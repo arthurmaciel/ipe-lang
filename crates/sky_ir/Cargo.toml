@@ -1,0 +1,11 @@
+[package]
+name = "sky_ir"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+sky_intern = { path = "../sky_intern" }
+sky_diagnostics = { path = "../sky_diagnostics" }
+
+[lints]
+workspace = true
