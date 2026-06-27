@@ -12,8 +12,10 @@
 //! exhaustiveness.
 
 mod ir;
+mod pretty;
 
 pub use ir::{
     Arm, BinOp, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module, Pat,
     Program, TypeDef,
 };
+pub use pretty::pretty;
