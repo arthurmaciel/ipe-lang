@@ -146,6 +146,7 @@ fn emit_expr_at(ctx: &EmitCtx, expr: &Expr, indent: usize, depth: u16) -> DResul
         Expr::Update { record, fields } => emit_update(ctx, record, fields, indent, depth),
         Expr::Lambda { params, ret, body } => emit_lambda(ctx, params, ret, body, indent, depth),
         Expr::Apply { func, args } => emit_apply(ctx, func, args, indent, depth),
+        Expr::FuncValue { callee, ty } => emit_func_value(ctx, callee, ty),
         Expr::Match(m) => {
             let scrut = emit_expr_at(ctx, m.scrutinee(), indent, child)?;
             let arm_indent = indent_of(indent + 1);
@@ -243,6 +244,25 @@ fn emit_apply(
         parts.push(emit_expr_at(ctx, arg, indent, child)?);
     }
     Ok(format!("({f})({})", parts.join(", ")))
+}
+
+/// Emit a top-level function (or kernel) named as a first-class *value* as a
+/// type-pinned boxed closure: `{ let __sky_fn: Box<dyn Fn(..) -> R> =
+/// Box::new(<name>); __sky_fn }`. The explicit binding type drives the unsized
+/// coercion of the named `fn` item (a zero-sized `Fn` implementor) to the boxed
+/// trait object, so the value fills a `Box<dyn Fn(..) -> R>` slot uniformly in
+/// every position — argument, return, or let-binding — rather than relying on a
+/// coercion site that an `if`/`match` branch or a bare `let` would not provide.
+/// `ty` is the value's `Fun` IR type; [`render_type`] renders it as the boxed
+/// trait object. Kept out of the `emit_expr_at` match (`#[inline(never)]`) for
+/// the same frame-size reason as the neighbouring helpers.
+#[inline(never)]
+fn emit_func_value(ctx: &EmitCtx, callee: &Callee, ty: &IrType) -> DResult<String> {
+    let name = callee_name(ctx, callee)?;
+    let boxed = render_type(ctx, ty)?;
+    Ok(format!(
+        "{{ let __sky_fn: {boxed} = Box::new({name}); __sky_fn }}"
+    ))
 }
 
 /// Emit a lambda `\p0 p1 ... -> body` as a boxed closure

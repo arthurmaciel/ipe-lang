@@ -223,7 +223,7 @@ pub fn title(c: Code) -> &'static str {
         SKY_L0104 => "only Task () is supported yet",
         SKY_L0105 => "parameter destructuring not supported yet",
         SKY_L0106 => "top-level function needs a type signature",
-        SKY_L0107 => "first-class functions not supported yet",
+        SKY_L0107 => "function value in a record field not supported yet",
         SKY_L0108 => "kernel function not available yet",
         SKY_L0109 => "type parameters on a type alias not supported yet",
         SKY_L0200 => "expression nests too deeply for the backend",

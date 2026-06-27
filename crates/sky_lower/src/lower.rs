@@ -442,6 +442,22 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Reject a record field whose value is function-typed.
+    ///
+    /// A function value lowers to a `Box<dyn Fn(..) -> R>`, but a synthesised
+    /// record struct derives `Clone`/`Debug`/`PartialEq` — none of which a boxed
+    /// `dyn Fn` satisfies — so a function-in-record field would emit Rust that
+    /// does not compile. Storing a function in a `let` works (no derive is
+    /// involved); storing one in a record is the documented first-class gap
+    /// until the record struct can carry a non-deriving function field.
+    /// [SKY-L0107, feature: first-class-functions]
+    fn reject_function_valued_field(&self, value: &canon::Expr) -> DResult<()> {
+        if let Some(Ty::Fun(_, _)) = self.types.regions.get(&value.span) {
+            return Err(unsupported(value.span, Feature::FirstClassFunctions));
+        }
+        Ok(())
+    }
+
     fn lower_expr(&self, e: &canon::Expr) -> DResult<Expr> {
         match &e.value {
             canon::Expr_::Int(n) => Ok(Expr::Int(*n)),
@@ -509,6 +525,7 @@ impl<'a> Lowerer<'a> {
                 // regardless of source order or interning order.
                 let mut lowered: Vec<(Symbol, Expr)> = Vec::with_capacity(fields.len());
                 for (name, value) in fields {
+                    self.reject_function_valued_field(value)?;
                     lowered.push((*name, self.lower_expr(value)?));
                 }
                 lowered.sort_by(|a, b| {
@@ -532,6 +549,7 @@ impl<'a> Lowerer<'a> {
                 let record = Box::new(self.lower_expr(base)?);
                 let mut lowered: Vec<(Symbol, Expr)> = Vec::with_capacity(fields.len());
                 for (name, value) in fields {
+                    self.reject_function_valued_field(value)?;
                     lowered.push((*name, self.lower_expr(value)?));
                 }
                 lowered.sort_by(|a, b| {
@@ -546,14 +564,30 @@ impl<'a> Lowerer<'a> {
             }
             canon::Expr_::Case(scrut, branches) => self.lower_case(scrut, branches),
             // A top-level binding or kernel named as a bare *value* (passed,
-            // returned, or let-bound) rather than directly applied. A lambda or
-            // a function-typed local works as a first-class value; wrapping a
-            // top-level/kernel name into a forwarding boxed closure additionally
-            // needs fresh parameter symbols, which this pass (holding an
-            // immutable interner) cannot mint — so it stays a documented gap.
-            // [SKY-L0107, feature: first-class-functions]
+            // returned, or let-bound) rather than directly applied. The
+            // reference's solved region type fixes its shape: a function type
+            // reifies into an [`Expr::FuncValue`] (a boxed closure the backend
+            // pins to a `Box<dyn Fn(..) -> R>` slot); a non-function top-level
+            // value reference (a nullary constant binding named as a value) is
+            // its zero-argument call.
             canon::Expr_::VarTopLevel { .. } | canon::Expr_::VarKernel { .. } => {
-                Err(unsupported(e.span, Feature::FirstClassFunctions))
+                let callee = self.lower_callee(e)?;
+                let ty = self.types.regions.get(&e.span).ok_or_else(|| {
+                    bug(
+                        "sky_lower::lower_expr",
+                        "no inferred type for a function/value reference",
+                    )
+                })?;
+                match self.ir_type_from_ty(ty, e.span)? {
+                    fun @ IrType::Fun(_, _) => Ok(Expr::FuncValue { callee, ty: fun }),
+                    // A nullary top-level constant referenced as a value is its
+                    // own zero-argument call (`x` → `x()`); a kernel is always
+                    // function-typed, so this branch is the constant case.
+                    _ => Ok(Expr::Call {
+                        callee,
+                        args: Vec::new(),
+                    }),
+                }
             }
         }
     }
@@ -601,10 +635,17 @@ impl<'a> Lowerer<'a> {
                     .ok_or_else(|| bug("sky_lower::lower_callee", "unknown top-level binding"))?;
                 Ok(Callee::Func(id))
             }
-            // A callee that is neither a kernel nor a top-level name — a lambda
-            // or a computed callee. M0 has no first-class functions.
-            // [SKY-L0107, feature: first-class-functions]
-            _ => Err(unsupported(callee.span, Feature::FirstClassFunctions)),
+            // `lower_callee` resolves a *named* callee to its [`Callee`]; both
+            // callers (the direct-call path in `lower_call` and the value-
+            // reference arm in `lower_expr`) gate on `VarKernel`/`VarTopLevel`
+            // before dispatching here, so any other shape is a violated
+            // invariant, not a user-reachable feature gap. (A lambda or computed
+            // callee applied as `(expr)(args)` lowers to [`Expr::Apply`]; a bare
+            // lambda value stays an [`Expr::Lambda`].)
+            _ => Err(bug(
+                "sky_lower::lower_callee",
+                "callee is neither a kernel nor a top-level name",
+            )),
         }
     }
 

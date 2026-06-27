@@ -503,7 +503,8 @@ const fn feature_label(f: Feature) -> &'static str {
             "top-level functions need a type signature [feature: untyped-functions]"
         }
         Feature::FirstClassFunctions => {
-            "first-class functions are not supported yet [feature: first-class-functions]"
+            "storing a function value in a record field is not supported yet \
+             [feature: first-class-functions]"
         }
         Feature::Kernels => "this kernel function is not available yet [feature: kernels]",
         Feature::ParametricAliases => {
