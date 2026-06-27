@@ -24,7 +24,12 @@ pub enum NameError {
 /// Errors raised during type inference / checking. Variants grow per task.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TypeError {
+    /// Two types failed to unify.
     Mismatch,
+    /// The solver's step budget was exhausted before inference settled — a
+    /// defensive bound against pathological / adversarial input that would
+    /// otherwise drive the unifier into a heap-exhausting blow-up.
+    BudgetExceeded,
 }
 
 /// The single typed error currency of the compiler.
