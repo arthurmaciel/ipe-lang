@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
-use sky_diagnostics::Diagnostic;
+use sky_diagnostics::{Diagnostic, render};
 use sky_intern::Interner;
 
 /// A driver-level error. Distinct from a compiler [`Diagnostic`]: it also covers
@@ -35,8 +35,15 @@ pub enum CliError {
         path: PathBuf,
         source: std::io::Error,
     },
-    /// The compiler rejected the program.
-    Pipeline(Diagnostic),
+    /// The compiler rejected the program. Carries the entry path and full
+    /// source text alongside the diagnostic so [`fmt::Display`] can render a
+    /// rustc/Elm-style report (caret snippet + help + `skyc explain` pointer)
+    /// rather than a debug dump.
+    Pipeline {
+        file: PathBuf,
+        src: String,
+        diag: Diagnostic,
+    },
     /// The Sky runtime module tree could not be located.
     RuntimeNotFound,
 }
@@ -46,7 +53,9 @@ impl fmt::Display for CliError {
         match self {
             Self::Usage(hint) => write!(f, "{hint}"),
             Self::Io { path, source } => write!(f, "io error at {}: {source}", path.display()),
-            Self::Pipeline(d) => write!(f, "compile error: {d:?}"),
+            Self::Pipeline { file, src, diag } => {
+                f.write_str(&render(diag, &file.to_string_lossy(), src))
+            }
             Self::RuntimeNotFound => write!(
                 f,
                 "could not locate the Sky runtime; set SKY_RUNTIME_DIR or pass --runtime <dir>"
@@ -66,14 +75,22 @@ impl std::error::Error for CliError {}
 pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), CliError> {
     let source = fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
 
+    // A pipeline diagnostic is rendered against the entry's path + source, so
+    // bundle both into every `CliError::Pipeline` produced below.
+    let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
+        file: entry.to_path_buf(),
+        src: source.clone(),
+        diag,
+    };
+
     let mut interner = Interner::new();
-    let module = sky_parse::parse_module(&source, &mut interner).map_err(CliError::Pipeline)?;
-    let canonical = sky_canon::canonicalise(&module, &mut interner).map_err(CliError::Pipeline)?;
-    let types = sky_types::infer(&canonical, &mut interner).map_err(CliError::Pipeline)?;
-    let program = sky_lower::lower(&canonical, &types, &interner).map_err(CliError::Pipeline)?;
+    let module = sky_parse::parse_module(&source, &mut interner).map_err(&pipeline_err)?;
+    let canonical = sky_canon::canonicalise(&module, &mut interner).map_err(&pipeline_err)?;
+    let types = sky_types::infer(&canonical, &mut interner).map_err(&pipeline_err)?;
+    let program = sky_lower::lower(&canonical, &types, &interner).map_err(&pipeline_err)?;
     let emitted = RustBackend::new(&interner)
         .emit(&program)
-        .map_err(CliError::Pipeline)?;
+        .map_err(&pipeline_err)?;
 
     let src_dir = out_dir.join("src");
     fs::create_dir_all(&src_dir).map_err(|e| io_err(&src_dir, e))?;
