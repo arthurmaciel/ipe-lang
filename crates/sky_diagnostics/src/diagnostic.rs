@@ -7,7 +7,11 @@ use crate::span::Span;
 /// Errors raised during lexing / parsing. Variants grow per task.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ParseError {
+    /// A token was encountered where the grammar did not allow it, input ended
+    /// prematurely, or a stray byte could not be lexed.
     Unexpected,
+    /// The parser's recursion-depth guard tripped on pathological input.
+    TooDeep,
 }
 
 /// Errors raised during name resolution / canonicalisation. Variants grow per
