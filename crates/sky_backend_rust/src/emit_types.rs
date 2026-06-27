@@ -20,6 +20,13 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType) -> DResult<String> {
         IrType::Unit => "()".to_owned(),
         IrType::TaskUnit => "SkyTask<()>".to_owned(),
         IrType::Enum(sym) => ctx.enum_name(*sym)?.to_owned(),
+        IrType::Tuple(elems) => {
+            let mut parts = Vec::with_capacity(elems.len());
+            for elem in elems {
+                parts.push(render_type(ctx, elem)?);
+            }
+            format!("({})", parts.join(", "))
+        }
     })
 }
 

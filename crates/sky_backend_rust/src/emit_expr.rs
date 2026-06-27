@@ -119,6 +119,16 @@ fn emit_expr_at(ctx: &EmitCtx, expr: &Expr, indent: usize, depth: u16) -> DResul
             }
             Ok(format!("{name}({})", parts.join(", ")))
         }
+        Expr::Tuple(elems) => {
+            // A tuple constructor renders inline as `(e1, e2, ...)`. The IR
+            // invariant guarantees arity ≥ 2, so this is always a genuine Rust
+            // tuple; the emission stays total over any vector regardless.
+            let mut parts = Vec::with_capacity(elems.len());
+            for elem in elems {
+                parts.push(emit_expr_at(ctx, elem, indent, child)?);
+            }
+            Ok(format!("({})", parts.join(", ")))
+        }
         Expr::Match(m) => {
             let scrut = emit_expr_at(ctx, m.scrutinee(), indent, child)?;
             let arm_indent = indent_of(indent + 1);
