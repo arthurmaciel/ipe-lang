@@ -1,0 +1,23 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Comparison + boolean operators, type-checked, lowered, and emitted.
+-- (`>` `<` `&&`)
+isLarge : Int -> Bool
+isLarge n =
+    n > 10 && n < 100
+
+-- (`<=` `>=` `||`)
+inRange : Int -> Int -> Bool
+inRange lo hi =
+    lo <= hi || lo >= hi
+
+-- (`==` `/=` `||`)
+sameOrDiffers : Int -> Int -> Bool
+sameOrDiffers a b =
+    a == b || a /= b
+
+-- Arithmetic precedence: `*` binds tighter than `+`/`-`, both left-assoc.
+-- 2 + (3 * 4) - 1 = 13.
+main =
+    println (String.fromInt (2 + 3 * 4 - 1))

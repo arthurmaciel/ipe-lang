@@ -78,6 +78,16 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Underscore => TokenKind::Underscore,
         Tok::Plus => TokenKind::Plus,
         Tok::Minus => TokenKind::Minus,
+        Tok::Star => TokenKind::Star,
+        Tok::Slash => TokenKind::Slash,
+        Tok::SlashEq => TokenKind::SlashEq,
+        Tok::EqEq => TokenKind::EqEq,
+        Tok::Lt => TokenKind::Lt,
+        Tok::Gt => TokenKind::Gt,
+        Tok::Le => TokenKind::Le,
+        Tok::Ge => TokenKind::Ge,
+        Tok::AmpAmp => TokenKind::AmpAmp,
+        Tok::PipePipe => TokenKind::PipePipe,
         Tok::Ident(_) => TokenKind::Ident,
         Tok::Int(_) => TokenKind::Int,
     }
@@ -809,17 +819,31 @@ impl<'a> Parser<'a> {
         matches!(kind, Tok::LParen | Tok::Int(_) | Tok::Ident(_))
     }
 
-    /// Peek a `+`/`-` binary operator that continues the current block.
+    /// Peek a binary operator that continues the current block. Recognises the
+    /// full M1-core set: arithmetic (`+ - * /`), comparison (`== /= < > <= >=`),
+    /// and boolean (`&& ||`). Precedence + associativity are resolved later, at
+    /// canonicalisation, from the flat chain this records.
     fn peek_binop(&self, threshold: u32) -> Option<(&'static str, Span)> {
         let tok = self.peek()?;
         if !layout::continues_block(tok, threshold) {
             return None;
         }
-        match tok.kind {
-            Tok::Plus => Some(("+", tok.span)),
-            Tok::Minus => Some(("-", tok.span)),
-            _ => None,
-        }
+        let op = match tok.kind {
+            Tok::Plus => "+",
+            Tok::Minus => "-",
+            Tok::Star => "*",
+            Tok::Slash => "/",
+            Tok::SlashEq => "/=",
+            Tok::EqEq => "==",
+            Tok::Lt => "<",
+            Tok::Gt => ">",
+            Tok::Le => "<=",
+            Tok::Ge => ">=",
+            Tok::AmpAmp => "&&",
+            Tok::PipePipe => "||",
+            _ => return None,
+        };
+        Some((op, tok.span))
     }
 
     fn peek_is_simple_atom_in_block(&self, threshold: u32) -> bool {

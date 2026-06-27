@@ -211,6 +211,31 @@ mod tests {
     const HDR: &str = "module Main exposing (main)\n";
 
     #[test]
+    fn full_operator_set_parses_into_a_binops_chain() {
+        // Every M1-core operator must lex + parse; the body becomes a flat
+        // `Binops` chain (precedence is resolved later, at canonicalisation).
+        let mut i = Interner::new();
+        let src = format!(
+            "{HDR}f a b c =\n    a + b * c - a / b == c /= a < b > c <= a >= b && c || a\n"
+        );
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "all operators must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let f = find_value(&m, &i, "f");
+        assert!(
+            f.is_some_and(|v| matches!(v.body.value, Expr_::Binops(ref ops, _) if ops.len() == 12)),
+            "body is a 12-operator flat chain, got {:?}",
+            f.map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
+    fn lone_ampersand_is_unknown_char() {
+        // A single `&` is not a Sky operator (only `&&`); it lexes as SKY-P0010.
+        assert_eq!(err_code(&format!("{HDR}x = 1 & 2")), "SKY-P0010");
+    }
+
+    #[test]
     fn lexer_errors_carry_their_codes() {
         // SKY-P0010 unknown character.
         assert_eq!(err_code("module Main exposing (main)\nx = @"), "SKY-P0010");

@@ -545,6 +545,138 @@ mod tests {
         prev.last().copied().unwrap_or(0)
     }
 
+    /// Parse + canonicalise a free-standing module body, returning the resolved
+    /// body expression of the binding named `which`.
+    fn canon_body(i: &mut Interner, source: &str, which: &str) -> Option<Expr_> {
+        let src = sky_parse::parse_module(source, i).ok()?;
+        let m = canonicalise(&src, i).ok()?;
+        let def = find_def(&m, i, which)?;
+        match def {
+            Def::Typed { body, .. } | Def::Untyped { body, .. } => Some(body.value.clone()),
+        }
+    }
+
+    /// Destructure a resolved binop into `(func-name, lhs, rhs)`.
+    fn as_binop<'a>(i: &Interner, e: &'a Expr_) -> Option<(String, &'a Expr, &'a Expr)> {
+        match e {
+            Expr_::Binop { func, lhs, rhs, .. } => Some((i.resolve(*func)?.to_owned(), lhs, rhs)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn mul_binds_tighter_than_add() {
+        // `2 + 3 * 4` must associate as `add(2, mul(3, 4))`, never `mul(add(2,3), 4)`.
+        let mut i = Interner::new();
+        let body = canon_body(
+            &mut i,
+            "module Main exposing (v)\nv : Int\nv =\n    2 + 3 * 4\n",
+            "v",
+        );
+        assert!(body.is_some(), "v must canonicalise");
+        let Some(body) = body else { return };
+        let top = as_binop(&i, &body);
+        assert!(top.is_some(), "top is a binop");
+        let Some((top, lhs, rhs)) = top else { return };
+        assert_eq!(top, "add", "outer op is +");
+        assert!(matches!(lhs.value, Expr_::Int(2)), "lhs is literal 2");
+        let inner = as_binop(&i, &rhs.value);
+        assert!(inner.is_some(), "rhs is the * subtree");
+        let Some((inner, il, ir)) = inner else { return };
+        assert_eq!(inner, "mul", "inner op is *");
+        assert!(matches!(il.value, Expr_::Int(3)));
+        assert!(matches!(ir.value, Expr_::Int(4)));
+    }
+
+    #[test]
+    fn left_associative_subtraction_chains_left() {
+        // `10 - 3 - 2` is `sub(sub(10, 3), 2)` (left-assoc), not `sub(10, sub(3, 2))`.
+        let mut i = Interner::new();
+        let body = canon_body(
+            &mut i,
+            "module Main exposing (v)\nv : Int\nv =\n    10 - 3 - 2\n",
+            "v",
+        );
+        assert!(body.is_some(), "v must canonicalise");
+        let Some(body) = body else { return };
+        let top = as_binop(&i, &body);
+        assert!(top.is_some(), "top is a binop");
+        let Some((top, lhs, rhs)) = top else { return };
+        assert_eq!(top, "sub");
+        assert!(
+            matches!(rhs.value, Expr_::Int(2)),
+            "rhs is the last operand"
+        );
+        assert_eq!(
+            as_binop(&i, &lhs.value).map(|t| t.0),
+            Some("sub".to_owned())
+        );
+    }
+
+    #[test]
+    fn comparison_below_arithmetic_and_above_boolean() {
+        // `n > 10 && n < 100` ⇒ `and(gt(n, 10), lt(n, 100))`: `&&` is the root,
+        // each comparison its own subtree (comparison binds tighter than `&&`).
+        let mut i = Interner::new();
+        let body = canon_body(
+            &mut i,
+            "module Main exposing (f)\nf : Int -> Bool\nf n =\n    n > 10 && n < 100\n",
+            "f",
+        );
+        assert!(body.is_some(), "f must canonicalise");
+        let Some(body) = body else { return };
+        let top = as_binop(&i, &body);
+        assert!(top.is_some(), "top is a binop");
+        let Some((top, lhs, rhs)) = top else { return };
+        assert_eq!(top, "and", "root is &&");
+        assert_eq!(as_binop(&i, &lhs.value).map(|t| t.0), Some("gt".to_owned()));
+        assert_eq!(as_binop(&i, &rhs.value).map(|t| t.0), Some("lt".to_owned()));
+    }
+
+    #[test]
+    fn parenthesised_group_is_not_reassociated() {
+        // `(2 + 3) * 4` ⇒ `mul(add(2, 3), 4)`. Parens override precedence.
+        let mut i = Interner::new();
+        let body = canon_body(
+            &mut i,
+            "module Main exposing (v)\nv : Int\nv =\n    (2 + 3) * 4\n",
+            "v",
+        );
+        assert!(body.is_some(), "v must canonicalise");
+        let Some(body) = body else { return };
+        let top = as_binop(&i, &body);
+        assert!(top.is_some(), "top is a binop");
+        let Some((top, lhs, rhs)) = top else { return };
+        assert_eq!(top, "mul", "root is *");
+        assert!(matches!(rhs.value, Expr_::Int(4)));
+        assert_eq!(
+            as_binop(&i, &lhs.value).map(|t| t.0),
+            Some("add".to_owned())
+        );
+    }
+
+    #[test]
+    fn or_is_right_associative() {
+        // `a || b || c` ⇒ `or(a, or(b, c))` (right-assoc, prec 2).
+        let mut i = Interner::new();
+        let body = canon_body(
+            &mut i,
+            "module Main exposing (f)\nf : Bool -> Bool -> Bool -> Bool\nf a b c =\n    a || b || c\n",
+            "f",
+        );
+        assert!(body.is_some(), "f must canonicalise");
+        let Some(body) = body else { return };
+        let top = as_binop(&i, &body);
+        assert!(top.is_some(), "top is a binop");
+        let Some((top, lhs, rhs)) = top else { return };
+        assert_eq!(top, "or");
+        assert!(
+            matches!(lhs.value, Expr_::VarLocal(_)),
+            "lhs is the lone `a`"
+        );
+        assert_eq!(as_binop(&i, &rhs.value).map(|t| t.0), Some("or".to_owned()));
+    }
+
     #[test]
     fn env_var_homes_compare() {
         // Exercise the VarHome surface for PartialEq coverage.
