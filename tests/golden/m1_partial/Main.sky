@@ -1,0 +1,21 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Two-parameter function; partially applied below.
+add : Int -> Int -> Int
+add a b = a + b
+
+-- Higher-order: applies its function argument twice.
+applyTwice : (Int -> Int) -> Int -> Int
+applyTwice f x = f (f x)
+
+-- One declared parameter but a two-arrow type — over-applied below.
+over : Int -> Int -> Int
+over a = \b -> a + b
+
+main =
+    let f = add 2 in
+    let p = f 3 in
+    let o = over 1 2 in
+    let h = applyTwice (add 1) 5 in
+    println (String.fromInt (p + o + h))

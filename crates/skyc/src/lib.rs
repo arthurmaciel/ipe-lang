@@ -172,7 +172,7 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
     let module = sky_parse::parse_module(&source, &mut interner).map_err(&pipeline_err)?;
     let canonical = sky_canon::canonicalise(&module, &mut interner).map_err(&pipeline_err)?;
     let types = sky_types::infer(&canonical, &mut interner).map_err(&pipeline_err)?;
-    let program = sky_lower::lower(&canonical, &types, &interner).map_err(&pipeline_err)?;
+    let program = sky_lower::lower(&canonical, &types, &mut interner).map_err(&pipeline_err)?;
     let emitted = RustBackend::new(&interner)
         .emit(&program)
         .map_err(&pipeline_err)?;
@@ -441,7 +441,7 @@ pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
     let module = sky_parse::parse_module(&source, &mut interner).map_err(&pipeline_err)?;
     let canonical = sky_canon::canonicalise(&module, &mut interner).map_err(&pipeline_err)?;
     let types = sky_types::infer(&canonical, &mut interner).map_err(&pipeline_err)?;
-    let program = sky_lower::lower(&canonical, &types, &interner).map_err(&pipeline_err)?;
+    let program = sky_lower::lower(&canonical, &types, &mut interner).map_err(&pipeline_err)?;
     Ok(sky_ir::pretty(&program, &interner))
 }
 
@@ -465,7 +465,7 @@ fn pipeline_first_diagnostic(source: &str) -> Option<Diagnostic> {
         Ok(t) => t,
         Err(d) => return Some(d),
     };
-    sky_lower::lower(&canonical, &types, &interner).err()
+    sky_lower::lower(&canonical, &types, &mut interner).err()
 }
 
 /// Collect every [`Applicability::MachineApplicable`] suggestion a diagnostic

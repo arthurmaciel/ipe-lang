@@ -42,9 +42,18 @@ use sky_types::SolvedTypes;
 pub fn lower(
     m: &canon::Module,
     types: &SolvedTypes,
-    interner: &Interner,
+    interner: &mut Interner,
 ) -> DResult<sky_ir::Program> {
-    lower::Lowerer::new(m, types, interner).run()
+    // Eta-expansion of a partial application needs fresh parameter symbols that
+    // cannot capture any name free in the supplied arguments. Mint a pool up
+    // front — sized to the widest function arity in the module, the most params
+    // any single eta-lambda can introduce — through the one `&mut Interner` the
+    // entry point owns, so the lowering walk itself stays over a shared `&`.
+    // Each eta-lambda is its own closure scope, so the pool is reused across
+    // sites without collision; `fresh_symbols` guarantees the names dodge every
+    // user identifier (all interned by now) and each other.
+    let eta_params = interner.fresh_symbols("eta_", lower::max_def_arity(m))?;
+    lower::Lowerer::new(m, types, &*interner, eta_params).run()
 }
 
 #[cfg(test)]
@@ -62,7 +71,7 @@ mod tests {
         let src = sky_parse::parse_module(GOLDEN, &mut i).ok()?;
         let m = sky_canon::canonicalise(&src, &mut i).ok()?;
         let types = sky_types::infer(&m, &mut i).ok()?;
-        let program = lower(&m, &types, &i).ok()?;
+        let program = lower(&m, &types, &mut i).ok()?;
         Some((program, i))
     }
 
@@ -226,7 +235,7 @@ mod tests {
         let src = sky_parse::parse_module(source, &mut i).ok()?;
         let m = sky_canon::canonicalise(&src, &mut i).ok()?;
         let types = sky_types::infer(&m, &mut i).ok()?;
-        let program = lower(&m, &types, &i).ok()?;
+        let program = lower(&m, &types, &mut i).ok()?;
         let module = program.modules.into_iter().next()?;
         let func = module
             .funcs
@@ -491,7 +500,7 @@ mod tests {
                     .ok()?;
             let m = sky_canon::canonicalise(&src, &mut i).ok()?;
             let types = sky_types::infer(&m, &mut i).ok()?;
-            lower(&m, &types, &i).ok()
+            lower(&m, &types, &mut i).ok()
         })();
         assert!(pipeline.is_some(), "v must lower");
         let Some(program) = pipeline else { return };
