@@ -196,6 +196,113 @@ mod tests {
         x
     }
 
+    /// The error code a bad source produces, or `"OK"` when it (unexpectedly)
+    /// parses. Comparing the wire string keeps the assertions readable without
+    /// importing every taxonomy constant.
+    fn err_code(src: &str) -> String {
+        let mut i = Interner::new();
+        match parse_module(src, &mut i) {
+            Ok(_) => "OK".to_owned(),
+            Err(d) => d.code().as_str().to_owned(),
+        }
+    }
+
+    /// A well-formed module header so a per-construct test isolates the body.
+    const HDR: &str = "module Main exposing (main)\n";
+
+    #[test]
+    fn lexer_errors_carry_their_codes() {
+        // SKY-P0010 unknown character.
+        assert_eq!(err_code("module Main exposing (main)\nx = @"), "SKY-P0010");
+        // SKY-P0011 stray '.'.
+        assert_eq!(err_code("."), "SKY-P0011");
+        // SKY-P0012 number joined to a name.
+        assert_eq!(err_code("123abc"), "SKY-P0012");
+        // SKY-P0013 integer literal out of range.
+        assert_eq!(err_code("99999999999999999999999"), "SKY-P0013");
+    }
+
+    #[test]
+    fn malformed_module_header_is_p0020() {
+        // Not `module`.
+        assert_eq!(err_code("import X exposing (..)"), "SKY-P0020");
+        // Module name not an identifier.
+        assert_eq!(err_code("module = x"), "SKY-P0020");
+        // Missing `exposing`.
+        assert_eq!(err_code("module Main"), "SKY-P0020");
+    }
+
+    #[test]
+    fn malformed_exposing_list_is_p0021() {
+        // Missing `(`.
+        assert_eq!(err_code("module Main exposing main)"), "SKY-P0021");
+        // Bad separator between items.
+        assert_eq!(err_code("module Main exposing (a b)"), "SKY-P0021");
+    }
+
+    #[test]
+    fn missing_equals_is_p0030() {
+        assert_eq!(err_code(&format!("{HDR}foo 5")), "SKY-P0030");
+    }
+
+    #[test]
+    fn malformed_type_declaration_is_p0031() {
+        // Missing type name.
+        assert_eq!(err_code(&format!("{HDR}type = Foo")), "SKY-P0031");
+        // Missing `=` before constructors.
+        assert_eq!(err_code(&format!("{HDR}type Foo Bar")), "SKY-P0031");
+        // Constructor not uppercase.
+        assert_eq!(err_code(&format!("{HDR}type Foo = bar")), "SKY-P0031");
+    }
+
+    #[test]
+    fn type_args_on_non_constructor_is_p0040() {
+        assert_eq!(err_code(&format!("{HDR}x : a Int\nx = 5")), "SKY-P0040");
+    }
+
+    #[test]
+    fn expected_type_is_p0041() {
+        // A token that cannot begin a type.
+        assert_eq!(err_code(&format!("{HDR}x : =\nx = 5")), "SKY-P0041");
+        // SHOULD-FIX: a dotted upper-ident (qualified type) is rejected, not
+        // collapsed into a non-reference AST.
+        assert_eq!(err_code(&format!("{HDR}x : Foo.Bar\nx = 5")), "SKY-P0041");
+    }
+
+    #[test]
+    fn unclosed_delimiter_is_p0050() {
+        assert_eq!(err_code(&format!("{HDR}main = (5")), "SKY-P0050");
+    }
+
+    #[test]
+    fn malformed_case_is_p0060() {
+        // `of` missing after the scrutinee.
+        assert_eq!(err_code(&format!("{HDR}main = case 5")), "SKY-P0060");
+        // `->` missing in a branch.
+        let missing_arrow = format!("{HDR}main =\n    case main of\n        Foo 5\n");
+        assert_eq!(err_code(&missing_arrow), "SKY-P0060");
+    }
+
+    #[test]
+    fn unexpected_token_is_p0001() {
+        // A token that cannot begin an expression.
+        assert_eq!(err_code(&format!("{HDR}main = )")), "SKY-P0001");
+        // SHOULD-FIX: a qualified constructor in pattern position is rejected.
+        let qual_ctor = format!("{HDR}main =\n    case main of\n        Foo.Bar -> 1\n");
+        assert_eq!(err_code(&qual_ctor), "SKY-P0001");
+    }
+
+    #[test]
+    fn unexpected_eof_is_p0002() {
+        assert_eq!(err_code(&format!("{HDR}main =")), "SKY-P0002");
+    }
+
+    #[test]
+    fn nesting_too_deep_is_p0003() {
+        let deep = format!("{HDR}main = {}", "(".repeat(400));
+        assert_eq!(err_code(&deep), "SKY-P0003");
+    }
+
     #[test]
     fn fuzz_random_bytes_never_panics_and_errors() {
         // Feed many 1 KB blobs of random bytes; the parser must reject every

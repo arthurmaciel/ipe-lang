@@ -5,11 +5,27 @@
 //! bindings with optional type annotations, `case … of`, function application,
 //! and `+`/`-` binary-operator chains.
 //!
-//! Recursion is bounded by [`MAX_DEPTH`]; every recursive entry threads a depth
-//! counter and fails with [`ParseError::TooDeep`] before the native stack can
+//! Every raise site emits a **coded, structured** [`ParseError`]: the generic
+//! "expected X, found Y" family funnels through [`ParseError::UnexpectedToken`]
+//! (SKY-P0001) carrying the found [`TokenKind`] and an [`ExpectedSet`];
+//! truncated input becomes [`ParseError::UnexpectedEof`] (SKY-P0002) tagged with
+//! the enclosing [`Construct`]; and each construct (module header, exposing list,
+//! definition, type declaration, `case`, parenthesised group) has its own
+//! defect-precise variant. Recursion is bounded by [`MAX_DEPTH`]; every
+//! recursive entry threads a depth counter and fails with
+//! [`ParseError::NestingTooDeep`] (SKY-P0003) before the native stack can
 //! overflow on adversarial input.
+//!
+//! Qualified upper-case names in **type** and **pattern** position are rejected
+//! with a typed error rather than collapsed into a non-reference AST: M0 does
+//! not yet model `Module.Type` annotations or `Module.Ctor` patterns, so the
+//! parser fails fast instead of silently dropping the qualifier (which the
+//! canonicaliser would then resolve against the wrong name).
 
-use sky_diagnostics::{DResult, Diagnostic, Located, ParseError, Span};
+use sky_diagnostics::{
+    CaseDefect, Construct, DResult, Diagnostic, Expected, ExpectedSet, ExposingDefect,
+    HeaderDefect, Located, ParseError, Span, TokenKind, TypeDeclDefect,
+};
 use sky_intern::{Interner, Symbol};
 use sky_syntax::{
     Ctor, Exposed, Exposing, Expr, Expr_, Import, Module, Pattern, Pattern_, Privacy,
@@ -19,7 +35,8 @@ use sky_syntax::{
 use crate::layout;
 use crate::lexer::{Tok, Token};
 
-/// Maximum recursion depth before the parser bails with [`ParseError::TooDeep`].
+/// Maximum recursion depth before the parser bails with
+/// [`ParseError::NestingTooDeep`].
 pub const MAX_DEPTH: u32 = 256;
 
 pub struct Parser<'a> {
@@ -37,6 +54,33 @@ enum Decl {
         patterns: Vec<Pattern>,
         body: Expr,
     },
+}
+
+/// Map a concrete lexer token to its payload-free [`TokenKind`] category — the
+/// "found" shape a [`ParseError::UnexpectedToken`] reports.
+const fn tok_kind(t: &Tok) -> TokenKind {
+    match t {
+        Tok::Module => TokenKind::Module,
+        Tok::Import => TokenKind::Import,
+        Tok::Exposing => TokenKind::Exposing,
+        Tok::As => TokenKind::As,
+        Tok::Type => TokenKind::Type,
+        Tok::Case => TokenKind::Case,
+        Tok::Of => TokenKind::Of,
+        Tok::LParen => TokenKind::LParen,
+        Tok::RParen => TokenKind::RParen,
+        Tok::Equals => TokenKind::Equals,
+        Tok::Pipe => TokenKind::Pipe,
+        Tok::Colon => TokenKind::Colon,
+        Tok::Arrow => TokenKind::Arrow,
+        Tok::DotDot => TokenKind::DotDot,
+        Tok::Comma => TokenKind::Comma,
+        Tok::Underscore => TokenKind::Underscore,
+        Tok::Plus => TokenKind::Plus,
+        Tok::Minus => TokenKind::Minus,
+        Tok::Ident(_) => TokenKind::Ident,
+        Tok::Int(_) => TokenKind::Int,
+    }
 }
 
 impl<'a> Parser<'a> {
@@ -58,57 +102,98 @@ impl<'a> Parser<'a> {
         self.peek().map(|t| &t.kind)
     }
 
-    fn bump(&mut self) -> DResult<Token> {
+    /// Consume the next token. On end-of-input the error names `construct`, the
+    /// enclosing grammar production that still required more tokens.
+    fn bump(&mut self, construct: Construct) -> DResult<Token> {
         let tok = self
             .toks
             .get(self.pos)
             .cloned()
-            .ok_or_else(|| self.eof_err())?;
+            .ok_or_else(|| Diagnostic::Parse {
+                span: self.eof_err_span(),
+                msg: ParseError::UnexpectedEof { construct },
+            })?;
         self.pos += 1;
         Ok(tok)
     }
 
-    fn eof_err(&self) -> Diagnostic {
-        let span = self.toks.last().map_or(Span::DUMMY, |t| t.span);
-        Diagnostic::Parse {
-            span,
-            msg: ParseError::Unexpected,
-        }
-    }
-
-    fn err_here(&self) -> Diagnostic {
-        let span = self.peek().map_or_else(|| self.eof_err_span(), |t| t.span);
-        Diagnostic::Parse {
-            span,
-            msg: ParseError::Unexpected,
-        }
-    }
-
+    /// Byte span to point at when input has run out: the end of the last token.
     fn eof_err_span(&self) -> Span {
         self.toks.last().map_or(Span::DUMMY, |t| t.span)
     }
 
-    fn too_deep(&self) -> Diagnostic {
-        Diagnostic::Parse {
-            span: self.err_here_span(),
-            msg: ParseError::TooDeep,
-        }
-    }
-
+    /// Byte span to point at "here": the next token, or end-of-input.
     fn err_here_span(&self) -> Span {
         self.peek().map_or_else(|| self.eof_err_span(), |t| t.span)
     }
 
-    /// Consume the next token, requiring it to equal `want`.
-    fn expect(&mut self, want: &Tok) -> DResult<Token> {
-        let tok = self.bump()?;
-        if &tok.kind == want {
-            Ok(tok)
-        } else {
-            Err(Diagnostic::Parse {
-                span: tok.span,
-                msg: ParseError::Unexpected,
-            })
+    fn too_deep(&self, construct: Construct) -> Diagnostic {
+        Diagnostic::Parse {
+            span: self.err_here_span(),
+            msg: ParseError::NestingTooDeep {
+                construct,
+                limit: u16::try_from(MAX_DEPTH).unwrap_or(u16::MAX),
+            },
+        }
+    }
+
+    // ---- typed-error constructors -----------------------------------------
+
+    /// "found `<tok>`, expected `<set>`" — the SKY-P0001 funnel.
+    fn unexpected_token(tok: &Token, expected: &[Expected]) -> Diagnostic {
+        Diagnostic::Parse {
+            span: tok.span,
+            msg: ParseError::UnexpectedToken {
+                found: tok_kind(&tok.kind),
+                expected: ExpectedSet(expected.into()),
+            },
+        }
+    }
+
+    const fn malformed_header(span: Span, defect: HeaderDefect) -> Diagnostic {
+        Diagnostic::Parse {
+            span,
+            msg: ParseError::MalformedModuleHeader(defect),
+        }
+    }
+
+    const fn malformed_exposing(span: Span, defect: ExposingDefect) -> Diagnostic {
+        Diagnostic::Parse {
+            span,
+            msg: ParseError::MalformedExposingList(defect),
+        }
+    }
+
+    const fn malformed_type_decl(span: Span, defect: TypeDeclDefect) -> Diagnostic {
+        Diagnostic::Parse {
+            span,
+            msg: ParseError::MalformedTypeDeclaration(defect),
+        }
+    }
+
+    const fn malformed_case(span: Span, defect: CaseDefect) -> Diagnostic {
+        Diagnostic::Parse {
+            span,
+            msg: ParseError::MalformedCase(defect),
+        }
+    }
+
+    /// Require a closing `)`. The primary span points where the `)` was
+    /// expected; `opener` is carried as the secondary span (SKY-P0050).
+    fn close_paren(&mut self, opener: Span, construct: Construct) -> DResult<()> {
+        match self.peek() {
+            Some(t) if t.kind == Tok::RParen => {
+                self.bump(construct)?;
+                Ok(())
+            }
+            Some(t) => Err(Diagnostic::Parse {
+                span: t.span,
+                msg: ParseError::UnclosedDelimiter { opener },
+            }),
+            None => Err(Diagnostic::Parse {
+                span: self.eof_err_span(),
+                msg: ParseError::UnclosedDelimiter { opener },
+            }),
         }
     }
 
@@ -119,9 +204,42 @@ impl<'a> Parser<'a> {
     // ---- module -----------------------------------------------------------
 
     pub fn parse_module(&mut self) -> DResult<Module> {
-        let module_tok = self.expect(&Tok::Module)?;
-        let name = self.parse_dotted_name()?;
-        self.expect(&Tok::Exposing)?;
+        // The file must begin with `module`.
+        let module_tok = match self.peek() {
+            Some(t) if t.kind == Tok::Module => self.bump(Construct::ModuleHeader)?,
+            Some(t) => {
+                return Err(Self::malformed_header(
+                    t.span,
+                    HeaderDefect::NotModuleKeyword,
+                ));
+            }
+            None => {
+                return Err(Self::malformed_header(
+                    self.eof_err_span(),
+                    HeaderDefect::NotModuleKeyword,
+                ));
+            }
+        };
+        let name = self.parse_module_name()?;
+
+        // The `exposing` keyword must follow the module name.
+        match self.peek() {
+            Some(t) if t.kind == Tok::Exposing => {
+                self.bump(Construct::ModuleHeader)?;
+            }
+            Some(t) => {
+                return Err(Self::malformed_header(
+                    t.span,
+                    HeaderDefect::MissingExposing,
+                ));
+            }
+            None => {
+                return Err(Self::malformed_header(
+                    self.eof_err_span(),
+                    HeaderDefect::MissingExposing,
+                ));
+            }
+        }
         let exposing = self.parse_exposing()?;
 
         let mut imports = Vec::new();
@@ -180,8 +298,32 @@ impl<'a> Parser<'a> {
         (values, unions)
     }
 
+    /// The module name in the header: a single (possibly dotted) identifier.
+    /// A missing or non-identifier name is a malformed-header defect.
+    fn parse_module_name(&mut self) -> DResult<Located<Vec<Symbol>>> {
+        let Some(tok) = self.peek().cloned() else {
+            return Err(Self::malformed_header(
+                self.eof_err_span(),
+                HeaderDefect::MissingName,
+            ));
+        };
+        let Tok::Ident(text) = &tok.kind else {
+            return Err(Self::malformed_header(
+                tok.span,
+                HeaderDefect::NameNotIdentifier,
+            ));
+        };
+        self.pos += 1; // consume the name token (already cloned above)
+        let segs = text
+            .split('.')
+            .map(|s| self.interner.intern(s))
+            .collect::<DResult<Vec<Symbol>>>()?;
+        Ok(Located::new(tok.span, segs))
+    }
+
+    /// A dotted import name, e.g. `Sky.Core.Prelude`.
     fn parse_dotted_name(&mut self) -> DResult<Located<Vec<Symbol>>> {
-        let tok = self.bump()?;
+        let tok = self.bump(Construct::ModuleHeader)?;
         match &tok.kind {
             Tok::Ident(text) => {
                 let segs = text
@@ -190,44 +332,87 @@ impl<'a> Parser<'a> {
                     .collect::<DResult<Vec<Symbol>>>()?;
                 Ok(Located::new(tok.span, segs))
             }
-            _ => Err(Diagnostic::Parse {
-                span: tok.span,
-                msg: ParseError::Unexpected,
-            }),
+            _ => Err(Self::unexpected_token(&tok, &[Expected::Identifier])),
         }
     }
 
     fn parse_exposing(&mut self) -> DResult<Exposing> {
-        self.expect(&Tok::LParen)?;
+        // Opening `(`.
+        match self.peek() {
+            Some(t) if t.kind == Tok::LParen => {
+                self.bump(Construct::ExposingList)?;
+            }
+            Some(t) => {
+                return Err(Self::malformed_exposing(
+                    t.span,
+                    ExposingDefect::MissingOpenParen,
+                ));
+            }
+            None => {
+                return Err(Self::malformed_exposing(
+                    self.eof_err_span(),
+                    ExposingDefect::MissingOpenParen,
+                ));
+            }
+        }
         if self.peek_kind() == Some(&Tok::DotDot) {
-            self.bump()?;
-            self.expect(&Tok::RParen)?;
+            self.bump(Construct::ExposingList)?;
+            self.expect_exposing_close()?;
             return Ok(Exposing::All);
         }
         let mut items = Vec::new();
         loop {
             items.push(self.parse_exposed()?);
-            match self.peek_kind() {
-                Some(&Tok::Comma) => {
-                    self.bump()?;
+            match self.peek() {
+                Some(t) if t.kind == Tok::Comma => {
+                    self.bump(Construct::ExposingList)?;
                 }
-                Some(&Tok::RParen) => {
-                    self.bump()?;
+                Some(t) if t.kind == Tok::RParen => {
+                    self.bump(Construct::ExposingList)?;
                     break;
                 }
-                _ => return Err(self.err_here()),
+                Some(t) => {
+                    return Err(Self::malformed_exposing(
+                        t.span,
+                        ExposingDefect::BadSeparator,
+                    ));
+                }
+                None => {
+                    return Err(Self::malformed_exposing(
+                        self.eof_err_span(),
+                        ExposingDefect::BadSeparator,
+                    ));
+                }
             }
         }
         Ok(Exposing::List(items))
     }
 
+    /// Require the `)` that closes an `exposing (..)` clause.
+    fn expect_exposing_close(&mut self) -> DResult<()> {
+        match self.peek() {
+            Some(t) if t.kind == Tok::RParen => {
+                self.bump(Construct::ExposingList)?;
+                Ok(())
+            }
+            Some(t) => Err(Self::malformed_exposing(
+                t.span,
+                ExposingDefect::BadSeparator,
+            )),
+            None => Err(Self::malformed_exposing(
+                self.eof_err_span(),
+                ExposingDefect::BadSeparator,
+            )),
+        }
+    }
+
     fn parse_exposed(&mut self) -> DResult<Located<Exposed>> {
-        let tok = self.bump()?;
+        let tok = self.bump(Construct::ExposingList)?;
         let Tok::Ident(text) = &tok.kind else {
-            return Err(Diagnostic::Parse {
-                span: tok.span,
-                msg: ParseError::Unexpected,
-            });
+            return Err(Self::malformed_exposing(
+                tok.span,
+                ExposingDefect::NameNotIdentifier,
+            ));
         };
         let sym = self.interner.intern(text)?;
         let is_type = text.chars().next().is_some_and(|c| c.is_ascii_uppercase());
@@ -243,58 +428,85 @@ impl<'a> Parser<'a> {
         if self.peek_kind() != Some(&Tok::LParen) {
             return Ok(Privacy::Private);
         }
-        self.bump()?; // (
+        self.bump(Construct::ExposingList)?; // (
         if self.peek_kind() == Some(&Tok::DotDot) {
-            self.bump()?;
-            self.expect(&Tok::RParen)?;
+            self.bump(Construct::ExposingList)?;
+            self.expect_ctor_list_close()?;
             return Ok(Privacy::Public);
         }
         let mut ctors = Vec::new();
         loop {
-            let tok = self.bump()?;
+            let tok = self.bump(Construct::ExposingList)?;
             match &tok.kind {
                 Tok::Ident(text) => ctors.push(self.interner.intern(text)?),
                 _ => {
-                    return Err(Diagnostic::Parse {
-                        span: tok.span,
-                        msg: ParseError::Unexpected,
-                    });
+                    return Err(Self::malformed_exposing(
+                        tok.span,
+                        ExposingDefect::MalformedCtorList,
+                    ));
                 }
             }
-            match self.peek_kind() {
-                Some(&Tok::Comma) => {
-                    self.bump()?;
+            match self.peek() {
+                Some(t) if t.kind == Tok::Comma => {
+                    self.bump(Construct::ExposingList)?;
                 }
-                Some(&Tok::RParen) => {
-                    self.bump()?;
+                Some(t) if t.kind == Tok::RParen => {
+                    self.bump(Construct::ExposingList)?;
                     break;
                 }
-                _ => return Err(self.err_here()),
+                Some(t) => {
+                    return Err(Self::malformed_exposing(
+                        t.span,
+                        ExposingDefect::MalformedCtorList,
+                    ));
+                }
+                None => {
+                    return Err(Self::malformed_exposing(
+                        self.eof_err_span(),
+                        ExposingDefect::MalformedCtorList,
+                    ));
+                }
             }
         }
         Ok(Privacy::PublicCtors(ctors))
     }
 
+    /// Require the `)` that closes a `Type(..)` constructor list.
+    fn expect_ctor_list_close(&mut self) -> DResult<()> {
+        match self.peek() {
+            Some(t) if t.kind == Tok::RParen => {
+                self.bump(Construct::ExposingList)?;
+                Ok(())
+            }
+            Some(t) => Err(Self::malformed_exposing(
+                t.span,
+                ExposingDefect::MalformedCtorList,
+            )),
+            None => Err(Self::malformed_exposing(
+                self.eof_err_span(),
+                ExposingDefect::MalformedCtorList,
+            )),
+        }
+    }
+
     fn parse_import(&mut self) -> DResult<Import> {
-        self.expect(&Tok::Import)?;
+        // The caller has already peeked `import`.
+        self.bump(Construct::ModuleHeader)?;
         let name = self.parse_dotted_name()?;
         let alias = if self.peek_kind() == Some(&Tok::As) {
-            self.bump()?;
-            let tok = self.bump()?;
+            self.bump(Construct::ModuleHeader)?;
+            let tok = self.bump(Construct::ModuleHeader)?;
             match &tok.kind {
                 Tok::Ident(text) => Some(self.interner.intern(text)?),
                 _ => {
-                    return Err(Diagnostic::Parse {
-                        span: tok.span,
-                        msg: ParseError::Unexpected,
-                    });
+                    return Err(Self::unexpected_token(&tok, &[Expected::Identifier]));
                 }
             }
         } else {
             None
         };
         let exposing = if self.peek_kind() == Some(&Tok::Exposing) {
-            self.bump()?;
+            self.bump(Construct::ModuleHeader)?;
             let clause = self.parse_exposing()?;
             Located::new(name.span, clause)
         } else {
@@ -313,19 +525,17 @@ impl<'a> Parser<'a> {
         if self.peek_kind() == Some(&Tok::Type) {
             return self.parse_union().map(Decl::Union);
         }
-        let tok = self.bump()?;
+        let tok = self.bump(Construct::Definition)?;
         let Tok::Ident(text) = &tok.kind else {
-            return Err(Diagnostic::Parse {
-                span: tok.span,
-                msg: ParseError::Unexpected,
-            });
+            return Err(Self::unexpected_token(&tok, &[Expected::Identifier]));
         };
+        let binding_name: Box<str> = text.as_str().into();
         let name_sym = self.interner.intern(text)?;
         let name = Located::new(tok.span, name_sym);
         let name_col = tok.col;
 
         if self.peek_kind() == Some(&Tok::Colon) {
-            self.bump()?; // :
+            self.bump(Construct::Definition)?; // :
             let ty = self.parse_type(name_col, 0)?;
             return Ok(Decl::Annotation(name_sym, ty));
         }
@@ -334,7 +544,29 @@ impl<'a> Parser<'a> {
         while self.peek_is_pattern_atom_start() {
             patterns.push(self.parse_pattern_atom(0)?);
         }
-        self.expect(&Tok::Equals)?;
+
+        // The patterns must be followed by `=` before the body.
+        match self.peek() {
+            Some(t) if t.kind == Tok::Equals => {
+                self.bump(Construct::Definition)?;
+            }
+            Some(t) => {
+                return Err(Diagnostic::Parse {
+                    span: t.span,
+                    msg: ParseError::MissingEquals {
+                        binding: binding_name,
+                    },
+                });
+            }
+            None => {
+                return Err(Diagnostic::Parse {
+                    span: self.eof_err_span(),
+                    msg: ParseError::MissingEquals {
+                        binding: binding_name,
+                    },
+                });
+            }
+        }
         let body = self.parse_expr(name_col, 0)?;
         Ok(Decl::Value {
             name,
@@ -344,14 +576,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_union(&mut self) -> DResult<Located<Union>> {
-        let type_tok = self.expect(&Tok::Type)?;
+        // The caller has already peeked `type`.
+        let type_tok = self.bump(Construct::TypeDeclaration)?;
         let union_col = type_tok.col;
-        let name_tok = self.bump()?;
+        let name_tok = self.bump(Construct::TypeDeclaration)?;
         let Tok::Ident(name_text) = &name_tok.kind else {
-            return Err(Diagnostic::Parse {
-                span: name_tok.span,
-                msg: ParseError::Unexpected,
-            });
+            return Err(Self::malformed_type_decl(
+                name_tok.span,
+                TypeDeclDefect::MissingName,
+            ));
         };
         let name = Located::new(name_tok.span, self.interner.intern(name_text)?);
 
@@ -370,16 +603,33 @@ impl<'a> Parser<'a> {
             let Some((text, span)) = var else { break };
             let sym = self.intern(&text)?;
             vars.push(Located::new(span, sym));
-            self.bump()?;
+            self.bump(Construct::TypeDeclaration)?;
         }
 
-        self.expect(&Tok::Equals)?;
+        // The `=` before the constructors.
+        match self.peek() {
+            Some(t) if t.kind == Tok::Equals => {
+                self.bump(Construct::TypeDeclaration)?;
+            }
+            Some(t) => {
+                return Err(Self::malformed_type_decl(
+                    t.span,
+                    TypeDeclDefect::MissingEquals,
+                ));
+            }
+            None => {
+                return Err(Self::malformed_type_decl(
+                    self.eof_err_span(),
+                    TypeDeclDefect::MissingEquals,
+                ));
+            }
+        }
 
         let mut ctors = Vec::new();
         loop {
             ctors.push(self.parse_ctor(union_col)?);
             if self.peek_kind() == Some(&Tok::Pipe) {
-                self.bump()?;
+                self.bump(Construct::TypeDeclaration)?;
             } else {
                 break;
             }
@@ -390,13 +640,20 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_ctor(&mut self, threshold: u32) -> DResult<Located<Ctor>> {
-        let tok = self.bump()?;
+        let tok = self.bump(Construct::TypeDeclaration)?;
         let Tok::Ident(text) = &tok.kind else {
-            return Err(Diagnostic::Parse {
-                span: tok.span,
-                msg: ParseError::Unexpected,
-            });
+            return Err(Self::malformed_type_decl(
+                tok.span,
+                TypeDeclDefect::CtorNotIdentifier,
+            ));
         };
+        // Constructors must start with an uppercase letter.
+        if !text.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+            return Err(Self::malformed_type_decl(
+                tok.span,
+                TypeDeclDefect::CtorNotUppercase,
+            ));
+        }
         let name = self.interner.intern(text)?;
         let mut args = Vec::new();
         while self.peek_is_type_atom_in_block(threshold) {
@@ -409,14 +666,14 @@ impl<'a> Parser<'a> {
 
     fn parse_type(&mut self, threshold: u32, depth: u32) -> DResult<Located<TypeAnnotation>> {
         if depth > MAX_DEPTH {
-            return Err(self.too_deep());
+            return Err(self.too_deep(Construct::Type));
         }
         let left = self.parse_type_app(threshold, depth + 1)?;
         let arrow_in_block = self
             .peek()
             .is_some_and(|t| t.kind == Tok::Arrow && layout::continues_block(t, threshold));
         if arrow_in_block {
-            self.bump()?;
+            self.bump(Construct::Type)?;
             let right = self.parse_type(threshold, depth + 1)?;
             let span = Self::span_merge(left.span, right.span);
             Ok(Located::new(
@@ -430,7 +687,7 @@ impl<'a> Parser<'a> {
 
     fn parse_type_app(&mut self, threshold: u32, depth: u32) -> DResult<Located<TypeAnnotation>> {
         if depth > MAX_DEPTH {
-            return Err(self.too_deep());
+            return Err(self.too_deep(Construct::Type));
         }
         let head = self.parse_type_atom(depth + 1)?;
         let mut args = Vec::new();
@@ -451,42 +708,49 @@ impl<'a> Parser<'a> {
             // A type variable / arrow cannot be applied in the M0 grammar.
             _ => Err(Diagnostic::Parse {
                 span: head.span,
-                msg: ParseError::Unexpected,
+                msg: ParseError::TypeArgsOnNonConstructor,
             }),
         }
     }
 
     fn parse_type_atom(&mut self, depth: u32) -> DResult<Located<TypeAnnotation>> {
         if depth > MAX_DEPTH {
-            return Err(self.too_deep());
+            return Err(self.too_deep(Construct::Type));
         }
-        let tok = self.bump()?;
+        let tok = self.bump(Construct::Type)?;
         match &tok.kind {
             Tok::LParen => {
+                let opener = tok.span;
                 let inner = self.parse_type(0, depth + 1)?;
-                self.expect(&Tok::RParen)?;
+                self.close_paren(opener, Construct::Type)?;
                 Ok(Located::new(tok.span, inner.value))
             }
             Tok::Ident(text) => {
                 let first_upper = text.chars().next().is_some_and(|c| c.is_ascii_uppercase());
                 if first_upper {
+                    // M0 does not model qualified types (`Module.Type`). Reject a
+                    // dotted upper-case name rather than build a non-reference AST.
+                    if text.contains('.') {
+                        return Err(Diagnostic::Parse {
+                            span: tok.span,
+                            msg: ParseError::ExpectedType,
+                        });
+                    }
                     let empty = self.interner.intern("")?;
-                    let segs = text
-                        .split('.')
-                        .map(|s| self.interner.intern(s))
-                        .collect::<DResult<Vec<Symbol>>>()?;
+                    let seg = self.interner.intern(text)?;
                     Ok(Located::new(
                         tok.span,
-                        TypeAnnotation::TType(empty, segs, Vec::new()),
+                        TypeAnnotation::TType(empty, vec![seg], Vec::new()),
                     ))
                 } else {
                     let sym = self.interner.intern(text)?;
                     Ok(Located::new(tok.span, TypeAnnotation::TVar(sym)))
                 }
             }
+            // A token that cannot begin a type.
             _ => Err(Diagnostic::Parse {
                 span: tok.span,
-                msg: ParseError::Unexpected,
+                msg: ParseError::ExpectedType,
             }),
         }
     }
@@ -501,14 +765,14 @@ impl<'a> Parser<'a> {
 
     fn parse_expr(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
         if depth > MAX_DEPTH {
-            return Err(self.too_deep());
+            return Err(self.too_deep(Construct::Expression));
         }
         let first = self.parse_app(threshold, depth + 1)?;
         let mut ops: Vec<(Expr, Located<Symbol>)> = Vec::new();
         let mut operand = first;
         while let Some((op, op_span)) = self.peek_binop(threshold) {
             let op_sym = self.intern(op)?;
-            self.bump()?;
+            self.bump(Construct::Expression)?;
             ops.push((operand, Located::new(op_span, op_sym)));
             operand = self.parse_app(threshold, depth + 1)?;
         }
@@ -523,7 +787,7 @@ impl<'a> Parser<'a> {
 
     fn parse_app(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
         if depth > MAX_DEPTH {
-            return Err(self.too_deep());
+            return Err(self.too_deep(Construct::Expression));
         }
         let head = self.parse_atom(threshold, depth + 1)?;
         let mut args = Vec::new();
@@ -570,16 +834,17 @@ impl<'a> Parser<'a> {
 
     fn parse_atom(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
         if depth > MAX_DEPTH {
-            return Err(self.too_deep());
+            return Err(self.too_deep(Construct::Expression));
         }
         if self.peek_kind() == Some(&Tok::Case) {
             return self.parse_case(threshold, depth + 1);
         }
-        let tok = self.bump()?;
+        let tok = self.bump(Construct::Expression)?;
         match &tok.kind {
             Tok::LParen => {
+                let opener = tok.span;
                 let inner = self.parse_expr(0, depth + 1)?;
-                self.expect(&Tok::RParen)?;
+                self.close_paren(opener, Construct::ParenGroup)?;
                 Ok(Located::new(tok.span, inner.value))
             }
             Tok::Int(n) => Ok(Located::new(tok.span, Expr_::Int(*n))),
@@ -587,10 +852,7 @@ impl<'a> Parser<'a> {
                 let expr = self.ident_expr(text)?;
                 Ok(Located::new(tok.span, expr))
             }
-            _ => Err(Diagnostic::Parse {
-                span: tok.span,
-                msg: ParseError::Unexpected,
-            }),
+            _ => Err(Self::unexpected_token(&tok, &[Expected::Expression])),
         }
     }
 
@@ -617,31 +879,72 @@ impl<'a> Parser<'a> {
 
     fn parse_case(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
         if depth > MAX_DEPTH {
-            return Err(self.too_deep());
+            return Err(self.too_deep(Construct::Expression));
         }
-        let case_tok = self.expect(&Tok::Case)?;
+        // The caller has already peeked `case`.
+        let case_tok = self.bump(Construct::Expression)?;
         let scrutinee = self.parse_expr(threshold, depth + 1)?;
-        self.expect(&Tok::Of)?;
 
-        let Some(first) = self.peek() else {
-            return Err(self.eof_err());
+        // `of` after the scrutinee.
+        match self.peek() {
+            Some(t) if t.kind == Tok::Of => {
+                self.bump(Construct::CaseBranch)?;
+            }
+            Some(t) => {
+                return Err(Self::malformed_case(t.span, CaseDefect::MissingOf));
+            }
+            None => {
+                return Err(Self::malformed_case(
+                    self.eof_err_span(),
+                    CaseDefect::MissingOf,
+                ));
+            }
+        }
+
+        let (arm_col, first_span) = match self.peek() {
+            Some(t) => (t.col, t.span),
+            None => {
+                return Err(Self::malformed_case(
+                    self.eof_err_span(),
+                    CaseDefect::NoBranches,
+                ));
+            }
         };
-        let arm_col = first.col;
         if arm_col <= threshold {
-            return Err(self.err_here());
+            return Err(Self::malformed_case(
+                first_span,
+                CaseDefect::FirstBranchNotIndented,
+            ));
         }
 
         let mut arms = Vec::new();
         let mut end = scrutinee.span;
         while self.peek_aligned_at(arm_col) {
             let pat = self.parse_pattern(depth + 1)?;
-            self.expect(&Tok::Arrow)?;
+            // `->` in this branch.
+            match self.peek() {
+                Some(t) if t.kind == Tok::Arrow => {
+                    self.bump(Construct::CaseBranch)?;
+                }
+                Some(t) => {
+                    return Err(Self::malformed_case(t.span, CaseDefect::MissingArrow));
+                }
+                None => {
+                    return Err(Self::malformed_case(
+                        self.eof_err_span(),
+                        CaseDefect::MissingArrow,
+                    ));
+                }
+            }
             let body = self.parse_expr(arm_col, depth + 1)?;
             end = body.span;
             arms.push((pat, body));
         }
         if arms.is_empty() {
-            return Err(self.err_here());
+            return Err(Self::malformed_case(
+                self.err_here_span(),
+                CaseDefect::NoBranches,
+            ));
         }
         let span = Self::span_merge(case_tok.span, end);
         Ok(Located::new(span, Expr_::Case(Box::new(scrutinee), arms)))
@@ -652,7 +955,7 @@ impl<'a> Parser<'a> {
     /// A full pattern, gathering constructor sub-patterns (case-arm position).
     fn parse_pattern(&mut self, depth: u32) -> DResult<Pattern> {
         if depth > MAX_DEPTH {
-            return Err(self.too_deep());
+            return Err(self.too_deep(Construct::Pattern));
         }
         let head = self.parse_pattern_atom(depth + 1)?;
         // Only a constructor head may take sub-patterns.
@@ -675,40 +978,37 @@ impl<'a> Parser<'a> {
 
     fn parse_pattern_atom(&mut self, depth: u32) -> DResult<Pattern> {
         if depth > MAX_DEPTH {
-            return Err(self.too_deep());
+            return Err(self.too_deep(Construct::Pattern));
         }
-        let tok = self.bump()?;
+        let tok = self.bump(Construct::Pattern)?;
         match &tok.kind {
             Tok::Underscore => Ok(Located::new(tok.span, Pattern_::PAnything)),
             Tok::LParen => {
+                let opener = tok.span;
                 let inner = self.parse_pattern(depth + 1)?;
-                self.expect(&Tok::RParen)?;
+                self.close_paren(opener, Construct::Pattern)?;
                 Ok(Located::new(tok.span, inner.value))
             }
             Tok::Ident(text) => {
                 let first_upper = text.chars().next().is_some_and(|c| c.is_ascii_uppercase());
                 if first_upper {
-                    let mut segs = text
-                        .split('.')
-                        .map(|s| self.interner.intern(s))
-                        .collect::<DResult<Vec<Symbol>>>()?;
-                    let name = match segs.pop() {
-                        Some(sym) => sym,
-                        None => self.interner.intern(text)?,
-                    };
+                    // M0 does not model qualified constructors (`Module.Ctor`) in
+                    // pattern position. Reject a dotted upper-case name rather than
+                    // drop the qualifier into a non-reference AST.
+                    if text.contains('.') {
+                        return Err(Self::unexpected_token(&tok, &[Expected::Constructor]));
+                    }
+                    let name = self.interner.intern(text)?;
                     Ok(Located::new(
                         tok.span,
-                        Pattern_::PCtor(name, segs, Vec::new()),
+                        Pattern_::PCtor(name, Vec::new(), Vec::new()),
                     ))
                 } else {
                     let sym = self.interner.intern(text)?;
                     Ok(Located::new(tok.span, Pattern_::PVar(sym)))
                 }
             }
-            _ => Err(Diagnostic::Parse {
-                span: tok.span,
-                msg: ParseError::Unexpected,
-            }),
+            _ => Err(Self::unexpected_token(&tok, &[Expected::Pattern])),
         }
     }
 
