@@ -37,6 +37,9 @@ version = "0.0.0"
 [[package]]
 name = "sky_intern"
 version = "0.0.0"
+dependencies = [
+ "sky_diagnostics",
+]
 
 [[package]]
 name = "sky_ir"

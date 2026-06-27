@@ -67,7 +67,10 @@ mod tests {
         i: &Interner,
         name: &str,
     ) -> Option<&'a sky_ir::Func> {
-        module.funcs.iter().find(|f| i.resolve(f.name) == name)
+        module
+            .funcs
+            .iter()
+            .find(|f| i.resolve(f.name) == Some(name))
     }
 
     #[test]
@@ -85,7 +88,7 @@ mod tests {
                 .name
                 .0
                 .iter()
-                .map(|&s| i.resolve(s))
+                .filter_map(|&s| i.resolve(s))
                 .collect::<Vec<_>>(),
             vec!["Main"]
         );
@@ -110,8 +113,8 @@ mod tests {
         let Some(TypeDef::Enum(en)) = module.types.first() else {
             return;
         };
-        assert_eq!(i.resolve(en.name), "Msg");
-        let variants: Vec<&str> = en.variants.iter().map(|&s| i.resolve(s)).collect();
+        assert_eq!(i.resolve(en.name), Some("Msg"));
+        let variants: Vec<&str> = en.variants.iter().filter_map(|&s| i.resolve(s)).collect();
         assert_eq!(variants, vec!["Increment", "Decrement"]);
     }
 
@@ -136,9 +139,9 @@ mod tests {
         let Some((p1, t1)) = update.params.get(1) else {
             return;
         };
-        assert_eq!(i.resolve(*p0), "msg");
-        assert!(matches!(t0, IrType::Enum(s) if i.resolve(*s) == "Msg"));
-        assert_eq!(i.resolve(*p1), "count");
+        assert_eq!(i.resolve(*p0), Some("msg"));
+        assert!(matches!(t0, IrType::Enum(s) if i.resolve(*s) == Some("Msg")));
+        assert_eq!(i.resolve(*p1), Some("count"));
         assert_eq!(*t1, IrType::Int);
 
         // return type : Int.
@@ -150,13 +153,13 @@ mod tests {
             "update body must be a Match"
         );
         let Expr::Match(m) = &update.body else { return };
-        assert!(matches!(m.scrutinee(), Expr::Var(s) if i.resolve(*s) == "msg"));
+        assert!(matches!(m.scrutinee(), Expr::Var(s) if i.resolve(*s) == Some("msg")));
         assert_eq!(m.arms().len(), 2);
 
         // first arm: Increment -> (count + 1).
         let Some(arm0) = m.arms().first() else { return };
         let sky_ir::Pat::Ctor { variant, .. } = arm0.pat;
-        assert_eq!(i.resolve(variant), "Increment");
+        assert_eq!(i.resolve(variant), Some("Increment"));
         assert!(matches!(&arm0.body, Expr::BinOp { op: BinOp::Add, .. }));
 
         // second arm: Decrement -> (count - 1).

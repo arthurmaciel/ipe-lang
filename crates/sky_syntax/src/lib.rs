@@ -13,7 +13,7 @@ pub use ast::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sky_diagnostics::{Located, Span};
+    use sky_diagnostics::{DResult, Located, Span};
     use sky_intern::{Interner, Symbol};
 
     fn sp() -> Span {
@@ -27,21 +27,21 @@ mod tests {
     /// Build, by hand, the Source AST the parser is expected to produce for
     /// `tests/golden/m0/Main.sky`. Returns the module plus the interner so the
     /// caller can resolve symbols if needed.
-    fn golden_module(i: &mut Interner) -> Module {
-        let main = i.intern("main");
-        let msg_ty = i.intern("Msg");
-        let int_ty = i.intern("Int");
-        let increment = i.intern("Increment");
-        let decrement = i.intern("Decrement");
-        let update = i.intern("update");
-        let msg_arg = i.intern("msg");
-        let count = i.intern("count");
-        let plus = i.intern("+");
-        let minus = i.intern("-");
-        let println = i.intern("println");
-        let string_mod = i.intern("String");
-        let from_int = i.intern("fromInt");
-        let empty = i.intern("");
+    fn golden_module(i: &mut Interner) -> DResult<Module> {
+        let main = i.intern("main")?;
+        let msg_ty = i.intern("Msg")?;
+        let int_ty = i.intern("Int")?;
+        let increment = i.intern("Increment")?;
+        let decrement = i.intern("Decrement")?;
+        let update = i.intern("update")?;
+        let msg_arg = i.intern("msg")?;
+        let count = i.intern("count")?;
+        let plus = i.intern("+")?;
+        let minus = i.intern("-")?;
+        let println = i.intern("println")?;
+        let string_mod = i.intern("String")?;
+        let from_int = i.intern("fromInt")?;
+        let empty = i.intern("")?;
 
         // type Msg = Increment | Decrement
         let union = Union {
@@ -114,23 +114,27 @@ mod tests {
             type_annotation: None,
         };
 
-        Module {
-            name: loc(vec![i.intern("Main")]),
+        let main_mod = i.intern("Main")?;
+        let sky = i.intern("Sky")?;
+        let core = i.intern("Core")?;
+        let prelude = i.intern("Prelude")?;
+        Ok(Module {
+            name: loc(vec![main_mod]),
             exposing: loc(Exposing::List(vec![loc(Exposed::Value(main))])),
             imports: vec![Import {
-                name: loc(vec![i.intern("Sky"), i.intern("Core"), i.intern("Prelude")]),
+                name: loc(vec![sky, core, prelude]),
                 alias: None,
                 exposing: loc(Exposing::All),
             }],
             values: vec![loc(update_value), loc(main_value)],
             unions: vec![loc(union)],
-        }
+        })
     }
 
     #[test]
-    fn golden_ast_constructs_and_field_access_compiles() {
+    fn golden_ast_constructs_and_field_access_compiles() -> DResult<()> {
         let mut i = Interner::new();
-        let m = golden_module(&mut i);
+        let m = golden_module(&mut i)?;
 
         // Module-level field access compiles.
         assert_eq!(m.imports.len(), 1);
@@ -138,7 +142,7 @@ mod tests {
         assert_eq!(m.values.len(), 2);
 
         // Drill into the union (iterate to avoid fallible indexing).
-        let msg_ty = i.intern("Msg");
+        let msg_ty = i.intern("Msg")?;
         for u in &m.unions {
             assert_eq!(u.value.ctors.len(), 2);
             assert_eq!(u.value.name.value, msg_ty);
@@ -146,8 +150,8 @@ mod tests {
 
         // Inspect each value: `update` carries a type annotation + two
         // patterns + a `case` body; `main` carries none + a `Call` body.
-        let update_sym = i.intern("update");
-        let main_sym = i.intern("main");
+        let update_sym = i.intern("update")?;
+        let main_sym = i.intern("main")?;
         let mut saw_update = false;
         let mut saw_main = false;
         for v in &m.values {
@@ -165,12 +169,13 @@ mod tests {
             }
         }
         assert!(saw_update && saw_main);
+        Ok(())
     }
 
     #[test]
-    fn ast_partial_eq_round_trips() {
+    fn ast_partial_eq_round_trips() -> DResult<()> {
         let mut i = Interner::new();
-        let a = golden_module(&mut i);
+        let a = golden_module(&mut i)?;
         let b = a.clone();
         assert_eq!(a, b);
 
@@ -178,18 +183,21 @@ mod tests {
         let mut c = a.clone();
         c.imports.clear();
         assert_ne!(a, c);
+        Ok(())
     }
 
     #[test]
-    fn unused_variants_construct_and_compare() {
+    fn unused_variants_construct_and_compare() -> DResult<()> {
         // PAnything, TVar are not in the golden program; exercise them so the
         // whole M0 enum surface is covered by PartialEq.
         let anything: Pattern_ = Pattern_::PAnything;
         assert_eq!(anything, Pattern_::PAnything);
 
         let mut i = Interner::new();
-        let a: Symbol = i.intern("a");
+        let a: Symbol = i.intern("a")?;
         assert_eq!(TypeAnnotation::TVar(a), TypeAnnotation::TVar(a));
-        assert_ne!(TypeAnnotation::TVar(a), TypeAnnotation::TVar(i.intern("b")));
+        let b = i.intern("b")?;
+        assert_ne!(TypeAnnotation::TVar(a), TypeAnnotation::TVar(b));
+        Ok(())
     }
 }

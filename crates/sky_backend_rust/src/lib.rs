@@ -53,7 +53,7 @@ impl Backend for RustBackend<'_> {
     }
 
     fn emit(&self, program: &Program) -> DResult<EmittedProject> {
-        let ctx = EmitCtx::build(self.interner, program);
+        let ctx = EmitCtx::build(self.interner, program)?;
         project::emit_program(&ctx, program)
     }
 }
@@ -70,34 +70,39 @@ pub(crate) struct EmitCtx<'a> {
 }
 
 impl<'a> EmitCtx<'a> {
-    fn build(interner: &'a Interner, program: &Program) -> Self {
+    fn build(interner: &'a Interner, program: &Program) -> DResult<Self> {
         let mut enum_names = BTreeMap::new();
         let mut func_names = BTreeMap::new();
         for module in &program.modules {
-            let segs: Vec<&str> = module.name.0.iter().map(|s| interner.resolve(*s)).collect();
+            let segs = module
+                .name
+                .0
+                .iter()
+                .map(|s| resolve_sym(interner, *s))
+                .collect::<DResult<Vec<&str>>>()?;
             for ty in &module.types {
                 let TypeDef::Enum(def) = ty;
                 enum_names.insert(
                     def.name,
-                    naming::enum_name(&segs, interner.resolve(def.name)),
+                    naming::enum_name(&segs, resolve_sym(interner, def.name)?),
                 );
             }
             for func in &module.funcs {
                 func_names.insert(
                     func.id,
-                    naming::module_value(&segs, interner.resolve(func.name)),
+                    naming::module_value(&segs, resolve_sym(interner, func.name)?),
                 );
             }
         }
-        Self {
+        Ok(Self {
             interner,
             enum_names,
             func_names,
-        }
+        })
     }
 
-    fn resolve(&self, sym: Symbol) -> &str {
-        self.interner.resolve(sym)
+    fn resolve(&self, sym: Symbol) -> DResult<&str> {
+        resolve_sym(self.interner, sym)
     }
 
     fn enum_name(&self, ty: Symbol) -> DResult<&str> {
@@ -119,4 +124,17 @@ impl<'a> EmitCtx<'a> {
                 detail: format!("no Rust name for function id {}", id.as_raw()),
             })
     }
+}
+
+/// Resolve a symbol that the IR guarantees came from `interner`. A `None` here
+/// means the IR carried a symbol from a different interner — an internal
+/// invariant violation, surfaced as a [`Diagnostic::CompilerBug`] rather than a
+/// silent empty name.
+fn resolve_sym(interner: &Interner, sym: Symbol) -> DResult<&str> {
+    interner
+        .resolve(sym)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::resolve_sym",
+            detail: format!("symbol {} not present in interner", sym.as_raw()),
+        })
 }

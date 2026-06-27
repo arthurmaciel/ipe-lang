@@ -3,5 +3,8 @@ name = "sky_intern"
 edition.workspace = true
 version.workspace = true
 
+[dependencies]
+sky_diagnostics = { path = "../sky_diagnostics" }
+
 [lints]
 workspace = true

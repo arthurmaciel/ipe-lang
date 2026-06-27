@@ -47,7 +47,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     let mut variant_lines = Vec::with_capacity(def.variants.len());
     let mut show_arms = Vec::with_capacity(def.variants.len());
     for variant in &def.variants {
-        let vn = ctx.resolve(*variant);
+        let vn = ctx.resolve(*variant)?;
         variant_lines.push(format!("    {vn},"));
         show_arms.push(format!("            {name}::{vn} => \"{vn}\".to_string(),"));
     }

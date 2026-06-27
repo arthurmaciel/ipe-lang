@@ -18,7 +18,7 @@ use crate::env::{CtorHome, Env, VarHome};
 /// nor a kernel function.
 pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::Module> {
     let home = m.name.value.clone();
-    let mut env = Env::initial(home.clone(), interner);
+    let mut env = Env::initial(home.clone(), interner)?;
 
     // Collect the local union names first; the type canonicaliser sets a
     // constructor application's home to this module only for these names.
@@ -264,7 +264,7 @@ fn canonicalise_binops(
     env: &Env,
     interner: &mut Interner,
 ) -> DResult<canon::Expr_> {
-    let basics = interner.intern("Basics");
+    let basics = interner.intern("Basics")?;
 
     // Fold left: (((operand0 op0 operand1) op1 operand2) ...) opN final.
     let mut iter = pairs.iter();
@@ -278,12 +278,12 @@ fn canonicalise_binops(
 
     for (operand, op) in iter {
         let rhs = canonicalise_expr(operand, env, interner)?;
-        acc_expr = combine_binop(acc_expr, pending_op, rhs, basics, interner);
+        acc_expr = combine_binop(acc_expr, pending_op, rhs, basics, interner)?;
         pending_op = *op;
     }
 
     let rhs = canonicalise_expr(final_, env, interner)?;
-    Ok(combine_binop(acc_expr, pending_op, rhs, basics, interner).value)
+    Ok(combine_binop(acc_expr, pending_op, rhs, basics, interner)?.value)
 }
 
 /// Build a single resolved binary-operation node.
@@ -293,10 +293,10 @@ fn combine_binop(
     rhs: canon::Expr,
     basics: Symbol,
     interner: &mut Interner,
-) -> canon::Expr {
-    let func = resolve_op_func(op.value, interner);
+) -> DResult<canon::Expr> {
+    let func = resolve_op_func(op.value, interner)?;
     let span = Span::new(lhs.span.lo, rhs.span.hi);
-    Located::new(
+    Ok(Located::new(
         span,
         canon::Expr_::Binop {
             op: op.value,
@@ -305,33 +305,33 @@ fn combine_binop(
             lhs: Box::new(lhs),
             rhs: Box::new(rhs),
         },
-    )
+    ))
 }
 
 /// Map an operator symbol to its kernel function name. M0 subset of
 /// `Expression.resolveOpName`.
-fn resolve_op_func(op: Symbol, interner: &mut Interner) -> Symbol {
+fn resolve_op_func(op: Symbol, interner: &mut Interner) -> DResult<Symbol> {
     let func: Option<&'static str> = match interner.resolve(op) {
-        "+" => Some("add"),
-        "-" => Some("sub"),
-        "*" => Some("mul"),
-        "/" => Some("fdiv"),
-        "//" => Some("idiv"),
-        "==" => Some("eq"),
-        "/=" => Some("neq"),
-        "<" => Some("lt"),
-        ">" => Some("gt"),
-        "<=" => Some("le"),
-        ">=" => Some("ge"),
-        "&&" => Some("and"),
-        "||" => Some("or"),
-        "++" => Some("append"),
+        Some("+") => Some("add"),
+        Some("-") => Some("sub"),
+        Some("*") => Some("mul"),
+        Some("/") => Some("fdiv"),
+        Some("//") => Some("idiv"),
+        Some("==") => Some("eq"),
+        Some("/=") => Some("neq"),
+        Some("<") => Some("lt"),
+        Some(">") => Some("gt"),
+        Some("<=") => Some("le"),
+        Some(">=") => Some("ge"),
+        Some("&&") => Some("and"),
+        Some("||") => Some("or"),
+        Some("++") => Some("append"),
         // Unknown operators map to their own name under Basics, matching the
         // Haskell fall-through (`_ -> Can.VarKernel "Basics" op`).
         _ => None,
     };
     // The immutable borrow above ends here, so interning is now permitted.
-    func.map_or(op, |name| interner.intern(name))
+    func.map_or(Ok(op), |name| interner.intern(name))
 }
 
 /// Canonicalise a type annotation. M0 subset of `Canonicalise.Type`.

@@ -42,11 +42,11 @@ fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
 pub fn emit_expr(ctx: &EmitCtx, expr: &Expr, indent: usize) -> DResult<String> {
     match expr {
         Expr::Int(n) => Ok(n.to_string()),
-        Expr::Var(sym) => Ok(ctx.resolve(*sym).to_owned()),
+        Expr::Var(sym) => Ok(ctx.resolve(*sym)?.to_owned()),
         Expr::Ctor { ty, variant } => Ok(format!(
             "{}::{}",
             ctx.enum_name(*ty)?,
-            ctx.resolve(*variant)
+            ctx.resolve(*variant)?
         )),
         Expr::BinOp { op, lhs, rhs } => {
             let l = emit_expr(ctx, lhs, indent)?;
@@ -68,7 +68,7 @@ pub fn emit_expr(ctx: &EmitCtx, expr: &Expr, indent: usize) -> DResult<String> {
             let mut arms = Vec::with_capacity(m.arms().len());
             for arm in m.arms() {
                 let Pat::Ctor { ty, variant } = &arm.pat;
-                let pat = format!("{}::{}", ctx.enum_name(*ty)?, ctx.resolve(*variant));
+                let pat = format!("{}::{}", ctx.enum_name(*ty)?, ctx.resolve(*variant)?);
                 let body = emit_expr(ctx, &arm.body, indent + 1)?;
                 arms.push(format!("{arm_indent}{pat} => {body},"));
             }
@@ -91,7 +91,7 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     for (param, ty) in &func.params {
         params.push(format!(
             "{}: {}",
-            ctx.resolve(*param),
+            ctx.resolve(*param)?,
             render_type(ctx, ty)?
         ));
     }
