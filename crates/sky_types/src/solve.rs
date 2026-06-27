@@ -9,6 +9,7 @@
 //! bound (`SKY_SOLVER_BUDGET`) carries over verbatim in spirit.
 
 use sky_diagnostics::{DResult, Diagnostic, Span, TypeError};
+use sky_intern::Interner;
 
 use crate::ty::Content;
 use crate::unify::unify;
@@ -31,11 +32,15 @@ pub struct Constraint {
     pub rhs: VarId,
 }
 
-/// A decrementing solver-step budget. Each unify/occurs step ticks it; reaching
-/// zero raises [`TypeError::BudgetExceeded`]. A budget of `None` is disabled
-/// (the `SKY_SOLVER_BUDGET=0` escape hatch).
+/// A decrementing solver-step budget. Each unify/occurs/zonk step ticks it;
+/// reaching zero raises [`TypeError::StepBudgetExceeded`] carrying the original
+/// `limit` (so the help line can name the value to raise). A budget of `None`
+/// is disabled (the `SKY_SOLVER_BUDGET=0` escape hatch).
 pub struct Budget {
     remaining: Option<u64>,
+    /// The step cap this budget was created with, reported in the diagnostic.
+    /// `0` for an unbounded budget (never surfaced — it cannot be exhausted).
+    limit: u64,
 }
 
 impl Budget {
@@ -44,13 +49,17 @@ impl Budget {
     pub const fn new(steps: u64) -> Self {
         Self {
             remaining: Some(steps),
+            limit: steps,
         }
     }
 
     /// A disabled (unbounded) budget.
     #[must_use]
     pub const fn unbounded() -> Self {
-        Self { remaining: None }
+        Self {
+            remaining: None,
+            limit: 0,
+        }
     }
 
     /// Resolve the budget from the environment, mirroring the Haskell
@@ -72,7 +81,8 @@ impl Budget {
     /// Consume one step.
     ///
     /// # Errors
-    /// [`TypeError::BudgetExceeded`] when the budget is exhausted.
+    /// [`TypeError::StepBudgetExceeded`] when the budget is exhausted, carrying
+    /// the configured `limit`.
     pub const fn tick(&mut self) -> DResult<()> {
         if let Some(remaining) = self.remaining.as_mut() {
             match remaining.checked_sub(1) {
@@ -80,7 +90,7 @@ impl Budget {
                 None => {
                     return Err(Diagnostic::Type {
                         span: Span::DUMMY,
-                        msg: TypeError::BudgetExceeded,
+                        msg: TypeError::StepBudgetExceeded { budget: self.limit },
                     });
                 }
             }
@@ -97,10 +107,11 @@ impl Budget {
 pub fn solve(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
+    interner: &Interner,
     constraints: &[Constraint],
 ) -> DResult<()> {
     for c in constraints {
-        unify(uf, budget, c.span, c.lhs, c.rhs)?;
+        unify(uf, budget, interner, c.span, c.lhs, c.rhs)?;
     }
     Ok(())
 }

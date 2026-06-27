@@ -16,20 +16,28 @@
 use std::collections::BTreeMap;
 
 use sky_canon::ast as canon;
-use sky_diagnostics::{DResult, Diagnostic, Span};
+use sky_diagnostics::{DResult, Diagnostic, Span, TypeError};
 use sky_intern::{Interner, Symbol};
 
-use crate::solve::Constraint;
+use crate::doc::canon_type_to_doc;
+use crate::solve::{Budget, Constraint};
 use crate::ty::{Content, FlatType, Ty, from_canon};
 use crate::unionfind::{UnionFind, VarId};
 
 /// `where_` tag for any `CompilerBug` raised during constraint generation.
 const STAGE: &str = "sky_types::constrain";
 
-/// Maximum structural depth [`Builder::zonk`] walks before declaring a type
-/// pathologically deep. The occurs check in unification rules out true cycles,
-/// so this bound is only ever hit on adversarial input.
-const ZONK_DEPTH_LIMIT: u32 = 100_000;
+/// Maximum number of nodes [`zonk`] reads back from a single type before
+/// declaring it pathologically deep. The occurs check in unification rules out
+/// true cycles, so this bound is only ever hit on adversarial input.
+///
+/// Kept deliberately **well under** the native-stack ceiling (a few thousand,
+/// not the previous 100 000): the [`Ty`] this produces is then walked
+/// recursively by the renderer ([`crate::doc::ty_to_doc`]), so capping the node
+/// count here keeps that downstream recursion provably stack-safe. The
+/// read-back itself is iterative (an explicit work stack), so it never grows the
+/// native stack regardless of the bound.
+const ZONK_NODE_LIMIT: u32 = 4_096;
 
 /// Interned symbols for the built-in type constructors the inferencer needs to
 /// name. `Int` / `String` usually already exist (from the source), but `Task`
@@ -190,12 +198,24 @@ impl<'a> Builder<'a> {
     fn constrain_def(&mut self, def: &canon::Def) -> DResult<()> {
         match def {
             canon::Def::Typed {
-                patterns, body, ty, ..
+                name,
+                patterns,
+                body,
+                ty,
+                ..
             } => {
                 let mut local = BTreeMap::new();
                 let mut cursor = ty;
                 for pat in patterns {
-                    let (arg_ty, rest) = peel_arrow(cursor)?;
+                    let (arg_ty, rest) = match cursor {
+                        canon::Type::Lambda(a, b) => (a.as_ref(), b.as_ref()),
+                        // The binding writes more parameter patterns than its
+                        // annotation has arrows (`f a b = …` with `f : Int`).
+                        // Parse-don't-validate: surface a user-facing
+                        // SKY-T0004 with the binding span + the written
+                        // signature, not a CompilerBug.
+                        _ => return Err(self.too_many_parameters(name, ty)),
+                    };
                     let arg = from_canon(arg_ty);
                     let arg_var = self.instantiate(&arg)?;
                     Self::bind_param(&mut local, pat, arg_var);
@@ -221,6 +241,32 @@ impl<'a> Builder<'a> {
                 self.untyped.insert(name.value, body_var);
                 Ok(())
             }
+        }
+    }
+
+    /// Build the SKY-T0004 diagnostic for a binding with more parameter
+    /// patterns than its annotation has arrows. Resolving the name / rendering
+    /// the signature can itself only fail on a forged symbol, in which case
+    /// that internal bug is surfaced instead.
+    fn too_many_parameters(&self, name: &sky_diagnostics::Located<Symbol>, ty: &canon::Type) -> Diagnostic {
+        let binding = match self.interner.resolve(name.value) {
+            Some(s) => Box::from(s),
+            None => {
+                return Diagnostic::CompilerBug {
+                    where_: "intern.resolve",
+                    detail: format!("no backing string for symbol {}", name.value.as_raw()),
+                };
+            }
+        };
+        match canon_type_to_doc(ty, self.interner) {
+            Ok(signature) => Diagnostic::Type {
+                span: name.span,
+                msg: TypeError::TooManyParameters {
+                    binding,
+                    signature: Box::new(signature),
+                },
+            },
+            Err(bug) => bug,
         }
     }
 
@@ -371,56 +417,107 @@ impl<'a> Builder<'a> {
     }
 }
 
+/// A single step of the iterative [`zonk`] work stack.
+///
+/// `Visit` reads one union-find node and pushes either a leaf result or the
+/// `Build*` task plus its children's `Visit`s; the `Build*` tasks reassemble a
+/// parent [`Ty`] once its children's results sit on the result stack.
+enum ZonkTask {
+    /// Resolve and read back one variable.
+    Visit(VarId),
+    /// Pop two results (`arg`, then `result`) and push a `Fun`.
+    BuildFun,
+    /// Pop `arity` results and push a `Con` over them.
+    BuildCon {
+        module: Vec<Symbol>,
+        name: Symbol,
+        arity: usize,
+    },
+}
+
 /// Read a settled union-find variable back into a resolved [`Ty`].
 ///
 /// Called after [`crate::solve::solve`] has discharged every constraint. The
-/// occurs check in unification guarantees the structure is acyclic, so the
-/// depth bound is only ever hit on adversarial input.
+/// occurs check in unification guarantees the structure is acyclic, so the node
+/// bound is only ever hit on adversarial input.
+///
+/// **Iterative.** The walk runs over an explicit heap-allocated work stack
+/// (mirroring the iterative `find` in `unionfind.rs`), so it never grows the
+/// native call stack regardless of how deep the type is. Each node visited
+/// ticks the shared [`Budget`] (a DOS bound) and consumes one of
+/// [`ZONK_NODE_LIMIT`] per-call nodes (a stack-safety bound on the renderer that
+/// later walks the result).
 ///
 /// # Errors
 /// [`Diagnostic::CompilerBug`] on a union-find invariant violation or if the
-/// structure is deeper than [`ZONK_DEPTH_LIMIT`].
-pub fn zonk(uf: &mut UnionFind<Content>, var: VarId) -> DResult<Ty> {
-    zonk_depth(uf, var, ZONK_DEPTH_LIMIT)
-}
+/// structure has more than [`ZONK_NODE_LIMIT`] nodes; [`TypeError::StepBudgetExceeded`]
+/// if the shared budget is exhausted.
+pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DResult<Ty> {
+    let mut work: Vec<ZonkTask> = vec![ZonkTask::Visit(var)];
+    let mut results: Vec<Ty> = Vec::new();
+    let mut nodes_left = ZONK_NODE_LIMIT;
 
-fn zonk_depth(uf: &mut UnionFind<Content>, var: VarId, depth: u32) -> DResult<Ty> {
-    if depth == 0 {
-        return Err(Diagnostic::CompilerBug {
-            where_: STAGE,
-            detail: "type exceeded read-back depth limit".to_owned(),
-        });
-    }
-    let root = uf.find(var)?;
-    match uf.content(root)? {
-        Content::Flex => Ok(Ty::Var(root)),
-        Content::Structure(FlatType::Unit) => Ok(Ty::Unit),
-        Content::Structure(FlatType::Fun(a, b)) => {
-            let at = zonk_depth(uf, a, depth - 1)?;
-            let bt = zonk_depth(uf, b, depth - 1)?;
-            Ok(Ty::Fun(Box::new(at), Box::new(bt)))
-        }
-        Content::Structure(FlatType::Con { module, name, args }) => {
-            let mut targs = Vec::with_capacity(args.len());
-            for a in args {
-                targs.push(zonk_depth(uf, a, depth - 1)?);
+    while let Some(task) = work.pop() {
+        match task {
+            ZonkTask::Visit(v) => {
+                budget.tick()?;
+                nodes_left = nodes_left.checked_sub(1).ok_or_else(|| Diagnostic::CompilerBug {
+                    where_: STAGE,
+                    detail: "type exceeded read-back node limit".to_owned(),
+                })?;
+                let root = uf.find(v)?;
+                match uf.content(root)? {
+                    Content::Flex => results.push(Ty::Var(root)),
+                    Content::Structure(FlatType::Unit) => results.push(Ty::Unit),
+                    Content::Structure(FlatType::Fun(a, b)) => {
+                        // Push the rebuild first, then the children so that `a`
+                        // is visited before `b` and lands lower on `results`.
+                        work.push(ZonkTask::BuildFun);
+                        work.push(ZonkTask::Visit(b));
+                        work.push(ZonkTask::Visit(a));
+                    }
+                    Content::Structure(FlatType::Con { module, name, args }) => {
+                        let arity = args.len();
+                        work.push(ZonkTask::BuildCon { module, name, arity });
+                        // Reverse so args land on `results` in source order.
+                        for a in args.into_iter().rev() {
+                            work.push(ZonkTask::Visit(a));
+                        }
+                    }
+                }
             }
-            Ok(Ty::Con {
+            ZonkTask::BuildFun => {
+                let (Some(b), Some(a)) = (results.pop(), results.pop()) else {
+                    return Err(zonk_underflow());
+                };
+                results.push(Ty::Fun(Box::new(a), Box::new(b)));
+            }
+            ZonkTask::BuildCon {
                 module,
                 name,
-                args: targs,
-            })
+                arity,
+            } => {
+                let split = results
+                    .len()
+                    .checked_sub(arity)
+                    .ok_or_else(zonk_underflow)?;
+                let args = results.split_off(split);
+                results.push(Ty::Con { module, name, args });
+            }
         }
+    }
+
+    match results.pop() {
+        Some(ty) if results.is_empty() => Ok(ty),
+        _ => Err(zonk_underflow()),
     }
 }
 
-/// Split an arrow type into (argument, remainder).
-fn peel_arrow(t: &canon::Type) -> DResult<(&canon::Type, &canon::Type)> {
-    match t {
-        canon::Type::Lambda(a, b) => Ok((a, b)),
-        _ => Err(Diagnostic::CompilerBug {
-            where_: STAGE,
-            detail: "binding has more parameters than its annotation's arrows".to_owned(),
-        }),
+/// The work-stack invariant was violated (only reachable via a compiler bug in
+/// `zonk` itself, never from input).
+fn zonk_underflow() -> Diagnostic {
+    Diagnostic::CompilerBug {
+        where_: STAGE,
+        detail: "zonk result stack underflow".to_owned(),
     }
 }

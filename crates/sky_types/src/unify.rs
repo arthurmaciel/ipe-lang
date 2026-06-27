@@ -9,32 +9,38 @@
 //! terminates.
 //!
 //! Every step decrements the shared [`Budget`]; an adversarial constraint set
-//! that drives the unifier into a blow-up trips [`TypeError::BudgetExceeded`]
+//! that drives the unifier into a blow-up trips [`TypeError::StepBudgetExceeded`]
 //! instead of exhausting the heap.
+//!
+//! Parse-don't-validate: a type error is built into an **owned** diagnostic
+//! payload at the failure point — the diverging types are zonked + resolved into
+//! [`TyDoc`](sky_diagnostics::TyDoc)s here (via [`crate::doc`]), so the reporter
+//! never touches the interner or the arena.
 
 use sky_diagnostics::{DResult, Diagnostic, Span, TypeError};
+use sky_intern::Interner;
 
+use crate::constrain::zonk;
+use crate::doc::{VarNamer, ty_to_doc};
 use crate::solve::Budget;
 use crate::ty::{Content, FlatType};
 use crate::unionfind::{UnionFind, VarId};
 
-/// Maximum structural depth an occurs check will walk before declaring the
-/// candidate cyclic. Bounds recursion on adversarial input (belt-and-braces
-/// alongside the budget).
-const OCCURS_DEPTH_LIMIT: u32 = 10_000;
-
 /// Unify the types of variables `a` and `b` in place.
 ///
-/// `span` is attached to any [`TypeError::Mismatch`] for diagnostics.
+/// `span` is attached to any [`TypeError::TypeMismatch`] for diagnostics; `a` is
+/// the *found* (actual) side and `b` the *expected* side, matching the
+/// `Constraint { lhs, rhs }` convention used by the constraint generator.
 ///
 /// # Errors
-/// * [`TypeError::Mismatch`] when two incompatible structures meet, or when a
-///   bind would create an infinite type.
-/// * [`TypeError::BudgetExceeded`] when the step budget is exhausted.
+/// * [`TypeError::TypeMismatch`] when two incompatible structures meet.
+/// * [`TypeError::InfiniteType`] when a bind would create a cyclic type.
+/// * [`TypeError::StepBudgetExceeded`] when the step budget is exhausted.
 /// * [`Diagnostic::CompilerBug`] on a union-find invariant violation.
 pub fn unify(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
+    interner: &Interner,
     span: Span,
     a: VarId,
     b: VarId,
@@ -52,23 +58,26 @@ pub fn unify(
         (Content::Flex, Content::Flex) => uf.union(ra, rb, Content::Flex),
         // A flex adopts the other side's structure (occurs-checked).
         (Content::Flex, structure @ Content::Structure(_)) => {
-            occurs_guard(uf, budget, ra, rb)?;
+            occurs_guard(uf, budget, interner, span, ra, rb)?;
             uf.union(ra, rb, structure)
         }
         (structure @ Content::Structure(_), Content::Flex) => {
-            occurs_guard(uf, budget, rb, ra)?;
+            occurs_guard(uf, budget, interner, span, rb, ra)?;
             uf.union(ra, rb, structure)
         }
         (Content::Structure(fa), Content::Structure(fb)) => {
-            unify_flat(uf, budget, span, ra, rb, fa, fb)
+            unify_flat(uf, budget, interner, span, ra, rb, fa, fb)
         }
     }
 }
 
-/// Unify two concrete structures that share representatives `ra` / `rb`.
+/// Unify two concrete structures that share representatives `ra` (found) / `rb`
+/// (expected).
+#[allow(clippy::too_many_arguments)]
 fn unify_flat(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
+    interner: &Interner,
     span: Span,
     ra: VarId,
     rb: VarId,
@@ -81,8 +90,8 @@ fn unify_flat(
             // Merge the roots first so a recursive reference resolves, then
             // unify argument-with-argument and result-with-result.
             uf.union(ra, rb, Content::Structure(FlatType::Fun(a1, r1)))?;
-            unify(uf, budget, span, a1, a2)?;
-            unify(uf, budget, span, r1, r2)
+            unify(uf, budget, interner, span, a1, a2)?;
+            unify(uf, budget, interner, span, r1, r2)
         }
         (
             FlatType::Con {
@@ -97,7 +106,7 @@ fn unify_flat(
             },
         ) => {
             if m1 != m2 || n1 != n2 || as1.len() != as2.len() {
-                return Err(mismatch(span));
+                return Err(mismatch(uf, budget, interner, span, ra, rb));
             }
             uf.union(
                 ra,
@@ -109,67 +118,147 @@ fn unify_flat(
                 }),
             )?;
             for (x, y) in as1.iter().zip(as2.iter()) {
-                unify(uf, budget, span, *x, *y)?;
+                unify(uf, budget, interner, span, *x, *y)?;
             }
             Ok(())
         }
-        _ => Err(mismatch(span)),
+        _ => Err(mismatch(uf, budget, interner, span, ra, rb)),
     }
 }
 
-/// Reject binding flexible `var` to `structure` if `var` occurs inside it.
+/// Reject binding flexible `var` to `structure` if `var` occurs inside it,
+/// surfacing an owned [`TypeError::InfiniteType`] at the real `span`.
 fn occurs_guard(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
+    interner: &Interner,
+    span: Span,
     var: VarId,
     structure: VarId,
 ) -> DResult<()> {
     let target = uf.find(var)?;
-    if occurs(uf, budget, target, structure, OCCURS_DEPTH_LIMIT)? {
-        Err(mismatch(Span::DUMMY))
+    if occurs(uf, budget, target, structure)? {
+        Err(infinite_type(uf, budget, interner, span, target, structure))
     } else {
         Ok(())
     }
 }
 
 /// Whether `target`'s representative appears within the structure rooted at
-/// `node`. Depth-bounded to keep adversarial inputs from unbounded recursion.
+/// `node`.
+///
+/// **Iterative.** Walks an explicit heap-allocated work stack instead of
+/// recursing, so adversarial nesting cannot overflow the native stack; the
+/// shared [`Budget`] (ticked per node) bounds total work. The structure is
+/// acyclic at every call site (occurs runs *before* the bind that could create
+/// a cycle), so the walk terminates.
 fn occurs(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
     target: VarId,
     node: VarId,
-    depth: u32,
 ) -> DResult<bool> {
-    budget.tick()?;
-    if depth == 0 {
-        // Treat exhaustion as "possibly cyclic" — conservative, rejects.
-        return Ok(true);
-    }
-    let here = uf.find(node)?;
-    if here == target {
-        return Ok(true);
-    }
-    match uf.content(here)? {
-        Content::Flex | Content::Structure(FlatType::Unit) => Ok(false),
-        Content::Structure(FlatType::Fun(a, r)) => {
-            Ok(occurs(uf, budget, target, a, depth - 1)?
-                || occurs(uf, budget, target, r, depth - 1)?)
+    let mut stack: Vec<VarId> = vec![node];
+    while let Some(n) = stack.pop() {
+        budget.tick()?;
+        let here = uf.find(n)?;
+        if here == target {
+            return Ok(true);
         }
-        Content::Structure(FlatType::Con { args, .. }) => {
-            for arg in args {
-                if occurs(uf, budget, target, arg, depth - 1)? {
-                    return Ok(true);
+        match uf.content(here)? {
+            Content::Flex | Content::Structure(FlatType::Unit) => {}
+            Content::Structure(FlatType::Fun(a, r)) => {
+                stack.push(a);
+                stack.push(r);
+            }
+            Content::Structure(FlatType::Con { args, .. }) => {
+                for arg in args {
+                    stack.push(arg);
                 }
             }
-            Ok(false)
         }
+    }
+    Ok(false)
+}
+
+/// Build an owned [`TypeError::TypeMismatch`] from the two diverging variables.
+/// `found` is the actual type, `expected` the wanted one; both are zonked +
+/// rendered through a shared [`VarNamer`] so a shared variable reads identically
+/// on both sides. If the read-back itself hits an internal invariant, that bug
+/// is surfaced instead of the mismatch.
+fn mismatch(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    span: Span,
+    found: VarId,
+    expected: VarId,
+) -> Diagnostic {
+    let mut namer = VarNamer::new();
+    let expected_ty = match zonk(uf, budget, expected) {
+        Ok(t) => t,
+        Err(bug) => return bug,
+    };
+    let found_ty = match zonk(uf, budget, found) {
+        Ok(t) => t,
+        Err(bug) => return bug,
+    };
+    let expected_doc = match ty_to_doc(&expected_ty, interner, &mut namer) {
+        Ok(d) => d,
+        Err(bug) => return bug,
+    };
+    let found_doc = match ty_to_doc(&found_ty, interner, &mut namer) {
+        Ok(d) => d,
+        Err(bug) => return bug,
+    };
+    Diagnostic::Type {
+        span,
+        msg: TypeError::TypeMismatch {
+            expected: Box::new(expected_doc),
+            found: Box::new(found_doc),
+            definition: None,
+            path: Box::new([]),
+        },
     }
 }
 
-const fn mismatch(span: Span) -> Diagnostic {
+/// Build an owned [`TypeError::InfiniteType`] naming the offending variable and
+/// the structure it would have to equal.
+fn infinite_type(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    span: Span,
+    var: VarId,
+    structure: VarId,
+) -> Diagnostic {
+    let mut namer = VarNamer::new();
+    // Name the variable first so it reads as `a` and any same var inside the
+    // structure renders consistently.
+    let var_ty = match zonk(uf, budget, var) {
+        Ok(t) => t,
+        Err(bug) => return bug,
+    };
+    let var_name = match ty_to_doc(&var_ty, interner, &mut namer) {
+        Ok(sky_diagnostics::TyDoc::Var(v)) => v,
+        // The occurs target is always flexible at the guard site; any other
+        // shape (or a read-back bug) is an internal invariant violation.
+        Ok(_) => Box::from("?"),
+        Err(bug) => return bug,
+    };
+    let structure_ty = match zonk(uf, budget, structure) {
+        Ok(t) => t,
+        Err(bug) => return bug,
+    };
+    let structure_doc = match ty_to_doc(&structure_ty, interner, &mut namer) {
+        Ok(d) => d,
+        Err(bug) => return bug,
+    };
     Diagnostic::Type {
         span,
-        msg: TypeError::Mismatch,
+        msg: TypeError::InfiniteType {
+            var: var_name,
+            ty: Box::new(structure_doc),
+        },
     }
 }
