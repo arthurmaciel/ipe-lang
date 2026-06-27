@@ -111,6 +111,20 @@ pub enum Expr_ {
     /// A precedence-climbed binary-operator chain: a sequence of
     /// `(operand, operator)` pairs followed by the final operand.
     Binops(Vec<(Expr, Located<Symbol>)>, Box<Expr>),
+    /// `let <bindings> in <body>`. M1 models simple value bindings only
+    /// (`name = expr`); function bindings (`f x = …`) and destructuring
+    /// (`(a, b) = …`) are rejected at the parser. The bindings are scoped
+    /// sequentially: each value sees the enclosing scope plus the bindings that
+    /// precede it (`let*`), matching the non-recursive nested-`Let` IR.
+    Let(Vec<LetBinding>, Box<Expr>),
+}
+
+/// A single `let` value binding: `name = body`. M1 subset of the Haskell
+/// compiler's `Sky.AST.Source.Def` (the `Define` variant with no parameters).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct LetBinding {
+    pub name: Located<Symbol>,
+    pub body: Expr,
 }
 
 /// A pattern with its source span.

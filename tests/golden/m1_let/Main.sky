@@ -1,0 +1,21 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Single-binding let inside a function body.
+double : Int -> Int
+double n =
+    let d = n + n in d
+
+-- Multi-binding let with a sequential reference (b uses a).
+triple : Int -> Int
+triple n =
+    let
+        a = n + n
+        b = a + n
+    in
+    b
+
+-- Inline let in the entry point binds the combined result.
+main =
+    let total = double 5 + triple 4 in
+    println (String.fromInt total)

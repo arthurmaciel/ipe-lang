@@ -450,6 +450,19 @@ impl<'a> Builder<'a> {
             canon::Expr_::Binop { func, lhs, rhs, .. } => {
                 self.constrain_binop(local, *func, lhs, rhs)?
             }
+            canon::Expr_::Let(bindings, body) => {
+                // Sequential, monomorphic `let`: each binding's value is
+                // constrained against the scope built so far, and its name binds
+                // to that value's variable for the bindings that follow and the
+                // `in` body. The whole `let`'s type is the body's type. (M1 does
+                // not generalise let-bound names — no let-polymorphism.)
+                let mut let_local = local.clone();
+                for b in bindings {
+                    let bv = self.constrain_expr(&let_local, &b.body)?;
+                    let_local.insert(b.name.value, bv);
+                }
+                self.constrain_expr(&let_local, body)?
+            }
         };
         self.regions.insert(span, var);
         Ok(var)

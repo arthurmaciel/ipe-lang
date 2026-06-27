@@ -49,6 +49,7 @@ const ALL_CODES: &[Code] = &[
     sky_diagnostics::SKY_P0041,
     sky_diagnostics::SKY_P0050,
     sky_diagnostics::SKY_P0060,
+    sky_diagnostics::SKY_P0061,
     sky_diagnostics::SKY_N0001,
     sky_diagnostics::SKY_N0002,
     sky_diagnostics::SKY_N0003,
@@ -782,7 +783,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 50, "taxonomy is 50 codes");
+        assert_eq!(ALL_CODES.len(), 51, "taxonomy is 51 codes");
         assert!(
             index.contains("SKY-T0001  type mismatch"),
             "index pairs code with title"

@@ -15,8 +15,8 @@ use crate::code::{
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0200, SKY_N0001, SKY_N0002, SKY_N0003,
     SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_P0001, SKY_P0002, SKY_P0003,
     SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031,
-    SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004,
-    SKY_T0010, SKY_T0011, Severity,
+    SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061, SKY_T0001, SKY_T0002, SKY_T0003,
+    SKY_T0004, SKY_T0010, SKY_T0011, Severity,
 };
 use crate::span::Span;
 
@@ -35,6 +35,8 @@ pub enum TokenKind {
     Type,
     Case,
     Of,
+    Let,
+    In,
     LParen,
     RParen,
     Equals,
@@ -68,6 +70,7 @@ pub enum Expected {
     ModuleKeyword,
     ExposingKeyword,
     OfKeyword,
+    InKeyword,
     Equals,
     Arrow,
     Pipe,
@@ -100,6 +103,7 @@ pub enum Construct {
     ParenGroup,
     Expression,
     Pattern,
+    Let,
 }
 
 /// Which part of a module header is malformed.
@@ -152,6 +156,21 @@ pub enum CaseDefect {
     NoBranches,
     /// The first branch is not indented past `case`.
     FirstBranchNotIndented,
+}
+
+/// Which part of a `let … in` expression is malformed.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum LetDefect {
+    /// `let` is immediately followed by `in` (or end of input) — no bindings.
+    NoBindings,
+    /// A binding name is not a lowercase identifier.
+    BindingNameNotLower,
+    /// A binding name is not followed by `=` (also catches the unsupported
+    /// function-binding form `let f x = …`, where a parameter sits where `=`
+    /// was expected).
+    MissingEquals,
+    /// The `in` keyword is missing after the bindings.
+    MissingIn,
 }
 
 // ===========================================================================
@@ -223,6 +242,8 @@ pub enum ParseError {
     UnclosedDelimiter { opener: Span },
     /// A `case … of` expression is malformed. [SKY-P0060]
     MalformedCase(CaseDefect),
+    /// A `let … in` expression is malformed. [SKY-P0061]
+    MalformedLet(LetDefect),
 }
 
 /// Errors raised during name resolution / canonicalisation.
@@ -537,6 +558,7 @@ const fn parse_code(msg: &ParseError) -> Code {
         ParseError::ExpectedType => SKY_P0041,
         ParseError::UnclosedDelimiter { .. } => SKY_P0050,
         ParseError::MalformedCase(_) => SKY_P0060,
+        ParseError::MalformedLet(_) => SKY_P0061,
     }
 }
 
@@ -630,7 +652,8 @@ fn parse_help(msg: &ParseError) -> Vec<HelpLine> {
         | ParseError::MalformedExposingList(_)
         | ParseError::MissingEquals { .. }
         | ParseError::TypeArgsOnNonConstructor
-        | ParseError::MalformedCase(_) => Vec::new(),
+        | ParseError::MalformedCase(_)
+        | ParseError::MalformedLet(_) => Vec::new(),
     }
 }
 

@@ -309,6 +309,72 @@ mod tests {
     }
 
     #[test]
+    fn inline_let_parses_into_a_let_node() {
+        // `let x = 2 in x + x` is a single-binding `Let` whose body is a Binops.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    let x = 2 in x + x\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "inline let must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|v| matches!(&v.body.value, Expr_::Let(b, body)
+                if b.len() == 1
+                    && b.first().is_some_and(|bb| i.resolve(bb.name.value) == Some("x"))
+                    && b.first().is_some_and(|bb| matches!(bb.body.value, Expr_::Int(2)))
+                    && matches!(body.value, Expr_::Binops(_, _)))),
+            "v body is `let x = 2 in x + x`, got {:?}",
+            v.map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
+    fn multi_binding_let_parses_every_binding() {
+        // Layout-aligned bindings; a later binding may read an earlier one.
+        let mut i = Interner::new();
+        let src =
+            format!("{HDR}v : Int\nv =\n    let\n        a = 1\n        b = a\n    in\n    b\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "multi-binding let must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let names: Vec<&str> = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::Let(bindings, _)) => bindings
+                .iter()
+                .filter_map(|b| i.resolve(b.name.value))
+                .collect(),
+            _ => Vec::new(),
+        };
+        assert_eq!(names, vec!["a", "b"], "both bindings, in order");
+    }
+
+    #[test]
+    fn malformed_let_is_p0061() {
+        // No bindings before `in`.
+        assert_eq!(err_code(&format!("{HDR}v =\n    let in 0\n")), "SKY-P0061");
+        // Missing `=` after the binding name.
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    let x 2 in x\n")),
+            "SKY-P0061"
+        );
+        // A function-style binding (`let f x = …`) is unsupported: the parameter
+        // sits where `=` was expected, the clean rejection.
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    let f x = x in f\n")),
+            "SKY-P0061"
+        );
+        // Missing `in` after the bindings.
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    let x = 2\n    x\n")),
+            "SKY-P0061"
+        );
+        // An uppercase binding name is not a value binding.
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    let X = 2 in X\n")),
+            "SKY-P0061"
+        );
+    }
+
+    #[test]
     fn unexpected_token_is_p0001() {
         // A token that cannot begin an expression.
         assert_eq!(err_code(&format!("{HDR}main = )")), "SKY-P0001");

@@ -279,6 +279,63 @@ mod tests {
     }
 
     #[test]
+    fn lowers_multi_binding_let_to_nested_lets() {
+        // `let a = 1; b = a in a + b` ⇒ Let a (Let b (Add a b)).
+        let opt = lower_body(
+            "module Main exposing (v)\nv : Int\nv =\n    let\n        a = 1\n        b = a\n    in\n    a + b\n",
+            "v",
+        );
+        assert!(opt.is_some(), "v must lower");
+        let Some((body, i)) = opt else { return };
+        let Expr::Let { name, value, body } = &body else {
+            assert!(false_marker(), "outer is a Let, got {body:?}");
+            return;
+        };
+        assert_eq!(i.resolve(*name), Some("a"), "outer binds a");
+        assert!(matches!(value.as_ref(), Expr::Int(1)), "a = 1");
+        // Inner: Let b = (Var a) in (Add a b).
+        let Expr::Let {
+            name: n2,
+            value: v2,
+            body: b2,
+        } = body.as_ref()
+        else {
+            assert!(false_marker(), "inner is a Let");
+            return;
+        };
+        assert_eq!(i.resolve(*n2), Some("b"), "inner binds b");
+        assert!(
+            matches!(v2.as_ref(), Expr::Var(s) if i.resolve(*s) == Some("a")),
+            "b = a"
+        );
+        assert!(
+            matches!(b2.as_ref(), Expr::BinOp { op: BinOp::Add, .. }),
+            "in-body is a + b"
+        );
+    }
+
+    #[test]
+    fn lowers_inline_let_in_function_body() {
+        // `let d = n + n in d` inside a typed function lowers to a single Let.
+        let opt = lower_body(
+            "module Main exposing (f)\nf : Int -> Int\nf n =\n    let d = n + n in d\n",
+            "f",
+        );
+        assert!(opt.is_some(), "f must lower");
+        let Some((body, i)) = opt else { return };
+        assert!(
+            matches!(&body, Expr::Let { name, .. } if i.resolve(*name) == Some("d")),
+            "body is `let d = …`, got {body:?}"
+        );
+    }
+
+    /// A runtime `false` the optimiser cannot fold, so `assert!(false_marker())`
+    /// fails the test without tripping `clippy::assertions_on_constants`.
+    fn false_marker() -> bool {
+        std::hint::black_box(false)
+    }
+
+    #[test]
     fn lowers_remaining_operators() {
         // Cover Sub, Div, Eq, Neq, Le, Ge, Or paths through `binop`.
         for (src_op, want) in [

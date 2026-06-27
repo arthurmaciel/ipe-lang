@@ -24,11 +24,11 @@
 
 use sky_diagnostics::{
     CaseDefect, Construct, DResult, Diagnostic, Expected, ExpectedSet, ExposingDefect,
-    HeaderDefect, Located, ParseError, Span, TokenKind, TypeDeclDefect,
+    HeaderDefect, LetDefect, Located, ParseError, Span, TokenKind, TypeDeclDefect,
 };
 use sky_intern::{Interner, Symbol};
 use sky_syntax::{
-    Ctor, Exposed, Exposing, Expr, Expr_, Import, Module, Pattern, Pattern_, Privacy,
+    Ctor, Exposed, Exposing, Expr, Expr_, Import, LetBinding, Module, Pattern, Pattern_, Privacy,
     TypeAnnotation, Union, Value,
 };
 
@@ -67,6 +67,8 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Type => TokenKind::Type,
         Tok::Case => TokenKind::Case,
         Tok::Of => TokenKind::Of,
+        Tok::Let => TokenKind::Let,
+        Tok::In => TokenKind::In,
         Tok::LParen => TokenKind::LParen,
         Tok::RParen => TokenKind::RParen,
         Tok::Equals => TokenKind::Equals,
@@ -185,6 +187,13 @@ impl<'a> Parser<'a> {
         Diagnostic::Parse {
             span,
             msg: ParseError::MalformedCase(defect),
+        }
+    }
+
+    const fn malformed_let(span: Span, defect: LetDefect) -> Diagnostic {
+        Diagnostic::Parse {
+            span,
+            msg: ParseError::MalformedLet(defect),
         }
     }
 
@@ -863,6 +872,9 @@ impl<'a> Parser<'a> {
         if self.peek_kind() == Some(&Tok::Case) {
             return self.parse_case(threshold, depth + 1);
         }
+        if self.peek_kind() == Some(&Tok::Let) {
+            return self.parse_let(threshold, depth + 1);
+        }
         let tok = self.bump(Construct::Expression)?;
         match &tok.kind {
             Tok::LParen => {
@@ -972,6 +984,113 @@ impl<'a> Parser<'a> {
         }
         let span = Self::span_merge(case_tok.span, end);
         Ok(Located::new(span, Expr_::Case(Box::new(scrutinee), arms)))
+    }
+
+    /// Parse `let <bindings> in <body>`. The first binding's column fixes the
+    /// alignment for the block; every later binding must start at that column.
+    /// Each binding is a simple value (`name = expr`) whose body parses with the
+    /// binding column as its layout threshold, so it stops at the next aligned
+    /// binding or at `in`. Bindings are scoped sequentially (`let*`): each value
+    /// sees the bindings before it, which matches the non-recursive nested-`Let`
+    /// the lowerer produces.
+    fn parse_let(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
+        if depth > MAX_DEPTH {
+            return Err(self.too_deep(Construct::Expression));
+        }
+        // The caller has already peeked `let`.
+        let let_tok = self.bump(Construct::Let)?;
+
+        // The first binding establishes the alignment column for the block. A
+        // `let` immediately followed by `in` (or end of input) has no bindings.
+        let binding_col = match self.peek() {
+            Some(t) if t.kind == Tok::In => {
+                return Err(Self::malformed_let(t.span, LetDefect::NoBindings));
+            }
+            Some(t) => t.col,
+            None => {
+                return Err(Self::malformed_let(
+                    self.eof_err_span(),
+                    LetDefect::NoBindings,
+                ));
+            }
+        };
+
+        let mut bindings = Vec::new();
+        loop {
+            bindings.push(self.parse_let_binding(binding_col, depth + 1)?);
+            // Another binding continues only when the next token is an
+            // identifier aligned at the binding column. `in` is its own token
+            // (never an `Ident`), so it always ends the binding list.
+            let more = self.peek().is_some_and(|t| {
+                layout::aligned_at(t, binding_col) && matches!(t.kind, Tok::Ident(_))
+            });
+            if !more {
+                break;
+            }
+        }
+
+        // `in` after the bindings.
+        match self.peek() {
+            Some(t) if t.kind == Tok::In => {
+                self.bump(Construct::Let)?;
+            }
+            Some(t) => return Err(Self::malformed_let(t.span, LetDefect::MissingIn)),
+            None => {
+                return Err(Self::malformed_let(
+                    self.eof_err_span(),
+                    LetDefect::MissingIn,
+                ));
+            }
+        }
+
+        let body = self.parse_expr(threshold, depth + 1)?;
+        let span = Self::span_merge(let_tok.span, body.span);
+        Ok(Located::new(span, Expr_::Let(bindings, Box::new(body))))
+    }
+
+    /// Parse a single `name = body` let binding. `binding_col` is the block's
+    /// alignment column, used as the body's layout threshold so the body stops
+    /// at the next aligned binding or at `in`.
+    fn parse_let_binding(&mut self, binding_col: u32, depth: u32) -> DResult<LetBinding> {
+        if depth > MAX_DEPTH {
+            return Err(self.too_deep(Construct::Let));
+        }
+        let name_tok = self.bump(Construct::Let)?;
+        let Tok::Ident(text) = &name_tok.kind else {
+            return Err(Self::malformed_let(
+                name_tok.span,
+                LetDefect::BindingNameNotLower,
+            ));
+        };
+        // A value binding name is a plain lowercase identifier; reject an
+        // uppercase (constructor) or dotted (qualified) name.
+        if text.contains('.') || text.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+            return Err(Self::malformed_let(
+                name_tok.span,
+                LetDefect::BindingNameNotLower,
+            ));
+        }
+        let name_sym = self.interner.intern(text)?;
+        let name = Located::new(name_tok.span, name_sym);
+
+        // `=` after the name. A parameter here (`let f x = …`) lands as a
+        // non-`=` token, producing the clean MissingEquals rejection — M1 has no
+        // function bindings in `let`.
+        match self.peek() {
+            Some(t) if t.kind == Tok::Equals => {
+                self.bump(Construct::Let)?;
+            }
+            Some(t) => return Err(Self::malformed_let(t.span, LetDefect::MissingEquals)),
+            None => {
+                return Err(Self::malformed_let(
+                    self.eof_err_span(),
+                    LetDefect::MissingEquals,
+                ));
+            }
+        }
+
+        let body = self.parse_expr(binding_col, depth + 1)?;
+        Ok(LetBinding { name, body })
     }
 
     // ---- patterns ---------------------------------------------------------

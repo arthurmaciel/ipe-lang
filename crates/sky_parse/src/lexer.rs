@@ -25,6 +25,8 @@ pub enum Tok {
     Type,
     Case,
     Of,
+    Let,
+    In,
     // Punctuation / operators.
     LParen,
     RParen,
@@ -157,6 +159,8 @@ fn keyword(text: &str) -> Option<Tok> {
         "type" => Some(Tok::Type),
         "case" => Some(Tok::Case),
         "of" => Some(Tok::Of),
+        "let" => Some(Tok::Let),
+        "in" => Some(Tok::In),
         _ => None,
     }
 }

@@ -25,7 +25,7 @@ use core::fmt::Write as _;
 use crate::code::{ISSUE_TRACKER_URL, Severity, title};
 use crate::diagnostic::{
     CaseDefect, Diagnostic, Expected, ExpectedSet, ExposingDefect, Feature, HeaderDefect, HelpLine,
-    Hint, LowerError, NameError, ParseError, SpanRole, Suggestion, TokenKind, TyDoc,
+    Hint, LetDefect, LowerError, NameError, ParseError, SpanRole, Suggestion, TokenKind, TyDoc,
     TypeDeclDefect, TypeError,
 };
 use crate::span::Span;
@@ -337,6 +337,7 @@ fn parse_label(msg: &ParseError) -> Option<String> {
         ParseError::ExpectedType => Some("expected a type here".to_string()),
         ParseError::UnclosedDelimiter { .. } => Some("this delimiter is never closed".to_string()),
         ParseError::MalformedCase(defect) => Some(case_defect_str(*defect).to_string()),
+        ParseError::MalformedLet(defect) => Some(let_defect_str(*defect).to_string()),
         ParseError::Unexpected | ParseError::TooDeep => None,
     }
 }
@@ -516,6 +517,8 @@ const fn token_kind_str(t: TokenKind) -> &'static str {
         TokenKind::Type => "`type`",
         TokenKind::Case => "`case`",
         TokenKind::Of => "`of`",
+        TokenKind::Let => "`let`",
+        TokenKind::In => "`in`",
         TokenKind::LParen => "`(`",
         TokenKind::RParen => "`)`",
         TokenKind::Equals => "`=`",
@@ -548,6 +551,7 @@ const fn expected_str(e: Expected) -> &'static str {
         Expected::ModuleKeyword => "`module`",
         Expected::ExposingKeyword => "`exposing`",
         Expected::OfKeyword => "`of`",
+        Expected::InKeyword => "`in`",
         Expected::Equals => "`=`",
         Expected::Arrow => "`->`",
         Expected::Pipe => "`|`",
@@ -609,6 +613,15 @@ const fn case_defect_str(d: CaseDefect) -> &'static str {
         CaseDefect::MissingArrow => "expected `->` in this branch",
         CaseDefect::NoBranches => "this `case` has no branches",
         CaseDefect::FirstBranchNotIndented => "the first branch must be indented past `case`",
+    }
+}
+
+const fn let_defect_str(d: LetDefect) -> &'static str {
+    match d {
+        LetDefect::NoBindings => "this `let` has no bindings before `in`",
+        LetDefect::BindingNameNotLower => "a let binding name must be a lowercase identifier",
+        LetDefect::MissingEquals => "expected `=` after the binding name",
+        LetDefect::MissingIn => "expected `in` after the let bindings",
     }
 }
 

@@ -103,6 +103,17 @@ pub enum Expr_ {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    /// `let <bindings> in <body>`. Bindings are scoped sequentially: each value
+    /// was resolved against the enclosing scope plus the bindings before it, and
+    /// every binding name is a local within `body`.
+    Let(Vec<LetBinding>, Box<Expr>),
+}
+
+/// A resolved `let` value binding: `name = body`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct LetBinding {
+    pub name: Located<Symbol>,
+    pub body: Expr,
 }
 
 /// One arm of a `case`: a resolved pattern and the body it guards.

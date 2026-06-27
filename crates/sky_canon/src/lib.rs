@@ -678,6 +678,81 @@ mod tests {
     }
 
     #[test]
+    fn let_binds_names_as_locals() {
+        // `let x = 2 in x + x` → a `Let` whose in-body is a Binop over the
+        // let-bound local `x`.
+        let mut i = Interner::new();
+        let body = canon_body(
+            &mut i,
+            "module Main exposing (v)\nv : Int\nv =\n    let x = 2 in x + x\n",
+            "v",
+        );
+        assert!(body.is_some(), "v must canonicalise");
+        let Some(Expr_::Let(bindings, in_body)) = body else {
+            assert!(false_marker(), "v body is a Let");
+            return;
+        };
+        assert_eq!(bindings.len(), 1, "one binding");
+        assert!(
+            bindings
+                .first()
+                .is_some_and(|b| i.resolve(b.name.value) == Some("x")),
+            "binding name is x"
+        );
+        let Some((func, lhs, rhs)) = as_binop(&i, &in_body.value) else {
+            assert!(false_marker(), "in-body is a binop");
+            return;
+        };
+        assert_eq!(func, "add");
+        assert!(matches!(lhs.value, Expr_::VarLocal(s) if i.resolve(s) == Some("x")));
+        assert!(matches!(rhs.value, Expr_::VarLocal(s) if i.resolve(s) == Some("x")));
+    }
+
+    #[test]
+    fn let_later_binding_sees_earlier() {
+        // Sequential (`let*`) scoping: `b = a` resolves `a` to the earlier
+        // let-bound local, not to an error.
+        let mut i = Interner::new();
+        let body = canon_body(
+            &mut i,
+            "module Main exposing (v)\nv : Int\nv =\n    let\n        a = 1\n        b = a\n    in\n    b\n",
+            "v",
+        );
+        assert!(body.is_some(), "v must canonicalise");
+        let Some(Expr_::Let(bindings, _)) = body else {
+            assert!(false_marker(), "v body is a Let");
+            return;
+        };
+        let second = bindings.get(1);
+        assert!(
+            second.is_some_and(
+                |b| matches!(b.body.value, Expr_::VarLocal(s) if i.resolve(s) == Some("a"))
+            ),
+            "the second binding's value resolves `a` to a local"
+        );
+    }
+
+    #[test]
+    fn let_forward_reference_rejects_cleanly() {
+        // `y = x` before `x = 2`: with sequential scoping `x` is not yet bound
+        // and there is no outer `x`, so it resolves to nothing — a clean
+        // ValueNotFound, never a miscompile.
+        let err = canon_err(
+            "module Main exposing (v)\nv : Int\nv =\n    let\n        y = x\n        x = 2\n    in\n    y\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::ValueNotFound { .. },
+                    ..
+                })
+            ),
+            "forward reference must reject as ValueNotFound, got {err:?}"
+        );
+    }
+
+    #[test]
     fn env_var_homes_compare() {
         // Exercise the VarHome surface for PartialEq coverage.
         assert_eq!(VarHome::Local, VarHome::Local);
