@@ -807,6 +807,66 @@ mod tests {
     }
 
     #[test]
+    fn record_literal_canonicalises_field_wise() {
+        // `{ x = 1, y = a }` resolves each field value against scope; the second
+        // is the parameter `a`, a local. Field labels are carried unresolved.
+        let mut i = Interner::new();
+        let body = canon_body(
+            &mut i,
+            "module Main exposing (v)\nv : Int -> Int\nv a =\n    { x = 1, y = a }\n",
+            "v",
+        );
+        assert!(body.is_some(), "v must canonicalise");
+        let Some(body) = body else { return };
+        assert!(
+            matches!(&body, Expr_::Record(fields)
+                if fields.len() == 2
+                    && matches!(fields.first().map(|(_, e)| &e.value), Some(Expr_::Int(1)))
+                    && matches!(fields.get(1).map(|(_, e)| &e.value), Some(Expr_::VarLocal(_)))),
+            "`{{ x = 1, y = a }}` resolves to a 2-field Record, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn field_access_canonicalises_over_its_record() {
+        // `p.x` resolves the record sub-expression (the local `p`); the field is
+        // a label carried unresolved.
+        let mut i = Interner::new();
+        let body = canon_body(&mut i, "module Main exposing (v)\nv p =\n    p.x\n", "v");
+        assert!(body.is_some(), "v must canonicalise");
+        let Some(body) = body else { return };
+        assert!(
+            matches!(&body, Expr_::Access(rec, field)
+                if matches!(rec.value, Expr_::VarLocal(_)) && i.resolve(*field) == Some("x")),
+            "`p.x` resolves to an Access over a local, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_record_field_is_rejected() {
+        // `{ x = 1, x = 2 }` defines `x` twice — rejected (SKY-N0010) rather than
+        // silently collapsing to one field.
+        let mut i = Interner::new();
+        let src = sky_parse::parse_module(
+            "module Main exposing (v)\nv =\n    { x = 1, x = 2 }\n",
+            &mut i,
+        );
+        assert!(src.is_ok(), "must parse");
+        let Ok(src) = src else { return };
+        let r = canonicalise(&src, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(sky_diagnostics::Diagnostic::Name {
+                    msg: sky_diagnostics::NameError::DuplicateValue { .. },
+                    ..
+                })
+            ),
+            "duplicate record field must be a DuplicateValue, got {r:?}"
+        );
+    }
+
+    #[test]
     fn env_var_homes_compare() {
         // Exercise the VarHome surface for PartialEq coverage.
         assert_eq!(VarHome::Local, VarHome::Local);

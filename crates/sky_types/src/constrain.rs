@@ -105,6 +105,26 @@ pub struct Builder<'a> {
     top_level: BTreeMap<Symbol, Ty>,
     /// Body region-var of each untyped top-level binding, read back for `env`.
     untyped: BTreeMap<Symbol, VarId>,
+    /// Deferred record field-access obligations, resolved after the main solve.
+    field_accesses: Vec<FieldAccess>,
+}
+
+/// A deferred record field-access obligation `record.field`.
+///
+/// Closed records carry no row variable, so a field access cannot be discharged
+/// by ordinary unification while the constraints are still being built (the
+/// record's type may not be settled yet). Each access is recorded here and
+/// resolved once after the main solve, when [`crate::resolve_field_accesses`]
+/// can read the now-settled record type and link `result` to the field's type.
+pub struct FieldAccess {
+    /// The variable of the record sub-expression (`record` in `record.field`).
+    pub record: VarId,
+    /// The accessed field name.
+    pub field: Symbol,
+    /// The variable the access's result type was bound to (the access's region).
+    pub result: VarId,
+    /// The access expression's source span, for blame.
+    pub span: Span,
 }
 
 /// The output of constraint generation, consumed by the solver + read-back.
@@ -113,6 +133,7 @@ pub struct Generated {
     pub constraints: Vec<Constraint>,
     pub top_level: BTreeMap<Symbol, Ty>,
     pub untyped: BTreeMap<Symbol, VarId>,
+    pub field_accesses: Vec<FieldAccess>,
 }
 
 impl<'a> Builder<'a> {
@@ -136,6 +157,7 @@ impl<'a> Builder<'a> {
             constraints: Vec::new(),
             top_level: BTreeMap::new(),
             untyped: BTreeMap::new(),
+            field_accesses: Vec::new(),
         };
 
         // First pass: record annotation types so any binding can reference any
@@ -156,6 +178,7 @@ impl<'a> Builder<'a> {
             constraints: builder.constraints,
             top_level: builder.top_level,
             untyped: builder.untyped,
+            field_accesses: builder.field_accesses,
         })
     }
 
@@ -270,6 +293,14 @@ impl<'a> Builder<'a> {
                     elem_vars.push(self.instantiate_in(e, vars)?);
                 }
                 self.structure(FlatType::Tuple(elem_vars))
+            }
+            Ty::Record(fields) => {
+                let mut field_vars = BTreeMap::new();
+                for (name, field_ty) in fields {
+                    let v = self.instantiate_in(field_ty, vars)?;
+                    field_vars.insert(*name, v);
+                }
+                self.structure(FlatType::Record(field_vars))
             }
             Ty::Var(id) => {
                 if let Some(v) = vars.get(id).copied() {
@@ -496,9 +527,53 @@ impl<'a> Builder<'a> {
                 }
                 self.structure(FlatType::Tuple(elem_vars))?
             }
+            canon::Expr_::Record(fields) => self.constrain_record(local, fields)?,
+            canon::Expr_::Access(record, field) => {
+                self.constrain_access(local, record, *field, span)?
+            }
         };
         self.regions.insert(span, var);
         Ok(var)
+    }
+
+    /// Constrain a record literal `{ name = value, ... }`. Its type is the
+    /// closed record `{ name : <field type>, ... }`, each field value
+    /// constrained independently. Canonicalisation has already rejected a
+    /// duplicate field name, so the resulting field map is exact.
+    fn constrain_record(
+        &mut self,
+        local: &BTreeMap<Symbol, VarId>,
+        fields: &[(Symbol, canon::Expr)],
+    ) -> DResult<VarId> {
+        let mut field_vars = BTreeMap::new();
+        for (name, value) in fields {
+            let v = self.constrain_expr(local, value)?;
+            field_vars.insert(*name, v);
+        }
+        self.structure(FlatType::Record(field_vars))
+    }
+
+    /// Constrain a record field access `record.field`. With closed records (no
+    /// row variable), the field cannot be resolved until the record's type
+    /// settles, so the access is deferred: a fresh result variable is its region
+    /// type now, and [`crate::resolve_field_accesses`] links it to the field's
+    /// type after the main solve.
+    fn constrain_access(
+        &mut self,
+        local: &BTreeMap<Symbol, VarId>,
+        record: &canon::Expr,
+        field: Symbol,
+        span: Span,
+    ) -> DResult<VarId> {
+        let record_var = self.constrain_expr(local, record)?;
+        let result = self.flex()?;
+        self.field_accesses.push(FieldAccess {
+            record: record_var,
+            field,
+            result,
+            span,
+        });
+        Ok(result)
     }
 
     /// Constrain a `case` arm pattern against the scrutinee's variable, binding
@@ -576,6 +651,10 @@ enum ZonkTask {
     },
     /// Pop `arity` results and push a `Tuple` over them.
     BuildTuple { arity: usize },
+    /// Pop one result per field name (in `names` order) and push a `Record`. The
+    /// `names` are visited in their `BTreeMap` order, so popping in reverse pairs
+    /// each result with its field name.
+    BuildRecord { names: Vec<Symbol> },
 }
 
 /// Read a settled union-find variable back into a resolved [`Ty`].
@@ -641,6 +720,16 @@ pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DRe
                             work.push(ZonkTask::Visit(e));
                         }
                     }
+                    Content::Structure(FlatType::Record(fields)) => {
+                        // Capture the field names (BTreeMap order) for the
+                        // rebuild, and visit each field var in reverse so the
+                        // results land in the same order the names are popped.
+                        let names: Vec<Symbol> = fields.keys().copied().collect();
+                        work.push(ZonkTask::BuildRecord { names });
+                        for v in fields.values().copied().rev() {
+                            work.push(ZonkTask::Visit(v));
+                        }
+                    }
                 }
             }
             ZonkTask::BuildFun => {
@@ -668,6 +757,17 @@ pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DRe
                     .ok_or_else(zonk_underflow)?;
                 let elems = results.split_off(split);
                 results.push(Ty::Tuple(elems));
+            }
+            ZonkTask::BuildRecord { names } => {
+                let split = results
+                    .len()
+                    .checked_sub(names.len())
+                    .ok_or_else(zonk_underflow)?;
+                let tys = results.split_off(split);
+                // `tys` is in the same order as `names` (field var visits were
+                // reversed, so the results stack restores `BTreeMap` order).
+                let fields: BTreeMap<Symbol, Ty> = names.into_iter().zip(tys).collect();
+                results.push(Ty::Record(fields));
             }
         }
     }

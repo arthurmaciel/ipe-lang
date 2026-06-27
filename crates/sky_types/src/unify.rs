@@ -134,6 +134,23 @@ fn unify_flat(
             }
             Ok(())
         }
+        (FlatType::Record(fs1), FlatType::Record(fs2)) => {
+            // Closed records unify only when their field-name SETS are identical,
+            // then field-by-field. A differing field set (a missing or extra
+            // field) is a mismatch — there is no row variable to absorb it. Both
+            // maps are keyed by `Symbol`, so equal key sequences mean equal sets.
+            if !fs1.keys().eq(fs2.keys()) {
+                return Err(mismatch(uf, budget, interner, span, ra, rb));
+            }
+            uf.union(ra, rb, Content::Structure(FlatType::Record(fs1.clone())))?;
+            for (name, v1) in &fs1 {
+                // Present in `fs2` because the key sets are equal.
+                if let Some(v2) = fs2.get(name) {
+                    unify(uf, budget, interner, span, *v1, *v2)?;
+                }
+            }
+            Ok(())
+        }
         _ => Err(mismatch(uf, budget, interner, span, ra, rb)),
     }
 }
@@ -191,6 +208,11 @@ fn occurs(
             Content::Structure(FlatType::Tuple(elems)) => {
                 for elem in elems {
                     stack.push(elem);
+                }
+            }
+            Content::Structure(FlatType::Record(fields)) => {
+                for v in fields.values() {
+                    stack.push(*v);
                 }
             }
         }

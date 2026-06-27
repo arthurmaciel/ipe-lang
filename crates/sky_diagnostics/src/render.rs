@@ -388,6 +388,10 @@ fn type_label(msg: &TypeError) -> Option<String> {
         TypeError::RedundantCaseBranch { constructor } => {
             Some(format!("`{constructor}` is already handled"))
         }
+        TypeError::NoSuchField { field, record } => Some(format!(
+            "type {} has no field `{field}`",
+            ty_to_string(record)
+        )),
         TypeError::Mismatch | TypeError::BudgetExceeded | TypeError::StepBudgetExceeded { .. } => {
             None
         }
@@ -528,6 +532,8 @@ const fn token_kind_str(t: TokenKind) -> &'static str {
         TokenKind::Else => "`else`",
         TokenKind::LParen => "`(`",
         TokenKind::RParen => "`)`",
+        TokenKind::LBrace => "`{`",
+        TokenKind::RBrace => "`}`",
         TokenKind::Equals => "`=`",
         TokenKind::Pipe => "`|`",
         TokenKind::Colon => "`:`",
@@ -568,6 +574,7 @@ const fn expected_str(e: Expected) -> &'static str {
         Expected::Colon => "`:`",
         Expected::LParen => "`(`",
         Expected::RParen => "`)`",
+        Expected::RBrace => "`}`",
         Expected::Identifier => "an identifier",
         Expected::Constructor => "a constructor",
         Expected::TypeAtom => "a type",
@@ -677,6 +684,17 @@ fn ty_to_string(t: &TyDoc) -> String {
         TyDoc::Tuple(elems) => {
             let rendered: Vec<String> = elems.iter().map(ty_to_string).collect();
             format!("({})", rendered.join(", "))
+        }
+        TyDoc::Record(fields) => {
+            if fields.is_empty() {
+                "{}".to_string()
+            } else {
+                let rendered: Vec<String> = fields
+                    .iter()
+                    .map(|(name, ty)| format!("{name} : {}", ty_to_string(ty)))
+                    .collect();
+                format!("{{ {} }}", rendered.join(", "))
+            }
         }
     }
 }

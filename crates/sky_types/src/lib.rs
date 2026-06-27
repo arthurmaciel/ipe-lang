@@ -36,14 +36,17 @@ mod unionfind;
 use std::collections::BTreeMap;
 
 use sky_canon::ast as canon;
-use sky_diagnostics::{DResult, Span};
+use sky_diagnostics::{DResult, Diagnostic, Span, TypeError};
 use sky_intern::{Interner, Symbol};
 
 pub use solve::{BUDGET_ENV, Budget, DEFAULT_SOLVER_BUDGET};
 pub use ty::Ty;
 
-use constrain::{Builder, zonk};
+use constrain::{Builder, FieldAccess, zonk};
+use doc::{VarNamer, ty_to_doc};
 use solve::solve;
+use ty::{Content, FlatType};
+use unify::unify;
 use unionfind::UnionFind;
 
 /// The result of inference: resolved types for bindings and for every region.
@@ -86,6 +89,12 @@ fn infer_with_budget(
 
     solve(&mut uf, budget, interner, &generated.constraints)?;
 
+    // Discharge deferred record field accesses now the record types are settled
+    // (closed records carry no row variable, so this cannot run during the main
+    // solve — see [`FieldAccess`]). Done before the region read-back so each
+    // access's result variable reflects the field's type.
+    resolve_field_accesses(&mut uf, budget, interner, &generated.field_accesses)?;
+
     // End-of-checking exhaustiveness + redundancy pass. Running it here — after
     // the solver settles — makes the lowerer's `Match::new` exhaustiveness
     // contract a genuinely unreachable compiler-bug case.
@@ -105,6 +114,71 @@ fn infer_with_budget(
     }
 
     Ok(SolvedTypes { env, regions })
+}
+
+/// Discharge every deferred record field access (`record.field`).
+///
+/// By the time this runs the main solve has settled each record's type. For each
+/// access, the now-resolved record type is read: a closed record carrying the
+/// field links the access's result variable to the field's type (so any
+/// surrounding constraint already placed on the result, e.g. `record.field + 1`,
+/// is checked against the field's real type); a record without the field — or a
+/// base that is not a record at all — is a [`TypeError::NoSuchField`] blamed at
+/// the access span.
+fn resolve_field_accesses(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    accesses: &[FieldAccess],
+) -> DResult<()> {
+    for fa in accesses {
+        let root = uf.find(fa.record)?;
+        let field_var = match uf.content(root)? {
+            Content::Structure(FlatType::Record(fields)) => fields.get(&fa.field).copied(),
+            _ => None,
+        };
+        match field_var {
+            Some(v) => unify(uf, budget, interner, fa.span, fa.result, v)?,
+            None => return Err(no_such_field(uf, budget, interner, fa)),
+        }
+    }
+    Ok(())
+}
+
+/// Build the [`TypeError::NoSuchField`] (SKY-T0012) for an access whose field is
+/// absent from the (settled) record type, or whose base is not a record. The
+/// record type is zonked + rendered here so the reporter needs no arena access.
+fn no_such_field(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    fa: &FieldAccess,
+) -> Diagnostic {
+    let field = match interner.resolve(fa.field) {
+        Some(s) => Box::from(s),
+        None => {
+            return Diagnostic::CompilerBug {
+                where_: "intern.resolve",
+                detail: format!("no backing string for field symbol {}", fa.field.as_raw()),
+            };
+        }
+    };
+    let record_ty = match zonk(uf, budget, fa.record) {
+        Ok(t) => t,
+        Err(bug) => return bug,
+    };
+    let mut namer = VarNamer::new();
+    let record_doc = match ty_to_doc(&record_ty, interner, &mut namer) {
+        Ok(d) => d,
+        Err(bug) => return bug,
+    };
+    Diagnostic::Type {
+        span: fa.span,
+        msg: TypeError::NoSuchField {
+            field,
+            record: Box::new(record_doc),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -753,6 +827,107 @@ mod tests {
         assert!(
             infer(&m, &mut i).is_err(),
             "a tuple body against an Int annotation must be a type error"
+        );
+    }
+
+    #[test]
+    fn record_value_infers_record_type() {
+        // Untyped `v = { x = 1, y = 2 }` infers the closed record type
+        // `{ x : Int, y : Int }`.
+        let opt = infer_env_ty("module Main exposing (v)\nv =\n    { x = 1, y = 2 }\n", "v");
+        assert!(opt.is_some(), "v must infer");
+        let Some((ty, i)) = opt else { return };
+        let shape = match &ty {
+            Ty::Record(fields) => Some((
+                fields.len(),
+                fields
+                    .values()
+                    .all(|t| ty_con_name(t, &i).as_deref() == Some("Int")),
+            )),
+            _ => None,
+        };
+        assert_eq!(
+            shape,
+            Some((2, true)),
+            "v infers `{{ x : Int, y : Int }}`, got {ty:?}"
+        );
+    }
+
+    #[test]
+    fn field_access_infers_the_field_type() {
+        // `let p = { x = 1, y = 2 } in p.x` has the field's type, `Int`.
+        let opt = infer_env_ty(
+            "module Main exposing (v)\nv =\n    let p = { x = 1, y = 2 } in p.x\n",
+            "v",
+        );
+        assert!(opt.is_some(), "v must infer");
+        let Some((ty, i)) = opt else { return };
+        assert_eq!(ty_con_name(&ty, &i).as_deref(), Some("Int"));
+    }
+
+    #[test]
+    fn field_access_constrains_through_arithmetic() {
+        // `p.x + p.y` forces both fields to `Int`; the whole binding is `Int`.
+        let opt = infer_env_ty(
+            "module Main exposing (v)\nv =\n    let p = { x = 1, y = 2 } in p.x + p.y\n",
+            "v",
+        );
+        assert!(opt.is_some(), "v must infer");
+        let Some((ty, i)) = opt else { return };
+        assert_eq!(ty_con_name(&ty, &i).as_deref(), Some("Int"));
+    }
+
+    #[test]
+    fn accessing_a_missing_field_is_no_such_field() {
+        // `{ x = 1 }` has no `y`: a closed record rejects the access (SKY-T0012).
+        let source = "module Main exposing (v)\nv =\n    let p = { x = 1 } in p.y\n";
+        let Some((m, mut i)) = canon_src(source) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::NoSuchField { .. },
+                    ..
+                })
+            ),
+            "a missing field must be NoSuchField, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn accessing_a_field_on_a_non_record_is_no_such_field() {
+        // `p` is an `Int`, so `p.x` has no field to read (SKY-T0012).
+        let source = "module Main exposing (v)\nv =\n    let p = 5 in p.x\n";
+        let Some((m, mut i)) = canon_src(source) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::NoSuchField { .. },
+                    ..
+                })
+            ),
+            "a field on a non-record must be NoSuchField, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn records_with_different_field_sets_do_not_unify() {
+        // `{ x = 1 } == { y = 1 }`: closed records unify only at equal field
+        // sets, so this is a type error.
+        let source = "module Main exposing (v)\nv : Bool\nv =\n    { x = 1 } == { y = 1 }\n";
+        let Some((m, mut i)) = canon_src(source) else {
+            return;
+        };
+        assert!(
+            infer(&m, &mut i).is_err(),
+            "records with different field sets must not unify"
         );
     }
 

@@ -8,6 +8,8 @@
 //!   narrowed to the M0 lattice: functions, type-constructor applications, and
 //!   unit; no records / tuples / aliases / super-types yet).
 
+use std::collections::BTreeMap;
+
 use sky_canon::ast as canon;
 use sky_intern::Symbol;
 
@@ -34,6 +36,10 @@ pub enum Ty {
     /// An anonymous product (tuple) type `(T1, T2, ...)`. Invariant: arity ≥ 2 —
     /// a 0-tuple is [`Ty::Unit`] and a 1-tuple is just its element.
     Tuple(Vec<Self>),
+    /// A closed record type `{ x : Int, y : Bool }`, keyed by field name. The
+    /// [`BTreeMap`] fixes iteration order (by [`Symbol`]); consumers that need a
+    /// source-like order re-sort by the resolved field name.
+    Record(BTreeMap<Symbol, Self>),
 }
 
 /// What a union-find variable resolves to during inference.
@@ -61,6 +67,10 @@ pub enum FlatType {
     Unit,
     /// Anonymous product (tuple) over variable elements. Invariant: arity ≥ 2.
     Tuple(Vec<VarId>),
+    /// Closed record `{ name : var, ... }`, keyed by field name; each value is
+    /// the union-find variable of that field's type, refined in place by
+    /// unification.
+    Record(BTreeMap<Symbol, VarId>),
 }
 
 /// Convert a canonical annotation type into a resolved [`Ty`].

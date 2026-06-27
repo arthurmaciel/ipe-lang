@@ -151,6 +151,15 @@ pub enum Expr_ {
     /// the parser). Mirrors the Haskell compiler's `Src.Tuple e1 e2 [rest]`,
     /// flattened to one vector here.
     Tuple(Vec<Expr>),
+    /// A record literal `{ field = expr, ... }`. Fields are `(name, value)`
+    /// pairs in source order; the field name is a located lowercase identifier.
+    /// Mirrors the Haskell compiler's `Src.Record`, narrowed to the closed-record
+    /// (no `{ r | ... }` extension) M1 subset.
+    Record(Vec<(Located<Symbol>, Expr)>),
+    /// A record field access `record.field` (`record` lowercase). The parser
+    /// builds this from a dotted lowercase identifier (`p.x`) and nests it for a
+    /// chain (`p.x.y` -> `Access (Access p x) y`). Mirrors `Src.Access`.
+    Access(Box<Expr>, Located<Symbol>),
 }
 
 /// A single `let` value binding: `name = body`. M1 subset of the Haskell

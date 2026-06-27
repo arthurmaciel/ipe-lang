@@ -33,6 +33,8 @@ pub enum Tok {
     // Punctuation / operators.
     LParen,
     RParen,
+    LBrace,
+    RBrace,
     Equals,
     Pipe,
     Colon,
@@ -278,6 +280,8 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
     let kind = match c {
         '(' => one_char(lx, Tok::LParen),
         ')' => one_char(lx, Tok::RParen),
+        '{' => one_char(lx, Tok::LBrace),
+        '}' => one_char(lx, Tok::RBrace),
         ':' => one_char(lx, Tok::Colon),
         ',' => one_char(lx, Tok::Comma),
         '+' => one_char(lx, Tok::Plus),

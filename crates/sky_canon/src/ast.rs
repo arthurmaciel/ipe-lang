@@ -117,6 +117,13 @@ pub enum Expr_ {
     /// single expression was unwrapped by the parser). Every element is resolved
     /// against the same enclosing scope — a tuple introduces no bindings.
     Tuple(Vec<Expr>),
+    /// A record literal `{ field = value, ... }`. Fields are `(name, value)`
+    /// pairs; the name is a label (not a resolvable reference), the value is
+    /// resolved against the enclosing scope. A record introduces no bindings.
+    Record(Vec<(Symbol, Expr)>),
+    /// A record field access `record.field`. The record sub-expression is
+    /// resolved against the enclosing scope; the field is a label.
+    Access(Box<Expr>, Symbol),
 }
 
 /// A resolved `let` value binding: `name = body`.

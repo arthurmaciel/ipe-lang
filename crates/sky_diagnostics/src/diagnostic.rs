@@ -16,7 +16,7 @@ use crate::code::{
     SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_P0001, SKY_P0002,
     SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020, SKY_P0021, SKY_P0030,
     SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001,
-    SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, Severity,
+    SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, Severity,
 };
 use crate::span::Span;
 
@@ -42,6 +42,8 @@ pub enum TokenKind {
     Else,
     LParen,
     RParen,
+    LBrace,
+    RBrace,
     Equals,
     Pipe,
     Colon,
@@ -83,6 +85,7 @@ pub enum Expected {
     Colon,
     LParen,
     RParen,
+    RBrace,
     Identifier,
     Constructor,
     TypeAtom,
@@ -111,6 +114,7 @@ pub enum Construct {
     Let,
     If,
     Tuple,
+    Record,
 }
 
 /// Which part of a module header is malformed.
@@ -217,6 +221,10 @@ pub enum TyDoc {
     Unit,
     /// An anonymous product (tuple) type `(T1, T2, ...)`. Invariant: arity ≥ 2.
     Tuple(Box<[Self]>),
+    /// A closed record type `{ x : Int, y : Bool }`. Fields are `(name, type)`
+    /// pairs in field-name order (the producer sorts them, so rendering is
+    /// deterministic).
+    Record(Box<[(Box<str>, Self)]>),
 }
 
 // ===========================================================================
@@ -341,6 +349,9 @@ pub enum TypeError {
     NonExhaustiveCase { missing: Box<[Box<str>]> },
     /// Two arms cover the same constructor (warning). [SKY-T0011]
     RedundantCaseBranch { constructor: Box<str> },
+    /// A `record.field` access whose `field` is not present in the (closed)
+    /// record type `record` — or whose base is not a record at all. [SKY-T0012]
+    NoSuchField { field: Box<str>, record: Box<TyDoc> },
 }
 
 /// A language feature that the Milestone-0 lowerer does not yet support. Each
@@ -531,7 +542,8 @@ impl Diagnostic {
                 | TypeError::InfiniteType { .. }
                 | TypeError::StepBudgetExceeded { .. }
                 | TypeError::TooManyParameters { .. }
-                | TypeError::NonExhaustiveCase { .. } => Severity::Error,
+                | TypeError::NonExhaustiveCase { .. }
+                | TypeError::NoSuchField { .. } => Severity::Error,
             },
             Self::CompilerBug { .. } => Severity::Bug,
         }
@@ -609,6 +621,7 @@ const fn type_code(msg: &TypeError) -> Code {
         TypeError::TooManyParameters { .. } => SKY_T0004,
         TypeError::NonExhaustiveCase { .. } => SKY_T0010,
         TypeError::RedundantCaseBranch { .. } => SKY_T0011,
+        TypeError::NoSuchField { .. } => SKY_T0012,
     }
 }
 
@@ -720,7 +733,8 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
         TypeError::Mismatch
         | TypeError::InfiniteType { .. }
         | TypeError::TooManyParameters { .. }
-        | TypeError::RedundantCaseBranch { .. } => Vec::new(),
+        | TypeError::RedundantCaseBranch { .. }
+        | TypeError::NoSuchField { .. } => Vec::new(),
     }
 }
 

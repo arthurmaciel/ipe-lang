@@ -117,6 +117,19 @@ pub fn ty_to_doc(ty: &Ty, interner: &Interner, namer: &mut VarNamer) -> DResult<
             }
             Ok(TyDoc::Tuple(doc_elems.into_boxed_slice()))
         }
+        Ty::Record(fields) => {
+            // Render in field-name order. The map is keyed by `Symbol`, so resolve
+            // each name and sort the resulting pairs for a deterministic form.
+            let mut entries: Vec<(Box<str>, TyDoc)> = Vec::with_capacity(fields.len());
+            for (name, field_ty) in fields {
+                entries.push((
+                    resolve(interner, *name)?,
+                    ty_to_doc(field_ty, interner, namer)?,
+                ));
+            }
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Ok(TyDoc::Record(entries.into_boxed_slice()))
+        }
     }
 }
 

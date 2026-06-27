@@ -42,6 +42,13 @@ pub struct Module {
     pub types: Vec<TypeDef>,
     pub funcs: Vec<Func>,
     pub entry: Option<FuncId>,
+    /// Every CLOSED record shape the module's expressions construct or read,
+    /// each an [`IrType::Record`]. The lowerer surfaces these (it alone has the
+    /// solved types) so the backend can synthesise one Rust struct per shape —
+    /// record literals live inside function bodies, where the type does not
+    /// otherwise appear in a signature. Non-record entries are ignored by the
+    /// backend, so the field stays robust to a stray shape.
+    pub records: Vec<IrType>,
 }
 
 /// A user-declared type. M0 supports only enums with nullary variants.
@@ -504,6 +511,7 @@ mod tests {
                 })],
                 funcs: vec![func],
                 entry: Some(FuncId::from_raw(0)),
+                records: vec![],
             }],
         };
         let clone = program.clone();

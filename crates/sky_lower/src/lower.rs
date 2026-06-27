@@ -123,15 +123,68 @@ impl<'a> Lowerer<'a> {
             funcs.push(func);
         }
 
+        let records = self.collect_record_types()?;
+
         let module = Module {
             name: ModPath(self.m.name.clone()),
             types: types_ir,
             funcs,
             entry,
+            records,
         };
         Ok(Program {
             modules: vec![module],
         })
+    }
+
+    /// Collect every distinct CLOSED record shape the module's expressions
+    /// construct or read, as [`IrType::Record`]s for the backend to synthesise a
+    /// struct from. A record literal lives inside a function body, where its
+    /// type appears in no signature — so the type-directed lowerer surfaces it
+    /// here from the solver's per-region (and per-binding) types, which is the
+    /// only place the solved record shape is known.
+    ///
+    /// Determinism: both maps walked are `BTreeMap`s, and duplicates are dropped
+    /// by full structural equality, so the output order is fixed.
+    fn collect_record_types(&self) -> DResult<Vec<IrType>> {
+        let mut out: Vec<IrType> = Vec::new();
+        for ty in self.types.regions.values().chain(self.types.env.values()) {
+            self.collect_records_in_ty(ty, &mut out)?;
+        }
+        Ok(out)
+    }
+
+    /// Walk a solved [`Ty`], pushing every distinct record shape it contains
+    /// (nested records first) into `out`. Non-record shapes recurse into their
+    /// children; leaves contribute nothing.
+    fn collect_records_in_ty(&self, ty: &Ty, out: &mut Vec<IrType>) -> DResult<()> {
+        match ty {
+            Ty::Record(fields) => {
+                for field_ty in fields.values() {
+                    self.collect_records_in_ty(field_ty, out)?;
+                }
+                let ir = self.ir_type_from_ty(ty, Span::DUMMY)?;
+                if !out.contains(&ir) {
+                    out.push(ir);
+                }
+            }
+            Ty::Tuple(elems) => {
+                for e in elems {
+                    self.collect_records_in_ty(e, out)?;
+                }
+            }
+            Ty::Fun(a, b) => {
+                self.collect_records_in_ty(a, out)?;
+                self.collect_records_in_ty(b, out)?;
+            }
+            Ty::Con { args, .. } => {
+                for a in args {
+                    self.collect_records_in_ty(a, out)?;
+                }
+            }
+            Ty::Var(_) | Ty::Unit => {}
+        }
+        Ok(())
     }
 
     fn lower_def(&self, def: &canon::Def) -> DResult<Func> {
@@ -275,6 +328,14 @@ impl<'a> Lowerer<'a> {
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(IrType::Tuple(lowered))
             }
+            // A closed record type: lower each field type, keyed by field name.
+            Ty::Record(fields) => {
+                let mut lowered = BTreeMap::new();
+                for (name, field_ty) in fields {
+                    lowered.insert(*name, self.ir_type_from_ty(field_ty, span)?);
+                }
+                Ok(IrType::Record(lowered))
+            }
             // An inferred function type in value position (e.g. a bare partial
             // application as a binding body).
             // [SKY-L0103, feature: higher-order-values]
@@ -378,6 +439,26 @@ impl<'a> Lowerer<'a> {
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Expr::Tuple(elems))
             }
+            canon::Expr_::Record(fields) => {
+                // A record literal lowers field-wise. The IR carries fields in
+                // field-NAME order (the backend names struct-literal fields, so
+                // write order is free), making the lowering deterministic
+                // regardless of source order or interning order.
+                let mut lowered: Vec<(Symbol, Expr)> = Vec::with_capacity(fields.len());
+                for (name, value) in fields {
+                    lowered.push((*name, self.lower_expr(value)?));
+                }
+                lowered.sort_by(|a, b| {
+                    self.resolve(a.0)
+                        .unwrap_or("")
+                        .cmp(self.resolve(b.0).unwrap_or(""))
+                });
+                Ok(Expr::Record(lowered))
+            }
+            canon::Expr_::Access(record, field) => Ok(Expr::Access {
+                record: Box::new(self.lower_expr(record)?),
+                field: *field,
+            }),
             canon::Expr_::Case(scrut, branches) => self.lower_case(scrut, branches),
             // A function named as a bare value rather than applied. M0 has no
             // first-class functions; a function name is legal only as a call

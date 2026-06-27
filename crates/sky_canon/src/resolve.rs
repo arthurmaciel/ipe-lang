@@ -359,6 +359,37 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
             }
             canon::Expr_::Tuple(can_elems)
         }
+        src::Expr_::Record(fields) => {
+            // A record introduces no bindings: every field value resolves against
+            // the same enclosing scope. The field name is a label, not a
+            // reference, so it is carried through unresolved. A field name written
+            // twice in one literal would otherwise silently collapse to one
+            // struct field, so it is rejected here — a field is, in effect, a
+            // value defined more than once in the record.
+            let mut seen: BTreeMap<Symbol, Span> = BTreeMap::new();
+            let mut can_fields = Vec::with_capacity(fields.len());
+            for (name, value) in fields {
+                if let Some(first) = seen.get(&name.value) {
+                    return Err(Diagnostic::Name {
+                        span: name.span,
+                        msg: NameError::DuplicateValue {
+                            name: name_str(interner, name.value)?,
+                            first: *first,
+                        },
+                    });
+                }
+                seen.insert(name.value, name.span);
+                let can_value = canonicalise_expr(value, env, interner)?;
+                can_fields.push((name.value, can_value));
+            }
+            canon::Expr_::Record(can_fields)
+        }
+        src::Expr_::Access(record, field) => {
+            // `record.field`: the record sub-expression resolves against the
+            // enclosing scope; the field is a label carried through unresolved.
+            let can_record = canonicalise_expr(record, env, interner)?;
+            canon::Expr_::Access(Box::new(can_record), field.value)
+        }
     };
     Ok(Located::new(span, node))
 }

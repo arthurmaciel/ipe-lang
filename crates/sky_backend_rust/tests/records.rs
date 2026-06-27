@@ -46,6 +46,7 @@ fn program(name: Symbol, funcs: Vec<Func>, entry: Option<FuncId>) -> Program {
             types: vec![],
             funcs,
             entry,
+            records: vec![],
         }],
     }
 }
