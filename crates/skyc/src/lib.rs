@@ -31,7 +31,10 @@ pub enum CliError {
     /// Command-line misuse; carries a fixed usage hint.
     Usage(&'static str),
     /// A filesystem operation failed at `path`.
-    Io { path: PathBuf, source: std::io::Error },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     /// The compiler rejected the program.
     Pipeline(Diagnostic),
     /// The Sky runtime module tree could not be located.
@@ -68,7 +71,9 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
     let canonical = sky_canon::canonicalise(&module, &mut interner).map_err(CliError::Pipeline)?;
     let types = sky_types::infer(&canonical, &mut interner).map_err(CliError::Pipeline)?;
     let program = sky_lower::lower(&canonical, &types, &interner).map_err(CliError::Pipeline)?;
-    let emitted = RustBackend::new(&interner).emit(&program).map_err(CliError::Pipeline)?;
+    let emitted = RustBackend::new(&interner)
+        .emit(&program)
+        .map_err(CliError::Pipeline)?;
 
     let src_dir = out_dir.join("src");
     fs::create_dir_all(&src_dir).map_err(|e| io_err(&src_dir, e))?;
@@ -114,7 +119,10 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
     let mut here: Option<&Path> = Some(cwd.as_path());
     while let Some(dir) = here {
         for candidate in [
-            dir.join("sky").join("runtime-rust").join("src").join("sky_runtime"),
+            dir.join("sky")
+                .join("runtime-rust")
+                .join("src")
+                .join("sky_runtime"),
             dir.join("runtime-rust").join("src").join("sky_runtime"),
         ] {
             if candidate.is_dir() {
@@ -178,5 +186,8 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<(), CliError> {
 }
 
 fn io_err(path: &Path, source: std::io::Error) -> CliError {
-    CliError::Io { path: path.to_path_buf(), source }
+    CliError::Io {
+        path: path.to_path_buf(),
+        source,
+    }
 }

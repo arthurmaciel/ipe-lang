@@ -94,14 +94,16 @@ mod tests {
         assert!(update.is_some(), "update value present");
         if let Some(uval) = update {
             assert_eq!(uval.patterns.len(), 2);
-            assert!(uval
-                .patterns
-                .first()
-                .is_some_and(|p| matches!(p.value, Pattern_::PVar(_))));
-            assert!(uval
-                .patterns
-                .get(1)
-                .is_some_and(|p| matches!(p.value, Pattern_::PVar(_))));
+            assert!(
+                uval.patterns
+                    .first()
+                    .is_some_and(|p| matches!(p.value, Pattern_::PVar(_)))
+            );
+            assert!(
+                uval.patterns
+                    .get(1)
+                    .is_some_and(|p| matches!(p.value, Pattern_::PVar(_)))
+            );
 
             // Annotation: Msg -> Int -> Int (two nested arrows, all TType leaves).
             assert!(uval.type_annotation.as_ref().is_some_and(|ann| matches!(
@@ -141,9 +143,10 @@ mod tests {
             if let Expr_::Call(_, args) = &mval.body.value {
                 assert_eq!(args.len(), 1);
                 // The single argument is itself a Call (String.fromInt (...)).
-                assert!(args
-                    .first()
-                    .is_some_and(|a| matches!(a.value, Expr_::Call(_, _))));
+                assert!(
+                    args.first()
+                        .is_some_and(|a| matches!(a.value, Expr_::Call(_, _)))
+                );
             }
         }
     }

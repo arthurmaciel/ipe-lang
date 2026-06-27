@@ -14,6 +14,6 @@
 mod ir;
 
 pub use ir::{
-    Arm, BinOp, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module,
-    Pat, Program, TypeDef,
+    Arm, BinOp, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module, Pat,
+    Program, TypeDef,
 };

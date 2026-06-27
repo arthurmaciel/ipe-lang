@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use sky_diagnostics::{Diagnostic, DResult, Located, NameError, Span};
+use sky_diagnostics::{DResult, Diagnostic, Located, NameError, Span};
 use sky_intern::{Interner, Symbol};
 use sky_syntax as src;
 
@@ -22,8 +22,7 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
 
     // Collect the local union names first; the type canonicaliser sets a
     // constructor application's home to this module only for these names.
-    let local_union_names: BTreeSet<Symbol> =
-        m.unions.iter().map(|u| u.value.name.value).collect();
+    let local_union_names: BTreeSet<Symbol> = m.unions.iter().map(|u| u.value.name.value).collect();
 
     // Register unions + their constructors into the environment.
     let mut unions = Vec::with_capacity(m.unions.len());
@@ -35,16 +34,26 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
     // Register every top-level value name so bindings can be referenced before
     // their definition (mutual / forward references).
     for v in &m.values {
-        env.vars.insert(v.value.name.value, VarHome::TopLevel(home.clone()));
+        env.vars
+            .insert(v.value.name.value, VarHome::TopLevel(home.clone()));
     }
 
     // Canonicalise each value declaration.
     let mut defs = Vec::with_capacity(m.values.len());
     for v in &m.values {
-        defs.push(canonicalise_value(&v.value, &env, &local_union_names, interner)?);
+        defs.push(canonicalise_value(
+            &v.value,
+            &env,
+            &local_union_names,
+            interner,
+        )?);
     }
 
-    Ok(canon::Module { name: home, unions, defs })
+    Ok(canon::Module {
+        name: home,
+        unions,
+        defs,
+    })
 }
 
 /// Register a union and its constructors into the environment, returning the
@@ -57,11 +66,20 @@ fn register_union(u: &src::Union, home: &[Symbol], env: &mut Env) -> canon::Unio
         let arity = c.value.args.len();
         env.ctors.insert(
             name,
-            CtorHome { home: home.to_vec(), type_name, name, index, arity },
+            CtorHome {
+                home: home.to_vec(),
+                type_name,
+                name,
+                index,
+                arity,
+            },
         );
         ctors.push(canon::Ctor { name, index, arity });
     }
-    canon::Union { name: type_name, ctors }
+    canon::Union {
+        name: type_name,
+        ctors,
+    }
 }
 
 /// Canonicalise a single top-level value declaration.
@@ -84,7 +102,11 @@ fn canonicalise_value(
     let body = canonicalise_expr(&val.body, &body_env, interner)?;
 
     match &val.type_annotation {
-        None => Ok(canon::Def::Untyped { name: val.name, patterns, body }),
+        None => Ok(canon::Def::Untyped {
+            name: val.name,
+            patterns,
+            body,
+        }),
         Some(ann) => {
             let mut free_vars = BTreeSet::new();
             let ty = canonicalise_type(&ann.value, env, local_union_names, &mut free_vars);
@@ -143,11 +165,7 @@ fn canonicalise_pattern(p: &src::Pattern, env: &Env) -> DResult<canon::Pattern> 
 }
 
 /// Canonicalise an expression, resolving every name.
-fn canonicalise_expr(
-    e: &src::Expr,
-    env: &Env,
-    interner: &mut Interner,
-) -> DResult<canon::Expr> {
+fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResult<canon::Expr> {
     let span = e.span;
     let node = match &e.value {
         src::Expr_::Int(n) => canon::Expr_::Int(*n),
@@ -170,13 +188,14 @@ fn canonicalise_expr(
                 bind_pattern_names(&pat.value, &mut arm_env);
                 let can_pat = canonicalise_pattern(pat, env)?;
                 let can_body = canonicalise_expr(body, &arm_env, interner)?;
-                branches.push(canon::CaseBranch { pat: can_pat, body: can_body });
+                branches.push(canon::CaseBranch {
+                    pat: can_pat,
+                    body: can_body,
+                });
             }
             canon::Expr_::Case(Box::new(can_scrut), branches)
         }
-        src::Expr_::Binops(pairs, final_) => {
-            canonicalise_binops(pairs, final_, env, interner)?
-        }
+        src::Expr_::Binops(pairs, final_) => canonicalise_binops(pairs, final_, env, interner)?,
     };
     Ok(Located::new(span, node))
 }
@@ -193,13 +212,18 @@ fn resolve_var(name: Symbol, span: Span, env: &Env) -> DResult<canon::Expr_> {
     }
     match env.lookup_var(name) {
         Some(VarHome::Local) => Ok(canon::Expr_::VarLocal(name)),
-        Some(VarHome::TopLevel(module)) => {
-            Ok(canon::Expr_::VarTopLevel { module: module.clone(), name })
-        }
-        Some(VarHome::Kernel(m, f)) => {
-            Ok(canon::Expr_::VarKernel { module: *m, name: *f })
-        }
-        None => Err(Diagnostic::Name { span, msg: NameError::Unknown }),
+        Some(VarHome::TopLevel(module)) => Ok(canon::Expr_::VarTopLevel {
+            module: module.clone(),
+            name,
+        }),
+        Some(VarHome::Kernel(m, f)) => Ok(canon::Expr_::VarKernel {
+            module: *m,
+            name: *f,
+        }),
+        None => Err(Diagnostic::Name {
+            span,
+            msg: NameError::Unknown,
+        }),
     }
 }
 
@@ -211,12 +235,19 @@ fn resolve_qual_var(
     env: &Env,
 ) -> DResult<canon::Expr_> {
     match env.lookup_qual_var(qualifier, name) {
-        Some(VarHome::Kernel(m, f)) => Ok(canon::Expr_::VarKernel { module: *m, name: *f }),
-        Some(VarHome::TopLevel(module)) => {
-            Ok(canon::Expr_::VarTopLevel { module: module.clone(), name })
-        }
+        Some(VarHome::Kernel(m, f)) => Ok(canon::Expr_::VarKernel {
+            module: *m,
+            name: *f,
+        }),
+        Some(VarHome::TopLevel(module)) => Ok(canon::Expr_::VarTopLevel {
+            module: module.clone(),
+            name,
+        }),
         Some(VarHome::Local) => Ok(canon::Expr_::VarLocal(name)),
-        None => Err(Diagnostic::Name { span, msg: NameError::Unknown }),
+        None => Err(Diagnostic::Name {
+            span,
+            msg: NameError::Unknown,
+        }),
     }
 }
 
@@ -334,7 +365,11 @@ fn canonicalise_type(
                 .iter()
                 .map(|a| canonicalise_type(a, env, local_union_names, free_vars))
                 .collect();
-            canon::Type::Con { home, name, args: can_args }
+            canon::Type::Con {
+                home,
+                name,
+                args: can_args,
+            }
         }
     }
 }

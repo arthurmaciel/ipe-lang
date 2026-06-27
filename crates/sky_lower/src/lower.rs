@@ -20,7 +20,10 @@ use sky_types::{SolvedTypes, Ty};
 
 /// Build a [`Diagnostic::CompilerBug`] for a violated lowering invariant.
 fn bug(where_: &'static str, detail: impl Into<String>) -> Diagnostic {
-    Diagnostic::CompilerBug { where_, detail: detail.into() }
+    Diagnostic::CompilerBug {
+        where_,
+        detail: detail.into(),
+    }
 }
 
 /// The lowering pass over a single canonical module.
@@ -38,11 +41,7 @@ pub struct Lowerer<'a> {
 }
 
 impl<'a> Lowerer<'a> {
-    pub fn new(
-        m: &'a canon::Module,
-        types: &'a SolvedTypes,
-        interner: &'a Interner,
-    ) -> Self {
+    pub fn new(m: &'a canon::Module, types: &'a SolvedTypes, interner: &'a Interner) -> Self {
         let mut func_ids = BTreeMap::new();
         for (idx, def) in m.defs.iter().enumerate() {
             let id = FuncId::from_raw(u32::try_from(idx).unwrap_or(u32::MAX));
@@ -54,7 +53,13 @@ impl<'a> Lowerer<'a> {
             enum_variants.insert(union.name, union.ctors.iter().map(|c| c.name).collect());
         }
 
-        Self { m, types, interner, func_ids, enum_variants }
+        Self {
+            m,
+            types,
+            interner,
+            func_ids,
+            enum_variants,
+        }
     }
 
     /// Run the pass, producing the single-module program.
@@ -64,7 +69,10 @@ impl<'a> Lowerer<'a> {
             .unions
             .iter()
             .map(|u| {
-                TypeDef::Enum(EnumDef { name: u.name, variants: u.ctors.iter().map(|c| c.name).collect() })
+                TypeDef::Enum(EnumDef {
+                    name: u.name,
+                    variants: u.ctors.iter().map(|c| c.name).collect(),
+                })
             })
             .collect();
 
@@ -78,19 +86,36 @@ impl<'a> Lowerer<'a> {
             funcs.push(func);
         }
 
-        let module = Module { name: ModPath(self.m.name.clone()), types: types_ir, funcs, entry };
-        Ok(Program { modules: vec![module] })
+        let module = Module {
+            name: ModPath(self.m.name.clone()),
+            types: types_ir,
+            funcs,
+            entry,
+        };
+        Ok(Program {
+            modules: vec![module],
+        })
     }
 
     fn lower_def(&self, def: &canon::Def) -> DResult<Func> {
         let name = def.name().value;
-        let id =
-            *self.func_ids.get(&name).ok_or_else(|| bug("sky_lower::lower_def", "missing func id"))?;
+        let id = *self
+            .func_ids
+            .get(&name)
+            .ok_or_else(|| bug("sky_lower::lower_def", "missing func id"))?;
 
         match def {
-            canon::Def::Typed { patterns, body, ty, .. } => {
+            canon::Def::Typed {
+                patterns, body, ty, ..
+            } => {
                 let (params, ret) = self.split_typed_sig(ty, patterns)?;
-                Ok(Func { id, name, params, ret, body: self.lower_expr(body)? })
+                Ok(Func {
+                    id,
+                    name,
+                    params,
+                    ret,
+                    body: self.lower_expr(body)?,
+                })
             }
             canon::Def::Untyped { patterns, body, .. } => {
                 if !patterns.is_empty() {
@@ -99,13 +124,18 @@ impl<'a> Lowerer<'a> {
                         "untyped definition with parameters is unsupported in M0",
                     ));
                 }
-                let ret_ty = self
-                    .types
-                    .env
-                    .get(&name)
-                    .ok_or_else(|| bug("sky_lower::lower_def", "no inferred type for binding"))?;
+                let ret_ty =
+                    self.types.env.get(&name).ok_or_else(|| {
+                        bug("sky_lower::lower_def", "no inferred type for binding")
+                    })?;
                 let ret = self.ir_type_from_ty(ret_ty)?;
-                Ok(Func { id, name, params: Vec::new(), ret, body: self.lower_expr(body)? })
+                Ok(Func {
+                    id,
+                    name,
+                    params: Vec::new(),
+                    ret,
+                    body: self.lower_expr(body)?,
+                })
             }
         }
     }
@@ -185,9 +215,10 @@ impl<'a> Lowerer<'a> {
                 "sky_lower::ir_type_from_ty",
                 "function type in value position is unsupported in M0",
             )),
-            Ty::Var(_) => {
-                Err(bug("sky_lower::ir_type_from_ty", "unresolved type variable in value position"))
-            }
+            Ty::Var(_) => Err(bug(
+                "sky_lower::ir_type_from_ty",
+                "unresolved type variable in value position",
+            )),
         }
     }
 
@@ -210,9 +241,12 @@ impl<'a> Lowerer<'a> {
         match &e.value {
             canon::Expr_::Int(n) => Ok(Expr::Int(*n)),
             canon::Expr_::VarLocal(s) => Ok(Expr::Var(*s)),
-            canon::Expr_::VarCtor { type_name, name, .. } => {
-                Ok(Expr::Ctor { ty: *type_name, variant: *name })
-            }
+            canon::Expr_::VarCtor {
+                type_name, name, ..
+            } => Ok(Expr::Ctor {
+                ty: *type_name,
+                variant: *name,
+            }),
             canon::Expr_::Binop { func, lhs, rhs, .. } => Ok(Expr::BinOp {
                 op: self.binop(*func)?,
                 lhs: Box::new(self.lower_expr(lhs)?),
@@ -220,7 +254,10 @@ impl<'a> Lowerer<'a> {
             }),
             canon::Expr_::Call(callee, args) => {
                 let callee = self.lower_callee(callee)?;
-                let args = args.iter().map(|a| self.lower_expr(a)).collect::<DResult<Vec<_>>>()?;
+                let args = args
+                    .iter()
+                    .map(|a| self.lower_expr(a))
+                    .collect::<DResult<Vec<_>>>()?;
                 Ok(Expr::Call { callee, args })
             }
             canon::Expr_::Case(scrut, branches) => self.lower_case(scrut, branches),
@@ -261,17 +298,19 @@ impl<'a> Lowerer<'a> {
         match self.interner.resolve(func) {
             "add" => Ok(BinOp::Add),
             "sub" => Ok(BinOp::Sub),
-            other => {
-                Err(bug("sky_lower::binop", format!("unsupported binary operator `{other}` in M0")))
-            }
+            other => Err(bug(
+                "sky_lower::binop",
+                format!("unsupported binary operator `{other}` in M0"),
+            )),
         }
     }
 
     fn lower_case(&self, scrut: &canon::Expr, branches: &[canon::CaseBranch]) -> DResult<Expr> {
         let scrutinee = self.lower_expr(scrut)?;
 
-        let first =
-            branches.first().ok_or_else(|| bug("sky_lower::lower_case", "empty case expression"))?;
+        let first = branches
+            .first()
+            .ok_or_else(|| bug("sky_lower::lower_case", "empty case expression"))?;
         let canon::Pattern_::PCtor { type_name, .. } = &first.pat.value else {
             return Err(bug(
                 "sky_lower::lower_case",
@@ -286,14 +325,20 @@ impl<'a> Lowerer<'a> {
         let arms = branches
             .iter()
             .map(|br| {
-                let canon::Pattern_::PCtor { type_name, name, .. } = &br.pat.value else {
+                let canon::Pattern_::PCtor {
+                    type_name, name, ..
+                } = &br.pat.value
+                else {
                     return Err(bug(
                         "sky_lower::lower_case",
                         "non-constructor pattern is unsupported in M0",
                     ));
                 };
                 Ok(Arm {
-                    pat: Pat::Ctor { ty: *type_name, variant: *name },
+                    pat: Pat::Ctor {
+                        ty: *type_name,
+                        variant: *name,
+                    },
                     body: self.lower_expr(&br.body)?,
                 })
             })

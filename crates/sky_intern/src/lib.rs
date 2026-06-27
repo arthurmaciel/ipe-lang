@@ -6,9 +6,13 @@ pub struct Symbol(u32);
 
 impl Symbol {
     #[must_use]
-    pub const fn from_raw(n: u32) -> Self { Self(n) }
+    pub const fn from_raw(n: u32) -> Self {
+        Self(n)
+    }
     #[must_use]
-    pub const fn as_raw(self) -> u32 { self.0 }
+    pub const fn as_raw(self) -> u32 {
+        self.0
+    }
 }
 
 #[derive(Default)]
@@ -19,7 +23,9 @@ pub struct Interner {
 
 impl Interner {
     #[must_use]
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn intern(&mut self, s: &str) -> Symbol {
         if let Some(&sym) = self.map.get(s) {

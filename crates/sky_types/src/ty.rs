@@ -24,7 +24,11 @@ pub enum Ty {
     /// A type-constructor application. `module` is the defining module (empty
     /// for built-ins like `Int` / `String` that have no user home); `name` is
     /// the interned type name; `args` its type arguments.
-    Con { module: Vec<Symbol>, name: Symbol, args: Vec<Self> },
+    Con {
+        module: Vec<Symbol>,
+        name: Symbol,
+        args: Vec<Self>,
+    },
     /// The unit type `()`.
     Unit,
 }
@@ -45,7 +49,11 @@ pub enum FlatType {
     /// Function `arg -> result`.
     Fun(VarId, VarId),
     /// Type-constructor application over variable arguments.
-    Con { module: Vec<Symbol>, name: Symbol, args: Vec<VarId> },
+    Con {
+        module: Vec<Symbol>,
+        name: Symbol,
+        args: Vec<VarId>,
+    },
     /// Unit `()`.
     Unit,
 }

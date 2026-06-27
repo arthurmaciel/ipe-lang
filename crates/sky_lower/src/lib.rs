@@ -77,11 +77,23 @@ mod tests {
         let Some((program, i)) = opt else { return };
 
         assert_eq!(program.modules.len(), 1);
-        let Some(module) = program.modules.first() else { return };
-        assert_eq!(module.name.0.iter().map(|&s| i.resolve(s)).collect::<Vec<_>>(), vec!["Main"]);
+        let Some(module) = program.modules.first() else {
+            return;
+        };
+        assert_eq!(
+            module
+                .name
+                .0
+                .iter()
+                .map(|&s| i.resolve(s))
+                .collect::<Vec<_>>(),
+            vec!["Main"]
+        );
 
         // entry points at the `main` func.
-        let Some(main) = find_func(module, &i, "main") else { return };
+        let Some(main) = find_func(module, &i, "main") else {
+            return;
+        };
         assert_eq!(module.entry, Some(main.id));
     }
 
@@ -90,10 +102,14 @@ mod tests {
         let opt = lower_golden();
         assert!(opt.is_some(), "golden");
         let Some((program, i)) = opt else { return };
-        let Some(module) = program.modules.first() else { return };
+        let Some(module) = program.modules.first() else {
+            return;
+        };
 
         assert_eq!(module.types.len(), 1);
-        let Some(TypeDef::Enum(en)) = module.types.first() else { return };
+        let Some(TypeDef::Enum(en)) = module.types.first() else {
+            return;
+        };
         assert_eq!(i.resolve(en.name), "Msg");
         let variants: Vec<&str> = en.variants.iter().map(|&s| i.resolve(s)).collect();
         assert_eq!(variants, vec!["Increment", "Decrement"]);
@@ -104,14 +120,22 @@ mod tests {
         let opt = lower_golden();
         assert!(opt.is_some(), "golden");
         let Some((program, i)) = opt else { return };
-        let Some(module) = program.modules.first() else { return };
+        let Some(module) = program.modules.first() else {
+            return;
+        };
 
-        let Some(update) = find_func(module, &i, "update") else { return };
+        let Some(update) = find_func(module, &i, "update") else {
+            return;
+        };
 
         // params: msg : Enum(Msg), count : Int.
         assert_eq!(update.params.len(), 2);
-        let Some((p0, t0)) = update.params.first() else { return };
-        let Some((p1, t1)) = update.params.get(1) else { return };
+        let Some((p0, t0)) = update.params.first() else {
+            return;
+        };
+        let Some((p1, t1)) = update.params.get(1) else {
+            return;
+        };
         assert_eq!(i.resolve(*p0), "msg");
         assert!(matches!(t0, IrType::Enum(s) if i.resolve(*s) == "Msg"));
         assert_eq!(i.resolve(*p1), "count");
@@ -121,7 +145,10 @@ mod tests {
         assert_eq!(update.ret, IrType::Int);
 
         // body: an exhaustive match with two arms.
-        assert!(matches!(&update.body, Expr::Match(_)), "update body must be a Match");
+        assert!(
+            matches!(&update.body, Expr::Match(_)),
+            "update body must be a Match"
+        );
         let Expr::Match(m) = &update.body else { return };
         assert!(matches!(m.scrutinee(), Expr::Var(s) if i.resolve(*s) == "msg"));
         assert_eq!(m.arms().len(), 2);
@@ -142,23 +169,44 @@ mod tests {
         let opt = lower_golden();
         assert!(opt.is_some(), "golden");
         let Some((program, i)) = opt else { return };
-        let Some(module) = program.modules.first() else { return };
+        let Some(module) = program.modules.first() else {
+            return;
+        };
 
-        let Some(main) = find_func(module, &i, "main") else { return };
+        let Some(main) = find_func(module, &i, "main") else {
+            return;
+        };
         assert!(main.params.is_empty());
         assert_eq!(main.ret, IrType::TaskUnit);
 
         // main = println (String.fromInt (update Increment 0))
-        assert!(matches!(&main.body, Expr::Call { .. }), "main body is a call");
-        let Expr::Call { callee, args } = &main.body else { return };
+        assert!(
+            matches!(&main.body, Expr::Call { .. }),
+            "main body is a call"
+        );
+        let Expr::Call { callee, args } = &main.body else {
+            return;
+        };
         assert_eq!(*callee, Callee::Kernel(KernelFn::LogPrintln));
         assert_eq!(args.len(), 1);
 
-        let Some(Expr::Call { callee: c1, args: a1 }) = args.first() else { return };
+        let Some(Expr::Call {
+            callee: c1,
+            args: a1,
+        }) = args.first()
+        else {
+            return;
+        };
         assert_eq!(*c1, Callee::Kernel(KernelFn::StringFromInt));
 
         // inner: update Increment 0 → Callee::Func.
-        let Some(Expr::Call { callee: c2, args: a2 }) = a1.first() else { return };
+        let Some(Expr::Call {
+            callee: c2,
+            args: a2,
+        }) = a1.first()
+        else {
+            return;
+        };
         assert!(matches!(c2, Callee::Func(_)));
         assert_eq!(a2.len(), 2);
         assert!(matches!(a2.first(), Some(Expr::Ctor { .. })));

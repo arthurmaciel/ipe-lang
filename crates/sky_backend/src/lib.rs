@@ -68,7 +68,9 @@ mod tests {
         let backend = NoopBackend;
         assert_eq!(backend.name(), "noop");
 
-        let program = Program { modules: Vec::new() };
+        let program = Program {
+            modules: Vec::new(),
+        };
         let emitted = backend.emit(&program);
         assert_eq!(emitted, Ok(EmittedProject::default()));
         assert!(matches!(&emitted, Ok(project) if project.files.is_empty()));

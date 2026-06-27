@@ -1,0 +1,3 @@
+# Format with the latest (2024) style edition. Crates remain edition 2021;
+# style_edition only governs rustfmt's formatting rules, not the language edition.
+style_edition = "2024"

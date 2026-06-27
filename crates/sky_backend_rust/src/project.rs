@@ -20,10 +20,10 @@ use sky_backend::EmittedProject;
 use sky_diagnostics::DResult;
 use sky_ir::{Program, TypeDef};
 
+use crate::EmitCtx;
 use crate::emit_expr::emit_func;
 use crate::emit_types::emit_enum;
 use crate::preamble::{epilogue, preamble};
-use crate::EmitCtx;
 
 /// The golden M0 program, embedded at compile time. The fixed runtime-bindings
 /// block (kernel wrappers, golden lines 45–127) is an exact substring of it.
@@ -104,7 +104,16 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 
     let mut files = BTreeMap::new();
     files.insert("src/main.rs".to_owned(), out);
-    files.insert("src/sky_runtime/mod.rs".to_owned(), RUNTIME_MOD_RS.to_owned());
-    files.insert("src/sky_runtime/config.rs".to_owned(), RUNTIME_CONFIG_RS.to_owned());
-    Ok(EmittedProject { files, cargo_toml: CARGO_TOML.to_owned() })
+    files.insert(
+        "src/sky_runtime/mod.rs".to_owned(),
+        RUNTIME_MOD_RS.to_owned(),
+    );
+    files.insert(
+        "src/sky_runtime/config.rs".to_owned(),
+        RUNTIME_CONFIG_RS.to_owned(),
+    );
+    Ok(EmittedProject {
+        files,
+        cargo_toml: CARGO_TOML.to_owned(),
+    })
 }

@@ -255,7 +255,7 @@ impl<'a> Parser<'a> {
                     return Err(Diagnostic::Parse {
                         span: tok.span,
                         msg: ParseError::Unexpected,
-                    })
+                    });
                 }
             }
             match self.peek_kind() {
@@ -284,7 +284,7 @@ impl<'a> Parser<'a> {
                     return Err(Diagnostic::Parse {
                         span: tok.span,
                         msg: ParseError::Unexpected,
-                    })
+                    });
                 }
             }
         } else {

@@ -8,7 +8,7 @@
 //! the unifier, in order, sharing one [`Budget`]. The defensive solver-step
 //! bound (`SKY_SOLVER_BUDGET`) carries over verbatim in spirit.
 
-use sky_diagnostics::{Diagnostic, DResult, Span, TypeError};
+use sky_diagnostics::{DResult, Diagnostic, Span, TypeError};
 
 use crate::ty::Content;
 use crate::unify::unify;
@@ -42,7 +42,9 @@ impl Budget {
     /// A budget with an explicit step cap.
     #[must_use]
     pub const fn new(steps: u64) -> Self {
-        Self { remaining: Some(steps) }
+        Self {
+            remaining: Some(steps),
+        }
     }
 
     /// A disabled (unbounded) budget.

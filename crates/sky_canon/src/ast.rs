@@ -42,7 +42,11 @@ pub struct Ctor {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Def {
     /// A binding with no type annotation.
-    Untyped { name: Located<Symbol>, patterns: Vec<Pattern>, body: Expr },
+    Untyped {
+        name: Located<Symbol>,
+        patterns: Vec<Pattern>,
+        body: Expr,
+    },
     /// A binding with an annotation, carrying its free type variables and the
     /// canonicalised annotation type.
     Typed {
@@ -78,7 +82,12 @@ pub enum Expr_ {
     /// `Log`, `Basics`, `String`), `name` the function (e.g. `println`).
     VarKernel { module: Symbol, name: Symbol },
     /// A data constructor used as a value.
-    VarCtor { home: Vec<Symbol>, type_name: Symbol, name: Symbol, index: usize },
+    VarCtor {
+        home: Vec<Symbol>,
+        type_name: Symbol,
+        name: Symbol,
+        index: usize,
+    },
     /// An integer literal.
     Int(i64),
     /// Function application.
@@ -87,7 +96,13 @@ pub enum Expr_ {
     Case(Box<Expr>, Vec<CaseBranch>),
     /// A resolved binary operation. `op` is the source operator symbol;
     /// `home` / `func` is the kernel it resolves to (e.g. `Basics` / `add`).
-    Binop { op: Symbol, home: Symbol, func: Symbol, lhs: Box<Expr>, rhs: Box<Expr> },
+    Binop {
+        op: Symbol,
+        home: Symbol,
+        func: Symbol,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
 }
 
 /// One arm of a `case`: a resolved pattern and the body it guards.
@@ -127,5 +142,9 @@ pub enum Type {
     Var(Symbol),
     /// A type-constructor application. `home` is the defining module (empty for
     /// built-ins like `Int`); `name` the type name; `args` its arguments.
-    Con { home: Vec<Symbol>, name: Symbol, args: Vec<Self> },
+    Con {
+        home: Vec<Symbol>,
+        name: Symbol,
+        args: Vec<Self>,
+    },
 }

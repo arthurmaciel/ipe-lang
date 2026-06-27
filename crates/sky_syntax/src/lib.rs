@@ -48,8 +48,14 @@ mod tests {
             name: loc(msg_ty),
             vars: Vec::new(),
             ctors: vec![
-                loc(Ctor { name: increment, args: Vec::new() }),
-                loc(Ctor { name: decrement, args: Vec::new() }),
+                loc(Ctor {
+                    name: increment,
+                    args: Vec::new(),
+                }),
+                loc(Ctor {
+                    name: decrement,
+                    args: Vec::new(),
+                }),
             ],
         };
 
@@ -112,11 +118,7 @@ mod tests {
             name: loc(vec![i.intern("Main")]),
             exposing: loc(Exposing::List(vec![loc(Exposed::Value(main))])),
             imports: vec![Import {
-                name: loc(vec![
-                    i.intern("Sky"),
-                    i.intern("Core"),
-                    i.intern("Prelude"),
-                ]),
+                name: loc(vec![i.intern("Sky"), i.intern("Core"), i.intern("Prelude")]),
                 alias: None,
                 exposing: loc(Exposing::All),
             }],
@@ -188,9 +190,6 @@ mod tests {
         let mut i = Interner::new();
         let a: Symbol = i.intern("a");
         assert_eq!(TypeAnnotation::TVar(a), TypeAnnotation::TVar(a));
-        assert_ne!(
-            TypeAnnotation::TVar(a),
-            TypeAnnotation::TVar(i.intern("b"))
-        );
+        assert_ne!(TypeAnnotation::TVar(a), TypeAnnotation::TVar(i.intern("b")));
     }
 }

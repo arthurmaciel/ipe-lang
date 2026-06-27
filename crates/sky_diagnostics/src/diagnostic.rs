@@ -10,13 +10,13 @@
 //! so existing call sites keep compiling while producers migrate.
 
 use crate::code::{
-    Code, Severity, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103,
-    SKY_I0200, SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103,
-    SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0200, SKY_N0001, SKY_N0002,
-    SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_P0001, SKY_P0002,
-    SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020, SKY_P0021, SKY_P0030,
-    SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_T0001, SKY_T0002, SKY_T0003,
-    SKY_T0004, SKY_T0010, SKY_T0011,
+    Code, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200,
+    SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
+    SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0200, SKY_N0001, SKY_N0002, SKY_N0003,
+    SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_P0001, SKY_P0002, SKY_P0003,
+    SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031,
+    SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004,
+    SKY_T0010, SKY_T0011, Severity,
 };
 use crate::span::Span;
 
@@ -279,7 +279,10 @@ pub enum TypeError {
     StepBudgetExceeded { budget: u64 },
     /// A typed binding has more parameter patterns than its annotation has
     /// arrows. [SKY-T0004]
-    TooManyParameters { binding: Box<str>, signature: Box<TyDoc> },
+    TooManyParameters {
+        binding: Box<str>,
+        signature: Box<TyDoc>,
+    },
     /// A case does not cover every constructor; `missing` lists them. [SKY-T0010]
     NonExhaustiveCase { missing: Box<[Box<str>]> },
     /// Two arms cover the same constructor (warning). [SKY-T0011]
@@ -327,14 +330,29 @@ pub enum LowerError {
 /// The single typed error currency of the compiler.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Diagnostic {
-    Parse { span: Span, msg: ParseError },
-    Name { span: Span, msg: NameError },
-    Type { span: Span, msg: TypeError },
+    Parse {
+        span: Span,
+        msg: ParseError,
+    },
+    Name {
+        span: Span,
+        msg: NameError,
+    },
+    Type {
+        span: Span,
+        msg: TypeError,
+    },
     /// A feature that is not supported yet (distinct from a compiler bug).
-    Lower { span: Span, msg: LowerError },
+    Lower {
+        span: Span,
+        msg: LowerError,
+    },
     /// A violated internal invariant — illegal IR, missing region type, etc.
     /// `where_` names the stage; `detail` is the only free-form message.
-    CompilerBug { where_: &'static str, detail: String },
+    CompilerBug {
+        where_: &'static str,
+        detail: String,
+    },
 }
 
 /// Result alias used throughout the compiler.
@@ -604,9 +622,10 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
         TypeError::BudgetExceeded | TypeError::StepBudgetExceeded { .. } => {
             vec![HelpLine::Hint(Hint::RaiseSolverBudget)]
         }
-        TypeError::NonExhaustiveCase { missing } => {
-            missing.iter().map(|c| HelpLine::MissingConstructor(c.clone())).collect()
-        }
+        TypeError::NonExhaustiveCase { missing } => missing
+            .iter()
+            .map(|c| HelpLine::MissingConstructor(c.clone()))
+            .collect(),
         TypeError::Mismatch
         | TypeError::InfiniteType { .. }
         | TypeError::TooManyParameters { .. }
@@ -629,5 +648,8 @@ fn lower_help(msg: LowerError) -> Vec<HelpLine> {
 /// Maps already-sorted suggestion names into `DidYouMean` help lines. The
 /// producer is responsible for the stable `(Levenshtein, name)` ordering.
 fn did_you_mean(suggestions: &[Box<str>]) -> Vec<HelpLine> {
-    suggestions.iter().map(|s| HelpLine::DidYouMean(s.clone())).collect()
+    suggestions
+        .iter()
+        .map(|s| HelpLine::DidYouMean(s.clone()))
+        .collect()
 }

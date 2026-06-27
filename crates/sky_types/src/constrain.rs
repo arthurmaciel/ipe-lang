@@ -16,11 +16,11 @@
 use std::collections::BTreeMap;
 
 use sky_canon::ast as canon;
-use sky_diagnostics::{Diagnostic, DResult, Span};
+use sky_diagnostics::{DResult, Diagnostic, Span};
 use sky_intern::{Interner, Symbol};
 
 use crate::solve::Constraint;
-use crate::ty::{from_canon, Content, FlatType, Ty};
+use crate::ty::{Content, FlatType, Ty, from_canon};
 use crate::unionfind::{UnionFind, VarId};
 
 /// `where_` tag for any `CompilerBug` raised during constraint generation.
@@ -131,7 +131,11 @@ impl<'a> Builder<'a> {
 
     fn int_var(&mut self) -> DResult<VarId> {
         let name = self.builtins.int;
-        self.structure(FlatType::Con { module: Vec::new(), name, args: Vec::new() })
+        self.structure(FlatType::Con {
+            module: Vec::new(),
+            name,
+            args: Vec::new(),
+        })
     }
 
     fn con_var(&mut self, module: Vec<Symbol>, name: Symbol, args: Vec<VarId>) -> DResult<VarId> {
@@ -172,7 +176,11 @@ impl<'a> Builder<'a> {
                 for a in args {
                     arg_vars.push(self.instantiate_in(a, vars)?);
                 }
-                self.structure(FlatType::Con { module: module.clone(), name: *name, args: arg_vars })
+                self.structure(FlatType::Con {
+                    module: module.clone(),
+                    name: *name,
+                    args: arg_vars,
+                })
             }
         }
     }
@@ -181,7 +189,9 @@ impl<'a> Builder<'a> {
 
     fn constrain_def(&mut self, def: &canon::Def) -> DResult<()> {
         match def {
-            canon::Def::Typed { patterns, body, ty, .. } => {
+            canon::Def::Typed {
+                patterns, body, ty, ..
+            } => {
                 let mut local = BTreeMap::new();
                 let mut cursor = ty;
                 for pat in patterns {
@@ -197,7 +207,11 @@ impl<'a> Builder<'a> {
                 self.eq(body.span, body_var, ret_var);
                 Ok(())
             }
-            canon::Def::Untyped { name, patterns, body } => {
+            canon::Def::Untyped {
+                name,
+                patterns,
+                body,
+            } => {
                 let mut local = BTreeMap::new();
                 for pat in patterns {
                     let v = self.flex()?;
@@ -250,7 +264,9 @@ impl<'a> Builder<'a> {
                 let ty = self.kernel_ty(*module, *name);
                 self.instantiate(&ty)?
             }
-            canon::Expr_::VarCtor { home, type_name, .. } => {
+            canon::Expr_::VarCtor {
+                home, type_name, ..
+            } => {
                 // M0 constructors are nullary, so the value's type is the enum.
                 self.con_var(home.clone(), *type_name, Vec::new())?
             }
@@ -309,7 +325,9 @@ impl<'a> Builder<'a> {
                 local.insert(*s, scrut_var);
                 Ok(())
             }
-            canon::Pattern_::PCtor { home, type_name, .. } => {
+            canon::Pattern_::PCtor {
+                home, type_name, ..
+            } => {
                 // M0 constructor patterns are nullary; the pattern's type is the
                 // enum, which must match the scrutinee.
                 let ctor = self.con_var(home.clone(), *type_name, Vec::new())?;
@@ -323,10 +341,21 @@ impl<'a> Builder<'a> {
     /// `Log.println`; any other kernel is treated as fully polymorphic so it
     /// never spuriously fails inference for the M0 subset.
     fn kernel_ty(&self, module: Symbol, name: Symbol) -> Ty {
-        let int = Ty::Con { module: Vec::new(), name: self.builtins.int, args: Vec::new() };
-        let string = Ty::Con { module: Vec::new(), name: self.builtins.string, args: Vec::new() };
-        let task_unit =
-            Ty::Con { module: Vec::new(), name: self.builtins.task, args: vec![Ty::Unit] };
+        let int = Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.int,
+            args: Vec::new(),
+        };
+        let string = Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.string,
+            args: Vec::new(),
+        };
+        let task_unit = Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.task,
+            args: vec![Ty::Unit],
+        };
         match (self.interner.resolve(module), self.interner.resolve(name)) {
             ("String", "fromInt") => Ty::Fun(Box::new(int), Box::new(string)),
             ("Log", "println") => Ty::Fun(Box::new(string), Box::new(task_unit)),
@@ -373,7 +402,11 @@ fn zonk_depth(uf: &mut UnionFind<Content>, var: VarId, depth: u32) -> DResult<Ty
             for a in args {
                 targs.push(zonk_depth(uf, a, depth - 1)?);
             }
-            Ok(Ty::Con { module, name, args: targs })
+            Ok(Ty::Con {
+                module,
+                name,
+                args: targs,
+            })
         }
     }
 }

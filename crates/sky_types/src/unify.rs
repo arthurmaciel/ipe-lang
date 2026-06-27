@@ -12,7 +12,7 @@
 //! that drives the unifier into a blow-up trips [`TypeError::BudgetExceeded`]
 //! instead of exhausting the heap.
 
-use sky_diagnostics::{Diagnostic, DResult, Span, TypeError};
+use sky_diagnostics::{DResult, Diagnostic, Span, TypeError};
 
 use crate::solve::Budget;
 use crate::ty::{Content, FlatType};
@@ -85,8 +85,16 @@ fn unify_flat(
             unify(uf, budget, span, r1, r2)
         }
         (
-            FlatType::Con { module: m1, name: n1, args: as1 },
-            FlatType::Con { module: m2, name: n2, args: as2 },
+            FlatType::Con {
+                module: m1,
+                name: n1,
+                args: as1,
+            },
+            FlatType::Con {
+                module: m2,
+                name: n2,
+                args: as2,
+            },
         ) => {
             if m1 != m2 || n1 != n2 || as1.len() != as2.len() {
                 return Err(mismatch(span));
@@ -94,7 +102,11 @@ fn unify_flat(
             uf.union(
                 ra,
                 rb,
-                Content::Structure(FlatType::Con { module: m1, name: n1, args: as1.clone() }),
+                Content::Structure(FlatType::Con {
+                    module: m1,
+                    name: n1,
+                    args: as1.clone(),
+                }),
             )?;
             for (x, y) in as1.iter().zip(as2.iter()) {
                 unify(uf, budget, span, *x, *y)?;
@@ -156,5 +168,8 @@ fn occurs(
 }
 
 const fn mismatch(span: Span) -> Diagnostic {
-    Diagnostic::Type { span, msg: TypeError::Mismatch }
+    Diagnostic::Type {
+        span,
+        msg: TypeError::Mismatch,
+    }
 }

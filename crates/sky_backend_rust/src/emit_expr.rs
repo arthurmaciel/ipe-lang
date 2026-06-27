@@ -7,9 +7,9 @@
 use sky_diagnostics::DResult;
 use sky_ir::{BinOp, Callee, Expr, Func, Pat};
 
+use crate::EmitCtx;
 use crate::emit_types::render_type;
 use crate::naming::kernel_name;
-use crate::EmitCtx;
 
 /// One indentation level: four spaces, matching the golden's formatting.
 fn indent_of(level: usize) -> String {
@@ -43,9 +43,11 @@ pub fn emit_expr(ctx: &EmitCtx, expr: &Expr, indent: usize) -> DResult<String> {
     match expr {
         Expr::Int(n) => Ok(n.to_string()),
         Expr::Var(sym) => Ok(ctx.resolve(*sym).to_owned()),
-        Expr::Ctor { ty, variant } => {
-            Ok(format!("{}::{}", ctx.enum_name(*ty)?, ctx.resolve(*variant)))
-        }
+        Expr::Ctor { ty, variant } => Ok(format!(
+            "{}::{}",
+            ctx.enum_name(*ty)?,
+            ctx.resolve(*variant)
+        )),
         Expr::BinOp { op, lhs, rhs } => {
             let l = emit_expr(ctx, lhs, indent)?;
             let r = emit_expr(ctx, rhs, indent)?;
@@ -70,7 +72,10 @@ pub fn emit_expr(ctx: &EmitCtx, expr: &Expr, indent: usize) -> DResult<String> {
                 let body = emit_expr(ctx, &arm.body, indent + 1)?;
                 arms.push(format!("{arm_indent}{pat} => {body},"));
             }
-            Ok(format!("match {scrut} {{\n{}\n{close_indent}}}", arms.join("\n")))
+            Ok(format!(
+                "match {scrut} {{\n{}\n{close_indent}}}",
+                arms.join("\n")
+            ))
         }
     }
 }
@@ -84,9 +89,16 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     let name = ctx.func_name(func.id)?.to_owned();
     let mut params = Vec::with_capacity(func.params.len());
     for (param, ty) in &func.params {
-        params.push(format!("{}: {}", ctx.resolve(*param), render_type(ctx, ty)?));
+        params.push(format!(
+            "{}: {}",
+            ctx.resolve(*param),
+            render_type(ctx, ty)?
+        ));
     }
     let ret = render_type(ctx, &func.ret)?;
     let body = emit_expr(ctx, &func.body, 1)?;
-    Ok(format!("pub fn {name}({}) -> {ret} {{\n    {body}\n}}\n", params.join(", ")))
+    Ok(format!(
+        "pub fn {name}({}) -> {ret} {{\n    {body}\n}}\n",
+        params.join(", ")
+    ))
 }

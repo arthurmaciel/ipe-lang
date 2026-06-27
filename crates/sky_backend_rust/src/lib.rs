@@ -24,7 +24,7 @@ mod project;
 use std::collections::BTreeMap;
 
 use sky_backend::{Backend, EmittedProject};
-use sky_diagnostics::{Diagnostic, DResult};
+use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{FuncId, Program, TypeDef};
 
@@ -77,13 +77,23 @@ impl<'a> EmitCtx<'a> {
             let segs: Vec<&str> = module.name.0.iter().map(|s| interner.resolve(*s)).collect();
             for ty in &module.types {
                 let TypeDef::Enum(def) = ty;
-                enum_names.insert(def.name, naming::enum_name(&segs, interner.resolve(def.name)));
+                enum_names.insert(
+                    def.name,
+                    naming::enum_name(&segs, interner.resolve(def.name)),
+                );
             }
             for func in &module.funcs {
-                func_names.insert(func.id, naming::module_value(&segs, interner.resolve(func.name)));
+                func_names.insert(
+                    func.id,
+                    naming::module_value(&segs, interner.resolve(func.name)),
+                );
             }
         }
-        Self { interner, enum_names, func_names }
+        Self {
+            interner,
+            enum_names,
+            func_names,
+        }
     }
 
     fn resolve(&self, sym: Symbol) -> &str {
@@ -91,16 +101,22 @@ impl<'a> EmitCtx<'a> {
     }
 
     fn enum_name(&self, ty: Symbol) -> DResult<&str> {
-        self.enum_names.get(&ty).map(String::as_str).ok_or_else(|| Diagnostic::CompilerBug {
-            where_: "sky_backend_rust::EmitCtx::enum_name",
-            detail: format!("no Rust name for enum type symbol {}", ty.as_raw()),
-        })
+        self.enum_names
+            .get(&ty)
+            .map(String::as_str)
+            .ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::EmitCtx::enum_name",
+                detail: format!("no Rust name for enum type symbol {}", ty.as_raw()),
+            })
     }
 
     fn func_name(&self, id: FuncId) -> DResult<&str> {
-        self.func_names.get(&id).map(String::as_str).ok_or_else(|| Diagnostic::CompilerBug {
-            where_: "sky_backend_rust::EmitCtx::func_name",
-            detail: format!("no Rust name for function id {}", id.as_raw()),
-        })
+        self.func_names
+            .get(&id)
+            .map(String::as_str)
+            .ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::EmitCtx::func_name",
+                detail: format!("no Rust name for function id {}", id.as_raw()),
+            })
     }
 }
