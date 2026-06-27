@@ -47,6 +47,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sky_lower"
+version = "0.0.0"
+dependencies = [
+ "sky_canon",
+ "sky_diagnostics",
+ "sky_intern",
+ "sky_ir",
+ "sky_parse",
+ "sky_types",
+]
+
+[[package]]
 name = "sky_parse"
 version = "0.0.0"
 dependencies = [
@@ -71,4 +83,19 @@ dependencies = [
  "sky_diagnostics",
  "sky_intern",
  "sky_parse",
+]
+
+[[package]]
+name = "skyc"
+version = "0.0.0"
+dependencies = [
+ "sky_backend",
+ "sky_backend_rust",
+ "sky_canon",
+ "sky_diagnostics",
+ "sky_intern",
+ "sky_ir",
+ "sky_lower",
+ "sky_parse",
+ "sky_types",
 ]
