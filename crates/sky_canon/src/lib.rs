@@ -786,6 +786,27 @@ mod tests {
     }
 
     #[test]
+    fn tuple_canonicalises_element_wise() {
+        // `(1, x)` resolves each element against the enclosing scope; the second
+        // element is the parameter `x`, bound to a local.
+        let mut i = Interner::new();
+        let body = canon_body(
+            &mut i,
+            "module Main exposing (v)\nv : Int -> Int\nv x =\n    (1, x)\n",
+            "v",
+        );
+        assert!(body.is_some(), "v must canonicalise");
+        let Some(body) = body else { return };
+        assert!(
+            matches!(&body, Expr_::Tuple(es)
+                if es.len() == 2
+                    && matches!(es.first().map(|e| &e.value), Some(Expr_::Int(1)))
+                    && matches!(es.get(1).map(|e| &e.value), Some(Expr_::VarLocal(_)))),
+            "(1, x) resolves to a 2-tuple of Int and a local, got {body:?}"
+        );
+    }
+
+    #[test]
     fn env_var_homes_compare() {
         // Exercise the VarHome surface for PartialEq coverage.
         assert_eq!(VarHome::Local, VarHome::Local);

@@ -110,6 +110,13 @@ pub fn ty_to_doc(ty: &Ty, interner: &Interner, namer: &mut VarNamer) -> DResult<
                 args: doc_args.into_boxed_slice(),
             })
         }
+        Ty::Tuple(elems) => {
+            let mut doc_elems = Vec::with_capacity(elems.len());
+            for e in elems {
+                doc_elems.push(ty_to_doc(e, interner, namer)?);
+            }
+            Ok(TyDoc::Tuple(doc_elems.into_boxed_slice()))
+        }
     }
 }
 

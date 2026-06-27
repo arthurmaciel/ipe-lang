@@ -418,6 +418,62 @@ mod tests {
     }
 
     #[test]
+    fn tuple_literal_parses_into_a_tuple_node() {
+        // `(1, 2)` is a 2-element `Tuple`; `(1, 2, 3)` is a 3-element one.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    (1, 2)\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "tuple must parse: {m:?}");
+        let Ok(m) = m else { return };
+        assert!(
+            find_value(&m, &i, "v").is_some_and(|v| matches!(&v.body.value, Expr_::Tuple(es)
+                if es.len() == 2
+                    && matches!(es.first().map(|e| &e.value), Some(Expr_::Int(1)))
+                    && matches!(es.get(1).map(|e| &e.value), Some(Expr_::Int(2))))),
+            "v body is the 2-tuple `(1, 2)`"
+        );
+
+        let mut i3 = Interner::new();
+        let src3 = format!("{HDR}v : Int\nv =\n    (1, 2, 3)\n");
+        let m3 = parse_module(&src3, &mut i3);
+        assert!(m3.is_ok(), "3-tuple must parse: {m3:?}");
+        let Ok(m3) = m3 else { return };
+        assert!(
+            find_value(&m3, &i3, "v")
+                .is_some_and(|v| matches!(&v.body.value, Expr_::Tuple(es) if es.len() == 3)),
+            "v body is the 3-tuple `(1, 2, 3)`"
+        );
+    }
+
+    #[test]
+    fn parenthesised_single_expr_is_not_a_tuple() {
+        // `(1)` is the parenthesised `Int`, unwrapped — never a 1-tuple.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    (1)\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "paren group must parse: {m:?}");
+        let Ok(m) = m else { return };
+        assert!(
+            find_value(&m, &i, "v").is_some_and(|v| matches!(v.body.value, Expr_::Int(1))),
+            "v body is the unwrapped `Int(1)`, not a Tuple"
+        );
+    }
+
+    #[test]
+    fn unit_value_is_rejected() {
+        // `()` is the unit value, outside the M1 expression grammar: a clean
+        // "expected expression" parse error at the `)`, never a tuple or panic.
+        assert_eq!(err_code(&format!("{HDR}v =\n    ()\n")), "SKY-P0001");
+    }
+
+    #[test]
+    fn unclosed_tuple_is_p0050() {
+        // A tuple opened but never closed surfaces the unclosed-delimiter code,
+        // the same as a plain parenthesised group.
+        assert_eq!(err_code(&format!("{HDR}v =\n    (1, 2\n")), "SKY-P0050");
+    }
+
+    #[test]
     fn malformed_if_is_p0062() {
         // Missing `then` after the condition.
         assert_eq!(

@@ -110,6 +110,7 @@ pub enum Construct {
     Pattern,
     Let,
     If,
+    Tuple,
 }
 
 /// Which part of a module header is malformed.
@@ -214,6 +215,8 @@ pub enum TyDoc {
     Var(Box<str>),
     /// The unit type `()`.
     Unit,
+    /// An anonymous product (tuple) type `(T1, T2, ...)`. Invariant: arity ≥ 2.
+    Tuple(Box<[Self]>),
 }
 
 // ===========================================================================

@@ -113,6 +113,10 @@ pub enum Expr_ {
     /// sub-expression is resolved against the same enclosing scope — `if`
     /// introduces no bindings.
     If(Vec<(Expr, Expr)>, Box<Expr>),
+    /// A tuple literal `(e1, e2, ...)`. Invariant: arity ≥ 2 (a parenthesised
+    /// single expression was unwrapped by the parser). Every element is resolved
+    /// against the same enclosing scope — a tuple introduces no bindings.
+    Tuple(Vec<Expr>),
 }
 
 /// A resolved `let` value binding: `name = body`.

@@ -31,6 +31,9 @@ pub enum Ty {
     },
     /// The unit type `()`.
     Unit,
+    /// An anonymous product (tuple) type `(T1, T2, ...)`. Invariant: arity ≥ 2 —
+    /// a 0-tuple is [`Ty::Unit`] and a 1-tuple is just its element.
+    Tuple(Vec<Self>),
 }
 
 /// What a union-find variable resolves to during inference.
@@ -56,6 +59,8 @@ pub enum FlatType {
     },
     /// Unit `()`.
     Unit,
+    /// Anonymous product (tuple) over variable elements. Invariant: arity ≥ 2.
+    Tuple(Vec<VarId>),
 }
 
 /// Convert a canonical annotation type into a resolved [`Ty`].

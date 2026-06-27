@@ -671,6 +671,10 @@ fn ty_to_string(t: &TyDoc) -> String {
             }
         }
         TyDoc::Fun(a, b) => format!("{} -> {}", ty_fun_lhs(a), ty_to_string(b)),
+        TyDoc::Tuple(elems) => {
+            let rendered: Vec<String> = elems.iter().map(ty_to_string).collect();
+            format!("({})", rendered.join(", "))
+        }
     }
 }
 

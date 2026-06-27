@@ -716,4 +716,61 @@ mod tests {
             "Int operand to && must be a type error"
         );
     }
+
+    #[test]
+    fn tuple_value_infers_tuple_type() {
+        // Untyped `v = (1, 2)` infers the product type `(Int, Int)`.
+        let opt = infer_env_ty("module Main exposing (v)\nv =\n    (1, 2)\n", "v");
+        assert!(opt.is_some(), "v must infer");
+        let Some((ty, i)) = opt else { return };
+        let shape = match &ty {
+            Ty::Tuple(elems) => Some((
+                elems.len(),
+                elems
+                    .iter()
+                    .all(|e| ty_con_name(e, &i).as_deref() == Some("Int")),
+            )),
+            _ => None,
+        };
+        assert_eq!(
+            shape,
+            Some((2, true)),
+            "v infers the 2-tuple `(Int, Int)`, got {ty:?}"
+        );
+    }
+
+    #[test]
+    fn tuple_against_int_annotation_is_rejected() {
+        // `v : Int` with a tuple body must fail: `(Int, Int)` ≠ `Int`.
+        let mut i = Interner::new();
+        let source = "module Main exposing (v)\nv : Int\nv =\n    (1, 2)\n";
+        let parsed = sky_parse::parse_module(source, &mut i);
+        assert!(parsed.is_ok(), "must parse");
+        let Ok(src) = parsed else { return };
+        let canon = sky_canon::canonicalise(&src, &mut i);
+        assert!(canon.is_ok(), "must canonicalise");
+        let Ok(m) = canon else { return };
+        assert!(
+            infer(&m, &mut i).is_err(),
+            "a tuple body against an Int annotation must be a type error"
+        );
+    }
+
+    #[test]
+    fn tuple_arity_mismatch_is_rejected() {
+        // Comparing a 2-tuple with a 3-tuple must fail: tuples unify only at
+        // equal arity.
+        let mut i = Interner::new();
+        let source = "module Main exposing (v)\nv : Bool\nv =\n    (1, 2) == (1, 2, 3)\n";
+        let parsed = sky_parse::parse_module(source, &mut i);
+        assert!(parsed.is_ok(), "must parse");
+        let Ok(src) = parsed else { return };
+        let canon = sky_canon::canonicalise(&src, &mut i);
+        assert!(canon.is_ok(), "must canonicalise");
+        let Ok(m) = canon else { return };
+        assert!(
+            infer(&m, &mut i).is_err(),
+            "2-tuple vs 3-tuple must be a type error"
+        );
+    }
 }

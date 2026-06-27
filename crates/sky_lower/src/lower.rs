@@ -266,6 +266,15 @@ impl<'a> Lowerer<'a> {
                     format!("unknown type constructor `{other}`"),
                 )),
             },
+            // A tuple in value position (e.g. a binding whose body is a tuple
+            // literal): lower element-wise to the IR tuple type.
+            Ty::Tuple(elems) => {
+                let lowered = elems
+                    .iter()
+                    .map(|e| self.ir_type_from_ty(e, span))
+                    .collect::<DResult<Vec<_>>>()?;
+                Ok(IrType::Tuple(lowered))
+            }
             // An inferred function type in value position (e.g. a bare partial
             // application as a binding body).
             // [SKY-L0103, feature: higher-order-values]
@@ -359,6 +368,15 @@ impl<'a> Lowerer<'a> {
                     };
                 }
                 Ok(acc)
+            }
+            canon::Expr_::Tuple(elems) => {
+                // A tuple value lowers element-wise to the IR tuple constructor.
+                // The parser guarantees arity ≥ 2, which is the IR invariant.
+                let elems = elems
+                    .iter()
+                    .map(|e| self.lower_expr(e))
+                    .collect::<DResult<Vec<_>>>()?;
+                Ok(Expr::Tuple(elems))
             }
             canon::Expr_::Case(scrut, branches) => self.lower_case(scrut, branches),
             // A function named as a bare value rather than applied. M0 has no

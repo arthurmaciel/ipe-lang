@@ -122,6 +122,18 @@ fn unify_flat(
             }
             Ok(())
         }
+        (FlatType::Tuple(es1), FlatType::Tuple(es2)) => {
+            // Tuples unify only at the same arity, element-wise. Merge the roots
+            // first so a recursive reference resolves before the children unify.
+            if es1.len() != es2.len() {
+                return Err(mismatch(uf, budget, interner, span, ra, rb));
+            }
+            uf.union(ra, rb, Content::Structure(FlatType::Tuple(es1.clone())))?;
+            for (x, y) in es1.iter().zip(es2.iter()) {
+                unify(uf, budget, interner, span, *x, *y)?;
+            }
+            Ok(())
+        }
         _ => Err(mismatch(uf, budget, interner, span, ra, rb)),
     }
 }
@@ -174,6 +186,11 @@ fn occurs(
             Content::Structure(FlatType::Con { args, .. }) => {
                 for arg in args {
                     stack.push(arg);
+                }
+            }
+            Content::Structure(FlatType::Tuple(elems)) => {
+                for elem in elems {
+                    stack.push(elem);
                 }
             }
         }

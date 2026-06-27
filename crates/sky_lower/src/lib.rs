@@ -404,4 +404,49 @@ mod tests {
             assert_eq!(op, want, "operator {src_op}");
         }
     }
+
+    #[test]
+    fn tuple_value_lowers_to_ir_tuple() {
+        // `v = (1, 2)` lowers to the IR tuple constructor over two Int literals.
+        let opt = lower_body("module Main exposing (v)\nv =\n    (1, 2)\n", "v");
+        assert!(
+            matches!(&opt, Some((Expr::Tuple(es), _))
+                if es.len() == 2
+                    && matches!(es.first(), Some(Expr::Int(1)))
+                    && matches!(es.get(1), Some(Expr::Int(2)))),
+            "v lowers to `Tuple([Int(1), Int(2)])`, got {:?}",
+            opt.as_ref().map(|(b, _)| b)
+        );
+    }
+
+    #[test]
+    fn tuple_return_type_lowers_to_ir_tuple_type() {
+        // An untyped no-param binding's inferred tuple type flows to the func's
+        // IR return type as `IrType::Tuple`.
+        let mut i = Interner::new();
+        let pipeline = (|| {
+            let src =
+                sky_parse::parse_module("module Main exposing (v)\nv =\n    (1, 2)\n", &mut i)
+                    .ok()?;
+            let m = sky_canon::canonicalise(&src, &mut i).ok()?;
+            let types = sky_types::infer(&m, &mut i).ok()?;
+            lower(&m, &types, &i).ok()
+        })();
+        assert!(pipeline.is_some(), "v must lower");
+        let Some(program) = pipeline else { return };
+        let Some(module) = program.modules.first() else {
+            return;
+        };
+        let Some(v) = find_func(module, &i, "v") else {
+            return;
+        };
+        assert!(
+            matches!(&v.ret, IrType::Tuple(es)
+                if es.len() == 2
+                    && matches!(es.first(), Some(IrType::Int))
+                    && matches!(es.get(1), Some(IrType::Int))),
+            "v's IR return type is `(Int, Int)`, got {:?}",
+            v.ret
+        );
+    }
 }

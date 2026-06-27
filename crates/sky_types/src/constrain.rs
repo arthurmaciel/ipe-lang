@@ -264,6 +264,13 @@ impl<'a> Builder<'a> {
     fn instantiate_in(&mut self, ty: &Ty, vars: &mut BTreeMap<u32, VarId>) -> DResult<VarId> {
         match ty {
             Ty::Unit => self.structure(FlatType::Unit),
+            Ty::Tuple(elems) => {
+                let mut elem_vars = Vec::with_capacity(elems.len());
+                for e in elems {
+                    elem_vars.push(self.instantiate_in(e, vars)?);
+                }
+                self.structure(FlatType::Tuple(elem_vars))
+            }
             Ty::Var(id) => {
                 if let Some(v) = vars.get(id).copied() {
                     return Ok(v);
@@ -479,6 +486,16 @@ impl<'a> Builder<'a> {
                 self.eq(else_expr.span, else_var, result);
                 result
             }
+            canon::Expr_::Tuple(elems) => {
+                // A tuple's type is the product of its elements' types, each
+                // constrained independently. Mirrors
+                // `Sky.Type.Constrain.Expression`'s tuple arm.
+                let mut elem_vars = Vec::with_capacity(elems.len());
+                for elem in elems {
+                    elem_vars.push(self.constrain_expr(local, elem)?);
+                }
+                self.structure(FlatType::Tuple(elem_vars))?
+            }
         };
         self.regions.insert(span, var);
         Ok(var)
@@ -557,6 +574,8 @@ enum ZonkTask {
         name: Symbol,
         arity: usize,
     },
+    /// Pop `arity` results and push a `Tuple` over them.
+    BuildTuple { arity: usize },
 }
 
 /// Read a settled union-find variable back into a resolved [`Ty`].
@@ -614,6 +633,14 @@ pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DRe
                             work.push(ZonkTask::Visit(a));
                         }
                     }
+                    Content::Structure(FlatType::Tuple(elems)) => {
+                        let arity = elems.len();
+                        work.push(ZonkTask::BuildTuple { arity });
+                        // Reverse so elements land on `results` in source order.
+                        for e in elems.into_iter().rev() {
+                            work.push(ZonkTask::Visit(e));
+                        }
+                    }
                 }
             }
             ZonkTask::BuildFun => {
@@ -633,6 +660,14 @@ pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DRe
                     .ok_or_else(zonk_underflow)?;
                 let args = results.split_off(split);
                 results.push(Ty::Con { module, name, args });
+            }
+            ZonkTask::BuildTuple { arity } => {
+                let split = results
+                    .len()
+                    .checked_sub(arity)
+                    .ok_or_else(zonk_underflow)?;
+                let elems = results.split_off(split);
+                results.push(Ty::Tuple(elems));
             }
         }
     }

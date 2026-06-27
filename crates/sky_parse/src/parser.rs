@@ -890,18 +890,68 @@ impl<'a> Parser<'a> {
         }
         let tok = self.bump(Construct::Expression)?;
         match &tok.kind {
-            Tok::LParen => {
-                let opener = tok.span;
-                let inner = self.parse_expr(0, depth + 1)?;
-                self.close_paren(opener, Construct::ParenGroup)?;
-                Ok(Located::new(tok.span, inner.value))
-            }
+            Tok::LParen => self.parse_paren_or_tuple(tok.span, depth + 1),
             Tok::Int(n) => Ok(Located::new(tok.span, Expr_::Int(*n))),
             Tok::Ident(text) => {
                 let expr = self.ident_expr(text)?;
                 Ok(Located::new(tok.span, expr))
             }
             _ => Err(Self::unexpected_token(&tok, &[Expected::Expression])),
+        }
+    }
+
+    /// Parse what follows a just-consumed `(`: either a parenthesised single
+    /// expression (the parens are unwrapped — `(e)` is just `e`, preserving the
+    /// outer span so explicit grouping is honoured) or a tuple literal
+    /// `(e1, e2, ...)` of arity ≥ 2. Empty parens `()` (the unit value) are not
+    /// part of the M1 grammar and surface as a clean "expected expression" parse
+    /// error at the `)`.
+    ///
+    /// `opener` is the `(`'s span; `depth` bounds the inner-expression recursion.
+    fn parse_paren_or_tuple(&mut self, opener: Span, depth: u32) -> DResult<Expr> {
+        if depth > MAX_DEPTH {
+            return Err(self.too_deep(Construct::Tuple));
+        }
+        // `()` — the unit value — is outside the M1 expression grammar.
+        if let Some(t) = self.peek().filter(|t| t.kind == Tok::RParen) {
+            return Err(Self::unexpected_token(t, &[Expected::Expression]));
+        }
+        let first = self.parse_expr(0, depth + 1)?;
+        // No following comma → a plain parenthesised group. Unwrap to the inner
+        // value, spanning from the `(` to the `)` so the grouping is honoured.
+        if self.peek_kind() != Some(&Tok::Comma) {
+            let close = self.expect_rparen(opener, Construct::ParenGroup)?;
+            let span = Self::span_merge(opener, close);
+            return Ok(Located::new(span, first.value));
+        }
+        // One or more comma-separated elements → a tuple literal.
+        let mut elems = vec![first];
+        while self.peek_kind() == Some(&Tok::Comma) {
+            self.bump(Construct::Tuple)?;
+            elems.push(self.parse_expr(0, depth + 1)?);
+        }
+        let close = self.expect_rparen(opener, Construct::Tuple)?;
+        let span = Self::span_merge(opener, close);
+        Ok(Located::new(span, Expr_::Tuple(elems)))
+    }
+
+    /// Require a closing `)`, returning its span. Like [`Self::close_paren`] but
+    /// hands back the `)`'s span so the caller can build the full bracketed span.
+    fn expect_rparen(&mut self, opener: Span, construct: Construct) -> DResult<Span> {
+        match self.peek() {
+            Some(t) if t.kind == Tok::RParen => {
+                let span = t.span;
+                self.bump(construct)?;
+                Ok(span)
+            }
+            Some(t) => Err(Diagnostic::Parse {
+                span: t.span,
+                msg: ParseError::UnclosedDelimiter { opener },
+            }),
+            None => Err(Diagnostic::Parse {
+                span: self.eof_err_span(),
+                msg: ParseError::UnclosedDelimiter { opener },
+            }),
         }
     }
 

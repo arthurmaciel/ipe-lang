@@ -312,6 +312,15 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
             let can_else = canonicalise_expr(else_expr, env, interner)?;
             canon::Expr_::If(can_branches, Box::new(can_else))
         }
+        src::Expr_::Tuple(elems) => {
+            // A tuple introduces no bindings: every element resolves against the
+            // same enclosing scope.
+            let mut can_elems = Vec::with_capacity(elems.len());
+            for elem in elems {
+                can_elems.push(canonicalise_expr(elem, env, interner)?);
+            }
+            canon::Expr_::Tuple(can_elems)
+        }
     };
     Ok(Located::new(span, node))
 }
