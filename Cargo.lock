@@ -62,3 +62,13 @@ dependencies = [
  "sky_diagnostics",
  "sky_intern",
 ]
+
+[[package]]
+name = "sky_types"
+version = "0.0.0"
+dependencies = [
+ "sky_canon",
+ "sky_diagnostics",
+ "sky_intern",
+ "sky_parse",
+]

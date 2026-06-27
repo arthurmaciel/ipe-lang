@@ -1,0 +1,15 @@
+[package]
+name = "sky_types"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+sky_intern = { path = "../sky_intern" }
+sky_diagnostics = { path = "../sky_diagnostics" }
+sky_canon = { path = "../sky_canon" }
+
+[dev-dependencies]
+sky_parse = { path = "../sky_parse" }
+
+[lints]
+workspace = true
