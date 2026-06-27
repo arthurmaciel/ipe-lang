@@ -373,6 +373,67 @@ mod tests {
     }
 
     #[test]
+    fn lowers_lambda_to_typed_closure_and_application_to_apply() {
+        // `let inc = \x -> x + 1 in inc 41`: the binding value is a typed
+        // `Lambda`, and `inc 41` (a local callee) lowers to `Apply`.
+        let opt = lower_body(
+            "module Main exposing (v)\nv : Int\nv =\n    let inc = \\x -> x + 1 in inc 41\n",
+            "v",
+        );
+        assert!(opt.is_some(), "v must lower");
+        let Some((body, i)) = opt else { return };
+        let Expr::Let { value, body, .. } = &body else {
+            assert!(false_marker(), "outer is a Let, got {body:?}");
+            return;
+        };
+        // The let value is a one-parameter `Int -> Int` lambda.
+        assert!(
+            matches!(
+                value.as_ref(),
+                Expr::Lambda { params, ret, .. }
+                    if params.len() == 1
+                        && params.first().map(|(_, t)| t) == Some(&IrType::Int)
+                        && *ret == IrType::Int
+            ),
+            "inc is a typed Int->Int lambda, got {value:?}"
+        );
+        // The `in` body applies the local `inc` via Apply.
+        assert!(
+            matches!(
+                body.as_ref(),
+                Expr::Apply { func, args }
+                    if matches!(func.as_ref(), Expr::Var(s) if i.resolve(*s) == Some("inc"))
+                        && args.len() == 1
+            ),
+            "inc 41 lowers to Apply, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn lowers_inline_capturing_lambda_application() {
+        // `let n = 10 in (\x -> x + n) 5`: the inline lambda is the callee, so
+        // the application lowers to `Apply` over a `Lambda` (capturing `n`).
+        let opt = lower_body(
+            "module Main exposing (v)\nv : Int\nv =\n    let n = 10 in (\\x -> x + n) 5\n",
+            "v",
+        );
+        assert!(opt.is_some(), "v must lower");
+        let Some((body, _)) = opt else { return };
+        let Expr::Let { body, .. } = &body else {
+            assert!(false_marker(), "outer is a Let, got {body:?}");
+            return;
+        };
+        assert!(
+            matches!(
+                body.as_ref(),
+                Expr::Apply { func, args }
+                    if matches!(func.as_ref(), Expr::Lambda { .. }) && args.len() == 1
+            ),
+            "applied inline lambda lowers to Apply over a Lambda, got {body:?}"
+        );
+    }
+
+    #[test]
     fn lowers_remaining_operators() {
         // Cover Sub, Div, Eq, Neq, Le, Ge, Or paths through `binop`.
         for (src_op, want) in [

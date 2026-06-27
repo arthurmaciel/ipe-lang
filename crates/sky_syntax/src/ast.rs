@@ -129,6 +129,11 @@ pub enum Expr_ {
     Call(Box<Expr>, Vec<Expr>),
     /// `case scrutinee of` with `(pattern, body)` arms.
     Case(Box<Expr>, Vec<(Pattern, Expr)>),
+    /// An anonymous function `\p0 p1 ... -> body`. The parameter list has arity
+    /// ≥ 1 (the parser rejects a zero-parameter `\ -> e`); each parameter is a
+    /// pattern (M1 admits a plain variable or `_`). Mirrors the Haskell
+    /// compiler's `Src.Lambda [Pattern] Expr`.
+    Lambda(Vec<Pattern>, Box<Expr>),
     /// A precedence-climbed binary-operator chain: a sequence of
     /// `(operand, operator)` pairs followed by the final operand.
     Binops(Vec<(Expr, Located<Symbol>)>, Box<Expr>),

@@ -39,6 +39,8 @@ pub enum Tok {
     Pipe,
     Colon,
     Arrow,
+    /// A lambda lead-in `\` (`\x -> e`).
+    Backslash,
     DotDot,
     Comma,
     Underscore,
@@ -283,6 +285,7 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
         '{' => one_char(lx, Tok::LBrace),
         '}' => one_char(lx, Tok::RBrace),
         ':' => one_char(lx, Tok::Colon),
+        '\\' => one_char(lx, Tok::Backslash),
         ',' => one_char(lx, Tok::Comma),
         '+' => one_char(lx, Tok::Plus),
         '*' => one_char(lx, Tok::Star),

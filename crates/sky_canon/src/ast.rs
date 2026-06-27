@@ -94,6 +94,11 @@ pub enum Expr_ {
     Call(Box<Expr>, Vec<Expr>),
     /// `case scrutinee of` with resolved arms.
     Case(Box<Expr>, Vec<CaseBranch>),
+    /// An anonymous function `\p0 p1 ... -> body`. The parameter patterns are
+    /// resolved (each variable becomes a local in `body`); any free variable in
+    /// `body` that is not a parameter is captured from the enclosing scope by
+    /// ordinary name resolution. Arity ≥ 1 (the parser rejects `\ -> e`).
+    Lambda(Vec<Pattern>, Box<Expr>),
     /// A resolved binary operation. `op` is the source operator symbol;
     /// `home` / `func` is the kernel it resolves to (e.g. `Basics` / `add`).
     Binop {

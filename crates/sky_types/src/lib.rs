@@ -787,6 +787,70 @@ mod tests {
     }
 
     #[test]
+    fn lambda_binding_infers_a_function_type() {
+        // `f = \x -> x + 1` infers `Int -> Int` (the `+ 1` pins both x and the
+        // result to Int).
+        let opt = infer_env_ty("module Main exposing (f)\nf =\n    \\x -> x + 1\n", "f");
+        assert!(opt.is_some(), "f must infer");
+        let Some((ty, i)) = opt else { return };
+        assert!(matches!(ty, Ty::Fun(..)), "f must be an arrow, got {ty:?}");
+        let Ty::Fun(arg, ret) = &ty else { return };
+        assert_eq!(ty_con_name(arg, &i).as_deref(), Some("Int"));
+        assert_eq!(ty_con_name(ret, &i).as_deref(), Some("Int"));
+    }
+
+    #[test]
+    fn multi_param_lambda_infers_curried_arrows() {
+        // `f = \a b -> a + b` infers `Int -> Int -> Int`.
+        let opt = infer_env_ty("module Main exposing (f)\nf =\n    \\a b -> a + b\n", "f");
+        assert!(opt.is_some(), "f must infer");
+        let Some((ty, i)) = opt else { return };
+        assert!(matches!(ty, Ty::Fun(..)), "f must be an arrow, got {ty:?}");
+        let Ty::Fun(a, tail) = &ty else { return };
+        assert_eq!(ty_con_name(a, &i).as_deref(), Some("Int"));
+        assert!(
+            matches!(tail.as_ref(), Ty::Fun(..)),
+            "tail must be an arrow, got {tail:?}"
+        );
+        let Ty::Fun(b, ret) = tail.as_ref() else {
+            return;
+        };
+        assert_eq!(ty_con_name(b, &i).as_deref(), Some("Int"));
+        assert_eq!(ty_con_name(ret, &i).as_deref(), Some("Int"));
+    }
+
+    #[test]
+    fn applied_captured_lambda_infers_int() {
+        // `(\x -> x + n) 5` with `n = 10` applies a capturing lambda; the whole
+        // binding is `Int`.
+        let opt = infer_env_ty(
+            "module Main exposing (v)\nv =\n    let n = 10 in (\\x -> x + n) 5\n",
+            "v",
+        );
+        assert!(opt.is_some(), "v must infer");
+        let Some((ty, i)) = opt else { return };
+        assert_eq!(ty_con_name(&ty, &i).as_deref(), Some("Int"));
+    }
+
+    #[test]
+    fn applying_a_non_function_is_rejected() {
+        // `v = 5 1` applies an Int to an argument — `Int` cannot unify with a
+        // function type, so it is a type error (no panic, no silent accept).
+        let mut i = Interner::new();
+        let source = "module Main exposing (v)\nv : Int\nv =\n    let g = 5 in g 1\n";
+        let parsed = sky_parse::parse_module(source, &mut i);
+        assert!(parsed.is_ok(), "must parse");
+        let Ok(src) = parsed else { return };
+        let canon = sky_canon::canonicalise(&src, &mut i);
+        assert!(canon.is_ok(), "must canonicalise");
+        let Ok(m) = canon else { return };
+        assert!(
+            infer(&m, &mut i).is_err(),
+            "applying a non-function must be a type error"
+        );
+    }
+
+    #[test]
     fn arithmetic_chain_is_int() {
         let opt = infer_env_ty(
             "module Main exposing (v)\nv : Int\nv =\n    2 + 3 * 4 - 1\n",
