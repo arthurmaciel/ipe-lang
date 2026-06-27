@@ -1,0 +1,15 @@
+# Hosted light gates (Codeberg-hosted Woodpecker) per
+# docs/architecture/ci-and-hosting.md. Fast feedback even when the local
+# heavy runner is off. Miri + the example/parity/perf sweeps live on the
+# self-hosted heavy workflow (.forgejo/workflows/heavy.yml).
+when:
+  - event: [push, pull_request]
+
+steps:
+  check:
+    image: rust:latest
+    commands:
+      - rustup component add clippy rustfmt
+      - cargo fmt --all -- --check
+      - cargo clippy --all-targets -- -D warnings
+      - cargo test
