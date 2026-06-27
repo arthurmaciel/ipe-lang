@@ -21,6 +21,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sky_canon"
+version = "0.0.0"
+dependencies = [
+ "sky_diagnostics",
+ "sky_intern",
+ "sky_parse",
+ "sky_syntax",
+]
+
+[[package]]
 name = "sky_diagnostics"
 version = "0.0.0"
 
