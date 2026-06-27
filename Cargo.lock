@@ -3,9 +3,29 @@
 version = 4
 
 [[package]]
+name = "sky_backend"
+version = "0.0.0"
+dependencies = [
+ "sky_diagnostics",
+ "sky_ir",
+]
+
+[[package]]
+name = "sky_backend_rust"
+version = "0.0.0"
+
+[[package]]
 name = "sky_diagnostics"
 version = "0.0.0"
 
 [[package]]
 name = "sky_intern"
 version = "0.0.0"
+
+[[package]]
+name = "sky_ir"
+version = "0.0.0"
+dependencies = [
+ "sky_diagnostics",
+ "sky_intern",
+]
