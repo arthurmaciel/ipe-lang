@@ -122,6 +122,14 @@ pub enum Expr_ {
     /// `if` plus every `else if` — followed by the mandatory final `else`
     /// expression. Mirrors the Haskell compiler's `Src.If [(Expr, Expr)] Expr`.
     If(Vec<(Expr, Expr)>, Box<Expr>),
+    /// A tuple literal `(e1, e2, ...)`.
+    ///
+    /// Invariant: the element list has arity ≥ 2. A parenthesised single
+    /// expression `(e)` is *not* a tuple — the parser unwraps it to `e` — and
+    /// the empty parens `()` are the unit value (unsupported in M1, rejected at
+    /// the parser). Mirrors the Haskell compiler's `Src.Tuple e1 e2 [rest]`,
+    /// flattened to one vector here.
+    Tuple(Vec<Expr>),
 }
 
 /// A single `let` value binding: `name = body`. M1 subset of the Haskell

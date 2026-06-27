@@ -100,6 +100,12 @@ fn check_expr(e: &canon::Expr, enums: &EnumTable, interner: &Interner) -> DResul
             }
             check_expr(else_expr, enums, interner)
         }
+        canon::Expr_::Tuple(elems) => {
+            for elem in elems {
+                check_expr(elem, enums, interner)?;
+            }
+            Ok(())
+        }
     }
 }
 
