@@ -104,8 +104,12 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
     let cargo_path = out_dir.join("Cargo.toml");
     fs::write(&cargo_path, &emitted.cargo_toml).map_err(|e| io_err(&cargo_path, e))?;
 
+    // Each `rel` is a `sky_backend::RelPath`: validated at construction to be
+    // relative and free of `..` components, so `out_dir.join(rel)` cannot escape
+    // `out_dir` (no absolute-write, no path-traversal). The trust boundary is the
+    // newtype, not this loop.
     for (rel, contents) in &emitted.files {
-        let path = out_dir.join(rel);
+        let path = out_dir.join(rel.as_str());
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
         }
