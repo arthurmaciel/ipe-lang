@@ -16,7 +16,7 @@
 
 use std::collections::BTreeMap;
 
-use sky_backend::EmittedProject;
+use sky_backend::{EmittedProject, RelPath};
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_ir::{Program, TypeDef};
 
@@ -108,13 +108,13 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     out.push_str(&epilogue()?);
 
     let mut files = BTreeMap::new();
-    files.insert("src/main.rs".to_owned(), out);
+    files.insert(RelPath::new("src/main.rs")?, out);
     files.insert(
-        "src/sky_runtime/mod.rs".to_owned(),
+        RelPath::new("src/sky_runtime/mod.rs")?,
         RUNTIME_MOD_RS.to_owned(),
     );
     files.insert(
-        "src/sky_runtime/config.rs".to_owned(),
+        RelPath::new("src/sky_runtime/config.rs")?,
         RUNTIME_CONFIG_RS.to_owned(),
     );
     Ok(EmittedProject {
