@@ -26,6 +26,8 @@
 //! (which keeps `&Interner`) can resolve them.
 
 mod constrain;
+mod doc;
+mod exhaust;
 mod solve;
 mod ty;
 mod unify;
@@ -82,19 +84,24 @@ fn infer_with_budget(
     let mut uf = UnionFind::new();
     let generated = Builder::run(&mut uf, interner, m)?;
 
-    solve(&mut uf, budget, &generated.constraints)?;
+    solve(&mut uf, budget, interner, &generated.constraints)?;
+
+    // End-of-checking exhaustiveness + redundancy pass. Running it here — after
+    // the solver settles — makes the lowerer's `Match::new` exhaustiveness
+    // contract a genuinely unreachable compiler-bug case.
+    exhaust::check(m, interner)?;
 
     // Read back every region's resolved type.
     let mut regions = BTreeMap::new();
     for (span, var) in generated.regions {
-        regions.insert(span, zonk(&mut uf, var)?);
+        regions.insert(span, zonk(&mut uf, budget, var)?);
     }
 
     // `env` = annotation types of typed bindings (exact) + read-back of every
     // untyped binding's inferred body type.
     let mut env = generated.top_level;
     for (name, var) in generated.untyped {
-        env.insert(name, zonk(&mut uf, var)?);
+        env.insert(name, zonk(&mut uf, budget, var)?);
     }
 
     Ok(SolvedTypes { env, regions })
@@ -334,7 +341,7 @@ mod tests {
         assert!(matches!(
             r,
             Err(Diagnostic::Type {
-                msg: TypeError::BudgetExceeded,
+                msg: TypeError::StepBudgetExceeded { budget: 1 },
                 ..
             })
         ));
@@ -347,5 +354,219 @@ mod tests {
         let Some((m, mut i)) = opt else { return };
         let mut budget = Budget::unbounded();
         assert!(infer_with_budget(&m, &mut i, &mut budget).is_ok());
+    }
+
+    // ── rich TypeError payloads (E3) ───────────────────────────────────────
+
+    /// Parse + canonicalise an inline module, returning it plus the interner.
+    fn canon_src(src: &str) -> Option<(canon::Module, Interner)> {
+        let mut i = Interner::new();
+        let parsed = sky_parse::parse_module(src, &mut i).ok()?;
+        let m = sky_canon::canonicalise(&parsed, &mut i).ok()?;
+        Some((m, i))
+    }
+
+    fn con_doc(name: &str) -> sky_diagnostics::TyDoc {
+        sky_diagnostics::TyDoc::Con {
+            module: "".into(),
+            name: name.into(),
+            args: Box::new([]),
+        }
+    }
+
+    #[test]
+    fn type_mismatch_carries_expected_and_found() {
+        // `h : Int` but the body is a `Msg` constructor.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   type Msg = Increment | Decrement\n\
+                   h : Int\n\
+                   h = Increment\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::TypeMismatch { .. },
+                    ..
+                })
+            ),
+            "expected a TypeMismatch, got {r:?}"
+        );
+        let Err(Diagnostic::Type {
+            msg: TypeError::TypeMismatch {
+                expected, found, ..
+            },
+            ..
+        }) = r
+        else {
+            return;
+        };
+        assert_eq!(*expected, con_doc("Int"));
+        // A user type carries its defining module home.
+        assert_eq!(
+            *found,
+            sky_diagnostics::TyDoc::Con {
+                module: "Main".into(),
+                name: "Msg".into(),
+                args: Box::new([]),
+            }
+        );
+    }
+
+    #[test]
+    fn too_many_parameters_names_binding_and_signature() {
+        // `g : Int` but `g a = 0` binds a parameter the signature has no arrow
+        // for.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   g : Int\n\
+                   g a = 0\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::TooManyParameters { .. },
+                    ..
+                })
+            ),
+            "expected TooManyParameters, got {r:?}"
+        );
+        let Err(Diagnostic::Type {
+            msg: TypeError::TooManyParameters { binding, signature },
+            ..
+        }) = r
+        else {
+            return;
+        };
+        assert_eq!(&*binding, "g");
+        assert_eq!(*signature, con_doc("Int"));
+    }
+
+    #[test]
+    fn non_exhaustive_case_lists_missing_constructors() {
+        // The `case` covers only `Increment`; `Decrement` is missing.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   type Msg = Increment | Decrement\n\
+                   f : Msg -> Int\n\
+                   f msg =\n        case msg of\n            Increment -> 1\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::NonExhaustiveCase { .. },
+                    ..
+                })
+            ),
+            "expected NonExhaustiveCase, got {r:?}"
+        );
+        let Err(Diagnostic::Type {
+            msg: TypeError::NonExhaustiveCase { missing },
+            ..
+        }) = r
+        else {
+            return;
+        };
+        let names: Vec<&str> = missing.iter().map(AsRef::as_ref).collect();
+        assert_eq!(names, vec!["Decrement"]);
+    }
+
+    #[test]
+    fn redundant_case_branch_names_constructor() {
+        // `Increment` is matched twice; the case is otherwise exhaustive, so the
+        // redundancy is the only finding.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   type Msg = Increment | Decrement\n\
+                   f : Msg -> Int\n\
+                   f msg =\n        case msg of\n            Increment -> 1\n\
+                   \x20           Decrement -> 2\n            Increment -> 3\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::RedundantCaseBranch { .. },
+                    ..
+                })
+            ),
+            "expected RedundantCaseBranch, got {r:?}"
+        );
+        let Err(Diagnostic::Type {
+            msg: TypeError::RedundantCaseBranch { constructor },
+            ..
+        }) = r
+        else {
+            return;
+        };
+        assert_eq!(&*constructor, "Increment");
+    }
+
+    #[test]
+    fn self_application_is_an_infinite_type() {
+        // `f x = x x` forces `a = a -> b`, tripping the occurs check.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   f x = x x\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::InfiniteType { .. },
+                    ..
+                })
+            ),
+            "expected InfiniteType, got {r:?}"
+        );
+        let Err(Diagnostic::Type {
+            msg: TypeError::InfiniteType { var, ty },
+            span,
+        }) = r
+        else {
+            return;
+        };
+        // Real offending span — not DUMMY (the historic bug).
+        assert_ne!(span, Span::DUMMY, "occurs-check span must be real");
+        // `var` appears on the left of the arrow it would have to equal.
+        assert!(matches!(
+            ty.as_ref(),
+            sky_diagnostics::TyDoc::Fun(lhs, _)
+                if matches!(lhs.as_ref(), sky_diagnostics::TyDoc::Var(v) if *v == var)
+        ));
+    }
+
+    #[test]
+    fn exhaustive_case_passes_the_check() {
+        // The golden program's `update` covers every `Msg` constructor.
+        let opt = canon_golden();
+        let Some((m, mut i)) = opt else { return };
+        assert!(
+            infer(&m, &mut i).is_ok(),
+            "an exhaustive, non-redundant program must pass the new pass"
+        );
     }
 }

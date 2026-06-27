@@ -248,7 +248,11 @@ impl<'a> Builder<'a> {
     /// patterns than its annotation has arrows. Resolving the name / rendering
     /// the signature can itself only fail on a forged symbol, in which case
     /// that internal bug is surfaced instead.
-    fn too_many_parameters(&self, name: &sky_diagnostics::Located<Symbol>, ty: &canon::Type) -> Diagnostic {
+    fn too_many_parameters(
+        &self,
+        name: &sky_diagnostics::Located<Symbol>,
+        ty: &canon::Type,
+    ) -> Diagnostic {
         let binding = match self.interner.resolve(name.value) {
             Some(s) => Box::from(s),
             None => {
@@ -461,10 +465,12 @@ pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DRe
         match task {
             ZonkTask::Visit(v) => {
                 budget.tick()?;
-                nodes_left = nodes_left.checked_sub(1).ok_or_else(|| Diagnostic::CompilerBug {
-                    where_: STAGE,
-                    detail: "type exceeded read-back node limit".to_owned(),
-                })?;
+                nodes_left = nodes_left
+                    .checked_sub(1)
+                    .ok_or_else(|| Diagnostic::CompilerBug {
+                        where_: STAGE,
+                        detail: "type exceeded read-back node limit".to_owned(),
+                    })?;
                 let root = uf.find(v)?;
                 match uf.content(root)? {
                     Content::Flex => results.push(Ty::Var(root)),
@@ -478,7 +484,11 @@ pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DRe
                     }
                     Content::Structure(FlatType::Con { module, name, args }) => {
                         let arity = args.len();
-                        work.push(ZonkTask::BuildCon { module, name, arity });
+                        work.push(ZonkTask::BuildCon {
+                            module,
+                            name,
+                            arity,
+                        });
                         // Reverse so args land on `results` in source order.
                         for a in args.into_iter().rev() {
                             work.push(ZonkTask::Visit(a));
