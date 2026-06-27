@@ -224,3 +224,69 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
     }
     Ok(())
 }
+
+/// M1-core: `Expr::Let`, `Expr::If`, and the extended `BinOp` set emit total,
+/// well-formed Rust even though the frontend does not yet produce them. The
+/// `let`/`if` forms render as self-contained parenthesised expressions so they
+/// compose anywhere an expression is expected, and `/=` maps to Rust `!=`.
+#[test]
+fn let_if_and_extended_binops_emit_total_rust() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let f = interner.intern("f")?;
+    let n = interner.intern("n")?;
+    let x = interner.intern("x")?;
+
+    // f(n : Int) -> Int =
+    //   let x = n * 2 in
+    //     if (x >= 10) && (x /= 0) then x / 2 else x + 1
+    let body = Expr::Let {
+        name: x,
+        value: Box::new(Expr::BinOp {
+            op: BinOp::Mul,
+            lhs: Box::new(Expr::Var(n)),
+            rhs: Box::new(Expr::Int(2)),
+        }),
+        body: Box::new(Expr::If {
+            cond: Box::new(Expr::BinOp {
+                op: BinOp::And,
+                lhs: Box::new(Expr::BinOp {
+                    op: BinOp::Ge,
+                    lhs: Box::new(Expr::Var(x)),
+                    rhs: Box::new(Expr::Int(10)),
+                }),
+                rhs: Box::new(Expr::BinOp {
+                    op: BinOp::Neq,
+                    lhs: Box::new(Expr::Var(x)),
+                    rhs: Box::new(Expr::Int(0)),
+                }),
+            }),
+            then_: Box::new(Expr::BinOp {
+                op: BinOp::Div,
+                lhs: Box::new(Expr::Var(x)),
+                rhs: Box::new(Expr::Int(2)),
+            }),
+            else_: Box::new(Expr::BinOp {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Var(x)),
+                rhs: Box::new(Expr::Int(1)),
+            }),
+        }),
+    };
+    let f_fn = Func {
+        id: FuncId::from_raw(0),
+        name: f,
+        params: vec![(n, IrType::Int)],
+        ret: IrType::Int,
+        body,
+    };
+
+    let out = emit(&interner, &program(main_mod, vec![], vec![f_fn]))?;
+    let expected_body =
+        "({ let x = (n * 2); (if ((x >= 10) && (x != 0)) { (x / 2) } else { (x + 1) }) })";
+    assert!(
+        out.contains(expected_body),
+        "let/if/binops did not emit as expected:\n{out}"
+    );
+    Ok(())
+}
