@@ -325,11 +325,12 @@ fn unknown_kernel_call() -> DResult<()> {
 fn unsupported_binary_operator() -> DResult<()> {
     let mut i = Interner::new();
     let f = i.intern("f")?;
-    let op = i.intern("*")?;
+    let op = i.intern("++")?;
     let home = i.intern("Basics")?;
-    let func = i.intern("mul")?;
+    let func = i.intern("append")?;
     let ty = con_int(&mut i)?;
-    // 1 * 2 — only +/- are modelled.
+    // 1 ++ 2 — list/string operators (`++` → append, `::` → cons) await those
+    // types; the M1-core arithmetic/comparison/boolean set is supported.
     let body = Located::new(
         Span::new(112, 117),
         canon::Expr_::Binop {

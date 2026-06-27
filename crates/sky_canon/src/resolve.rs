@@ -1,7 +1,7 @@
 //! Name resolution: `sky_syntax` source tree → canonical AST. Port of the M0
 //! subset of `Sky.Canonicalise.{Module,Expression,Pattern,Type}`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use sky_diagnostics::{DResult, Diagnostic, Located, NameError, Span};
 use sky_intern::{Interner, Symbol};
@@ -365,39 +365,118 @@ fn resolve_qual_var(
     }
 }
 
-/// Canonicalise a binary-operator chain.
+/// Operator associativity. Mirrors `Sky.Parse.Symbol.Assoc`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Assoc {
+    Left,
+    Right,
+    None,
+}
+
+/// The precedence (higher binds tighter) and associativity of `op`.
 ///
-/// M0 limitation: operators are folded left-associatively. The M0 grammar only
-/// exposes `+` and `-` (both left-associative, equal precedence), for which a
-/// left fold is exactly correct. Full precedence climbing (per
-/// `Sky.Parse.Symbol.precedence`) arrives with the operator table in a later
-/// milestone.
+/// Mirror of the Haskell reference `Sky.Parse.Symbol.precedence` for the
+/// M1-core operator set; any operator outside the set defaults to `9 L` exactly
+/// as the Haskell catch-all does.
+const fn op_precedence(op: &str) -> (i32, Assoc) {
+    match op.as_bytes() {
+        b"*" | b"/" | b"//" | b"%" => (7, Assoc::Left),
+        b"+" | b"-" => (6, Assoc::Left),
+        b"++" => (5, Assoc::Right),
+        b"==" | b"/=" | b"<" | b">" | b"<=" | b">=" => (4, Assoc::None),
+        b"&&" => (3, Assoc::Right),
+        b"||" => (2, Assoc::Right),
+        _ => (9, Assoc::Left),
+    }
+}
+
+/// Canonicalise a binary-operator chain into a precedence-correct tree.
+///
+/// The parser records a chain `e0 op0 e1 op1 … opN-1 eN` as a *flat* list of
+/// `(operand, operator)` pairs plus a trailing operand, without consulting
+/// precedence. Here we re-associate it via precedence climbing (port of
+/// `Sky.Canonicalise.Expression.canonicaliseBinops`), reading each operator's
+/// precedence + associativity from [`op_precedence`].
+///
+/// Unlike the Haskell parser — which nests `Src.Binops` pairwise and so needs a
+/// flattening pre-pass — the Rust parser already emits one flat chain per
+/// syntactic level. A `Binop` *operand* therefore only ever arises from an
+/// explicit parenthesised group, which must stay atomic; we never re-flatten
+/// it, so the user's grouping is preserved.
 fn canonicalise_binops(
     pairs: &[(src::Expr, Located<Symbol>)],
     final_: &src::Expr,
     env: &Env,
     interner: &mut Interner,
 ) -> DResult<canon::Expr_> {
-    let basics = interner.intern("Basics")?;
-
-    // Fold left: (((operand0 op0 operand1) op1 operand2) ...) opN final.
-    let mut iter = pairs.iter();
-    let Some((first_src, first_op)) = iter.next() else {
-        // No operators: just the final operand.
+    // No operators: just the final operand.
+    if pairs.is_empty() {
         return Ok(canonicalise_expr(final_, env, interner)?.value);
-    };
-
-    let mut acc_expr = canonicalise_expr(first_src, env, interner)?;
-    let mut pending_op = *first_op;
-
-    for (operand, op) in iter {
-        let rhs = canonicalise_expr(operand, env, interner)?;
-        acc_expr = combine_binop(acc_expr, pending_op, rhs, basics, interner)?;
-        pending_op = *op;
     }
 
-    let rhs = canonicalise_expr(final_, env, interner)?;
-    Ok(combine_binop(acc_expr, pending_op, rhs, basics, interner)?.value)
+    let basics = interner.intern("Basics")?;
+
+    // Canonicalise every operand once, left to right, into a front-poppable
+    // queue; pair each operator with its precedence + associativity.
+    let mut operands: VecDeque<canon::Expr> = VecDeque::with_capacity(pairs.len() + 1);
+    let mut ops: VecDeque<(Located<Symbol>, i32, Assoc)> = VecDeque::with_capacity(pairs.len());
+    for (operand, op) in pairs {
+        operands.push_back(canonicalise_expr(operand, env, interner)?);
+        let (prec, assoc) = op_precedence(name_or_empty(interner, op.value));
+        ops.push_back((*op, prec, assoc));
+    }
+    operands.push_back(canonicalise_expr(final_, env, interner)?);
+
+    let left = operands
+        .pop_front()
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_canon::canonicalise_binops",
+            detail: "binop chain with operators but no operands".to_owned(),
+        })?;
+    let tree = climb_binops(0, left, &mut operands, &mut ops, basics, interner)?;
+    Ok(tree.value)
+}
+
+/// Precedence-climbing core. Consumes operators of precedence ≥ `min_prec` from
+/// the front of `ops`, each paired with the next operand from `operands`, and
+/// folds them around `left`. Direct port of the Haskell `climb` helper.
+fn climb_binops(
+    min_prec: i32,
+    mut left: canon::Expr,
+    operands: &mut VecDeque<canon::Expr>,
+    ops: &mut VecDeque<(Located<Symbol>, i32, Assoc)>,
+    basics: Symbol,
+    interner: &mut Interner,
+) -> DResult<canon::Expr> {
+    while let Some(&(op, prec, assoc)) = ops.front() {
+        if prec < min_prec {
+            break;
+        }
+        ops.pop_front();
+        let next_operand = operands
+            .pop_front()
+            .ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_canon::climb_binops",
+                detail: "operator without a right operand".to_owned(),
+            })?;
+        // A left- (or non-) associative operator restricts its right subtree to
+        // strictly-higher precedence; a right-associative one admits equal
+        // precedence so it nests rightward.
+        let next_min = match assoc {
+            Assoc::Left | Assoc::None => prec + 1,
+            Assoc::Right => prec,
+        };
+        let right = climb_binops(next_min, next_operand, operands, ops, basics, interner)?;
+        left = combine_binop(left, op, right, basics, interner)?;
+    }
+    Ok(left)
+}
+
+/// Resolve an operator symbol to its text, or `""` when (impossibly) un-interned
+/// — the empty string falls through [`op_precedence`] to the `9 L` default, so a
+/// missing symbol degrades gracefully rather than panicking.
+fn name_or_empty(interner: &Interner, sym: Symbol) -> &str {
+    interner.resolve(sym).unwrap_or("")
 }
 
 /// Build a single resolved binary-operation node.

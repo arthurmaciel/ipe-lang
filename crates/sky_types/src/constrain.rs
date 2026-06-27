@@ -45,6 +45,8 @@ const ZONK_NODE_LIMIT: u32 = 4_096;
 /// guarantee a stable, resolvable [`Symbol`] for each.
 struct Builtins {
     int: Symbol,
+    float: Symbol,
+    bool: Symbol,
     string: Symbol,
     task: Symbol,
 }
@@ -53,9 +55,39 @@ impl Builtins {
     fn new(interner: &mut Interner) -> DResult<Self> {
         Ok(Self {
             int: interner.intern("Int")?,
+            float: interner.intern("Float")?,
+            bool: interner.intern("Bool")?,
             string: interner.intern("String")?,
             task: interner.intern("Task")?,
         })
+    }
+}
+
+/// The type discipline a binary operator imposes. Classified once from the
+/// resolved kernel name so the constraint walk doesn't re-borrow the interner.
+#[derive(Clone, Copy)]
+enum BinopClass {
+    /// `+ - * //`: `Int -> Int -> Int`.
+    IntArith,
+    /// `/`: `Float -> Float -> Float` (matches the Go backend's float division).
+    FloatDiv,
+    /// `== /= < > <= >=`: `a -> a -> Bool` (operands share one type).
+    Compare,
+    /// `&& ||`: `Bool -> Bool -> Bool`.
+    Boolean,
+    /// Any other operator (`++`, `::`, …): `a -> a -> a`. Unreachable from the
+    /// M1 lexer's operator set, but kept sound rather than panicking.
+    Poly,
+}
+
+/// Classify a resolved operator kernel name (`add`, `eq`, `and`, …).
+const fn classify_binop(func: &str) -> BinopClass {
+    match func.as_bytes() {
+        b"add" | b"sub" | b"mul" | b"idiv" => BinopClass::IntArith,
+        b"fdiv" => BinopClass::FloatDiv,
+        b"eq" | b"neq" | b"lt" | b"gt" | b"le" | b"ge" => BinopClass::Compare,
+        b"and" | b"or" => BinopClass::Boolean,
+        _ => BinopClass::Poly,
     }
 }
 
@@ -144,6 +176,72 @@ impl<'a> Builder<'a> {
             name,
             args: Vec::new(),
         })
+    }
+
+    fn bool_var(&mut self) -> DResult<VarId> {
+        let name = self.builtins.bool;
+        self.structure(FlatType::Con {
+            module: Vec::new(),
+            name,
+            args: Vec::new(),
+        })
+    }
+
+    fn float_var(&mut self) -> DResult<VarId> {
+        let name = self.builtins.float;
+        self.structure(FlatType::Con {
+            module: Vec::new(),
+            name,
+            args: Vec::new(),
+        })
+    }
+
+    /// Constrain a binary operation by the type discipline of its operator. The
+    /// returned [`VarId`] is the result type's variable. Mirrors the M1-core
+    /// subset of `Sky.Type.Constrain.Expression.binopTypes`.
+    fn constrain_binop(
+        &mut self,
+        local: &BTreeMap<Symbol, VarId>,
+        func: Symbol,
+        lhs: &canon::Expr,
+        rhs: &canon::Expr,
+    ) -> DResult<VarId> {
+        let class = classify_binop(self.interner.resolve(func).unwrap_or(""));
+        let lv = self.constrain_expr(local, lhs)?;
+        let rv = self.constrain_expr(local, rhs)?;
+        match class {
+            BinopClass::IntArith => {
+                let li = self.int_var()?;
+                self.eq(lhs.span, lv, li);
+                let ri = self.int_var()?;
+                self.eq(rhs.span, rv, ri);
+                self.int_var()
+            }
+            BinopClass::FloatDiv => {
+                let lf = self.float_var()?;
+                self.eq(lhs.span, lv, lf);
+                let rf = self.float_var()?;
+                self.eq(rhs.span, rv, rf);
+                self.float_var()
+            }
+            BinopClass::Compare => {
+                // Operands unify to one shared type; the result is Bool.
+                self.eq(rhs.span, lv, rv);
+                self.bool_var()
+            }
+            BinopClass::Boolean => {
+                let lb = self.bool_var()?;
+                self.eq(lhs.span, lv, lb);
+                let rb = self.bool_var()?;
+                self.eq(rhs.span, rv, rb);
+                self.bool_var()
+            }
+            BinopClass::Poly => {
+                // `a -> a -> a`: operands and result share one type.
+                self.eq(rhs.span, lv, rv);
+                Ok(lv)
+            }
+        }
     }
 
     fn con_var(&mut self, module: Vec<Symbol>, name: Symbol, args: Vec<VarId>) -> DResult<VarId> {
@@ -349,15 +447,8 @@ impl<'a> Builder<'a> {
                 }
                 result
             }
-            canon::Expr_::Binop { lhs, rhs, .. } => {
-                // M0 exposes only `+` / `-`, both `Int -> Int -> Int`.
-                let lv = self.constrain_expr(local, lhs)?;
-                let rv = self.constrain_expr(local, rhs)?;
-                let li = self.int_var()?;
-                self.eq(lhs.span, lv, li);
-                let ri = self.int_var()?;
-                self.eq(rhs.span, rv, ri);
-                self.int_var()?
+            canon::Expr_::Binop { func, lhs, rhs, .. } => {
+                self.constrain_binop(local, *func, lhs, rhs)?
             }
         };
         self.regions.insert(span, var);

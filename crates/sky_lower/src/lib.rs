@@ -219,4 +219,95 @@ mod tests {
         assert!(matches!(a2.first(), Some(Expr::Ctor { .. })));
         assert!(matches!(a2.get(1), Some(Expr::Int(0))));
     }
+
+    /// Lower a free-standing module and return the body of `which`.
+    fn lower_body(source: &str, which: &str) -> Option<(Expr, Interner)> {
+        let mut i = Interner::new();
+        let src = sky_parse::parse_module(source, &mut i).ok()?;
+        let m = sky_canon::canonicalise(&src, &mut i).ok()?;
+        let types = sky_types::infer(&m, &mut i).ok()?;
+        let program = lower(&m, &types, &i).ok()?;
+        let module = program.modules.into_iter().next()?;
+        let func = module
+            .funcs
+            .into_iter()
+            .find(|f| i.resolve(f.name) == Some(which))?;
+        Some((func.body, i))
+    }
+
+    #[test]
+    fn lowers_full_arithmetic_with_precedence() {
+        // `2 + 3 * 4` ⇒ Add(2, Mul(3, 4)).
+        let opt = lower_body(
+            "module Main exposing (v)\nv : Int\nv =\n    2 + 3 * 4\n",
+            "v",
+        );
+        assert!(opt.is_some(), "v must lower");
+        let Some((body, _)) = opt else { return };
+        assert!(
+            matches!(&body, Expr::BinOp { op: BinOp::Add, .. }),
+            "body is Add(_, _)"
+        );
+        let Expr::BinOp { lhs, rhs, .. } = &body else {
+            return;
+        };
+        assert!(matches!(lhs.as_ref(), Expr::Int(2)));
+        assert!(
+            matches!(rhs.as_ref(), Expr::BinOp { op: BinOp::Mul, .. }),
+            "rhs is Mul(3, 4)"
+        );
+    }
+
+    #[test]
+    fn lowers_comparison_and_boolean_ops() {
+        // `n > 10 && n < 100` ⇒ And(Gt(..), Lt(..)).
+        let opt = lower_body(
+            "module Main exposing (f)\nf : Int -> Bool\nf n =\n    n > 10 && n < 100\n",
+            "f",
+        );
+        assert!(opt.is_some(), "f must lower");
+        let Some((body, _)) = opt else { return };
+        assert!(
+            matches!(&body, Expr::BinOp { op: BinOp::And, .. }),
+            "body is And(_, _)"
+        );
+        let Expr::BinOp { lhs, rhs, .. } = &body else {
+            return;
+        };
+        assert!(matches!(lhs.as_ref(), Expr::BinOp { op: BinOp::Gt, .. }));
+        assert!(matches!(rhs.as_ref(), Expr::BinOp { op: BinOp::Lt, .. }));
+    }
+
+    #[test]
+    fn lowers_remaining_operators() {
+        // Cover Sub, Div, Eq, Neq, Le, Ge, Or paths through `binop`.
+        for (src_op, want) in [
+            ("a - b", BinOp::Sub),
+            ("a / b", BinOp::Div),
+            ("a == b", BinOp::Eq),
+            ("a /= b", BinOp::Neq),
+            ("a <= b", BinOp::Le),
+            ("a >= b", BinOp::Ge),
+            ("a || b", BinOp::Or),
+        ] {
+            // Annotate to keep operand/result types concrete for each operator.
+            // `/` (fdiv) is Float-typed, matching the Go backend.
+            let sig = match want {
+                BinOp::Sub => "f : Int -> Int -> Int",
+                BinOp::Div => "f : Float -> Float -> Float",
+                BinOp::Or => "f : Bool -> Bool -> Bool",
+                _ => "f : Int -> Int -> Bool",
+            };
+            let source = format!("module Main exposing (f)\n{sig}\nf a b =\n    {src_op}\n");
+            let opt = lower_body(&source, "f");
+            assert!(
+                matches!(&opt, Some((Expr::BinOp { .. }, _))),
+                "{src_op} must lower to a binop"
+            );
+            let Some((Expr::BinOp { op, .. }, _)) = opt else {
+                continue;
+            };
+            assert_eq!(op, want, "operator {src_op}");
+        }
+    }
 }

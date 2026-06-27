@@ -368,8 +368,21 @@ impl<'a> Lowerer<'a> {
         match self.resolve(func)? {
             "add" => Ok(BinOp::Add),
             "sub" => Ok(BinOp::Sub),
-            // Any operator other than `+`/`-` (`*`, `/`, `==`, `++`, …).
-            // [SKY-L0101, feature: binops]
+            "mul" => Ok(BinOp::Mul),
+            // `/` (`fdiv`) and `//` (`idiv`) both lower to the IR's `Div`; the
+            // operand types (Float vs Int) settled by inference pick the Rust
+            // semantics, matching the Go backend.
+            "fdiv" | "idiv" => Ok(BinOp::Div),
+            "eq" => Ok(BinOp::Eq),
+            "neq" => Ok(BinOp::Neq),
+            "lt" => Ok(BinOp::Lt),
+            "gt" => Ok(BinOp::Gt),
+            "le" => Ok(BinOp::Le),
+            "ge" => Ok(BinOp::Ge),
+            "and" => Ok(BinOp::And),
+            "or" => Ok(BinOp::Or),
+            // List / string operators (`++` → `append`, `::` → `cons`) await
+            // those types. [SKY-L0101, feature: binops]
             _ => Err(unsupported(span, Feature::BinOps)),
         }
     }

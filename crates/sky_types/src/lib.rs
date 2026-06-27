@@ -569,4 +569,78 @@ mod tests {
             "an exhaustive, non-redundant program must pass the new pass"
         );
     }
+
+    /// Parse + canonicalise + infer `source`; return the resolved type of the
+    /// binding named `which` from the env.
+    fn infer_env_ty(source: &str, which: &str) -> Option<(Ty, Interner)> {
+        let mut i = Interner::new();
+        let src = sky_parse::parse_module(source, &mut i).ok()?;
+        let m = sky_canon::canonicalise(&src, &mut i).ok()?;
+        let solved = infer(&m, &mut i).ok()?;
+        let sym = sym(&i, &m, which)?;
+        let ty = solved.env.get(&sym)?.clone();
+        Some((ty, i))
+    }
+
+    /// Walk an arrow type to its final (return) constructor name.
+    fn return_con_name(ty: &Ty, i: &Interner) -> Option<String> {
+        match ty {
+            Ty::Fun(_, rest) => return_con_name(rest, i),
+            Ty::Con { name, .. } => i.resolve(*name).map(str::to_owned),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn arithmetic_chain_is_int() {
+        let opt = infer_env_ty(
+            "module Main exposing (v)\nv : Int\nv =\n    2 + 3 * 4 - 1\n",
+            "v",
+        );
+        assert!(opt.is_some(), "v must infer");
+        let Some((ty, i)) = opt else { return };
+        assert_eq!(ty_con_name(&ty, &i).as_deref(), Some("Int"));
+    }
+
+    #[test]
+    fn comparison_and_boolean_produce_bool() {
+        // `f : Int -> Bool` ⇒ body `n > 10 && n < 100` must be Bool.
+        let opt = infer_env_ty(
+            "module Main exposing (f)\nf : Int -> Bool\nf n =\n    n > 10 && n < 100\n",
+            "f",
+        );
+        assert!(opt.is_some(), "f must infer");
+        let Some((ty, i)) = opt else { return };
+        assert_eq!(
+            return_con_name(&ty, &i).as_deref(),
+            Some("Bool"),
+            "comparison + && yields Bool"
+        );
+    }
+
+    #[test]
+    fn untyped_comparison_infers_bool_return() {
+        // No annotation: the inferred return of `g a b = a == b` must be Bool.
+        let opt = infer_env_ty("module Main exposing (g)\ng a b =\n    a == b\n", "g");
+        assert!(opt.is_some(), "g must infer");
+        let Some((ty, i)) = opt else { return };
+        assert_eq!(return_con_name(&ty, &i).as_deref(), Some("Bool"));
+    }
+
+    #[test]
+    fn boolean_operand_type_mismatch_is_rejected() {
+        // `1 && 2` — `&&` demands Bool operands; an Int operand must fail.
+        let mut i = Interner::new();
+        let source = "module Main exposing (v)\nv : Bool\nv =\n    1 && 2\n";
+        let parsed = sky_parse::parse_module(source, &mut i);
+        assert!(parsed.is_ok(), "must parse");
+        let Ok(src) = parsed else { return };
+        let canon = sky_canon::canonicalise(&src, &mut i);
+        assert!(canon.is_ok(), "must canonicalise");
+        let Ok(m) = canon else { return };
+        assert!(
+            infer(&m, &mut i).is_err(),
+            "Int operand to && must be a type error"
+        );
+    }
 }

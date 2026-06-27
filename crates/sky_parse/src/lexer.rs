@@ -37,6 +37,16 @@ pub enum Tok {
     Underscore,
     Plus,
     Minus,
+    Star,
+    Slash,
+    SlashEq,
+    EqEq,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    AmpAmp,
+    PipePipe,
     // Literals / names.
     /// A (possibly dotted) identifier, e.g. `count`, `Msg`, `String.fromInt`.
     Ident(String),
@@ -238,60 +248,40 @@ fn lex_ident(lx: &mut Lexer) -> Tok {
     keyword(&text).unwrap_or(Tok::Ident(text))
 }
 
+/// Consume the current char, then optionally a following `second` char,
+/// yielding `two` when the pair matches and `one` otherwise. Factors the
+/// shared "one-or-two-character operator" shape (`=`/`==`, `<`/`<=`, `-`/`->`,
+/// …) so each call site is a single line.
+fn one_or_two(lx: &mut Lexer, second: char, two: Tok, one: Tok) -> Tok {
+    lx.advance();
+    if lx.peek() == Some(second) {
+        lx.advance();
+        two
+    } else {
+        one
+    }
+}
+
 /// Lex a punctuation / operator token. `c` is the already-peeked first
 /// character and `lo` is its byte offset (the start of the token).
 fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
     let kind = match c {
-        '(' => {
-            lx.advance();
-            Tok::LParen
-        }
-        ')' => {
-            lx.advance();
-            Tok::RParen
-        }
-        '=' => {
-            lx.advance();
-            Tok::Equals
-        }
-        '|' => {
-            lx.advance();
-            Tok::Pipe
-        }
-        ':' => {
-            lx.advance();
-            Tok::Colon
-        }
-        ',' => {
-            lx.advance();
-            Tok::Comma
-        }
-        '+' => {
-            lx.advance();
-            Tok::Plus
-        }
-        '-' => {
-            lx.advance();
-            if lx.peek() == Some('>') {
-                lx.advance();
-                Tok::Arrow
-            } else {
-                Tok::Minus
-            }
-        }
-        '.' => {
-            lx.advance();
-            if lx.peek() == Some('.') {
-                lx.advance();
-                Tok::DotDot
-            } else {
-                // A lone `.` is not part of `..` and not attached to an ident.
-                return Err(Diagnostic::Parse {
-                    span: Span::new(lo, lx.offset()),
-                    msg: ParseError::StrayDot,
-                });
-            }
-        }
+        '(' => one_char(lx, Tok::LParen),
+        ')' => one_char(lx, Tok::RParen),
+        ':' => one_char(lx, Tok::Colon),
+        ',' => one_char(lx, Tok::Comma),
+        '+' => one_char(lx, Tok::Plus),
+        '*' => one_char(lx, Tok::Star),
+        '=' => one_or_two(lx, '=', Tok::EqEq, Tok::Equals),
+        '|' => one_or_two(lx, '|', Tok::PipePipe, Tok::Pipe),
+        '-' => one_or_two(lx, '>', Tok::Arrow, Tok::Minus),
+        '/' => one_or_two(lx, '=', Tok::SlashEq, Tok::Slash),
+        '<' => one_or_two(lx, '=', Tok::Le, Tok::Lt),
+        '>' => one_or_two(lx, '=', Tok::Ge, Tok::Gt),
+        // `&` and `.` are valid ONLY as their two-char forms (`&&`, `..`);
+        // a lone first char is a typed lex error rather than a token.
+        '&' => return two_char_only(lx, lo, '&', Tok::AmpAmp, ParseError::UnknownChar('&')),
+        '.' => return two_char_only(lx, lo, '.', Tok::DotDot, ParseError::StrayDot),
         other => {
             return Err(Diagnostic::Parse {
                 span: Span::new(lo, lo + char_width(other)),
@@ -300,4 +290,26 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
         }
     };
     Ok(kind)
+}
+
+/// Consume the current char and yield `tok` (single-character token).
+fn one_char(lx: &mut Lexer, tok: Tok) -> Tok {
+    lx.advance();
+    tok
+}
+
+/// Lex a token that is only valid as a two-character pair: consume the first
+/// char, require `second`, and yield `two`; a missing `second` is the typed
+/// lex error `err`.
+fn two_char_only(lx: &mut Lexer, lo: u32, second: char, two: Tok, err: ParseError) -> DResult<Tok> {
+    lx.advance();
+    if lx.peek() == Some(second) {
+        lx.advance();
+        Ok(two)
+    } else {
+        Err(Diagnostic::Parse {
+            span: Span::new(lo, lx.offset()),
+            msg: err,
+        })
+    }
 }
