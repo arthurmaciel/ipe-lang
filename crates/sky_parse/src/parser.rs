@@ -24,7 +24,7 @@
 
 use sky_diagnostics::{
     CaseDefect, Construct, DResult, Diagnostic, Expected, ExpectedSet, ExposingDefect,
-    HeaderDefect, LetDefect, Located, ParseError, Span, TokenKind, TypeDeclDefect,
+    HeaderDefect, IfDefect, LetDefect, Located, ParseError, Span, TokenKind, TypeDeclDefect,
 };
 use sky_intern::{Interner, Symbol};
 use sky_syntax::{
@@ -69,6 +69,9 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Of => TokenKind::Of,
         Tok::Let => TokenKind::Let,
         Tok::In => TokenKind::In,
+        Tok::If => TokenKind::If,
+        Tok::Then => TokenKind::Then,
+        Tok::Else => TokenKind::Else,
         Tok::LParen => TokenKind::LParen,
         Tok::RParen => TokenKind::RParen,
         Tok::Equals => TokenKind::Equals,
@@ -194,6 +197,13 @@ impl<'a> Parser<'a> {
         Diagnostic::Parse {
             span,
             msg: ParseError::MalformedLet(defect),
+        }
+    }
+
+    const fn malformed_if(span: Span, defect: IfDefect) -> Diagnostic {
+        Diagnostic::Parse {
+            span,
+            msg: ParseError::MalformedIf(defect),
         }
     }
 
@@ -875,6 +885,9 @@ impl<'a> Parser<'a> {
         if self.peek_kind() == Some(&Tok::Let) {
             return self.parse_let(threshold, depth + 1);
         }
+        if self.peek_kind() == Some(&Tok::If) {
+            return self.parse_if(threshold, depth + 1);
+        }
         let tok = self.bump(Construct::Expression)?;
         match &tok.kind {
             Tok::LParen => {
@@ -1046,6 +1059,87 @@ impl<'a> Parser<'a> {
         let body = self.parse_expr(threshold, depth + 1)?;
         let span = Self::span_merge(let_tok.span, body.span);
         Ok(Located::new(span, Expr_::Let(bindings, Box::new(body))))
+    }
+
+    /// Parse `if <cond> then <a> else <b>`, including any `else if` chain. Each
+    /// condition and branch parses as a full expression at `threshold`; the
+    /// `then` / `else` / `if` keyword tokens delimit them, since the expression
+    /// parser never consumes a keyword as an application argument or operator.
+    /// The result is `If [(cond, branch), …] else`, mirroring the Haskell
+    /// compiler's `Src.If [(Expr, Expr)] Expr` — the leading `if` plus every
+    /// `else if`, then the mandatory final `else`.
+    fn parse_if(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
+        if depth > MAX_DEPTH {
+            return Err(self.too_deep(Construct::If));
+        }
+        // The caller has already peeked `if`.
+        let if_tok = self.bump(Construct::If)?;
+
+        let mut branches = Vec::new();
+        loop {
+            // Reject an absent condition cleanly rather than letting the
+            // expression parser stumble over the `then` / `else` keyword.
+            match self.peek() {
+                Some(t) if matches!(t.kind, Tok::Then | Tok::Else) => {
+                    return Err(Self::malformed_if(t.span, IfDefect::MissingCondition));
+                }
+                None => {
+                    return Err(Self::malformed_if(
+                        self.eof_err_span(),
+                        IfDefect::MissingCondition,
+                    ));
+                }
+                _ => {}
+            }
+            let cond = self.parse_expr(threshold, depth + 1)?;
+
+            // `then` after the condition.
+            match self.peek() {
+                Some(t) if t.kind == Tok::Then => {
+                    self.bump(Construct::If)?;
+                }
+                Some(t) => return Err(Self::malformed_if(t.span, IfDefect::MissingThen)),
+                None => {
+                    return Err(Self::malformed_if(
+                        self.eof_err_span(),
+                        IfDefect::MissingThen,
+                    ));
+                }
+            }
+
+            let branch = self.parse_expr(threshold, depth + 1)?;
+            branches.push((cond, branch));
+
+            // `else` after the `then` branch (mandatory — every `if` is an
+            // expression with both outcomes).
+            match self.peek() {
+                Some(t) if t.kind == Tok::Else => {
+                    self.bump(Construct::If)?;
+                }
+                Some(t) => return Err(Self::malformed_if(t.span, IfDefect::MissingElse)),
+                None => {
+                    return Err(Self::malformed_if(
+                        self.eof_err_span(),
+                        IfDefect::MissingElse,
+                    ));
+                }
+            }
+
+            // `else if` continues the chain with another `(cond, branch)` pair;
+            // a plain `else` ends it with the final expression below.
+            if self.peek_kind() == Some(&Tok::If) {
+                self.bump(Construct::If)?;
+                continue;
+            }
+            break;
+        }
+
+        let else_branch = self.parse_expr(threshold, depth + 1)?;
+        let span = Self::span_merge(if_tok.span, else_branch.span);
+        Ok(Located::new(
+            span,
+            Expr_::If(branches, Box::new(else_branch)),
+        ))
     }
 
     /// Parse a single `name = body` let binding. `binding_col` is the block's

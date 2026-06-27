@@ -375,6 +375,68 @@ mod tests {
     }
 
     #[test]
+    fn inline_if_parses_into_an_if_node() {
+        // `if c then 1 else 0` is a single-branch `If` plus a final else.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    if v < 0 then 1 else 0\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "inline if must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|v| matches!(&v.body.value, Expr_::If(branches, els)
+                if branches.len() == 1
+                    && branches.first().is_some_and(|(_, b)| matches!(b.value, Expr_::Int(1)))
+                    && matches!(els.value, Expr_::Int(0)))),
+            "v body is `if v < 0 then 1 else 0`, got {:?}",
+            v.map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
+    fn else_if_chain_records_every_branch() {
+        // `if … then … else if … then … else …` records two `(cond, branch)`
+        // pairs plus the final else, in source order.
+        let mut i = Interner::new();
+        let src = format!(
+            "{HDR}v : Int\nv =\n    if v > 0 then\n        1\n    else if v < 0 then\n        2\n    else\n        0\n"
+        );
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "else-if chain must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::If(branches, els)) => {
+                Some((branches.len(), matches!(els.value, Expr_::Int(0))))
+            }
+            _ => None,
+        };
+        assert_eq!(
+            shape,
+            Some((2, true)),
+            "two `(cond, branch)` pairs and a final `else 0`"
+        );
+    }
+
+    #[test]
+    fn malformed_if_is_p0062() {
+        // Missing `then` after the condition.
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    if v 1 else 0\n")),
+            "SKY-P0062"
+        );
+        // Missing `else` after the `then` branch.
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    if v then 1\n")),
+            "SKY-P0062"
+        );
+        // Absent condition (`if then …`).
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    if then 1 else 0\n")),
+            "SKY-P0062"
+        );
+    }
+
+    #[test]
     fn unexpected_token_is_p0001() {
         // A token that cannot begin an expression.
         assert_eq!(err_code(&format!("{HDR}main = )")), "SKY-P0001");

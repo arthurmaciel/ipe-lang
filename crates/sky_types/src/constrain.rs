@@ -463,6 +463,22 @@ impl<'a> Builder<'a> {
                 }
                 self.constrain_expr(&let_local, body)?
             }
+            canon::Expr_::If(branches, else_expr) => {
+                // Every condition is `Bool`; every branch and the final `else`
+                // unify to one shared result type, which is the whole `if`'s
+                // type. Mirrors `Sky.Type.Constrain.Expression.constrainIf`.
+                let result = self.flex()?;
+                for (cond, body) in branches {
+                    let cond_var = self.constrain_expr(local, cond)?;
+                    let want_bool = self.bool_var()?;
+                    self.eq(cond.span, cond_var, want_bool);
+                    let body_var = self.constrain_expr(local, body)?;
+                    self.eq(body.span, body_var, result);
+                }
+                let else_var = self.constrain_expr(local, else_expr)?;
+                self.eq(else_expr.span, else_var, result);
+                result
+            }
         };
         self.regions.insert(span, var);
         Ok(var)

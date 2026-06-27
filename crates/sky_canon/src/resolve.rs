@@ -300,6 +300,18 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
             let can_in = canonicalise_expr(body, &let_env, interner)?;
             canon::Expr_::Let(can_bindings, Box::new(can_in))
         }
+        src::Expr_::If(branches, else_expr) => {
+            // `if` introduces no bindings: every condition and branch resolves
+            // against the same enclosing scope.
+            let mut can_branches = Vec::with_capacity(branches.len());
+            for (cond, body) in branches {
+                let can_cond = canonicalise_expr(cond, env, interner)?;
+                let can_body = canonicalise_expr(body, env, interner)?;
+                can_branches.push((can_cond, can_body));
+            }
+            let can_else = canonicalise_expr(else_expr, env, interner)?;
+            canon::Expr_::If(can_branches, Box::new(can_else))
+        }
     };
     Ok(Located::new(span, node))
 }

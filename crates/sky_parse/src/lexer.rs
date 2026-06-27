@@ -27,6 +27,9 @@ pub enum Tok {
     Of,
     Let,
     In,
+    If,
+    Then,
+    Else,
     // Punctuation / operators.
     LParen,
     RParen,
@@ -161,6 +164,9 @@ fn keyword(text: &str) -> Option<Tok> {
         "of" => Some(Tok::Of),
         "let" => Some(Tok::Let),
         "in" => Some(Tok::In),
+        "if" => Some(Tok::If),
+        "then" => Some(Tok::Then),
+        "else" => Some(Tok::Else),
         _ => None,
     }
 }

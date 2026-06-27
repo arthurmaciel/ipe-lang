@@ -25,8 +25,8 @@ use core::fmt::Write as _;
 use crate::code::{ISSUE_TRACKER_URL, Severity, title};
 use crate::diagnostic::{
     CaseDefect, Diagnostic, Expected, ExpectedSet, ExposingDefect, Feature, HeaderDefect, HelpLine,
-    Hint, LetDefect, LowerError, NameError, ParseError, SpanRole, Suggestion, TokenKind, TyDoc,
-    TypeDeclDefect, TypeError,
+    Hint, IfDefect, LetDefect, LowerError, NameError, ParseError, SpanRole, Suggestion, TokenKind,
+    TyDoc, TypeDeclDefect, TypeError,
 };
 use crate::span::Span;
 
@@ -338,6 +338,7 @@ fn parse_label(msg: &ParseError) -> Option<String> {
         ParseError::UnclosedDelimiter { .. } => Some("this delimiter is never closed".to_string()),
         ParseError::MalformedCase(defect) => Some(case_defect_str(*defect).to_string()),
         ParseError::MalformedLet(defect) => Some(let_defect_str(*defect).to_string()),
+        ParseError::MalformedIf(defect) => Some(if_defect_str(*defect).to_string()),
         ParseError::Unexpected | ParseError::TooDeep => None,
     }
 }
@@ -519,6 +520,9 @@ const fn token_kind_str(t: TokenKind) -> &'static str {
         TokenKind::Of => "`of`",
         TokenKind::Let => "`let`",
         TokenKind::In => "`in`",
+        TokenKind::If => "`if`",
+        TokenKind::Then => "`then`",
+        TokenKind::Else => "`else`",
         TokenKind::LParen => "`(`",
         TokenKind::RParen => "`)`",
         TokenKind::Equals => "`=`",
@@ -552,6 +556,8 @@ const fn expected_str(e: Expected) -> &'static str {
         Expected::ExposingKeyword => "`exposing`",
         Expected::OfKeyword => "`of`",
         Expected::InKeyword => "`in`",
+        Expected::ThenKeyword => "`then`",
+        Expected::ElseKeyword => "`else`",
         Expected::Equals => "`=`",
         Expected::Arrow => "`->`",
         Expected::Pipe => "`|`",
@@ -622,6 +628,14 @@ const fn let_defect_str(d: LetDefect) -> &'static str {
         LetDefect::BindingNameNotLower => "a let binding name must be a lowercase identifier",
         LetDefect::MissingEquals => "expected `=` after the binding name",
         LetDefect::MissingIn => "expected `in` after the let bindings",
+    }
+}
+
+const fn if_defect_str(d: IfDefect) -> &'static str {
+    match d {
+        IfDefect::MissingCondition => "this `if` is missing its condition",
+        IfDefect::MissingThen => "expected `then` after the condition",
+        IfDefect::MissingElse => "expected `else` after the `then` branch",
     }
 }
 

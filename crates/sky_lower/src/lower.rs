@@ -343,6 +343,23 @@ impl<'a> Lowerer<'a> {
                 }
                 Ok(acc)
             }
+            canon::Expr_::If(branches, else_expr) => {
+                // A multi-way `if` (with `else if` branches) lowers to right-
+                // nested binary `If`s: `if c1 then a else if c2 then b else c`
+                // becomes `If c1 a (If c2 b c)`. Folding from the right keeps
+                // the source order of the conditions.
+                let mut acc = self.lower_expr(else_expr)?;
+                for (cond, body) in branches.iter().rev() {
+                    let cond = self.lower_expr(cond)?;
+                    let then_ = self.lower_expr(body)?;
+                    acc = Expr::If {
+                        cond: Box::new(cond),
+                        then_: Box::new(then_),
+                        else_: Box::new(acc),
+                    };
+                }
+                Ok(acc)
+            }
             canon::Expr_::Case(scrut, branches) => self.lower_case(scrut, branches),
             // A function named as a bare value rather than applied. M0 has no
             // first-class functions; a function name is legal only as a call

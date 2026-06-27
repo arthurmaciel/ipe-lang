@@ -117,6 +117,11 @@ pub enum Expr_ {
     /// sequentially: each value sees the enclosing scope plus the bindings that
     /// precede it (`let*`), matching the non-recursive nested-`Let` IR.
     Let(Vec<LetBinding>, Box<Expr>),
+    /// `if cond then a else b`, with optional `else if` branches. The list holds
+    /// one or more `(condition, branch)` pairs in source order — the leading
+    /// `if` plus every `else if` — followed by the mandatory final `else`
+    /// expression. Mirrors the Haskell compiler's `Src.If [(Expr, Expr)] Expr`.
+    If(Vec<(Expr, Expr)>, Box<Expr>),
 }
 
 /// A single `let` value binding: `name = body`. M1 subset of the Haskell

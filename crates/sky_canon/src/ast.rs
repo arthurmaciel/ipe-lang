@@ -107,6 +107,12 @@ pub enum Expr_ {
     /// was resolved against the enclosing scope plus the bindings before it, and
     /// every binding name is a local within `body`.
     Let(Vec<LetBinding>, Box<Expr>),
+    /// `if cond then a else b`, with optional `else if` branches. The list holds
+    /// one or more `(condition, branch)` pairs (the leading `if` plus every
+    /// `else if`), followed by the mandatory final `else` expression. Every
+    /// sub-expression is resolved against the same enclosing scope — `if`
+    /// introduces no bindings.
+    If(Vec<(Expr, Expr)>, Box<Expr>),
 }
 
 /// A resolved `let` value binding: `name = body`.

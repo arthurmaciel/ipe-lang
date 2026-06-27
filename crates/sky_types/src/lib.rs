@@ -419,6 +419,79 @@ mod tests {
     }
 
     #[test]
+    fn if_branches_unify_to_the_annotated_return() {
+        // A well-typed `if`: condition `Bool`, both branches `Int`, agreeing
+        // with the `Int` return annotation.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   f : Int -> Int\n\
+                   f n =\n    if n > 0 then n else 0\n\
+                   main =\n    println (String.fromInt (f 1))\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(r.is_ok(), "well-typed if must infer: {r:?}");
+        let Ok(solved) = r else { return };
+        let Some(f) = sym(&i, &m, "f") else { return };
+        let Some(Ty::Fun(arg, ret)) = solved.env.get(&f) else {
+            return;
+        };
+        assert_eq!(ty_con_name(arg, &i).as_deref(), Some("Int"));
+        assert_eq!(ty_con_name(ret, &i).as_deref(), Some("Int"));
+    }
+
+    #[test]
+    fn if_condition_must_be_bool() {
+        // `if n then …` with `n : Int` — the condition is not `Bool`.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   f : Int -> Int\n\
+                   f n =\n    if n then 1 else 0\n\
+                   main =\n    println (String.fromInt (f 1))\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::TypeMismatch { .. },
+                    ..
+                })
+            ),
+            "a non-Bool condition must be a TypeMismatch, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn if_branches_must_agree() {
+        // The `then` branch is `Int` and the `else` is a `Msg` constructor —
+        // the two branches cannot unify.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   type Msg = Increment | Decrement\n\
+                   f : Int -> Int\n\
+                   f n =\n    if n > 0 then 1 else Increment\n\
+                   main =\n    println (String.fromInt (f 1))\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::TypeMismatch { .. },
+                    ..
+                })
+            ),
+            "disagreeing branches must be a TypeMismatch, got {r:?}"
+        );
+    }
+
+    #[test]
     fn too_many_parameters_names_binding_and_signature() {
         // `g : Int` but `g a = 0` binds a parameter the signature has no arrow
         // for.
