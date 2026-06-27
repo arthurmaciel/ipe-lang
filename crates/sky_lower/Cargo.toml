@@ -1,0 +1,17 @@
+[package]
+name = "sky_lower"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+sky_intern = { path = "../sky_intern" }
+sky_diagnostics = { path = "../sky_diagnostics" }
+sky_canon = { path = "../sky_canon" }
+sky_types = { path = "../sky_types" }
+sky_ir = { path = "../sky_ir" }
+
+[dev-dependencies]
+sky_parse = { path = "../sky_parse" }
+
+[lints]
+workspace = true
