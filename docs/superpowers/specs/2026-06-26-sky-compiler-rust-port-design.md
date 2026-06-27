@@ -1,7 +1,16 @@
 # Sky Compiler — Rust Port: Design
 
+> **SUPERSEDED IN PART (2026-06-27):** the "byte-identical to the Haskell
+> reference's Rust emission" correctness oracle is **demoted to a self-owned
+> regression snapshot**. The authoritative oracle is now **behavioural parity
+> with anzellai's mainline (Haskell frontend + Go backend/runtime)** — exactly
+> what `PRINCIPLES.md` point 2 mandates. The fork's Haskell→Rust backend is
+> abandoned; `runtime-rust` is canonical and ours. See
+> `docs/architecture/repo-layout-and-mirroring.md` for the current model. The
+> architecture, crate layout, and soundness rules below all still hold.
+
 **Date:** 2026-06-26
-**Status:** Approved (brainstorm complete; guardian ruling: APPROVE-WITH-CONSTRAINTS)
+**Status:** Approved (brainstorm complete; guardian ruling: APPROVE-WITH-CONSTRAINTS); oracle section superseded 2026-06-27 (see banner)
 **Design authority / reviewer:** `security-soundness-guardian` agent
 **Repo:** `/home/arthur/Documentos/comp/sky-rust` (greenfield)
 **Reference:** `/home/arthur/Documentos/comp/sky` (Haskell Sky compiler, ~65k LOC, 92 modules)
