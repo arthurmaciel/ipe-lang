@@ -27,11 +27,16 @@ Each round (a milestone or a batch within one) runs:
    additions a round needs — new `sky_ir` variants, new diagnostic codes, new
    shared AST nodes, new kernel-registry rows. Freeze them. This is the *only*
    serialized code step; keep it small and fast.
-2. **Parallel FAN-OUT (worktree-isolated agents).** Each agent owns one
-   **vertical feature slice** (parse→canon→types→lower→backend for one feature) or
-   one **leaf artifact** (one explain page, one runtime kernel + its parity test).
-   Agents build on the now-frozen core and touch **disjoint files**. Worktree
-   isolation (`isolation: 'worktree'`) removes working-copy/index races.
+2. **Parallel FAN-OUT — DISJOINT FILE SETS ONLY (hard rule).** Two agents run
+   concurrently **iff their file sets do not intersect.** No shared file is ever
+   edited by more than one agent in a round. Before fan-out, write down each
+   agent's exact file list; if any file appears twice, those agents are **not**
+   parallel — serialize them (or move the shared edit into the CORE step / a single
+   owner). This eliminates merge conflicts by construction, not by resolution.
+   Each agent owns one **vertical feature slice** (parse→canon→types→lower→backend
+   for one feature) or one **leaf artifact** (one explain page, one runtime kernel
+   + its parity test). Worktree isolation (`isolation: 'worktree'`) still backs
+   each agent so working-copy/index state never overlaps even transiently.
 3. **Parallel guardian reviews (read-only).** One per slice, concurrently — no
    write races. Use a `pipeline` so each slice verifies the moment its review is
    ready, not at a barrier.
@@ -96,6 +101,10 @@ per-milestone harness.
 
 ## Guardrails on going faster (so rigour holds)
 
+- **Disjoint file sets only (hard rule).** Parallel agents must edit
+  non-overlapping files; any shared file (a shared enum, root `Cargo.toml`, a
+  shared match-arm file) is edited only in the sequential CORE step or by one
+  owner. If two tasks want the same file, they run in sequence — full stop.
 - The guardian gate and behavioural-parity oracle are **never** skipped to save
   time. If a slice can't pass, it doesn't land — it goes back to the queue.
 - Worktree disk cost is real (~1.5 GB each): cap concurrent worktrees, prune after
@@ -107,8 +116,8 @@ per-milestone harness.
 
 ## One-line summary
 
-Freeze a small shared core per round, then **fan out vertical feature slices in
-isolated worktrees through unchanged guardian + parity + clippy/Miri/fmt gates**,
-merge serially; roadmap M1→M6 by dependency, each milestone a parallel batch,
-behavioural parity vs Go as the spec — fast *because* the gates are mechanical, not
-*despite* them.
+Freeze a small shared core per round, then **fan out only agents with disjoint
+file sets**, in isolated worktrees, through unchanged guardian + parity +
+clippy/Miri/fmt gates; merge serially; roadmap M1→M6 by dependency, each milestone
+a parallel batch, behavioural parity vs Go as the spec — fast *because* the gates
+are mechanical and the work is partitioned by file, not *despite* them.
