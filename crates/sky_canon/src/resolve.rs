@@ -1,7 +1,7 @@
 //! Name resolution: `sky_syntax` source tree → canonical AST. Port of the M0
 //! subset of `Sky.Canonicalise.{Module,Expression,Pattern,Type}`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use sky_diagnostics::{DResult, Diagnostic, Located, NameError, Span};
 use sky_intern::{Interner, Symbol};
@@ -10,12 +10,27 @@ use sky_syntax as src;
 use crate::ast as canon;
 use crate::env::{CtorHome, Env, VarHome};
 
+/// The maximum number of `did you mean` suggestions attached to an unresolved
+/// name. Keeping it small prevents a wall of near-misses drowning the actual
+/// error; the list is `(Levenshtein, name)`-sorted so the closest comes first.
+const MAX_SUGGESTIONS: usize = 3;
+
+/// The inclusive edit-distance ceiling for a suggestion. Mirrors the Haskell
+/// reference (`Sky.Canonicalise.Module.suggestQualifier`): beyond two edits a
+/// "did you mean" is more misleading than helpful, so silence wins.
+const SUGGESTION_MAX_DISTANCE: usize = 2;
+
 /// Canonicalise a parsed module into its name-resolved form.
 ///
 /// # Errors
-/// Returns [`Diagnostic::Name`] with [`NameError::Unknown`] for any name that
-/// resolves to neither a constructor, a bound variable, a top-level binding,
-/// nor a kernel function.
+/// Returns [`Diagnostic::Name`] for any name that resolves to neither a
+/// constructor, a bound variable, a top-level binding, nor a kernel function
+/// ([`NameError::ValueNotFound`] / [`NameError::ConstructorNotFound`] /
+/// [`NameError::UnknownModule`] / [`NameError::NoSuchMember`], each with a
+/// deterministic did-you-mean), or for a duplicated value/constructor/type name
+/// ([`NameError::DuplicateValue`] / [`NameError::DuplicateConstructor`] /
+/// [`NameError::DuplicateType`]). [`Diagnostic::CompilerBug`] if the interner's
+/// symbol table is exhausted or a name symbol is not interned.
 pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::Module> {
     let home = m.name.value.clone();
     let mut env = Env::initial(home.clone(), interner)?;
@@ -24,18 +39,46 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
     // constructor application's home to this module only for these names.
     let local_union_names: BTreeSet<Symbol> = m.unions.iter().map(|u| u.value.name.value).collect();
 
-    // Register unions + their constructors into the environment.
+    // Register unions + their constructors into the environment, rejecting any
+    // duplicate type or constructor name (closes the silent last-wins that the
+    // bare `insert` used to hide).
     let mut unions = Vec::with_capacity(m.unions.len());
+    let mut seen_types: BTreeMap<Symbol, Span> = BTreeMap::new();
+    let mut seen_ctors: BTreeMap<Symbol, Span> = BTreeMap::new();
     for u in &m.unions {
-        let union = register_union(&u.value, &home, &mut env);
+        let type_name = u.value.name.value;
+        let type_span = u.value.name.span;
+        if let Some(&first) = seen_types.get(&type_name) {
+            return Err(Diagnostic::Name {
+                span: type_span,
+                msg: NameError::DuplicateType {
+                    name: name_str(interner, type_name)?,
+                    first,
+                },
+            });
+        }
+        seen_types.insert(type_name, type_span);
+        let union = register_union(&u.value, &home, &mut env, &mut seen_ctors, interner)?;
         unions.push(union);
     }
 
     // Register every top-level value name so bindings can be referenced before
-    // their definition (mutual / forward references).
+    // their definition (mutual / forward references), rejecting duplicates.
+    let mut seen_values: BTreeMap<Symbol, Span> = BTreeMap::new();
     for v in &m.values {
-        env.vars
-            .insert(v.value.name.value, VarHome::TopLevel(home.clone()));
+        let name = v.value.name.value;
+        let name_span = v.value.name.span;
+        if let Some(&first) = seen_values.get(&name) {
+            return Err(Diagnostic::Name {
+                span: name_span,
+                msg: NameError::DuplicateValue {
+                    name: name_str(interner, name)?,
+                    first,
+                },
+            });
+        }
+        seen_values.insert(name, name_span);
+        env.vars.insert(name, VarHome::TopLevel(home.clone()));
     }
 
     // Canonicalise each value declaration.
@@ -58,12 +101,37 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
 
 /// Register a union and its constructors into the environment, returning the
 /// canonical union record.
-fn register_union(u: &src::Union, home: &[Symbol], env: &mut Env) -> canon::Union {
+///
+/// `seen_ctors` carries every constructor name already registered across the
+/// module so a name reused in the same or a different union is rejected
+/// ([`NameError::DuplicateConstructor`]) instead of silently overwriting the
+/// earlier `env.ctors` entry.
+///
+/// # Errors
+/// [`NameError::DuplicateConstructor`] on a repeated constructor name;
+/// [`Diagnostic::CompilerBug`] if a constructor symbol is not interned.
+fn register_union(
+    u: &src::Union,
+    home: &[Symbol],
+    env: &mut Env,
+    seen_ctors: &mut BTreeMap<Symbol, Span>,
+    interner: &Interner,
+) -> DResult<canon::Union> {
     let type_name = u.name.value;
     let mut ctors = Vec::with_capacity(u.ctors.len());
     for (index, c) in u.ctors.iter().enumerate() {
         let name = c.value.name;
         let arity = c.value.args.len();
+        if let Some(&first) = seen_ctors.get(&name) {
+            return Err(Diagnostic::Name {
+                span: c.span,
+                msg: NameError::DuplicateConstructor {
+                    name: name_str(interner, name)?,
+                    first,
+                },
+            });
+        }
+        seen_ctors.insert(name, c.span);
         env.ctors.insert(
             name,
             CtorHome {
@@ -76,10 +144,10 @@ fn register_union(u: &src::Union, home: &[Symbol], env: &mut Env) -> canon::Unio
         );
         ctors.push(canon::Ctor { name, index, arity });
     }
-    canon::Union {
+    Ok(canon::Union {
         name: type_name,
         ctors,
-    }
+    })
 }
 
 /// Canonicalise a single top-level value declaration.
@@ -97,7 +165,7 @@ fn canonicalise_value(
 
     let mut patterns = Vec::with_capacity(val.patterns.len());
     for p in &val.patterns {
-        patterns.push(canonicalise_pattern(p, env)?);
+        patterns.push(canonicalise_pattern(p, env, interner)?);
     }
     let body = canonicalise_expr(&val.body, &body_env, interner)?;
 
@@ -110,9 +178,16 @@ fn canonicalise_value(
         Some(ann) => {
             let mut free_vars = BTreeSet::new();
             let ty = canonicalise_type(&ann.value, env, local_union_names, &mut free_vars);
+            // Order the quantified type variables by their resolved NAME, not by
+            // `Symbol` id (intern order is allocation-dependent, hence not a
+            // stable wire order). Determinism gate: a multi-tyvar annotation
+            // must yield the same `free_vars` regardless of how the interner
+            // happened to number the names.
+            let mut free_vars: Vec<Symbol> = free_vars.into_iter().collect();
+            free_vars.sort_by(|a, b| interner.resolve(*a).cmp(&interner.resolve(*b)));
             Ok(canon::Def::Typed {
                 name: val.name,
-                free_vars: free_vars.into_iter().collect(),
+                free_vars,
                 patterns,
                 body,
                 ty,
@@ -135,22 +210,31 @@ fn bind_pattern_names(p: &src::Pattern_, env: &mut Env) {
 }
 
 /// Canonicalise a pattern. M0 supports wildcard, var, and constructor patterns.
-fn canonicalise_pattern(p: &src::Pattern, env: &Env) -> DResult<canon::Pattern> {
+fn canonicalise_pattern(
+    p: &src::Pattern,
+    env: &Env,
+    interner: &Interner,
+) -> DResult<canon::Pattern> {
     let span = p.span;
     let node = match &p.value {
         src::Pattern_::PAnything => canon::Pattern_::PAnything,
         src::Pattern_::PVar(name) => canon::Pattern_::PVar(*name),
         src::Pattern_::PCtor(name, _, args) => {
-            let ctor = env.lookup_ctor(*name).ok_or(Diagnostic::Name {
-                span,
-                msg: NameError::Unknown,
-            })?;
+            let Some(ctor) = env.lookup_ctor(*name) else {
+                return Err(Diagnostic::Name {
+                    span,
+                    msg: NameError::ConstructorNotFound {
+                        name: name_str(interner, *name)?,
+                        suggestions: suggestions(*name, env.ctors.keys().copied(), interner),
+                    },
+                });
+            };
             let home = ctor.home.clone();
             let type_name = ctor.type_name;
             let index = ctor.index;
             let mut can_args = Vec::with_capacity(args.len());
             for a in args {
-                can_args.push(canonicalise_pattern(a, env)?);
+                can_args.push(canonicalise_pattern(a, env, interner)?);
             }
             canon::Pattern_::PCtor {
                 home,
@@ -169,8 +253,8 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
     let span = e.span;
     let node = match &e.value {
         src::Expr_::Int(n) => canon::Expr_::Int(*n),
-        src::Expr_::VarLocal(name) => resolve_var(*name, span, env)?,
-        src::Expr_::VarQual(qual, name) => resolve_qual_var(*qual, *name, span, env)?,
+        src::Expr_::VarLocal(name) => resolve_var(*name, span, env, interner)?,
+        src::Expr_::VarQual(qual, name) => resolve_qual_var(*qual, *name, span, env, interner)?,
         src::Expr_::Call(f, args) => {
             let callee = canonicalise_expr(f, env, interner)?;
             let mut can_args = Vec::with_capacity(args.len());
@@ -186,7 +270,7 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
                 // Pattern-bound names are local in the arm body.
                 let mut arm_env = env.clone();
                 bind_pattern_names(&pat.value, &mut arm_env);
-                let can_pat = canonicalise_pattern(pat, env)?;
+                let can_pat = canonicalise_pattern(pat, env, interner)?;
                 let can_body = canonicalise_expr(body, &arm_env, interner)?;
                 branches.push(canon::CaseBranch {
                     pat: can_pat,
@@ -201,7 +285,7 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
 }
 
 /// Resolve a bare name: constructor first, then variable. Unknown → error.
-fn resolve_var(name: Symbol, span: Span, env: &Env) -> DResult<canon::Expr_> {
+fn resolve_var(name: Symbol, span: Span, env: &Env, interner: &Interner) -> DResult<canon::Expr_> {
     if let Some(ctor) = env.lookup_ctor(name) {
         return Ok(canon::Expr_::VarCtor {
             home: ctor.home.clone(),
@@ -220,21 +304,45 @@ fn resolve_var(name: Symbol, span: Span, env: &Env) -> DResult<canon::Expr_> {
             module: *m,
             name: *f,
         }),
+        // A bare value name can resolve to either a value binding or a
+        // constructor used as a value, so the suggestion pool spans both
+        // namespaces (value bindings first, then constructor names).
         None => Err(Diagnostic::Name {
             span,
-            msg: NameError::Unknown,
+            msg: NameError::ValueNotFound {
+                name: name_str(interner, name)?,
+                suggestions: suggestions(
+                    name,
+                    env.vars.keys().chain(env.ctors.keys()).copied(),
+                    interner,
+                ),
+            },
         }),
     }
 }
 
-/// Resolve a qualified name `Qualifier.name`. Unknown → error.
+/// Resolve a qualified name `Qualifier.name`. Distinguishes an unknown
+/// qualifier ([`NameError::UnknownModule`]) from a known qualifier missing the
+/// member ([`NameError::NoSuchMember`]).
 fn resolve_qual_var(
     qualifier: Symbol,
     name: Symbol,
     span: Span,
     env: &Env,
+    interner: &Interner,
 ) -> DResult<canon::Expr_> {
-    match env.lookup_qual_var(qualifier, name) {
+    let Some(members) = env.qual_members(qualifier) else {
+        // The qualifier itself is unknown: suggest from the known qualifiers
+        // (kernel modules + import aliases).
+        return Err(Diagnostic::Name {
+            span,
+            msg: NameError::UnknownModule {
+                qualifier: name_str(interner, qualifier)?,
+                suggestions: suggestions(qualifier, env.qual_vars.keys().copied(), interner),
+            },
+        });
+    };
+    match members.get(&name) {
         Some(VarHome::Kernel(m, f)) => Ok(canon::Expr_::VarKernel {
             module: *m,
             name: *f,
@@ -244,9 +352,15 @@ fn resolve_qual_var(
             name,
         }),
         Some(VarHome::Local) => Ok(canon::Expr_::VarLocal(name)),
+        // The qualifier resolves but the member is absent: suggest from this
+        // module's members.
         None => Err(Diagnostic::Name {
             span,
-            msg: NameError::Unknown,
+            msg: NameError::NoSuchMember {
+                module: name_str(interner, qualifier)?,
+                member: name_str(interner, name)?,
+                suggestions: suggestions(name, members.keys().copied(), interner),
+            },
         }),
     }
 }
@@ -372,6 +486,81 @@ fn canonicalise_type(
             }
         }
     }
+}
+
+/// Resolve a symbol to an owned name for a diagnostic payload.
+///
+/// # Errors
+/// [`Diagnostic::CompilerBug`] (`SKY-I0010`) when the symbol is not backed by
+/// the interner — every name here came from the parser via this interner, so a
+/// miss is an impossible-invariant violation, surfaced rather than swallowed as
+/// an empty identifier.
+fn name_str(interner: &Interner, sym: Symbol) -> DResult<Box<str>> {
+    interner
+        .resolve(sym)
+        .map(Box::<str>::from)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "intern.resolve",
+            detail: "canonicaliser: name symbol not backed by the interner".to_owned(),
+        })
+}
+
+/// Build the deterministic `did you mean` suggestion list for an unresolved
+/// `typo`, drawn from `candidates`.
+///
+/// Candidates within [`SUGGESTION_MAX_DISTANCE`] edits (and not identical) are
+/// kept, sorted by `(Levenshtein distance, name)` — a total, allocation-order-
+/// independent ordering — and truncated to [`MAX_SUGGESTIONS`]. A candidate the
+/// interner cannot resolve is skipped (it cannot be rendered) rather than
+/// faulting the whole diagnostic.
+fn suggestions(
+    typo: Symbol,
+    candidates: impl Iterator<Item = Symbol>,
+    interner: &Interner,
+) -> Box<[Box<str>]> {
+    let Some(typo_str) = interner.resolve(typo) else {
+        return Box::new([]);
+    };
+    let mut scored: Vec<(usize, Box<str>)> = candidates
+        .filter_map(|c| interner.resolve(c))
+        .map(|name| (levenshtein(typo_str, name), Box::<str>::from(name)))
+        .filter(|(d, _)| *d > 0 && *d <= SUGGESTION_MAX_DISTANCE)
+        .collect();
+    // (distance, name) is a total order; `Box<str>` compares lexicographically.
+    scored.sort();
+    scored.dedup();
+    scored
+        .into_iter()
+        .take(MAX_SUGGESTIONS)
+        .map(|(_, name)| name)
+        .collect()
+}
+
+/// Iterative Levenshtein edit distance over Unicode scalar values, computed
+/// with two rolling rows and no indexing (the `indexing_slicing` lint is
+/// denied workspace-wide). Sky identifiers are short ASCII names, so the
+/// O(n·m) cost is negligible. Mirrors the Haskell reference's `levenshtein`.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let b_chars: Vec<char> = b.chars().collect();
+    // Row 0: cost of deleting every prefix of `b` (i.e. inserting into empty a).
+    let mut prev: Vec<usize> = (0..=b_chars.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        // `curr[0]` = cost of deleting the first `i + 1` chars of `a`.
+        let mut curr: Vec<usize> = Vec::with_capacity(b_chars.len() + 1);
+        curr.push(i + 1);
+        // `diag` tracks `prev[j - 1]`; for the first column that is `prev[0]`,
+        // which always equals the row index `i`.
+        let mut diag = i;
+        for (cb, &up) in b_chars.iter().zip(prev.iter().skip(1)) {
+            let cost = usize::from(ca != *cb);
+            let left = curr.last().copied().unwrap_or(i + 1);
+            let cell = (up + 1).min(left + 1).min(diag + cost);
+            curr.push(cell);
+            diag = up;
+        }
+        prev = curr;
+    }
+    prev.last().copied().unwrap_or(0)
 }
 
 /// The interned symbol for the empty string (symbol id 0 is never guaranteed,
