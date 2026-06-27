@@ -1,0 +1,7 @@
+[package]
+name = "sky_intern"
+edition.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true

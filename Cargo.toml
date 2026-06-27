@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/sky_intern"]
+
+[workspace.package]
+edition = "2021"
+version = "0.0.0"
+license = "Apache-2.0"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+unreachable = "deny"
+todo = "deny"
+unimplemented = "deny"
+pedantic = "deny"
+nursery = "deny"
