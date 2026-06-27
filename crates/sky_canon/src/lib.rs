@@ -843,6 +843,51 @@ mod tests {
     }
 
     #[test]
+    fn record_update_canonicalises_base_and_fields() {
+        // `{ p | x = 41 }` resolves the base `p` (the parameter, a local) and the
+        // updated field value; the field name is a label carried unresolved.
+        let mut i = Interner::new();
+        let body = canon_body(
+            &mut i,
+            "module Main exposing (v)\nv p =\n    { p | x = 41 }\n",
+            "v",
+        );
+        assert!(body.is_some(), "v must canonicalise");
+        let Some(body) = body else { return };
+        assert!(
+            matches!(&body, Expr_::Update(base, fields)
+                if matches!(base.value, Expr_::VarLocal(_))
+                    && fields.len() == 1
+                    && matches!(fields.first().map(|(_, e)| &e.value), Some(Expr_::Int(41)))),
+            "`{{ p | x = 41 }}` resolves to an Update over a local, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_record_update_field_is_rejected() {
+        // `{ p | x = 1, x = 2 }` updates `x` twice — rejected (SKY-N0010), as on
+        // a record literal.
+        let mut i = Interner::new();
+        let src = sky_parse::parse_module(
+            "module Main exposing (v)\nv p =\n    { p | x = 1, x = 2 }\n",
+            &mut i,
+        );
+        assert!(src.is_ok(), "must parse");
+        let Ok(src) = src else { return };
+        let r = canonicalise(&src, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(sky_diagnostics::Diagnostic::Name {
+                    msg: sky_diagnostics::NameError::DuplicateValue { .. },
+                    ..
+                })
+            ),
+            "duplicate update field must be a DuplicateValue, got {r:?}"
+        );
+    }
+
+    #[test]
     fn duplicate_record_field_is_rejected() {
         // `{ x = 1, x = 2 }` defines `x` twice — rejected (SKY-N0010) rather than
         // silently collapsing to one field.

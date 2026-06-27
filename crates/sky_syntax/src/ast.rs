@@ -160,6 +160,13 @@ pub enum Expr_ {
     /// builds this from a dotted lowercase identifier (`p.x`) and nests it for a
     /// chain (`p.x.y` -> `Access (Access p x) y`). Mirrors `Src.Access`.
     Access(Box<Expr>, Located<Symbol>),
+    /// A record update `{ base | field = expr, ... }`. The `base` is a located
+    /// lowercase variable naming the record to copy (Sky restricts the update
+    /// base to a bare variable, as Elm does); the field list carries each
+    /// updated `(name, value)` pair in source order. Mirrors the Haskell
+    /// compiler's `Src.Update (Located String) [(Located String, Expr)]`,
+    /// narrowed to the closed-record M1 subset.
+    Update(Located<Symbol>, Vec<(Located<Symbol>, Expr)>),
 }
 
 /// A single `let` value binding: `name = body`. M1 subset of the Haskell

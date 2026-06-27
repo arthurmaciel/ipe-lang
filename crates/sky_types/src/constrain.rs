@@ -107,6 +107,8 @@ pub struct Builder<'a> {
     untyped: BTreeMap<Symbol, VarId>,
     /// Deferred record field-access obligations, resolved after the main solve.
     field_accesses: Vec<FieldAccess>,
+    /// Deferred record-update obligations, resolved after the main solve.
+    record_updates: Vec<RecordUpdate>,
 }
 
 /// A deferred record field-access obligation `record.field`.
@@ -127,6 +129,23 @@ pub struct FieldAccess {
     pub span: Span,
 }
 
+/// A deferred record-update obligation `{ base | field = value, ... }`.
+///
+/// Like [`FieldAccess`], a closed record carries no row variable, so the
+/// updated fields cannot be checked against the base's type while the
+/// constraints are still being built. Each update is recorded here and resolved
+/// once after the main solve, when [`crate::resolve_record_updates`] reads the
+/// settled base type and unifies each updated value against the corresponding
+/// field's type (a field absent from the base is a [`crate::TypeError::NoSuchField`]).
+pub struct RecordUpdate {
+    /// The variable of the base record being copied (`base` in `{ base | … }`).
+    pub record: VarId,
+    /// The updated `(field name, value variable)` pairs.
+    pub fields: Vec<(Symbol, VarId)>,
+    /// The update expression's source span, for blame.
+    pub span: Span,
+}
+
 /// The output of constraint generation, consumed by the solver + read-back.
 pub struct Generated {
     pub regions: BTreeMap<Span, VarId>,
@@ -134,6 +153,7 @@ pub struct Generated {
     pub top_level: BTreeMap<Symbol, Ty>,
     pub untyped: BTreeMap<Symbol, VarId>,
     pub field_accesses: Vec<FieldAccess>,
+    pub record_updates: Vec<RecordUpdate>,
 }
 
 impl<'a> Builder<'a> {
@@ -158,6 +178,7 @@ impl<'a> Builder<'a> {
             top_level: BTreeMap::new(),
             untyped: BTreeMap::new(),
             field_accesses: Vec::new(),
+            record_updates: Vec::new(),
         };
 
         // First pass: record annotation types so any binding can reference any
@@ -179,6 +200,7 @@ impl<'a> Builder<'a> {
             top_level: builder.top_level,
             untyped: builder.untyped,
             field_accesses: builder.field_accesses,
+            record_updates: builder.record_updates,
         })
     }
 
@@ -531,6 +553,9 @@ impl<'a> Builder<'a> {
             canon::Expr_::Access(record, field) => {
                 self.constrain_access(local, record, *field, span)?
             }
+            canon::Expr_::Update(base, fields) => {
+                self.constrain_update(local, base, fields, span)?
+            }
         };
         self.regions.insert(span, var);
         Ok(var)
@@ -574,6 +599,34 @@ impl<'a> Builder<'a> {
             span,
         });
         Ok(result)
+    }
+
+    /// Constrain a record update `{ base | field = value, ... }`. The result
+    /// type is the base record's type (an update copies-and-replaces, changing
+    /// no field's type), so the update's region variable *is* the base's. The
+    /// field-existence + per-field type checks are deferred — closed records
+    /// carry no row variable, so the base's type may not be settled yet —
+    /// recorded here and discharged by [`crate::resolve_record_updates`] after
+    /// the main solve.
+    fn constrain_update(
+        &mut self,
+        local: &BTreeMap<Symbol, VarId>,
+        base: &canon::Expr,
+        fields: &[(Symbol, canon::Expr)],
+        span: Span,
+    ) -> DResult<VarId> {
+        let record_var = self.constrain_expr(local, base)?;
+        let mut field_vars = Vec::with_capacity(fields.len());
+        for (name, value) in fields {
+            let v = self.constrain_expr(local, value)?;
+            field_vars.push((*name, v));
+        }
+        self.record_updates.push(RecordUpdate {
+            record: record_var,
+            fields: field_vars,
+            span,
+        });
+        Ok(record_var)
     }
 
     /// Constrain a `case` arm pattern against the scrutinee's variable, binding

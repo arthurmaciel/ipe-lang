@@ -124,6 +124,12 @@ pub enum Expr_ {
     /// A record field access `record.field`. The record sub-expression is
     /// resolved against the enclosing scope; the field is a label.
     Access(Box<Expr>, Symbol),
+    /// A record update `{ base | field = value, ... }`. The base is the resolved
+    /// reference to the record being copied (a variable, in the M1 grammar); the
+    /// field list carries each updated `(name, value)` pair, names being labels
+    /// and values resolved against the enclosing scope. An update introduces no
+    /// bindings.
+    Update(Box<Expr>, Vec<(Symbol, Expr)>),
 }
 
 /// A resolved `let` value binding: `name = body`.

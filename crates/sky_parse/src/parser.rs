@@ -1097,12 +1097,19 @@ impl<'a> Parser<'a> {
 
     /// Parse a record literal `{ field = expr, ... }`, the `{` already consumed.
     ///
-    /// M1 records are **closed**: a non-empty, comma-separated list of
-    /// `name = value` fields, where `name` is a plain lowercase identifier. The
-    /// row-extension form `{ r | f = v }` and the empty record `{}` are not part
-    /// of the M1 grammar — both surface as a clean parse error rather than a
-    /// silently-different AST. `opener` is the `{`'s span; `depth` bounds the
-    /// field-value recursion.
+    /// M1 records are **closed**. After the opening `{` two forms are accepted,
+    /// distinguished by the token following the first lowercase identifier:
+    ///
+    /// * `{ name = value, ... }` — a record **literal**: a non-empty, comma-
+    ///   separated list of `name = value` fields.
+    /// * `{ base | field = value, ... }` — a record **update** (a `|` after the
+    ///   first name): a copy of the record variable `base` with the listed
+    ///   fields replaced. The base is a bare lowercase variable, matching Sky's
+    ///   (and Elm's) grammar.
+    ///
+    /// The empty record `{}` is not part of the M1 grammar — it surfaces as a
+    /// clean parse error rather than a silently-different AST. `opener` is the
+    /// `{`'s span; `depth` bounds the field-value recursion.
     fn parse_record(&mut self, opener: Span, depth: u32) -> DResult<Expr> {
         if depth > MAX_DEPTH {
             return Err(self.too_deep(Construct::Record));
@@ -1111,26 +1118,19 @@ impl<'a> Parser<'a> {
         if let Some(t) = self.peek().filter(|t| t.kind == Tok::RBrace) {
             return Err(Self::unexpected_token(t, &[Expected::Identifier]));
         }
-        let mut fields = Vec::new();
+        // The first lowercase identifier is either the first field's name (a
+        // literal) or the base record variable (an update); a following `|`
+        // decides.
+        let first = self.parse_record_field_name()?;
+        if self.peek_kind() == Some(&Tok::Pipe) {
+            self.bump(Construct::Record)?;
+            return self.parse_record_update(opener, first, depth);
+        }
+        // Literal: `first` is the first field's name; `=` then its value.
+        self.expect_field_equals()?;
+        let value = self.parse_expr(0, depth + 1)?;
+        let mut fields = vec![(first, value)];
         loop {
-            let name = self.parse_record_field_name()?;
-            // `=` between the field name and its value.
-            match self.peek() {
-                Some(t) if t.kind == Tok::Equals => {
-                    self.bump(Construct::Record)?;
-                }
-                Some(t) => return Err(Self::unexpected_token(t, &[Expected::Equals])),
-                None => {
-                    return Err(Diagnostic::Parse {
-                        span: self.eof_err_span(),
-                        msg: ParseError::UnexpectedEof {
-                            construct: Construct::Record,
-                        },
-                    });
-                }
-            }
-            let value = self.parse_expr(0, depth + 1)?;
-            fields.push((name, value));
             // A `,` continues the field list; a `}` closes it.
             match self.peek() {
                 Some(t) if t.kind == Tok::Comma => {
@@ -1148,15 +1148,72 @@ impl<'a> Parser<'a> {
                         &[Expected::Comma, Expected::RBrace],
                     ));
                 }
-                None => {
-                    return Err(Diagnostic::Parse {
-                        span: self.eof_err_span(),
-                        msg: ParseError::UnexpectedEof {
-                            construct: Construct::Record,
-                        },
-                    });
-                }
+                None => return Err(self.record_eof()),
             }
+            let name = self.parse_record_field_name()?;
+            self.expect_field_equals()?;
+            let value = self.parse_expr(0, depth + 1)?;
+            fields.push((name, value));
+        }
+    }
+
+    /// Parse the field list of a record update `{ base | field = value, ... }`,
+    /// the `base |` prefix already consumed. At least one updated field is
+    /// required; the list is comma-separated and closed by `}`. `opener` is the
+    /// `{`'s span; `base` is the located base variable name.
+    fn parse_record_update(
+        &mut self,
+        opener: Span,
+        base: Located<Symbol>,
+        depth: u32,
+    ) -> DResult<Expr> {
+        let mut fields = Vec::new();
+        loop {
+            let name = self.parse_record_field_name()?;
+            self.expect_field_equals()?;
+            let value = self.parse_expr(0, depth + 1)?;
+            fields.push((name, value));
+            match self.peek() {
+                Some(t) if t.kind == Tok::Comma => {
+                    self.bump(Construct::Record)?;
+                }
+                Some(t) if t.kind == Tok::RBrace => {
+                    let close = t.span;
+                    self.bump(Construct::Record)?;
+                    let span = Self::span_merge(opener, close);
+                    return Ok(Located::new(span, Expr_::Update(base, fields)));
+                }
+                Some(t) => {
+                    return Err(Self::unexpected_token(
+                        t,
+                        &[Expected::Comma, Expected::RBrace],
+                    ));
+                }
+                None => return Err(self.record_eof()),
+            }
+        }
+    }
+
+    /// Consume the `=` that separates a record field name from its value.
+    fn expect_field_equals(&mut self) -> DResult<()> {
+        match self.peek() {
+            Some(t) if t.kind == Tok::Equals => {
+                self.bump(Construct::Record)?;
+                Ok(())
+            }
+            Some(t) => Err(Self::unexpected_token(t, &[Expected::Equals])),
+            None => Err(self.record_eof()),
+        }
+    }
+
+    /// The unexpected-EOF diagnostic for an unterminated record (literal or
+    /// update).
+    fn record_eof(&self) -> Diagnostic {
+        Diagnostic::Parse {
+            span: self.eof_err_span(),
+            msg: ParseError::UnexpectedEof {
+                construct: Construct::Record,
+            },
         }
     }
 
