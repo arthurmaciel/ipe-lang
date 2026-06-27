@@ -1,0 +1,27 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Inline if-then-else.
+absVal : Int -> Int
+absVal n =
+    if n < 0 then 0 - n else n
+
+-- Multi-way if with an else-if chain.
+classify : Int -> Int
+classify n =
+    if n > 0 then
+        1
+    else if n < 0 then
+        2
+    else
+        0
+
+-- Nested ifs combine in the entry point.
+main =
+    let
+        a = absVal (0 - 7)
+        b = classify 5
+        c = classify (0 - 3)
+        total = a + b + c
+    in
+    println (String.fromInt total)

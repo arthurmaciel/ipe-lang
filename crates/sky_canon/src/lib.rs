@@ -733,6 +733,39 @@ mod tests {
     }
 
     #[test]
+    fn if_resolves_conditions_and_branches() {
+        // `if x > 0 then x else 0` over a parameter `x`: the condition and both
+        // branches resolve against the same scope (the parameter is in scope in
+        // each). `if` introduces no bindings.
+        let mut i = Interner::new();
+        let body = canon_body(
+            &mut i,
+            "module Main exposing (f)\nf : Int -> Int\nf x =\n    if x > 0 then x else 0\n",
+            "f",
+        );
+        assert!(body.is_some(), "f must canonicalise");
+        let Some(Expr_::If(branches, els)) = body else {
+            assert!(false_marker(), "f body is an If");
+            return;
+        };
+        assert_eq!(branches.len(), 1, "one `(cond, branch)` pair");
+        let Some((cond, branch)) = branches.first() else {
+            assert!(false_marker(), "the pair is present");
+            return;
+        };
+        // The condition is `x > 0` — a binop reading the local `x`.
+        let Some((func, lhs, _)) = as_binop(&i, &cond.value) else {
+            assert!(false_marker(), "cond is a binop");
+            return;
+        };
+        assert_eq!(func, "gt", "condition op is >");
+        assert!(matches!(lhs.value, Expr_::VarLocal(s) if i.resolve(s) == Some("x")));
+        // The `then` branch reads the same local; the `else` is the literal 0.
+        assert!(matches!(branch.value, Expr_::VarLocal(s) if i.resolve(s) == Some("x")));
+        assert!(matches!(els.value, Expr_::Int(0)));
+    }
+
+    #[test]
     fn let_forward_reference_rejects_cleanly() {
         // `y = x` before `x = 2`: with sequential scoping `x` is not yet bound
         // and there is no outer `x`, so it resolves to nothing — a clean

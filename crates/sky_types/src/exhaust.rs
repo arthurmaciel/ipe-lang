@@ -93,6 +93,13 @@ fn check_expr(e: &canon::Expr, enums: &EnumTable, interner: &Interner) -> DResul
             }
             check_expr(body, enums, interner)
         }
+        canon::Expr_::If(branches, else_expr) => {
+            for (cond, body) in branches {
+                check_expr(cond, enums, interner)?;
+                check_expr(body, enums, interner)?;
+            }
+            check_expr(else_expr, enums, interner)
+        }
     }
 }
 

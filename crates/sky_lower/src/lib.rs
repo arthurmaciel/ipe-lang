@@ -329,6 +329,43 @@ mod tests {
         );
     }
 
+    #[test]
+    fn lowers_multi_way_if_to_nested_ifs() {
+        // `if n > 0 then 1 else if n < 0 then 2 else 0` ⇒
+        // If (n>0) 1 (If (n<0) 2 0): a right-nested chain of binary `If`s.
+        let opt = lower_body(
+            "module Main exposing (f)\nf : Int -> Int\nf n =\n    if n > 0 then\n        1\n    else if n < 0 then\n        2\n    else\n        0\n",
+            "f",
+        );
+        assert!(opt.is_some(), "f must lower");
+        let Some((body, _i)) = opt else { return };
+        let Expr::If { cond, then_, else_ } = &body else {
+            assert!(false_marker(), "outer is an If, got {body:?}");
+            return;
+        };
+        assert!(
+            matches!(cond.as_ref(), Expr::BinOp { op: BinOp::Gt, .. }),
+            "outer cond is n > 0"
+        );
+        assert!(matches!(then_.as_ref(), Expr::Int(1)), "outer then is 1");
+        // The else arm is the nested `if n < 0 then 2 else 0`.
+        let Expr::If {
+            cond: c2,
+            then_: t2,
+            else_: e2,
+        } = else_.as_ref()
+        else {
+            assert!(false_marker(), "inner else is an If");
+            return;
+        };
+        assert!(
+            matches!(c2.as_ref(), Expr::BinOp { op: BinOp::Lt, .. }),
+            "inner cond is n < 0"
+        );
+        assert!(matches!(t2.as_ref(), Expr::Int(2)), "inner then is 2");
+        assert!(matches!(e2.as_ref(), Expr::Int(0)), "final else is 0");
+    }
+
     /// A runtime `false` the optimiser cannot fold, so `assert!(false_marker())`
     /// fails the test without tripping `clippy::assertions_on_constants`.
     fn false_marker() -> bool {
