@@ -32,10 +32,12 @@ pub struct Constraint {
     pub rhs: VarId,
 }
 
-/// A decrementing solver-step budget. Each unify/occurs/zonk step ticks it;
-/// reaching zero raises [`TypeError::StepBudgetExceeded`] carrying the original
-/// `limit` (so the help line can name the value to raise). A budget of `None`
-/// is disabled (the `SKY_SOLVER_BUDGET=0` escape hatch).
+/// A decrementing solver-step budget.
+///
+/// Each unify/occurs/zonk step ticks it; reaching zero raises
+/// [`TypeError::StepBudgetExceeded`] carrying the original `limit` (so the help
+/// line can name the value to raise). A budget of `None` is disabled (the
+/// `SKY_SOLVER_BUDGET=0` escape hatch).
 pub struct Budget {
     remaining: Option<u64>,
     /// The step cap this budget was created with, reported in the diagnostic.

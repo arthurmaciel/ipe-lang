@@ -14,9 +14,6 @@ use sky_intern::{Interner, Symbol};
 
 use crate::ty::Ty;
 
-/// `where_` tag for any internal-invariant bug raised while rendering a type.
-const STAGE: &str = "sky_types::doc";
-
 /// Deterministic naming for flexible type variables that survived solving.
 ///
 /// A solved [`Ty::Var`] carries an opaque arena id, not a source name; rendering
@@ -66,12 +63,13 @@ fn letters(k: u32) -> Box<str> {
 /// Resolve a single [`Symbol`] into an owned name, or a `CompilerBug` if the
 /// interner has no backing string (a forged symbol — see SKY-I0010).
 fn resolve(interner: &Interner, sym: Symbol) -> DResult<Box<str>> {
-    interner.resolve(sym).map(Box::from).ok_or_else(|| {
-        Diagnostic::CompilerBug {
+    interner
+        .resolve(sym)
+        .map(Box::from)
+        .ok_or_else(|| Diagnostic::CompilerBug {
             where_: "intern.resolve",
             detail: format!("no backing string for symbol {}", sym.as_raw()),
-        }
-    })
+        })
 }
 
 /// Join dotted module segments into an owned `Module.Path` string (empty for the
@@ -148,7 +146,6 @@ pub fn canon_type_to_doc(t: &canon::Type, interner: &Interner) -> DResult<TyDoc>
     }
 }
 
-#[allow(clippy::missing_const_for_fn)]
 #[cfg(test)]
 mod tests {
     use super::*;
