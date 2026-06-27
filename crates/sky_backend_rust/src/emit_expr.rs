@@ -5,6 +5,7 @@
 //! `main.rs` lines 129–137 (`main_update` / `sky_main`).
 
 use sky_diagnostics::{DResult, Diagnostic, LowerError, Span};
+use sky_intern::Symbol;
 use sky_ir::{BinOp, Callee, Expr, Func, Pat};
 
 use crate::EmitCtx;
@@ -129,6 +130,20 @@ fn emit_expr_at(ctx: &EmitCtx, expr: &Expr, indent: usize, depth: u16) -> DResul
             }
             Ok(format!("({})", parts.join(", ")))
         }
+        // The record arms own several `Vec`/`String` locals; keeping their
+        // bodies in dedicated functions (not inlined into this match) holds
+        // `emit_expr_at`'s own stack frame small, so the depth guard — not a
+        // native overflow — is what bounds a deep `BinOp`/`Call` spine.
+        Expr::Record(fields) => emit_record(ctx, fields, indent, depth),
+        Expr::Access { record, field } => {
+            // Field access `<record>.<field>`. The base is parenthesised so a
+            // record literal in record position (`{ ... }.field`) is never
+            // misparsed; the field ident is keyword-mangled to match the struct.
+            let base = emit_expr_at(ctx, record, indent, child)?;
+            let field = ctx.emit_ident(*field)?;
+            Ok(format!("({base}).{field}"))
+        }
+        Expr::Update { record, fields } => emit_update(ctx, record, fields, indent, depth),
         Expr::Match(m) => {
             let scrut = emit_expr_at(ctx, m.scrutinee(), indent, child)?;
             let arm_indent = indent_of(indent + 1);
@@ -146,6 +161,63 @@ fn emit_expr_at(ctx: &EmitCtx, expr: &Expr, indent: usize, depth: u16) -> DResul
             ))
         }
     }
+}
+
+/// Emit a record literal `{ x = e1, ... }` as a named struct literal
+/// `RecXY { x: <e1>, ... }`. `depth` is the literal's own IR-nesting level; its
+/// field values are emitted one level deeper. Kept out of the `emit_expr_at`
+/// match (`#[inline(never)]`) so its locals don't inflate the recursive frame.
+#[inline(never)]
+fn emit_record(
+    ctx: &EmitCtx,
+    fields: &[(Symbol, Expr)],
+    indent: usize,
+    depth: u16,
+) -> DResult<String> {
+    let child = depth + 1;
+    // The struct is resolved by the literal's field-name set (Rust names
+    // struct-literal fields, so write order is free); the field idents are
+    // keyword-mangled to match the struct definition.
+    let mut key = Vec::with_capacity(fields.len());
+    for (sym, _) in fields {
+        key.push(ctx.resolve_ident(*sym)?.to_owned());
+    }
+    let struct_name = ctx.record_name_for_literal(&key)?.to_owned();
+    let mut parts = Vec::with_capacity(fields.len());
+    for (sym, value) in fields {
+        let field_ident = ctx.emit_ident(*sym)?;
+        let rendered = emit_expr_at(ctx, value, indent, child)?;
+        parts.push(format!("{field_ident}: {rendered}"));
+    }
+    Ok(format!("{struct_name} {{ {} }}", parts.join(", ")))
+}
+
+/// Emit a functional record update `{ record | f = v, ... }` as a clone-and-
+/// reassign block: `{ let mut __sky_rec = (<record>).clone(); __sky_rec.f = v;
+/// __sky_rec }`. This needs no struct name and leaves the source record
+/// untouched; the block scope makes the temporary safe under nesting. Kept out
+/// of the match (`#[inline(never)]`) for the same frame-size reason as
+/// [`emit_record`].
+#[inline(never)]
+fn emit_update(
+    ctx: &EmitCtx,
+    record: &Expr,
+    fields: &[(Symbol, Expr)],
+    indent: usize,
+    depth: u16,
+) -> DResult<String> {
+    let child = depth + 1;
+    let base = emit_expr_at(ctx, record, indent, child)?;
+    let mut assigns = Vec::with_capacity(fields.len());
+    for (sym, value) in fields {
+        let field_ident = ctx.emit_ident(*sym)?;
+        let rendered = emit_expr_at(ctx, value, indent, child)?;
+        assigns.push(format!(" __sky_rec.{field_ident} = {rendered};"));
+    }
+    Ok(format!(
+        "{{ let mut __sky_rec = ({base}).clone();{} __sky_rec }}",
+        assigns.concat()
+    ))
 }
 
 /// Emit a whole function item, including its trailing newline.

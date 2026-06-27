@@ -2,7 +2,7 @@
 //! M0 the surface is deliberately narrow so that every constructible value is a
 //! well-formed program fragment.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::Symbol;
@@ -84,6 +84,18 @@ pub enum IrType {
     /// lowerer is the sole producer and upholds this; the backend stays total
     /// over any vector it receives (it never panics on a degenerate arity).
     Tuple(Vec<Self>),
+    /// A CLOSED record type `{ x : Int, y : Bool, ... }` — an exact, known field
+    /// set keyed by field name.
+    ///
+    /// The field map is a [`BTreeMap`], so its iteration order is fixed (by
+    /// [`Symbol`]). The backend re-canonicalises by *field name* before it
+    /// derives a struct name or emits the struct body, so the synthesised Rust
+    /// struct is deterministic regardless of interning order.
+    ///
+    /// Open / row-polymorphic records (`{ r | x : Int }`) are intentionally NOT
+    /// representable here — they are deferred to M2 and rejected at lowering, so
+    /// every `Record` the backend sees is closed.
+    Record(BTreeMap<Symbol, Self>),
 }
 
 /// An expression in the typed IR.
@@ -134,6 +146,25 @@ pub enum Expr {
     /// upholds this; the backend remains total over any vector (it never panics
     /// on a degenerate arity).
     Tuple(Vec<Self>),
+    /// A record literal `{ x = e1, y = e2, ... }`.
+    ///
+    /// The fields are carried as `(field name, value)` pairs sorted by field
+    /// name, so the construction is deterministic. The backend resolves the
+    /// literal's synthesised Rust struct from its field-name set; Rust names its
+    /// struct-literal fields, so the emitted construction is order-independent.
+    Record(Vec<(Symbol, Self)>),
+    /// A record field access `record.field`.
+    Access {
+        record: Box<Self>,
+        field: Symbol,
+    },
+    /// A record update `{ record | x = e1, ... }`: a copy of `record` with the
+    /// listed fields replaced. `fields` lists only the changed fields, as
+    /// `(field name, new value)` pairs.
+    Update {
+        record: Box<Self>,
+        fields: Vec<(Symbol, Self)>,
+    },
 }
 
 /// The target of a [`Expr::Call`].
@@ -395,6 +426,51 @@ mod tests {
             IrType::Int,
             IrType::Tuple(vec![IrType::Bool, IrType::Str]),
         ]);
+        assert_eq!(nested, nested.clone());
+        Ok(())
+    }
+
+    #[test]
+    fn record_expr_access_update_and_type_construct_and_round_trip() -> DResult<()> {
+        let mut i = Interner::new();
+        let x = i.intern("x")?;
+        let y = i.intern("y")?;
+        let p = i.intern("p")?;
+
+        // { x = 1, y = 2 } — fields sorted by name (x before y).
+        let lit = Expr::Record(vec![(x, Expr::Int(1)), (y, Expr::Int(2))]);
+        assert_eq!(lit, lit.clone());
+        assert!(format!("{lit:?}").contains("Record"));
+
+        // p.x — a field access.
+        let access = Expr::Access {
+            record: Box::new(Expr::Var(p)),
+            field: x,
+        };
+        assert_eq!(access, access.clone());
+        assert!(format!("{access:?}").contains("Access"));
+
+        // { p | x = 5 } — a single-field update.
+        let update = Expr::Update {
+            record: Box::new(Expr::Var(p)),
+            fields: vec![(x, Expr::Int(5))],
+        };
+        assert_eq!(update, update.clone());
+        assert!(format!("{update:?}").contains("Update"));
+
+        // { x : Int, y : Bool } — a closed record TYPE.
+        let mut fields = BTreeMap::new();
+        fields.insert(x, IrType::Int);
+        fields.insert(y, IrType::Bool);
+        let ty = IrType::Record(fields);
+        assert_eq!(ty, ty.clone());
+        assert!(format!("{ty:?}").contains("Record"));
+
+        // Nested record type: { x : Int, y : { x : Int, y : Bool } }.
+        let mut outer = BTreeMap::new();
+        outer.insert(x, IrType::Int);
+        outer.insert(y, ty);
+        let nested = IrType::Record(outer);
         assert_eq!(nested, nested.clone());
         Ok(())
     }

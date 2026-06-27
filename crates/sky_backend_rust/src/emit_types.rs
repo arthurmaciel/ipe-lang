@@ -8,7 +8,8 @@
 use sky_diagnostics::DResult;
 use sky_ir::{EnumDef, IrType};
 
-use crate::EmitCtx;
+use crate::naming::mangle_reserved;
+use crate::{EmitCtx, RecordStruct};
 
 /// Render an IR type to its Rust spelling (M0 subset).
 pub fn render_type(ctx: &EmitCtx, ty: &IrType) -> DResult<String> {
@@ -27,6 +28,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType) -> DResult<String> {
             }
             format!("({})", parts.join(", "))
         }
+        IrType::Record(fields) => ctx.record_name_for_type(fields)?.to_owned(),
     })
 }
 
@@ -77,6 +79,66 @@ impl SkyStringify for {name} {{
         match self {{
 {arms}
         }}
+    }}
+}}
+"
+    ))
+}
+
+/// Emit a synthesised record struct and its derived `SkyStringify` impl,
+/// including the trailing newline.
+///
+/// Shape (for `{ x : Int, y : Int }`):
+/// ```text
+/// #[derive(Clone, Debug, PartialEq)]
+/// pub struct RecXY {
+///     x: i64,
+///     y: i64,
+/// }
+/// impl SkyStringify for RecXY {
+///     fn sky_show(&self) -> String {
+///         format!("{{{} {}}}", (&sky_runtime::stringify::Wrap(&self.x)).dispatch(), (&sky_runtime::stringify::Wrap(&self.y)).dispatch())
+///     }
+/// }
+/// ```
+///
+/// The `sky_show` body mirrors the Go reference's `%v` rendering of a struct
+/// (`{f0 f1 ...}`, fields space-separated in declared order, no field names) so
+/// stringifying a record reads identically across the two backends. Each field
+/// renders through the runtime's total autoref `Wrap(..).dispatch()` shim, which
+/// never fails to resolve a method regardless of the field type.
+pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> {
+    let name = &rec.name;
+    let mut field_lines = Vec::with_capacity(rec.fields.len());
+    let mut show_args = Vec::with_capacity(rec.fields.len());
+    for (field_name, field_ty) in &rec.fields {
+        let ident = mangle_reserved(field_name.clone());
+        let rust_ty = render_type(ctx, field_ty)?;
+        field_lines.push(format!("    {ident}: {rust_ty},"));
+        show_args.push(format!(
+            "(&sky_runtime::stringify::Wrap(&self.{ident})).dispatch()"
+        ));
+    }
+    let fields_block = field_lines.join("\n");
+
+    // Go `%v` of a struct: `{v0 v1 ...}` — N space-separated `{}` placeholders
+    // wrapped in literal braces. With zero fields the rendering is just `{}`.
+    let body = if rec.fields.is_empty() {
+        "\"{}\".to_string()".to_owned()
+    } else {
+        let placeholders = vec!["{}"; rec.fields.len()].join(" ");
+        let fmt = format!("{{{{{placeholders}}}}}");
+        format!("format!(\"{fmt}\", {})", show_args.join(", "))
+    };
+
+    Ok(format!(
+        "#[derive(Clone, Debug, PartialEq)]
+pub struct {name} {{
+{fields_block}
+}}
+impl SkyStringify for {name} {{
+    fn sky_show(&self) -> String {{
+        {body}
     }}
 }}
 "
