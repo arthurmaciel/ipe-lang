@@ -62,6 +62,19 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Resolve a symbol the IR guarantees was interned by `interner`. A `None`
+    /// means the canonical AST carried a foreign symbol — an internal invariant
+    /// violation, surfaced as a [`Diagnostic::CompilerBug`] rather than a silent
+    /// empty name.
+    fn resolve(&self, sym: Symbol) -> DResult<&'a str> {
+        self.interner.resolve(sym).ok_or_else(|| {
+            bug(
+                "sky_lower::resolve",
+                format!("symbol {} not present in interner", sym.as_raw()),
+            )
+        })
+    }
+
     /// Run the pass, producing the single-module program.
     pub fn run(self) -> DResult<Program> {
         let types_ir: Vec<TypeDef> = self
@@ -80,7 +93,7 @@ impl<'a> Lowerer<'a> {
         let mut entry = None;
         for def in &self.m.defs {
             let func = self.lower_def(def)?;
-            if self.interner.resolve(func.name) == "main" {
+            if self.interner.resolve(func.name) == Some("main") {
                 entry = Some(func.id);
             }
             funcs.push(func);
@@ -193,7 +206,7 @@ impl<'a> Lowerer<'a> {
     fn ir_type_from_ty(&self, t: &Ty) -> DResult<IrType> {
         match t {
             Ty::Unit => Ok(IrType::Unit),
-            Ty::Con { name, args, .. } => match self.interner.resolve(*name) {
+            Ty::Con { name, args, .. } => match self.resolve(*name)? {
                 "Int" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
@@ -224,7 +237,7 @@ impl<'a> Lowerer<'a> {
 
     /// Map a built-in or user type constructor *name* to an [`IrType`].
     fn con_name_to_ir(&self, name: Symbol) -> DResult<IrType> {
-        match self.interner.resolve(name) {
+        match self.resolve(name)? {
             "Int" => Ok(IrType::Int),
             "Float" => Ok(IrType::Float),
             "Bool" => Ok(IrType::Bool),
@@ -271,7 +284,7 @@ impl<'a> Lowerer<'a> {
     fn lower_callee(&self, callee: &canon::Expr) -> DResult<Callee> {
         match &callee.value {
             canon::Expr_::VarKernel { module, name } => {
-                match (self.interner.resolve(*module), self.interner.resolve(*name)) {
+                match (self.resolve(*module)?, self.resolve(*name)?) {
                     ("Log", "println") => Ok(Callee::Kernel(KernelFn::LogPrintln)),
                     ("String", "fromInt") => Ok(Callee::Kernel(KernelFn::StringFromInt)),
                     (m, n) => Err(bug(
@@ -295,7 +308,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn binop(&self, func: Symbol) -> DResult<BinOp> {
-        match self.interner.resolve(func) {
+        match self.resolve(func)? {
             "add" => Ok(BinOp::Add),
             "sub" => Ok(BinOp::Sub),
             other => Err(bug(

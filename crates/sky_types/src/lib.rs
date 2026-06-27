@@ -118,12 +118,12 @@ mod tests {
     fn sym(i: &Interner, m: &canon::Module, name: &str) -> Option<Symbol> {
         // Resolve a name to its symbol by scanning the def names / unions.
         for d in &m.defs {
-            if i.resolve(d.name().value) == name {
+            if i.resolve(d.name().value) == Some(name) {
                 return Some(d.name().value);
             }
         }
         for u in &m.unions {
-            if i.resolve(u.name) == name {
+            if i.resolve(u.name) == Some(name) {
                 return Some(u.name);
             }
         }
@@ -140,7 +140,7 @@ mod tests {
 
     fn ty_con_name(ty: &Ty, i: &Interner) -> Option<String> {
         match ty {
-            Ty::Con { name, .. } => Some(i.resolve(*name).to_owned()),
+            Ty::Con { name, .. } => i.resolve(*name).map(str::to_owned),
             _ => None,
         }
     }
@@ -183,7 +183,10 @@ mod tests {
         let Ok(solved) = solved else { return };
 
         // main = println (String.fromInt (update Increment 0))
-        let main_def = m.defs.iter().find(|d| i.resolve(d.name().value) == "main");
+        let main_def = m
+            .defs
+            .iter()
+            .find(|d| i.resolve(d.name().value) == Some("main"));
         assert!(
             matches!(main_def, Some(canon::Def::Untyped { .. })),
             "main is untyped"
@@ -203,7 +206,7 @@ mod tests {
             matches!(
                 println_region,
                 Some(Ty::Con { name, args, .. })
-                    if i.resolve(*name) == "Task" && args.as_slice() == [Ty::Unit]
+                    if i.resolve(*name) == Some("Task") && args.as_slice() == [Ty::Unit]
             ),
             "println region must be Task (): {println_region:?}"
         );
@@ -253,7 +256,7 @@ mod tests {
         let update_def = m
             .defs
             .iter()
-            .find(|d| i.resolve(d.name().value) == "update");
+            .find(|d| i.resolve(d.name().value) == Some("update"));
         assert!(
             matches!(update_def, Some(canon::Def::Typed { .. })),
             "update is typed"
@@ -313,7 +316,7 @@ mod tests {
             matches!(
                 main_ty,
                 Some(Ty::Con { name, args, .. })
-                    if i.resolve(*name) == "Task" && args.as_slice() == [Ty::Unit]
+                    if i.resolve(*name) == Some("Task") && args.as_slice() == [Ty::Unit]
             ),
             "env[main] must be Task (): {main_ty:?}"
         );

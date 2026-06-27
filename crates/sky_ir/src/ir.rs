@@ -218,20 +218,21 @@ impl Match {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sky_diagnostics::DResult;
     use sky_intern::Interner;
 
-    fn msg_enum(i: &mut Interner) -> (Symbol, Symbol, Symbol) {
-        let ty = i.intern("Msg");
-        let inc = i.intern("Increment");
-        let dec = i.intern("Decrement");
-        (ty, inc, dec)
+    fn msg_enum(i: &mut Interner) -> DResult<(Symbol, Symbol, Symbol)> {
+        let ty = i.intern("Msg")?;
+        let inc = i.intern("Increment")?;
+        let dec = i.intern("Decrement")?;
+        Ok((ty, inc, dec))
     }
 
     #[test]
-    fn match_new_accepts_exhaustive_and_round_trips_debug() {
+    fn match_new_accepts_exhaustive_and_round_trips_debug() -> DResult<()> {
         let mut i = Interner::new();
-        let (ty, inc, dec) = msg_enum(&mut i);
-        let count = i.intern("count");
+        let (ty, inc, dec) = msg_enum(&mut i)?;
+        let count = i.intern("count")?;
 
         // case msg of Increment -> count + 1 ; Decrement -> count - 1
         let arms = vec![
@@ -252,7 +253,7 @@ mod tests {
                 },
             },
         ];
-        let res = Match::new(Expr::Var(i.intern("msg")), arms, &[inc, dec]);
+        let res = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec]);
 
         assert_eq!(res.as_ref().map(|m| m.arms().len()), Ok(2));
         assert!(matches!(
@@ -262,27 +263,29 @@ mod tests {
         // Debug round-trips (no panic, stable shape).
         let rendered = format!("{res:?}");
         assert!(rendered.contains("Match"));
+        Ok(())
     }
 
     #[test]
-    fn match_new_rejects_non_exhaustive() {
+    fn match_new_rejects_non_exhaustive() -> DResult<()> {
         let mut i = Interner::new();
-        let (ty, inc, dec) = msg_enum(&mut i);
-        let count = i.intern("count");
+        let (ty, inc, dec) = msg_enum(&mut i)?;
+        let count = i.intern("count")?;
 
         // Only the Increment arm — Decrement uncovered.
         let arms = vec![Arm {
             pat: Pat::Ctor { ty, variant: inc },
             body: Expr::Var(count),
         }];
-        let r = Match::new(Expr::Var(i.intern("msg")), arms, &[inc, dec]);
+        let r = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec]);
         assert!(matches!(r, Err(Diagnostic::CompilerBug { .. })));
+        Ok(())
     }
 
     #[test]
-    fn match_new_rejects_duplicate_arm() {
+    fn match_new_rejects_duplicate_arm() -> DResult<()> {
         let mut i = Interner::new();
-        let (ty, inc, dec) = msg_enum(&mut i);
+        let (ty, inc, dec) = msg_enum(&mut i)?;
 
         let arms = vec![
             Arm {
@@ -294,15 +297,16 @@ mod tests {
                 body: Expr::Int(1),
             },
         ];
-        let r = Match::new(Expr::Var(i.intern("msg")), arms, &[inc, dec]);
+        let r = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec]);
         assert!(matches!(r, Err(Diagnostic::CompilerBug { .. })));
+        Ok(())
     }
 
     #[test]
-    fn match_new_rejects_unknown_variant() {
+    fn match_new_rejects_unknown_variant() -> DResult<()> {
         let mut i = Interner::new();
-        let (ty, inc, dec) = msg_enum(&mut i);
-        let bogus = i.intern("Reset");
+        let (ty, inc, dec) = msg_enum(&mut i)?;
+        let bogus = i.intern("Reset")?;
 
         let arms = vec![
             Arm {
@@ -314,16 +318,17 @@ mod tests {
                 body: Expr::Int(1),
             },
         ];
-        let r = Match::new(Expr::Var(i.intern("msg")), arms, &[inc, dec]);
+        let r = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec]);
         assert!(matches!(r, Err(Diagnostic::CompilerBug { .. })));
+        Ok(())
     }
 
     #[test]
-    fn program_round_trips_debug() {
+    fn program_round_trips_debug() -> DResult<()> {
         let mut i = Interner::new();
-        let (ty, inc, dec) = msg_enum(&mut i);
-        let main_sym = i.intern("main");
-        let main_mod = i.intern("Main");
+        let (ty, inc, dec) = msg_enum(&mut i)?;
+        let main_sym = i.intern("main")?;
+        let main_mod = i.intern("Main")?;
 
         let func = Func {
             id: FuncId::from_raw(0),
@@ -352,5 +357,6 @@ mod tests {
         let clone = program.clone();
         assert_eq!(program, clone);
         assert!(format!("{program:?}").contains("Program"));
+        Ok(())
     }
 }

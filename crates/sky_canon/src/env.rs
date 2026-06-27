@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use sky_diagnostics::DResult;
 use sky_intern::{Interner, Symbol};
 
 /// Where a (possibly qualified) variable resolves to.
@@ -47,15 +48,18 @@ impl Env {
     /// Build the base environment with Sky's built-in variables and the
     /// auto-qualified prelude kernel modules. The `home` module's top-level
     /// names and unions are registered separately by the caller.
-    #[must_use]
-    pub fn initial(home: Vec<Symbol>, interner: &mut Interner) -> Self {
+    ///
+    /// # Errors
+    /// [`sky_diagnostics::Diagnostic::CompilerBug`] if the interner's symbol
+    /// table is exhausted while interning the built-in names.
+    pub fn initial(home: Vec<Symbol>, interner: &mut Interner) -> DResult<Self> {
         let mut env = Self {
             home,
             ..Self::default()
         };
-        env.install_builtin_vars(interner);
-        env.install_prelude_qualifiers(interner);
-        env
+        env.install_builtin_vars(interner)?;
+        env.install_prelude_qualifiers(interner)?;
+        Ok(env)
     }
 
     /// Bind a name as a local (function parameter / `case` binding).
@@ -83,9 +87,9 @@ impl Env {
 
     /// Built-in unqualified variables (from the Prelude). M0 subset of
     /// `Environment.builtinVars`.
-    fn install_builtin_vars(&mut self, interner: &mut Interner) {
-        let basics = interner.intern("Basics");
-        let log = interner.intern("Log");
+    fn install_builtin_vars(&mut self, interner: &mut Interner) -> DResult<()> {
+        let basics = interner.intern("Basics")?;
+        let log = interner.intern("Log")?;
         for (name, module, func) in [
             ("identity", basics, "identity"),
             ("always", basics, "always"),
@@ -98,16 +102,17 @@ impl Env {
             ("errorToString", basics, "errorToString"),
             ("println", log, "println"),
         ] {
-            let key = interner.intern(name);
-            let func = interner.intern(func);
+            let key = interner.intern(name)?;
+            let func = interner.intern(func)?;
             self.vars.insert(key, VarHome::Kernel(module, func));
         }
+        Ok(())
     }
 
     /// Auto-qualified prelude kernel modules. M0 subset of
     /// `Environment.preludeQualifiers` — `String.fromInt`, `String.fromFloat`,
     /// etc. resolve without an explicit `import String`.
-    fn install_prelude_qualifiers(&mut self, interner: &mut Interner) {
+    fn install_prelude_qualifiers(&mut self, interner: &mut Interner) -> DResult<()> {
         const QUALIFIERS: &[(&str, &[&str])] = &[
             (
                 "String",
@@ -176,13 +181,14 @@ impl Env {
         ];
 
         for (qual, funcs) in QUALIFIERS {
-            let qual_sym = interner.intern(qual);
+            let qual_sym = interner.intern(qual)?;
             let mut module = BTreeMap::new();
             for func in *funcs {
-                let func_sym = interner.intern(func);
+                let func_sym = interner.intern(func)?;
                 module.insert(func_sym, VarHome::Kernel(qual_sym, func_sym));
             }
             self.qual_vars.entry(qual_sym).or_default().extend(module);
         }
+        Ok(())
     }
 }

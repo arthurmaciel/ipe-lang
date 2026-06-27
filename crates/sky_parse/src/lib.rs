@@ -42,7 +42,7 @@ mod tests {
         m.values
             .iter()
             .map(|v| &v.value)
-            .find(|v| i.resolve(v.name.value) == name)
+            .find(|v| i.resolve(v.name.value) == Some(name))
     }
 
     #[test]
@@ -54,7 +54,10 @@ mod tests {
 
         // Module header: name `Main`, exposing (main).
         assert_eq!(m.name.value.len(), 1);
-        assert_eq!(m.name.value.first().map(|&s| i.resolve(s)), Some("Main"));
+        assert_eq!(
+            m.name.value.first().and_then(|&s| i.resolve(s)),
+            Some("Main")
+        );
         assert!(matches!(
             &m.exposing.value,
             Exposing::List(items)
@@ -65,7 +68,12 @@ mod tests {
         // One import: Sky.Core.Prelude exposing (..).
         assert_eq!(m.imports.len(), 1);
         if let Some(imp) = m.imports.first() {
-            let segs: Vec<&str> = imp.name.value.iter().map(|&s| i.resolve(s)).collect();
+            let segs: Vec<&str> = imp
+                .name
+                .value
+                .iter()
+                .filter_map(|&s| i.resolve(s))
+                .collect();
             assert_eq!(segs, ["Sky", "Core", "Prelude"]);
             assert!(imp.alias.is_none());
             assert!(matches!(imp.exposing.value, Exposing::All));
@@ -74,14 +82,14 @@ mod tests {
         // One union: Msg { Increment, Decrement }.
         assert_eq!(m.unions.len(), 1);
         if let Some(union) = m.unions.first().map(|u| &u.value) {
-            assert_eq!(i.resolve(union.name.value), "Msg");
+            assert_eq!(i.resolve(union.name.value), Some("Msg"));
             assert_eq!(union.ctors.len(), 2);
             assert_eq!(
-                union.ctors.first().map(|c| i.resolve(c.value.name)),
+                union.ctors.first().and_then(|c| i.resolve(c.value.name)),
                 Some("Increment")
             );
             assert_eq!(
-                union.ctors.get(1).map(|c| i.resolve(c.value.name)),
+                union.ctors.get(1).and_then(|c| i.resolve(c.value.name)),
                 Some("Decrement")
             );
             assert!(union.ctors.first().is_some_and(|c| c.value.args.is_empty()));
@@ -172,7 +180,7 @@ mod tests {
             qual.is_some_and(|q| matches!(
                 q,
                 Expr_::VarQual(qsym, nsym)
-                    if i.resolve(*qsym) == "String" && i.resolve(*nsym) == "fromInt"
+                    if i.resolve(*qsym) == Some("String") && i.resolve(*nsym) == Some("fromInt")
             )),
             "expected String.fromInt VarQual, got {qual:?}"
         );

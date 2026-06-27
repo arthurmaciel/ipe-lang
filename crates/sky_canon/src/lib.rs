@@ -46,7 +46,9 @@ mod tests {
     }
 
     fn find_def<'a>(m: &'a ast::Module, i: &Interner, name: &str) -> Option<&'a Def> {
-        m.defs.iter().find(|d| i.resolve(d.name().value) == name)
+        m.defs
+            .iter()
+            .find(|d| i.resolve(d.name().value) == Some(name))
     }
 
     /// Drill into a [`Call`] node, returning callee + args.
@@ -65,18 +67,18 @@ mod tests {
         let Some(m) = m else { return };
 
         assert_eq!(m.name.len(), 1);
-        assert_eq!(m.name.first().map(|&s| i.resolve(s)), Some("Main"));
+        assert_eq!(m.name.first().and_then(|&s| i.resolve(s)), Some("Main"));
 
         // The `Msg` union with two nullary constructors.
         assert_eq!(m.unions.len(), 1);
         let Some(union) = m.unions.first() else {
             return;
         };
-        assert_eq!(i.resolve(union.name), "Msg");
+        assert_eq!(i.resolve(union.name), Some("Msg"));
         let names: Vec<(&str, usize)> = union
             .ctors
             .iter()
-            .map(|c| (i.resolve(c.name), c.index))
+            .filter_map(|c| i.resolve(c.name).map(|n| (n, c.index)))
             .collect();
         assert_eq!(names, vec![("Increment", 0), ("Decrement", 1)]);
     }
@@ -106,7 +108,7 @@ mod tests {
         let Expr_::Case(scrut, branches) = &body.value else {
             return;
         };
-        assert!(matches!(scrut.value, Expr_::VarLocal(s) if i.resolve(s) == "msg"));
+        assert!(matches!(scrut.value, Expr_::VarLocal(s) if i.resolve(s) == Some("msg")));
         assert_eq!(branches.len(), 2);
 
         // First arm: `Increment -> count + 1`.
@@ -124,8 +126,8 @@ mod tests {
         else {
             return;
         };
-        assert_eq!(i.resolve(*type_name), "Msg");
-        assert_eq!(i.resolve(*name), "Increment");
+        assert_eq!(i.resolve(*type_name), Some("Msg"));
+        assert_eq!(i.resolve(*name), Some("Increment"));
         assert_eq!(*index, 0);
 
         // Body `count + 1` → Binop resolving to Basics.add over a local lhs.
@@ -139,9 +141,9 @@ mod tests {
         else {
             return;
         };
-        assert_eq!(i.resolve(*home), "Basics");
-        assert_eq!(i.resolve(*func), "add");
-        assert!(matches!(lhs.value, Expr_::VarLocal(s) if i.resolve(s) == "count"));
+        assert_eq!(i.resolve(*home), Some("Basics"));
+        assert_eq!(i.resolve(*func), Some("add"));
+        assert!(matches!(lhs.value, Expr_::VarLocal(s) if i.resolve(s) == Some("count")));
 
         // Second arm resolves `-` to Basics.sub.
         let Some(dec) = branches.get(1) else { return };
@@ -152,7 +154,7 @@ mod tests {
         let Expr_::Binop { func, .. } = &dec.body.value else {
             return;
         };
-        assert_eq!(i.resolve(*func), "sub");
+        assert_eq!(i.resolve(*func), Some("sub"));
     }
 
     #[test]
@@ -180,8 +182,8 @@ mod tests {
         let Some((Expr_::VarKernel { module, name }, outer_args)) = outer else {
             return;
         };
-        assert_eq!(i.resolve(*module), "Log");
-        assert_eq!(i.resolve(*name), "println");
+        assert_eq!(i.resolve(*module), Some("Log"));
+        assert_eq!(i.resolve(*name), Some("println"));
         assert_eq!(outer_args.len(), 1);
 
         // String.fromInt → VarKernel { String, fromInt }.
@@ -196,8 +198,8 @@ mod tests {
         let Some((Expr_::VarKernel { module, name }, mid_args)) = mid else {
             return;
         };
-        assert_eq!(i.resolve(*module), "String");
-        assert_eq!(i.resolve(*name), "fromInt");
+        assert_eq!(i.resolve(*module), Some("String"));
+        assert_eq!(i.resolve(*name), Some("fromInt"));
 
         // update Increment 0 → VarTopLevel update applied to VarCtor + Int.
         let Some(mid0) = mid_args.first() else { return };
@@ -209,8 +211,8 @@ mod tests {
         let Some((Expr_::VarTopLevel { module, name }, inner_args)) = inner else {
             return;
         };
-        assert_eq!(module.first().map(|&s| i.resolve(s)), Some("Main"));
-        assert_eq!(i.resolve(*name), "update");
+        assert_eq!(module.first().and_then(|&s| i.resolve(s)), Some("Main"));
+        assert_eq!(i.resolve(*name), Some("update"));
         assert_eq!(inner_args.len(), 2);
 
         // `Increment` used as a value → VarCtor of Main.Msg.
@@ -230,10 +232,10 @@ mod tests {
         else {
             return;
         };
-        assert_eq!(i.resolve(*type_name), "Msg");
-        assert_eq!(i.resolve(*name), "Increment");
+        assert_eq!(i.resolve(*type_name), Some("Msg"));
+        assert_eq!(i.resolve(*name), Some("Increment"));
         assert_eq!(*index, 0);
-        assert_eq!(home.first().map(|&s| i.resolve(s)), Some("Main"));
+        assert_eq!(home.first().and_then(|&s| i.resolve(s)), Some("Main"));
 
         // `0` literal.
         assert!(matches!(
@@ -271,9 +273,9 @@ mod tests {
         let ast::Type::Con { name, home, .. } = arg.as_ref() else {
             return;
         };
-        assert_eq!(i.resolve(*name), "Msg");
+        assert_eq!(i.resolve(*name), Some("Msg"));
         // `Msg` is a local union → home is this module.
-        assert_eq!(home.first().map(|&s| i.resolve(s)), Some("Main"));
+        assert_eq!(home.first().and_then(|&s| i.resolve(s)), Some("Main"));
         // Tail is Int -> Int.
         assert!(matches!(rest.as_ref(), ast::Type::Lambda(_, _)));
     }

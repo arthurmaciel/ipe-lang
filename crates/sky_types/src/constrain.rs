@@ -42,12 +42,12 @@ struct Builtins {
 }
 
 impl Builtins {
-    fn new(interner: &mut Interner) -> Self {
-        Self {
-            int: interner.intern("Int"),
-            string: interner.intern("String"),
-            task: interner.intern("Task"),
-        }
+    fn new(interner: &mut Interner) -> DResult<Self> {
+        Ok(Self {
+            int: interner.intern("Int")?,
+            string: interner.intern("String")?,
+            task: interner.intern("Task")?,
+        })
     }
 }
 
@@ -87,7 +87,7 @@ impl<'a> Builder<'a> {
         interner: &'a mut Interner,
         module: &canon::Module,
     ) -> DResult<Generated> {
-        let builtins = Builtins::new(interner);
+        let builtins = Builtins::new(interner)?;
         let mut builder = Self {
             uf,
             interner,
@@ -248,7 +248,10 @@ impl<'a> Builder<'a> {
                 None => {
                     return Err(Diagnostic::CompilerBug {
                         where_: STAGE,
-                        detail: format!("unbound local `{}`", self.interner.resolve(*s)),
+                        detail: format!(
+                            "unbound local `{}`",
+                            self.interner.resolve(*s).unwrap_or("<unknown symbol>")
+                        ),
                     });
                 }
             },
@@ -357,8 +360,8 @@ impl<'a> Builder<'a> {
             args: vec![Ty::Unit],
         };
         match (self.interner.resolve(module), self.interner.resolve(name)) {
-            ("String", "fromInt") => Ty::Fun(Box::new(int), Box::new(string)),
-            ("Log", "println") => Ty::Fun(Box::new(string), Box::new(task_unit)),
+            (Some("String"), Some("fromInt")) => Ty::Fun(Box::new(int), Box::new(string)),
+            (Some("Log"), Some("println")) => Ty::Fun(Box::new(string), Box::new(task_unit)),
             // Unknown kernel: a single flexible variable. The raw id is chosen
             // to be distinct from any real interned symbol's typical range; it
             // only needs to differ between the two `Ty::Var` arms of one

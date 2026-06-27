@@ -27,14 +27,14 @@ const GOLDEN_CARGO: &str = include_str!("../../../tests/golden/m0/Cargo.toml");
 /// main = println (String.fromInt (update Increment 0))
 /// ```
 fn build_m0(interner: &mut Interner) -> DResult<Program> {
-    let main_mod = interner.intern("Main");
-    let msg_ty = interner.intern("Msg");
-    let increment = interner.intern("Increment");
-    let decrement = interner.intern("Decrement");
-    let update = interner.intern("update");
-    let main = interner.intern("main");
-    let msg = interner.intern("msg");
-    let count = interner.intern("count");
+    let main_mod = interner.intern("Main")?;
+    let msg_ty = interner.intern("Msg")?;
+    let increment = interner.intern("Increment")?;
+    let decrement = interner.intern("Decrement")?;
+    let update = interner.intern("update")?;
+    let main = interner.intern("main")?;
+    let msg = interner.intern("msg")?;
+    let count = interner.intern("count")?;
 
     let update_id = FuncId::from_raw(0);
     let main_id = FuncId::from_raw(1);

@@ -112,7 +112,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn intern(&mut self, s: &str) -> Symbol {
+    fn intern(&mut self, s: &str) -> DResult<Symbol> {
         self.interner.intern(s)
     }
 
@@ -184,7 +184,10 @@ impl<'a> Parser<'a> {
         let tok = self.bump()?;
         match &tok.kind {
             Tok::Ident(text) => {
-                let segs: Vec<Symbol> = text.split('.').map(|s| self.interner.intern(s)).collect();
+                let segs = text
+                    .split('.')
+                    .map(|s| self.interner.intern(s))
+                    .collect::<DResult<Vec<Symbol>>>()?;
                 Ok(Located::new(tok.span, segs))
             }
             _ => Err(Diagnostic::Parse {
@@ -226,7 +229,7 @@ impl<'a> Parser<'a> {
                 msg: ParseError::Unexpected,
             });
         };
-        let sym = self.interner.intern(text);
+        let sym = self.interner.intern(text)?;
         let is_type = text.chars().next().is_some_and(|c| c.is_ascii_uppercase());
         if is_type {
             let privacy = self.parse_privacy()?;
@@ -250,7 +253,7 @@ impl<'a> Parser<'a> {
         loop {
             let tok = self.bump()?;
             match &tok.kind {
-                Tok::Ident(text) => ctors.push(self.interner.intern(text)),
+                Tok::Ident(text) => ctors.push(self.interner.intern(text)?),
                 _ => {
                     return Err(Diagnostic::Parse {
                         span: tok.span,
@@ -279,7 +282,7 @@ impl<'a> Parser<'a> {
             self.bump()?;
             let tok = self.bump()?;
             match &tok.kind {
-                Tok::Ident(text) => Some(self.interner.intern(text)),
+                Tok::Ident(text) => Some(self.interner.intern(text)?),
                 _ => {
                     return Err(Diagnostic::Parse {
                         span: tok.span,
@@ -317,7 +320,7 @@ impl<'a> Parser<'a> {
                 msg: ParseError::Unexpected,
             });
         };
-        let name_sym = self.interner.intern(text);
+        let name_sym = self.interner.intern(text)?;
         let name = Located::new(tok.span, name_sym);
         let name_col = tok.col;
 
@@ -350,7 +353,7 @@ impl<'a> Parser<'a> {
                 msg: ParseError::Unexpected,
             });
         };
-        let name = Located::new(name_tok.span, self.interner.intern(name_text));
+        let name = Located::new(name_tok.span, self.interner.intern(name_text)?);
 
         let mut vars = Vec::new();
         loop {
@@ -365,7 +368,7 @@ impl<'a> Parser<'a> {
                 _ => None,
             };
             let Some((text, span)) = var else { break };
-            let sym = self.intern(&text);
+            let sym = self.intern(&text)?;
             vars.push(Located::new(span, sym));
             self.bump()?;
         }
@@ -394,7 +397,7 @@ impl<'a> Parser<'a> {
                 msg: ParseError::Unexpected,
             });
         };
-        let name = self.interner.intern(text);
+        let name = self.interner.intern(text)?;
         let mut args = Vec::new();
         while self.peek_is_type_atom_in_block(threshold) {
             args.push(self.parse_type_atom(0)?.value);
@@ -467,15 +470,17 @@ impl<'a> Parser<'a> {
             Tok::Ident(text) => {
                 let first_upper = text.chars().next().is_some_and(|c| c.is_ascii_uppercase());
                 if first_upper {
-                    let empty = self.interner.intern("");
-                    let segs: Vec<Symbol> =
-                        text.split('.').map(|s| self.interner.intern(s)).collect();
+                    let empty = self.interner.intern("")?;
+                    let segs = text
+                        .split('.')
+                        .map(|s| self.interner.intern(s))
+                        .collect::<DResult<Vec<Symbol>>>()?;
                     Ok(Located::new(
                         tok.span,
                         TypeAnnotation::TType(empty, segs, Vec::new()),
                     ))
                 } else {
-                    let sym = self.interner.intern(text);
+                    let sym = self.interner.intern(text)?;
                     Ok(Located::new(tok.span, TypeAnnotation::TVar(sym)))
                 }
             }
@@ -502,7 +507,7 @@ impl<'a> Parser<'a> {
         let mut ops: Vec<(Expr, Located<Symbol>)> = Vec::new();
         let mut operand = first;
         while let Some((op, op_span)) = self.peek_binop(threshold) {
-            let op_sym = self.intern(op);
+            let op_sym = self.intern(op)?;
             self.bump()?;
             ops.push((operand, Located::new(op_span, op_sym)));
             operand = self.parse_app(threshold, depth + 1)?;
@@ -578,7 +583,10 @@ impl<'a> Parser<'a> {
                 Ok(Located::new(tok.span, inner.value))
             }
             Tok::Int(n) => Ok(Located::new(tok.span, Expr_::Int(*n))),
-            Tok::Ident(text) => Ok(Located::new(tok.span, self.ident_expr(text))),
+            Tok::Ident(text) => {
+                let expr = self.ident_expr(text)?;
+                Ok(Located::new(tok.span, expr))
+            }
             _ => Err(Diagnostic::Parse {
                 span: tok.span,
                 msg: ParseError::Unexpected,
@@ -587,24 +595,24 @@ impl<'a> Parser<'a> {
     }
 
     /// Resolve a (possibly dotted) identifier into a `VarLocal` / `VarQual`.
-    fn ident_expr(&mut self, text: &str) -> Expr_ {
+    fn ident_expr(&mut self, text: &str) -> DResult<Expr_> {
         let mut segs = text.split('.');
         let first = segs.next().unwrap_or("");
         let rest: Vec<&str> = segs.collect();
         if rest.is_empty() {
-            return Expr_::VarLocal(self.interner.intern(first));
+            return Ok(Expr_::VarLocal(self.interner.intern(first)?));
         }
         // Qualified: everything but the last segment is the qualifier.
         let mut all: Vec<&str> = Vec::with_capacity(rest.len() + 1);
         all.push(first);
         all.extend(rest);
         let Some((last, init)) = all.split_last() else {
-            return Expr_::VarLocal(self.interner.intern(text));
+            return Ok(Expr_::VarLocal(self.interner.intern(text)?));
         };
         let qualifier = init.join(".");
-        let q = self.interner.intern(&qualifier);
-        let name = self.interner.intern(last);
-        Expr_::VarQual(q, name)
+        let q = self.interner.intern(&qualifier)?;
+        let name = self.interner.intern(last)?;
+        Ok(Expr_::VarQual(q, name))
     }
 
     fn parse_case(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
@@ -680,15 +688,20 @@ impl<'a> Parser<'a> {
             Tok::Ident(text) => {
                 let first_upper = text.chars().next().is_some_and(|c| c.is_ascii_uppercase());
                 if first_upper {
-                    let mut segs: Vec<Symbol> =
-                        text.split('.').map(|s| self.interner.intern(s)).collect();
-                    let name = segs.pop().unwrap_or_else(|| self.interner.intern(text));
+                    let mut segs = text
+                        .split('.')
+                        .map(|s| self.interner.intern(s))
+                        .collect::<DResult<Vec<Symbol>>>()?;
+                    let name = match segs.pop() {
+                        Some(sym) => sym,
+                        None => self.interner.intern(text)?,
+                    };
                     Ok(Located::new(
                         tok.span,
                         Pattern_::PCtor(name, segs, Vec::new()),
                     ))
                 } else {
-                    let sym = self.interner.intern(text);
+                    let sym = self.interner.intern(text)?;
                     Ok(Located::new(tok.span, Pattern_::PVar(sym)))
                 }
             }
