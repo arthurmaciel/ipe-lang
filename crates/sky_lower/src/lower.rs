@@ -473,7 +473,7 @@ impl<'a> Lowerer<'a> {
                 lhs: Box::new(self.lower_expr(lhs)?),
                 rhs: Box::new(self.lower_expr(rhs)?),
             }),
-            canon::Expr_::Call(callee, args) => self.lower_call(callee, args),
+            canon::Expr_::Call(callee, args) => self.lower_call(callee, args, e.span),
             canon::Expr_::Lambda(params, body) => self.lower_lambda(params, body, e.span),
             canon::Expr_::Let(bindings, body) => {
                 // Multi-binding `let` lowers to right-nested single-binding IR
@@ -597,20 +597,71 @@ impl<'a> Lowerer<'a> {
     /// first-class function *value* — a local (function-typed) binding, a
     /// lambda, or another expression's result — applied via [`Expr::Apply`]
     /// (a boxed `dyn Fn` auto-derefs at the call site).
-    fn lower_call(&self, callee: &canon::Expr, args: &[canon::Expr]) -> DResult<Expr> {
+    ///
+    /// A direct [`Expr::Call`] is *saturated*: it passes exactly as many
+    /// arguments as the callee declares. Lowering a direct call whose argument
+    /// count differs from the callee's arity would emit Rust the toolchain
+    /// rejects (a top-level `fn` / kernel has a fixed Rust signature). So when
+    /// the counts differ — partial application (fewer) or over-application
+    /// (more) — the lowerer fails closed with [`Feature::PartialOverApplication`]
+    /// rather than emit broken Rust. Eta-expanding the partial case into a boxed
+    /// closure (and saturating the over case via a trailing [`Expr::Apply`]) is
+    /// deferred: it needs fresh parameter symbols, which the immutable interner
+    /// borrowed here cannot mint without rearchitecting the lowering entry point.
+    /// [SKY-L0110]
+    fn lower_call(
+        &self,
+        callee: &canon::Expr,
+        args: &[canon::Expr],
+        call_span: Span,
+    ) -> DResult<Expr> {
         let lowered_args = args
             .iter()
             .map(|a| self.lower_expr(a))
             .collect::<DResult<Vec<_>>>()?;
         match &callee.value {
-            canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } => Ok(Expr::Call {
-                callee: self.lower_callee(callee)?,
-                args: lowered_args,
-            }),
+            canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } => {
+                let resolved = self.lower_callee(callee)?;
+                let arity = self.callee_arity(&resolved)?;
+                if args.len() != arity {
+                    return Err(unsupported(call_span, Feature::PartialOverApplication));
+                }
+                Ok(Expr::Call {
+                    callee: resolved,
+                    args: lowered_args,
+                })
+            }
             _ => Ok(Expr::Apply {
                 func: Box::new(self.lower_expr(callee)?),
                 args: lowered_args,
             }),
+        }
+    }
+
+    /// The declared arity of a resolved direct callee — the argument count a
+    /// saturated [`Expr::Call`] to it must pass. A kernel's arity is fixed per
+    /// [`KernelFn`]; a top-level binding's is its parameter-pattern count (a
+    /// nullary constant has arity 0). The [`FuncId`] was assigned from the
+    /// definitions in declaration order, so the same-index lookup is exact.
+    fn callee_arity(&self, callee: &Callee) -> DResult<usize> {
+        match callee {
+            // Both M0/M1 kernels take a single argument; widen this match as
+            // the kernel set grows so a new entry can never silently inherit 1.
+            Callee::Kernel(KernelFn::StringFromInt | KernelFn::LogPrintln) => Ok(1),
+            Callee::Func(id) => {
+                let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
+                let def = self.m.defs.get(idx).ok_or_else(|| {
+                    bug(
+                        "sky_lower::callee_arity",
+                        "func id has no matching definition",
+                    )
+                })?;
+                Ok(match def {
+                    canon::Def::Typed { patterns, .. } | canon::Def::Untyped { patterns, .. } => {
+                        patterns.len()
+                    }
+                })
+            }
         }
     }
 
