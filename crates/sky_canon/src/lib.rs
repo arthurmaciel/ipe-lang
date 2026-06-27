@@ -21,10 +21,11 @@ pub use env::{CtorHome, Env, VarHome};
 /// Canonicalise a parsed module into its name-resolved canonical AST.
 ///
 /// # Errors
-/// Returns a [`sky_diagnostics::Diagnostic`] — specifically
-/// [`sky_diagnostics::NameError::Unknown`] — for any name that resolves to
+/// Returns a [`sky_diagnostics::Diagnostic`] for any name that resolves to
 /// neither a constructor, a bound variable, a top-level binding, nor a kernel
-/// function.
+/// function (an [`sky_diagnostics::NameError`] payload variant carrying a
+/// deterministic did-you-mean), or for a duplicated value/constructor/type
+/// name.
 pub fn canonicalise(m: &sky_syntax::Module, interner: &mut Interner) -> DResult<ast::Module> {
     resolve::canonicalise(m, interner)
 }
@@ -280,21 +281,268 @@ mod tests {
         assert!(matches!(rest.as_ref(), ast::Type::Lambda(_, _)));
     }
 
-    #[test]
-    fn unknown_name_is_a_name_error() {
+    /// Parse `src_text` and canonicalise it, returning the diagnostic (if any).
+    /// Returns `None` from the parse step rather than panicking.
+    fn canon_err(src_text: &str) -> Option<Diagnostic> {
         let mut i = Interner::new();
-        let src_text = "module Main exposing (main)\n\nmain = nope\n";
-        let parsed = sky_parse::parse_module(src_text, &mut i);
-        assert!(parsed.is_ok(), "source parses");
-        let Ok(src) = parsed else { return };
-        let result = canonicalise(&src, &mut i);
+        let src = sky_parse::parse_module(src_text, &mut i).ok()?;
+        canonicalise(&src, &mut i).err()
+    }
+
+    #[test]
+    fn unknown_name_is_a_value_not_found() {
+        let err = canon_err("module Main exposing (main)\n\nmain = nope\n");
         assert!(matches!(
-            result,
-            Err(Diagnostic::Name {
-                msg: NameError::Unknown,
+            err,
+            Some(Diagnostic::Name {
+                msg: NameError::ValueNotFound { .. },
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn unknown_value_suggests_close_name() {
+        // `printn` is one edit from the in-scope kernel value `println`.
+        let err = canon_err("module Main exposing (main)\n\nmain = printn\n");
+        assert!(
+            matches!(
+                &err,
+                Some(Diagnostic::Name {
+                    msg: NameError::ValueNotFound { .. },
+                    ..
+                })
+            ),
+            "expected ValueNotFound, got {err:?}"
+        );
+        let Some(Diagnostic::Name {
+            msg: NameError::ValueNotFound { name, suggestions },
+            ..
+        }) = err
+        else {
+            return;
+        };
+        assert_eq!(&*name, "printn");
+        assert!(
+            suggestions.iter().any(|s| &**s == "println"),
+            "suggestions should include `println`, got {suggestions:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_value_far_from_everything_has_no_suggestions() {
+        // `zzzzzzzz` is > 2 edits from every in-scope name → silence.
+        let err = canon_err("module Main exposing (main)\n\nmain = zzzzzzzz\n");
+        let Some(Diagnostic::Name {
+            msg: NameError::ValueNotFound { suggestions, .. },
+            ..
+        }) = err
+        else {
+            assert!(false_marker(), "expected ValueNotFound");
+            return;
+        };
+        assert!(
+            suggestions.is_empty(),
+            "no suggestion within edit-distance 2, got {suggestions:?}"
+        );
+    }
+
+    #[test]
+    fn suggestions_sorted_by_distance_then_name() {
+        // Several `List`/`Basics` members sit at equal edit distance from
+        // `ma`; assert the rendered list is `(distance, name)`-sorted.
+        let err = canon_err("module Main exposing (main)\n\nmain = List.ma\n");
+        let Some(Diagnostic::Name {
+            msg: NameError::NoSuchMember { suggestions, .. },
+            ..
+        }) = err
+        else {
+            assert!(false_marker(), "expected NoSuchMember");
+            return;
+        };
+        let keys: Vec<(usize, String)> = suggestions
+            .iter()
+            .map(|s| (test_levenshtein("ma", s), s.to_string()))
+            .collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted, "suggestions must be (distance, name)-sorted");
+    }
+
+    #[test]
+    fn unknown_qualifier_is_unknown_module() {
+        let err = canon_err("module Main exposing (main)\n\nmain = Strng.fromInt\n");
+        let Some(Diagnostic::Name {
+            msg:
+                NameError::UnknownModule {
+                    qualifier,
+                    suggestions,
+                },
+            ..
+        }) = err
+        else {
+            assert!(false_marker(), "expected UnknownModule");
+            return;
+        };
+        assert_eq!(&*qualifier, "Strng");
+        assert!(
+            suggestions.iter().any(|s| &**s == "String"),
+            "should suggest `String`, got {suggestions:?}"
+        );
+    }
+
+    #[test]
+    fn known_qualifier_missing_member_is_no_such_member() {
+        // `fromInr` is one edit (substitution) from the `String` member
+        // `fromInt`.
+        let err = canon_err("module Main exposing (main)\n\nmain = String.fromInr\n");
+        let Some(Diagnostic::Name {
+            msg:
+                NameError::NoSuchMember {
+                    module,
+                    member,
+                    suggestions,
+                },
+            ..
+        }) = err
+        else {
+            assert!(false_marker(), "expected NoSuchMember");
+            return;
+        };
+        assert_eq!(&*module, "String");
+        assert_eq!(&*member, "fromInr");
+        assert!(
+            suggestions.iter().any(|s| &**s == "fromInt"),
+            "should suggest `fromInt`, got {suggestions:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_constructor_pattern_is_constructor_not_found() {
+        let src = "module Main exposing (main)\n\n\
+                   type Msg = Increment | Decrement\n\n\
+                   f x =\n    case x of\n        Incremen -> 0\n\n\
+                   main = f Increment\n";
+        let err = canon_err(src);
+        let Some(Diagnostic::Name {
+            msg: NameError::ConstructorNotFound { name, suggestions },
+            ..
+        }) = err
+        else {
+            assert!(false_marker(), "expected ConstructorNotFound, got {err:?}");
+            return;
+        };
+        assert_eq!(&*name, "Incremen");
+        assert!(
+            suggestions.iter().any(|s| &**s == "Increment"),
+            "should suggest `Increment`, got {suggestions:?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_value_points_at_both_spans() {
+        let src = "module Main exposing (main)\n\nmain = 1\n\nmain = 2\n";
+        let err = canon_err(src);
+        let Some(Diagnostic::Name {
+            span,
+            msg: NameError::DuplicateValue { name, first },
+        }) = err
+        else {
+            assert!(false_marker(), "expected DuplicateValue, got {err:?}");
+            return;
+        };
+        assert_eq!(&*name, "main");
+        // The second definition (primary) is strictly after the first.
+        assert!(
+            first.lo < span.lo,
+            "first span {first:?} must precede the duplicate {span:?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_type_points_at_both_spans() {
+        let src = "module Main exposing (main)\n\n\
+                   type Msg = A\n\ntype Msg = B\n\nmain = 0\n";
+        let err = canon_err(src);
+        let Some(Diagnostic::Name {
+            span,
+            msg: NameError::DuplicateType { name, first },
+        }) = err
+        else {
+            assert!(false_marker(), "expected DuplicateType, got {err:?}");
+            return;
+        };
+        assert_eq!(&*name, "Msg");
+        assert!(first.lo < span.lo, "first span precedes duplicate");
+    }
+
+    #[test]
+    fn duplicate_constructor_across_unions_points_at_both_spans() {
+        // Same constructor name `A` in two distinct unions.
+        let src = "module Main exposing (main)\n\n\
+                   type Foo = A\n\ntype Bar = A\n\nmain = 0\n";
+        let err = canon_err(src);
+        let Some(Diagnostic::Name {
+            span,
+            msg: NameError::DuplicateConstructor { name, first },
+        }) = err
+        else {
+            assert!(false_marker(), "expected DuplicateConstructor, got {err:?}");
+            return;
+        };
+        assert_eq!(&*name, "A");
+        assert!(first.lo < span.lo, "first span precedes duplicate");
+    }
+
+    #[test]
+    fn free_type_vars_ordered_by_name_not_symbol_id() {
+        // Source order of the tyvars is `z`, `a`; an id-ordered result would be
+        // `[z, a]`, but the name order is `[a, z]`.
+        let src = "module Main exposing (main)\n\n\
+                   f : z -> a -> z\nf x y = x\n\nmain = 0\n";
+        let mut i = Interner::new();
+        let parsed = sky_parse::parse_module(src, &mut i);
+        assert!(parsed.is_ok(), "source parses");
+        let Ok(srcm) = parsed else { return };
+        let m = canonicalise(&srcm, &mut i);
+        assert!(m.is_ok(), "canonicalises: {m:?}");
+        let Ok(m) = m else { return };
+        let def = m
+            .defs
+            .iter()
+            .find(|d| i.resolve(d.name().value) == Some("f"));
+        let Some(Def::Typed { free_vars, .. }) = def else {
+            assert!(false_marker(), "f is a typed def");
+            return;
+        };
+        let names: Vec<&str> = free_vars.iter().filter_map(|&v| i.resolve(v)).collect();
+        assert_eq!(names, vec!["a", "z"], "free vars sorted by name");
+    }
+
+    /// A runtime `false` the optimiser cannot fold, so `assert!(false_marker())`
+    /// fails the test (the desired "wrong variant" signal) without tripping
+    /// `clippy::assertions_on_constants`, which fires on a literal `false`.
+    fn false_marker() -> bool {
+        std::hint::black_box(false)
+    }
+
+    /// Stand-alone Levenshtein for the ordering assertion, kept separate from
+    /// the production helper (which is private to `resolve`).
+    fn test_levenshtein(a: &str, b: &str) -> usize {
+        let bc: Vec<char> = b.chars().collect();
+        let mut prev: Vec<usize> = (0..=bc.len()).collect();
+        for (i, ca) in a.chars().enumerate() {
+            let mut curr = vec![i + 1];
+            let mut diag = i;
+            for (cb, &up) in bc.iter().zip(prev.iter().skip(1)) {
+                let cost = usize::from(ca != *cb);
+                let left = curr.last().copied().unwrap_or(i + 1);
+                curr.push((up + 1).min(left + 1).min(diag + cost));
+                diag = up;
+            }
+            prev = curr;
+        }
+        prev.last().copied().unwrap_or(0)
     }
 
     #[test]

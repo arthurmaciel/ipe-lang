@@ -85,6 +85,14 @@ impl Env {
         self.qual_vars.get(&qualifier).and_then(|m| m.get(&name))
     }
 
+    /// The member table for a qualifier, or `None` when the qualifier names no
+    /// known module/import alias. Lets a caller distinguish an unknown
+    /// qualifier from a known qualifier missing the member.
+    #[must_use]
+    pub fn qual_members(&self, qualifier: Symbol) -> Option<&BTreeMap<Symbol, VarHome>> {
+        self.qual_vars.get(&qualifier)
+    }
+
     /// Built-in unqualified variables (from the Prelude). M0 subset of
     /// `Environment.builtinVars`.
     fn install_builtin_vars(&mut self, interner: &mut Interner) -> DResult<()> {
