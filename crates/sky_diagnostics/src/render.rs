@@ -502,6 +502,9 @@ const fn feature_label(f: Feature) -> &'static str {
             "first-class functions are not supported yet [feature: first-class-functions]"
         }
         Feature::Kernels => "this kernel function is not available yet [feature: kernels]",
+        Feature::ParametricAliases => {
+            "type parameters on a type alias are not supported yet [feature: parametric-aliases]"
+        }
     }
 }
 

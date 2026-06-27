@@ -7,7 +7,7 @@ mod ast;
 
 pub use ast::{
     Ctor, Exposed, Exposing, Expr, Expr_, Import, LetBinding, Module, Pattern, Pattern_, Privacy,
-    TypeAnnotation, Union, Value,
+    TypeAlias, TypeAnnotation, Union, Value,
 };
 
 #[cfg(test)]
@@ -128,6 +128,7 @@ mod tests {
             }],
             values: vec![loc(update_value), loc(main_value)],
             unions: vec![loc(union)],
+            aliases: Vec::new(),
         })
     }
 

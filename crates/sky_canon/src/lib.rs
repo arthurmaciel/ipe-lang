@@ -814,4 +814,168 @@ mod tests {
         assert_ne!(VarHome::TopLevel(m.clone()), VarHome::Local);
         assert_eq!(VarHome::TopLevel(m.clone()), VarHome::TopLevel(m));
     }
+
+    // ---- type aliases (B2) ------------------------------------------------
+
+    /// Parse `source` and canonicalise it, returning the module on success.
+    fn canon_ok(i: &mut Interner, source: &str) -> Option<ast::Module> {
+        let src = sky_parse::parse_module(source, i).ok()?;
+        canonicalise(&src, i).ok()
+    }
+
+    /// The annotation type of a named typed def, cloned for inspection.
+    fn typed_ann(m: &ast::Module, i: &Interner, name: &str) -> Option<ast::Type> {
+        match find_def(m, i, name)? {
+            Def::Typed { ty, .. } => Some(ty.clone()),
+            Def::Untyped { .. } => None,
+        }
+    }
+
+    #[test]
+    fn non_parametric_alias_expands_to_its_body() {
+        // `type alias Count = Int` then `inc : Count -> Count` must canonicalise
+        // exactly as if written `inc : Int -> Int` — the alias is gone.
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (inc)\n\
+             type alias Count = Int\n\n\
+             inc : Count -> Count\n\
+             inc n =\n    n\n",
+        );
+        assert!(m.is_some(), "module must canonicalise");
+        let Some(m) = m else { return };
+        let ty = typed_ann(&m, &i, "inc");
+        let Some(ast::Type::Lambda(arg, rest)) = ty else {
+            assert!(false_marker(), "inc annotation is an arrow");
+            return;
+        };
+        // Both sides are `Int` (a built-in con, empty home) — no `Count` survives.
+        for side in [arg.as_ref(), rest.as_ref()] {
+            let ast::Type::Con { name, home, args } = side else {
+                assert!(false_marker(), "alias expanded to a constructor type");
+                return;
+            };
+            assert_eq!(i.resolve(*name), Some("Int"));
+            assert!(home.is_empty(), "Int is a built-in: empty home");
+            assert!(args.is_empty());
+        }
+    }
+
+    #[test]
+    fn chained_alias_expands_through() {
+        // `B = A`, `A = Int`: a reference to `B` expands through `A` to `Int`.
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (v)\n\
+             type alias A = Int\n\
+             type alias B = A\n\n\
+             v : B\n\
+             v =\n    0\n",
+        );
+        assert!(m.is_some(), "module must canonicalise");
+        let Some(m) = m else { return };
+        let ty = typed_ann(&m, &i, "v");
+        let Some(ast::Type::Con { name, home, .. }) = ty else {
+            assert!(false_marker(), "v annotation is a constructor type");
+            return;
+        };
+        assert_eq!(i.resolve(name), Some("Int"));
+        assert!(home.is_empty());
+    }
+
+    #[test]
+    fn alias_to_local_union_preserves_home() {
+        // An alias whose body names a local union keeps that union's home, so the
+        // expansion is identical to naming the union directly.
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (v)\n\
+             type Color = Red | Green\n\
+             type alias C = Color\n\n\
+             v : C -> Int\n\
+             v c =\n    0\n",
+        );
+        assert!(m.is_some(), "module must canonicalise");
+        let Some(m) = m else { return };
+        let ty = typed_ann(&m, &i, "v");
+        let Some(ast::Type::Lambda(arg, _)) = ty else {
+            assert!(false_marker(), "v annotation is an arrow");
+            return;
+        };
+        let ast::Type::Con { name, home, .. } = arg.as_ref() else {
+            assert!(false_marker(), "arg is a constructor type");
+            return;
+        };
+        assert_eq!(i.resolve(*name), Some("Color"));
+        assert_eq!(home.first().and_then(|&s| i.resolve(s)), Some("Main"));
+    }
+
+    #[test]
+    fn parametric_alias_is_a_lower_not_yet_supported() {
+        // A declared type parameter on an alias fails fast as SKY-L0109, with the
+        // span on the parameter — never a crash.
+        let err = canon_err(
+            "module Main exposing (v)\n\
+             type alias F a = Int\n\n\
+             v : Int\n\
+             v =\n    0\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Lower {
+                    msg: sky_diagnostics::LowerError::Unsupported(
+                        sky_diagnostics::Feature::ParametricAliases
+                    ),
+                    ..
+                })
+            ),
+            "expected a ParametricAliases Lower diagnostic, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_alias_name_is_a_duplicate_type() {
+        let err = canon_err(
+            "module Main exposing (v)\n\
+             type alias X = Int\n\
+             type alias X = Bool\n\n\
+             v : Int\n\
+             v =\n    0\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::DuplicateType { .. },
+                    ..
+                })
+            ),
+            "expected DuplicateType, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn alias_colliding_with_a_union_is_a_duplicate_type() {
+        let err = canon_err(
+            "module Main exposing (v)\n\
+             type Color = Red\n\
+             type alias Color = Int\n\n\
+             v : Int\n\
+             v =\n    0\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::DuplicateType { .. },
+                    ..
+                })
+            ),
+            "expected DuplicateType, got {err:?}"
+        );
+    }
 }
