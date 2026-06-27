@@ -400,6 +400,33 @@ pub enum Hint {
     FeatureNotSupported(Feature),
 }
 
+/// How confidently a [`Suggestion`] can be applied to source, mirroring rustc's
+/// model. Governs whether `skyc fix` may auto-apply the edit.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Applicability {
+    /// The replacement is correct and self-contained; eligible for auto-patch.
+    MachineApplicable,
+    /// The replacement is a best guess that may not be what the author meant.
+    MaybeIncorrect,
+    /// The replacement still contains placeholders the author must fill in.
+    HasPlaceholders,
+}
+
+/// A typed, span-scoped source edit the compiler proposes as a fix.
+///
+/// The span is the region to replace; `replacement` is the literal text to write
+/// there. Only [`Applicability::MachineApplicable`] suggestions are auto-applied;
+/// the others are shown but require explicit per-edit confirmation.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Suggestion {
+    /// The source region the edit replaces.
+    pub span: Span,
+    /// The literal text to substitute for the region.
+    pub replacement: Box<str>,
+    /// How safe the edit is to apply automatically.
+    pub applicability: Applicability,
+}
+
 /// One line of help under a diagnostic. Names are carried as owned `Box<str>`;
 /// everything else is a POD enum, so help text is rendered from data.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -412,6 +439,9 @@ pub enum HelpLine {
     SecondarySpan { span: Span, role: SpanRole },
     /// Name a constructor missing from an exhaustive match.
     MissingConstructor(Box<str>),
+    /// A concrete, span-scoped fix the reader can apply (and `skyc fix` may
+    /// auto-apply when [`Applicability::MachineApplicable`]).
+    Suggest(Suggestion),
 }
 
 // ===========================================================================
@@ -470,7 +500,7 @@ impl Diagnostic {
     pub fn help(&self) -> Vec<HelpLine> {
         match self {
             Self::Parse { msg, .. } => parse_help(msg),
-            Self::Name { msg, .. } => name_help(msg),
+            Self::Name { msg, span } => name_help(msg, *span),
             Self::Type { msg, .. } => type_help(msg),
             Self::Lower { msg, .. } => lower_help(*msg),
             Self::CompilerBug { .. } => Vec::new(),
@@ -594,13 +624,13 @@ fn parse_help(msg: &ParseError) -> Vec<HelpLine> {
     }
 }
 
-fn name_help(msg: &NameError) -> Vec<HelpLine> {
+fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
     match msg {
         NameError::ValueNotFound { suggestions, .. }
         | NameError::TypeNotFound { suggestions, .. }
         | NameError::ConstructorNotFound { suggestions, .. }
         | NameError::UnknownModule { suggestions, .. }
-        | NameError::NoSuchMember { suggestions, .. } => did_you_mean(suggestions),
+        | NameError::NoSuchMember { suggestions, .. } => did_you_mean(suggestions, span),
         NameError::DuplicateValue { first, .. }
         | NameError::DuplicateConstructor { first, .. }
         | NameError::DuplicateType { first, .. } => vec![HelpLine::SecondarySpan {
@@ -645,11 +675,21 @@ fn lower_help(msg: LowerError) -> Vec<HelpLine> {
     }
 }
 
-/// Maps already-sorted suggestion names into `DidYouMean` help lines. The
-/// producer is responsible for the stable `(Levenshtein, name)` ordering.
-fn did_you_mean(suggestions: &[Box<str>]) -> Vec<HelpLine> {
-    suggestions
-        .iter()
-        .map(|s| HelpLine::DidYouMean(s.clone()))
-        .collect()
+/// Turns already-sorted suggestion names into help lines. A single candidate is
+/// confident enough to offer as a [`Applicability::MachineApplicable`]
+/// suggestion over `span` (the misspelled name's region); two or more stay
+/// non-committal "did you mean" lines. The producer is responsible for the
+/// stable `(Levenshtein, name)` ordering.
+fn did_you_mean(suggestions: &[Box<str>], span: Span) -> Vec<HelpLine> {
+    match suggestions {
+        [only] => vec![HelpLine::Suggest(Suggestion {
+            span,
+            replacement: only.clone(),
+            applicability: Applicability::MachineApplicable,
+        })],
+        many => many
+            .iter()
+            .map(|s| HelpLine::DidYouMean(s.clone()))
+            .collect(),
+    }
 }

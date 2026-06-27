@@ -9,6 +9,13 @@
 //! Ranges: `SKY-P####` parse, `SKY-N####` name resolution, `SKY-T####` type,
 //! `SKY-L####` lower / not-yet-supported, `SKY-I####` internal (compiler bug).
 
+/// Where a reader reports a compiler bug or nudges an unimplemented feature.
+///
+/// Single source of truth: every humble / ICE message and every `SKY-I*` /
+/// `SKY-L*` explain page footer references this one constant. `OWNER` is a
+/// placeholder until the repository's Codeberg home is fixed.
+pub const ISSUE_TRACKER_URL: &str = "https://codeberg.org/OWNER/sky-rust/issues";
+
 /// A stable compiler error code, e.g. `SKY-T0001`.
 ///
 /// The wrapped string is always one of the taxonomy constants in this module;
@@ -225,12 +232,69 @@ pub fn title(c: Code) -> &'static str {
 
 /// The embedded `skyc explain` page for a code.
 ///
-/// Returns `None` for now: the explain pages land in a later phase. The
-/// signature is fixed so callers (`skyc explain`, the CI page-coverage test)
-/// can be written against it before the pages exist.
+/// Each page is `include_str!`d from `explain/<CODE>.md` at compile time, so a
+/// missing or renamed page is a build error — the registry cannot drift from
+/// the taxonomy silently. Total over every shipped constant; the `_` arm only
+/// guards a `Code` that cannot be constructed outside this crate.
+///
+/// Page invariants (enforced by [`tests::every_code_has_a_conforming_explain_page`]):
+/// line 1 is exactly `# <CODE>: <title()>`, and the body carries at least three
+/// ```` ```sky ```` fences.
 #[must_use]
-pub const fn explain_page(_c: Code) -> Option<&'static str> {
-    None
+pub fn explain_page(c: Code) -> Option<&'static str> {
+    match c {
+        SKY_P0001 => Some(include_str!("../explain/SKY-P0001.md")),
+        SKY_P0002 => Some(include_str!("../explain/SKY-P0002.md")),
+        SKY_P0003 => Some(include_str!("../explain/SKY-P0003.md")),
+        SKY_P0010 => Some(include_str!("../explain/SKY-P0010.md")),
+        SKY_P0011 => Some(include_str!("../explain/SKY-P0011.md")),
+        SKY_P0012 => Some(include_str!("../explain/SKY-P0012.md")),
+        SKY_P0013 => Some(include_str!("../explain/SKY-P0013.md")),
+        SKY_P0020 => Some(include_str!("../explain/SKY-P0020.md")),
+        SKY_P0021 => Some(include_str!("../explain/SKY-P0021.md")),
+        SKY_P0030 => Some(include_str!("../explain/SKY-P0030.md")),
+        SKY_P0031 => Some(include_str!("../explain/SKY-P0031.md")),
+        SKY_P0040 => Some(include_str!("../explain/SKY-P0040.md")),
+        SKY_P0041 => Some(include_str!("../explain/SKY-P0041.md")),
+        SKY_P0050 => Some(include_str!("../explain/SKY-P0050.md")),
+        SKY_P0060 => Some(include_str!("../explain/SKY-P0060.md")),
+        SKY_N0001 => Some(include_str!("../explain/SKY-N0001.md")),
+        SKY_N0002 => Some(include_str!("../explain/SKY-N0002.md")),
+        SKY_N0003 => Some(include_str!("../explain/SKY-N0003.md")),
+        SKY_N0004 => Some(include_str!("../explain/SKY-N0004.md")),
+        SKY_N0005 => Some(include_str!("../explain/SKY-N0005.md")),
+        SKY_N0010 => Some(include_str!("../explain/SKY-N0010.md")),
+        SKY_N0011 => Some(include_str!("../explain/SKY-N0011.md")),
+        SKY_N0012 => Some(include_str!("../explain/SKY-N0012.md")),
+        SKY_T0001 => Some(include_str!("../explain/SKY-T0001.md")),
+        SKY_T0002 => Some(include_str!("../explain/SKY-T0002.md")),
+        SKY_T0003 => Some(include_str!("../explain/SKY-T0003.md")),
+        SKY_T0004 => Some(include_str!("../explain/SKY-T0004.md")),
+        SKY_T0010 => Some(include_str!("../explain/SKY-T0010.md")),
+        SKY_T0011 => Some(include_str!("../explain/SKY-T0011.md")),
+        SKY_L0100 => Some(include_str!("../explain/SKY-L0100.md")),
+        SKY_L0101 => Some(include_str!("../explain/SKY-L0101.md")),
+        SKY_L0102 => Some(include_str!("../explain/SKY-L0102.md")),
+        SKY_L0103 => Some(include_str!("../explain/SKY-L0103.md")),
+        SKY_L0104 => Some(include_str!("../explain/SKY-L0104.md")),
+        SKY_L0105 => Some(include_str!("../explain/SKY-L0105.md")),
+        SKY_L0106 => Some(include_str!("../explain/SKY-L0106.md")),
+        SKY_L0107 => Some(include_str!("../explain/SKY-L0107.md")),
+        SKY_L0108 => Some(include_str!("../explain/SKY-L0108.md")),
+        SKY_L0200 => Some(include_str!("../explain/SKY-L0200.md")),
+        SKY_I0001 => Some(include_str!("../explain/SKY-I0001.md")),
+        SKY_I0010 => Some(include_str!("../explain/SKY-I0010.md")),
+        SKY_I0011 => Some(include_str!("../explain/SKY-I0011.md")),
+        SKY_I0100 => Some(include_str!("../explain/SKY-I0100.md")),
+        SKY_I0101 => Some(include_str!("../explain/SKY-I0101.md")),
+        SKY_I0102 => Some(include_str!("../explain/SKY-I0102.md")),
+        SKY_I0103 => Some(include_str!("../explain/SKY-I0103.md")),
+        SKY_I0200 => Some(include_str!("../explain/SKY-I0200.md")),
+        SKY_I0201 => Some(include_str!("../explain/SKY-I0201.md")),
+        SKY_I0202 => Some(include_str!("../explain/SKY-I0202.md")),
+        SKY_I0203 => Some(include_str!("../explain/SKY-I0203.md")),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -271,10 +335,41 @@ mod tests {
         assert_eq!(seen.len(), 50);
     }
 
+    /// CI coverage gate: every taxonomy code has a conforming explain page.
+    /// Line 1 must be exactly `# <CODE>: <title()>` and the body must carry at
+    /// least three ```` ```sky ```` fences. A code without a page, or with a
+    /// non-conforming one, fails the suite (and `include_str!` already fails the
+    /// build if the file is absent entirely).
     #[test]
-    fn explain_pages_absent_for_now() {
+    fn every_code_has_a_conforming_explain_page() {
         for &c in ALL {
-            assert!(explain_page(c).is_none());
+            assert!(
+                explain_page(c).is_some(),
+                "{} has no explain page",
+                c.as_str()
+            );
+            if let Some(page) = explain_page(c) {
+                let first = page.lines().next().unwrap_or("");
+                let expected = format!("# {}: {}", c.as_str(), title(c));
+                assert_eq!(
+                    first,
+                    expected,
+                    "{} page line 1 must be `{expected}`",
+                    c.as_str()
+                );
+                let fences = page.matches("```sky").count();
+                assert!(
+                    fences >= 3,
+                    "{} page has {fences} ```sky fences, need >= 3",
+                    c.as_str()
+                );
+            }
         }
+    }
+
+    #[test]
+    fn issue_tracker_url_is_a_codeberg_issues_link() {
+        assert!(ISSUE_TRACKER_URL.starts_with("https://codeberg.org/"));
+        assert!(ISSUE_TRACKER_URL.ends_with("/issues"));
     }
 }
