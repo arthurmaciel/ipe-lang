@@ -42,12 +42,12 @@ use sky_intern::{Interner, Symbol};
 pub use solve::{BUDGET_ENV, Budget, DEFAULT_SOLVER_BUDGET};
 pub use ty::Ty;
 
-use constrain::{Builder, FieldAccess, zonk};
+use constrain::{Builder, FieldAccess, RecordUpdate, zonk};
 use doc::{VarNamer, ty_to_doc};
 use solve::solve;
 use ty::{Content, FlatType};
 use unify::unify;
-use unionfind::UnionFind;
+use unionfind::{UnionFind, VarId};
 
 /// The result of inference: resolved types for bindings and for every region.
 ///
@@ -95,6 +95,11 @@ fn infer_with_budget(
     // access's result variable reflects the field's type.
     resolve_field_accesses(&mut uf, budget, interner, &generated.field_accesses)?;
 
+    // Discharge deferred record updates the same way: each updated field must
+    // exist in the (now-settled) base record's type, and its new value must
+    // unify with that field's type.
+    resolve_record_updates(&mut uf, budget, interner, &generated.record_updates)?;
+
     // End-of-checking exhaustiveness + redundancy pass. Running it here — after
     // the solver settles — makes the lowerer's `Match::new` exhaustiveness
     // contract a genuinely unreachable compiler-bug case.
@@ -139,31 +144,74 @@ fn resolve_field_accesses(
         };
         match field_var {
             Some(v) => unify(uf, budget, interner, fa.span, fa.result, v)?,
-            None => return Err(no_such_field(uf, budget, interner, fa)),
+            None => {
+                return Err(no_such_field(
+                    uf, budget, interner, fa.record, fa.field, fa.span,
+                ));
+            }
         }
     }
     Ok(())
 }
 
-/// Build the [`TypeError::NoSuchField`] (SKY-T0012) for an access whose field is
-/// absent from the (settled) record type, or whose base is not a record. The
-/// record type is zonked + rendered here so the reporter needs no arena access.
+/// Discharge every deferred record update (`{ base | field = value, ... }`).
+///
+/// By the time this runs the base record's type has settled. For each updated
+/// field, the field's type is read from the base record and unified with the new
+/// value's type — so changing a field to a value of the wrong type is a normal
+/// [`unify`] mismatch, blamed at the update span. A field absent from the base —
+/// or a base that is not a record at all — is a [`TypeError::NoSuchField`].
+fn resolve_record_updates(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    updates: &[RecordUpdate],
+) -> DResult<()> {
+    for ru in updates {
+        let root = uf.find(ru.record)?;
+        // Clone the field map so the base's descriptor is not borrowed across the
+        // `unify` calls below (which mutate the arena).
+        let base_fields = match uf.content(root)? {
+            Content::Structure(FlatType::Record(fields)) => fields,
+            _ => BTreeMap::new(),
+        };
+        for (field, value_var) in &ru.fields {
+            match base_fields.get(field).copied() {
+                Some(field_var) => unify(uf, budget, interner, ru.span, *value_var, field_var)?,
+                None => {
+                    return Err(no_such_field(
+                        uf, budget, interner, ru.record, *field, ru.span,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Build the [`TypeError::NoSuchField`] (SKY-T0012) for a field that is absent
+/// from the (settled) record type, or whose base is not a record. Shared by the
+/// field-access ([`resolve_field_accesses`]) and record-update
+/// ([`resolve_record_updates`]) resolution passes; the record type is zonked +
+/// rendered here so the reporter needs no arena access.
 fn no_such_field(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
     interner: &Interner,
-    fa: &FieldAccess,
+    record: VarId,
+    field: Symbol,
+    span: Span,
 ) -> Diagnostic {
-    let field = match interner.resolve(fa.field) {
+    let field = match interner.resolve(field) {
         Some(s) => Box::from(s),
         None => {
             return Diagnostic::CompilerBug {
                 where_: "intern.resolve",
-                detail: format!("no backing string for field symbol {}", fa.field.as_raw()),
+                detail: format!("no backing string for field symbol {}", field.as_raw()),
             };
         }
     };
-    let record_ty = match zonk(uf, budget, fa.record) {
+    let record_ty = match zonk(uf, budget, record) {
         Ok(t) => t,
         Err(bug) => return bug,
     };
@@ -173,7 +221,7 @@ fn no_such_field(
         Err(bug) => return bug,
     };
     Diagnostic::Type {
-        span: fa.span,
+        span,
         msg: TypeError::NoSuchField {
             field,
             record: Box::new(record_doc),
@@ -914,6 +962,75 @@ mod tests {
                 })
             ),
             "a field on a non-record must be NoSuchField, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn record_update_has_the_base_record_type() {
+        // `{ p | x = 41 }` is the same record type as `p`, so reading `q.x`
+        // afterwards is an `Int`.
+        let opt = infer_env_ty(
+            "module Main exposing (v)\nv =\n    let p = { x = 1, y = 2 } in let q = { p | x = 41 } in q.y\n",
+            "v",
+        );
+        assert!(opt.is_some(), "v must infer");
+        let Some((ty, i)) = opt else { return };
+        assert_eq!(ty_con_name(&ty, &i).as_deref(), Some("Int"));
+    }
+
+    #[test]
+    fn updating_a_missing_field_is_no_such_field() {
+        // `{ p | z = 0 }` where `p` has only `x`/`y`: a closed record rejects the
+        // update of an absent field (SKY-T0012).
+        let source =
+            "module Main exposing (v)\nv =\n    let p = { x = 1, y = 2 } in { p | z = 0 }\n";
+        let Some((m, mut i)) = canon_src(source) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::NoSuchField { .. },
+                    ..
+                })
+            ),
+            "updating a missing field must be NoSuchField, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn updating_a_field_to_the_wrong_type_is_rejected() {
+        // `p.x` is an `Int`; updating it to a record `{ a = 1 }` cannot unify, so
+        // the whole binding is a type error.
+        let source = "module Main exposing (v)\nv =\n    let p = { x = 1, y = 2 } in { p | x = { a = 1 } }\n";
+        let Some((m, mut i)) = canon_src(source) else {
+            return;
+        };
+        assert!(
+            infer(&m, &mut i).is_err(),
+            "updating a field to a value of the wrong type must be a type error"
+        );
+    }
+
+    #[test]
+    fn updating_a_field_on_a_non_record_is_no_such_field() {
+        // `p` is an `Int`, so `{ p | x = 1 }` has no field to update (SKY-T0012).
+        let source = "module Main exposing (v)\nv =\n    let p = 5 in { p | x = 1 }\n";
+        let Some((m, mut i)) = canon_src(source) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::NoSuchField { .. },
+                    ..
+                })
+            ),
+            "updating a field on a non-record must be NoSuchField, got {r:?}"
         );
     }
 

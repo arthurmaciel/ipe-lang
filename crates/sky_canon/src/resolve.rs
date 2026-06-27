@@ -361,28 +361,9 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
         }
         src::Expr_::Record(fields) => {
             // A record introduces no bindings: every field value resolves against
-            // the same enclosing scope. The field name is a label, not a
-            // reference, so it is carried through unresolved. A field name written
-            // twice in one literal would otherwise silently collapse to one
-            // struct field, so it is rejected here — a field is, in effect, a
-            // value defined more than once in the record.
-            let mut seen: BTreeMap<Symbol, Span> = BTreeMap::new();
-            let mut can_fields = Vec::with_capacity(fields.len());
-            for (name, value) in fields {
-                if let Some(first) = seen.get(&name.value) {
-                    return Err(Diagnostic::Name {
-                        span: name.span,
-                        msg: NameError::DuplicateValue {
-                            name: name_str(interner, name.value)?,
-                            first: *first,
-                        },
-                    });
-                }
-                seen.insert(name.value, name.span);
-                let can_value = canonicalise_expr(value, env, interner)?;
-                can_fields.push((name.value, can_value));
-            }
-            canon::Expr_::Record(can_fields)
+            // the same enclosing scope. The field names are labels, carried
+            // unresolved; a duplicate is rejected (see `canonicalise_fields`).
+            canon::Expr_::Record(canonicalise_fields(fields, env, interner)?)
         }
         src::Expr_::Access(record, field) => {
             // `record.field`: the record sub-expression resolves against the
@@ -390,8 +371,50 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
             let can_record = canonicalise_expr(record, env, interner)?;
             canon::Expr_::Access(Box::new(can_record), field.value)
         }
+        src::Expr_::Update(base, fields) => {
+            // `{ base | field = value, ... }`: the base names a record variable,
+            // resolved against the enclosing scope exactly as a bare reference
+            // would be (an unknown name is the usual `ValueNotFound`). The updated
+            // fields resolve the same way as a literal's, with the same
+            // duplicate-field rejection.
+            let base_node = resolve_var(base.value, base.span, env, interner)?;
+            let can_base = Located::new(base.span, base_node);
+            let can_fields = canonicalise_fields(fields, env, interner)?;
+            canon::Expr_::Update(Box::new(can_base), can_fields)
+        }
     };
     Ok(Located::new(span, node))
+}
+
+/// Canonicalise a record field list (shared by the literal `{ f = v, ... }` and
+/// the update `{ r | f = v, ... }` forms).
+///
+/// Each field value resolves against the enclosing scope; the field name is a
+/// label carried through unresolved. A field name written twice would otherwise
+/// silently collapse to one struct field, so a duplicate is rejected here — a
+/// field is, in effect, a value defined more than once in the record.
+fn canonicalise_fields(
+    fields: &[(Located<Symbol>, src::Expr)],
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<Vec<(Symbol, canon::Expr)>> {
+    let mut seen: BTreeMap<Symbol, Span> = BTreeMap::new();
+    let mut can_fields = Vec::with_capacity(fields.len());
+    for (name, value) in fields {
+        if let Some(first) = seen.get(&name.value) {
+            return Err(Diagnostic::Name {
+                span: name.span,
+                msg: NameError::DuplicateValue {
+                    name: name_str(interner, name.value)?,
+                    first: *first,
+                },
+            });
+        }
+        seen.insert(name.value, name.span);
+        let can_value = canonicalise_expr(value, env, interner)?;
+        can_fields.push((name.value, can_value));
+    }
+    Ok(can_fields)
 }
 
 /// Resolve a bare name: constructor first, then variable. Unknown → error.

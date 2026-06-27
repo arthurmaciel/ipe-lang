@@ -492,6 +492,27 @@ mod tests {
     }
 
     #[test]
+    fn record_update_parses_into_an_update_node() {
+        // `{ p | x = 41 }` is an `Update` over base `p` with one updated field.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    {{ p | x = 41, y = 7 }}\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "record update must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::Update(base, fields)) => {
+                let names: Vec<&str> = fields
+                    .iter()
+                    .filter_map(|(n, _)| i.resolve(n.value))
+                    .collect();
+                i.resolve(base.value) == Some("p") && names == vec!["x", "y"]
+            }
+            _ => false,
+        };
+        assert!(shape, "v body is `Update p [x, y]`, base + fields in order");
+    }
+
+    #[test]
     fn field_access_parses_into_an_access_chain() {
         // `p.x` is `Access (VarLocal p) x`; `p.x.y` nests it.
         let mut i = Interner::new();

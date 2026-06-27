@@ -459,6 +459,28 @@ impl<'a> Lowerer<'a> {
                 record: Box::new(self.lower_expr(record)?),
                 field: *field,
             }),
+            canon::Expr_::Update(base, fields) => {
+                // A record update lowers to a copy of `base` with the listed
+                // fields replaced. Only the changed fields are carried, sorted by
+                // field name so the lowering is deterministic; the backend names
+                // each reassignment, so write order is free. The result's record
+                // struct is the base's, already surfaced via `Module.records`
+                // from the base region's solved type.
+                let record = Box::new(self.lower_expr(base)?);
+                let mut lowered: Vec<(Symbol, Expr)> = Vec::with_capacity(fields.len());
+                for (name, value) in fields {
+                    lowered.push((*name, self.lower_expr(value)?));
+                }
+                lowered.sort_by(|a, b| {
+                    self.resolve(a.0)
+                        .unwrap_or("")
+                        .cmp(self.resolve(b.0).unwrap_or(""))
+                });
+                Ok(Expr::Update {
+                    record,
+                    fields: lowered,
+                })
+            }
             canon::Expr_::Case(scrut, branches) => self.lower_case(scrut, branches),
             // A function named as a bare value rather than applied. M0 has no
             // first-class functions; a function name is legal only as a call
