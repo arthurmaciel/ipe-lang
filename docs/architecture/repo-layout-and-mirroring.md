@@ -3,26 +3,52 @@
 > **Status:** plan / decision record. Written 2026-06-27. Not yet executed.
 > **Owner:** sky-rust coordinator (downstream of upstream Sky by anzellai).
 
+## 0. Pivot (2026-06-27): drop the fork's Haskell Rust backend; mirror behaviour, not bytes
+
+The Haskell compiler's Rust backend (`Generate/Rust/*`) **and** `runtime-rust`
+were authored by *us* (the coordinator + agents), not by anzellai — `runtime-rust`
+is already the **canonical** Rust runtime. We are **abandoning the fork's Haskell
+Rust backend** and focusing solely on **sky-rust (compiler + Rust backend + Rust
+runtime)**, mirroring **functionality/behaviour** against anzellai's mainline:
+the Haskell **frontend** (parse/canon/types semantics) and the **Go**
+backend+runtime (observable behaviour).
+
+Why this is correct, not a compromise:
+- Byte-matching the fork's Haskell-emitted Rust was **circular** — it only proved
+  "I reproduced my own earlier output," and faithfully reproduced its bugs. A
+  bootstrap crutch, never a real oracle.
+- `PRINCIPLES.md` point 2 already defines correctness as *"match the **Go
+  reference's** observable behaviour."* The Go backend/runtime is the mature,
+  external reference. So the pivot **returns to the stated principle**; the
+  byte-diff was the temporary proxy.
+
 ## 1. The forces (why this is not a normal "merge the repos" question)
 
 - **We are downstream.** Upstream Sky (the Haskell compiler + Go backend/runtime,
   by anzellai) is fast-moving, brilliant, industrial-grade. Our standing policy:
-  **always pull upstream improvements into the Sky Rust compiler**, and the
-  **Rust runtime is a behavioural mirror of the Go runtime** (born to mirror it;
-  may diverge later, deliberately, once we have the skill to design our own).
-- **Two distinct mirrors, two distinct references:**
-  1. **Haskell compiler → Rust compiler** (frontend + lowering *behaviour*). The
-     Haskell compiler is the spec; the **golden byte-diff oracle** enforces it.
-  2. **Go runtime → Rust runtime** (kernel *behaviour*). The Go runtime is the
-     reference; **behavioural parity tests** (same Sky program, Go vs Rust
-     output) enforce it.
+  **always pull upstream improvements into sky-rust**, and the **Rust runtime is a
+  behavioural mirror of the Go runtime** (born to mirror it; may diverge later,
+  deliberately, once we have the skill to design our own).
+- **Two distinct mirrors, two distinct references — both anzellai's mainline:**
+  1. **Haskell frontend → Rust compiler** (parse/canon/types/lower *behaviour*).
+     Enforced **end-to-end**: the program must compile + run the same, and reject
+     the same ill-formed inputs (a should-reject corpus + the error-code system).
+  2. **Go runtime/backend → Rust runtime/backend** (kernel + emission *behaviour*).
+     Enforced by **behavioural parity**: same Sky program, `sky`(Go) output vs
+     `skyc`(Rust) output (stdout/exit/HTTP), the example sweep, ported Sky.Test.
+- **Emission is snapshot-tested, not byte-diffed against Haskell.** A self-owned
+  insta-style snapshot of `skyc`'s output is a *regression guard* ("did my codegen
+  change, and did I mean to?"), not a correctness oracle. Codegen *quality* (worse
+  Rust, same behaviour) is covered by perf-sweep + clippy/Miri on emitted code.
 - **v0.17 "fully-typed codegen" is landing soon** (upstream
   `feat/v0.17-fully-typed-codegen`). `sky-rust` is **already** type-directed /
-  fully-typed by design, so v0.17 is *convergent*, not disruptive to our
-  architecture. Its main concrete effect on us: the Haskell Rust-backend's
-  *emitted bytes* will shift, so our **golden re-baselines** against v0.17.
-- **The Haskell compiler is still our correctness oracle**, so it (and the Go
-  runtime) must stay reachable from our test harness for the foreseeable future.
+  fully-typed by design, so v0.17 is *convergent*. With the byte-diff gone, v0.17
+  no longer forces a golden re-baseline — it's a *semantics* sync (port any new
+  typing/lowering behaviour), validated by behavioural parity.
+- **anzellai's mainline (Haskell frontend + Go backend/runtime) is the reference**
+  and must stay reachable from our test harness (a released `sky` binary +
+  `runtime-go` source) for the foreseeable future. We do **not** maintain the
+  fork's Rust backend.
 
 Conclusion: the coupling decision is really "how do we make **continuous mirroring
 of a fast upstream** sustainable," and the repo layout serves that.
@@ -32,8 +58,10 @@ of a fast upstream** sustainable," and the repo layout serves that.
 1. **Monorepo for our work**, with the Rust compiler + Rust backend + Rust runtime
    co-located, and **upstream Sky vendored as a pinned, read-only dependency**
    (git submodule or subtree, pinned to a tag, e.g. `v0.17.0`). The pinned
-   upstream supplies *both* references: the Haskell compiler (golden oracle) and
-   the Go runtime source (the runtime mirror reference).
+   upstream supplies *both* references: a built/released `sky` binary with the
+   **Go** backend (the behavioural oracle + the Haskell frontend as semantics
+   reading) and `runtime-go/` source (the runtime-mirror reference). The fork's
+   Haskell **Rust** backend is **not** vendored — it is abandoned (see §0).
 2. **Preserve the `sky_ir` backend boundary.** Co-locating must not privilege
    Rust. The runtime lives *under the backend*, so future backends slot in
    cleanly.
@@ -61,12 +89,14 @@ sky-rust/                          # the monorepo
       runtime/                     # sky_runtime — MIRRORS runtime-go module-for-module
     # future: backends/wasm/, backends/c/, each with its own runtime/
   vendor/
-    upstream-sky/                  # anzellai's Haskell sky, submodule pinned to a tag
-                                   #   -> the Haskell compiler (golden oracle)
-                                   #   -> runtime-go/ (the runtime mirror reference)
+    upstream-sky/                  # anzellai's mainline sky, submodule pinned to a tag
+                                   #   -> sky (Haskell+Go) = behavioural oracle
+                                   #   -> Haskell frontend  = semantics reading
+                                   #   -> runtime-go/        = runtime mirror reference
+                                   #   (the fork's Haskell Rust backend is NOT here)
   tests/
-    golden/                        # emitted-Rust byte targets, regenerated from vendor/upstream-sky
-    parity/                        # Go-vs-Rust behavioural diffs over upstream examples
+    snapshots/                     # self-owned insta snapshots of skyc's emission (regression guard)
+    parity/                        # behavioural diffs: sky(Go) output vs skyc(Rust) over upstream examples
   docs/
     parity/
       compiler-parity.md           # ledger: upstream feature -> rust-compiler status
@@ -80,27 +110,31 @@ Notes:
   **embedded** into `skyc` (via `include_dir!`/`build.rs`, mirroring how the
   Haskell binary TH-embeds its runtime), killing the current sibling-path
   `resolve_runtime` hack and making CI self-contained.
-- During the port, the pinned upstream's Haskell compiler is built with its own
-  toolchain in CI to (re)generate goldens and run parity diffs.
+- During the port, the pinned upstream's `sky` (Haskell+**Go**) is built/used in CI
+  to run behavioural parity diffs and as the semantics reference. The fork's
+  Haskell Rust backend is not built or used.
 
 ## 4. The mirroring model (the sustainable SOP)
 
-Treat **upstream as the spec**, the **golden + parity harness as the enforcer**,
-and the **two ledgers as the backlog**. This lets us track a fast upstream
-mechanically — port *behaviour*, let the oracle *prove* we matched it — without a
-deep design decision on every feature.
+Treat **upstream (anzellai's mainline) as the spec**, the **parity harness as the
+enforcer**, and the **two ledgers as the backlog**. Port *behaviour*; let the Go
+reference *prove* we matched it — no deep design decision per feature. Emission is
+snapshot-guarded for regressions, not pinned to any external bytes.
 
-### 4a. Compiler mirror (Haskell → Rust)
+### 4a. Compiler mirror (Haskell frontend + Go backend → sky-rust)
 Per upstream release:
 1. Bump `vendor/upstream-sky` pin to the new tag.
-2. Regenerate `tests/golden/` from the pinned Haskell compiler (`--backend rust`).
-3. Run the **byte-diff oracle** + the **behavioural diff** (compile+run each
-   example with the pinned Haskell compiler AND `skyc`, compare stdout/exit).
-4. Triage divergences; for each, port the upstream change into the right pipeline
-   stage (`sky_parse`/`sky_canon`/`sky_types`/`sky_lower`/`sky_backend_rust`).
+2. Run the **behavioural diff**: compile + run each example with the pinned
+   `sky`(Go) AND `skyc`(Rust); compare stdout / exit / HTTP. Run the should-reject
+   corpus: both must reject the same ill-formed inputs (our error-code message is
+   ours; the *accept/reject decision* must match).
+3. Refresh `tests/snapshots/` only when WE intentionally change emission (insta
+   review) — it is a regression guard, not a spec.
+4. Triage behavioural divergences; for each, port the upstream change into the
+   right stage (`sky_parse`/`sky_canon`/`sky_types`/`sky_lower`/`sky_backend_rust`).
 5. Update `docs/parity/compiler-parity.md`; re-green; tag `sky-rust vX.Y`.
-The existing `sky-rust-backend` skills are exactly this machinery —
-`sync-with-upstream`, `build-sweep`, `run-sweep`, `web-sweep`, `perf-sweep`.
+The existing `sky-rust-backend` skills are this machinery — `sync-with-upstream`,
+`build-sweep`, `run-sweep`, `web-sweep`, `perf-sweep`.
 
 ### 4b. Runtime mirror (Go → Rust)
 - Keep `backends/rust/runtime/sky_runtime/` **structurally 1:1** with
@@ -132,40 +166,43 @@ The existing `sky-rust-backend` skills are exactly this machinery —
 unification (see `BUMPING-EDITIONS.md`) so the tree is disrupted **once**.
 
 1. **Wait for / fetch v0.17.** When `feat/v0.17-fully-typed-codegen` releases,
-   read its codegen notes; because we are already type-directed, expect *fewer*
-   divergences, possibly a smaller golden diff. Study the branch to map any new
-   IR/typing concepts onto our `sky_ir`/`sky_lower`.
-2. **Vendor upstream.** Add `vendor/upstream-sky` as a submodule pinned to
-   `v0.17.0`. Wire CI to build its Haskell compiler + Go runtime.
-3. **Move the runtime in.** Relocate `runtime-rust` → `backends/rust/runtime/`;
-   switch `skyc` from sibling-path copy to embedded (`include_dir!`/`build.rs`);
-   delete the `resolve_runtime` upward-search hack. (Coordinate with the upstream
-   repo if it still vendors `runtime-rust` — at this point the monorepo owns the
-   canonical Rust runtime; upstream's Haskell Rust-backend can reference the
-   vendored copy or be retired.)
-4. **Re-baseline goldens** from the pinned v0.17 Haskell compiler; apply the
-   edition-2024 unification here (one window — see `BUMPING-EDITIONS.md`).
+   read its codegen + typing notes; because we are already type-directed, expect a
+   *semantics* sync, not a re-baseline. Map any new typing/lowering concepts onto
+   `sky_ir`/`sky_lower`.
+2. **Vendor upstream mainline.** Add `vendor/upstream-sky` as a submodule pinned to
+   `v0.17.0`. Wire CI to build/use `sky` (Haskell+**Go**) as the behavioural oracle
+   + the `runtime-go` source. (Not the fork's Rust backend.)
+3. **Move the runtime in.** Relocate `runtime-rust` → `backends/rust/runtime/`
+   (it is already canonical and ours); switch `skyc` from sibling-path copy to
+   embedded (`include_dir!`/`build.rs`); delete the `resolve_runtime` upward-search
+   hack. No upstream coordination needed — the fork's Rust backend is retired, so
+   nothing else consumes `runtime-rust`.
+4. **Apply the edition-2024 unification** (now a *one-repo* change — the emitted
+   edition is purely ours; no Haskell-emitter coordination — see the simplified
+   `BUMPING-EDITIONS.md`). Refresh `tests/snapshots/` via insta review.
 5. **Stand up the ledgers + parity harness** (`docs/parity/*`, `tests/parity/`)
-   from the pinned upstream's example set.
+   driving `sky`(Go) vs `skyc`(Rust) over the pinned upstream's example set.
 6. **Tag `sky-rust v0.17.0`** mirroring Sky v0.17.0. From here, every upstream
    release is a pin-bump + the §4 SOP.
 
-## 6. Open questions to resolve with upstream's author
+## 6. Open questions / notes
 
-- Does v0.17 change the *emitted Rust* shape materially (it will move toward
-  typed; quantify the golden delta once it lands)?
-- Is upstream willing to treat the monorepo's `backends/rust/runtime/` as the
-  canonical Rust runtime (so it isn't maintained in two places)? If not, keep the
-  submodule one-directional and accept the runtime lives upstream until we fully
-  own it.
-- Long-term: when does the Haskell compiler get retired as the oracle? Until then
-  the vendored upstream is load-bearing; the monorepo makes that dependency local
-  and pinned rather than a fragile sibling path.
+- v0.17 is a *semantics* sync, not an emission re-baseline (byte-diff is gone).
+  Still worth reading its typing model to mirror behaviour precisely.
+- `backends/rust/runtime/` is the **sole canonical** Rust runtime (the fork's
+  Haskell Rust backend that previously also vendored a copy is abandoned) — no
+  dual maintenance.
+- Long-term, anzellai's mainline (`sky` Haskell+Go) stays the behavioural oracle
+  and the runtime-mirror source; the monorepo makes that a local pinned submodule
+  rather than a fragile sibling path. Retiring it as the oracle is a far-future
+  decision (only once sky-rust is independently trusted).
 
 ## 7. One-line summary
 
-Monorepo our compiler + Rust backend + Rust runtime, **vendor upstream Sky pinned
-to a tag** as the dual reference (Haskell oracle + Go-runtime mirror source),
-enforce both mirrors with the golden + parity harness and two ledgers, version-lock
-to upstream, and do the reorg **once**, bundled with the v0.17 sync and the
-edition-2024 bump — after the current error-code phases land.
+Abandon the fork's Haskell Rust backend; mirror **behaviour** (not bytes) against
+anzellai's mainline. Monorepo our compiler + Rust backend + Rust runtime, **vendor
+upstream pinned to a tag** as the dual reference (Go behavioural oracle +
+`runtime-go` mirror source), enforce with behavioural-parity + two ledgers
+(emission is snapshot-guarded), version-lock to upstream, and do the reorg **once**,
+bundled with the v0.17 sync + the (now one-repo) edition-2024 bump — after the
+current error-code phases land.
