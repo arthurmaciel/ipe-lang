@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use sky_backend::EmittedProject;
-use sky_diagnostics::DResult;
+use sky_diagnostics::{DResult, Diagnostic};
 use sky_ir::{Program, TypeDef};
 
 use crate::EmitCtx;
@@ -44,10 +44,15 @@ const RUNTIME_MOD_RS: &str = include_str!("../../../tests/golden/m0/sky_runtime/
 /// The generated `sky_runtime/config.rs` (DB/config bindings — empty for M0).
 const RUNTIME_CONFIG_RS: &str = include_str!("../../../tests/golden/m0/sky_runtime/config.rs");
 
-/// Fallback when an anchor is not found in the embedded golden. The golden
-/// always contains both anchors, so this is unreachable in practice; it keeps
-/// the slice helper panic-free.
-const EMPTY: &str = "";
+/// The `Diagnostic::CompilerBug` raised when a golden anchor is absent — a
+/// drifted-golden invariant violation, surfaced (SKY-I0203) instead of a silent
+/// empty slice.
+fn anchor_missing(anchor: &str) -> Diagnostic {
+    Diagnostic::CompilerBug {
+        where_: "backend.golden_anchor",
+        detail: format!("golden anchor {anchor:?} not found in the embedded M0 golden"),
+    }
+}
 
 /// The fixed kernel-wrapper prelude emitted between the user types and the user
 /// functions (golden lines 45–127).
@@ -58,26 +63,26 @@ const EMPTY: &str = "";
 /// preamble/epilogue use. The slice is anchored entirely on its *own* content
 /// (the first alias and the final `crypto_random_token` wrapper), independent of
 /// the surrounding user code.
-fn runtime_bindings() -> &'static str {
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] (SKY-I0203) if either anchor is absent
+/// from the embedded golden — a drifted-golden invariant violation, surfaced
+/// instead of a silent empty slice.
+fn runtime_bindings() -> DResult<&'static str> {
     const START: &str = "type SkyError = String;";
     const END: &str = "    sky_runtime::crypto::crypto_random_token(n)\n}\n";
-    let Some(start) = GOLDEN.find(START) else {
-        return EMPTY;
-    };
-    let Some(rest) = GOLDEN.get(start..) else {
-        return EMPTY;
-    };
-    let Some(end_in_rest) = rest.find(END) else {
-        return EMPTY;
-    };
+    let start = GOLDEN.find(START).ok_or_else(|| anchor_missing(START))?;
+    let rest = GOLDEN.get(start..).ok_or_else(|| anchor_missing(START))?;
+    let end_in_rest = rest.find(END).ok_or_else(|| anchor_missing(END))?;
     let end = start + end_in_rest + END.len();
-    GOLDEN.get(start..end).unwrap_or(EMPTY)
+    GOLDEN.get(start..end).ok_or_else(|| anchor_missing(END))
 }
 
 /// Emit the complete project for `program`.
 pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject> {
     let mut out = String::new();
-    out.push_str(&preamble());
+    out.push_str(&preamble()?);
 
     // User types, emitted from the IR.
     for module in &program.modules {
@@ -89,7 +94,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     out.push('\n');
 
     // Fixed kernel-wrapper prelude.
-    out.push_str(runtime_bindings());
+    out.push_str(runtime_bindings()?);
     out.push('\n');
 
     // User functions, emitted from the IR.
@@ -100,7 +105,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     }
     out.push('\n');
 
-    out.push_str(&epilogue());
+    out.push_str(&epilogue()?);
 
     let mut files = BTreeMap::new();
     files.insert("src/main.rs".to_owned(), out);

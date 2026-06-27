@@ -82,10 +82,25 @@ impl<'a> EmitCtx<'a> {
                 .collect::<DResult<Vec<&str>>>()?;
             for ty in &module.types {
                 let TypeDef::Enum(def) = ty;
-                enum_names.insert(
-                    def.name,
-                    naming::enum_name(&segs, resolve_sym(interner, def.name)?),
-                );
+                let rust_name = naming::enum_name(&segs, resolve_sym(interner, def.name)?);
+                // The IR keys a type by its bare name `Symbol`. Two modules
+                // declaring same-named types intern to the *same* `Symbol`, so a
+                // plain insert would silently overwrite the first mapping —
+                // making both use sites resolve to one module's Rust type. The
+                // user-facing duplicate is caught upstream (SKY-N0012); reaching
+                // here means the lowerer admitted a cross-module collision the
+                // backend cannot disambiguate from a bare `Symbol`, so fail fast
+                // (SKY-I0202) rather than emit code referencing the wrong type.
+                if let Some(prev) = enum_names.insert(def.name, rust_name.clone()) {
+                    return Err(Diagnostic::CompilerBug {
+                        where_: "backend.type_name_collision",
+                        detail: format!(
+                            "type symbol {} maps to two Rust names ({prev} and {rust_name}); \
+                             cross-module same-named types are indistinguishable by bare symbol",
+                            def.name.as_raw()
+                        ),
+                    });
+                }
             }
             for func in &module.funcs {
                 func_names.insert(
@@ -101,8 +116,31 @@ impl<'a> EmitCtx<'a> {
         })
     }
 
-    fn resolve(&self, sym: Symbol) -> DResult<&str> {
-        resolve_sym(self.interner, sym)
+    /// Resolve a symbol that will be emitted as a Rust identifier, rejecting an
+    /// absent *or* empty resolution. The lowerer is contracted never to hand the
+    /// backend a dangling or empty-intended value/variant/param symbol, so a
+    /// failure here is an internal invariant violation (SKY-I0201) — surfaced as
+    /// a [`Diagnostic::CompilerBug`] rather than silently emitting an empty (and
+    /// uncompilable) Rust identifier.
+    fn resolve_ident(&self, sym: Symbol) -> DResult<&str> {
+        match self.interner.resolve(sym) {
+            Some(s) if !s.is_empty() => Ok(s),
+            _ => Err(Diagnostic::CompilerBug {
+                where_: "backend.dangling_symbol",
+                detail: format!(
+                    "value/variant symbol {} resolved to an empty or absent identifier",
+                    sym.as_raw()
+                ),
+            }),
+        }
+    }
+
+    /// Resolve a symbol to the Rust identifier to emit for it: checked for
+    /// emptiness ([`Self::resolve_ident`]) and then mangled if it collides with
+    /// a Rust keyword ([`naming::mangle_reserved`]). Used for every emitted
+    /// value/variant/param name.
+    fn emit_ident(&self, sym: Symbol) -> DResult<String> {
+        Ok(naming::mangle_reserved(self.resolve_ident(sym)?.to_owned()))
     }
 
     fn enum_name(&self, ty: Symbol) -> DResult<&str> {
