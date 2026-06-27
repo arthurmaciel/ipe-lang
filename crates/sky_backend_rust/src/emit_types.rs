@@ -47,9 +47,16 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     let mut variant_lines = Vec::with_capacity(def.variants.len());
     let mut show_arms = Vec::with_capacity(def.variants.len());
     for variant in &def.variants {
-        let vn = ctx.resolve(*variant)?;
+        // The Rust variant ident is keyword-mangled; the `sky_show` string keeps
+        // the original Sky name so a variant like `Type` still displays as
+        // "Type", not "Type_". For non-keyword variants the two coincide, so the
+        // golden stays byte-identical.
+        let vn = ctx.emit_ident(*variant)?;
+        let display = ctx.resolve_ident(*variant)?;
         variant_lines.push(format!("    {vn},"));
-        show_arms.push(format!("            {name}::{vn} => \"{vn}\".to_string(),"));
+        show_arms.push(format!(
+            "            {name}::{vn} => \"{display}\".to_string(),"
+        ));
     }
     let variants = variant_lines.join("\n");
     let arms = show_arms.join("\n");
