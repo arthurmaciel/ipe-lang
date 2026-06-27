@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use sky_canon::ast as canon;
 use sky_diagnostics::{
     Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0100, SKY_L0101, SKY_L0102,
-    SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, Span,
+    SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, Span,
 };
 use sky_intern::{Interner, Symbol};
 use sky_ir::{Callee, Expr, IrType, KernelFn};
@@ -378,9 +378,9 @@ fn value_callee_lowers_to_apply() -> DResult<()> {
     let f = i.intern("f")?;
     let g = i.intern("g")?;
     let ty = con_int(&mut i)?;
-    let callee = Box::new(Located::new(Span::new(82, 83), canon::Expr_::VarLocal(g)));
+    let callee_ref = Box::new(Located::new(Span::new(82, 83), canon::Expr_::VarLocal(g)));
     let arg = int(Span::new(84, 85), 5);
-    let body = Located::new(Span::new(82, 90), canon::Expr_::Call(callee, vec![arg]));
+    let body = Located::new(Span::new(82, 90), canon::Expr_::Call(callee_ref, vec![arg]));
     let def = canon::Def::Typed {
         name: Located::new(Span::new(80, 81), f),
         free_vars: Vec::new(),
@@ -408,14 +408,17 @@ fn unknown_kernel_call() -> DResult<()> {
     let module = i.intern("Time")?;
     let fname = i.intern("now")?;
     let ty = con_int(&mut i)?;
-    let callee = Box::new(Located::new(
+    let callee_ref = Box::new(Located::new(
         Span::new(92, 100),
         canon::Expr_::VarKernel {
             module,
             name: fname,
         },
     ));
-    let body = Located::new(Span::new(92, 102), canon::Expr_::Call(callee, Vec::new()));
+    let body = Located::new(
+        Span::new(92, 102),
+        canon::Expr_::Call(callee_ref, Vec::new()),
+    );
     let def = canon::Def::Typed {
         name: Located::new(Span::new(90, 91), f),
         free_vars: Vec::new(),
@@ -559,6 +562,117 @@ fn non_constructor_pattern_in_later_arm() -> DResult<()> {
         Feature::CasePatternKinds,
         SKY_L0100,
         Span::new(163, 164),
+    );
+    Ok(())
+}
+
+#[test]
+fn partial_application_of_top_level_fn() -> DResult<()> {
+    // `add` declares two parameters; `add 2` passes one. Partial application
+    // cannot lower to a saturated `Expr::Call`, so it fails closed with
+    // SKY-L0110 (carrying the call's span), never broken Rust. [fix: M1 b4]
+    let mut i = Interner::new();
+    let add = i.intern("add")?;
+    let caller = i.intern("caller")?;
+    let a = i.intern("a")?;
+    let b = i.intern("b")?;
+    // add : Int -> Int -> Int   (two parameters)
+    let add_ty = canon::Type::Lambda(
+        Box::new(con_int(&mut i)?),
+        Box::new(canon::Type::Lambda(
+            Box::new(con_int(&mut i)?),
+            Box::new(con_int(&mut i)?),
+        )),
+    );
+    let add_def = canon::Def::Typed {
+        name: Located::new(Span::new(10, 13), add),
+        free_vars: Vec::new(),
+        patterns: vec![
+            Located::new(Span::new(14, 15), canon::Pattern_::PVar(a)),
+            Located::new(Span::new(16, 17), canon::Pattern_::PVar(b)),
+        ],
+        body: int(Span::new(20, 21), 0),
+        ty: add_ty,
+    };
+    // caller : Int -> Int   — its body `add 2` is a one-argument call.
+    let call_span = Span::new(40, 45);
+    let callee_ref = Box::new(Located::new(
+        Span::new(40, 43),
+        canon::Expr_::VarTopLevel {
+            module: Vec::new(),
+            name: add,
+        },
+    ));
+    let body = Located::new(
+        call_span,
+        canon::Expr_::Call(callee_ref, vec![int(Span::new(44, 45), 2)]),
+    );
+    let caller_ty = canon::Type::Lambda(Box::new(con_int(&mut i)?), Box::new(con_int(&mut i)?));
+    let caller_def = canon::Def::Typed {
+        name: Located::new(Span::new(30, 36), caller),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty: caller_ty,
+    };
+    // The under-saturated call site is blamed.
+    assert_unsupported(
+        run(Vec::new(), vec![add_def, caller_def], BTreeMap::new(), &i),
+        Feature::PartialOverApplication,
+        SKY_L0110,
+        call_span,
+    );
+    Ok(())
+}
+
+#[test]
+fn over_application_of_top_level_fn() -> DResult<()> {
+    // `f` declares one parameter; `f 1 2` passes two — over-application across
+    // the arity boundary. The first call would saturate, but the extra argument
+    // cannot lower to a saturated `Expr::Call`, so it fails closed with
+    // SKY-L0110 rather than emit `f(1, 2)` that the Rust toolchain rejects.
+    let mut i = Interner::new();
+    let f = i.intern("f")?;
+    let caller = i.intern("caller")?;
+    let x = i.intern("x")?;
+    // f : Int -> Int   (one parameter)
+    let f_ty = canon::Type::Lambda(Box::new(con_int(&mut i)?), Box::new(con_int(&mut i)?));
+    let f_def = canon::Def::Typed {
+        name: Located::new(Span::new(10, 11), f),
+        free_vars: Vec::new(),
+        patterns: vec![Located::new(Span::new(12, 13), canon::Pattern_::PVar(x))],
+        body: int(Span::new(16, 17), 0),
+        ty: f_ty,
+    };
+    // caller : Int   — its body `f 1 2` is a two-argument call of a unary `f`.
+    let call_span = Span::new(40, 47);
+    let callee_ref = Box::new(Located::new(
+        Span::new(40, 41),
+        canon::Expr_::VarTopLevel {
+            module: Vec::new(),
+            name: f,
+        },
+    ));
+    let body = Located::new(
+        call_span,
+        canon::Expr_::Call(
+            callee_ref,
+            vec![int(Span::new(44, 45), 1), int(Span::new(46, 47), 2)],
+        ),
+    );
+    let caller_def = canon::Def::Typed {
+        name: Located::new(Span::new(30, 36), caller),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty: con_int(&mut i)?,
+    };
+    // The over-saturated call site is blamed.
+    assert_unsupported(
+        run(Vec::new(), vec![f_def, caller_def], BTreeMap::new(), &i),
+        Feature::PartialOverApplication,
+        SKY_L0110,
+        call_span,
     );
     Ok(())
 }

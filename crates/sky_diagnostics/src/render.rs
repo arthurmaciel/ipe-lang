@@ -510,6 +510,10 @@ const fn feature_label(f: Feature) -> &'static str {
         Feature::ParametricAliases => {
             "type parameters on a type alias are not supported yet [feature: parametric-aliases]"
         }
+        Feature::PartialOverApplication => {
+            "partial application and over-application are not supported yet \
+             [feature: partial-over-application]"
+        }
     }
 }
 
