@@ -1,0 +1,26 @@
+[package]
+name = "skyc"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "skyc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "skyc"
+path = "src/main.rs"
+
+[dependencies]
+sky_intern = { path = "../sky_intern" }
+sky_diagnostics = { path = "../sky_diagnostics" }
+sky_parse = { path = "../sky_parse" }
+sky_canon = { path = "../sky_canon" }
+sky_types = { path = "../sky_types" }
+sky_lower = { path = "../sky_lower" }
+sky_ir = { path = "../sky_ir" }
+sky_backend = { path = "../sky_backend" }
+sky_backend_rust = { path = "../sky_backend_rust" }
+
+[lints]
+workspace = true

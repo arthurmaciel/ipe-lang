@@ -33,6 +33,17 @@ const GOLDEN: &str = include_str!("../../../tests/golden/m0/main.rs");
 /// same manifest for every program (dependency set is fixed by the runtime).
 const CARGO_TOML: &str = include_str!("../../../tests/golden/m0/Cargo.toml");
 
+/// The generated `sky_runtime/mod.rs` — the curated set of runtime modules whose
+/// dependencies are satisfied by [`CARGO_TOML`]. The vendored runtime source
+/// ships a fuller `mod.rs` (declaring `uuid` / `live` / `db` / … modules that
+/// pull crates outside the M0 manifest); the driver overwrites it with this
+/// trimmed version. M0 emits a fixed module set; later milestones compute it
+/// from the kernels a program actually uses.
+const RUNTIME_MOD_RS: &str = include_str!("../../../tests/golden/m0/sky_runtime/mod.rs");
+
+/// The generated `sky_runtime/config.rs` (DB/config bindings — empty for M0).
+const RUNTIME_CONFIG_RS: &str = include_str!("../../../tests/golden/m0/sky_runtime/config.rs");
+
 /// Fallback when an anchor is not found in the embedded golden. The golden
 /// always contains both anchors, so this is unreachable in practice; it keeps
 /// the slice helper panic-free.
@@ -93,5 +104,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 
     let mut files = BTreeMap::new();
     files.insert("src/main.rs".to_owned(), out);
+    files.insert("src/sky_runtime/mod.rs".to_owned(), RUNTIME_MOD_RS.to_owned());
+    files.insert("src/sky_runtime/config.rs".to_owned(), RUNTIME_CONFIG_RS.to_owned());
     Ok(EmittedProject { files, cargo_toml: CARGO_TOML.to_owned() })
 }
