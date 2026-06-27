@@ -7,7 +7,10 @@
 //! reconstructs block structure from columns (see [`crate::layout`]).
 //!
 //! The lexer never panics on arbitrary bytes: any byte it cannot classify
-//! yields [`ParseError::Unexpected`].
+//! yields a typed, coded [`ParseError`] — [`ParseError::UnknownChar`] for an
+//! unrecognised byte, [`ParseError::StrayDot`] for a lone `.`,
+//! [`ParseError::NumberJoinedToName`] for `123abc`, and
+//! [`ParseError::IntLiteralOutOfRange`] for an `i64` overflow.
 
 use sky_diagnostics::{DResult, Diagnostic, ParseError, Span};
 
@@ -119,14 +122,12 @@ impl Lexer {
             }
         }
     }
+}
 
-    fn err(&self) -> Diagnostic {
-        let o = self.offset();
-        Diagnostic::Parse {
-            span: Span::new(o, o),
-            msg: ParseError::Unexpected,
-        }
-    }
+/// The UTF-8 byte width of `c` as a `u32`, clamped to `1` on the impossible
+/// overflow so a span can always be formed without a panic.
+fn char_width(c: char) -> u32 {
+    u32::try_from(c.len_utf8()).unwrap_or(1)
 }
 
 const fn is_ident_start(c: char) -> bool {
@@ -162,11 +163,11 @@ pub fn lex(src: &str) -> DResult<Vec<Token>> {
         let lo = lx.offset();
 
         let kind = if c.is_ascii_digit() {
-            lex_number(&mut lx)?
+            lex_number(&mut lx, lo)?
         } else if is_ident_start(c) {
             lex_ident(&mut lx)
         } else {
-            lex_symbol(&mut lx)?
+            lex_symbol(&mut lx, c, lo)?
         };
 
         let hi = lx.offset();
@@ -180,7 +181,7 @@ pub fn lex(src: &str) -> DResult<Vec<Token>> {
     Ok(out)
 }
 
-fn lex_number(lx: &mut Lexer) -> DResult<Tok> {
+fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     let mut text = String::new();
     while let Some(c) = lx.peek() {
         if c.is_ascii_digit() {
@@ -188,12 +189,22 @@ fn lex_number(lx: &mut Lexer) -> DResult<Tok> {
             lx.advance();
         } else if is_ident_start(c) {
             // A digit immediately followed by a letter is not a valid M0 token.
-            return Err(lx.err());
+            let at = lx.offset();
+            return Err(Diagnostic::Parse {
+                span: Span::new(at, at + char_width(c)),
+                msg: ParseError::NumberJoinedToName(c),
+            });
         } else {
             break;
         }
     }
-    let n = text.parse::<i64>().map_err(|_| lx.err())?;
+    // The loop only pushed ASCII digits, so the sole parse failure is an `i64`
+    // overflow — never an empty or malformed literal.
+    let hi = lx.offset();
+    let n = text.parse::<i64>().map_err(|_| Diagnostic::Parse {
+        span: Span::new(lo, hi),
+        msg: ParseError::IntLiteralOutOfRange,
+    })?;
     Ok(Tok::Int(n))
 }
 
@@ -227,10 +238,9 @@ fn lex_ident(lx: &mut Lexer) -> Tok {
     keyword(&text).unwrap_or(Tok::Ident(text))
 }
 
-fn lex_symbol(lx: &mut Lexer) -> DResult<Tok> {
-    let Some(c) = lx.peek() else {
-        return Err(lx.err());
-    };
+/// Lex a punctuation / operator token. `c` is the already-peeked first
+/// character and `lo` is its byte offset (the start of the token).
+fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
     let kind = match c {
         '(' => {
             lx.advance();
@@ -275,10 +285,19 @@ fn lex_symbol(lx: &mut Lexer) -> DResult<Tok> {
                 lx.advance();
                 Tok::DotDot
             } else {
-                return Err(lx.err());
+                // A lone `.` is not part of `..` and not attached to an ident.
+                return Err(Diagnostic::Parse {
+                    span: Span::new(lo, lx.offset()),
+                    msg: ParseError::StrayDot,
+                });
             }
         }
-        _ => return Err(lx.err()),
+        other => {
+            return Err(Diagnostic::Parse {
+                span: Span::new(lo, lo + char_width(other)),
+                msg: ParseError::UnknownChar(other),
+            });
+        }
     };
     Ok(kind)
 }
