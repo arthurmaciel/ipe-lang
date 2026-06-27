@@ -290,3 +290,30 @@ fn let_if_and_extended_binops_emit_total_rust() -> DResult<()> {
     );
     Ok(())
 }
+
+/// A tuple type in a return position and a tuple constructor in the body emit
+/// as genuine Rust tuples: `(i64, i64)` and `(x, 1)`.
+#[test]
+fn tuple_type_and_expr_emit_as_rust_tuples() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let f = interner.intern("pair")?;
+    let n = interner.intern("n")?;
+
+    // pair(n : Int) -> (Int, Int) = (n, 1)
+    let f_fn = Func {
+        id: FuncId::from_raw(0),
+        name: f,
+        params: vec![(n, IrType::Int)],
+        ret: IrType::Tuple(vec![IrType::Int, IrType::Int]),
+        body: Expr::Tuple(vec![Expr::Var(n), Expr::Int(1)]),
+    };
+
+    let out = emit(&interner, &program(main_mod, vec![], vec![f_fn]))?;
+    assert!(
+        out.contains("-> (i64, i64)"),
+        "tuple return type did not emit:\n{out}"
+    );
+    assert!(out.contains("(n, 1)"), "tuple expr did not emit:\n{out}");
+    Ok(())
+}

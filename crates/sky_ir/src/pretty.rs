@@ -68,6 +68,14 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::Unit => "()".to_owned(),
         IrType::TaskUnit => "Task Error ()".to_owned(),
         IrType::Enum(name) => sym_name(interner, *name),
+        IrType::Tuple(elems) => {
+            let inner = elems
+                .iter()
+                .map(|t| ir_type_name(interner, t))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({inner})")
+        }
     }
 }
 
@@ -222,6 +230,12 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
             line(out, level, &format!("Call {}", callee_name(callee)));
             for arg in args {
                 write_expr(out, arg, interner, level + 1);
+            }
+        }
+        Expr::Tuple(elems) => {
+            line(out, level, "Tuple");
+            for elem in elems {
+                write_expr(out, elem, interner, level + 1);
             }
         }
     }
@@ -427,6 +441,42 @@ program
               BinOp +
                 Var x
                 Int 1
+";
+        assert_eq!(pretty(&program, &i), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn pretty_renders_tuple_expr_and_type() -> DResult<()> {
+        let mut i = Interner::new();
+        let main_mod = i.intern("Main")?;
+        let f = i.intern("pair")?;
+        let n = i.intern("n")?;
+
+        // pair(n : Int) -> (Int, Bool) = (n, n)  (shape only; types illustrative)
+        let body = Expr::Tuple(vec![Expr::Var(n), Expr::Int(1)]);
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![],
+                funcs: vec![Func {
+                    id: FuncId::from_raw(0),
+                    name: f,
+                    params: vec![(n, IrType::Int)],
+                    ret: IrType::Tuple(vec![IrType::Int, IrType::Bool]),
+                    body,
+                }],
+                entry: None,
+            }],
+        };
+
+        let expected = "\
+program
+  module Main
+    fn#0 pair(n : Int) -> (Int, Bool)
+      Tuple
+        Var n
+        Int 1
 ";
         assert_eq!(pretty(&program, &i), expected);
         Ok(())

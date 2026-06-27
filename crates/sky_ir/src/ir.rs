@@ -77,6 +77,13 @@ pub enum IrType {
     Unit,
     TaskUnit,
     Enum(Symbol),
+    /// An anonymous product type `(T1, T2, ...)`.
+    ///
+    /// Invariant: the element list has arity ≥ 2. A 0-tuple is [`IrType::Unit`]
+    /// and a 1-tuple is just its element type — neither is a `Tuple`. The
+    /// lowerer is the sole producer and upholds this; the backend stays total
+    /// over any vector it receives (it never panics on a degenerate arity).
+    Tuple(Vec<Self>),
 }
 
 /// An expression in the typed IR.
@@ -120,6 +127,13 @@ pub enum Expr {
         callee: Callee,
         args: Vec<Self>,
     },
+    /// A tuple constructor `(e1, e2, ...)`.
+    ///
+    /// Invariant: the element list has arity ≥ 2 — a 0-tuple is the unit value
+    /// and a 1-tuple is just its element, so neither is a `Tuple`. The lowerer
+    /// upholds this; the backend remains total over any vector (it never panics
+    /// on a degenerate arity).
+    Tuple(Vec<Self>),
 }
 
 /// The target of a [`Expr::Call`].
@@ -349,6 +363,39 @@ mod tests {
         ];
         let r = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec]);
         assert!(matches!(r, Err(Diagnostic::CompilerBug { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn tuple_expr_and_type_construct_and_round_trip() -> DResult<()> {
+        let mut i = Interner::new();
+        let x = i.intern("x")?;
+
+        // ( x + 1, 2, "three"-as-Var ) — a 3-tuple expression.
+        let expr = Expr::Tuple(vec![
+            Expr::BinOp {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Var(x)),
+                rhs: Box::new(Expr::Int(1)),
+            },
+            Expr::Int(2),
+            Expr::Var(x),
+        ]);
+        assert_eq!(expr, expr.clone());
+        let rendered = format!("{expr:?}");
+        assert!(rendered.contains("Tuple"));
+
+        // (Int, Bool) — a 2-tuple type.
+        let ty = IrType::Tuple(vec![IrType::Int, IrType::Bool]);
+        assert_eq!(ty, ty.clone());
+        assert!(format!("{ty:?}").contains("Tuple"));
+
+        // Nested tuple type: (Int, (Bool, String)).
+        let nested = IrType::Tuple(vec![
+            IrType::Int,
+            IrType::Tuple(vec![IrType::Bool, IrType::Str]),
+        ]);
+        assert_eq!(nested, nested.clone());
         Ok(())
     }
 
