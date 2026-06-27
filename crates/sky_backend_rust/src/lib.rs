@@ -308,6 +308,15 @@ fn collect_record_shapes(
                 }
             }
         }
+        IrType::Fun(params, ret) => {
+            // A function type contributes no struct of its own, but its
+            // parameter and return types may carry record shapes (e.g. a
+            // callback over a record).
+            for param in params {
+                collect_record_shapes(interner, param, shapes)?;
+            }
+            collect_record_shapes(interner, ret, shapes)?;
+        }
         IrType::Int
         | IrType::Float
         | IrType::Bool
