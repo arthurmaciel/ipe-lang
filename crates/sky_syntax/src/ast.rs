@@ -23,6 +23,11 @@ pub struct Module {
     pub imports: Vec<Import>,
     pub values: Vec<Located<Value>>,
     pub unions: Vec<Located<Union>>,
+    /// `type alias Name = T` declarations. M1 models the non-parametric form
+    /// only; a parametric alias (`type alias F a = …`) carries its declared
+    /// `vars` here and is rejected at canonicalisation as a not-yet-supported
+    /// feature rather than at the parser.
+    pub aliases: Vec<Located<TypeAlias>>,
 }
 
 /// Export / import exposing specification.
@@ -82,6 +87,22 @@ pub struct Union {
     /// Type variables, e.g. `a` in `type Maybe a`.
     pub vars: Vec<Located<Symbol>>,
     pub ctors: Vec<Located<Ctor>>,
+}
+
+/// A `type alias Name = T` declaration.
+///
+/// Mirrors the Haskell compiler's `Sky.AST.Source.Alias`, narrowed to what M1
+/// supports. The aliased type `body` is expanded away at canonicalisation, so no
+/// stage after name resolution ever observes the alias name.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TypeAlias {
+    pub name: Located<Symbol>,
+    /// Declared type parameters (`a` in `type alias F a = …`). Empty for the
+    /// supported non-parametric form; a non-empty list is rejected at
+    /// canonicalisation ([`sky_diagnostics::Feature::ParametricAliases`]).
+    pub vars: Vec<Located<Symbol>>,
+    /// The aliased type.
+    pub body: Located<TypeAnnotation>,
 }
 
 /// A single union constructor.

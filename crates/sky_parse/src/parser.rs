@@ -29,7 +29,7 @@ use sky_diagnostics::{
 use sky_intern::{Interner, Symbol};
 use sky_syntax::{
     Ctor, Exposed, Exposing, Expr, Expr_, Import, LetBinding, Module, Pattern, Pattern_, Privacy,
-    TypeAnnotation, Union, Value,
+    TypeAlias, TypeAnnotation, Union, Value,
 };
 
 use crate::layout;
@@ -45,9 +45,18 @@ pub struct Parser<'a> {
     interner: &'a mut Interner,
 }
 
+/// The result of splitting parsed declarations into their three kinds: value
+/// bindings (with annotations attached), union types, and type aliases.
+type AssembledDecls = (
+    Vec<Located<Value>>,
+    Vec<Located<Union>>,
+    Vec<Located<TypeAlias>>,
+);
+
 /// One parsed top-level declaration, before annotations are matched to values.
 enum Decl {
     Union(Located<Union>),
+    Alias(Located<TypeAlias>),
     Annotation(Symbol, Located<TypeAnnotation>),
     Value {
         name: Located<Symbol>,
@@ -282,24 +291,27 @@ impl<'a> Parser<'a> {
         }
 
         let header_span = Self::span_merge(module_tok.span, name.span);
-        let (values, unions) = Self::assemble(decls);
+        let (values, unions, aliases) = Self::assemble(decls);
         Ok(Module {
             name,
             exposing: Located::new(header_span, exposing),
             imports,
             values,
             unions,
+            aliases,
         })
     }
 
-    /// Split decls into values (with annotations attached) and unions.
-    fn assemble(decls: Vec<Decl>) -> (Vec<Located<Value>>, Vec<Located<Union>>) {
+    /// Split decls into values (with annotations attached), unions, and aliases.
+    fn assemble(decls: Vec<Decl>) -> AssembledDecls {
         let mut unions = Vec::new();
+        let mut aliases = Vec::new();
         let mut annotations: Vec<(Symbol, Located<TypeAnnotation>)> = Vec::new();
         let mut values = Vec::new();
         for d in decls {
             match d {
                 Decl::Union(u) => unions.push(u),
+                Decl::Alias(a) => aliases.push(a),
                 Decl::Annotation(name, ty) => annotations.push((name, ty)),
                 Decl::Value {
                     name,
@@ -324,7 +336,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        (values, unions)
+        (values, unions, aliases)
     }
 
     /// The module name in the header: a single (possibly dotted) identifier.
@@ -552,6 +564,12 @@ impl<'a> Parser<'a> {
 
     fn parse_decl(&mut self) -> DResult<Decl> {
         if self.peek_kind() == Some(&Tok::Type) {
+            // `type alias …` and `type …` (a union) share the `type` keyword; the
+            // disambiguator is the soft keyword `alias` (a plain identifier) in
+            // the next slot.
+            if self.peek_is_alias_keyword() {
+                return self.parse_type_alias().map(Decl::Alias);
+            }
             return self.parse_union().map(Decl::Union);
         }
         let tok = self.bump(Construct::Definition)?;
@@ -602,6 +620,79 @@ impl<'a> Parser<'a> {
             patterns,
             body,
         })
+    }
+
+    /// True when the token after the peeked `type` is the soft keyword `alias`.
+    /// `alias` is a plain identifier (not a reserved token), so a union named by
+    /// a user who happens to also write `alias` is distinguished only here, at
+    /// the one site where the look-ahead is meaningful.
+    fn peek_is_alias_keyword(&self) -> bool {
+        matches!(
+            self.toks.get(self.pos + 1).map(|t| &t.kind),
+            Some(Tok::Ident(text)) if text.as_str() == "alias"
+        )
+    }
+
+    /// Parse `type alias Name [vars…] = T`. Type parameters are captured in
+    /// `vars` (not rejected here) so canonicalisation can fail-fast on the
+    /// parametric form with a precise span; the non-parametric form is the only
+    /// shape M1 lowers.
+    fn parse_type_alias(&mut self) -> DResult<Located<TypeAlias>> {
+        // The caller has already established `type` followed by `alias`.
+        let type_tok = self.bump(Construct::TypeDeclaration)?; // `type`
+        let alias_col = type_tok.col;
+        self.bump(Construct::TypeDeclaration)?; // `alias`
+
+        let name_tok = self.bump(Construct::TypeDeclaration)?;
+        let Tok::Ident(name_text) = &name_tok.kind else {
+            return Err(Self::malformed_type_decl(
+                name_tok.span,
+                TypeDeclDefect::MissingName,
+            ));
+        };
+        let name = Located::new(name_tok.span, self.interner.intern(name_text)?);
+
+        // Declared type parameters (lowercase identifiers), mirroring `parse_union`.
+        let mut vars = Vec::new();
+        loop {
+            let var = match self.peek() {
+                Some(Token {
+                    kind: Tok::Ident(text),
+                    span,
+                    ..
+                }) if text.chars().next().is_some_and(|c| c.is_ascii_lowercase()) => {
+                    Some((text.clone(), *span))
+                }
+                _ => None,
+            };
+            let Some((text, span)) = var else { break };
+            let sym = self.intern(&text)?;
+            vars.push(Located::new(span, sym));
+            self.bump(Construct::TypeDeclaration)?;
+        }
+
+        // The `=` before the aliased type.
+        match self.peek() {
+            Some(t) if t.kind == Tok::Equals => {
+                self.bump(Construct::TypeDeclaration)?;
+            }
+            Some(t) => {
+                return Err(Self::malformed_type_decl(
+                    t.span,
+                    TypeDeclDefect::MissingEquals,
+                ));
+            }
+            None => {
+                return Err(Self::malformed_type_decl(
+                    self.eof_err_span(),
+                    TypeDeclDefect::MissingEquals,
+                ));
+            }
+        }
+
+        let body = self.parse_type(alias_col, 0)?;
+        let span = Self::span_merge(type_tok.span, body.span);
+        Ok(Located::new(span, TypeAlias { name, vars, body }))
     }
 
     fn parse_union(&mut self) -> DResult<Located<Union>> {

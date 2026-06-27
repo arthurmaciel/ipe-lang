@@ -1,0 +1,14 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A non-parametric type alias for a domain quantity.
+type alias Count = Int
+
+-- Annotated with the alias; must compile exactly as if annotated with `Int`
+-- directly (the alias is expanded at canonicalisation).
+increment : Count -> Count
+increment n =
+    n + 1
+
+main =
+    println (String.fromInt (increment 41))

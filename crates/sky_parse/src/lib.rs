@@ -529,4 +529,70 @@ mod tests {
             assert!(result.is_err(), "random bytes must not parse as a module");
         }
     }
+
+    #[test]
+    fn parses_non_parametric_type_alias() {
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\
+                   type alias Count = Int\n\n\
+                   v : Count\n\
+                   v =\n    0\n";
+        let result = parse_module(src, &mut i);
+        assert!(result.is_ok(), "alias must parse: {result:?}");
+        let Ok(m) = result else { return };
+        assert_eq!(m.aliases.len(), 1, "one alias collected");
+        assert_eq!(m.unions.len(), 0, "alias is not a union");
+        let Some(alias) = m.aliases.first().map(|a| &a.value) else {
+            return;
+        };
+        assert_eq!(i.resolve(alias.name.value), Some("Count"));
+        assert!(alias.vars.is_empty(), "non-parametric alias has no vars");
+        assert!(
+            matches!(&alias.body.value, TypeAnnotation::TType(_, segs, args)
+                if segs.last().and_then(|&s| i.resolve(s)) == Some("Int") && args.is_empty()),
+            "body is the `Int` constructor, got {:?}",
+            alias.body.value
+        );
+    }
+
+    #[test]
+    fn parses_parametric_alias_capturing_its_vars() {
+        // The parser does not reject a parametric alias — it captures the vars so
+        // canonicalisation can fail-fast with a precise span. `alias` stays a soft
+        // keyword: a union is still distinguished from a `type alias`.
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\
+                   type alias Pair a = a\n\n\
+                   v : Int\n\
+                   v =\n    0\n";
+        let result = parse_module(src, &mut i);
+        assert!(result.is_ok(), "parametric alias must parse: {result:?}");
+        let Ok(m) = result else { return };
+        assert_eq!(m.aliases.len(), 1, "one alias expected");
+        let Some(alias) = m.aliases.first().map(|a| &a.value) else {
+            return;
+        };
+        assert_eq!(i.resolve(alias.name.value), Some("Pair"));
+        assert_eq!(alias.vars.len(), 1, "one declared type parameter");
+        assert_eq!(
+            alias.vars.first().and_then(|v| i.resolve(v.value)),
+            Some("a")
+        );
+    }
+
+    #[test]
+    fn type_without_alias_keyword_is_still_a_union() {
+        // Guard the soft-keyword look-ahead: `type Foo = …` is a union, never an
+        // alias, even though `alias` is just an identifier.
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\
+                   type Foo = Bar | Baz\n\n\
+                   v : Int\n\
+                   v =\n    0\n";
+        let result = parse_module(src, &mut i);
+        assert!(result.is_ok(), "union must parse: {result:?}");
+        let Ok(m) = result else { return };
+        assert_eq!(m.unions.len(), 1, "one union");
+        assert_eq!(m.aliases.len(), 0, "no aliases");
+    }
 }
