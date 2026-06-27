@@ -87,6 +87,12 @@ fn check_expr(e: &canon::Expr, enums: &EnumTable, interner: &Interner) -> DResul
             }
             Ok(())
         }
+        canon::Expr_::Let(bindings, body) => {
+            for b in bindings {
+                check_expr(&b.body, enums, interner)?;
+            }
+            check_expr(body, enums, interner)
+        }
     }
 }
 

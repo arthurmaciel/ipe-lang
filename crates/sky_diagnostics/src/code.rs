@@ -77,6 +77,8 @@ pub const SKY_P0041: Code = Code("SKY-P0041");
 pub const SKY_P0050: Code = Code("SKY-P0050");
 /// malformed case expression
 pub const SKY_P0060: Code = Code("SKY-P0060");
+/// malformed let expression
+pub const SKY_P0061: Code = Code("SKY-P0061");
 
 // ---------------------------------------------------------------------------
 // Name resolution (SKY-N####)
@@ -191,6 +193,7 @@ pub fn title(c: Code) -> &'static str {
         SKY_P0041 => "expected a type",
         SKY_P0050 => "unclosed delimiter",
         SKY_P0060 => "malformed case expression",
+        SKY_P0061 => "malformed let expression",
         SKY_N0001 => "cannot find this value in scope",
         SKY_N0002 => "cannot find this type in scope",
         SKY_N0003 => "cannot find this constructor",
@@ -258,6 +261,7 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         SKY_P0041 => Some(include_str!("../explain/SKY-P0041.md")),
         SKY_P0050 => Some(include_str!("../explain/SKY-P0050.md")),
         SKY_P0060 => Some(include_str!("../explain/SKY-P0060.md")),
+        SKY_P0061 => Some(include_str!("../explain/SKY-P0061.md")),
         SKY_N0001 => Some(include_str!("../explain/SKY-N0001.md")),
         SKY_N0002 => Some(include_str!("../explain/SKY-N0002.md")),
         SKY_N0003 => Some(include_str!("../explain/SKY-N0003.md")),
@@ -304,17 +308,17 @@ mod tests {
     /// Every taxonomy code this module exposes, for round-trip / coverage tests.
     const ALL: &[Code] = &[
         SKY_P0001, SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020,
-        SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_N0001,
-        SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_T0001,
-        SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_L0100, SKY_L0101, SKY_L0102,
-        SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0200, SKY_I0001,
-        SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200, SKY_I0201,
-        SKY_I0202, SKY_I0203,
+        SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061,
+        SKY_N0001, SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012,
+        SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_L0100, SKY_L0101,
+        SKY_L0102, SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0200,
+        SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200,
+        SKY_I0201, SKY_I0202, SKY_I0203,
     ];
 
     #[test]
-    fn taxonomy_has_fifty_codes() {
-        assert_eq!(ALL.len(), 50);
+    fn taxonomy_has_fifty_one_codes() {
+        assert_eq!(ALL.len(), 51);
     }
 
     #[test]
@@ -332,7 +336,7 @@ mod tests {
             assert!(s.starts_with("SKY-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 50);
+        assert_eq!(seen.len(), 51);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.

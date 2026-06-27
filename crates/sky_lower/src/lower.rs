@@ -326,6 +326,23 @@ impl<'a> Lowerer<'a> {
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Expr::Call { callee, args })
             }
+            canon::Expr_::Let(bindings, body) => {
+                // Multi-binding `let` lowers to right-nested single-binding IR
+                // `Let`s: `let a = …; b = … in body` becomes
+                // `Let a (Let b body)`. The IR `Let` is non-recursive — `name`
+                // is bound only within `body` — which matches the sequential
+                // (`let*`) scoping canonicalisation and inference established.
+                let mut acc = self.lower_expr(body)?;
+                for b in bindings.iter().rev() {
+                    let value = self.lower_expr(&b.body)?;
+                    acc = Expr::Let {
+                        name: b.name.value,
+                        value: Box::new(value),
+                        body: Box::new(acc),
+                    };
+                }
+                Ok(acc)
+            }
             canon::Expr_::Case(scrut, branches) => self.lower_case(scrut, branches),
             // A function named as a bare value rather than applied. M0 has no
             // first-class functions; a function name is legal only as a call

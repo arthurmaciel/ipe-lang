@@ -280,6 +280,26 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
             canon::Expr_::Case(Box::new(can_scrut), branches)
         }
         src::Expr_::Binops(pairs, final_) => canonicalise_binops(pairs, final_, env, interner)?,
+        src::Expr_::Let(bindings, body) => {
+            // Sequential (`let*`) scoping: each binding's value is resolved
+            // against the enclosing scope plus the bindings before it, then its
+            // name becomes a local for the bindings that follow and for the
+            // `in` body. This matches the non-recursive nested-`Let` the lowerer
+            // emits, so a self- or forward-reference resolves to an outer name or
+            // fails cleanly (`ValueNotFound`) rather than miscompiling.
+            let mut let_env = env.clone();
+            let mut can_bindings = Vec::with_capacity(bindings.len());
+            for b in bindings {
+                let can_body = canonicalise_expr(&b.body, &let_env, interner)?;
+                let_env.add_local(b.name.value);
+                can_bindings.push(canon::LetBinding {
+                    name: b.name,
+                    body: can_body,
+                });
+            }
+            let can_in = canonicalise_expr(body, &let_env, interner)?;
+            canon::Expr_::Let(can_bindings, Box::new(can_in))
+        }
     };
     Ok(Located::new(span, node))
 }
