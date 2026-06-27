@@ -83,6 +83,8 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Else => TokenKind::Else,
         Tok::LParen => TokenKind::LParen,
         Tok::RParen => TokenKind::RParen,
+        Tok::LBrace => TokenKind::LBrace,
+        Tok::RBrace => TokenKind::RBrace,
         Tok::Equals => TokenKind::Equals,
         Tok::Pipe => TokenKind::Pipe,
         Tok::Colon => TokenKind::Colon,
@@ -926,7 +928,10 @@ impl<'a> Parser<'a> {
     }
 
     const fn is_simple_atom_start(kind: &Tok) -> bool {
-        matches!(kind, Tok::LParen | Tok::Int(_) | Tok::Ident(_))
+        matches!(
+            kind,
+            Tok::LParen | Tok::LBrace | Tok::Int(_) | Tok::Ident(_)
+        )
     }
 
     /// Peek a binary operator that continues the current block. Recognises the
@@ -982,9 +987,10 @@ impl<'a> Parser<'a> {
         let tok = self.bump(Construct::Expression)?;
         match &tok.kind {
             Tok::LParen => self.parse_paren_or_tuple(tok.span, depth + 1),
+            Tok::LBrace => self.parse_record(tok.span, depth + 1),
             Tok::Int(n) => Ok(Located::new(tok.span, Expr_::Int(*n))),
             Tok::Ident(text) => {
-                let expr = self.ident_expr(text)?;
+                let expr = self.ident_expr(text, tok.span)?;
                 Ok(Located::new(tok.span, expr))
             }
             _ => Err(Self::unexpected_token(&tok, &[Expected::Expression])),
@@ -1046,25 +1052,127 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Resolve a (possibly dotted) identifier into a `VarLocal` / `VarQual`.
-    fn ident_expr(&mut self, text: &str) -> DResult<Expr_> {
+    /// Resolve a (possibly dotted) identifier token into an expression.
+    ///
+    /// The first segment's case decides the shape, mirroring Elm:
+    /// * an **upper**-case head (`String.fromInt`, `Json.Decode.field`) is a
+    ///   module-qualified name — everything but the last segment is the
+    ///   qualifier, the last is the value (`VarQual`);
+    /// * a **lower**-case head (`p`, `p.x`, `record.a.b`) is a local reference
+    ///   followed by zero or more record-field accesses — `p.x.y` becomes
+    ///   `Access (Access p x) y`. A bare `p` (no dots) is just `VarLocal p`.
+    ///
+    /// `span` is the whole identifier token's span; every node built here reuses
+    /// it (the lexer produces one token for the dotted run, so there is no
+    /// finer-grained span to attribute the pieces to).
+    fn ident_expr(&mut self, text: &str, span: Span) -> DResult<Expr_> {
         let mut segs = text.split('.');
         let first = segs.next().unwrap_or("");
         let rest: Vec<&str> = segs.collect();
         if rest.is_empty() {
             return Ok(Expr_::VarLocal(self.interner.intern(first)?));
         }
-        // Qualified: everything but the last segment is the qualifier.
-        let mut all: Vec<&str> = Vec::with_capacity(rest.len() + 1);
-        all.push(first);
-        all.extend(rest);
-        let Some((last, init)) = all.split_last() else {
-            return Ok(Expr_::VarLocal(self.interner.intern(text)?));
+        let head_upper = first.chars().next().is_some_and(|c| c.is_ascii_uppercase());
+        if head_upper {
+            // Qualified: everything but the last segment is the qualifier.
+            let mut all: Vec<&str> = Vec::with_capacity(rest.len() + 1);
+            all.push(first);
+            all.extend(rest);
+            let Some((last, init)) = all.split_last() else {
+                return Ok(Expr_::VarLocal(self.interner.intern(text)?));
+            };
+            let qualifier = init.join(".");
+            let q = self.interner.intern(&qualifier)?;
+            let name = self.interner.intern(last)?;
+            return Ok(Expr_::VarQual(q, name));
+        }
+        // Lower-case head: a local var with a chain of field accesses.
+        let mut expr = Located::new(span, Expr_::VarLocal(self.interner.intern(first)?));
+        for seg in rest {
+            let field = Located::new(span, self.interner.intern(seg)?);
+            expr = Located::new(span, Expr_::Access(Box::new(expr), field));
+        }
+        Ok(expr.value)
+    }
+
+    /// Parse a record literal `{ field = expr, ... }`, the `{` already consumed.
+    ///
+    /// M1 records are **closed**: a non-empty, comma-separated list of
+    /// `name = value` fields, where `name` is a plain lowercase identifier. The
+    /// row-extension form `{ r | f = v }` and the empty record `{}` are not part
+    /// of the M1 grammar — both surface as a clean parse error rather than a
+    /// silently-different AST. `opener` is the `{`'s span; `depth` bounds the
+    /// field-value recursion.
+    fn parse_record(&mut self, opener: Span, depth: u32) -> DResult<Expr> {
+        if depth > MAX_DEPTH {
+            return Err(self.too_deep(Construct::Record));
+        }
+        // `{}` (the empty record) is outside the M1 grammar.
+        if let Some(t) = self.peek().filter(|t| t.kind == Tok::RBrace) {
+            return Err(Self::unexpected_token(t, &[Expected::Identifier]));
+        }
+        let mut fields = Vec::new();
+        loop {
+            let name = self.parse_record_field_name()?;
+            // `=` between the field name and its value.
+            match self.peek() {
+                Some(t) if t.kind == Tok::Equals => {
+                    self.bump(Construct::Record)?;
+                }
+                Some(t) => return Err(Self::unexpected_token(t, &[Expected::Equals])),
+                None => {
+                    return Err(Diagnostic::Parse {
+                        span: self.eof_err_span(),
+                        msg: ParseError::UnexpectedEof {
+                            construct: Construct::Record,
+                        },
+                    });
+                }
+            }
+            let value = self.parse_expr(0, depth + 1)?;
+            fields.push((name, value));
+            // A `,` continues the field list; a `}` closes it.
+            match self.peek() {
+                Some(t) if t.kind == Tok::Comma => {
+                    self.bump(Construct::Record)?;
+                }
+                Some(t) if t.kind == Tok::RBrace => {
+                    let close = t.span;
+                    self.bump(Construct::Record)?;
+                    let span = Self::span_merge(opener, close);
+                    return Ok(Located::new(span, Expr_::Record(fields)));
+                }
+                Some(t) => {
+                    return Err(Self::unexpected_token(
+                        t,
+                        &[Expected::Comma, Expected::RBrace],
+                    ));
+                }
+                None => {
+                    return Err(Diagnostic::Parse {
+                        span: self.eof_err_span(),
+                        msg: ParseError::UnexpectedEof {
+                            construct: Construct::Record,
+                        },
+                    });
+                }
+            }
+        }
+    }
+
+    /// Parse a record field name: a plain lowercase identifier (no dots, no
+    /// uppercase head). A qualified or upper-case token here is rejected rather
+    /// than silently accepted as a label.
+    fn parse_record_field_name(&mut self) -> DResult<Located<Symbol>> {
+        let tok = self.bump(Construct::Record)?;
+        let Tok::Ident(text) = &tok.kind else {
+            return Err(Self::unexpected_token(&tok, &[Expected::Identifier]));
         };
-        let qualifier = init.join(".");
-        let q = self.interner.intern(&qualifier)?;
-        let name = self.interner.intern(last)?;
-        Ok(Expr_::VarQual(q, name))
+        if text.contains('.') || text.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+            return Err(Self::unexpected_token(&tok, &[Expected::Identifier]));
+        }
+        let sym = self.interner.intern(text)?;
+        Ok(Located::new(tok.span, sym))
     }
 
     fn parse_case(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {

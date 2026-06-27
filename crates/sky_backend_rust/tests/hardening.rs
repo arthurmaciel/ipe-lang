@@ -27,6 +27,7 @@ fn program(name: Symbol, types: Vec<TypeDef>, funcs: Vec<Func>) -> Program {
             types,
             funcs,
             entry: None,
+            records: vec![],
         }],
     }
 }
@@ -207,12 +208,14 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
                 types: vec![make_enum()],
                 funcs: vec![],
                 entry: None,
+                records: vec![],
             },
             Module {
                 name: ModPath(vec![other_mod]),
                 types: vec![make_enum()],
                 funcs: vec![],
                 entry: None,
+                records: vec![],
             },
         ],
     };

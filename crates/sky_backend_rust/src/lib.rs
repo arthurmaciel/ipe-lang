@@ -129,13 +129,15 @@ impl<'a> EmitCtx<'a> {
             }
         }
 
-        // Prepass: collect every distinct CLOSED record shape that appears in a
-        // function signature (recursing into nested records / tuples), so each
-        // gets one synthesised struct, declared before any use. A record literal
-        // resolves to its struct through this table by its field-name set; the
-        // lowerer is contracted to surface every record type it constructs in a
-        // signature, so a literal whose set is absent is an internal invariant
-        // violation (surfaced as a `CompilerBug`, never a silent mis-emit).
+        // Prepass: collect every distinct CLOSED record shape the program uses
+        // (recursing into nested records / tuples), so each gets one synthesised
+        // struct, declared before any use. Two sources feed it: function
+        // signatures (params / return), and the lowerer-surfaced `module.records`
+        // — the shapes of record literals that live inside function bodies, where
+        // the type appears in no signature. A record literal resolves to its
+        // struct through this table by its field-name set; a literal whose set is
+        // absent is an internal invariant violation (surfaced as a `CompilerBug`,
+        // never a silent mis-emit).
         let mut shapes: BTreeMap<Vec<String>, Vec<(String, IrType)>> = BTreeMap::new();
         for module in &program.modules {
             for func in &module.funcs {
@@ -143,6 +145,9 @@ impl<'a> EmitCtx<'a> {
                     collect_record_shapes(interner, ty, &mut shapes)?;
                 }
                 collect_record_shapes(interner, &func.ret, &mut shapes)?;
+            }
+            for ty in &module.records {
+                collect_record_shapes(interner, ty, &mut shapes)?;
             }
         }
         let mut record_structs = Vec::with_capacity(shapes.len());

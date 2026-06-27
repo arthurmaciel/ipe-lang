@@ -1,0 +1,8 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+main =
+    let
+        p = { x = 2, y = 40 }
+    in
+    println (String.fromInt (p.x + p.y))

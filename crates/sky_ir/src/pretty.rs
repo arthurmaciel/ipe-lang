@@ -376,6 +376,7 @@ mod tests {
                 })],
                 funcs: vec![main_func, tick_func],
                 entry: Some(FuncId::from_raw(0)),
+                records: vec![],
             }],
         })
     }
@@ -466,6 +467,7 @@ program
                     body,
                 }],
                 entry: None,
+                records: vec![],
             }],
         };
 
@@ -518,6 +520,7 @@ program
                     body,
                 }],
                 entry: None,
+                records: vec![],
             }],
         };
 
@@ -572,6 +575,7 @@ program
                     body,
                 }],
                 entry: None,
+                records: vec![],
             }],
         };
 
@@ -612,6 +616,7 @@ program
                     body,
                 }],
                 entry: None,
+                records: vec![],
             }],
         };
 
@@ -639,6 +644,7 @@ program
                 types: vec![],
                 funcs: vec![],
                 entry: None,
+                records: vec![],
             }],
         };
         let rendered = pretty(&program, &i);

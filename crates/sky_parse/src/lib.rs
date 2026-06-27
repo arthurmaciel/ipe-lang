@@ -474,6 +474,79 @@ mod tests {
     }
 
     #[test]
+    fn record_literal_parses_into_a_record_node() {
+        // `{ x = 1, y = 2 }` is a two-field `Record`, fields in source order.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    {{ x = 1, y = 2 }}\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "record literal must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let names: Vec<&str> = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::Record(fields)) => fields
+                .iter()
+                .filter_map(|(n, _)| i.resolve(n.value))
+                .collect(),
+            _ => Vec::new(),
+        };
+        assert_eq!(names, vec!["x", "y"], "both fields, in source order");
+    }
+
+    #[test]
+    fn field_access_parses_into_an_access_chain() {
+        // `p.x` is `Access (VarLocal p) x`; `p.x.y` nests it.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    p.x.y\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "field access must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            // outer: (…).y
+            Some(Expr_::Access(inner, outer_field)) => {
+                match (&inner.value, i.resolve(outer_field.value)) {
+                    // inner: (p).x
+                    (Expr_::Access(base, inner_field), Some("y")) => {
+                        match (&base.value, i.resolve(inner_field.value)) {
+                            (Expr_::VarLocal(p), Some("x")) => i.resolve(*p) == Some("p"),
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        assert!(shape, "v body is `Access (Access p x) y`");
+    }
+
+    #[test]
+    fn qualified_uppercase_name_is_not_field_access() {
+        // `String.fromInt` keeps its `VarQual` shape — only a lowercase head is
+        // a record field access.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v =\n    String.fromInt 1\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "qualified call must parse: {m:?}");
+        let Ok(m) = m else { return };
+        assert!(
+            find_value(&m, &i, "v").is_some_and(|v| matches!(&v.body.value, Expr_::Call(callee, _)
+                if matches!(callee.value, Expr_::VarQual(_, _)))),
+            "callee stays a VarQual, not an Access"
+        );
+    }
+
+    #[test]
+    fn empty_record_is_rejected() {
+        // `{}` (the empty record) is outside the M1 grammar: a clean parse error.
+        assert_eq!(err_code(&format!("{HDR}v =\n    {{}}\n")), "SKY-P0001");
+    }
+
+    #[test]
+    fn unclosed_record_is_unexpected_eof() {
+        // A record opened but never closed runs the input out cleanly.
+        assert_eq!(err_code(&format!("{HDR}v =\n    {{ x = 1\n")), "SKY-P0002");
+    }
+
+    #[test]
     fn malformed_if_is_p0062() {
         // Missing `then` after the condition.
         assert_eq!(

@@ -105,6 +105,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
             })],
             funcs: vec![update_fn, main_fn],
             entry: Some(main_id),
+            records: vec![],
         }],
     })
 }
