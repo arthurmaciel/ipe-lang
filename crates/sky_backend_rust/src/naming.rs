@@ -199,6 +199,21 @@ pub fn module_value(module: &[&str], name: &str) -> String {
     )))
 }
 
+/// The base Rust struct name for a synthesised record shape, derived from its
+/// sorted field names: `record_struct_name(["x", "y"])` → `RecXY`.
+///
+/// Mirrors the Haskell Rust backend's `anonStructName` strategy (a name built
+/// from the field set) but with a `Rec_` stem. The result is a *base* name; the
+/// caller deduplicates across the program and appends a numeric suffix on the
+/// rare event that two distinct field sets camel-case to the same string (e.g.
+/// `["a_b"]` and `["a", "b"]`), keeping every synthesised struct collision-free.
+/// A base that lands on a Rust keyword is mangled by [`mangle_reserved`].
+#[must_use]
+pub fn record_struct_name(field_names: &[String]) -> String {
+    let joined = field_names.join("_");
+    mangle_reserved(to_camel_case(&format!("Rec_{joined}")))
+}
+
 /// The Rust runtime function name for a kernel built-in (M0 subset). Mirrors
 /// `Kernel.kernelToRust`.
 #[must_use]
@@ -243,6 +258,29 @@ mod tests {
     fn kernel_names() {
         assert_eq!(kernel_name(KernelFn::StringFromInt), "string_from_int");
         assert_eq!(kernel_name(KernelFn::LogPrintln), "log_println");
+    }
+
+    #[test]
+    fn record_struct_names_from_field_sets() {
+        use super::record_struct_name;
+        assert_eq!(
+            record_struct_name(&["x".to_owned(), "y".to_owned()]),
+            "RecXY"
+        );
+        assert_eq!(
+            record_struct_name(&["name".to_owned(), "age".to_owned()]),
+            "RecNameAge"
+        );
+        // A single field.
+        assert_eq!(record_struct_name(&["count".to_owned()]), "RecCount");
+        // Different field sets that camel-case to the SAME base name — the
+        // caller disambiguates with a numeric suffix; the base collision is a
+        // documented possibility, not a panic.
+        assert_eq!(record_struct_name(&["a_b".to_owned()]), "RecAB");
+        assert_eq!(
+            record_struct_name(&["a".to_owned(), "b".to_owned()]),
+            "RecAB"
+        );
     }
 
     #[test]

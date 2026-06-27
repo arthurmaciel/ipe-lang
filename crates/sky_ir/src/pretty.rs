@@ -76,6 +76,25 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
                 .join(", ");
             format!("({inner})")
         }
+        IrType::Record(fields) => {
+            // Render in field-name order (the BTreeMap is keyed by Symbol, so
+            // sort the resolved names for a deterministic, source-like form).
+            let mut entries: Vec<(String, String)> = fields
+                .iter()
+                .map(|(name, ty)| (sym_name(interner, *name), ir_type_name(interner, ty)))
+                .collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            if entries.is_empty() {
+                "{}".to_owned()
+            } else {
+                let inner = entries
+                    .iter()
+                    .map(|(n, t)| format!("{n} : {t}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{ {inner} }}")
+            }
+        }
     }
 }
 
@@ -236,6 +255,38 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
             line(out, level, "Tuple");
             for elem in elems {
                 write_expr(out, elem, interner, level + 1);
+            }
+        }
+        Expr::Record(fields) => {
+            line(out, level, "Record");
+            for (name, value) in fields {
+                line(
+                    out,
+                    level + 1,
+                    &format!("field {}", sym_name(interner, *name)),
+                );
+                write_expr(out, value, interner, level + 2);
+            }
+        }
+        Expr::Access { record, field } => {
+            line(
+                out,
+                level,
+                &format!("Access .{}", sym_name(interner, *field)),
+            );
+            write_expr(out, record, interner, level + 1);
+        }
+        Expr::Update { record, fields } => {
+            line(out, level, "Update");
+            line(out, level + 1, "record");
+            write_expr(out, record, interner, level + 2);
+            for (name, value) in fields {
+                line(
+                    out,
+                    level + 1,
+                    &format!("field {}", sym_name(interner, *name)),
+                );
+                write_expr(out, value, interner, level + 2);
             }
         }
     }
@@ -477,6 +528,102 @@ program
       Tuple
         Var n
         Int 1
+";
+        assert_eq!(pretty(&program, &i), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn pretty_renders_record_expr_access_update_and_type() -> DResult<()> {
+        use std::collections::BTreeMap;
+
+        let mut i = Interner::new();
+        let main_mod = i.intern("Main")?;
+        let func = i.intern("move_")?;
+        let param = i.intern("p")?;
+        let x = i.intern("x")?;
+        let y = i.intern("y")?;
+
+        // move_(p : { x : Int, y : Int }) -> { x : Int, y : Int }
+        //   = { p | x = p.x }   (shape only; values illustrative)
+        let body = Expr::Update {
+            record: Box::new(Expr::Var(param)),
+            fields: vec![(
+                x,
+                Expr::Access {
+                    record: Box::new(Expr::Var(param)),
+                    field: x,
+                },
+            )],
+        };
+        let mut rec_fields = BTreeMap::new();
+        rec_fields.insert(x, IrType::Int);
+        rec_fields.insert(y, IrType::Int);
+        let rec_ty = IrType::Record(rec_fields);
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![],
+                funcs: vec![Func {
+                    id: FuncId::from_raw(0),
+                    name: func,
+                    params: vec![(param, rec_ty.clone())],
+                    ret: rec_ty,
+                    body,
+                }],
+                entry: None,
+            }],
+        };
+
+        let expected = "\
+program
+  module Main
+    fn#0 move_(p : { x : Int, y : Int }) -> { x : Int, y : Int }
+      Update
+        record
+          Var p
+        field x
+          Access .x
+            Var p
+";
+        assert_eq!(pretty(&program, &i), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn pretty_renders_record_literal() -> DResult<()> {
+        let mut i = Interner::new();
+        let main_mod = i.intern("Main")?;
+        let f = i.intern("origin")?;
+        let x = i.intern("x")?;
+        let y = i.intern("y")?;
+
+        // origin() -> ... = { x = 1, y = 2 }
+        let body = Expr::Record(vec![(x, Expr::Int(1)), (y, Expr::Int(2))]);
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![],
+                funcs: vec![Func {
+                    id: FuncId::from_raw(0),
+                    name: f,
+                    params: vec![],
+                    ret: IrType::Int,
+                    body,
+                }],
+                entry: None,
+            }],
+        };
+
+        let expected = "\
+program
+  module Main
+    fn#0 origin() -> Int
+      Record
+        field x
+          Int 1
+        field y
+          Int 2
 ";
         assert_eq!(pretty(&program, &i), expected);
         Ok(())

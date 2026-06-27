@@ -22,7 +22,7 @@ use sky_ir::{Program, TypeDef};
 
 use crate::EmitCtx;
 use crate::emit_expr::emit_func;
-use crate::emit_types::emit_enum;
+use crate::emit_types::{emit_enum, emit_record_struct};
 use crate::preamble::{epilogue, preamble};
 
 /// The golden M0 program, embedded at compile time. The fixed runtime-bindings
@@ -90,6 +90,12 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
             let TypeDef::Enum(def) = ty;
             out.push_str(&emit_enum(ctx, def)?);
         }
+    }
+    // Synthesised record structs, one per distinct closed record shape. Item
+    // order is irrelevant in Rust, so these can reference one another freely;
+    // a program with no records emits nothing here, keeping output unchanged.
+    for rec in ctx.record_structs() {
+        out.push_str(&emit_record_struct(ctx, rec)?);
     }
     out.push('\n');
 
