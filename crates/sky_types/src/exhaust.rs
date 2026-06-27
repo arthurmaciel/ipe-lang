@@ -112,6 +112,7 @@ fn check_expr(e: &canon::Expr, enums: &EnumTable, interner: &Interner) -> DResul
             }
             Ok(())
         }
+        canon::Expr_::Lambda(_, body) => check_expr(body, enums, interner),
         canon::Expr_::Access(record, _) => check_expr(record, enums, interner),
         canon::Expr_::Update(base, fields) => {
             check_expr(base, enums, interner)?;

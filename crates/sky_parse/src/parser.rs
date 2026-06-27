@@ -89,6 +89,7 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Pipe => TokenKind::Pipe,
         Tok::Colon => TokenKind::Colon,
         Tok::Arrow => TokenKind::Arrow,
+        Tok::Backslash => TokenKind::Backslash,
         Tok::DotDot => TokenKind::DotDot,
         Tok::Comma => TokenKind::Comma,
         Tok::Underscore => TokenKind::Underscore,
@@ -984,6 +985,9 @@ impl<'a> Parser<'a> {
         if self.peek_kind() == Some(&Tok::If) {
             return self.parse_if(threshold, depth + 1);
         }
+        if self.peek_kind() == Some(&Tok::Backslash) {
+            return self.parse_lambda(threshold, depth + 1);
+        }
         let tok = self.bump(Construct::Expression)?;
         match &tok.kind {
             Tok::LParen => self.parse_paren_or_tuple(tok.span, depth + 1),
@@ -1365,6 +1369,57 @@ impl<'a> Parser<'a> {
         let body = self.parse_expr(threshold, depth + 1)?;
         let span = Self::span_merge(let_tok.span, body.span);
         Ok(Located::new(span, Expr_::Let(bindings, Box::new(body))))
+    }
+
+    /// Parse a lambda `\p0 p1 ... -> body`, the `\` already peeked. One or more
+    /// parameter patterns precede the `->`; the body parses as a full expression
+    /// at `threshold`, so it extends as far right as the surrounding layout
+    /// allows (`\x -> x + 1` captures the whole `x + 1`). A zero-parameter
+    /// `\ -> e` and a missing `->` are clean parse errors, never a silently
+    /// reshaped AST. Mirrors the Haskell compiler's `Sky.Parse.Expression.lambda`.
+    fn parse_lambda(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
+        if depth > MAX_DEPTH {
+            return Err(self.too_deep(Construct::Lambda));
+        }
+        // The caller has already peeked `\`.
+        let lambda_tok = self.bump(Construct::Lambda)?;
+
+        // At least one parameter pattern before the `->`.
+        let mut params = Vec::new();
+        while self.peek_is_pattern_atom_start() {
+            params.push(self.parse_pattern_atom(depth + 1)?);
+        }
+        if params.is_empty() {
+            return Err(self.peek().map_or_else(
+                || Diagnostic::Parse {
+                    span: self.eof_err_span(),
+                    msg: ParseError::UnexpectedEof {
+                        construct: Construct::Lambda,
+                    },
+                },
+                |t| Self::unexpected_token(t, &[Expected::Pattern]),
+            ));
+        }
+
+        // `->` between the parameters and the body.
+        match self.peek() {
+            Some(t) if t.kind == Tok::Arrow => {
+                self.bump(Construct::Lambda)?;
+            }
+            Some(t) => return Err(Self::unexpected_token(t, &[Expected::Arrow])),
+            None => {
+                return Err(Diagnostic::Parse {
+                    span: self.eof_err_span(),
+                    msg: ParseError::UnexpectedEof {
+                        construct: Construct::Lambda,
+                    },
+                });
+            }
+        }
+
+        let body = self.parse_expr(threshold, depth + 1)?;
+        let span = Self::span_merge(lambda_tok.span, body.span);
+        Ok(Located::new(span, Expr_::Lambda(params, Box::new(body))))
     }
 
     /// Parse `if <cond> then <a> else <b>`, including any `else if` chain. Each

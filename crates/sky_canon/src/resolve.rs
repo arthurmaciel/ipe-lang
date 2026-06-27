@@ -317,6 +317,22 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
             }
             canon::Expr_::Case(Box::new(can_scrut), branches)
         }
+        src::Expr_::Lambda(params, body) => {
+            // The lambda's parameters become locals in its body; every other
+            // free name resolves against the enclosing scope (an outer local,
+            // a top-level binding, or a kernel) exactly as a bare reference
+            // would — that is the capture. The parameter patterns themselves
+            // are resolved against the *enclosing* env (a constructor pattern
+            // must resolve there), matching how `case` arms are handled.
+            let mut body_env = env.clone();
+            let mut can_params = Vec::with_capacity(params.len());
+            for p in params {
+                bind_pattern_names(&p.value, &mut body_env);
+                can_params.push(canonicalise_pattern(p, env, interner)?);
+            }
+            let can_body = canonicalise_expr(body, &body_env, interner)?;
+            canon::Expr_::Lambda(can_params, Box::new(can_body))
+        }
         src::Expr_::Binops(pairs, final_) => canonicalise_binops(pairs, final_, env, interner)?,
         src::Expr_::Let(bindings, body) => {
             // Sequential (`let*`) scoping: each binding's value is resolved

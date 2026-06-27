@@ -507,6 +507,7 @@ impl<'a> Builder<'a> {
                 }
                 result
             }
+            canon::Expr_::Lambda(params, body) => self.constrain_lambda(local, params, body)?,
             canon::Expr_::Binop { func, lhs, rhs, .. } => {
                 self.constrain_binop(local, *func, lhs, rhs)?
             }
@@ -559,6 +560,31 @@ impl<'a> Builder<'a> {
         };
         self.regions.insert(span, var);
         Ok(var)
+    }
+
+    /// Constrain a lambda `\p0 p1 ... -> body`. Each parameter gets a fresh
+    /// flexible variable bound in the body's scope; the body is constrained
+    /// there. The lambda's type is the right-nested arrow `p0 -> p1 -> … -> body`,
+    /// so a surrounding `Call` unifies its callee against exactly this shape.
+    /// Mirrors `Sky.Type.Constrain.Expression`'s lambda arm.
+    fn constrain_lambda(
+        &mut self,
+        local: &BTreeMap<Symbol, VarId>,
+        params: &[canon::Pattern],
+        body: &canon::Expr,
+    ) -> DResult<VarId> {
+        let mut lam_local = local.clone();
+        let mut param_vars = Vec::with_capacity(params.len());
+        for p in params {
+            let v = self.flex()?;
+            Self::bind_param(&mut lam_local, p, v);
+            param_vars.push(v);
+        }
+        let mut arrow = self.constrain_expr(&lam_local, body)?;
+        for pv in param_vars.into_iter().rev() {
+            arrow = self.structure(FlatType::Fun(pv, arrow))?;
+        }
+        Ok(arrow)
     }
 
     /// Constrain a record literal `{ name = value, ... }`. Its type is the

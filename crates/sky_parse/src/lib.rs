@@ -230,6 +230,78 @@ mod tests {
     }
 
     #[test]
+    fn single_param_lambda_parses_with_body() {
+        // `\x -> x + 1` is a one-parameter lambda whose body greedily captures
+        // the whole `x + 1` operator chain.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f =\n    \\x -> x + 1\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "lambda must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let f = find_value(&m, &i, "f");
+        let body = f.map(|v| &v.body.value);
+        assert!(
+            matches!(
+                body,
+                Some(Expr_::Lambda(params, b))
+                    if params.len() == 1 && matches!(b.value, Expr_::Binops(..))
+            ),
+            "expected a 1-param lambda over a binop body, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn multi_param_lambda_parses_all_params() {
+        // `\a b -> a + b` is a two-parameter lambda.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f =\n    \\a b -> a + b\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "multi-param lambda must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let f = find_value(&m, &i, "f");
+        assert!(
+            f.and_then(|v| match &v.body.value {
+                Expr_::Lambda(params, _) => Some(params.len()),
+                _ => None,
+            }) == Some(2),
+            "expected a 2-param lambda, got {:?}",
+            f.map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
+    fn parenthesised_lambda_is_applied() {
+        // `(\x -> x) 5` parses as an application whose callee is the lambda.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f =\n    (\\x -> x) 5\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "applied lambda must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let f = find_value(&m, &i, "f");
+        assert!(
+            f.is_some_and(|v| matches!(
+                &v.body.value,
+                Expr_::Call(callee, args)
+                    if matches!(callee.value, Expr_::Lambda(..)) && args.len() == 1
+            )),
+            "expected a Call with a Lambda callee, got {:?}",
+            f.map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
+    fn lambda_without_arrow_is_a_parse_error() {
+        // `\x x` — no `->` after the parameters.
+        assert_eq!(err_code(&format!("{HDR}f =\n    \\x 1\n")), "SKY-P0001");
+    }
+
+    #[test]
+    fn lambda_without_params_is_a_parse_error() {
+        // `\ -> 1` — a zero-parameter lambda is outside the grammar.
+        assert_eq!(err_code(&format!("{HDR}f =\n    \\ -> 1\n")), "SKY-P0001");
+    }
+
+    #[test]
     fn lone_ampersand_is_unknown_char() {
         // A single `&` is not a Sky operator (only `&&`); it lexes as SKY-P0010.
         assert_eq!(err_code(&format!("{HDR}x = 1 & 2")), "SKY-P0010");

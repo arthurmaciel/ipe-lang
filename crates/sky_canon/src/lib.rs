@@ -60,6 +60,56 @@ mod tests {
         }
     }
 
+    /// Parse + canonicalise inline source, returning the module + interner.
+    fn canon_src(src: &str) -> Option<(ast::Module, Interner)> {
+        let mut i = Interner::new();
+        let parsed = sky_parse::parse_module(src, &mut i).ok()?;
+        let m = canonicalise(&parsed, &mut i).ok()?;
+        Some((m, i))
+    }
+
+    #[test]
+    fn lambda_binds_params_locally_and_captures_outer_names() {
+        // `f = \x -> x + n` (with top-level `n`): inside the lambda body `x`
+        // resolves to a local (the parameter) and `n` to the captured top-level
+        // binding.
+        let src = "module Main exposing (f)\n\
+                   n : Int\n\
+                   n = 10\n\
+                   f =\n    \\x -> x + n\n";
+        let opt = canon_src(src);
+        assert!(opt.is_some(), "must parse + canonicalise");
+        let Some((m, i)) = opt else { return };
+        let def = find_def(&m, &i, "f");
+        assert!(matches!(def, Some(Def::Untyped { .. })), "f is untyped");
+        let Some(Def::Untyped { body, .. }) = def else {
+            return;
+        };
+        assert!(
+            matches!(&body.value, Expr_::Lambda(..)),
+            "f body is a lambda"
+        );
+        let Expr_::Lambda(params, lam_body) = &body.value else {
+            return;
+        };
+        assert_eq!(params.len(), 1, "one parameter");
+        assert!(
+            matches!(params.first().map(|p| &p.value), Some(Pattern_::PVar(s)) if i.resolve(*s) == Some("x"))
+        );
+        // The body `x + n`: x is a local, n is the captured top-level binding.
+        assert!(
+            matches!(&lam_body.value, Expr_::Binop { .. }),
+            "body is x + n"
+        );
+        let Expr_::Binop { lhs, rhs, .. } = &lam_body.value else {
+            return;
+        };
+        assert!(matches!(lhs.value, Expr_::VarLocal(s) if i.resolve(s) == Some("x")));
+        assert!(
+            matches!(&rhs.value, Expr_::VarTopLevel { name, .. } if i.resolve(*name) == Some("n"))
+        );
+    }
+
     #[test]
     fn module_name_and_union_resolve() {
         let mut i = Interner::new();

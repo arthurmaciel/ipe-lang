@@ -48,6 +48,8 @@ pub enum TokenKind {
     Pipe,
     Colon,
     Arrow,
+    /// A lambda lead-in `\`.
+    Backslash,
     DotDot,
     Comma,
     Underscore,
@@ -115,6 +117,7 @@ pub enum Construct {
     If,
     Tuple,
     Record,
+    Lambda,
 }
 
 /// Which part of a module header is malformed.

@@ -11,11 +11,18 @@ use std::collections::BTreeMap;
 use sky_canon::ast as canon;
 use sky_diagnostics::{
     Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0100, SKY_L0101, SKY_L0102,
-    SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, Span,
+    SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, Span,
 };
 use sky_intern::{Interner, Symbol};
+use sky_ir::{Expr, IrType};
 use sky_lower::lower;
 use sky_types::{SolvedTypes, Ty};
+
+/// Extract the single lowered function from a one-binding program, or `None` if
+/// the shape is unexpected (the caller asserts on the `Option`).
+fn single_func(res: &DResult<sky_ir::Program>) -> Option<&sky_ir::Func> {
+    res.as_ref().ok()?.modules.first()?.funcs.first()
+}
 
 /// Lower a hand-built module + binding environment. `regions` is unused by the
 /// lowerer, so an empty map suffices.
@@ -125,11 +132,13 @@ fn non_variable_parameter_pattern() -> DResult<()> {
 }
 
 #[test]
-fn function_type_in_annotation_argument() -> DResult<()> {
+fn function_type_in_annotation_argument_lowers_to_fun() -> DResult<()> {
+    // `f : (Int -> Int) -> Int` — a higher-order argument now lowers to a boxed
+    // `Fn` parameter type `Fun([Int], Int)` (M1 first-class functions), not an
+    // unsupported-feature diagnostic.
     let mut i = Interner::new();
     let f = i.intern("f")?;
     let x = i.intern("x")?;
-    // f : (Int -> Int) -> Int  — a higher-order argument.
     let arg = canon::Type::Lambda(Box::new(con_int(&mut i)?), Box::new(con_int(&mut i)?));
     let ty = canon::Type::Lambda(Box::new(arg), Box::new(con_int(&mut i)?));
     let patterns = vec![Located::new(Span::new(30, 31), canon::Pattern_::PVar(x))];
@@ -140,12 +149,13 @@ fn function_type_in_annotation_argument() -> DResult<()> {
         body: int(Span::new(32, 33), 0),
         ty,
     };
-    // The argument type is blamed via its parameter pattern span.
-    assert_unsupported(
-        run(Vec::new(), vec![def], BTreeMap::new(), &i),
-        Feature::HigherOrderValues,
-        SKY_L0103,
-        Span::new(30, 31),
+    let res = run(Vec::new(), vec![def], BTreeMap::new(), &i);
+    let func = single_func(&res);
+    let param_ty = func.and_then(|fc| fc.params.first()).map(|(_, t)| t);
+    assert_eq!(
+        param_ty,
+        Some(&IrType::Fun(vec![IrType::Int], Box::new(IrType::Int))),
+        "higher-order param must lower to Fun([Int], Int): {res:?}"
     );
     Ok(())
 }
@@ -208,7 +218,9 @@ fn task_with_non_unit_result() -> DResult<()> {
 }
 
 #[test]
-fn inferred_function_type_in_value_position() -> DResult<()> {
+fn inferred_function_type_in_value_position_lowers_to_fun() -> DResult<()> {
+    // An inferred function type `Int -> Int` in value position now lowers to the
+    // boxed `Fn` return type `Fun([Int], Int)` (M1 first-class functions).
     let mut i = Interner::new();
     let f = i.intern("f")?;
     let int_name = i.intern("Int")?;
@@ -217,7 +229,6 @@ fn inferred_function_type_in_value_position() -> DResult<()> {
         name,
         args: Vec::new(),
     };
-    // Inferred type: Int -> Int (a bare function as a value).
     let mut env = BTreeMap::new();
     env.insert(f, Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name))));
     let def = canon::Def::Untyped {
@@ -225,11 +236,11 @@ fn inferred_function_type_in_value_position() -> DResult<()> {
         patterns: Vec::new(),
         body: int(Span::new(62, 63), 0),
     };
-    assert_unsupported(
-        run(Vec::new(), vec![def], env, &i),
-        Feature::HigherOrderValues,
-        SKY_L0103,
-        Span::new(60, 61),
+    let res = run(Vec::new(), vec![def], env, &i);
+    assert_eq!(
+        single_func(&res).map(|fc| &fc.ret),
+        Some(&IrType::Fun(vec![IrType::Int], Box::new(IrType::Int))),
+        "function-typed binding must lower its return to Fun([Int], Int): {res:?}"
     );
     Ok(())
 }
@@ -266,13 +277,17 @@ fn bare_function_reference_as_value() -> DResult<()> {
 }
 
 #[test]
-fn non_name_call_callee() -> DResult<()> {
+fn value_callee_lowers_to_apply() -> DResult<()> {
+    // A call whose callee is not a kernel/top-level name (here a local that
+    // would hold a function value) lowers to `Expr::Apply`, the first-class
+    // application path — distinct from the direct `Expr::Call` callee path.
     let mut i = Interner::new();
     let f = i.intern("f")?;
+    let g = i.intern("g")?;
     let ty = con_int(&mut i)?;
-    // A call whose callee is an integer literal — a computed callee.
-    let callee = Box::new(int(Span::new(82, 83), 5));
-    let body = Located::new(Span::new(82, 90), canon::Expr_::Call(callee, Vec::new()));
+    let callee = Box::new(Located::new(Span::new(82, 83), canon::Expr_::VarLocal(g)));
+    let arg = int(Span::new(84, 85), 5);
+    let body = Located::new(Span::new(82, 90), canon::Expr_::Call(callee, vec![arg]));
     let def = canon::Def::Typed {
         name: Located::new(Span::new(80, 81), f),
         free_vars: Vec::new(),
@@ -280,12 +295,15 @@ fn non_name_call_callee() -> DResult<()> {
         body,
         ty,
     };
-    // The callee node's span is blamed.
-    assert_unsupported(
-        run(Vec::new(), vec![def], BTreeMap::new(), &i),
-        Feature::FirstClassFunctions,
-        SKY_L0107,
-        Span::new(82, 83),
+    let res = run(Vec::new(), vec![def], BTreeMap::new(), &i);
+    let body = single_func(&res).map(|fc| &fc.body);
+    assert!(
+        matches!(
+            body,
+            Some(Expr::Apply { func, args })
+                if matches!(func.as_ref(), Expr::Var(s) if *s == g) && args.len() == 1
+        ),
+        "a value callee must lower to Apply over the local, got {body:?}"
     );
     Ok(())
 }

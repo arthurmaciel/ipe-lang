@@ -281,12 +281,71 @@ impl<'a> Lowerer<'a> {
         match t {
             canon::Type::Con { name, .. } => self.con_name_to_ir(*name),
             // A function type in argument/return position of a value annotation
-            // (`f : (Int -> Int) -> Int`). [SKY-L0103, feature: higher-order-values]
-            canon::Type::Lambda(_, _) => Err(unsupported(span, Feature::HigherOrderValues)),
+            // (`apply : (Int -> Int) -> Int`). Flatten the curried arrow chain
+            // into one boxed `Fn` value type `Fun([T0, …], R)`.
+            canon::Type::Lambda(_, _) => {
+                let mut params = Vec::new();
+                let mut cur = t;
+                while let canon::Type::Lambda(arg, rest) = cur {
+                    params.push(self.ir_type_from_canon(arg, span)?);
+                    cur = rest.as_ref();
+                }
+                let ret = self.ir_type_from_canon(cur, span)?;
+                Ok(IrType::Fun(params, Box::new(ret)))
+            }
             // A type variable in an annotation (`id : a -> a`); M0 is monomorphic.
             // [SKY-L0102, feature: polymorphism]
             canon::Type::Var(_) => Err(unsupported(span, Feature::Polymorphism)),
         }
+    }
+
+    /// Lower an anonymous function `\p0 p1 ... -> body` into [`Expr::Lambda`].
+    ///
+    /// The lambda's solved region type is a curried arrow `T0 -> T1 -> … -> R`;
+    /// exactly one arrow is peeled per parameter pattern, so the parameter count
+    /// — not a full flatten — fixes the boxed closure's arity (a body that
+    /// itself returns a function leaves that function as the lambda's `ret`,
+    /// matching how a nested lambda lowers). Parameter patterns must be plain
+    /// names (M1 has no parameter destructuring).
+    fn lower_lambda(
+        &self,
+        params: &[canon::Pattern],
+        body: &canon::Expr,
+        span: Span,
+    ) -> DResult<Expr> {
+        // The region type the solver recorded for this lambda is its arrow.
+        let ty = self.types.regions.get(&span).ok_or_else(|| {
+            bug(
+                "sky_lower::lower_lambda",
+                "no inferred type for lambda expression",
+            )
+        })?;
+        let mut cur = ty;
+        let mut ir_params = Vec::with_capacity(params.len());
+        for pat in params {
+            let Ty::Fun(arg, rest) = cur else {
+                // The lambda's inferred type has fewer arrows than it has
+                // parameters — ruled out by inference (the lambda arm builds one
+                // arrow per parameter), so reaching here is an invariant
+                // violation, not a missing feature.
+                return Err(bug(
+                    "sky_lower::lower_lambda",
+                    "lambda type has fewer arrows than parameters",
+                ));
+            };
+            ir_params.push((
+                Self::pattern_var(pat)?,
+                self.ir_type_from_ty(arg, pat.span)?,
+            ));
+            cur = rest.as_ref();
+        }
+        let ret = self.ir_type_from_ty(cur, span)?;
+        let body = self.lower_expr(body)?;
+        Ok(Expr::Lambda {
+            params: ir_params,
+            ret,
+            body: Box::new(body),
+        })
     }
 
     /// Convert a solved [`Ty`] (used for the return type of untyped bindings,
@@ -336,10 +395,20 @@ impl<'a> Lowerer<'a> {
                 }
                 Ok(IrType::Record(lowered))
             }
-            // An inferred function type in value position (e.g. a bare partial
-            // application as a binding body).
-            // [SKY-L0103, feature: higher-order-values]
-            Ty::Fun(_, _) => Err(unsupported(span, Feature::HigherOrderValues)),
+            // An inferred function type in value position (a lambda, or a
+            // function-typed parameter/binding). Flatten the curried arrow chain
+            // into one boxed `Fn` value type `Fun([T0, …], R)`, matching the
+            // backend's `Box<dyn Fn(T0, …) -> R>` rendering.
+            Ty::Fun(_, _) => {
+                let mut params = Vec::new();
+                let mut cur = t;
+                while let Ty::Fun(arg, rest) = cur {
+                    params.push(self.ir_type_from_ty(arg, span)?);
+                    cur = rest.as_ref();
+                }
+                let ret = self.ir_type_from_ty(cur, span)?;
+                Ok(IrType::Fun(params, Box::new(ret)))
+            }
             // The solver left a flexible variable unresolved for a concrete
             // binding: it should have been fully zonked. An invariant violation.
             Ty::Var(_) => Err(bug(
@@ -388,14 +457,8 @@ impl<'a> Lowerer<'a> {
                 lhs: Box::new(self.lower_expr(lhs)?),
                 rhs: Box::new(self.lower_expr(rhs)?),
             }),
-            canon::Expr_::Call(callee, args) => {
-                let callee = self.lower_callee(callee)?;
-                let args = args
-                    .iter()
-                    .map(|a| self.lower_expr(a))
-                    .collect::<DResult<Vec<_>>>()?;
-                Ok(Expr::Call { callee, args })
-            }
+            canon::Expr_::Call(callee, args) => self.lower_call(callee, args),
+            canon::Expr_::Lambda(params, body) => self.lower_lambda(params, body, e.span),
             canon::Expr_::Let(bindings, body) => {
                 // Multi-binding `let` lowers to right-nested single-binding IR
                 // `Let`s: `let a = …; b = … in body` becomes
@@ -482,12 +545,38 @@ impl<'a> Lowerer<'a> {
                 })
             }
             canon::Expr_::Case(scrut, branches) => self.lower_case(scrut, branches),
-            // A function named as a bare value rather than applied. M0 has no
-            // first-class functions; a function name is legal only as a call
-            // callee. [SKY-L0107, feature: first-class-functions]
+            // A top-level binding or kernel named as a bare *value* (passed,
+            // returned, or let-bound) rather than directly applied. A lambda or
+            // a function-typed local works as a first-class value; wrapping a
+            // top-level/kernel name into a forwarding boxed closure additionally
+            // needs fresh parameter symbols, which this pass (holding an
+            // immutable interner) cannot mint — so it stays a documented gap.
+            // [SKY-L0107, feature: first-class-functions]
             canon::Expr_::VarTopLevel { .. } | canon::Expr_::VarKernel { .. } => {
                 Err(unsupported(e.span, Feature::FirstClassFunctions))
             }
+        }
+    }
+
+    /// Lower a function application. A kernel or top-level callee keeps the
+    /// efficient direct [`Callee`] path (`Expr::Call`); any other callee is a
+    /// first-class function *value* — a local (function-typed) binding, a
+    /// lambda, or another expression's result — applied via [`Expr::Apply`]
+    /// (a boxed `dyn Fn` auto-derefs at the call site).
+    fn lower_call(&self, callee: &canon::Expr, args: &[canon::Expr]) -> DResult<Expr> {
+        let lowered_args = args
+            .iter()
+            .map(|a| self.lower_expr(a))
+            .collect::<DResult<Vec<_>>>()?;
+        match &callee.value {
+            canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } => Ok(Expr::Call {
+                callee: self.lower_callee(callee)?,
+                args: lowered_args,
+            }),
+            _ => Ok(Expr::Apply {
+                func: Box::new(self.lower_expr(callee)?),
+                args: lowered_args,
+            }),
         }
     }
 
