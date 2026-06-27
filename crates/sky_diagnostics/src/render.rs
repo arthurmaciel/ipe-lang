@@ -22,10 +22,11 @@
 
 use core::fmt::Write as _;
 
-use crate::code::{Severity, title};
+use crate::code::{ISSUE_TRACKER_URL, Severity, title};
 use crate::diagnostic::{
     CaseDefect, Diagnostic, Expected, ExpectedSet, ExposingDefect, Feature, HeaderDefect, HelpLine,
-    Hint, LowerError, NameError, ParseError, SpanRole, TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    Hint, LowerError, NameError, ParseError, SpanRole, Suggestion, TokenKind, TyDoc,
+    TypeDeclDefect, TypeError,
 };
 use crate::span::Span;
 
@@ -118,16 +119,34 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
     // Band 4 — help + note footer.
     let mut footer: Vec<String> = Vec::new();
     for line in &other_help {
-        if let Some(text) = help_text(line) {
+        let text = match line {
+            // A span-scoped suggestion can show the text it replaces, so it is
+            // rendered here (with source) rather than in the source-free
+            // `help_text`.
+            HelpLine::Suggest(s) => Some(suggestion_text(s, source)),
+            other => help_text(other),
+        };
+        if let Some(text) = text {
             footer.push(text);
         }
     }
-    if let Diagnostic::CompilerBug { detail, .. } = d {
-        if !detail.is_empty() {
+    // Humble messaging: an internal compiler error (every `SKY-I*`) is a gap in
+    // Sky, not the reader's fault. Apologise plainly, Elm-style, and point at
+    // the one issue tracker — never a raw backtrace, never false confidence.
+    if severity == Severity::Bug {
+        if let Diagnostic::CompilerBug { detail, .. } = d
+            && !detail.is_empty()
+        {
             footer.push(format!("note: {detail}"));
         }
         footer.push("note: this is a bug in Sky, please report it".to_string());
+        footer.push(format!(
+            "note: I'm not sure what went wrong here — sorry about that. This is likely a gap \
+             in the Sky Rust compiler. Please report it (with this source + `skyc --version`) \
+             at: {ISSUE_TRACKER_URL}"
+        ));
     }
+    // Every coded diagnostic keeps the explain-page pointer as its last note.
     footer.push(format!(
         "note: run `skyc explain {}` for more information",
         code.as_str()
@@ -403,7 +422,24 @@ fn help_text(line: &HelpLine) -> Option<String> {
         HelpLine::MissingConstructor(name) => {
             Some(format!("help: this case does not handle `{name}`"))
         }
+        // Source-free fallback: the source-aware [`suggestion_text`] is used in
+        // the render footer, but this arm keeps `help_text` total over `HelpLine`.
+        HelpLine::Suggest(s) => Some(format!("help: replace with `{}`", s.replacement)),
         HelpLine::SecondarySpan { .. } => None,
+    }
+}
+
+/// Render a suggestion as a `help: replace ... with ...` line, reading the old
+/// text from `source` over the suggestion's span. Falls back to the source-free
+/// wording when the span is empty or out of range.
+fn suggestion_text(s: &Suggestion, source: &str) -> String {
+    let lo = floor_boundary(source, s.span.lo as usize);
+    let hi = floor_boundary(source, s.span.hi as usize).max(lo);
+    let original = slice(source, lo, hi);
+    if original.is_empty() {
+        format!("help: replace with `{}`", s.replacement)
+    } else {
+        format!("help: replace `{original}` with `{}`", s.replacement)
     }
 }
 
@@ -798,6 +834,49 @@ mod tests {
             "{out}"
         );
         let _ = SKY_T0001;
+    }
+
+    #[test]
+    fn single_candidate_renders_machine_applicable_replacement() {
+        // One suggestion → a span-scoped "replace `lenght` with `length`".
+        let src = "lenght\n";
+        let d = Diagnostic::Name {
+            span: Span::new(0, 6),
+            msg: NameError::ValueNotFound {
+                name: "lenght".into(),
+                suggestions: Box::new(["length".into()]),
+            },
+        };
+        let out = render(&d, "n.sky", src);
+        assert!(
+            out.contains("= help: replace `lenght` with `length`"),
+            "suggestion:\n{out}"
+        );
+        // Re-render is byte-identical (deterministic).
+        assert_eq!(out, render(&d, "n.sky", src));
+    }
+
+    #[test]
+    fn compiler_bug_emits_apology_and_tracker_url() {
+        let d = Diagnostic::CompilerBug {
+            where_: "lower",
+            detail: "no region type".into(),
+        };
+        let out = render(&d, "x.sky", "anything");
+        assert!(
+            out.contains("sorry about that"),
+            "Elm-style apology:\n{out}"
+        );
+        assert!(
+            out.contains(crate::code::ISSUE_TRACKER_URL),
+            "tracker URL:\n{out}"
+        );
+        // Footer still ends with the explain pointer.
+        assert!(
+            out.trim_end()
+                .ends_with("note: run `skyc explain SKY-I0001` for more information"),
+            "explain pointer last:\n{out}"
+        );
     }
 
     #[test]

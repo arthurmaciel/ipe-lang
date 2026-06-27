@@ -9,18 +9,18 @@ mod render;
 mod span;
 
 pub use code::{
-    Code, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200,
-    SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
-    SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0200, SKY_N0001, SKY_N0002, SKY_N0003,
-    SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_P0001, SKY_P0002, SKY_P0003,
-    SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031,
-    SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004,
-    SKY_T0010, SKY_T0011, Severity, explain_page, title,
+    Code, ISSUE_TRACKER_URL, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102,
+    SKY_I0103, SKY_I0200, SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102,
+    SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0200, SKY_N0001,
+    SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_P0001,
+    SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020, SKY_P0021,
+    SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_T0001, SKY_T0002,
+    SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, Severity, explain_page, title,
 };
 pub use diagnostic::{
-    CaseDefect, Construct, DResult, Diagnostic, Expected, ExpectedSet, ExposingDefect, Feature,
-    HeaderDefect, HelpLine, Hint, LowerError, NameError, ParseError, SpanRole, TokenKind, TyDoc,
-    TypeDeclDefect, TypeError,
+    Applicability, CaseDefect, Construct, DResult, Diagnostic, Expected, ExpectedSet,
+    ExposingDefect, Feature, HeaderDefect, HelpLine, Hint, LowerError, NameError, ParseError,
+    SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
 };
 pub use render::render;
 pub use span::{Located, Span};
@@ -195,6 +195,25 @@ mod tests {
                 HelpLine::DidYouMean("length".into()),
                 HelpLine::DidYouMean("list".into()),
             ]
+        );
+    }
+
+    #[test]
+    fn single_candidate_becomes_machine_applicable_suggestion() {
+        let d = Diagnostic::Name {
+            span: Span::new(0, 6),
+            msg: NameError::ValueNotFound {
+                name: "lenght".into(),
+                suggestions: Box::new(["length".into()]),
+            },
+        };
+        assert_eq!(
+            d.help(),
+            vec![HelpLine::Suggest(Suggestion {
+                span: Span::new(0, 6),
+                replacement: "length".into(),
+                applicability: Applicability::MachineApplicable,
+            })]
         );
     }
 
