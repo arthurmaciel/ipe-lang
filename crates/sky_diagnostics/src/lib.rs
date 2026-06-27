@@ -5,6 +5,7 @@
 
 mod code;
 mod diagnostic;
+mod render;
 mod span;
 
 pub use code::{
@@ -21,6 +22,7 @@ pub use diagnostic::{
     HelpLine, Hint, LowerError, NameError, ParseError, SpanRole, TokenKind, TyDoc, TypeDeclDefect,
     TypeError, ExpectedSet,
 };
+pub use render::render;
 pub use span::{Located, Span};
 
 #[cfg(test)]
