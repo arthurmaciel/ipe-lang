@@ -71,11 +71,21 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
     }
 }
 
-/// Render a binary operator's surface token.
+/// Render a binary operator's surface (Sky source) token.
 const fn binop_token(op: BinOp) -> &'static str {
     match op {
         BinOp::Add => "+",
         BinOp::Sub => "-",
+        BinOp::Mul => "*",
+        BinOp::Div => "/",
+        BinOp::Eq => "==",
+        BinOp::Neq => "/=",
+        BinOp::Lt => "<",
+        BinOp::Gt => ">",
+        BinOp::Le => "<=",
+        BinOp::Ge => ">=",
+        BinOp::And => "&&",
+        BinOp::Or => "||",
     }
 }
 
@@ -190,6 +200,22 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
             line(out, level, &format!("BinOp {}", binop_token(*op)));
             write_expr(out, lhs, interner, level + 1);
             write_expr(out, rhs, interner, level + 1);
+        }
+        Expr::Let { name, value, body } => {
+            line(out, level, &format!("Let {}", sym_name(interner, *name)));
+            line(out, level + 1, "value");
+            write_expr(out, value, interner, level + 2);
+            line(out, level + 1, "body");
+            write_expr(out, body, interner, level + 2);
+        }
+        Expr::If { cond, then_, else_ } => {
+            line(out, level, "If");
+            line(out, level + 1, "cond");
+            write_expr(out, cond, interner, level + 2);
+            line(out, level + 1, "then");
+            write_expr(out, then_, interner, level + 2);
+            line(out, level + 1, "else");
+            write_expr(out, else_, interner, level + 2);
         }
         Expr::Match(m) => write_match(out, m, interner, level),
         Expr::Call { callee, args } => {
@@ -326,6 +352,83 @@ program
         let mut i = Interner::new();
         let program = m0_program(&mut i)?;
         assert_eq!(pretty(&program, &i), pretty(&program, &i));
+        Ok(())
+    }
+
+    #[test]
+    fn pretty_renders_let_if_and_extended_binops() -> DResult<()> {
+        let mut i = Interner::new();
+        let main_mod = i.intern("Main")?;
+        let f = i.intern("f")?;
+        let n = i.intern("n")?;
+        let x = i.intern("x")?;
+
+        // f(n : Int) -> Int = let x = n * 2 in if x >= 10 then x / 2 else x + 1
+        let body = Expr::Let {
+            name: x,
+            value: Box::new(Expr::BinOp {
+                op: BinOp::Mul,
+                lhs: Box::new(Expr::Var(n)),
+                rhs: Box::new(Expr::Int(2)),
+            }),
+            body: Box::new(Expr::If {
+                cond: Box::new(Expr::BinOp {
+                    op: BinOp::Ge,
+                    lhs: Box::new(Expr::Var(x)),
+                    rhs: Box::new(Expr::Int(10)),
+                }),
+                then_: Box::new(Expr::BinOp {
+                    op: BinOp::Div,
+                    lhs: Box::new(Expr::Var(x)),
+                    rhs: Box::new(Expr::Int(2)),
+                }),
+                else_: Box::new(Expr::BinOp {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Var(x)),
+                    rhs: Box::new(Expr::Int(1)),
+                }),
+            }),
+        };
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![],
+                funcs: vec![Func {
+                    id: FuncId::from_raw(0),
+                    name: f,
+                    params: vec![(n, IrType::Int)],
+                    ret: IrType::Int,
+                    body,
+                }],
+                entry: None,
+            }],
+        };
+
+        let expected = "\
+program
+  module Main
+    fn#0 f(n : Int) -> Int
+      Let x
+        value
+          BinOp *
+            Var n
+            Int 2
+        body
+          If
+            cond
+              BinOp >=
+                Var x
+                Int 10
+            then
+              BinOp /
+                Var x
+                Int 2
+            else
+              BinOp +
+                Var x
+                Int 1
+";
+        assert_eq!(pretty(&program, &i), expected);
         Ok(())
     }
 

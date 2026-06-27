@@ -100,6 +100,21 @@ pub enum Expr {
         lhs: Box<Self>,
         rhs: Box<Self>,
     },
+    /// A non-recursive single-binding `let name = value in body`. Multi-binding
+    /// `let` lowers to nested `Let`s; `name` is bound only within `body`, not in
+    /// `value`.
+    Let {
+        name: Symbol,
+        value: Box<Self>,
+        body: Box<Self>,
+    },
+    /// A conditional `if cond then then_ else else_`. The `else` arm is
+    /// mandatory — every Sky `if` is an expression with both branches.
+    If {
+        cond: Box<Self>,
+        then_: Box<Self>,
+        else_: Box<Self>,
+    },
     Match(Match),
     Call {
         callee: Callee,
@@ -121,11 +136,25 @@ pub enum KernelFn {
     LogPrintln,
 }
 
-/// Binary operators in the M0 subset.
+/// Binary operators.
+///
+/// M0 shipped `Add`/`Sub`; M1 core widens the set with the remaining
+/// arithmetic, comparison, and boolean operators. List/string operators
+/// (`++`, `::`) are deferred until those types land.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BinOp {
     Add,
     Sub,
+    Mul,
+    Div,
+    Eq,
+    Neq,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    And,
+    Or,
 }
 
 /// One arm of a [`Match`]: a constructor pattern and the body it guards.
@@ -357,6 +386,76 @@ mod tests {
         let clone = program.clone();
         assert_eq!(program, clone);
         assert!(format!("{program:?}").contains("Program"));
+        Ok(())
+    }
+
+    #[test]
+    fn let_if_and_extended_binops_construct_and_round_trip() -> DResult<()> {
+        let mut i = Interner::new();
+        let x = i.intern("x")?;
+
+        // let x = 6 / 2 in if (x == 3) && (x > 0) then x * 10 else x - 1
+        let expr = Expr::Let {
+            name: x,
+            value: Box::new(Expr::BinOp {
+                op: BinOp::Div,
+                lhs: Box::new(Expr::Int(6)),
+                rhs: Box::new(Expr::Int(2)),
+            }),
+            body: Box::new(Expr::If {
+                cond: Box::new(Expr::BinOp {
+                    op: BinOp::And,
+                    lhs: Box::new(Expr::BinOp {
+                        op: BinOp::Eq,
+                        lhs: Box::new(Expr::Var(x)),
+                        rhs: Box::new(Expr::Int(3)),
+                    }),
+                    rhs: Box::new(Expr::BinOp {
+                        op: BinOp::Gt,
+                        lhs: Box::new(Expr::Var(x)),
+                        rhs: Box::new(Expr::Int(0)),
+                    }),
+                }),
+                then_: Box::new(Expr::BinOp {
+                    op: BinOp::Mul,
+                    lhs: Box::new(Expr::Var(x)),
+                    rhs: Box::new(Expr::Int(10)),
+                }),
+                else_: Box::new(Expr::BinOp {
+                    op: BinOp::Sub,
+                    lhs: Box::new(Expr::Var(x)),
+                    rhs: Box::new(Expr::Int(1)),
+                }),
+            }),
+        };
+
+        // Clone + structural equality + Debug all hold for the new variants.
+        assert_eq!(expr, expr.clone());
+        let rendered = format!("{expr:?}");
+        assert!(rendered.contains("Let"));
+        assert!(rendered.contains("If"));
+
+        // Every extended BinOp is a distinct, Copy, comparable value: the full
+        // set has no duplicates and the Copy bound holds (the array is consumed
+        // by value below without moving out of `all`).
+        let all = [
+            BinOp::Add,
+            BinOp::Sub,
+            BinOp::Mul,
+            BinOp::Div,
+            BinOp::Eq,
+            BinOp::Neq,
+            BinOp::Lt,
+            BinOp::Gt,
+            BinOp::Le,
+            BinOp::Ge,
+            BinOp::And,
+            BinOp::Or,
+        ];
+        let distinct: BTreeSet<_> = all.iter().map(|op| format!("{op:?}")).collect();
+        assert_eq!(distinct.len(), all.len());
+        let copied = all;
+        assert_eq!(copied.len(), all.len());
         Ok(())
     }
 }

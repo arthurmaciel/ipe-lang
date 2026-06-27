@@ -26,11 +26,23 @@ fn indent_of(level: usize) -> String {
     "    ".repeat(level)
 }
 
-/// The Rust spelling of an M0 binary operator.
+/// The Rust spelling of a binary operator. Every Sky M1-core operator maps to
+/// the identically-spelled Rust operator except `/=` (Sky inequality), which is
+/// Rust's `!=`.
 const fn op_str(op: BinOp) -> &'static str {
     match op {
         BinOp::Add => "+",
         BinOp::Sub => "-",
+        BinOp::Mul => "*",
+        BinOp::Div => "/",
+        BinOp::Eq => "==",
+        BinOp::Neq => "!=",
+        BinOp::Lt => "<",
+        BinOp::Gt => ">",
+        BinOp::Le => "<=",
+        BinOp::Ge => ">=",
+        BinOp::And => "&&",
+        BinOp::Or => "||",
     }
 }
 
@@ -81,6 +93,23 @@ fn emit_expr_at(ctx: &EmitCtx, expr: &Expr, indent: usize, depth: u16) -> DResul
             let l = emit_expr_at(ctx, lhs, indent, child)?;
             let r = emit_expr_at(ctx, rhs, indent, child)?;
             Ok(format!("({} {} {})", l, op_str(*op), r))
+        }
+        Expr::Let { name, value, body } => {
+            // A `let` expression renders as a parenthesised Rust block so it
+            // composes inline anywhere an expression is expected:
+            // `({ let <name> = <value>; <body> })`.
+            let name = ctx.emit_ident(*name)?;
+            let value = emit_expr_at(ctx, value, indent, child)?;
+            let body = emit_expr_at(ctx, body, indent, child)?;
+            Ok(format!("({{ let {name} = {value}; {body} }})"))
+        }
+        Expr::If { cond, then_, else_ } => {
+            // Parenthesised so the whole `if`/`else` is a single expression
+            // value, independent of surrounding precedence.
+            let cond = emit_expr_at(ctx, cond, indent, child)?;
+            let then_ = emit_expr_at(ctx, then_, indent, child)?;
+            let else_ = emit_expr_at(ctx, else_, indent, child)?;
+            Ok(format!("(if {cond} {{ {then_} }} else {{ {else_} }})"))
         }
         Expr::Call { callee, args } => {
             let name = callee_name(ctx, callee)?;
