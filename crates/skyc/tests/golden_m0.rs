@@ -98,3 +98,39 @@ fn end_to_end_builds_and_prints_one() {
         "program prints 1"
     );
 }
+
+/// A `CliError::Pipeline` must render as a coded, rustc/Elm-style report — not a
+/// `{:?}` debug dump. We feed `build` a deliberately ill-formed `.sky` source and
+/// assert the displayed error carries an `error[SKY-…]` header and the
+/// `skyc explain` footer pointer.
+#[test]
+fn pipeline_error_renders_with_code_and_explain_pointer() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pipeline_err");
+    let _ = std::fs::create_dir_all(&dir);
+    let entry = dir.join("Bad.sky");
+    // Malformed: a top-level declaration with no right-hand side. This is
+    // rejected at the parse stage boundary, the first pipeline stage.
+    let wrote = std::fs::write(&entry, "module Main exposing (main)\n\nmain =\n");
+    assert!(wrote.is_ok(), "must write ill-formed source");
+
+    // The runtime dir is never reached: the parse error fires first. Pass a
+    // path that need not exist.
+    let runtime = dir.join("no-runtime");
+    let built = skyc::build(&entry, &dir.join("out"), &runtime);
+
+    assert!(
+        matches!(&built, Err(skyc::CliError::Pipeline { .. })),
+        "expected a pipeline error, got: {built:?}"
+    );
+    let Err(err) = built else { return };
+
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("error[SKY-"),
+        "rendered error must carry a coded header, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("skyc explain"),
+        "rendered error must point at `skyc explain`, got:\n{rendered}"
+    );
+}
