@@ -61,6 +61,39 @@ impl Interner {
         Ok(sym)
     }
 
+    /// Mint `count` fresh symbols whose resolved strings are guaranteed to be
+    /// distinct from one another *and* from every string already interned.
+    ///
+    /// Each name is `<prefix><n>` for the smallest run of `n` (from `0`) whose
+    /// candidate is not already present, so the result can never alias a user
+    /// identifier (all of which are interned before this is called) nor a
+    /// previously minted fresh symbol. The lowerer uses this for eta-expansion
+    /// parameter names, which must not capture any name free in the supplied
+    /// arguments. Deterministic for a given interner state: the same call on the
+    /// same interner always yields the same symbols.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Diagnostic::CompilerBug`] when the `u32` suffix space is
+    /// exhausted before `count` fresh names are found, or when [`Self::intern`]
+    /// itself reports the symbol table full — both unreachable for any real
+    /// program.
+    pub fn fresh_symbols(&mut self, prefix: &str, count: usize) -> DResult<Vec<Symbol>> {
+        let mut out = Vec::with_capacity(count);
+        let mut n: u32 = 0;
+        while out.len() < count {
+            let candidate = format!("{prefix}{n}");
+            if !self.map.contains_key(&candidate) {
+                out.push(self.intern(&candidate)?);
+            }
+            n = n.checked_add(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "intern.fresh_symbols",
+                detail: "exhausted u32 suffix space minting fresh symbols".to_owned(),
+            })?;
+        }
+        Ok(out)
+    }
+
     /// Resolve a [`Symbol`] to its interned string.
     ///
     /// Returns `None` for a symbol this interner never handed out (a forged or
@@ -75,6 +108,8 @@ impl Interner {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     #[test]
     fn intern_dedups_and_resolves() -> sky_diagnostics::DResult<()> {
@@ -92,5 +127,44 @@ mod tests {
     fn resolve_unknown_is_none_not_panic() {
         let i = Interner::new();
         assert_eq!(i.resolve(Symbol::from_raw(999)), None);
+    }
+
+    #[test]
+    fn fresh_symbols_are_distinct_and_named_in_order() -> sky_diagnostics::DResult<()> {
+        let mut i = Interner::new();
+        let pool = i.fresh_symbols("eta_", 3)?;
+        let names: Vec<Option<&str>> = pool.iter().map(|&s| i.resolve(s)).collect();
+        assert_eq!(
+            names,
+            vec![Some("eta_0"), Some("eta_1"), Some("eta_2")],
+            "named by ascending suffix"
+        );
+        // Distinct symbols.
+        let unique: BTreeSet<Symbol> = pool.iter().copied().collect();
+        assert_eq!(unique.len(), pool.len(), "every minted symbol is distinct");
+        Ok(())
+    }
+
+    #[test]
+    fn fresh_symbols_skip_already_interned_collisions() -> sky_diagnostics::DResult<()> {
+        let mut i = Interner::new();
+        // A user identifier that would collide with the first candidate.
+        let user = i.intern("eta_0")?;
+        let pool = i.fresh_symbols("eta_", 2)?;
+        // The minted names step over the pre-existing `eta_0`.
+        let names: Vec<Option<&str>> = pool.iter().map(|&s| i.resolve(s)).collect();
+        assert_eq!(names, vec![Some("eta_1"), Some("eta_2")]);
+        assert!(
+            pool.iter().all(|&s| s != user),
+            "a fresh symbol never aliases a user name"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fresh_symbols_zero_count_is_empty() -> sky_diagnostics::DResult<()> {
+        let mut i = Interner::new();
+        assert!(i.fresh_symbols("eta_", 0)?.is_empty());
+        Ok(())
     }
 }

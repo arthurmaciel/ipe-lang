@@ -62,10 +62,38 @@ pub struct Lowerer<'a> {
     /// variant set handed to [`Match::new`] (the IR layer cannot self-confirm
     /// this; the lowerer carries the obligation).
     enum_variants: BTreeMap<Symbol, Vec<Symbol>>,
+    /// Pre-minted, collision-free parameter names for eta-expanding a partial
+    /// application into a boxed closure. Sized in [`crate::lower`] to the widest
+    /// function arity in the module — an eta-lambda introduces at most that many
+    /// params — so position `i` of the pool names the i-th synthesised parameter.
+    /// Each eta-lambda is its own closure scope, so the same pool entry is reused
+    /// across sites without shadowing; [`Interner::fresh_symbols`] guarantees no
+    /// entry aliases a user identifier.
+    eta_params: Vec<Symbol>,
+}
+
+/// The widest parameter-pattern count across the module's top-level bindings —
+/// the most parameters any single eta-expanded partial application can need.
+/// Drives the eta-parameter pool sizing in [`crate::lower`].
+pub fn max_def_arity(m: &canon::Module) -> usize {
+    m.defs
+        .iter()
+        .map(|d| match d {
+            canon::Def::Typed { patterns, .. } | canon::Def::Untyped { patterns, .. } => {
+                patterns.len()
+            }
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 impl<'a> Lowerer<'a> {
-    pub fn new(m: &'a canon::Module, types: &'a SolvedTypes, interner: &'a Interner) -> Self {
+    pub fn new(
+        m: &'a canon::Module,
+        types: &'a SolvedTypes,
+        interner: &'a Interner,
+        eta_params: Vec<Symbol>,
+    ) -> Self {
         let mut func_ids = BTreeMap::new();
         for (idx, def) in m.defs.iter().enumerate() {
             let id = FuncId::from_raw(u32::try_from(idx).unwrap_or(u32::MAX));
@@ -83,6 +111,7 @@ impl<'a> Lowerer<'a> {
             interner,
             func_ids,
             enum_variants,
+            eta_params,
         }
     }
 
@@ -599,16 +628,22 @@ impl<'a> Lowerer<'a> {
     /// (a boxed `dyn Fn` auto-derefs at the call site).
     ///
     /// A direct [`Expr::Call`] is *saturated*: it passes exactly as many
-    /// arguments as the callee declares. Lowering a direct call whose argument
-    /// count differs from the callee's arity would emit Rust the toolchain
-    /// rejects (a top-level `fn` / kernel has a fixed Rust signature). So when
-    /// the counts differ — partial application (fewer) or over-application
-    /// (more) — the lowerer fails closed with [`Feature::PartialOverApplication`]
-    /// rather than emit broken Rust. Eta-expanding the partial case into a boxed
-    /// closure (and saturating the over case via a trailing [`Expr::Apply`]) is
-    /// deferred: it needs fresh parameter symbols, which the immutable interner
-    /// borrowed here cannot mint without rearchitecting the lowering entry point.
-    /// [SKY-L0110]
+    /// arguments as the callee declares. A top-level `fn` / kernel has a fixed
+    /// Rust signature, so a call whose argument count differs from the callee's
+    /// arity cannot be one direct `Call` — it is reshaped to preserve currying:
+    ///
+    /// * **exact** (`args == arity`) — the direct [`Expr::Call`] (the fast path);
+    /// * **partial** (`args < arity`) — eta-expanded into an [`Expr::Lambda`]
+    ///   that captures the supplied args and takes the missing ones as fresh
+    ///   parameters, its body the now-saturated [`Expr::Call`]
+    ///   (see [`Self::eta_expand_partial`]);
+    /// * **over** (`args > arity`) — saturated: the first `arity` args form a
+    ///   direct [`Expr::Call`], and the surplus apply to its (function-typed)
+    ///   result through an [`Expr::Apply`] (see [`Self::saturate_over`]).
+    ///
+    /// A non-named callee — a local (function-typed) binding, a lambda, or
+    /// another expression's result — is a first-class function *value* applied
+    /// via [`Expr::Apply`] (a boxed `dyn Fn` auto-derefs at the call site).
     fn lower_call(
         &self,
         callee: &canon::Expr,
@@ -623,18 +658,119 @@ impl<'a> Lowerer<'a> {
             canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } => {
                 let resolved = self.lower_callee(callee)?;
                 let arity = self.callee_arity(&resolved)?;
-                if args.len() != arity {
-                    return Err(unsupported(call_span, Feature::PartialOverApplication));
+                match args.len().cmp(&arity) {
+                    std::cmp::Ordering::Equal => Ok(Expr::Call {
+                        callee: resolved,
+                        args: lowered_args,
+                    }),
+                    std::cmp::Ordering::Less => {
+                        self.eta_expand_partial(callee, resolved, lowered_args, arity, call_span)
+                    }
+                    std::cmp::Ordering::Greater => {
+                        Ok(Self::saturate_over(resolved, lowered_args, arity))
+                    }
                 }
-                Ok(Expr::Call {
-                    callee: resolved,
-                    args: lowered_args,
-                })
             }
             _ => Ok(Expr::Apply {
                 func: Box::new(self.lower_expr(callee)?),
                 args: lowered_args,
             }),
+        }
+    }
+
+    /// Eta-expand a partial application `f a0 … a_{k-1}` (with `k < arity`) into a
+    /// boxed closure `\eta_k … eta_{arity-1} -> f(a0, …, a_{k-1}, eta_k, …)` — a
+    /// first-class function value of the residual arrow type. The supplied
+    /// `lowered_args` are captured; the missing parameters take fresh,
+    /// collision-free names from [`Self::eta_params`].
+    ///
+    /// The per-parameter and return types come from the callee's solved region
+    /// type (the full arrow `T0 -> … -> T_{arity-1} -> R`) — never guessed. A
+    /// missing region type, or an arrow shorter than `arity`, is unreachable for
+    /// well-typed input and surfaces as a [`Diagnostic::CompilerBug`], not a
+    /// silent default.
+    fn eta_expand_partial(
+        &self,
+        callee: &canon::Expr,
+        resolved: Callee,
+        lowered_args: Vec<Expr>,
+        arity: usize,
+        call_span: Span,
+    ) -> DResult<Expr> {
+        let fn_ty = self.types.regions.get(&callee.span).ok_or_else(|| {
+            bug(
+                "sky_lower::eta_expand_partial",
+                "no inferred type for a partially-applied callee",
+            )
+        })?;
+        // Peel exactly `arity` arrows: the argument types in order, then the
+        // trailing result type R.
+        let mut cur = fn_ty;
+        let mut arg_tys: Vec<&Ty> = Vec::with_capacity(arity);
+        for _ in 0..arity {
+            let Ty::Fun(arg, rest) = cur else {
+                // The callee's type has fewer arrows than its declared arity —
+                // ruled out for well-typed input (inference unified the callee
+                // against an `arity`-deep arrow), so this is an invariant
+                // violation, not a missing feature.
+                return Err(bug(
+                    "sky_lower::eta_expand_partial",
+                    "callee type has fewer arrows than its arity",
+                ));
+            };
+            arg_tys.push(arg);
+            cur = rest.as_ref();
+        }
+        let ret_ty = cur;
+
+        let supplied = lowered_args.len();
+        // The missing parameters are argument positions `supplied..arity`.
+        let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
+        let mut call_args = lowered_args;
+        for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
+            // Reuse pool slot `offset`: each eta-lambda is its own scope, so the
+            // i-th synthesised param can share a name across sites without
+            // shadowing. A miss means the pool was undersized — an invariant
+            // violation, since it is sized to the module's widest arity.
+            let sym = *self.eta_params.get(offset).ok_or_else(|| {
+                bug(
+                    "sky_lower::eta_expand_partial",
+                    "eta-parameter pool smaller than the partial-application gap",
+                )
+            })?;
+            let ir = self.ir_type_from_ty(arg_ty, call_span)?;
+            params.push((sym, ir));
+            call_args.push(Expr::Var(sym));
+        }
+        let ret = self.ir_type_from_ty(ret_ty, call_span)?;
+        let body = Expr::Call {
+            callee: resolved,
+            args: call_args,
+        };
+        Ok(Expr::Lambda {
+            params,
+            ret,
+            body: Box::new(body),
+        })
+    }
+
+    /// Saturate an over-application `f a0 … a_{n-1}` (with `n > arity`): the first
+    /// `arity` args form the direct [`Expr::Call`] to `f` (returning a
+    /// function-typed value), and the surplus apply to that result via one
+    /// [`Expr::Apply`]. A single `Apply` suffices because the IR flattens a
+    /// curried result type into one multi-parameter [`IrType::Fun`], so the
+    /// trailing closure accepts every remaining argument at once; the backend
+    /// renders it as `(f(a0, …))(a_arity, …)`.
+    fn saturate_over(resolved: Callee, lowered_args: Vec<Expr>, arity: usize) -> Expr {
+        let mut iter = lowered_args.into_iter();
+        let head: Vec<Expr> = iter.by_ref().take(arity).collect();
+        let rest: Vec<Expr> = iter.collect();
+        Expr::Apply {
+            func: Box::new(Expr::Call {
+                callee: resolved,
+                args: head,
+            }),
+            args: rest,
         }
     }
 

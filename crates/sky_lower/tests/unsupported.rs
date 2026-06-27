@@ -11,10 +11,10 @@ use std::collections::BTreeMap;
 use sky_canon::ast as canon;
 use sky_diagnostics::{
     Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0100, SKY_L0101, SKY_L0102,
-    SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, Span,
+    SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, Span,
 };
 use sky_intern::{Interner, Symbol};
-use sky_ir::{Callee, Expr, IrType, KernelFn};
+use sky_ir::{Callee, Expr, FuncId, IrType, KernelFn};
 use sky_lower::lower;
 use sky_types::{SolvedTypes, Ty};
 
@@ -30,7 +30,7 @@ fn run(
     unions: Vec<canon::Union>,
     defs: Vec<canon::Def>,
     env: BTreeMap<Symbol, Ty>,
-    interner: &Interner,
+    interner: &mut Interner,
 ) -> DResult<sky_ir::Program> {
     run_with_regions(unions, defs, env, BTreeMap::new(), interner)
 }
@@ -43,7 +43,7 @@ fn run_with_regions(
     defs: Vec<canon::Def>,
     env: BTreeMap<Symbol, Ty>,
     regions: BTreeMap<Span, Ty>,
-    interner: &Interner,
+    interner: &mut Interner,
 ) -> DResult<sky_ir::Program> {
     let m = canon::Module {
         name: Vec::new(),
@@ -96,6 +96,31 @@ fn con_int(interner: &mut Interner) -> DResult<canon::Type> {
     })
 }
 
+/// The solved `Ty` for `Int` — a nullary type constructor — used to seed the
+/// per-region map the eta-expansion arm consults.
+fn ty_int(interner: &mut Interner) -> DResult<Ty> {
+    Ok(Ty::Con {
+        module: Vec::new(),
+        name: interner.intern("Int")?,
+        args: Vec::new(),
+    })
+}
+
+/// Find the lowered function named `name` in a one-module program.
+fn func_named<'a>(
+    res: &'a DResult<sky_ir::Program>,
+    interner: &Interner,
+    name: &str,
+) -> Option<&'a sky_ir::Func> {
+    res.as_ref()
+        .ok()?
+        .modules
+        .first()?
+        .funcs
+        .iter()
+        .find(|f| interner.resolve(f.name) == Some(name))
+}
+
 #[test]
 fn untyped_function_with_parameters() -> DResult<()> {
     let mut i = Interner::new();
@@ -110,7 +135,7 @@ fn untyped_function_with_parameters() -> DResult<()> {
     };
     // The binding's name span is blamed.
     assert_unsupported(
-        run(Vec::new(), vec![def], BTreeMap::new(), &i),
+        run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
         Feature::UntypedFunctions,
         SKY_L0106,
         Span::new(10, 11),
@@ -133,7 +158,7 @@ fn non_variable_parameter_pattern() -> DResult<()> {
         ty,
     };
     assert_unsupported(
-        run(Vec::new(), vec![def], BTreeMap::new(), &i),
+        run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
         Feature::ParamPatterns,
         SKY_L0105,
         Span::new(20, 21),
@@ -159,7 +184,7 @@ fn function_type_in_annotation_argument_lowers_to_fun() -> DResult<()> {
         body: int(Span::new(32, 33), 0),
         ty,
     };
-    let res = run(Vec::new(), vec![def], BTreeMap::new(), &i);
+    let res = run(Vec::new(), vec![def], BTreeMap::new(), &mut i);
     let func = single_func(&res);
     let param_ty = func.and_then(|fc| fc.params.first()).map(|(_, t)| t);
     assert_eq!(
@@ -185,7 +210,7 @@ fn type_variable_in_annotation() -> DResult<()> {
     };
     // No parameters → the return type is blamed via the binding's name span.
     assert_unsupported(
-        run(Vec::new(), vec![def], BTreeMap::new(), &i),
+        run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
         Feature::Polymorphism,
         SKY_L0102,
         Span::new(40, 41),
@@ -219,7 +244,7 @@ fn task_with_non_unit_result() -> DResult<()> {
         body: int(Span::new(52, 53), 0),
     };
     assert_unsupported(
-        run(Vec::new(), vec![def], env, &i),
+        run(Vec::new(), vec![def], env, &mut i),
         Feature::TaskResults,
         SKY_L0104,
         Span::new(50, 51),
@@ -246,7 +271,7 @@ fn inferred_function_type_in_value_position_lowers_to_fun() -> DResult<()> {
         patterns: Vec::new(),
         body: int(Span::new(62, 63), 0),
     };
-    let res = run(Vec::new(), vec![def], env, &i);
+    let res = run(Vec::new(), vec![def], env, &mut i);
     assert_eq!(
         single_func(&res).map(|fc| &fc.ret),
         Some(&IrType::Fun(vec![IrType::Int], Box::new(IrType::Int))),
@@ -303,7 +328,7 @@ fn bare_function_reference_lowers_to_func_value() -> DResult<()> {
         Ty::Fun(Box::new(con(int_name)), Box::new(con(string_name))),
     );
 
-    let res = run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &i);
+    let res = run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i);
     let body = single_func(&res).map(|fc| &fc.body);
     assert_eq!(
         body,
@@ -361,7 +386,7 @@ fn function_value_in_record_field_is_unsupported() -> DResult<()> {
         Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name))),
     );
     assert_unsupported(
-        run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &i),
+        run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i),
         Feature::FirstClassFunctions,
         SKY_L0107,
         field_span,
@@ -388,7 +413,7 @@ fn value_callee_lowers_to_apply() -> DResult<()> {
         body,
         ty,
     };
-    let res = run(Vec::new(), vec![def], BTreeMap::new(), &i);
+    let res = run(Vec::new(), vec![def], BTreeMap::new(), &mut i);
     let body = single_func(&res).map(|fc| &fc.body);
     assert!(
         matches!(
@@ -427,7 +452,7 @@ fn unknown_kernel_call() -> DResult<()> {
         ty,
     };
     assert_unsupported(
-        run(Vec::new(), vec![def], BTreeMap::new(), &i),
+        run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
         Feature::Kernels,
         SKY_L0108,
         Span::new(92, 100),
@@ -464,7 +489,7 @@ fn unsupported_binary_operator() -> DResult<()> {
     };
     // The whole binop expression span is blamed.
     assert_unsupported(
-        run(Vec::new(), vec![def], BTreeMap::new(), &i),
+        run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
         Feature::BinOps,
         SKY_L0101,
         Span::new(112, 117),
@@ -493,7 +518,7 @@ fn non_constructor_pattern_in_first_arm() -> DResult<()> {
         ty,
     };
     assert_unsupported(
-        run(Vec::new(), vec![def], BTreeMap::new(), &i),
+        run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
         Feature::CasePatternKinds,
         SKY_L0100,
         Span::new(126, 127),
@@ -558,7 +583,7 @@ fn non_constructor_pattern_in_later_arm() -> DResult<()> {
     };
     // The later non-constructor arm's pattern span is blamed.
     assert_unsupported(
-        run(vec![union], vec![def], BTreeMap::new(), &i),
+        run(vec![union], vec![def], BTreeMap::new(), &mut i),
         Feature::CasePatternKinds,
         SKY_L0100,
         Span::new(163, 164),
@@ -567,10 +592,11 @@ fn non_constructor_pattern_in_later_arm() -> DResult<()> {
 }
 
 #[test]
-fn partial_application_of_top_level_fn() -> DResult<()> {
-    // `add` declares two parameters; `add 2` passes one. Partial application
-    // cannot lower to a saturated `Expr::Call`, so it fails closed with
-    // SKY-L0110 (carrying the call's span), never broken Rust. [fix: M1 b4]
+fn partial_application_eta_expands_to_a_closure() -> DResult<()> {
+    // `add` declares two parameters; `add 2` passes one. Partial application now
+    // eta-expands into a boxed closure `\eta_0 -> add(2, eta_0)` — a first-class
+    // function value — rather than failing closed with SKY-L0110. (M1 b4 closed
+    // the partial/over-application gate for named callees.)
     let mut i = Interner::new();
     let add = i.intern("add")?;
     let caller = i.intern("caller")?;
@@ -595,9 +621,10 @@ fn partial_application_of_top_level_fn() -> DResult<()> {
         ty: add_ty,
     };
     // caller : Int -> Int   — its body `add 2` is a one-argument call.
+    let callee_span = Span::new(40, 43);
     let call_span = Span::new(40, 45);
     let callee_ref = Box::new(Located::new(
-        Span::new(40, 43),
+        callee_span,
         canon::Expr_::VarTopLevel {
             module: Vec::new(),
             name: add,
@@ -615,22 +642,74 @@ fn partial_application_of_top_level_fn() -> DResult<()> {
         body,
         ty: caller_ty,
     };
-    // The under-saturated call site is blamed.
-    assert_unsupported(
-        run(Vec::new(), vec![add_def, caller_def], BTreeMap::new(), &i),
-        Feature::PartialOverApplication,
-        SKY_L0110,
-        call_span,
+    // The eta-expansion reads the callee's solved arrow type from its region.
+    let mut regions = BTreeMap::new();
+    regions.insert(
+        callee_span,
+        Ty::Fun(
+            Box::new(ty_int(&mut i)?),
+            Box::new(Ty::Fun(
+                Box::new(ty_int(&mut i)?),
+                Box::new(ty_int(&mut i)?),
+            )),
+        ),
+    );
+
+    let res = run_with_regions(
+        Vec::new(),
+        vec![add_def, caller_def],
+        BTreeMap::new(),
+        regions,
+        &mut i,
+    );
+    assert!(res.is_ok(), "partial application must lower, got {res:?}");
+
+    let caller_fn = func_named(&res, &i, "caller");
+    let Some(caller_fn) = caller_fn else {
+        assert!(false_marker(), "caller must lower");
+        return Ok(());
+    };
+    // The body is the eta-lambda `\eta_0: Int -> add(2, eta_0)` : Int -> Int.
+    let Expr::Lambda { params, ret, body } = &caller_fn.body else {
+        assert!(
+            false_marker(),
+            "partial lowers to a Lambda, got {:?}",
+            caller_fn.body
+        );
+        return Ok(());
+    };
+    assert_eq!(params.len(), 1, "one missing parameter");
+    let Some((eta_sym, eta_ty)) = params.first() else {
+        return Ok(());
+    };
+    assert_eq!(*eta_ty, IrType::Int, "missing param keeps its solved type");
+    assert_eq!(
+        i.resolve(*eta_sym),
+        Some("eta_0"),
+        "fresh, collision-free eta param name"
+    );
+    assert_eq!(*ret, IrType::Int, "residual return type");
+    // body: add(2, eta_0) — a saturated direct Call to add (FuncId 0).
+    let Expr::Call { callee, args } = body.as_ref() else {
+        assert!(false_marker(), "eta body is a saturated Call, got {body:?}");
+        return Ok(());
+    };
+    assert_eq!(*callee, Callee::Func(FuncId::from_raw(0)));
+    assert_eq!(args.len(), 2, "supplied arg + synthesised param");
+    assert!(matches!(args.first(), Some(Expr::Int(2))), "captured arg 2");
+    assert!(
+        matches!(args.get(1), Some(Expr::Var(s)) if s == eta_sym),
+        "trailing arg is the eta param"
     );
     Ok(())
 }
 
 #[test]
-fn over_application_of_top_level_fn() -> DResult<()> {
+fn over_application_saturates_via_apply() -> DResult<()> {
     // `f` declares one parameter; `f 1 2` passes two — over-application across
-    // the arity boundary. The first call would saturate, but the extra argument
-    // cannot lower to a saturated `Expr::Call`, so it fails closed with
-    // SKY-L0110 rather than emit `f(1, 2)` that the Rust toolchain rejects.
+    // the arity boundary. The first arg saturates the direct `Call(f, [1])`
+    // (which returns a function value); the surplus `2` applies to that result
+    // through an `Apply`, rather than failing closed with SKY-L0110.
     let mut i = Interner::new();
     let f = i.intern("f")?;
     let caller = i.intern("caller")?;
@@ -667,12 +746,40 @@ fn over_application_of_top_level_fn() -> DResult<()> {
         body,
         ty: con_int(&mut i)?,
     };
-    // The over-saturated call site is blamed.
-    assert_unsupported(
-        run(Vec::new(), vec![f_def, caller_def], BTreeMap::new(), &i),
-        Feature::PartialOverApplication,
-        SKY_L0110,
-        call_span,
+
+    let res = run(Vec::new(), vec![f_def, caller_def], BTreeMap::new(), &mut i);
+    assert!(res.is_ok(), "over-application must lower, got {res:?}");
+
+    let Some(caller_fn) = func_named(&res, &i, "caller") else {
+        assert!(false_marker(), "caller must lower");
+        return Ok(());
+    };
+    // body: (f(1))(2) — Apply over a saturated direct Call.
+    let Expr::Apply { func, args } = &caller_fn.body else {
+        assert!(
+            false_marker(),
+            "over lowers to an Apply, got {:?}",
+            caller_fn.body
+        );
+        return Ok(());
+    };
+    let Expr::Call { callee, args: head } = func.as_ref() else {
+        assert!(false_marker(), "Apply func is a direct Call, got {func:?}");
+        return Ok(());
+    };
+    assert_eq!(*callee, Callee::Func(FuncId::from_raw(0)));
+    assert_eq!(head.len(), 1, "first arity args saturate the Call");
+    assert!(
+        matches!(head.first(), Some(Expr::Int(1))),
+        "saturating arg 1"
     );
+    assert_eq!(args.len(), 1, "surplus arg applied to the result");
+    assert!(matches!(args.first(), Some(Expr::Int(2))), "surplus arg 2");
     Ok(())
+}
+
+/// A runtime `false` the optimiser cannot fold, so `assert!(false_marker())`
+/// fails the test without tripping `clippy::assertions_on_constants`.
+const fn false_marker() -> bool {
+    std::hint::black_box(false)
 }
