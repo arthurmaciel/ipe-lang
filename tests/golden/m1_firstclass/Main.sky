@@ -1,0 +1,21 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A higher-order function: a function-typed parameter, applied twice.
+applyTwice : (Int -> Int) -> Int -> Int
+applyTwice f x = f (f x)
+
+-- A plain top-level function, passed below as a first-class value by name.
+inc : Int -> Int
+inc n = n + 1
+
+-- Returns a top-level function by name (a function value in return position).
+makeInc : Int -> (Int -> Int)
+makeInc base = inc
+
+main =
+    let a = applyTwice (\n -> n + 3) 1 in
+    let b = applyTwice inc 1 in
+    let g = makeInc 0 in
+    let c = g 40 in
+    println (String.fromInt (a + b + c))

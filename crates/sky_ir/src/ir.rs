@@ -207,6 +207,22 @@ pub enum Expr {
         func: Box<Self>,
         args: Vec<Self>,
     },
+    /// A top-level function or kernel named as a first-class *value* — passed as
+    /// an argument, returned, or let-bound — rather than directly called.
+    ///
+    /// Distinct from [`Expr::Call`] (which applies a known [`Callee`] to
+    /// arguments on the spot): `FuncValue` reifies the callee into a boxed
+    /// closure value so it fills a `Box<dyn Fn(..) -> R>` slot uniformly. The
+    /// backend emits `{ let f: <ty> = Box::new(<callee>); f }`, the explicit
+    /// binding type pinning the unsized coercion of the top-level `fn` item (a
+    /// zero-sized `Fn` implementor) to the boxed trait object. `ty` is the
+    /// value's flattened [`IrType::Fun`], recorded by the lowerer from the
+    /// reference's solved region type. A direct call keeps the efficient
+    /// [`Expr::Call`] path; only a bare value reference becomes a `FuncValue`.
+    FuncValue {
+        callee: Callee,
+        ty: IrType,
+    },
 }
 
 /// The target of a [`Expr::Call`].
@@ -560,6 +576,15 @@ mod tests {
             Box::new(IrType::Fun(vec![IrType::Str], Box::new(IrType::Unit))),
         );
         assert_eq!(multi, multi.clone());
+
+        // A top-level function named as a first-class value: callee `fn#0`,
+        // reified at its boxed `Int -> Int` value type.
+        let func_value = Expr::FuncValue {
+            callee: Callee::Func(FuncId::from_raw(0)),
+            ty: IrType::Fun(vec![IrType::Int], Box::new(IrType::Int)),
+        };
+        assert_eq!(func_value, func_value.clone());
+        assert!(format!("{func_value:?}").contains("FuncValue"));
         Ok(())
     }
 

@@ -14,7 +14,7 @@ use sky_diagnostics::{
     SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, Span,
 };
 use sky_intern::{Interner, Symbol};
-use sky_ir::{Expr, IrType};
+use sky_ir::{Callee, Expr, IrType, KernelFn};
 use sky_lower::lower;
 use sky_types::{SolvedTypes, Ty};
 
@@ -24,12 +24,25 @@ fn single_func(res: &DResult<sky_ir::Program>) -> Option<&sky_ir::Func> {
     res.as_ref().ok()?.modules.first()?.funcs.first()
 }
 
-/// Lower a hand-built module + binding environment. `regions` is unused by the
-/// lowerer, so an empty map suffices.
+/// Lower a hand-built module + binding environment, with no per-region types.
+/// Suffices for the arms that never consult `regions` (most unsupported gates).
 fn run(
     unions: Vec<canon::Union>,
     defs: Vec<canon::Def>,
     env: BTreeMap<Symbol, Ty>,
+    interner: &Interner,
+) -> DResult<sky_ir::Program> {
+    run_with_regions(unions, defs, env, BTreeMap::new(), interner)
+}
+
+/// Lower a hand-built module with an explicit per-region (`span` → solved `Ty`)
+/// map — needed by the arms that reify a value's solved type (a first-class
+/// function reference, a function-typed lambda parameter).
+fn run_with_regions(
+    unions: Vec<canon::Union>,
+    defs: Vec<canon::Def>,
+    env: BTreeMap<Symbol, Ty>,
+    regions: BTreeMap<Span, Ty>,
     interner: &Interner,
 ) -> DResult<sky_ir::Program> {
     let m = canon::Module {
@@ -37,10 +50,7 @@ fn run(
         unions,
         defs,
     };
-    let types = SolvedTypes {
-        env,
-        regions: BTreeMap::new(),
-    };
+    let types = SolvedTypes { env, regions };
     lower(&m, &types, interner)
 }
 
@@ -246,15 +256,29 @@ fn inferred_function_type_in_value_position_lowers_to_fun() -> DResult<()> {
 }
 
 #[test]
-fn bare_function_reference_as_value() -> DResult<()> {
+fn bare_function_reference_lowers_to_func_value() -> DResult<()> {
+    // A kernel named as a bare *value* (not called) reifies into a first-class
+    // `Expr::FuncValue` carrying its callee and boxed function type — the M1
+    // first-class-function value path, not an unsupported-feature diagnostic.
     let mut i = Interner::new();
     let f = i.intern("f")?;
     let module = i.intern("String")?;
     let fname = i.intern("fromInt")?;
-    let ty = con_int(&mut i)?;
+    let int_name = i.intern("Int")?;
+    let string_name = i.intern("String")?;
+    // `f` is annotated with the function type `Int -> String` so the reified
+    // kernel value's shape is consistent end-to-end.
+    let ty = canon::Type::Lambda(Box::new(con_int(&mut i)?), {
+        Box::new(canon::Type::Con {
+            home: Vec::new(),
+            name: string_name,
+            args: Vec::new(),
+        })
+    });
+    let body_span = Span::new(72, 79);
     // body is a bare kernel reference, not a call.
     let body = Located::new(
-        Span::new(72, 79),
+        body_span,
         canon::Expr_::VarKernel {
             module,
             name: fname,
@@ -267,11 +291,80 @@ fn bare_function_reference_as_value() -> DResult<()> {
         body,
         ty,
     };
+    // The solver records the kernel reference's region type `Int -> String`.
+    let con = |name| Ty::Con {
+        module: Vec::new(),
+        name,
+        args: Vec::new(),
+    };
+    let mut regions = BTreeMap::new();
+    regions.insert(
+        body_span,
+        Ty::Fun(Box::new(con(int_name)), Box::new(con(string_name))),
+    );
+
+    let res = run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &i);
+    let body = single_func(&res).map(|fc| &fc.body);
+    assert_eq!(
+        body,
+        Some(&Expr::FuncValue {
+            callee: Callee::Kernel(KernelFn::StringFromInt),
+            ty: IrType::Fun(vec![IrType::Int], Box::new(IrType::Str)),
+        }),
+        "a bare kernel reference must lower to FuncValue: {res:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn function_value_in_record_field_is_unsupported() -> DResult<()> {
+    // Storing a function value in a record field can't compile (a boxed `dyn Fn`
+    // satisfies none of the record struct's derived `Clone`/`Debug`/`PartialEq`),
+    // so it lowers to the SKY-L0107 first-class-function gap — blaming the field
+    // value's span — rather than emitting Rust that does not build.
+    let mut i = Interner::new();
+    let f = i.intern("f")?;
+    let field = i.intern("step")?;
+    let int_name = i.intern("Int")?;
+    let ty = con_int(&mut i)?;
+    // body: `{ step = inc }` where `inc` is a kernel named as a value. The field
+    // value's region type is the function type, which trips the gate.
+    let field_span = Span::new(82, 85);
+    let module = i.intern("String")?;
+    let fname = i.intern("fromInt")?;
+    let field_value = Located::new(
+        field_span,
+        canon::Expr_::VarKernel {
+            module,
+            name: fname,
+        },
+    );
+    let body = Located::new(
+        Span::new(80, 90),
+        canon::Expr_::Record(vec![(field, field_value)]),
+    );
+    let def = canon::Def::Typed {
+        name: Located::new(Span::new(70, 71), f),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty,
+    };
+    let con = |name| Ty::Con {
+        module: Vec::new(),
+        name,
+        args: Vec::new(),
+    };
+    let mut regions = BTreeMap::new();
+    regions.insert(
+        field_span,
+        Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name))),
+    );
     assert_unsupported(
-        run(Vec::new(), vec![def], BTreeMap::new(), &i),
+        run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &i),
         Feature::FirstClassFunctions,
         SKY_L0107,
-        Span::new(72, 79),
+        field_span,
     );
     Ok(())
 }

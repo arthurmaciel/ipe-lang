@@ -302,6 +302,15 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
         }
         Expr::Lambda { params, ret, body } => write_lambda(out, params, ret, body, interner, level),
         Expr::Apply { func, args } => write_apply(out, func, args, interner, level),
+        Expr::FuncValue { callee, ty } => line(
+            out,
+            level,
+            &format!(
+                "FuncValue {} : {}",
+                callee_name(callee),
+                ir_type_name(interner, ty)
+            ),
+        ),
     }
 }
 
