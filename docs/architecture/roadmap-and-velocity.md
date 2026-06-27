@@ -75,16 +75,25 @@ per shared match-file per round, or split the file).
   v0.15 type-directed lowering semantics).
 - **M3 — full ADTs & patterns:** non-nullary constructors, nested/cons/tuple/record/
   literal/alias/wildcard patterns, exhaustiveness over all of them.
-- **M4 — stdlib breadth (via the kernel registry):** `List/Maybe/Result/Dict/Set/
-  String/Math/Char/...` — fan out one slice per module; each slice = registry rows
-  + Rust runtime mirror of the Go runtime + parity tests + ledger entries.
+- **M4 — stdlib breadth (via the kernel registry — COMMITTED):** `List/Maybe/
+  Result/Dict/Set/String/Math/Char/...` — fan out one slice per module; each slice
+  = registry rows + Rust runtime mirror of the Go runtime + parity tests + ledger
+  entries. The registry (`Callee::Kernel(KernelId)` + a `KernelId → entry` table,
+  replacing the M0 flat `KernelFn` enum) is now a **committed invariant**, because
+  **FFI is its sibling** — an FFI binding is a kernel sourced from crate
+  introspection. See `docs/architecture/ffi-design.md`.
+- **M4.5 — Sky→Rust FFI:** the isolated, fail-closed `sky_ffi` subsystem
+  (introspect → `.skyi` + registry table + `catch_unwind` wrapper), `sky add`,
+  dynamic emitted-`Cargo.toml` deps, the FFI security gates. Rides the same kernel
+  registry as M4. Full design: `docs/architecture/ffi-design.md`.
 - **M5 — effects & runtime:** `Task` everywhere, `Cmd/Sub`, `Http`, `File`,
   `System`, `Process`, `Db`, `Crypto`, `Time`, `Random` — mirror `runtime-go`
   module-for-module per `docs/parity/runtime-parity.md`.
 - **M6 — app shapes:** `Sky.Http.Server`, `Sky.Live`, `Sky.Tui`, `Sky.Webview` —
   the big integrations; each its own sub-roadmap.
-- **Cross-cutting (fold in as needed):** DCE, auto-TCO, monomorphisation, the FFI
-  subsystem (`sky add` + crate introspection, fail-closed).
+- **Cross-cutting (fold in as needed):** DCE, auto-TCO, monomorphisation (also the
+  Wall #2 demand-driven path FFI reuses). The FFI subsystem is M4.5 above, not a
+  loose cross-cut — designed-for from M0 (`docs/architecture/ffi-design.md`).
 
 ## How a milestone runs (concrete)
 
