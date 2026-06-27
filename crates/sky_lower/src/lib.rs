@@ -30,11 +30,15 @@ use sky_types::SolvedTypes;
 /// Lower a canonical module + its solved types into the typed IR.
 ///
 /// # Errors
-/// Returns [`sky_diagnostics::Diagnostic::CompilerBug`] when an internal
-/// invariant is violated — a missing region type for an `IrType` slot, an
-/// unresolved scrutinee enum, an unsupported (non-M0) node shape, or a match
-/// arm set that fails [`sky_ir::Match::new`]'s exhaustiveness proof. All of
-/// these are unreachable for well-typed, well-canonicalised M0 input.
+/// * Returns [`sky_diagnostics::Diagnostic::Lower`] when the input is valid Sky
+///   that the M0 subset does not model yet (polymorphism, higher-order values,
+///   non-`Task ()` results, extra kernels, non-constructor patterns, …),
+///   carrying the offending node's span and its `SKY-L01##` feature.
+/// * Returns [`sky_diagnostics::Diagnostic::CompilerBug`] when an internal
+///   invariant is violated — a missing region type for an `IrType` slot, an
+///   unresolved scrutinee enum, or a match arm set that fails
+///   [`sky_ir::Match::new`]'s exhaustiveness proof. These are unreachable for
+///   well-typed, well-canonicalised M0 input.
 pub fn lower(
     m: &canon::Module,
     types: &SolvedTypes,
