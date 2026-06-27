@@ -29,6 +29,18 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType) -> DResult<String> {
             format!("({})", parts.join(", "))
         }
         IrType::Record(fields) => ctx.record_name_for_type(fields)?.to_owned(),
+        IrType::Fun(params, ret) => {
+            // A first-class function value is a boxed trait object
+            // `Box<dyn Fn(T0, ...) -> R>`. A nullary function type renders as
+            // `Box<dyn Fn() -> R>`. The boxed-closure optimisation (a concrete,
+            // non-boxed generic closure type) is deferred.
+            let mut parts = Vec::with_capacity(params.len());
+            for param in params {
+                parts.push(render_type(ctx, param)?);
+            }
+            let ret = render_type(ctx, ret)?;
+            format!("Box<dyn Fn({}) -> {ret}>", parts.join(", "))
+        }
     })
 }
 

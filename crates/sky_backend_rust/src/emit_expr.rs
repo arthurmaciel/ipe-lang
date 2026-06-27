@@ -6,7 +6,7 @@
 
 use sky_diagnostics::{DResult, Diagnostic, LowerError, Span};
 use sky_intern::Symbol;
-use sky_ir::{BinOp, Callee, Expr, Func, Pat};
+use sky_ir::{BinOp, Callee, Expr, Func, IrType, Pat};
 
 use crate::EmitCtx;
 use crate::emit_types::render_type;
@@ -144,6 +144,8 @@ fn emit_expr_at(ctx: &EmitCtx, expr: &Expr, indent: usize, depth: u16) -> DResul
             Ok(format!("({base}).{field}"))
         }
         Expr::Update { record, fields } => emit_update(ctx, record, fields, indent, depth),
+        Expr::Lambda { params, ret, body } => emit_lambda(ctx, params, ret, body, indent, depth),
+        Expr::Apply { func, args } => emit_apply(ctx, func, args, indent, depth),
         Expr::Match(m) => {
             let scrut = emit_expr_at(ctx, m.scrutinee(), indent, child)?;
             let arm_indent = indent_of(indent + 1);
@@ -217,6 +219,62 @@ fn emit_update(
     Ok(format!(
         "{{ let mut __sky_rec = ({base}).clone();{} __sky_rec }}",
         assigns.concat()
+    ))
+}
+
+/// Emit an application of a first-class function value, `(<func>)(<args>)`. The
+/// callee is parenthesised so a boxed `dyn Fn` (or any expression value) is
+/// applied uniformly — a `Box<dyn Fn(..)>` auto-derefs at the call. `depth` is
+/// the application's own IR-nesting level; its callee and arguments are emitted
+/// one level deeper. Kept out of the `emit_expr_at` match (`#[inline(never)]`)
+/// so its `Vec`/`String` locals don't inflate the recursive frame.
+#[inline(never)]
+fn emit_apply(
+    ctx: &EmitCtx,
+    func: &Expr,
+    args: &[Expr],
+    indent: usize,
+    depth: u16,
+) -> DResult<String> {
+    let child = depth + 1;
+    let f = emit_expr_at(ctx, func, indent, child)?;
+    let mut parts = Vec::with_capacity(args.len());
+    for arg in args {
+        parts.push(emit_expr_at(ctx, arg, indent, child)?);
+    }
+    Ok(format!("({f})({})", parts.join(", ")))
+}
+
+/// Emit a lambda `\p0 p1 ... -> body` as a boxed closure
+/// `Box::new(move |p0: T0, ...| -> R { <body> })`. The `move` capture takes any
+/// free locals by value; the explicit return type pins the closure's signature
+/// so it coerces cleanly to the `Box<dyn Fn(..) -> R>` slot it fills. `depth` is
+/// the lambda's own IR-nesting level; its body is emitted one level deeper. Kept
+/// out of the `emit_expr_at` match (`#[inline(never)]`) for the same frame-size
+/// reason as [`emit_record`] / [`emit_update`].
+#[inline(never)]
+fn emit_lambda(
+    ctx: &EmitCtx,
+    params: &[(Symbol, IrType)],
+    ret: &IrType,
+    body: &Expr,
+    indent: usize,
+    depth: u16,
+) -> DResult<String> {
+    let child = depth + 1;
+    let mut parts = Vec::with_capacity(params.len());
+    for (param, ty) in params {
+        parts.push(format!(
+            "{}: {}",
+            ctx.emit_ident(*param)?,
+            render_type(ctx, ty)?
+        ));
+    }
+    let ret = render_type(ctx, ret)?;
+    let body = emit_expr_at(ctx, body, indent, child)?;
+    Ok(format!(
+        "Box::new(move |{}| -> {ret} {{ {body} }})",
+        parts.join(", ")
     ))
 }
 

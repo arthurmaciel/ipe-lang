@@ -103,6 +103,18 @@ pub enum IrType {
     /// representable here — they are deferred to M2 and rejected at lowering, so
     /// every `Record` the backend sees is closed.
     Record(BTreeMap<Symbol, Self>),
+    /// A function type `T0 -> T1 -> ... -> R`, carried as its parameter list and
+    /// return type (`params -> ret`).
+    ///
+    /// This is the type of a first-class function value — a lambda, a
+    /// function-typed parameter or binding, or a top-level function used as a
+    /// value. The backend renders it as a boxed trait object
+    /// `Box<dyn Fn(T0, ...) -> R>`.
+    ///
+    /// Invariant: a zero-parameter function type (`params` empty) is a genuine
+    /// nullary `Fn() -> R`, distinct from `ret` alone. The lowerer is the sole
+    /// producer; the backend stays total over any parameter vector it receives.
+    Fun(Vec<Self>, Box<Self>),
 }
 
 /// An expression in the typed IR.
@@ -171,6 +183,29 @@ pub enum Expr {
     Update {
         record: Box<Self>,
         fields: Vec<(Symbol, Self)>,
+    },
+    /// An anonymous function `\p0 p1 ... -> body`: typed parameters, a return
+    /// type, and a body expression.
+    ///
+    /// Distinct from [`Func`] (a named top-level declaration): a `Lambda` is an
+    /// expression value. The backend emits it as a boxed closure
+    /// `Box::new(move |p0: T0, ...| -> R { body })`, move-capturing any free
+    /// locals. A zero-parameter lambda is a genuine nullary closure.
+    Lambda {
+        params: Vec<(Symbol, IrType)>,
+        ret: IrType,
+        body: Box<Self>,
+    },
+    /// Application of an arbitrary expression value to arguments, `func(args)`.
+    ///
+    /// Distinct from [`Expr::Call`], which targets a known [`Callee`] (a direct
+    /// top-level function or a kernel) and keeps the efficient direct-call path.
+    /// `Apply` calls a first-class function *value* — a lambda, a
+    /// function-typed parameter/binding, or a top-level function passed as a
+    /// value — and renders as `(func)(args)` (a boxed `dyn Fn` auto-derefs).
+    Apply {
+        func: Box<Self>,
+        args: Vec<Self>,
     },
 }
 
@@ -479,6 +514,52 @@ mod tests {
         outer.insert(y, ty);
         let nested = IrType::Record(outer);
         assert_eq!(nested, nested.clone());
+        Ok(())
+    }
+
+    #[test]
+    fn lambda_apply_expr_and_fun_type_construct_and_round_trip() -> DResult<()> {
+        let mut i = Interner::new();
+        let x = i.intern("x")?;
+        let f = i.intern("f")?;
+
+        // \x -> x + 1 — a single-param lambda returning Int.
+        let lambda = Expr::Lambda {
+            params: vec![(x, IrType::Int)],
+            ret: IrType::Int,
+            body: Box::new(Expr::BinOp {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Var(x)),
+                rhs: Box::new(Expr::Int(1)),
+            }),
+        };
+        assert_eq!(lambda, lambda.clone());
+        assert!(format!("{lambda:?}").contains("Lambda"));
+
+        // f 2 — apply the function-typed local `f` to one argument.
+        let apply = Expr::Apply {
+            func: Box::new(Expr::Var(f)),
+            args: vec![Expr::Int(2)],
+        };
+        assert_eq!(apply, apply.clone());
+        assert!(format!("{apply:?}").contains("Apply"));
+
+        // Int -> Int — a one-param function type.
+        let fun_ty = IrType::Fun(vec![IrType::Int], Box::new(IrType::Int));
+        assert_eq!(fun_ty, fun_ty.clone());
+        assert!(format!("{fun_ty:?}").contains("Fun"));
+
+        // () -> Bool — a nullary function type (distinct from Bool alone).
+        let nullary = IrType::Fun(vec![], Box::new(IrType::Bool));
+        assert_eq!(nullary, nullary.clone());
+        assert_ne!(nullary, IrType::Bool);
+
+        // (Int, Bool) -> Int — a multi-param function type, nested under Fun.
+        let multi = IrType::Fun(
+            vec![IrType::Int, IrType::Bool],
+            Box::new(IrType::Fun(vec![IrType::Str], Box::new(IrType::Unit))),
+        );
+        assert_eq!(multi, multi.clone());
         Ok(())
     }
 

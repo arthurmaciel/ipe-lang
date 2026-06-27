@@ -95,6 +95,17 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
                 format!("{{ {inner} }}")
             }
         }
+        IrType::Fun(params, ret) => {
+            // Source-like arrow form `T0 -> T1 -> R`. A nullary function type
+            // shows its unit parameter explicitly so it stays distinct from its
+            // bare return type.
+            let mut parts: Vec<String> = params.iter().map(|t| ir_type_name(interner, t)).collect();
+            if parts.is_empty() {
+                parts.push("()".to_owned());
+            }
+            parts.push(ir_type_name(interner, ret));
+            parts.join(" -> ")
+        }
     }
 }
 
@@ -289,6 +300,49 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
                 write_expr(out, value, interner, level + 2);
             }
         }
+        Expr::Lambda { params, ret, body } => write_lambda(out, params, ret, body, interner, level),
+        Expr::Apply { func, args } => write_apply(out, func, args, interner, level),
+    }
+}
+
+/// Render a `Lambda` node: a header `Lambda (p0 : T0, ...) -> R` followed by its
+/// body one level deeper. Split from [`write_expr`] to keep that match small.
+fn write_lambda(
+    out: &mut String,
+    params: &[(Symbol, IrType)],
+    ret: &IrType,
+    body: &Expr,
+    interner: &Interner,
+    level: usize,
+) {
+    let rendered = params
+        .iter()
+        .map(|(sym, ty)| {
+            format!(
+                "{} : {}",
+                sym_name(interner, *sym),
+                ir_type_name(interner, ty)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    line(
+        out,
+        level,
+        &format!("Lambda ({rendered}) -> {}", ir_type_name(interner, ret)),
+    );
+    write_expr(out, body, interner, level + 1);
+}
+
+/// Render an `Apply` node: a `func` sub-tree then one `arg` sub-tree per
+/// argument. Split from [`write_expr`] to keep that match small.
+fn write_apply(out: &mut String, func: &Expr, args: &[Expr], interner: &Interner, level: usize) {
+    line(out, level, "Apply");
+    line(out, level + 1, "func");
+    write_expr(out, func, interner, level + 2);
+    for arg in args {
+        line(out, level + 1, "arg");
+        write_expr(out, arg, interner, level + 2);
     }
 }
 
@@ -629,6 +683,94 @@ program
           Int 1
         field y
           Int 2
+";
+        assert_eq!(pretty(&program, &i), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn pretty_renders_lambda_apply_and_fun_type() -> DResult<()> {
+        let mut i = Interner::new();
+        let main_mod = i.intern("Main")?;
+        let f = i.intern("apply2")?;
+        let g = i.intern("g")?;
+        let x = i.intern("x")?;
+
+        // apply2(g : Int -> Int) -> Int = (\x -> g x) 2
+        let body = Expr::Apply {
+            func: Box::new(Expr::Lambda {
+                params: vec![(x, IrType::Int)],
+                ret: IrType::Int,
+                body: Box::new(Expr::Apply {
+                    func: Box::new(Expr::Var(g)),
+                    args: vec![Expr::Var(x)],
+                }),
+            }),
+            args: vec![Expr::Int(2)],
+        };
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![],
+                funcs: vec![Func {
+                    id: FuncId::from_raw(0),
+                    name: f,
+                    params: vec![(g, IrType::Fun(vec![IrType::Int], Box::new(IrType::Int)))],
+                    ret: IrType::Int,
+                    body,
+                }],
+                entry: None,
+                records: vec![],
+            }],
+        };
+
+        let expected = "\
+program
+  module Main
+    fn#0 apply2(g : Int -> Int) -> Int
+      Apply
+        func
+          Lambda (x : Int) -> Int
+            Apply
+              func
+                Var g
+              arg
+                Var x
+        arg
+          Int 2
+";
+        assert_eq!(pretty(&program, &i), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn pretty_renders_nullary_fun_type() -> DResult<()> {
+        let mut i = Interner::new();
+        let main_mod = i.intern("Main")?;
+        let f = i.intern("thunk")?;
+
+        // thunk(k : () -> Bool) -> Bool = ...  (body shape illustrative)
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![],
+                funcs: vec![Func {
+                    id: FuncId::from_raw(0),
+                    name: f,
+                    params: vec![(i.intern("k")?, IrType::Fun(vec![], Box::new(IrType::Bool)))],
+                    ret: IrType::Bool,
+                    body: Expr::Int(0),
+                }],
+                entry: None,
+                records: vec![],
+            }],
+        };
+
+        let expected = "\
+program
+  module Main
+    fn#0 thunk(k : () -> Bool) -> Bool
+      Int 0
 ";
         assert_eq!(pretty(&program, &i), expected);
         Ok(())
