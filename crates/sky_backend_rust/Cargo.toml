@@ -4,6 +4,10 @@ edition.workspace = true
 version.workspace = true
 
 [dependencies]
+sky_ir = { path = "../sky_ir" }
+sky_intern = { path = "../sky_intern" }
+sky_backend = { path = "../sky_backend" }
+sky_diagnostics = { path = "../sky_diagnostics" }
 
 [lints]
 workspace = true
