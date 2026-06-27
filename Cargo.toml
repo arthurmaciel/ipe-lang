@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/sky_intern", "crates/sky_diagnostics", "crates/sky_ir", "crates/sky_backend", "crates/sky_backend_rust"]
+members = ["crates/sky_intern", "crates/sky_diagnostics", "crates/sky_syntax", "crates/sky_ir", "crates/sky_backend", "crates/sky_backend_rust"]
 
 [workspace.package]
 edition = "2021"
