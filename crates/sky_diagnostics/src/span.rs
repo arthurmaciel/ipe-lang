@@ -34,6 +34,9 @@ impl<T> Located<T> {
     /// Transform the carried value while preserving the span.
     #[must_use]
     pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Located<U> {
-        Located { span: self.span, value: f(self.value) }
+        Located {
+            span: self.span,
+            value: f(self.value),
+        }
     }
 }

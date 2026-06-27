@@ -7,11 +7,11 @@
 
 use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
-use sky_diagnostics::{Diagnostic, DResult};
+use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::Interner;
 use sky_ir::{
-    Arm, BinOp, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module,
-    Pat, Program, TypeDef,
+    Arm, BinOp, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module, Pat,
+    Program, TypeDef,
 };
 
 const GOLDEN_MAIN: &str = include_str!("../../../tests/golden/m0/main.rs");
@@ -41,7 +41,10 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
 
     let arms = vec![
         Arm {
-            pat: Pat::Ctor { ty: msg_ty, variant: increment },
+            pat: Pat::Ctor {
+                ty: msg_ty,
+                variant: increment,
+            },
             body: Expr::BinOp {
                 op: BinOp::Add,
                 lhs: Box::new(Expr::Var(count)),
@@ -49,7 +52,10 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
             },
         },
         Arm {
-            pat: Pat::Ctor { ty: msg_ty, variant: decrement },
+            pat: Pat::Ctor {
+                ty: msg_ty,
+                variant: decrement,
+            },
             body: Expr::BinOp {
                 op: BinOp::Sub,
                 lhs: Box::new(Expr::Var(count)),
@@ -78,7 +84,13 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
                 callee: Callee::Kernel(KernelFn::StringFromInt),
                 args: vec![Expr::Call {
                     callee: Callee::Func(update_id),
-                    args: vec![Expr::Ctor { ty: msg_ty, variant: increment }, Expr::Int(0)],
+                    args: vec![
+                        Expr::Ctor {
+                            ty: msg_ty,
+                            variant: increment,
+                        },
+                        Expr::Int(0),
+                    ],
                 }],
             }],
         },
@@ -98,7 +110,10 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
 }
 
 fn missing(detail: &str) -> Diagnostic {
-    Diagnostic::CompilerBug { where_: "golden test", detail: detail.to_owned() }
+    Diagnostic::CompilerBug {
+        where_: "golden test",
+        detail: detail.to_owned(),
+    }
 }
 
 #[test]
@@ -109,8 +124,15 @@ fn m0_emits_byte_identical_main_rs() -> DResult<()> {
     let backend = RustBackend::new(&interner);
     let emitted = backend.emit(&program)?;
 
-    let main_rs = emitted.files.get("src/main.rs").ok_or_else(|| missing("no src/main.rs"))?;
-    assert_eq!(main_rs.as_str(), GOLDEN_MAIN, "src/main.rs must match the golden byte-for-byte");
+    let main_rs = emitted
+        .files
+        .get("src/main.rs")
+        .ok_or_else(|| missing("no src/main.rs"))?;
+    assert_eq!(
+        main_rs.as_str(),
+        GOLDEN_MAIN,
+        "src/main.rs must match the golden byte-for-byte"
+    );
     Ok(())
 }
 
@@ -122,7 +144,11 @@ fn m0_emits_byte_identical_cargo_toml() -> DResult<()> {
     let backend = RustBackend::new(&interner);
     let emitted = backend.emit(&program)?;
 
-    assert_eq!(emitted.cargo_toml.as_str(), GOLDEN_CARGO, "Cargo.toml must match the golden");
+    assert_eq!(
+        emitted.cargo_toml.as_str(),
+        GOLDEN_CARGO,
+        "Cargo.toml must match the golden"
+    );
     Ok(())
 }
 

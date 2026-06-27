@@ -49,7 +49,10 @@ impl Env {
     /// names and unions are registered separately by the caller.
     #[must_use]
     pub fn initial(home: Vec<Symbol>, interner: &mut Interner) -> Self {
-        let mut env = Self { home, ..Self::default() };
+        let mut env = Self {
+            home,
+            ..Self::default()
+        };
         env.install_builtin_vars(interner);
         env.install_prelude_qualifiers(interner);
         env
@@ -109,18 +112,56 @@ impl Env {
             (
                 "String",
                 &[
-                    "length", "reverse", "append", "split", "join", "contains", "startsWith",
-                    "endsWith", "toInt", "fromInt", "toFloat", "fromFloat", "toUpper", "toLower",
-                    "trim", "replace", "slice", "isEmpty", "fromChar", "toChar", "repeat",
-                    "padLeft", "padRight", "lines", "words",
+                    "length",
+                    "reverse",
+                    "append",
+                    "split",
+                    "join",
+                    "contains",
+                    "startsWith",
+                    "endsWith",
+                    "toInt",
+                    "fromInt",
+                    "toFloat",
+                    "fromFloat",
+                    "toUpper",
+                    "toLower",
+                    "trim",
+                    "replace",
+                    "slice",
+                    "isEmpty",
+                    "fromChar",
+                    "toChar",
+                    "repeat",
+                    "padLeft",
+                    "padRight",
+                    "lines",
+                    "words",
                 ],
             ),
             (
                 "List",
                 &[
-                    "map", "filter", "foldl", "foldr", "length", "head", "tail", "take", "drop",
-                    "append", "concat", "concatMap", "reverse", "member", "any", "all", "range",
-                    "zip", "isEmpty", "cons",
+                    "map",
+                    "filter",
+                    "foldl",
+                    "foldr",
+                    "length",
+                    "head",
+                    "tail",
+                    "take",
+                    "drop",
+                    "append",
+                    "concat",
+                    "concatMap",
+                    "reverse",
+                    "member",
+                    "any",
+                    "all",
+                    "range",
+                    "zip",
+                    "isEmpty",
+                    "cons",
                 ],
             ),
             ("Maybe", &["withDefault", "map", "andThen"]),

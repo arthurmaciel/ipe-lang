@@ -91,10 +91,20 @@ pub enum IrType {
 pub enum Expr {
     Int(i64),
     Var(Symbol),
-    Ctor { ty: Symbol, variant: Symbol },
-    BinOp { op: BinOp, lhs: Box<Self>, rhs: Box<Self> },
+    Ctor {
+        ty: Symbol,
+        variant: Symbol,
+    },
+    BinOp {
+        op: BinOp,
+        lhs: Box<Self>,
+        rhs: Box<Self>,
+    },
     Match(Match),
-    Call { callee: Callee, args: Vec<Self> },
+    Call {
+        callee: Callee,
+        args: Vec<Self>,
+    },
 }
 
 /// The target of a [`Expr::Call`].
@@ -188,7 +198,10 @@ impl Match {
             });
         }
 
-        Ok(Self { scrutinee: Box::new(scrutinee), arms })
+        Ok(Self {
+            scrutinee: Box::new(scrutinee),
+            arms,
+        })
     }
 
     #[must_use]
@@ -242,7 +255,10 @@ mod tests {
         let res = Match::new(Expr::Var(i.intern("msg")), arms, &[inc, dec]);
 
         assert_eq!(res.as_ref().map(|m| m.arms().len()), Ok(2));
-        assert!(matches!(res.as_ref().map(Match::scrutinee), Ok(Expr::Var(_))));
+        assert!(matches!(
+            res.as_ref().map(Match::scrutinee),
+            Ok(Expr::Var(_))
+        ));
         // Debug round-trips (no panic, stable shape).
         let rendered = format!("{res:?}");
         assert!(rendered.contains("Match"));
@@ -269,8 +285,14 @@ mod tests {
         let (ty, inc, dec) = msg_enum(&mut i);
 
         let arms = vec![
-            Arm { pat: Pat::Ctor { ty, variant: inc }, body: Expr::Int(0) },
-            Arm { pat: Pat::Ctor { ty, variant: inc }, body: Expr::Int(1) },
+            Arm {
+                pat: Pat::Ctor { ty, variant: inc },
+                body: Expr::Int(0),
+            },
+            Arm {
+                pat: Pat::Ctor { ty, variant: inc },
+                body: Expr::Int(1),
+            },
         ];
         let r = Match::new(Expr::Var(i.intern("msg")), arms, &[inc, dec]);
         assert!(matches!(r, Err(Diagnostic::CompilerBug { .. })));
@@ -283,8 +305,14 @@ mod tests {
         let bogus = i.intern("Reset");
 
         let arms = vec![
-            Arm { pat: Pat::Ctor { ty, variant: inc }, body: Expr::Int(0) },
-            Arm { pat: Pat::Ctor { ty, variant: bogus }, body: Expr::Int(1) },
+            Arm {
+                pat: Pat::Ctor { ty, variant: inc },
+                body: Expr::Int(0),
+            },
+            Arm {
+                pat: Pat::Ctor { ty, variant: bogus },
+                body: Expr::Int(1),
+            },
         ];
         let r = Match::new(Expr::Var(i.intern("msg")), arms, &[inc, dec]);
         assert!(matches!(r, Err(Diagnostic::CompilerBug { .. })));
@@ -313,7 +341,10 @@ mod tests {
         let program = Program {
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
-                types: vec![TypeDef::Enum(EnumDef { name: ty, variants: vec![inc, dec] })],
+                types: vec![TypeDef::Enum(EnumDef {
+                    name: ty,
+                    variants: vec![inc, dec],
+                })],
                 funcs: vec![func],
                 entry: Some(FuncId::from_raw(0)),
             }],

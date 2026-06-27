@@ -22,7 +22,7 @@
 
 use core::fmt::Write as _;
 
-use crate::code::{title, Severity};
+use crate::code::{Severity, title};
 use crate::diagnostic::{
     CaseDefect, Diagnostic, Expected, ExpectedSet, ExposingDefect, Feature, HeaderDefect, HelpLine,
     Hint, LowerError, NameError, ParseError, SpanRole, TokenKind, TyDoc, TypeDeclDefect, TypeError,
@@ -95,15 +95,21 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
         out.push_str(&bar_pad);
         out.push_str(" |\n");
         let plabel = primary_label(d).unwrap_or_default();
-        let primary_style =
-            UnderlineStyle { glyph: '^', color_seq: severity_color(severity), label: &plabel };
+        let primary_style = UnderlineStyle {
+            glyph: '^',
+            color_seq: severity_color(severity),
+            label: &plabel,
+        };
         push_span_block(&mut out, source, primary, &primary_style, gutter, color);
         for (span, role) in &secondaries {
             if *span != Span::DUMMY {
                 out.push_str(&bar_pad);
                 out.push_str(" |\n");
-                let style =
-                    UnderlineStyle { glyph: '-', color_seq: BLUE, label: role_label(*role) };
+                let style = UnderlineStyle {
+                    glyph: '-',
+                    color_seq: BLUE,
+                    label: role_label(*role),
+                };
                 push_span_block(&mut out, source, *span, &style, gutter, color);
             }
         }
@@ -122,7 +128,10 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
         }
         footer.push("note: this is a bug in Sky, please report it".to_string());
     }
-    footer.push(format!("note: run `skyc explain {}` for more information", code.as_str()));
+    footer.push(format!(
+        "note: run `skyc explain {}` for more information",
+        code.as_str()
+    ));
 
     if has_snippet {
         out.push_str(&bar_pad);
@@ -172,7 +181,12 @@ fn locate(source: &str, raw: u32) -> Loc {
     let col = slice(source, line_start, byte).chars().count() + 1;
     let rest = slice(source, line_start, source.len());
     let line_len = rest.find('\n').unwrap_or(rest.len());
-    Loc { line, col, line_start, line_end: line_start + line_len }
+    Loc {
+        line,
+        col,
+        line_start,
+        line_end: line_start + line_len,
+    }
 }
 
 /// The largest char boundary `<= b` (and `<= source.len()`).
@@ -209,7 +223,11 @@ fn push_span_block(
     let width = slice(source, lo_byte, hi_byte).chars().count().max(1);
 
     let leading = " ".repeat(loc.col.saturating_sub(1));
-    let underline = paint(color, style.color_seq, &style.glyph.to_string().repeat(width));
+    let underline = paint(
+        color,
+        style.color_seq,
+        &style.glyph.to_string().repeat(width),
+    );
     out.push_str(&" ".repeat(gutter));
     out.push_str(" | ");
     out.push_str(&leading);
@@ -271,9 +289,11 @@ fn primary_label(d: &Diagnostic) -> Option<String> {
 
 fn parse_label(msg: &ParseError) -> Option<String> {
     match msg {
-        ParseError::UnexpectedToken { found, expected } => {
-            Some(format!("found {}, expected {}", token_kind_str(*found), expected_set_str(expected)))
-        }
+        ParseError::UnexpectedToken { found, expected } => Some(format!(
+            "found {}, expected {}",
+            token_kind_str(*found),
+            expected_set_str(expected)
+        )),
         ParseError::UnexpectedEof { .. } => Some("input ended here".to_string()),
         ParseError::NestingTooDeep { limit, .. } => {
             Some(format!("nested past the limit of {limit}"))
@@ -283,7 +303,9 @@ fn parse_label(msg: &ParseError) -> Option<String> {
         ParseError::NumberJoinedToName(c) => {
             Some(format!("a number cannot be followed by {}", char_repr(*c)))
         }
-        ParseError::IntLiteralOutOfRange => Some("this integer does not fit in 64 bits".to_string()),
+        ParseError::IntLiteralOutOfRange => {
+            Some("this integer does not fit in 64 bits".to_string())
+        }
         ParseError::MalformedModuleHeader(defect) => Some(header_defect_str(*defect).to_string()),
         ParseError::MalformedExposingList(defect) => Some(exposing_defect_str(*defect).to_string()),
         ParseError::MissingEquals { binding } => Some(format!("`{binding}` needs an `=` here")),
@@ -318,8 +340,17 @@ fn name_label(msg: &NameError) -> Option<String> {
 
 fn type_label(msg: &TypeError) -> Option<String> {
     match msg {
-        TypeError::TypeMismatch { expected, found, path, .. } => {
-            let mut label = format!("expected {}, found {}", ty_to_string(expected), ty_to_string(found));
+        TypeError::TypeMismatch {
+            expected,
+            found,
+            path,
+            ..
+        } => {
+            let mut label = format!(
+                "expected {}, found {}",
+                ty_to_string(expected),
+                ty_to_string(found)
+            );
             if !path.is_empty() {
                 let joined: Vec<&str> = path.iter().map(AsRef::as_ref).collect();
                 let _ = write!(label, " (at {})", joined.join("."));
@@ -414,7 +445,9 @@ const fn feature_label(f: Feature) -> &'static str {
             "case patterns other than nullary constructors are not supported yet \
              [feature: case-pattern-kinds]"
         }
-        Feature::BinOps => "operators other than `+` and `-` are not supported yet [feature: binops]",
+        Feature::BinOps => {
+            "operators other than `+` and `-` are not supported yet [feature: binops]"
+        }
         Feature::Polymorphism => "type variables are not supported yet [feature: polymorphism]",
         Feature::HigherOrderValues => {
             "function-valued parameters and returns are not supported yet \
@@ -517,7 +550,9 @@ const fn type_decl_defect_str(d: TypeDeclDefect) -> &'static str {
     match d {
         TypeDeclDefect::MissingName => "the type name is missing",
         TypeDeclDefect::MissingEquals => "expected `=` before the constructors",
-        TypeDeclDefect::CtorNotUppercase => "a constructor name must start with an uppercase letter",
+        TypeDeclDefect::CtorNotUppercase => {
+            "a constructor name must start with an uppercase letter"
+        }
         TypeDeclDefect::CtorNotIdentifier => "expected a constructor name here",
     }
 }
@@ -590,7 +625,11 @@ mod tests {
     use crate::diagnostic::{Diagnostic, Expected, ExpectedSet, ParseError};
 
     fn con(name: &str) -> TyDoc {
-        TyDoc::Con { module: "".into(), name: name.into(), args: Box::new([]) }
+        TyDoc::Con {
+            module: "".into(),
+            name: name.into(),
+            args: Box::new([]),
+        }
     }
 
     #[test]
@@ -612,10 +651,16 @@ mod tests {
         };
         let out = render(&d, "test.sky", src);
 
-        assert!(out.starts_with("error[SKY-T0001]: type mismatch\n"), "header:\n{out}");
+        assert!(
+            out.starts_with("error[SKY-T0001]: type mismatch\n"),
+            "header:\n{out}"
+        );
         assert!(out.contains("--> test.sky:4:5"), "location:\n{out}");
         assert!(out.contains("4 |     foo"), "source line:\n{out}");
-        assert!(out.contains("^^^ expected Int, found List String"), "underline:\n{out}");
+        assert!(
+            out.contains("^^^ expected Int, found List String"),
+            "underline:\n{out}"
+        );
         assert!(
             out.contains("= note: run `skyc explain SKY-T0001` for more information"),
             "footer:\n{out}"
@@ -626,14 +671,20 @@ mod tests {
 
     #[test]
     fn dummy_span_compiler_bug_renders_header_help_footer_only() {
-        let d = Diagnostic::CompilerBug { where_: "lower", detail: "no region type".into() };
+        let d = Diagnostic::CompilerBug {
+            where_: "lower",
+            detail: "no region type".into(),
+        };
         let out = render(&d, "test.sky", "anything");
 
         assert!(out.starts_with("internal compiler error[SKY-I0001]: internal compiler error\n"));
         // No location / snippet band for a DUMMY span.
         assert!(!out.contains("-->"), "no location:\n{out}");
         assert!(!out.contains(" | "), "no snippet:\n{out}");
-        assert!(out.contains("= note: no region type"), "detail surfaced:\n{out}");
+        assert!(
+            out.contains("= note: no region type"),
+            "detail surfaced:\n{out}"
+        );
         assert!(out.contains("= note: this is a bug in Sky, please report it"));
         assert!(out.contains("= note: run `skyc explain SKY-I0001` for more information"));
         let _ = SKY_I0001;
@@ -655,7 +706,10 @@ mod tests {
         assert!(out.contains("--> f.sky:2:5"), "clamped location:\n{out}");
         // Underline is bounded by the end of the line, not the bogus hi.
         assert!(out.contains("^^^"), "clamped underline:\n{out}");
-        assert!(!out.contains("^^^^^^^^^^"), "underline must not run past EOL:\n{out}");
+        assert!(
+            !out.contains("^^^^^^^^^^"),
+            "underline must not run past EOL:\n{out}"
+        );
     }
 
     #[test]
@@ -666,7 +720,10 @@ mod tests {
             msg: ParseError::IntLiteralOutOfRange,
         };
         let _ = render(&d, "empty.sky", "");
-        let d2 = Diagnostic::Type { span: Span::new(500, 600), msg: TypeError::Mismatch };
+        let d2 = Diagnostic::Type {
+            span: Span::new(500, 600),
+            msg: TypeError::Mismatch,
+        };
         let out = render(&d2, "empty.sky", "");
         assert!(out.contains("error[SKY-T0001]"));
     }
@@ -676,11 +733,16 @@ mod tests {
         let src = "main =\n    ( foo\n";
         let d = Diagnostic::Parse {
             span: Span::new(15, 16), // somewhere on line 2.
-            msg: ParseError::UnclosedDelimiter { opener: Span::new(11, 12) },
+            msg: ParseError::UnclosedDelimiter {
+                opener: Span::new(11, 12),
+            },
         };
         let out = render(&d, "p.sky", src);
         assert!(out.contains('^'), "primary underline:\n{out}");
-        assert!(out.contains("- the unclosed delimiter opened here"), "secondary:\n{out}");
+        assert!(
+            out.contains("- the unclosed delimiter opened here"),
+            "secondary:\n{out}"
+        );
         let _ = SKY_P0050;
     }
 
@@ -726,10 +788,15 @@ mod tests {
     fn warning_header_word_for_redundant_branch() {
         let d = Diagnostic::Type {
             span: Span::new(0, 3),
-            msg: TypeError::RedundantCaseBranch { constructor: "Red".into() },
+            msg: TypeError::RedundantCaseBranch {
+                constructor: "Red".into(),
+            },
         };
         let out = render(&d, "w.sky", "Red\n");
-        assert!(out.starts_with("warning[SKY-T0011]: redundant case branch\n"), "{out}");
+        assert!(
+            out.starts_with("warning[SKY-T0011]: redundant case branch\n"),
+            "{out}"
+        );
         let _ = SKY_T0001;
     }
 

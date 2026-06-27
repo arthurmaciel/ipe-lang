@@ -95,7 +95,10 @@ mod tests {
 
     #[test]
     fn preamble_ends_with_user_types_banner() {
-        assert!(preamble().ends_with("// USER TYPES\n// ===========================================\n\n"));
+        assert!(
+            preamble()
+                .ends_with("// USER TYPES\n// ===========================================\n\n")
+        );
     }
 
     #[test]

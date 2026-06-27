@@ -54,7 +54,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     let variants = variant_lines.join("\n");
     let arms = show_arms.join("\n");
     Ok(format!(
-"#[derive(Clone, Debug, PartialEq)]
+        "#[derive(Clone, Debug, PartialEq)]
 pub enum {name} {{
 {variants}
 }}

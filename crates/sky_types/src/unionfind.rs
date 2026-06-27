@@ -13,7 +13,7 @@
 //! [`Diagnostic::CompilerBug`] (a violated internal invariant) rather than a
 //! panic — the no-panic gate forbids `[]`-indexing here.
 
-use sky_diagnostics::{Diagnostic, DResult};
+use sky_diagnostics::{DResult, Diagnostic};
 
 /// An index into the union-find arena. Minted only by [`UnionFind::fresh`].
 pub type VarId = u32;
@@ -213,8 +213,7 @@ mod tests {
     #[test]
     fn union_merges_classes_and_keeps_descriptor() {
         let mut uf: UnionFind<i32> = UnionFind::new();
-        let (Some(a), Some(b), Some(c)) =
-            (uf.fresh(10).ok(), uf.fresh(20).ok(), uf.fresh(30).ok())
+        let (Some(a), Some(b), Some(c)) = (uf.fresh(10).ok(), uf.fresh(20).ok(), uf.fresh(30).ok())
         else {
             return;
         };
@@ -264,7 +263,9 @@ mod tests {
     #[test]
     fn set_content_updates_representative() {
         let mut uf: UnionFind<i32> = UnionFind::new();
-        let (Some(a), Some(b)) = (uf.fresh(1).ok(), uf.fresh(2).ok()) else { return };
+        let (Some(a), Some(b)) = (uf.fresh(1).ok(), uf.fresh(2).ok()) else {
+            return;
+        };
         assert!(uf.union(a, b, 5).is_ok());
         assert!(uf.set_content(b, 42).is_ok());
         assert_eq!(uf.content(a).ok(), Some(42));

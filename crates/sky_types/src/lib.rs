@@ -37,10 +37,10 @@ use sky_canon::ast as canon;
 use sky_diagnostics::{DResult, Span};
 use sky_intern::{Interner, Symbol};
 
-pub use solve::{Budget, BUDGET_ENV, DEFAULT_SOLVER_BUDGET};
+pub use solve::{BUDGET_ENV, Budget, DEFAULT_SOLVER_BUDGET};
 pub use ty::Ty;
 
-use constrain::{zonk, Builder};
+use constrain::{Builder, zonk};
 use solve::solve;
 use unionfind::UnionFind;
 
@@ -154,15 +154,21 @@ mod tests {
         assert!(solved.is_ok(), "inference must succeed");
         let Ok(solved) = solved else { return };
 
-        let Some(update) = sym(&i, &m, "update") else { return };
-        let Some(ty) = solved.env.get(&update) else { return };
+        let Some(update) = sym(&i, &m, "update") else {
+            return;
+        };
+        let Some(ty) = solved.env.get(&update) else {
+            return;
+        };
 
         // Msg -> (Int -> Int)
         assert!(matches!(ty, Ty::Fun(..)), "update is an arrow");
         let Ty::Fun(msg_arg, tail) = ty else { return };
         assert_eq!(ty_con_name(msg_arg, &i).as_deref(), Some("Msg"));
         assert!(matches!(tail.as_ref(), Ty::Fun(..)), "tail is an arrow");
-        let Ty::Fun(int_arg, ret) = tail.as_ref() else { return };
+        let Ty::Fun(int_arg, ret) = tail.as_ref() else {
+            return;
+        };
         assert_eq!(ty_con_name(int_arg, &i).as_deref(), Some("Int"));
         assert_eq!(ty_con_name(ret, &i).as_deref(), Some("Int"));
     }
@@ -178,13 +184,20 @@ mod tests {
 
         // main = println (String.fromInt (update Increment 0))
         let main_def = m.defs.iter().find(|d| i.resolve(d.name().value) == "main");
-        assert!(matches!(main_def, Some(canon::Def::Untyped { .. })), "main is untyped");
-        let Some(canon::Def::Untyped { body, .. }) = main_def else { return };
+        assert!(
+            matches!(main_def, Some(canon::Def::Untyped { .. })),
+            "main is untyped"
+        );
+        let Some(canon::Def::Untyped { body, .. }) = main_def else {
+            return;
+        };
 
         // Outer call: println … : Task ()
         let outer = as_call(body);
         assert!(outer.is_some(), "main body is a call");
-        let Some((_println, outer_args)) = outer else { return };
+        let Some((_println, outer_args)) = outer else {
+            return;
+        };
         let println_region = solved.regions.get(&body.span);
         assert!(
             matches!(
@@ -196,20 +209,34 @@ mod tests {
         );
 
         // String.fromInt … : String
-        let Some(from_int_call) = outer_args.first() else { return };
+        let Some(from_int_call) = outer_args.first() else {
+            return;
+        };
         let mid = as_call(from_int_call);
         assert!(mid.is_some(), "fromInt call");
-        let Some((_from_int, mid_args)) = mid else { return };
+        let Some((_from_int, mid_args)) = mid else {
+            return;
+        };
         assert_eq!(
-            solved.regions.get(&from_int_call.span).and_then(|t| ty_con_name(t, &i)).as_deref(),
+            solved
+                .regions
+                .get(&from_int_call.span)
+                .and_then(|t| ty_con_name(t, &i))
+                .as_deref(),
             Some("String")
         );
 
         // update Increment 0 : Int
-        let Some(update_call) = mid_args.first() else { return };
+        let Some(update_call) = mid_args.first() else {
+            return;
+        };
         assert!(as_call(update_call).is_some(), "update call");
         assert_eq!(
-            solved.regions.get(&update_call.span).and_then(|t| ty_con_name(t, &i)).as_deref(),
+            solved
+                .regions
+                .get(&update_call.span)
+                .and_then(|t| ty_con_name(t, &i))
+                .as_deref(),
             Some("Int")
         );
     }
@@ -223,23 +250,49 @@ mod tests {
         assert!(solved.is_ok(), "inference must succeed");
         let Ok(solved) = solved else { return };
 
-        let update_def = m.defs.iter().find(|d| i.resolve(d.name().value) == "update");
-        assert!(matches!(update_def, Some(canon::Def::Typed { .. })), "update is typed");
-        let Some(canon::Def::Typed { body, .. }) = update_def else { return };
-        assert!(matches!(&body.value, canon::Expr_::Case(..)), "update body is case");
-        let canon::Expr_::Case(scrut, branches) = &body.value else { return };
+        let update_def = m
+            .defs
+            .iter()
+            .find(|d| i.resolve(d.name().value) == "update");
+        assert!(
+            matches!(update_def, Some(canon::Def::Typed { .. })),
+            "update is typed"
+        );
+        let Some(canon::Def::Typed { body, .. }) = update_def else {
+            return;
+        };
+        assert!(
+            matches!(&body.value, canon::Expr_::Case(..)),
+            "update body is case"
+        );
+        let canon::Expr_::Case(scrut, branches) = &body.value else {
+            return;
+        };
 
         // Scrutinee `msg` : Msg
         assert_eq!(
-            solved.regions.get(&scrut.span).and_then(|t| ty_con_name(t, &i)).as_deref(),
+            solved
+                .regions
+                .get(&scrut.span)
+                .and_then(|t| ty_con_name(t, &i))
+                .as_deref(),
             Some("Msg")
         );
 
         // First arm body `count + 1` : Int
-        let Some(first) = branches.first() else { return };
-        assert!(matches!(first.body.value, canon::Expr_::Binop { .. }), "arm body is binop");
+        let Some(first) = branches.first() else {
+            return;
+        };
+        assert!(
+            matches!(first.body.value, canon::Expr_::Binop { .. }),
+            "arm body is binop"
+        );
         assert_eq!(
-            solved.regions.get(&first.body.span).and_then(|t| ty_con_name(t, &i)).as_deref(),
+            solved
+                .regions
+                .get(&first.body.span)
+                .and_then(|t| ty_con_name(t, &i))
+                .as_deref(),
             Some("Int")
         );
     }
@@ -252,7 +305,9 @@ mod tests {
         let solved = infer(&m, &mut i);
         assert!(solved.is_ok(), "inference must succeed");
         let Ok(solved) = solved else { return };
-        let Some(main) = sym(&i, &m, "main") else { return };
+        let Some(main) = sym(&i, &m, "main") else {
+            return;
+        };
         let main_ty = solved.env.get(&main);
         assert!(
             matches!(
@@ -275,7 +330,10 @@ mod tests {
         let r = infer_with_budget(&m, &mut i, &mut budget);
         assert!(matches!(
             r,
-            Err(Diagnostic::Type { msg: TypeError::BudgetExceeded, .. })
+            Err(Diagnostic::Type {
+                msg: TypeError::BudgetExceeded,
+                ..
+            })
         ));
     }
 

@@ -69,10 +69,15 @@ mod tests {
 
         // The `Msg` union with two nullary constructors.
         assert_eq!(m.unions.len(), 1);
-        let Some(union) = m.unions.first() else { return };
+        let Some(union) = m.unions.first() else {
+            return;
+        };
         assert_eq!(i.resolve(union.name), "Msg");
-        let names: Vec<(&str, usize)> =
-            union.ctors.iter().map(|c| (i.resolve(c.name), c.index)).collect();
+        let names: Vec<(&str, usize)> = union
+            .ctors
+            .iter()
+            .map(|c| (i.resolve(c.name), c.index))
+            .collect();
         assert_eq!(names, vec![("Increment", 0), ("Decrement", 1)]);
     }
 
@@ -84,13 +89,23 @@ mod tests {
         let Some(m) = m else { return };
 
         let def = find_def(&m, &i, "update");
-        assert!(matches!(def, Some(Def::Typed { .. })), "update is a typed def");
-        let Some(Def::Typed { patterns, body, .. }) = def else { return };
+        assert!(
+            matches!(def, Some(Def::Typed { .. })),
+            "update is a typed def"
+        );
+        let Some(Def::Typed { patterns, body, .. }) = def else {
+            return;
+        };
         assert_eq!(patterns.len(), 2);
 
         // case msg of ...
-        assert!(matches!(&body.value, Expr_::Case(..)), "update body is a case");
-        let Expr_::Case(scrut, branches) = &body.value else { return };
+        assert!(
+            matches!(&body.value, Expr_::Case(..)),
+            "update body is a case"
+        );
+        let Expr_::Case(scrut, branches) = &body.value else {
+            return;
+        };
         assert!(matches!(scrut.value, Expr_::VarLocal(s) if i.resolve(s) == "msg"));
         assert_eq!(branches.len(), 2);
 
@@ -100,22 +115,43 @@ mod tests {
             matches!(&inc.pat.value, Pattern_::PCtor { .. }),
             "arm pattern is a ctor"
         );
-        let Pattern_::PCtor { type_name, name, index, .. } = &inc.pat.value else { return };
+        let Pattern_::PCtor {
+            type_name,
+            name,
+            index,
+            ..
+        } = &inc.pat.value
+        else {
+            return;
+        };
         assert_eq!(i.resolve(*type_name), "Msg");
         assert_eq!(i.resolve(*name), "Increment");
         assert_eq!(*index, 0);
 
         // Body `count + 1` → Binop resolving to Basics.add over a local lhs.
-        assert!(matches!(&inc.body.value, Expr_::Binop { .. }), "arm body is a binop");
-        let Expr_::Binop { home, func, lhs, .. } = &inc.body.value else { return };
+        assert!(
+            matches!(&inc.body.value, Expr_::Binop { .. }),
+            "arm body is a binop"
+        );
+        let Expr_::Binop {
+            home, func, lhs, ..
+        } = &inc.body.value
+        else {
+            return;
+        };
         assert_eq!(i.resolve(*home), "Basics");
         assert_eq!(i.resolve(*func), "add");
         assert!(matches!(lhs.value, Expr_::VarLocal(s) if i.resolve(s) == "count"));
 
         // Second arm resolves `-` to Basics.sub.
         let Some(dec) = branches.get(1) else { return };
-        assert!(matches!(&dec.body.value, Expr_::Binop { .. }), "arm body is a binop");
-        let Expr_::Binop { func, .. } = &dec.body.value else { return };
+        assert!(
+            matches!(&dec.body.value, Expr_::Binop { .. }),
+            "arm body is a binop"
+        );
+        let Expr_::Binop { func, .. } = &dec.body.value else {
+            return;
+        };
         assert_eq!(i.resolve(*func), "sub");
     }
 
@@ -127,8 +163,13 @@ mod tests {
         let Some(m) = m else { return };
 
         let def = find_def(&m, &i, "main");
-        assert!(matches!(def, Some(Def::Untyped { .. })), "main is an untyped def");
-        let Some(Def::Untyped { body, .. }) = def else { return };
+        assert!(
+            matches!(def, Some(Def::Untyped { .. })),
+            "main is an untyped def"
+        );
+        let Some(Def::Untyped { body, .. }) = def else {
+            return;
+        };
 
         // main = println (String.fromInt (update Increment 0))
         let outer = as_call(body);
@@ -136,19 +177,25 @@ mod tests {
             matches!(outer, Some((Expr_::VarKernel { .. }, _))),
             "main body is a call to a kernel"
         );
-        let Some((Expr_::VarKernel { module, name }, outer_args)) = outer else { return };
+        let Some((Expr_::VarKernel { module, name }, outer_args)) = outer else {
+            return;
+        };
         assert_eq!(i.resolve(*module), "Log");
         assert_eq!(i.resolve(*name), "println");
         assert_eq!(outer_args.len(), 1);
 
         // String.fromInt → VarKernel { String, fromInt }.
-        let Some(arg0) = outer_args.first() else { return };
+        let Some(arg0) = outer_args.first() else {
+            return;
+        };
         let mid = as_call(arg0);
         assert!(
             matches!(mid, Some((Expr_::VarKernel { .. }, _))),
             "arg is a call to a kernel"
         );
-        let Some((Expr_::VarKernel { module, name }, mid_args)) = mid else { return };
+        let Some((Expr_::VarKernel { module, name }, mid_args)) = mid else {
+            return;
+        };
         assert_eq!(i.resolve(*module), "String");
         assert_eq!(i.resolve(*name), "fromInt");
 
@@ -159,25 +206,40 @@ mod tests {
             matches!(inner, Some((Expr_::VarTopLevel { .. }, _))),
             "arg is a call to a top-level"
         );
-        let Some((Expr_::VarTopLevel { module, name }, inner_args)) = inner else { return };
+        let Some((Expr_::VarTopLevel { module, name }, inner_args)) = inner else {
+            return;
+        };
         assert_eq!(module.first().map(|&s| i.resolve(s)), Some("Main"));
         assert_eq!(i.resolve(*name), "update");
         assert_eq!(inner_args.len(), 2);
 
         // `Increment` used as a value → VarCtor of Main.Msg.
-        let Some(ctor_arg) = inner_args.first() else { return };
+        let Some(ctor_arg) = inner_args.first() else {
+            return;
+        };
         assert!(
             matches!(&ctor_arg.value, Expr_::VarCtor { .. }),
             "Increment is a ctor value"
         );
-        let Expr_::VarCtor { type_name, name, index, home } = &ctor_arg.value else { return };
+        let Expr_::VarCtor {
+            type_name,
+            name,
+            index,
+            home,
+        } = &ctor_arg.value
+        else {
+            return;
+        };
         assert_eq!(i.resolve(*type_name), "Msg");
         assert_eq!(i.resolve(*name), "Increment");
         assert_eq!(*index, 0);
         assert_eq!(home.first().map(|&s| i.resolve(s)), Some("Main"));
 
         // `0` literal.
-        assert!(matches!(inner_args.get(1).map(|a| &a.value), Some(Expr_::Int(0))));
+        assert!(matches!(
+            inner_args.get(1).map(|a| &a.value),
+            Some(Expr_::Int(0))
+        ));
     }
 
     #[test]
@@ -189,17 +251,26 @@ mod tests {
 
         let def = find_def(&m, &i, "update");
         assert!(matches!(def, Some(Def::Typed { .. })), "update is typed");
-        let Some(Def::Typed { ty, free_vars, .. }) = def else { return };
+        let Some(Def::Typed { ty, free_vars, .. }) = def else {
+            return;
+        };
         // No type variables in `Msg -> Int -> Int`.
         assert!(free_vars.is_empty());
         // Outer arrow: Msg -> (Int -> Int).
-        assert!(matches!(ty, ast::Type::Lambda(_, _)), "annotation is an arrow");
-        let ast::Type::Lambda(arg, rest) = ty else { return };
+        assert!(
+            matches!(ty, ast::Type::Lambda(_, _)),
+            "annotation is an arrow"
+        );
+        let ast::Type::Lambda(arg, rest) = ty else {
+            return;
+        };
         assert!(
             matches!(arg.as_ref(), ast::Type::Con { .. }),
             "first arg is a constructor type"
         );
-        let ast::Type::Con { name, home, .. } = arg.as_ref() else { return };
+        let ast::Type::Con { name, home, .. } = arg.as_ref() else {
+            return;
+        };
         assert_eq!(i.resolve(*name), "Msg");
         // `Msg` is a local union → home is this module.
         assert_eq!(home.first().map(|&s| i.resolve(s)), Some("Main"));
@@ -217,7 +288,10 @@ mod tests {
         let result = canonicalise(&src, &mut i);
         assert!(matches!(
             result,
-            Err(Diagnostic::Name { msg: NameError::Unknown, .. })
+            Err(Diagnostic::Name {
+                msg: NameError::Unknown,
+                ..
+            })
         ));
     }
 

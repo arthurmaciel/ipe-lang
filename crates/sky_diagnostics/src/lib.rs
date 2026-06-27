@@ -9,18 +9,18 @@ mod render;
 mod span;
 
 pub use code::{
-    explain_page, title, Code, Severity, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101,
-    SKY_I0102, SKY_I0103, SKY_I0200, SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101,
-    SKY_L0102, SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0200,
-    SKY_N0001, SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012,
-    SKY_P0001, SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020,
-    SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_T0001,
-    SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011,
+    Code, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200,
+    SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
+    SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0200, SKY_N0001, SKY_N0002, SKY_N0003,
+    SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_P0001, SKY_P0002, SKY_P0003,
+    SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031,
+    SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004,
+    SKY_T0010, SKY_T0011, Severity, explain_page, title,
 };
 pub use diagnostic::{
-    CaseDefect, Construct, Diagnostic, DResult, Expected, ExposingDefect, Feature, HeaderDefect,
-    HelpLine, Hint, LowerError, NameError, ParseError, SpanRole, TokenKind, TyDoc, TypeDeclDefect,
-    TypeError, ExpectedSet,
+    CaseDefect, Construct, DResult, Diagnostic, Expected, ExpectedSet, ExposingDefect, Feature,
+    HeaderDefect, HelpLine, Hint, LowerError, NameError, ParseError, SpanRole, TokenKind, TyDoc,
+    TypeDeclDefect, TypeError,
 };
 pub use render::render;
 pub use span::{Located, Span};
@@ -31,8 +31,17 @@ mod tests {
 
     #[test]
     fn compiler_bug_carries_context() {
-        let d = Diagnostic::CompilerBug { where_: "lower", detail: "no type for region".into() };
-        assert!(matches!(d, Diagnostic::CompilerBug { where_: "lower", .. }));
+        let d = Diagnostic::CompilerBug {
+            where_: "lower",
+            detail: "no type for region".into(),
+        };
+        assert!(matches!(
+            d,
+            Diagnostic::CompilerBug {
+                where_: "lower",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -50,7 +59,10 @@ mod tests {
 
     #[test]
     fn diagnostic_is_clone_eq() {
-        let a = Diagnostic::Parse { span: Span::DUMMY, msg: ParseError::Unexpected };
+        let a = Diagnostic::Parse {
+            span: Span::DUMMY,
+            msg: ParseError::Unexpected,
+        };
         let b = a.clone();
         assert_eq!(a, b);
     }
@@ -58,10 +70,22 @@ mod tests {
     #[test]
     fn coarse_variants_still_construct() {
         // Additive guarantee: every Milestone-0 variant remains buildable.
-        let _ = Diagnostic::Parse { span: Span::DUMMY, msg: ParseError::TooDeep };
-        let _ = Diagnostic::Name { span: Span::DUMMY, msg: NameError::Unknown };
-        let _ = Diagnostic::Type { span: Span::DUMMY, msg: TypeError::Mismatch };
-        let _ = Diagnostic::Type { span: Span::DUMMY, msg: TypeError::BudgetExceeded };
+        let _ = Diagnostic::Parse {
+            span: Span::DUMMY,
+            msg: ParseError::TooDeep,
+        };
+        let _ = Diagnostic::Name {
+            span: Span::DUMMY,
+            msg: NameError::Unknown,
+        };
+        let _ = Diagnostic::Type {
+            span: Span::DUMMY,
+            msg: TypeError::Mismatch,
+        };
+        let _ = Diagnostic::Type {
+            span: Span::DUMMY,
+            msg: TypeError::BudgetExceeded,
+        };
     }
 
     #[test]
@@ -77,7 +101,10 @@ mod tests {
 
     #[test]
     fn coarse_and_payload_share_a_code() {
-        let coarse = Diagnostic::Type { span: Span::DUMMY, msg: TypeError::Mismatch };
+        let coarse = Diagnostic::Type {
+            span: Span::DUMMY,
+            msg: TypeError::Mismatch,
+        };
         let rich = Diagnostic::Type {
             span: Span::DUMMY,
             msg: TypeError::TypeMismatch {
@@ -95,7 +122,9 @@ mod tests {
     fn redundant_branch_is_a_warning() {
         let d = Diagnostic::Type {
             span: Span::DUMMY,
-            msg: TypeError::RedundantCaseBranch { constructor: "Red".into() },
+            msg: TypeError::RedundantCaseBranch {
+                constructor: "Red".into(),
+            },
         };
         assert_eq!(d.severity(), Severity::Warning);
         assert_eq!(d.code(), SKY_T0011);
@@ -109,17 +138,26 @@ mod tests {
         };
         assert_eq!(d.code(), SKY_L0101);
         assert_eq!(d.severity(), Severity::Error);
-        assert_eq!(d.help(), vec![HelpLine::Hint(Hint::FeatureNotSupported(Feature::BinOps))]);
+        assert_eq!(
+            d.help(),
+            vec![HelpLine::Hint(Hint::FeatureNotSupported(Feature::BinOps))]
+        );
     }
 
     #[test]
     fn compiler_bug_maps_where_to_internal_code() {
-        let generic = Diagnostic::CompilerBug { where_: "lower", detail: "x".into() };
+        let generic = Diagnostic::CompilerBug {
+            where_: "lower",
+            detail: "x".into(),
+        };
         assert_eq!(generic.code(), SKY_I0001);
         assert_eq!(generic.severity(), Severity::Bug);
         assert_eq!(generic.primary_span(), Span::DUMMY);
 
-        let specific = Diagnostic::CompilerBug { where_: "intern.resolve", detail: "y".into() };
+        let specific = Diagnostic::CompilerBug {
+            where_: "intern.resolve",
+            detail: "y".into(),
+        };
         assert_eq!(specific.code(), SKY_I0010);
     }
 
@@ -127,12 +165,18 @@ mod tests {
     fn duplicate_value_points_at_first_definition() {
         let d = Diagnostic::Name {
             span: Span::new(20, 24),
-            msg: NameError::DuplicateValue { name: "foo".into(), first: Span::new(2, 5) },
+            msg: NameError::DuplicateValue {
+                name: "foo".into(),
+                first: Span::new(2, 5),
+            },
         };
         assert_eq!(d.code(), SKY_N0010);
         assert_eq!(
             d.help(),
-            vec![HelpLine::SecondarySpan { span: Span::new(2, 5), role: SpanRole::FirstDefinition }]
+            vec![HelpLine::SecondarySpan {
+                span: Span::new(2, 5),
+                role: SpanRole::FirstDefinition
+            }]
         );
     }
 
