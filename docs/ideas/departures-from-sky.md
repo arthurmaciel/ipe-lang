@@ -1,0 +1,107 @@
+# Departures from upstream Sky — idea log (research / deferred)
+
+> **Purpose:** a single running log of ideas that **intentionally diverge** from
+> the upstream Sky project's design. These are *our own* directions, mostly
+> **runtime-side**, captured for later investigation — **not** committed to and
+> **not** scheduled. They must not distract from the compiler core (M1–M6).
+>
+> **Governing rules:** every divergence here, if/when adopted, becomes a
+> documented entry (per `PRINCIPLES.md`: a divergence is *documented*, never
+> silently wrong) and flips the relevant `docs/parity/runtime-parity.md` row from
+> "mirrors Go" → "intentional Rust design + rationale + own tests." Until then we
+> still **mirror** upstream behaviour (so we can keep tracking it); these ideas are
+> the graduation path from *follower* to *designer*.
+>
+> Status legend: 🔬 research · 🧊 deferred · 🚧 prototyping · ✅ adopted.
+
+---
+
+## Idea 1 — Hotloading / hotpatching a running app (live UI on code change) 🔬🧊
+
+**Goal:** edit Sky source and have a *running* app's UI update immediately, ideally
+**preserving `Model` state** (the "edit `view`, see it change, state intact" loop).
+
+**Key fact (don't conflate):** **salsa ≠ hotloading.** Salsa is incremental
+*compilation* — it only makes the **rebuild** fast (`sky watch`/LSP). Getting new
+code into a live process is a separate **runtime** mechanism.
+
+**Mechanisms, ranked by principle-fit:**
+1. **Dev-mode IR interpreter** — tree-walk the typed IR; hold the `Model`, hot-swap
+   the interpreted `view`/`update` on change. *Safe* (no `unsafe`), reuses our IR,
+   compile natively for prod. **Best fit.**
+2. **WASM backend + host module reload** — swap the compiled WASM module, keep
+   state in the host. Safe (sandbox); aligns with the multi-backend direction.
+3. **Native dylib reload** (`hot-lib-reloader`-style) — fast but `dlopen` +
+   fn-pointer transmute = `unsafe`/fragile. **Discouraged** (violates the spirit of
+   `forbid(unsafe)` + soundness).
+4. **Baseline (already ~half-there):** fast `sky watch` rebuild → restart →
+   session-store state-persist → SSE reconnect. Salsa accelerates the rebuild step.
+
+**Enabler:** Idea 3 (decoupled TEA). TEA's Model/code split is what makes
+view-only hot-swap tractable; `Model`-shape changes need a migration story.
+
+**Open questions:** `Model`-shape migration on type changes; granularity (view-only
+vs `update` vs `Model`); how the dev host preserves in-flight `Cmd`/`Sub`; security
+of an interpreter eval path (must stay sandboxed, no arbitrary host access).
+
+---
+
+## Idea 2 — `Std.Ui` as a backend-agnostic UI IR; target chosen by a function call 🔬🧊
+
+**Today:** `Std.Ui` rendering is coupled to the *app shape* — Live → HTML, TUI →
+ANSI, Webview → HTML. The target is implied by where you run.
+
+**Idea:** make `Std.Ui` a **pure UI description (its own IR)**, and select the
+target with an explicit **function call**, decoupling *what UI* from *how/where
+rendered*. UI becomes **data you can target anywhere**:
+- `Ui.toHtml : Element -> String` (generate HTML/CSS as a value)
+- `Ui.toAnsi : Element -> AnsiBuffer`
+- …one lowering per UI backend, analogous to `sky_ir` → code backends.
+
+**Unlocks:** *generate* (not render) HTML/CSS from inside a **TUI** app; *generate*
+ANSI from inside a **Live**/**Webview** app. Concretely enables a CLI or Live app
+that **emits whole sites** — a programmatic/graphical **site-builder**.
+
+**Principle notes:** these are **pure functions** (no I/O) → excellent fit.
+**Security is load-bearing:** HTML *generation* must keep `Std.Ui`'s
+HTML-escaping / no-`data-sky-eval` / no-XSS guarantees even when producing-not-
+serving; ANSI generation must sanitize control bytes (mirror the Tui
+`sanitiseRune` discipline). The UI-IR is, in effect, a second IR with its own
+backend trait — keep it as cleanly bounded as `sky_ir`/`sky_backend`.
+
+---
+
+## Idea 3 — Decouple TEA from Live/TUI/Webview (standalone TEA engine) 🔬🧊
+
+**Analogy:** Iced (GUI) and Ratatui (TUI) are *standalone* frameworks. Make the
+**TEA runtime** (`Model`/`Msg`/`init`/`update`/`view`/`Cmd`/`Sub` loop) a
+**backend-agnostic engine**; Live / TUI / Webview become **transports/drivers**
+plugged into it, not the engine itself.
+
+**Unlocks:**
+- One TEA app driven by *any* transport (write once, run as web / terminal /
+  desktop — already a Sky aspiration, but as a *library boundary*, not three
+  hard-wired shapes).
+- A **dev hot-reload host** (Idea 1) that owns the `Model` and swaps `update`/`view`.
+- Free composition with Idea 2 (generate HTML in a TUI, ANSI in Live).
+
+**Open questions:** the engine↔transport interface (event in, patch/render out);
+where `Cmd`/`Sub` effect execution lives; how `Sky.Live`'s SSE/diff layer becomes
+just one transport implementation.
+
+---
+
+## Why these three belong together
+
+Standalone TEA engine (3) + `Std.Ui`-as-IR (2) + a hot-swap host (1) =
+**"edit code → UI updates live, render any UI to any target."** That combination
+is the foundation for the **graphical-and-programmatic site-builder** vision
+(build sites in a CLI or inside a Live app, updating the UI directly from code).
+
+## Disposition
+
+All three are **runtime-side and depart from upstream Sky's coupling**, so they are
+**research/deferred** until the compiler core is solid (M1–M6) and the
+mirror/parity machinery is in place. Revisit when: (a) the IR + multi-backend
+boundary is proven, and (b) we are ready to *design* rather than *mirror* — at
+which point each becomes a real divergence-ledger entry with its own tests.
