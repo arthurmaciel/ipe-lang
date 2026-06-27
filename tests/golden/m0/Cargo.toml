@@ -1,0 +1,53 @@
+[package]
+name = "sky-app"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["tokio", "crypto", "json"]
+tokio = []
+crypto = []
+json = []
+db = []
+live = []
+redis_store = []
+webview = []
+tui = []
+static_alloc = ["mimalloc"]
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+mimalloc = { version = "0.1", optional = true }
+serde_json = "1"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+regex = "1"
+base64 = "0.22"
+hex = "0.4"
+percent-encoding = "2"
+chrono = "0.4"
+chrono-tz = "0.10"
+rust_decimal = { version = "1", features = ["serde"] }
+hmac = "0.12"
+sha1 = "0.10"
+md-5 = "0.10"
+subtle = "2"
+rsa = { version = "0.9", features = ["sha2"] }
+aes-gcm = "0.10"
+chacha20poly1305 = "0.10"
+pbkdf2 = "0.12"
+flate2 = "1"
+zstd = "0.13"
+csv = "1"
+jsonwebtoken = "9"
+bcrypt = "0.17"
+toml = "0.8"
+serde_yaml = "0.9"
+
+[profile.dev]
+debug = 0
+incremental = true
+overflow-checks = false
+
+[profile.release]
+strip = true
