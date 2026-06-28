@@ -255,3 +255,22 @@ reach the page to LEARN, so depth is welcome as long as precision comes first.
 (The kind-teacher addendum's CONTENT requirements — progressive depth, glossary
 with etymology, timeless/no-archaeology, kind tone — all still hold; only the
 section ORDER and the analogy register/placement are refined here.)
+
+## Addendum (2026-06-28) — FINAL explain-page section headings (supersedes prior naming)
+
+```
+# SKY-XXXX: <title>
+
+<direct, precise 1-2 sentences: what's wrong + the fix — NO heading, lead text>
+
+## Explanation        (the technical rule/mechanism — authoritative, as deep as warranted)
+## Examples           (>=3 `sky` snippets: error + >=1 fix)
+## Comparison         (OPTIONAL adult real-world analogy; open with a skip cue)
+## Names and origins  (glossary: each named concept + plain definition + etymology/origin)
+```
+
+The opening paragraph is the direct summary (no "The short version" heading — just
+say it). All earlier requirements stand: timeless/no-archaeology, kind teacher
+tone, glossary teaches every named term, CI jargon + archaeology gates. Only the
+headings/lead are finalized here: lead-text, then Explanation, Examples,
+Comparison, Names and origins.
