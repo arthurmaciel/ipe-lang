@@ -1,0 +1,11 @@
+{
+  "name": "sky-local",
+  "owner": { "name": "Arthur Maciel" },
+  "plugins": [
+    {
+      "name": "sky-compiler",
+      "source": "./sky-compiler",
+      "description": "Soundness gate + guardian-review workflow for Sky-compiler / Rust-backend / Rust-runtime development."
+    }
+  ]
+}
