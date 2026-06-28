@@ -14,7 +14,10 @@ use sky_diagnostics::Located;
 use sky_intern::Symbol;
 
 /// A parsed module (M0 subset).
-#[derive(Clone, PartialEq, Eq, Debug)]
+//
+// `Eq` is not derived: `values` hold [`Value`]s whose bodies may carry an `f64`
+// float literal, so the tree is only `PartialEq`.
+#[derive(Clone, PartialEq, Debug)]
 pub struct Module {
     /// Dotted module-name segments, e.g. `Main` → `[Main]`.
     pub name: Located<Vec<Symbol>>,
@@ -71,7 +74,10 @@ pub struct Import {
 }
 
 /// A top-level value / function declaration.
-#[derive(Clone, PartialEq, Eq, Debug)]
+//
+// `Eq` is not derived: `body` is an [`Expr`], which may carry an `f64` float
+// literal and so is only `PartialEq`.
+#[derive(Clone, PartialEq, Debug)]
 pub struct Value {
     pub name: Located<Symbol>,
     /// Argument patterns (empty for a plain value binding).
@@ -119,7 +125,11 @@ pub struct Ctor {
 pub type Expr = Located<Expr_>;
 
 /// Expression node (M0 subset).
-#[derive(Clone, PartialEq, Eq, Debug)]
+///
+/// `Eq` is not derived: [`Expr_::Float`] carries an `f64`, which is only
+/// `PartialEq`. No consumer keys a map / set on an expression, so `PartialEq`
+/// (structural `==`, used in tests) is sufficient.
+#[derive(Clone, PartialEq, Debug)]
 pub enum Expr_ {
     /// An unqualified name reference (local var, top-level binding, or
     /// constructor used as a value — name resolution decides which).
@@ -128,6 +138,10 @@ pub enum Expr_ {
     VarQual(Symbol, Symbol),
     /// An integer literal.
     Int(i64),
+    /// A floating-point literal `1.5`, `3.0`, `1.5e3`, `2e-2`. The carried
+    /// [`f64`] is the parsed value (the lexer resolves the lexeme), mirroring
+    /// the Haskell compiler's `Src.Float`.
+    Float(f64),
     /// A string literal `"hello"`. The carried [`String`] is the literal's
     /// already-unescaped value (the lexer resolves escape sequences), so the
     /// downstream stages see the runtime string verbatim. Mirrors the Haskell
@@ -198,7 +212,8 @@ pub enum Expr_ {
 /// (a constructor pattern) parses here but is rejected fail-closed downstream —
 /// a `let` binder must always match. M1 subset of the Haskell compiler's
 /// `Sky.AST.Source.Def`, extended with the destructure form (`DestructDef`).
-#[derive(Clone, PartialEq, Eq, Debug)]
+// `Eq` is not derived: `body` is an [`Expr`], only `PartialEq` (float literals).
+#[derive(Clone, PartialEq, Debug)]
 pub struct LetBinding {
     pub pat: Pattern,
     pub body: Expr,

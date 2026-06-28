@@ -220,6 +220,7 @@ pub fn record_struct_name(field_names: &[String]) -> String {
 pub const fn kernel_name(k: KernelFn) -> &'static str {
     match k {
         KernelFn::StringFromInt => "string_from_int",
+        KernelFn::StringFromFloat => "string_from_float",
         KernelFn::LogPrintln => "log_println",
     }
 }
@@ -257,6 +258,7 @@ mod tests {
     #[test]
     fn kernel_names() {
         assert_eq!(kernel_name(KernelFn::StringFromInt), "string_from_int");
+        assert_eq!(kernel_name(KernelFn::StringFromFloat), "string_from_float");
         assert_eq!(kernel_name(KernelFn::LogPrintln), "log_println");
     }
 

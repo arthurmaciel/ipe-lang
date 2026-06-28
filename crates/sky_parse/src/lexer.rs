@@ -15,7 +15,12 @@
 use sky_diagnostics::{DResult, Diagnostic, ParseError, Span};
 
 /// A lexical token kind (M0 subset).
-#[derive(Clone, PartialEq, Eq, Debug)]
+///
+/// `Eq` is intentionally NOT derived: [`Tok::Float`] carries an `f64`, which is
+/// only `PartialEq` (IEEE-754 `NaN` is not reflexive). Token comparison only
+/// ever needs `==` against a fixed non-float variant (`t.kind == Tok::RParen`),
+/// which `PartialEq` provides; nothing keys a map or set on a `Tok`.
+#[derive(Clone, PartialEq, Debug)]
 pub enum Tok {
     // Keywords.
     Module,
@@ -66,6 +71,11 @@ pub enum Tok {
     Ident(String),
     /// An integer literal.
     Int(i64),
+    /// A floating-point literal `1.5`, `3.0`, `1.5e3`, `2e-2`. The carried
+    /// [`f64`] is the parsed value; the lexer only builds well-formed Elm-style
+    /// float lexemes (a leading digit is required, so `.5` is not a float), so
+    /// the downstream stages see a ready numeric value.
+    Float(f64),
     /// A string literal `"hello"`. The carried [`String`] is the already
     /// UNESCAPED value (escape sequences such as `\n` / `\"` are resolved here),
     /// so downstream stages see the runtime string verbatim.
@@ -77,7 +87,10 @@ pub enum Tok {
 }
 
 /// A token with its source position.
-#[derive(Clone, PartialEq, Eq, Debug)]
+///
+/// `Eq` is not derived: the `kind` field is a [`Tok`], which carries an `f64`
+/// in [`Tok::Float`] and so is only `PartialEq` (see [`Tok`]).
+#[derive(Clone, PartialEq, Debug)]
 pub struct Token {
     pub kind: Tok,
     /// 1-based line.
@@ -111,6 +124,12 @@ impl Lexer {
 
     fn peek2(&self) -> Option<char> {
         self.chars.get(self.pos + 1).map(|&(_, c)| c)
+    }
+
+    /// The character two positions ahead of the cursor, used to confirm a digit
+    /// follows a signed exponent (`e-2`) before committing to a float lexeme.
+    fn peek3(&self) -> Option<char> {
+        self.chars.get(self.pos + 2).map(|&(_, c)| c)
     }
 
     /// Byte offset of the current char, or end-of-input.
@@ -222,31 +241,98 @@ pub fn lex(src: &str) -> DResult<Vec<Token>> {
     Ok(out)
 }
 
-fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
-    let mut text = String::new();
+/// Consume a run of ASCII digits into `out` (zero or more). Each digit advances
+/// the cursor; the first non-digit stops the run without consuming it.
+fn consume_digits(lx: &mut Lexer, out: &mut String) {
     while let Some(c) = lx.peek() {
         if c.is_ascii_digit() {
-            text.push(c);
+            out.push(c);
             lx.advance();
-        } else if is_ident_start(c) {
-            // A digit immediately followed by a letter is not a valid M0 token.
-            let at = lx.offset();
-            return Err(Diagnostic::Parse {
-                span: Span::new(at, at + char_width(c)),
-                msg: ParseError::NumberJoinedToName(c),
-            });
         } else {
             break;
         }
     }
-    // The loop only pushed ASCII digits, so the sole parse failure is an `i64`
-    // overflow — never an empty or malformed literal.
+}
+
+/// Lex a numeric literal — an integer `42` or an Elm-style float `1.5` / `3.0` /
+/// `1.5e3` / `2e-2`. The caller peeked an ASCII digit, so the integer part is
+/// always present (a leading digit is required: `.5` is NOT a float — the bare
+/// `.` lexes separately).
+///
+/// A `.` is taken as a fractional point only when a digit follows it, so `1..5`
+/// keeps its `..` range token and `1.foo` keeps the `.` as a field access. An
+/// `e`/`E` is taken as an exponent only when a digit (after an optional sign)
+/// follows, so a trailing `e` falls through to the joined-name check. A literal
+/// with a fraction OR an exponent is a [`Tok::Float`]; otherwise a [`Tok::Int`].
+fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
+    let mut text = String::new();
+    let mut is_float = false;
+
+    // Integer part: one or more ASCII digits (the caller guaranteed the first).
+    consume_digits(lx, &mut text);
+
+    // Fractional part: a `.` immediately followed by a digit.
+    if lx.peek() == Some('.') && lx.peek2().is_some_and(|c| c.is_ascii_digit()) {
+        is_float = true;
+        text.push('.');
+        lx.advance(); // consume the `.`
+        consume_digits(lx, &mut text);
+    }
+
+    // Exponent part: `e`/`E`, an optional `+`/`-`, then one or more digits.
+    if let Some(exp @ ('e' | 'E')) = lx.peek() {
+        let signed = matches!(lx.peek2(), Some('+' | '-'));
+        let digit_follows = if signed {
+            lx.peek3().is_some_and(|c| c.is_ascii_digit())
+        } else {
+            lx.peek2().is_some_and(|c| c.is_ascii_digit())
+        };
+        if digit_follows {
+            is_float = true;
+            text.push(exp);
+            lx.advance(); // consume `e`/`E`
+            if let Some(sign @ ('+' | '-')) = lx.peek() {
+                text.push(sign);
+                lx.advance(); // consume the sign
+            }
+            consume_digits(lx, &mut text);
+        }
+    }
+
+    // A digit run immediately followed by a letter / underscore (`123abc`,
+    // `1.5x`) is not a valid token — surface the joined-name error at the
+    // offending character.
+    if let Some(c) = lx.peek()
+        && is_ident_start(c)
+    {
+        let at = lx.offset();
+        return Err(Diagnostic::Parse {
+            span: Span::new(at, at + char_width(c)),
+            msg: ParseError::NumberJoinedToName(c),
+        });
+    }
+
     let hi = lx.offset();
-    let n = text.parse::<i64>().map_err(|_| Diagnostic::Parse {
-        span: Span::new(lo, hi),
-        msg: ParseError::IntLiteralOutOfRange,
-    })?;
-    Ok(Tok::Int(n))
+    if is_float {
+        // `text` is a well-formed float lexeme by construction (a digit run, an
+        // optional `.`-digit run, an optional `e[+-]`-digit run), so `f64`
+        // parsing cannot fail — an out-of-range magnitude reads back as
+        // `inf`, never an error. A failure here would be a lexer contract
+        // breach, so it is a compiler bug rather than user error.
+        let f = text.parse::<f64>().map_err(|e| Diagnostic::CompilerBug {
+            where_: "sky_parse::lex_number",
+            detail: format!("well-formed float lexeme {text:?} failed to parse: {e}"),
+        })?;
+        Ok(Tok::Float(f))
+    } else {
+        // The integer part only pushed ASCII digits, so the sole parse failure
+        // is an `i64` overflow — never an empty or malformed literal.
+        let n = text.parse::<i64>().map_err(|_| Diagnostic::Parse {
+            span: Span::new(lo, hi),
+            msg: ParseError::IntLiteralOutOfRange,
+        })?;
+        Ok(Tok::Int(n))
+    }
 }
 
 /// Lex a single-line string literal `"…"`. The opening `"` is the current char.

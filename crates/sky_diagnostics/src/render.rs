@@ -613,6 +613,7 @@ const fn token_kind_str(t: TokenKind) -> &'static str {
         TokenKind::PipePipe => "`||`",
         TokenKind::Ident => "an identifier",
         TokenKind::Int => "a number",
+        TokenKind::Float => "a floating-point number",
         TokenKind::Str => "a string literal",
         TokenKind::Char => "a character literal",
         TokenKind::Eof => "end of input",

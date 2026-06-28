@@ -954,6 +954,7 @@ impl<'a> Lowerer<'a> {
         self.reject_function_through_type_var(e)?;
         match &e.value {
             canon::Expr_::Int(n) => Ok(Expr::Int(*n)),
+            canon::Expr_::Float(f) => Ok(Expr::Float(*f)),
             canon::Expr_::Str(s) => Ok(Expr::Str(s.clone())),
             canon::Expr_::Char(c) => Ok(Expr::Char(c.clone())),
             canon::Expr_::Unit => Ok(Expr::Unit),
@@ -1351,9 +1352,11 @@ impl<'a> Lowerer<'a> {
     /// definitions in declaration order, so the same-index lookup is exact.
     fn callee_arity(&self, callee: &Callee) -> DResult<usize> {
         match callee {
-            // Both M0/M1 kernels take a single argument; widen this match as
+            // Every wired kernel takes a single argument; widen this match as
             // the kernel set grows so a new entry can never silently inherit 1.
-            Callee::Kernel(KernelFn::StringFromInt | KernelFn::LogPrintln) => Ok(1),
+            Callee::Kernel(
+                KernelFn::StringFromInt | KernelFn::StringFromFloat | KernelFn::LogPrintln,
+            ) => Ok(1),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -1387,6 +1390,7 @@ impl<'a> Lowerer<'a> {
                 match (self.resolve(*module)?, self.resolve(*name)?) {
                     ("Log", "println") => Ok(Callee::Kernel(KernelFn::LogPrintln)),
                     ("String", "fromInt") => Ok(Callee::Kernel(KernelFn::StringFromInt)),
+                    ("String", "fromFloat") => Ok(Callee::Kernel(KernelFn::StringFromFloat)),
                     // A kernel beyond the M0 set (`Time.now`, `String.length`, …).
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),

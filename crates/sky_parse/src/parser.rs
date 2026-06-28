@@ -108,6 +108,7 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::PipePipe => TokenKind::PipePipe,
         Tok::Ident(_) => TokenKind::Ident,
         Tok::Int(_) => TokenKind::Int,
+        Tok::Float(_) => TokenKind::Float,
         Tok::Str(_) => TokenKind::Str,
         Tok::Char(_) => TokenKind::Char,
     }
@@ -1011,7 +1012,13 @@ impl<'a> Parser<'a> {
     const fn is_simple_atom_start(kind: &Tok) -> bool {
         matches!(
             kind,
-            Tok::LParen | Tok::LBrace | Tok::Int(_) | Tok::Str(_) | Tok::Char(_) | Tok::Ident(_)
+            Tok::LParen
+                | Tok::LBrace
+                | Tok::Int(_)
+                | Tok::Float(_)
+                | Tok::Str(_)
+                | Tok::Char(_)
+                | Tok::Ident(_)
         )
     }
 
@@ -1102,6 +1109,7 @@ impl<'a> Parser<'a> {
             Tok::LParen => self.parse_paren_or_tuple(tok.span, depth + 1),
             Tok::LBrace => self.parse_record(tok.span, depth + 1),
             Tok::Int(n) => Ok(Located::new(tok.span, Expr_::Int(*n))),
+            Tok::Float(f) => Ok(Located::new(tok.span, Expr_::Float(*f))),
             Tok::Str(s) => Ok(Located::new(tok.span, Expr_::Str(s.clone()))),
             Tok::Char(c) => Ok(Located::new(tok.span, Expr_::Char(c.clone()))),
             Tok::Ident(text) => {
@@ -1740,7 +1748,10 @@ impl<'a> Parser<'a> {
         match &tok.kind {
             Tok::Underscore => Ok(Located::new(tok.span, Pattern_::PAnything)),
             // Literal leaves (M3b-3): int / string / char. Bool literals
-            // (`True` / `False`) come through the `Ident` arm below.
+            // (`True` / `False`) come through the `Ident` arm below. A float
+            // literal is intentionally NOT a pattern leaf — equality on `f64`
+            // is unsound to match on (Rust forbids float patterns), so a
+            // `Tok::Float` falls through to the fail-closed catch-all below.
             Tok::Int(n) => Ok(Located::new(tok.span, Pattern_::PInt(*n))),
             Tok::Str(s) => Ok(Located::new(tok.span, Pattern_::PStr(s.clone()))),
             Tok::Char(c) => Ok(Located::new(tok.span, Pattern_::PChar(c.clone()))),

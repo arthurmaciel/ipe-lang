@@ -71,6 +71,8 @@ pub enum TokenKind {
     PipePipe,
     Ident,
     Int,
+    /// A floating-point literal `1.5`, `3.0`, `1.5e3`.
+    Float,
     /// A string literal `"…"`.
     Str,
     /// A character literal `'…'`.

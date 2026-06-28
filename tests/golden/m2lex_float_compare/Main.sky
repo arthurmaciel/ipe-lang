@@ -1,0 +1,13 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+bigger : Bool
+bigger =
+    2.5 > 1.5
+
+chosen : Float
+chosen =
+    if bigger then 1.5e3 else 2e-2
+
+main =
+    println (String.fromFloat chosen)

@@ -1,0 +1,8 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+half : Float
+half = 3.0 / 2.0
+
+main =
+    println (String.fromFloat half)
