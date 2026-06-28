@@ -206,3 +206,17 @@ upstream pinned to a tag** as the dual reference (Go behavioural oracle +
 (emission is snapshot-guarded), version-lock to upstream, and do the reorg **once**,
 bundled with the v0.17 sync + the (now one-repo) edition-2024 bump — after the
 current error-code phases land.
+
+## Parity-oracle caveat — the Go reference can be wrong
+
+Behavioural parity vs the Go backend is the correctness oracle, but the oracle is
+not infallible. When Sky-Rust is *provably correct* and the Go reference is *buggy*,
+we DIVERGE (stay correct) + document it + file the bug upstream — we do NOT reproduce
+a Go defect to "match." A parity mismatch is therefore triaged, not auto-treated as a
+Sky-Rust regression: determine which side is correct first.
+
+Known instance: deeply nested constructor patterns (≥3 deep, e.g.
+`Som (Som (Som x))` discrimination) — the Go reference panics at runtime
+(`rt.AsInt got nil`); Sky-Rust compiles + runs correctly. Sky-Rust is the strict
+improvement; do not "fix" it toward the Go panic. File upstream against the Go
+backend so the oracle stays trustworthy at greater nesting depths.
