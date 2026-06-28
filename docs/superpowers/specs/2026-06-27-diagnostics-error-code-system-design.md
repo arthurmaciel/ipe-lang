@@ -227,3 +227,31 @@ WHY, not WHEN/which-phase/which-task. Existing archaeology comments ("M3a
 residual", "Wall #2", "v0.15 Stage A", "fixes M2c BLOCKER") are pruned
 opportunistically when a file is touched, and swept in a dedicated cleanup pass
 before any public release. (This is a *code-readability* item, not CI-gated yet.)
+
+## Addendum (2026-06-28) — explain-page structure refinement (supersedes earlier tier order)
+
+Canonical order for every `explain/SKY-*.md` page (technical-first; analogy late + optional):
+
+1. **The short version** — 1–2 PRECISE sentences: what's wrong + the fix. No
+   analogy. This is the agent-first / skim-first TL;DR; everyone reads it.
+2. **What's happening** — the technical rule/mechanism, going as deep as the error
+   warrants (working-dev → theory). The source of truth.
+3. **the code** — ≥3 `sky` snippets (error + ≥1 fix).
+4. **A simple comparison** — an OPTIONAL real-world analogy, clearly labelled and
+   opened with a skip cue ("If that felt abstract, here's an everyday parallel…").
+   Register: **young-adult / common-people-with-responsibilities** (jobs, money,
+   policies, deadlines, routing) — NOT childish (no toys/games). Tight + accurate;
+   it illustrates, it does not redefine.
+5. **Names & where they come from** — glossary + etymology (per the kind-teacher
+   addendum).
+
+Rationale: leading with a metaphor delays the precise signal an AI agent / expert
+wants and a strained metaphor can mislead. Placing the analogy AFTER the technical
+truth and marking it optional makes it neutral-to-helpful for agents (skippable)
+and grounding for human learners, while the technical section stays the
+authoritative explanation. Agents primarily consume the rendered diagnostic; they
+reach the page to LEARN, so depth is welcome as long as precision comes first.
+
+(The kind-teacher addendum's CONTENT requirements — progressive depth, glossary
+with etymology, timeless/no-archaeology, kind tone — all still hold; only the
+section ORDER and the analogy register/placement are refined here.)
