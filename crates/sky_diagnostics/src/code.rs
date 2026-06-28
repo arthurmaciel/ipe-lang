@@ -123,6 +123,8 @@ pub const SKY_T0010: Code = Code("SKY-T0010");
 pub const SKY_T0011: Code = Code("SKY-T0011");
 /// this record has no such field
 pub const SKY_T0012: Code = Code("SKY-T0012");
+/// constructor pattern binds the wrong number of payload fields
+pub const SKY_T0013: Code = Code("SKY-T0013");
 
 // ---------------------------------------------------------------------------
 // Lower / not-yet-supported (SKY-L####)
@@ -150,6 +152,10 @@ pub const SKY_L0108: Code = Code("SKY-L0108");
 pub const SKY_L0110: Code = Code("SKY-L0110");
 /// updating a generic record needs a bounded type parameter (M2d)
 pub const SKY_L0111: Code = Code("SKY-L0111");
+/// a constructor payload sub-pattern other than a variable / wildcard
+pub const SKY_L0112: Code = Code("SKY-L0112");
+/// a data constructor used as a first-class function value / partially applied
+pub const SKY_L0113: Code = Code("SKY-L0113");
 /// expression nests too deeply for the backend
 pub const SKY_L0200: Code = Code("SKY-L0200");
 
@@ -221,6 +227,7 @@ pub fn title(c: Code) -> &'static str {
         SKY_T0010 => "this case does not handle every possibility",
         SKY_T0011 => "redundant case branch",
         SKY_T0012 => "this record has no such field",
+        SKY_T0013 => "constructor pattern binds the wrong number of fields",
         SKY_L0100 => "pattern kind not supported yet",
         SKY_L0101 => "operator not supported yet",
         SKY_L0102 => "polymorphic value's type could not be determined",
@@ -232,6 +239,8 @@ pub fn title(c: Code) -> &'static str {
         SKY_L0108 => "kernel function not available yet",
         SKY_L0110 => "partial or over-application not supported yet",
         SKY_L0111 => "updating a generic record is not supported yet",
+        SKY_L0112 => "nested constructor payload patterns not supported yet",
+        SKY_L0113 => "constructor used as a function value not supported yet",
         SKY_L0200 => "expression nests too deeply for the backend",
         SKY_I0001 => "internal compiler error",
         SKY_I0010 => "intern: unresolved symbol",
@@ -294,6 +303,7 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         SKY_T0010 => Some(include_str!("../explain/SKY-T0010.md")),
         SKY_T0011 => Some(include_str!("../explain/SKY-T0011.md")),
         SKY_T0012 => Some(include_str!("../explain/SKY-T0012.md")),
+        SKY_T0013 => Some(include_str!("../explain/SKY-T0013.md")),
         SKY_L0100 => Some(include_str!("../explain/SKY-L0100.md")),
         SKY_L0101 => Some(include_str!("../explain/SKY-L0101.md")),
         SKY_L0102 => Some(include_str!("../explain/SKY-L0102.md")),
@@ -305,6 +315,8 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         SKY_L0108 => Some(include_str!("../explain/SKY-L0108.md")),
         SKY_L0110 => Some(include_str!("../explain/SKY-L0110.md")),
         SKY_L0111 => Some(include_str!("../explain/SKY-L0111.md")),
+        SKY_L0112 => Some(include_str!("../explain/SKY-L0112.md")),
+        SKY_L0113 => Some(include_str!("../explain/SKY-L0113.md")),
         SKY_L0200 => Some(include_str!("../explain/SKY-L0200.md")),
         SKY_I0001 => Some(include_str!("../explain/SKY-I0001.md")),
         SKY_I0010 => Some(include_str!("../explain/SKY-I0010.md")),
@@ -331,14 +343,15 @@ mod tests {
         SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061,
         SKY_P0062, SKY_N0001, SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011,
         SKY_N0012, SKY_N0013, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011,
-        SKY_T0012, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106,
-        SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0200, SKY_I0001, SKY_I0010, SKY_I0011,
-        SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200, SKY_I0201, SKY_I0202, SKY_I0203,
+        SKY_T0012, SKY_T0013, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104, SKY_L0105,
+        SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113, SKY_L0200,
+        SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200,
+        SKY_I0201, SKY_I0202, SKY_I0203,
     ];
 
     #[test]
-    fn taxonomy_has_fifty_six_codes() {
-        assert_eq!(ALL.len(), 56);
+    fn taxonomy_has_fifty_nine_codes() {
+        assert_eq!(ALL.len(), 59);
     }
 
     #[test]
@@ -356,7 +369,7 @@ mod tests {
             assert!(s.starts_with("SKY-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 56);
+        assert_eq!(seen.len(), 59);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.

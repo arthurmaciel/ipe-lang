@@ -1,0 +1,16 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A directly self-recursive ADT: `Node` carries two `Tree` fields, which the
+-- backend boxes so the Rust enum stays finite-sized, balanced by `Box::new` at
+-- construction and a deref at pattern binding.
+type Tree = Leaf | Node Tree Int Tree
+
+sumTree : Tree -> Int
+sumTree t =
+    case t of
+        Leaf -> 0
+        Node l n r -> sumTree l + n + sumTree r
+
+main =
+    println (String.fromInt (sumTree (Node (Node Leaf 3 Leaf) 4 (Node Leaf 5 Leaf))))

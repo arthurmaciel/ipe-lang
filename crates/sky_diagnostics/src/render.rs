@@ -399,6 +399,13 @@ fn type_label(msg: &TypeError) -> Option<String> {
             "type {} has no field `{field}`",
             ty_to_string(record)
         )),
+        TypeError::CtorPatternArity {
+            ctor,
+            expected,
+            found,
+        } => Some(format!(
+            "`{ctor}` binds {found} field(s) but its declaration has {expected}"
+        )),
         TypeError::Mismatch | TypeError::BudgetExceeded | TypeError::StepBudgetExceeded { .. } => {
             None
         }
@@ -525,6 +532,16 @@ const fn feature_label(f: Feature) -> &'static str {
             "updating a generic record is not supported yet — it needs a \
              `Clone`-bounded type parameter (bounded generics are M2d) \
              [feature: bounded-record-update]"
+        }
+        Feature::NestedPayloadPatterns => {
+            "a constructor payload pattern must be a variable or `_` for now — \
+             nested constructor / literal / tuple / record patterns are not \
+             supported yet [feature: nested-payload-patterns]"
+        }
+        Feature::CtorAsFunction => {
+            "a data constructor used as a function value (referenced bare or \
+             partially applied) is not supported yet — apply it to all its \
+             fields at once [feature: ctor-as-function]"
         }
     }
 }

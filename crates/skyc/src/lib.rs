@@ -66,6 +66,8 @@ const ALL_CODES: &[Code] = &[
     sky_diagnostics::SKY_T0004,
     sky_diagnostics::SKY_T0010,
     sky_diagnostics::SKY_T0011,
+    sky_diagnostics::SKY_T0012,
+    sky_diagnostics::SKY_T0013,
     sky_diagnostics::SKY_L0100,
     sky_diagnostics::SKY_L0101,
     sky_diagnostics::SKY_L0102,
@@ -77,6 +79,8 @@ const ALL_CODES: &[Code] = &[
     sky_diagnostics::SKY_L0108,
     sky_diagnostics::SKY_L0110,
     sky_diagnostics::SKY_L0111,
+    sky_diagnostics::SKY_L0112,
+    sky_diagnostics::SKY_L0113,
     sky_diagnostics::SKY_L0200,
     sky_diagnostics::SKY_I0001,
     sky_diagnostics::SKY_I0010,
@@ -755,8 +759,8 @@ mod tests {
 
     #[test]
     fn explain_rejects_unknown_code_with_suggestions() {
-        // One digit off SKY-T0010 / SKY-T0011 — close enough to suggest.
-        let result = explain_lookup("SKY-T0012");
+        // One digit off SKY-T0013 / SKY-T0010..12 — close enough to suggest.
+        let result = explain_lookup("SKY-T0014");
         assert!(
             matches!(&result, Err(CliError::UnknownCode { .. })),
             "unknown code must error, got: {result:?}"
@@ -787,7 +791,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 55, "taxonomy is 55 codes");
+        assert_eq!(ALL_CODES.len(), 59, "taxonomy is 59 codes");
         assert!(
             index.contains("SKY-T0001  type mismatch"),
             "index pairs code with title"

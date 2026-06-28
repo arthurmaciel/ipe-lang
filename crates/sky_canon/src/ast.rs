@@ -10,7 +10,7 @@
 //! Identifiers are interned [`Symbol`]s; located nodes are wrapped in
 //! [`Located`]. Module names are dotted segment vectors (`Main` → `[Main]`).
 
-use sky_diagnostics::Located;
+use sky_diagnostics::{Located, Span};
 use sky_intern::Symbol;
 
 /// A name-resolved module (M0 subset).
@@ -26,15 +26,30 @@ pub struct Module {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Union {
     pub name: Symbol,
+    /// The type variables this union quantifies, in declaration order
+    /// (`a` in `type Maybe a = …`). Empty for a monomorphic union. The order is
+    /// load-bearing: the lowerer carries it through to the IR enum's
+    /// `type_params`, where each parameter's position fixes its Rust generic name
+    /// and aligns with the positional type arguments at every use site.
+    pub vars: Vec<Symbol>,
     pub ctors: Vec<Ctor>,
 }
 
-/// A single resolved constructor: name, positional index, and arity.
+/// A single resolved constructor: name, positional index, arity, declared
+/// payload field types, and source span.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Ctor {
     pub name: Symbol,
     pub index: usize,
     pub arity: usize,
+    /// The constructor's payload field types in declaration order
+    /// (`[a]` for `Just a`, `[Tree, Int, Tree]` for `Node Tree Int Tree`). A
+    /// nullary constructor has an empty list; `args.len() == arity`. A field type
+    /// variable resolves to a [`Type::Var`] naming one of the union's `vars`.
+    pub args: Vec<Type>,
+    /// The constructor declaration's source span, for blame on a lowering gap
+    /// that concerns the declared field types (e.g. an unsupported field shape).
+    pub span: Span,
 }
 
 /// A top-level definition. Mirrors `Can.Def` / `Can.TypedDef`: a binding either

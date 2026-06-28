@@ -1,0 +1,19 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A function value laundered into a constructor payload THROUGH a type variable:
+-- `Mk : a -> Box a` applied as `Mk (\n -> n + 1)` instantiates the payload to
+-- `Int -> Int` at the use site. The generated Rust enum derives
+-- `Clone`/`Debug`/`PartialEq` + `SkyStringify`, none of which a `Box<dyn Fn>`
+-- field satisfies — so accepting it would emit cargo-failing Rust. The lowerer's
+-- region-based gate must reject it cleanly (SKY-L0107) instead. Semantically the
+-- program would print 2 (`(\n -> n + 1) 1`).
+type Box a = Mk a
+
+unwrap : Box (Int -> Int) -> Int
+unwrap b =
+    case b of
+        Mk f -> f 1
+
+main =
+    println (String.fromInt (unwrap (Mk (\n -> n + 1))))

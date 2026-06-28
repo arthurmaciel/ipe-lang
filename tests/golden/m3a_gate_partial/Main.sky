@@ -1,0 +1,11 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A partially-applied payload constructor used as a function value — SKY-L0113.
+type Tree = Leaf | Node Tree Int Tree
+
+half : Tree -> (Tree -> Tree)
+half x = Node Leaf 1
+
+main =
+    println (String.fromInt 0)

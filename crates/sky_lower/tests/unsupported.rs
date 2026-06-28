@@ -628,16 +628,21 @@ fn non_constructor_pattern_in_later_arm() -> DResult<()> {
     // A real union so the first (constructor) arm passes the enum lookup.
     let union = canon::Union {
         name: msg,
+        vars: Vec::new(),
         ctors: vec![
             canon::Ctor {
                 name: inc,
                 index: 0,
                 arity: 0,
+                args: Vec::new(),
+                span: Span::new(0, 0),
             },
             canon::Ctor {
                 name: dec,
                 index: 1,
                 arity: 0,
+                args: Vec::new(),
+                span: Span::new(0, 0),
             },
         ],
     };
