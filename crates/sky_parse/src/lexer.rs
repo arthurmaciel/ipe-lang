@@ -312,6 +312,16 @@ fn lex_char(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     // end of input) is malformed.
     if lx.peek() == Some('\'') {
         lx.advance();
+        // Enforce the single-char invariant the backend relies on: an
+        // unrecognised escape (e.g. `'\q'`) resolves to backslash + char, two
+        // scalar values. Recognised escapes (`\n \t \r \\ \" \' \0`) and plain
+        // chars are all exactly one scalar value, so no valid program regresses.
+        if value.chars().count() != 1 {
+            return Err(Diagnostic::Parse {
+                span: Span::new(lo, lx.offset()),
+                msg: ParseError::MalformedChar,
+            });
+        }
         Ok(Tok::Char(value))
     } else {
         let hi = lx.offset();
