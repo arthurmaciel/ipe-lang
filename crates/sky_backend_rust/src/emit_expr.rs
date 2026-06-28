@@ -97,6 +97,8 @@ fn emit_expr_at(
     let child = depth + 1;
     match expr {
         Expr::Int(n) => Ok(n.to_string()),
+        // The unit value renders as the Rust unit expression `()`.
+        Expr::Unit => Ok("()".to_owned()),
         Expr::Var(sym) => ctx.emit_ident(*sym),
         Expr::Ctor { ty, variant, args } => {
             emit_ctor(ctx, *ty, *variant, args, indent, depth, generics)
@@ -298,17 +300,26 @@ fn emit_match(
     ))
 }
 
-/// Render a pattern to its Rust spelling. Total over the M3a pattern set:
-/// a variable binder (the keyword-mangled name), a wildcard (`_`), or a
-/// constructor pattern (`EnumName::Variant` / `EnumName::Variant(sub0, …)`).
+/// Render a pattern to its Rust spelling. Total over the M3a/M3b-1 pattern set:
+/// a variable binder (the keyword-mangled name), a wildcard (`_`), a constructor
+/// pattern (`EnumName::Variant` / `EnumName::Variant(sub0, …)`), or a tuple
+/// pattern (`(sub0, sub1, …)`).
 ///
-/// Nested constructor sub-patterns recurse; the M3a lowerer rejects them upstream
-/// (only variable / wildcard payload sub-patterns reach here), but the renderer
-/// stays total so an unexpected nesting can never panic.
+/// Nested sub-patterns recurse; the renderer stays total so an unexpected
+/// nesting can never panic.
 fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
     match pat {
         Pat::Var(sym) => ctx.emit_ident(*sym),
         Pat::Wildcard => Ok("_".to_owned()),
+        Pat::Tuple(elems) => {
+            // A tuple pattern destructures element-by-element: `(p0, p1, …)`.
+            // Stays total over any element vector (no arity assumption).
+            let mut subs = Vec::with_capacity(elems.len());
+            for sub in elems {
+                subs.push(render_pat(ctx, sub)?);
+            }
+            Ok(format!("({})", subs.join(", ")))
+        }
         Pat::Ctor { ty, variant, args } => {
             let path = format!("{}::{}", ctx.enum_name(*ty)?, ctx.emit_ident(*variant)?);
             if args.is_empty() {
