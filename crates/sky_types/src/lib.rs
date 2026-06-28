@@ -118,22 +118,45 @@ fn infer_with_budget(
     // emitted type parameter. (Ordering-only flex variables are left generic, as
     // before — they carry no numeric obligation to default.)
     let int_sym = interner.intern("Int")?;
-    for v in &generated.super_vars {
+    for (v, orig_bounds, span) in &generated.super_vars {
         let root = uf.find(*v)?;
-        if let Content::Super {
-            rigid: false,
-            bounds,
-        } = uf.content(root)?
-            && bounds.has_number()
-        {
-            uf.set_content(
-                root,
-                Content::Structure(FlatType::Con {
-                    module: Vec::new(),
-                    name: int_sym,
-                    args: Vec::new(),
-                }),
-            )?;
+        match uf.content(root)? {
+            // An unpinned `Number` flex defaults to `Int` — an untyped
+            // `\a b -> a + b` is `Int`, not an under-determined generic.
+            // Ordering / equality flexes carry no numeric default, so an unpinned
+            // one is left generic (matching the reference compiler).
+            Content::Super {
+                rigid: false,
+                bounds,
+            } if bounds.has_number() => {
+                uf.set_content(
+                    root,
+                    Content::Structure(FlatType::Con {
+                        module: Vec::new(),
+                        name: int_sym,
+                        args: Vec::new(),
+                    }),
+                )?;
+            }
+            // An unpinned ordering / equality flex stays generic. A super var is
+            // never a plain `Flex` / `Rigid` after solving (it merges as a
+            // `Super`, pins to a `Structure`, or adopts a skolem's rigidity as a
+            // rigid `Super`), but those arms are covered for totality and need no
+            // action either.
+            Content::Super { .. } | Content::Flex | Content::Rigid => {}
+            // The variable pinned to a concrete type during solving. Verify —
+            // deeply, against the fully-resolved type — that the type really
+            // supports the operation. The unifier's head pin-check already
+            // cleared a function HEAD; this catches a function NESTED inside a
+            // tuple / record / enum under an equality obligation (Rust cannot
+            // compare it), failing closed with SKY-T0014 instead of emitting
+            // code `cargo` rejects.
+            Content::Structure(_) => {
+                let ty = zonk(&mut uf, budget, root)?;
+                if !concrete_super_ok(interner, *orig_bounds, &ty) {
+                    return Err(super_unsatisfied(interner, *orig_bounds, &ty, *span));
+                }
+            }
         }
     }
 
@@ -216,32 +239,87 @@ fn check_scheme_applications(
     Ok(())
 }
 
-/// Whether a concrete type satisfies the Rust bound a super-typed generic
-/// emits. The emission carries `Copy`, so a non-`Copy` orderable type (`String`)
-/// is excluded even though it supports comparison; a non-concrete type (a bare
-/// variable, a function, a tuple) satisfies nothing.
+/// Whether a concrete type satisfies the Rust bound a super-typed *generic*
+/// emits at a use site. `Number` / `Comparable` emissions carry `Copy`, so a
+/// non-`Copy` orderable type (`String`) is excluded from ordering even though it
+/// supports comparison, and both require a bare scalar primitive. An equality
+/// emission carries only `PartialEq` (no `Copy`), so it admits any equatable
+/// type — every concrete type free of a function ([`ty_is_equatable`]), which
+/// includes `String`, tuples, and enums. A non-concrete type (a bare variable
+/// the obligation escaped into) satisfies nothing — fail-closed, as cross-
+/// binding obligation propagation is not yet supported.
 fn emitted_bound_satisfied(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bool {
-    let Ty::Con { module, name, args } = ty else {
-        return false;
+    let prim = match ty {
+        Ty::Con { module, name, args } if module.is_empty() && args.is_empty() => {
+            interner.resolve(*name)
+        }
+        _ => None,
     };
-    if !module.is_empty() || !args.is_empty() {
-        return false;
+    let number_ok = matches!(prim, Some("Int" | "Float"));
+    let ord_ok = matches!(prim, Some("Int" | "Float" | "Char" | "Bool"));
+    (!bounds.has_number() || number_ok)
+        && (!bounds.has_ord() || ord_ok)
+        && (!bounds.has_eq() || ty_is_equatable(ty))
+}
+
+/// Whether a resolved concrete type satisfies super-type obligations `bounds`
+/// when a variable pinned *directly* to it (a non-generic, concrete use such as
+/// `n == n` on a known type). Mirrors the unifier's head pin-check
+/// ([`crate::unify`]'s `super_concrete_ok`) but over the fully-resolved [`Ty`],
+/// so it rejects a function nested anywhere inside an equated type — the case
+/// the head check defers to here. `String` satisfies ordering (a direct
+/// `"a" > "b"` borrows its operands, needing no `Copy`), unlike the
+/// generic-emission gate [`emitted_bound_satisfied`].
+pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bool {
+    let prim = match ty {
+        Ty::Con { module, name, args } if module.is_empty() && args.is_empty() => {
+            interner.resolve(*name)
+        }
+        _ => None,
+    };
+    let number_ok = matches!(prim, Some("Int" | "Float"));
+    let ord_ok = matches!(prim, Some("Int" | "Float" | "Char" | "String" | "Bool"));
+    (!bounds.has_number() || number_ok)
+        && (!bounds.has_ord() || ord_ok)
+        && (!bounds.has_eq() || ty_is_equatable(ty))
+}
+
+/// Whether a resolved type derives Rust's `PartialEq`: true for every fully
+/// concrete type containing no function anywhere (primitives, unit, tuples,
+/// records, and enums all derive `PartialEq`; a function never does). A bare
+/// type variable is rejected (fail-closed): an equality obligation that escaped
+/// into an enclosing generic is not yet propagated across binding boundaries.
+fn ty_is_equatable(ty: &Ty) -> bool {
+    match ty {
+        Ty::Var(_) | Ty::Fun(_, _) => false,
+        Ty::Unit => true,
+        Ty::Tuple(elems) => elems.iter().all(ty_is_equatable),
+        Ty::Record(fields) => fields.values().all(ty_is_equatable),
+        Ty::Con { args, .. } => args.iter().all(ty_is_equatable),
     }
-    let Some(name) = interner.resolve(*name) else {
-        return false;
-    };
-    let number_ok = matches!(name, "Int" | "Float");
-    let ord_ok = matches!(name, "Int" | "Float" | "Char" | "Bool");
-    (!bounds.has_number() || number_ok) && (!bounds.has_ord() || ord_ok)
 }
 
 /// Build the [`TypeError::SuperTypeUnsatisfied`] (SKY-T0014) for a super-typed
 /// binding used at a type that does not meet its obligations.
 fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span) -> Diagnostic {
-    let class: &str = match (bounds.has_number(), bounds.has_ord()) {
-        (true, true) => "Number + Comparable",
-        (true, false) => "Number",
-        _ => "Comparable",
+    // Name every super-type the variable owes, in a fixed order, joined with
+    // `+` (`Number + Equatable` when a variable is both added and compared for
+    // equality). A bound set always carries at least one obligation at a call
+    // site, so the join is non-empty; the fallback keeps the function total.
+    let mut classes: Vec<&str> = Vec::new();
+    if bounds.has_number() {
+        classes.push("Number");
+    }
+    if bounds.has_ord() {
+        classes.push("Comparable");
+    }
+    if bounds.has_eq() {
+        classes.push("Equatable");
+    }
+    let class = if classes.is_empty() {
+        "Equatable".to_owned()
+    } else {
+        classes.join(" + ")
     };
     let mut namer = VarNamer::new();
     let found = match ty_to_doc(ty, interner, &mut namer) {
@@ -251,7 +329,7 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
     Diagnostic::Type {
         span,
         msg: TypeError::SuperTypeUnsatisfied {
-            class: Box::from(class),
+            class: class.into_boxed_str(),
             found: Box::new(found),
         },
     }

@@ -9,8 +9,17 @@
 //! soundness floor for bounded generics: skyc accepting a program it cannot
 //! lower to compiling Rust is forbidden.
 //!
-//! The Go reference rejects the same program too (its `Number` constraint is not
-//! satisfied by `Bool`); the codes differ but both fail closed.
+//! For the `Number` case the Go reference rejects the same program too (its
+//! `Number` constraint is not satisfied by `Bool`); the codes differ but both
+//! fail closed.
+//!
+//! The `Equatable`-at-a-function case is a *justified divergence* from Go: the
+//! Go backend lowers generic equality to a runtime reflect-based `rt.Eq`, which
+//! quietly accepts a function argument (returning `false`). The Rust backend
+//! instead lowers `==` to the static `PartialEq` operator, which Rust never
+//! derives for a function — so emitting it would fail `cargo`. skyc therefore
+//! rejects equality instantiated at a function type here (SKY-T0014) rather than
+//! reproduce a comparison that has no sound Rust meaning.
 
 use std::path::{Path, PathBuf};
 
@@ -51,6 +60,15 @@ fn number_generic_at_bool_is_sky_t0014() {
     assert_gate(
         "m2d1_gate_unsatisfied",
         "m2d1_gate_unsatisfied_emit",
+        sky_diagnostics::SKY_T0014,
+    );
+}
+
+#[test]
+fn equality_generic_at_function_is_sky_t0014() {
+    assert_gate(
+        "m2d1_gate_eq_function",
+        "m2d1_gate_eq_function_emit",
         sky_diagnostics::SKY_T0014,
     );
 }

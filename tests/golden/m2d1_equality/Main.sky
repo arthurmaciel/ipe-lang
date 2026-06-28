@@ -1,0 +1,26 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- `eq2` compares its two arguments with `==`. Equality works for any type that
+-- is not a function, so the body constrains `a` to the Equatable super-type and
+-- the generic emits a `PartialEq` bound — never an unbounded `T1` the backend
+-- could not compare. Note: no `Copy`, because `==` borrows its operands.
+eq2 : a -> a -> Bool
+eq2 p q = p == q
+
+-- `ne2` exercises the `/=` operator through the same Equatable path.
+ne2 : a -> a -> Bool
+ne2 p q = p /= q
+
+-- Instantiated at Bool through an annotated forwarder, so the bound is exercised
+-- at a second type in one module.
+eqBool : Bool -> Bool -> Bool
+eqBool x y = eq2 x y
+
+main =
+    let same = eq2 21 21
+        diff = ne2 1 2
+        flag = eqBool (0 == 0) (1 == 1)
+        n = if same && diff && flag then 42 else 0
+    in
+    println (String.fromInt n)
