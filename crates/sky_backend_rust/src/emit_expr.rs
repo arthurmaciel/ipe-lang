@@ -10,9 +10,9 @@ use sky_diagnostics::{DResult, Diagnostic, LowerError, Span};
 use sky_intern::Symbol;
 use sky_ir::{BinOp, Callee, Expr, Func, IrType, Match, Pat};
 
+use crate::EmitCtx;
 use crate::emit_types::{GenericScope, render_type};
 use crate::naming::kernel_name;
-use crate::{EmitCtx, is_direct_self_field};
 
 /// The deepest expression nesting the backend will descend before failing fast.
 ///
@@ -168,8 +168,9 @@ fn emit_expr_at(
 
 /// Emit a constructor application. A nullary constructor renders as the bare
 /// path `EnumName::Variant` (byte-identical to M0); a payload constructor renders
-/// `EnumName::Variant(arg0, arg1, …)`. A direct-self-recursive payload position
-/// is wrapped in `Box::new(…)` to balance the boxed enum field. Kept out of the
+/// `EnumName::Variant(arg0, arg1, …)`. A payload position on a type-size cycle
+/// back to its own enum is wrapped in `Box::new(…)` to balance the boxed enum
+/// field (see [`crate::EmitCtx::is_cyclic_self_field`]). Kept out of the
 /// `emit_expr_at` match (`#[inline(never)]`) so its locals don't inflate the
 /// recursive frame.
 #[inline(never)]
@@ -204,9 +205,9 @@ fn emit_ctor(
     let mut parts = Vec::with_capacity(args.len());
     for (arg, field_ty) in args.iter().zip(fields.iter()) {
         let rendered = emit_expr_at(ctx, arg, indent, child, generics)?;
-        // A direct self-edge field is boxed in the enum, so its construction
+        // A cyclic self-edge field is boxed in the enum, so its construction
         // argument is boxed too.
-        if is_direct_self_field(field_ty, ty) {
+        if ctx.is_cyclic_self_field(field_ty, ty) {
             parts.push(format!("Box::new({rendered})"));
         } else {
             parts.push(rendered);
@@ -217,7 +218,7 @@ fn emit_ctor(
 
 /// Emit a `match`. Each arm's head is a constructor pattern (an exhaustiveness
 /// obligation [`sky_ir::Match::new`] guarantees); a payload position binds a
-/// variable or is a wildcard. A direct-self-recursive payload field is boxed in
+/// variable or is a wildcard. A cyclic self-edge payload field is boxed in
 /// the enum, so a variable bound to such a field is unboxed (`let x = *x;`) at the
 /// top of the arm body, giving the binder the enum's own (owned) type rather than
 /// `Box<…>`. Kept out of the `emit_expr_at` match (`#[inline(never)]`) for the
@@ -268,8 +269,8 @@ fn emit_match(
             for (sub, field_ty) in args.iter().zip(fields.iter()) {
                 sub_pats.push(render_pat(ctx, sub)?);
                 // A variable bound to a boxed self-edge field is unboxed so the
-                // body sees the enum's own type, not `Box<Enum>`.
-                if is_direct_self_field(field_ty, *ty)
+                // body sees the payload's own type, not `Box<…>`.
+                if ctx.is_cyclic_self_field(field_ty, *ty)
                     && let Pat::Var(s) = sub
                 {
                     let binder = ctx.emit_ident(*s)?;

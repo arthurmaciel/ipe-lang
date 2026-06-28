@@ -107,8 +107,15 @@ pub(crate) struct EmitCtx<'a> {
     /// `(enum type symbol, variant symbol)` → that variant's declared payload
     /// field types, in source (positional) order. Empty vector for a nullary
     /// variant. Used at construction / pattern sites to box (and un-box) a
-    /// direct-self-recursive field so the emitted Rust enum stays finite-sized.
+    /// recursive field so the emitted Rust enum stays finite-sized.
     variant_fields: BTreeMap<(Symbol, Symbol), Vec<IrType>>,
+    /// Enum type symbol → the field-type lists of all its variants (one inner
+    /// vector per variant, in declaration order). The whole-enum view that
+    /// [`Self::is_cyclic_self_field`] walks to decide whether a payload field
+    /// sits on a type-size cycle back to its own enum — direct (`Node Tree …`)
+    /// or indirect (mutual recursion, or a self-edge routed through a tuple /
+    /// record / another generic's type argument).
+    enum_variants: BTreeMap<Symbol, Vec<Vec<IrType>>>,
     /// Function id → Rust function name (e.g. `update` → `main_update`).
     func_names: BTreeMap<FuncId, String>,
     /// Every distinct record shape synthesised for the program, in emission
@@ -124,6 +131,7 @@ impl<'a> EmitCtx<'a> {
     fn build(interner: &'a Interner, program: &Program) -> DResult<Self> {
         let mut enum_names = BTreeMap::new();
         let mut variant_fields: BTreeMap<(Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
+        let mut enum_variants: BTreeMap<Symbol, Vec<Vec<IrType>>> = BTreeMap::new();
         let mut func_names = BTreeMap::new();
         for module in &program.modules {
             let segs = module
@@ -153,9 +161,12 @@ impl<'a> EmitCtx<'a> {
                         ),
                     });
                 }
+                let mut all_fields = Vec::with_capacity(def.variants.len());
                 for variant in &def.variants {
                     variant_fields.insert((def.name, variant.name), variant.fields.clone());
+                    all_fields.push(variant.fields.clone());
                 }
+                enum_variants.insert(def.name, all_fields);
             }
             for func in &module.funcs {
                 func_names.insert(
@@ -222,6 +233,7 @@ impl<'a> EmitCtx<'a> {
             interner,
             enum_names,
             variant_fields,
+            enum_variants,
             func_names,
             record_structs,
             record_by_fieldset,
@@ -247,6 +259,30 @@ impl<'a> EmitCtx<'a> {
                     ty.as_raw()
                 ),
             })
+    }
+
+    /// Is `field` a payload field of enum `enum_sym` that sits on a type-size
+    /// cycle back to that enum — so the Rust enum is infinite-sized (E0072)
+    /// unless the field is boxed?
+    ///
+    /// This generalises the old direct-self-edge test (`field` *is* the enum's
+    /// own type, `type Tree = … | Node Tree …`) to every cycle the field can
+    /// close: mutual recursion between two enums, and a self-edge routed through
+    /// a tuple (`Node (Tree, Int)`), a record (`Node { left : Tree }`), or
+    /// another generic's type argument (`Node (Maybe Tree)`). The backend wraps
+    /// such a field in `Box<…>` at the declaration and balances that with
+    /// `Box::new` at construction and a deref at pattern binding — boxing at
+    /// least one edge of every cycle, which is what keeps the emitted crate
+    /// finite-sized and matches the Go reference's recursive-payload boxing.
+    ///
+    /// Every *constructible* recursive Sky type routes through an enum (the enum
+    /// supplies the nullary base case), so boxing the cyclic enum-payload edge
+    /// breaks every reachable cycle; a hypothetical pure record/tuple alias
+    /// cycle (no enum on it) is rejected upstream before it can reach the
+    /// backend.
+    pub(crate) fn is_cyclic_self_field(&self, field: &IrType, enum_sym: Symbol) -> bool {
+        let mut visited = BTreeSet::new();
+        type_reaches_enum(field, enum_sym, &self.enum_variants, &mut visited)
     }
 
     /// Every synthesised record struct, in emission order.
@@ -459,20 +495,63 @@ fn collect_record_shapes(
     Ok(())
 }
 
-/// Is `field` a DIRECT self-edge of the enum `enum_sym` — i.e. exactly that
-/// enum's own type (`IrType::Enum { name == enum_sym }`), regardless of its type
-/// arguments?
+/// Does `ty` reach the enum type `target` by following type-size edges —
+/// tuple elements, record fields, an enum's type arguments, and (memoised by
+/// enum name) an enum's own variant payload fields?
 ///
-/// A direct self-edge (`type Tree = … | Node Tree Int Tree`) makes the Rust
-/// enum infinite-sized (E0072) unless the field is boxed, so the backend wraps
-/// it in `Box<…>` at the declaration and balances that with `Box::new` at
-/// construction and a deref at pattern binding. An *indirect* recursion (the
-/// enum reached through a tuple / record / another generic's argument) is NOT a
-/// direct self-edge and is not boxed here — a documented M3a residual, mirroring
-/// the Go-reference Rust backend's `boxIfRecursive`, which boxes only the
-/// top-level self-edge.
-pub(crate) fn is_direct_self_field(field: &IrType, enum_sym: Symbol) -> bool {
-    matches!(field, IrType::Enum { name, .. } if *name == enum_sym)
+/// A `Box<…>` and a first-class function value (`Box<dyn Fn …>`) are already a
+/// pointer-sized indirection, so traversal does NOT descend through
+/// [`IrType::Fun`]; those edges can never make a type infinite-sized.
+///
+/// `visited` memoises the per-enum *definition* walk (a name-keyed, type-arg-
+/// independent set of fields) so a recursive enum is explored once. The
+/// use-site type arguments are checked on every visit (NOT memoised), because
+/// `Maybe Int` and `Maybe Tree` share the enum name `Maybe` but carry different
+/// arguments — memoising under the name would drop the `Tree` argument on the
+/// second visit.
+fn type_reaches_enum(
+    ty: &IrType,
+    target: Symbol,
+    enums: &BTreeMap<Symbol, Vec<Vec<IrType>>>,
+    visited: &mut BTreeSet<Symbol>,
+) -> bool {
+    match ty {
+        IrType::Enum { name, args } => {
+            if *name == target {
+                return true;
+            }
+            if args
+                .iter()
+                .any(|a| type_reaches_enum(a, target, enums, visited))
+            {
+                return true;
+            }
+            // Descend into this enum's own variant payload fields once.
+            if visited.insert(*name)
+                && let Some(variants) = enums.get(name)
+            {
+                return variants
+                    .iter()
+                    .flatten()
+                    .any(|f| type_reaches_enum(f, target, enums, visited));
+            }
+            false
+        }
+        IrType::Tuple(elems) => elems
+            .iter()
+            .any(|e| type_reaches_enum(e, target, enums, visited)),
+        IrType::Record(map) => map
+            .values()
+            .any(|v| type_reaches_enum(v, target, enums, visited)),
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Unit
+        | IrType::TaskUnit
+        | IrType::Fun(_, _)
+        | IrType::Generic(_) => false,
+    }
 }
 
 /// Does this type contain an [`IrType::Generic`] anywhere (a field that is — or

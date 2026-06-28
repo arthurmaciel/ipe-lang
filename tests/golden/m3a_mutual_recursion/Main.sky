@@ -1,0 +1,23 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Mutually-recursive ADTs: each enum's payload field is the *other* enum, so the
+-- type-size cycle Even -> Odd -> Even is closed only through enum-payload edges.
+-- The backend boxes at least one edge of the cycle so the Rust enums stay
+-- finite-sized.
+type Even = EZero | ESucc Odd
+type Odd = OSucc Even
+
+countOdd : Odd -> Int
+countOdd o =
+    case o of
+        OSucc e -> 1 + countEven e
+
+countEven : Even -> Int
+countEven e =
+    case e of
+        EZero -> 0
+        ESucc o -> 1 + countOdd o
+
+main =
+    println (String.fromInt (countOdd (OSucc (ESucc (OSucc (ESucc (OSucc EZero)))))))

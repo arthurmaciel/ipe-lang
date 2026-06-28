@@ -543,6 +543,10 @@ const fn feature_label(f: Feature) -> &'static str {
              partially applied) is not supported yet — apply it to all its \
              fields at once [feature: ctor-as-function]"
         }
+        Feature::CtorPayloadFunction => {
+            "storing a function value in a constructor payload is not supported \
+             yet [feature: ctor-payload-function]"
+        }
     }
 }
 
