@@ -1502,7 +1502,29 @@ impl<'a> Lowerer<'a> {
                 })?;
                 self.lower_record_pat(fields, ty, pat.span)
             }
+            // An `inner as name` over an irrefutable destructure binds BOTH the
+            // whole value (`name`) and the inner shape. The inner is lowered
+            // against the SAME `value` region — an alias does not change the
+            // scrutinee's type — so a nested record still recovers its full
+            // field set. Lowers to Rust's binding-with-subpattern
+            // `name @ <inner>`.
+            canon::Pattern_::PAlias(inner, name) => Ok(Pat::Alias(
+                Box::new(self.lower_binder_pat(inner, value)?),
+                name.value,
+            )),
             _ => Self::lower_destructure_pat(pat),
+        }
+    }
+
+    /// Does this `case`-arm head destructure a product (tuple or record),
+    /// possibly under one or more `as` aliases? Such a single arm is an
+    /// irrefutable binding rather than an enum match. Peels `PAlias` because
+    /// `(a, b) as whole` is just as irrefutable as `(a, b)`.
+    fn is_destructure_head(pat: &canon::Pattern_) -> bool {
+        match pat {
+            canon::Pattern_::PTuple(_) | canon::Pattern_::PRecord(_) => true,
+            canon::Pattern_::PAlias(inner, _) => Self::is_destructure_head(&inner.value),
+            _ => false,
         }
     }
 
@@ -1575,13 +1597,11 @@ impl<'a> Lowerer<'a> {
             .ok_or_else(|| bug("sky_lower::lower_case", "empty case expression"))?;
         // A tuple- or record-pattern arm is an irrefutable destructure, not an
         // enum match. Exactly one such arm (`case (1, 2) of (a, b) -> …`,
-        // `case r of { x, y } -> …`) lowers to a `Destructure` binding rather
-        // than an `Expr::Match`. More than one arm would need product
-        // exhaustiveness, the tuple-pattern gap (SKY-L0115).
-        if matches!(
-            &first.pat.value,
-            canon::Pattern_::PTuple(_) | canon::Pattern_::PRecord(_)
-        ) {
+        // `case r of { x, y } -> …`, `case p of (a, b) as whole -> …`) lowers
+        // to a `Destructure` binding rather than an `Expr::Match`. The head is
+        // a destructure even under one or more `as` aliases. More than one arm
+        // would need product exhaustiveness, the tuple-pattern gap (SKY-L0115).
+        if Self::is_destructure_head(&first.pat.value) {
             if branches.len() != 1 {
                 return Err(unsupported(first.pat.span, Feature::TuplePatternMatch));
             }
