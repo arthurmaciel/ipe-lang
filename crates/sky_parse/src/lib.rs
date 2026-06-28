@@ -818,9 +818,10 @@ mod tests {
 
     #[test]
     fn parses_parametric_alias_capturing_its_vars() {
-        // The parser does not reject a parametric alias — it captures the vars so
-        // canonicalisation can fail-fast with a precise span. `alias` stays a soft
-        // keyword: a union is still distinguished from a `type alias`.
+        // The parser captures a parametric alias's declared vars so
+        // canonicalisation can substitute use-site arguments and expand the body.
+        // `alias` stays a soft keyword: a union is still distinguished from a
+        // `type alias`.
         let mut i = Interner::new();
         let src = "module Main exposing (v)\n\
                    type alias Pair a = a\n\n\
