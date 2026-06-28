@@ -365,7 +365,10 @@ pub enum Feature {
     CasePatternKinds,
     /// Binary operators other than `+`/`-`. [SKY-L0101]
     BinOps,
-    /// Type variables in annotations. [SKY-L0102]
+    /// A value whose type stays fully polymorphic — the solver never pinned it
+    /// to a concrete instance, so the lowerer cannot monomorphise it (M2a emits
+    /// generic *functions*, but cannot yet represent an under-determined
+    /// polymorphic *value*). [SKY-L0102]
     Polymorphism,
     /// Function types in argument/return position of a value annotation. [SKY-L0103]
     HigherOrderValues,

@@ -195,22 +195,65 @@ fn function_type_in_annotation_argument_lowers_to_fun() -> DResult<()> {
     Ok(())
 }
 
+/// M2a: a fully-parametric annotation lowers to a *generic* function — the
+/// binding's free type variables become `type_params`, and each annotation
+/// `Type::Var` becomes an `IrType::Generic`. `identity : a -> a ; identity x = x`
+/// emits `type_params = [a]`, param `(x, Generic(a))`, return `Generic(a)`. This
+/// is the positive counterpart of the old "polymorphism rejected" gate, now
+/// closed for structural pass-through variables.
 #[test]
-fn type_variable_in_annotation() -> DResult<()> {
+fn parametric_annotation_lowers_to_generic_func() -> DResult<()> {
     let mut i = Interner::new();
-    let f = i.intern("f")?;
+    let identity = i.intern("identity")?;
     let a = i.intern("a")?;
-    // f : a  — M0 is monomorphic.
+    let x = i.intern("x")?;
+    // identity : a -> a ; identity x = x
     let def = canon::Def::Typed {
-        name: Located::new(Span::new(40, 41), f),
+        name: Located::new(Span::new(40, 48), identity),
         free_vars: vec![a],
-        patterns: Vec::new(),
-        body: int(Span::new(42, 43), 0),
-        ty: canon::Type::Var(a),
+        patterns: vec![Located::new(Span::new(49, 50), canon::Pattern_::PVar(x))],
+        body: Located::new(Span::new(53, 54), canon::Expr_::VarLocal(x)),
+        ty: canon::Type::Lambda(Box::new(canon::Type::Var(a)), Box::new(canon::Type::Var(a))),
     };
-    // No parameters → the return type is blamed via the binding's name span.
+    let res = run(Vec::new(), vec![def], BTreeMap::new(), &mut i);
+    let func = single_func(&res);
+    assert_eq!(
+        func.map(|f| f.type_params.clone()),
+        Some(vec![a]),
+        "identity quantifies exactly [a]: {res:?}"
+    );
+    assert_eq!(
+        func.and_then(|f| f.params.first()).map(|(_, t)| t),
+        Some(&IrType::Generic(a)),
+        "the parameter type lowers to Generic(a): {res:?}"
+    );
+    assert_eq!(
+        func.map(|f| f.ret.clone()),
+        Some(IrType::Generic(a)),
+        "the return type lowers to Generic(a): {res:?}"
+    );
+    Ok(())
+}
+
+/// A type variable left unresolved in *value* position (the solver never pinned
+/// it to a concrete instance — e.g. an under-determined polymorphic value) is an
+/// M2a feature gap, not an invariant violation: it surfaces as `SKY-L0102`
+/// (`Feature::Polymorphism`) carrying the binding span, never a `CompilerBug`.
+#[test]
+fn unresolved_type_variable_in_value_position() -> DResult<()> {
+    let mut i = Interner::new();
+    let g = i.intern("g")?;
+    // An untyped nullary binding whose inferred type is a bare variable.
+    let def = canon::Def::Untyped {
+        name: Located::new(Span::new(40, 41), g),
+        patterns: Vec::new(),
+        body: int(Span::new(44, 45), 0),
+    };
+    let mut env = BTreeMap::new();
+    env.insert(g, Ty::Var(0));
+    // No parameters → the binding's name span is blamed.
     assert_unsupported(
-        run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
+        run(Vec::new(), vec![def], env, &mut i),
         Feature::Polymorphism,
         SKY_L0102,
         Span::new(40, 41),

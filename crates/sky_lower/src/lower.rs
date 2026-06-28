@@ -226,17 +226,31 @@ impl<'a> Lowerer<'a> {
         let sig_span = def.name().span;
         match def {
             canon::Def::Typed {
-                patterns, body, ty, ..
+                patterns,
+                body,
+                ty,
+                free_vars,
+                ..
             } => {
-                let (params, ret) = self.split_typed_sig(ty, patterns, sig_span)?;
+                // M2a: a typed binding's free type variables are the type
+                // parameters it quantifies. Every variable appearing in the
+                // annotation is one of them (canon collects the complete set,
+                // ordered deterministically by name), so each `Type::Var` in the
+                // signature lowers to an `IrType::Generic` and the backend emits
+                // `pub fn name<T1, T2, ..>(..)`. The body of a well-typed
+                // parametric binding uses these variables only structurally
+                // (pure pass-through) — the type checker's rigid-skolem gate
+                // already rejects any body that pins a variable to a concrete or
+                // super-typed shape (`f : a -> a ; f x = x + 1`), so a function
+                // that reaches lowering with `free_vars` is a true parametric
+                // pass-through and never needs a Rust trait bound. An empty
+                // `free_vars` keeps the function monomorphic, byte-identical to
+                // M0/M1.
+                let (params, ret) = self.split_typed_sig(ty, patterns, free_vars)?;
                 Ok(Func {
                     id,
                     name,
-                    // M2a polymorphism is not yet surfaced by the lowerer; every
-                    // function it emits is monomorphic for now. The IR carries
-                    // the field so the backend can emit generics once the
-                    // type-variable detection lands.
-                    type_params: Vec::new(),
+                    type_params: free_vars.clone(),
                     params,
                     ret,
                     body: self.lower_expr(body)?,
@@ -267,12 +281,15 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Split a typed binding's arrow annotation into one [`IrType`] per
-    /// parameter pattern plus the trailing return type.
+    /// parameter pattern plus the trailing return type. `generics` is the
+    /// binding's quantified type-variable set ([`canon::Def::Typed::free_vars`]),
+    /// so each annotation `Type::Var` it contains lowers to an
+    /// [`IrType::Generic`] rather than being rejected as monomorphic.
     fn split_typed_sig(
         &self,
         ty: &canon::Type,
         patterns: &[canon::Pattern],
-        sig_span: Span,
+        generics: &[Symbol],
     ) -> DResult<(Vec<(Symbol, IrType)>, IrType)> {
         let mut cur = ty;
         let mut params = Vec::with_capacity(patterns.len());
@@ -289,15 +306,15 @@ impl<'a> Lowerer<'a> {
                     "annotation has fewer arrows than parameters",
                 ));
             };
-            // The argument type describes this parameter; blame its pattern.
+            // The argument type describes this parameter.
             params.push((
                 Self::pattern_var(pat)?,
-                self.ir_type_from_canon(arg, pat.span)?,
+                self.ir_type_from_canon(arg, generics)?,
             ));
             cur = rest.as_ref();
         }
-        // The trailing type is the return type; blame the binding signature.
-        Ok((params, self.ir_type_from_canon(cur, sig_span)?))
+        // The trailing type is the return type.
+        Ok((params, self.ir_type_from_canon(cur, generics)?))
     }
 
     const fn pattern_var(pat: &canon::Pattern) -> DResult<Symbol> {
@@ -311,8 +328,15 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Convert a canonical annotation type (no `Task`/unit appears in M0
-    /// annotations) into an [`IrType`].
-    fn ir_type_from_canon(&self, t: &canon::Type, span: Span) -> DResult<IrType> {
+    /// annotations) into an [`IrType`]. `generics` is the enclosing binding's
+    /// quantified type-variable set: a `Type::Var` it contains is a parametric
+    /// pass-through and lowers to [`IrType::Generic`] (M2a).
+    ///
+    /// Every failure here is an internal-invariant violation (a `Type::Con` that
+    /// resolves to neither a builtin nor a declared union, or a `Type::Var`
+    /// missing from the binding's free-variable set), so no node `span` is
+    /// threaded — those are [`bug`]s, not span-carrying feature gaps.
+    fn ir_type_from_canon(&self, t: &canon::Type, generics: &[Symbol]) -> DResult<IrType> {
         match t {
             canon::Type::Con { name, .. } => self.con_name_to_ir(*name),
             // A function type in argument/return position of a value annotation
@@ -322,15 +346,29 @@ impl<'a> Lowerer<'a> {
                 let mut params = Vec::new();
                 let mut cur = t;
                 while let canon::Type::Lambda(arg, rest) = cur {
-                    params.push(self.ir_type_from_canon(arg, span)?);
+                    params.push(self.ir_type_from_canon(arg, generics)?);
                     cur = rest.as_ref();
                 }
-                let ret = self.ir_type_from_canon(cur, span)?;
+                let ret = self.ir_type_from_canon(cur, generics)?;
                 Ok(IrType::Fun(params, Box::new(ret)))
             }
-            // A type variable in an annotation (`id : a -> a`); M0 is monomorphic.
-            // [SKY-L0102, feature: polymorphism]
-            canon::Type::Var(_) => Err(unsupported(span, Feature::Polymorphism)),
+            // A type variable in an annotation (`id : a -> a`). When the
+            // enclosing binding quantifies it (M2a — a fully-parametric
+            // function), it lowers to an [`IrType::Generic`] pass-through. Every
+            // variable appearing in the annotation is in `free_vars` by
+            // construction, so a variable absent from `generics` here means canon
+            // failed to collect the binding's complete free-variable set — a
+            // violated invariant, not a user-reachable feature gap.
+            canon::Type::Var(v) => {
+                if generics.contains(v) {
+                    Ok(IrType::Generic(*v))
+                } else {
+                    Err(bug(
+                        "sky_lower::ir_type_from_canon",
+                        "annotation type variable not in the binding's free-variable set",
+                    ))
+                }
+            }
         }
     }
 
@@ -472,12 +510,18 @@ impl<'a> Lowerer<'a> {
                 let ret = self.ir_type_from_ty(cur, span)?;
                 Ok(IrType::Fun(params, Box::new(ret)))
             }
-            // The solver left a flexible variable unresolved for a concrete
-            // binding: it should have been fully zonked. An invariant violation.
-            Ty::Var(_) => Err(bug(
-                "sky_lower::ir_type_from_ty",
-                "unresolved type variable in value position",
-            )),
+            // A type variable in value position. With M2a, a binding can be
+            // genuinely parametric, so a region the solver left as a bare
+            // variable is an under-determined polymorphic value the lowerer
+            // cannot monomorphise here yet — e.g. a polymorphic function
+            // referenced as a first-class value whose type never gets pinned to a
+            // concrete instance at the use site. That is a real M2a feature gap
+            // (the value's Rust type would itself have to be generic in a
+            // position the backend does not yet model), not an invariant
+            // violation, so it surfaces as a `Diagnostic::Lower` with the span —
+            // never a `CompilerBug` for well-typed input.
+            // [SKY-L0102, feature: polymorphism]
+            Ty::Var(_) => Err(unsupported(span, Feature::Polymorphism)),
         }
     }
 

@@ -51,7 +51,7 @@ Ill-formed Sky source must **fail fast** with **precise, informative, helpful** 
 | SKY-T0011 | Type | redundant case branch | Two arms cover the same constructor (or an arm is unreachable). Warning severity; names the duplicated constructor with the arm span. User-facing analogue of the lowerer's duplicate-arm ICE. |
 | SKY-L0100 | Lower | pattern kind not supported yet | A case arm uses a wildcard/variable/literal pattern; M0 matches only nullary constructor patterns. [feature: case-pattern-kinds] |
 | SKY-L0101 | Lower | operator not supported yet | A binary operator other than '+'/'-' is used ('*','/','==','++'). Reported with the operator's span; payload carries the operator. [feature: binops] |
-| SKY-L0102 | Lower | polymorphic type variables not supported yet | A type annotation contains a type variable ('id : a -> a'); M0 is monomorphic. [feature: polymorphism] |
+| SKY-L0102 | Lower | polymorphic value's type could not be determined | A value stays fully polymorphic — the solver never pinned it to a concrete instance (e.g. 'let f = identity' with f never applied), so the lowerer cannot monomorphise it. M2a emits generic functions, but cannot yet represent an under-determined polymorphic value. [feature: polymorphism] |
 | SKY-L0103 | Lower | function-valued parameters/returns not supported yet | A function type appears in argument/return position of a value annotation. [feature: higher-order-values] |
 | SKY-L0104 | Lower | only Task () is supported yet | A Task type other than 'Task ()' is used ('Task Int'). [feature: task-results] |
 | SKY-L0105 | Lower | parameter destructuring not supported yet | A function parameter is a non-variable pattern ('f (Just x) ='); M0 params must be plain names. [feature: param-patterns] |

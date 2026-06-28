@@ -220,7 +220,7 @@ pub fn title(c: Code) -> &'static str {
         SKY_T0012 => "this record has no such field",
         SKY_L0100 => "pattern kind not supported yet",
         SKY_L0101 => "operator not supported yet",
-        SKY_L0102 => "polymorphic type variables not supported yet",
+        SKY_L0102 => "polymorphic value's type could not be determined",
         SKY_L0103 => "function-valued parameters/returns not supported yet",
         SKY_L0104 => "only Task () is supported yet",
         SKY_L0105 => "parameter destructuring not supported yet",

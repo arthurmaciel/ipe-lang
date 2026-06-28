@@ -1,0 +1,22 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A fully-parametric identity: the type variable `a` is used structurally
+-- (pure pass-through), so it lowers to a Rust generic `fn ...<T1>(x: T1) -> T1`.
+identity : a -> a
+identity x = x
+
+-- Two type variables, the first returned: `const x _ = x`.
+const : a -> b -> a
+const x y = x
+
+-- A higher-order parametric function: applies its function-typed argument.
+apply : (a -> b) -> a -> b
+apply f x = f x
+
+main =
+    let n = identity 40 in
+    let flag = identity (1 == 1) in
+    let c = const 2 (5 == 5) in
+    let r = apply (\k -> k + 0) (if flag then n + c else n) in
+    println (String.fromInt r)
