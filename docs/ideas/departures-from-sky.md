@@ -105,3 +105,41 @@ All three are **runtime-side and depart from upstream Sky's coupling**, so they 
 mirror/parity machinery is in place. Revisit when: (a) the IR + multi-backend
 boundary is proven, and (b) we are ready to *design* rather than *mirror* — at
 which point each becomes a real divergence-ledger entry with its own tests.
+
+## Idea 4 — Deep nested-record-update sugar `{ r | a.b.c = v }` 🔬🧊
+
+**Goal:** a concise deep-update form, since the manual nested form repeats the
+access path at every level and gets noisy at depth 3+:
+```elm
+-- manual (works today on concrete records; parity-preserving)
+{ model | user = { model.user | profile = { model.user.profile | bio = newBio } } }
+-- proposed sugar
+{ model | user.profile.bio = newBio }
+```
+
+**Why it's a departure:** upstream Sky follows Elm, which has NO deep-update
+syntax. Adding it is a deliberate Sky-Rust **divergence** (a *superset* of the
+grammar), so it must be documented and gated — never allowed to silently
+disagree with upstream behaviour.
+
+**Shape of the work (small, self-contained):**
+- Parse a dotted field-chain on an update LHS: `field (. field)* = expr`.
+- **Desugar in canon** into the existing nested `update`+`access` form (the
+  manual example above) — so types/lower/backend see ONLY the primitives we
+  already support; zero new IR, zero new codegen. Pure front-end sugar.
+- Multi-field at the same prefix may share the path (optional optimization).
+
+**Constraints / gates:**
+- **Static path only** — the LHS must be a literal field chain; no computed or
+  conditional paths.
+- Works wherever the underlying nested `update`+`access` works: concrete records
+  **now**; generic records once `SKY-L0111` (generic-record-update gate) is
+  lifted in M2d.
+- Since it desugars to parity-sound primitives, runtime behaviour is identical to
+  the manual form — the only divergence is the *accepted grammar*. Record it in
+  the parity ledger as "intentional surface extension" if adopted.
+
+**Disposition:** filed (user opted in 2026-06-28). Implement as a canon-level
+desugaring after the core language + patterns settle (post-M3), low-risk; not a
+blocker for anything. Depth 1–2 is already fine via the manual form, so priority
+is low.
