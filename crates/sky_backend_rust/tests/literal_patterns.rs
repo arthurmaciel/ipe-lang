@@ -10,9 +10,9 @@
 //!   subpattern form `name @ <inner>`.
 //!
 //! The literal cases appear here as constructor-payload SUB-patterns so they
-//! flow through `render_pat` (the case-arm head stays a constructor under M3a's
-//! exhaustiveness contract; same-top-constructor literal discrimination — `Just 0`
-//! vs `Just n` — is M3b-4 / SKY-L0116 and lands with the decision-tree compiler).
+//! flow through `render_pat` (same-top-constructor literal discrimination —
+//! `Wrap 0` vs `Wrap n` — is now lowered one arm per source arm; its end-to-end
+//! regression lives in the `golden_m3b4_two_same_ctor` test).
 //! They are render-only assertions: a single literal sub-pattern is not an
 //! exhaustive cover of its scrutinee axis in Rust, so these programs are not
 //! built — the literal's flat-arm SPELLING is what CORE pins. Exhaustiveness +

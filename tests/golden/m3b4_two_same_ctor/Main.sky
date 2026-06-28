@@ -1,0 +1,20 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Two `case` arms head-match the SAME top constructor (`Wrap`) and discriminate
+-- on a nested LITERAL sub-pattern: `Wrap 0` versus `Wrap n`. With the prior
+-- one-arm-per-constructor restriction lifted, each arm lowers to its own Rust
+-- `match` arm in source order; `Wrap n` binds the remaining ints and `Empty`
+-- covers the nullary constructor.
+type Box a = Wrap a | Empty
+
+classify : Box Int -> Int
+classify b =
+    case b of
+        Wrap 0 -> 100
+        Wrap n -> n
+        Empty -> 9
+
+-- 100 + 5 + 9 = 114, matching the Go reference compiler.
+main =
+    println (String.fromInt (classify (Wrap 0) + classify (Wrap 5) + classify Empty))

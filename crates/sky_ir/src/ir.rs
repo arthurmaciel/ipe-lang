@@ -474,6 +474,27 @@ pub fn is_irrefutable(pat: &Pat) -> bool {
     }
 }
 
+/// Whether a pattern's HEAD is a constructor — a [`Pat::Ctor`] directly, or an
+/// alias (`name @ <inner>`) whose inner pattern is itself constructor-headed.
+/// Used by [`Match::new_flat`] to recognise a constructor-discrimination arm set
+/// (where coverage is proven by the upstream enum exhaustiveness check) as a
+/// distinct case from an open-literal cover (which needs a trailing catch-all).
+#[must_use]
+pub fn is_ctor_headed(pat: &Pat) -> bool {
+    match pat {
+        Pat::Ctor { .. } => true,
+        Pat::Alias(inner, _) => is_ctor_headed(inner),
+        Pat::Wildcard
+        | Pat::Var(_)
+        | Pat::Int(_)
+        | Pat::Bool(_)
+        | Pat::Char(_)
+        | Pat::Str(_)
+        | Pat::Tuple(_)
+        | Pat::Record(_) => false,
+    }
+}
+
 /// An exhaustive case analysis over an enum scrutinee.
 ///
 /// Fields are private: the sole way to obtain a `Match` is [`Match::new`],
@@ -486,17 +507,31 @@ pub struct Match {
 }
 
 impl Match {
-    /// Build an exhaustive `Match`.
+    /// Build a constructor-headed `Match` from an ORDERED arm list.
     ///
     /// `variants` is the complete set of constructors of the scrutinee's enum.
-    /// The arm set is accepted only when it covers exactly that set, with no
-    /// duplicate, unknown, or missing variant.
+    /// Every arm head is a constructor pattern, and the same top-level
+    /// constructor MAY appear in more than one arm — those arms discriminate on
+    /// their nested sub-patterns (`Som (Som x)`, `Som Non`, `Non`) and Rust's
+    /// `match` resolves the overlap and ordering natively. Arms are kept in
+    /// source order; the renderer emits them one-to-one.
+    ///
+    /// Exhaustiveness over the nested shape is proven UPSTREAM by the type
+    /// phase's usefulness/Maranget analysis (SKY-T0010), which runs before
+    /// lowering, so a non-exhaustive `case` never reaches this constructor. The
+    /// check here is a cheap NECESSARY-condition backstop only: every variant of
+    /// the enum must appear as some arm's top constructor, and no arm may name a
+    /// constructor outside the enum. A variant wholly absent from the top
+    /// constructors guarantees non-exhaustiveness, so it is a genuine internal
+    /// invariant violation; duplicate top constructors are the normal nested-
+    /// discrimination shape and are accepted.
     ///
     /// # Errors
     ///
-    /// Returns [`Diagnostic::CompilerBug`] when the arms do not form an
-    /// exhaustive, non-redundant cover of `variants` — an internal invariant
-    /// violation the lowerer must never produce.
+    /// Returns [`Diagnostic::CompilerBug`] when an arm head is not a constructor,
+    /// an arm names a constructor not in `variants`, or some variant is missing
+    /// from the top constructors — each an internal invariant violation the
+    /// lowerer must never produce.
     pub fn new(scrutinee: Expr, arms: Vec<Arm>, variants: &[Symbol]) -> DResult<Self> {
         let expected: BTreeSet<Symbol> = variants.iter().copied().collect();
 
@@ -504,9 +539,9 @@ impl Match {
         for arm in &arms {
             // The case-arm head is always a constructor pattern (payload binders
             // are sub-patterns). A bare variable / wildcard whole-scrutinee arm
-            // is not an M3a shape, so the lowerer never produces one here — a
-            // non-ctor arm head is an internal invariant violation, surfaced as
-            // a `CompilerBug` rather than silently skewing the coverage count.
+            // routes through `new_flat`, so a non-ctor arm head here is an
+            // internal invariant violation, surfaced as a `CompilerBug` rather
+            // than silently skewing the coverage set.
             let Pat::Ctor { variant, .. } = &arm.pat else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_ir::Match::new",
@@ -523,19 +558,16 @@ impl Match {
                     ),
                 });
             }
-            if !covered.insert(variant) {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "sky_ir::Match::new",
-                    detail: format!("duplicate match arm for variant {}", variant.as_raw()),
-                });
-            }
+            // A repeated top constructor is the nested-discrimination shape
+            // (`Som (Som x)` then `Som Non`); the set insert ignores the repeat.
+            covered.insert(variant);
         }
 
         if covered != expected {
             return Err(Diagnostic::CompilerBug {
                 where_: "sky_ir::Match::new",
                 detail: format!(
-                    "non-exhaustive match: covered {} of {} variants",
+                    "non-exhaustive match: top constructors cover {} of {} variants",
                     covered.len(),
                     expected.len()
                 ),
@@ -548,25 +580,35 @@ impl Match {
         })
     }
 
-    /// Build a FLAT refutable `match` — the M3b-3 shape whose arm heads are
+    /// Build a FLAT refutable `match` from an ORDERED arm list whose heads are
     /// literals (`0` / `'a'` / `"hi"` / `True` / `False`), wildcards / variables,
-    /// alias binders, or constructors, in any mix. Unlike [`Match::new`] (which
-    /// proves coverage against a known enum's variant set), exhaustiveness here is
-    /// proven STRUCTURALLY, so the emitted Rust `match` can never fall through:
+    /// alias binders, or constructors, in any mix. Arms are kept in source order;
+    /// the renderer emits them one-to-one, so several arms may discriminate on the
+    /// same top-level constructor via their nested sub-patterns.
+    ///
+    /// Unlike [`Match::new`] (the all-constructor path), this path admits open
+    /// literal types (`Int` / `Char` / `String`) whose coverage cannot be proven
+    /// from a finite variant set. Exhaustiveness is therefore proven UPSTREAM by
+    /// the type phase's usefulness/Maranget analysis (SKY-T0010), which runs
+    /// before lowering, so a non-exhaustive `case` never reaches this constructor.
+    ///
+    /// The backstop here is a cheap NECESSARY-condition check — the arm set is
+    /// accepted when it is structurally guaranteed to cover its scrutinee:
     ///
     /// * a trailing IRREFUTABLE arm (`_`, a variable, or an alias whose inner
     ///   pattern is irrefutable) matches every remaining value, OR
-    /// * the arms are a complete `Bool` cover (`True` and `False` both present).
+    /// * the arms are a complete `Bool` cover (`True` and `False` both present), OR
+    /// * every arm head is constructor-shaped (a constructor, or an alias over
+    ///   one): the scrutinee is then a finite enum whose coverage the upstream
+    ///   Maranget check already proved, so no open-literal gap can hide here.
     ///
-    /// The type phase ([`crate`]-external exhaustiveness, SKY-T0010) has already
-    /// proven the Sky `case` exhaustive before the lowerer calls this, so a shape
-    /// that satisfies neither structural rule is an internal invariant violation,
-    /// surfaced as a [`Diagnostic::CompilerBug`] rather than emitted as a Rust
-    /// `match` that rustc would reject with E0004.
+    /// An arm set matching none of these (an open-literal cover with no trailing
+    /// catch-all) would be genuinely non-exhaustive, so it is a `CompilerBug`
+    /// rather than a Rust `match` rustc would reject with E0004.
     ///
     /// # Errors
-    /// [`Diagnostic::CompilerBug`] when `arms` is empty or not structurally
-    /// exhaustive.
+    /// [`Diagnostic::CompilerBug`] when `arms` is empty or none of the backstop
+    /// conditions hold.
     pub fn new_flat(scrutinee: Expr, arms: Vec<Arm>) -> DResult<Self> {
         let Some(last) = arms.last() else {
             return Err(Diagnostic::CompilerBug {
@@ -578,11 +620,18 @@ impl Match {
         let bool_complete = arms.iter().all(|a| matches!(a.pat, Pat::Bool(_)))
             && arms.iter().any(|a| matches!(a.pat, Pat::Bool(true)))
             && arms.iter().any(|a| matches!(a.pat, Pat::Bool(false)));
-        if !trailing_catch_all && !bool_complete {
+        // Constructor-shaped heads (a constructor, or an alias whose inner is one)
+        // mean the scrutinee is a finite enum; the upstream Maranget check proved
+        // its coverage, so an alias-over-constructor discrimination set with no
+        // trailing catch-all (`Som (Som x) as w` then `Som Non` then `Non`) is
+        // still sound here.
+        let all_ctor_headed = arms.iter().all(|a| is_ctor_headed(&a.pat));
+        if !trailing_catch_all && !bool_complete && !all_ctor_headed {
             return Err(Diagnostic::CompilerBug {
                 where_: "sky_ir::Match::new_flat",
                 detail: "flat match is not structurally exhaustive (no trailing \
-                         catch-all and not a complete Bool cover)"
+                         catch-all, not a complete Bool cover, and not a \
+                         constructor-headed cover)"
                     .to_owned(),
             });
         }
@@ -683,10 +732,52 @@ mod tests {
     }
 
     #[test]
-    fn match_new_rejects_duplicate_arm() -> DResult<()> {
+    fn match_new_accepts_duplicate_top_ctor_with_full_cover() -> DResult<()> {
         let mut i = Interner::new();
         let (ty, inc, dec) = msg_enum(&mut i)?;
 
+        // Two arms head-matching the same top constructor (`Increment`) is the
+        // nested-discrimination shape; combined with the `Decrement` arm the top
+        // constructors cover the whole enum, so the ordered arm list is accepted.
+        let arms = vec![
+            Arm {
+                pat: Pat::Ctor {
+                    ty,
+                    variant: inc,
+                    args: vec![],
+                },
+                body: Expr::Int(0),
+            },
+            Arm {
+                pat: Pat::Ctor {
+                    ty,
+                    variant: inc,
+                    args: vec![],
+                },
+                body: Expr::Int(1),
+            },
+            Arm {
+                pat: Pat::Ctor {
+                    ty,
+                    variant: dec,
+                    args: vec![],
+                },
+                body: Expr::Int(2),
+            },
+        ];
+        let r = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec])?;
+        assert_eq!(r.arms().len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn match_new_rejects_missing_top_ctor_despite_duplicate() -> DResult<()> {
+        let mut i = Interner::new();
+        let (ty, inc, dec) = msg_enum(&mut i)?;
+
+        // `Increment` twice but `Decrement` never: a variant wholly absent from
+        // the top constructors guarantees non-exhaustiveness, so the cheap
+        // necessary-condition backstop still fails closed.
         let arms = vec![
             Arm {
                 pat: Pat::Ctor {
@@ -802,6 +893,60 @@ mod tests {
             },
         ];
         assert!(Match::new_flat(Expr::Var(b), arms).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn new_flat_accepts_alias_over_ctor_discrimination_without_catch_all() -> DResult<()> {
+        let mut i = Interner::new();
+        let opt = i.intern("Opt")?;
+        let som = i.intern("Som")?;
+        let non = i.intern("Non")?;
+        let o = i.intern("o")?;
+        let w = i.intern("w")?;
+        let x = i.intern("x")?;
+        // case o of (Som (Som x)) as w -> … ; Som Non -> … ; Non -> …
+        // Every head is constructor-shaped (the first under an alias), so the
+        // scrutinee is a finite enum whose coverage the upstream Maranget check
+        // proved — no trailing catch-all needed.
+        let arms = vec![
+            Arm {
+                pat: Pat::Alias(
+                    Box::new(Pat::Ctor {
+                        ty: opt,
+                        variant: som,
+                        args: vec![Pat::Ctor {
+                            ty: opt,
+                            variant: som,
+                            args: vec![Pat::Var(x)],
+                        }],
+                    }),
+                    w,
+                ),
+                body: Expr::Var(x),
+            },
+            Arm {
+                pat: Pat::Ctor {
+                    ty: opt,
+                    variant: som,
+                    args: vec![Pat::Ctor {
+                        ty: opt,
+                        variant: non,
+                        args: vec![],
+                    }],
+                },
+                body: Expr::Int(0),
+            },
+            Arm {
+                pat: Pat::Ctor {
+                    ty: opt,
+                    variant: non,
+                    args: vec![],
+                },
+                body: Expr::Int(1),
+            },
+        ];
+        assert!(Match::new_flat(Expr::Var(o), arms).is_ok());
         Ok(())
     }
 

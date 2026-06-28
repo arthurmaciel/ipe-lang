@@ -557,9 +557,9 @@ const fn feature_label(f: Feature) -> &'static str {
              refutable element is not supported yet [feature: tuple-pattern-match]"
         }
         Feature::NestedCtorDiscrimination => {
-            "two `case` arms matching the same constructor (nested constructor \
-             discrimination) are not supported yet — each top-level constructor \
-             may appear in at most one arm for now \
+            "this refutable pattern-discrimination shape is not supported yet — \
+             discriminating with cons / list patterns or guarded arms needs \
+             machinery that is not in place yet \
              [feature: nested-ctor-discrimination]"
         }
     }

@@ -455,13 +455,14 @@ pub enum Feature {
     /// single irrefutable tuple destructure (elements are variables / wildcards /
     /// nested irrefutable tuples); the richer shapes land later. [SKY-L0115]
     TuplePatternMatch,
-    /// Two `case` arms head-matching the SAME constructor — nested constructor
-    /// discrimination (`Just (Just a) -> … ; Just Nothing -> … ; Nothing -> …`).
-    /// M3b-2 emits a Rust `match` with one arm per top-level constructor; ordered
-    /// discrimination on a refutable nested payload needs the multi-arm-per-
-    /// variant match-compilation that lands later. The exhaustiveness checker
-    /// still validates such a `case` first (so a non-exhaustive one surfaces as
-    /// SKY-T0010), and an exhaustive one reaching here is gated cleanly rather
+    /// A refutable pattern-discrimination shape the lowerer cannot yet route to
+    /// a Rust `match`. Several `case` arms head-matching the same CONSTRUCTOR and
+    /// discriminating on their nested sub-patterns (`Som (Som x)` then `Som Non`
+    /// then `Non`) ARE supported — each arm lowers one-to-one to a Rust arm in
+    /// source order. This gate is reserved for the discrimination shapes that
+    /// still lack their carrier: cons / list patterns and guarded arms. The
+    /// exhaustiveness checker validates the `case` first (a non-exhaustive one is
+    /// SKY-T0010), so an unsupported shape reaching here is gated cleanly rather
     /// than mis-lowered. [SKY-L0116]
     NestedCtorDiscrimination,
 }

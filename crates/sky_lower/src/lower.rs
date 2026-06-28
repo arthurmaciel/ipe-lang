@@ -1612,28 +1612,23 @@ impl<'a> Lowerer<'a> {
                 body: Box::new(self.lower_expr(&first.body)?),
             });
         }
-        // A SECOND arm for the same top-level constructor is nested-constructor
-        // discrimination (`Just 0` vs `Just n`) — the decision-tree shape gated
-        // fail-closed here (SKY-L0116, M3b-4) before any `Match` is built. The
-        // exhaustiveness checker has already run, so a non-exhaustive nested
-        // `case` is SKY-T0010; this gate catches the exhaustive same-ctor shape.
-        let mut seen: BTreeSet<Symbol> = BTreeSet::new();
-        for br in branches {
-            if let canon::Pattern_::PCtor { name, .. } = &br.pat.value
-                && !seen.insert(*name)
-            {
-                return Err(unsupported(br.pat.span, Feature::NestedCtorDiscrimination));
-            }
-        }
-
-        // Lower every arm's head pattern. A pure constructor `case` (every arm a
-        // distinct constructor, no literal / wildcard / variable / alias) keeps
-        // the M3a/M3b-2 enum-cover `Match::new` path, whose exhaustiveness is the
-        // exact variant set. Any other mix (literal heads, a wildcard / variable
-        // catch-all, an alias, or a constructor + catch-all) is M3b-3's FLAT
-        // refutable match (`Match::new_flat`), whose exhaustiveness is structural
-        // (a trailing catch-all, or a complete `Bool` cover). Both forms have
-        // already been proven exhaustive by the type phase (SKY-T0010).
+        // Each Sky `case` arm becomes its OWN Rust `match` arm, in source order.
+        // Several arms may head-match the SAME top-level constructor and
+        // discriminate on their nested sub-patterns (`Som (Som x)`, `Som Non`,
+        // `Non`); Rust's `match` resolves the overlap and ordering natively, so
+        // the arms are emitted one-to-one rather than grouped one-per-constructor.
+        // Coverage over the nested shape is the exhaustiveness checker's call: it
+        // runs before lowering, so a non-exhaustive nested `case` is already
+        // SKY-T0010 and never reaches here, and a redundant nested arm is already
+        // SKY-T0011. The `Match` constructors below carry only a cheap
+        // necessary-condition backstop (every top constructor present / a
+        // structural catch-all), never re-deriving that proof.
+        //
+        // A pure constructor `case` (every arm head a constructor) takes the
+        // enum-cover `Match::new` path, whose backstop is the scrutinee's variant
+        // set. Any other mix (literal heads, a wildcard / variable catch-all, an
+        // alias head, or a constructor + catch-all) takes the FLAT refutable
+        // `Match::new_flat` path, whose backstop is structural.
         let all_ctor = branches
             .iter()
             .all(|br| matches!(br.pat.value, canon::Pattern_::PCtor { .. }));

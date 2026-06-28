@@ -15,8 +15,11 @@
 //! * a REFUTABLE `let` destructure (`let (Wrap x) = …`) → SKY-L0115, so the
 //!   backend never emits a refutable Rust `let` that rustc would reject.
 //!
-//! (The sibling SKY-L0116 — two arms for the same constructor — is locked by
-//! `golden_m3a_gates::duplicate_constructor_arms_is_sky_l0116`.)
+//! (Two arms for the same constructor — once gated as SKY-L0116 — are now
+//! supported: each lowers to its own Rust `match` arm in source order. The
+//! positive regression lives in `golden_m3b4_nested` / `golden_m3b4_two_same_ctor`,
+//! and `golden_m3b4_gates` locks that a non-exhaustive nested same-ctor `case`
+//! is still SKY-T0010.)
 
 use std::path::{Path, PathBuf};
 
