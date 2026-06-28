@@ -105,6 +105,10 @@ pub enum Expr_ {
     },
     /// An integer literal.
     Int(i64),
+    /// A string literal `"hello"` — carries its already-unescaped value.
+    Str(String),
+    /// A character literal `'a'` — carries its single unescaped character's text.
+    Char(String),
     /// The unit value `()` — the sole inhabitant of the unit type. Introduces no
     /// bindings and resolves no names.
     Unit,
@@ -198,6 +202,20 @@ pub enum Pattern_ {
     /// located field name that also binds a local of the same name. Always
     /// irrefutable; carries at least one field.
     PRecord(Vec<Located<Symbol>>),
+    /// An integer literal pattern `0` (M3b-3). Refutable; Int is OPEN.
+    PInt(i64),
+    /// A boolean literal pattern `True` / `False` (M3b-3). A `True` + `False`
+    /// pair is an exhaustive cover of the closed `Bool` type.
+    PBool(bool),
+    /// A character literal pattern `'a'` (M3b-3) — carries the single unescaped
+    /// character's text. Refutable; Char is OPEN.
+    PChar(String),
+    /// A string literal pattern `"hi"` (M3b-3) — carries the unescaped value.
+    /// Refutable; String is OPEN.
+    PStr(String),
+    /// An alias / `as` pattern `inner as name` (M3b-3): matches `inner` and also
+    /// binds the whole matched value to `name`.
+    PAlias(Box<Pattern>, Located<Symbol>),
 }
 
 /// Canonical type (M0 subset). Mirrors `Can.Type` narrowed to arrows, type

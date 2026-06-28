@@ -66,6 +66,14 @@ pub enum Tok {
     Ident(String),
     /// An integer literal.
     Int(i64),
+    /// A string literal `"hello"`. The carried [`String`] is the already
+    /// UNESCAPED value (escape sequences such as `\n` / `\"` are resolved here),
+    /// so downstream stages see the runtime string verbatim.
+    Str(String),
+    /// A character literal `'a'`. The carried [`String`] is the single UNESCAPED
+    /// character's text (exactly one `char`), so `'\n'` carries a one-character
+    /// newline string. The backend renders it as a Rust `char` literal.
+    Char(String),
 }
 
 /// A token with its source position.
@@ -195,6 +203,10 @@ pub fn lex(src: &str) -> DResult<Vec<Token>> {
             lex_number(&mut lx, lo)?
         } else if is_ident_start(c) {
             lex_ident(&mut lx)
+        } else if c == '"' {
+            lex_string(&mut lx, lo)?
+        } else if c == '\'' {
+            lex_char(&mut lx, lo)?
         } else {
             lex_symbol(&mut lx, c, lo)?
         };
@@ -235,6 +247,122 @@ fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
         msg: ParseError::IntLiteralOutOfRange,
     })?;
     Ok(Tok::Int(n))
+}
+
+/// Lex a single-line string literal `"…"`. The opening `"` is the current char.
+/// Escape sequences are resolved into the runtime value; an unrecognised escape
+/// is kept verbatim (backslash + char) so a typo surfaces as wrong text rather
+/// than lost data, matching the Go reference's `unescapeString`. Reaching end of
+/// input before the closing `"` is [`ParseError::UnterminatedString`].
+fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
+    lx.advance(); // consume opening `"`
+    let mut value = String::new();
+    loop {
+        match lx.peek() {
+            None => {
+                let hi = lx.offset();
+                return Err(Diagnostic::Parse {
+                    span: Span::new(lo, hi),
+                    msg: ParseError::UnterminatedString,
+                });
+            }
+            Some('"') => {
+                lx.advance();
+                return Ok(Tok::Str(value));
+            }
+            Some('\\') => {
+                lx.advance();
+                push_escape(lx, &mut value);
+            }
+            Some(c) => {
+                value.push(c);
+                lx.advance();
+            }
+        }
+    }
+}
+
+/// Lex a character literal `'c'` or `'\n'`. The opening `'` is the current char.
+/// Exactly one character (or one escape sequence) must precede the closing `'`;
+/// an empty `''`, a multi-character body, or a missing closing quote is
+/// [`ParseError::MalformedChar`]. The carried value is the single unescaped
+/// character's text.
+fn lex_char(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
+    lx.advance(); // consume opening `'`
+    let mut value = String::new();
+    match lx.peek() {
+        Some('\\') => {
+            lx.advance();
+            push_escape(lx, &mut value);
+        }
+        Some('\'') | None => {
+            // Empty `''` or unterminated — malformed.
+            let hi = lx.offset();
+            return Err(Diagnostic::Parse {
+                span: Span::new(lo, hi),
+                msg: ParseError::MalformedChar,
+            });
+        }
+        Some(c) => {
+            value.push(c);
+            lx.advance();
+        }
+    }
+    // A single closing quote must follow; anything else (a second character or
+    // end of input) is malformed.
+    if lx.peek() == Some('\'') {
+        lx.advance();
+        Ok(Tok::Char(value))
+    } else {
+        let hi = lx.offset();
+        Err(Diagnostic::Parse {
+            span: Span::new(lo, hi),
+            msg: ParseError::MalformedChar,
+        })
+    }
+}
+
+/// Resolve one escape sequence (the leading `\` already consumed) and push its
+/// value into `out`. An unrecognised escape is kept as backslash + char so the
+/// user can see the typo rather than silently losing data, mirroring the Go
+/// reference. End of input after a lone `\` pushes just the backslash.
+fn push_escape(lx: &mut Lexer, out: &mut String) {
+    match lx.peek() {
+        Some('n') => {
+            out.push('\n');
+            lx.advance();
+        }
+        Some('t') => {
+            out.push('\t');
+            lx.advance();
+        }
+        Some('r') => {
+            out.push('\r');
+            lx.advance();
+        }
+        Some('\\') => {
+            out.push('\\');
+            lx.advance();
+        }
+        Some('"') => {
+            out.push('"');
+            lx.advance();
+        }
+        Some('\'') => {
+            out.push('\'');
+            lx.advance();
+        }
+        Some('0') => {
+            out.push('\0');
+            lx.advance();
+        }
+        Some(other) => {
+            out.push('\\');
+            out.push(other);
+            lx.advance();
+        }
+        None => out.push('\\'),
+    }
 }
 
 fn lex_ident(lx: &mut Lexer) -> Tok {

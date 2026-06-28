@@ -1,0 +1,13 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Int is an OPEN type: literal arms without a wildcard / variable catch-all do
+-- NOT cover every value, so this `case` is non-exhaustive (SKY-T0010).
+f : Int -> Int
+f n =
+    case n of
+        0 -> 0
+        1 -> 1
+
+main =
+    println (String.fromInt (f 7))

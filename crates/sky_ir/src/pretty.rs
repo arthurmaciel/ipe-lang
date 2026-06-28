@@ -65,6 +65,7 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::Float => "Float".to_owned(),
         IrType::Bool => "Bool".to_owned(),
         IrType::Str => "String".to_owned(),
+        IrType::Char => "Char".to_owned(),
         IrType::Unit => "()".to_owned(),
         IrType::TaskUnit => "Task Error ()".to_owned(),
         // A generic type variable renders by its source name (e.g. `a`); the
@@ -348,6 +349,8 @@ fn write_binding(
 fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) {
     match expr {
         Expr::Int(n) => line(out, level, &format!("Int {n}")),
+        Expr::Str(s) => line(out, level, &format!("Str {s:?}")),
+        Expr::Char(c) => line(out, level, &format!("Char '{c}'")),
         Expr::Unit => line(out, level, "Unit"),
         Expr::Var(sym) => line(out, level, &format!("Var {}", sym_name(interner, *sym))),
         Expr::Ctor { ty, variant, args } => {

@@ -97,6 +97,21 @@ fn emit_expr_at(
     let child = depth + 1;
     match expr {
         Expr::Int(n) => Ok(n.to_string()),
+        // A string literal renders as an owned `String` (Sky `String` is Rust
+        // `String`, never `&str`). The `{:?}` Debug form produces a valid Rust
+        // string literal with deterministic escaping.
+        Expr::Str(s) => Ok(format!("{s:?}.to_string()")),
+        // A character literal renders as a Rust `char`. The carried text is a
+        // single character (lexer invariant); `{:?}` escapes it deterministically.
+        // A malformed (non-single-char) value falls back to a string literal
+        // rather than emitting invalid Rust, staying total.
+        Expr::Char(c) => {
+            let mut chars = c.chars();
+            Ok(match (chars.next(), chars.next()) {
+                (Some(ch), None) => format!("{ch:?}"),
+                _ => format!("{c:?}"),
+            })
+        }
         // The unit value renders as the Rust unit expression `()`.
         Expr::Unit => Ok("()".to_owned()),
         Expr::Var(sym) => ctx.emit_ident(*sym),
@@ -233,13 +248,20 @@ fn emit_ctor(
     Ok(format!("{path}({})", parts.join(", ")))
 }
 
-/// Emit a `match`. Each arm's head is a constructor pattern (an exhaustiveness
-/// obligation [`sky_ir::Match::new`] guarantees); a payload position binds a
-/// variable or is a wildcard. A cyclic self-edge payload field is boxed in
-/// the enum, so a variable bound to such a field is unboxed (`let x = *x;`) at the
-/// top of the arm body, giving the binder the enum's own (owned) type rather than
-/// `Box<…>`. Kept out of the `emit_expr_at` match (`#[inline(never)]`) for the
-/// same frame-size reason as the neighbouring helpers.
+/// Emit a `match`. An arm head is a constructor pattern (M3a/M3b-2, exhaustive
+/// over the enum's variants) or — for the M3b-3 flat refutable match — a literal
+/// (`0` / `'a'` / `"hi"` / `true` / `false`), a wildcard / variable binder, or
+/// an alias. A cyclic self-edge constructor payload field is boxed in the enum,
+/// so a variable bound to such a field is unboxed (`let x = *x;`) at the top of
+/// the arm body, giving the binder the enum's own (owned) type rather than
+/// `Box<…>`.
+///
+/// `String` scrutinees match against `scrut.as_str()` because Rust string
+/// literal patterns are `&str`; any top-level binder in such an arm is rebound
+/// to an owned `String` (`let name = name.to_string();`) so the arm body sees
+/// the Sky `String` type, keeping the lowering sound. Kept out of the
+/// `emit_expr_at` match (`#[inline(never)]`) for the same frame-size reason as
+/// the neighbouring helpers.
 #[inline(never)]
 fn emit_match(
     ctx: &EmitCtx,
@@ -249,63 +271,38 @@ fn emit_match(
     generics: GenericScope,
 ) -> DResult<String> {
     let child = depth + 1;
-    let scrut = emit_expr_at(ctx, m.scrutinee(), indent, child, generics)?;
+    let scrut_expr = emit_expr_at(ctx, m.scrutinee(), indent, child, generics)?;
+    // A string scrutinee is matched as `&str` so literal patterns apply; the
+    // presence of a `Pat::Str` head is the reliable signal (the type checker
+    // proved the scrutinee a `String`).
+    let str_mode = m.arms().iter().any(|a| matches!(a.pat, Pat::Str(_)));
+    let scrut = if str_mode {
+        format!("({scrut_expr}).as_str()")
+    } else {
+        scrut_expr
+    };
     let arm_indent = indent_of(indent + 1);
     let close_indent = indent_of(indent);
     let mut arms = Vec::with_capacity(m.arms().len());
     for arm in m.arms() {
-        // The arm head is a constructor pattern (guaranteed by `Match::new`); a
-        // non-ctor head is an internal invariant violation, surfaced rather than
-        // mis-emitted.
-        let Pat::Ctor { ty, variant, args } = &arm.pat else {
-            return Err(Diagnostic::CompilerBug {
-                where_: "sky_backend_rust::emit_match",
-                detail: "match arm head is not a constructor pattern".to_owned(),
-            });
-        };
-        let path = format!("{}::{}", ctx.enum_name(*ty)?, ctx.emit_ident(*variant)?);
-        let (pat, unboxes) = if args.is_empty() {
-            (path, String::new())
+        let (pat, prelude) = if let Pat::Ctor { ty, variant, args } = &arm.pat {
+            emit_ctor_arm_pat(ctx, *ty, *variant, args)?
         } else {
-            let fields = ctx.variant_fields(*ty, *variant)?;
-            if fields.len() != args.len() {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "sky_backend_rust::emit_match",
-                    detail: format!(
-                        "constructor pattern {} of enum {} binds {} sub-patterns but the \
-                         variant declares {} fields",
-                        variant.as_raw(),
-                        ty.as_raw(),
-                        args.len(),
-                        fields.len()
-                    ),
-                });
-            }
-            let mut sub_pats = Vec::with_capacity(args.len());
-            let mut unbox_lines = String::new();
-            for (sub, field_ty) in args.iter().zip(fields.iter()) {
-                sub_pats.push(render_pat(ctx, sub)?);
-                // A variable bound to a boxed self-edge field is unboxed so the
-                // body sees the payload's own type, not `Box<…>`.
-                if ctx.is_cyclic_self_field(field_ty, *ty)
-                    && let Pat::Var(s) = sub
-                {
-                    let binder = ctx.emit_ident(*s)?;
-                    write!(unbox_lines, "let {binder} = *{binder}; ").map_err(|e| {
-                        Diagnostic::CompilerBug {
-                            where_: "sky_backend_rust::emit_match",
-                            detail: format!("writing unbox binder failed: {e}"),
-                        }
-                    })?;
-                }
-            }
-            (format!("{path}({})", sub_pats.join(", ")), unbox_lines)
+            // A flat-match leaf head: literal / wildcard / variable / alias.
+            // `render_pat` is total over the whole pattern set. In string mode,
+            // rebind any binder it introduces to an owned `String`.
+            let prelude = if str_mode {
+                str_binder_rebinds(ctx, &arm.pat)?
+            } else {
+                String::new()
+            };
+            (render_pat(ctx, &arm.pat)?, prelude)
         };
         let body = emit_expr_at(ctx, &arm.body, indent + 1, child, generics)?;
-        let arm_body = if unboxes.is_empty() {
+        let arm_body = if prelude.is_empty() {
             body
         } else {
-            format!("{{ {unboxes}{body} }}")
+            format!("{{ {prelude}{body} }}")
         };
         arms.push(format!("{arm_indent}{pat} => {arm_body},"));
     }
@@ -313,6 +310,99 @@ fn emit_match(
         "match {scrut} {{\n{}\n{close_indent}}}",
         arms.join("\n")
     ))
+}
+
+/// Render a constructor arm head to its Rust pattern plus any leading unbox
+/// statements. A cyclic self-edge payload field is boxed in the enum, so a
+/// variable bound to it is unboxed (`let x = *x;`) at the arm body's head.
+fn emit_ctor_arm_pat(
+    ctx: &EmitCtx,
+    ty: Symbol,
+    variant: Symbol,
+    args: &[Pat],
+) -> DResult<(String, String)> {
+    let path = format!("{}::{}", ctx.enum_name(ty)?, ctx.emit_ident(variant)?);
+    if args.is_empty() {
+        return Ok((path, String::new()));
+    }
+    let fields = ctx.variant_fields(ty, variant)?;
+    if fields.len() != args.len() {
+        return Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_match",
+            detail: format!(
+                "constructor pattern {} of enum {} binds {} sub-patterns but the \
+                 variant declares {} fields",
+                variant.as_raw(),
+                ty.as_raw(),
+                args.len(),
+                fields.len()
+            ),
+        });
+    }
+    let mut sub_pats = Vec::with_capacity(args.len());
+    let mut unbox_lines = String::new();
+    for (sub, field_ty) in args.iter().zip(fields.iter()) {
+        sub_pats.push(render_pat(ctx, sub)?);
+        // A variable bound to a boxed self-edge field is unboxed so the body
+        // sees the payload's own type, not `Box<…>`.
+        if ctx.is_cyclic_self_field(field_ty, ty)
+            && let Pat::Var(s) = sub
+        {
+            let binder = ctx.emit_ident(*s)?;
+            write!(unbox_lines, "let {binder} = *{binder}; ").map_err(|e| {
+                Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_match",
+                    detail: format!("writing unbox binder failed: {e}"),
+                }
+            })?;
+        }
+    }
+    Ok((format!("{path}({})", sub_pats.join(", ")), unbox_lines))
+}
+
+/// Build the `let name = name.to_string();` prelude that rebinds every top-level
+/// binder a string-match arm introduces from `&str` to an owned `String`, so the
+/// arm body sees the Sky `String` type. A variable binds itself; an alias binds
+/// its name and recurses into its inner pattern; a wildcard / literal binds
+/// nothing.
+fn str_binder_rebinds(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
+    let mut out = String::new();
+    collect_str_rebinds(ctx, pat, &mut out)?;
+    Ok(out)
+}
+
+fn collect_str_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<()> {
+    match pat {
+        Pat::Var(s) => {
+            let name = ctx.emit_ident(*s)?;
+            write!(out, "let {name} = {name}.to_string(); ").map_err(|e| {
+                Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::str_binder_rebinds",
+                    detail: format!("writing rebind binder failed: {e}"),
+                }
+            })?;
+            Ok(())
+        }
+        Pat::Alias(inner, name) => {
+            let n = ctx.emit_ident(*name)?;
+            write!(out, "let {n} = {n}.to_string(); ").map_err(|e| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::str_binder_rebinds",
+                detail: format!("writing rebind binder failed: {e}"),
+            })?;
+            collect_str_rebinds(ctx, inner, out)
+        }
+        // A string scrutinee admits no constructor / tuple / record / non-string
+        // literal head (the type checker proves the scrutinee a `String`); these
+        // introduce no `String`-typed binder to rebind.
+        Pat::Wildcard
+        | Pat::Str(_)
+        | Pat::Int(_)
+        | Pat::Bool(_)
+        | Pat::Char(_)
+        | Pat::Ctor { .. }
+        | Pat::Tuple(_)
+        | Pat::Record(_) => Ok(()),
+    }
 }
 
 /// Render a pattern to its Rust spelling. Total and recursive over the entire

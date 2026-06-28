@@ -108,6 +108,8 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::PipePipe => TokenKind::PipePipe,
         Tok::Ident(_) => TokenKind::Ident,
         Tok::Int(_) => TokenKind::Int,
+        Tok::Str(_) => TokenKind::Str,
+        Tok::Char(_) => TokenKind::Char,
     }
 }
 
@@ -592,7 +594,7 @@ impl<'a> Parser<'a> {
         }
 
         let mut patterns = Vec::new();
-        while self.peek_is_pattern_atom_start() {
+        while self.peek_is_binder_atom_start() {
             patterns.push(self.parse_pattern_atom(0)?);
         }
 
@@ -1009,7 +1011,7 @@ impl<'a> Parser<'a> {
     const fn is_simple_atom_start(kind: &Tok) -> bool {
         matches!(
             kind,
-            Tok::LParen | Tok::LBrace | Tok::Int(_) | Tok::Ident(_)
+            Tok::LParen | Tok::LBrace | Tok::Int(_) | Tok::Str(_) | Tok::Char(_) | Tok::Ident(_)
         )
     }
 
@@ -1100,6 +1102,8 @@ impl<'a> Parser<'a> {
             Tok::LParen => self.parse_paren_or_tuple(tok.span, depth + 1),
             Tok::LBrace => self.parse_record(tok.span, depth + 1),
             Tok::Int(n) => Ok(Located::new(tok.span, Expr_::Int(*n))),
+            Tok::Str(s) => Ok(Located::new(tok.span, Expr_::Str(s.clone()))),
+            Tok::Char(c) => Ok(Located::new(tok.span, Expr_::Char(c.clone()))),
             Tok::Ident(text) => {
                 let expr = self.ident_expr(text, tok.span)?;
                 Ok(Located::new(tok.span, expr))
@@ -1500,7 +1504,7 @@ impl<'a> Parser<'a> {
 
         // At least one parameter pattern before the `->`.
         let mut params = Vec::new();
-        while self.peek_is_pattern_atom_start() {
+        while self.peek_is_binder_atom_start() {
             params.push(self.parse_pattern_atom(depth + 1)?);
         }
         if params.is_empty() {
@@ -1684,7 +1688,7 @@ impl<'a> Parser<'a> {
         }
         let head = self.parse_pattern_atom(depth + 1)?;
         // Only a constructor head may take sub-patterns.
-        if let Pattern_::PCtor(name, mods, _) = head.value.clone() {
+        let pat = if let Pattern_::PCtor(name, mods, _) = head.value.clone() {
             let mut sub = Vec::new();
             let mut end = head.span;
             while self.peek_is_pattern_atom_start() {
@@ -1693,12 +1697,39 @@ impl<'a> Parser<'a> {
                 sub.push(p);
             }
             if sub.is_empty() {
-                return Ok(head);
+                head
+            } else {
+                let span = Self::span_merge(head.span, end);
+                Located::new(span, Pattern_::PCtor(name, mods, sub))
             }
-            let span = Self::span_merge(head.span, end);
-            return Ok(Located::new(span, Pattern_::PCtor(name, mods, sub)));
+        } else {
+            head
+        };
+        // An `as` alias binds the whole pattern parsed so far to a name
+        // (`inner as name`). Mirrors the Haskell compiler's `pattern_` postfix
+        // check; the inner sub-pattern keeps its shape and the alias wraps it.
+        if self.peek_kind() == Some(&Tok::As) {
+            self.bump(Construct::Pattern)?;
+            let name = self.parse_lower_name()?;
+            let span = Self::span_merge(pat.span, name.span);
+            return Ok(Located::new(span, Pattern_::PAlias(Box::new(pat), name)));
         }
-        Ok(head)
+        Ok(pat)
+    }
+
+    /// Parse a lowercase identifier as a located binding name (the alias target
+    /// of an `as` pattern). An upper-case identifier or any other token is a
+    /// parse error — only a lowercase name can bind a value.
+    fn parse_lower_name(&mut self) -> DResult<Located<Symbol>> {
+        let tok = self.bump(Construct::Pattern)?;
+        if let Tok::Ident(text) = &tok.kind
+            && text.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+            && !text.contains('.')
+        {
+            let sym = self.interner.intern(text)?;
+            return Ok(Located::new(tok.span, sym));
+        }
+        Err(Self::unexpected_token(&tok, &[Expected::Identifier]))
     }
 
     fn parse_pattern_atom(&mut self, depth: u32) -> DResult<Pattern> {
@@ -1708,6 +1739,23 @@ impl<'a> Parser<'a> {
         let tok = self.bump(Construct::Pattern)?;
         match &tok.kind {
             Tok::Underscore => Ok(Located::new(tok.span, Pattern_::PAnything)),
+            // Literal leaves (M3b-3): int / string / char. Bool literals
+            // (`True` / `False`) come through the `Ident` arm below.
+            Tok::Int(n) => Ok(Located::new(tok.span, Pattern_::PInt(*n))),
+            Tok::Str(s) => Ok(Located::new(tok.span, Pattern_::PStr(s.clone()))),
+            Tok::Char(c) => Ok(Located::new(tok.span, Pattern_::PChar(c.clone()))),
+            // A negative integer literal pattern `-3`. The `-` lexes as
+            // [`Tok::Minus`]; the digit must follow immediately. Anything else
+            // after `-` is not a pattern.
+            Tok::Minus => {
+                let neg = self.bump(Construct::Pattern)?;
+                if let Tok::Int(n) = &neg.kind {
+                    let span = Self::span_merge(tok.span, neg.span);
+                    Ok(Located::new(span, Pattern_::PInt(n.wrapping_neg())))
+                } else {
+                    Err(Self::unexpected_token(&neg, &[Expected::Pattern]))
+                }
+            }
             Tok::LParen => {
                 let opener = tok.span;
                 let inner = self.parse_pattern(depth + 1)?;
@@ -1760,6 +1808,16 @@ impl<'a> Parser<'a> {
                 }
             }
             Tok::Ident(text) => {
+                // `True` / `False` are the two Bool constructors; in pattern
+                // position they are boolean literal patterns (a closed
+                // two-constructor cover), matching the Haskell compiler's
+                // `Src.PBool`. They are checked before the general ctor branch.
+                if text == "True" {
+                    return Ok(Located::new(tok.span, Pattern_::PBool(true)));
+                }
+                if text == "False" {
+                    return Ok(Located::new(tok.span, Pattern_::PBool(false)));
+                }
                 let first_upper = text.chars().next().is_some_and(|c| c.is_ascii_uppercase());
                 if first_upper {
                     // M0 does not model qualified constructors (`Module.Ctor`) in
@@ -1782,7 +1840,30 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether the next token can begin a pattern ATOM in a position that admits
+    /// refutable literal sub-patterns — namely a constructor's argument list
+    /// (`Just 0`, `MkWrap 'a'`). Includes the literal starts.
     fn peek_is_pattern_atom_start(&self) -> bool {
+        matches!(
+            self.peek_kind(),
+            Some(
+                &(Tok::Underscore
+                    | Tok::LParen
+                    | Tok::LBrace
+                    | Tok::Ident(_)
+                    | Tok::Int(_)
+                    | Tok::Str(_)
+                    | Tok::Char(_)
+                    | Tok::Minus)
+            )
+        )
+    }
+
+    /// Whether the next token can begin a BINDER pattern atom — a function or
+    /// lambda parameter. Literals are refutable and never bind a parameter, so a
+    /// literal start STOPS the parameter list (`\x 1` reports a missing `->` at
+    /// `1`, not a swallowed literal parameter), matching the pre-M3b-3 grammar.
+    fn peek_is_binder_atom_start(&self) -> bool {
         matches!(
             self.peek_kind(),
             Some(&(Tok::Underscore | Tok::LParen | Tok::LBrace | Tok::Ident(_)))

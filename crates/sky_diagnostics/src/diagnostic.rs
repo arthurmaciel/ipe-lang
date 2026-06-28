@@ -15,9 +15,10 @@ use crate::code::{
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
     SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0200, SKY_N0001, SKY_N0002, SKY_N0003, SKY_N0004,
     SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_P0001, SKY_P0002, SKY_P0003,
-    SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031,
-    SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002,
-    SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, Severity,
+    SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015, SKY_P0020, SKY_P0021,
+    SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062,
+    SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013,
+    Severity,
 };
 use crate::span::Span;
 
@@ -70,6 +71,10 @@ pub enum TokenKind {
     PipePipe,
     Ident,
     Int,
+    /// A string literal `"…"`.
+    Str,
+    /// A character literal `'…'`.
+    Char,
     /// End of input.
     Eof,
 }
@@ -261,6 +266,12 @@ pub enum ParseError {
     NumberJoinedToName(char),
     /// An integer literal that does not fit in `i64`. [SKY-P0013]
     IntLiteralOutOfRange,
+    /// A string literal `"…` whose closing `"` is missing before end of input
+    /// (or before the line ends). [SKY-P0014]
+    UnterminatedString,
+    /// A character literal `'…` that is malformed — unterminated, empty (`''`),
+    /// or carrying more than one character before the closing `'`. [SKY-P0015]
+    MalformedChar,
     /// The module header is malformed. [SKY-P0020]
     MalformedModuleHeader(HeaderDefect),
     /// The `exposing (...)` list is malformed. [SKY-P0021]
@@ -663,6 +674,8 @@ const fn parse_code(msg: &ParseError) -> Code {
         ParseError::StrayDot => SKY_P0011,
         ParseError::NumberJoinedToName(_) => SKY_P0012,
         ParseError::IntLiteralOutOfRange => SKY_P0013,
+        ParseError::UnterminatedString => SKY_P0014,
+        ParseError::MalformedChar => SKY_P0015,
         ParseError::MalformedModuleHeader(_) => SKY_P0020,
         ParseError::MalformedExposingList(_) => SKY_P0021,
         ParseError::MissingEquals { .. } => SKY_P0030,
@@ -773,6 +786,8 @@ fn parse_help(msg: &ParseError) -> Vec<HelpLine> {
         | ParseError::UnexpectedToken { .. }
         | ParseError::UnexpectedEof { .. }
         | ParseError::UnknownChar(_)
+        | ParseError::UnterminatedString
+        | ParseError::MalformedChar
         | ParseError::MalformedExposingList(_)
         | ParseError::MissingEquals { .. }
         | ParseError::TypeArgsOnNonConstructor

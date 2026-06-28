@@ -71,6 +71,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Float => "f64".to_owned(),
         IrType::Bool => "bool".to_owned(),
         IrType::Str => "String".to_owned(),
+        IrType::Char => "char".to_owned(),
         IrType::Unit => "()".to_owned(),
         IrType::TaskUnit => "SkyTask<()>".to_owned(),
         IrType::Enum { name, args } => {

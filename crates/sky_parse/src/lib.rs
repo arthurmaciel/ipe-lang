@@ -479,6 +479,89 @@ mod tests {
     }
 
     #[test]
+    fn string_and_char_literal_expressions_parse() {
+        // `"hi"` is a string literal (escapes resolved); `'a'` a char literal.
+        let mut i = Interner::new();
+        let src = format!("{HDR}s =\n    \"h\\ti\"\nc =\n    'a'\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "string/char literals must parse: {m:?}");
+        let Ok(m) = m else { return };
+        assert!(
+            matches!(find_value(&m, &i, "s").map(|v| &v.body.value), Some(Expr_::Str(t)) if t == "h\ti"),
+            "s body is the unescaped string `h<tab>i`, got {:?}",
+            find_value(&m, &i, "s").map(|v| &v.body.value)
+        );
+        assert!(
+            matches!(find_value(&m, &i, "c").map(|v| &v.body.value), Some(Expr_::Char(t)) if t == "a"),
+            "c body is the char `a`, got {:?}",
+            find_value(&m, &i, "c").map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
+    fn literal_and_bool_patterns_in_case_parse() {
+        // Int / Bool / String / wildcard literal arm heads.
+        let mut i = Interner::new();
+        let src = format!(
+            "{HDR}v : Int\nv =\n    case n of\n        0 -> 1\n        True -> 2\n        \"hi\" -> 3\n        _ -> 4\n"
+        );
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "literal-pattern case must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let Some(Expr_::Case(_, arms)) = find_value(&m, &i, "v").map(|v| &v.body.value) else {
+            assert!(black_box_false(), "v body is a Case");
+            return;
+        };
+        let kinds: Vec<&Pattern_> = arms.iter().map(|(p, _)| &p.value).collect();
+        assert!(
+            matches!(kinds.as_slice(), [
+                Pattern_::PInt(0),
+                Pattern_::PBool(true),
+                Pattern_::PStr(s),
+                Pattern_::PAnything,
+            ] if s == "hi"),
+            "arm heads are 0 / True / \"hi\" / _, got {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn as_alias_pattern_parses() {
+        // `(m as k) -> …` aliases the whole matched value to `k`.
+        let mut i = Interner::new();
+        let src =
+            format!("{HDR}v : Int\nv =\n    case n of\n        0 -> 0\n        (m as k) -> k\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "alias pattern must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let Some(Expr_::Case(_, arms)) = find_value(&m, &i, "v").map(|v| &v.body.value) else {
+            assert!(black_box_false(), "v body is a Case");
+            return;
+        };
+        assert!(
+            arms.get(1).is_some_and(|(p, _)| matches!(
+                &p.value,
+                Pattern_::PAlias(inner, name)
+                    if matches!(inner.value, Pattern_::PVar(_)) && i.resolve(name.value) == Some("k")
+            )),
+            "second arm head is `m as k`, got {:?}",
+            arms.get(1).map(|(p, _)| &p.value)
+        );
+    }
+
+    #[test]
+    fn unterminated_string_is_p0014() {
+        assert_eq!(err_code(&format!("{HDR}s =\n    \"oops\n")), "SKY-P0014");
+    }
+
+    #[test]
+    fn malformed_char_is_p0015() {
+        // Empty char literal `''`.
+        assert_eq!(err_code(&format!("{HDR}c =\n    ''\n")), "SKY-P0015");
+        // Multi-character char literal `'ab'`.
+        assert_eq!(err_code(&format!("{HDR}c =\n    'ab'\n")), "SKY-P0015");
+    }
+
+    #[test]
     fn malformed_let_is_p0061() {
         // No bindings before `in`.
         assert_eq!(err_code(&format!("{HDR}v =\n    let in 0\n")), "SKY-P0061");
