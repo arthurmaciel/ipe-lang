@@ -16,7 +16,9 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic, SKY_I0201, SKY_I0202, SKY_L0200};
 use sky_intern::{Interner, Symbol};
-use sky_ir::{BinOp, EnumDef, Expr, Func, FuncId, IrType, ModPath, Module, Program, TypeDef};
+use sky_ir::{
+    BinOp, EnumDef, Expr, Func, FuncId, IrType, ModPath, Module, Program, TypeDef, Variant,
+};
 
 /// A single-module program with the given types and funcs (no entry needed:
 /// emission does not require one).
@@ -59,7 +61,11 @@ fn reserved_names_are_mangled_in_emitted_output() -> DResult<()> {
 
     let en = EnumDef {
         name: kw_ty,
-        variants: vec![variant],
+        type_params: vec![],
+        variants: vec![Variant {
+            name: variant,
+            fields: vec![],
+        }],
     };
     let render_fn = Func {
         id: FuncId::from_raw(0),
@@ -202,7 +208,11 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
     let make_enum = || {
         TypeDef::Enum(EnumDef {
             name: msg,
-            variants: vec![inc],
+            type_params: vec![],
+            variants: vec![Variant {
+                name: inc,
+                fields: vec![],
+            }],
         })
     };
     let prog = Program {

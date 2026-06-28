@@ -4,13 +4,15 @@
 //! the function-item shape from `ModuleEmitter.hs`. The byte target is golden
 //! `main.rs` lines 129–137 (`main_update` / `sky_main`).
 
+use core::fmt::Write as _;
+
 use sky_diagnostics::{DResult, Diagnostic, LowerError, Span};
 use sky_intern::Symbol;
-use sky_ir::{BinOp, Callee, Expr, Func, IrType, Pat};
+use sky_ir::{BinOp, Callee, Expr, Func, IrType, Match, Pat};
 
-use crate::EmitCtx;
 use crate::emit_types::{GenericScope, render_type};
 use crate::naming::kernel_name;
+use crate::{EmitCtx, is_direct_self_field};
 
 /// The deepest expression nesting the backend will descend before failing fast.
 ///
@@ -96,11 +98,9 @@ fn emit_expr_at(
     match expr {
         Expr::Int(n) => Ok(n.to_string()),
         Expr::Var(sym) => ctx.emit_ident(*sym),
-        Expr::Ctor { ty, variant } => Ok(format!(
-            "{}::{}",
-            ctx.enum_name(*ty)?,
-            ctx.emit_ident(*variant)?
-        )),
+        Expr::Ctor { ty, variant, args } => {
+            emit_ctor(ctx, *ty, *variant, args, indent, depth, generics)
+        }
         Expr::BinOp { op, lhs, rhs } => {
             let l = emit_expr_at(ctx, lhs, indent, child, generics)?;
             let r = emit_expr_at(ctx, rhs, indent, child, generics)?;
@@ -162,21 +162,163 @@ fn emit_expr_at(
         }
         Expr::Apply { func, args } => emit_apply(ctx, func, args, indent, depth, generics),
         Expr::FuncValue { callee, ty } => emit_func_value(ctx, callee, ty, generics),
-        Expr::Match(m) => {
-            let scrut = emit_expr_at(ctx, m.scrutinee(), indent, child, generics)?;
-            let arm_indent = indent_of(indent + 1);
-            let close_indent = indent_of(indent);
-            let mut arms = Vec::with_capacity(m.arms().len());
-            for arm in m.arms() {
-                let Pat::Ctor { ty, variant } = &arm.pat;
-                let pat = format!("{}::{}", ctx.enum_name(*ty)?, ctx.emit_ident(*variant)?);
-                let body = emit_expr_at(ctx, &arm.body, indent + 1, child, generics)?;
-                arms.push(format!("{arm_indent}{pat} => {body},"));
+        Expr::Match(m) => emit_match(ctx, m, indent, depth, generics),
+    }
+}
+
+/// Emit a constructor application. A nullary constructor renders as the bare
+/// path `EnumName::Variant` (byte-identical to M0); a payload constructor renders
+/// `EnumName::Variant(arg0, arg1, …)`. A direct-self-recursive payload position
+/// is wrapped in `Box::new(…)` to balance the boxed enum field. Kept out of the
+/// `emit_expr_at` match (`#[inline(never)]`) so its locals don't inflate the
+/// recursive frame.
+#[inline(never)]
+fn emit_ctor(
+    ctx: &EmitCtx,
+    ty: Symbol,
+    variant: Symbol,
+    args: &[Expr],
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+) -> DResult<String> {
+    let child = depth + 1;
+    let path = format!("{}::{}", ctx.enum_name(ty)?, ctx.emit_ident(variant)?);
+    if args.is_empty() {
+        return Ok(path);
+    }
+    let fields = ctx.variant_fields(ty, variant)?;
+    if fields.len() != args.len() {
+        return Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_ctor",
+            detail: format!(
+                "constructor {} of enum {} applied to {} args but declares {} fields; \
+                 a constructor application must be saturated",
+                variant.as_raw(),
+                ty.as_raw(),
+                args.len(),
+                fields.len()
+            ),
+        });
+    }
+    let mut parts = Vec::with_capacity(args.len());
+    for (arg, field_ty) in args.iter().zip(fields.iter()) {
+        let rendered = emit_expr_at(ctx, arg, indent, child, generics)?;
+        // A direct self-edge field is boxed in the enum, so its construction
+        // argument is boxed too.
+        if is_direct_self_field(field_ty, ty) {
+            parts.push(format!("Box::new({rendered})"));
+        } else {
+            parts.push(rendered);
+        }
+    }
+    Ok(format!("{path}({})", parts.join(", ")))
+}
+
+/// Emit a `match`. Each arm's head is a constructor pattern (an exhaustiveness
+/// obligation [`sky_ir::Match::new`] guarantees); a payload position binds a
+/// variable or is a wildcard. A direct-self-recursive payload field is boxed in
+/// the enum, so a variable bound to such a field is unboxed (`let x = *x;`) at the
+/// top of the arm body, giving the binder the enum's own (owned) type rather than
+/// `Box<…>`. Kept out of the `emit_expr_at` match (`#[inline(never)]`) for the
+/// same frame-size reason as the neighbouring helpers.
+#[inline(never)]
+fn emit_match(
+    ctx: &EmitCtx,
+    m: &Match,
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+) -> DResult<String> {
+    let child = depth + 1;
+    let scrut = emit_expr_at(ctx, m.scrutinee(), indent, child, generics)?;
+    let arm_indent = indent_of(indent + 1);
+    let close_indent = indent_of(indent);
+    let mut arms = Vec::with_capacity(m.arms().len());
+    for arm in m.arms() {
+        // The arm head is a constructor pattern (guaranteed by `Match::new`); a
+        // non-ctor head is an internal invariant violation, surfaced rather than
+        // mis-emitted.
+        let Pat::Ctor { ty, variant, args } = &arm.pat else {
+            return Err(Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_match",
+                detail: "match arm head is not a constructor pattern".to_owned(),
+            });
+        };
+        let path = format!("{}::{}", ctx.enum_name(*ty)?, ctx.emit_ident(*variant)?);
+        let (pat, unboxes) = if args.is_empty() {
+            (path, String::new())
+        } else {
+            let fields = ctx.variant_fields(*ty, *variant)?;
+            if fields.len() != args.len() {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_match",
+                    detail: format!(
+                        "constructor pattern {} of enum {} binds {} sub-patterns but the \
+                         variant declares {} fields",
+                        variant.as_raw(),
+                        ty.as_raw(),
+                        args.len(),
+                        fields.len()
+                    ),
+                });
             }
-            Ok(format!(
-                "match {scrut} {{\n{}\n{close_indent}}}",
-                arms.join("\n")
-            ))
+            let mut sub_pats = Vec::with_capacity(args.len());
+            let mut unbox_lines = String::new();
+            for (sub, field_ty) in args.iter().zip(fields.iter()) {
+                sub_pats.push(render_pat(ctx, sub)?);
+                // A variable bound to a boxed self-edge field is unboxed so the
+                // body sees the enum's own type, not `Box<Enum>`.
+                if is_direct_self_field(field_ty, *ty)
+                    && let Pat::Var(s) = sub
+                {
+                    let binder = ctx.emit_ident(*s)?;
+                    write!(unbox_lines, "let {binder} = *{binder}; ").map_err(|e| {
+                        Diagnostic::CompilerBug {
+                            where_: "sky_backend_rust::emit_match",
+                            detail: format!("writing unbox binder failed: {e}"),
+                        }
+                    })?;
+                }
+            }
+            (format!("{path}({})", sub_pats.join(", ")), unbox_lines)
+        };
+        let body = emit_expr_at(ctx, &arm.body, indent + 1, child, generics)?;
+        let arm_body = if unboxes.is_empty() {
+            body
+        } else {
+            format!("{{ {unboxes}{body} }}")
+        };
+        arms.push(format!("{arm_indent}{pat} => {arm_body},"));
+    }
+    Ok(format!(
+        "match {scrut} {{\n{}\n{close_indent}}}",
+        arms.join("\n")
+    ))
+}
+
+/// Render a pattern to its Rust spelling. Total over the M3a pattern set:
+/// a variable binder (the keyword-mangled name), a wildcard (`_`), or a
+/// constructor pattern (`EnumName::Variant` / `EnumName::Variant(sub0, …)`).
+///
+/// Nested constructor sub-patterns recurse; the M3a lowerer rejects them upstream
+/// (only variable / wildcard payload sub-patterns reach here), but the renderer
+/// stays total so an unexpected nesting can never panic.
+fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
+    match pat {
+        Pat::Var(sym) => ctx.emit_ident(*sym),
+        Pat::Wildcard => Ok("_".to_owned()),
+        Pat::Ctor { ty, variant, args } => {
+            let path = format!("{}::{}", ctx.enum_name(*ty)?, ctx.emit_ident(*variant)?);
+            if args.is_empty() {
+                Ok(path)
+            } else {
+                let mut subs = Vec::with_capacity(args.len());
+                for sub in args {
+                    subs.push(render_pat(ctx, sub)?);
+                }
+                Ok(format!("{path}({})", subs.join(", ")))
+            }
         }
     }
 }

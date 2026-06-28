@@ -73,7 +73,20 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Str => "String".to_owned(),
         IrType::Unit => "()".to_owned(),
         IrType::TaskUnit => "SkyTask<()>".to_owned(),
-        IrType::Enum(sym) => ctx.enum_name(*sym)?.to_owned(),
+        IrType::Enum { name, args } => {
+            let base = ctx.enum_name(*name)?.to_owned();
+            if args.is_empty() {
+                // A non-generic enum renders as the bare Rust type name —
+                // byte-identical to the M0 backend.
+                base
+            } else {
+                let mut parts = Vec::with_capacity(args.len());
+                for arg in args {
+                    parts.push(render_type(ctx, arg, generics)?);
+                }
+                format!("{base}<{}>", parts.join(", "))
+            }
+        }
         IrType::Tuple(elems) => {
             let mut parts = Vec::with_capacity(elems.len());
             for elem in elems {
@@ -102,10 +115,11 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
     })
 }
 
-/// Emit a nullary-variant enum and its derived `SkyStringify` impl, including
-/// the trailing newline.
+/// Emit an enum and its derived `SkyStringify` impl, including the trailing
+/// newline.
 ///
-/// Shape (matching the golden):
+/// A nullary-only, non-generic enum (the M0 case) emits byte-identically to the
+/// golden:
 /// ```text
 /// #[derive(Clone, Debug, PartialEq)]
 /// pub enum MainMsg {
@@ -121,8 +135,36 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
 ///     }
 /// }
 /// ```
+///
+/// A payload-carrying and/or generic enum (M3a) gains tuple-variant payloads, a
+/// `<T1, …>` clause on the enum and its impl, and `SkyStringify` arms that bind
+/// each payload field and render it through the total autoref dispatch — mirroring
+/// the Go-reference Rust backend's `skyStringifyEnumImpl`:
+/// ```text
+/// #[derive(Clone, Debug, PartialEq)]
+/// pub enum MainMaybe<T1> {
+///     Just(T1),
+///     Nothing,
+/// }
+/// impl<T1: SkyStringify + std::fmt::Debug> SkyStringify for MainMaybe<T1> {
+///     fn sky_show(&self) -> String {
+///         match self {
+///             MainMaybe::Just(p0) => format!("Just {}", (&sky_runtime::stringify::Wrap(p0)).dispatch()),
+///             MainMaybe::Nothing => "Nothing".to_string(),
+///         }
+///     }
+/// }
+/// ```
+///
+/// A direct self-recursive payload field (`Node Tree Int Tree`) is wrapped in
+/// `Box<…>` so the Rust enum stays finite-sized (E0072); the construction and
+/// pattern emitters balance that boxing.
 pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     let name = ctx.enum_name(def.name)?.to_owned();
+    // The enum's own generic scope: each type parameter → `T1`, `T2`, … by
+    // position. Empty for a non-generic enum (byte-identical to M0).
+    let scope = GenericScope::new(&def.type_params);
+
     let mut variant_lines = Vec::with_capacity(def.variants.len());
     let mut show_arms = Vec::with_capacity(def.variants.len());
     for variant in &def.variants {
@@ -130,21 +172,76 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
         // the original Sky name so a variant like `Type` still displays as
         // "Type", not "Type_". For non-keyword variants the two coincide, so the
         // golden stays byte-identical.
-        let vn = ctx.emit_ident(*variant)?;
-        let display = ctx.resolve_ident(*variant)?;
-        variant_lines.push(format!("    {vn},"));
-        show_arms.push(format!(
-            "            {name}::{vn} => \"{display}\".to_string(),"
-        ));
+        let vn = ctx.emit_ident(variant.name)?;
+        let display = ctx.resolve_ident(variant.name)?.to_owned();
+        if variant.fields.is_empty() {
+            variant_lines.push(format!("    {vn},"));
+            show_arms.push(format!(
+                "            {name}::{vn} => \"{display}\".to_string(),"
+            ));
+        } else {
+            // Payload variant: render each field type (boxing a direct self-edge),
+            // and bind a `pN` per field in the stringify arm.
+            let mut field_types = Vec::with_capacity(variant.fields.len());
+            let mut binders = Vec::with_capacity(variant.fields.len());
+            let mut show_args = Vec::with_capacity(variant.fields.len());
+            for (i, field_ty) in variant.fields.iter().enumerate() {
+                let rendered = render_type(ctx, field_ty, scope)?;
+                let rendered = if crate::is_direct_self_field(field_ty, def.name) {
+                    format!("Box<{rendered}>")
+                } else {
+                    rendered
+                };
+                field_types.push(rendered);
+                let binder = format!("p{i}");
+                // `binder` is a `match self` binder → already a `&FieldType`, so
+                // `Wrap(binder)` carries the reference the dispatch expects. This
+                // is total over any field type (the `Debug` arm is the fallback).
+                show_args.push(format!(
+                    "(&sky_runtime::stringify::Wrap({binder})).dispatch()"
+                ));
+                binders.push(binder);
+            }
+            variant_lines.push(format!("    {vn}({}),", field_types.join(", ")));
+            let placeholders = vec!["{}"; variant.fields.len()].join(" ");
+            // Go `%v`-style: `Vname <f0> <f1> …` (variant name, then space-
+            // separated fields). Matches the Go-reference `skyStringifyEnumImpl`.
+            show_arms.push(format!(
+                "            {name}::{vn}({}) => format!(\"{display} {placeholders}\", {}),",
+                binders.join(", "),
+                show_args.join(", ")
+            ));
+        }
     }
     let variants = variant_lines.join("\n");
     let arms = show_arms.join("\n");
+
+    // Generic clauses: `<T1, T2>` on the enum, `<T1: SkyStringify + Debug, …>` on
+    // the impl, `<T1, T2>` on the impl's `for` type. All empty when the enum is
+    // non-generic, so that path stays byte-identical to M0.
+    let params: Vec<String> = (1..=def.type_params.len())
+        .map(|i| format!("T{i}"))
+        .collect();
+    let (decl_clause, impl_bounds, use_clause) = if params.is_empty() {
+        (String::new(), String::new(), String::new())
+    } else {
+        let bounds: Vec<String> = params
+            .iter()
+            .map(|p| format!("{p}: SkyStringify + std::fmt::Debug"))
+            .collect();
+        (
+            format!("<{}>", params.join(", ")),
+            format!("<{}>", bounds.join(", ")),
+            format!("<{}>", params.join(", ")),
+        )
+    };
+
     Ok(format!(
         "#[derive(Clone, Debug, PartialEq)]
-pub enum {name} {{
+pub enum {name}{decl_clause} {{
 {variants}
 }}
-impl SkyStringify for {name} {{
+impl{impl_bounds} SkyStringify for {name}{use_clause} {{
     fn sky_show(&self) -> String {{
         match self {{
 {arms}
