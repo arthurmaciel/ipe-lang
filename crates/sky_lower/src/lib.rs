@@ -53,14 +53,19 @@ pub fn lower(
     // sites without collision; `fresh_symbols` guarantees the names dodge every
     // user identifier (all interned by now) and each other.
     let eta_params = interner.fresh_symbols("eta_", lower::max_def_arity(m))?;
-    lower::Lowerer::new(m, types, &*interner, eta_params).run()
+    // A tuple-destructuring function parameter has no single name; the lowerer
+    // gives each parameter position a synthetic binder from this pool and
+    // prepends a `Destructure` to the body. One per parameter position, sized to
+    // the widest function arity, minted through the same owned `&mut Interner`.
+    let param_binders = interner.fresh_symbols("arg_", lower::max_def_arity(m))?;
+    lower::Lowerer::new(m, types, &*interner, eta_params, param_binders).run()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use sky_diagnostics::{Diagnostic, Feature, LowerError};
-    use sky_ir::{BinOp, Callee, Expr, IrType, KernelFn, TypeDef};
+    use sky_ir::{BinOp, Callee, Expr, IrType, KernelFn, Pat, TypeDef};
 
     const GOLDEN: &str = include_str!("../../../tests/golden/m0/Main.sky");
 
@@ -267,6 +272,98 @@ mod tests {
             .into_iter()
             .find(|f| i.resolve(f.name) == Some(which))?;
         Some((func, i))
+    }
+
+    #[test]
+    fn tuple_parameter_lowers_to_synthetic_binder_plus_destructure() {
+        // `fst (a, b) = a` — the tuple parameter has no single name, so it
+        // becomes one synthetic parameter whose tuple type is `(a, b)` and the
+        // body opens with a `Destructure` binding `(a, b) = <synthetic>`.
+        let opt = lower_func(
+            "module Main exposing (fst)\nfst : (a, b) -> a\nfst (a, b) =\n    a\n",
+            "fst",
+        );
+        assert!(opt.is_some(), "fst must lower");
+        let Some((func, i)) = opt else { return };
+        assert_eq!(func.params.len(), 1, "one (synthetic) parameter");
+        assert!(
+            matches!(func.params.first(), Some((_, IrType::Tuple(es))) if es.len() == 2),
+            "the parameter's type is a 2-element tuple, got {:?}",
+            func.params.first().map(|(_, t)| t)
+        );
+        let Expr::Destructure {
+            binder,
+            value,
+            body,
+        } = &func.body
+        else {
+            assert!(false_marker(), "body is a Destructure, got {:?}", func.body);
+            return;
+        };
+        assert!(
+            matches!(binder, Pat::Tuple(es)
+                if es.len() == 2
+                    && matches!(es.first(), Some(Pat::Var(_)))
+                    && matches!(es.get(1), Some(Pat::Var(_)))),
+            "binder is `(a, b)`"
+        );
+        assert!(
+            matches!(value.as_ref(), Expr::Var(s) if i.resolve(*s).is_some_and(|n| n.starts_with("arg_"))),
+            "destructured value is the synthetic parameter"
+        );
+        assert!(
+            matches!(body.as_ref(), Expr::Var(s) if i.resolve(*s) == Some("a")),
+            "body returns `a`"
+        );
+    }
+
+    #[test]
+    fn single_arm_tuple_case_lowers_to_a_destructure() {
+        // `case (1, 2) of (a, b) -> a + b` is an irrefutable destructure, not an
+        // enum match — it lowers to a `Destructure`, not an `Expr::Match`.
+        let opt = lower_body(
+            "module Main exposing (v)\nv : Int\nv =\n    case (1, 2) of\n        (a, b) -> a + b\n",
+            "v",
+        );
+        assert!(opt.is_some(), "v must lower");
+        let Some((body, _i)) = opt else { return };
+        let Expr::Destructure {
+            binder,
+            value,
+            body,
+        } = &body
+        else {
+            assert!(false_marker(), "body is a Destructure, got {body:?}");
+            return;
+        };
+        assert!(
+            matches!(binder, Pat::Tuple(es) if es.len() == 2),
+            "binder is a 2-tuple"
+        );
+        assert!(
+            matches!(value.as_ref(), Expr::Tuple(es) if es.len() == 2),
+            "destructured value is the `(1, 2)` tuple"
+        );
+        assert!(
+            matches!(body.as_ref(), Expr::BinOp { op: BinOp::Add, .. }),
+            "body is `a + b`"
+        );
+    }
+
+    #[test]
+    fn unit_value_lowers_to_expr_unit() {
+        // The `()` argument lowers to `Expr::Unit`.
+        let opt = lower_body(
+            "module Main exposing (v)\nuseUnit : () -> Int\nuseUnit u =\n    7\nv : Int\nv =\n    useUnit ()\n",
+            "v",
+        );
+        assert!(opt.is_some(), "v must lower");
+        let Some((body, _i)) = opt else { return };
+        assert!(
+            matches!(&body, Expr::Call { args, .. }
+                if matches!(args.first(), Some(Expr::Unit))),
+            "the call argument is `Expr::Unit`, got {body:?}"
+        );
     }
 
     /// Lower a free-standing module, returning the lowering [`DResult`] so a test

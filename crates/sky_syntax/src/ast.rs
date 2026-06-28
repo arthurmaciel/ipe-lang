@@ -128,6 +128,9 @@ pub enum Expr_ {
     VarQual(Symbol, Symbol),
     /// An integer literal.
     Int(i64),
+    /// The unit value `()` — the sole inhabitant of the unit type. Built by the
+    /// parser from empty parentheses. Mirrors the Haskell compiler's `Src.Unit`.
+    Unit,
     /// Function application: callee applied to one or more arguments.
     Call(Box<Expr>, Vec<Expr>),
     /// `case scrutinee of` with `(pattern, body)` arms.
@@ -197,6 +200,11 @@ pub enum Pattern_ {
     PVar(Symbol),
     /// A constructor pattern: name, dotted module segments, sub-patterns.
     PCtor(Symbol, Vec<Symbol>, Vec<Pattern>),
+    /// A tuple pattern `(p0, p1, ...)`. Invariant: arity ≥ 2 — a parenthesised
+    /// single pattern `(p)` is unwrapped to `p`, and empty parens `()` are not a
+    /// pattern. Elements may be variables, wildcards, nested constructor
+    /// patterns, or nested tuples. Mirrors the Haskell compiler's tuple pattern.
+    PTuple(Vec<Pattern>),
 }
 
 /// Type-annotation node (M0 subset).

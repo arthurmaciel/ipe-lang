@@ -64,6 +64,7 @@ fn build_enum_table(module: &canon::Module) -> EnumTable {
 fn check_expr(e: &canon::Expr, enums: &EnumTable, interner: &Interner) -> DResult<()> {
     match &e.value {
         canon::Expr_::Int(_)
+        | canon::Expr_::Unit
         | canon::Expr_::VarLocal(_)
         | canon::Expr_::VarTopLevel { .. }
         | canon::Expr_::VarKernel { .. }
@@ -142,7 +143,14 @@ fn check_case(
                     enum_name = Some(*type_name);
                 }
             }
-            canon::Pattern_::PAnything | canon::Pattern_::PVar(_) => return Ok(()),
+            // A tuple pattern arm is irrefutable (it binds, it never fails to
+            // match), so it makes the `case` catch-all exhaustive — exactly like
+            // a wildcard / variable arm. Whether the tuple destructure itself is
+            // supported (single arm, irrefutable elements) is the lowerer's
+            // SKY-L0115 report to make.
+            canon::Pattern_::PAnything | canon::Pattern_::PVar(_) | canon::Pattern_::PTuple(_) => {
+                return Ok(());
+            }
         }
     }
     let Some(enum_name) = enum_name else {

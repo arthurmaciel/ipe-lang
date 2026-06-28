@@ -352,6 +352,11 @@ fn bind_pattern_names(p: &src::Pattern_, env: &mut Env) {
                 bind_pattern_names(&a.value, env);
             }
         }
+        src::Pattern_::PTuple(elems) => {
+            for e in elems {
+                bind_pattern_names(&e.value, env);
+            }
+        }
     }
 }
 
@@ -390,6 +395,13 @@ fn canonicalise_pattern(
                 args: can_args,
             }
         }
+        src::Pattern_::PTuple(elems) => {
+            let mut can_elems = Vec::with_capacity(elems.len());
+            for e in elems {
+                can_elems.push(canonicalise_pattern(e, env, interner)?);
+            }
+            canon::Pattern_::PTuple(can_elems)
+        }
     };
     Ok(Located::new(span, node))
 }
@@ -399,6 +411,7 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
     let span = e.span;
     let node = match &e.value {
         src::Expr_::Int(n) => canon::Expr_::Int(*n),
+        src::Expr_::Unit => canon::Expr_::Unit,
         src::Expr_::VarLocal(name) => resolve_var(*name, span, env, interner)?,
         src::Expr_::VarQual(qual, name) => resolve_qual_var(*qual, *name, span, env, interner)?,
         src::Expr_::Call(f, args) => {

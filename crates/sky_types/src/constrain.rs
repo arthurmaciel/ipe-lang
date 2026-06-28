@@ -494,7 +494,7 @@ impl<'a> Builder<'a> {
                     };
                     let arg = from_canon(arg_ty);
                     let arg_var = self.instantiate_rigid(&arg, &mut rigid_vars)?;
-                    Self::bind_param(&mut local, pat, arg_var);
+                    self.constrain_pattern(&mut local, pat, arg_var)?;
                     cursor = rest;
                 }
                 let ret_ty = from_canon(cursor);
@@ -512,7 +512,7 @@ impl<'a> Builder<'a> {
                 let mut param_vars = Vec::with_capacity(patterns.len());
                 for pat in patterns {
                     let v = self.flex()?;
-                    Self::bind_param(&mut local, pat, v);
+                    self.constrain_pattern(&mut local, pat, v)?;
                     param_vars.push(v);
                 }
                 let body_var = self.constrain_expr(&local, body)?;
@@ -571,17 +571,6 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Bind a function parameter pattern's names to `var` in `local`.
-    fn bind_param(local: &mut BTreeMap<Symbol, VarId>, pat: &canon::Pattern, var: VarId) {
-        match &pat.value {
-            canon::Pattern_::PVar(s) => {
-                local.insert(*s, var);
-            }
-            // `_` binds nothing; nullary ctor params don't occur in M0.
-            canon::Pattern_::PAnything | canon::Pattern_::PCtor { .. } => {}
-        }
-    }
-
     fn constrain_expr(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
@@ -590,6 +579,7 @@ impl<'a> Builder<'a> {
         let span = e.span;
         let var = match &e.value {
             canon::Expr_::Int(_) => self.int_var()?,
+            canon::Expr_::Unit => self.structure(FlatType::Unit)?,
             canon::Expr_::VarLocal(s) => match local.get(s) {
                 Some(v) => *v,
                 None => {
@@ -713,7 +703,7 @@ impl<'a> Builder<'a> {
         let mut param_vars = Vec::with_capacity(params.len());
         for p in params {
             let v = self.flex()?;
-            Self::bind_param(&mut lam_local, p, v);
+            self.constrain_pattern(&mut lam_local, p, v)?;
             param_vars.push(v);
         }
         let mut arrow = self.constrain_expr(&lam_local, body)?;
@@ -886,6 +876,23 @@ impl<'a> Builder<'a> {
                     // for the nullary case.
                     let ctor = self.con_var(home.clone(), *type_name, Vec::new())?;
                     self.eq(pat.span, ctor, scrut_var);
+                }
+                Ok(())
+            }
+            canon::Pattern_::PTuple(elems) => {
+                // A tuple pattern matches a Tuple type element-wise: mint one
+                // fresh variable per element, tie the scrutinee to the product
+                // over them, and constrain each sub-pattern against its element's
+                // variable. Nested sub-patterns recurse; the lowerer restricts
+                // which element shapes it can actually emit.
+                let mut elem_vars = Vec::with_capacity(elems.len());
+                for _ in elems {
+                    elem_vars.push(self.flex()?);
+                }
+                let tuple = self.structure(FlatType::Tuple(elem_vars.clone()))?;
+                self.eq(pat.span, tuple, scrut_var);
+                for (sub, ev) in elems.iter().zip(elem_vars) {
+                    self.constrain_pattern(local, sub, ev)?;
                 }
                 Ok(())
             }

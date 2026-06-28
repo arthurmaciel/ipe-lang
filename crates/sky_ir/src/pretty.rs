@@ -308,6 +308,24 @@ fn write_func(out: &mut String, func: &Func, interner: &Interner) {
     write_expr(out, &func.body, interner, 3);
 }
 
+/// Render a `let`-like binding node (`Let` / `Destructure`): a `header` line,
+/// then the `value` and `body` sub-trees under labelled children. Shared by both
+/// binding forms so each match arm stays a single call.
+fn write_binding(
+    out: &mut String,
+    header: &str,
+    value: &Expr,
+    body: &Expr,
+    interner: &Interner,
+    level: usize,
+) {
+    line(out, level, header);
+    line(out, level + 1, "value");
+    write_expr(out, value, interner, level + 2);
+    line(out, level + 1, "body");
+    write_expr(out, body, interner, level + 2);
+}
+
 fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) {
     match expr {
         Expr::Int(n) => line(out, level, &format!("Int {n}")),
@@ -333,11 +351,28 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
             write_expr(out, rhs, interner, level + 1);
         }
         Expr::Let { name, value, body } => {
-            line(out, level, &format!("Let {}", sym_name(interner, *name)));
-            line(out, level + 1, "value");
-            write_expr(out, value, interner, level + 2);
-            line(out, level + 1, "body");
-            write_expr(out, body, interner, level + 2);
+            write_binding(
+                out,
+                &format!("Let {}", sym_name(interner, *name)),
+                value,
+                body,
+                interner,
+                level,
+            );
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            write_binding(
+                out,
+                &format!("Destructure {}", pat_name(interner, binder)),
+                value,
+                body,
+                interner,
+                level,
+            );
         }
         Expr::If { cond, then_, else_ } => {
             line(out, level, "If");
@@ -361,17 +396,7 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
                 write_expr(out, elem, interner, level + 1);
             }
         }
-        Expr::Record(fields) => {
-            line(out, level, "Record");
-            for (name, value) in fields {
-                line(
-                    out,
-                    level + 1,
-                    &format!("field {}", sym_name(interner, *name)),
-                );
-                write_expr(out, value, interner, level + 2);
-            }
-        }
+        Expr::Record(fields) => write_record(out, fields, interner, level),
         Expr::Access { record, field } => {
             line(
                 out,
@@ -380,19 +405,7 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
             );
             write_expr(out, record, interner, level + 1);
         }
-        Expr::Update { record, fields } => {
-            line(out, level, "Update");
-            line(out, level + 1, "record");
-            write_expr(out, record, interner, level + 2);
-            for (name, value) in fields {
-                line(
-                    out,
-                    level + 1,
-                    &format!("field {}", sym_name(interner, *name)),
-                );
-                write_expr(out, value, interner, level + 2);
-            }
-        }
+        Expr::Update { record, fields } => write_update(out, record, fields, interner, level),
         Expr::Lambda { params, ret, body } => write_lambda(out, params, ret, body, interner, level),
         Expr::Apply { func, args } => write_apply(out, func, args, interner, level),
         Expr::FuncValue { callee, ty } => line(
@@ -405,6 +418,37 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
             ),
         ),
     }
+}
+
+/// Render the labelled `field <name>` / value child lines of a record literal /
+/// update. Shared by [`write_record`] and [`write_update`].
+fn write_fields(out: &mut String, fields: &[(Symbol, Expr)], interner: &Interner, level: usize) {
+    for (name, value) in fields {
+        line(out, level, &format!("field {}", sym_name(interner, *name)));
+        write_expr(out, value, interner, level + 1);
+    }
+}
+
+/// Render a `Record` literal node. Split from [`write_expr`] to keep that match
+/// small.
+fn write_record(out: &mut String, fields: &[(Symbol, Expr)], interner: &Interner, level: usize) {
+    line(out, level, "Record");
+    write_fields(out, fields, interner, level + 1);
+}
+
+/// Render an `Update` node: the copied `record` then the changed fields. Split
+/// from [`write_expr`] to keep that match small.
+fn write_update(
+    out: &mut String,
+    record: &Expr,
+    fields: &[(Symbol, Expr)],
+    interner: &Interner,
+    level: usize,
+) {
+    line(out, level, "Update");
+    line(out, level + 1, "record");
+    write_expr(out, record, interner, level + 2);
+    write_fields(out, fields, interner, level + 1);
 }
 
 /// Render a `Lambda` node: a header `Lambda (p0 : T0, ...) -> R` followed by its

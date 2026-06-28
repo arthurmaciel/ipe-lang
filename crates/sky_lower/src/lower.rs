@@ -25,6 +25,15 @@ use sky_ir::{
 };
 use sky_types::{SolvedTypes, Ty};
 
+/// One lowered function parameter: its (possibly synthetic) binder name and its
+/// IR type.
+type IrParam = (Symbol, IrType);
+
+/// A tuple-parameter destructure-prologue entry: the synthetic binder name the
+/// parameter was given, paired with the irrefutable tuple [`Pat`] that opens it
+/// at the top of the function body (`let <Pat> = <synthetic>`).
+type ParamPrologue = (Symbol, Pat);
+
 /// Build a [`Diagnostic::CompilerBug`] for a violated lowering invariant.
 ///
 /// Reserved **strictly** for genuinely-unreachable states: a symbol foreign to
@@ -208,6 +217,18 @@ pub struct Lowerer<'a> {
     /// across sites without shadowing; [`Interner::fresh_symbols`] guarantees no
     /// entry aliases a user identifier.
     eta_params: Vec<Symbol>,
+    /// Pre-minted, collision-free binder names for a tuple-destructuring
+    /// function parameter. A parameter pattern `(a, b)` has no single name, so
+    /// the lowerer gives the parameter a synthetic name from this pool (position
+    /// `i` names the i-th parameter) and prepends a `Destructure` binding
+    /// `let (a, b) = <synthetic>` to the body. Sized to the widest function
+    /// arity in the module — the most parameters any binding can carry, hence
+    /// the most synthetic binders one function can need — through the one
+    /// `&mut Interner` the entry point owns. Each function is its own scope, so
+    /// the pool is reused positionally across functions without collision;
+    /// [`Interner::fresh_symbols`] guarantees the names dodge every user
+    /// identifier and each other.
+    param_binders: Vec<Symbol>,
 }
 
 /// The widest parameter-pattern count across the module's top-level bindings —
@@ -231,6 +252,7 @@ impl<'a> Lowerer<'a> {
         types: &'a SolvedTypes,
         interner: &'a Interner,
         eta_params: Vec<Symbol>,
+        param_binders: Vec<Symbol>,
     ) -> Self {
         let mut func_ids = BTreeMap::new();
         for (idx, def) in m.defs.iter().enumerate() {
@@ -255,6 +277,7 @@ impl<'a> Lowerer<'a> {
             enum_variants,
             ctor_arity,
             eta_params,
+            param_binders,
         }
     }
 
@@ -448,14 +471,26 @@ impl<'a> Lowerer<'a> {
                 // pass-through and never needs a Rust trait bound. An empty
                 // `free_vars` keeps the function monomorphic, byte-identical to
                 // M0/M1.
-                let (params, ret) = self.split_typed_sig(ty, patterns, free_vars)?;
+                let (params, prologue, ret) = self.split_typed_sig(ty, patterns, free_vars)?;
+                // A tuple-destructuring parameter binds its synthetic name to the
+                // tuple, then the body opens it with a `Destructure`. Fold the
+                // prologue OUTERMOST-first (reverse) so the first parameter's
+                // destructure is the outermost binding, matching source order.
+                let mut lowered_body = self.lower_expr(body)?;
+                for (binder_sym, binder_pat) in prologue.into_iter().rev() {
+                    lowered_body = Expr::Destructure {
+                        binder: binder_pat,
+                        value: Box::new(Expr::Var(binder_sym)),
+                        body: Box::new(lowered_body),
+                    };
+                }
                 Ok(Func {
                     id,
                     name,
                     type_params: free_vars.clone(),
                     params,
                     ret,
-                    body: self.lower_expr(body)?,
+                    body: lowered_body,
                 })
             }
             canon::Def::Untyped { patterns, body, .. } => {
@@ -487,15 +522,23 @@ impl<'a> Lowerer<'a> {
     /// binding's quantified type-variable set ([`canon::Def::Typed::free_vars`]),
     /// so each annotation `Type::Var` it contains lowers to an
     /// [`IrType::Generic`] rather than being rejected as monomorphic.
+    ///
+    /// Returns `(params, prologue, ret)`. A plain variable parameter contributes
+    /// `(name, ty)` to `params` directly. A TUPLE parameter `(a, b)` has no
+    /// single name: it contributes a synthetic binder name to `params` and a
+    /// `(synthetic, tuple Pat)` entry to `prologue`, which [`Self::lower_def`]
+    /// turns into a `Destructure` wrapping the body. `prologue` is in source
+    /// (parameter) order.
     fn split_typed_sig(
         &self,
         ty: &canon::Type,
         patterns: &[canon::Pattern],
         generics: &[Symbol],
-    ) -> DResult<(Vec<(Symbol, IrType)>, IrType)> {
+    ) -> DResult<(Vec<IrParam>, Vec<ParamPrologue>, IrType)> {
         let mut cur = ty;
         let mut params = Vec::with_capacity(patterns.len());
-        for pat in patterns {
+        let mut prologue = Vec::new();
+        for (i, pat) in patterns.iter().enumerate() {
             let canon::Type::Lambda(arg, rest) = cur else {
                 // More parameter patterns than the annotation has arrows. The
                 // type checker rejects this first (the body's inferred arity
@@ -508,15 +551,32 @@ impl<'a> Lowerer<'a> {
                     "annotation has fewer arrows than parameters",
                 ));
             };
-            // The argument type describes this parameter.
-            params.push((
-                Self::pattern_var(pat)?,
-                self.ir_type_from_canon(arg, generics)?,
-            ));
+            let ir_ty = self.ir_type_from_canon(arg, generics)?;
+            match &pat.value {
+                canon::Pattern_::PTuple(_) => {
+                    // A tuple parameter: name it with a fresh synthetic binder
+                    // (one per parameter position) and record the destructure for
+                    // the body prologue. The pool is sized to the widest function
+                    // arity, so position `i` is always present; a missing slot is
+                    // an internal invariant violation.
+                    let synthetic = *self.param_binders.get(i).ok_or_else(|| {
+                        bug(
+                            "sky_lower::split_typed_sig",
+                            "tuple-parameter binder pool exhausted",
+                        )
+                    })?;
+                    params.push((synthetic, ir_ty));
+                    prologue.push((synthetic, Self::lower_destructure_pat(pat)?));
+                }
+                // A plain variable parameter. A wildcard / constructor parameter
+                // is parameter-destructuring the lowerer does not model yet
+                // (SKY-L0105); `pattern_var` makes that report.
+                _ => params.push((Self::pattern_var(pat)?, ir_ty)),
+            }
             cur = rest.as_ref();
         }
         // The trailing type is the return type.
-        Ok((params, self.ir_type_from_canon(cur, generics)?))
+        Ok((params, prologue, self.ir_type_from_canon(cur, generics)?))
     }
 
     const fn pattern_var(pat: &canon::Pattern) -> DResult<Symbol> {
@@ -838,6 +898,7 @@ impl<'a> Lowerer<'a> {
         self.reject_function_through_type_var(e)?;
         match &e.value {
             canon::Expr_::Int(n) => Ok(Expr::Int(*n)),
+            canon::Expr_::Unit => Ok(Expr::Unit),
             canon::Expr_::VarLocal(s) => Ok(Expr::Var(*s)),
             canon::Expr_::VarCtor {
                 type_name, name, ..
@@ -1337,16 +1398,46 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Lower a constructor payload sub-pattern. M3a binds a payload field to a
-    /// variable or ignores it with `_`; a nested constructor / literal / tuple /
-    /// record / cons sub-pattern is the nested-payload gap (SKY-L0112), surfaced
-    /// fail-closed rather than mis-lowered.
-    const fn lower_payload_pat(p: &canon::Pattern) -> DResult<Pat> {
+    /// variable or ignores it with `_`; M3b-1 also admits a TUPLE payload of
+    /// those (`Just (a, b)`), lowered element-wise. A nested constructor /
+    /// literal / record / cons sub-pattern is the nested-payload gap (SKY-L0112),
+    /// surfaced fail-closed rather than mis-lowered.
+    fn lower_payload_pat(p: &canon::Pattern) -> DResult<Pat> {
         match &p.value {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
             canon::Pattern_::PAnything => Ok(Pat::Wildcard),
+            canon::Pattern_::PTuple(elems) => {
+                let subs = elems
+                    .iter()
+                    .map(Self::lower_payload_pat)
+                    .collect::<DResult<Vec<_>>>()?;
+                Ok(Pat::Tuple(subs))
+            }
             canon::Pattern_::PCtor { .. } => {
                 Err(unsupported(p.span, Feature::NestedPayloadPatterns))
             }
+        }
+    }
+
+    /// Lower an IRREFUTABLE destructuring binder — a function-parameter pattern
+    /// or a single-arm tuple `case` pattern. A variable / wildcard / nested
+    /// tuple of those always matches, so the resulting `Destructure` (or a
+    /// tuple function parameter) is a sound, exhaustive Rust binding. A
+    /// REFUTABLE element — a constructor (a literal once those land) — could
+    /// fail to match and is the tuple-pattern gap (SKY-L0115), surfaced
+    /// fail-closed rather than emitted as a refutable `let`.
+    fn lower_destructure_pat(p: &canon::Pattern) -> DResult<Pat> {
+        match &p.value {
+            canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
+            canon::Pattern_::PAnything => Ok(Pat::Wildcard),
+            canon::Pattern_::PTuple(elems) => {
+                let subs = elems
+                    .iter()
+                    .map(Self::lower_destructure_pat)
+                    .collect::<DResult<Vec<_>>>()?;
+                Ok(Pat::Tuple(subs))
+            }
+            canon::Pattern_::PCtor { .. } => Err(unsupported(p.span, Feature::TuplePatternMatch)),
         }
     }
 
@@ -1358,6 +1449,22 @@ impl<'a> Lowerer<'a> {
         let first = branches
             .first()
             .ok_or_else(|| bug("sky_lower::lower_case", "empty case expression"))?;
+        // A tuple-pattern arm is an irrefutable destructure, not an enum match.
+        // M3b-1 supports exactly one such arm (`case (1, 2) of (a, b) -> …`);
+        // it lowers to a `Destructure` binding rather than an `Expr::Match`.
+        // More than one arm would need product/literal exhaustiveness, the
+        // tuple-pattern gap (SKY-L0115).
+        if let canon::Pattern_::PTuple(_) = &first.pat.value {
+            if branches.len() != 1 {
+                return Err(unsupported(first.pat.span, Feature::TuplePatternMatch));
+            }
+            let binder = Self::lower_destructure_pat(&first.pat)?;
+            return Ok(Expr::Destructure {
+                binder,
+                value: Box::new(scrutinee),
+                body: Box::new(self.lower_expr(&first.body)?),
+            });
+        }
         let canon::Pattern_::PCtor { type_name, .. } = &first.pat.value else {
             // A wildcard/variable/literal arm. M0 matches only nullary
             // constructor patterns. [SKY-L0100, feature: case-pattern-kinds]

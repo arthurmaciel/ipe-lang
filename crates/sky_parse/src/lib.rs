@@ -532,10 +532,57 @@ mod tests {
     }
 
     #[test]
-    fn unit_value_is_rejected() {
-        // `()` is the unit value, outside the M1 expression grammar: a clean
-        // "expected expression" parse error at the `)`, never a tuple or panic.
-        assert_eq!(err_code(&format!("{HDR}v =\n    ()\n")), "SKY-P0001");
+    fn unit_value_parses_into_expr_unit() {
+        // `()` is the unit value (M3b-1): empty parentheses parse to `Expr_::Unit`,
+        // never a tuple, a paren-group, or a parse error.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v =\n    ()\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "unit value must parse: {m:?}");
+        let Ok(m) = m else { return };
+        assert!(
+            find_value(&m, &i, "v").is_some_and(|v| matches!(v.body.value, Expr_::Unit)),
+            "v body is `Expr_::Unit`"
+        );
+    }
+
+    #[test]
+    fn tuple_pattern_in_function_parameter_parses_into_a_ptuple() {
+        // `fst (a, b) = a` — a tuple pattern in parameter position, with two
+        // variable elements. Before M3b-1 this failed at the `,`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}fst : (a, b) -> a\nfst (a, b) =\n    a\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "tuple-parameter pattern must parse: {m:?}");
+        let Ok(m) = m else { return };
+        assert!(
+            find_value(&m, &i, "fst").is_some_and(|v| v.patterns.first().is_some_and(|p| {
+                matches!(&p.value, Pattern_::PTuple(es)
+                    if es.len() == 2
+                        && matches!(es.first().map(|e| &e.value), Some(Pattern_::PVar(_)))
+                        && matches!(es.get(1).map(|e| &e.value), Some(Pattern_::PVar(_))))
+            })),
+            "fst's parameter is a 2-element tuple pattern of variables"
+        );
+    }
+
+    #[test]
+    fn tuple_pattern_in_case_arm_parses_into_a_ptuple() {
+        // `case p of (a, b) -> a` — a tuple pattern as a `case` arm head.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    case (1, 2) of\n        (a, b) -> a\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "tuple case-arm pattern must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let arm_is_tuple = find_value(&m, &i, "v").is_some_and(|v| {
+            matches!(&v.body.value, Expr_::Case(_, arms)
+                if arms.first().is_some_and(|(pat, _)|
+                    matches!(&pat.value, Pattern_::PTuple(es) if es.len() == 2)))
+        });
+        assert!(
+            arm_is_tuple,
+            "the single case arm is a 2-element tuple pattern"
+        );
     }
 
     #[test]

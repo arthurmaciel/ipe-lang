@@ -1108,21 +1108,24 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse what follows a just-consumed `(`: either a parenthesised single
-    /// expression (the parens are unwrapped — `(e)` is just `e`, preserving the
-    /// outer span so explicit grouping is honoured) or a tuple literal
-    /// `(e1, e2, ...)` of arity ≥ 2. Empty parens `()` (the unit value) are not
-    /// part of the M1 grammar and surface as a clean "expected expression" parse
-    /// error at the `)`.
+    /// Parse what follows a just-consumed `(`: empty parens `()` are the unit
+    /// value ([`Expr_::Unit`]); a single expression has its parens unwrapped
+    /// (`(e)` is just `e`, preserving the outer span so explicit grouping is
+    /// honoured); a comma-separated list is a tuple literal `(e1, e2, ...)` of
+    /// arity ≥ 2.
     ///
     /// `opener` is the `(`'s span; `depth` bounds the inner-expression recursion.
     fn parse_paren_or_tuple(&mut self, opener: Span, depth: u32) -> DResult<Expr> {
         if depth > MAX_DEPTH {
             return Err(self.too_deep(Construct::Tuple));
         }
-        // `()` — the unit value — is outside the M1 expression grammar.
+        // `()` — the unit value. Empty parentheses are the sole inhabitant of
+        // the unit type; the closing `)` is consumed and the span spans both.
         if let Some(t) = self.peek().filter(|t| t.kind == Tok::RParen) {
-            return Err(Self::unexpected_token(t, &[Expected::Expression]));
+            let close = t.span;
+            self.bump(Construct::ParenGroup)?;
+            let span = Self::span_merge(opener, close);
+            return Ok(Located::new(span, Expr_::Unit));
         }
         let first = self.parse_expr(0, depth + 1)?;
         // No following comma → a plain parenthesised group. Unwrap to the inner
@@ -1691,6 +1694,18 @@ impl<'a> Parser<'a> {
             Tok::LParen => {
                 let opener = tok.span;
                 let inner = self.parse_pattern(depth + 1)?;
+                // A following `,` makes this a tuple pattern `(p0, p1, ...)`;
+                // otherwise the parens just group a single pattern and unwrap.
+                if self.peek_kind() == Some(&Tok::Comma) {
+                    let mut elems = vec![inner];
+                    while self.peek_kind() == Some(&Tok::Comma) {
+                        self.bump(Construct::Pattern)?;
+                        elems.push(self.parse_pattern(depth + 1)?);
+                    }
+                    let close = self.expect_rparen(opener, Construct::Pattern)?;
+                    let span = Self::span_merge(opener, close);
+                    return Ok(Located::new(span, Pattern_::PTuple(elems)));
+                }
                 self.close_paren(opener, Construct::Pattern)?;
                 Ok(Located::new(tok.span, inner.value))
             }

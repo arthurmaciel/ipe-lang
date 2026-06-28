@@ -1,0 +1,15 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+type Opt = Som Int | Non
+
+-- A REFUTABLE element (the `Som x` constructor) inside a tuple destructure
+-- could fail to match — the tuple-pattern gap (SKY-L0115).
+f : (Opt, Int) -> Int
+f pair =
+    case pair of
+        (Som x, b) -> x + b
+        (Non, b) -> b
+
+main =
+    println (String.fromInt (f (Som 1, 2)))

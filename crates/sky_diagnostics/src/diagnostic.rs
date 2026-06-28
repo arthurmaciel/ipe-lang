@@ -13,11 +13,11 @@ use crate::code::{
     Code, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200,
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
-    SKY_L0114, SKY_L0200, SKY_N0001, SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010,
-    SKY_N0011, SKY_N0012, SKY_N0013, SKY_P0001, SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011,
-    SKY_P0012, SKY_P0013, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041,
-    SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004,
-    SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, Severity,
+    SKY_L0114, SKY_L0115, SKY_L0200, SKY_N0001, SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005,
+    SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_P0001, SKY_P0002, SKY_P0003, SKY_P0010,
+    SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040,
+    SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003,
+    SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, Severity,
 };
 use crate::span::Span;
 
@@ -432,6 +432,14 @@ pub enum Feature {
     /// function in a *record* field), split out so the message names the
     /// constructor-payload carrier and blames the construction site. [SKY-L0114]
     CtorPayloadFunction,
+    /// A tuple pattern used in a position the lowerer cannot yet handle: a
+    /// `case` on a tuple with MORE THAN ONE arm (needs product/literal-pattern
+    /// exhaustiveness), or a tuple destructure binder (a single-arm tuple `case`
+    /// or a tuple function parameter) whose element is REFUTABLE — a constructor
+    /// or literal — so the binding could fail at run time. M3b-1 supports a
+    /// single irrefutable tuple destructure (elements are variables / wildcards /
+    /// nested irrefutable tuples); the richer shapes land later. [SKY-L0115]
+    TuplePatternMatch,
 }
 
 /// Errors raised during lowering: "not supported yet" — distinct from
@@ -705,6 +713,7 @@ const fn feature_code(f: Feature) -> Code {
         Feature::NestedPayloadPatterns => SKY_L0112,
         Feature::CtorAsFunction => SKY_L0113,
         Feature::CtorPayloadFunction => SKY_L0114,
+        Feature::TuplePatternMatch => SKY_L0115,
     }
 }
 
