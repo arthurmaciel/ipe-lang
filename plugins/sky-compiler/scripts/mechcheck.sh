@@ -9,12 +9,16 @@
 #   WORKSPACE_DIR  cargo workspace to check (default: $PWD) — works for sky-rust
 #                  (compiler+backend) and runtime-rust alike.
 #   --miri    also run `cargo +nightly miri test --workspace` (slow)
-#   --e2e     also run the golden E2E (SKY_E2E=1 cargo test) — sky-rust only
+#   --e2e     also run the golden E2E (SKY_E2E=1) — sky-rust only; runs BOUNDED
+#             (nested cargo builds are CPU/mem/disk heavy)
 #   --parity  also run ./scripts/parity-sweep.sh if present (Go-vs-Rust) — sky-rust only
 #   --all     --miri --e2e --parity
 #
+# Test runner: uses `cargo nextest run` (global cross-binary parallel pool) when
+# installed, else falls back to `cargo test`. The E2E step is thread-capped because
+# each E2E test shells out to its own `cargo build` (oversubscription/ENOSPC risk).
+#
 # Exit codes: 0 = all green; 1 = a check failed (see printed log); 2 = bad invocation.
-# Uses rg (not grep) per project convention; no unwrap-style surprises — pure checks.
 set -uo pipefail
 
 WS="${PWD}"
@@ -41,6 +45,10 @@ if [ "${free_gb:-99}" -lt 15 ]; then
   command -v go >/dev/null && go clean -cache 2>/dev/null
 fi
 
+# Cross-binary parallel test runner if available.
+HAS_NEXTEST=0
+command -v cargo-nextest >/dev/null 2>&1 && HAS_NEXTEST=1
+
 # step NAME CMD...  — run a check, fail-fast with the log on failure.
 step() {
   local name="$1"; shift
@@ -59,17 +67,32 @@ step() {
   fi
 }
 
-echo "mechcheck: $WS"
+echo "mechcheck: $WS  (nextest=$HAS_NEXTEST, ${free_gb}G free)"
 step fmt    cargo fmt --all -- --check
 step build  cargo build --workspace --all-targets
 step clippy cargo clippy --all-targets -- -D warnings
-step test   cargo test --workspace
+
+# Fast unit/integration tests — wide parallelism (nextest global pool when present).
+if [ "$HAS_NEXTEST" = 1 ]; then
+  step test cargo nextest run --workspace
+  step doctest cargo test --doc --workspace   # nextest does not run doctests
+else
+  step test cargo test --workspace
+fi
+
 [ "$RUN_MIRI" = 1 ] && step miri cargo +nightly miri test --workspace
+
+# E2E: each test shells out to its own `cargo build` — cap concurrency.
 if [ "$RUN_E2E" = 1 ]; then
   export SKY_E2E=1
-  step e2e cargo test --workspace
+  if [ "$HAS_NEXTEST" = 1 ]; then
+    step e2e cargo nextest run --workspace --test-threads 2
+  else
+    step e2e cargo test --workspace   # cargo runs test binaries serially => inherently bounded
+  fi
   unset SKY_E2E
 fi
+
 if [ "$RUN_PARITY" = 1 ]; then
   if [ -x ./scripts/parity-sweep.sh ]; then
     step parity ./scripts/parity-sweep.sh
