@@ -1,0 +1,13 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+wrap : a -> { value : a }
+wrap x = { value = x }
+
+unwrap : { value : a } -> a
+unwrap r = r.value
+
+main =
+    let n = unwrap (wrap 40) in
+    let flag = unwrap (wrap (1 == 1)) in
+    println (String.fromInt (if flag then n + 2 else n))

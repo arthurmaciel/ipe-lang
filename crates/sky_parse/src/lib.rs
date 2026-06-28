@@ -641,6 +641,106 @@ mod tests {
     }
 
     #[test]
+    fn record_type_annotation_parses_into_a_trecord() {
+        // `wrap : a -> { value : a }` — a record type in return position. The
+        // annotation is `TLambda(TVar a, TRecord [(value, TVar a)])`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}wrap : a -> {{ value : a }}\nwrap x =\n    x\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "record-type annotation must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = find_value(&m, &i, "wrap").and_then(|v| v.type_annotation.clone());
+        assert!(
+            shape.is_some_and(|ann| matches!(
+                &ann.value,
+                TypeAnnotation::TLambda(arg, ret)
+                    if matches!(&**arg, TypeAnnotation::TVar(_))
+                        && matches!(
+                            &**ret,
+                            TypeAnnotation::TRecord(fields)
+                                if fields.len() == 1
+                                    && matches!(
+                                        fields.first(),
+                                        Some((_, TypeAnnotation::TVar(_)))
+                                    )
+                        )
+            )),
+            "annotation is `a -> {{ value : a }}` with a 1-field TRecord return"
+        );
+    }
+
+    #[test]
+    fn multi_field_record_type_annotation_parses() {
+        // `{ first : a, second : b }` — fields kept in source order.
+        let mut i = Interner::new();
+        let src = format!("{HDR}pair : a -> b -> {{ first : a, second : b }}\npair x y =\n    x\n");
+        let m = parse_module(&src, &mut i);
+        assert!(
+            m.is_ok(),
+            "two-field record-type annotation must parse: {m:?}"
+        );
+        let Ok(m) = m else { return };
+        let arity = find_value(&m, &i, "pair")
+            .and_then(|v| v.type_annotation.clone())
+            .and_then(|ann| match ann.value {
+                TypeAnnotation::TLambda(_, ret) => match *ret {
+                    TypeAnnotation::TLambda(_, ret2) => match *ret2 {
+                        TypeAnnotation::TRecord(fields) => Some(fields.len()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            });
+        assert_eq!(arity, Some(2), "return type is a 2-field TRecord");
+    }
+
+    #[test]
+    fn record_type_alias_body_parses() {
+        // `type alias Box a = { value : a }` — the alias body is a TRecord.
+        let mut i = Interner::new();
+        let src = format!("{HDR}type alias Box a = {{ value : a }}\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "record-type alias must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let alias = m.aliases.first();
+        assert!(
+            alias.is_some_and(|a| matches!(
+                &a.value.body.value,
+                TypeAnnotation::TRecord(fields)
+                    if fields.len() == 1
+            )),
+            "alias body is a 1-field TRecord"
+        );
+    }
+
+    #[test]
+    fn empty_record_type_is_rejected() {
+        // The empty record type `{}` is outside the grammar.
+        assert!(
+            parse_module(
+                &format!("{HDR}f : {{}}\nf =\n    0\n"),
+                &mut Interner::new()
+            )
+            .is_err(),
+            "the empty record type must be rejected"
+        );
+    }
+
+    #[test]
+    fn record_type_missing_colon_is_rejected() {
+        // A record-type field needs a `:` between name and type.
+        assert!(
+            parse_module(
+                &format!("{HDR}f : {{ value a }}\nf =\n    0\n"),
+                &mut Interner::new()
+            )
+            .is_err(),
+            "a record-type field without `:` must be rejected"
+        );
+    }
+
+    #[test]
     fn record_literal_parses_into_a_record_node() {
         // `{ x = 1, y = 2 }` is a two-field `Record`, fields in source order.
         let mut i = Interner::new();

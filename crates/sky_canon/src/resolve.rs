@@ -757,6 +757,20 @@ fn canonicalise_type(
             }
             Ok(canon::Type::Tuple(can_elems))
         }
+        src::TypeAnnotation::TRecord(fields) => {
+            // Each field type is canonicalised under the current substitution, so
+            // a field variable bound by an enclosing alias argument resolves to it
+            // and an unbound one is collected into `free_vars` (quantified by the
+            // binding) — exactly the [`TVar`] handling above, applied per field.
+            let mut can_fields = Vec::with_capacity(fields.len());
+            for (name, fty) in fields {
+                can_fields.push((
+                    *name,
+                    canonicalise_type(fty, ctx, subst, free_vars, visited)?,
+                ));
+            }
+            Ok(canon::Type::Record(can_fields))
+        }
         src::TypeAnnotation::TType(_, segments, args) => {
             let name = segments.last().copied().unwrap_or_else(|| {
                 // An unnamed type cannot occur in the M0 grammar; fall back to

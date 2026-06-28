@@ -59,6 +59,7 @@ pub fn lower(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sky_diagnostics::{Diagnostic, Feature, LowerError};
     use sky_ir::{BinOp, Callee, Expr, IrType, KernelFn, TypeDef};
 
     const GOLDEN: &str = include_str!("../../../tests/golden/m0/Main.sky");
@@ -242,6 +243,125 @@ mod tests {
             .into_iter()
             .find(|f| i.resolve(f.name) == Some(which))?;
         Some((func.body, i))
+    }
+
+    /// Lower a free-standing module and return the whole [`sky_ir::Func`] of
+    /// `which` (so a test can inspect `type_params` / `params` / `ret`).
+    fn lower_func(source: &str, which: &str) -> Option<(sky_ir::Func, Interner)> {
+        let mut i = Interner::new();
+        let src = sky_parse::parse_module(source, &mut i).ok()?;
+        let m = sky_canon::canonicalise(&src, &mut i).ok()?;
+        let types = sky_types::infer(&m, &mut i).ok()?;
+        let program = lower(&m, &types, &mut i).ok()?;
+        let module = program.modules.into_iter().next()?;
+        let func = module
+            .funcs
+            .into_iter()
+            .find(|f| i.resolve(f.name) == Some(which))?;
+        Some((func, i))
+    }
+
+    /// Lower a free-standing module, returning the lowering [`DResult`] so a test
+    /// can assert a not-yet gap surfaces as a `Diagnostic::Lower`.
+    fn lower_result(source: &str) -> DResult<()> {
+        let mut i = Interner::new();
+        let src = sky_parse::parse_module(source, &mut i)?;
+        let m = sky_canon::canonicalise(&src, &mut i)?;
+        let types = sky_types::infer(&m, &mut i)?;
+        lower(&m, &types, &mut i).map(|_| ())
+    }
+
+    #[test]
+    fn generic_record_signature_lowers_to_generic_struct_field() {
+        // `wrap : a -> { value : a }` — the parameter and the record field both
+        // lower to `IrType::Generic(a)`, and `wrap` quantifies `[a]`.
+        let opt = lower_func(
+            "module Main exposing (wrap)\nwrap : a -> { value : a }\nwrap x =\n    { value = x }\n",
+            "wrap",
+        );
+        assert!(opt.is_some(), "wrap must lower");
+        let Some((func, i)) = opt else { return };
+        // One type parameter, named `a`.
+        assert_eq!(func.type_params.len(), 1, "wrap quantifies one type var");
+        assert_eq!(
+            func.type_params.first().and_then(|s| i.resolve(*s)),
+            Some("a")
+        );
+        let Some(&param_sym) = func.type_params.first() else {
+            return;
+        };
+        // The single parameter is `IrType::Generic(a)`.
+        assert!(
+            matches!(func.params.first(), Some((_, IrType::Generic(s))) if *s == param_sym),
+            "parameter lowers to Generic(a), got {:?}",
+            func.params
+        );
+        // The return type is `{ value : Generic(a) }`.
+        let IrType::Record(fields) = &func.ret else {
+            assert!(false_marker(), "ret is a record, got {:?}", func.ret);
+            return;
+        };
+        assert!(
+            fields
+                .values()
+                .all(|t| matches!(t, IrType::Generic(s) if *s == param_sym)),
+            "record field lowers to Generic(a), got {fields:?}"
+        );
+    }
+
+    #[test]
+    fn record_type_alias_lowers_to_concrete_struct() {
+        // `type alias Box a = { value : a }`; `mkBox : Int -> Box Int` expands to
+        // a concrete record `{ value : Int }` in the signature.
+        let opt = lower_func(
+            "module Main exposing (mkBox)\ntype alias Box a = { value : a }\nmkBox : Int -> Box Int\nmkBox n =\n    { value = n }\n",
+            "mkBox",
+        );
+        assert!(opt.is_some(), "mkBox must lower");
+        let Some((func, _)) = opt else { return };
+        assert!(func.type_params.is_empty(), "mkBox is monomorphic");
+        let IrType::Record(fields) = &func.ret else {
+            assert!(false_marker(), "ret is a record, got {:?}", func.ret);
+            return;
+        };
+        assert!(
+            fields.values().all(|t| matches!(t, IrType::Int)),
+            "alias field expands to Int, got {fields:?}"
+        );
+    }
+
+    #[test]
+    fn generic_record_update_is_a_lower_gap() {
+        // Updating a generic record needs a `Clone`-bounded type parameter
+        // (bounded generics are M2d) — it surfaces as SKY-L0111, NOT broken Rust.
+        let err = lower_result(
+            "module Main exposing (setValue)\nsetValue : { value : a } -> a -> { value : a }\nsetValue r x =\n    { r | value = x }\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Err(Diagnostic::Lower {
+                    msg: LowerError::Unsupported(Feature::BoundedRecordUpdate),
+                    ..
+                })
+            ),
+            "generic record update must be SKY-L0111, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn monomorphic_record_update_still_lowers() {
+        // A concrete record update keeps the b3 behaviour (no gate).
+        let opt = lower_body(
+            "module Main exposing (moveX)\nmoveX : { x : Int, y : Int } -> { x : Int, y : Int }\nmoveX p =\n    { p | x = 99 }\n",
+            "moveX",
+        );
+        assert!(opt.is_some(), "monomorphic update must lower");
+        let Some((body, _)) = opt else { return };
+        assert!(
+            matches!(&body, Expr::Update { .. }),
+            "body is a record update, got {body:?}"
+        );
     }
 
     #[test]

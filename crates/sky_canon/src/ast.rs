@@ -191,4 +191,9 @@ pub enum Type {
     /// An anonymous product (tuple) type `(T1, T2, ...)`. Invariant: arity ≥ 2 —
     /// a 0-tuple is [`Self::Unit`] and a 1-tuple is just its element.
     Tuple(Vec<Self>),
+    /// A closed record type `{ field : T, ... }`. Fields are `(name, type)` pairs
+    /// in source order; the empty record is outside the grammar so the list is
+    /// non-empty. A field type variable participates in the binding's
+    /// quantification exactly like one in any other position (M2c).
+    Record(Vec<(Symbol, Self)>),
 }

@@ -75,6 +75,8 @@ const ALL_CODES: &[Code] = &[
     sky_diagnostics::SKY_L0106,
     sky_diagnostics::SKY_L0107,
     sky_diagnostics::SKY_L0108,
+    sky_diagnostics::SKY_L0110,
+    sky_diagnostics::SKY_L0111,
     sky_diagnostics::SKY_L0200,
     sky_diagnostics::SKY_I0001,
     sky_diagnostics::SKY_I0010,
@@ -785,7 +787,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 53, "taxonomy is 53 codes");
+        assert_eq!(ALL_CODES.len(), 55, "taxonomy is 55 codes");
         assert!(
             index.contains("SKY-T0001  type mismatch"),
             "index pairs code with title"
@@ -879,5 +881,67 @@ mod tests {
         assert_eq!(line_col(src, 1), (1, 2));
         assert_eq!(line_col(src, 3), (2, 1));
         assert_eq!(line_col(src, 4), (2, 2));
+    }
+
+    /// Generic records, end to end from SOURCE: parse → canon → infer → lower →
+    /// emit → `cargo build` → run, asserting the program prints `42` — the value
+    /// the Go reference backend produces for the same program (hand-verified in a
+    /// temp dir). Gated on `SKY_E2E=1` so the default `cargo test` stays fast and
+    /// offline. Complements the backend crate's hand-built-IR e2e by exercising
+    /// the whole frontend (record type annotations + generalisation + lowering).
+    #[test]
+    fn generic_record_program_builds_and_prints_forty_two() {
+        const SRC: &str = "module Main exposing (main)\n\n\
+             wrap : a -> { value : a }\n\
+             wrap x =\n    { value = x }\n\n\
+             unwrap : { value : a } -> a\n\
+             unwrap r =\n    r.value\n\n\
+             main = println (String.fromInt (unwrap (wrap 42)))\n";
+
+        if std::env::var("SKY_E2E").is_err() {
+            return;
+        }
+
+        let dir = std::env::temp_dir().join("skyc_generic_record_src_e2e");
+        let _ = fs::remove_dir_all(&dir);
+        let entry = dir.join("Main.sky");
+        let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
+        assert!(created.is_ok(), "write source: {created:?}");
+
+        let runtime = resolve_runtime();
+        assert!(runtime.is_ok(), "runtime must resolve: {runtime:?}");
+        let Ok(runtime) = runtime else { return };
+
+        let out = dir.join("out");
+        let built = build(&entry, &out, &runtime);
+        assert!(built.is_ok(), "skyc build must succeed: {built:?}");
+
+        let status = std::process::Command::new("cargo")
+            .arg("build")
+            .current_dir(&out)
+            .status();
+        assert!(
+            matches!(&status, Ok(s) if s.success()),
+            "emitted generic-record crate must compile: {status:?}"
+        );
+
+        let bin = out.join("target").join("debug").join("sky-app");
+        let run = std::process::Command::new(&bin).output();
+        let Ok(run) = run else {
+            assert!(false_marker(), "run binary: {run:?}");
+            return;
+        };
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "42\n",
+            "generic-record program prints 42 (Go-backend parity)"
+        );
+        assert!(run.status.success(), "exit 0, matching the Go oracle");
+    }
+
+    /// A runtime `false` the optimiser cannot fold, so `assert!(false_marker())`
+    /// fails the test without tripping `clippy::assertions_on_constants`.
+    fn false_marker() -> bool {
+        std::hint::black_box(false)
     }
 }

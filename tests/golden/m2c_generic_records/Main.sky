@@ -1,0 +1,11 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+wrap : a -> { value : a }
+wrap x = { value = x }
+
+unwrap : { value : a } -> a
+unwrap r = r.value
+
+main =
+    println (String.fromInt (unwrap (wrap 42)))

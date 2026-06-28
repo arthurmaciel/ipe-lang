@@ -171,6 +171,19 @@ pub fn canon_type_to_doc(t: &canon::Type, interner: &Interner) -> DResult<TyDoc>
             }
             Ok(TyDoc::Tuple(doc_elems.into_boxed_slice()))
         }
+        canon::Type::Record(fields) => {
+            // Render in field-name order for a deterministic form, mirroring the
+            // solved-type renderer above.
+            let mut entries: Vec<(Box<str>, TyDoc)> = Vec::with_capacity(fields.len());
+            for (name, field_ty) in fields {
+                entries.push((
+                    resolve(interner, *name)?,
+                    canon_type_to_doc(field_ty, interner)?,
+                ));
+            }
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Ok(TyDoc::Record(entries.into_boxed_slice()))
+        }
     }
 }
 

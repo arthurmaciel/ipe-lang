@@ -869,6 +869,8 @@ impl<'a> Parser<'a> {
                 let span = Self::span_merge(opener, close);
                 Ok(Located::new(span, TypeAnnotation::TTuple(elems)))
             }
+            // A closed record type `{ field : T, ... }`.
+            Tok::LBrace => self.parse_record_type(tok.span, depth + 1),
             Tok::Ident(text) => {
                 let first_upper = text.chars().next().is_some_and(|c| c.is_ascii_uppercase());
                 if first_upper {
@@ -901,8 +903,62 @@ impl<'a> Parser<'a> {
 
     fn peek_is_type_atom_in_block(&self, threshold: u32) -> bool {
         self.peek().is_some_and(|t| {
-            layout::continues_block(t, threshold) && matches!(t.kind, Tok::LParen | Tok::Ident(_))
+            layout::continues_block(t, threshold)
+                && matches!(t.kind, Tok::LParen | Tok::LBrace | Tok::Ident(_))
         })
+    }
+
+    /// Parse a closed record type `{ field : T, ... }`, the opening `{` already
+    /// consumed (its span is `opener`). At least one field is required — the
+    /// empty record `{}` is outside the grammar. Each field is a lowercase name,
+    /// a `:`, then its type; fields are comma-separated and the list is closed by
+    /// `}`. Duplicate field names are not rejected here (a later stage owns that),
+    /// matching how the record *literal* parser stays purely syntactic.
+    fn parse_record_type(&mut self, opener: Span, depth: u32) -> DResult<Located<TypeAnnotation>> {
+        if depth > MAX_DEPTH {
+            return Err(self.too_deep(Construct::Type));
+        }
+        // `{}` (the empty record type) is outside the grammar.
+        if let Some(t) = self.peek().filter(|t| t.kind == Tok::RBrace) {
+            return Err(Self::unexpected_token(t, &[Expected::Identifier]));
+        }
+        let mut fields = Vec::new();
+        loop {
+            let name = self.parse_record_field_name()?;
+            self.expect_field_colon()?;
+            let ty = self.parse_type(0, depth + 1)?;
+            fields.push((name.value, ty.value));
+            match self.peek() {
+                Some(t) if t.kind == Tok::Comma => {
+                    self.bump(Construct::Type)?;
+                }
+                Some(t) if t.kind == Tok::RBrace => {
+                    let close = t.span;
+                    self.bump(Construct::Type)?;
+                    let span = Self::span_merge(opener, close);
+                    return Ok(Located::new(span, TypeAnnotation::TRecord(fields)));
+                }
+                Some(t) => {
+                    return Err(Self::unexpected_token(
+                        t,
+                        &[Expected::Comma, Expected::RBrace],
+                    ));
+                }
+                None => return Err(self.record_eof()),
+            }
+        }
+    }
+
+    /// Consume the `:` separating a record-type field name from its type.
+    fn expect_field_colon(&mut self) -> DResult<()> {
+        match self.peek() {
+            Some(t) if t.kind == Tok::Colon => {
+                self.bump(Construct::Type)?;
+                Ok(())
+            }
+            Some(t) => Err(Self::unexpected_token(t, &[Expected::Colon])),
+            None => Err(self.record_eof()),
+        }
     }
 
     // ---- expressions ------------------------------------------------------

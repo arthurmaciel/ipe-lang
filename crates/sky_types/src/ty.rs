@@ -103,5 +103,16 @@ pub fn from_canon(t: &canon::Type) -> Ty {
         },
         canon::Type::Unit => Ty::Unit,
         canon::Type::Tuple(elems) => Ty::Tuple(elems.iter().map(from_canon).collect()),
+        // A closed record annotation `{ field : T, ... }`. Keyed by field name in
+        // the [`BTreeMap`] (fixing iteration order); a field type variable carries
+        // through via its raw id exactly as a top-level [`canon::Type::Var`] does,
+        // so an annotated record field var becomes a rigid skolem when the
+        // signature is instantiated to check the body.
+        canon::Type::Record(fields) => Ty::Record(
+            fields
+                .iter()
+                .map(|(name, fty)| (*name, from_canon(fty)))
+                .collect(),
+        ),
     }
 }

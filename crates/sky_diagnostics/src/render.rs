@@ -521,6 +521,11 @@ const fn feature_label(f: Feature) -> &'static str {
             "partial application and over-application are not supported yet \
              [feature: partial-over-application]"
         }
+        Feature::BoundedRecordUpdate => {
+            "updating a generic record is not supported yet — it needs a \
+             `Clone`-bounded type parameter (bounded generics are M2d) \
+             [feature: bounded-record-update]"
+        }
     }
 }
 
