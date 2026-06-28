@@ -1,0 +1,20 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- One declared parameter but a three-arrow type: the body is a nested lambda
+-- chain `\b -> \c -> ...`. The lowerer flattens the chain into a single
+-- multi-parameter closure so the emitted `Box<dyn Fn(i64, i64) -> i64>` body
+-- matches the flattened return type cargo expects.
+f : Int -> Int -> Int -> Int
+f a = \b -> \c -> a + b + c
+
+main =
+    -- exact-then-Apply: `f 1` saturates the declared parameter and returns the
+    -- two-argument closure; `h 2 3` applies it exactly.
+    let h = f 1 in
+    let exact = h 2 3 in
+    -- over-applied: `f 1` saturates, the surplus `2 3` apply to its result.
+    let over = f 1 2 3 in
+    -- Both paths compute 1 + 2 + 3 = 6; print the shared value so a divergence
+    -- between the two reshapes would change the output.
+    println (String.fromInt (if exact == over then exact else 0))
