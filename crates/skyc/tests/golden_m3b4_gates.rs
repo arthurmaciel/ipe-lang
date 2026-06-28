@@ -52,3 +52,19 @@ fn non_exhaustive_nested_same_ctor_case_is_sky_t0010() {
         sky_diagnostics::SKY_T0010,
     );
 }
+
+/// Floor sentinel: EVERY top constructor is covered (`Som`/`Non`) and inside
+/// `Som` both inner constructors are covered (`Som …`/`Non`) — the only gap is
+/// the DEEPER literal column (`Som (Som 0)` matched, `Som (Som n)` for `n /= 0`
+/// uncovered, since `Int` is OPEN). A shallow top-constructor guard would wave
+/// this through; only the deep Maranget usefulness check catches it. Asserting
+/// SKY-T0010 here pins that the soundness floor rests SOLELY on that check now
+/// that the same-top-constructor restriction is lifted.
+#[test]
+fn all_top_ctors_covered_with_nested_literal_gap_is_sky_t0010() {
+    assert_gate(
+        "m3b4_floor_sentinel",
+        "m3b4_floor_sentinel_emit",
+        sky_diagnostics::SKY_T0010,
+    );
+}
