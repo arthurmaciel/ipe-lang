@@ -1,0 +1,13 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+type RChain = REnd | RNode { rest : RChain, val : Int }
+
+sumR : RChain -> Int
+sumR c =
+    case c of
+        REnd -> 0
+        RNode rec -> rec.val + sumR rec.rest
+
+main =
+    println (String.fromInt (sumR (RNode { rest = RNode { rest = REnd, val = 2 }, val = 3 })))

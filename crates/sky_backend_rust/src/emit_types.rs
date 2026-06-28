@@ -156,9 +156,12 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
 /// }
 /// ```
 ///
-/// A direct self-recursive payload field (`Node Tree Int Tree`) is wrapped in
-/// `Box<…>` so the Rust enum stays finite-sized (E0072); the construction and
-/// pattern emitters balance that boxing.
+/// A payload field that sits on a type-size cycle back to its own enum —
+/// directly (`Node Tree Int Tree`) or indirectly (mutual recursion, or a
+/// self-edge routed through a tuple / record / another generic's type argument)
+/// — is wrapped in `Box<…>` so the Rust enum stays finite-sized (E0072); the
+/// construction and pattern emitters balance that boxing. See
+/// [`crate::EmitCtx::is_cyclic_self_field`].
 pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     let name = ctx.enum_name(def.name)?.to_owned();
     // The enum's own generic scope: each type parameter → `T1`, `T2`, … by
@@ -187,7 +190,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
             let mut show_args = Vec::with_capacity(variant.fields.len());
             for (i, field_ty) in variant.fields.iter().enumerate() {
                 let rendered = render_type(ctx, field_ty, scope)?;
-                let rendered = if crate::is_direct_self_field(field_ty, def.name) {
+                let rendered = if ctx.is_cyclic_self_field(field_ty, def.name) {
                     format!("Box<{rendered}>")
                 } else {
                     rendered

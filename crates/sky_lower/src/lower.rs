@@ -83,8 +83,10 @@ fn ty_contains_fun(ty: &Ty) -> bool {
 /// 1)` (region `{ value : Int -> Int }`), or `Som (\n -> n + 1)` for
 /// `type Opt a = Som a | Non` (region `Opt (Int -> Int)`). The field instantiates
 /// to a function only at the use site, so the only place to see it is the use
-/// site's region type. Fail-closed: this is the documented first-class-function
-/// gap ([`Feature::FirstClassFunctions`], SKY-L0107), never broken Rust.
+/// site's region type. Fail-closed: a record-field carrier is the
+/// first-class-function gap ([`Feature::FirstClassFunctions`], SKY-L0107) and a
+/// constructor-payload carrier is [`Feature::CtorPayloadFunction`] (SKY-L0114) —
+/// see [`con_payload_carries_function`]; never broken Rust.
 fn embeds_nonderivable_function(ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) | Ty::Unit => false,
@@ -102,6 +104,22 @@ fn embeds_nonderivable_function(ty: &Ty) -> bool {
             .values()
             .any(|f| ty_contains_fun(f) || embeds_nonderivable_function(f)),
     }
+}
+
+/// Is the carrier of a non-derivable function a CONSTRUCTOR payload — i.e. the
+/// region type's head is a user enum (`Ty::Con`) whose type arguments embed a
+/// function?
+///
+/// This distinguishes the two carriers [`embeds_nonderivable_function`] flags so
+/// the diagnostic names the right one: a `Con`-headed region is a
+/// constructor-payload function (SKY-L0114, [`Feature::CtorPayloadFunction`]); a
+/// `Record`-headed region (or any other) is a record-field function (SKY-L0107,
+/// [`Feature::FirstClassFunctions`]). Only the *head* is inspected — the gate
+/// has already confirmed a function is embedded somewhere; this picks the
+/// blame label, so the outermost carrier is the one named.
+fn con_payload_carries_function(ty: &Ty) -> bool {
+    matches!(ty, Ty::Con { args, .. }
+        if args.iter().any(|a| ty_contains_fun(a) || embeds_nonderivable_function(a)))
 }
 
 /// Collect every type-variable [`Symbol`] mentioned in a canonical type into
@@ -299,8 +317,8 @@ impl<'a> Lowerer<'a> {
     ///   ([`Feature::Polymorphism`]);
     /// * a field whose type embeds a function (`type Box = Mk (Int -> Int)`)
     ///   would make the enum's derived `Clone`/`Debug`/`PartialEq` /
-    ///   `SkyStringify` fail to hold for a `Box<dyn Fn>` field — the first-class
-    ///   gap ([`Feature::FirstClassFunctions`]).
+    ///   `SkyStringify` fail to hold for a `Box<dyn Fn>` field — the
+    ///   constructor-payload-function gap ([`Feature::CtorPayloadFunction`]).
     fn lower_enum(&self, u: &canon::Union) -> DResult<EnumDef> {
         let type_params = u.vars.clone();
         let mut variants = Vec::with_capacity(u.ctors.len());
@@ -316,9 +334,11 @@ impl<'a> Lowerer<'a> {
                 }
                 let ir = self.ir_type_from_canon(arg, &type_params)?;
                 // Gate 2: a function-bearing payload field cannot satisfy the
-                // enum's derives.
+                // enum's derives. The carrier is a constructor payload, so blame
+                // the constructor declaration with the payload-specific message
+                // (SKY-L0114) rather than the record-field one.
                 if ir_contains_fun(&ir) {
-                    return Err(unsupported(ctor.span, Feature::FirstClassFunctions));
+                    return Err(unsupported(ctor.span, Feature::CtorPayloadFunction));
                 }
                 fields.push(ir);
             }
@@ -781,25 +801,41 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    fn lower_expr(&self, e: &canon::Expr) -> DResult<Expr> {
-        // Soundness gate (region-based): reject a function value reaching a
-        // record field OR a constructor payload THROUGH a type variable — e.g.
-        // `wrap : a -> { value : a }` applied as `wrap (\n -> n + 1)` (region
-        // `{ value : Int -> Int }`), or `Som (\n -> n + 1)` for
-        // `type Opt a = Som a | Non` (region `Opt (Int -> Int)`). The field
-        // instantiates to a function only at the use site, so the syntactic
-        // per-field gate (`reject_function_valued_field`) cannot see it; the
-        // use-site region type can. Record/Update *literals* carry their own
-        // per-field gate that blames the offending field value's span, so they are
-        // exempt here. [SKY-L0107, feature: first-class-functions]
+    /// Soundness gate (region-based): reject a function value reaching a record
+    /// field OR a constructor payload THROUGH a type variable — e.g.
+    /// `wrap : a -> { value : a }` applied as `wrap (\n -> n + 1)` (region
+    /// `{ value : Int -> Int }`), or `Som (\n -> n + 1)` for
+    /// `type Opt a = Som a | Non` (region `Opt (Int -> Int)`). The field
+    /// instantiates to a function only at the use site, so the syntactic
+    /// per-field gate ([`Self::reject_function_valued_field`]) cannot see it; the
+    /// use-site region type can. Record/Update *literals* carry their own
+    /// per-field gate that blames the offending field value's span, so they are
+    /// exempt here.
+    ///
+    /// The diagnostic names the carrier: a function reaching a CONSTRUCTOR
+    /// payload (region head is a user enum `Con`) gets the constructor-payload
+    /// message blaming this construction site (SKY-L0114,
+    /// [`Feature::CtorPayloadFunction`]); a function reaching a RECORD field gets
+    /// the record-field message (SKY-L0107, [`Feature::FirstClassFunctions`]).
+    fn reject_function_through_type_var(&self, e: &canon::Expr) -> DResult<()> {
         if !matches!(
             &e.value,
             canon::Expr_::Record(_) | canon::Expr_::Update(_, _)
         ) && let Some(ty) = self.types.regions.get(&e.span)
             && embeds_nonderivable_function(ty)
         {
-            return Err(unsupported(e.span, Feature::FirstClassFunctions));
+            let feature = if con_payload_carries_function(ty) {
+                Feature::CtorPayloadFunction
+            } else {
+                Feature::FirstClassFunctions
+            };
+            return Err(unsupported(e.span, feature));
         }
+        Ok(())
+    }
+
+    fn lower_expr(&self, e: &canon::Expr) -> DResult<Expr> {
+        self.reject_function_through_type_var(e)?;
         match &e.value {
             canon::Expr_::Int(n) => Ok(Expr::Int(*n)),
             canon::Expr_::VarLocal(s) => Ok(Expr::Var(*s)),

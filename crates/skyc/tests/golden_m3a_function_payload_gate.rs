@@ -53,13 +53,15 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
 
     let built = skyc::build(&entry, &out, &runtime);
 
-    // The minimal sound outcome: a clean first-class-function diagnostic.
+    // The minimal sound outcome: a clean constructor-payload-function
+    // diagnostic naming the constructor-payload carrier (SKY-L0114), distinct
+    // from the record-field gap (SKY-L0107).
     if let Err(CliError::Pipeline { diag, .. }) = &built {
         assert_eq!(
             diag.code(),
-            sky_diagnostics::SKY_L0107,
+            sky_diagnostics::SKY_L0114,
             "a function value reaching a constructor payload through a type \
-             variable must surface SKY-L0107, got: {diag:?}"
+             variable must surface SKY-L0114, got: {diag:?}"
         );
         return;
     }
@@ -68,7 +70,7 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
     // driver error, and never a silent accept that later cargo-fails.
     assert!(
         built.is_ok(),
-        "must reject cleanly (SKY-L0107) or accept fully — never another error: {:?}",
+        "must reject cleanly (SKY-L0114) or accept fully — never another error: {:?}",
         built.err()
     );
 

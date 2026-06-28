@@ -1,0 +1,17 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A self-edge routed through a TUPLE payload: `ChainNode`'s field is the tuple
+-- `(Chain, Int)`, which reaches `Chain` again, so the type-size cycle is closed
+-- through a tuple rather than a bare self-field. The backend boxes the cyclic
+-- enum-payload edge (the whole tuple) so the Rust enum stays finite-sized.
+type Chain = ChainEnd | ChainNode (Chain, Int)
+
+depth : Chain -> Int
+depth c =
+    case c of
+        ChainEnd -> 0
+        ChainNode _ -> 5
+
+main =
+    println (String.fromInt (depth (ChainNode (ChainNode (ChainEnd, 3), 2))))
