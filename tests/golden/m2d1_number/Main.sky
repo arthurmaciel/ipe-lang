@@ -1,0 +1,11 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+double : a -> a
+double x = x + x
+
+doubleFloat : Float -> Float
+doubleFloat x = double x
+
+main =
+    println (String.fromInt (double 21))

@@ -50,7 +50,11 @@ fn run_with_regions(
         unions,
         defs,
     };
-    let types = SolvedTypes { env, regions };
+    let types = SolvedTypes {
+        env,
+        regions,
+        bounds: BTreeMap::new(),
+    };
     lower(&m, &types, interner)
 }
 

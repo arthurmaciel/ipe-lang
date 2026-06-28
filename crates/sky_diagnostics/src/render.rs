@@ -408,6 +408,9 @@ fn type_label(msg: &TypeError) -> Option<String> {
         } => Some(format!(
             "`{ctor}` binds {found} field(s) but its declaration has {expected}"
         )),
+        TypeError::SuperTypeUnsatisfied { class, found } => {
+            Some(format!("{} is not a {class} type", ty_to_string(found)))
+        }
         TypeError::Mismatch | TypeError::BudgetExceeded | TypeError::StepBudgetExceeded { .. } => {
             None
         }
