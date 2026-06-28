@@ -235,3 +235,86 @@ pure → fine).
 (divergence rule). Pairs naturally with Idea 5 (or-patterns) — implement together;
 both are native Rust, the only real work is the exhaustiveness/redundancy
 adjustments. High value (very common idiom), moderate effort.
+
+## Idea 7 — Effect/monadic sequencing sugar (UNDECIDED — 3 candidate syntaxes) 🔬🧊
+
+**Problem:** effectful Sky code (Task/Result/Maybe chains) drifts into nested-lambda
+pyramids:
+```elm
+readConfig |> Task.andThen (\cfg ->
+  connect cfg |> Task.andThen (\conn ->
+    query conn |> Task.andThen (\rows -> process rows)))
+```
+All three candidates below desugar to exactly this (nested callbacks / `andThen`) —
+**zero runtime difference**; the choice is purely surface syntax + how much
+machinery each introduces. **No decision yet** (coordinator leans against `use` as
+too polluting — revisit post-M6).
+
+**Candidate A — Gleam `use` (per-line keyword):**
+```elm
+use cfg  <- Task.andThen readConfig
+use conn <- Task.andThen (connect cfg)
+use rows <- Task.andThen (query conn)
+process rows                              -- result = the rest of the function
+```
+`use x <- f` ⇒ `f (\x -> <rest>)`. PRO: general (any callback-last fn, not just
+monads), no monad/typeclass abstraction, composes with normal code, trivial uniform
+desugar, no compiler-known names. CON: `use` keyword + the chainer repeated on every
+line — reads as visual noise to some (coordinator's concern).
+
+**Candidate B — F#-style named block `Task.chain`:**
+```elm
+Task.chain
+    cfg  <- readConfig
+    conn <- connect cfg
+    rows <- query conn
+    process rows            -- trailing result expr required
+```
+PRO: cleanest vertical read; factors the chainer to one header. CON: reintroduces
+"monad-shaped" machinery — either a per-type builder (`Task.chain`/`Result.chain`/…,
+i.e. a typeclass-ish abstraction Elm deliberately refused) OR compiler magic on the
+`.chain` naming convention; needs a trailing result expr; is a walled sub-block;
+type-coupled.
+
+**Candidate C — Roc-style postfix `!`:**
+```elm
+cfg  = readConfig!
+conn = (connect cfg)!
+rows = (query conn)!
+process rows
+```
+`e!` runs the effect and binds its result. PRO: most concise; no keyword-per-line,
+no block, no builder names. CON: needs an effect-tracking model in the type system
+(Roc tracks effects/purity) to know what `!` may apply to; terse `!` is easy to miss;
+the most machinery under the hood.
+
+**Disposition:** filed (2026-06-28), UNDECIDED. Post-M6. Evaluate against: cleanliness
+(coordinator: `use` too noisy), generality, and how much new abstraction each forces
+(Elm-spirit favours LESS). Prior art: Haskell `do`, OCaml `let*`, F# computation
+expressions, Gleam `use`, Roc `!`.
+
+## Idea 8 — Record field-punning on construction 🔬🧊
+
+**Goal:** when a local variable matches a field name, drop the redundant `= name`:
+```elm
+-- today
+{ name = name, age = age, email = email }
+-- punned
+{ name, age, email }
+```
+Dual of the record-PATTERN punning we already support (`{ x, y }` destructure). Common
+in Rust / JS / Gleam / OCaml.
+
+**Why it's a departure:** Elm/Sky require `field = value` on construction. Superset of
+the grammar.
+
+**Shape of the work:** pure **canon-level desugar** — `{ name, age }` in expression
+position ⇒ `{ name = name, age = age }`, resolving each bare field to the in-scope
+local of the same name (error if no such local). Zero new IR / codegen / runtime.
+
+**Only downside: a small loss of explicitness** — the reader no longer sees `= name`,
+so "this field is filled from a same-named local" is implicit. Mitigated by: the field
+names are still right there; it only fires when a matching local exists; it's a
+well-loved idiom elsewhere. Low risk.
+
+**Disposition:** filed (2026-06-28). Post-M6, low effort, low risk — a clean polish.
