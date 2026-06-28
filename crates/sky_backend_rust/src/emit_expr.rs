@@ -316,10 +316,12 @@ fn emit_match(
 }
 
 /// Render a pattern to its Rust spelling. Total and recursive over the entire
-/// M3a/M3b-1/M3b-2 pattern set:
+/// M3a/M3b-1/M3b-2/M3b-3 pattern set:
 ///
 /// * a variable binder (the keyword-mangled name),
 /// * a wildcard (`_`),
+/// * a literal leaf — int (`0`), bool (`true`), char (`'a'`), string (`"hi"`),
+/// * an alias / `as` pattern (`name @ <inner>`),
 /// * a tuple pattern (`(sub0, sub1, …)`),
 /// * a constructor pattern (`EnumName::Variant` / `EnumName::Variant(sub0, …)`),
 /// * a record pattern (`RecXY { x: sub0, y: sub1, .. }`).
@@ -332,6 +334,31 @@ fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
     match pat {
         Pat::Var(sym) => ctx.emit_ident(*sym),
         Pat::Wildcard => Ok("_".to_owned()),
+        // Literal leaves render as Rust literals. Int reuses the same spelling as
+        // the `Expr::Int` emitter; Bool maps to the Rust keyword constant; Char
+        // and Str escape via the `{:?}` Debug form, which produces a valid Rust
+        // literal (quotes, backslashes and control chars escaped) and is
+        // deterministic.
+        Pat::Int(n) => Ok(n.to_string()),
+        Pat::Bool(b) => Ok(if *b { "true" } else { "false" }.to_owned()),
+        // A well-formed Char pattern carries exactly one character → Rust char
+        // literal. A malformed (multi-char / empty) carried string falls back to
+        // a string literal rather than emitting invalid Rust, staying total.
+        Pat::Char(c) => {
+            let mut chars = c.chars();
+            match (chars.next(), chars.next()) {
+                (Some(ch), None) => Ok(format!("{ch:?}")),
+                _ => Ok(format!("{c:?}")),
+            }
+        }
+        Pat::Str(s) => Ok(format!("{s:?}")),
+        // `inner as name` → Rust binding-with-subpattern `name @ <inner>`. The
+        // inner sub-pattern recurses through this same total renderer.
+        Pat::Alias(inner, name) => {
+            let name = ctx.emit_ident(*name)?;
+            let inner = render_pat(ctx, inner)?;
+            Ok(format!("{name} @ {inner}"))
+        }
         Pat::Tuple(elems) => {
             // A tuple pattern destructures element-by-element: `(p0, p1, …)`.
             // Stays total over any element vector (no arity assumption).

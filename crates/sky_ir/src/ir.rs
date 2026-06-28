@@ -382,15 +382,17 @@ pub struct Arm {
 /// appear as a constructor payload, a tuple element, or a record-field
 /// sub-pattern (`Just (a, b)`, `Node (Node …) x r`, `{ point = (a, b) }`).
 ///
-/// [`Pat::Var`] / [`Pat::Wildcard`] are leaves; [`Pat::Ctor`] / [`Pat::Tuple`] /
-/// [`Pat::Record`] are nesting nodes whose sub-patterns reuse the same enum,
-/// recursively. They also serve as an irrefutable destructuring binder (a single
-/// irrefutable case arm, a function parameter, or a `let`-destructure) when every
-/// leaf is a var / wildcard.
+/// [`Pat::Var`] / [`Pat::Wildcard`] and the literal leaves [`Pat::Int`] /
+/// [`Pat::Bool`] / [`Pat::Char`] / [`Pat::Str`] are leaves; [`Pat::Ctor`] /
+/// [`Pat::Tuple`] / [`Pat::Record`] / [`Pat::Alias`] are nesting nodes whose
+/// sub-patterns reuse the same enum, recursively. The var / wildcard /
+/// alias-of-irrefutable shapes also serve as an irrefutable destructuring binder
+/// (a single irrefutable case arm, a function parameter, or a `let`-destructure)
+/// when every leaf is a var / wildcard.
 ///
-/// Literal / cons / list / alias (`as`) patterns remain M3b-3 / M4 and are
-/// rejected upstream at lowering, so every [`Pat`] the backend sees here is
-/// var / wildcard / ctor / tuple / record.
+/// M3b-3 adds the refutable literal leaves ([`Pat::Int`], [`Pat::Bool`],
+/// [`Pat::Char`], [`Pat::Str`]) and the alias / `as` binder ([`Pat::Alias`]).
+/// Cons / list patterns remain M4 and are rejected upstream at lowering.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Pat {
     /// A variable binder — binds the matched value (a constructor payload field)
@@ -398,6 +400,26 @@ pub enum Pat {
     Var(Symbol),
     /// A wildcard `_` — matches any value and binds nothing.
     Wildcard,
+    /// An integer literal pattern `0`, `42`, `-1`. Refutable. Renders as the Rust
+    /// integer literal of the same value.
+    Int(i64),
+    /// A boolean literal pattern `True` / `False`. Refutable in isolation but a
+    /// `True` + `False` pair is an exhaustive cover of `Bool`. Renders as the Rust
+    /// `true` / `false` literal.
+    Bool(bool),
+    /// A character literal pattern `'a'`. The carried [`String`] is the source
+    /// character text (a single grapheme in well-formed IR); the backend renders
+    /// it as a Rust `char` literal. Refutable.
+    Char(String),
+    /// A string literal pattern `"hello"`. The carried [`String`] is the literal's
+    /// value; the backend renders it as a Rust string literal with deterministic
+    /// escaping. Refutable.
+    Str(String),
+    /// An alias / `as` pattern `inner as name` — matches `inner` and additionally
+    /// binds the whole matched value to `name`. Renders as the Rust binding-with-
+    /// subpattern form `name @ <inner>`. The inner sub-pattern is an arbitrary
+    /// [`Pat`] and recurses.
+    Alias(Box<Self>, Symbol),
     /// A constructor pattern `Variant sub0 sub1 …` (a nullary pattern `Variant`
     /// has an empty `args`). Each `args` element is an arbitrary [`Pat`] (M3b-2:
     /// nested ctor / tuple / record sub-patterns are all permitted).

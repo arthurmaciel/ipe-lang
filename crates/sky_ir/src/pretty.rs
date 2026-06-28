@@ -168,6 +168,17 @@ fn pat_name(interner: &Interner, pat: &Pat) -> String {
     match pat {
         Pat::Var(sym) => sym_name(interner, *sym),
         Pat::Wildcard => "_".to_owned(),
+        Pat::Int(n) => n.to_string(),
+        Pat::Bool(b) => if *b { "True" } else { "False" }.to_owned(),
+        Pat::Char(c) => format!("'{c}'"),
+        Pat::Str(s) => format!("{s:?}"),
+        Pat::Alias(inner, name) => {
+            format!(
+                "{} as {}",
+                pat_name(interner, inner),
+                sym_name(interner, *name)
+            )
+        }
         Pat::Tuple(elems) => {
             let inner = elems
                 .iter()
