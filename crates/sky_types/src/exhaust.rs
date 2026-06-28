@@ -200,6 +200,7 @@ pub fn check(module: &canon::Module, interner: &Interner) -> DResult<()> {
 fn check_expr(e: &canon::Expr, sigs: &Sigs, interner: &Interner) -> DResult<()> {
     match &e.value {
         canon::Expr_::Int(_)
+        | canon::Expr_::Float(_)
         | canon::Expr_::Str(_)
         | canon::Expr_::Char(_)
         | canon::Expr_::Unit

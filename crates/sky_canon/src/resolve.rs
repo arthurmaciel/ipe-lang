@@ -440,6 +440,7 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
     let span = e.span;
     let node = match &e.value {
         src::Expr_::Int(n) => canon::Expr_::Int(*n),
+        src::Expr_::Float(f) => canon::Expr_::Float(*f),
         src::Expr_::Str(s) => canon::Expr_::Str(s.clone()),
         src::Expr_::Char(c) => canon::Expr_::Char(c.clone()),
         src::Expr_::Unit => canon::Expr_::Unit,

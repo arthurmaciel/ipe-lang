@@ -320,6 +320,43 @@ mod tests {
     }
 
     #[test]
+    fn float_literals_lex_to_float_tokens() {
+        use lexer::{Tok, lex};
+        let kinds = |src: &str| -> Vec<Tok> {
+            lex(src).map_or_else(
+                |_| Vec::new(),
+                |toks| toks.into_iter().map(|t| t.kind).collect(),
+            )
+        };
+        // Plain fraction, whole-number fraction, and both exponent shapes.
+        assert_eq!(kinds("1.5"), vec![Tok::Float(1.5)]);
+        assert_eq!(kinds("3.0"), vec![Tok::Float(3.0)]);
+        assert_eq!(kinds("1.5e3"), vec![Tok::Float(1500.0)]);
+        assert_eq!(kinds("2e-2"), vec![Tok::Float(0.02)]);
+        assert_eq!(kinds("6E2"), vec![Tok::Float(600.0)]);
+        // An integer with no fraction / exponent stays an `Int`.
+        assert_eq!(kinds("42"), vec![Tok::Int(42)]);
+        // `1..5` is a range, not a float: the `..` is not consumed as a point.
+        assert_eq!(kinds("1..5"), vec![Tok::Int(1), Tok::DotDot, Tok::Int(5)]);
+    }
+
+    #[test]
+    fn leading_dot_is_not_a_float() {
+        // Elm-style requires a leading digit, so `.5` is a stray `.` (SKY-P0011),
+        // never a float.
+        assert_eq!(err_code(".5"), "SKY-P0011");
+    }
+
+    #[test]
+    fn trailing_exponent_marker_is_joined_name() {
+        // `1.5e` has no digit after the exponent marker, so the `e` reads as a
+        // name joined to the number (SKY-P0012) rather than an exponent.
+        assert_eq!(err_code("1.5e"), "SKY-P0012");
+        // A letter immediately after a float is likewise a joined name.
+        assert_eq!(err_code("1.5x"), "SKY-P0012");
+    }
+
+    #[test]
     fn malformed_module_header_is_p0020() {
         // Not `module`.
         assert_eq!(err_code("import X exposing (..)"), "SKY-P0020");

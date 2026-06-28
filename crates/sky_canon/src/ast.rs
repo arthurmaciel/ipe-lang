@@ -14,7 +14,10 @@ use sky_diagnostics::{Located, Span};
 use sky_intern::Symbol;
 
 /// A name-resolved module (M0 subset).
-#[derive(Clone, PartialEq, Eq, Debug)]
+//
+// `Eq` is not derived: `defs` carry [`Expr`] bodies that may hold a float
+// literal (only `PartialEq`).
+#[derive(Clone, PartialEq, Debug)]
 pub struct Module {
     /// Dotted module-name segments, e.g. `Main` → `[Main]`.
     pub name: Vec<Symbol>,
@@ -54,7 +57,9 @@ pub struct Ctor {
 
 /// A top-level definition. Mirrors `Can.Def` / `Can.TypedDef`: a binding either
 /// carries a canonical type annotation (`Typed`) or it does not (`Untyped`).
-#[derive(Clone, PartialEq, Eq, Debug)]
+// `Eq` is not derived: a binding body is an [`Expr`] that may carry a float
+// literal (only `PartialEq`).
+#[derive(Clone, PartialEq, Debug)]
 pub enum Def {
     /// A binding with no type annotation.
     Untyped {
@@ -87,7 +92,9 @@ impl Def {
 pub type Expr = Located<Expr_>;
 
 /// Name-resolved expression node (M0 subset).
-#[derive(Clone, PartialEq, Eq, Debug)]
+///
+/// `Eq` is not derived: [`Expr_::Float`] carries an `f64` (only `PartialEq`).
+#[derive(Clone, PartialEq, Debug)]
 pub enum Expr_ {
     /// A locally-bound variable (function parameter, `let`, or `case` binding).
     VarLocal(Symbol),
@@ -105,6 +112,8 @@ pub enum Expr_ {
     },
     /// An integer literal.
     Int(i64),
+    /// A floating-point literal `1.5`, `3.0`, `1.5e3` — carries its parsed value.
+    Float(f64),
     /// A string literal `"hello"` — carries its already-unescaped value.
     Str(String),
     /// A character literal `'a'` — carries its single unescaped character's text.
@@ -164,14 +173,17 @@ pub enum Expr_ {
 /// The binder is a resolved [`Pattern`]: a [`Pattern_::PVar`] for the common
 /// `name = body` case, or an irrefutable tuple / record destructure (M3b-2). A
 /// refutable binder is rejected fail-closed at lowering.
-#[derive(Clone, PartialEq, Eq, Debug)]
+// `Eq` is not derived: `body` is an [`Expr`], only `PartialEq` (float literals).
+#[derive(Clone, PartialEq, Debug)]
 pub struct LetBinding {
     pub pat: Pattern,
     pub body: Expr,
 }
 
 /// One arm of a `case`: a resolved pattern and the body it guards.
-#[derive(Clone, PartialEq, Eq, Debug)]
+//
+// `Eq` is not derived: `body` is an [`Expr`], only `PartialEq` (float literals).
+#[derive(Clone, PartialEq, Debug)]
 pub struct CaseBranch {
     pub pat: Pattern,
     pub body: Expr,

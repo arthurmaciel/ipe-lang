@@ -716,6 +716,24 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// Constrain a reference to a top-level binding. A typed binding is
+    /// instantiated fresh (flex) at this use site so it unifies against its own
+    /// concrete arguments without pinning the binding's other call sites, and the
+    /// alpha-renaming map is recorded for the post-solve super-type obligation
+    /// check. An untyped binding resolves to its shared monomorphic variable; a
+    /// name that is not a binding of this module stays fully flexible.
+    fn constrain_var_top_level(&mut self, name: Symbol, span: Span) -> DResult<VarId> {
+        if let Some(ty) = self.top_level.get(&name).cloned() {
+            let (var, vars) = self.instantiate_tracked(&ty)?;
+            self.scheme_apps.push(SchemeApp { name, vars, span });
+            Ok(var)
+        } else if let Some(v) = self.untyped.get(&name).copied() {
+            Ok(v)
+        } else {
+            self.flex()
+        }
+    }
+
     fn constrain_expr(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
@@ -724,6 +742,7 @@ impl<'a> Builder<'a> {
         let span = e.span;
         let var = match &e.value {
             canon::Expr_::Int(_) => self.int_var()?,
+            canon::Expr_::Float(_) => self.float_var()?,
             canon::Expr_::Str(_) => self.string_var()?,
             canon::Expr_::Char(_) => self.char_var()?,
             canon::Expr_::Unit => self.structure(FlatType::Unit)?,
@@ -739,29 +758,7 @@ impl<'a> Builder<'a> {
                     });
                 }
             },
-            canon::Expr_::VarTopLevel { name, .. } => {
-                if let Some(ty) = self.top_level.get(name).cloned() {
-                    // Typed binding: instantiate its scheme fresh (flex) here, so
-                    // this use unifies against its own concrete arguments without
-                    // pinning the binding's other call sites. The alpha-renaming
-                    // map is recorded so a super-typed binding's obligations can
-                    // be checked against the concrete type this use pins post-solve.
-                    let (var, vars) = self.instantiate_tracked(&ty)?;
-                    self.scheme_apps.push(SchemeApp {
-                        name: *name,
-                        vars,
-                        span,
-                    });
-                    var
-                } else if let Some(v) = self.untyped.get(name).copied() {
-                    // Untyped binding: resolve to its shared monomorphic variable.
-                    v
-                } else {
-                    // Not a binding of this module (e.g. a re-export the
-                    // canonicaliser accepted): leave fully flexible.
-                    self.flex()?
-                }
-            }
+            canon::Expr_::VarTopLevel { name, .. } => self.constrain_var_top_level(*name, span)?,
             canon::Expr_::VarKernel { module, name } => {
                 let ty = self.kernel_ty(*module, *name);
                 self.instantiate(&ty)?
@@ -1133,13 +1130,19 @@ impl<'a> Builder<'a> {
         )
     }
 
-    /// The type of a kernel function. M0 only exercises `String.fromInt` and
-    /// `Log.println`; any other kernel is treated as fully polymorphic so it
-    /// never spuriously fails inference for the M0 subset.
+    /// The type of a kernel function. The wired set is `String.fromInt :
+    /// Int -> String`, `String.fromFloat : Float -> String`, and `Log.println :
+    /// String -> Task ()`; any other kernel is treated as fully polymorphic so
+    /// it never spuriously fails inference for the supported subset.
     fn kernel_ty(&self, module: Symbol, name: Symbol) -> Ty {
         let int = Ty::Con {
             module: Vec::new(),
             name: self.builtins.int,
+            args: Vec::new(),
+        };
+        let float = Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.float,
             args: Vec::new(),
         };
         let string = Ty::Con {
@@ -1154,6 +1157,7 @@ impl<'a> Builder<'a> {
         };
         match (self.interner.resolve(module), self.interner.resolve(name)) {
             (Some("String"), Some("fromInt")) => Ty::Fun(Box::new(int), Box::new(string)),
+            (Some("String"), Some("fromFloat")) => Ty::Fun(Box::new(float), Box::new(string)),
             (Some("Log"), Some("println")) => Ty::Fun(Box::new(string), Box::new(task_unit)),
             // Unknown kernel: a single flexible variable. The raw id is chosen
             // to be distinct from any real interned symbol's typical range; it

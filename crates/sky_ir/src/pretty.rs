@@ -151,6 +151,7 @@ const fn binop_token(op: BinOp) -> &'static str {
 const fn kernel_name(kernel: KernelFn) -> &'static str {
     match kernel {
         KernelFn::StringFromInt => "String.fromInt",
+        KernelFn::StringFromFloat => "String.fromFloat",
         KernelFn::LogPrintln => "Log.println",
     }
 }
@@ -387,6 +388,7 @@ fn write_binding(
 fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) {
     match expr {
         Expr::Int(n) => line(out, level, &format!("Int {n}")),
+        Expr::Float(f) => line(out, level, &format!("Float {f}")),
         Expr::Str(s) => line(out, level, &format!("Str {s:?}")),
         Expr::Char(c) => line(out, level, &format!("Char '{c}'")),
         Expr::Unit => line(out, level, "Unit"),

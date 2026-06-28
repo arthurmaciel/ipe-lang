@@ -29,14 +29,20 @@ impl FuncId {
 }
 
 /// A whole compiled program: an ordered list of modules.
-#[derive(Clone, PartialEq, Eq, Debug)]
+//
+// `Eq` is not derived: a module's functions hold [`Expr`] bodies that may carry
+// a float literal (only `PartialEq`).
+#[derive(Clone, PartialEq, Debug)]
 pub struct Program {
     pub modules: Vec<Module>,
 }
 
 /// A single module: its declared types and functions, plus an optional entry
 /// point (the `main` function, when this module carries it).
-#[derive(Clone, PartialEq, Eq, Debug)]
+//
+// `Eq` is not derived: `funcs` hold [`Expr`] bodies that may carry a float
+// literal (only `PartialEq`).
+#[derive(Clone, PartialEq, Debug)]
 pub struct Module {
     pub name: ModPath,
     pub types: Vec<TypeDef>,
@@ -241,7 +247,10 @@ impl BoundSet {
 
 /// A function: the type variables it quantifies, typed parameters, a return
 /// type, and a body expression.
-#[derive(Clone, PartialEq, Eq, Debug)]
+//
+// `Eq` is not derived: `body` is an [`Expr`] that may carry a float literal
+// (only `PartialEq`).
+#[derive(Clone, PartialEq, Debug)]
 pub struct Func {
     pub id: FuncId,
     pub name: Symbol,
@@ -348,9 +357,15 @@ pub enum IrType {
 /// [`Match`] is [`Match::new`], which validates the arm set. An inline
 /// struct-variant with public fields could be built directly, bypassing the
 /// check, and would make illegal IR representable.
-#[derive(Clone, PartialEq, Eq, Debug)]
+// `Eq` is not derived: [`Expr::Float`] carries an `f64`, which is only
+// `PartialEq` (IEEE-754). No consumer keys a map / set on an [`Expr`].
+#[derive(Clone, PartialEq, Debug)]
 pub enum Expr {
     Int(i64),
+    /// A floating-point literal — the carried [`f64`] is the parsed value. The
+    /// backend renders it as an f64-typed Rust literal (a whole-number value
+    /// keeps its decimal point, `3.0`, so it never types as an integer).
+    Float(f64),
     /// A string literal — the carried [`String`] is the already-unescaped value.
     /// The backend renders it as an owned `String` (`"…".to_string()`).
     Str(String),
@@ -498,6 +513,9 @@ pub enum Callee {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum KernelFn {
     StringFromInt,
+    /// `String.fromFloat : Float -> String` — the float counterpart of
+    /// [`KernelFn::StringFromInt`]; renders an `f64` to its decimal text.
+    StringFromFloat,
     LogPrintln,
 }
 
@@ -523,7 +541,9 @@ pub enum BinOp {
 }
 
 /// One arm of a [`Match`]: a constructor pattern and the body it guards.
-#[derive(Clone, PartialEq, Eq, Debug)]
+//
+// `Eq` is not derived: `body` is an [`Expr`], only `PartialEq` (float literals).
+#[derive(Clone, PartialEq, Debug)]
 pub struct Arm {
     pub pat: Pat,
     pub body: Expr,
@@ -649,7 +669,10 @@ pub fn is_ctor_headed(pat: &Pat) -> bool {
 /// Fields are private: the sole way to obtain a `Match` is [`Match::new`],
 /// which proves exhaustiveness at construction time. This makes a
 /// non-exhaustive `Match` unrepresentable.
-#[derive(Clone, PartialEq, Eq, Debug)]
+//
+// `Eq` is not derived: the scrutinee / arm bodies are [`Expr`]s that may carry
+// a float literal (only `PartialEq`).
+#[derive(Clone, PartialEq, Debug)]
 pub struct Match {
     scrutinee: Box<Expr>,
     arms: Vec<Arm>,

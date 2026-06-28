@@ -1,0 +1,9 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+area : Float -> Float
+area r =
+    3.14 * r * r
+
+main =
+    println (String.fromFloat (area 2.0))
