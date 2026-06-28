@@ -35,13 +35,6 @@ impl<'a> GenericScope<'a> {
         Self { params }
     }
 
-    /// The empty scope — no generic is in scope. Used for program-level
-    /// emission (enums / record structs) and for monomorphic functions.
-    #[must_use]
-    pub const fn empty() -> GenericScope<'static> {
-        GenericScope { params: &[] }
-    }
-
     /// The deterministic Rust generic name for `sym` (`T1`, `T2`, … by position).
     ///
     /// # Errors
@@ -88,7 +81,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             }
             format!("({})", parts.join(", "))
         }
-        IrType::Record(fields) => ctx.record_name_for_type(fields)?.to_owned(),
+        IrType::Record(fields) => ctx.render_record_use(fields, generics)?,
         IrType::Fun(params, ret) => {
             // A first-class function value is a boxed trait object
             // `Box<dyn Fn(T0, ...) -> R>`. A nullary function type renders as
@@ -184,21 +177,61 @@ impl SkyStringify for {name} {{
 /// stringifying a record reads identically across the two backends. Each field
 /// renders through the runtime's total autoref `Wrap(..).dispatch()` shim, which
 /// never fails to resolve a method regardless of the field type.
+///
+/// A GENERIC record shape (M2c — a field typed by a type variable) gains a
+/// generic clause on both the struct and its impl. Shape (for `{ value : a }`):
+/// ```text
+/// #[derive(Clone, Debug, PartialEq)]
+/// pub struct RecValue<T1> {
+///     value: T1,
+/// }
+/// impl<T1: SkyStringify + std::fmt::Debug> SkyStringify for RecValue<T1> {
+///     ...
+/// }
+/// ```
+/// The impl bounds each parameter `SkyStringify + std::fmt::Debug` so the inline
+/// autoref `Wrap(..).dispatch()` resolves at the generic frame (the
+/// `SkyStringify` arm is selected with zero autoref, the `Debug` arm is the
+/// always-available fallback). `std::fmt::Debug` is spelled in full — the
+/// emitted crate's `pub use sky_runtime::*` shadows the `core` crate with the
+/// runtime's `core` module, so `core::fmt` would not resolve. A monomorphic
+/// record emits an empty clause, so that path is byte-identical to b3.
 pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> {
     let name = &rec.name;
+    // The struct's own generic scope: each parameter symbol → `T1`, `T2`, … by
+    // position. Empty for a monomorphic record (byte-identical to b3).
+    let scope = GenericScope::new(&rec.type_params);
     let mut field_lines = Vec::with_capacity(rec.fields.len());
     let mut show_args = Vec::with_capacity(rec.fields.len());
     for (field_name, field_ty) in &rec.fields {
         let ident = mangle_reserved(field_name.clone());
-        // A synthesised record struct is a program-level declaration: no
-        // function generic is in scope (generic records are M2b).
-        let rust_ty = render_type(ctx, field_ty, GenericScope::empty())?;
+        let rust_ty = render_type(ctx, field_ty, scope)?;
         field_lines.push(format!("    {ident}: {rust_ty},"));
         show_args.push(format!(
             "(&sky_runtime::stringify::Wrap(&self.{ident})).dispatch()"
         ));
     }
     let fields_block = field_lines.join("\n");
+
+    // Generic clauses: `<T1, T2>` on the struct, `<T1: SkyStringify + Debug, …>`
+    // on the impl, `<T1, T2>` on the impl's `for` type. All empty when the record
+    // is monomorphic.
+    let params: Vec<String> = (1..=rec.type_params.len())
+        .map(|i| format!("T{i}"))
+        .collect();
+    let (decl_clause, impl_bounds, use_clause) = if params.is_empty() {
+        (String::new(), String::new(), String::new())
+    } else {
+        let bounds: Vec<String> = params
+            .iter()
+            .map(|p| format!("{p}: SkyStringify + std::fmt::Debug"))
+            .collect();
+        (
+            format!("<{}>", params.join(", ")),
+            format!("<{}>", bounds.join(", ")),
+            format!("<{}>", params.join(", ")),
+        )
+    };
 
     // Go `%v` of a struct: `{v0 v1 ...}` — N space-separated `{}` placeholders
     // wrapped in literal braces. With zero fields the rendering is just `{}`.
@@ -212,10 +245,10 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
 
     Ok(format!(
         "#[derive(Clone, Debug, PartialEq)]
-pub struct {name} {{
+pub struct {name}{decl_clause} {{
 {fields_block}
 }}
-impl SkyStringify for {name} {{
+impl{impl_bounds} SkyStringify for {name}{use_clause} {{
     fn sky_show(&self) -> String {{
         {body}
     }}
