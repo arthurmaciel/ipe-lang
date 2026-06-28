@@ -1,0 +1,284 @@
+//! Fully-parametric top-level function emission for the Rust backend (M2a core).
+//!
+//! Exercises the generic-codegen spine added by the IR's [`IrType::Generic`] +
+//! `Func::type_params`: a structurally-parametric function `identity : a -> a`
+//! emits `pub fn main_identity<T1>(x: T1) -> T1 { x }`, every `IrType::Generic`
+//! in its signature / body renders as the deterministic Rust generic name
+//! (`a` → `T1` by quantification position), and a same-module use at two
+//! distinct concrete types (`Int` and `Bool`) resolves to the ONE generic
+//! function, which Rust monomorphises.
+//!
+//! Behavioural-parity oracle: the Go reference compiler at
+//! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the
+//! equivalent program
+//!
+//! ```text
+//! identity : a -> a
+//! identity x = x
+//! main =
+//!     let n = identity 40
+//!         flag = identity (1 == 1)
+//!     in println (String.fromInt (if flag then n + 2 else n))
+//! ```
+//!
+//! to stdout `42\n`, exit 0 (hand-verified in a temp dir; the Go backend emits
+//! the matching `func identity[T1 any](x T1) T1`, confirming the `a` → `T1`
+//! naming convention). The `end_to_end_*` test (gated on `SKY_E2E=1`) drives
+//! the hand-built IR through the Rust backend, builds the emitted crate, and
+//! asserts the identical `42`.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use sky_backend::Backend;
+use sky_backend_rust::RustBackend;
+use sky_diagnostics::{DResult, Diagnostic};
+use sky_intern::Interner;
+use sky_ir::{BinOp, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program};
+
+/// Build the canonical generic program:
+///
+/// ```sky
+/// identity : a -> a
+/// identity x = x
+/// main =
+///     let n = identity 40
+///         flag = identity (1 == 1)
+///     in println (String.fromInt (if flag then n + 2 else n))
+/// ```
+///
+/// `identity` quantifies the single type variable `a` (used structurally, pure
+/// pass-through), so it lowers to a generic `Func` (`type_params = [a]`). `main`
+/// uses it at `Int` and `Bool` in the same module — the ONE generic function,
+/// monomorphised by Rust at each call.
+fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
+    let main_mod = interner.intern("Main")?;
+    let identity = interner.intern("identity")?;
+    let main = interner.intern("main")?;
+    let a = interner.intern("a")?;
+    let x = interner.intern("x")?;
+    let n = interner.intern("n")?;
+    let flag = interner.intern("flag")?;
+
+    let identity_id = FuncId::from_raw(0);
+    let main_id = FuncId::from_raw(1);
+
+    // identity x = x — body is the bare parameter, the var typed `Generic(a)`.
+    let identity_fn = Func {
+        id: identity_id,
+        name: identity,
+        type_params: vec![a],
+        params: vec![(x, IrType::Generic(a))],
+        ret: IrType::Generic(a),
+        body: Expr::Var(x),
+    };
+
+    // identity 40 — T1 = Int.
+    let call_int = Expr::Call {
+        callee: Callee::Func(identity_id),
+        args: vec![Expr::Int(40)],
+    };
+    // identity (1 == 1) — T1 = Bool, the second concrete instantiation.
+    let call_bool = Expr::Call {
+        callee: Callee::Func(identity_id),
+        args: vec![Expr::BinOp {
+            op: BinOp::Eq,
+            lhs: Box::new(Expr::Int(1)),
+            rhs: Box::new(Expr::Int(1)),
+        }],
+    };
+    // if flag then n + 2 else n
+    let chosen = Expr::If {
+        cond: Box::new(Expr::Var(flag)),
+        then_: Box::new(Expr::BinOp {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Var(n)),
+            rhs: Box::new(Expr::Int(2)),
+        }),
+        else_: Box::new(Expr::Var(n)),
+    };
+    // println (String.fromInt <chosen>)
+    let print = Expr::Call {
+        callee: Callee::Kernel(KernelFn::LogPrintln),
+        args: vec![Expr::Call {
+            callee: Callee::Kernel(KernelFn::StringFromInt),
+            args: vec![chosen],
+        }],
+    };
+    // let n = identity 40 in let flag = identity (1 == 1) in <print>
+    let main_body = Expr::Let {
+        name: n,
+        value: Box::new(call_int),
+        body: Box::new(Expr::Let {
+            name: flag,
+            value: Box::new(call_bool),
+            body: Box::new(print),
+        }),
+    };
+    let main_fn = Func {
+        id: main_id,
+        name: main,
+        type_params: vec![],
+        params: vec![],
+        ret: IrType::TaskUnit,
+        body: main_body,
+    };
+
+    Ok(Program {
+        modules: vec![Module {
+            name: ModPath(vec![main_mod]),
+            types: vec![],
+            funcs: vec![identity_fn, main_fn],
+            entry: Some(main_id),
+            records: vec![],
+        }],
+    })
+}
+
+#[test]
+fn emits_generic_function_signature() -> DResult<()> {
+    let mut interner = Interner::new();
+    let prog = build_identity_program(&mut interner)?;
+    let emitted = RustBackend::new(&interner).emit(&prog)?;
+    let main_rs = emitted
+        .files
+        .get(&sky_backend::RelPath::new("src/main.rs")?)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "generics test",
+            detail: "emitted project is missing src/main.rs".to_owned(),
+        })?;
+
+    // The generic clause + the `Generic(a)` → `T1` rendering in both the
+    // parameter and the return position.
+    assert!(
+        main_rs.contains("pub fn main_identity<T1>(x: T1) -> T1 {"),
+        "generic function emits a `<T1>` clause with T1-typed param and return:\n{main_rs}"
+    );
+    // Its body is the bare pass-through parameter.
+    assert!(
+        main_rs.contains("pub fn main_identity<T1>(x: T1) -> T1 {\n    x\n}"),
+        "identity's body is the bare parameter `x`:\n{main_rs}"
+    );
+    // The monomorphic entry carries NO generic clause — the empty `type_params`
+    // path is byte-identical to the pre-M2a shape.
+    assert!(
+        main_rs.contains("pub fn sky_main() -> SkyTask<()> {"),
+        "monomorphic `main` emits no generic clause:\n{main_rs}"
+    );
+    // Exactly ONE generic function is emitted; both call sites target it and
+    // Rust monomorphises (no per-type duplicate definition).
+    assert_eq!(
+        main_rs.matches("pub fn main_identity").count(),
+        1,
+        "one generic fn, shared across both concrete instantiations"
+    );
+    Ok(())
+}
+
+/// Full spine: build the generic IR, emit the Cargo project, vendor the runtime,
+/// `cargo build`, run, and assert the program prints `42` — the value the Go
+/// backend produces for the equivalent program. Gated on `SKY_E2E=1` so the
+/// default `cargo test` stays fast and offline.
+#[test]
+fn end_to_end_builds_and_prints_forty_two() -> DResult<()> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let mut interner = Interner::new();
+    let prog = build_identity_program(&mut interner)?;
+    let emitted = RustBackend::new(&interner).emit(&prog)?;
+
+    let out = std::env::temp_dir().join("sky_backend_generics_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+    let src = out.join("src");
+    std::fs::create_dir_all(&src).map_err(|e| io_bug(&src, &e))?;
+
+    let runtime = resolve_runtime().ok_or_else(|| Diagnostic::CompilerBug {
+        where_: "generics e2e",
+        detail: "could not locate runtime-rust/src/sky_runtime".to_owned(),
+    })?;
+    copy_dir(&runtime, &src.join("sky_runtime"))?;
+
+    let cargo_toml = out.join("Cargo.toml");
+    std::fs::write(&cargo_toml, &emitted.cargo_toml).map_err(|e| io_bug(&cargo_toml, &e))?;
+    for (rel, contents) in &emitted.files {
+        let path = out.join(rel.as_str());
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io_bug(parent, &e))?;
+        }
+        std::fs::write(&path, contents).map_err(|e| io_bug(&path, &e))?;
+    }
+
+    let status = Command::new("cargo")
+        .arg("build")
+        .current_dir(&out)
+        .status();
+    assert!(
+        matches!(&status, Ok(s) if s.success()),
+        "emitted generic project must build: {status:?}"
+    );
+
+    let bin = out.join("target").join("debug").join("sky-app");
+    let output = Command::new(&bin).output().map_err(|e| io_bug(&bin, &e))?;
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "42\n",
+        "generic program prints 42 (Go-backend parity)"
+    );
+    assert!(output.status.success(), "exit 0, matching the Go oracle");
+    Ok(())
+}
+
+/// Wrap a filesystem error as a `CompilerBug` (the E2E test's `DResult` currency).
+fn io_bug(path: &Path, e: &std::io::Error) -> Diagnostic {
+    Diagnostic::CompilerBug {
+        where_: "generics e2e io",
+        detail: format!("{}: {e}", path.display()),
+    }
+}
+
+/// Locate the vendored Rust runtime (`runtime-rust/src/sky_runtime`), via
+/// `SKY_RUNTIME_DIR` or an upward search for a sibling `sky` checkout.
+fn resolve_runtime() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("SKY_RUNTIME_DIR") {
+        let p = PathBuf::from(dir);
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+    let cwd = std::env::current_dir().ok()?;
+    let mut here: Option<&Path> = Some(cwd.as_path());
+    while let Some(dir) = here {
+        for candidate in [
+            dir.join("sky")
+                .join("runtime-rust")
+                .join("src")
+                .join("sky_runtime"),
+            dir.join("runtime-rust").join("src").join("sky_runtime"),
+        ] {
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
+        }
+        here = dir.parent();
+    }
+    None
+}
+
+/// Recursively copy the (trusted, bounded-depth) runtime tree into the crate.
+fn copy_dir(src: &Path, dst: &Path) -> DResult<()> {
+    std::fs::create_dir_all(dst).map_err(|e| io_bug(dst, &e))?;
+    for entry in std::fs::read_dir(src).map_err(|e| io_bug(src, &e))? {
+        let entry = entry.map_err(|e| io_bug(src, &e))?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        let file_type = entry.file_type().map_err(|e| io_bug(&from, &e))?;
+        if file_type.is_dir() {
+            copy_dir(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to).map_err(|e| io_bug(&from, &e))?;
+        }
+    }
+    Ok(())
+}

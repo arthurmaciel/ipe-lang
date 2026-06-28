@@ -64,11 +64,22 @@ pub struct EnumDef {
     pub variants: Vec<Symbol>,
 }
 
-/// A function: typed parameters, a return type, and a body expression.
+/// A function: the type variables it quantifies, typed parameters, a return
+/// type, and a body expression.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Func {
     pub id: FuncId,
     pub name: Symbol,
+    /// The type variables this function quantifies, in quantification order
+    /// (M2a). Each is a Sky type-variable [`Symbol`] that appears as an
+    /// [`IrType::Generic`] in the parameters / return / body. A monomorphic
+    /// function has an empty list, so existing M0 / M1 functions are unchanged.
+    ///
+    /// The order is load-bearing: the backend derives each variable's Rust
+    /// generic name (`T1`, `T2`, …) from its *position* here, so a function
+    /// quantifying `[a, b]` emits `fn name<T1, T2>(..)` with `a` → `T1` and
+    /// `b` → `T2` regardless of the source variable spellings.
+    pub type_params: Vec<Symbol>,
     pub params: Vec<(Symbol, IrType)>,
     pub ret: IrType,
     pub body: Expr,
@@ -115,6 +126,23 @@ pub enum IrType {
     /// nullary `Fn() -> R`, distinct from `ret` alone. The lowerer is the sole
     /// producer; the backend stays total over any parameter vector it receives.
     Fun(Vec<Self>, Box<Self>),
+    /// A generic type parameter — a Sky type variable used STRUCTURALLY
+    /// (pass-through, no operation applied to it) in a fully-parametric
+    /// top-level function (M2a). The carried [`Symbol`] is the source type
+    /// variable's name (e.g. interned `"a"`).
+    ///
+    /// The backend renders this as the function's corresponding Rust generic
+    /// (`T1`, `T2`, …), resolved by the variable's position in the enclosing
+    /// [`Func::type_params`] — not by the symbol's spelling — so emission is
+    /// deterministic regardless of source naming.
+    ///
+    /// A `Generic` is only ever in scope inside a function that quantifies it;
+    /// it never appears in a program-level position (enum / record-struct
+    /// declaration). Constrained type variables (those needing a Rust trait
+    /// bound — `Number` / `Comparable` / `Appendable`) and the wildcard `any`
+    /// are NOT representable here: they are rejected at lowering (M2c) so every
+    /// `Generic` the backend sees is a true parametric pass-through.
+    Generic(Symbol),
 }
 
 /// An expression in the typed IR.
@@ -589,6 +617,45 @@ mod tests {
     }
 
     #[test]
+    fn generic_type_and_quantified_func_construct_and_round_trip() -> DResult<()> {
+        let mut i = Interner::new();
+        let a = i.intern("a")?;
+        let b = i.intern("b")?;
+        let x = i.intern("x")?;
+        let id = i.intern("id")?;
+
+        // A fully-parametric `id : a -> a` quantifying [a].
+        let generic_a = IrType::Generic(a);
+        assert_eq!(generic_a, generic_a.clone());
+        assert!(format!("{generic_a:?}").contains("Generic"));
+
+        let func = Func {
+            id: FuncId::from_raw(0),
+            name: id,
+            type_params: vec![a],
+            params: vec![(x, IrType::Generic(a))],
+            ret: IrType::Generic(a),
+            body: Expr::Var(x),
+        };
+        assert_eq!(func, func.clone());
+        assert_eq!(func.type_params, vec![a]);
+
+        // Distinct generic vars compare unequal; quantification order is carried
+        // verbatim (no dedup / sort), so [a, b] stays [a, b].
+        assert_ne!(IrType::Generic(a), IrType::Generic(b));
+        let two = Func {
+            id: FuncId::from_raw(1),
+            name: id,
+            type_params: vec![a, b],
+            params: vec![(x, IrType::Generic(a))],
+            ret: IrType::Generic(b),
+            body: Expr::Var(x),
+        };
+        assert_eq!(two.type_params, vec![a, b]);
+        Ok(())
+    }
+
+    #[test]
     fn program_round_trips_debug() -> DResult<()> {
         let mut i = Interner::new();
         let (ty, inc, dec) = msg_enum(&mut i)?;
@@ -598,6 +665,7 @@ mod tests {
         let func = Func {
             id: FuncId::from_raw(0),
             name: main_sym,
+            type_params: vec![],
             params: vec![],
             ret: IrType::TaskUnit,
             body: Expr::Call {

@@ -68,6 +68,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
     let update_fn = Func {
         id: update_id,
         name: update,
+        type_params: vec![],
         params: vec![(msg, IrType::Enum(msg_ty)), (count, IrType::Int)],
         ret: IrType::Int,
         body: Expr::Match(update_match),
@@ -76,6 +77,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
     let main_fn = Func {
         id: main_id,
         name: main,
+        type_params: vec![],
         params: vec![],
         ret: IrType::TaskUnit,
         body: Expr::Call {

@@ -232,6 +232,11 @@ impl<'a> Lowerer<'a> {
                 Ok(Func {
                     id,
                     name,
+                    // M2a polymorphism is not yet surfaced by the lowerer; every
+                    // function it emits is monomorphic for now. The IR carries
+                    // the field so the backend can emit generics once the
+                    // type-variable detection lands.
+                    type_params: Vec::new(),
                     params,
                     ret,
                     body: self.lower_expr(body)?,
@@ -252,6 +257,7 @@ impl<'a> Lowerer<'a> {
                 Ok(Func {
                     id,
                     name,
+                    type_params: Vec::new(),
                     params: Vec::new(),
                     ret,
                     body: self.lower_expr(body)?,

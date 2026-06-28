@@ -64,6 +64,7 @@ fn reserved_names_are_mangled_in_emitted_output() -> DResult<()> {
     let render_fn = Func {
         id: FuncId::from_raw(0),
         name: func,
+        type_params: vec![],
         params: vec![(param, IrType::Int)],
         ret: IrType::Int,
         body: Expr::Var(param),
@@ -108,6 +109,7 @@ fn deeply_nested_expr_fails_fast_not_stack_overflow() -> DResult<()> {
     let deep_fn = Func {
         id: FuncId::from_raw(0),
         name: func,
+        type_params: vec![],
         params: vec![],
         ret: IrType::Int,
         body,
@@ -146,6 +148,7 @@ fn nesting_at_the_bound_still_emits() -> DResult<()> {
     let ok_fn = Func {
         id: FuncId::from_raw(0),
         name: func,
+        type_params: vec![],
         params: vec![],
         ret: IrType::Int,
         body,
@@ -170,6 +173,7 @@ fn empty_intended_symbol_is_rejected() -> DResult<()> {
     let f = Func {
         id: FuncId::from_raw(0),
         name: func,
+        type_params: vec![],
         params: vec![(empty, IrType::Int)],
         ret: IrType::Int,
         body: Expr::Int(0),
@@ -279,6 +283,7 @@ fn let_if_and_extended_binops_emit_total_rust() -> DResult<()> {
     let f_fn = Func {
         id: FuncId::from_raw(0),
         name: f,
+        type_params: vec![],
         params: vec![(n, IrType::Int)],
         ret: IrType::Int,
         body,
@@ -307,6 +312,7 @@ fn tuple_type_and_expr_emit_as_rust_tuples() -> DResult<()> {
     let f_fn = Func {
         id: FuncId::from_raw(0),
         name: f,
+        type_params: vec![],
         params: vec![(n, IrType::Int)],
         ret: IrType::Tuple(vec![IrType::Int, IrType::Int]),
         body: Expr::Tuple(vec![Expr::Var(n), Expr::Int(1)]),
