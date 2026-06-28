@@ -193,3 +193,45 @@ fail-fast). Runtime behaviour is identical to the duplicated-body form.
 verified-complete parity base (same rule as Idea 4). Low effort (native Rust + the
 Maranget algo already handles it), moderate value (real DRY win, very common
 idiom) — a strong early candidate once divergences open.
+
+## Idea 6 — Pattern guards (Haskell-style guards) 🔬🧊
+
+**Goal:** condition an arm on a boolean predicate over the bound vars, with
+fall-through to later arms:
+```elm
+case v of
+    n if n < 1            -> arm1
+    n if n >= 10          -> arm1
+    s if String.isEmpty s -> arm2
+    _                     -> arm3
+```
+
+**Syntax decision: `if` (NOT Haskell's `|`).** Decided 2026-06-28. Haskell uses
+`|` for guards only because it has no or-patterns; we picked `|` for or-patterns
+(Idea 5), so a guard marker of `|` would COLLIDE. Use Rust's spelling: `pattern if
+cond -> body`. `if` is already a keyword but is unambiguous in case-arm-LHS
+position. Guards COMPOSE with or-patterns: `A | B if cond -> ...` (guard applies to
+the whole or-pattern). Maps **1:1 to Rust match guards** `n if n < 1 => ...`.
+
+**Why it's a departure:** Elm/Sky have no pattern guards (you nest `if` in the arm
+body). Superset → documented divergence, not oracle-verifiable.
+
+**Shape of the work (native Rust target):**
+- Parse `pattern (if <boolExpr>)? -> body` in case arms.
+- IR: add an optional guard expr to `Arm { pat, guard: Option<Expr>, body }`.
+- types: guard expr must be `Bool`, scoped over the pattern's bound vars.
+- backend: emit Rust `pat if <guard> => body`.
+
+**Correctness gate (load-bearing — soundness floor):** a **guarded arm does NOT
+contribute to exhaustiveness** (the guard may be false). The M3b-2 Maranget check
+must treat guarded rows as non-covering, so a case whose coverage relies on guarded
+arms requires an unguarded/wildcard fallback else **SKY-T0010** — caught BEFORE
+emit (Rust would otherwise reject the guard-only match as non-exhaustive E0004 =
+exit-0-then-cargo-fail). Guards also affect redundancy: a guard can make an
+otherwise-shadowed later arm reachable. Guard expr must be pure `Bool` (Sky is
+pure → fine).
+
+**Disposition:** filed (user opted in 2026-06-28). Post-M6 "designer" phase
+(divergence rule). Pairs naturally with Idea 5 (or-patterns) — implement together;
+both are native Rust, the only real work is the exhaustiveness/redundancy
+adjustments. High value (very common idiom), moderate effort.
