@@ -14,7 +14,7 @@
 //!   a [`sky_diagnostics::Diagnostic::CompilerBug`] — the "compiler is broken"
 //!   channel, reachable only for ill-canonicalised or ill-typed input.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use sky_canon::ast as canon;
 use sky_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span};
@@ -59,7 +59,7 @@ fn ty_contains_var(ty: &Ty) -> bool {
 /// A field of a synthesised record struct whose type embeds a `Box<dyn Fn>`
 /// cannot satisfy the struct's derived `Clone`/`Debug`/`PartialEq` nor its
 /// `SkyStringify` impl — so the field type carrying a function is the unsound
-/// shape. Used by [`embeds_function_record_field`] to test a record field.
+/// shape. Used by [`embeds_nonderivable_function`] to test a payload field.
 fn ty_contains_fun(ty: &Ty) -> bool {
     match ty {
         Ty::Fun(_, _) => true,
@@ -70,28 +70,88 @@ fn ty_contains_fun(ty: &Ty) -> bool {
     }
 }
 
-/// Does this solved [`Ty`] embed a record whose field type contains a function?
+/// Does this solved [`Ty`] embed a record field OR an enum payload whose type
+/// contains a function?
 ///
-/// Such a record synthesises to a Rust struct that derives
-/// `Clone`/`Debug`/`PartialEq` and impls `SkyStringify` — none of which a
-/// `Box<dyn Fn>` field satisfies — so it would emit Rust that does not build.
+/// A record synthesises to a Rust struct, and a user enum to a Rust enum, both
+/// deriving `Clone`/`Debug`/`PartialEq` + `SkyStringify` — none of which a
+/// `Box<dyn Fn>` field satisfies — so either would emit Rust that does not build.
 /// The syntactic [`Lowerer::reject_function_valued_field`] gate only sees a
 /// *literally* function-typed field value; this catches the case it misses — a
-/// function value flowing into a record field THROUGH a type variable, e.g.
-/// `wrap : a -> { value : a }` applied as `wrap (\n -> n + 1)`, whose solved
-/// region type is `{ value : Int -> Int }`. The field instantiates to a function
-/// only at the use site, so the only place to see it is the use site's region
-/// type. Fail-closed: this is the documented first-class-function gap
-/// ([`Feature::FirstClassFunctions`], SKY-L0107), never broken Rust.
-fn embeds_function_record_field(ty: &Ty) -> bool {
+/// function value flowing into a record field or constructor payload THROUGH a
+/// type variable, e.g. `wrap : a -> { value : a }` applied as `wrap (\n -> n +
+/// 1)` (region `{ value : Int -> Int }`), or `Som (\n -> n + 1)` for
+/// `type Opt a = Som a | Non` (region `Opt (Int -> Int)`). The field instantiates
+/// to a function only at the use site, so the only place to see it is the use
+/// site's region type. Fail-closed: this is the documented first-class-function
+/// gap ([`Feature::FirstClassFunctions`], SKY-L0107), never broken Rust.
+fn embeds_nonderivable_function(ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) | Ty::Unit => false,
-        Ty::Fun(a, b) => embeds_function_record_field(a) || embeds_function_record_field(b),
-        Ty::Tuple(elems) => elems.iter().any(embeds_function_record_field),
-        Ty::Con { args, .. } => args.iter().any(embeds_function_record_field),
+        Ty::Fun(a, b) => embeds_nonderivable_function(a) || embeds_nonderivable_function(b),
+        Ty::Tuple(elems) => elems.iter().any(embeds_nonderivable_function),
+        // A `Con` here is a user enum (which derives `Clone`/`Debug`/`PartialEq`
+        // + `SkyStringify`) applied to its type arguments. A function reaching a
+        // payload field — directly (`Opt (Int -> Int)`) or nested inside another
+        // payload/record under it — makes those derives fail, so it is the same
+        // non-derivable shape as a function in a record field.
+        Ty::Con { args, .. } => args
+            .iter()
+            .any(|a| ty_contains_fun(a) || embeds_nonderivable_function(a)),
         Ty::Record(fields) => fields
             .values()
-            .any(|f| ty_contains_fun(f) || embeds_function_record_field(f)),
+            .any(|f| ty_contains_fun(f) || embeds_nonderivable_function(f)),
+    }
+}
+
+/// Collect every type-variable [`Symbol`] mentioned in a canonical type into
+/// `out`. Used to verify a constructor field's type variables are all bound by
+/// the union's declared parameters before lowering the field.
+fn collect_type_vars(t: &canon::Type, out: &mut BTreeSet<Symbol>) {
+    match t {
+        canon::Type::Var(s) => {
+            out.insert(*s);
+        }
+        canon::Type::Unit => {}
+        canon::Type::Lambda(a, b) => {
+            collect_type_vars(a, out);
+            collect_type_vars(b, out);
+        }
+        canon::Type::Tuple(elems) => {
+            for e in elems {
+                collect_type_vars(e, out);
+            }
+        }
+        canon::Type::Con { args, .. } => {
+            for a in args {
+                collect_type_vars(a, out);
+            }
+        }
+        canon::Type::Record(fields) => {
+            for (_, fty) in fields {
+                collect_type_vars(fty, out);
+            }
+        }
+    }
+}
+
+/// Does this IR type embed a function type anywhere? An enum variant whose
+/// payload field carries a `Box<dyn Fn>` cannot satisfy the enum's derived
+/// `Clone`/`Debug`/`PartialEq` nor its `SkyStringify` impl, so a function-bearing
+/// field is the fail-closed first-class gap.
+fn ir_contains_fun(ty: &IrType) -> bool {
+    match ty {
+        IrType::Fun(_, _) => true,
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Unit
+        | IrType::TaskUnit
+        | IrType::Generic(_) => false,
+        IrType::Enum { args, .. } => args.iter().any(ir_contains_fun),
+        IrType::Tuple(elems) => elems.iter().any(ir_contains_fun),
+        IrType::Record(fields) => fields.values().any(ir_contains_fun),
     }
 }
 
@@ -118,6 +178,10 @@ pub struct Lowerer<'a> {
     /// variant set handed to [`Match::new`] (the IR layer cannot self-confirm
     /// this; the lowerer carries the obligation).
     enum_variants: BTreeMap<Symbol, Vec<Symbol>>,
+    /// Each constructor's declared payload arity, keyed by constructor name. A
+    /// saturated construction passes exactly this many arguments; a bare or
+    /// partially-applied payload constructor is the constructor-as-function gap.
+    ctor_arity: BTreeMap<Symbol, usize>,
     /// Pre-minted, collision-free parameter names for eta-expanding a partial
     /// application into a boxed closure. Sized in [`crate::lower`] to the widest
     /// function arity in the module — an eta-lambda introduces at most that many
@@ -157,8 +221,12 @@ impl<'a> Lowerer<'a> {
         }
 
         let mut enum_variants = BTreeMap::new();
+        let mut ctor_arity = BTreeMap::new();
         for union in &m.unions {
             enum_variants.insert(union.name, union.ctors.iter().map(|c| c.name).collect());
+            for ctor in &union.ctors {
+                ctor_arity.insert(ctor.name, ctor.arity);
+            }
         }
 
         Self {
@@ -167,6 +235,7 @@ impl<'a> Lowerer<'a> {
             interner,
             func_ids,
             enum_variants,
+            ctor_arity,
             eta_params,
         }
     }
@@ -186,30 +255,10 @@ impl<'a> Lowerer<'a> {
 
     /// Run the pass, producing the single-module program.
     pub fn run(self) -> DResult<Program> {
-        let types_ir: Vec<TypeDef> = self
-            .m
-            .unions
-            .iter()
-            .map(|u| {
-                // M3a IR shape: each constructor becomes a `Variant`. The
-                // payload-field lowering (and generic enum `type_params`) is
-                // wired by the M3a lowering task; this pass still produces
-                // nullary, non-generic enums, so existing programs lower to a
-                // byte-identical IR.
-                TypeDef::Enum(EnumDef {
-                    name: u.name,
-                    type_params: vec![],
-                    variants: u
-                        .ctors
-                        .iter()
-                        .map(|c| Variant {
-                            name: c.name,
-                            fields: vec![],
-                        })
-                        .collect(),
-                })
-            })
-            .collect();
+        let mut types_ir: Vec<TypeDef> = Vec::with_capacity(self.m.unions.len());
+        for u in &self.m.unions {
+            types_ir.push(TypeDef::Enum(self.lower_enum(u)?));
+        }
 
         let mut funcs = Vec::with_capacity(self.m.defs.len());
         let mut entry = None;
@@ -232,6 +281,56 @@ impl<'a> Lowerer<'a> {
         };
         Ok(Program {
             modules: vec![module],
+        })
+    }
+
+    /// Lower a union declaration into the IR enum: its quantified type variables
+    /// become `type_params` (declaration order is load-bearing — the backend
+    /// derives each parameter's Rust generic name from its position), and each
+    /// constructor becomes a [`Variant`] whose declared payload field types lower
+    /// under that generic scope.
+    ///
+    /// Two fail-closed gates run per constructor, both surfaced as a
+    /// span-carrying [`Diagnostic::Lower`] rather than emitting Rust that cargo
+    /// rejects:
+    ///
+    /// * a field type variable not bound by the union's parameters (`type Foo a =
+    ///   Bar b`) would have no Rust generic to resolve to — the polymorphism gap
+    ///   ([`Feature::Polymorphism`]);
+    /// * a field whose type embeds a function (`type Box = Mk (Int -> Int)`)
+    ///   would make the enum's derived `Clone`/`Debug`/`PartialEq` /
+    ///   `SkyStringify` fail to hold for a `Box<dyn Fn>` field — the first-class
+    ///   gap ([`Feature::FirstClassFunctions`]).
+    fn lower_enum(&self, u: &canon::Union) -> DResult<EnumDef> {
+        let type_params = u.vars.clone();
+        let mut variants = Vec::with_capacity(u.ctors.len());
+        for ctor in &u.ctors {
+            let mut fields = Vec::with_capacity(ctor.args.len());
+            for arg in &ctor.args {
+                // Gate 1: every field type variable must be one the union
+                // quantifies, so it resolves to a Rust generic by position.
+                let mut vars = BTreeSet::new();
+                collect_type_vars(arg, &mut vars);
+                if !vars.iter().all(|v| type_params.contains(v)) {
+                    return Err(unsupported(ctor.span, Feature::Polymorphism));
+                }
+                let ir = self.ir_type_from_canon(arg, &type_params)?;
+                // Gate 2: a function-bearing payload field cannot satisfy the
+                // enum's derives.
+                if ir_contains_fun(&ir) {
+                    return Err(unsupported(ctor.span, Feature::FirstClassFunctions));
+                }
+                fields.push(ir);
+            }
+            variants.push(Variant {
+                name: ctor.name,
+                fields,
+            });
+        }
+        Ok(EnumDef {
+            name: u.name,
+            type_params,
+            variants,
         })
     }
 
@@ -421,7 +520,30 @@ impl<'a> Lowerer<'a> {
     /// threaded — those are [`bug`]s, not span-carrying feature gaps.
     fn ir_type_from_canon(&self, t: &canon::Type, generics: &[Symbol]) -> DResult<IrType> {
         match t {
-            canon::Type::Con { name, .. } => self.con_name_to_ir(*name),
+            // A type-constructor application. A builtin (`Int`, `Bool`, …) carries
+            // no args; a user enum carries its type arguments, each lowered under
+            // the same generic scope so `Opt Int` → `Enum { Opt, [Int] }` and
+            // `Opt a` (inside a generic signature) → `Enum { Opt, [Generic a] }`.
+            canon::Type::Con { name, args, .. } => match self.resolve(*name)? {
+                "Int" => Ok(IrType::Int),
+                "Float" => Ok(IrType::Float),
+                "Bool" => Ok(IrType::Bool),
+                "String" => Ok(IrType::Str),
+                _ if self.enum_variants.contains_key(name) => {
+                    let mut ir_args = Vec::with_capacity(args.len());
+                    for a in args {
+                        ir_args.push(self.ir_type_from_canon(a, generics)?);
+                    }
+                    Ok(IrType::Enum {
+                        name: *name,
+                        args: ir_args,
+                    })
+                }
+                other => Err(bug(
+                    "sky_lower::ir_type_from_canon",
+                    format!("unknown type constructor `{other}`"),
+                )),
+            },
             // A function type in argument/return position of a value annotation
             // (`apply : (Int -> Int) -> Int`). Flatten the curried arrow chain
             // into one boxed `Fn` value type `Fun([T0, …], R)`.
@@ -577,10 +699,18 @@ impl<'a> Lowerer<'a> {
                 // A `Task` carrying a non-unit result (`Task Int`); M0 models
                 // only `Task ()`. [SKY-L0104, feature: task-results]
                 "Task" => Err(unsupported(span, Feature::TaskResults)),
-                _ if self.enum_variants.contains_key(name) => Ok(IrType::Enum {
-                    name: *name,
-                    args: vec![],
-                }),
+                _ if self.enum_variants.contains_key(name) => {
+                    // A use-site enum type carries its solved type arguments, so
+                    // `Opt Int` → `Enum { Opt, [Int] }` (rendered `MainOpt<i64>`).
+                    let mut ir_args = Vec::with_capacity(args.len());
+                    for a in args {
+                        ir_args.push(self.ir_type_from_ty(a, span)?);
+                    }
+                    Ok(IrType::Enum {
+                        name: *name,
+                        args: ir_args,
+                    })
+                }
                 // Name resolution guarantees every type constructor resolves to
                 // a builtin or a declared union, so an unknown one here is an
                 // invariant violation, not user error.
@@ -635,30 +765,6 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Map a built-in or user type constructor *name* to an [`IrType`].
-    fn con_name_to_ir(&self, name: Symbol) -> DResult<IrType> {
-        // Builtin names are matched first: `sky_canon`'s §3.2 gate rejects any
-        // user type/ctor that shadows a builtin name, so matching `Int`/`Float`/
-        // `Bool`/`String` ahead of the user-enum lookup can never silently
-        // override a user declaration — the precedence is pinned to that gate,
-        // not a deliberate shadow.
-        match self.resolve(name)? {
-            "Int" => Ok(IrType::Int),
-            "Float" => Ok(IrType::Float),
-            "Bool" => Ok(IrType::Bool),
-            "String" => Ok(IrType::Str),
-            _ if self.enum_variants.contains_key(&name) => Ok(IrType::Enum { name, args: vec![] }),
-            // Name resolution + the type checker guarantee every type
-            // constructor in an annotation resolves to a builtin or a declared
-            // union before lowering, so an unknown one here is a violated
-            // invariant, not user error.
-            other => Err(bug(
-                "sky_lower::con_name_to_ir",
-                format!("unknown type constructor `{other}`"),
-            )),
-        }
-    }
-
     /// Reject a record field whose value is function-typed.
     ///
     /// A function value lowers to a `Box<dyn Fn(..) -> R>`, but a synthesised
@@ -677,19 +783,20 @@ impl<'a> Lowerer<'a> {
 
     fn lower_expr(&self, e: &canon::Expr) -> DResult<Expr> {
         // Soundness gate (region-based): reject a function value reaching a
-        // record field THROUGH a type variable — e.g. `wrap : a -> { value : a }`
-        // applied as `wrap (\n -> n + 1)`, whose solved region type is
-        // `{ value : Int -> Int }`. The field instantiates to a function only at
-        // the use site, so the syntactic per-field gate
-        // (`reject_function_valued_field`) cannot see it; the use-site region
-        // type can. Record/Update *literals* carry their own per-field gate that
-        // blames the offending field value's span, so they are exempt here.
-        // [SKY-L0107, feature: first-class-functions]
+        // record field OR a constructor payload THROUGH a type variable — e.g.
+        // `wrap : a -> { value : a }` applied as `wrap (\n -> n + 1)` (region
+        // `{ value : Int -> Int }`), or `Som (\n -> n + 1)` for
+        // `type Opt a = Som a | Non` (region `Opt (Int -> Int)`). The field
+        // instantiates to a function only at the use site, so the syntactic
+        // per-field gate (`reject_function_valued_field`) cannot see it; the
+        // use-site region type can. Record/Update *literals* carry their own
+        // per-field gate that blames the offending field value's span, so they are
+        // exempt here. [SKY-L0107, feature: first-class-functions]
         if !matches!(
             &e.value,
             canon::Expr_::Record(_) | canon::Expr_::Update(_, _)
         ) && let Some(ty) = self.types.regions.get(&e.span)
-            && embeds_function_record_field(ty)
+            && embeds_nonderivable_function(ty)
         {
             return Err(unsupported(e.span, Feature::FirstClassFunctions));
         }
@@ -698,13 +805,23 @@ impl<'a> Lowerer<'a> {
             canon::Expr_::VarLocal(s) => Ok(Expr::Var(*s)),
             canon::Expr_::VarCtor {
                 type_name, name, ..
-            } => Ok(Expr::Ctor {
-                ty: *type_name,
-                variant: *name,
-                // Payload-carrying construction is wired by the M3a lowering
-                // task; a bare ctor reference is nullary here.
-                args: vec![],
-            }),
+            } => {
+                // A bare constructor reference. A nullary constructor is its own
+                // zero-payload value (`Nothing`, `Leaf`); a payload constructor
+                // referenced without arguments is a constructor-as-function value,
+                // which awaits first-class-value support (a saturated construction
+                // is handled in `lower_call`).
+                let arity = self.ctor_arity_of(*name)?;
+                if arity == 0 {
+                    Ok(Expr::Ctor {
+                        ty: *type_name,
+                        variant: *name,
+                        args: vec![],
+                    })
+                } else {
+                    Err(unsupported(e.span, Feature::CtorAsFunction))
+                }
+            }
             canon::Expr_::Binop { func, lhs, rhs, .. } => Ok(Expr::BinOp {
                 op: self.binop(*func, e.span)?,
                 lhs: Box::new(self.lower_expr(lhs)?),
@@ -879,6 +996,26 @@ impl<'a> Lowerer<'a> {
             .map(|a| self.lower_expr(a))
             .collect::<DResult<Vec<_>>>()?;
         match &callee.value {
+            canon::Expr_::VarCtor {
+                type_name, name, ..
+            } => {
+                // A constructor application. M3a lowers a *saturated* construction
+                // to `Expr::Ctor`; a partial application (`Node l 1` for a
+                // three-field `Node`) is a constructor-as-function value, which
+                // awaits first-class-value support. Over-application is ruled out
+                // by type-checking (applying past the fields makes the result a
+                // non-function), so a non-equal count here is always partial.
+                let arity = self.ctor_arity_of(*name)?;
+                if args.len() == arity {
+                    Ok(Expr::Ctor {
+                        ty: *type_name,
+                        variant: *name,
+                        args: lowered_args,
+                    })
+                } else {
+                    Err(unsupported(call_span, Feature::CtorAsFunction))
+                }
+            }
             canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } => {
                 let resolved = self.lower_callee(callee)?;
                 let arity = self.callee_arity(&resolved)?;
@@ -1095,6 +1232,16 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// The declared payload arity of a constructor. Name resolution guarantees
+    /// every `VarCtor` / ctor pattern names a declared constructor, so a miss is a
+    /// violated invariant rather than user error.
+    fn ctor_arity_of(&self, name: Symbol) -> DResult<usize> {
+        self.ctor_arity
+            .get(&name)
+            .copied()
+            .ok_or_else(|| bug("sky_lower::ctor_arity_of", "unknown constructor"))
+    }
+
     fn lower_callee(&self, callee: &canon::Expr) -> DResult<Callee> {
         match &callee.value {
             canon::Expr_::VarKernel { module, name } => {
@@ -1153,6 +1300,20 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Lower a constructor payload sub-pattern. M3a binds a payload field to a
+    /// variable or ignores it with `_`; a nested constructor / literal / tuple /
+    /// record / cons sub-pattern is the nested-payload gap (SKY-L0112), surfaced
+    /// fail-closed rather than mis-lowered.
+    const fn lower_payload_pat(p: &canon::Pattern) -> DResult<Pat> {
+        match &p.value {
+            canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
+            canon::Pattern_::PAnything => Ok(Pat::Wildcard),
+            canon::Pattern_::PCtor { .. } => {
+                Err(unsupported(p.span, Feature::NestedPayloadPatterns))
+            }
+        }
+    }
+
     fn lower_case(&self, scrut: &canon::Expr, branches: &[canon::CaseBranch]) -> DResult<Expr> {
         let scrutinee = self.lower_expr(scrut)?;
 
@@ -1178,19 +1339,29 @@ impl<'a> Lowerer<'a> {
             .iter()
             .map(|br| {
                 let canon::Pattern_::PCtor {
-                    type_name, name, ..
+                    type_name,
+                    name,
+                    args,
+                    ..
                 } = &br.pat.value
                 else {
                     // [SKY-L0100, feature: case-pattern-kinds]
                     return Err(unsupported(br.pat.span, Feature::CasePatternKinds));
                 };
+                // Each payload sub-pattern binds a variable or is a wildcard;
+                // richer shapes are the nested-payload gap (SKY-L0112). The type
+                // checker (SKY-T0013) already proved the sub-pattern count equals
+                // the constructor's field count, so the IR `Pat::Ctor` the backend
+                // sees always matches the variant's declared arity.
+                let sub = args
+                    .iter()
+                    .map(Self::lower_payload_pat)
+                    .collect::<DResult<Vec<_>>>()?;
                 Ok(Arm {
                     pat: Pat::Ctor {
                         ty: *type_name,
                         variant: *name,
-                        // Payload sub-patterns are wired by the M3a lowering
-                        // task; a nullary ctor pattern binds nothing.
-                        args: vec![],
+                        args: sub,
                     },
                     body: self.lower_expr(&br.body)?,
                 })

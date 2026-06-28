@@ -66,8 +66,9 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
 
     // Register unions + their constructors into the environment, rejecting any
     // duplicate type or constructor name (closes the silent last-wins that the
-    // bare `insert` used to hide).
-    let mut unions = Vec::with_capacity(m.unions.len());
+    // bare `insert` used to hide). The canonical `canon::Union` records (with
+    // their canonicalised payload field types) are built in a second pass below,
+    // once type aliases are collected — a field type may reference an alias.
     let mut seen_types: BTreeMap<Symbol, Span> = BTreeMap::new();
     let mut seen_ctors: BTreeMap<Symbol, Span> = BTreeMap::new();
     for u in &m.unions {
@@ -83,8 +84,7 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
             });
         }
         seen_types.insert(type_name, type_span);
-        let union = register_union(&u.value, &home, &mut env, &mut seen_ctors, interner)?;
-        unions.push(union);
+        register_union(&u.value, &home, &mut env, &mut seen_ctors, interner)?;
     }
 
     // Collect type aliases. Both the non-parametric form (`type alias Count =
@@ -116,6 +116,20 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
                 body: a.value.body.value.clone(),
             },
         );
+    }
+
+    // Second union pass: now that aliases are collected, canonicalise every
+    // constructor's payload field types (a field may reference an alias or
+    // another local union) and build the canonical union records.
+    let mut unions = Vec::with_capacity(m.unions.len());
+    for u in &m.unions {
+        unions.push(canonicalise_union(
+            &u.value,
+            &env,
+            &local_union_names,
+            &aliases,
+            interner,
+        )?);
     }
 
     // Register every top-level value name so bindings can be referenced before
@@ -156,8 +170,13 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
     })
 }
 
-/// Register a union and its constructors into the environment, returning the
-/// canonical union record.
+/// Register a union's constructors into the environment.
+///
+/// This is the *name-resolution* half: each constructor's home / type / index /
+/// arity is recorded in `env.ctors` so a `VarCtor` reference or a constructor
+/// pattern can resolve before any value body is canonicalised. The payload field
+/// *types* are canonicalised separately in [`canonicalise_union`] (after type
+/// aliases are collected, so a field type may itself reference an alias).
 ///
 /// `seen_ctors` carries every constructor name already registered across the
 /// module so a name reused in the same or a different union is rejected
@@ -173,9 +192,8 @@ fn register_union(
     env: &mut Env,
     seen_ctors: &mut BTreeMap<Symbol, Span>,
     interner: &Interner,
-) -> DResult<canon::Union> {
+) -> DResult<()> {
     let type_name = u.name.value;
-    let mut ctors = Vec::with_capacity(u.ctors.len());
     for (index, c) in u.ctors.iter().enumerate() {
         let name = c.value.name;
         let arity = c.value.args.len();
@@ -199,10 +217,71 @@ fn register_union(
                 arity,
             },
         );
-        ctors.push(canon::Ctor { name, index, arity });
+    }
+    Ok(())
+}
+
+/// Build the canonical [`canon::Union`] record for a source union, canonicalising
+/// every constructor's payload field types under the union's type-variable scope.
+///
+/// Each field type variable (`a` in `Just a`) is a free variable of the type
+/// annotation and resolves to a [`canon::Type::Var`]; a field that names the
+/// union itself (`Tree` in `Node Tree Int Tree`) resolves to a local
+/// [`canon::Type::Con`]. The union's declared `vars` are carried through in
+/// declaration order — the lowerer's IR `type_params` order depends on it.
+///
+/// # Errors
+/// [`NameError::AliasArity`] when a field type applies an alias with the wrong
+/// argument count; [`Diagnostic::CompilerBug`] on a forged symbol.
+fn canonicalise_union(
+    u: &src::Union,
+    env: &Env,
+    local_union_names: &BTreeSet<Symbol>,
+    aliases: &BTreeMap<Symbol, AliasDef>,
+    interner: &Interner,
+) -> DResult<canon::Union> {
+    let type_name = u.name.value;
+    let vars: Vec<Symbol> = u.vars.iter().map(|v| v.value).collect();
+    let mut ctors = Vec::with_capacity(u.ctors.len());
+    for (index, c) in u.ctors.iter().enumerate() {
+        let name = c.value.name;
+        let arity = c.value.args.len();
+        let ctx = TypeCtx {
+            env,
+            local_union_names,
+            aliases,
+            interner,
+            ann_span: c.span,
+        };
+        let mut args = Vec::with_capacity(c.value.args.len());
+        for a in &c.value.args {
+            // A constructor field type is canonicalised under an empty
+            // substitution: each free type variable it mentions is one of the
+            // union's `vars` and resolves to a `Type::Var`. The `free_vars` set is
+            // local (the union's quantification, not a binding's), so it is
+            // discarded — the declared `vars` are the authoritative parameter list.
+            let mut free_vars = BTreeSet::new();
+            let mut visited = Vec::new();
+            let subst = BTreeMap::new();
+            args.push(canonicalise_type(
+                a,
+                &ctx,
+                &subst,
+                &mut free_vars,
+                &mut visited,
+            )?);
+        }
+        ctors.push(canon::Ctor {
+            name,
+            index,
+            arity,
+            args,
+            span: c.span,
+        });
     }
     Ok(canon::Union {
         name: type_name,
+        vars,
         ctors,
     })
 }

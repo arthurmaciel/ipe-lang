@@ -156,23 +156,46 @@ fn check_case(
         return Ok(());
     };
 
-    // Redundancy: first duplicate constructor, in source order.
-    let mut seen: BTreeSet<Symbol> = BTreeSet::new();
+    // Redundancy: an arm is redundant only when an *earlier* arm already covers
+    // its constructor unconditionally — i.e. that earlier arm bound every payload
+    // field to a variable / wildcard (irrefutable), so it matches every value of
+    // the constructor. Two arms with the same constructor head but a *refutable*
+    // payload sub-pattern (e.g. `Som (Som x)` then `Som Non`) are not redundant;
+    // those richer payload shapes are not supported yet and the lowerer reports
+    // the nested-payload gap (SKY-L0112) rather than a misleading "redundant".
+    let mut covered: BTreeSet<Symbol> = BTreeSet::new();
     for br in branches {
-        if let canon::Pattern_::PCtor { name, .. } = &br.pat.value
-            && !seen.insert(*name)
-        {
-            return Err(Diagnostic::Type {
-                span: br.pat.span,
-                msg: TypeError::RedundantCaseBranch {
-                    constructor: resolve(interner, *name)?,
-                },
-            });
+        if let canon::Pattern_::PCtor { name, args, .. } = &br.pat.value {
+            if covered.contains(name) {
+                return Err(Diagnostic::Type {
+                    span: br.pat.span,
+                    msg: TypeError::RedundantCaseBranch {
+                        constructor: resolve(interner, *name)?,
+                    },
+                });
+            }
+            if args.iter().all(|a| {
+                matches!(
+                    a.value,
+                    canon::Pattern_::PAnything | canon::Pattern_::PVar(_)
+                )
+            }) {
+                covered.insert(*name);
+            }
         }
     }
 
-    // Exhaustiveness: every enum constructor must be covered, listed in
-    // declaration order.
+    // Exhaustiveness: every enum constructor must be named by at least one arm,
+    // listed in declaration order. A constructor that appears only with a
+    // refutable payload sub-pattern still counts as named here — judging whether
+    // its payload cases are themselves exhaustive needs nested-pattern analysis
+    // (M3b); the lowerer's SKY-L0112 gate stops the unsupported shape first.
+    let mut seen: BTreeSet<Symbol> = BTreeSet::new();
+    for br in branches {
+        if let canon::Pattern_::PCtor { name, .. } = &br.pat.value {
+            seen.insert(*name);
+        }
+    }
     let mut missing: Vec<Box<str>> = Vec::new();
     for ctor in all_ctors {
         if !seen.contains(ctor) {

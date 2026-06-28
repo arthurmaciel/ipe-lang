@@ -12,12 +12,12 @@
 use crate::code::{
     Code, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200,
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
-    SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0200, SKY_N0001,
-    SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
-    SKY_P0001, SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020,
-    SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061,
-    SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012,
-    Severity,
+    SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
+    SKY_L0200, SKY_N0001, SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011,
+    SKY_N0012, SKY_N0013, SKY_P0001, SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012,
+    SKY_P0013, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050,
+    SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010,
+    SKY_T0011, SKY_T0012, SKY_T0013, Severity,
 };
 use crate::span::Span;
 
@@ -364,6 +364,14 @@ pub enum TypeError {
     /// A `record.field` access whose `field` is not present in the (closed)
     /// record type `record` — or whose base is not a record at all. [SKY-T0012]
     NoSuchField { field: Box<str>, record: Box<TyDoc> },
+    /// A constructor pattern binds a number of payload sub-patterns that differs
+    /// from the constructor's declared field count (`Just` with no payload, or
+    /// `Node l r` for a three-field `Node`). [SKY-T0013]
+    CtorPatternArity {
+        ctor: Box<str>,
+        expected: usize,
+        found: usize,
+    },
 }
 
 /// A language feature that the Milestone-0 lowerer does not yet support. Each
@@ -402,6 +410,17 @@ pub enum Feature {
     /// Rust. Field access + construction on generic records DO work (M2c).
     /// [SKY-L0111]
     BoundedRecordUpdate,
+    /// A constructor payload sub-pattern that is not a plain variable or a
+    /// wildcard — a nested constructor (`Just (Node …)`), literal, tuple, record,
+    /// cons, or alias pattern. M3a binds payloads to variables / `_` only; the
+    /// richer payload-pattern shapes land in M3b. [SKY-L0112]
+    NestedPayloadPatterns,
+    /// A data constructor named as a first-class function *value* — referenced
+    /// bare (`map Just xs`) or partially applied (`Node l 1` for a three-field
+    /// `Node`). M3a lowers a *saturated* construction (`Just 5`, `Node l 1 r`);
+    /// constructor-as-function awaits the same first-class-value machinery as a
+    /// partially-applied top-level function. [SKY-L0113]
+    CtorAsFunction,
 }
 
 /// Errors raised during lowering: "not supported yet" — distinct from
@@ -567,7 +586,8 @@ impl Diagnostic {
                 | TypeError::StepBudgetExceeded { .. }
                 | TypeError::TooManyParameters { .. }
                 | TypeError::NonExhaustiveCase { .. }
-                | TypeError::NoSuchField { .. } => Severity::Error,
+                | TypeError::NoSuchField { .. }
+                | TypeError::CtorPatternArity { .. } => Severity::Error,
             },
             Self::CompilerBug { .. } => Severity::Bug,
         }
@@ -647,6 +667,7 @@ const fn type_code(msg: &TypeError) -> Code {
         TypeError::NonExhaustiveCase { .. } => SKY_T0010,
         TypeError::RedundantCaseBranch { .. } => SKY_T0011,
         TypeError::NoSuchField { .. } => SKY_T0012,
+        TypeError::CtorPatternArity { .. } => SKY_T0013,
     }
 }
 
@@ -670,6 +691,8 @@ const fn feature_code(f: Feature) -> Code {
         Feature::Kernels => SKY_L0108,
         Feature::PartialOverApplication => SKY_L0110,
         Feature::BoundedRecordUpdate => SKY_L0111,
+        Feature::NestedPayloadPatterns => SKY_L0112,
+        Feature::CtorAsFunction => SKY_L0113,
     }
 }
 
@@ -760,7 +783,8 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
         | TypeError::InfiniteType { .. }
         | TypeError::TooManyParameters { .. }
         | TypeError::RedundantCaseBranch { .. }
-        | TypeError::NoSuchField { .. } => Vec::new(),
+        | TypeError::NoSuchField { .. }
+        | TypeError::CtorPatternArity { .. } => Vec::new(),
     }
 }
 

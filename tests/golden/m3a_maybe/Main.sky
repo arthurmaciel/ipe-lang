@@ -1,0 +1,17 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A generic algebraic data type with a payload-carrying constructor.
+-- `Som a` carries one field; `Non` is nullary. Construction (`Som 41`) and a
+-- constructor pattern binding the payload to a variable (`Som x -> …`) are the
+-- core of M3a.
+type Opt a = Som a | Non
+
+unwrap : Opt Int -> Int
+unwrap m =
+    case m of
+        Som x -> x + 1
+        Non -> 0
+
+main =
+    println (String.fromInt (unwrap (Som 41)))

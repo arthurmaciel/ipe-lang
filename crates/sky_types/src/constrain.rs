@@ -109,6 +109,24 @@ pub struct Builder<'a> {
     field_accesses: Vec<FieldAccess>,
     /// Deferred record-update obligations, resolved after the main solve.
     record_updates: Vec<RecordUpdate>,
+    /// The type scheme of every data constructor declared in this module, keyed
+    /// by constructor name. A constructor is a (possibly generic) function
+    /// `field0 -> … -> fieldN -> T vars`; each use site instantiates the scheme
+    /// fresh, exactly as a polymorphic top-level binding does.
+    ctors: BTreeMap<Symbol, CtorScheme>,
+}
+
+/// A data constructor's quantified type scheme.
+///
+/// `arg_tys` are the declared payload field types (a nullary constructor has an
+/// empty list); `result` is the enum type the constructor builds, applied to the
+/// union's type variables (`Maybe a` for `Just`). Both sides share the union's
+/// type variables as [`Ty::Var`]s, so instantiating them through one shared map
+/// alpha-renames a generic constructor consistently per use site.
+#[derive(Clone)]
+struct CtorScheme {
+    arg_tys: Vec<Ty>,
+    result: Ty,
 }
 
 /// A deferred record field-access obligation `record.field`.
@@ -179,7 +197,32 @@ impl<'a> Builder<'a> {
             untyped: BTreeMap::new(),
             field_accesses: Vec::new(),
             record_updates: Vec::new(),
+            ctors: BTreeMap::new(),
         };
+
+        // Register every data constructor's scheme up front, so a `VarCtor`
+        // reference or a constructor pattern can instantiate it fresh. A
+        // constructor `C : field0 -> … -> T vars`; the result type applies the
+        // union to its declared type variables (as `Ty::Var`s), and the field
+        // types carry those same variables, so one shared instantiation map
+        // alpha-renames a generic constructor per use site.
+        for union in &module.unions {
+            let result = Ty::Con {
+                module: module.name.clone(),
+                name: union.name,
+                args: union.vars.iter().map(|v| Ty::Var(v.as_raw())).collect(),
+            };
+            for ctor in &union.ctors {
+                let arg_tys = ctor.args.iter().map(from_canon).collect();
+                builder.ctors.insert(
+                    ctor.name,
+                    CtorScheme {
+                        arg_tys,
+                        result: result.clone(),
+                    },
+                );
+            }
+        }
 
         // First pass: register every binding so any binding can reference any
         // other (forward references resolve).
@@ -335,6 +378,23 @@ impl<'a> Builder<'a> {
     fn instantiate(&mut self, ty: &Ty) -> DResult<VarId> {
         let mut vars = BTreeMap::new();
         self.instantiate_in(ty, &mut vars, /* rigid */ false)
+    }
+
+    /// Instantiate a constructor scheme through one shared variable map, returning
+    /// the fresh variables of its payload fields and of its result enum type.
+    /// Sharing the map keeps a generic constructor's field and result variables
+    /// linked at this use site (`Just : a -> Maybe a` instantiated at `a = Int`
+    /// ties the payload to the result), exactly like [`Self::instantiate`] over the
+    /// equivalent arrow — but decomposed, so a pattern can bind each field and a
+    /// value reference can rebuild the arrow.
+    fn instantiate_ctor(&mut self, scheme: &CtorScheme) -> DResult<(Vec<VarId>, VarId)> {
+        let mut vars = BTreeMap::new();
+        let mut arg_vars = Vec::with_capacity(scheme.arg_tys.len());
+        for t in &scheme.arg_tys {
+            arg_vars.push(self.instantiate_in(t, &mut vars, /* rigid */ false)?);
+        }
+        let result_var = self.instantiate_in(&scheme.result, &mut vars, /* rigid */ false)?;
+        Ok((arg_vars, result_var))
     }
 
     /// Instantiate a resolved [`Ty`] with every type variable replaced by a fresh
@@ -562,11 +622,11 @@ impl<'a> Builder<'a> {
                 self.instantiate(&ty)?
             }
             canon::Expr_::VarCtor {
-                home, type_name, ..
-            } => {
-                // M0 constructors are nullary, so the value's type is the enum.
-                self.con_var(home.clone(), *type_name, Vec::new())?
-            }
+                home,
+                type_name,
+                name,
+                ..
+            } => self.constrain_var_ctor(home, *type_name, *name)?,
             canon::Expr_::Call(callee, args) => {
                 let callee_var = self.constrain_expr(local, callee)?;
                 let mut arg_vars = Vec::with_capacity(args.len());
@@ -582,17 +642,7 @@ impl<'a> Builder<'a> {
                 self.eq(callee.span, callee_var, expected);
                 ret
             }
-            canon::Expr_::Case(scrut, branches) => {
-                let scrut_var = self.constrain_expr(local, scrut)?;
-                let result = self.flex()?;
-                for br in branches {
-                    let mut br_local = local.clone();
-                    self.constrain_pattern(&mut br_local, &br.pat, scrut_var)?;
-                    let body_var = self.constrain_expr(&br_local, &br.body)?;
-                    self.eq(br.body.span, body_var, result);
-                }
-                result
-            }
+            canon::Expr_::Case(scrut, branches) => self.constrain_case(local, scrut, branches)?,
             canon::Expr_::Lambda(params, body) => self.constrain_lambda(local, params, body)?,
             canon::Expr_::Binop { func, lhs, rhs, .. } => {
                 self.constrain_binop(local, *func, lhs, rhs)?
@@ -741,6 +791,51 @@ impl<'a> Builder<'a> {
         Ok(record_var)
     }
 
+    /// Constrain a `case scrut of …`: the scrutinee shares one type, every arm
+    /// pattern is checked against it, and every arm body unifies to one shared
+    /// result — the whole `case`'s type.
+    fn constrain_case(
+        &mut self,
+        local: &BTreeMap<Symbol, VarId>,
+        scrut: &canon::Expr,
+        branches: &[canon::CaseBranch],
+    ) -> DResult<VarId> {
+        let scrut_var = self.constrain_expr(local, scrut)?;
+        let result = self.flex()?;
+        for br in branches {
+            let mut br_local = local.clone();
+            self.constrain_pattern(&mut br_local, &br.pat, scrut_var)?;
+            let body_var = self.constrain_expr(&br_local, &br.body)?;
+            self.eq(br.body.span, body_var, result);
+        }
+        Ok(result)
+    }
+
+    /// Constrain a constructor referenced as a value: its scheme instantiated
+    /// fresh. A nullary constructor's value type is the enum itself; a payload
+    /// constructor's is the curried arrow `field0 -> … -> T vars`. Each reference
+    /// instantiates independently, so the same generic constructor used at `Int`
+    /// and at `Bool` in one module yields two separately-satisfiable types. A
+    /// constructor with no registered scheme (imported, outside the single-module
+    /// subset) falls back to the bare enum type, sound for the nullary case.
+    fn constrain_var_ctor(
+        &mut self,
+        home: &[Symbol],
+        type_name: Symbol,
+        name: Symbol,
+    ) -> DResult<VarId> {
+        if let Some(scheme) = self.ctors.get(&name).cloned() {
+            let (arg_vars, result_var) = self.instantiate_ctor(&scheme)?;
+            let mut t = result_var;
+            for av in arg_vars.into_iter().rev() {
+                t = self.structure(FlatType::Fun(av, t))?;
+            }
+            Ok(t)
+        } else {
+            self.con_var(home.to_vec(), type_name, Vec::new())
+        }
+    }
+
     /// Constrain a `case` arm pattern against the scrutinee's variable, binding
     /// any pattern variables into `local`.
     fn constrain_pattern(
@@ -756,15 +851,71 @@ impl<'a> Builder<'a> {
                 Ok(())
             }
             canon::Pattern_::PCtor {
-                home, type_name, ..
+                home,
+                type_name,
+                name,
+                args,
+                ..
             } => {
-                // M0 constructor patterns are nullary; the pattern's type is the
-                // enum, which must match the scrutinee.
-                let ctor = self.con_var(home.clone(), *type_name, Vec::new())?;
-                self.eq(pat.span, ctor, scrut_var);
+                if let Some(scheme) = self.ctors.get(name).cloned() {
+                    // A constructor pattern binds exactly its declared fields. A
+                    // mismatch (`Just` with no payload, `Node l r` for a three-field
+                    // `Node`) is a user error, surfaced as SKY-T0013 rather than
+                    // silently constraining a prefix.
+                    if args.len() != scheme.arg_tys.len() {
+                        return Err(self.ctor_pattern_arity(
+                            pat.span,
+                            *name,
+                            scheme.arg_tys.len(),
+                            args.len(),
+                        ));
+                    }
+                    // Instantiate the scheme fresh, tie the result to the
+                    // scrutinee, and constrain each payload sub-pattern against its
+                    // field's (now use-site) type. Recursing handles a nested
+                    // sub-pattern's typing too; the lowerer is what restricts M3a
+                    // payloads to variables / wildcards.
+                    let (arg_vars, result_var) = self.instantiate_ctor(&scheme)?;
+                    self.eq(pat.span, result_var, scrut_var);
+                    for (sub, av) in args.iter().zip(arg_vars) {
+                        self.constrain_pattern(local, sub, av)?;
+                    }
+                } else {
+                    // A constructor with no registered scheme (imported, outside the
+                    // single-module subset): fall back to the bare enum type, sound
+                    // for the nullary case.
+                    let ctor = self.con_var(home.clone(), *type_name, Vec::new())?;
+                    self.eq(pat.span, ctor, scrut_var);
+                }
                 Ok(())
             }
         }
+    }
+
+    /// Build the SKY-T0013 diagnostic for a constructor pattern that binds the
+    /// wrong number of payload fields. A forged constructor symbol surfaces the
+    /// underlying intern bug instead.
+    fn ctor_pattern_arity(
+        &self,
+        span: Span,
+        ctor: Symbol,
+        expected: usize,
+        found: usize,
+    ) -> Diagnostic {
+        self.interner.resolve(ctor).map_or_else(
+            || Diagnostic::CompilerBug {
+                where_: "intern.resolve",
+                detail: format!("no backing string for constructor symbol {}", ctor.as_raw()),
+            },
+            |s| Diagnostic::Type {
+                span,
+                msg: TypeError::CtorPatternArity {
+                    ctor: Box::from(s),
+                    expected,
+                    found,
+                },
+            },
+        )
     }
 
     /// The type of a kernel function. M0 only exercises `String.fromInt` and

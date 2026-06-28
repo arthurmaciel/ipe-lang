@@ -1,0 +1,14 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- `Node` declares three fields; this pattern binds only two — SKY-T0013.
+type Tree = Leaf | Node Tree Int Tree
+
+f : Tree -> Int
+f t =
+    case t of
+        Leaf -> 0
+        Node l r -> 1
+
+main =
+    println (String.fromInt (f Leaf))
