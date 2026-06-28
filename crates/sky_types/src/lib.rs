@@ -862,6 +862,44 @@ mod tests {
     }
 
     #[test]
+    fn nested_redundant_arm_names_the_subsuming_constructor() {
+        // `Som x` (a bare variable payload) already matches every `Som _`, so the
+        // later, deeper `Som (Som y)` arm covers no new value. The redundancy
+        // finding is computed over the same nested matrix as exhaustiveness, so it
+        // must fire even when the useless arm is more specific than the arm that
+        // subsumes it — reported as SKY-T0011 naming the top-level `Som`.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   type Opt a = Som a | Non\n\
+                   f : Opt (Opt Int) -> Int\n\
+                   f o =\n        case o of\n            Som x -> 1\n\
+                   \x20           Som (Som y) -> y\n            Non -> 0\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::RedundantCaseBranch { .. },
+                    ..
+                })
+            ),
+            "expected RedundantCaseBranch, got {r:?}"
+        );
+        let Err(Diagnostic::Type {
+            msg: TypeError::RedundantCaseBranch { constructor },
+            ..
+        }) = r
+        else {
+            return;
+        };
+        assert_eq!(&*constructor, "Som", "names the subsuming top-level ctor");
+    }
+
+    #[test]
     fn nested_exhaustive_case_passes_the_check() {
         // Every nested possibility is covered: `Som (Som x)`, `Som Non`, `Non`.
         let src = "module Main exposing (main)\n\
