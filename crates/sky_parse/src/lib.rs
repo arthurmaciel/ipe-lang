@@ -807,6 +807,82 @@ mod tests {
     }
 
     #[test]
+    fn field_access_on_parenthesised_var_parses(/* #6 */) {
+        // `(r).value` — field access on a parenthesised variable. The `.` is a
+        // standalone `Tok::Dot` (the parens break the bare-ident dotted run), so
+        // it must be resolved as a postfix access, not rejected as a stray dot.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v =\n    (r).value\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "`(r).value` must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::Access(base, field)) => {
+                matches!(&base.value, Expr_::VarLocal(r) if i.resolve(*r) == Some("r"))
+                    && i.resolve(field.value) == Some("value")
+            }
+            _ => false,
+        };
+        assert!(shape, "v body is `Access (VarLocal r) value`");
+    }
+
+    #[test]
+    fn field_access_on_call_result_parses(/* #6 */) {
+        // `(wrap 1).value` — field access on a call result. Field access binds
+        // tighter than application, so `.value` attaches to the `(wrap 1)` atom.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v =\n    (wrap 1).value\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "`(wrap 1).value` must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::Access(base, field)) => {
+                matches!(&base.value, Expr_::Call(callee, args)
+                    if matches!(&callee.value, Expr_::VarLocal(w) if i.resolve(*w) == Some("wrap"))
+                        && args.len() == 1)
+                    && i.resolve(field.value) == Some("value")
+            }
+            _ => false,
+        };
+        assert!(shape, "v body is `Access (Call wrap [1]) value`");
+    }
+
+    #[test]
+    fn chained_field_access_on_parenthesised_expr_parses(/* #6 */) {
+        // `((nested).a).b` — chained access. The lexer folds the `a.b` after the
+        // first dot into one dotted identifier; each segment becomes a separate
+        // access node, yielding `Access (Access (Access nested a) b) …`. Here the
+        // inner `(nested).a` is one atom, then `.b` applies to the whole group.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v =\n    ((nested).a).b\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "`((nested).a).b` must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            // outer: (…).b
+            Some(Expr_::Access(inner, outer_field)) => {
+                match (&inner.value, i.resolve(outer_field.value)) {
+                    // inner: (nested).a
+                    (Expr_::Access(base, inner_field), Some("b")) => {
+                        matches!(&base.value, Expr_::VarLocal(n) if i.resolve(*n) == Some("nested"))
+                            && i.resolve(inner_field.value) == Some("a")
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        assert!(shape, "v body is `Access (Access nested a) b`");
+    }
+
+    #[test]
+    fn lone_dot_is_still_a_stray_dot(/* #6 regression */) {
+        // A `.` not part of `..` and not introducing a field access is still the
+        // typed stray-dot lex error — the #6 fix must not swallow it.
+        assert_eq!(err_code(&format!("{HDR}v =\n    1 . 2\n")), "SKY-P0011");
+    }
+
+    #[test]
     fn qualified_uppercase_name_is_not_field_access() {
         // `String.fromInt` keeps its `VarQual` shape — only a lowercase head is
         // a record field access.

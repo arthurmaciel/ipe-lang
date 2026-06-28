@@ -1,0 +1,14 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+type alias Box = { value : Int }
+
+wrap : Int -> Box
+wrap n =
+    { value = n }
+
+main =
+    let
+        r = { value = 1 }
+    in
+    println (String.fromInt ((wrap 41).value + (r).value))

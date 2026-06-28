@@ -578,6 +578,7 @@ const fn token_kind_str(t: TokenKind) -> &'static str {
         TokenKind::Arrow => "`->`",
         TokenKind::Backslash => "`\\`",
         TokenKind::DotDot => "`..`",
+        TokenKind::Dot => "`.`",
         TokenKind::Comma => "`,`",
         TokenKind::Underscore => "`_`",
         TokenKind::Plus => "`+`",
