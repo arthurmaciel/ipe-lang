@@ -1,0 +1,19 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- An `as` alias can wrap a *destructuring* pattern: `(a, b) as whole` binds the
+-- whole matched tuple to `whole` AND its two elements to `a` and `b`, all in
+-- scope in the arm body. This lowers to Rust's binding-with-subpattern
+-- `whole @ (a, b)`. Re-destructuring `whole` proves the whole value is bound,
+-- not just its parts.
+combine : (Int, Int) -> Int
+combine pair =
+    case pair of
+        (a, b) as whole ->
+            let
+                (x, y) = whole
+            in
+            (a + b) + (x - y)
+
+main =
+    println (String.fromInt (combine (10, 3)))
