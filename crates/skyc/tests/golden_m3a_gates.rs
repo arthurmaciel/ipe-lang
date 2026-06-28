@@ -4,11 +4,13 @@
 //!
 //! * a constructor pattern binding the wrong number of payload fields →
 //!   SKY-T0013 (a type error),
-//! * two `case` arms head-matching the same constructor with a refutable nested
-//!   payload (`Som (Som x)` then `Som Non`) → SKY-L0116 (nested constructor
-//!   discrimination; M3b-2 lowers one arm per top-level constructor),
 //! * a partially-applied payload constructor used as a function value
 //!   (`Node Leaf 1`) → SKY-L0113 (the constructor-as-function lowering gap).
+//!
+//! (Two `case` arms head-matching the same constructor with a refutable nested
+//! payload — `Som (Som x)` then `Som Non` — is now SUPPORTED: each arm lowers to
+//! its own Rust `match` arm in source order. Its positive regression lives in
+//! `golden_m3b4_nested` / `golden_m3b4_two_same_ctor`.)
 //!
 //! Each is driven through the full `skyc` pipeline and asserted to produce its
 //! exact code, locking the gap so it can never regress into a worse failure mode.
@@ -57,18 +59,6 @@ fn ctor_pattern_arity_is_sky_t0013() {
         "m3a_gate_arity",
         "m3a_gate_arity_emit",
         sky_diagnostics::SKY_T0013,
-    );
-}
-
-#[test]
-fn duplicate_constructor_arms_is_sky_l0116() {
-    // `Som (Som x) -> …` then `Som Non -> …`: two arms for `Som`. The nested
-    // payload pattern itself now lowers (M3b-2); the second `Som` arm is the
-    // gated shape (nested constructor discrimination).
-    assert_gate(
-        "m3a_gate_nested",
-        "m3a_gate_nested_emit",
-        sky_diagnostics::SKY_L0116,
     );
 }
 

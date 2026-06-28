@@ -255,7 +255,7 @@ pub fn title(c: Code) -> &'static str {
         SKY_L0113 => "constructor used as a function value not supported yet",
         SKY_L0114 => "function value in a constructor payload not supported yet",
         SKY_L0115 => "tuple pattern not supported here yet",
-        SKY_L0116 => "multiple `case` arms for the same constructor not supported yet",
+        SKY_L0116 => "refutable pattern-discrimination shape not supported yet",
         SKY_L0200 => "expression nests too deeply for the backend",
         SKY_I0001 => "internal compiler error",
         SKY_I0010 => "intern: unresolved symbol",

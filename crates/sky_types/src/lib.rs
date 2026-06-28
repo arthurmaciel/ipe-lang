@@ -912,8 +912,9 @@ mod tests {
         let Some((m, mut i)) = canon_src(src) else {
             return;
         };
-        // Exhaustiveness passes; the only remaining gap (two `Som` arms) is the
-        // lowerer's SKY-L0116 call, not this pass's. So `infer` must succeed.
+        // Exhaustiveness passes: the two `Som` arms discriminate on their nested
+        // sub-pattern and together with `Non` cover every value. So `infer` must
+        // succeed (the lowerer then emits one Rust arm per source arm).
         assert!(
             infer(&m, &mut i).is_ok(),
             "an exhaustive nested case must pass the exhaustiveness check"
