@@ -344,3 +344,40 @@ disambiguation — a familiarity win if `use` reads alien.
 
 Open: `let x <- e` (favoured) vs `use` vs the `chain` block (7-B) vs Roc `!` (7-C).
 Still UNDECIDED, post-M6.
+
+### Idea 7 update (2026-06-28) — the `<-` fork + effect-discard ergonomics
+
+Trigger: coordinator dislikes the effect-DISCARD idiom `let _ = println "hi" in ()`
+(auto-forced Task) and asked whether `let _ <- println "hi"` replaces it. It exposes
+that `<-` has TWO possible meanings — a real decision, not just spelling:
+
+- **Gleam-style** `let x <- f` ⇒ `f (\x -> rest)`, f = a CALLBACK-ACCEPTING fn.
+  General (resource brackets, guards, any callback-last fn); but each line names the
+  chainer, and **bare `let _ <- println "hi"` does NOT type-check** (a Task value
+  isn't a callback-acceptor) — you'd write `let _ <- Task.andThen (println "hi")`,
+  which is LONGER than today's `let _ = …`. So Gleam-style does NOT fix the discard
+  wart.
+- **Haskell-style** `let x <- action` where action is an EFFECT VALUE (`Task e a`);
+  bind is implicit ⇒ `Task.andThen action (\x -> rest)`. Then `let _ <- println "hi"`
+  WORKS and is clean. Cost: a per-type bind notion for the effect types
+  (Task/Result/Maybe/List) — a monad-ish abstraction Elm avoided. Mitigation: keep it
+  **built-in for the small fixed set of effect types**, NOT a user-facing Monad
+  typeclass, to stay Elm-clean.
+
+**Cleanest discard form (independent of the above):** a **bare effect-statement line**
+inside an effect block (Gleam itself uses this for discard):
+```elm
+    println "hi"            -- run, discard result, continue
+    let x <- readLine       -- run, bind result
+    println ("got " ++ x)
+    Task.succeed ()
+```
+A bare line = run/discard; `let x <- e` = bind; `let _ <- e` becomes unnecessary.
+This directly removes the `let _ = … in ()` wart.
+
+**Revised disposition:** the effect-sequencing form AND the discard ergonomics are
+ONE co-design. Leaning: a Haskell-style effect block (bare statement = run/discard,
+`let x <- effect` = bind) with bind built-in for the fixed effect types only (no
+general Monad class). Still UNDECIDED, post-M6. Open spellings: block header
+(`do`-like / `Task.chain` 7-B) vs free-floating `let x <- e`; bare-statement
+sequencing; Roc `!` (7-C). Decide together.
