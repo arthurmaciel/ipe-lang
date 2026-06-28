@@ -318,3 +318,29 @@ names are still right there; it only fires when a matching local exists; it's a
 well-loved idiom elsewhere. Low risk.
 
 **Disposition:** filed (2026-06-28). Post-M6, low effort, low risk — a clean polish.
+
+### Idea 7 update (2026-06-28) — preferred spelling for Candidate A: `let x <- e` (not `use`)
+
+Coordinator finds `use` alien/polluting. Prefer reusing `let` with the `<-` arrow
+to mark an effectful (callback) bind, distinct from `=` (pure bind):
+```elm
+let cfg  <- Task.andThen readConfig
+let conn <- Task.andThen (connect cfg)
+let rows <- Task.andThen (query conn)
+process rows
+```
+Same desugaring as `use` (`let x <- f` ⇒ `f (\x -> <rest>)`); identical runtime.
+Well-precedented: Haskell `do` `x <- action`, OCaml `let*`, F# `let!` — all mark
+the effectful bind. `<-` reads as "draw x from e" and is free in Sky (Elm dropped
+its old `<-`).
+
+**Wrinkle (the cost of overloading `let`):** Sky's `let x = e in body` needs `in`
+and may multi-bind; `let x <- f` has NO `in` (rest-of-block is the continuation).
+So `let x <- e` must be a STANDALONE statement form, and `=` and `<-` cannot be
+mixed inside one `let … in` multi-binding block (Haskell avoids this only because
+its `<-` lives inside `do`). Parser disambiguates on the `=` vs `<-` token after the
+binder. Net vs `use`: drops a new keyword, adds a small "which `let`?"
+disambiguation — a familiarity win if `use` reads alien.
+
+Open: `let x <- e` (favoured) vs `use` vs the `chain` block (7-B) vs Roc `!` (7-C).
+Still UNDECIDED, post-M6.
