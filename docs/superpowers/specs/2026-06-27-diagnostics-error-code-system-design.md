@@ -198,3 +198,32 @@ The existing coverage test gains assertions:
   shared CI-gate + glossary-infra change (touches sky_diagnostics) is one
   sequential owner. Schedule it as a quality batch (not blocking the roadmap; can
   run parallel to code milestones since pages ≠ crate source).
+
+## Addendum (2026-06-28) — reader-facing pages are TIMELESS (no project archaeology)
+
+Every `explain/SKY-*.md` page (and future user/stdlib docs) explains the
+*concept and behaviour*, NEVER the compiler's development history. The reader is a
+Sky programmer or agent learning the language — they do not care how or when the
+compiler was built.
+
+**Forbidden in reader-facing pages** (FAIL CI): references to phases / milestones
+(e.g. "M3b-2", "v0.15 Stage A"), sessions, epics, "walls" (e.g. "Wall #2"), task
+numbers, internal problem IDs, and first-person dev narrative ("we ported it…",
+"this was added in…", "previously this failed…"). The glossary teaches a concept
+timelessly — e.g. Maranget's algorithm is "the standard exhaustiveness/usefulness
+method from Luc Maranget's 2007 paper (INRIA)", with NO "we ported it" tail.
+
+Allowed: the concept, the rule, the fix, the theory, the names + their real-world
+origins, and (for SKY-L*/SKY-I*) the "not yet"/"our bug, please report" framing
+(that's product behaviour, not archaeology).
+
+**CI gate:** the page-coverage test adds an archaeology denylist (case-insensitive
+regex over page bodies): `\bM[0-9]+[a-z]?\b` (milestone tags), `\bWall #?[0-9]`,
+`\bphase\b`, `\bepic\b`, `\bsession\b`, `\btask #?[0-9]`, `we ported`, `was added
+in`, `v0\.[0-9]+ stage`. A reader-facing page matching any of these fails CI.
+
+**Code comments:** apply the same spirit going forward — comments explain WHAT and
+WHY, not WHEN/which-phase/which-task. Existing archaeology comments ("M3a
+residual", "Wall #2", "v0.15 Stage A", "fixes M2c BLOCKER") are pruned
+opportunistically when a file is touched, and swept in a dedicated cleanup pass
+before any public release. (This is a *code-readability* item, not CI-gated yet.)
