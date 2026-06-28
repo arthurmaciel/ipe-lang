@@ -48,6 +48,7 @@ struct Builtins {
     float: Symbol,
     bool: Symbol,
     string: Symbol,
+    char: Symbol,
     task: Symbol,
 }
 
@@ -58,6 +59,7 @@ impl Builtins {
             float: interner.intern("Float")?,
             bool: interner.intern("Bool")?,
             string: interner.intern("String")?,
+            char: interner.intern("Char")?,
             task: interner.intern("Task")?,
         })
     }
@@ -299,6 +301,24 @@ impl<'a> Builder<'a> {
 
     fn float_var(&mut self) -> DResult<VarId> {
         let name = self.builtins.float;
+        self.structure(FlatType::Con {
+            module: Vec::new(),
+            name,
+            args: Vec::new(),
+        })
+    }
+
+    fn string_var(&mut self) -> DResult<VarId> {
+        let name = self.builtins.string;
+        self.structure(FlatType::Con {
+            module: Vec::new(),
+            name,
+            args: Vec::new(),
+        })
+    }
+
+    fn char_var(&mut self) -> DResult<VarId> {
+        let name = self.builtins.char;
         self.structure(FlatType::Con {
             module: Vec::new(),
             name,
@@ -579,6 +599,8 @@ impl<'a> Builder<'a> {
         let span = e.span;
         let var = match &e.value {
             canon::Expr_::Int(_) => self.int_var()?,
+            canon::Expr_::Str(_) => self.string_var()?,
+            canon::Expr_::Char(_) => self.char_var()?,
             canon::Expr_::Unit => self.structure(FlatType::Unit)?,
             canon::Expr_::VarLocal(s) => match local.get(s) {
                 Some(v) => *v,
@@ -919,6 +941,35 @@ impl<'a> Builder<'a> {
                     local.insert(f.value, result);
                 }
                 Ok(())
+            }
+            // A literal pattern pins the scrutinee to the literal's type. It
+            // binds no names. A mismatch (`case n of "x" -> …` with `n : Int`)
+            // surfaces as the ordinary SKY-T0001 type mismatch.
+            canon::Pattern_::PInt(_) => {
+                let lit = self.int_var()?;
+                self.eq(pat.span, lit, scrut_var);
+                Ok(())
+            }
+            canon::Pattern_::PBool(_) => {
+                let lit = self.bool_var()?;
+                self.eq(pat.span, lit, scrut_var);
+                Ok(())
+            }
+            canon::Pattern_::PChar(_) => {
+                let lit = self.char_var()?;
+                self.eq(pat.span, lit, scrut_var);
+                Ok(())
+            }
+            canon::Pattern_::PStr(_) => {
+                let lit = self.string_var()?;
+                self.eq(pat.span, lit, scrut_var);
+                Ok(())
+            }
+            // An alias `inner as name` binds `name` to the whole scrutinee and
+            // additionally constrains the inner pattern against it.
+            canon::Pattern_::PAlias(inner, name) => {
+                local.insert(name.value, scrut_var);
+                self.constrain_pattern(local, inner, scrut_var)
             }
         }
     }

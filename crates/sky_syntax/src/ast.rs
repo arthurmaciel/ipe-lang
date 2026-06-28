@@ -128,6 +128,16 @@ pub enum Expr_ {
     VarQual(Symbol, Symbol),
     /// An integer literal.
     Int(i64),
+    /// A string literal `"hello"`. The carried [`String`] is the literal's
+    /// already-unescaped value (the lexer resolves escape sequences), so the
+    /// downstream stages see the runtime string verbatim. Mirrors the Haskell
+    /// compiler's `Src.Str`.
+    Str(String),
+    /// A character literal `'a'`. The carried [`String`] is the source character
+    /// text — a single grapheme for an ordinary char, or a backslash-escape pair
+    /// (`\n`, `\\`) for an escaped one — matching the Haskell compiler's
+    /// `Src.Chr String` representation so the value round-trips to the backend.
+    Char(String),
     /// The unit value `()` — the sole inhabitant of the unit type. Built by the
     /// parser from empty parentheses. Mirrors the Haskell compiler's `Src.Unit`.
     Unit,
@@ -219,6 +229,26 @@ pub enum Pattern_ {
     /// a record pattern is always irrefutable. The empty record `{}` is outside
     /// the grammar; a `PRecord` always carries at least one field.
     PRecord(Vec<Located<Symbol>>),
+    /// An integer literal pattern `0`, `42` (M3b-3). Refutable. Int is an OPEN
+    /// (infinite) type, so a `case` over int literals needs a wildcard / var
+    /// catch-all to be exhaustive. Mirrors the Haskell compiler's `Src.PInt`.
+    PInt(i64),
+    /// A boolean literal pattern `True` / `False` (M3b-3). Refutable in
+    /// isolation, but a `True` + `False` pair is an exhaustive cover of `Bool`
+    /// (a closed two-constructor type). Mirrors the Haskell compiler's `Src.PBool`.
+    PBool(bool),
+    /// A character literal pattern `'a'` (M3b-3). The carried [`String`] is the
+    /// source character text (single grapheme, or a `\`-escape pair). Refutable;
+    /// Char is OPEN. Mirrors the Haskell compiler's `Src.PChr`.
+    PChar(String),
+    /// A string literal pattern `"hi"` (M3b-3). The carried [`String`] is the
+    /// already-unescaped value. Refutable; String is OPEN. Mirrors the Haskell
+    /// compiler's `Src.PStr`.
+    PStr(String),
+    /// An alias / `as` pattern `inner as name` (M3b-3). Matches `inner` and also
+    /// binds the whole matched value to `name`. Mirrors the Haskell compiler's
+    /// `Src.PAlias Pattern (A.Located String)`.
+    PAlias(Box<Pattern>, Located<Symbol>),
 }
 
 /// Type-annotation node (M0 subset).

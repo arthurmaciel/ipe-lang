@@ -1,0 +1,13 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A literal arm AFTER a wildcard catch-all can never match — it is redundant
+-- (SKY-T0011).
+f : Int -> Int
+f n =
+    case n of
+        _ -> 0
+        1 -> 1
+
+main =
+    println (String.fromInt (f 7))

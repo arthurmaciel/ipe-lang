@@ -89,6 +89,8 @@ impl Sigs {
         match head {
             Head::Tuple(n) => *n,
             Head::Adt(c) => self.ctor_arity.get(c).copied().unwrap_or(0),
+            // Literal heads carry no sub-patterns.
+            Head::Bool(_) | Head::Int(_) | Head::Char(_) | Head::Str(_) => 0,
         }
     }
 }
@@ -100,6 +102,16 @@ enum Head {
     Adt(Symbol),
     /// The single constructor of a tuple type of the given arity.
     Tuple(usize),
+    /// A boolean literal head — `Bool` is a CLOSED two-constructor type, so a
+    /// `True` + `False` pair completes the signature.
+    Bool(bool),
+    /// An integer literal head. `Int` is an OPEN (infinite) type, so a literal
+    /// column never completes a signature — a wildcard / var is required.
+    Int(i64),
+    /// A character literal head. OPEN, like [`Head::Int`].
+    Char(String),
+    /// A string literal head. OPEN, like [`Head::Int`].
+    Str(String),
 }
 
 /// A pattern abstracted for the usefulness algorithm: either a wildcard (which
@@ -127,6 +139,14 @@ fn to_upat(p: &canon::Pattern_) -> UPat {
             Head::Tuple(elems.len()),
             elems.iter().map(|e| to_upat(&e.value)).collect(),
         ),
+        // Literal leaves abstract to a zero-arity head of their value.
+        canon::Pattern_::PInt(n) => UPat::Ctor(Head::Int(*n), Vec::new()),
+        canon::Pattern_::PBool(b) => UPat::Ctor(Head::Bool(*b), Vec::new()),
+        canon::Pattern_::PChar(c) => UPat::Ctor(Head::Char(c.clone()), Vec::new()),
+        canon::Pattern_::PStr(s) => UPat::Ctor(Head::Str(s.clone()), Vec::new()),
+        // An alias is transparent for coverage — it matches exactly what its
+        // inner pattern matches.
+        canon::Pattern_::PAlias(inner, _) => to_upat(&inner.value),
     }
 }
 
@@ -136,9 +156,15 @@ fn to_upat(p: &canon::Pattern_) -> UPat {
 /// and is skipped (the lowerer rejects the unknown scrutinee enum separately).
 fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
     match p {
-        canon::Pattern_::PAnything | canon::Pattern_::PVar(_) | canon::Pattern_::PRecord(_) => {
-            false
-        }
+        // Wildcards, variables, field-pun records, and literal leaves reference
+        // no ADT constructor.
+        canon::Pattern_::PAnything
+        | canon::Pattern_::PVar(_)
+        | canon::Pattern_::PRecord(_)
+        | canon::Pattern_::PInt(_)
+        | canon::Pattern_::PBool(_)
+        | canon::Pattern_::PChar(_)
+        | canon::Pattern_::PStr(_) => false,
         canon::Pattern_::PCtor { name, args, .. } => {
             !sigs.ctor_to_union.contains_key(name)
                 || args
@@ -148,6 +174,7 @@ fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
         canon::Pattern_::PTuple(elems) => elems
             .iter()
             .any(|e| pattern_uses_unknown_ctor(&e.value, sigs)),
+        canon::Pattern_::PAlias(inner, _) => pattern_uses_unknown_ctor(&inner.value, sigs),
     }
 }
 
@@ -173,6 +200,8 @@ pub fn check(module: &canon::Module, interner: &Interner) -> DResult<()> {
 fn check_expr(e: &canon::Expr, sigs: &Sigs, interner: &Interner) -> DResult<()> {
     match &e.value {
         canon::Expr_::Int(_)
+        | canon::Expr_::Str(_)
+        | canon::Expr_::Char(_)
         | canon::Expr_::Unit
         | canon::Expr_::VarLocal(_)
         | canon::Expr_::VarTopLevel { .. }
@@ -262,13 +291,19 @@ fn check_case(
     let mut prior: Vec<Vec<UPat>> = Vec::with_capacity(rows.len());
     for (br, row) in branches.iter().zip(rows.iter()) {
         let q = [row.clone()];
-        if useful(&prior, &q, sigs, 1).is_empty()
-            && let canon::Pattern_::PCtor { name, .. } = &br.pat.value
-        {
+        // A tuple / record arm is reported through the dedicated multi-arm
+        // product gate at lowering (SKY-L0115), which gives a clearer message
+        // than "redundant branch"; redundancy reporting covers the constructor /
+        // literal / wildcard / variable / alias arm shapes.
+        let is_product = matches!(
+            br.pat.value,
+            canon::Pattern_::PTuple(_) | canon::Pattern_::PRecord(_)
+        );
+        if !is_product && useful(&prior, &q, sigs, 1).is_empty() {
             return Err(Diagnostic::Type {
                 span: br.pat.span,
                 msg: TypeError::RedundantCaseBranch {
-                    constructor: resolve(interner, *name)?,
+                    constructor: arm_label(&br.pat.value, interner)?,
                 },
             });
         }
@@ -436,6 +471,20 @@ fn complete_signature(roots: &[Head], sigs: &Sigs) -> Option<Vec<(Head, usize)>>
     let first = roots.first()?;
     match first {
         Head::Tuple(n) => Some(vec![(Head::Tuple(*n), *n)]),
+        // `Bool` is closed: the signature is complete once both `True` and
+        // `False` appear in the column.
+        Head::Bool(_) => {
+            let has_true = roots.contains(&Head::Bool(true));
+            let has_false = roots.contains(&Head::Bool(false));
+            if has_true && has_false {
+                Some(vec![(Head::Bool(true), 0), (Head::Bool(false), 0)])
+            } else {
+                None
+            }
+        }
+        // Int / Char / String are OPEN — a finite set of literals never covers
+        // the type, so the signature is never complete (a wildcard is required).
+        Head::Int(_) | Head::Char(_) | Head::Str(_) => None,
         Head::Adt(c) => {
             let union = sigs.ctor_to_union.get(c)?;
             let all = sigs.union_ctors.get(union)?;
@@ -443,7 +492,7 @@ fn complete_signature(roots: &[Head], sigs: &Sigs) -> Option<Vec<(Head, usize)>>
                 .iter()
                 .filter_map(|h| match h {
                     Head::Adt(name) => Some(*name),
-                    Head::Tuple(_) => None,
+                    _ => None,
                 })
                 .collect();
             if all.iter().all(|(name, _)| present.contains(name)) {
@@ -463,32 +512,53 @@ fn complete_signature(roots: &[Head], sigs: &Sigs) -> Option<Vec<(Head, usize)>>
 /// column is missing (with wildcard arguments), in declaration order — or a bare
 /// wildcard when the column carries no constructor at all (nothing to refine).
 fn missing_heads(roots: &[Head], sigs: &Sigs) -> Vec<UPat> {
-    let Some(Head::Adt(c)) = roots.first() else {
-        // Empty column, or a tuple column (always complete, never reaches here).
-        return vec![UPat::Wild];
-    };
-    let Some(union) = sigs.ctor_to_union.get(c) else {
-        return vec![UPat::Wild];
-    };
-    let Some(all) = sigs.union_ctors.get(union) else {
-        return vec![UPat::Wild];
-    };
-    let present: BTreeSet<Symbol> = roots
-        .iter()
-        .filter_map(|h| match h {
-            Head::Adt(name) => Some(*name),
-            Head::Tuple(_) => None,
-        })
-        .collect();
-    let mut out: Vec<UPat> = all
-        .iter()
-        .filter(|(name, _)| !present.contains(name))
-        .map(|(name, ar)| UPat::Ctor(Head::Adt(*name), vec![UPat::Wild; *ar]))
-        .collect();
-    if out.is_empty() {
-        out.push(UPat::Wild);
+    match roots.first() {
+        // A `Bool` column missing one literal: the precise witness is that
+        // literal (`True` / `False`), not a bare wildcard.
+        Some(Head::Bool(_)) => {
+            let mut out = Vec::new();
+            if !roots.contains(&Head::Bool(true)) {
+                out.push(UPat::Ctor(Head::Bool(true), Vec::new()));
+            }
+            if !roots.contains(&Head::Bool(false)) {
+                out.push(UPat::Ctor(Head::Bool(false), Vec::new()));
+            }
+            if out.is_empty() {
+                out.push(UPat::Wild);
+            }
+            out
+        }
+        Some(Head::Adt(c)) => {
+            let Some(union) = sigs.ctor_to_union.get(c) else {
+                return vec![UPat::Wild];
+            };
+            let Some(all) = sigs.union_ctors.get(union) else {
+                return vec![UPat::Wild];
+            };
+            let present: BTreeSet<Symbol> = roots
+                .iter()
+                .filter_map(|h| match h {
+                    Head::Adt(name) => Some(*name),
+                    _ => None,
+                })
+                .collect();
+            let mut out: Vec<UPat> = all
+                .iter()
+                .filter(|(name, _)| !present.contains(name))
+                .map(|(name, ar)| UPat::Ctor(Head::Adt(*name), vec![UPat::Wild; *ar]))
+                .collect();
+            if out.is_empty() {
+                out.push(UPat::Wild);
+            }
+            out
+        }
+        // An OPEN literal column (Int / Char / String) is only completed by a
+        // catch-all → witness `_`. An empty column, or a tuple column (always
+        // complete, never reaches here), also witness `_`.
+        Some(Head::Int(_) | Head::Char(_) | Head::Str(_) | Head::Tuple(_)) | None => {
+            vec![UPat::Wild]
+        }
     }
-    out
 }
 
 /// Re-wrap a specialised witness `w` (its leading `arity` columns are the
@@ -509,6 +579,10 @@ fn rebuild(head: &Head, arity: usize, mut w: Vec<UPat>) -> Vec<UPat> {
 fn render_upat(p: &UPat, interner: &Interner, atom: bool) -> DResult<String> {
     match p {
         UPat::Wild => Ok("_".to_owned()),
+        UPat::Ctor(Head::Bool(b), _) => Ok(if *b { "True" } else { "False" }.to_owned()),
+        UPat::Ctor(Head::Int(n), _) => Ok(n.to_string()),
+        UPat::Ctor(Head::Char(c), _) => Ok(format!("'{c}'")),
+        UPat::Ctor(Head::Str(s), _) => Ok(format!("{s:?}")),
         UPat::Ctor(Head::Tuple(_), args) => {
             let mut parts = Vec::with_capacity(args.len());
             for a in args {
@@ -533,6 +607,27 @@ fn render_upat(p: &UPat, interner: &Interner, atom: bool) -> DResult<String> {
             }
         }
     }
+}
+
+/// The surface spelling of a `case` arm's pattern, used to name a redundant arm
+/// in the SKY-T0011 diagnostic. A constructor / variable resolves through the
+/// interner; a literal spells itself; a wildcard is `_`; an alias spells its
+/// inner pattern (the part that drives the match).
+fn arm_label(p: &canon::Pattern_, interner: &Interner) -> DResult<Box<str>> {
+    let s = match p {
+        canon::Pattern_::PAnything => "_".to_owned(),
+        canon::Pattern_::PVar(name) | canon::Pattern_::PCtor { name, .. } => {
+            resolve(interner, *name)?.to_string()
+        }
+        canon::Pattern_::PInt(n) => n.to_string(),
+        canon::Pattern_::PBool(b) => if *b { "True" } else { "False" }.to_owned(),
+        canon::Pattern_::PChar(c) => format!("'{c}'"),
+        canon::Pattern_::PStr(s) => format!("{s:?}"),
+        canon::Pattern_::PAlias(inner, _) => return arm_label(&inner.value, interner),
+        canon::Pattern_::PTuple(_) => "(…)".to_owned(),
+        canon::Pattern_::PRecord(_) => "{…}".to_owned(),
+    };
+    Ok(s.into_boxed_str())
 }
 
 /// Resolve a constructor symbol to an owned name, or a `CompilerBug` on a forged

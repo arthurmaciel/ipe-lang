@@ -124,6 +124,8 @@ pub enum IrType {
     Float,
     Bool,
     Str,
+    /// A Unicode scalar value `Char`. Renders as Rust's `char`.
+    Char,
     Unit,
     TaskUnit,
     /// A user-declared enum type, applied to its type arguments.
@@ -200,6 +202,12 @@ pub enum IrType {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Expr {
     Int(i64),
+    /// A string literal — the carried [`String`] is the already-unescaped value.
+    /// The backend renders it as an owned `String` (`"…".to_string()`).
+    Str(String),
+    /// A character literal — the carried [`String`] is the single unescaped
+    /// character's text. The backend renders it as a Rust `char` literal.
+    Char(String),
     /// The unit value `()` — the sole inhabitant of [`IrType::Unit`].
     ///
     /// Sky's `()` literal lowers here; the backend emits the Rust unit
@@ -448,6 +456,24 @@ pub enum Pat {
     Record(Vec<(Symbol, Self)>),
 }
 
+/// Whether a pattern matches EVERY value of its scrutinee type — a wildcard, a
+/// variable binder, or an alias whose inner pattern is itself irrefutable. Used
+/// to prove a flat `match`'s trailing arm is a genuine catch-all.
+#[must_use]
+pub fn is_irrefutable(pat: &Pat) -> bool {
+    match pat {
+        Pat::Wildcard | Pat::Var(_) => true,
+        Pat::Alias(inner, _) => is_irrefutable(inner),
+        Pat::Int(_)
+        | Pat::Bool(_)
+        | Pat::Char(_)
+        | Pat::Str(_)
+        | Pat::Ctor { .. }
+        | Pat::Tuple(_)
+        | Pat::Record(_) => false,
+    }
+}
+
 /// An exhaustive case analysis over an enum scrutinee.
 ///
 /// Fields are private: the sole way to obtain a `Match` is [`Match::new`],
@@ -516,6 +542,50 @@ impl Match {
             });
         }
 
+        Ok(Self {
+            scrutinee: Box::new(scrutinee),
+            arms,
+        })
+    }
+
+    /// Build a FLAT refutable `match` — the M3b-3 shape whose arm heads are
+    /// literals (`0` / `'a'` / `"hi"` / `True` / `False`), wildcards / variables,
+    /// alias binders, or constructors, in any mix. Unlike [`Match::new`] (which
+    /// proves coverage against a known enum's variant set), exhaustiveness here is
+    /// proven STRUCTURALLY, so the emitted Rust `match` can never fall through:
+    ///
+    /// * a trailing IRREFUTABLE arm (`_`, a variable, or an alias whose inner
+    ///   pattern is irrefutable) matches every remaining value, OR
+    /// * the arms are a complete `Bool` cover (`True` and `False` both present).
+    ///
+    /// The type phase ([`crate`]-external exhaustiveness, SKY-T0010) has already
+    /// proven the Sky `case` exhaustive before the lowerer calls this, so a shape
+    /// that satisfies neither structural rule is an internal invariant violation,
+    /// surfaced as a [`Diagnostic::CompilerBug`] rather than emitted as a Rust
+    /// `match` that rustc would reject with E0004.
+    ///
+    /// # Errors
+    /// [`Diagnostic::CompilerBug`] when `arms` is empty or not structurally
+    /// exhaustive.
+    pub fn new_flat(scrutinee: Expr, arms: Vec<Arm>) -> DResult<Self> {
+        let Some(last) = arms.last() else {
+            return Err(Diagnostic::CompilerBug {
+                where_: "sky_ir::Match::new_flat",
+                detail: "flat match has no arms".to_owned(),
+            });
+        };
+        let trailing_catch_all = is_irrefutable(&last.pat);
+        let bool_complete = arms.iter().all(|a| matches!(a.pat, Pat::Bool(_)))
+            && arms.iter().any(|a| matches!(a.pat, Pat::Bool(true)))
+            && arms.iter().any(|a| matches!(a.pat, Pat::Bool(false)));
+        if !trailing_catch_all && !bool_complete {
+            return Err(Diagnostic::CompilerBug {
+                where_: "sky_ir::Match::new_flat",
+                detail: "flat match is not structurally exhaustive (no trailing \
+                         catch-all and not a complete Bool cover)"
+                    .to_owned(),
+            });
+        }
         Ok(Self {
             scrutinee: Box::new(scrutinee),
             arms,
@@ -666,6 +736,126 @@ mod tests {
         ];
         let r = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec]);
         assert!(matches!(r, Err(Diagnostic::CompilerBug { .. })));
+        Ok(())
+    }
+
+    // ── M3b-3 flat refutable match (`Match::new_flat`) ─────────────────────
+
+    #[test]
+    fn new_flat_accepts_literal_arms_with_trailing_wildcard() -> DResult<()> {
+        let mut i = Interner::new();
+        let n = i.intern("n")?;
+        // case n of 0 -> 0 ; 1 -> 1 ; _ -> 9
+        let arms = vec![
+            Arm {
+                pat: Pat::Int(0),
+                body: Expr::Int(0),
+            },
+            Arm {
+                pat: Pat::Int(1),
+                body: Expr::Int(1),
+            },
+            Arm {
+                pat: Pat::Wildcard,
+                body: Expr::Int(9),
+            },
+        ];
+        let r = Match::new_flat(Expr::Var(n), arms);
+        assert_eq!(r.as_ref().map(|m| m.arms().len()), Ok(3));
+        Ok(())
+    }
+
+    #[test]
+    fn new_flat_accepts_trailing_variable_and_alias_catch_all() -> DResult<()> {
+        let mut i = Interner::new();
+        let n = i.intern("n")?;
+        let m = i.intern("m")?;
+        let k = i.intern("k")?;
+        // case n of 0 -> 0 ; (m as k) -> k  — alias-of-var is irrefutable.
+        let arms = vec![
+            Arm {
+                pat: Pat::Int(0),
+                body: Expr::Int(0),
+            },
+            Arm {
+                pat: Pat::Alias(Box::new(Pat::Var(m)), k),
+                body: Expr::Var(k),
+            },
+        ];
+        assert!(Match::new_flat(Expr::Var(n), arms).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn new_flat_accepts_complete_bool_cover_without_wildcard() -> DResult<()> {
+        let mut i = Interner::new();
+        let b = i.intern("b")?;
+        // case b of True -> 1 ; False -> 0 — closed cover, no catch-all needed.
+        let arms = vec![
+            Arm {
+                pat: Pat::Bool(true),
+                body: Expr::Int(1),
+            },
+            Arm {
+                pat: Pat::Bool(false),
+                body: Expr::Int(0),
+            },
+        ];
+        assert!(Match::new_flat(Expr::Var(b), arms).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn new_flat_rejects_open_literals_without_catch_all() -> DResult<()> {
+        let mut i = Interner::new();
+        let n = i.intern("n")?;
+        // case n of 0 -> 0 ; 1 -> 1 — Int is OPEN; no catch-all → not structurally
+        // exhaustive. The soundness floor: a CompilerBug here, never an emitted
+        // `match` that rustc would reject with E0004.
+        let arms = vec![
+            Arm {
+                pat: Pat::Int(0),
+                body: Expr::Int(0),
+            },
+            Arm {
+                pat: Pat::Int(1),
+                body: Expr::Int(1),
+            },
+        ];
+        assert!(matches!(
+            Match::new_flat(Expr::Var(n), arms),
+            Err(Diagnostic::CompilerBug { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn new_flat_rejects_incomplete_bool_cover() -> DResult<()> {
+        let mut i = Interner::new();
+        let b = i.intern("b")?;
+        // Only `True` — `False` uncovered and no wildcard.
+        let arms = vec![Arm {
+            pat: Pat::Bool(true),
+            body: Expr::Int(1),
+        }];
+        assert!(matches!(
+            Match::new_flat(Expr::Var(b), arms),
+            Err(Diagnostic::CompilerBug { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn is_irrefutable_classifies_binders_only() -> DResult<()> {
+        let mut i = Interner::new();
+        let x = i.intern("x")?;
+        assert!(is_irrefutable(&Pat::Wildcard));
+        assert!(is_irrefutable(&Pat::Var(x)));
+        assert!(is_irrefutable(&Pat::Alias(Box::new(Pat::Var(x)), x)));
+        assert!(!is_irrefutable(&Pat::Int(0)));
+        assert!(!is_irrefutable(&Pat::Bool(true)));
+        assert!(!is_irrefutable(&Pat::Str("hi".to_owned())));
+        assert!(!is_irrefutable(&Pat::Alias(Box::new(Pat::Int(0)), x)));
         Ok(())
     }
 

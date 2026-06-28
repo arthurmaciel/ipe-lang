@@ -325,6 +325,8 @@ fn parse_label(msg: &ParseError) -> Option<String> {
         ParseError::IntLiteralOutOfRange => {
             Some("this integer does not fit in 64 bits".to_string())
         }
+        ParseError::UnterminatedString => Some("this string is never closed".to_string()),
+        ParseError::MalformedChar => Some("this character literal is malformed".to_string()),
         ParseError::MalformedModuleHeader(defect) => Some(header_defect_str(*defect).to_string()),
         ParseError::MalformedExposingList(defect) => Some(exposing_defect_str(*defect).to_string()),
         ParseError::MissingEquals { binding } => Some(format!("`{binding}` needs an `=` here")),
@@ -608,6 +610,8 @@ const fn token_kind_str(t: TokenKind) -> &'static str {
         TokenKind::PipePipe => "`||`",
         TokenKind::Ident => "an identifier",
         TokenKind::Int => "a number",
+        TokenKind::Str => "a string literal",
+        TokenKind::Char => "a character literal",
         TokenKind::Eof => "end of input",
     }
 }

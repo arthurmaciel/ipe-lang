@@ -1,0 +1,13 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Boolean literal patterns: a `True` + `False` pair is a closed, exhaustive
+-- cover of `Bool` (no wildcard required).
+toInt : Bool -> Int
+toInt b =
+    case b of
+        True -> 1
+        False -> 0
+
+main =
+    println (String.fromInt (toInt (0 == 0)))

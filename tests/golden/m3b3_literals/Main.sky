@@ -1,0 +1,14 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Int literal patterns with a wildcard catch-all; the arm bodies are String
+-- literals (an OPEN type needs the `_` to be exhaustive).
+classify : Int -> String
+classify n =
+    case n of
+        0 -> "zero"
+        1 -> "one"
+        _ -> "many"
+
+main =
+    println (classify 1)

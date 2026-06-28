@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use sky_canon::ast as canon;
 use sky_diagnostics::{
-    Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0100, SKY_L0101, SKY_L0102,
-    SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, Span,
+    Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0101, SKY_L0102, SKY_L0104,
+    SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, Span,
 };
 use sky_intern::{Interner, Symbol};
 use sky_ir::{Callee, Expr, FuncId, IrType, KernelFn};
@@ -587,13 +587,16 @@ fn unsupported_binary_operator() -> DResult<()> {
     Ok(())
 }
 
+/// M3b-3: a single wildcard `case` arm is now a supported FLAT match (a trailing
+/// catch-all is structurally exhaustive), no longer the SKY-L0100 gap. The
+/// lowering succeeds and yields a `Match` body.
 #[test]
-fn non_constructor_pattern_in_first_arm() -> DResult<()> {
+fn wildcard_only_case_lowers_to_flat_match() -> DResult<()> {
     let mut i = Interner::new();
     let f = i.intern("f")?;
     let x = i.intern("x")?;
     let ty = con_int(&mut i)?;
-    // case x of _ -> 0  (a wildcard arm; M0 matches only nullary ctors).
+    // case x of _ -> 0
     let scrut = Box::new(Located::new(Span::new(122, 123), canon::Expr_::VarLocal(x)));
     let branch = canon::CaseBranch {
         pat: Located::new(Span::new(126, 127), canon::Pattern_::PAnything),
@@ -607,17 +610,20 @@ fn non_constructor_pattern_in_first_arm() -> DResult<()> {
         body,
         ty,
     };
-    assert_unsupported(
-        run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
-        Feature::CasePatternKinds,
-        SKY_L0100,
-        Span::new(126, 127),
+    let res = run(Vec::new(), vec![def], BTreeMap::new(), &mut i);
+    let body = single_func(&res).map(|fc| &fc.body);
+    assert!(
+        matches!(body, Some(Expr::Match(_))),
+        "wildcard-only case must lower to a flat Match, got {body:?}"
     );
     Ok(())
 }
 
+/// M3b-3: a constructor arm followed by a variable catch-all is now a supported
+/// FLAT match (the trailing variable is an irrefutable catch-all), no longer the
+/// SKY-L0100 gap.
 #[test]
-fn non_constructor_pattern_in_later_arm() -> DResult<()> {
+fn ctor_then_variable_catch_all_lowers_to_flat_match() -> DResult<()> {
     let mut i = Interner::new();
     let f = i.intern("f")?;
     let x = i.intern("x")?;
@@ -625,7 +631,6 @@ fn non_constructor_pattern_in_later_arm() -> DResult<()> {
     let inc = i.intern("Increment")?;
     let dec = i.intern("Decrement")?;
     let ty = con_int(&mut i)?;
-    // A real union so the first (constructor) arm passes the enum lookup.
     let union = canon::Union {
         name: msg,
         vars: Vec::new(),
@@ -660,7 +665,7 @@ fn non_constructor_pattern_in_later_arm() -> DResult<()> {
         ),
         body: int(Span::new(159, 160), 0),
     };
-    // The second arm is a variable pattern — unsupported.
+    // The second arm is a variable catch-all — supported in M3b-3.
     let arm1 = canon::CaseBranch {
         pat: Located::new(Span::new(163, 164), canon::Pattern_::PVar(x)),
         body: int(Span::new(168, 169), 1),
@@ -676,12 +681,11 @@ fn non_constructor_pattern_in_later_arm() -> DResult<()> {
         body,
         ty,
     };
-    // The later non-constructor arm's pattern span is blamed.
-    assert_unsupported(
-        run(vec![union], vec![def], BTreeMap::new(), &mut i),
-        Feature::CasePatternKinds,
-        SKY_L0100,
-        Span::new(163, 164),
+    let res = run(vec![union], vec![def], BTreeMap::new(), &mut i);
+    let body = single_func(&res).map(|fc| &fc.body);
+    assert!(
+        matches!(body, Some(Expr::Match(_))),
+        "ctor + variable catch-all must lower to a flat Match, got {body:?}"
     );
     Ok(())
 }

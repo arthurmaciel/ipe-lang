@@ -345,7 +345,12 @@ fn canonicalise_value(
 /// Bind every variable a pattern introduces as a local in the environment.
 fn bind_pattern_names(p: &src::Pattern_, env: &mut Env) {
     match p {
-        src::Pattern_::PAnything => {}
+        // The wildcard and the literal leaves all bind nothing.
+        src::Pattern_::PAnything
+        | src::Pattern_::PInt(_)
+        | src::Pattern_::PBool(_)
+        | src::Pattern_::PChar(_)
+        | src::Pattern_::PStr(_) => {}
         src::Pattern_::PVar(name) => env.add_local(*name),
         src::Pattern_::PCtor(_, _, args) => {
             for a in args {
@@ -362,6 +367,11 @@ fn bind_pattern_names(p: &src::Pattern_, env: &mut Env) {
             for f in fields {
                 env.add_local(f.value);
             }
+        }
+        src::Pattern_::PAlias(inner, name) => {
+            // The alias binds its name AND every name its inner pattern binds.
+            bind_pattern_names(&inner.value, env);
+            env.add_local(name.value);
         }
     }
 }
@@ -413,6 +423,14 @@ fn canonicalise_pattern(
             // (the binding of each as a local happens in `bind_pattern_names`).
             canon::Pattern_::PRecord(fields.clone())
         }
+        src::Pattern_::PInt(n) => canon::Pattern_::PInt(*n),
+        src::Pattern_::PBool(b) => canon::Pattern_::PBool(*b),
+        src::Pattern_::PChar(c) => canon::Pattern_::PChar(c.clone()),
+        src::Pattern_::PStr(s) => canon::Pattern_::PStr(s.clone()),
+        src::Pattern_::PAlias(inner, name) => {
+            let can_inner = canonicalise_pattern(inner, env, interner)?;
+            canon::Pattern_::PAlias(Box::new(can_inner), *name)
+        }
     };
     Ok(Located::new(span, node))
 }
@@ -422,6 +440,8 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
     let span = e.span;
     let node = match &e.value {
         src::Expr_::Int(n) => canon::Expr_::Int(*n),
+        src::Expr_::Str(s) => canon::Expr_::Str(s.clone()),
+        src::Expr_::Char(c) => canon::Expr_::Char(c.clone()),
         src::Expr_::Unit => canon::Expr_::Unit,
         src::Expr_::VarLocal(name) => resolve_var(*name, span, env, interner)?,
         src::Expr_::VarQual(qual, name) => resolve_qual_var(*qual, *name, span, env, interner)?,

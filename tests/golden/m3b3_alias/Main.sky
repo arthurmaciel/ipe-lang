@@ -1,0 +1,13 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- An `as` alias binds the whole matched value alongside its inner pattern, and
+-- a trailing variable is an irrefutable catch-all.
+f : Int -> Int
+f n =
+    case n of
+        0 -> 0
+        (m as k) -> k + m
+
+main =
+    println (String.fromInt (f 7))

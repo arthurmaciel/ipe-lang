@@ -1,0 +1,13 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Character literal pattern with a wildcard catch-all.
+grade : Char -> Int
+grade c =
+    case c of
+        'a' -> 1
+        'b' -> 2
+        _ -> 0
+
+main =
+    println (String.fromInt (grade 'b'))

@@ -173,6 +173,7 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::Float
         | IrType::Bool
         | IrType::Str
+        | IrType::Char
         | IrType::Unit
         | IrType::TaskUnit
         | IrType::Generic(_) => false,
@@ -609,6 +610,7 @@ impl<'a> Lowerer<'a> {
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
                 "String" => Ok(IrType::Str),
+                "Char" => Ok(IrType::Char),
                 _ if self.enum_variants.contains_key(name) => {
                     let mut ir_args = Vec::with_capacity(args.len());
                     for a in args {
@@ -773,6 +775,7 @@ impl<'a> Lowerer<'a> {
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
                 "String" => Ok(IrType::Str),
+                "Char" => Ok(IrType::Char),
                 "Task" if args.len() == 1 && matches!(args.first(), Some(Ty::Unit)) => {
                     Ok(IrType::TaskUnit)
                 }
@@ -898,6 +901,8 @@ impl<'a> Lowerer<'a> {
         self.reject_function_through_type_var(e)?;
         match &e.value {
             canon::Expr_::Int(n) => Ok(Expr::Int(*n)),
+            canon::Expr_::Str(s) => Ok(Expr::Str(s.clone())),
+            canon::Expr_::Char(c) => Ok(Expr::Char(c.clone())),
             canon::Expr_::Unit => Ok(Expr::Unit),
             canon::Expr_::VarLocal(s) => Ok(Expr::Var(*s)),
             canon::Expr_::VarCtor {
@@ -1390,6 +1395,16 @@ impl<'a> Lowerer<'a> {
         match &p.value {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
             canon::Pattern_::PAnything => Ok(Pat::Wildcard),
+            // Literal leaves (M3b-3) lower to the matching refutable IR leaf.
+            canon::Pattern_::PInt(n) => Ok(Pat::Int(*n)),
+            canon::Pattern_::PBool(b) => Ok(Pat::Bool(*b)),
+            canon::Pattern_::PChar(c) => Ok(Pat::Char(c.clone())),
+            canon::Pattern_::PStr(s) => Ok(Pat::Str(s.clone())),
+            // An alias `inner as name` lowers to the IR binding-with-subpattern.
+            canon::Pattern_::PAlias(inner, name) => Ok(Pat::Alias(
+                Box::new(Self::lower_payload_pat(inner)?),
+                name.value,
+            )),
             canon::Pattern_::PTuple(elems) => {
                 let subs = elems
                     .iter()
@@ -1445,7 +1460,21 @@ impl<'a> Lowerer<'a> {
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Pat::Tuple(subs))
             }
-            canon::Pattern_::PCtor { .. } => Err(unsupported(p.span, Feature::TuplePatternMatch)),
+            // A constructor or literal element is REFUTABLE — it could fail to
+            // match — so it cannot bind irrefutably in a `let` / parameter
+            // destructure. This is the tuple-pattern gap (SKY-L0115), surfaced
+            // fail-closed.
+            canon::Pattern_::PCtor { .. }
+            | canon::Pattern_::PInt(_)
+            | canon::Pattern_::PBool(_)
+            | canon::Pattern_::PChar(_)
+            | canon::Pattern_::PStr(_) => Err(unsupported(p.span, Feature::TuplePatternMatch)),
+            // An alias `inner as name` is irrefutable exactly when `inner` is, so
+            // it recurses: a refutable inner surfaces the same SKY-L0115 gap.
+            canon::Pattern_::PAlias(inner, name) => Ok(Pat::Alias(
+                Box::new(Self::lower_destructure_pat(inner)?),
+                name.value,
+            )),
             // A record pattern nested inside a tuple destructure needs the
             // element's record type to recover the complete field set; only a
             // top-level record binder is supported (via `lower_binder_pat`).
@@ -1563,26 +1592,11 @@ impl<'a> Lowerer<'a> {
                 body: Box::new(self.lower_expr(&first.body)?),
             });
         }
-        let canon::Pattern_::PCtor { type_name, .. } = &first.pat.value else {
-            // A wildcard/variable/literal arm. M0 matches only nullary
-            // constructor patterns. [SKY-L0100, feature: case-pattern-kinds]
-            return Err(unsupported(first.pat.span, Feature::CasePatternKinds));
-        };
-        // The scrutinee's enum is one this module declared (the type checker
-        // pinned the constructor's union), so it is always in `enum_variants` —
-        // the *true* variant set handed to `Match::new` below.
-        let variants = self
-            .enum_variants
-            .get(type_name)
-            .ok_or_else(|| bug("sky_lower::lower_case", "unknown scrutinee enum"))?;
-
-        // M3b-2 lowers a constructor `case` to a Rust `match` with one arm per
-        // top-level constructor. A SECOND arm for the same constructor is nested
-        // constructor discrimination — gated fail-closed here (SKY-L0116) before
-        // `Match::new`, so the unsupported shape never reaches its exactly-once
-        // contract as a `CompilerBug`. The exhaustiveness checker has already run
-        // (a non-exhaustive nested `case` surfaced as SKY-T0010), so an
-        // exhaustive two-arm shape is the one this gate catches.
+        // A SECOND arm for the same top-level constructor is nested-constructor
+        // discrimination (`Just 0` vs `Just n`) — the decision-tree shape gated
+        // fail-closed here (SKY-L0116, M3b-4) before any `Match` is built. The
+        // exhaustiveness checker has already run, so a non-exhaustive nested
+        // `case` is SKY-T0010; this gate catches the exhaustive same-ctor shape.
         let mut seen: BTreeSet<Symbol> = BTreeSet::new();
         for br in branches {
             if let canon::Pattern_::PCtor { name, .. } = &br.pat.value
@@ -1592,39 +1606,86 @@ impl<'a> Lowerer<'a> {
             }
         }
 
+        // Lower every arm's head pattern. A pure constructor `case` (every arm a
+        // distinct constructor, no literal / wildcard / variable / alias) keeps
+        // the M3a/M3b-2 enum-cover `Match::new` path, whose exhaustiveness is the
+        // exact variant set. Any other mix (literal heads, a wildcard / variable
+        // catch-all, an alias, or a constructor + catch-all) is M3b-3's FLAT
+        // refutable match (`Match::new_flat`), whose exhaustiveness is structural
+        // (a trailing catch-all, or a complete `Bool` cover). Both forms have
+        // already been proven exhaustive by the type phase (SKY-T0010).
+        let all_ctor = branches
+            .iter()
+            .all(|br| matches!(br.pat.value, canon::Pattern_::PCtor { .. }));
+
         let arms = branches
             .iter()
             .map(|br| {
-                let canon::Pattern_::PCtor {
-                    type_name,
-                    name,
-                    args,
-                    ..
-                } = &br.pat.value
-                else {
-                    // [SKY-L0100, feature: case-pattern-kinds]
-                    return Err(unsupported(br.pat.span, Feature::CasePatternKinds));
-                };
-                // Each payload sub-pattern binds a variable or is a wildcard;
-                // richer shapes are the nested-payload gap (SKY-L0112). The type
-                // checker (SKY-T0013) already proved the sub-pattern count equals
-                // the constructor's field count, so the IR `Pat::Ctor` the backend
-                // sees always matches the variant's declared arity.
-                let sub = args
-                    .iter()
-                    .map(Self::lower_payload_pat)
-                    .collect::<DResult<Vec<_>>>()?;
                 Ok(Arm {
-                    pat: Pat::Ctor {
-                        ty: *type_name,
-                        variant: *name,
-                        args: sub,
-                    },
+                    pat: Self::lower_arm_pat(&br.pat)?,
                     body: self.lower_expr(&br.body)?,
                 })
             })
             .collect::<DResult<Vec<_>>>()?;
 
-        Ok(Expr::Match(Match::new(scrutinee, arms, variants)?))
+        if all_ctor {
+            // The scrutinee's enum is one this module declared (the type checker
+            // pinned the constructor's union), so it is always in
+            // `enum_variants` — the *true* variant set handed to `Match::new`.
+            let canon::Pattern_::PCtor { type_name, .. } = &first.pat.value else {
+                return Err(bug(
+                    "sky_lower::lower_case",
+                    "all-ctor case without a ctor head",
+                ));
+            };
+            let variants = self
+                .enum_variants
+                .get(type_name)
+                .ok_or_else(|| bug("sky_lower::lower_case", "unknown scrutinee enum"))?;
+            Ok(Expr::Match(Match::new(scrutinee, arms, variants)?))
+        } else {
+            Ok(Expr::Match(Match::new_flat(scrutinee, arms)?))
+        }
+    }
+
+    /// Lower a `case`-arm HEAD pattern to its IR [`Pat`]. Handles the full M3b-3
+    /// refutable head set — variable / wildcard binders, the literal leaves
+    /// (`0` / `True` / `'a'` / `"hi"`), an alias / `as` binder, and a
+    /// constructor pattern (whose payload sub-patterns recurse through
+    /// [`Self::lower_payload_pat`]). A tuple / record head is the destructure
+    /// path (handled by the single-arm branch of [`Self::lower_case`]); reaching
+    /// it here is a multi-arm product `case`, the tuple-pattern gap (SKY-L0115).
+    fn lower_arm_pat(p: &canon::Pattern) -> DResult<Pat> {
+        match &p.value {
+            canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
+            canon::Pattern_::PAnything => Ok(Pat::Wildcard),
+            canon::Pattern_::PInt(n) => Ok(Pat::Int(*n)),
+            canon::Pattern_::PBool(b) => Ok(Pat::Bool(*b)),
+            canon::Pattern_::PChar(c) => Ok(Pat::Char(c.clone())),
+            canon::Pattern_::PStr(s) => Ok(Pat::Str(s.clone())),
+            canon::Pattern_::PAlias(inner, name) => Ok(Pat::Alias(
+                Box::new(Self::lower_arm_pat(inner)?),
+                name.value,
+            )),
+            canon::Pattern_::PCtor {
+                type_name,
+                name,
+                args,
+                ..
+            } => {
+                let sub = args
+                    .iter()
+                    .map(Self::lower_payload_pat)
+                    .collect::<DResult<Vec<_>>>()?;
+                Ok(Pat::Ctor {
+                    ty: *type_name,
+                    variant: *name,
+                    args: sub,
+                })
+            }
+            canon::Pattern_::PTuple(_) | canon::Pattern_::PRecord(_) => {
+                Err(unsupported(p.span, Feature::TuplePatternMatch))
+            }
+        }
     }
 }
