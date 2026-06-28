@@ -89,6 +89,12 @@ per shared match-file per round, or split the file).
 - **M5 — effects & runtime:** `Task` everywhere, `Cmd/Sub`, `Http`, `File`,
   `System`, `Process`, `Db`, `Crypto`, `Time`, `Random` — mirror `runtime-go`
   module-for-module per `docs/parity/runtime-parity.md`.
+
+**Backlog/coverage oracle for M4+M5: `skydex`** (`sky/tools/skydex`, bounded ~64 MB).
+Run `skydex update` then `skydex parity --gaps` from the sky repo to get the
+computed kernel backlog (go-only/rust-only with go=/rust=/route= file:line);
+`skydex locate <sym>` + `skydex covers <kernel>` to find impls + coverage. Drives
+the parity ledger. Dev tool, outside the trust path. See memory `skydex-tool`.
 - **M6 — app shapes:** `Sky.Http.Server`, `Sky.Live`, `Sky.Tui`, `Sky.Webview` —
   the big integrations; each its own sub-roadmap.
 - **Cross-cutting (fold in as needed):** DCE, auto-TCO, monomorphisation (also the
