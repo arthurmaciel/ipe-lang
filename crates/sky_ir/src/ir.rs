@@ -96,22 +96,154 @@ pub struct Variant {
     pub fields: Vec<IrType>,
 }
 
+/// The set of Rust trait bounds a generic type parameter carries, held as a
+/// compact bit set.
+///
+/// An unconstrained type variable — one the body only passes through (`id x =
+/// x`) — has the empty set [`BoundSet::UNBOUNDED`], which the backend emits as a
+/// bare generic (`T1`), byte-identical to a structurally-parametric M2a
+/// function. A variable the body *constrains* by applying an operation to it
+/// carries the matching bounds, so the emitted generic is `T1: <bounds>`.
+///
+/// Each flag maps a Sky super-type capability to the Rust standard-library
+/// trait that realises it, with no new runtime trait:
+///
+/// * `add` / `sub` / `mul` realise Sky's **Number** super-type (`Int` or
+///   `Float`). They are split per arithmetic operator because Sky's
+///   `Basics.add` / `sub` / `mul` already lower to Rust's `+` / `-` / `*`, and
+///   each operator demands exactly its own `::core::ops` trait — a body that
+///   only adds needs only `Add`, so the bound stays minimal rather than
+///   over-constraining a caller.
+/// * `ord` realises Sky's **Comparable** super-type (`Int` / `Float` / `Char` /
+///   `String` / `Bool`) for the ordering comparisons `<` `>` `<=` `>=`, mapping
+///   to Rust's `PartialOrd`.
+/// * `copy` is added when a bound value is used more than once and is a
+///   bit-copyable primitive (every `Number` / `Comparable` primitive except
+///   `String`), so the generated body can reuse it without a move error.
+/// * `clone` is the non-`Copy` counterpart — added when a reused value's type
+///   may be `String`, where `Clone` is the available duplication trait.
+///
+/// The flags are independent and compose: a Comparable-and-reused variable
+/// carries `ord | copy`; a numeric-add-and-reused variable carries `add | copy`.
+/// The `with_*` builders set a flag and return the updated set, so a bound set
+/// is assembled fluently (`BoundSet::UNBOUNDED.with_add().with_copy()`); the
+/// `has_*` predicates read one flag back.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
+pub struct BoundSet(u8);
+
+impl BoundSet {
+    const ADD: u8 = 1 << 0;
+    const SUB: u8 = 1 << 1;
+    const MUL: u8 = 1 << 2;
+    const ORD: u8 = 1 << 3;
+    const COPY: u8 = 1 << 4;
+    const CLONE: u8 = 1 << 5;
+
+    /// The empty bound set: an unconstrained, structurally-parametric variable.
+    pub const UNBOUNDED: Self = Self(0);
+
+    /// Whether this set carries no bound at all — the variable is a true
+    /// parametric pass-through and emits as a bare generic.
+    #[must_use]
+    pub const fn is_unbounded(self) -> bool {
+        self.0 == 0
+    }
+
+    /// This set with the `::core::ops::Add<Output = Self>` (Number `+`) bound.
+    #[must_use]
+    pub const fn with_add(self) -> Self {
+        Self(self.0 | Self::ADD)
+    }
+
+    /// This set with the `::core::ops::Sub<Output = Self>` (Number `-`) bound.
+    #[must_use]
+    pub const fn with_sub(self) -> Self {
+        Self(self.0 | Self::SUB)
+    }
+
+    /// This set with the `::core::ops::Mul<Output = Self>` (Number `*`) bound.
+    #[must_use]
+    pub const fn with_mul(self) -> Self {
+        Self(self.0 | Self::MUL)
+    }
+
+    /// This set with the `PartialOrd` (Comparable ordering) bound.
+    #[must_use]
+    pub const fn with_ord(self) -> Self {
+        Self(self.0 | Self::ORD)
+    }
+
+    /// This set with the `Copy` (bit-copyable reuse) bound.
+    #[must_use]
+    pub const fn with_copy(self) -> Self {
+        Self(self.0 | Self::COPY)
+    }
+
+    /// This set with the `Clone` (non-`Copy` reuse) bound.
+    #[must_use]
+    pub const fn with_clone(self) -> Self {
+        Self(self.0 | Self::CLONE)
+    }
+
+    /// Whether the `Add` bound is set.
+    #[must_use]
+    pub const fn has_add(self) -> bool {
+        self.0 & Self::ADD != 0
+    }
+
+    /// Whether the `Sub` bound is set.
+    #[must_use]
+    pub const fn has_sub(self) -> bool {
+        self.0 & Self::SUB != 0
+    }
+
+    /// Whether the `Mul` bound is set.
+    #[must_use]
+    pub const fn has_mul(self) -> bool {
+        self.0 & Self::MUL != 0
+    }
+
+    /// Whether the `PartialOrd` bound is set.
+    #[must_use]
+    pub const fn has_ord(self) -> bool {
+        self.0 & Self::ORD != 0
+    }
+
+    /// Whether the `Copy` bound is set.
+    #[must_use]
+    pub const fn has_copy(self) -> bool {
+        self.0 & Self::COPY != 0
+    }
+
+    /// Whether the `Clone` bound is set.
+    #[must_use]
+    pub const fn has_clone(self) -> bool {
+        self.0 & Self::CLONE != 0
+    }
+}
+
 /// A function: the type variables it quantifies, typed parameters, a return
 /// type, and a body expression.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Func {
     pub id: FuncId,
     pub name: Symbol,
-    /// The type variables this function quantifies, in quantification order
-    /// (M2a). Each is a Sky type-variable [`Symbol`] that appears as an
-    /// [`IrType::Generic`] in the parameters / return / body. A monomorphic
-    /// function has an empty list, so existing M0 / M1 functions are unchanged.
+    /// The type variables this function quantifies, in quantification order,
+    /// each paired with its [`BoundSet`] (M2a / M2d). A type variable is a Sky
+    /// type-variable [`Symbol`] that appears as an [`IrType::Generic`] in the
+    /// parameters / return / body; its `BoundSet` records the Rust trait bounds
+    /// the body's use of the variable demands. A monomorphic function has an
+    /// empty list, so existing M0 / M1 functions are unchanged. A
+    /// structurally-parametric variable (M2a) carries [`BoundSet::UNBOUNDED`],
+    /// so its emitted generic stays a bare `T1`.
     ///
     /// The order is load-bearing: the backend derives each variable's Rust
     /// generic name (`T1`, `T2`, …) from its *position* here, so a function
     /// quantifying `[a, b]` emits `fn name<T1, T2>(..)` with `a` → `T1` and
-    /// `b` → `T2` regardless of the source variable spellings.
-    pub type_params: Vec<Symbol>,
+    /// `b` → `T2` regardless of the source variable spellings. Only the
+    /// [`Symbol`] participates in naming; the [`BoundSet`] adds the `: <bounds>`
+    /// clause at that position.
+    pub type_params: Vec<(Symbol, BoundSet)>,
     pub params: Vec<(Symbol, IrType)>,
     pub ret: IrType,
     pub body: Expr,
@@ -1153,13 +1285,13 @@ mod tests {
         let func = Func {
             id: FuncId::from_raw(0),
             name: id,
-            type_params: vec![a],
+            type_params: vec![(a, BoundSet::UNBOUNDED)],
             params: vec![(x, IrType::Generic(a))],
             ret: IrType::Generic(a),
             body: Expr::Var(x),
         };
         assert_eq!(func, func.clone());
-        assert_eq!(func.type_params, vec![a]);
+        assert_eq!(func.type_params, vec![(a, BoundSet::UNBOUNDED)]);
 
         // Distinct generic vars compare unequal; quantification order is carried
         // verbatim (no dedup / sort), so [a, b] stays [a, b].
@@ -1167,12 +1299,31 @@ mod tests {
         let two = Func {
             id: FuncId::from_raw(1),
             name: id,
-            type_params: vec![a, b],
+            type_params: vec![(a, BoundSet::UNBOUNDED), (b, BoundSet::UNBOUNDED)],
             params: vec![(x, IrType::Generic(a))],
             ret: IrType::Generic(b),
             body: Expr::Var(x),
         };
-        assert_eq!(two.type_params, vec![a, b]);
+        assert_eq!(
+            two.type_params,
+            vec![(a, BoundSet::UNBOUNDED), (b, BoundSet::UNBOUNDED)]
+        );
+
+        // A constrained variable carries its bounds; an unbounded one does not.
+        assert!(BoundSet::default().is_unbounded());
+        let bounds = BoundSet::UNBOUNDED.with_add().with_copy();
+        assert!(!bounds.is_unbounded());
+        assert!(bounds.has_add() && bounds.has_copy());
+        assert!(!bounds.has_sub() && !bounds.has_ord());
+        let double = Func {
+            id: FuncId::from_raw(2),
+            name: id,
+            type_params: vec![(a, bounds)],
+            params: vec![(x, IrType::Generic(a))],
+            ret: IrType::Generic(a),
+            body: Expr::Var(x),
+        };
+        assert_eq!(double.type_params, vec![(a, bounds)]);
         Ok(())
     }
 

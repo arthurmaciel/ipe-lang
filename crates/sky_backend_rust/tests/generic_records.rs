@@ -35,7 +35,7 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::{Interner, Symbol};
-use sky_ir::{Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program};
+use sky_ir::{BoundSet, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program};
 
 /// A single-module program.
 fn program(name: Symbol, funcs: Vec<Func>, records: Vec<IrType>, entry: Option<FuncId>) -> Program {
@@ -87,7 +87,7 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
     let wrap_fn = Func {
         id: FuncId::from_raw(0),
         name: wrap,
-        type_params: vec![a],
+        type_params: vec![(a, BoundSet::UNBOUNDED)],
         params: vec![(x, IrType::Generic(a))],
         ret: value_record(value, IrType::Generic(a)),
         body: Expr::Record(vec![(value, Expr::Var(x))]),
@@ -96,7 +96,7 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
     let unwrap_fn = Func {
         id: FuncId::from_raw(1),
         name: unwrap,
-        type_params: vec![b],
+        type_params: vec![(b, BoundSet::UNBOUNDED)],
         params: vec![(r, value_record(value, IrType::Generic(b)))],
         ret: IrType::Generic(b),
         body: Expr::Access {
@@ -199,7 +199,7 @@ fn merges_generic_and_concrete_field_set() -> DResult<()> {
     let wrap_fn = Func {
         id: FuncId::from_raw(0),
         name: wrap,
-        type_params: vec![a],
+        type_params: vec![(a, BoundSet::UNBOUNDED)],
         params: vec![(x, IrType::Generic(a))],
         ret: value_record(value, IrType::Generic(a)),
         body: Expr::Record(vec![(value, Expr::Var(x))]),
@@ -257,7 +257,7 @@ fn two_type_parameter_record() -> DResult<()> {
     let pair_fn = Func {
         id: FuncId::from_raw(0),
         name: pair,
-        type_params: vec![a, b],
+        type_params: vec![(a, BoundSet::UNBOUNDED), (b, BoundSet::UNBOUNDED)],
         params: vec![(x, IrType::Generic(a)), (y, IrType::Generic(b))],
         ret: rec,
         body: Expr::Record(vec![(first, Expr::Var(x)), (second, Expr::Var(y))]),

@@ -13,8 +13,8 @@
 use sky_intern::{Interner, Symbol};
 
 use crate::ir::{
-    Arm, BinOp, Callee, EnumDef, Expr, Func, IrType, KernelFn, Match, ModPath, Module, Pat,
-    Program, TypeDef, Variant,
+    Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, IrType, KernelFn, Match, ModPath, Module,
+    Pat, Program, TypeDef, Variant,
 };
 
 /// Render `program` as a readable indented tree, resolving every [`Symbol`]
@@ -288,6 +288,37 @@ fn variant_name(interner: &Interner, v: &Variant) -> String {
     }
 }
 
+/// The debug-text suffix for one type parameter's bounds: empty for an
+/// unbounded variable (so a structurally-parametric function's rendering is
+/// byte-identical to the M2a form), or `: Add+Sub+…` listing each set flag in a
+/// fixed order. This is the IR's human-readable dump, not the Rust emission —
+/// the backend renders the real `::core::ops::*` / `PartialOrd` spellings.
+fn bound_suffix(bounds: BoundSet) -> String {
+    if bounds.is_unbounded() {
+        return String::new();
+    }
+    let mut parts = Vec::new();
+    if bounds.has_add() {
+        parts.push("Add");
+    }
+    if bounds.has_sub() {
+        parts.push("Sub");
+    }
+    if bounds.has_mul() {
+        parts.push("Mul");
+    }
+    if bounds.has_ord() {
+        parts.push("Ord");
+    }
+    if bounds.has_copy() {
+        parts.push("Copy");
+    }
+    if bounds.has_clone() {
+        parts.push("Clone");
+    }
+    format!(": {}", parts.join("+"))
+}
+
 fn write_func(out: &mut String, func: &Func, interner: &Interner) {
     let params = func
         .params
@@ -310,7 +341,11 @@ fn write_func(out: &mut String, func: &Func, interner: &Interner) {
         let vars = func
             .type_params
             .iter()
-            .map(|sym| sym_name(interner, *sym))
+            .map(|(sym, bounds)| {
+                let name = sym_name(interner, *sym);
+                let suffix = bound_suffix(*bounds);
+                format!("{name}{suffix}")
+            })
             .collect::<Vec<_>>()
             .join(", ");
         format!("<{vars}>")
