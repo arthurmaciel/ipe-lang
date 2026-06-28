@@ -323,7 +323,9 @@ fn collect_record_shapes(
         | IrType::Str
         | IrType::Unit
         | IrType::TaskUnit
-        | IrType::Enum(_) => {}
+        | IrType::Enum(_)
+        // A generic type variable carries no concrete record shape of its own.
+        | IrType::Generic(_) => {}
     }
     Ok(())
 }

@@ -67,7 +67,11 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::Str => "String".to_owned(),
         IrType::Unit => "()".to_owned(),
         IrType::TaskUnit => "Task Error ()".to_owned(),
-        IrType::Enum(name) => sym_name(interner, *name),
+        // An enum renders by its type name; a generic type variable renders by
+        // its source name (e.g. `a`) — both are a bare interned [`Symbol`]. The
+        // Rust generic spelling (`T1`, …) is a backend concern; the IR view
+        // keeps the source-facing name.
+        IrType::Enum(name) | IrType::Generic(name) => sym_name(interner, *name),
         IrType::Tuple(elems) => {
             let inner = elems
                 .iter()
@@ -208,11 +212,25 @@ fn write_func(out: &mut String, func: &Func, interner: &Interner) {
         })
         .collect::<Vec<_>>()
         .join(", ");
+    // A fully-parametric function shows its quantified type variables as
+    // `<a, b>` after the name; a monomorphic function shows nothing, so
+    // existing (empty `type_params`) output is unchanged.
+    let generics = if func.type_params.is_empty() {
+        String::new()
+    } else {
+        let vars = func
+            .type_params
+            .iter()
+            .map(|sym| sym_name(interner, *sym))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("<{vars}>")
+    };
     line(
         out,
         2,
         &format!(
-            "fn#{} {}({params}) -> {}",
+            "fn#{} {}{generics}({params}) -> {}",
             func.id.as_raw(),
             sym_name(interner, func.name),
             ir_type_name(interner, &func.ret)
@@ -387,6 +405,7 @@ mod tests {
         let main_func = Func {
             id: FuncId::from_raw(0),
             name: main_sym,
+            type_params: vec![],
             params: vec![],
             ret: IrType::TaskUnit,
             body: Expr::Call {
@@ -425,6 +444,7 @@ mod tests {
         let tick_func = Func {
             id: FuncId::from_raw(1),
             name: tick,
+            type_params: vec![],
             params: vec![(m, IrType::Enum(msg)), (count, IrType::Int)],
             ret: IrType::Int,
             body: Expr::Match(Match::new(Expr::Var(m), tick_arms, &[inc, dec])?),
@@ -525,6 +545,7 @@ program
                 funcs: vec![Func {
                     id: FuncId::from_raw(0),
                     name: f,
+                    type_params: vec![],
                     params: vec![(n, IrType::Int)],
                     ret: IrType::Int,
                     body,
@@ -578,6 +599,7 @@ program
                 funcs: vec![Func {
                     id: FuncId::from_raw(0),
                     name: f,
+                    type_params: vec![],
                     params: vec![(n, IrType::Int)],
                     ret: IrType::Tuple(vec![IrType::Int, IrType::Bool]),
                     body,
@@ -633,6 +655,7 @@ program
                 funcs: vec![Func {
                     id: FuncId::from_raw(0),
                     name: func,
+                    type_params: vec![],
                     params: vec![(param, rec_ty.clone())],
                     ret: rec_ty,
                     body,
@@ -674,6 +697,7 @@ program
                 funcs: vec![Func {
                     id: FuncId::from_raw(0),
                     name: f,
+                    type_params: vec![],
                     params: vec![],
                     ret: IrType::Int,
                     body,
@@ -724,6 +748,7 @@ program
                 funcs: vec![Func {
                     id: FuncId::from_raw(0),
                     name: f,
+                    type_params: vec![],
                     params: vec![(g, IrType::Fun(vec![IrType::Int], Box::new(IrType::Int)))],
                     ret: IrType::Int,
                     body,
@@ -766,6 +791,7 @@ program
                 funcs: vec![Func {
                     id: FuncId::from_raw(0),
                     name: f,
+                    type_params: vec![],
                     params: vec![(i.intern("k")?, IrType::Fun(vec![], Box::new(IrType::Bool)))],
                     ret: IrType::Bool,
                     body: Expr::Int(0),

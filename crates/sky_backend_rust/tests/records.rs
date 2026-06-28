@@ -90,6 +90,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
     let mk_fn = Func {
         id: FuncId::from_raw(0),
         name: mk,
+        type_params: vec![],
         params: vec![(arg, IrType::Int)],
         ret: rec.clone(),
         body: Expr::Record(vec![(x, Expr::Var(arg)), (y, Expr::Int(2))]),
@@ -98,6 +99,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
     let bump_fn = Func {
         id: FuncId::from_raw(1),
         name: bump,
+        type_params: vec![],
         params: vec![(par, rec.clone())],
         ret: rec.clone(),
         body: Expr::Update {
@@ -109,6 +111,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
     let getx_fn = Func {
         id: FuncId::from_raw(2),
         name: getx,
+        type_params: vec![],
         params: vec![(par, rec)],
         ret: IrType::Int,
         body: Expr::Access {
@@ -120,6 +123,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
     let main_fn = Func {
         id: FuncId::from_raw(3),
         name: main,
+        type_params: vec![],
         params: vec![],
         ret: IrType::TaskUnit,
         body: Expr::Call {
@@ -223,6 +227,7 @@ fn synthesises_nested_record_structs() -> DResult<()> {
     let f_fn = Func {
         id: FuncId::from_raw(0),
         name: func,
+        type_params: vec![],
         params: vec![(par, outer)],
         ret: xy,
         body: Expr::Access {
@@ -263,6 +268,7 @@ fn literal_with_unknown_shape_fails_fast() -> DResult<()> {
     let f_fn = Func {
         id: FuncId::from_raw(0),
         name: func,
+        type_params: vec![],
         params: vec![],
         ret: IrType::Int, // NOT a record type → the literal's shape is uncollected
         body: Expr::Access {
@@ -300,6 +306,7 @@ fn conflicting_field_set_types_fail_fast() -> DResult<()> {
     let f_fn = Func {
         id: FuncId::from_raw(0),
         name: fsym,
+        type_params: vec![],
         params: vec![(par, IrType::Record(int_rec))],
         ret: IrType::Int,
         body: Expr::Int(0),
@@ -307,6 +314,7 @@ fn conflicting_field_set_types_fail_fast() -> DResult<()> {
     let g_fn = Func {
         id: FuncId::from_raw(1),
         name: gsym,
+        type_params: vec![],
         params: vec![(qar, IrType::Record(bool_rec))],
         ret: IrType::Bool,
         body: Expr::Int(0),

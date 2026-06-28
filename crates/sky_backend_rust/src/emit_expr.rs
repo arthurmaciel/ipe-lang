@@ -9,7 +9,7 @@ use sky_intern::Symbol;
 use sky_ir::{BinOp, Callee, Expr, Func, IrType, Pat};
 
 use crate::EmitCtx;
-use crate::emit_types::render_type;
+use crate::emit_types::{GenericScope, render_type};
 use crate::naming::kernel_name;
 
 /// The deepest expression nesting the backend will descend before failing fast.
@@ -65,14 +65,25 @@ fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
 ///
 /// The bounded entry point: emission starts at depth 0 and fails fast past
 /// [`MAX_EMIT_DEPTH`] (SKY-L0200) rather than overflowing the native stack.
-pub fn emit_expr(ctx: &EmitCtx, expr: &Expr, indent: usize) -> DResult<String> {
-    emit_expr_at(ctx, expr, indent, 0)
+pub fn emit_expr(
+    ctx: &EmitCtx,
+    expr: &Expr,
+    indent: usize,
+    generics: GenericScope,
+) -> DResult<String> {
+    emit_expr_at(ctx, expr, indent, 0, generics)
 }
 
 /// Depth-tracked recursion behind [`emit_expr`]. `depth` is the IR-nesting level
 /// of `expr` (0 at the function body); it gates the bounded-emit guard and is
 /// independent of `indent` (the textual indentation of `match` arms).
-fn emit_expr_at(ctx: &EmitCtx, expr: &Expr, indent: usize, depth: u16) -> DResult<String> {
+fn emit_expr_at(
+    ctx: &EmitCtx,
+    expr: &Expr,
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+) -> DResult<String> {
     if depth > MAX_EMIT_DEPTH {
         return Err(Diagnostic::Lower {
             span: Span::DUMMY,
@@ -91,8 +102,8 @@ fn emit_expr_at(ctx: &EmitCtx, expr: &Expr, indent: usize, depth: u16) -> DResul
             ctx.emit_ident(*variant)?
         )),
         Expr::BinOp { op, lhs, rhs } => {
-            let l = emit_expr_at(ctx, lhs, indent, child)?;
-            let r = emit_expr_at(ctx, rhs, indent, child)?;
+            let l = emit_expr_at(ctx, lhs, indent, child, generics)?;
+            let r = emit_expr_at(ctx, rhs, indent, child, generics)?;
             Ok(format!("({} {} {})", l, op_str(*op), r))
         }
         Expr::Let { name, value, body } => {
@@ -100,23 +111,23 @@ fn emit_expr_at(ctx: &EmitCtx, expr: &Expr, indent: usize, depth: u16) -> DResul
             // composes inline anywhere an expression is expected:
             // `({ let <name> = <value>; <body> })`.
             let name = ctx.emit_ident(*name)?;
-            let value = emit_expr_at(ctx, value, indent, child)?;
-            let body = emit_expr_at(ctx, body, indent, child)?;
+            let value = emit_expr_at(ctx, value, indent, child, generics)?;
+            let body = emit_expr_at(ctx, body, indent, child, generics)?;
             Ok(format!("({{ let {name} = {value}; {body} }})"))
         }
         Expr::If { cond, then_, else_ } => {
             // Parenthesised so the whole `if`/`else` is a single expression
             // value, independent of surrounding precedence.
-            let cond = emit_expr_at(ctx, cond, indent, child)?;
-            let then_ = emit_expr_at(ctx, then_, indent, child)?;
-            let else_ = emit_expr_at(ctx, else_, indent, child)?;
+            let cond = emit_expr_at(ctx, cond, indent, child, generics)?;
+            let then_ = emit_expr_at(ctx, then_, indent, child, generics)?;
+            let else_ = emit_expr_at(ctx, else_, indent, child, generics)?;
             Ok(format!("(if {cond} {{ {then_} }} else {{ {else_} }})"))
         }
         Expr::Call { callee, args } => {
             let name = callee_name(ctx, callee)?;
             let mut parts = Vec::with_capacity(args.len());
             for arg in args {
-                parts.push(emit_expr_at(ctx, arg, indent, child)?);
+                parts.push(emit_expr_at(ctx, arg, indent, child, generics)?);
             }
             Ok(format!("{name}({})", parts.join(", ")))
         }
@@ -126,7 +137,7 @@ fn emit_expr_at(ctx: &EmitCtx, expr: &Expr, indent: usize, depth: u16) -> DResul
             // tuple; the emission stays total over any vector regardless.
             let mut parts = Vec::with_capacity(elems.len());
             for elem in elems {
-                parts.push(emit_expr_at(ctx, elem, indent, child)?);
+                parts.push(emit_expr_at(ctx, elem, indent, child, generics)?);
             }
             Ok(format!("({})", parts.join(", ")))
         }
@@ -134,28 +145,32 @@ fn emit_expr_at(ctx: &EmitCtx, expr: &Expr, indent: usize, depth: u16) -> DResul
         // bodies in dedicated functions (not inlined into this match) holds
         // `emit_expr_at`'s own stack frame small, so the depth guard — not a
         // native overflow — is what bounds a deep `BinOp`/`Call` spine.
-        Expr::Record(fields) => emit_record(ctx, fields, indent, depth),
+        Expr::Record(fields) => emit_record(ctx, fields, indent, depth, generics),
         Expr::Access { record, field } => {
             // Field access `<record>.<field>`. The base is parenthesised so a
             // record literal in record position (`{ ... }.field`) is never
             // misparsed; the field ident is keyword-mangled to match the struct.
-            let base = emit_expr_at(ctx, record, indent, child)?;
+            let base = emit_expr_at(ctx, record, indent, child, generics)?;
             let field = ctx.emit_ident(*field)?;
             Ok(format!("({base}).{field}"))
         }
-        Expr::Update { record, fields } => emit_update(ctx, record, fields, indent, depth),
-        Expr::Lambda { params, ret, body } => emit_lambda(ctx, params, ret, body, indent, depth),
-        Expr::Apply { func, args } => emit_apply(ctx, func, args, indent, depth),
-        Expr::FuncValue { callee, ty } => emit_func_value(ctx, callee, ty),
+        Expr::Update { record, fields } => {
+            emit_update(ctx, record, fields, indent, depth, generics)
+        }
+        Expr::Lambda { params, ret, body } => {
+            emit_lambda(ctx, params, ret, body, indent, depth, generics)
+        }
+        Expr::Apply { func, args } => emit_apply(ctx, func, args, indent, depth, generics),
+        Expr::FuncValue { callee, ty } => emit_func_value(ctx, callee, ty, generics),
         Expr::Match(m) => {
-            let scrut = emit_expr_at(ctx, m.scrutinee(), indent, child)?;
+            let scrut = emit_expr_at(ctx, m.scrutinee(), indent, child, generics)?;
             let arm_indent = indent_of(indent + 1);
             let close_indent = indent_of(indent);
             let mut arms = Vec::with_capacity(m.arms().len());
             for arm in m.arms() {
                 let Pat::Ctor { ty, variant } = &arm.pat;
                 let pat = format!("{}::{}", ctx.enum_name(*ty)?, ctx.emit_ident(*variant)?);
-                let body = emit_expr_at(ctx, &arm.body, indent + 1, child)?;
+                let body = emit_expr_at(ctx, &arm.body, indent + 1, child, generics)?;
                 arms.push(format!("{arm_indent}{pat} => {body},"));
             }
             Ok(format!(
@@ -176,6 +191,7 @@ fn emit_record(
     fields: &[(Symbol, Expr)],
     indent: usize,
     depth: u16,
+    generics: GenericScope,
 ) -> DResult<String> {
     let child = depth + 1;
     // The struct is resolved by the literal's field-name set (Rust names
@@ -189,7 +205,7 @@ fn emit_record(
     let mut parts = Vec::with_capacity(fields.len());
     for (sym, value) in fields {
         let field_ident = ctx.emit_ident(*sym)?;
-        let rendered = emit_expr_at(ctx, value, indent, child)?;
+        let rendered = emit_expr_at(ctx, value, indent, child, generics)?;
         parts.push(format!("{field_ident}: {rendered}"));
     }
     Ok(format!("{struct_name} {{ {} }}", parts.join(", ")))
@@ -208,13 +224,14 @@ fn emit_update(
     fields: &[(Symbol, Expr)],
     indent: usize,
     depth: u16,
+    generics: GenericScope,
 ) -> DResult<String> {
     let child = depth + 1;
-    let base = emit_expr_at(ctx, record, indent, child)?;
+    let base = emit_expr_at(ctx, record, indent, child, generics)?;
     let mut assigns = Vec::with_capacity(fields.len());
     for (sym, value) in fields {
         let field_ident = ctx.emit_ident(*sym)?;
-        let rendered = emit_expr_at(ctx, value, indent, child)?;
+        let rendered = emit_expr_at(ctx, value, indent, child, generics)?;
         assigns.push(format!(" __sky_rec.{field_ident} = {rendered};"));
     }
     Ok(format!(
@@ -236,12 +253,13 @@ fn emit_apply(
     args: &[Expr],
     indent: usize,
     depth: u16,
+    generics: GenericScope,
 ) -> DResult<String> {
     let child = depth + 1;
-    let f = emit_expr_at(ctx, func, indent, child)?;
+    let f = emit_expr_at(ctx, func, indent, child, generics)?;
     let mut parts = Vec::with_capacity(args.len());
     for arg in args {
-        parts.push(emit_expr_at(ctx, arg, indent, child)?);
+        parts.push(emit_expr_at(ctx, arg, indent, child, generics)?);
     }
     Ok(format!("({f})({})", parts.join(", ")))
 }
@@ -257,9 +275,14 @@ fn emit_apply(
 /// trait object. Kept out of the `emit_expr_at` match (`#[inline(never)]`) for
 /// the same frame-size reason as the neighbouring helpers.
 #[inline(never)]
-fn emit_func_value(ctx: &EmitCtx, callee: &Callee, ty: &IrType) -> DResult<String> {
+fn emit_func_value(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    ty: &IrType,
+    generics: GenericScope,
+) -> DResult<String> {
     let name = callee_name(ctx, callee)?;
-    let boxed = render_type(ctx, ty)?;
+    let boxed = render_type(ctx, ty, generics)?;
     Ok(format!(
         "{{ let __sky_fn: {boxed} = Box::new({name}); __sky_fn }}"
     ))
@@ -280,6 +303,7 @@ fn emit_lambda(
     body: &Expr,
     indent: usize,
     depth: u16,
+    generics: GenericScope,
 ) -> DResult<String> {
     let child = depth + 1;
     let mut parts = Vec::with_capacity(params.len());
@@ -287,11 +311,11 @@ fn emit_lambda(
         parts.push(format!(
             "{}: {}",
             ctx.emit_ident(*param)?,
-            render_type(ctx, ty)?
+            render_type(ctx, ty, generics)?
         ));
     }
-    let ret = render_type(ctx, ret)?;
-    let body = emit_expr_at(ctx, body, indent, child)?;
+    let ret = render_type(ctx, ret, generics)?;
+    let body = emit_expr_at(ctx, body, indent, child, generics)?;
     Ok(format!(
         "Box::new(move |{}| -> {ret} {{ {body} }})",
         parts.join(", ")
@@ -300,23 +324,42 @@ fn emit_lambda(
 
 /// Emit a whole function item, including its trailing newline.
 ///
-/// Shape: `pub fn <name>(<params>) -> <ret> {\n    <body>\n}\n`. The body is an
-/// expression rendered at indentation level 1; the closing brace sits at column
-/// 0. Matches golden `main_update` / `sky_main`.
+/// Shape: `pub fn <name>[<generics>](<params>) -> <ret> {\n    <body>\n}\n`. A
+/// monomorphic function (empty `type_params`) emits no generic clause, so its
+/// output is byte-identical to the M0 / M1 golden `main_update` / `sky_main`. A
+/// fully-parametric function quantifying `[a, b]` emits `pub fn name<T1, T2>(..)`
+/// and renders every [`IrType::Generic`] in its signature / body through the
+/// matching scope (M2a). The body is an expression rendered at indentation
+/// level 1; the closing brace sits at column 0.
 pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     let name = ctx.func_name(func.id)?.to_owned();
+    let generics = GenericScope::new(&func.type_params);
+
+    // The generic clause `<T1, T2, ..>` — one `T{i+1}` per quantified variable
+    // in declaration order. Empty for a monomorphic function, so the output
+    // matches the pre-M2a golden exactly.
+    let generic_clause = if func.type_params.is_empty() {
+        String::new()
+    } else {
+        let names = (1..=func.type_params.len())
+            .map(|n| format!("T{n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("<{names}>")
+    };
+
     let mut params = Vec::with_capacity(func.params.len());
     for (param, ty) in &func.params {
         params.push(format!(
             "{}: {}",
             ctx.emit_ident(*param)?,
-            render_type(ctx, ty)?
+            render_type(ctx, ty, generics)?
         ));
     }
-    let ret = render_type(ctx, &func.ret)?;
-    let body = emit_expr(ctx, &func.body, 1)?;
+    let ret = render_type(ctx, &func.ret, generics)?;
+    let body = emit_expr(ctx, &func.body, 1, generics)?;
     Ok(format!(
-        "pub fn {name}({}) -> {ret} {{\n    {body}\n}}\n",
+        "pub fn {name}{generic_clause}({}) -> {ret} {{\n    {body}\n}}\n",
         params.join(", ")
     ))
 }
