@@ -490,7 +490,10 @@ const fn feature_label(f: Feature) -> &'static str {
         Feature::BinOps => {
             "operators other than `+` and `-` are not supported yet [feature: binops]"
         }
-        Feature::Polymorphism => "type variables are not supported yet [feature: polymorphism]",
+        Feature::Polymorphism => {
+            "this value stays fully polymorphic — its concrete type is never \
+             determined, so it cannot be compiled yet [feature: polymorphism]"
+        }
         Feature::HigherOrderValues => {
             "function-valued parameters and returns are not supported yet \
              [feature: higher-order-values]"
