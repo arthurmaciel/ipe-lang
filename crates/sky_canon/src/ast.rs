@@ -186,4 +186,9 @@ pub enum Type {
         name: Symbol,
         args: Vec<Self>,
     },
+    /// The unit type `()`.
+    Unit,
+    /// An anonymous product (tuple) type `(T1, T2, ...)`. Invariant: arity ≥ 2 —
+    /// a 0-tuple is [`Self::Unit`] and a 1-tuple is just its element.
+    Tuple(Vec<Self>),
 }

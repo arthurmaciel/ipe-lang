@@ -101,5 +101,7 @@ pub fn from_canon(t: &canon::Type) -> Ty {
             name: *name,
             args: args.iter().map(from_canon).collect(),
         },
+        canon::Type::Unit => Ty::Unit,
+        canon::Type::Tuple(elems) => Ty::Tuple(elems.iter().map(from_canon).collect()),
     }
 }

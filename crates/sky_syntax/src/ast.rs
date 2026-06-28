@@ -206,4 +206,10 @@ pub enum TypeAnnotation {
     /// A type constructor application: module qualifier, dotted name segments,
     /// type arguments. The qualifier is the empty symbol for unqualified types.
     TType(Symbol, Vec<Symbol>, Vec<Self>),
+    /// The unit type `()`.
+    TUnit,
+    /// An anonymous product (tuple) type `(T1, T2, ...)`. Invariant: arity ≥ 2 —
+    /// a 0-tuple is [`Self::TUnit`] and a parenthesised single type `(T)`
+    /// unwraps to `T` (neither is a `TTuple`).
+    TTuple(Vec<Self>),
 }

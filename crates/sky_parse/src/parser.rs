@@ -844,9 +844,30 @@ impl<'a> Parser<'a> {
         match &tok.kind {
             Tok::LParen => {
                 let opener = tok.span;
-                let inner = self.parse_type(0, depth + 1)?;
-                self.close_paren(opener, Construct::Type)?;
-                Ok(Located::new(tok.span, inner.value))
+                // `()` — the unit type.
+                if self.peek_kind() == Some(&Tok::RParen) {
+                    let close = self.expect_rparen(opener, Construct::Type)?;
+                    let span = Self::span_merge(opener, close);
+                    return Ok(Located::new(span, TypeAnnotation::TUnit));
+                }
+                let first = self.parse_type(0, depth + 1)?;
+                // No following comma → a parenthesised single type. Unwrap to the
+                // inner type, spanning from the `(` to the `)` so explicit
+                // grouping (e.g. `(a -> b) -> c`) is honoured.
+                if self.peek_kind() != Some(&Tok::Comma) {
+                    let close = self.expect_rparen(opener, Construct::Type)?;
+                    let span = Self::span_merge(opener, close);
+                    return Ok(Located::new(span, first.value));
+                }
+                // One or more comma-separated members → a tuple type.
+                let mut elems = vec![first.value];
+                while self.peek_kind() == Some(&Tok::Comma) {
+                    self.bump(Construct::Type)?;
+                    elems.push(self.parse_type(0, depth + 1)?.value);
+                }
+                let close = self.expect_rparen(opener, Construct::Type)?;
+                let span = Self::span_merge(opener, close);
+                Ok(Located::new(span, TypeAnnotation::TTuple(elems)))
             }
             Tok::Ident(text) => {
                 let first_upper = text.chars().next().is_some_and(|c| c.is_ascii_uppercase());
