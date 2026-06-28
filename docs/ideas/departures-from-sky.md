@@ -381,3 +381,31 @@ ONE co-design. Leaning: a Haskell-style effect block (bare statement = run/disca
 general Monad class). Still UNDECIDED, post-M6. Open spellings: block header
 (`do`-like / `Task.chain` 7-B) vs free-floating `let x <- e`; bare-statement
 sequencing; Roc `!` (7-C). Decide together.
+
+### Idea 7 update (2026-06-28) — effect/pure VISIBILITY is a first-class criterion (reorders candidates)
+
+Coordinator: distinguishing effectful vs pure code is very important. This becomes a
+ranking criterion — and it changes the order.
+
+- **Gleam is the wrong model here:** Gleam is impure + effect-UNTRACKED; nothing in
+  its types or syntax marks `io.println` as an effect (only the module name hints).
+  So Gleam-`use` (and a bare-statement line) give **no inline effect marker** — they
+  rank LOW on this axis.
+- **Sky already marks effects at the TYPE level:** every effect returns `Task e a`
+  (effect-boundary rule). The `Task` type IS the pure/effect marker. PRESERVE this —
+  any sugar must not erase it.
+- **Roc `!` marks effects INLINE, per call:** `read! config`, `println! "hi"`. A
+  visible marker on every effectful call (Roc's compiler enforces it via purity
+  inference). Fits Sky: effects are already reified as `Task`, so `!` = "run this
+  Task here and bind its result," legal only in an effect context, visible per call;
+  handles bind (`x = read! cfg`) AND discard (`println! "hi"` line). Essentially
+  Haskell-style bind with a clear postfix marker instead of a quiet `<-`.
+
+**Revised lean:** on the combined axes (effect VISIBILITY + clean discard + no
+general Monad class), **Roc-style `!` now leads** — it keeps effects visible at the
+call site (Gleam-`use`/bare-line do not), kills the `let _ = … in ()` wart
+(`println! "hi"`), and rides Sky's existing `Task` reification (no new typeclass;
+the compiler just gates `!` to Task-typed exprs in an effect context). `let x <- e`
+and `Task.chain` blocks remain options but LOSE inline effect-marking unless paired
+with a marker. Still UNDECIDED, post-M6 — but the criterion ordering is now: keep
+the `Task` type marker; prefer a VISIBLE per-call form (`!`) over invisible ones.
