@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use sky_canon::ast as canon;
 use sky_diagnostics::{
     Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0100, SKY_L0101, SKY_L0102,
-    SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, Span,
+    SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, Span,
 };
 use sky_intern::{Interner, Symbol};
 use sky_ir::{Callee, Expr, FuncId, IrType, KernelFn};
@@ -775,6 +775,284 @@ fn over_application_saturates_via_apply() -> DResult<()> {
     );
     assert_eq!(args.len(), 1, "surplus arg applied to the result");
     assert!(matches!(args.first(), Some(Expr::Int(2))), "surplus arg 2");
+    Ok(())
+}
+
+#[test]
+fn nested_lambda_body_flattens_into_one_closure() -> DResult<()> {
+    // `f a = \b -> \c -> 0` declared `Int -> Int -> Int -> Int`. The body is a
+    // curried lambda chain; the lowerer must flatten it into ONE
+    // multi-parameter closure so the emitted `Box<dyn Fn(i64, i64) -> i64>` body
+    // matches the flattened return type `split_typed_sig` produces. (Without the
+    // flatten the body would be a curried `Fn(i64) -> Fn(i64) -> i64`, which
+    // cargo rejects with no Sky diagnostic.) The innermost body is `0` — the
+    // flatten depends only on the lambda chain + arrow type, not on the body.
+    let mut i = Interner::new();
+    let f_sym = i.intern("f")?;
+    let a_sym = i.intern("a")?;
+    let b_sym = i.intern("b")?;
+    let c_sym = i.intern("c")?;
+    // f : Int -> Int -> Int -> Int
+    let f_ty = canon::Type::Lambda(
+        Box::new(con_int(&mut i)?),
+        Box::new(canon::Type::Lambda(
+            Box::new(con_int(&mut i)?),
+            Box::new(canon::Type::Lambda(
+                Box::new(con_int(&mut i)?),
+                Box::new(con_int(&mut i)?),
+            )),
+        )),
+    );
+    // body: \b -> \c -> 0   (two nested lambdas at distinct spans).
+    let inner_span = Span::new(30, 40);
+    let outer_span = Span::new(20, 40);
+    let inner = Located::new(
+        inner_span,
+        canon::Expr_::Lambda(
+            vec![Located::new(
+                Span::new(31, 32),
+                canon::Pattern_::PVar(c_sym),
+            )],
+            Box::new(int(Span::new(35, 36), 0)),
+        ),
+    );
+    let outer = Located::new(
+        outer_span,
+        canon::Expr_::Lambda(
+            vec![Located::new(
+                Span::new(21, 22),
+                canon::Pattern_::PVar(b_sym),
+            )],
+            Box::new(inner),
+        ),
+    );
+    let f_def = canon::Def::Typed {
+        name: Located::new(Span::new(10, 11), f_sym),
+        free_vars: Vec::new(),
+        patterns: vec![Located::new(
+            Span::new(12, 13),
+            canon::Pattern_::PVar(a_sym),
+        )],
+        body: outer,
+        ty: f_ty,
+    };
+    // Region types: outer lambda is `Int -> Int -> Int`, inner is `Int -> Int`.
+    let mut regions = BTreeMap::new();
+    regions.insert(
+        outer_span,
+        Ty::Fun(
+            Box::new(ty_int(&mut i)?),
+            Box::new(Ty::Fun(
+                Box::new(ty_int(&mut i)?),
+                Box::new(ty_int(&mut i)?),
+            )),
+        ),
+    );
+    regions.insert(
+        inner_span,
+        Ty::Fun(Box::new(ty_int(&mut i)?), Box::new(ty_int(&mut i)?)),
+    );
+
+    let res = run_with_regions(Vec::new(), vec![f_def], BTreeMap::new(), regions, &mut i);
+    assert!(res.is_ok(), "nested-lambda binding must lower, got {res:?}");
+
+    let Some(f_fn) = func_named(&res, &i, "f") else {
+        assert!(false_marker(), "f must lower");
+        return Ok(());
+    };
+    // f keeps its one declared parameter; its return type is the FLATTENED
+    // two-argument closure, never a curried one.
+    assert_eq!(f_fn.params.len(), 1, "one declared parameter `a`");
+    assert_eq!(
+        f_fn.ret,
+        IrType::Fun(vec![IrType::Int, IrType::Int], Box::new(IrType::Int)),
+        "return type is the flattened Fn(Int, Int) -> Int"
+    );
+    // The body is ONE Lambda taking BOTH `b` and `c`, returning Int — the nested
+    // chain collapsed into a single multi-parameter closure.
+    let Expr::Lambda { params, ret, body } = &f_fn.body else {
+        assert!(
+            false_marker(),
+            "body lowers to a single flattened Lambda, got {:?}",
+            f_fn.body
+        );
+        return Ok(());
+    };
+    assert_eq!(params.len(), 2, "both `b` and `c` in one closure");
+    let names: Vec<Option<&str>> = params.iter().map(|(s, _)| i.resolve(*s)).collect();
+    assert_eq!(
+        names,
+        vec![Some("b"), Some("c")],
+        "flattened params are `b` then `c`, in order"
+    );
+    assert!(
+        params.iter().all(|(_, t)| *t == IrType::Int),
+        "both params keep their solved Int type"
+    );
+    assert_eq!(*ret, IrType::Int, "the flattened closure returns Int");
+    assert!(
+        matches!(body.as_ref(), Expr::Int(0)),
+        "innermost body is the literal 0, got {body:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn partial_application_of_a_first_class_value_fails_closed() -> DResult<()> {
+    // Partial application of a first-class *value* (here a lambda) — `(\b -> \c
+    // -> 0) 2` passes one argument to a two-arity closure. The named-callee path
+    // eta-expands an arity mismatch, but the value path cannot (it would have to
+    // capture the closure value), so M1 fails closed with SKY-L0110 rather than
+    // emitting an under-applied `(g)(2)` that cargo rejects with no Sky
+    // diagnostic. This is the shape the (now-removed) named-callee gate never
+    // covered — the value-application path needs its own fail-closed net.
+    let mut i = Interner::new();
+    let caller = i.intern("caller")?;
+    let b = i.intern("b")?;
+    let c = i.intern("c")?;
+    // The callee value: \b -> \c -> 0  (solved type Int -> Int -> Int, arity 2).
+    let callee_span = Span::new(40, 50);
+    let inner = Located::new(
+        Span::new(42, 50),
+        canon::Expr_::Lambda(
+            vec![Located::new(Span::new(43, 44), canon::Pattern_::PVar(c))],
+            Box::new(int(Span::new(47, 48), 0)),
+        ),
+    );
+    let callee_lambda = Box::new(Located::new(
+        callee_span,
+        canon::Expr_::Lambda(
+            vec![Located::new(Span::new(41, 42), canon::Pattern_::PVar(b))],
+            Box::new(inner),
+        ),
+    ));
+    // caller : Int   — body `(\b -> \c -> 0) 2` applies the value with one arg.
+    let call_span = Span::new(40, 53);
+    let body = Located::new(
+        call_span,
+        canon::Expr_::Call(callee_lambda, vec![int(Span::new(52, 53), 2)]),
+    );
+    let caller_def = canon::Def::Typed {
+        name: Located::new(Span::new(30, 36), caller),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty: con_int(&mut i)?,
+    };
+    // The value-application gate reads the callee value's solved arrow arity.
+    let mut regions = BTreeMap::new();
+    regions.insert(
+        callee_span,
+        Ty::Fun(
+            Box::new(ty_int(&mut i)?),
+            Box::new(Ty::Fun(
+                Box::new(ty_int(&mut i)?),
+                Box::new(ty_int(&mut i)?),
+            )),
+        ),
+    );
+
+    let res = run_with_regions(
+        Vec::new(),
+        vec![caller_def],
+        BTreeMap::new(),
+        regions,
+        &mut i,
+    );
+    // Blamed span is the whole application (`call_span`).
+    assert_unsupported(res, Feature::PartialOverApplication, SKY_L0110, call_span);
+    Ok(())
+}
+
+#[test]
+fn over_application_with_partial_surplus_saturation_fails_closed() -> DResult<()> {
+    // `f` declares ONE parameter but a four-arrow type `Int -> Int -> Int -> Int
+    // -> Int`, so `f 1` returns a flattened THREE-argument closure. `f 1 2`
+    // over-applies (two args > one declared param) but the single surplus arg
+    // does NOT saturate that three-argument closure — the result is itself a
+    // partial application of the returned first-class value, which M1 cannot
+    // lower. The over path must fail closed with SKY-L0110 rather than emit
+    // `(f(1))(2)` that passes one of three required args and cargo rejects with
+    // no Sky diagnostic. (`f 1 2 3 4` — surplus 3 == returned arity 3 — still
+    // saturates exactly and lowers to a single `Apply`; this test pins only the
+    // short-surplus case.)
+    let mut i = Interner::new();
+    let f = i.intern("f")?;
+    let caller = i.intern("caller")?;
+    let x = i.intern("x")?;
+    // f : Int -> Int -> Int -> Int -> Int   (one declared parameter)
+    let f_ty = canon::Type::Lambda(
+        Box::new(con_int(&mut i)?),
+        Box::new(canon::Type::Lambda(
+            Box::new(con_int(&mut i)?),
+            Box::new(canon::Type::Lambda(
+                Box::new(con_int(&mut i)?),
+                Box::new(canon::Type::Lambda(
+                    Box::new(con_int(&mut i)?),
+                    Box::new(con_int(&mut i)?),
+                )),
+            )),
+        )),
+    );
+    let f_def = canon::Def::Typed {
+        name: Located::new(Span::new(10, 11), f),
+        free_vars: Vec::new(),
+        patterns: vec![Located::new(Span::new(12, 13), canon::Pattern_::PVar(x))],
+        body: int(Span::new(16, 17), 0),
+        ty: f_ty,
+    };
+    // caller : Int   — body `f 1 2`: two args against a one-parameter callee.
+    let callee_span = Span::new(40, 41);
+    let call_span = Span::new(40, 45);
+    let callee_ref = Box::new(Located::new(
+        callee_span,
+        canon::Expr_::VarTopLevel {
+            module: Vec::new(),
+            name: f,
+        },
+    ));
+    let body = Located::new(
+        call_span,
+        canon::Expr_::Call(
+            callee_ref,
+            vec![int(Span::new(42, 43), 1), int(Span::new(44, 45), 2)],
+        ),
+    );
+    let caller_def = canon::Def::Typed {
+        name: Located::new(Span::new(30, 36), caller),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty: con_int(&mut i)?,
+    };
+    // The over-application gate reads the callee's full arrow arity (4) and
+    // subtracts the one consumed parameter — the returned closure needs 3 args.
+    let mut regions = BTreeMap::new();
+    regions.insert(
+        callee_span,
+        Ty::Fun(
+            Box::new(ty_int(&mut i)?),
+            Box::new(Ty::Fun(
+                Box::new(ty_int(&mut i)?),
+                Box::new(Ty::Fun(
+                    Box::new(ty_int(&mut i)?),
+                    Box::new(Ty::Fun(
+                        Box::new(ty_int(&mut i)?),
+                        Box::new(ty_int(&mut i)?),
+                    )),
+                )),
+            )),
+        ),
+    );
+
+    let res = run_with_regions(
+        Vec::new(),
+        vec![f_def, caller_def],
+        BTreeMap::new(),
+        regions,
+        &mut i,
+    );
+    assert_unsupported(res, Feature::PartialOverApplication, SKY_L0110, call_span);
     Ok(())
 }
 

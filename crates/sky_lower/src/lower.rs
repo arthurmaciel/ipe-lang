@@ -330,12 +330,19 @@ impl<'a> Lowerer<'a> {
 
     /// Lower an anonymous function `\p0 p1 ... -> body` into [`Expr::Lambda`].
     ///
-    /// The lambda's solved region type is a curried arrow `T0 -> T1 -> … -> R`;
-    /// exactly one arrow is peeled per parameter pattern, so the parameter count
-    /// — not a full flatten — fixes the boxed closure's arity (a body that
-    /// itself returns a function leaves that function as the lambda's `ret`,
-    /// matching how a nested lambda lowers). Parameter patterns must be plain
-    /// names (M1 has no parameter destructuring).
+    /// The lambda's solved region type is a curried arrow `T0 -> T1 -> … -> R`.
+    /// A directly-nested lambda body (`\b -> \c -> e`) is *flattened* into this
+    /// same multi-parameter [`Expr::Lambda`]: one arrow is peeled from the region
+    /// type per parameter, across every nested level, until the body is no longer
+    /// a lambda. This mirrors how [`Self::ir_type_from_ty`] /
+    /// [`Self::ir_type_from_canon`] fully flatten a curried arrow chain into a
+    /// single `Fun([T0, …], R)`, so the emitted closure's arity always equals its
+    /// declared `Box<dyn Fn(..)>` type — at *every* nesting depth, not just one.
+    /// (Without the flatten, `f a = \b -> \c -> …` declared `Int -> Int -> Int ->
+    /// Int` emits a curried `Fn(i64) -> Fn(i64) -> i64` body into a flattened
+    /// `Fn(i64, i64) -> i64` return slot, which cargo rejects with no Sky
+    /// diagnostic.) Parameter patterns must be plain names (M1 has no parameter
+    /// destructuring).
     fn lower_lambda(
         &self,
         params: &[canon::Pattern],
@@ -351,25 +358,46 @@ impl<'a> Lowerer<'a> {
         })?;
         let mut cur = ty;
         let mut ir_params = Vec::with_capacity(params.len());
-        for pat in params {
-            let Ty::Fun(arg, rest) = cur else {
-                // The lambda's inferred type has fewer arrows than it has
-                // parameters — ruled out by inference (the lambda arm builds one
-                // arrow per parameter), so reaching here is an invariant
-                // violation, not a missing feature.
-                return Err(bug(
-                    "sky_lower::lower_lambda",
-                    "lambda type has fewer arrows than parameters",
+        // The frontier of the flatten: start at this lambda's own params/body,
+        // then descend into each directly-nested lambda while the arrow type can
+        // still supply a parameter type.
+        let mut cur_params: &[canon::Pattern] = params;
+        let mut cur_body: &canon::Expr = body;
+        loop {
+            for pat in cur_params {
+                let Ty::Fun(arg, rest) = cur else {
+                    // The lambda's inferred type has fewer arrows than it has
+                    // parameters — ruled out by inference (the lambda arm builds
+                    // one arrow per parameter), so reaching here is an invariant
+                    // violation, not a missing feature.
+                    return Err(bug(
+                        "sky_lower::lower_lambda",
+                        "lambda type has fewer arrows than parameters",
+                    ));
+                };
+                ir_params.push((
+                    Self::pattern_var(pat)?,
+                    self.ir_type_from_ty(arg, pat.span)?,
                 ));
-            };
-            ir_params.push((
-                Self::pattern_var(pat)?,
-                self.ir_type_from_ty(arg, pat.span)?,
-            ));
-            cur = rest.as_ref();
+                cur = rest.as_ref();
+            }
+            // Collapse a directly-nested lambda body into this same closure: a
+            // remaining `Fun` arrow proves the type still curries, so the nested
+            // params extend `ir_params` rather than becoming a separate boxed
+            // closure. The `matches!` guard is belt-and-braces — a well-typed
+            // lambda body always carries a function type, so when `cur_body` is a
+            // lambda `cur` is always `Fun` — but keeping it means any unexpected
+            // shape degrades to the single-level lowering rather than panicking.
+            match &cur_body.value {
+                canon::Expr_::Lambda(inner_params, inner_body) if matches!(cur, Ty::Fun(_, _)) => {
+                    cur_params = inner_params;
+                    cur_body = inner_body;
+                }
+                _ => break,
+            }
         }
         let ret = self.ir_type_from_ty(cur, span)?;
-        let body = self.lower_expr(body)?;
+        let body = self.lower_expr(cur_body)?;
         Ok(Expr::Lambda {
             params: ir_params,
             ret,
@@ -639,7 +667,9 @@ impl<'a> Lowerer<'a> {
     ///   (see [`Self::eta_expand_partial`]);
     /// * **over** (`args > arity`) — saturated: the first `arity` args form a
     ///   direct [`Expr::Call`], and the surplus apply to its (function-typed)
-    ///   result through an [`Expr::Apply`] (see [`Self::saturate_over`]).
+    ///   result through an [`Expr::Apply`] (see [`Self::saturate_over`]) — but
+    ///   only when the surplus exactly saturates the returned closure; a surplus
+    ///   that leaves it partially applied fails closed (see [`Self::saturate_over`]).
     ///
     /// A non-named callee — a local (function-typed) binding, a lambda, or
     /// another expression's result — is a first-class function *value* applied
@@ -667,15 +697,56 @@ impl<'a> Lowerer<'a> {
                         self.eta_expand_partial(callee, resolved, lowered_args, arity, call_span)
                     }
                     std::cmp::Ordering::Greater => {
-                        Ok(Self::saturate_over(resolved, lowered_args, arity))
+                        self.saturate_over(callee, resolved, lowered_args, arity, call_span)
                     }
                 }
             }
-            _ => Ok(Expr::Apply {
-                func: Box::new(self.lower_expr(callee)?),
-                args: lowered_args,
-            }),
+            _ => {
+                // A first-class function *value* applied via [`Expr::Apply`]
+                // (a local function-typed binding, a lambda, or another
+                // expression's result). The named-callee path above reshapes an
+                // arity mismatch (eta-expand / saturate); the value path cannot
+                // — eta-expanding a value would have to capture the closure
+                // value itself, a distinct mechanism M1 does not yet provide.
+                //
+                // So when the callee's solved type is a known curried arrow whose
+                // arity exceeds the supplied argument count, this is *partial*
+                // application of a first-class value: fail closed with a Sky
+                // diagnostic rather than emit an under-applied `(g)(a)` that cargo
+                // rejects with no Sky-level error. (Over-application of a value is
+                // ruled out earlier by type-checking — applying past the arity
+                // makes the result a non-function — so a mismatch here is always
+                // partial.) A missing or non-arrow region type falls through to
+                // the direct apply, preserving the exact-application fast path.
+                if let Some(ty) = self.types.regions.get(&callee.span) {
+                    let arity = Self::ty_arrow_arity(ty);
+                    if arity != 0 && args.len() != arity {
+                        return Err(unsupported(call_span, Feature::PartialOverApplication));
+                    }
+                }
+                Ok(Expr::Apply {
+                    func: Box::new(self.lower_expr(callee)?),
+                    args: lowered_args,
+                })
+            }
         }
+    }
+
+    /// The number of leading arrows in a curried function type — the argument
+    /// count a saturated application of a value of this type must pass. A
+    /// non-function type has arity `0`. Used to detect partial application of a
+    /// first-class function value, which M1 fails closed on rather than emitting
+    /// an under-applied call. (The IR flattens this curried chain into one
+    /// multi-parameter `Fun`, so this count is the boxed closure's parameter
+    /// count.)
+    fn ty_arrow_arity(t: &Ty) -> usize {
+        let mut n = 0;
+        let mut cur = t;
+        while let Ty::Fun(_, rest) = cur {
+            n += 1;
+            cur = rest.as_ref();
+        }
+        n
     }
 
     /// Eta-expand a partial application `f a0 … a_{k-1}` (with `k < arity`) into a
@@ -761,17 +832,46 @@ impl<'a> Lowerer<'a> {
     /// curried result type into one multi-parameter [`IrType::Fun`], so the
     /// trailing closure accepts every remaining argument at once; the backend
     /// renders it as `(f(a0, …))(a_arity, …)`.
-    fn saturate_over(resolved: Callee, lowered_args: Vec<Expr>, arity: usize) -> Expr {
+    ///
+    /// That single-`Apply` shape is sound **only when the surplus exactly
+    /// saturates the returned closure**. The closure's arity is the callee
+    /// type's full arrow depth minus the `arity` parameters the direct `Call`
+    /// already consumes; if the surplus is short of it, the result is itself a
+    /// partial application of a first-class value — which M1 cannot lower (the
+    /// returned closure is a flattened multi-parameter `Fn`; under-applying it
+    /// would need first-class-value partial application). So in that case we fail
+    /// closed with [`Feature::PartialOverApplication`] rather than emit
+    /// `(f(a0))(a_arity)` that passes too few arguments and cargo rejects with no
+    /// Sky-level diagnostic. (A surplus that EXCEEDS the returned closure's arity
+    /// is ruled out earlier by type-checking — applying past the arity makes the
+    /// result a non-function.) A missing/non-arrow callee region type falls
+    /// through to the bare reshape, preserving behaviour for the exact-surplus
+    /// case the solver always types.
+    fn saturate_over(
+        &self,
+        callee: &canon::Expr,
+        resolved: Callee,
+        lowered_args: Vec<Expr>,
+        arity: usize,
+        call_span: Span,
+    ) -> DResult<Expr> {
+        let surplus = lowered_args.len().saturating_sub(arity);
+        if let Some(ty) = self.types.regions.get(&callee.span) {
+            let returned_arity = Self::ty_arrow_arity(ty).saturating_sub(arity);
+            if surplus != returned_arity {
+                return Err(unsupported(call_span, Feature::PartialOverApplication));
+            }
+        }
         let mut iter = lowered_args.into_iter();
         let head: Vec<Expr> = iter.by_ref().take(arity).collect();
         let rest: Vec<Expr> = iter.collect();
-        Expr::Apply {
+        Ok(Expr::Apply {
             func: Box::new(Expr::Call {
                 callee: resolved,
                 args: head,
             }),
             args: rest,
-        }
+        })
     }
 
     /// The declared arity of a resolved direct callee — the argument count a
