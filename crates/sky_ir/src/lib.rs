@@ -15,7 +15,7 @@ mod ir;
 mod pretty;
 
 pub use ir::{
-    Arm, BinOp, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module, Pat,
-    Program, TypeDef, Variant,
+    Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
+    Module, Pat, Program, TypeDef, Variant,
 };
 pub use pretty::pretty;

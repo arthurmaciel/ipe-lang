@@ -34,7 +34,9 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::Interner;
-use sky_ir::{BinOp, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program};
+use sky_ir::{
+    BinOp, BoundSet, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program,
+};
 
 /// Build the canonical generic program:
 ///
@@ -67,7 +69,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
     let identity_fn = Func {
         id: identity_id,
         name: identity,
-        type_params: vec![a],
+        type_params: vec![(a, BoundSet::UNBOUNDED)],
         params: vec![(x, IrType::Generic(a))],
         ret: IrType::Generic(a),
         body: Expr::Var(x),
@@ -171,6 +173,129 @@ fn emits_generic_function_signature() -> DResult<()> {
         main_rs.matches("pub fn main_identity").count(),
         1,
         "one generic fn, shared across both concrete instantiations"
+    );
+    Ok(())
+}
+
+/// Build a program with two super-typed generic functions, exercising the M2d
+/// bound clauses:
+///
+/// ```sky
+/// double x = x + x          -- Number  → T1: Add<Output = T1> + Copy
+/// max a b = if a > b then a else b  -- Comparable → T1: PartialOrd + Copy
+/// main = println (String.fromInt (double (max 20 21)))
+/// ```
+fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
+    let main_mod = interner.intern("Main")?;
+    let double = interner.intern("double")?;
+    let max = interner.intern("max")?;
+    let main = interner.intern("main")?;
+    let a = interner.intern("a")?;
+    let x = interner.intern("x")?;
+    // `max`'s value parameters — distinct symbols from the type variable `a`.
+    let p = interner.intern("p")?;
+    let q = interner.intern("q")?;
+
+    let double_id = FuncId::from_raw(0);
+    let max_id = FuncId::from_raw(1);
+    let main_id = FuncId::from_raw(2);
+
+    // double x = x + x — the body adds `x` to itself, so `a` carries Add and is
+    // reused (Copy). A reused (Copy) numeric-add variable.
+    let num_bounds = BoundSet::UNBOUNDED.with_add().with_copy();
+    let double_fn = Func {
+        id: double_id,
+        name: double,
+        type_params: vec![(a, num_bounds)],
+        params: vec![(x, IrType::Generic(a))],
+        ret: IrType::Generic(a),
+        body: Expr::BinOp {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Var(x)),
+            rhs: Box::new(Expr::Var(x)),
+        },
+    };
+
+    // max a b = if a > b then a else b — `a` is ordered and reused.
+    let ord_bounds = BoundSet::UNBOUNDED.with_ord().with_copy();
+    let max_fn = Func {
+        id: max_id,
+        name: max,
+        type_params: vec![(a, ord_bounds)],
+        params: vec![(p, IrType::Generic(a)), (q, IrType::Generic(a))],
+        ret: IrType::Generic(a),
+        body: Expr::If {
+            cond: Box::new(Expr::BinOp {
+                op: BinOp::Gt,
+                lhs: Box::new(Expr::Var(p)),
+                rhs: Box::new(Expr::Var(q)),
+            }),
+            then_: Box::new(Expr::Var(p)),
+            else_: Box::new(Expr::Var(q)),
+        },
+    };
+
+    // main = println (String.fromInt (double (max 20 21)))
+    let max_call = Expr::Call {
+        callee: Callee::Func(max_id),
+        args: vec![Expr::Int(20), Expr::Int(21)],
+    };
+    let double_call = Expr::Call {
+        callee: Callee::Func(double_id),
+        args: vec![max_call],
+    };
+    let main_body = Expr::Call {
+        callee: Callee::Kernel(KernelFn::LogPrintln),
+        args: vec![Expr::Call {
+            callee: Callee::Kernel(KernelFn::StringFromInt),
+            args: vec![double_call],
+        }],
+    };
+    let main_fn = Func {
+        id: main_id,
+        name: main,
+        type_params: vec![],
+        params: vec![],
+        ret: IrType::TaskUnit,
+        body: main_body,
+    };
+
+    Ok(Program {
+        modules: vec![Module {
+            name: ModPath(vec![main_mod]),
+            types: vec![],
+            funcs: vec![double_fn, max_fn, main_fn],
+            entry: Some(main_id),
+            records: vec![],
+        }],
+    })
+}
+
+#[test]
+fn emits_super_typed_bound_clauses() -> DResult<()> {
+    let mut interner = Interner::new();
+    let prog = build_bounded_program(&mut interner)?;
+    let emitted = RustBackend::new(&interner).emit(&prog)?;
+    let main_rs = emitted
+        .files
+        .get(&sky_backend::RelPath::new("src/main.rs")?)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "bounded generics test",
+            detail: "emitted project is missing src/main.rs".to_owned(),
+        })?;
+
+    // Number → the std arithmetic op trait actually used (`Add`) plus `Copy`,
+    // with `Output` closed over the parameter's own generic name.
+    assert!(
+        main_rs.contains(
+            "pub fn main_double<T1: ::core::ops::Add<Output = T1> + Copy>(x: T1) -> T1 {"
+        ),
+        "double emits a Number bound (Add + Copy):\n{main_rs}"
+    );
+    // Comparable → `PartialOrd` plus `Copy`.
+    assert!(
+        main_rs.contains("pub fn main_max<T1: PartialOrd + Copy>(p: T1, q: T1) -> T1 {"),
+        "max emits a Comparable bound (PartialOrd + Copy):\n{main_rs}"
     );
     Ok(())
 }

@@ -8,7 +8,7 @@ use core::fmt::Write as _;
 
 use sky_diagnostics::{DResult, Diagnostic, LowerError, Span};
 use sky_intern::Symbol;
-use sky_ir::{BinOp, Callee, Expr, Func, IrType, Match, Pat};
+use sky_ir::{BinOp, BoundSet, Callee, Expr, Func, IrType, Match, Pat};
 
 use crate::EmitCtx;
 use crate::emit_types::{GenericScope, render_type};
@@ -662,6 +662,42 @@ fn emit_lambda(
     ))
 }
 
+/// Render one type parameter's trailing bound clause for the generic list:
+/// `: ::core::ops::Add<Output = T{n}> + Copy` and the like, or the empty string
+/// for an unbounded variable (so an M2a structurally-parametric function emits a
+/// bare `T{n}`, byte-identical to the pre-M2d golden).
+///
+/// `n` is the variable's 1-based position, which is also its own Rust name
+/// `T{n}` — the arithmetic `::core::ops` traits take `Output = T{n}` so the
+/// operation stays closed over the parameter's type (`x + x : T{n}`). The trait
+/// order is fixed (`Add`, `Sub`, `Mul`, `PartialOrd`, `Copy`, `Clone`) so the
+/// emission is deterministic regardless of how the bound set was assembled.
+fn render_bounds(bounds: BoundSet, n: usize) -> String {
+    if bounds.is_unbounded() {
+        return String::new();
+    }
+    let mut traits = Vec::new();
+    if bounds.has_add() {
+        traits.push(format!("::core::ops::Add<Output = T{n}>"));
+    }
+    if bounds.has_sub() {
+        traits.push(format!("::core::ops::Sub<Output = T{n}>"));
+    }
+    if bounds.has_mul() {
+        traits.push(format!("::core::ops::Mul<Output = T{n}>"));
+    }
+    if bounds.has_ord() {
+        traits.push("PartialOrd".to_owned());
+    }
+    if bounds.has_copy() {
+        traits.push("Copy".to_owned());
+    }
+    if bounds.has_clone() {
+        traits.push("Clone".to_owned());
+    }
+    format!(": {}", traits.join(" + "))
+}
+
 /// Emit a whole function item, including its trailing newline.
 ///
 /// Shape: `pub fn <name>[<generics>](<params>) -> <ret> {\n    <body>\n}\n`. A
@@ -669,23 +705,37 @@ fn emit_lambda(
 /// output is byte-identical to the M0 / M1 golden `main_update` / `sky_main`. A
 /// fully-parametric function quantifying `[a, b]` emits `pub fn name<T1, T2>(..)`
 /// and renders every [`IrType::Generic`] in its signature / body through the
-/// matching scope (M2a). The body is an expression rendered at indentation
-/// level 1; the closing brace sits at column 0.
+/// matching scope (M2a). A variable carrying a [`BoundSet`] gains its
+/// `: <bounds>` clause at its position (M2d). The body is an expression rendered
+/// at indentation level 1; the closing brace sits at column 0.
 pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     let name = ctx.func_name(func.id)?.to_owned();
-    let generics = GenericScope::new(&func.type_params);
+    // The generic scope resolves an `IrType::Generic` to its positional Rust
+    // name; only the variable symbols participate, so project them out of the
+    // `(Symbol, BoundSet)` pairs.
+    let scope_syms: Vec<Symbol> = func.type_params.iter().map(|(sym, _)| *sym).collect();
+    let generics = GenericScope::new(&scope_syms);
 
-    // The generic clause `<T1, T2, ..>` — one `T{i+1}` per quantified variable
-    // in declaration order. Empty for a monomorphic function, so the output
-    // matches the pre-M2a golden exactly.
+    // The generic clause `<T1, T2: <bounds>, ..>` — one entry per quantified
+    // variable in declaration order, the position fixing its `T{i+1}` name. An
+    // unbounded variable (M2a) emits a bare `T{i+1}`, so a function with no
+    // bounds matches the pre-M2d golden exactly. Empty for a monomorphic
+    // function, matching the pre-M2a golden.
     let generic_clause = if func.type_params.is_empty() {
         String::new()
     } else {
-        let names = (1..=func.type_params.len())
-            .map(|n| format!("T{n}"))
+        let entries = func
+            .type_params
+            .iter()
+            .enumerate()
+            .map(|(i, (_, bounds))| {
+                let n = i.saturating_add(1);
+                let clause = render_bounds(*bounds, n);
+                format!("T{n}{clause}")
+            })
             .collect::<Vec<_>>()
             .join(", ");
-        format!("<{names}>")
+        format!("<{entries}>")
     };
 
     let mut params = Vec::with_capacity(func.params.len());

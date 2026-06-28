@@ -14,7 +14,7 @@ use sky_diagnostics::{
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, Span,
 };
 use sky_intern::{Interner, Symbol};
-use sky_ir::{Callee, Expr, FuncId, IrType, KernelFn};
+use sky_ir::{BoundSet, Callee, Expr, FuncId, IrType, KernelFn};
 use sky_lower::lower;
 use sky_types::{SolvedTypes, Ty};
 
@@ -219,8 +219,8 @@ fn parametric_annotation_lowers_to_generic_func() -> DResult<()> {
     let func = single_func(&res);
     assert_eq!(
         func.map(|f| f.type_params.clone()),
-        Some(vec![a]),
-        "identity quantifies exactly [a]: {res:?}"
+        Some(vec![(a, BoundSet::UNBOUNDED)]),
+        "identity quantifies exactly [a], unbounded: {res:?}"
     );
     assert_eq!(
         func.and_then(|f| f.params.first()).map(|(_, t)| t),

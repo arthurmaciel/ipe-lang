@@ -389,12 +389,14 @@ mod tests {
         // One type parameter, named `a`.
         assert_eq!(func.type_params.len(), 1, "wrap quantifies one type var");
         assert_eq!(
-            func.type_params.first().and_then(|s| i.resolve(*s)),
+            func.type_params.first().and_then(|(s, _)| i.resolve(*s)),
             Some("a")
         );
-        let Some(&param_sym) = func.type_params.first() else {
+        let Some(&(param_sym, bounds)) = func.type_params.first() else {
             return;
         };
+        // A structurally-parametric variable carries no bounds (M2a).
+        assert!(bounds.is_unbounded(), "wrap's `a` is an unbounded generic");
         // The single parameter is `IrType::Generic(a)`.
         assert!(
             matches!(func.params.first(), Some((_, IrType::Generic(s))) if *s == param_sym),

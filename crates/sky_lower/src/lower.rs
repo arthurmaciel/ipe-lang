@@ -20,8 +20,8 @@ use sky_canon::ast as canon;
 use sky_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{
-    Arm, BinOp, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module, Pat,
-    Program, TypeDef, Variant,
+    Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
+    Module, Pat, Program, TypeDef, Variant,
 };
 use sky_types::{SolvedTypes, Ty};
 
@@ -485,10 +485,19 @@ impl<'a> Lowerer<'a> {
                         body: Box::new(lowered_body),
                     };
                 }
+                // Every variable that reaches lowering is a true parametric
+                // pass-through (the type checker's rigid-skolem gate rejects any
+                // body that constrains a variable), so each quantified variable
+                // carries the empty bound set — emitting a bare `T1`, identical
+                // to M2a. Bound inference for super-typed variables is M2d.
+                let type_params = free_vars
+                    .iter()
+                    .map(|v| (*v, BoundSet::UNBOUNDED))
+                    .collect();
                 Ok(Func {
                     id,
                     name,
-                    type_params: free_vars.clone(),
+                    type_params,
                     params,
                     ret,
                     body: lowered_body,
