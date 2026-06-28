@@ -1,0 +1,12 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+maxOf : a -> a -> a
+maxOf p q = if p > q then p else q
+
+main =
+    let bigInt = maxOf 3 7
+        bigChar = maxOf 'a' 'z'
+        bonus = if bigChar > 'y' then bigInt else 0
+    in
+    println (String.fromInt bonus)

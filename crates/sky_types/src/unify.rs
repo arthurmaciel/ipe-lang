@@ -23,8 +23,33 @@ use sky_intern::Interner;
 use crate::constrain::zonk;
 use crate::doc::{VarNamer, ty_to_doc};
 use crate::solve::Budget;
-use crate::ty::{Content, FlatType};
+use crate::ty::{Content, FlatType, TyBounds};
 use crate::unionfind::{UnionFind, VarId};
+
+/// Whether a concrete structure `flat` satisfies a variable's super-type
+/// obligations `bounds`.
+///
+/// This is the *pin* check: a super-typed flex variable may collapse onto a
+/// concrete type only when that type really supports the operations the body
+/// performed. Numeric obligations (`+ - *`) are met by `Int` / `Float`;
+/// ordering (`< > <= >=`) is met by the scalar primitives `Int` / `Float` /
+/// `Char` / `String` / `Bool`. Anything else — a function, tuple, record, or a
+/// type constructor with arguments — satisfies neither, so a super-typed
+/// variable cannot pin to it.
+fn super_concrete_ok(interner: &Interner, bounds: TyBounds, flat: &FlatType) -> bool {
+    let FlatType::Con { module, name, args } = flat else {
+        return false;
+    };
+    if !module.is_empty() || !args.is_empty() {
+        return false;
+    }
+    let Some(name) = interner.resolve(*name) else {
+        return false;
+    };
+    let number_ok = matches!(name, "Int" | "Float");
+    let ord_ok = matches!(name, "Int" | "Float" | "Char" | "String" | "Bool");
+    (!bounds.has_number() || number_ok) && (!bounds.has_ord() || ord_ok)
+}
 
 /// Unify the types of variables `a` and `b` in place.
 ///
@@ -71,11 +96,77 @@ pub fn unify(
         (Content::Flex, Content::Rigid) | (Content::Rigid, Content::Flex) => {
             uf.union(ra, rb, Content::Rigid)
         }
+        // A flex adopts a super-typed variable's obligations wholesale.
+        (s @ Content::Super { .. }, Content::Flex) | (Content::Flex, s @ Content::Super { .. }) => {
+            uf.union(ra, rb, s)
+        }
+        // Two super-typed variables merge: the survivor owes the union of both
+        // obligation sets, and is rigid if either was (an annotation skolem that
+        // meets an inferred super-flex must stay generic).
+        (
+            Content::Super {
+                rigid: r1,
+                bounds: b1,
+            },
+            Content::Super {
+                rigid: r2,
+                bounds: b2,
+            },
+        ) => uf.union(
+            ra,
+            rb,
+            Content::Super {
+                rigid: r1 || r2,
+                bounds: b1.union(b2),
+            },
+        ),
+        // A super-typed FLEX meeting a rigid skolem: the rigid adopts the
+        // obligations and stays rigid, so the body's super-typed use of an
+        // annotated `a` becomes a trait bound on `a` rather than a rejection.
+        (
+            Content::Super {
+                rigid: false,
+                bounds,
+            },
+            Content::Rigid,
+        )
+        | (
+            Content::Rigid,
+            Content::Super {
+                rigid: false,
+                bounds,
+            },
+        ) => uf.union(
+            ra,
+            rb,
+            Content::Super {
+                rigid: true,
+                bounds,
+            },
+        ),
+        // A super-typed variable meeting a concrete structure. A flex pins to the
+        // structure when it satisfies the obligations; a rigid cannot be pinned
+        // (the annotation promised a generic), and a structure that fails the
+        // obligations is a mismatch either way.
+        (Content::Super { rigid, bounds }, structure @ Content::Structure(_))
+        | (structure @ Content::Structure(_), Content::Super { rigid, bounds }) => {
+            let pins = match &structure {
+                Content::Structure(flat) => !rigid && super_concrete_ok(interner, bounds, flat),
+                _ => false,
+            };
+            if pins {
+                uf.union(ra, rb, structure)
+            } else {
+                Err(mismatch(uf, budget, interner, span, ra, rb))
+            }
+        }
         // A rigid unifies only with itself (caught by the `equivalent` check
-        // above) or with a flex (handled above). Against a concrete structure or
-        // a *different* rigid it is a mismatch — the annotation promised a fully
-        // parametric variable the body is now trying to pin down. Mirrors the
-        // Haskell `(RigidVar _, _)` / `(_, RigidVar _)` reject arms.
+        // above) or with a flex (handled above). Against a concrete structure, a
+        // *different* rigid, or a super-typed RIGID (which would conflate two
+        // distinct annotation variables) it is a mismatch — the annotation
+        // promised a fully parametric variable the body is now trying to pin
+        // down. Mirrors the Haskell `(RigidVar _, _)` / `(_, RigidVar _)` reject
+        // arms.
         (Content::Rigid, _) | (_, Content::Rigid) => {
             Err(mismatch(uf, budget, interner, span, ra, rb))
         }
@@ -209,8 +300,12 @@ fn occurs(
             return Ok(true);
         }
         match uf.content(here)? {
-            // Leaves: a flexible or rigid variable and `Unit` carry no children.
-            Content::Flex | Content::Rigid | Content::Structure(FlatType::Unit) => {}
+            // Leaves: a flexible, rigid, or super-typed variable and `Unit` carry
+            // no children.
+            Content::Flex
+            | Content::Rigid
+            | Content::Super { .. }
+            | Content::Structure(FlatType::Unit) => {}
             Content::Structure(FlatType::Fun(a, r)) => {
                 stack.push(a);
                 stack.push(r);

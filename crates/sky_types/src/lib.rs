@@ -40,9 +40,9 @@ use sky_diagnostics::{DResult, Diagnostic, Span, TypeError};
 use sky_intern::{Interner, Symbol};
 
 pub use solve::{BUDGET_ENV, Budget, DEFAULT_SOLVER_BUDGET};
-pub use ty::Ty;
+pub use ty::{Ty, TyBounds};
 
-use constrain::{Builder, FieldAccess, RecordUpdate, zonk};
+use constrain::{Builder, FieldAccess, RecordUpdate, SchemeApp, zonk};
 use doc::{VarNamer, ty_to_doc};
 use solve::solve;
 use ty::{Content, FlatType};
@@ -60,6 +60,12 @@ pub struct SolvedTypes {
     /// Type of each sub-expression source region, keyed by its [`Span`]. Drives
     /// type-directed lowering.
     pub regions: BTreeMap<Span, Ty>,
+    /// Super-type obligations of each typed binding's generic variables: binding
+    /// name → (annotation variable symbol → its [`TyBounds`]). Only variables the
+    /// body actually constrained appear; a structurally-parametric variable is
+    /// absent (its bound is empty). The lowerer turns each obligation into the
+    /// matching Rust trait bound on the emitted generic parameter.
+    pub bounds: BTreeMap<Symbol, BTreeMap<Symbol, TyBounds>>,
 }
 
 /// Infer the types of a canonical module.
@@ -105,6 +111,56 @@ fn infer_with_budget(
     // contract a genuinely unreachable compiler-bug case.
     exhaust::check(m, interner)?;
 
+    // Numeric defaulting: a `Number` variable the program never pinned to a
+    // concrete type resolves to `Int` (an untyped `\a b -> a + b` is `Int`, not
+    // an under-determined generic). Only super-typed FLEX variables default; an
+    // annotation skolem (rigid super) stays generic so its bound surfaces on the
+    // emitted type parameter. (Ordering-only flex variables are left generic, as
+    // before — they carry no numeric obligation to default.)
+    let int_sym = interner.intern("Int")?;
+    for v in &generated.super_vars {
+        let root = uf.find(*v)?;
+        if let Content::Super {
+            rigid: false,
+            bounds,
+        } = uf.content(root)?
+            && bounds.has_number()
+        {
+            uf.set_content(
+                root,
+                Content::Structure(FlatType::Con {
+                    module: Vec::new(),
+                    name: int_sym,
+                    args: Vec::new(),
+                }),
+            )?;
+        }
+    }
+
+    // Recover each typed binding's generic-variable super-type obligations from
+    // the skolems its body constrained. A variable the body never constrained
+    // stays a plain rigid (no obligation, absent from the map).
+    let mut bounds: BTreeMap<Symbol, BTreeMap<Symbol, TyBounds>> = BTreeMap::new();
+    for (def_name, var_rigids) in &generated.typed_rigids {
+        let mut var_bounds = BTreeMap::new();
+        for (var_sym, rigid) in var_rigids {
+            if let Content::Super { bounds: b, .. } = uf.content(*rigid)?
+                && !b.is_empty()
+            {
+                var_bounds.insert(*var_sym, b);
+            }
+        }
+        if !var_bounds.is_empty() {
+            bounds.insert(*def_name, var_bounds);
+        }
+    }
+
+    // Soundness gate: a super-typed binding used at a concrete type must be used
+    // at a type that actually supports the operations its generic emission
+    // requires. Without this, `double True` (where `double` needs Number) would
+    // type-check here yet emit Rust that `cargo` rejects.
+    check_scheme_applications(&mut uf, budget, interner, &bounds, &generated.scheme_apps)?;
+
     // Read back every region's resolved type.
     let mut regions = BTreeMap::new();
     for (span, var) in generated.regions {
@@ -118,7 +174,87 @@ fn infer_with_budget(
         env.insert(name, zonk(&mut uf, budget, var)?);
     }
 
-    Ok(SolvedTypes { env, regions })
+    Ok(SolvedTypes {
+        env,
+        regions,
+        bounds,
+    })
+}
+
+/// Verify every use of a super-typed binding pins each obligated generic
+/// variable to a type that satisfies the bound its generic emission requires.
+///
+/// A binding like `double : a -> a` whose body adds `a` to itself is emitted as
+/// a generic function bounded by Rust's `Add` (and `Copy`). A use `double True`
+/// instantiates `a` to `Bool`, which provides neither — so it must be rejected
+/// *here*, in the type checker, rather than left to fail when `cargo` compiles
+/// the emitted Rust. A use that leaves the variable non-concrete (it flows into
+/// an enclosing generic, e.g. `f x = double x`) is also rejected: propagating a
+/// super-type obligation across binding boundaries is not yet supported, so it
+/// is a fail-closed limitation rather than unsound emission.
+fn check_scheme_applications(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    bounds: &BTreeMap<Symbol, BTreeMap<Symbol, TyBounds>>,
+    apps: &[SchemeApp],
+) -> DResult<()> {
+    for app in apps {
+        let Some(var_bounds) = bounds.get(&app.name) else {
+            continue;
+        };
+        for (var_sym, b) in var_bounds {
+            let Some(fresh) = app.vars.get(&var_sym.as_raw()) else {
+                continue;
+            };
+            let ty = zonk(uf, budget, *fresh)?;
+            if !emitted_bound_satisfied(interner, *b, &ty) {
+                return Err(super_unsatisfied(interner, *b, &ty, app.span));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether a concrete type satisfies the Rust bound a super-typed generic
+/// emits. The emission carries `Copy`, so a non-`Copy` orderable type (`String`)
+/// is excluded even though it supports comparison; a non-concrete type (a bare
+/// variable, a function, a tuple) satisfies nothing.
+fn emitted_bound_satisfied(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bool {
+    let Ty::Con { module, name, args } = ty else {
+        return false;
+    };
+    if !module.is_empty() || !args.is_empty() {
+        return false;
+    }
+    let Some(name) = interner.resolve(*name) else {
+        return false;
+    };
+    let number_ok = matches!(name, "Int" | "Float");
+    let ord_ok = matches!(name, "Int" | "Float" | "Char" | "Bool");
+    (!bounds.has_number() || number_ok) && (!bounds.has_ord() || ord_ok)
+}
+
+/// Build the [`TypeError::SuperTypeUnsatisfied`] (SKY-T0014) for a super-typed
+/// binding used at a type that does not meet its obligations.
+fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span) -> Diagnostic {
+    let class: &str = match (bounds.has_number(), bounds.has_ord()) {
+        (true, true) => "Number + Comparable",
+        (true, false) => "Number",
+        _ => "Comparable",
+    };
+    let mut namer = VarNamer::new();
+    let found = match ty_to_doc(ty, interner, &mut namer) {
+        Ok(d) => d,
+        Err(bug) => return bug,
+    };
+    Diagnostic::Type {
+        span,
+        msg: TypeError::SuperTypeUnsatisfied {
+            class: Box::from(class),
+            found: Box::new(found),
+        },
+    }
 }
 
 /// Discharge every deferred record field access (`record.field`).
@@ -1486,11 +1622,12 @@ mod tests {
         );
     }
 
-    /// `f : a -> a; f x = x + 1` annotates a fully-parametric `a` but the body
-    /// forces it to `Int`. M2a does not generalise a variable the body pins to a
-    /// concrete (or super-typed) shape; with no bound to carry, the rigid check
-    /// rejects it as a mismatch rather than silently accepting an under-specified
-    /// generic.
+    /// `f : a -> a; f x = x + 1` annotates a fully-parametric `a`, but the
+    /// literal `1` pins `a` to `Int`. The annotation promised *any* type while
+    /// the body needs a concrete one, so the rigid skolem `a` meeting the `Int`
+    /// the literal forces is a mismatch — the signature is too general for its
+    /// body. (Contrast `f x = x + x`, which carries no literal: `a` stays a
+    /// Number-bounded generic.)
     #[test]
     fn parametric_annotation_body_forcing_concrete_is_rejected() {
         let src = "module Main exposing (main)\n\
@@ -1559,5 +1696,130 @@ mod tests {
             infer(&m, &mut i).is_err(),
             "an unannotated binding used at Int and Bool must be rejected (monomorphic)"
         );
+    }
+
+    /// The single recorded [`TyBounds`] of a binding's one bounded variable, or
+    /// `None` if the binding recorded no obligated variable.
+    fn sole_bound(solved: &SolvedTypes, i: &mut Interner, binding: &str) -> Option<TyBounds> {
+        let sym = i.intern(binding).ok()?;
+        solved.bounds.get(&sym)?.values().next().copied()
+    }
+
+    /// `double : a -> a; double x = x + x` constrains `a` numerically (no literal
+    /// pins it), so instead of the rigid-skolem rejection a structurally-
+    /// parametric variable would get, `a` carries the `Add` (Number) obligation.
+    #[test]
+    fn number_generic_double_carries_add_bound() {
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   double : a -> a\n\
+                   double x =\n    x + x\n\
+                   main =\n    println (String.fromInt (double 21))\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let solved = infer(&m, &mut i);
+        assert!(solved.is_ok(), "double must type-check, got {solved:?}");
+        let Ok(solved) = solved else { return };
+        let bound = sole_bound(&solved, &mut i, "double");
+        assert!(bound.is_some(), "double records a bound");
+        let Some(b) = bound else { return };
+        assert!(b.has_add(), "double's `a` carries the Add (Number) bound");
+        assert!(
+            !b.has_ord() && !b.has_sub() && !b.has_mul(),
+            "double needs only Add, got {b:?}"
+        );
+    }
+
+    /// `maxOf : a -> a -> a; maxOf p q = if p > q then p else q` orders `a`, so
+    /// `a` carries the `PartialOrd` (Comparable) obligation.
+    #[test]
+    fn comparable_generic_max_carries_ord_bound() {
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   maxOf : a -> a -> a\n\
+                   maxOf p q =\n    if p > q then p else q\n\
+                   main =\n    println (String.fromInt (maxOf 3 7))\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let solved = infer(&m, &mut i);
+        assert!(solved.is_ok(), "maxOf must type-check, got {solved:?}");
+        let Ok(solved) = solved else { return };
+        let bound = sole_bound(&solved, &mut i, "maxOf");
+        assert!(bound.is_some(), "maxOf records a bound");
+        let Some(b) = bound else { return };
+        assert!(b.has_ord(), "maxOf's `a` carries the ordering bound");
+        assert!(
+            !b.has_add() && !b.has_sub() && !b.has_mul(),
+            "maxOf needs only ordering, got {b:?}"
+        );
+    }
+
+    /// A Number generic used at both `Int` (a literal) and `Float` (through an
+    /// annotated forwarder) type-checks: both satisfy the `Add` obligation.
+    #[test]
+    fn number_generic_used_at_int_and_float_checks() {
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   double : a -> a\n\
+                   double x =\n    x + x\n\
+                   doubleFloat : Float -> Float\n\
+                   doubleFloat x =\n    double x\n\
+                   main =\n    println (String.fromInt (double 21))\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        assert!(
+            infer(&m, &mut i).is_ok(),
+            "double used at Int and Float must type-check"
+        );
+    }
+
+    /// A Number generic used at `Bool` is rejected: `Bool` is not a `Number`, so
+    /// the use surfaces SKY-T0014 rather than emitting Rust `cargo` cannot build.
+    #[test]
+    fn number_generic_at_bool_is_super_type_unsatisfied() {
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   double : a -> a\n\
+                   double x =\n    x + x\n\
+                   doubleBool : Bool -> Bool\n\
+                   doubleBool x =\n    double x\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        assert!(
+            matches!(
+                infer(&m, &mut i),
+                Err(Diagnostic::Type {
+                    msg: TypeError::SuperTypeUnsatisfied { .. },
+                    ..
+                })
+            ),
+            "a Number generic used at Bool must be SuperTypeUnsatisfied"
+        );
+    }
+
+    /// An unannotated `\\a b -> a + b` is `Int -> Int -> Int` by numeric
+    /// defaulting: the body constrains the parameters to `Number`, and a
+    /// `Number` the program never pins resolves to `Int`.
+    #[test]
+    fn unpinned_numeric_binding_defaults_to_int() {
+        let opt = infer_env_ty("module Main exposing (f)\nf =\n    \\a b -> a + b\n", "f");
+        assert!(opt.is_some(), "f must infer");
+        let Some((ty, i)) = opt else { return };
+        // `Int -> Int -> Int`.
+        assert_eq!(return_con_name(&ty, &i).as_deref(), Some("Int"));
+        assert!(matches!(ty, Ty::Fun(..)), "f must be an arrow, got {ty:?}");
+        let Ty::Fun(a, tail) = &ty else { return };
+        assert_eq!(ty_con_name(a, &i).as_deref(), Some("Int"));
+        assert!(
+            matches!(tail.as_ref(), Ty::Fun(..)),
+            "f's tail must be an arrow, got {tail:?}"
+        );
+        let Ty::Fun(b, _) = tail.as_ref() else { return };
+        assert_eq!(ty_con_name(b, &i).as_deref(), Some("Int"));
     }
 }

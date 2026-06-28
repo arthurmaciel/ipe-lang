@@ -42,6 +42,88 @@ pub enum Ty {
     Record(BTreeMap<Symbol, Self>),
 }
 
+/// The super-type obligations a type variable carries: the operations a body
+/// performs on it that only *some* types support.
+///
+/// A bare type variable is structurally parametric — the body passes it through
+/// untouched, so any type works. The moment a body adds it (`x + x`) or orders
+/// it (`a > b`), the variable is no longer "any type": it must be a type that
+/// supports that operation. Sky's two relevant super-types are **Number** (the
+/// numeric operators `+ - *`, satisfied by `Int` / `Float`) and **Comparable**
+/// (the ordering comparisons `< > <= >=`, satisfied by the scalar primitives).
+///
+/// Each obligation is one bit, so two variables that unify merge their
+/// obligations with a bitwise OR ([`Self::union`]) — the merged variable owes
+/// everything either side owed. The set is read back when generalising: a
+/// variable that owes `Add` becomes a generic parameter bounded by Rust's
+/// `Add` trait, and so on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct TyBounds(u8);
+
+impl TyBounds {
+    const ADD: u8 = 1 << 0;
+    const SUB: u8 = 1 << 1;
+    const MUL: u8 = 1 << 2;
+    const ORD: u8 = 1 << 3;
+
+    /// No obligation — a structurally-parametric variable.
+    pub const EMPTY: Self = Self(0);
+
+    /// The single-obligation sets, one per operator family.
+    #[must_use]
+    pub const fn add() -> Self {
+        Self(Self::ADD)
+    }
+    #[must_use]
+    pub const fn sub() -> Self {
+        Self(Self::SUB)
+    }
+    #[must_use]
+    pub const fn mul() -> Self {
+        Self(Self::MUL)
+    }
+    /// The ordering obligation (`< > <= >=` → Rust `PartialOrd`).
+    #[must_use]
+    pub const fn ord() -> Self {
+        Self(Self::ORD)
+    }
+
+    /// Whether this set carries no obligation at all.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+    #[must_use]
+    pub const fn has_add(self) -> bool {
+        self.0 & Self::ADD != 0
+    }
+    #[must_use]
+    pub const fn has_sub(self) -> bool {
+        self.0 & Self::SUB != 0
+    }
+    #[must_use]
+    pub const fn has_mul(self) -> bool {
+        self.0 & Self::MUL != 0
+    }
+    #[must_use]
+    pub const fn has_ord(self) -> bool {
+        self.0 & Self::ORD != 0
+    }
+
+    /// Whether any numeric operator (`+ - *`) constrains this variable — i.e. it
+    /// must be a `Number` (`Int` / `Float`).
+    #[must_use]
+    pub const fn has_number(self) -> bool {
+        self.0 & (Self::ADD | Self::SUB | Self::MUL) != 0
+    }
+
+    /// The union of two obligation sets — what a merged variable owes.
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
 /// What a union-find variable resolves to during inference.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Content {
@@ -59,6 +141,18 @@ pub enum Content {
     /// share one rigid node (via the per-signature instantiation map), so they are
     /// `equivalent`; two different variables are separate nodes that cannot unify.
     Rigid,
+    /// A variable constrained to a Sky super-type ([`TyBounds`]) but not yet
+    /// pinned to a concrete structure. `rigid` distinguishes a super-typed
+    /// *annotation skolem* (it must stay generic, surfacing its obligations as
+    /// trait bounds on the emitted type parameter) from a super-typed *flex* (an
+    /// inferred variable that may still pin to a matching concrete type).
+    ///
+    /// A super-typed flex pins to any structure that satisfies its obligations
+    /// (`Int` / `Float` for Number; the scalar primitives for Comparable); a
+    /// super-typed rigid against a concrete structure is a mismatch, exactly as a
+    /// plain rigid is — the annotation promised a generic the body is now trying
+    /// to pin down.
+    Super { rigid: bool, bounds: TyBounds },
     /// A resolved concrete structure.
     Structure(FlatType),
 }

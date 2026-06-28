@@ -18,7 +18,7 @@ use crate::code::{
     SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015, SKY_P0020, SKY_P0021,
     SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062,
     SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013,
-    Severity,
+    SKY_T0014, Severity,
 };
 use crate::span::Span;
 
@@ -385,6 +385,13 @@ pub enum TypeError {
         expected: usize,
         found: usize,
     },
+    /// A generic binding whose body constrains a type variable to a Sky
+    /// super-type — `Number` (`+ - *`) or `Comparable` (`< > <= >=`) — is used
+    /// at a type that does not provide those operations (`double True`, where
+    /// `double` needs `Number`), or at a type that stays non-concrete (the
+    /// obligation cannot be propagated across the use). `class` names the
+    /// super-type; `found` is the offending type. [SKY-T0014]
+    SuperTypeUnsatisfied { class: Box<str>, found: Box<TyDoc> },
 }
 
 /// A language feature that the Milestone-0 lowerer does not yet support. Each
@@ -631,7 +638,8 @@ impl Diagnostic {
                 | TypeError::TooManyParameters { .. }
                 | TypeError::NonExhaustiveCase { .. }
                 | TypeError::NoSuchField { .. }
-                | TypeError::CtorPatternArity { .. } => Severity::Error,
+                | TypeError::CtorPatternArity { .. }
+                | TypeError::SuperTypeUnsatisfied { .. } => Severity::Error,
             },
             Self::CompilerBug { .. } => Severity::Bug,
         }
@@ -714,6 +722,7 @@ const fn type_code(msg: &TypeError) -> Code {
         TypeError::RedundantCaseBranch { .. } => SKY_T0011,
         TypeError::NoSuchField { .. } => SKY_T0012,
         TypeError::CtorPatternArity { .. } => SKY_T0013,
+        TypeError::SuperTypeUnsatisfied { .. } => SKY_T0014,
     }
 }
 
@@ -835,7 +844,8 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
         | TypeError::TooManyParameters { .. }
         | TypeError::RedundantCaseBranch { .. }
         | TypeError::NoSuchField { .. }
-        | TypeError::CtorPatternArity { .. } => Vec::new(),
+        | TypeError::CtorPatternArity { .. }
+        | TypeError::SuperTypeUnsatisfied { .. } => Vec::new(),
     }
 }
 

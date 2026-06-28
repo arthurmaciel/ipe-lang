@@ -23,7 +23,7 @@ use sky_ir::{
     Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
     Module, Pat, Program, TypeDef, Variant,
 };
-use sky_types::{SolvedTypes, Ty};
+use sky_types::{SolvedTypes, Ty, TyBounds};
 
 /// One lowered function parameter: its (possibly synthetic) binder name and its
 /// IR type.
@@ -458,20 +458,17 @@ impl<'a> Lowerer<'a> {
                 free_vars,
                 ..
             } => {
-                // M2a: a typed binding's free type variables are the type
-                // parameters it quantifies. Every variable appearing in the
-                // annotation is one of them (canon collects the complete set,
-                // ordered deterministically by name), so each `Type::Var` in the
+                // A typed binding's free type variables are the type parameters
+                // it quantifies. Every variable appearing in the annotation is
+                // one of them (canon collects the complete set, ordered
+                // deterministically by name), so each `Type::Var` in the
                 // signature lowers to an `IrType::Generic` and the backend emits
-                // `pub fn name<T1, T2, ..>(..)`. The body of a well-typed
-                // parametric binding uses these variables only structurally
-                // (pure pass-through) — the type checker's rigid-skolem gate
-                // already rejects any body that pins a variable to a concrete or
-                // super-typed shape (`f : a -> a ; f x = x + 1`), so a function
-                // that reaches lowering with `free_vars` is a true parametric
-                // pass-through and never needs a Rust trait bound. An empty
-                // `free_vars` keeps the function monomorphic, byte-identical to
-                // M0/M1.
+                // `pub fn name<T1, T2, ..>(..)`. A variable the body uses only
+                // structurally (pure pass-through) is unbounded — a bare `T{n}`;
+                // a variable the body constrains to a super-type carries the
+                // matching Rust trait bound (see [`Self::bounds_for`]). An empty
+                // `free_vars` keeps the function monomorphic, byte-identical to a
+                // non-generic binding.
                 let (params, prologue, ret) = self.split_typed_sig(ty, patterns, free_vars)?;
                 // A tuple-destructuring parameter binds its synthetic name to the
                 // tuple, then the body opens it with a `Destructure`. Fold the
@@ -485,14 +482,13 @@ impl<'a> Lowerer<'a> {
                         body: Box::new(lowered_body),
                     };
                 }
-                // Every variable that reaches lowering is a true parametric
-                // pass-through (the type checker's rigid-skolem gate rejects any
-                // body that constrains a variable), so each quantified variable
-                // carries the empty bound set — emitting a bare `T1`, identical
-                // to M2a. Bound inference for super-typed variables is M2d.
+                // Each quantified variable carries the Rust trait bound its
+                // body-imposed super-type obligations require (empty for a
+                // structurally-parametric variable — a bare `T{n}`).
+                let var_bounds = self.types.bounds.get(&name);
                 let type_params = free_vars
                     .iter()
-                    .map(|v| (*v, BoundSet::UNBOUNDED))
+                    .map(|v| (*v, Self::bounds_for(var_bounds, *v)))
                     .collect();
                 Ok(Func {
                     id,
@@ -525,6 +521,39 @@ impl<'a> Lowerer<'a> {
                 })
             }
         }
+    }
+
+    /// The Rust trait bounds a quantified variable `var` carries, translating the
+    /// type checker's super-type obligations ([`TyBounds`]) into the backend's
+    /// [`BoundSet`]. A numeric obligation maps to the std arithmetic op trait it
+    /// used (`Add` / `Sub` / `Mul`); an ordering obligation maps to `PartialOrd`.
+    /// Any super-typed variable also gains `Copy`: the operations consume their
+    /// operands by value (Rust's `Add` takes `self`), and a body that adds or
+    /// compares a value reuses it, so the parameter must be bit-copyable. A
+    /// variable with no obligation (or a binding with no recorded bounds) is
+    /// unbounded — a bare `T{n}`, byte-identical to a structurally-parametric
+    /// generic.
+    fn bounds_for(var_bounds: Option<&BTreeMap<Symbol, TyBounds>>, var: Symbol) -> BoundSet {
+        let Some(b) = var_bounds.and_then(|m| m.get(&var)).copied() else {
+            return BoundSet::UNBOUNDED;
+        };
+        if b.is_empty() {
+            return BoundSet::UNBOUNDED;
+        }
+        let mut set = BoundSet::UNBOUNDED;
+        if b.has_add() {
+            set = set.with_add();
+        }
+        if b.has_sub() {
+            set = set.with_sub();
+        }
+        if b.has_mul() {
+            set = set.with_mul();
+        }
+        if b.has_ord() {
+            set = set.with_ord();
+        }
+        set.with_copy()
     }
 
     /// Split a typed binding's arrow annotation into one [`IrType`] per

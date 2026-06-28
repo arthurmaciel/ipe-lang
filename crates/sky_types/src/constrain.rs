@@ -21,7 +21,7 @@ use sky_intern::{Interner, Symbol};
 
 use crate::doc::canon_type_to_doc;
 use crate::solve::{Budget, Constraint};
-use crate::ty::{Content, FlatType, Ty, from_canon};
+use crate::ty::{Content, FlatType, Ty, TyBounds, from_canon};
 use crate::unionfind::{UnionFind, VarId};
 
 /// `where_` tag for any `CompilerBug` raised during constraint generation.
@@ -69,25 +69,38 @@ impl Builtins {
 /// resolved kernel name so the constraint walk doesn't re-borrow the interner.
 #[derive(Clone, Copy)]
 enum BinopClass {
-    /// `+ - * //`: `Int -> Int -> Int`.
-    IntArith,
+    /// `//`: integer division `Int -> Int -> Int`.
+    IntDiv,
     /// `/`: `Float -> Float -> Float` (matches the Go backend's float division).
     FloatDiv,
-    /// `== /= < > <= >=`: `a -> a -> Bool` (operands share one type).
-    Compare,
+    /// `+ - *`: `Number a => a -> a -> a`. The operands and the result share one
+    /// numeric variable carrying the named obligation, so the operation stays
+    /// generic over `Int` / `Float` until a concrete operand pins it.
+    Num(TyBounds),
+    /// `< > <= >=`: `Comparable a => a -> a -> Bool` — operands share one
+    /// ordered type; the result is `Bool`.
+    Order,
+    /// `== /=`: `a -> a -> Bool` — operands share *any* one type (structural
+    /// equality is total over non-function types), so no super-type obligation.
+    Equality,
     /// `&& ||`: `Bool -> Bool -> Bool`.
     Boolean,
-    /// Any other operator (`++`, `::`, …): `a -> a -> a`. Unreachable from the
-    /// M1 lexer's operator set, but kept sound rather than panicking.
+    /// Any other operator (`++`, `::`, …): `a -> a -> a`. The numeric/ordering
+    /// super-types do not cover string/list append (`Appendable`), so it stays a
+    /// plain pass-through here and is gated at lowering rather than mis-typed.
     Poly,
 }
 
 /// Classify a resolved operator kernel name (`add`, `eq`, `and`, …).
 const fn classify_binop(func: &str) -> BinopClass {
     match func.as_bytes() {
-        b"add" | b"sub" | b"mul" | b"idiv" => BinopClass::IntArith,
+        b"add" => BinopClass::Num(TyBounds::add()),
+        b"sub" => BinopClass::Num(TyBounds::sub()),
+        b"mul" => BinopClass::Num(TyBounds::mul()),
+        b"idiv" => BinopClass::IntDiv,
         b"fdiv" => BinopClass::FloatDiv,
-        b"eq" | b"neq" | b"lt" | b"gt" | b"le" | b"ge" => BinopClass::Compare,
+        b"lt" | b"gt" | b"le" | b"ge" => BinopClass::Order,
+        b"eq" | b"neq" => BinopClass::Equality,
         b"and" | b"or" => BinopClass::Boolean,
         _ => BinopClass::Poly,
     }
@@ -116,6 +129,38 @@ pub struct Builder<'a> {
     /// `field0 -> … -> fieldN -> T vars`; each use site instantiates the scheme
     /// fresh, exactly as a polymorphic top-level binding does.
     ctors: BTreeMap<Symbol, CtorScheme>,
+    /// One entry per typed binding: its name and the rigid (skolem) variable each
+    /// of its annotation type variables instantiated to while its body was
+    /// checked. Read post-solve to recover each variable's super-type obligations
+    /// (the bounds the body imposed) for generalisation.
+    typed_rigids: Vec<(Symbol, BTreeMap<Symbol, VarId>)>,
+    /// One entry per *reference* to a typed top-level binding (each `VarTopLevel`
+    /// use site), recording how that use instantiated the binding's scheme. Used
+    /// post-solve to check a super-typed binding's obligations against the
+    /// concrete type each use pins it to.
+    scheme_apps: Vec<SchemeApp>,
+    /// Every super-typed flex variable minted by a numeric/ordering operator.
+    /// Read post-solve to apply numeric defaulting: an unpinned `Number`
+    /// variable resolves to `Int`, matching the reference compiler's defaulting
+    /// of an otherwise-unconstrained `number`.
+    super_vars: Vec<VarId>,
+}
+
+/// A single use site of a typed top-level binding.
+///
+/// At each reference the binding's scheme is instantiated into fresh variables
+/// (the [`Builder::instantiate`] / `CForeign` path). `vars` records, for each of
+/// the scheme's type variables (keyed by the annotation variable's raw symbol
+/// id), the fresh union-find variable it instantiated to — so once the solver
+/// settles, the concrete type this use pinned each variable to can be read back
+/// and checked against the binding's super-type obligations.
+pub struct SchemeApp {
+    /// The referenced binding's name.
+    pub name: Symbol,
+    /// Scheme type-variable raw id → the fresh variable it instantiated to here.
+    pub vars: BTreeMap<u32, VarId>,
+    /// The reference's source span, for blame on an unsatisfied bound.
+    pub span: Span,
 }
 
 /// A data constructor's quantified type scheme.
@@ -174,6 +219,9 @@ pub struct Generated {
     pub untyped: BTreeMap<Symbol, VarId>,
     pub field_accesses: Vec<FieldAccess>,
     pub record_updates: Vec<RecordUpdate>,
+    pub typed_rigids: Vec<(Symbol, BTreeMap<Symbol, VarId>)>,
+    pub scheme_apps: Vec<SchemeApp>,
+    pub super_vars: Vec<VarId>,
 }
 
 impl<'a> Builder<'a> {
@@ -200,6 +248,9 @@ impl<'a> Builder<'a> {
             field_accesses: Vec::new(),
             record_updates: Vec::new(),
             ctors: BTreeMap::new(),
+            typed_rigids: Vec::new(),
+            scheme_apps: Vec::new(),
+            super_vars: Vec::new(),
         };
 
         // Register every data constructor's scheme up front, so a `VarCtor`
@@ -264,6 +315,9 @@ impl<'a> Builder<'a> {
             untyped: builder.untyped,
             field_accesses: builder.field_accesses,
             record_updates: builder.record_updates,
+            typed_rigids: builder.typed_rigids,
+            scheme_apps: builder.scheme_apps,
+            super_vars: builder.super_vars,
         })
     }
 
@@ -326,6 +380,20 @@ impl<'a> Builder<'a> {
         })
     }
 
+    /// Mint a fresh super-typed flexible variable carrying `bounds` — a value
+    /// the body has constrained to a Sky super-type (numeric / ordered) but not
+    /// yet to a concrete type. It pins to any matching primitive, or — when it
+    /// meets an annotation skolem — lifts that skolem's obligations so the
+    /// generic parameter is emitted with the matching trait bound.
+    fn super_var(&mut self, bounds: TyBounds) -> DResult<VarId> {
+        let v = self.uf.fresh(Content::Super {
+            rigid: false,
+            bounds,
+        })?;
+        self.super_vars.push(v);
+        Ok(v)
+    }
+
     /// Constrain a binary operation by the type discipline of its operator. The
     /// returned [`VarId`] is the result type's variable. Mirrors the M1-core
     /// subset of `Sky.Type.Constrain.Expression.binopTypes`.
@@ -340,7 +408,17 @@ impl<'a> Builder<'a> {
         let lv = self.constrain_expr(local, lhs)?;
         let rv = self.constrain_expr(local, rhs)?;
         match class {
-            BinopClass::IntArith => {
+            BinopClass::Num(bounds) => {
+                // `+ - *` are Number-polymorphic: operands and result share one
+                // numeric variable. A concrete operand (`x + 1`) pins it to that
+                // type; an all-variable use (`x + x`) leaves it generic, carrying
+                // the operator's obligation so generalisation emits the bound.
+                let s = self.super_var(bounds)?;
+                self.eq(lhs.span, lv, s);
+                self.eq(rhs.span, rv, s);
+                Ok(s)
+            }
+            BinopClass::IntDiv => {
                 let li = self.int_var()?;
                 self.eq(lhs.span, lv, li);
                 let ri = self.int_var()?;
@@ -354,8 +432,17 @@ impl<'a> Builder<'a> {
                 self.eq(rhs.span, rv, rf);
                 self.float_var()
             }
-            BinopClass::Compare => {
-                // Operands unify to one shared type; the result is Bool.
+            BinopClass::Order => {
+                // `< > <= >=` are Comparable-polymorphic: operands share one
+                // ordered type (carrying the ordering obligation), result Bool.
+                let s = self.super_var(TyBounds::ord())?;
+                self.eq(lhs.span, lv, s);
+                self.eq(rhs.span, rv, s);
+                self.bool_var()
+            }
+            BinopClass::Equality => {
+                // `== /=`: operands unify to one shared type (any non-function
+                // type supports structural equality); the result is Bool.
                 self.eq(rhs.span, lv, rv);
                 self.bool_var()
             }
@@ -396,8 +483,19 @@ impl<'a> Builder<'a> {
     /// `identity` at `Int` and at `Bool` in the same module yields two
     /// independent, separately-satisfiable instantiations.
     fn instantiate(&mut self, ty: &Ty) -> DResult<VarId> {
+        let (var, _vars) = self.instantiate_tracked(ty)?;
+        Ok(var)
+    }
+
+    /// [`Self::instantiate`], additionally returning the alpha-renaming map
+    /// (scheme type-variable raw id → fresh variable). The map lets a use site be
+    /// checked post-solve against the binding's super-type obligations: each
+    /// obligated scheme variable's fresh variable reveals the concrete type this
+    /// use pinned it to.
+    fn instantiate_tracked(&mut self, ty: &Ty) -> DResult<(VarId, BTreeMap<u32, VarId>)> {
         let mut vars = BTreeMap::new();
-        self.instantiate_in(ty, &mut vars, /* rigid */ false)
+        let var = self.instantiate_in(ty, &mut vars, /* rigid */ false)?;
+        Ok((var, vars))
     }
 
     /// Instantiate a constructor scheme through one shared variable map, returning
@@ -488,7 +586,7 @@ impl<'a> Builder<'a> {
                 patterns,
                 body,
                 ty,
-                ..
+                free_vars,
             } => {
                 // Instantiate the WHOLE signature through one shared map so every
                 // occurrence of an annotation variable (`a` in `a -> a`) becomes
@@ -521,6 +619,17 @@ impl<'a> Builder<'a> {
                 let ret_var = self.instantiate_rigid(&ret_ty, &mut rigid_vars)?;
                 let body_var = self.constrain_expr(&local, body)?;
                 self.eq(body.span, body_var, ret_var);
+                // Record the skolem each annotation variable instantiated to, so
+                // its body-imposed super-type obligations can be read back for
+                // generalisation. Keyed by the variable's symbol (the lowerer's
+                // `free_vars` are these same symbols).
+                let mut var_rigids = BTreeMap::new();
+                for fv in free_vars {
+                    if let Some(rigid) = rigid_vars.get(&fv.as_raw()) {
+                        var_rigids.insert(*fv, *rigid);
+                    }
+                }
+                self.typed_rigids.push((name.value, var_rigids));
                 Ok(())
             }
             canon::Def::Untyped {
@@ -618,8 +727,16 @@ impl<'a> Builder<'a> {
                 if let Some(ty) = self.top_level.get(name).cloned() {
                     // Typed binding: instantiate its scheme fresh (flex) here, so
                     // this use unifies against its own concrete arguments without
-                    // pinning the binding's other call sites.
-                    self.instantiate(&ty)?
+                    // pinning the binding's other call sites. The alpha-renaming
+                    // map is recorded so a super-typed binding's obligations can
+                    // be checked against the concrete type this use pins post-solve.
+                    let (var, vars) = self.instantiate_tracked(&ty)?;
+                    self.scheme_apps.push(SchemeApp {
+                        name: *name,
+                        vars,
+                        span,
+                    });
+                    var
                 } else if let Some(v) = self.untyped.get(name).copied() {
                     // Untyped binding: resolve to its shared monomorphic variable.
                     v
@@ -1089,9 +1206,14 @@ pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DRe
                     })?;
                 let root = uf.find(v)?;
                 match uf.content(root)? {
-                    // A flexible or rigid variable that survives solving reads
-                    // back as a type variable named by its representative's id.
-                    Content::Flex | Content::Rigid => results.push(Ty::Var(root)),
+                    // A flexible, rigid, or super-typed variable that survives
+                    // solving reads back as a type variable named by its
+                    // representative's id. (A super-typed variable is still a
+                    // variable; its obligations are read separately when
+                    // generalising — see [`crate::SolvedTypes::bounds`].)
+                    Content::Flex | Content::Rigid | Content::Super { .. } => {
+                        results.push(Ty::Var(root));
+                    }
                     Content::Structure(FlatType::Unit) => results.push(Ty::Unit),
                     Content::Structure(FlatType::Fun(a, b)) => {
                         // Push the rebuild first, then the children so that `a`
