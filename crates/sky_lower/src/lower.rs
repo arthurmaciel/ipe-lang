@@ -369,6 +369,17 @@ impl<'a> Lowerer<'a> {
                     ))
                 }
             }
+            // The unit type `()` in an annotation (`f : () -> Int`).
+            canon::Type::Unit => Ok(IrType::Unit),
+            // A tuple type in an annotation (`fst : (a, b) -> a`). Lower element-
+            // wise; the invariant (arity ≥ 2) is upheld by the parser.
+            canon::Type::Tuple(elems) => {
+                let mut ir_elems = Vec::with_capacity(elems.len());
+                for e in elems {
+                    ir_elems.push(self.ir_type_from_canon(e, generics)?);
+                }
+                Ok(IrType::Tuple(ir_elems))
+            }
         }
     }
 

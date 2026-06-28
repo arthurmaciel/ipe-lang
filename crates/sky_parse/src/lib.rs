@@ -546,6 +546,101 @@ mod tests {
     }
 
     #[test]
+    fn tuple_type_annotation_parses_into_a_ttuple() {
+        // `fst : (a, b) -> a` — a tuple type in argument position. The annotation
+        // is `TLambda(TTuple([TVar a, TVar b]), TVar a)`. Before M2B this failed
+        // at parse with SKY-P0050; it now unblocks `fst`/`snd`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}fst : (a, b) -> a\nfst t =\n    t\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "tuple-type annotation must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = find_value(&m, &i, "fst").and_then(|v| v.type_annotation.clone());
+        assert!(
+            shape.is_some_and(|ann| matches!(
+                &ann.value,
+                TypeAnnotation::TLambda(arg, ret)
+                    if matches!(
+                        &**arg,
+                        TypeAnnotation::TTuple(elems)
+                            if elems.len() == 2
+                                && matches!(elems.first(), Some(TypeAnnotation::TVar(_)))
+                                && matches!(elems.get(1), Some(TypeAnnotation::TVar(_)))
+                    )
+                        && matches!(&**ret, TypeAnnotation::TVar(_))
+            )),
+            "annotation is `(a, b) -> a` with a 2-element TTuple argument"
+        );
+    }
+
+    #[test]
+    fn three_element_tuple_type_annotation_parses() {
+        // A 3-tuple type `(a, b, c)` carries all three members in order.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f : (a, b, c) -> a\nf t =\n    t\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "3-tuple-type annotation must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let arity = find_value(&m, &i, "f")
+            .and_then(|v| v.type_annotation.clone())
+            .and_then(|ann| match ann.value {
+                TypeAnnotation::TLambda(arg, _) => match *arg {
+                    TypeAnnotation::TTuple(elems) => Some(elems.len()),
+                    _ => None,
+                },
+                _ => None,
+            });
+        assert_eq!(arity, Some(3), "argument is a 3-element TTuple");
+    }
+
+    #[test]
+    fn parenthesised_single_type_is_not_a_tuple() {
+        // `(a) -> a` is a parenthesised single type, unwrapped to `a` — never a
+        // 1-tuple. The annotation is the plain arrow `TLambda(TVar, TVar)`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f : (a) -> a\nf x =\n    x\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "paren-group type must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = find_value(&m, &i, "f").and_then(|v| v.type_annotation.clone());
+        assert!(
+            shape.is_some_and(|ann| matches!(
+                &ann.value,
+                TypeAnnotation::TLambda(arg, ret)
+                    if matches!(&**arg, TypeAnnotation::TVar(_))
+                        && matches!(&**ret, TypeAnnotation::TVar(_))
+            )),
+            "annotation is the unwrapped `a -> a`, not a TTuple"
+        );
+    }
+
+    #[test]
+    fn unit_type_annotation_parses_into_a_tunit() {
+        // `()` in type position is the unit type — distinct from a tuple and from
+        // a parenthesised group. The argument is `TUnit`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f : () -> a\nf x =\n    x\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "unit-type annotation must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = find_value(&m, &i, "f").and_then(|v| v.type_annotation.clone());
+        assert!(
+            shape.is_some_and(|ann| matches!(
+                &ann.value,
+                TypeAnnotation::TLambda(arg, _) if matches!(&**arg, TypeAnnotation::TUnit)
+            )),
+            "annotation argument is TUnit"
+        );
+    }
+
+    #[test]
+    fn unclosed_tuple_type_is_p0050() {
+        // A tuple type opened but never closed surfaces the unclosed-delimiter
+        // code, the same as a plain parenthesised type group.
+        assert_eq!(err_code(&format!("{HDR}f : (a, b")), "SKY-P0050");
+    }
+
+    #[test]
     fn record_literal_parses_into_a_record_node() {
         // `{ x = 1, y = 2 }` is a two-field `Record`, fields in source order.
         let mut i = Interner::new();

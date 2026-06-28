@@ -717,6 +717,13 @@ fn canonicalise_type(
             free_vars.insert(*v);
             canon::Type::Var(*v)
         }
+        src::TypeAnnotation::TUnit => canon::Type::Unit,
+        src::TypeAnnotation::TTuple(elems) => canon::Type::Tuple(
+            elems
+                .iter()
+                .map(|e| canonicalise_type(e, env, local_union_names, aliases, free_vars, visited))
+                .collect(),
+        ),
         src::TypeAnnotation::TType(_, segments, args) => {
             let name = segments.last().copied().unwrap_or_else(|| {
                 // An unnamed type cannot occur in the M0 grammar; fall back to

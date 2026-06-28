@@ -163,6 +163,14 @@ pub fn canon_type_to_doc(t: &canon::Type, interner: &Interner) -> DResult<TyDoc>
                 args: doc_args.into_boxed_slice(),
             })
         }
+        canon::Type::Unit => Ok(TyDoc::Unit),
+        canon::Type::Tuple(elems) => {
+            let mut doc_elems = Vec::with_capacity(elems.len());
+            for e in elems {
+                doc_elems.push(canon_type_to_doc(e, interner)?);
+            }
+            Ok(TyDoc::Tuple(doc_elems.into_boxed_slice()))
+        }
     }
 }
 
