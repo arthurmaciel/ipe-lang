@@ -147,3 +147,49 @@ every parity sweep + incur re-verification through M2d/M4/M5/M6 if added early;
 the parse/canon surface is still moving until then; and deferring costs ~nothing
 (documented, self-contained, depth 1–2 fine manually). General rule: parity
 features go incrementally; **divergences go last, on a verified-complete base.**
+
+## Idea 5 — Or-patterns (alternative patterns in one case arm) 🔬🧊
+
+**Goal:** one arm matching several patterns, sharing a body — DRY vs Elm's
+repeat-the-body:
+```elm
+-- Elm/Sky today: duplicate the body
+case v of
+    A -> arm1
+    B -> arm1
+    _ -> arm3
+-- proposed
+case v of
+    A | B -> arm1
+    _     -> arm3
+```
+
+**Syntax decision: `|` (NOT `||`).** Decided 2026-06-28. `||` is *boolean OR*
+everywhere in the language; reusing it for pattern alternation overloads one token
+with two structurally different meanings (value op vs pattern combinator). `|`
+already means "one of these" via ADT sums (`type T = A | B`), matches
+Rust/OCaml/F#/Python-3.10 match or-patterns, is unambiguous in pattern position
+(no clash with record-update `{ r | f = v }` which is expression-position, nor with
+type decls), and maps **1:1 to Rust's native or-pattern** `A | B => ...`. No `or`
+keyword (needless reserved word).
+
+**Why it's a departure:** Elm/Sky have no or-patterns. Superset of the grammar →
+documented divergence, not oracle-verifiable.
+
+**Shape of the work (small; mostly native):**
+- Parse `pat (| pat)* -> body` in case arms (pattern position only; refutable
+  context — case, not irrefutable let-destructure).
+- IR: `Pat::Or(Vec<Pat>)`; backend emits Rust `p1 | p2 => body` (native).
+- Exhaustiveness: extend the M3b-2 Maranget check to expand `p|q` into two rows
+  (the algorithm already supports this — minimal work).
+
+**Correctness gate (load-bearing):** every alternative MUST bind the **same set of
+variables at the same types** (`Just x | Nothing ->` is illegal if `x` is used).
+Reject mismatched-binding or-patterns with a fail-fast diagnostic in canon/types
+(Rust rejects it too, but we must catch it first to stay sky-build⇒cargo-clean and
+fail-fast). Runtime behaviour is identical to the duplicated-body form.
+
+**Disposition:** filed (user opted in 2026-06-28). Post-M6 "designer" phase, on the
+verified-complete parity base (same rule as Idea 4). Low effort (native Rust + the
+Maranget algo already handles it), moderate value (real DRY win, very common
+idiom) — a strong early candidate once divergences open.
