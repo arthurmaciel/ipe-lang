@@ -13,11 +13,11 @@ use crate::code::{
     Code, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200,
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
-    SKY_L0114, SKY_L0115, SKY_L0200, SKY_N0001, SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005,
-    SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_P0001, SKY_P0002, SKY_P0003, SKY_P0010,
-    SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040,
-    SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003,
-    SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, Severity,
+    SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0200, SKY_N0001, SKY_N0002, SKY_N0003, SKY_N0004,
+    SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_P0001, SKY_P0002, SKY_P0003,
+    SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031,
+    SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002,
+    SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, Severity,
 };
 use crate::span::Span;
 
@@ -412,10 +412,14 @@ pub enum Feature {
     /// Rust. Field access + construction on generic records DO work (M2c).
     /// [SKY-L0111]
     BoundedRecordUpdate,
-    /// A constructor payload sub-pattern that is not a plain variable or a
-    /// wildcard — a nested constructor (`Just (Node …)`), literal, tuple, record,
-    /// cons, or alias pattern. M3a binds payloads to variables / `_` only; the
-    /// richer payload-pattern shapes land in M3b. [SKY-L0112]
+    /// A RECORD sub-pattern nested inside a constructor payload or a tuple
+    /// element (`Just { x }`, `( { x }, y )`). M3b-2 lowers nested variable /
+    /// wildcard / constructor / tuple sub-patterns, and a record pattern at the
+    /// `case` scrutinee or a `let` destructure — but a record pattern in a
+    /// nested carrier needs that carrier's record type threaded to the lowerer,
+    /// which lands later. The plain nested shapes (`Just (a, b)`,
+    /// `Node (Node …) x r`) are accepted; only the nested-record carrier is
+    /// gated here. [SKY-L0112]
     NestedPayloadPatterns,
     /// A data constructor named as a first-class function *value* — referenced
     /// bare (`map Just xs`) or partially applied (`Node l 1` for a three-field
@@ -440,6 +444,15 @@ pub enum Feature {
     /// single irrefutable tuple destructure (elements are variables / wildcards /
     /// nested irrefutable tuples); the richer shapes land later. [SKY-L0115]
     TuplePatternMatch,
+    /// Two `case` arms head-matching the SAME constructor — nested constructor
+    /// discrimination (`Just (Just a) -> … ; Just Nothing -> … ; Nothing -> …`).
+    /// M3b-2 emits a Rust `match` with one arm per top-level constructor; ordered
+    /// discrimination on a refutable nested payload needs the multi-arm-per-
+    /// variant match-compilation that lands later. The exhaustiveness checker
+    /// still validates such a `case` first (so a non-exhaustive one surfaces as
+    /// SKY-T0010), and an exhaustive one reaching here is gated cleanly rather
+    /// than mis-lowered. [SKY-L0116]
+    NestedCtorDiscrimination,
 }
 
 /// Errors raised during lowering: "not supported yet" — distinct from
@@ -714,6 +727,7 @@ const fn feature_code(f: Feature) -> Code {
         Feature::CtorAsFunction => SKY_L0113,
         Feature::CtorPayloadFunction => SKY_L0114,
         Feature::TuplePatternMatch => SKY_L0115,
+        Feature::NestedCtorDiscrimination => SKY_L0116,
     }
 }
 

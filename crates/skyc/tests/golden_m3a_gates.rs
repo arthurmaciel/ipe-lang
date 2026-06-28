@@ -4,8 +4,9 @@
 //!
 //! * a constructor pattern binding the wrong number of payload fields →
 //!   SKY-T0013 (a type error),
-//! * a nested constructor payload pattern (`Som (Som x)`) → SKY-L0112 (the
-//!   nested-payload lowering gap),
+//! * two `case` arms head-matching the same constructor with a refutable nested
+//!   payload (`Som (Som x)` then `Som Non`) → SKY-L0116 (nested constructor
+//!   discrimination; M3b-2 lowers one arm per top-level constructor),
 //! * a partially-applied payload constructor used as a function value
 //!   (`Node Leaf 1`) → SKY-L0113 (the constructor-as-function lowering gap).
 //!
@@ -60,11 +61,14 @@ fn ctor_pattern_arity_is_sky_t0013() {
 }
 
 #[test]
-fn nested_payload_pattern_is_sky_l0112() {
+fn duplicate_constructor_arms_is_sky_l0116() {
+    // `Som (Som x) -> …` then `Som Non -> …`: two arms for `Som`. The nested
+    // payload pattern itself now lowers (M3b-2); the second `Som` arm is the
+    // gated shape (nested constructor discrimination).
     assert_gate(
         "m3a_gate_nested",
         "m3a_gate_nested_emit",
-        sky_diagnostics::SKY_L0112,
+        sky_diagnostics::SKY_L0116,
     );
 }
 

@@ -1,0 +1,16 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A RECORD sub-pattern nested inside a constructor payload (`Box { x }`).
+-- M3b-2 lowers a record pattern at the `case` scrutinee or a `let` destructure,
+-- but a record nested in a constructor payload needs the payload field's record
+-- type threaded to the lowerer — not yet. [SKY-L0112]
+type Box = Box { x : Int }
+
+f : Box -> Int
+f b =
+    case b of
+        Box { x } -> x
+
+main =
+    println (String.fromInt (f (Box { x = 5 })))

@@ -155,10 +155,14 @@ pub enum Expr_ {
     Update(Box<Expr>, Vec<(Symbol, Expr)>),
 }
 
-/// A resolved `let` value binding: `name = body`.
+/// A resolved `let` binding: `<pat> = body`.
+///
+/// The binder is a resolved [`Pattern`]: a [`Pattern_::PVar`] for the common
+/// `name = body` case, or an irrefutable tuple / record destructure (M3b-2). A
+/// refutable binder is rejected fail-closed at lowering.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct LetBinding {
-    pub name: Located<Symbol>,
+    pub pat: Pattern,
     pub body: Expr,
 }
 
@@ -190,6 +194,10 @@ pub enum Pattern_ {
     /// A tuple pattern `(p0, p1, ...)`. Invariant: arity ≥ 2. Each element is a
     /// resolved sub-pattern; every variable it introduces is bound as a local.
     PTuple(Vec<Pattern>),
+    /// A record pattern `{ x, y }` (M3b-2). Field-pun only: each entry is a
+    /// located field name that also binds a local of the same name. Always
+    /// irrefutable; carries at least one field.
+    PRecord(Vec<Located<Symbol>>),
 }
 
 /// Canonical type (M0 subset). Mirrors `Can.Type` narrowed to arrows, type

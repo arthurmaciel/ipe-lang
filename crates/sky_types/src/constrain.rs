@@ -646,7 +646,10 @@ impl<'a> Builder<'a> {
                 let mut let_local = local.clone();
                 for b in bindings {
                     let bv = self.constrain_expr(&let_local, &b.body)?;
-                    let_local.insert(b.name.value, bv);
+                    // The binder may be a plain name or an irrefutable destructure
+                    // (tuple / record); `constrain_pattern` ties the binder's
+                    // shape to the value's type and binds every leaf variable.
+                    self.constrain_pattern(&mut let_local, &b.pat, bv)?;
                 }
                 self.constrain_expr(&let_local, body)?
             }
@@ -893,6 +896,27 @@ impl<'a> Builder<'a> {
                 self.eq(pat.span, tuple, scrut_var);
                 for (sub, ev) in elems.iter().zip(elem_vars) {
                     self.constrain_pattern(local, sub, ev)?;
+                }
+                Ok(())
+            }
+            canon::Pattern_::PRecord(fields) => {
+                // A field-pun record pattern `{ x, y }` binds each named field of
+                // the scrutinee record. Closed records carry no row variable, so
+                // the scrutinee's full field set may not be settled here; instead
+                // of forcing an exact-shape unification (which would reject the
+                // legal subset pattern `{ x }` on a `{ x, y }` record), each
+                // field is pulled out with the SAME deferred field-access channel
+                // a `record.field` expression uses. After the main solve,
+                // `resolve_field_accesses` links each binder to the field's type.
+                for f in fields {
+                    let result = self.flex()?;
+                    self.field_accesses.push(FieldAccess {
+                        record: scrut_var,
+                        field: f.value,
+                        result,
+                        span: f.span,
+                    });
+                    local.insert(f.value, result);
                 }
                 Ok(())
             }

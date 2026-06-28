@@ -1,0 +1,17 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A NESTED non-exhaustive `case`: the `Som` arm only matches when its inner
+-- value is itself `Som`, so `Som Non` is uncovered. The usefulness checker must
+-- catch this as SKY-T0010 (naming the missing `Som Non`) BEFORE emit, so rustc
+-- never sees a non-exhaustive `match`.
+type Opt a = Som a | Non
+
+f : Opt (Opt Int) -> Int
+f o =
+    case o of
+        Som (Som x) -> x
+        Non -> 0
+
+main =
+    println (String.fromInt (f Non))

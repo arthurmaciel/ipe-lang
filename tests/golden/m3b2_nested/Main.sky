@@ -1,0 +1,39 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A nested TUPLE pattern inside a constructor payload: `Wrap (a, c)`.
+type Box a = Wrap a | Empty
+
+boxSum : Box (Int, Int) -> Int
+boxSum b =
+    case b of
+        Wrap (a, c) -> a + c
+        Empty -> 0
+
+-- Nested wildcard sub-patterns in a recursive constructor payload.
+type Tree = Node Tree Int Tree | Leaf
+
+label : Tree -> Int
+label t =
+    case t of
+        Node _ x _ -> x
+        Leaf -> 0
+
+-- A record pattern as a single irrefutable `case` arm.
+recSum : { x : Int, y : Int } -> Int
+recSum r =
+    case r of
+        { x, y } -> x + y
+
+-- Irrefutable LET destructure — a tuple and a record binder.
+letParts : Int
+letParts =
+    let
+        (a, b) = (10, 20)
+        { x, y } = { x = 1, y = 2 }
+    in
+    a + b + x + y
+
+-- 3 + 5 + 42 + 33 = 83, the same value the Go reference compiler prints.
+main =
+    println (String.fromInt (boxSum (Wrap (1, 2)) + label (Node Leaf 5 Leaf) + recSum { x = 20, y = 22 } + letParts))

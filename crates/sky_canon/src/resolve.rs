@@ -357,6 +357,12 @@ fn bind_pattern_names(p: &src::Pattern_, env: &mut Env) {
                 bind_pattern_names(&e.value, env);
             }
         }
+        src::Pattern_::PRecord(fields) => {
+            // Field-pun: each field name binds a local of the same name.
+            for f in fields {
+                env.add_local(f.value);
+            }
+        }
     }
 }
 
@@ -401,6 +407,11 @@ fn canonicalise_pattern(
                 can_elems.push(canonicalise_pattern(e, env, interner)?);
             }
             canon::Pattern_::PTuple(can_elems)
+        }
+        src::Pattern_::PRecord(fields) => {
+            // Field-pun record pattern: the field names carry through verbatim
+            // (the binding of each as a local happens in `bind_pattern_names`).
+            canon::Pattern_::PRecord(fields.clone())
         }
     };
     Ok(Located::new(span, node))
@@ -466,9 +477,16 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
             let mut can_bindings = Vec::with_capacity(bindings.len());
             for b in bindings {
                 let can_body = canonicalise_expr(&b.body, &let_env, interner)?;
-                let_env.add_local(b.name.value);
+                // The binder's value is resolved against the scope so far; then
+                // every variable it introduces (a plain name, or each leaf of a
+                // tuple / record destructure) becomes a local for the bindings
+                // that follow and the `in` body. The binder pattern itself is
+                // canonicalised against the enclosing env (consistent with how
+                // `case` arms and lambda parameters resolve their patterns).
+                let can_pat = canonicalise_pattern(&b.pat, &let_env, interner)?;
+                bind_pattern_names(&b.pat.value, &mut let_env);
                 can_bindings.push(canon::LetBinding {
-                    name: b.name,
+                    pat: can_pat,
                     body: can_body,
                 });
             }
