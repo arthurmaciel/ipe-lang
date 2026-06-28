@@ -1,0 +1,15 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- An unrecognised escape resolves to backslash + char, two scalar values, which
+-- violates the single-character invariant the char backend relies on. In
+-- pattern position `'\q'` must be rejected at lex time as SKY-P0015 — never
+-- silently lowered to a two-character literal.
+grade : Char -> Int
+grade c =
+    case c of
+        '\q' -> 1
+        _ -> 0
+
+main =
+    println (String.fromInt (grade 'a'))

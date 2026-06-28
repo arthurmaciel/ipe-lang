@@ -1,0 +1,69 @@
+//! Milestone-3b-3 soundness floor for malformed character literals.
+//!
+//! An unrecognised escape inside a char literal (e.g. `'\q'`) resolves to
+//! backslash + char — two scalar values — which violates the single-character
+//! invariant the char backend relies on. The lexer rejects it at lex time as
+//! SKY-P0015 (`MalformedChar`) with NO emit, in BOTH pattern position and
+//! scrutinee position. Recognised escapes (`\n \t \r \\ \" \' \0`) and plain
+//! chars are all exactly one scalar value, so no valid program regresses.
+//!
+//! Each fixture is driven through the full `skyc` pipeline and asserted to
+//! produce its exact code AND to leave no `main.rs` behind (exit-1, no emit).
+
+use std::path::{Path, PathBuf};
+
+use skyc::CliError;
+
+fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+fn assert_malformed_char(fixture: &str, out_suffix: &str) {
+    let root = repo_root();
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join(fixture)
+        .join("Main.sky");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+    let built = skyc::build(&entry, &out, &runtime);
+    let got = match &built {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        got,
+        Some(sky_diagnostics::SKY_P0015),
+        "fixture {fixture}: expected SKY-P0015, got build result {built:?}"
+    );
+
+    // Soundness floor: a rejected program emits nothing.
+    let emitted = out.join("src").join("main.rs");
+    assert!(
+        !emitted.exists(),
+        "fixture {fixture}: expected no emit, but {} was written",
+        emitted.display()
+    );
+}
+
+#[test]
+fn unrecognised_escape_in_pattern_position_is_sky_p0015() {
+    assert_malformed_char(
+        "m3b3_gate_malformed_char_pattern",
+        "m3b3_gate_malformed_char_pattern_emit",
+    );
+}
+
+#[test]
+fn unrecognised_escape_in_scrutinee_position_is_sky_p0015() {
+    assert_malformed_char(
+        "m3b3_gate_malformed_char_scrutinee",
+        "m3b3_gate_malformed_char_scrutinee_emit",
+    );
+}

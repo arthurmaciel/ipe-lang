@@ -559,6 +559,14 @@ mod tests {
         assert_eq!(err_code(&format!("{HDR}c =\n    ''\n")), "SKY-P0015");
         // Multi-character char literal `'ab'`.
         assert_eq!(err_code(&format!("{HDR}c =\n    'ab'\n")), "SKY-P0015");
+        // Unrecognised escapes resolve to backslash + char (two scalar values),
+        // which violates the single-character invariant → SKY-P0015.
+        assert_eq!(err_code(&format!("{HDR}c =\n    '\\q'\n")), "SKY-P0015");
+        assert_eq!(err_code(&format!("{HDR}c =\n    '\\z'\n")), "SKY-P0015");
+        // Recognised escapes and plain chars stay valid (single scalar value).
+        assert_eq!(err_code(&format!("{HDR}c =\n    '\\n'\n")), "OK");
+        assert_eq!(err_code(&format!("{HDR}c =\n    '\\0'\n")), "OK");
+        assert_eq!(err_code(&format!("{HDR}c =\n    'a'\n")), "OK");
     }
 
     #[test]
