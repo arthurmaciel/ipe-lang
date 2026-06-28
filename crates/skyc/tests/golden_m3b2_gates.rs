@@ -3,10 +3,17 @@
 //! cargo-failing Rust:
 //!
 //! * a RECORD sub-pattern nested in a constructor payload (`Box { x }`) →
-//!   SKY-L0112 (the nested-record-carrier gap), and
+//!   SKY-L0112 (the nested-record-carrier gap),
 //! * a non-exhaustive NESTED `case` (`Just (Just a) -> … ; Nothing -> …`,
 //!   missing `Just Nothing`) → SKY-T0010, caught BEFORE emit so rustc never
-//!   sees a non-exhaustive `match` (the soundness floor).
+//!   sees a non-exhaustive `match` (the soundness floor),
+//! * a NESTED redundant arm (`Som x` then the subsumed `Som (Som y)`) →
+//!   SKY-T0011, computed over the same nested matrix as exhaustiveness,
+//! * a SINGLE-arm tuple `case` with a refutable constructor element over a
+//!   one-constructor carrier (type-level exhaustive, so it clears SKY-T0010 but
+//!   the lowerer still can't destructure it) → SKY-L0115, and
+//! * a REFUTABLE `let` destructure (`let (Wrap x) = …`) → SKY-L0115, so the
+//!   backend never emits a refutable Rust `let` that rustc would reject.
 //!
 //! (The sibling SKY-L0116 — two arms for the same constructor — is locked by
 //! `golden_m3a_gates::duplicate_constructor_arms_is_sky_l0116`.)
@@ -63,5 +70,32 @@ fn non_exhaustive_nested_case_is_sky_t0010() {
         "m3b2_gate_nonexhaustive",
         "m3b2_gate_nonexhaustive_emit",
         sky_diagnostics::SKY_T0010,
+    );
+}
+
+#[test]
+fn redundant_nested_arm_is_sky_t0011() {
+    assert_gate(
+        "m3b2_gate_redundant_nested",
+        "m3b2_gate_redundant_nested_emit",
+        sky_diagnostics::SKY_T0011,
+    );
+}
+
+#[test]
+fn single_arm_refutable_tuple_case_is_sky_l0115() {
+    assert_gate(
+        "m3b2_gate_refutable_single",
+        "m3b2_gate_refutable_single_emit",
+        sky_diagnostics::SKY_L0115,
+    );
+}
+
+#[test]
+fn refutable_let_destructure_is_sky_l0115() {
+    assert_gate(
+        "m3b2_gate_refutable_let",
+        "m3b2_gate_refutable_let_emit",
+        sky_diagnostics::SKY_L0115,
     );
 }

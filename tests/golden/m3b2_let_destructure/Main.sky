@@ -1,0 +1,28 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- The two irrefutable LET-destructure examples from M3b-2, each evaluating to 42:
+--
+--   `let (a, b) = (40, 2) in a + b`  ->  42   (tuple binder)
+--   `let { x } = { x = 42 } in x`    ->  42   (record binder, single named field)
+--
+-- A `{ x }` binder over a one-field record names the whole field set, so the
+-- complete record pattern reaches the backend exactly as a record literal does.
+-- The program sums them to 84 — the same value the Go reference compiler prints.
+
+tupleParts : Int
+tupleParts =
+    let
+        (a, b) = (40, 2)
+    in
+    a + b
+
+recordPart : Int
+recordPart =
+    let
+        { x } = { x = 42 }
+    in
+    x
+
+main =
+    println (String.fromInt (tupleParts + recordPart))

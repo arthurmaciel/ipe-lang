@@ -1,0 +1,19 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A NESTED redundant arm: `Som x` (a bare variable payload) already matches
+-- every `Som _` value, so the later `Som (Som y)` arm covers nothing new. The
+-- usefulness checker must report it as SKY-T0011 (naming `Som`) — the redundancy
+-- finding is computed over the same nested matrix as exhaustiveness, so it fires
+-- even when the useless arm is a deeper pattern than the arm that subsumes it.
+type Opt a = Som a | Non
+
+f : Opt (Opt Int) -> Int
+f o =
+    case o of
+        Som x -> 1
+        Som (Som y) -> y
+        Non -> 0
+
+main =
+    println (String.fromInt (f Non))
