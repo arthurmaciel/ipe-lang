@@ -117,6 +117,10 @@ pub struct Variant {
 /// * `ord` realises Sky's **Comparable** super-type (`Int` / `Float` / `Char` /
 ///   `String` / `Bool`) for the ordering comparisons `<` `>` `<=` `>=`, mapping
 ///   to Rust's `PartialOrd`.
+/// * `eq` realises Sky's **Equatable** super-type (every non-function type) for
+///   the equality comparisons `==` `/=`, mapping to Rust's `PartialEq`. Unlike
+///   `ord` / the arithmetic traits it adds no `copy`: `PartialEq::eq` takes
+///   `&self`, so an equated value is borrowed, never moved.
 /// * `copy` is added when a bound value is used more than once and is a
 ///   bit-copyable primitive (every `Number` / `Comparable` primitive except
 ///   `String`), so the generated body can reuse it without a move error.
@@ -138,6 +142,7 @@ impl BoundSet {
     const ORD: u8 = 1 << 3;
     const COPY: u8 = 1 << 4;
     const CLONE: u8 = 1 << 5;
+    const EQ: u8 = 1 << 6;
 
     /// The empty bound set: an unconstrained, structurally-parametric variable.
     pub const UNBOUNDED: Self = Self(0);
@@ -171,6 +176,12 @@ impl BoundSet {
     #[must_use]
     pub const fn with_ord(self) -> Self {
         Self(self.0 | Self::ORD)
+    }
+
+    /// This set with the `PartialEq` (Equatable equality) bound.
+    #[must_use]
+    pub const fn with_eq(self) -> Self {
+        Self(self.0 | Self::EQ)
     }
 
     /// This set with the `Copy` (bit-copyable reuse) bound.
@@ -207,6 +218,12 @@ impl BoundSet {
     #[must_use]
     pub const fn has_ord(self) -> bool {
         self.0 & Self::ORD != 0
+    }
+
+    /// Whether the `PartialEq` bound is set.
+    #[must_use]
+    pub const fn has_eq(self) -> bool {
+        self.0 & Self::EQ != 0
     }
 
     /// Whether the `Copy` bound is set.

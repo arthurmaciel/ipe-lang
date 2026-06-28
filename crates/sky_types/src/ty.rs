@@ -46,11 +46,15 @@ pub enum Ty {
 /// performs on it that only *some* types support.
 ///
 /// A bare type variable is structurally parametric — the body passes it through
-/// untouched, so any type works. The moment a body adds it (`x + x`) or orders
-/// it (`a > b`), the variable is no longer "any type": it must be a type that
-/// supports that operation. Sky's two relevant super-types are **Number** (the
-/// numeric operators `+ - *`, satisfied by `Int` / `Float`) and **Comparable**
-/// (the ordering comparisons `< > <= >=`, satisfied by the scalar primitives).
+/// untouched, so any type works. The moment a body adds it (`x + x`), orders
+/// it (`a > b`), or compares it for equality (`a == b`), the variable is no
+/// longer "any type": it must be a type that supports that operation. Sky's
+/// relevant super-types are **Number** (the numeric operators `+ - *`, satisfied
+/// by `Int` / `Float`), **Comparable** (the ordering comparisons `< > <= >=`,
+/// satisfied by the scalar primitives), and **Equatable** (the equality
+/// comparisons `== /=`, satisfied by every non-function type — Rust's
+/// `PartialEq` is derivable for primitives, tuples, records, and enums but never
+/// for a function).
 ///
 /// Each obligation is one bit, so two variables that unify merge their
 /// obligations with a bitwise OR ([`Self::union`]) — the merged variable owes
@@ -65,6 +69,7 @@ impl TyBounds {
     const SUB: u8 = 1 << 1;
     const MUL: u8 = 1 << 2;
     const ORD: u8 = 1 << 3;
+    const EQ: u8 = 1 << 4;
 
     /// No obligation — a structurally-parametric variable.
     pub const EMPTY: Self = Self(0);
@@ -87,6 +92,11 @@ impl TyBounds {
     pub const fn ord() -> Self {
         Self(Self::ORD)
     }
+    /// The equality obligation (`== /=` → Rust `PartialEq`).
+    #[must_use]
+    pub const fn eq() -> Self {
+        Self(Self::EQ)
+    }
 
     /// Whether this set carries no obligation at all.
     #[must_use]
@@ -108,6 +118,10 @@ impl TyBounds {
     #[must_use]
     pub const fn has_ord(self) -> bool {
         self.0 & Self::ORD != 0
+    }
+    #[must_use]
+    pub const fn has_eq(self) -> bool {
+        self.0 & Self::EQ != 0
     }
 
     /// Whether any numeric operator (`+ - *`) constrains this variable — i.e. it
@@ -148,7 +162,8 @@ pub enum Content {
     /// inferred variable that may still pin to a matching concrete type).
     ///
     /// A super-typed flex pins to any structure that satisfies its obligations
-    /// (`Int` / `Float` for Number; the scalar primitives for Comparable); a
+    /// (`Int` / `Float` for Number; the scalar primitives for Comparable; any
+    /// non-function type for Equatable); a
     /// super-typed rigid against a concrete structure is a mismatch, exactly as a
     /// plain rigid is — the annotation promised a generic the body is now trying
     /// to pin down.

@@ -27,27 +27,37 @@ use crate::ty::{Content, FlatType, TyBounds};
 use crate::unionfind::{UnionFind, VarId};
 
 /// Whether a concrete structure `flat` satisfies a variable's super-type
-/// obligations `bounds`.
+/// obligations `bounds` at the head.
 ///
 /// This is the *pin* check: a super-typed flex variable may collapse onto a
 /// concrete type only when that type really supports the operations the body
 /// performed. Numeric obligations (`+ - *`) are met by `Int` / `Float`;
 /// ordering (`< > <= >=`) is met by the scalar primitives `Int` / `Float` /
-/// `Char` / `String` / `Bool`. Anything else — a function, tuple, record, or a
-/// type constructor with arguments — satisfies neither, so a super-typed
-/// variable cannot pin to it.
+/// `Char` / `String` / `Bool` — both require a bare type constructor.
+///
+/// Equality (`== /=`) is far more permissive: structural equality is total over
+/// every non-function type, so an equality obligation pins to any structure that
+/// is not a function head (tuples, records, enums, and the primitives all derive
+/// Rust's `PartialEq`). A *nested* function inside such a structure still makes
+/// it non-equatable, but that is caught by the post-solve deep gate
+/// ([`crate::concrete_super_ok`]), which has the resolved type in hand; here at
+/// the head a function is the only outright rejection for equality.
 fn super_concrete_ok(interner: &Interner, bounds: TyBounds, flat: &FlatType) -> bool {
-    let FlatType::Con { module, name, args } = flat else {
-        return false;
-    };
-    if !module.is_empty() || !args.is_empty() {
+    // A function supports none of the super-types: not numeric, not ordered, and
+    // not equatable (Rust never derives `PartialEq` for a function).
+    if matches!(flat, FlatType::Fun(_, _)) {
         return false;
     }
-    let Some(name) = interner.resolve(*name) else {
-        return false;
+    // Numeric / ordering need a bare scalar primitive. Equality imposes no head
+    // restriction beyond the non-function rejection above.
+    let prim = match flat {
+        FlatType::Con { module, name, args } if module.is_empty() && args.is_empty() => {
+            interner.resolve(*name)
+        }
+        _ => None,
     };
-    let number_ok = matches!(name, "Int" | "Float");
-    let ord_ok = matches!(name, "Int" | "Float" | "Char" | "String" | "Bool");
+    let number_ok = matches!(prim, Some("Int" | "Float"));
+    let ord_ok = matches!(prim, Some("Int" | "Float" | "Char" | "String" | "Bool"));
     (!bounds.has_number() || number_ok) && (!bounds.has_ord() || ord_ok)
 }
 

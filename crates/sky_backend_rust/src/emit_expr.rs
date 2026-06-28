@@ -670,8 +670,9 @@ fn emit_lambda(
 /// `n` is the variable's 1-based position, which is also its own Rust name
 /// `T{n}` — the arithmetic `::core::ops` traits take `Output = T{n}` so the
 /// operation stays closed over the parameter's type (`x + x : T{n}`). The trait
-/// order is fixed (`Add`, `Sub`, `Mul`, `PartialOrd`, `Copy`, `Clone`) so the
-/// emission is deterministic regardless of how the bound set was assembled.
+/// order is fixed (`Add`, `Sub`, `Mul`, `PartialOrd`, `PartialEq`, `Copy`,
+/// `Clone`) so the emission is deterministic regardless of how the bound set was
+/// assembled.
 fn render_bounds(bounds: BoundSet, n: usize) -> String {
     if bounds.is_unbounded() {
         return String::new();
@@ -688,6 +689,9 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
     }
     if bounds.has_ord() {
         traits.push("PartialOrd".to_owned());
+    }
+    if bounds.has_eq() {
+        traits.push("PartialEq".to_owned());
     }
     if bounds.has_copy() {
         traits.push("Copy".to_owned());

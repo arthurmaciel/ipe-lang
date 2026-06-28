@@ -80,8 +80,10 @@ enum BinopClass {
     /// `< > <= >=`: `Comparable a => a -> a -> Bool` — operands share one
     /// ordered type; the result is `Bool`.
     Order,
-    /// `== /=`: `a -> a -> Bool` — operands share *any* one type (structural
-    /// equality is total over non-function types), so no super-type obligation.
+    /// `== /=`: `Equatable a => a -> a -> Bool` — operands share one equatable
+    /// type (structural equality is total over every non-function type); the
+    /// result is `Bool`. The shared variable carries the equality obligation, so
+    /// a generalised use emits a Rust `PartialEq` bound.
     Equality,
     /// `&& ||`: `Bool -> Bool -> Bool`.
     Boolean,
@@ -139,11 +141,16 @@ pub struct Builder<'a> {
     /// post-solve to check a super-typed binding's obligations against the
     /// concrete type each use pins it to.
     scheme_apps: Vec<SchemeApp>,
-    /// Every super-typed flex variable minted by a numeric/ordering operator.
-    /// Read post-solve to apply numeric defaulting: an unpinned `Number`
-    /// variable resolves to `Int`, matching the reference compiler's defaulting
-    /// of an otherwise-unconstrained `number`.
-    super_vars: Vec<VarId>,
+    /// Every super-typed flex variable minted by a numeric / ordering / equality
+    /// operator, paired with the obligations it was minted with and the operand
+    /// span to blame. Read post-solve for two jobs: numeric defaulting (an
+    /// unpinned `Number` variable resolves to `Int`, matching the reference
+    /// compiler's defaulting of an otherwise-unconstrained `number`) and the
+    /// concrete-pin soundness gate (a variable that pinned to a concrete type
+    /// during solving must be one the operation truly supports — an equality
+    /// obligation rejects a type containing a function, which Rust cannot
+    /// compare, with SKY-T0014 rather than emitting code `cargo` rejects).
+    super_vars: Vec<(VarId, TyBounds, Span)>,
 }
 
 /// A single use site of a typed top-level binding.
@@ -221,7 +228,7 @@ pub struct Generated {
     pub record_updates: Vec<RecordUpdate>,
     pub typed_rigids: Vec<(Symbol, BTreeMap<Symbol, VarId>)>,
     pub scheme_apps: Vec<SchemeApp>,
-    pub super_vars: Vec<VarId>,
+    pub super_vars: Vec<(VarId, TyBounds, Span)>,
 }
 
 impl<'a> Builder<'a> {
@@ -381,16 +388,18 @@ impl<'a> Builder<'a> {
     }
 
     /// Mint a fresh super-typed flexible variable carrying `bounds` — a value
-    /// the body has constrained to a Sky super-type (numeric / ordered) but not
-    /// yet to a concrete type. It pins to any matching primitive, or — when it
-    /// meets an annotation skolem — lifts that skolem's obligations so the
-    /// generic parameter is emitted with the matching trait bound.
-    fn super_var(&mut self, bounds: TyBounds) -> DResult<VarId> {
+    /// the body has constrained to a Sky super-type (numeric / ordered /
+    /// equatable) but not yet to a concrete type. It pins to any matching type,
+    /// or — when it meets an annotation skolem — lifts that skolem's obligations
+    /// so the generic parameter is emitted with the matching trait bound.
+    /// `span` is the operand span blamed if the variable later pins to a
+    /// concrete type that does not actually support the operation.
+    fn super_var(&mut self, bounds: TyBounds, span: Span) -> DResult<VarId> {
         let v = self.uf.fresh(Content::Super {
             rigid: false,
             bounds,
         })?;
-        self.super_vars.push(v);
+        self.super_vars.push((v, bounds, span));
         Ok(v)
     }
 
@@ -413,7 +422,7 @@ impl<'a> Builder<'a> {
                 // numeric variable. A concrete operand (`x + 1`) pins it to that
                 // type; an all-variable use (`x + x`) leaves it generic, carrying
                 // the operator's obligation so generalisation emits the bound.
-                let s = self.super_var(bounds)?;
+                let s = self.super_var(bounds, lhs.span)?;
                 self.eq(lhs.span, lv, s);
                 self.eq(rhs.span, rv, s);
                 Ok(s)
@@ -435,15 +444,22 @@ impl<'a> Builder<'a> {
             BinopClass::Order => {
                 // `< > <= >=` are Comparable-polymorphic: operands share one
                 // ordered type (carrying the ordering obligation), result Bool.
-                let s = self.super_var(TyBounds::ord())?;
+                let s = self.super_var(TyBounds::ord(), lhs.span)?;
                 self.eq(lhs.span, lv, s);
                 self.eq(rhs.span, rv, s);
                 self.bool_var()
             }
             BinopClass::Equality => {
-                // `== /=`: operands unify to one shared type (any non-function
-                // type supports structural equality); the result is Bool.
-                self.eq(rhs.span, lv, rv);
+                // `== /=` are Equatable-polymorphic: operands share one equatable
+                // type (carrying the equality obligation), result Bool. A
+                // concrete operand pins it (`n == 1` → `Int`); an all-variable
+                // use (`p == q`) leaves it generic, so generalisation emits a
+                // `PartialEq` bound rather than an unbounded `T{n}` the backend
+                // could not compare. A function operand fails the pin and a
+                // function instantiation fails the post-solve gate (SKY-T0014).
+                let s = self.super_var(TyBounds::eq(), lhs.span)?;
+                self.eq(lhs.span, lv, s);
+                self.eq(rhs.span, rv, s);
                 self.bool_var()
             }
             BinopClass::Boolean => {

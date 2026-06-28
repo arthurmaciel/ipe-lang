@@ -526,13 +526,18 @@ impl<'a> Lowerer<'a> {
     /// The Rust trait bounds a quantified variable `var` carries, translating the
     /// type checker's super-type obligations ([`TyBounds`]) into the backend's
     /// [`BoundSet`]. A numeric obligation maps to the std arithmetic op trait it
-    /// used (`Add` / `Sub` / `Mul`); an ordering obligation maps to `PartialOrd`.
-    /// Any super-typed variable also gains `Copy`: the operations consume their
-    /// operands by value (Rust's `Add` takes `self`), and a body that adds or
-    /// compares a value reuses it, so the parameter must be bit-copyable. A
-    /// variable with no obligation (or a binding with no recorded bounds) is
-    /// unbounded — a bare `T{n}`, byte-identical to a structurally-parametric
-    /// generic.
+    /// used (`Add` / `Sub` / `Mul`); an ordering obligation maps to `PartialOrd`;
+    /// an equality obligation maps to `PartialEq`.
+    ///
+    /// A `Number` / `Comparable` variable also gains `Copy`: those operations
+    /// consume their operands by value (Rust's `Add` takes `self`), and a body
+    /// that adds or orders a value reuses it, so the parameter must be
+    /// bit-copyable. Equality is the exception — `PartialEq::eq` takes `&self`,
+    /// so an *equality-only* variable borrows its operands and needs no `Copy`
+    /// (which would also wrongly exclude `String`, a non-`Copy` but equatable
+    /// type). A variable with no obligation (or a binding with no recorded
+    /// bounds) is unbounded — a bare `T{n}`, byte-identical to a
+    /// structurally-parametric generic.
     fn bounds_for(var_bounds: Option<&BTreeMap<Symbol, TyBounds>>, var: Symbol) -> BoundSet {
         let Some(b) = var_bounds.and_then(|m| m.get(&var)).copied() else {
             return BoundSet::UNBOUNDED;
@@ -553,7 +558,17 @@ impl<'a> Lowerer<'a> {
         if b.has_ord() {
             set = set.with_ord();
         }
-        set.with_copy()
+        if b.has_eq() {
+            set = set.with_eq();
+        }
+        // Number / Comparable operations move their operand (`Add::add(self)`,
+        // and the body reuses it), so the parameter must be `Copy`. Equality
+        // borrows (`PartialEq::eq(&self)`), so an equality-only variable adds no
+        // `Copy`.
+        if b.has_number() || b.has_ord() {
+            set = set.with_copy();
+        }
+        set
     }
 
     /// Split a typed binding's arrow annotation into one [`IrType`] per

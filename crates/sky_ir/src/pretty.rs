@@ -310,6 +310,9 @@ fn bound_suffix(bounds: BoundSet) -> String {
     if bounds.has_ord() {
         parts.push("Ord");
     }
+    if bounds.has_eq() {
+        parts.push("Eq");
+    }
     if bounds.has_copy() {
         parts.push("Copy");
     }
