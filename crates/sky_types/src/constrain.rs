@@ -181,11 +181,29 @@ impl<'a> Builder<'a> {
             record_updates: Vec::new(),
         };
 
-        // First pass: record annotation types so any binding can reference any
+        // First pass: register every binding so any binding can reference any
         // other (forward references resolve).
+        //
+        // * Typed bindings record their annotation type — the binding's *scheme*,
+        //   instantiated fresh (flex) at each reference (`VarTopLevel`).
+        // * Untyped bindings mint one shared monomorphic variable up front. Every
+        //   reference resolves to that *same* variable, so a reference is checked
+        //   against the binding's inferred type instead of being left
+        //   unconstrained. The variable's settled type is read back into `env`.
+        //   (Generalising an *un*annotated binding so it can be used at several
+        //   concrete types in one module needs rank-based let-generalisation,
+        //   which the M2a solver does not yet model — so an untyped polymorphic
+        //   binding is monomorphic at its use sites. Sound, not yet complete;
+        //   write an annotation to get full polymorphism.)
         for def in &module.defs {
-            if let canon::Def::Typed { name, ty, .. } = def {
-                builder.top_level.insert(name.value, from_canon(ty));
+            match def {
+                canon::Def::Typed { name, ty, .. } => {
+                    builder.top_level.insert(name.value, from_canon(ty));
+                }
+                canon::Def::Untyped { name, .. } => {
+                    let v = builder.flex()?;
+                    builder.untyped.insert(name.value, v);
+                }
             }
         }
 
@@ -208,6 +226,10 @@ impl<'a> Builder<'a> {
 
     fn flex(&mut self) -> DResult<VarId> {
         self.uf.fresh(Content::Flex)
+    }
+
+    fn rigid(&mut self) -> DResult<VarId> {
+        self.uf.fresh(Content::Rigid)
     }
 
     fn structure(&mut self, f: FlatType) -> DResult<VarId> {
@@ -299,27 +321,53 @@ impl<'a> Builder<'a> {
 
     // ── Ty ⇄ solver bridges ────────────────────────────────────────────────
 
-    /// Instantiate a resolved [`Ty`] into fresh union-find structure. Type
-    /// variables alpha-rename consistently *within this call* via `vars`.
+    /// Instantiate a resolved [`Ty`] into fresh union-find structure, with every
+    /// type variable replaced by a fresh **flexible** variable.
+    ///
+    /// This is the per-call-site instantiation (the Haskell `CForeign` path):
+    /// each reference to a polymorphic top-level binding alpha-renames the
+    /// binding's scheme into fresh flex variables, so the call unifies against the
+    /// concrete argument types at *this* site without pinning the binding's other
+    /// uses. Type variables alpha-rename consistently *within this call* via a
+    /// fresh `vars` map (`a -> a` becomes `f -> f`, one shared flex), so calling
+    /// `identity` at `Int` and at `Bool` in the same module yields two
+    /// independent, separately-satisfiable instantiations.
     fn instantiate(&mut self, ty: &Ty) -> DResult<VarId> {
         let mut vars = BTreeMap::new();
-        self.instantiate_in(ty, &mut vars)
+        self.instantiate_in(ty, &mut vars, /* rigid */ false)
     }
 
-    fn instantiate_in(&mut self, ty: &Ty, vars: &mut BTreeMap<u32, VarId>) -> DResult<VarId> {
+    /// Instantiate a resolved [`Ty`] with every type variable replaced by a fresh
+    /// **rigid** (skolem) variable, sharing `vars` across the call so repeated
+    /// occurrences of one annotation variable map to one rigid node.
+    ///
+    /// Used to seed a typed binding's parameters + return when checking its body:
+    /// the whole signature is instantiated through *one* `vars` map so `a` is the
+    /// same rigid everywhere it appears, and distinct annotation variables become
+    /// distinct rigids that the body cannot conflate ([`Content::Rigid`]).
+    fn instantiate_rigid(&mut self, ty: &Ty, vars: &mut BTreeMap<u32, VarId>) -> DResult<VarId> {
+        self.instantiate_in(ty, vars, /* rigid */ true)
+    }
+
+    fn instantiate_in(
+        &mut self,
+        ty: &Ty,
+        vars: &mut BTreeMap<u32, VarId>,
+        rigid: bool,
+    ) -> DResult<VarId> {
         match ty {
             Ty::Unit => self.structure(FlatType::Unit),
             Ty::Tuple(elems) => {
                 let mut elem_vars = Vec::with_capacity(elems.len());
                 for e in elems {
-                    elem_vars.push(self.instantiate_in(e, vars)?);
+                    elem_vars.push(self.instantiate_in(e, vars, rigid)?);
                 }
                 self.structure(FlatType::Tuple(elem_vars))
             }
             Ty::Record(fields) => {
                 let mut field_vars = BTreeMap::new();
                 for (name, field_ty) in fields {
-                    let v = self.instantiate_in(field_ty, vars)?;
+                    let v = self.instantiate_in(field_ty, vars, rigid)?;
                     field_vars.insert(*name, v);
                 }
                 self.structure(FlatType::Record(field_vars))
@@ -328,19 +376,19 @@ impl<'a> Builder<'a> {
                 if let Some(v) = vars.get(id).copied() {
                     return Ok(v);
                 }
-                let v = self.flex()?;
+                let v = if rigid { self.rigid()? } else { self.flex()? };
                 vars.insert(*id, v);
                 Ok(v)
             }
             Ty::Fun(a, b) => {
-                let av = self.instantiate_in(a, vars)?;
-                let bv = self.instantiate_in(b, vars)?;
+                let av = self.instantiate_in(a, vars, rigid)?;
+                let bv = self.instantiate_in(b, vars, rigid)?;
                 self.structure(FlatType::Fun(av, bv))
             }
             Ty::Con { module, name, args } => {
                 let mut arg_vars = Vec::with_capacity(args.len());
                 for a in args {
-                    arg_vars.push(self.instantiate_in(a, vars)?);
+                    arg_vars.push(self.instantiate_in(a, vars, rigid)?);
                 }
                 self.structure(FlatType::Con {
                     module: module.clone(),
@@ -362,6 +410,16 @@ impl<'a> Builder<'a> {
                 ty,
                 ..
             } => {
+                // Instantiate the WHOLE signature through one shared map so every
+                // occurrence of an annotation variable (`a` in `a -> a`) becomes
+                // the *same* rigid (skolem) node, and distinct variables become
+                // distinct rigids. Checking the body against rigids is what makes
+                // the annotation a genuine contract: `f : a -> a; f x = x + 1`
+                // (body pins `a` to `Int`) and `f : a -> b; f x = x` (body
+                // conflates `a` and `b`) are both mismatches rather than silently
+                // accepted. Per-call-site uses instead instantiate the binding's
+                // type as fresh *flex* variables (see [`Self::instantiate`]).
+                let mut rigid_vars = BTreeMap::new();
                 let mut local = BTreeMap::new();
                 let mut cursor = ty;
                 for pat in patterns {
@@ -375,12 +433,12 @@ impl<'a> Builder<'a> {
                         _ => return Err(self.too_many_parameters(name, ty)),
                     };
                     let arg = from_canon(arg_ty);
-                    let arg_var = self.instantiate(&arg)?;
+                    let arg_var = self.instantiate_rigid(&arg, &mut rigid_vars)?;
                     Self::bind_param(&mut local, pat, arg_var);
                     cursor = rest;
                 }
                 let ret_ty = from_canon(cursor);
-                let ret_var = self.instantiate(&ret_ty)?;
+                let ret_var = self.instantiate_rigid(&ret_ty, &mut rigid_vars)?;
                 let body_var = self.constrain_expr(&local, body)?;
                 self.eq(body.span, body_var, ret_var);
                 Ok(())
@@ -391,12 +449,33 @@ impl<'a> Builder<'a> {
                 body,
             } => {
                 let mut local = BTreeMap::new();
+                let mut param_vars = Vec::with_capacity(patterns.len());
                 for pat in patterns {
                     let v = self.flex()?;
                     Self::bind_param(&mut local, pat, v);
+                    param_vars.push(v);
                 }
                 let body_var = self.constrain_expr(&local, body)?;
-                self.untyped.insert(name.value, body_var);
+                // Reconstruct the binding's full type as the right-nested arrow
+                // `p0 -> p1 -> … -> body`, so `env[f]` for `f a b = a` is
+                // `a -> b -> a`, not just the body's type. A binding with no
+                // parameters is just its body's type.
+                let mut arrow = body_var;
+                for pv in param_vars.into_iter().rev() {
+                    arrow = self.structure(FlatType::Fun(pv, arrow))?;
+                }
+                // Tie the reconstructed type to the shared variable minted in the
+                // registration pass, which every reference resolves to.
+                let Some(shared) = self.untyped.get(&name.value).copied() else {
+                    return Err(Diagnostic::CompilerBug {
+                        where_: STAGE,
+                        detail: format!(
+                            "untyped binding `{}` was not registered",
+                            self.interner.resolve(name.value).unwrap_or("<unknown>")
+                        ),
+                    });
+                };
+                self.eq(name.span, arrow, shared);
                 Ok(())
             }
         }
@@ -464,11 +543,18 @@ impl<'a> Builder<'a> {
                 }
             },
             canon::Expr_::VarTopLevel { name, .. } => {
-                let ty = self.top_level.get(name).cloned();
-                match ty {
-                    Some(ty) => self.instantiate(&ty)?,
-                    // Untyped top-level reference: leave fully flexible.
-                    None => self.flex()?,
+                if let Some(ty) = self.top_level.get(name).cloned() {
+                    // Typed binding: instantiate its scheme fresh (flex) here, so
+                    // this use unifies against its own concrete arguments without
+                    // pinning the binding's other call sites.
+                    self.instantiate(&ty)?
+                } else if let Some(v) = self.untyped.get(name).copied() {
+                    // Untyped binding: resolve to its shared monomorphic variable.
+                    v
+                } else {
+                    // Not a binding of this module (e.g. a re-export the
+                    // canonicaliser accepted): leave fully flexible.
+                    self.flex()?
                 }
             }
             canon::Expr_::VarKernel { module, name } => {
@@ -770,7 +856,9 @@ pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DRe
                     })?;
                 let root = uf.find(v)?;
                 match uf.content(root)? {
-                    Content::Flex => results.push(Ty::Var(root)),
+                    // A flexible or rigid variable that survives solving reads
+                    // back as a type variable named by its representative's id.
+                    Content::Flex | Content::Rigid => results.push(Ty::Var(root)),
                     Content::Structure(FlatType::Unit) => results.push(Ty::Unit),
                     Content::Structure(FlatType::Fun(a, b)) => {
                         // Push the rebuild first, then the children so that `a`

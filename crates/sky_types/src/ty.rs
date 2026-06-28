@@ -47,6 +47,18 @@ pub enum Ty {
 pub enum Content {
     /// An unconstrained (flexible) inference variable.
     Flex,
+    /// A *rigid* (skolem) variable minted from a user annotation's type variable
+    /// while checking that binding's body. Mirrors Haskell `Content.RigidVar`.
+    ///
+    /// A rigid variable may unify with a flexible one (the flex adopts it), but
+    /// never with a concrete [`FlatType`] nor with a *different* rigid — so a body
+    /// cannot force an annotated `a` to a concrete shape (`f : a -> a; f x = x + 1`
+    /// is a mismatch, not silently accepted) nor collapse two distinct annotated
+    /// variables (`f : a -> b; f x = x` is a mismatch). Distinctness is by
+    /// union-find identity: two occurrences of the *same* annotation variable
+    /// share one rigid node (via the per-signature instantiation map), so they are
+    /// `equivalent`; two different variables are separate nodes that cannot unify.
+    Rigid,
     /// A resolved concrete structure.
     Structure(FlatType),
 }

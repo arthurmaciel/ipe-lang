@@ -1129,4 +1129,230 @@ mod tests {
             "2-tuple vs 3-tuple must be a type error"
         );
     }
+
+    // ── M2a: let-generalization + per-call-site instantiation ───────────────
+
+    /// A polymorphic annotation `a -> a` reads back into `env` as one quantified
+    /// variable used on both sides of the arrow — `Fun(Var p, Var p)` with the
+    /// *same* `p`. That single quantified var is what a later lowering pass turns
+    /// into one Rust generic parameter (`fn identity<T1>(x: T1) -> T1`).
+    #[test]
+    fn polymorphic_identity_generalises_to_one_var() {
+        let opt = infer_env_ty(
+            "module Main exposing (identity)\n\
+             import Sky.Core.Prelude exposing (..)\n\
+             identity : a -> a\n\
+             identity x =\n    x\n",
+            "identity",
+        );
+        assert!(opt.is_some(), "identity must infer");
+        let Some((ty, _i)) = opt else { return };
+        assert!(
+            matches!(&ty, Ty::Fun(a, r)
+                if matches!((a.as_ref(), r.as_ref()),
+                    (Ty::Var(x), Ty::Var(y)) if x == y)),
+            "identity must generalise to one quantified var `a -> a`, got {ty:?}"
+        );
+    }
+
+    /// One polymorphic function, two concrete uses in the same module: applied to
+    /// an `Int` and to a `Bool`, both must type-check. Each `VarTopLevel`
+    /// reference instantiates `identity`'s scheme into *fresh* variables, so the
+    /// two uses are satisfied independently (Rust later monomorphises the single
+    /// generic fn at both types).
+    #[test]
+    fn polymorphic_identity_used_at_int_and_bool_both_unify() {
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   identity : a -> a\n\
+                   identity x =\n    x\n\
+                   useInt : Int\n\
+                   useInt =\n    identity 5\n\
+                   useBool : Bool\n\
+                   useBool =\n    identity (0 == 0)\n\
+                   main =\n    println (String.fromInt useInt)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            r.is_ok(),
+            "identity used at Int and Bool in one module must infer: {r:?}"
+        );
+        let Ok(solved) = r else { return };
+        // The two consumers settle at their concrete result types.
+        let Some(use_int) = sym(&i, &m, "useInt") else {
+            return;
+        };
+        let Some(use_bool) = sym(&i, &m, "useBool") else {
+            return;
+        };
+        assert_eq!(
+            solved
+                .env
+                .get(&use_int)
+                .and_then(|t| ty_con_name(t, &i))
+                .as_deref(),
+            Some("Int")
+        );
+        assert_eq!(
+            solved
+                .env
+                .get(&use_bool)
+                .and_then(|t| ty_con_name(t, &i))
+                .as_deref(),
+            Some("Bool")
+        );
+    }
+
+    /// `const : a -> b -> a` keeps two *distinct* quantified variables: the first
+    /// parameter and the return share one, the second is its own. Confirms the
+    /// per-signature instantiation maps each annotation variable consistently
+    /// without conflating different ones.
+    #[test]
+    fn const_keeps_two_distinct_type_vars() {
+        let opt = infer_env_ty(
+            "module Main exposing (constant)\n\
+             import Sky.Core.Prelude exposing (..)\n\
+             constant : a -> b -> a\n\
+             constant x y =\n    x\n",
+            "constant",
+        );
+        assert!(opt.is_some(), "constant must infer");
+        let Some((ty, _i)) = opt else { return };
+        // `a -> b -> a`: positions 1 and 3 share one var; position 2 is distinct.
+        assert!(
+            matches!(&ty, Ty::Fun(a1, tail)
+                if matches!(tail.as_ref(), Ty::Fun(b, a2)
+                    if matches!((a1.as_ref(), b.as_ref(), a2.as_ref()),
+                        (Ty::Var(x), Ty::Var(y), Ty::Var(z)) if x == z && x != y))),
+            "constant must be `a -> b -> a` (first param == result, distinct from second), got {ty:?}"
+        );
+    }
+
+    /// `apply : (a -> b) -> a -> b` — a structural pass-through over a function
+    /// argument — infers with `a` and `b` threaded through correctly.
+    #[test]
+    fn higher_order_apply_infers_structurally() {
+        let opt = infer_env_ty(
+            "module Main exposing (apply)\n\
+             import Sky.Core.Prelude exposing (..)\n\
+             apply : (a -> b) -> a -> b\n\
+             apply f x =\n    f x\n",
+            "apply",
+        );
+        assert!(opt.is_some(), "apply must infer");
+        let Some((ty, _i)) = opt else { return };
+        // `(a -> b) -> a -> b`: the `a`s match, the `b`s match, `a` != `b`.
+        assert!(
+            matches!(&ty, Ty::Fun(fa, tail)
+                if matches!((fa.as_ref(), tail.as_ref()),
+                    (Ty::Fun(a1, b1), Ty::Fun(a2, b2))
+                    if matches!((a1.as_ref(), b1.as_ref(), a2.as_ref(), b2.as_ref()),
+                        (Ty::Var(va1), Ty::Var(vb1), Ty::Var(va2), Ty::Var(vb2))
+                        if va1 == va2 && vb1 == vb2 && va1 != vb1))),
+            "apply must be `(a -> b) -> a -> b`, got {ty:?}"
+        );
+    }
+
+    /// `bad : a -> b; bad x = x` returns a value of the parameter's type from a
+    /// signature that promised an *independent* return variable. The rigid
+    /// (skolem) check rejects it — the body cannot conflate two distinct
+    /// annotation variables.
+    #[test]
+    fn annotation_returning_a_different_var_is_rejected() {
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   bad : a -> b\n\
+                   bad x =\n    x\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        assert!(
+            matches!(
+                infer(&m, &mut i),
+                Err(Diagnostic::Type {
+                    msg: TypeError::TypeMismatch { .. },
+                    ..
+                })
+            ),
+            "returning the parameter from `a -> b` must be a type mismatch"
+        );
+    }
+
+    /// `f : a -> a; f x = x + 1` annotates a fully-parametric `a` but the body
+    /// forces it to `Int`. M2a does not generalise a variable the body pins to a
+    /// concrete (or super-typed) shape; with no bound to carry, the rigid check
+    /// rejects it as a mismatch rather than silently accepting an under-specified
+    /// generic.
+    #[test]
+    fn parametric_annotation_body_forcing_concrete_is_rejected() {
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   f : a -> a\n\
+                   f x =\n    x + 1\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        assert!(
+            matches!(
+                infer(&m, &mut i),
+                Err(Diagnostic::Type {
+                    msg: TypeError::TypeMismatch { .. },
+                    ..
+                })
+            ),
+            "a body pinning a parametric `a` to Int must be a type mismatch"
+        );
+    }
+
+    /// An *un*annotated binding reconstructs its full arrow type into `env`
+    /// (parameters included), and an unconstrained parameter generalises: for
+    /// `k a b = a`, `env[k]` is `a -> b -> a` with the first parameter and the
+    /// result sharing one inferred variable.
+    #[test]
+    fn untyped_binding_reconstructs_and_generalises_arrow() {
+        let opt = infer_env_ty(
+            "module Main exposing (k)\n\
+             import Sky.Core.Prelude exposing (..)\n\
+             k a b =\n    a\n",
+            "k",
+        );
+        assert!(opt.is_some(), "k must infer");
+        let Some((ty, _i)) = opt else { return };
+        // Reconstructed `a -> b -> a` (params included), first param == result.
+        assert!(
+            matches!(&ty, Ty::Fun(a1, tail)
+                if matches!(tail.as_ref(), Ty::Fun(b, a2)
+                    if matches!((a1.as_ref(), b.as_ref(), a2.as_ref()),
+                        (Ty::Var(x), Ty::Var(y), Ty::Var(z)) if x == z && x != y))),
+            "k must reconstruct + generalise to `a -> b -> a`, got {ty:?}"
+        );
+    }
+
+    /// Documents the M2a limitation: an *un*annotated polymorphic binding is
+    /// monomorphic at its use sites (no rank-based generalisation yet), so using
+    /// it at two different concrete types in one module is a sound rejection. The
+    /// fix is to annotate it (see
+    /// [`polymorphic_identity_used_at_int_and_bool_both_unify`]).
+    #[test]
+    fn untyped_polymorphic_use_at_two_types_is_rejected() {
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   ident x =\n    x\n\
+                   useInt : Int\n\
+                   useInt =\n    ident 5\n\
+                   useBool : Bool\n\
+                   useBool =\n    ident (0 == 0)\n\
+                   main =\n    println (String.fromInt useInt)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        assert!(
+            infer(&m, &mut i).is_err(),
+            "an unannotated binding used at Int and Bool must be rejected (monomorphic)"
+        );
+    }
 }

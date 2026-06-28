@@ -65,6 +65,20 @@ pub fn unify(
             occurs_guard(uf, budget, interner, span, rb, ra)?;
             uf.union(ra, rb, structure)
         }
+        // A flex adopts the other side's rigid (skolem). No occurs check is
+        // needed: a rigid carries no transitive structure, so the merge cannot
+        // build a cycle. Mirrors the Haskell `(FlexVar, _)` / `(_, FlexVar)` arms.
+        (Content::Flex, Content::Rigid) | (Content::Rigid, Content::Flex) => {
+            uf.union(ra, rb, Content::Rigid)
+        }
+        // A rigid unifies only with itself (caught by the `equivalent` check
+        // above) or with a flex (handled above). Against a concrete structure or
+        // a *different* rigid it is a mismatch — the annotation promised a fully
+        // parametric variable the body is now trying to pin down. Mirrors the
+        // Haskell `(RigidVar _, _)` / `(_, RigidVar _)` reject arms.
+        (Content::Rigid, _) | (_, Content::Rigid) => {
+            Err(mismatch(uf, budget, interner, span, ra, rb))
+        }
         (Content::Structure(fa), Content::Structure(fb)) => {
             unify_flat(uf, budget, interner, span, ra, rb, fa, fb)
         }
@@ -195,7 +209,8 @@ fn occurs(
             return Ok(true);
         }
         match uf.content(here)? {
-            Content::Flex | Content::Structure(FlatType::Unit) => {}
+            // Leaves: a flexible or rigid variable and `Unit` carry no children.
+            Content::Flex | Content::Rigid | Content::Structure(FlatType::Unit) => {}
             Content::Structure(FlatType::Fun(a, r)) => {
                 stack.push(a);
                 stack.push(r);
