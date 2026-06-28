@@ -1,0 +1,26 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Floor sentinel: EVERY top constructor is covered (`Som` and `Non`), and inside
+-- `Som` both inner constructors are covered (`Som …` and `Non`). The only gap is
+-- DEEPER still — `Som (Som n)` is matched only for the literal `0`, so every
+-- other Int (`Som (Som 1)`, `Som (Som 2)`, …) is uncovered. `Int` is an OPEN
+-- type, so a finite set of literals never completes the column; the usefulness
+-- checker must report SKY-T0010 (naming the missing `Som (Som _)`) BEFORE emit.
+--
+-- This pins the soundness floor: with the same-top-constructor restriction
+-- lifted, exhaustiveness rests SOLELY on the Maranget usefulness check. A
+-- top-level-complete case with a nested literal gap is the case a shallower
+-- guard would wave through — so it is exactly the regression that proves the
+-- deep check is load-bearing.
+type Opt a = Som a | Non
+
+f : Opt (Opt Int) -> Int
+f oo =
+    case oo of
+        Som (Som 0) -> 100
+        Som Non -> 10
+        Non -> 0
+
+main =
+    println (String.fromInt (f Non))
