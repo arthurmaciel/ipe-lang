@@ -193,6 +193,14 @@ fn pat_name(interner: &Interner, pat: &Pat) -> String {
                 format!("{head} {subs}")
             }
         }
+        Pat::Record(fields) => {
+            let inner = fields
+                .iter()
+                .map(|(sym, p)| format!("{} = {}", sym_name(interner, *sym), pat_name(interner, p)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ {inner} }}")
+        }
     }
 }
 
