@@ -377,15 +377,20 @@ pub struct Arm {
 /// M3a supports a constructor pattern whose payload sub-patterns bind to a
 /// variable ([`Pat::Var`]) or are ignored ([`Pat::Wildcard`]). Nullary
 /// constructor patterns (M0) are [`Pat::Ctor`] with an empty `args`. M3b-1 adds
-/// the tuple pattern [`Pat::Tuple`], whose elements reuse the existing pattern
-/// variants (var / wildcard / nested ctor / nested tuple).
+/// the tuple pattern [`Pat::Tuple`]. M3b-2 adds the record pattern
+/// [`Pat::Record`] and makes every sub-position fully recursive: ANY [`Pat`] may
+/// appear as a constructor payload, a tuple element, or a record-field
+/// sub-pattern (`Just (a, b)`, `Node (Node …) x r`, `{ point = (a, b) }`).
 ///
-/// [`Pat::Var`] / [`Pat::Wildcard`] / [`Pat::Tuple`] appear as the payload
-/// sub-patterns of a [`Pat::Ctor`] and, for [`Pat::Tuple`], also as a tuple-
-/// destructuring binder (a single irrefutable case arm or a function parameter).
-/// Literal / record / cons / alias patterns remain M3b+ and are rejected
-/// upstream at lowering, so every [`Pat`] the backend sees here is
-/// var / wildcard / ctor / tuple.
+/// [`Pat::Var`] / [`Pat::Wildcard`] are leaves; [`Pat::Ctor`] / [`Pat::Tuple`] /
+/// [`Pat::Record`] are nesting nodes whose sub-patterns reuse the same enum,
+/// recursively. They also serve as an irrefutable destructuring binder (a single
+/// irrefutable case arm, a function parameter, or a `let`-destructure) when every
+/// leaf is a var / wildcard.
+///
+/// Literal / cons / list / alias (`as`) patterns remain M3b-3 / M4 and are
+/// rejected upstream at lowering, so every [`Pat`] the backend sees here is
+/// var / wildcard / ctor / tuple / record.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Pat {
     /// A variable binder — binds the matched value (a constructor payload field)
@@ -394,7 +399,8 @@ pub enum Pat {
     /// A wildcard `_` — matches any value and binds nothing.
     Wildcard,
     /// A constructor pattern `Variant sub0 sub1 …` (a nullary pattern `Variant`
-    /// has an empty `args`).
+    /// has an empty `args`). Each `args` element is an arbitrary [`Pat`] (M3b-2:
+    /// nested ctor / tuple / record sub-patterns are all permitted).
     Ctor {
         ty: Symbol,
         variant: Symbol,
@@ -403,11 +409,21 @@ pub enum Pat {
     /// A tuple pattern `(p0, p1, …)`, destructuring an [`IrType::Tuple`] value
     /// element-by-element.
     ///
-    /// The element sub-patterns reuse the existing [`Pat`] variants. The tuple-
-    /// value invariant (arity ≥ 2) applies to well-formed IR — the lowerer is
-    /// the sole producer and upholds it — but the backend stays total over any
-    /// element vector it receives and never panics on a degenerate arity.
+    /// The element sub-patterns are arbitrary [`Pat`]s. The tuple-value invariant
+    /// (arity ≥ 2) applies to well-formed IR — the lowerer is the sole producer
+    /// and upholds it — but the backend stays total over any element vector it
+    /// receives and never panics on a degenerate arity.
     Tuple(Vec<Self>),
+    /// A record pattern `{ field0 = p0, field1 = p1, … }`, destructuring an
+    /// [`IrType::Record`] value field-by-field.
+    ///
+    /// Each entry pairs a field name ([`Symbol`]) with its sub-pattern (an
+    /// arbitrary [`Pat`]). The lowerer is contracted to surface the COMPLETE
+    /// field set of the record type — every field the type declares appears here,
+    /// a field the source omits binding to a [`Pat::Wildcard`] — so the field-name
+    /// set resolves the synthesised struct unambiguously, exactly as a record
+    /// literal does. The backend stays total over any entry vector it receives.
+    Record(Vec<(Symbol, Self)>),
 }
 
 /// An exhaustive case analysis over an enum scrutinee.

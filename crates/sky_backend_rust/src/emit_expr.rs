@@ -315,13 +315,19 @@ fn emit_match(
     ))
 }
 
-/// Render a pattern to its Rust spelling. Total over the M3a/M3b-1 pattern set:
-/// a variable binder (the keyword-mangled name), a wildcard (`_`), a constructor
-/// pattern (`EnumName::Variant` / `EnumName::Variant(sub0, …)`), or a tuple
-/// pattern (`(sub0, sub1, …)`).
+/// Render a pattern to its Rust spelling. Total and recursive over the entire
+/// M3a/M3b-1/M3b-2 pattern set:
 ///
-/// Nested sub-patterns recurse; the renderer stays total so an unexpected
-/// nesting can never panic.
+/// * a variable binder (the keyword-mangled name),
+/// * a wildcard (`_`),
+/// * a tuple pattern (`(sub0, sub1, …)`),
+/// * a constructor pattern (`EnumName::Variant` / `EnumName::Variant(sub0, …)`),
+/// * a record pattern (`RecXY { x: sub0, y: sub1, .. }`).
+///
+/// Every nested sub-position recurses through this same function, so an
+/// arbitrarily nested shape (`Just (a, b)`, `Node (Node …) x r`,
+/// `{ point = (a, b) }`) renders correctly. The renderer stays total: no arm
+/// panics, and every fallible lookup is surfaced as a [`Diagnostic`].
 fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
     match pat {
         Pat::Var(sym) => ctx.emit_ident(*sym),
@@ -347,6 +353,54 @@ fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
                 Ok(format!("{path}({})", subs.join(", ")))
             }
         }
+        Pat::Record(fields) => render_record_pat(ctx, fields),
+    }
+}
+
+/// Render a record pattern `{ field0 = p0, … }` to a Rust struct pattern
+/// `RecXY { field0: p0, …, .. }`.
+///
+/// The struct is resolved by the pattern's field-name set, exactly as a record
+/// LITERAL resolves its struct (Rust names struct-pattern fields, so write order
+/// is free). The lowerer surfaces the complete field set, so this exact-set
+/// lookup is unambiguous; a miss is an upstream-contract violation surfaced as a
+/// [`Diagnostic::CompilerBug`] rather than a silent mis-emit.
+///
+/// A trailing `..` is always emitted: it both matches the canonical struct-
+/// pattern shape and makes the rendering robust to a field the pattern does not
+/// bind (zero remaining fields under the complete-set contract — a legal,
+/// no-op `..`). A field whose sub-pattern is a variable bound to the field's own
+/// name renders in Rust shorthand (`x` rather than the lint-flagged `x: x`).
+fn render_record_pat(ctx: &EmitCtx, fields: &[(Symbol, Pat)]) -> DResult<String> {
+    // Resolve the struct by the (sorted) set of bound field names.
+    let mut key = Vec::with_capacity(fields.len());
+    for (sym, _) in fields {
+        key.push(ctx.resolve_ident(*sym)?.to_owned());
+    }
+    let struct_name = ctx.record_name_for_literal(&key)?.to_owned();
+
+    let mut parts = Vec::with_capacity(fields.len());
+    for (sym, sub) in fields {
+        let field_ident = ctx.emit_ident(*sym)?;
+        // Field-pun shorthand: `Rec { x, .. }` instead of `Rec { x: x, .. }`
+        // (the latter trips rustc's `non_shorthand_field_patterns` lint). Only
+        // when the sub-pattern is a variable whose emitted name equals the
+        // field's emitted name.
+        if let Pat::Var(var) = sub
+            && ctx.emit_ident(*var)? == field_ident
+        {
+            parts.push(field_ident);
+        } else {
+            let rendered = render_pat(ctx, sub)?;
+            parts.push(format!("{field_ident}: {rendered}"));
+        }
+    }
+    // An empty entry vector is degenerate (the lowerer never produces it), but
+    // stay total: render `Rec { .. }` rather than the invalid `Rec { , .. }`.
+    if parts.is_empty() {
+        Ok(format!("{struct_name} {{ .. }}"))
+    } else {
+        Ok(format!("{struct_name} {{ {}, .. }}", parts.join(", ")))
     }
 }
 
