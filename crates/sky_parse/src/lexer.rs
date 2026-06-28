@@ -42,6 +42,11 @@ pub enum Tok {
     /// A lambda lead-in `\` (`\x -> e`).
     Backslash,
     DotDot,
+    /// A lone `.` introducing a field access on a non-identifier expression,
+    /// e.g. the `.` in `(record).field`. Bare `ident.field` runs are still one
+    /// [`Tok::Ident`]; this token only appears when the dot follows a closing
+    /// delimiter or other non-identifier token.
+    Dot,
     Comma,
     Underscore,
     Plus,
@@ -298,7 +303,7 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
         // `&` and `.` are valid ONLY as their two-char forms (`&&`, `..`);
         // a lone first char is a typed lex error rather than a token.
         '&' => return two_char_only(lx, lo, '&', Tok::AmpAmp, ParseError::UnknownChar('&')),
-        '.' => return two_char_only(lx, lo, '.', Tok::DotDot, ParseError::StrayDot),
+        '.' => return lex_dot(lx, lo),
         other => {
             return Err(Diagnostic::Parse {
                 span: Span::new(lo, lo + char_width(other)),
@@ -313,6 +318,25 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
 fn one_char(lx: &mut Lexer, tok: Tok) -> Tok {
     lx.advance();
     tok
+}
+
+/// Lex a `.`-led token. `..` is [`Tok::DotDot`] (range / spread); a `.`
+/// immediately followed by an identifier start is [`Tok::Dot`] (field access on
+/// a non-identifier expression, e.g. `(r).value`); a lone `.` is the typed lex
+/// error [`ParseError::StrayDot`]. `lo` is the byte offset of the first `.`.
+fn lex_dot(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
+    lx.advance(); // consume the first `.`
+    match lx.peek() {
+        Some('.') => {
+            lx.advance();
+            Ok(Tok::DotDot)
+        }
+        Some(c) if is_ident_start(c) => Ok(Tok::Dot),
+        _ => Err(Diagnostic::Parse {
+            span: Span::new(lo, lx.offset()),
+            msg: ParseError::StrayDot,
+        }),
+    }
 }
 
 /// Lex a token that is only valid as a two-character pair: consume the first

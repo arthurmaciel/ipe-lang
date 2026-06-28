@@ -52,6 +52,8 @@ pub enum TokenKind {
     /// A lambda lead-in `\`.
     Backslash,
     DotDot,
+    /// A lone `.` field-access operator (`(r).field`).
+    Dot,
     Comma,
     Underscore,
     Plus,

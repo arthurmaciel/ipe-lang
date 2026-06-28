@@ -91,6 +91,7 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Arrow => TokenKind::Arrow,
         Tok::Backslash => TokenKind::Backslash,
         Tok::DotDot => TokenKind::DotDot,
+        Tok::Dot => TokenKind::Dot,
         Tok::Comma => TokenKind::Comma,
         Tok::Underscore => TokenKind::Underscore,
         Tok::Plus => TokenKind::Plus,
@@ -989,11 +990,11 @@ impl<'a> Parser<'a> {
         if depth > MAX_DEPTH {
             return Err(self.too_deep(Construct::Expression));
         }
-        let head = self.parse_atom(threshold, depth + 1)?;
+        let head = self.parse_atom_postfix(threshold, depth + 1)?;
         let mut args = Vec::new();
         let mut end = head.span;
         while self.peek_is_simple_atom_in_block(threshold) {
-            let arg = self.parse_atom(threshold, depth + 1)?;
+            let arg = self.parse_atom_postfix(threshold, depth + 1)?;
             end = arg.span;
             args.push(arg);
         }
@@ -1047,6 +1048,35 @@ impl<'a> Parser<'a> {
 
     fn peek_aligned_at(&self, align: u32) -> bool {
         self.peek().is_some_and(|t| layout::aligned_at(t, align))
+    }
+
+    /// Parse an atom followed by zero or more postfix field accesses.
+    ///
+    /// A bare `ident.field` run is one [`Tok::Ident`] handled in [`Self::ident_expr`];
+    /// this method covers field access on a *non-identifier* atom — most importantly
+    /// a parenthesised expression, `(record).field` or `(wrap 1).value`. The lexer
+    /// emits a [`Tok::Dot`] for each such `.`, each immediately followed by an
+    /// identifier token; a chained access like `(r).a.b` lexes the `a.b` as a single
+    /// dotted identifier, so its segments are split back out here. Field access binds
+    /// tighter than application, so it is resolved per-atom before [`Self::parse_app`]
+    /// gathers arguments.
+    fn parse_atom_postfix(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
+        let mut expr = self.parse_atom(threshold, depth + 1)?;
+        while self.peek_kind() == Some(&Tok::Dot) {
+            self.bump(Construct::Expression)?;
+            let tok = self.bump(Construct::Expression)?;
+            let Tok::Ident(text) = &tok.kind else {
+                return Err(Self::unexpected_token(&tok, &[Expected::Identifier]));
+            };
+            // `a.b.c` after a dot lexes as one dotted identifier; each segment is a
+            // separate field access on the running expression.
+            for seg in text.split('.') {
+                let field = Located::new(tok.span, self.interner.intern(seg)?);
+                let span = Self::span_merge(expr.span, tok.span);
+                expr = Located::new(span, Expr_::Access(Box::new(expr), field));
+            }
+        }
+        Ok(expr)
     }
 
     fn parse_atom(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
