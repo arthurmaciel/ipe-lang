@@ -148,3 +148,53 @@ Plus 21 nits (efficiency/readability) tracked but lower priority; addressed wher
   > `I'm not sure what went wrong here — sorry about that. This is likely a gap in the Sky Rust compiler. Please report it (with this source + `skyc --version`) at: <ISSUE_TRACKER_URL>`
 - `SKY-I*` (internal/ICE) pages already must state "this is a compiler bug, not your fault," what to attach, and where to report. Extend that with the explicit apology + the issue link. `SKY-L*` (not-yet-supported) pages stay "not supported yet" + `[feature: …]`, also linking the tracker for "please nudge us."
 - A single constant `ISSUE_TRACKER_URL` (Codeberg, e.g. `https://codeberg.org/<owner>/sky-rust/issues`) is the source of truth, embedded once and referenced by every humble/ICE message + page footer. (Placeholder until the repo's Codeberg home is fixed.)
+
+## Addendum (2026-06-28) — the compiler is a KIND TEACHER (MUST)
+
+Error explanations are not just correct and friendly — they **teach**, so the
+reader (human or AI agent) leaves more capable than they arrived. This is a
+non-negotiable requirement for every `explain/SKY-*.md` page and, where space
+allows, for inline diagnostic help.
+
+### Progressive, layered structure (every page)
+A page reads top-to-bottom from newcomer to expert. `skyc explain <CODE>` prints
+the whole progression so the reader naturally descends as far as they want:
+
+1. **🧒 In plain words (for anyone)** — explain it to a curious 10-year-old:
+   concrete analogy, zero jargon. The reader must understand the *shape* of the
+   problem from this alone.
+2. **🛠️ A bit deeper (everyday terms)** — the actual rule in working-developer
+   language, with the fix.
+3. **�the code** — ≥3 `sky` snippets (the existing requirement): the error and at
+   least one fix.
+4. **🔬 Under the hood** — the real mechanism / algorithm / theory.
+5. **📖 Names & where they come from** — a glossary: EVERY named concept used on
+   the page (Skolem, Maranget, Hindley–Milner, monomorphisation, eta-expansion,
+   exhaustiveness, usefulness, unification, rigid var, …) gets: a plain
+   definition, **its etymology / origin** (the person or root the name comes
+   from), and *why it matters here*. Never name-drop a term without teaching it.
+
+Tone: kind, encouraging, never condescending. `SKY-L*` (not-yet) pages say "not
+your fault, not supported yet." `SKY-I*` (ICE) pages say "this is our bug, please
+report" + the issue link. A humility line belongs on hard pages: *if the compiler
+can't explain itself well, that's our bug.*
+
+### CI enforcement (extend the page-coverage test)
+The existing coverage test gains assertions:
+- Each page contains the tier section markers (plain-words, deeper, under-the-hood)
+  in order, plus the ≥3 `sky` blocks.
+- **Jargon gate:** maintain a `TEACHABLE_TERMS` list (skolem, maranget,
+  hindley-milner/hm, monomorphi, eta, exhaustiv, usefulness, unification, rigid,
+  union-find, …). If a page body contains a term, it MUST have a glossary entry
+  defining it (term + origin). A page that uses jargon without teaching it fails CI.
+
+### Roll-out
+- The progressive template + jargon gate is established now; **every NEW page from
+  here on uses it** (added to the workflow agent preamble).
+- A dedicated **page-upgrade batch** rewrites the existing ~56 pages to the
+  progressive format + builds the shared glossary. Because each page is a disjoint
+  `.md` file, this fans out in PARALLEL (per the disjoint-files rule) and is
+  mechanical/cheaply-verified → use **Sonnet** (model-selection policy). The
+  shared CI-gate + glossary-infra change (touches sky_diagnostics) is one
+  sequential owner. Schedule it as a quality batch (not blocking the roadmap; can
+  run parallel to code milestones since pages ≠ crate source).
