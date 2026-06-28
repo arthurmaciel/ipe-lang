@@ -39,6 +39,62 @@ fn bug(where_: &'static str, detail: impl Into<String>) -> Diagnostic {
     }
 }
 
+/// Does this solved [`Ty`] contain a free type variable anywhere? Used to keep
+/// the lowerer's record-shape collection to fully-concrete shapes — a
+/// variable-bearing (generic) record reaches the backend through a signature,
+/// where the type variable still has a source [`Symbol`] to name the generic.
+fn ty_contains_var(ty: &Ty) -> bool {
+    match ty {
+        Ty::Var(_) => true,
+        Ty::Unit => false,
+        Ty::Fun(a, b) => ty_contains_var(a) || ty_contains_var(b),
+        Ty::Tuple(elems) => elems.iter().any(ty_contains_var),
+        Ty::Record(fields) => fields.values().any(ty_contains_var),
+        Ty::Con { args, .. } => args.iter().any(ty_contains_var),
+    }
+}
+
+/// Does this solved [`Ty`] contain a function type anywhere?
+///
+/// A field of a synthesised record struct whose type embeds a `Box<dyn Fn>`
+/// cannot satisfy the struct's derived `Clone`/`Debug`/`PartialEq` nor its
+/// `SkyStringify` impl — so the field type carrying a function is the unsound
+/// shape. Used by [`embeds_function_record_field`] to test a record field.
+fn ty_contains_fun(ty: &Ty) -> bool {
+    match ty {
+        Ty::Fun(_, _) => true,
+        Ty::Var(_) | Ty::Unit => false,
+        Ty::Tuple(elems) => elems.iter().any(ty_contains_fun),
+        Ty::Con { args, .. } => args.iter().any(ty_contains_fun),
+        Ty::Record(fields) => fields.values().any(ty_contains_fun),
+    }
+}
+
+/// Does this solved [`Ty`] embed a record whose field type contains a function?
+///
+/// Such a record synthesises to a Rust struct that derives
+/// `Clone`/`Debug`/`PartialEq` and impls `SkyStringify` — none of which a
+/// `Box<dyn Fn>` field satisfies — so it would emit Rust that does not build.
+/// The syntactic [`Lowerer::reject_function_valued_field`] gate only sees a
+/// *literally* function-typed field value; this catches the case it misses — a
+/// function value flowing into a record field THROUGH a type variable, e.g.
+/// `wrap : a -> { value : a }` applied as `wrap (\n -> n + 1)`, whose solved
+/// region type is `{ value : Int -> Int }`. The field instantiates to a function
+/// only at the use site, so the only place to see it is the use site's region
+/// type. Fail-closed: this is the documented first-class-function gap
+/// ([`Feature::FirstClassFunctions`], SKY-L0107), never broken Rust.
+fn embeds_function_record_field(ty: &Ty) -> bool {
+    match ty {
+        Ty::Var(_) | Ty::Unit => false,
+        Ty::Fun(a, b) => embeds_function_record_field(a) || embeds_function_record_field(b),
+        Ty::Tuple(elems) => elems.iter().any(embeds_function_record_field),
+        Ty::Con { args, .. } => args.iter().any(embeds_function_record_field),
+        Ty::Record(fields) => fields
+            .values()
+            .any(|f| ty_contains_fun(f) || embeds_function_record_field(f)),
+    }
+}
+
 /// Build a [`Diagnostic::Lower`] for a feature the M0 lowerer does not model
 /// yet, carrying the offending node's source `span`. This is the
 /// "not supported yet" channel (`SKY-L01##`), distinct from [`bug`] ("the
@@ -192,9 +248,23 @@ impl<'a> Lowerer<'a> {
                 for field_ty in fields.values() {
                     self.collect_records_in_ty(field_ty, out)?;
                 }
-                let ir = self.ir_type_from_ty(ty, Span::DUMMY)?;
-                if !out.contains(&ir) {
-                    out.push(ir);
+                // Only a FULLY-CONCRETE record shape is surfaced here. A record
+                // carrying a type variable is a generic shape that necessarily
+                // appears in a (polymorphic) signature — the backend synthesises
+                // and reconciles the generic struct from `func.params` / `func.ret`
+                // there. Surfacing it again from the solved region/env type would
+                // be redundant and, worse, has no source-level [`Symbol`] to name
+                // the generic (the solver's variable id is not a source symbol),
+                // so [`Self::ir_type_from_ty`] would reject the bare `Ty::Var`
+                // field as an under-determined polymorphic value. Skipping it is
+                // sound: an unannotated binding can never be generic (M0 rejects an
+                // untyped binding with parameters), so every genuinely-generic
+                // record reaches the backend through a signature.
+                if !ty_contains_var(ty) {
+                    let ir = self.ir_type_from_ty(ty, Span::DUMMY)?;
+                    if !out.contains(&ir) {
+                        out.push(ir);
+                    }
                 }
             }
             Ty::Tuple(elems) => {
@@ -379,6 +449,19 @@ impl<'a> Lowerer<'a> {
                     ir_elems.push(self.ir_type_from_canon(e, generics)?);
                 }
                 Ok(IrType::Tuple(ir_elems))
+            }
+            // A closed record type in an annotation (`wrap : a -> { value : a }`).
+            // Each field type is lowered under the same generic scope, so a field
+            // typed by a quantified variable becomes an [`IrType::Generic`]
+            // pass-through and the backend synthesises a GENERIC struct for the
+            // shape (M2c). Keyed by field name in a [`BTreeMap`] to match the
+            // backend's field-set canonicalisation.
+            canon::Type::Record(fields) => {
+                let mut ir_fields = BTreeMap::new();
+                for (name, fty) in fields {
+                    ir_fields.insert(*name, self.ir_type_from_canon(fty, generics)?);
+                }
+                Ok(IrType::Record(ir_fields))
             }
         }
     }
@@ -577,6 +660,23 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_expr(&self, e: &canon::Expr) -> DResult<Expr> {
+        // Soundness gate (region-based): reject a function value reaching a
+        // record field THROUGH a type variable — e.g. `wrap : a -> { value : a }`
+        // applied as `wrap (\n -> n + 1)`, whose solved region type is
+        // `{ value : Int -> Int }`. The field instantiates to a function only at
+        // the use site, so the syntactic per-field gate
+        // (`reject_function_valued_field`) cannot see it; the use-site region
+        // type can. Record/Update *literals* carry their own per-field gate that
+        // blames the offending field value's span, so they are exempt here.
+        // [SKY-L0107, feature: first-class-functions]
+        if !matches!(
+            &e.value,
+            canon::Expr_::Record(_) | canon::Expr_::Update(_, _)
+        ) && let Some(ty) = self.types.regions.get(&e.span)
+            && embeds_function_record_field(ty)
+        {
+            return Err(unsupported(e.span, Feature::FirstClassFunctions));
+        }
         match &e.value {
             canon::Expr_::Int(n) => Ok(Expr::Int(*n)),
             canon::Expr_::VarLocal(s) => Ok(Expr::Var(*s)),
@@ -657,29 +757,7 @@ impl<'a> Lowerer<'a> {
                 record: Box::new(self.lower_expr(record)?),
                 field: *field,
             }),
-            canon::Expr_::Update(base, fields) => {
-                // A record update lowers to a copy of `base` with the listed
-                // fields replaced. Only the changed fields are carried, sorted by
-                // field name so the lowering is deterministic; the backend names
-                // each reassignment, so write order is free. The result's record
-                // struct is the base's, already surfaced via `Module.records`
-                // from the base region's solved type.
-                let record = Box::new(self.lower_expr(base)?);
-                let mut lowered: Vec<(Symbol, Expr)> = Vec::with_capacity(fields.len());
-                for (name, value) in fields {
-                    self.reject_function_valued_field(value)?;
-                    lowered.push((*name, self.lower_expr(value)?));
-                }
-                lowered.sort_by(|a, b| {
-                    self.resolve(a.0)
-                        .unwrap_or("")
-                        .cmp(self.resolve(b.0).unwrap_or(""))
-                });
-                Ok(Expr::Update {
-                    record,
-                    fields: lowered,
-                })
-            }
+            canon::Expr_::Update(base, fields) => self.lower_update(base, fields),
             canon::Expr_::Case(scrut, branches) => self.lower_case(scrut, branches),
             // A top-level binding or kernel named as a bare *value* (passed,
             // returned, or let-bound) rather than directly applied. The
@@ -708,6 +786,42 @@ impl<'a> Lowerer<'a> {
                 }
             }
         }
+    }
+
+    /// Lower a functional record update `{ base | field = value, ... }` to a copy
+    /// of `base` with the listed fields replaced. Only the changed fields are
+    /// carried, sorted by field name so the lowering is deterministic; the backend
+    /// names each reassignment, so write order is free. The result's record struct
+    /// is the base's, already surfaced via `Module.records` from the base region's
+    /// solved type.
+    ///
+    /// M2c gate: updating a GENERIC record (a field typed by a quantified type
+    /// variable) needs a `Clone`-bounded type parameter, because the backend
+    /// copies the base with `.clone()`. Bounded generics are M2d, so a generic
+    /// record update is a not-yet gap ([`Feature::BoundedRecordUpdate`],
+    /// SKY-L0111) rather than broken Rust. The base's solved region type tells us
+    /// whether it is generic; a monomorphic update is byte-identical to b3.
+    fn lower_update(&self, base: &canon::Expr, fields: &[(Symbol, canon::Expr)]) -> DResult<Expr> {
+        if let Some(base_ty) = self.types.regions.get(&base.span)
+            && ty_contains_var(base_ty)
+        {
+            return Err(unsupported(base.span, Feature::BoundedRecordUpdate));
+        }
+        let record = Box::new(self.lower_expr(base)?);
+        let mut lowered: Vec<(Symbol, Expr)> = Vec::with_capacity(fields.len());
+        for (name, value) in fields {
+            self.reject_function_valued_field(value)?;
+            lowered.push((*name, self.lower_expr(value)?));
+        }
+        lowered.sort_by(|a, b| {
+            self.resolve(a.0)
+                .unwrap_or("")
+                .cmp(self.resolve(b.0).unwrap_or(""))
+        });
+        Ok(Expr::Update {
+            record,
+            fields: lowered,
+        })
     }
 
     /// Lower a function application. A kernel or top-level callee keeps the

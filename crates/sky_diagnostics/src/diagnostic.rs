@@ -12,11 +12,12 @@
 use crate::code::{
     Code, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200,
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
-    SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0200, SKY_N0001, SKY_N0002,
-    SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_P0001,
-    SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020, SKY_P0021,
-    SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062,
-    SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, Severity,
+    SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0200, SKY_N0001,
+    SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
+    SKY_P0001, SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0020,
+    SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061,
+    SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012,
+    Severity,
 };
 use crate::span::Span;
 
@@ -394,6 +395,13 @@ pub enum Feature {
     /// partial application (`add 2` where `add` takes two) or over-application
     /// across the arity boundary (`f 1 2` where `f` takes one). [SKY-L0110]
     PartialOverApplication,
+    /// A functional update `{ r | … }` on a record whose type is generic (a field
+    /// typed by a type variable). The backend copies the base record with
+    /// `.clone()`, which needs the type parameter to be `Clone`-bounded —
+    /// bounded generics are M2d, so this is a not-yet gap rather than broken
+    /// Rust. Field access + construction on generic records DO work (M2c).
+    /// [SKY-L0111]
+    BoundedRecordUpdate,
 }
 
 /// Errors raised during lowering: "not supported yet" — distinct from
@@ -661,6 +669,7 @@ const fn feature_code(f: Feature) -> Code {
         Feature::FirstClassFunctions => SKY_L0107,
         Feature::Kernels => SKY_L0108,
         Feature::PartialOverApplication => SKY_L0110,
+        Feature::BoundedRecordUpdate => SKY_L0111,
     }
 }
 

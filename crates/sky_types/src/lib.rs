@@ -244,6 +244,113 @@ mod tests {
         Some((m, i))
     }
 
+    /// Parse + canonicalise + infer an arbitrary single-module source string.
+    fn infer_src(src: &str) -> (DResult<SolvedTypes>, Interner, Option<canon::Module>) {
+        let mut i = Interner::new();
+        let parsed = match sky_parse::parse_module(src, &mut i) {
+            Ok(p) => p,
+            Err(e) => return (Err(e), i, None),
+        };
+        let m = match sky_canon::canonicalise(&parsed, &mut i) {
+            Ok(m) => m,
+            Err(e) => return (Err(e), i, None),
+        };
+        let solved = infer(&m, &mut i);
+        (solved, i, Some(m))
+    }
+
+    const M2C_HDR: &str = "module Main exposing (main)\n\n";
+
+    #[test]
+    fn generic_record_signature_typechecks() {
+        // `wrap : a -> { value : a }` over the identity-shaped body. The env entry
+        // is `Fun(Var, Record{ value : Var })` with the SAME variable in both
+        // positions (the field is the parameter's type).
+        let src = format!(
+            "{M2C_HDR}wrap : a -> {{ value : a }}\nwrap x =\n    {{ value = x }}\n\nmain = wrap 1\n"
+        );
+        let (solved, i, m) = infer_src(&src);
+        assert!(
+            solved.is_ok(),
+            "generic record signature must typecheck: {solved:?}"
+        );
+        let (Ok(solved), Some(m)) = (solved, m) else {
+            return;
+        };
+        let Some(wrap) = sym(&i, &m, "wrap") else {
+            return;
+        };
+        let Some(ty) = solved.env.get(&wrap) else {
+            return;
+        };
+        // `wrap : a -> { value : a }` — the parameter's type variable and the
+        // record field's type variable must be the SAME id. Extract both ids
+        // structurally, then assert their identity (so a wrong shape fails the
+        // final assertion rather than via a forbidden `panic!`).
+        let ids: Option<(u32, u32)> = match ty {
+            Ty::Fun(arg, ret) => match (arg.as_ref(), ret.as_ref()) {
+                (Ty::Var(arg_id), Ty::Record(fields)) => fields
+                    .iter()
+                    .find(|(name, _)| i.resolve(**name) == Some("value"))
+                    .and_then(|(_, fty)| match fty {
+                        Ty::Var(fid) => Some((*arg_id, *fid)),
+                        _ => None,
+                    }),
+                _ => None,
+            },
+            _ => None,
+        };
+        assert!(
+            matches!(ids, Some((a, f)) if a == f),
+            "wrap is `a -> {{ value : a }}` with the field carrying the parameter's \
+             own type variable; got env type {ty:?}"
+        );
+    }
+
+    #[test]
+    fn generic_record_field_access_typechecks() {
+        // `unwrap : { value : a } -> a ; unwrap r = r.value` — the deferred
+        // field-access links the result to the rigid field var; both are the same
+        // skolem, so it checks.
+        let src = format!(
+            "{M2C_HDR}unwrap : {{ value : a }} -> a\nunwrap r =\n    r.value\n\nmain = unwrap\n"
+        );
+        let (solved, ..) = infer_src(&src);
+        assert!(
+            solved.is_ok(),
+            "generic field access must typecheck: {solved:?}"
+        );
+    }
+
+    #[test]
+    fn body_constraining_a_record_field_var_is_rejected() {
+        // `bad : a -> { value : a } ; bad x = { value = 1 }` pins the rigid field
+        // variable `a` to `Int` in the body — the rigid-skolem gate rejects it
+        // (bounded generics are M2d), rather than silently accepting it.
+        let src = format!(
+            "{M2C_HDR}bad : a -> {{ value : a }}\nbad x =\n    {{ value = 1 }}\n\nmain = bad\n"
+        );
+        let (solved, ..) = infer_src(&src);
+        assert!(
+            solved.is_err(),
+            "a body pinning a rigid record-field variable must be a type error"
+        );
+    }
+
+    #[test]
+    fn record_type_alias_expands_and_typechecks() {
+        // `type alias Box a = { value : a }` used in a signature `mk : Int -> Box
+        // Int` expands to a closed record and typechecks.
+        let src = format!(
+            "{M2C_HDR}type alias Box a = {{ value : a }}\n\nmk : Int -> Box Int\nmk n =\n    {{ value = n }}\n\nmain = mk 1\n"
+        );
+        let (solved, ..) = infer_src(&src);
+        assert!(
+            solved.is_ok(),
+            "record-type alias must expand + typecheck: {solved:?}"
+        );
+    }
+
     fn sym(i: &Interner, m: &canon::Module, name: &str) -> Option<Symbol> {
         // Resolve a name to its symbol by scanning the def names / unions.
         for d in &m.defs {

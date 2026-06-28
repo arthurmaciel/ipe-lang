@@ -438,6 +438,53 @@ fn function_value_in_record_field_is_unsupported() -> DResult<()> {
 }
 
 #[test]
+fn function_in_record_field_via_type_variable_is_unsupported() -> DResult<()> {
+    // The indirect first-class-function gap: a function value reaches a record
+    // field THROUGH a type variable. A generic `wrap : a -> { value : a }`
+    // applied as `wrap (\n -> n + 1)` produces a value whose SOLVED region type
+    // is `{ value : Int -> Int }` — but the field value at that site is not
+    // syntactically a function (it's a plain reference), so the per-field
+    // `reject_function_valued_field` gate cannot see it. Only the region-based
+    // gate catches it, and it must surface as the SKY-L0107 first-class gap
+    // (blaming the use-site span) rather than emitting Rust that does not build.
+    let mut i = Interner::new();
+    let boxed = i.intern("boxed")?;
+    let value = i.intern("value")?;
+    let r = i.intern("r")?;
+    let int_name = i.intern("Int")?;
+    let ty = con_int(&mut i)?;
+    // body: a plain local reference whose region type is `{ value : Int -> Int }`.
+    let body_span = Span::new(40, 41);
+    let body = Located::new(body_span, canon::Expr_::VarLocal(r));
+    let def = canon::Def::Typed {
+        name: Located::new(Span::new(36, 37), boxed),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty,
+    };
+    let con = |name| Ty::Con {
+        module: Vec::new(),
+        name,
+        args: Vec::new(),
+    };
+    let mut record_fields = BTreeMap::new();
+    record_fields.insert(
+        value,
+        Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name))),
+    );
+    let mut regions = BTreeMap::new();
+    regions.insert(body_span, Ty::Record(record_fields));
+    assert_unsupported(
+        run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i),
+        Feature::FirstClassFunctions,
+        SKY_L0107,
+        body_span,
+    );
+    Ok(())
+}
+
+#[test]
 fn value_callee_lowers_to_apply() -> DResult<()> {
     // A call whose callee is not a kernel/top-level name (here a local that
     // would hold a function value) lowers to `Expr::Apply`, the first-class
