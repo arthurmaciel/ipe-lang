@@ -168,6 +168,14 @@ fn pat_name(interner: &Interner, pat: &Pat) -> String {
     match pat {
         Pat::Var(sym) => sym_name(interner, *sym),
         Pat::Wildcard => "_".to_owned(),
+        Pat::Tuple(elems) => {
+            let inner = elems
+                .iter()
+                .map(|p| pat_name(interner, p))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({inner})")
+        }
         Pat::Ctor { ty, variant, args } => {
             let head = format!(
                 "{}.{}",
@@ -303,6 +311,7 @@ fn write_func(out: &mut String, func: &Func, interner: &Interner) {
 fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) {
     match expr {
         Expr::Int(n) => line(out, level, &format!("Int {n}")),
+        Expr::Unit => line(out, level, "Unit"),
         Expr::Var(sym) => line(out, level, &format!("Var {}", sym_name(interner, *sym))),
         Expr::Ctor { ty, variant, args } => {
             line(
@@ -979,6 +988,86 @@ program
           Var x
         arm Maybe.Nothing
           Int 0
+";
+        assert_eq!(pretty(&program, &i), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn pretty_renders_tuple_pattern_and_unit() -> DResult<()> {
+        let mut i = Interner::new();
+        let main_mod = i.intern("Main")?;
+        let wrap = i.intern("Wrap")?;
+        let mk_wrap = i.intern("MkWrap")?;
+        let fst_of = i.intern("fstOf")?;
+        let w = i.intern("w")?;
+        let a = i.intern("a")?;
+        let b = i.intern("b")?;
+        let nop = i.intern("nop")?;
+
+        // type Wrap = MkWrap (Int, Int)
+        // fstOf(w : Wrap) -> Int = case w of MkWrap (a, b) -> a
+        // nop() -> () = ()
+        let arms = vec![Arm {
+            pat: Pat::Ctor {
+                ty: wrap,
+                variant: mk_wrap,
+                args: vec![Pat::Tuple(vec![Pat::Var(a), Pat::Var(b)])],
+            },
+            body: Expr::Var(a),
+        }];
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![TypeDef::Enum(EnumDef {
+                    name: wrap,
+                    type_params: vec![],
+                    variants: vec![Variant {
+                        name: mk_wrap,
+                        fields: vec![IrType::Tuple(vec![IrType::Int, IrType::Int])],
+                    }],
+                })],
+                funcs: vec![
+                    Func {
+                        id: FuncId::from_raw(0),
+                        name: fst_of,
+                        type_params: vec![],
+                        params: vec![(
+                            w,
+                            IrType::Enum {
+                                name: wrap,
+                                args: vec![],
+                            },
+                        )],
+                        ret: IrType::Int,
+                        body: Expr::Match(Match::new(Expr::Var(w), arms, &[mk_wrap])?),
+                    },
+                    Func {
+                        id: FuncId::from_raw(1),
+                        name: nop,
+                        type_params: vec![],
+                        params: vec![],
+                        ret: IrType::Unit,
+                        body: Expr::Unit,
+                    },
+                ],
+                entry: None,
+                records: vec![],
+            }],
+        };
+
+        let expected = "\
+program
+  module Main
+    type Wrap = MkWrap (Int, Int)
+    fn#0 fstOf(w : Wrap) -> Int
+      Match
+        scrutinee
+          Var w
+        arm Wrap.MkWrap (a, b)
+          Var a
+    fn#1 nop() -> ()
+      Unit
 ";
         assert_eq!(pretty(&program, &i), expected);
         Ok(())

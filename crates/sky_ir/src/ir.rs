@@ -200,6 +200,12 @@ pub enum IrType {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Expr {
     Int(i64),
+    /// The unit value `()` — the sole inhabitant of [`IrType::Unit`].
+    ///
+    /// Sky's `()` literal lowers here; the backend emits the Rust unit
+    /// expression `()`. Distinct from a zero-element [`Expr::Tuple`], which the
+    /// tuple invariant forbids (arity ≥ 2): the empty product is this `Unit`.
+    Unit,
     Var(Symbol),
     /// A constructor application `Variant arg0 arg1 …` (a nullary constructor
     /// `Variant` has an empty `args`).
@@ -352,12 +358,16 @@ pub struct Arm {
 ///
 /// M3a supports a constructor pattern whose payload sub-patterns bind to a
 /// variable ([`Pat::Var`]) or are ignored ([`Pat::Wildcard`]). Nullary
-/// constructor patterns (M0) are [`Pat::Ctor`] with an empty `args`.
-/// [`Pat::Var`] / [`Pat::Wildcard`] only ever appear as payload sub-patterns of
-/// a [`Pat::Ctor`]; the case-arm head is always a [`Pat::Ctor`] (an
-/// exhaustiveness obligation [`Match::new`] enforces). Literal / tuple / record
-/// / cons / alias payload sub-patterns are M3b and are rejected upstream at
-/// lowering, so every [`Pat`] the backend sees here is var / wildcard / ctor.
+/// constructor patterns (M0) are [`Pat::Ctor`] with an empty `args`. M3b-1 adds
+/// the tuple pattern [`Pat::Tuple`], whose elements reuse the existing pattern
+/// variants (var / wildcard / nested ctor / nested tuple).
+///
+/// [`Pat::Var`] / [`Pat::Wildcard`] / [`Pat::Tuple`] appear as the payload
+/// sub-patterns of a [`Pat::Ctor`] and, for [`Pat::Tuple`], also as a tuple-
+/// destructuring binder (a single irrefutable case arm or a function parameter).
+/// Literal / record / cons / alias patterns remain M3b+ and are rejected
+/// upstream at lowering, so every [`Pat`] the backend sees here is
+/// var / wildcard / ctor / tuple.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Pat {
     /// A variable binder — binds the matched value (a constructor payload field)
@@ -372,6 +382,14 @@ pub enum Pat {
         variant: Symbol,
         args: Vec<Self>,
     },
+    /// A tuple pattern `(p0, p1, …)`, destructuring an [`IrType::Tuple`] value
+    /// element-by-element.
+    ///
+    /// The element sub-patterns reuse the existing [`Pat`] variants. The tuple-
+    /// value invariant (arity ≥ 2) applies to well-formed IR — the lowerer is
+    /// the sole producer and upholds it — but the backend stays total over any
+    /// element vector it receives and never panics on a degenerate arity.
+    Tuple(Vec<Self>),
 }
 
 /// An exhaustive case analysis over an enum scrutinee.
