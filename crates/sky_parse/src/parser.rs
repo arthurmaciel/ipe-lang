@@ -637,9 +637,9 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse `type alias Name [vars…] = T`. Type parameters are captured in
-    /// `vars` (not rejected here) so canonicalisation can fail-fast on the
-    /// parametric form with a precise span; the non-parametric form is the only
-    /// shape M1 lowers.
+    /// `vars` so canonicalisation can substitute each use site's type arguments
+    /// for them and expand the alias body; both the parametric and the
+    /// non-parametric form are supported.
     fn parse_type_alias(&mut self) -> DResult<Located<TypeAlias>> {
         // The caller has already established `type` followed by `alias`.
         let type_tok = self.bump(Construct::TypeDeclaration)?; // `type`

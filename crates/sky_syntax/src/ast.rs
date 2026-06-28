@@ -23,10 +23,11 @@ pub struct Module {
     pub imports: Vec<Import>,
     pub values: Vec<Located<Value>>,
     pub unions: Vec<Located<Union>>,
-    /// `type alias Name = T` declarations. M1 models the non-parametric form
-    /// only; a parametric alias (`type alias F a = …`) carries its declared
-    /// `vars` here and is rejected at canonicalisation as a not-yet-supported
-    /// feature rather than at the parser.
+    /// `type alias Name [vars…] = T` declarations. Both the non-parametric form
+    /// and the parametric form (`type alias F a = …`) are supported; a parametric
+    /// alias carries its declared `vars` here, and canonicalisation substitutes
+    /// each use site's type arguments for those parameters before expanding the
+    /// body away.
     pub aliases: Vec<Located<TypeAlias>>,
 }
 
@@ -97,9 +98,11 @@ pub struct Union {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct TypeAlias {
     pub name: Located<Symbol>,
-    /// Declared type parameters (`a` in `type alias F a = …`). Empty for the
-    /// supported non-parametric form; a non-empty list is rejected at
-    /// canonicalisation ([`sky_diagnostics::Feature::ParametricAliases`]).
+    /// Declared type parameters (`a` in `type alias F a = …`). Empty for a
+    /// non-parametric alias; a non-empty list is bound, at each use site, to the
+    /// type arguments supplied there and substituted into `body` during
+    /// canonicalisation. A use site whose argument count differs from this list's
+    /// length is a [`sky_diagnostics::NameError::AliasArity`] error.
     pub vars: Vec<Located<Symbol>>,
     /// The aliased type.
     pub body: Located<TypeAnnotation>,

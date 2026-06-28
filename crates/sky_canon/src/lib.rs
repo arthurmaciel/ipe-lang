@@ -1069,26 +1069,121 @@ mod tests {
     }
 
     #[test]
-    fn parametric_alias_is_a_lower_not_yet_supported() {
-        // A declared type parameter on an alias fails fast as SKY-L0109, with the
-        // span on the parameter — never a crash.
+    fn parametric_alias_substitutes_and_expands() {
+        // `type alias Pair a = (a, a)` applied as `Pair Int` must expand, with
+        // the parameter `a` substituted by `Int`, to the tuple `(Int, Int)` —
+        // exactly as if the annotation read `(Int, Int) -> Int`. No `Pair` and no
+        // free `a` survive.
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (addPair)\n\
+             type alias Pair a = (a, a)\n\n\
+             addPair : Pair Int -> Int\n\
+             addPair p =\n    0\n",
+        );
+        assert!(m.is_some(), "module must canonicalise");
+        let Some(m) = m else { return };
+        // The binding generalises over nothing — `a` was bound to `Int`.
+        let Some(Def::Typed { free_vars, .. }) = find_def(&m, &i, "addPair") else {
+            assert!(false_marker(), "addPair is a typed def");
+            return;
+        };
+        assert!(free_vars.is_empty(), "no free type variable survives");
+        let Some(ast::Type::Lambda(arg, _)) = typed_ann(&m, &i, "addPair") else {
+            assert!(false_marker(), "addPair annotation is an arrow");
+            return;
+        };
+        let ast::Type::Tuple(elems) = arg.as_ref() else {
+            assert!(false_marker(), "argument expanded to a tuple");
+            return;
+        };
+        assert_eq!(elems.len(), 2, "Pair expands to a 2-tuple");
+        for e in elems {
+            let ast::Type::Con { name, home, args } = e else {
+                assert!(false_marker(), "each tuple member is `Int`");
+                return;
+            };
+            assert_eq!(i.resolve(*name), Some("Int"));
+            assert!(
+                home.is_empty() && args.is_empty(),
+                "Int is a nullary builtin"
+            );
+        }
+    }
+
+    #[test]
+    fn parametric_alias_keeps_a_free_argument_variable() {
+        // `Pair a` applied to a *variable* argument (`Pair b`) leaves `b` free, so
+        // the binding generalises over it: `f : Pair b -> b` is `(b, b) -> b`.
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (f)\n\
+             type alias Pair a = (a, a)\n\n\
+             f : Pair b -> b\n\
+             f p =\n    p\n",
+        );
+        assert!(m.is_some(), "module must canonicalise");
+        let Some(m) = m else { return };
+        let Some(Def::Typed { free_vars, .. }) = find_def(&m, &i, "f") else {
+            assert!(false_marker(), "f is a typed def");
+            return;
+        };
+        let names: Vec<_> = free_vars.iter().filter_map(|s| i.resolve(*s)).collect();
+        assert_eq!(names, vec!["b"], "the argument variable `b` stays free");
+    }
+
+    #[test]
+    fn alias_applied_with_too_many_arguments_is_an_arity_error() {
+        // `Pair` declares one parameter; `Pair Int Bool` supplies two — a coded
+        // SKY-N0013 arity error with a span, never a crash.
         let err = canon_err(
             "module Main exposing (v)\n\
-             type alias F a = Int\n\n\
-             v : Int\n\
+             type alias Pair a = (a, a)\n\n\
+             v : Pair Int Bool\n\
              v =\n    0\n",
         );
         assert!(
             matches!(
                 err,
-                Some(Diagnostic::Lower {
-                    msg: sky_diagnostics::LowerError::Unsupported(
-                        sky_diagnostics::Feature::ParametricAliases
-                    ),
+                Some(Diagnostic::Name {
+                    msg: NameError::AliasArity {
+                        expected: 1,
+                        found: 2,
+                        ..
+                    },
                     ..
                 })
             ),
-            "expected a ParametricAliases Lower diagnostic, got {err:?}"
+            "expected an AliasArity Name diagnostic (1 expected, 2 found), got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parametric_alias_under_applied_is_an_arity_error() {
+        // A bare `Pair` supplies zero arguments to a one-parameter alias — a type
+        // alias must be fully applied, so this is an arity error, not an opaque
+        // constructor.
+        let err = canon_err(
+            "module Main exposing (v)\n\
+             type alias Pair a = (a, a)\n\n\
+             v : Pair\n\
+             v =\n    0\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::AliasArity {
+                        expected: 1,
+                        found: 0,
+                        ..
+                    },
+                    ..
+                })
+            ),
+            "expected an AliasArity Name diagnostic (1 expected, 0 found), got {err:?}"
         );
     }
 

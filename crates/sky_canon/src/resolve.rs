@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use sky_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, NameError, Span};
+use sky_diagnostics::{DResult, Diagnostic, Located, NameError, Span};
 use sky_intern::{Interner, Symbol};
 use sky_syntax as src;
 
@@ -19,6 +19,31 @@ const MAX_SUGGESTIONS: usize = 3;
 /// reference (`Sky.Canonicalise.Module.suggestQualifier`): beyond two edits a
 /// "did you mean" is more misleading than helpful, so silence wins.
 const SUGGESTION_MAX_DISTANCE: usize = 2;
+
+/// A registered `type alias` awaiting expansion at its use sites.
+///
+/// `params` are the declared type parameters in source order (empty for a
+/// non-parametric alias). `body` is the right-hand-side annotation, kept in
+/// source form so each use site can substitute its own arguments for `params`
+/// and then expand — no later stage ever observes the alias name.
+struct AliasDef {
+    params: Vec<Symbol>,
+    body: src::TypeAnnotation,
+}
+
+/// The immutable context threaded through [`canonicalise_type`]. Bundling the
+/// read-only references keeps the recursive call under clippy's argument-count
+/// ceiling while leaving the per-call mutable state (`free_vars`, `visited`,
+/// `subst`) explicit at each call site.
+struct TypeCtx<'a> {
+    env: &'a Env,
+    local_union_names: &'a BTreeSet<Symbol>,
+    aliases: &'a BTreeMap<Symbol, AliasDef>,
+    interner: &'a Interner,
+    /// Span of the enclosing value annotation, used as the location for an
+    /// alias-arity error (the type AST itself carries no inner spans).
+    ann_span: Span,
+}
 
 /// Canonicalise a parsed module into its name-resolved form.
 ///
@@ -62,19 +87,16 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
         unions.push(union);
     }
 
-    // Collect type aliases. M1 supports the non-parametric form only — a declared
-    // type parameter is a not-yet-supported feature (SKY-L0109). An alias name
-    // that collides with a union (or another alias) is a duplicate type name. The
-    // aliased bodies are kept as source annotations and expanded in-place at every
-    // use site by `canonicalise_type`, so no later stage ever sees an alias.
-    let mut aliases: BTreeMap<Symbol, src::TypeAnnotation> = BTreeMap::new();
+    // Collect type aliases. Both the non-parametric form (`type alias Count =
+    // Int`) and the parametric form (`type alias Pair a = ( a, a )`) are
+    // supported: a parametric alias records its declared parameters and is
+    // expanded by substituting each use site's type arguments for the parameters
+    // in the body (M2B). An alias name that collides with a union (or another
+    // alias) is a duplicate type name. The aliased bodies are kept as source
+    // annotations and expanded in-place at every use site by `canonicalise_type`,
+    // so no later stage ever sees an alias.
+    let mut aliases: BTreeMap<Symbol, AliasDef> = BTreeMap::new();
     for a in &m.aliases {
-        if let Some(var) = a.value.vars.first() {
-            return Err(Diagnostic::Lower {
-                span: var.span,
-                msg: LowerError::Unsupported(Feature::ParametricAliases),
-            });
-        }
         let alias_name = a.value.name.value;
         let alias_span = a.value.name.span;
         if let Some(&first) = seen_types.get(&alias_name) {
@@ -87,7 +109,13 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
             });
         }
         seen_types.insert(alias_name, alias_span);
-        aliases.insert(alias_name, a.value.body.value.clone());
+        aliases.insert(
+            alias_name,
+            AliasDef {
+                params: a.value.vars.iter().map(|v| v.value).collect(),
+                body: a.value.body.value.clone(),
+            },
+        );
     }
 
     // Register every top-level value name so bindings can be referenced before
@@ -184,7 +212,7 @@ fn canonicalise_value(
     val: &src::Value,
     env: &Env,
     local_union_names: &BTreeSet<Symbol>,
-    aliases: &BTreeMap<Symbol, src::TypeAnnotation>,
+    aliases: &BTreeMap<Symbol, AliasDef>,
     interner: &mut Interner,
 ) -> DResult<canon::Def> {
     // Add parameter-bound names to a body-local environment.
@@ -208,14 +236,15 @@ fn canonicalise_value(
         Some(ann) => {
             let mut free_vars = BTreeSet::new();
             let mut visited = Vec::new();
-            let ty = canonicalise_type(
-                &ann.value,
+            let ctx = TypeCtx {
                 env,
                 local_union_names,
                 aliases,
-                &mut free_vars,
-                &mut visited,
-            );
+                interner,
+                ann_span: ann.span,
+            };
+            let subst = BTreeMap::new();
+            let ty = canonicalise_type(&ann.value, &ctx, &subst, &mut free_vars, &mut visited)?;
             // Order the quantified type variables by their resolved NAME, not by
             // `Symbol` id (intern order is allocation-dependent, hence not a
             // stable wire order). Determinism gate: a multi-tyvar annotation
@@ -677,88 +706,107 @@ fn resolve_op_func(op: Symbol, interner: &mut Interner) -> DResult<Symbol> {
 }
 
 /// Canonicalise a type annotation. M0 subset of `Canonicalise.Type`, extended
-/// with non-parametric `type alias` expansion: a `TType` whose unqualified name
-/// (and no type arguments) names a registered alias is replaced in place by the
-/// canonicalised alias body, so no later stage observes the alias name.
+/// with `type alias` expansion (M1 non-parametric, M2B parametric): a `TType`
+/// whose unqualified name registers as an alias is replaced in place by its
+/// body, with the use site's type arguments substituted for the alias's declared
+/// parameters, so no later stage observes the alias name.
 ///
-/// `visited` carries the chain of aliases currently being expanded along this
-/// path. A name already in the chain is a recursive alias — expansion stops and
-/// the name is left as an opaque constructor rather than recursing forever
-/// (soundness over completeness: a cyclic alias is exotic and out of scope for
-/// M1, but it must never crash the compiler).
+/// `subst` maps an in-scope alias parameter to the (already canonicalised) type
+/// argument bound to it; a `TVar` found in `subst` resolves to that type instead
+/// of remaining free. `visited` carries the chain of aliases currently being
+/// expanded along this path — a name already in the chain is a recursive alias,
+/// whose expansion stops (the name is left as an opaque constructor) rather than
+/// recursing forever (soundness over completeness: a cyclic alias is exotic, but
+/// must never hang or crash the compiler).
+///
+/// # Errors
+/// [`Diagnostic::Name`] ([`NameError::AliasArity`]) when an alias is applied to a
+/// number of type arguments that differs from its declared parameter count; the
+/// span is the enclosing annotation (the type AST carries no inner spans).
+/// [`Diagnostic::CompilerBug`] if a name symbol is not interned.
 fn canonicalise_type(
     t: &src::TypeAnnotation,
-    env: &Env,
-    local_union_names: &BTreeSet<Symbol>,
-    aliases: &BTreeMap<Symbol, src::TypeAnnotation>,
+    ctx: &TypeCtx,
+    subst: &BTreeMap<Symbol, canon::Type>,
     free_vars: &mut BTreeSet<Symbol>,
     visited: &mut Vec<Symbol>,
-) -> canon::Type {
+) -> DResult<canon::Type> {
     match t {
-        src::TypeAnnotation::TLambda(a, b) => canon::Type::Lambda(
-            Box::new(canonicalise_type(
-                a,
-                env,
-                local_union_names,
-                aliases,
-                free_vars,
-                visited,
-            )),
-            Box::new(canonicalise_type(
-                b,
-                env,
-                local_union_names,
-                aliases,
-                free_vars,
-                visited,
-            )),
-        ),
+        src::TypeAnnotation::TLambda(a, b) => Ok(canon::Type::Lambda(
+            Box::new(canonicalise_type(a, ctx, subst, free_vars, visited)?),
+            Box::new(canonicalise_type(b, ctx, subst, free_vars, visited)?),
+        )),
         src::TypeAnnotation::TVar(v) => {
-            free_vars.insert(*v);
-            canon::Type::Var(*v)
+            // A variable bound to an alias argument resolves to that argument; its
+            // own free variables were recorded when the argument was canonicalised
+            // at the use site, so it does not re-enter `free_vars` here. An unbound
+            // variable is genuinely free and is quantified by the binding.
+            Ok(subst.get(v).map_or_else(
+                || {
+                    free_vars.insert(*v);
+                    canon::Type::Var(*v)
+                },
+                Clone::clone,
+            ))
         }
-        src::TypeAnnotation::TUnit => canon::Type::Unit,
-        src::TypeAnnotation::TTuple(elems) => canon::Type::Tuple(
-            elems
-                .iter()
-                .map(|e| canonicalise_type(e, env, local_union_names, aliases, free_vars, visited))
-                .collect(),
-        ),
+        src::TypeAnnotation::TUnit => Ok(canon::Type::Unit),
+        src::TypeAnnotation::TTuple(elems) => {
+            let mut can_elems = Vec::with_capacity(elems.len());
+            for e in elems {
+                can_elems.push(canonicalise_type(e, ctx, subst, free_vars, visited)?);
+            }
+            Ok(canon::Type::Tuple(can_elems))
+        }
         src::TypeAnnotation::TType(_, segments, args) => {
             let name = segments.last().copied().unwrap_or_else(|| {
                 // An unnamed type cannot occur in the M0 grammar; fall back to
                 // the home module's name so the node is still well-formed.
-                env.home.last().copied().unwrap_or_else(name_zero)
+                ctx.env.home.last().copied().unwrap_or_else(name_zero)
             });
-            // An argument-free reference to a non-parametric alias expands to its
-            // body. (The M1 grammar rejects qualified types in annotations, so
-            // every `TType` here is unqualified — the qualifier is always empty.)
-            // An applied name, or a name already mid-expansion (cycle), skips
-            // expansion.
-            if args.is_empty()
-                && !visited.contains(&name)
-                && let Some(body) = aliases.get(&name)
+            // The M1 grammar rejects qualified types in annotations, so every
+            // `TType` here is unqualified — the qualifier is always empty. The
+            // type arguments are canonicalised under the current substitution
+            // (they appear at the use site) regardless of whether `name` is an
+            // alias or an ordinary constructor.
+            let mut can_args = Vec::with_capacity(args.len());
+            for a in args {
+                can_args.push(canonicalise_type(a, ctx, subst, free_vars, visited)?);
+            }
+            // A registered alias not already mid-expansion (cycle) is expanded:
+            // its declared parameters are bound to the canonicalised arguments and
+            // the body is canonicalised under that fresh substitution. Arity must
+            // match exactly — a type alias has to be fully applied.
+            if !visited.contains(&name)
+                && let Some(alias) = ctx.aliases.get(&name)
             {
+                if can_args.len() != alias.params.len() {
+                    return Err(Diagnostic::Name {
+                        span: ctx.ann_span,
+                        msg: NameError::AliasArity {
+                            name: name_str(ctx.interner, name)?,
+                            expected: alias.params.len(),
+                            found: can_args.len(),
+                        },
+                    });
+                }
+                let body_subst: BTreeMap<Symbol, canon::Type> =
+                    alias.params.iter().copied().zip(can_args).collect();
                 visited.push(name);
                 let expanded =
-                    canonicalise_type(body, env, local_union_names, aliases, free_vars, visited);
+                    canonicalise_type(&alias.body, ctx, &body_subst, free_vars, visited)?;
                 visited.pop();
-                return expanded;
+                return Ok(expanded);
             }
-            let home = if local_union_names.contains(&name) {
-                env.home.clone()
+            let home = if ctx.local_union_names.contains(&name) {
+                ctx.env.home.clone()
             } else {
                 Vec::new()
             };
-            let can_args = args
-                .iter()
-                .map(|a| canonicalise_type(a, env, local_union_names, aliases, free_vars, visited))
-                .collect();
-            canon::Type::Con {
+            Ok(canon::Type::Con {
                 home,
                 name,
                 args: can_args,
-            }
+            })
         }
     }
 }

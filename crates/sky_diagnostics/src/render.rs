@@ -355,6 +355,13 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::DuplicateValue { name, .. }
         | NameError::DuplicateConstructor { name, .. }
         | NameError::DuplicateType { name, .. } => Some(format!("`{name}` is redefined here")),
+        NameError::AliasArity {
+            name,
+            expected,
+            found,
+        } => Some(format!(
+            "`{name}` takes {expected} type argument(s), but {found} were given"
+        )),
         NameError::Unknown => None,
     }
 }
@@ -510,9 +517,6 @@ const fn feature_label(f: Feature) -> &'static str {
              [feature: first-class-functions]"
         }
         Feature::Kernels => "this kernel function is not available yet [feature: kernels]",
-        Feature::ParametricAliases => {
-            "type parameters on a type alias are not supported yet [feature: parametric-aliases]"
-        }
         Feature::PartialOverApplication => {
             "partial application and over-application are not supported yet \
              [feature: partial-over-application]"
