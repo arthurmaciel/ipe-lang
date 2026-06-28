@@ -140,6 +140,10 @@ disagree with upstream behaviour.
   the parity ledger as "intentional surface extension" if adopted.
 
 **Disposition:** filed (user opted in 2026-06-28). Implement as a canon-level
-desugaring after the core language + patterns settle (post-M3), low-risk; not a
-blocker for anything. Depth 1–2 is already fine via the manual form, so priority
-is low.
+desugaring in a **post-M6 "designer" phase, after the parity-faithful compiler is
+complete** — NOT mid-port. Rationale (2026-06-28): it's a divergence, so it
+*can't* be checked against the Go oracle (Go's parser rejects it) and would muddy
+every parity sweep + incur re-verification through M2d/M4/M5/M6 if added early;
+the parse/canon surface is still moving until then; and deferring costs ~nothing
+(documented, self-contained, depth 1–2 fine manually). General rule: parity
+features go incrementally; **divergences go last, on a verified-complete base.**
