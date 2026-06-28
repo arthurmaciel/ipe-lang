@@ -58,6 +58,19 @@ impl Backend for RustBackend<'_> {
     }
 }
 
+/// A canonical record field list: `(Sky field name, field type)` pairs sorted by
+/// field name. The order is the struct's declaration / `SkyStringify` read order.
+type RecordFields = Vec<(String, IrType)>;
+
+/// Every DISTINCT field-type shape observed for one field-name set, in
+/// first-occurrence order — a generic template and/or its concrete
+/// instantiations, reconciled by [`canonicalise_shape`].
+type ShapeOccurrences = Vec<RecordFields>;
+
+/// A synthesised struct's reconciled form: its canonical field template and its
+/// generic parameter symbols (empty for a monomorphic record).
+type CanonicalShape = (RecordFields, Vec<Symbol>);
+
 /// A synthesised Rust struct for one distinct CLOSED record shape.
 ///
 /// `fields` is the field set in canonical (field-name ascending) order — the
@@ -67,7 +80,21 @@ pub(crate) struct RecordStruct {
     pub name: String,
     /// The fields as `(Sky field name, field type)`, sorted by field name. The
     /// Rust field identifier is the keyword-mangled field name.
+    ///
+    /// For a GENERIC record shape (M2c), a field's type may be an
+    /// [`IrType::Generic`]; the carried [`Symbol`] is the canonical template's
+    /// source type-variable, resolved to its Rust generic name (`T1`, `T2`, …)
+    /// through a [`crate::emit_types::GenericScope`] over [`Self::type_params`].
     pub fields: Vec<(String, IrType)>,
+    /// The struct's generic type parameters (M2c): the distinct
+    /// [`IrType::Generic`] symbols appearing in [`Self::fields`], in
+    /// first-occurrence field order. Empty for a monomorphic record — that path
+    /// stays byte-identical to b3.
+    ///
+    /// The order is load-bearing: a parameter's Rust name (`T1`, `T2`, …) is its
+    /// *position* here, exactly as for [`sky_ir::Func::type_params`], so struct
+    /// declaration, field types, and every use-site instantiation agree.
+    pub type_params: Vec<Symbol>,
 }
 
 /// Shared emission context: the interner plus the precomputed Sky → Rust name
@@ -138,7 +165,12 @@ impl<'a> EmitCtx<'a> {
         // struct through this table by its field-name set; a literal whose set is
         // absent is an internal invariant violation (surfaced as a `CompilerBug`,
         // never a silent mis-emit).
-        let mut shapes: BTreeMap<Vec<String>, Vec<(String, IrType)>> = BTreeMap::new();
+        //
+        // Each field-name set maps to the LIST of distinct field-type shapes seen
+        // for it. A set may carry both a generic template (`{ value : a }`, from a
+        // parametric signature) and concrete instantiations (`{ value : Int }`):
+        // [`canonicalise_shape`] reconciles them into a single struct (M2c).
+        let mut shapes: BTreeMap<Vec<String>, ShapeOccurrences> = BTreeMap::new();
         for module in &program.modules {
             for func in &module.funcs {
                 for (_, ty) in &func.params {
@@ -153,10 +185,15 @@ impl<'a> EmitCtx<'a> {
         let mut record_structs = Vec::with_capacity(shapes.len());
         let mut record_by_fieldset = BTreeMap::new();
         let mut used_names: BTreeSet<String> = BTreeSet::new();
-        for (key, fields) in shapes {
+        for (key, occurrences) in shapes {
+            let (fields, type_params) = canonicalise_shape(&key, &occurrences)?;
             let name = unique_struct_name(naming::record_struct_name(&key), &mut used_names);
             record_by_fieldset.insert(key, record_structs.len());
-            record_structs.push(RecordStruct { name, fields });
+            record_structs.push(RecordStruct {
+                name,
+                fields,
+                type_params,
+            });
         }
 
         Ok(Self {
@@ -173,17 +210,67 @@ impl<'a> EmitCtx<'a> {
         &self.record_structs
     }
 
-    /// The Rust struct name for a record TYPE, keyed by its field-name set.
+    /// Render a record TYPE at a USE SITE to its Rust spelling, keyed by its
+    /// field-name set: the bare struct name for a monomorphic shape (`RecXY`,
+    /// byte-identical to b3), or the struct instantiated at concrete type
+    /// arguments for a generic shape (`RecValue<i64>`, M2c).
+    ///
+    /// `generics` is the enclosing function's generic scope: a use-site field
+    /// type may itself be an [`IrType::Generic`] (a parametric signature passing
+    /// the record through, `wrap : a -> { value : a }`), in which case the
+    /// argument renders as that function's Rust generic (`RecValue<T1>`).
     ///
     /// The prepass collected every `IrType::Record` reachable from a signature,
     /// so a miss here is an internal invariant violation (SKY-I0204).
-    fn record_name_for_type(&self, fields: &BTreeMap<Symbol, IrType>) -> DResult<&str> {
+    fn render_record_use(
+        &self,
+        fields: &BTreeMap<Symbol, IrType>,
+        generics: emit_types::GenericScope,
+    ) -> DResult<String> {
         let mut key = Vec::with_capacity(fields.len());
         for sym in fields.keys() {
             key.push(self.resolve_ident(*sym)?.to_owned());
         }
         key.sort();
-        self.record_name_by_key(&key)
+        let rec = self.record_struct_by_key(&key)?;
+        if rec.type_params.is_empty() {
+            // Monomorphic shape: the bare struct name, byte-identical to b3.
+            return Ok(rec.name.clone());
+        }
+        // Generic shape: match the use-site field types against the struct's
+        // template to recover one concrete type per generic parameter, then
+        // render each (through the ambient scope) as a turbofish-free arg list.
+        let mut by_name: BTreeMap<&str, &IrType> = BTreeMap::new();
+        for (sym, ty) in fields {
+            by_name.insert(self.resolve_ident(*sym)?, ty);
+        }
+        let mut subst: BTreeMap<Symbol, IrType> = BTreeMap::new();
+        for (field_name, template_ty) in &rec.fields {
+            let use_ty =
+                by_name
+                    .get(field_name.as_str())
+                    .ok_or_else(|| Diagnostic::CompilerBug {
+                        where_: "sky_backend_rust::EmitCtx::render_record_use",
+                        detail: format!(
+                            "use-site record is missing field `{field_name}` present in the \
+                         synthesised struct template"
+                        ),
+                    })?;
+            match_template(template_ty, use_ty, &mut subst)?;
+        }
+        let mut args = Vec::with_capacity(rec.type_params.len());
+        for param in &rec.type_params {
+            let arg_ty = subst.get(param).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::EmitCtx::render_record_use",
+                detail: format!(
+                    "generic record parameter symbol {} was not pinned by any use-site \
+                     field; the use site does not instantiate the struct template",
+                    param.as_raw()
+                ),
+            })?;
+            args.push(emit_types::render_type(self, arg_ty, generics)?);
+        }
+        Ok(format!("{}<{}>", rec.name, args.join(", ")))
     }
 
     /// The Rust struct name for a record LITERAL, keyed by its field names.
@@ -198,10 +285,14 @@ impl<'a> EmitCtx<'a> {
 
     /// Resolve a (sorted) field-name set to its synthesised struct name.
     fn record_name_by_key(&self, key: &[String]) -> DResult<&str> {
+        Ok(self.record_struct_by_key(key)?.name.as_str())
+    }
+
+    /// Resolve a (sorted) field-name set to its synthesised [`RecordStruct`].
+    fn record_struct_by_key(&self, key: &[String]) -> DResult<&RecordStruct> {
         self.record_by_fieldset
             .get(key)
             .and_then(|i| self.record_structs.get(*i))
-            .map(|r| r.name.as_str())
             .ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "sky_backend_rust::EmitCtx::record_name",
                 detail: format!(
@@ -261,19 +352,19 @@ impl<'a> EmitCtx<'a> {
 }
 
 /// Walk a type, recording every distinct CLOSED record shape it contains
-/// (recursing through tuples and nested records). A shape is keyed by its
-/// sorted field-name set and stored as the canonical `(field name, type)` list.
+/// (recursing through tuples and nested records). A shape is keyed by its sorted
+/// field-name set; the value accumulates each DISTINCT `(field name, type)` list
+/// observed for that set, in first-occurrence order.
 ///
-/// Two `IrType::Record`s that share a field-name set but differ in field types
-/// cannot both be represented by one struct keyed on that set; this is an
-/// upstream-contract violation in M1 (closed records assume one type per field
-/// set), surfaced as a [`Diagnostic::CompilerBug`] (SKY-I0204) rather than a
-/// silent mis-emit. (The user-facing rejection of such overloaded record types
-/// is the lowerer/type-checker's responsibility.)
+/// One set can legitimately carry several entries — a generic template
+/// (`{ value : a }`) plus concrete instantiations (`{ value : Int }`). The later
+/// [`canonicalise_shape`] pass reconciles them into one struct. Storing every
+/// distinct occurrence (rather than rejecting the second) is what makes M2c's
+/// generic-plus-concrete merge representable.
 fn collect_record_shapes(
     interner: &Interner,
     ty: &IrType,
-    shapes: &mut BTreeMap<Vec<String>, Vec<(String, IrType)>>,
+    shapes: &mut BTreeMap<Vec<String>, ShapeOccurrences>,
 ) -> DResult<()> {
     match ty {
         IrType::Tuple(elems) => {
@@ -291,21 +382,9 @@ fn collect_record_shapes(
             }
             fields.sort_by(|a, b| a.0.cmp(&b.0));
             let key: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
-            match shapes.get(&key) {
-                Some(existing) if existing != &fields => {
-                    return Err(Diagnostic::CompilerBug {
-                        where_: "sky_backend_rust::collect_record_shapes",
-                        detail: format!(
-                            "record field set {{{}}} maps to two distinct field-type shapes; \
-                             M1 closed records assume one type per field set",
-                            key.join(", ")
-                        ),
-                    });
-                }
-                Some(_) => {}
-                None => {
-                    shapes.insert(key, fields);
-                }
+            let entry = shapes.entry(key).or_default();
+            if !entry.contains(&fields) {
+                entry.push(fields);
             }
         }
         IrType::Fun(params, ret) => {
@@ -328,6 +407,280 @@ fn collect_record_shapes(
         | IrType::Generic(_) => {}
     }
     Ok(())
+}
+
+/// Does this type contain an [`IrType::Generic`] anywhere (a field that is — or
+/// structurally carries — a type variable)?
+fn contains_generic(ty: &IrType) -> bool {
+    match ty {
+        IrType::Generic(_) => true,
+        IrType::Tuple(elems) => elems.iter().any(contains_generic),
+        IrType::Record(map) => map.values().any(contains_generic),
+        IrType::Fun(params, ret) => params.iter().any(contains_generic) || contains_generic(ret),
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Unit
+        | IrType::TaskUnit
+        | IrType::Enum(_) => false,
+    }
+}
+
+/// Collect the distinct [`IrType::Generic`] symbols in `ty`, appending each (in
+/// first-occurrence order) to `out` if not already present.
+fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
+    match ty {
+        IrType::Generic(s) => {
+            if !out.contains(s) {
+                out.push(*s);
+            }
+        }
+        IrType::Tuple(elems) => {
+            for e in elems {
+                collect_generics(e, out);
+            }
+        }
+        IrType::Record(map) => {
+            for v in map.values() {
+                collect_generics(v, out);
+            }
+        }
+        IrType::Fun(params, ret) => {
+            for p in params {
+                collect_generics(p, out);
+            }
+            collect_generics(ret, out);
+        }
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Unit
+        | IrType::TaskUnit
+        | IrType::Enum(_) => {}
+    }
+}
+
+/// A position-canonical rendering of a field-shape: every [`IrType::Generic`]
+/// symbol is replaced by its first-occurrence index, so two alpha-equivalent
+/// templates (`{ value : a }` and `{ value : b }`) render the same string and a
+/// non-equivalent one (`{ x : a, y : a }` vs `{ x : a, y : b }`) does not. Used
+/// only for equality, never emitted.
+fn skeleton_key(fields: &[(String, IrType)]) -> String {
+    let mut idx: BTreeMap<Symbol, usize> = BTreeMap::new();
+    let mut out = String::new();
+    for (name, ty) in fields {
+        out.push_str(name);
+        out.push(':');
+        skeleton_ty(ty, &mut idx, &mut out);
+        out.push(';');
+    }
+    out
+}
+
+fn skeleton_ty(ty: &IrType, idx: &mut BTreeMap<Symbol, usize>, out: &mut String) {
+    match ty {
+        IrType::Generic(s) => {
+            let next = idx.len();
+            let n = *idx.entry(*s).or_insert(next);
+            out.push('G');
+            out.push_str(&n.to_string());
+        }
+        IrType::Tuple(elems) => {
+            out.push('(');
+            for e in elems {
+                skeleton_ty(e, idx, out);
+                out.push(',');
+            }
+            out.push(')');
+        }
+        IrType::Record(map) => {
+            out.push('{');
+            for (k, v) in map {
+                out.push_str(&k.as_raw().to_string());
+                out.push(':');
+                skeleton_ty(v, idx, out);
+                out.push(',');
+            }
+            out.push('}');
+        }
+        IrType::Fun(params, ret) => {
+            out.push_str("fn(");
+            for p in params {
+                skeleton_ty(p, idx, out);
+                out.push(',');
+            }
+            out.push_str(")->");
+            skeleton_ty(ret, idx, out);
+        }
+        // Scalar / leaf types (Int / Bool / Enum / …): their `Debug` form is a
+        // stable, generic-free discriminator — exactly what a skeleton needs.
+        other => {
+            use core::fmt::Write as _;
+            // Writing to a `String` is infallible; the `Result` is discarded.
+            let _ = write!(out, "{other:?}");
+        }
+    }
+}
+
+/// Match a struct-template type against a USE-SITE type, recording in `subst`
+/// the concrete (or generic-in-the-enclosing-function) type each template
+/// [`IrType::Generic`] binds to. A template `Generic` binds any use-site type
+/// (consistently — a symbol seen twice must bind the same type); every other
+/// node must structurally agree.
+///
+/// A mismatch means a use site that does not instantiate the struct template —
+/// an upstream-contract violation surfaced as a [`Diagnostic::CompilerBug`]
+/// (SKY-I0205), never a silent mis-emit.
+fn match_template(
+    template: &IrType,
+    concrete: &IrType,
+    subst: &mut BTreeMap<Symbol, IrType>,
+) -> DResult<()> {
+    let mismatch = || Diagnostic::CompilerBug {
+        where_: "sky_backend_rust::match_template",
+        detail: format!(
+            "use-site record type does not instantiate the synthesised struct template \
+             (template {template:?} vs use site {concrete:?})"
+        ),
+    };
+    match template {
+        IrType::Generic(s) => match subst.get(s) {
+            Some(prev) if prev != concrete => Err(Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::match_template",
+                detail: format!(
+                    "generic parameter symbol {} is bound to two distinct types at one use \
+                     site ({prev:?} and {concrete:?})",
+                    s.as_raw()
+                ),
+            }),
+            Some(_) => Ok(()),
+            None => {
+                subst.insert(*s, concrete.clone());
+                Ok(())
+            }
+        },
+        IrType::Tuple(ts) => match concrete {
+            IrType::Tuple(cs) if cs.len() == ts.len() => {
+                for (t, c) in ts.iter().zip(cs.iter()) {
+                    match_template(t, c, subst)?;
+                }
+                Ok(())
+            }
+            _ => Err(mismatch()),
+        },
+        IrType::Record(tm) => match concrete {
+            IrType::Record(cm) if tm.len() == cm.len() => {
+                for ((tk, tv), (ck, cv)) in tm.iter().zip(cm.iter()) {
+                    if tk != ck {
+                        return Err(mismatch());
+                    }
+                    match_template(tv, cv, subst)?;
+                }
+                Ok(())
+            }
+            _ => Err(mismatch()),
+        },
+        IrType::Fun(tp, tr) => match concrete {
+            IrType::Fun(cp, cr) if tp.len() == cp.len() => {
+                for (t, c) in tp.iter().zip(cp.iter()) {
+                    match_template(t, c, subst)?;
+                }
+                match_template(tr, cr, subst)
+            }
+            _ => Err(mismatch()),
+        },
+        // A concrete leaf must equal the use-site leaf exactly.
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Unit
+        | IrType::TaskUnit
+        | IrType::Enum(_) => {
+            if template == concrete {
+                Ok(())
+            } else {
+                Err(mismatch())
+            }
+        }
+    }
+}
+
+/// Reconcile every distinct field-type shape observed for one field-name set
+/// into a single synthesised struct: its canonical `(field name, type)` template
+/// and its generic parameter list (M2c).
+///
+/// * No occurrence carries a type variable → a MONOMORPHIC struct (empty
+///   parameter list). All occurrences must be identical, exactly as b3 required;
+///   a second, differing concrete shape is the same "two types for one field
+///   set" upstream-contract violation b3 rejected (SKY-I0204).
+/// * At least one occurrence is generic → a GENERIC struct. Every generic
+///   occurrence must be alpha-equivalent (same [`skeleton_key`]); the first is
+///   the canonical template, whose generic symbols name the parameters in
+///   first-occurrence field order. Every concrete occurrence must be a valid
+///   instantiation of that template (checked via [`match_template`]).
+fn canonicalise_shape(key: &[String], occurrences: &[RecordFields]) -> DResult<CanonicalShape> {
+    let first = occurrences.first().ok_or_else(|| Diagnostic::CompilerBug {
+        where_: "sky_backend_rust::canonicalise_shape",
+        detail: format!(
+            "record field set {{{}}} has no collected shape",
+            key.join(", ")
+        ),
+    })?;
+
+    let is_generic = |fields: &[(String, IrType)]| fields.iter().any(|(_, t)| contains_generic(t));
+
+    // Pick the canonical generic template (the first generic occurrence), if any.
+    let template = occurrences.iter().find(|f| is_generic(f));
+
+    let Some(template) = template else {
+        // All-concrete: b3 contract — exactly one shape per field set.
+        for other in occurrences.iter().skip(1) {
+            if other != first {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::canonicalise_shape",
+                    detail: format!(
+                        "record field set {{{}}} maps to two distinct field-type shapes; \
+                         closed records assume one type per field set",
+                        key.join(", ")
+                    ),
+                });
+            }
+        }
+        return Ok((first.clone(), Vec::new()));
+    };
+
+    let template_skeleton = skeleton_key(template);
+    let mut type_params: Vec<Symbol> = Vec::new();
+    for (_, ty) in template {
+        collect_generics(ty, &mut type_params);
+    }
+
+    for occ in occurrences {
+        if is_generic(occ) {
+            // Every generic occurrence must be alpha-equivalent to the template.
+            if skeleton_key(occ) != template_skeleton {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::canonicalise_shape",
+                    detail: format!(
+                        "record field set {{{}}} maps to two non-alpha-equivalent generic \
+                         shapes",
+                        key.join(", ")
+                    ),
+                });
+            }
+        } else {
+            // Every concrete occurrence must instantiate the template.
+            let mut subst: BTreeMap<Symbol, IrType> = BTreeMap::new();
+            for ((_, tv), (_, cv)) in template.iter().zip(occ.iter()) {
+                match_template(tv, cv, &mut subst)?;
+            }
+        }
+    }
+
+    Ok((template.clone(), type_params))
 }
 
 /// Return `base` if unused, else the first `base_<n>` (n ≥ 2) that is free,
