@@ -105,6 +105,9 @@ pub enum Expr_ {
     },
     /// An integer literal.
     Int(i64),
+    /// The unit value `()` — the sole inhabitant of the unit type. Introduces no
+    /// bindings and resolves no names.
+    Unit,
     /// Function application.
     Call(Box<Expr>, Vec<Expr>),
     /// `case scrutinee of` with resolved arms.
@@ -184,6 +187,9 @@ pub enum Pattern_ {
         index: usize,
         args: Vec<Pattern>,
     },
+    /// A tuple pattern `(p0, p1, ...)`. Invariant: arity ≥ 2. Each element is a
+    /// resolved sub-pattern; every variable it introduces is bound as a local.
+    PTuple(Vec<Pattern>),
 }
 
 /// Canonical type (M0 subset). Mirrors `Can.Type` narrowed to arrows, type

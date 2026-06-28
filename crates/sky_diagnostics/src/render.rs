@@ -547,6 +547,12 @@ const fn feature_label(f: Feature) -> &'static str {
             "storing a function value in a constructor payload is not supported \
              yet [feature: ctor-payload-function]"
         }
+        Feature::TuplePatternMatch => {
+            "a tuple pattern is supported only as a single irrefutable destructure \
+             (one `case` arm or a function parameter, with variable / `_` \
+             elements) for now — matching a tuple with multiple arms or a \
+             refutable element is not supported yet [feature: tuple-pattern-match]"
+        }
     }
 }
 

@@ -233,6 +233,24 @@ pub enum Expr {
         value: Box<Self>,
         body: Box<Self>,
     },
+    /// An irrefutable destructuring binding `let <binder> = value in body`.
+    ///
+    /// The sibling of [`Self::Let`] for the pattern-binder case: where `Let`
+    /// binds a single [`Symbol`] (the audited common fast path), `Destructure`
+    /// binds an IRREFUTABLE [`Pat`] — a [`Pat::Tuple`] of variables / wildcards
+    /// (recursively), or a bare [`Pat::Var`] / [`Pat::Wildcard`]. It is the IR
+    /// shape M3b-1 lowers a tuple-destructuring `case` arm and a tuple function
+    /// parameter to (`fst (a, b) = a` → a synthetic param plus
+    /// `Destructure { (a, b) = arg } a`). The binder must be irrefutable — the
+    /// lowerer is the sole producer and rejects a refutable element
+    /// (a constructor / literal) fail-closed (SKY-L0115) — so the backend's
+    /// `let <binder> = <value>;` is a sound, exhaustive Rust binding. `binder`
+    /// is bound only within `body`, not in `value`.
+    Destructure {
+        binder: Pat,
+        value: Box<Self>,
+        body: Box<Self>,
+    },
     /// A conditional `if cond then then_ else else_`. The `else` arm is
     /// mandatory — every Sky `if` is an expression with both branches.
     If {

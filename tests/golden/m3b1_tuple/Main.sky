@@ -1,0 +1,20 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A tuple pattern in a function parameter: the generic `fst` / `snd`
+-- projections. `(a, b)` destructures the single tuple argument irrefutably.
+fst : (a, b) -> a
+fst (a, b) = a
+
+snd : (a, b) -> b
+snd (a, b) = b
+
+-- A tuple pattern as a single irrefutable `case` arm.
+pairSum : Int
+pairSum =
+    case (1, 2) of
+        (a, b) -> a + b
+
+-- 41 + 2 + 3 = 46, the same value the Go reference compiler prints.
+main =
+    println (String.fromInt (fst (41, 99) + snd (7, 2) + pairSum))

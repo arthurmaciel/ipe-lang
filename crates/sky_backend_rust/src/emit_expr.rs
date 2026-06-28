@@ -117,6 +117,21 @@ fn emit_expr_at(
             let body = emit_expr_at(ctx, body, indent, child, generics)?;
             Ok(format!("({{ let {name} = {value}; {body} }})"))
         }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            // An irrefutable destructuring binding renders as a parenthesised
+            // Rust block, exactly like `Let`, but with a pattern binder:
+            // `({ let <binder> = <value>; <body> })`. The binder is irrefutable
+            // (the lowerer guarantees it — a tuple of var / wildcard binders, or
+            // a bare var / wildcard), so the `let` is exhaustive Rust.
+            let binder = render_pat(ctx, binder)?;
+            let value = emit_expr_at(ctx, value, indent, child, generics)?;
+            let body = emit_expr_at(ctx, body, indent, child, generics)?;
+            Ok(format!("({{ let {binder} = {value}; {body} }})"))
+        }
         Expr::If { cond, then_, else_ } => {
             // Parenthesised so the whole `if`/`else` is a single expression
             // value, independent of surrounding precedence.
