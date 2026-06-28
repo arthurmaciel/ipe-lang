@@ -51,17 +51,49 @@ pub struct Module {
     pub records: Vec<IrType>,
 }
 
-/// A user-declared type. M0 supports only enums with nullary variants.
+/// A user-declared type. The IR models user types as enums (Sky's `type`
+/// declarations); a nullary-only enum is the M0 case, a payload-carrying and/or
+/// generic enum the M3a case.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TypeDef {
     Enum(EnumDef),
 }
 
-/// An enum declaration with nullary variants only (M0 subset).
+/// An enum (algebraic data type) declaration.
+///
+/// A variant may carry payload fields (M3a) and the type may be generic over a
+/// list of type parameters (`type Maybe a = Just a | Nothing`). A nullary-only,
+/// non-generic enum (`type Msg = Increment | Decrement`) has every variant's
+/// `fields` empty and an empty `type_params` — that path stays byte-identical to
+/// the M0 backend output.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct EnumDef {
     pub name: Symbol,
-    pub variants: Vec<Symbol>,
+    /// The type variables this enum quantifies, in declaration order. Each is a
+    /// Sky type-variable [`Symbol`] that appears as an [`IrType::Generic`] in a
+    /// variant's field types. A non-generic enum has an empty list.
+    ///
+    /// The order is load-bearing: the backend derives each parameter's Rust
+    /// generic name (`T1`, `T2`, …) from its *position* here — exactly as for
+    /// [`Func::type_params`] — so the emitted `enum Name<T1, T2>` agrees with
+    /// every field type and use-site instantiation regardless of source naming.
+    pub type_params: Vec<Symbol>,
+    pub variants: Vec<Variant>,
+}
+
+/// One constructor of an [`EnumDef`]: its name and its ordered payload field
+/// types.
+///
+/// A nullary constructor (`Increment`, `Nothing`) has an empty `fields`. A
+/// payload constructor (`Just a`, `Rect Float Float`, `Node Tree Int Tree`)
+/// lists one [`IrType`] per positional field, in source order. A field whose
+/// type is the enum being declared (direct self-recursion) is rendered boxed by
+/// the backend so the Rust enum stays finite-sized; the IR carries the bare
+/// recursive type and leaves the boxing to emission.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Variant {
+    pub name: Symbol,
+    pub fields: Vec<IrType>,
 }
 
 /// A function: the type variables it quantifies, typed parameters, a return
@@ -94,7 +126,19 @@ pub enum IrType {
     Str,
     Unit,
     TaskUnit,
-    Enum(Symbol),
+    /// A user-declared enum type, applied to its type arguments.
+    ///
+    /// `name` is the enum's bare type [`Symbol`]; `args` are the concrete type
+    /// arguments at a use site (`Maybe Int` → `args = [Int]`, rendered
+    /// `MainMaybe<i64>`). A non-generic enum (`Msg`) carries an empty `args`
+    /// list, so it renders as the bare Rust type name — byte-identical to the M0
+    /// backend. An `arg` may itself be an [`IrType::Generic`] when a generic
+    /// enum is passed through a generic function (`Maybe a` inside a parametric
+    /// signature → `MainMaybe<T1>`).
+    Enum {
+        name: Symbol,
+        args: Vec<Self>,
+    },
     /// An anonymous product type `(T1, T2, ...)`.
     ///
     /// Invariant: the element list has arity ≥ 2. A 0-tuple is [`IrType::Unit`]
@@ -157,9 +201,18 @@ pub enum IrType {
 pub enum Expr {
     Int(i64),
     Var(Symbol),
+    /// A constructor application `Variant arg0 arg1 …` (a nullary constructor
+    /// `Variant` has an empty `args`).
+    ///
+    /// `ty` is the constructor's enum type [`Symbol`]; `variant` the constructor
+    /// name. `args` are the payload expressions, one per declared field, in
+    /// source order. The backend resolves the variant's declared field types
+    /// from the enum declaration to wrap any direct-self-recursive field in
+    /// `Box::new` at construction (matching the boxed enum field).
     Ctor {
         ty: Symbol,
         variant: Symbol,
+        args: Vec<Self>,
     },
     BinOp {
         op: BinOp,
@@ -295,10 +348,30 @@ pub struct Arm {
     pub body: Expr,
 }
 
-/// A pattern. M0 supports only nullary constructor patterns.
+/// A pattern.
+///
+/// M3a supports a constructor pattern whose payload sub-patterns bind to a
+/// variable ([`Pat::Var`]) or are ignored ([`Pat::Wildcard`]). Nullary
+/// constructor patterns (M0) are [`Pat::Ctor`] with an empty `args`.
+/// [`Pat::Var`] / [`Pat::Wildcard`] only ever appear as payload sub-patterns of
+/// a [`Pat::Ctor`]; the case-arm head is always a [`Pat::Ctor`] (an
+/// exhaustiveness obligation [`Match::new`] enforces). Literal / tuple / record
+/// / cons / alias payload sub-patterns are M3b and are rejected upstream at
+/// lowering, so every [`Pat`] the backend sees here is var / wildcard / ctor.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Pat {
-    Ctor { ty: Symbol, variant: Symbol },
+    /// A variable binder — binds the matched value (a constructor payload field)
+    /// to a name.
+    Var(Symbol),
+    /// A wildcard `_` — matches any value and binds nothing.
+    Wildcard,
+    /// A constructor pattern `Variant sub0 sub1 …` (a nullary pattern `Variant`
+    /// has an empty `args`).
+    Ctor {
+        ty: Symbol,
+        variant: Symbol,
+        args: Vec<Self>,
+    },
 }
 
 /// An exhaustive case analysis over an enum scrutinee.
@@ -329,7 +402,18 @@ impl Match {
 
         let mut covered: BTreeSet<Symbol> = BTreeSet::new();
         for arm in &arms {
-            let Pat::Ctor { variant, .. } = arm.pat;
+            // The case-arm head is always a constructor pattern (payload binders
+            // are sub-patterns). A bare variable / wildcard whole-scrutinee arm
+            // is not an M3a shape, so the lowerer never produces one here — a
+            // non-ctor arm head is an internal invariant violation, surfaced as
+            // a `CompilerBug` rather than silently skewing the coverage count.
+            let Pat::Ctor { variant, .. } = &arm.pat else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_ir::Match::new",
+                    detail: "match arm head is not a constructor pattern".to_owned(),
+                });
+            };
+            let variant = *variant;
             if !expected.contains(&variant) {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_ir::Match::new",
@@ -397,7 +481,11 @@ mod tests {
         // case msg of Increment -> count + 1 ; Decrement -> count - 1
         let arms = vec![
             Arm {
-                pat: Pat::Ctor { ty, variant: inc },
+                pat: Pat::Ctor {
+                    ty,
+                    variant: inc,
+                    args: vec![],
+                },
                 body: Expr::BinOp {
                     op: BinOp::Add,
                     lhs: Box::new(Expr::Var(count)),
@@ -405,7 +493,11 @@ mod tests {
                 },
             },
             Arm {
-                pat: Pat::Ctor { ty, variant: dec },
+                pat: Pat::Ctor {
+                    ty,
+                    variant: dec,
+                    args: vec![],
+                },
                 body: Expr::BinOp {
                     op: BinOp::Sub,
                     lhs: Box::new(Expr::Var(count)),
@@ -434,7 +526,11 @@ mod tests {
 
         // Only the Increment arm — Decrement uncovered.
         let arms = vec![Arm {
-            pat: Pat::Ctor { ty, variant: inc },
+            pat: Pat::Ctor {
+                ty,
+                variant: inc,
+                args: vec![],
+            },
             body: Expr::Var(count),
         }];
         let r = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec]);
@@ -449,11 +545,19 @@ mod tests {
 
         let arms = vec![
             Arm {
-                pat: Pat::Ctor { ty, variant: inc },
+                pat: Pat::Ctor {
+                    ty,
+                    variant: inc,
+                    args: vec![],
+                },
                 body: Expr::Int(0),
             },
             Arm {
-                pat: Pat::Ctor { ty, variant: inc },
+                pat: Pat::Ctor {
+                    ty,
+                    variant: inc,
+                    args: vec![],
+                },
                 body: Expr::Int(1),
             },
         ];
@@ -470,11 +574,19 @@ mod tests {
 
         let arms = vec![
             Arm {
-                pat: Pat::Ctor { ty, variant: inc },
+                pat: Pat::Ctor {
+                    ty,
+                    variant: inc,
+                    args: vec![],
+                },
                 body: Expr::Int(0),
             },
             Arm {
-                pat: Pat::Ctor { ty, variant: bogus },
+                pat: Pat::Ctor {
+                    ty,
+                    variant: bogus,
+                    args: vec![],
+                },
                 body: Expr::Int(1),
             },
         ];
@@ -681,7 +793,17 @@ mod tests {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
                     name: ty,
-                    variants: vec![inc, dec],
+                    type_params: vec![],
+                    variants: vec![
+                        Variant {
+                            name: inc,
+                            fields: vec![],
+                        },
+                        Variant {
+                            name: dec,
+                            fields: vec![],
+                        },
+                    ],
                 })],
                 funcs: vec![func],
                 entry: Some(FuncId::from_raw(0)),
@@ -761,6 +883,153 @@ mod tests {
         assert_eq!(distinct.len(), all.len());
         let copied = all;
         assert_eq!(copied.len(), all.len());
+        Ok(())
+    }
+
+    #[test]
+    fn payload_and_generic_enum_construct_and_round_trip() -> DResult<()> {
+        let mut i = Interner::new();
+        let a = i.intern("a")?;
+        let maybe = i.intern("Maybe")?;
+        let just = i.intern("Just")?;
+        let nothing = i.intern("Nothing")?;
+
+        // type Maybe a = Just a | Nothing — one generic param, one payload
+        // variant (carrying the type variable), one nullary variant.
+        let def = EnumDef {
+            name: maybe,
+            type_params: vec![a],
+            variants: vec![
+                Variant {
+                    name: just,
+                    fields: vec![IrType::Generic(a)],
+                },
+                Variant {
+                    name: nothing,
+                    fields: vec![],
+                },
+            ],
+        };
+        assert_eq!(def, def.clone());
+        assert_eq!(def.type_params, vec![a]);
+        assert_eq!(def.variants.len(), 2);
+        assert!(def.variants.first().is_some_and(|v| !v.fields.is_empty()));
+        assert!(def.variants.get(1).is_some_and(|v| v.fields.is_empty()));
+
+        // A use-site type `Maybe Int` carries its concrete type argument.
+        let use_ty = IrType::Enum {
+            name: maybe,
+            args: vec![IrType::Int],
+        };
+        assert_eq!(use_ty, use_ty.clone());
+        // A non-generic enum use carries no args and is distinct from the applied
+        // form.
+        let bare = IrType::Enum {
+            name: maybe,
+            args: vec![],
+        };
+        assert_ne!(use_ty, bare);
+
+        // Construction `Just 5` carries its payload argument.
+        let ctor = Expr::Ctor {
+            ty: maybe,
+            variant: just,
+            args: vec![Expr::Int(5)],
+        };
+        assert_eq!(ctor, ctor.clone());
+        assert!(format!("{ctor:?}").contains("Ctor"));
+        Ok(())
+    }
+
+    #[test]
+    fn ctor_pattern_with_var_and_wildcard_payloads_round_trip() -> DResult<()> {
+        let mut i = Interner::new();
+        let maybe = i.intern("Maybe")?;
+        let just = i.intern("Just")?;
+        let nothing = i.intern("Nothing")?;
+        let x = i.intern("x")?;
+        let m = i.intern("m")?;
+
+        // case m of Just x -> x ; Nothing -> 0  — a var-binding payload pattern
+        // and a nullary pattern. Match::new accepts it (coverage over the variant
+        // NAME set; payload binding does not affect coverage).
+        let arms = vec![
+            Arm {
+                pat: Pat::Ctor {
+                    ty: maybe,
+                    variant: just,
+                    args: vec![Pat::Var(x)],
+                },
+                body: Expr::Var(x),
+            },
+            Arm {
+                pat: Pat::Ctor {
+                    ty: maybe,
+                    variant: nothing,
+                    args: vec![],
+                },
+                body: Expr::Int(0),
+            },
+        ];
+        let m1 = Match::new(Expr::Var(m), arms, &[just, nothing])?;
+        assert_eq!(m1.arms().len(), 2);
+
+        // The wildcard payload sub-pattern is also representable.
+        let wild = Pat::Ctor {
+            ty: maybe,
+            variant: just,
+            args: vec![Pat::Wildcard],
+        };
+        assert_eq!(wild, wild.clone());
+        assert!(format!("{wild:?}").contains("Wildcard"));
+        Ok(())
+    }
+
+    #[test]
+    fn match_new_rejects_non_ctor_arm_head() -> DResult<()> {
+        let mut i = Interner::new();
+        let (_ty, inc, dec) = msg_enum(&mut i)?;
+
+        // A bare variable whole-scrutinee arm is not an M3a shape — the arm head
+        // must be a constructor pattern, so Match::new fails closed.
+        let arms = vec![Arm {
+            pat: Pat::Var(i.intern("anything")?),
+            body: Expr::Int(0),
+        }];
+        let r = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec]);
+        assert!(matches!(r, Err(Diagnostic::CompilerBug { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn recursive_enum_def_round_trips() -> DResult<()> {
+        let mut i = Interner::new();
+        let tree = i.intern("Tree")?;
+        let leaf = i.intern("Leaf")?;
+        let node = i.intern("Node")?;
+
+        // type Tree = Leaf | Node Tree Int Tree — the Node payload carries two
+        // direct self-edges (the enum's own type) around an Int.
+        let self_ty = IrType::Enum {
+            name: tree,
+            args: vec![],
+        };
+        let def = EnumDef {
+            name: tree,
+            type_params: vec![],
+            variants: vec![
+                Variant {
+                    name: leaf,
+                    fields: vec![],
+                },
+                Variant {
+                    name: node,
+                    fields: vec![self_ty.clone(), IrType::Int, self_ty],
+                },
+            ],
+        };
+        assert_eq!(def, def.clone());
+        assert!(def.variants.get(1).is_some_and(|v| v.fields.len() == 3));
         Ok(())
     }
 }

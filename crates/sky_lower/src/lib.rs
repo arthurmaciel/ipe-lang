@@ -128,7 +128,11 @@ mod tests {
             return;
         };
         assert_eq!(i.resolve(en.name), Some("Msg"));
-        let variants: Vec<&str> = en.variants.iter().filter_map(|&s| i.resolve(s)).collect();
+        let variants: Vec<&str> = en
+            .variants
+            .iter()
+            .filter_map(|v| i.resolve(v.name))
+            .collect();
         assert_eq!(variants, vec!["Increment", "Decrement"]);
     }
 
@@ -154,7 +158,9 @@ mod tests {
             return;
         };
         assert_eq!(i.resolve(*p0), Some("msg"));
-        assert!(matches!(t0, IrType::Enum(s) if i.resolve(*s) == Some("Msg")));
+        assert!(
+            matches!(t0, IrType::Enum { name, args } if i.resolve(*name) == Some("Msg") && args.is_empty())
+        );
         assert_eq!(i.resolve(*p1), Some("count"));
         assert_eq!(*t1, IrType::Int);
 
@@ -172,8 +178,10 @@ mod tests {
 
         // first arm: Increment -> (count + 1).
         let Some(arm0) = m.arms().first() else { return };
-        let sky_ir::Pat::Ctor { variant, .. } = arm0.pat;
-        assert_eq!(i.resolve(variant), Some("Increment"));
+        let sky_ir::Pat::Ctor { variant, .. } = &arm0.pat else {
+            return;
+        };
+        assert_eq!(i.resolve(*variant), Some("Increment"));
         assert!(matches!(&arm0.body, Expr::BinOp { op: BinOp::Add, .. }));
 
         // second arm: Decrement -> (count - 1).

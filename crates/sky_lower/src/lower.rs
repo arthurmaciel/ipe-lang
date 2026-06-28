@@ -21,7 +21,7 @@ use sky_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{
     Arm, BinOp, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module, Pat,
-    Program, TypeDef,
+    Program, TypeDef, Variant,
 };
 use sky_types::{SolvedTypes, Ty};
 
@@ -191,9 +191,22 @@ impl<'a> Lowerer<'a> {
             .unions
             .iter()
             .map(|u| {
+                // M3a IR shape: each constructor becomes a `Variant`. The
+                // payload-field lowering (and generic enum `type_params`) is
+                // wired by the M3a lowering task; this pass still produces
+                // nullary, non-generic enums, so existing programs lower to a
+                // byte-identical IR.
                 TypeDef::Enum(EnumDef {
                     name: u.name,
-                    variants: u.ctors.iter().map(|c| c.name).collect(),
+                    type_params: vec![],
+                    variants: u
+                        .ctors
+                        .iter()
+                        .map(|c| Variant {
+                            name: c.name,
+                            fields: vec![],
+                        })
+                        .collect(),
                 })
             })
             .collect();
@@ -564,7 +577,10 @@ impl<'a> Lowerer<'a> {
                 // A `Task` carrying a non-unit result (`Task Int`); M0 models
                 // only `Task ()`. [SKY-L0104, feature: task-results]
                 "Task" => Err(unsupported(span, Feature::TaskResults)),
-                _ if self.enum_variants.contains_key(name) => Ok(IrType::Enum(*name)),
+                _ if self.enum_variants.contains_key(name) => Ok(IrType::Enum {
+                    name: *name,
+                    args: vec![],
+                }),
                 // Name resolution guarantees every type constructor resolves to
                 // a builtin or a declared union, so an unknown one here is an
                 // invariant violation, not user error.
@@ -631,7 +647,7 @@ impl<'a> Lowerer<'a> {
             "Float" => Ok(IrType::Float),
             "Bool" => Ok(IrType::Bool),
             "String" => Ok(IrType::Str),
-            _ if self.enum_variants.contains_key(&name) => Ok(IrType::Enum(name)),
+            _ if self.enum_variants.contains_key(&name) => Ok(IrType::Enum { name, args: vec![] }),
             // Name resolution + the type checker guarantee every type
             // constructor in an annotation resolves to a builtin or a declared
             // union before lowering, so an unknown one here is a violated
@@ -685,6 +701,9 @@ impl<'a> Lowerer<'a> {
             } => Ok(Expr::Ctor {
                 ty: *type_name,
                 variant: *name,
+                // Payload-carrying construction is wired by the M3a lowering
+                // task; a bare ctor reference is nullary here.
+                args: vec![],
             }),
             canon::Expr_::Binop { func, lhs, rhs, .. } => Ok(Expr::BinOp {
                 op: self.binop(*func, e.span)?,
@@ -1169,6 +1188,9 @@ impl<'a> Lowerer<'a> {
                     pat: Pat::Ctor {
                         ty: *type_name,
                         variant: *name,
+                        // Payload sub-patterns are wired by the M3a lowering
+                        // task; a nullary ctor pattern binds nothing.
+                        args: vec![],
                     },
                     body: self.lower_expr(&br.body)?,
                 })

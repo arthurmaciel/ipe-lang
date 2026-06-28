@@ -104,6 +104,11 @@ pub(crate) struct EmitCtx<'a> {
     interner: &'a Interner,
     /// Enum type symbol → Rust type name (e.g. `Msg` → `MainMsg`).
     enum_names: BTreeMap<Symbol, String>,
+    /// `(enum type symbol, variant symbol)` → that variant's declared payload
+    /// field types, in source (positional) order. Empty vector for a nullary
+    /// variant. Used at construction / pattern sites to box (and un-box) a
+    /// direct-self-recursive field so the emitted Rust enum stays finite-sized.
+    variant_fields: BTreeMap<(Symbol, Symbol), Vec<IrType>>,
     /// Function id → Rust function name (e.g. `update` → `main_update`).
     func_names: BTreeMap<FuncId, String>,
     /// Every distinct record shape synthesised for the program, in emission
@@ -118,6 +123,7 @@ pub(crate) struct EmitCtx<'a> {
 impl<'a> EmitCtx<'a> {
     fn build(interner: &'a Interner, program: &Program) -> DResult<Self> {
         let mut enum_names = BTreeMap::new();
+        let mut variant_fields: BTreeMap<(Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
         let mut func_names = BTreeMap::new();
         for module in &program.modules {
             let segs = module
@@ -146,6 +152,9 @@ impl<'a> EmitCtx<'a> {
                             def.name.as_raw()
                         ),
                     });
+                }
+                for variant in &def.variants {
+                    variant_fields.insert((def.name, variant.name), variant.fields.clone());
                 }
             }
             for func in &module.funcs {
@@ -181,6 +190,19 @@ impl<'a> EmitCtx<'a> {
             for ty in &module.records {
                 collect_record_shapes(interner, ty, &mut shapes)?;
             }
+            // An enum variant's payload field type may itself be (or carry) a
+            // record shape (`type Boxed a = Box { value : a }`). The variant
+            // field types are not in any signature, so collect them here too —
+            // otherwise emitting the enum would resolve the record type to a
+            // struct that was never synthesised (a `CompilerBug` miss).
+            for ty in &module.types {
+                let TypeDef::Enum(def) = ty;
+                for variant in &def.variants {
+                    for field_ty in &variant.fields {
+                        collect_record_shapes(interner, field_ty, &mut shapes)?;
+                    }
+                }
+            }
         }
         let mut record_structs = Vec::with_capacity(shapes.len());
         let mut record_by_fieldset = BTreeMap::new();
@@ -199,10 +221,32 @@ impl<'a> EmitCtx<'a> {
         Ok(Self {
             interner,
             enum_names,
+            variant_fields,
             func_names,
             record_structs,
             record_by_fieldset,
         })
+    }
+
+    /// The declared payload field types of constructor `variant` of enum `ty`,
+    /// in positional order.
+    ///
+    /// A miss means a constructor expression / pattern names a variant the
+    /// program never declared — an upstream-contract violation (the type checker
+    /// pins every constructor to its union), surfaced as a [`Diagnostic::CompilerBug`]
+    /// rather than a silent mis-emit.
+    fn variant_fields(&self, ty: Symbol, variant: Symbol) -> DResult<&[IrType]> {
+        self.variant_fields
+            .get(&(ty, variant))
+            .map(Vec::as_slice)
+            .ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::EmitCtx::variant_fields",
+                detail: format!(
+                    "no declared field types for variant {} of enum {}",
+                    variant.as_raw(),
+                    ty.as_raw()
+                ),
+            })
     }
 
     /// Every synthesised record struct, in emission order.
@@ -396,17 +440,39 @@ fn collect_record_shapes(
             }
             collect_record_shapes(interner, ret, shapes)?;
         }
+        IrType::Enum { args, .. } => {
+            // An enum carries no struct of its own, but its type arguments may
+            // (e.g. `Maybe { x : Int }`).
+            for arg in args {
+                collect_record_shapes(interner, arg, shapes)?;
+            }
+        }
         IrType::Int
         | IrType::Float
         | IrType::Bool
         | IrType::Str
         | IrType::Unit
         | IrType::TaskUnit
-        | IrType::Enum(_)
         // A generic type variable carries no concrete record shape of its own.
         | IrType::Generic(_) => {}
     }
     Ok(())
+}
+
+/// Is `field` a DIRECT self-edge of the enum `enum_sym` — i.e. exactly that
+/// enum's own type (`IrType::Enum { name == enum_sym }`), regardless of its type
+/// arguments?
+///
+/// A direct self-edge (`type Tree = … | Node Tree Int Tree`) makes the Rust
+/// enum infinite-sized (E0072) unless the field is boxed, so the backend wraps
+/// it in `Box<…>` at the declaration and balances that with `Box::new` at
+/// construction and a deref at pattern binding. An *indirect* recursion (the
+/// enum reached through a tuple / record / another generic's argument) is NOT a
+/// direct self-edge and is not boxed here — a documented M3a residual, mirroring
+/// the Go-reference Rust backend's `boxIfRecursive`, which boxes only the
+/// top-level self-edge.
+pub(crate) fn is_direct_self_field(field: &IrType, enum_sym: Symbol) -> bool {
+    matches!(field, IrType::Enum { name, .. } if *name == enum_sym)
 }
 
 /// Does this type contain an [`IrType::Generic`] anywhere (a field that is — or
@@ -417,13 +483,13 @@ fn contains_generic(ty: &IrType) -> bool {
         IrType::Tuple(elems) => elems.iter().any(contains_generic),
         IrType::Record(map) => map.values().any(contains_generic),
         IrType::Fun(params, ret) => params.iter().any(contains_generic) || contains_generic(ret),
+        IrType::Enum { args, .. } => args.iter().any(contains_generic),
         IrType::Int
         | IrType::Float
         | IrType::Bool
         | IrType::Str
         | IrType::Unit
-        | IrType::TaskUnit
-        | IrType::Enum(_) => false,
+        | IrType::TaskUnit => false,
     }
 }
 
@@ -452,13 +518,17 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
             }
             collect_generics(ret, out);
         }
+        IrType::Enum { args, .. } => {
+            for a in args {
+                collect_generics(a, out);
+            }
+        }
         IrType::Int
         | IrType::Float
         | IrType::Bool
         | IrType::Str
         | IrType::Unit
-        | IrType::TaskUnit
-        | IrType::Enum(_) => {}
+        | IrType::TaskUnit => {}
     }
 }
 
@@ -514,8 +584,21 @@ fn skeleton_ty(ty: &IrType, idx: &mut BTreeMap<Symbol, usize>, out: &mut String)
             out.push_str(")->");
             skeleton_ty(ret, idx, out);
         }
-        // Scalar / leaf types (Int / Bool / Enum / …): their `Debug` form is a
-        // stable, generic-free discriminator — exactly what a skeleton needs.
+        IrType::Enum { name, args } => {
+            // Key by the enum's symbol plus its (possibly generic) type args, so
+            // `Maybe a` and `Maybe Int` skeletonise distinctly while `Maybe a`
+            // and `Maybe b` (alpha-equivalent) coincide.
+            out.push('E');
+            out.push_str(&name.as_raw().to_string());
+            out.push('<');
+            for a in args {
+                skeleton_ty(a, idx, out);
+                out.push(',');
+            }
+            out.push('>');
+        }
+        // Scalar / leaf types (Int / Bool / …): their `Debug` form is a stable,
+        // generic-free discriminator — exactly what a skeleton needs.
         other => {
             use core::fmt::Write as _;
             // Writing to a `String` is infallible; the `Result` is discarded.
@@ -591,14 +674,22 @@ fn match_template(
             }
             _ => Err(mismatch()),
         },
+        IrType::Enum { name: tn, args: ta } => match concrete {
+            IrType::Enum { name: cn, args: ca } if tn == cn && ta.len() == ca.len() => {
+                for (t, c) in ta.iter().zip(ca.iter()) {
+                    match_template(t, c, subst)?;
+                }
+                Ok(())
+            }
+            _ => Err(mismatch()),
+        },
         // A concrete leaf must equal the use-site leaf exactly.
         IrType::Int
         | IrType::Float
         | IrType::Bool
         | IrType::Str
         | IrType::Unit
-        | IrType::TaskUnit
-        | IrType::Enum(_) => {
+        | IrType::TaskUnit => {
             if template == concrete {
                 Ok(())
             } else {

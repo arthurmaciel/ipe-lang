@@ -14,7 +14,7 @@ use sky_intern::{Interner, Symbol};
 
 use crate::ir::{
     Arm, BinOp, Callee, EnumDef, Expr, Func, IrType, KernelFn, Match, ModPath, Module, Pat,
-    Program, TypeDef,
+    Program, TypeDef, Variant,
 };
 
 /// Render `program` as a readable indented tree, resolving every [`Symbol`]
@@ -67,11 +67,26 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::Str => "String".to_owned(),
         IrType::Unit => "()".to_owned(),
         IrType::TaskUnit => "Task Error ()".to_owned(),
-        // An enum renders by its type name; a generic type variable renders by
-        // its source name (e.g. `a`) — both are a bare interned [`Symbol`]. The
-        // Rust generic spelling (`T1`, …) is a backend concern; the IR view
+        // A generic type variable renders by its source name (e.g. `a`); the
+        // Rust generic spelling (`T1`, …) is a backend concern, so the IR view
         // keeps the source-facing name.
-        IrType::Enum(name) | IrType::Generic(name) => sym_name(interner, *name),
+        IrType::Generic(name) => sym_name(interner, *name),
+        // An enum renders by its type name, applied to its type arguments in
+        // source-like prefix form (`Maybe Int`). A non-generic enum (empty
+        // `args`) is just the bare type name.
+        IrType::Enum { name, args } => {
+            let base = sym_name(interner, *name);
+            if args.is_empty() {
+                base
+            } else {
+                let rendered = args
+                    .iter()
+                    .map(|t| ir_type_name(interner, t))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("{base} {rendered}")
+            }
+        }
         IrType::Tuple(elems) => {
             let inner = elems
                 .iter()
@@ -148,15 +163,27 @@ fn callee_name(callee: &Callee) -> String {
     }
 }
 
-/// Render a pattern, e.g. `Msg.Increment`.
+/// Render a pattern, e.g. `Msg.Increment`, `Maybe.Just x`, `Maybe.Just _`.
 fn pat_name(interner: &Interner, pat: &Pat) -> String {
     match pat {
-        Pat::Ctor { ty, variant } => {
-            format!(
+        Pat::Var(sym) => sym_name(interner, *sym),
+        Pat::Wildcard => "_".to_owned(),
+        Pat::Ctor { ty, variant, args } => {
+            let head = format!(
                 "{}.{}",
                 sym_name(interner, *ty),
                 sym_name(interner, *variant)
-            )
+            );
+            if args.is_empty() {
+                head
+            } else {
+                let subs = args
+                    .iter()
+                    .map(|p| pat_name(interner, p))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("{head} {subs}")
+            }
         }
     }
 }
@@ -184,18 +211,52 @@ fn write_module(out: &mut String, module: &Module, interner: &Interner) {
 
 fn write_type(out: &mut String, ty: &TypeDef, interner: &Interner) {
     match ty {
-        TypeDef::Enum(EnumDef { name, variants }) => {
+        TypeDef::Enum(EnumDef {
+            name,
+            type_params,
+            variants,
+        }) => {
             let rendered = variants
                 .iter()
-                .map(|v| sym_name(interner, *v))
+                .map(|v| variant_name(interner, v))
                 .collect::<Vec<_>>()
                 .join(" | ");
+            // A generic enum shows its quantified type variables after the name
+            // (`Maybe a`); a non-generic enum shows nothing, so existing output
+            // is unchanged.
+            let gens = if type_params.is_empty() {
+                String::new()
+            } else {
+                let vars = type_params
+                    .iter()
+                    .map(|sym| sym_name(interner, *sym))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!(" {vars}")
+            };
             line(
                 out,
                 2,
-                &format!("type {} = {rendered}", sym_name(interner, *name)),
+                &format!("type {}{gens} = {rendered}", sym_name(interner, *name)),
             );
         }
+    }
+}
+
+/// Render one enum variant in source-like form: `Increment`, `Just a`,
+/// `Rect Float Float`.
+fn variant_name(interner: &Interner, v: &Variant) -> String {
+    let head = sym_name(interner, v.name);
+    if v.fields.is_empty() {
+        head
+    } else {
+        let fields = v
+            .fields
+            .iter()
+            .map(|t| ir_type_name(interner, t))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("{head} {fields}")
     }
 }
 
@@ -243,15 +304,20 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
     match expr {
         Expr::Int(n) => line(out, level, &format!("Int {n}")),
         Expr::Var(sym) => line(out, level, &format!("Var {}", sym_name(interner, *sym))),
-        Expr::Ctor { ty, variant } => line(
-            out,
-            level,
-            &format!(
-                "Ctor {}.{}",
-                sym_name(interner, *ty),
-                sym_name(interner, *variant)
-            ),
-        ),
+        Expr::Ctor { ty, variant, args } => {
+            line(
+                out,
+                level,
+                &format!(
+                    "Ctor {}.{}",
+                    sym_name(interner, *ty),
+                    sym_name(interner, *variant)
+                ),
+            );
+            for arg in args {
+                write_expr(out, arg, interner, level + 1);
+            }
+        }
         Expr::BinOp { op, lhs, rhs } => {
             line(out, level, &format!("BinOp {}", binop_token(*op)));
             write_expr(out, lhs, interner, level + 1);
@@ -422,6 +488,7 @@ mod tests {
                 pat: Pat::Ctor {
                     ty: msg,
                     variant: inc,
+                    args: vec![],
                 },
                 body: Expr::BinOp {
                     op: BinOp::Add,
@@ -433,6 +500,7 @@ mod tests {
                 pat: Pat::Ctor {
                     ty: msg,
                     variant: dec,
+                    args: vec![],
                 },
                 body: Expr::BinOp {
                     op: BinOp::Sub,
@@ -445,7 +513,16 @@ mod tests {
             id: FuncId::from_raw(1),
             name: tick,
             type_params: vec![],
-            params: vec![(m, IrType::Enum(msg)), (count, IrType::Int)],
+            params: vec![
+                (
+                    m,
+                    IrType::Enum {
+                        name: msg,
+                        args: vec![],
+                    },
+                ),
+                (count, IrType::Int),
+            ],
             ret: IrType::Int,
             body: Expr::Match(Match::new(Expr::Var(m), tick_arms, &[inc, dec])?),
         };
@@ -455,7 +532,17 @@ mod tests {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
                     name: msg,
-                    variants: vec![inc, dec],
+                    type_params: vec![],
+                    variants: vec![
+                        Variant {
+                            name: inc,
+                            fields: vec![],
+                        },
+                        Variant {
+                            name: dec,
+                            fields: vec![],
+                        },
+                    ],
                 })],
                 funcs: vec![main_func, tick_func],
                 entry: Some(FuncId::from_raw(0)),
@@ -806,6 +893,92 @@ program
   module Main
     fn#0 thunk(k : () -> Bool) -> Bool
       Int 0
+";
+        assert_eq!(pretty(&program, &i), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn pretty_renders_generic_adt_decl_ctor_and_pattern() -> DResult<()> {
+        let mut i = Interner::new();
+        let main_mod = i.intern("Main")?;
+        let a = i.intern("a")?;
+        let maybe = i.intern("Maybe")?;
+        let just = i.intern("Just")?;
+        let nothing = i.intern("Nothing")?;
+        let unwrap = i.intern("unwrap")?;
+        let m = i.intern("m")?;
+        let x = i.intern("x")?;
+
+        // type Maybe a = Just a | Nothing
+        // unwrap(m : Maybe Int) -> Int =
+        //   case m of Just x -> x ; Nothing -> 0
+        let arms = vec![
+            Arm {
+                pat: Pat::Ctor {
+                    ty: maybe,
+                    variant: just,
+                    args: vec![Pat::Var(x)],
+                },
+                body: Expr::Var(x),
+            },
+            Arm {
+                pat: Pat::Ctor {
+                    ty: maybe,
+                    variant: nothing,
+                    args: vec![],
+                },
+                body: Expr::Int(0),
+            },
+        ];
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![TypeDef::Enum(EnumDef {
+                    name: maybe,
+                    type_params: vec![a],
+                    variants: vec![
+                        Variant {
+                            name: just,
+                            fields: vec![IrType::Generic(a)],
+                        },
+                        Variant {
+                            name: nothing,
+                            fields: vec![],
+                        },
+                    ],
+                })],
+                funcs: vec![Func {
+                    id: FuncId::from_raw(0),
+                    name: unwrap,
+                    type_params: vec![],
+                    params: vec![(
+                        m,
+                        IrType::Enum {
+                            name: maybe,
+                            args: vec![IrType::Int],
+                        },
+                    )],
+                    ret: IrType::Int,
+                    body: Expr::Match(Match::new(Expr::Var(m), arms, &[just, nothing])?),
+                }],
+                entry: None,
+                records: vec![],
+            }],
+        };
+
+        let expected = "\
+program
+  module Main
+    type Maybe a = Just a | Nothing
+    fn#0 unwrap(m : Maybe Int) -> Int
+      Match
+        scrutinee
+          Var m
+        arm Maybe.Just x
+          Var x
+        arm Maybe.Nothing
+          Int 0
 ";
         assert_eq!(pretty(&program, &i), expected);
         Ok(())

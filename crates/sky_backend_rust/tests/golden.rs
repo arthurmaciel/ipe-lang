@@ -11,7 +11,7 @@ use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::Interner;
 use sky_ir::{
     Arm, BinOp, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module, Pat,
-    Program, TypeDef,
+    Program, TypeDef, Variant,
 };
 
 const GOLDEN_MAIN: &str = include_str!("../../../tests/golden/m0/main.rs");
@@ -44,6 +44,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
             pat: Pat::Ctor {
                 ty: msg_ty,
                 variant: increment,
+                args: vec![],
             },
             body: Expr::BinOp {
                 op: BinOp::Add,
@@ -55,6 +56,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
             pat: Pat::Ctor {
                 ty: msg_ty,
                 variant: decrement,
+                args: vec![],
             },
             body: Expr::BinOp {
                 op: BinOp::Sub,
@@ -69,7 +71,16 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
         id: update_id,
         name: update,
         type_params: vec![],
-        params: vec![(msg, IrType::Enum(msg_ty)), (count, IrType::Int)],
+        params: vec![
+            (
+                msg,
+                IrType::Enum {
+                    name: msg_ty,
+                    args: vec![],
+                },
+            ),
+            (count, IrType::Int),
+        ],
         ret: IrType::Int,
         body: Expr::Match(update_match),
     };
@@ -90,6 +101,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
                         Expr::Ctor {
                             ty: msg_ty,
                             variant: increment,
+                            args: vec![],
                         },
                         Expr::Int(0),
                     ],
@@ -103,7 +115,17 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
             name: ModPath(vec![main_mod]),
             types: vec![TypeDef::Enum(EnumDef {
                 name: msg_ty,
-                variants: vec![increment, decrement],
+                type_params: vec![],
+                variants: vec![
+                    Variant {
+                        name: increment,
+                        fields: vec![],
+                    },
+                    Variant {
+                        name: decrement,
+                        fields: vec![],
+                    },
+                ],
             })],
             funcs: vec![update_fn, main_fn],
             entry: Some(main_id),
