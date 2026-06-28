@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use sky_canon::ast as canon;
-use sky_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span};
+use sky_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{
     Arm, BinOp, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module, Pat,
@@ -926,23 +926,7 @@ impl<'a> Lowerer<'a> {
             }),
             canon::Expr_::Call(callee, args) => self.lower_call(callee, args, e.span),
             canon::Expr_::Lambda(params, body) => self.lower_lambda(params, body, e.span),
-            canon::Expr_::Let(bindings, body) => {
-                // Multi-binding `let` lowers to right-nested single-binding IR
-                // `Let`s: `let a = …; b = … in body` becomes
-                // `Let a (Let b body)`. The IR `Let` is non-recursive — `name`
-                // is bound only within `body` — which matches the sequential
-                // (`let*`) scoping canonicalisation and inference established.
-                let mut acc = self.lower_expr(body)?;
-                for b in bindings.iter().rev() {
-                    let value = self.lower_expr(&b.body)?;
-                    acc = Expr::Let {
-                        name: b.name.value,
-                        value: Box::new(value),
-                        body: Box::new(acc),
-                    };
-                }
-                Ok(acc)
-            }
+            canon::Expr_::Let(bindings, body) => self.lower_let(bindings, body),
             canon::Expr_::If(branches, else_expr) => {
                 // A multi-way `if` (with `else if` branches) lowers to right-
                 // nested binary `If`s: `if c1 then a else if c2 then b else c`
@@ -1413,9 +1397,33 @@ impl<'a> Lowerer<'a> {
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Pat::Tuple(subs))
             }
-            canon::Pattern_::PCtor { .. } => {
-                Err(unsupported(p.span, Feature::NestedPayloadPatterns))
+            // M3b-2: a nested constructor sub-pattern (`Just (Just a)`,
+            // `Node (Node …) x r`). The canonical pattern already carries the
+            // resolved `type_name` / variant / sub-patterns, so the IR
+            // `Pat::Ctor` is built directly and recurses. Whether the resulting
+            // (refutable) nested shape is exhaustive is the exhaustiveness
+            // checker's call (SKY-T0010); a second arm for the same top-level
+            // constructor is gated separately (SKY-L0116).
+            canon::Pattern_::PCtor {
+                type_name,
+                name,
+                args,
+                ..
+            } => {
+                let subs = args
+                    .iter()
+                    .map(Self::lower_payload_pat)
+                    .collect::<DResult<Vec<_>>>()?;
+                Ok(Pat::Ctor {
+                    ty: *type_name,
+                    variant: *name,
+                    args: subs,
+                })
             }
+            // A record sub-pattern nested in a constructor payload needs the
+            // payload field's record type threaded here to recover the complete
+            // field set; not yet plumbed. [SKY-L0112]
+            canon::Pattern_::PRecord(_) => Err(unsupported(p.span, Feature::NestedPayloadPatterns)),
         }
     }
 
@@ -1438,7 +1446,94 @@ impl<'a> Lowerer<'a> {
                 Ok(Pat::Tuple(subs))
             }
             canon::Pattern_::PCtor { .. } => Err(unsupported(p.span, Feature::TuplePatternMatch)),
+            // A record pattern nested inside a tuple destructure needs the
+            // element's record type to recover the complete field set; only a
+            // top-level record binder is supported (via `lower_binder_pat`).
+            // [SKY-L0112]
+            canon::Pattern_::PRecord(_) => Err(unsupported(p.span, Feature::NestedPayloadPatterns)),
         }
+    }
+
+    /// Lower an irrefutable destructure binder — the LHS of a `let` destructure
+    /// or the single arm of a tuple / record `case`. Variables, wildcards, and
+    /// nested irrefutable tuples lower structurally via [`Self::lower_destructure_pat`];
+    /// a top-level RECORD binder resolves its synthesised struct from `value`'s
+    /// solved record type, so the COMPLETE field set (each pattern field a binder,
+    /// every other field a wildcard) reaches the backend exactly as a record
+    /// literal does. `value` is the canonical expression bound (the `let` body or
+    /// the `case` scrutinee); its region type supplies the record shape.
+    fn lower_binder_pat(&self, pat: &canon::Pattern, value: &canon::Expr) -> DResult<Pat> {
+        match &pat.value {
+            canon::Pattern_::PRecord(fields) => {
+                let ty = self.types.regions.get(&value.span).ok_or_else(|| {
+                    bug(
+                        "sky_lower::lower_binder_pat",
+                        "record destructure value has no solved region type",
+                    )
+                })?;
+                self.lower_record_pat(fields, ty, pat.span)
+            }
+            _ => Self::lower_destructure_pat(pat),
+        }
+    }
+
+    /// Build a [`Pat::Record`] from a field-pun record pattern and the scrutinee's
+    /// solved record type. The pattern names a subset of the record's fields
+    /// (`{ x }` on a `{ x, y }` record is legal); the COMPLETE field set is
+    /// emitted — each named field a [`Pat::Var`] binder, every other field a
+    /// [`Pat::Wildcard`] — so the backend resolves the struct from the full
+    /// field-name set, exactly as a record literal does. Entries are ordered by
+    /// resolved field name for deterministic output.
+    fn lower_record_pat(&self, fields: &[Located<Symbol>], ty: &Ty, span: Span) -> DResult<Pat> {
+        let Ty::Record(rec) = ty else {
+            // A record pattern whose scrutinee did not solve to a record type.
+            // The type checker proves the scrutinee is a record before this runs,
+            // so reaching here is fail-closed defence rather than a live path.
+            return Err(unsupported(span, Feature::NestedPayloadPatterns));
+        };
+        let bound: BTreeSet<Symbol> = fields.iter().map(|f| f.value).collect();
+        let mut entries: Vec<(Symbol, Pat)> = Vec::with_capacity(rec.len());
+        for field in rec.keys() {
+            let sub = if bound.contains(field) {
+                Pat::Var(*field)
+            } else {
+                Pat::Wildcard
+            };
+            entries.push((*field, sub));
+        }
+        entries.sort_by(|a, b| {
+            self.resolve(a.0)
+                .unwrap_or("")
+                .cmp(self.resolve(b.0).unwrap_or(""))
+        });
+        Ok(Pat::Record(entries))
+    }
+
+    /// Lower a `let … in body`. A multi-binding `let` becomes right-nested
+    /// single-binding IR nodes (`let a = …; b = … in body` → `Let a (Let b body)`),
+    /// matching the sequential (`let*`) scoping that canonicalisation and
+    /// inference established. A plain `name = value` binding stays the audited
+    /// single-symbol [`Expr::Let`]; an irrefutable destructure (`(a, b) = e`,
+    /// `{ x } = e`, `_ = e`) lowers to an [`Expr::Destructure`] whose binder is
+    /// built by [`Self::lower_binder_pat`] (a refutable binder is rejected there).
+    fn lower_let(&self, bindings: &[canon::LetBinding], body: &canon::Expr) -> DResult<Expr> {
+        let mut acc = self.lower_expr(body)?;
+        for b in bindings.iter().rev() {
+            let value = self.lower_expr(&b.body)?;
+            acc = match &b.pat.value {
+                canon::Pattern_::PVar(name) => Expr::Let {
+                    name: *name,
+                    value: Box::new(value),
+                    body: Box::new(acc),
+                },
+                _ => Expr::Destructure {
+                    binder: self.lower_binder_pat(&b.pat, &b.body)?,
+                    value: Box::new(value),
+                    body: Box::new(acc),
+                },
+            };
+        }
+        Ok(acc)
     }
 
     fn lower_case(&self, scrut: &canon::Expr, branches: &[canon::CaseBranch]) -> DResult<Expr> {
@@ -1449,16 +1544,19 @@ impl<'a> Lowerer<'a> {
         let first = branches
             .first()
             .ok_or_else(|| bug("sky_lower::lower_case", "empty case expression"))?;
-        // A tuple-pattern arm is an irrefutable destructure, not an enum match.
-        // M3b-1 supports exactly one such arm (`case (1, 2) of (a, b) -> …`);
-        // it lowers to a `Destructure` binding rather than an `Expr::Match`.
-        // More than one arm would need product/literal exhaustiveness, the
-        // tuple-pattern gap (SKY-L0115).
-        if let canon::Pattern_::PTuple(_) = &first.pat.value {
+        // A tuple- or record-pattern arm is an irrefutable destructure, not an
+        // enum match. Exactly one such arm (`case (1, 2) of (a, b) -> …`,
+        // `case r of { x, y } -> …`) lowers to a `Destructure` binding rather
+        // than an `Expr::Match`. More than one arm would need product
+        // exhaustiveness, the tuple-pattern gap (SKY-L0115).
+        if matches!(
+            &first.pat.value,
+            canon::Pattern_::PTuple(_) | canon::Pattern_::PRecord(_)
+        ) {
             if branches.len() != 1 {
                 return Err(unsupported(first.pat.span, Feature::TuplePatternMatch));
             }
-            let binder = Self::lower_destructure_pat(&first.pat)?;
+            let binder = self.lower_binder_pat(&first.pat, scrut)?;
             return Ok(Expr::Destructure {
                 binder,
                 value: Box::new(scrutinee),
@@ -1477,6 +1575,22 @@ impl<'a> Lowerer<'a> {
             .enum_variants
             .get(type_name)
             .ok_or_else(|| bug("sky_lower::lower_case", "unknown scrutinee enum"))?;
+
+        // M3b-2 lowers a constructor `case` to a Rust `match` with one arm per
+        // top-level constructor. A SECOND arm for the same constructor is nested
+        // constructor discrimination — gated fail-closed here (SKY-L0116) before
+        // `Match::new`, so the unsupported shape never reaches its exactly-once
+        // contract as a `CompilerBug`. The exhaustiveness checker has already run
+        // (a non-exhaustive nested `case` surfaced as SKY-T0010), so an
+        // exhaustive two-arm shape is the one this gate catches.
+        let mut seen: BTreeSet<Symbol> = BTreeSet::new();
+        for br in branches {
+            if let canon::Pattern_::PCtor { name, .. } = &br.pat.value
+                && !seen.insert(*name)
+            {
+                return Err(unsupported(br.pat.span, Feature::NestedCtorDiscrimination));
+            }
+        }
 
         let arms = branches
             .iter()

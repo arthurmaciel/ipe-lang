@@ -180,11 +180,17 @@ pub enum Expr_ {
     Update(Located<Symbol>, Vec<(Located<Symbol>, Expr)>),
 }
 
-/// A single `let` value binding: `name = body`. M1 subset of the Haskell
-/// compiler's `Sky.AST.Source.Def` (the `Define` variant with no parameters).
+/// A single `let` binding: `<pat> = body`.
+///
+/// The binder is a [`Pattern`]: the common `name = body` case is a
+/// [`Pattern_::PVar`], and M3b-2 also admits an irrefutable destructure
+/// (`(a, b) = e`, `{ x } = e`) as a tuple / record pattern. A refutable binder
+/// (a constructor pattern) parses here but is rejected fail-closed downstream —
+/// a `let` binder must always match. M1 subset of the Haskell compiler's
+/// `Sky.AST.Source.Def`, extended with the destructure form (`DestructDef`).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct LetBinding {
-    pub name: Located<Symbol>,
+    pub pat: Pattern,
     pub body: Expr,
 }
 
@@ -205,6 +211,14 @@ pub enum Pattern_ {
     /// pattern. Elements may be variables, wildcards, nested constructor
     /// patterns, or nested tuples. Mirrors the Haskell compiler's tuple pattern.
     PTuple(Vec<Pattern>),
+    /// A record pattern `{ x, y }` (M3b-2). Field-pun only: every entry names a
+    /// field of the scrutinee record and binds a variable of the same name, so
+    /// the binder list is a non-empty set of located field names. Mirrors the
+    /// Haskell compiler's `Src.PRecord [A.Located String]` — there is no
+    /// `{ field = sub-pattern }` form (the Go reference rejects it at parse), so
+    /// a record pattern is always irrefutable. The empty record `{}` is outside
+    /// the grammar; a `PRecord` always carries at least one field.
+    PRecord(Vec<Located<Symbol>>),
 }
 
 /// Type-annotation node (M0 subset).

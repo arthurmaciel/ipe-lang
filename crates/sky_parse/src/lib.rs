@@ -392,7 +392,7 @@ mod tests {
         assert!(
             v.is_some_and(|v| matches!(&v.body.value, Expr_::Let(b, body)
                 if b.len() == 1
-                    && b.first().is_some_and(|bb| i.resolve(bb.name.value) == Some("x"))
+                    && b.first().is_some_and(|bb| matches!(&bb.pat.value, Pattern_::PVar(s) if i.resolve(*s) == Some("x")))
                     && b.first().is_some_and(|bb| matches!(bb.body.value, Expr_::Int(2)))
                     && matches!(body.value, Expr_::Binops(_, _)))),
             "v body is `let x = 2 in x + x`, got {:?}",
@@ -412,11 +412,70 @@ mod tests {
         let names: Vec<&str> = match find_value(&m, &i, "v").map(|v| &v.body.value) {
             Some(Expr_::Let(bindings, _)) => bindings
                 .iter()
-                .filter_map(|b| i.resolve(b.name.value))
+                .filter_map(|b| match &b.pat.value {
+                    Pattern_::PVar(s) => i.resolve(*s),
+                    _ => None,
+                })
                 .collect(),
             _ => Vec::new(),
         };
         assert_eq!(names, vec!["a", "b"], "both bindings, in order");
+    }
+
+    #[test]
+    fn let_tuple_and_record_destructure_parse() {
+        // `let (a, b) = p` is a tuple-pattern binder; `let { x, y } = r` a
+        // record-pattern binder. Both must parse into the matching `Pattern_`.
+        let mut i = Interner::new();
+        let src =
+            format!("{HDR}v : Int\nv =\n    let (a, b) = p\n        {{ x, y }} = r\n    in a\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "let-destructure must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let Some(Expr_::Let(bindings, _)) = find_value(&m, &i, "v").map(|v| &v.body.value) else {
+            assert!(black_box_false(), "v body is a Let");
+            return;
+        };
+        assert_eq!(bindings.len(), 2, "two destructure bindings");
+        assert!(
+            bindings
+                .first()
+                .is_some_and(|b| matches!(&b.pat.value, Pattern_::PTuple(es) if es.len() == 2)),
+            "first binder is a 2-tuple pattern, got {:?}",
+            bindings.first().map(|b| &b.pat.value)
+        );
+        assert!(
+            bindings
+                .get(1)
+                .is_some_and(|b| matches!(&b.pat.value, Pattern_::PRecord(fs) if fs.len() == 2)),
+            "second binder is a 2-field record pattern, got {:?}",
+            bindings.get(1).map(|b| &b.pat.value)
+        );
+    }
+
+    #[test]
+    fn record_pattern_parses_in_a_case_arm() {
+        // `{ x, y } -> …` is a field-pun record pattern at the arm head.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    case r of\n        {{ x, y }} -> x\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "record-pattern case must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let Some(Expr_::Case(_, arms)) = find_value(&m, &i, "v").map(|v| &v.body.value) else {
+            assert!(black_box_false(), "v body is a Case");
+            return;
+        };
+        assert!(
+            arms.first()
+                .is_some_and(|(p, _)| matches!(&p.value, Pattern_::PRecord(fs) if fs.len() == 2)),
+            "arm head is a 2-field record pattern"
+        );
+    }
+
+    /// A runtime `false` the optimiser cannot fold, so `assert!(black_box_false())`
+    /// fails a test without tripping `clippy::assertions_on_constants`.
+    fn black_box_false() -> bool {
+        std::hint::black_box(false)
     }
 
     #[test]

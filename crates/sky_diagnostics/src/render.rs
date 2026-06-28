@@ -534,9 +534,10 @@ const fn feature_label(f: Feature) -> &'static str {
              [feature: bounded-record-update]"
         }
         Feature::NestedPayloadPatterns => {
-            "a constructor payload pattern must be a variable or `_` for now — \
-             nested constructor / literal / tuple / record patterns are not \
-             supported yet [feature: nested-payload-patterns]"
+            "a record pattern is supported at a `case` scrutinee or a `let` \
+             destructure, but not yet nested inside a constructor payload or a \
+             tuple element — that needs the carrier's record type threaded to the \
+             lowerer [feature: nested-payload-patterns]"
         }
         Feature::CtorAsFunction => {
             "a data constructor used as a function value (referenced bare or \
@@ -552,6 +553,12 @@ const fn feature_label(f: Feature) -> &'static str {
              (one `case` arm or a function parameter, with variable / `_` \
              elements) for now — matching a tuple with multiple arms or a \
              refutable element is not supported yet [feature: tuple-pattern-match]"
+        }
+        Feature::NestedCtorDiscrimination => {
+            "two `case` arms matching the same constructor (nested constructor \
+             discrimination) are not supported yet — each top-level constructor \
+             may appear in at most one arm for now \
+             [feature: nested-ctor-discrimination]"
         }
     }
 }

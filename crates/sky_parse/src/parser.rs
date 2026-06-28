@@ -1455,7 +1455,11 @@ impl<'a> Parser<'a> {
             // identifier aligned at the binding column. `in` is its own token
             // (never an `Ident`), so it always ends the binding list.
             let more = self.peek().is_some_and(|t| {
-                layout::aligned_at(t, binding_col) && matches!(t.kind, Tok::Ident(_))
+                layout::aligned_at(t, binding_col)
+                    && matches!(
+                        t.kind,
+                        Tok::Ident(_) | Tok::LParen | Tok::LBrace | Tok::Underscore
+                    )
             });
             if !more {
                 break;
@@ -1620,25 +1624,38 @@ impl<'a> Parser<'a> {
         if depth > MAX_DEPTH {
             return Err(self.too_deep(Construct::Let));
         }
-        let name_tok = self.bump(Construct::Let)?;
-        let Tok::Ident(text) = &name_tok.kind else {
-            return Err(Self::malformed_let(
-                name_tok.span,
-                LetDefect::BindingNameNotLower,
-            ));
+        // The binder is either a destructure pattern — a tuple `(a, b)`, a record
+        // `{ x }`, or a wildcard `_` (M3b-2) — or the common `name = body` value
+        // binding. The destructure forms start with a token that cannot begin a
+        // plain value name, so peeking selects the path without lookahead beyond
+        // one token. The simple path keeps its precise BindingNameNotLower
+        // diagnostics for an uppercase / dotted name.
+        let pat = if matches!(
+            self.peek_kind(),
+            Some(&(Tok::LParen | Tok::LBrace | Tok::Underscore))
+        ) {
+            self.parse_pattern(depth + 1)?
+        } else {
+            let name_tok = self.bump(Construct::Let)?;
+            let Tok::Ident(text) = &name_tok.kind else {
+                return Err(Self::malformed_let(
+                    name_tok.span,
+                    LetDefect::BindingNameNotLower,
+                ));
+            };
+            // A value binding name is a plain lowercase identifier; reject an
+            // uppercase (constructor) or dotted (qualified) name.
+            if text.contains('.') || text.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+                return Err(Self::malformed_let(
+                    name_tok.span,
+                    LetDefect::BindingNameNotLower,
+                ));
+            }
+            let name_sym = self.interner.intern(text)?;
+            Located::new(name_tok.span, Pattern_::PVar(name_sym))
         };
-        // A value binding name is a plain lowercase identifier; reject an
-        // uppercase (constructor) or dotted (qualified) name.
-        if text.contains('.') || text.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-            return Err(Self::malformed_let(
-                name_tok.span,
-                LetDefect::BindingNameNotLower,
-            ));
-        }
-        let name_sym = self.interner.intern(text)?;
-        let name = Located::new(name_tok.span, name_sym);
 
-        // `=` after the name. A parameter here (`let f x = …`) lands as a
+        // `=` after the binder. A parameter here (`let f x = …`) lands as a
         // non-`=` token, producing the clean MissingEquals rejection — M1 has no
         // function bindings in `let`.
         match self.peek() {
@@ -1655,7 +1672,7 @@ impl<'a> Parser<'a> {
         }
 
         let body = self.parse_expr(binding_col, depth + 1)?;
-        Ok(LetBinding { name, body })
+        Ok(LetBinding { pat, body })
     }
 
     // ---- patterns ---------------------------------------------------------
@@ -1709,6 +1726,39 @@ impl<'a> Parser<'a> {
                 self.close_paren(opener, Construct::Pattern)?;
                 Ok(Located::new(tok.span, inner.value))
             }
+            Tok::LBrace => {
+                // A record pattern `{ x, y }` (M3b-2). Field-pun only: each entry
+                // is a bare lowercase field name that also binds a local of the
+                // same name. There is no `{ field = sub-pattern }` form (the Go
+                // reference rejects it at parse), and the empty record `{}` is
+                // outside the grammar, so a record pattern carries ≥ 1 field.
+                let opener = tok.span;
+                if let Some(t) = self.peek().filter(|t| t.kind == Tok::RBrace) {
+                    return Err(Self::unexpected_token(t, &[Expected::Identifier]));
+                }
+                let mut fields = vec![self.parse_record_field_name()?];
+                loop {
+                    match self.peek() {
+                        Some(t) if t.kind == Tok::Comma => {
+                            self.bump(Construct::Pattern)?;
+                        }
+                        Some(t) if t.kind == Tok::RBrace => {
+                            let close = t.span;
+                            self.bump(Construct::Pattern)?;
+                            let span = Self::span_merge(opener, close);
+                            return Ok(Located::new(span, Pattern_::PRecord(fields)));
+                        }
+                        Some(t) => {
+                            return Err(Self::unexpected_token(
+                                t,
+                                &[Expected::Comma, Expected::RBrace],
+                            ));
+                        }
+                        None => return Err(self.record_eof()),
+                    }
+                    fields.push(self.parse_record_field_name()?);
+                }
+            }
             Tok::Ident(text) => {
                 let first_upper = text.chars().next().is_some_and(|c| c.is_ascii_uppercase());
                 if first_upper {
@@ -1735,7 +1785,7 @@ impl<'a> Parser<'a> {
     fn peek_is_pattern_atom_start(&self) -> bool {
         matches!(
             self.peek_kind(),
-            Some(&(Tok::Underscore | Tok::LParen | Tok::Ident(_)))
+            Some(&(Tok::Underscore | Tok::LParen | Tok::LBrace | Tok::Ident(_)))
         )
     }
 

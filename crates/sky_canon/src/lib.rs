@@ -744,9 +744,10 @@ mod tests {
         };
         assert_eq!(bindings.len(), 1, "one binding");
         assert!(
-            bindings
-                .first()
-                .is_some_and(|b| i.resolve(b.name.value) == Some("x")),
+            bindings.first().is_some_and(|b| matches!(
+                &b.pat.value,
+                Pattern_::PVar(s) if i.resolve(*s) == Some("x")
+            )),
             "binding name is x"
         );
         let Some((func, lhs, rhs)) = as_binop(&i, &in_body.value) else {

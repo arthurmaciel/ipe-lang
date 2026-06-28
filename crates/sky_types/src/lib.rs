@@ -824,6 +824,65 @@ mod tests {
     }
 
     #[test]
+    fn nested_non_exhaustive_case_names_the_missing_nested_pattern() {
+        // `Som (Som x)` only matches when the inner value is `Som`, so the value
+        // `Som Non` escapes every arm. The usefulness checker must report it as a
+        // non-exhaustive case naming the precise missing pattern `Som Non` —
+        // BEFORE lowering, so the Rust backend never emits a non-exhaustive match.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   type Opt a = Som a | Non\n\
+                   f : Opt (Opt Int) -> Int\n\
+                   f o =\n        case o of\n            Som (Som x) -> x\n\
+                   \x20           Non -> 0\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::NonExhaustiveCase { .. },
+                    ..
+                })
+            ),
+            "expected NonExhaustiveCase, got {r:?}"
+        );
+        let Err(Diagnostic::Type {
+            msg: TypeError::NonExhaustiveCase { missing },
+            ..
+        }) = r
+        else {
+            return;
+        };
+        let names: Vec<&str> = missing.iter().map(AsRef::as_ref).collect();
+        assert_eq!(names, vec!["Som Non"], "names the nested missing pattern");
+    }
+
+    #[test]
+    fn nested_exhaustive_case_passes_the_check() {
+        // Every nested possibility is covered: `Som (Som x)`, `Som Non`, `Non`.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   type Opt a = Som a | Non\n\
+                   f : Opt (Opt Int) -> Int\n\
+                   f o =\n        case o of\n            Som (Som x) -> x\n\
+                   \x20           Som Non -> 0\n            Non -> 0\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        // Exhaustiveness passes; the only remaining gap (two `Som` arms) is the
+        // lowerer's SKY-L0116 call, not this pass's. So `infer` must succeed.
+        assert!(
+            infer(&m, &mut i).is_ok(),
+            "an exhaustive nested case must pass the exhaustiveness check"
+        );
+    }
+
+    #[test]
     fn self_application_is_an_infinite_type() {
         // `f x = x x` forces `a = a -> b`, tripping the occurs check.
         let src = "module Main exposing (main)\n\
