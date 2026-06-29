@@ -207,16 +207,15 @@ upstream pinned to a tag** as the dual reference (Go behavioural oracle +
 bundled with the v0.17 sync + the (now one-repo) edition-2024 bump — after the
 current error-code phases land.
 
-## Parity-oracle caveat — the Go reference can be wrong
+## Parity-oracle caveat — the Go reference may differ from the target
 
-Behavioural parity vs the Go backend is the correctness oracle, but the oracle is
-not infallible. When Sky-Rust is *provably correct* and the Go reference is *buggy*,
-we DIVERGE (stay correct) + document it + file the bug upstream — we do NOT reproduce
-a Go defect to "match." A parity mismatch is therefore triaged, not auto-treated as a
-Sky-Rust regression: determine which side is correct first.
+Behavioural parity vs the Go backend is the correctness oracle, but the oracle
+records Sky's *current* behaviour, which may differ from Sky-Rust's target on
+some shapes. When a parity mismatch occurs, triage it first: determine which
+side is correct, record the difference as a documented divergence
+(`divergence-policy.md`), and never silently accept a mismatch as a regression.
 
 Known instance: deeply nested constructor patterns (≥3 deep, e.g.
-`Som (Som (Som x))` discrimination) — the Go reference panics at runtime
-(`rt.AsInt got nil`); Sky-Rust compiles + runs correctly. Sky-Rust is the strict
-improvement; do not "fix" it toward the Go panic. File upstream against the Go
-backend so the oracle stays trustworthy at greater nesting depths.
+`Som (Som (Som x))` discrimination) — the Go oracle exits non-zero on this
+shape; Sky-Rust compiles + runs correctly. This routes to the auto Go-failure
+divergence branch: skyc's output is recorded as the expected value.

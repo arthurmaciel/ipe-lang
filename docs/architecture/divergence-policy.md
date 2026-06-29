@@ -2,8 +2,8 @@
 
 > Status: IMPLEMENTED (M4b; extended M4c). The oracle crate (`tools/oracle`) +
 > the `refresh-oracle` tool encode this policy. M4c added the tagged
-> Go-succeeds-but-we-differ marker (`go-bug:` / `sanctioned:`); the first
-> `go-bug:`-tagged divergence is Math.min/max #136 (see registry below).
+> Go-succeeds-but-we-differ marker (`divergence:` / `sanctioned:`); the first
+> `divergence:`-tagged divergence is Math.min/max #136 (see registry below).
 
 ## Default — byte parity with Go
 
@@ -32,19 +32,20 @@ skyc's own (correct) output, and records it with a reason such as
 `Go oracle failed: …`. This is the original "the Go reference can be buggy"
 carve-out. No marker file is needed — the failure itself triggers the branch.
 
-### 2. `go-bug:` divergence (Go SUCCEEDS but is itself buggy)
+### 2. `divergence:` kind (Sky's current behaviour differs; we follow a different target)
 
-The Go oracle *succeeds* — it builds and runs — but produces the **wrong**
-output on this shape, so we cannot blindly cache it. Because Go does not fail,
-the auto path (kind 1) never fires; the golden must opt in explicitly. Sky-Rust
-implements the CORRECT behaviour and records its own output, re-converging to
-byte parity once the upstream Go bug is fixed and the vendored Go syncs.
+The Go oracle *succeeds* — it builds and runs — but Sky's current behaviour
+differs from what Sky-Rust implements. Because Go does not fail, the auto path
+(kind 1) never fires; the golden must opt in explicitly. Sky-Rust records its
+own output with a neutral rationale stating what differs and why (e.g.
+Elm-conformance, fuller Unicode).
 
 - Drop a `sanctioned.divergence` marker file whose reason begins with the
-  `go-bug: ` tag (e.g. `go-bug: PR #136 Math.min/max AsInt truncation`).
+  `divergence: ` tag (e.g. `divergence: Math.min/max Elm-conformant polymorphic
+  comparable. Divergence from Sky, rationale: Elm-conformance`).
 - `refresh-oracle` short-circuits straight to skyc's output (it does **not**
   require, or even run, the Go oracle for the expected value) and records it with
-  `oracle_divergence = true` and `divergence_reason = go-bug: <reason>`.
+  `oracle_divergence = true` and `divergence_reason = divergence: <reason>`.
 
 ### 3. `sanctioned:` divergence (Go SUCCEEDS, Sky-Rust is deliberately MORE correct)
 
@@ -60,7 +61,7 @@ This is a **deliberate, reviewed** choice — not a bug on either side.
 
 In all three kinds the staleness gate (`sha256(Main.sky)`) and `check_parity`
 apply unchanged — the recorded expectation is still pinned to the source and
-diffed exactly. The leading tag (`Go oracle failed:` / `go-bug:` /
+diffed exactly. The leading tag (`Go oracle failed:` / `divergence:` /
 `sanctioned:`) is what lets the read side, the refresh logs, and a human
 reviewer tell the kinds apart without re-running anything. A blank marker is a
 hard error: a marker divergence MUST state why.
@@ -88,34 +89,35 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
    hex-float and underscore-separated literals. Stricter, not looser; recorded as
    sanctioned where it surfaces.
 
-## Recorded `go-bug:` divergences (Go succeeds but is buggy)
+## Recorded `divergence:` entries (Sky's current behaviour differs)
 
-- **Math.min / Math.max — Go AsInt truncation (upstream PR #136, OPEN).** Go's
-  `Math.min`/`Math.max` coerce both arguments through `AsInt`, which truncates
-  `Float` (`Math.min 0.4 1.3 → 0`) and is meaningless for `String`. The
-  Elm-`Basics`-conformant behaviour (stdlib `Sky/Core/Math.sky`: `min`/`max :
-  a -> a -> a` over the polymorphic comparator) preserves each argument's type +
-  value. Sky-Rust implements the CORRECT behaviour; the divergence is recorded as
-  `go-bug: PR #136 Math.min/max AsInt truncation` and **auto-closes to byte
-  parity** when upstream #136 merges and the vendored Go syncs (`Math.abs` stays
-  `Int -> Int` — `AsInt` is correct there, not a divergence).
+- **Math.min / Math.max — AsInt coercion vs Elm-conformant polymorphic compare
+  (Sky PR #136).** Sky's `Math.min`/`Math.max` currently route both arguments
+  through `AsInt` before the compare, coercing `Float` to `Int` (`Math.min 0.4
+  1.3 → 0`) and yielding a meaningless compare for `String`. Sky-Rust follows
+  Elm's `Basics` polymorphic comparable (`min`/`max : a -> a -> a`) preserving
+  each argument's type + value. Divergence from Sky, rationale: Elm-conformance.
+  Recorded as `divergence: Math.min/max Elm-conformant polymorphic comparable
+  (Divergence from Sky, rationale: Elm-conformance)`. (`Math.abs` stays
+  `Int -> Int` — the `AsInt` path is correct there and is not a divergence.)
 
-## How to add a marker divergence (`go-bug:` or `sanctioned:`)
+## How to add a marker divergence (`divergence:` or `sanctioned:`)
 
 1. Decide the tag. `sanctioned:` — Sky-Rust is genuinely more correct
-   (PRINCIPLES §2), not a bug you are papering over. `go-bug:` — Go builds + runs
-   but produces the wrong answer; Sky-Rust is correct and will re-converge once
-   upstream Go is fixed. If in doubt, fix the parity bug instead.
+   (PRINCIPLES §2). `divergence:` — Sky's current behaviour differs; Sky-Rust
+   follows a different target (e.g. Elm-conformance, fuller Unicode). State
+   the difference and the rationale neutrally. If in doubt, fix the parity bug
+   instead.
 2. Add `tests/golden/<name>/sanctioned.divergence` with a one-line reason,
-   prefixed with the chosen tag (`go-bug: …` / `sanctioned: …`). An untagged
+   prefixed with the chosen tag (`divergence: …` / `sanctioned: …`). An untagged
    reason defaults to `sanctioned: `.
 3. Run `refresh-oracle <name>` (needs `SKY_RUNTIME_DIR` pointed at the Rust
    runtime). It captures Sky-Rust's output as the expected and writes
    `oracle_divergence = true` + `divergence_reason = <tag> <reason>` — WITHOUT
    requiring Go to fail.
 4. Commit `Main.sky`, `expected_go.txt`, `oracle.meta`, and
-   `sanctioned.divergence` together. For a `go-bug:` entry, also add a one-line
-   row to the registry above so the closure condition is tracked.
+   `sanctioned.divergence` together. For a `divergence:` entry, also add a
+   one-line row to the registry above documenting the difference and rationale.
 
 ## Decision: full-Unicode case mapping is intended — deferrals to post-M6
 

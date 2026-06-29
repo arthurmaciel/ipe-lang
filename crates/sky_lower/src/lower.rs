@@ -1743,7 +1743,9 @@ impl<'a> Lowerer<'a> {
                     // ── Math kernels ───────────────────────────────────────
                     // `min` / `max` are polymorphic `a -> a -> a` — lowered to
                     // the runtime's generic compare, NOT through any `Int`
-                    // coercion (the Go-bug divergence, PR #136). The args keep
+                    // coercion. Divergence from Sky (PR #136): Sky routes args
+                    // through AsInt; Sky-Rust follows Elm's polymorphic
+                    // comparable. Rationale: Elm-conformance. The args keep
                     // their solved type, so `math_min`/`math_max` infer `T` and
                     // preserve the argument's value + type unchanged.
                     ("Math", "min") => Ok(Callee::Kernel(KernelFn::MathMin)),

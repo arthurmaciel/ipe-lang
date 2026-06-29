@@ -1457,8 +1457,10 @@ impl<'a> Builder<'a> {
             // bounded path fails closed at type-check on non-comparable arguments
             // instead. Kept only as a safety net should the dedicated path ever be
             // bypassed; it is unreachable in normal lowering. The no-truncation /
-            // type-preserving behaviour (the Go-bug divergence, PR #136) is a
-            // property of the runtime compare the bounded variable lowers to.
+            // type-preserving behaviour (Divergence from Sky, PR #136 — Sky
+            // routes through AsInt; we follow Elm's polymorphic comparable;
+            // rationale: Elm-conformance) is a property of the runtime compare
+            // the bounded variable lowers to.
             (Some("Math"), Some("min" | "max")) => fun(var(0), fun(var(0), var(0))),
             // Constants — bare Float values (arity 0).
             (Some("Math"), Some("pi" | "e" | "phi" | "sqrt2" | "inf" | "nan")) => float,

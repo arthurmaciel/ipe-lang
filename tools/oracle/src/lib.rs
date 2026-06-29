@@ -7,8 +7,8 @@
 //!
 //! * `tests/golden/<name>/expected_go.txt` — the oracle's clean program stdout
 //!   (the bytes the Go-built binary prints, with NONE of the compiler's progress
-//!   chatter), OR — when the Go oracle is itself buggy on this shape — skyc's
-//!   own (correct) output, recorded as a documented divergence.
+//!   chatter), OR — when Sky's behaviour differs on this shape — skyc's
+//!   own output, recorded as a documented divergence.
 //! * `tests/golden/<name>/oracle.meta` — `sha256(Main.sky)` + the Go `sky`
 //!   version string + an `oracle_divergence` flag (with a reason when set) + the
 //!   captured exit code.
@@ -36,13 +36,12 @@
 //!   build error) on a shape skyc handles correctly. The refresh tool detects
 //!   it automatically (no marker needed) and records skyc's output with a
 //!   `Go oracle failed: …` reason.
-//! * **Marker divergence, `go-bug:` tag** — the Go oracle SUCCEEDS but is
-//!   itself buggy on this shape (e.g. PR #136 `Math.min`/`Math.max` `AsInt`
-//!   truncation).
+//! * **Marker divergence, `divergence:` tag** — the Go oracle SUCCEEDS but
+//!   Sky's current behaviour differs on this shape (e.g. Math.min/max polymorphic
+//!   comparable vs Sky's `AsInt` coercion, PR #136).
 //!   The golden opts in with a [`SANCTIONED_FILE`] marker whose reason begins
-//!   with [`GO_BUG_PREFIX`]; the refresh tool records Sky-Rust's CORRECT output
-//!   WITHOUT requiring Go to fail. Re-converges to byte parity once the upstream
-//!   Go bug is fixed and the vendored Go syncs.
+//!   with [`DIVERGENCE_PREFIX`]; the refresh tool records Sky-Rust's output
+//!   WITHOUT requiring Go to fail. See `docs/architecture/divergence-policy.md`.
 //! * **Marker divergence, `sanctioned:` tag** — the Go oracle SUCCEEDS, but
 //!   Sky-Rust is deliberately MORE correct (e.g. full-Unicode case mapping).
 //!   The golden opts in with a [`SANCTIONED_FILE`] marker; an untagged marker
@@ -65,13 +64,13 @@ pub const MAIN_SKY: &str = "Main.sky";
 /// Marker file declaring a golden a deliberate, Go-succeeds divergence.
 ///
 /// When present in a golden's directory it means the Go oracle SUCCEEDS but
-/// Sky-Rust records its own (correct) output as the expected value — the refresh
-/// tool short-circuits to skyc WITHOUT requiring, or even running, the Go oracle.
+/// Sky-Rust records its own output as the expected value — the refresh tool
+/// short-circuits to skyc WITHOUT requiring, or even running, the Go oracle.
 /// The file's contents are the human-readable reason. That reason may begin with
 /// a recognized tag ([`DIVERGENCE_TAG_PREFIXES`]) to declare *why* it diverges:
 ///
-/// * [`GO_BUG_PREFIX`] — the Go oracle is itself buggy here (we re-converge once
-///   upstream is fixed and the vendored Go syncs);
+/// * [`DIVERGENCE_PREFIX`] — Sky's current behaviour differs on this shape;
+///   Sky-Rust follows a different target (e.g. Elm-conformance, fuller Unicode).
 /// * [`SANCTIONED_PREFIX`] — Sky-Rust is deliberately more correct.
 ///
 /// An untagged reason defaults to [`SANCTIONED_PREFIX`] (backward-compatible).
@@ -83,23 +82,24 @@ pub const SANCTIONED_FILE: &str = "sanctioned.divergence";
 ///
 /// Applies when the Go oracle succeeds correctly but Sky-Rust is more correct
 /// still — e.g. full-Unicode case mapping. Lets the read side and humans tell a
-/// deliberate, reviewed divergence apart from a Go-bug divergence without
+/// deliberate, reviewed divergence apart from a Sky-behaviour divergence without
 /// re-running anything. Also the default tag for an untagged marker reason.
 pub const SANCTIONED_PREFIX: &str = "sanctioned: ";
 
-/// Tag for a divergence where the Go oracle SUCCEEDS but is itself buggy.
+/// Tag for a divergence where the Go oracle SUCCEEDS but Sky's current behaviour
+/// differs from what Sky-Rust implements.
 ///
-/// Sky-Rust records its own CORRECT output and re-converges to byte parity once
-/// the upstream Go bug is fixed and the vendored Go syncs. The counterpart to
+/// Sky-Rust records its own output with a neutral rationale (e.g.
+/// "Divergence from Sky, rationale: Elm-conformance"). The counterpart to
 /// [`SANCTIONED_PREFIX`]; distinct also from the auto Go-FAILURE path (where Go
 /// does not even succeed).
-pub const GO_BUG_PREFIX: &str = "go-bug: ";
+pub const DIVERGENCE_PREFIX: &str = "divergence: ";
 
 /// The recognized divergence-reason tag prefixes a marker file may declare.
 ///
 /// A marker reason beginning with one of these is kept verbatim by
 /// [`tag_divergence_reason`]; an untagged reason defaults to [`SANCTIONED_PREFIX`].
-pub const DIVERGENCE_TAG_PREFIXES: &[&str] = &[SANCTIONED_PREFIX, GO_BUG_PREFIX];
+pub const DIVERGENCE_TAG_PREFIXES: &[&str] = &[SANCTIONED_PREFIX, DIVERGENCE_PREFIX];
 
 /// Resolve a divergence-marker file's raw reason into a fully-tagged
 /// `divergence_reason` for `oracle.meta`.
@@ -108,8 +108,9 @@ pub const DIVERGENCE_TAG_PREFIXES: &[&str] = &[SANCTIONED_PREFIX, GO_BUG_PREFIX]
 /// stores the value). If the reason already carries a recognized tag
 /// ([`DIVERGENCE_TAG_PREFIXES`]) it is kept verbatim; otherwise it is treated as
 /// a sanctioned divergence and prefixed with [`SANCTIONED_PREFIX`]. This is what
-/// lets one marker file express either a `go-bug:` (Go succeeds-but-buggy) or a
-/// `sanctioned:` (we are more correct) divergence with a TAGGED reason.
+/// lets one marker file express either a `divergence:` (Sky's current behaviour
+/// differs) or a `sanctioned:` (we are more correct) divergence with a TAGGED
+/// reason.
 #[must_use]
 pub fn tag_divergence_reason(raw: &str) -> String {
     let flattened = raw.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -354,7 +355,7 @@ impl fmt::Display for ParityError {
                 } else if is_sanctioned {
                     "sanctioned-divergence expected (Sky-Rust deliberate output)"
                 } else {
-                    "Go-bug-divergence expected (skyc output)"
+                    "divergence-from-sky expected (skyc output)"
                 };
                 write!(
                     f,
@@ -704,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn sanctioned_mismatch_is_labelled_distinctly_from_go_bug() {
+    fn sanctioned_mismatch_is_labelled_distinctly_from_divergence() {
         let dir = fresh_golden("sanctioned_label");
         let src = "main = 1\n";
         write(&dir, "Main.sky", src);
@@ -724,7 +725,7 @@ mod tests {
             "expected a sanctioned Mismatch, got {err:?}"
         );
         // The Display string must label the expectation as sanctioned-sourced,
-        // distinct from a Go-bug divergence.
+        // distinct from a divergence-from-sky entry.
         let shown = err.err().map_or_else(String::new, |e| e.to_string());
         assert!(
             shown.contains("sanctioned-divergence"),
@@ -749,11 +750,13 @@ mod tests {
 
     #[test]
     fn tag_divergence_reason_keeps_recognized_tags_verbatim() {
-        // A go-bug tag (Go SUCCEEDS but is buggy here) is kept as-is — NOT
+        // A divergence tag (Sky's behaviour differs here) is kept as-is — NOT
         // re-prefixed with sanctioned.
         assert_eq!(
-            tag_divergence_reason("go-bug: PR #136 Math.min/max AsInt truncation"),
-            "go-bug: PR #136 Math.min/max AsInt truncation"
+            tag_divergence_reason(
+                "divergence: Math.min/max Elm-conformant comparable (Divergence from Sky, rationale: Elm-conformance)"
+            ),
+            "divergence: Math.min/max Elm-conformant comparable (Divergence from Sky, rationale: Elm-conformance)"
         );
         // An already-sanctioned tag is idempotent (not double-prefixed).
         assert_eq!(
@@ -763,18 +766,18 @@ mod tests {
     }
 
     #[test]
-    fn parity_uses_divergence_expected_when_go_is_buggy() {
+    fn parity_uses_divergence_expected_when_sky_differs() {
         let dir = fresh_golden("divergence");
         let src = "main = 42\n";
         write(&dir, "Main.sky", src);
-        // Go was buggy here, so expected holds skyc's CORRECT output.
+        // Sky's behaviour differs here; expected holds skyc's recorded output.
         write(&dir, "expected_go.txt", "42\n");
         let meta = Meta {
             main_sky_sha256: sha256_hex(src.as_bytes()),
             go_sky_version: "sky dev".to_owned(),
             exit_code: 0,
             oracle_divergence: true,
-            divergence_reason: Some("Go oracle panics on this shape".to_owned()),
+            divergence_reason: Some("Go oracle failed on this shape".to_owned()),
         };
         write(&dir, "oracle.meta", &meta.serialize());
 
