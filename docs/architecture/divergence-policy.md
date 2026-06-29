@@ -106,9 +106,14 @@ velocity, not because they are unimportant):
   exercise it. Doing so is post-M6 work.
 - **Non-ASCII case goldens** themselves — only ASCII case parity
   (`toUpper "hi" == "HI"`) is pinned in the M4b suite.
-- **A possible Roc-style "Unicode as a package" model** — moving heavyweight
-  Unicode behaviour behind an opt-in module rather than the default kernels —
-  is an open design question parked until after M6.
+
+**Unicode lives in the CORE — permanently.** A Roc-style "Unicode as an
+upgradable / opt-in package" model is explicitly **rejected** (user directive):
+full Unicode is a built-in commitment of the core runtime, and every divergence
+and decision is documented *here, in detail*, rather than relocated behind a
+separate package. The deferrals above are *velocity* deferrals — more goldens
+and locale tailoring to add later, **in core** — never a move of Unicode out of
+core.
 
 Predicates (`Char.isDigit`/`isLower`/`isUpper`/`isAlpha`), `String.split`, and
 `String.toInt`/`toFloat` are NOT in this carve-out: they are pure Go-parity and
