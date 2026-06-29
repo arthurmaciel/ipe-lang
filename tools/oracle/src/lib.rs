@@ -71,19 +71,22 @@ pub const MAIN_SKY: &str = "Main.sky";
 ///
 /// * [`DIVERGENCE_PREFIX`] — Sky's current behaviour differs on this shape;
 ///   Sky-Rust follows a different target (e.g. Elm-conformance, fuller Unicode).
-/// * [`SANCTIONED_PREFIX`] — Sky-Rust is deliberately more correct.
+/// * [`SANCTIONED_PREFIX`] — a reviewed, deliberate divergence where Sky-Rust
+///   implements a stricter / more Unicode-conformant behaviour.
 ///
 /// An untagged reason defaults to [`SANCTIONED_PREFIX`] (backward-compatible).
 /// This is distinct from the auto Go-FAILURE divergence path, which needs no
 /// marker — the Go failure itself triggers it.
 pub const SANCTIONED_FILE: &str = "sanctioned.divergence";
 
-/// Tag for a divergence where Sky-Rust is deliberately MORE correct than Go.
+/// Tag for a reviewed, deliberate divergence where Sky-Rust implements a
+/// stricter / more Unicode-conformant behaviour.
 ///
-/// Applies when the Go oracle succeeds correctly but Sky-Rust is more correct
-/// still — e.g. full-Unicode case mapping. Lets the read side and humans tell a
-/// deliberate, reviewed divergence apart from a Sky-behaviour divergence without
-/// re-running anything. Also the default tag for an untagged marker reason.
+/// Applies when the Go oracle succeeds and Sky-Rust deliberately implements a
+/// stricter behaviour — e.g. full-Unicode case mapping. Lets the read side and
+/// humans tell a deliberate, reviewed divergence apart from a Sky-behaviour
+/// divergence without re-running anything. Also the default tag for an untagged
+/// marker reason.
 pub const SANCTIONED_PREFIX: &str = "sanctioned: ";
 
 /// Tag for a divergence where the Go oracle SUCCEEDS but Sky's current behaviour
@@ -109,8 +112,8 @@ pub const DIVERGENCE_TAG_PREFIXES: &[&str] = &[SANCTIONED_PREFIX, DIVERGENCE_PRE
 /// ([`DIVERGENCE_TAG_PREFIXES`]) it is kept verbatim; otherwise it is treated as
 /// a sanctioned divergence and prefixed with [`SANCTIONED_PREFIX`]. This is what
 /// lets one marker file express either a `divergence:` (Sky's current behaviour
-/// differs) or a `sanctioned:` (we are more correct) divergence with a TAGGED
-/// reason.
+/// differs) or a `sanctioned:` (a reviewed, deliberate stricter behaviour)
+/// divergence with a TAGGED reason.
 #[must_use]
 pub fn tag_divergence_reason(raw: &str) -> String {
     let flattened = raw.split_whitespace().collect::<Vec<_>>().join(" ");

@@ -108,3 +108,44 @@ fn dict_float_key_is_sky_l0117() {
         sky_diagnostics::SKY_L0117,
     );
 }
+
+// ── Float Set via INFERENCE (no annotation) → SKY-L0117 ───────────────────────
+//
+// The fixtures above carry a `: Set Float` / `: Dict Float v` annotation, which
+// drives the shape gate in `ir_type_from_ty`. A Set produced purely by inference
+// never drives that conversion, so its own region type is the only place `Float`
+// surfaces — these fixtures exercise that inference path.
+
+/// Inline, unannotated `Set.fromList [1.5, 2.5]` — the producing call's region
+/// type (`Set Float`) is the only carrier of the `Float` element.
+#[test]
+fn set_float_inline_is_sky_l0117() {
+    assert_gate(
+        "m4d_set_float_inline_gate",
+        "m4d_set_float_inline_gate_emit",
+        sky_diagnostics::SKY_L0117,
+    );
+}
+
+/// `let s = Set.fromList [1.5, 2.5]` — a `let`-bound float Set with no
+/// annotation on the binding.
+#[test]
+fn set_float_let_is_sky_l0117() {
+    assert_gate(
+        "m4d_set_float_let_gate",
+        "m4d_set_float_let_gate_emit",
+        sky_diagnostics::SKY_L0117,
+    );
+}
+
+/// A Set built from a `List.map` result (`Set.fromList floats` where `floats`
+/// is a mapped `List Float`) — the float-ness is map-derived, not a literal
+/// float list.
+#[test]
+fn set_float_mapped_is_sky_l0117() {
+    assert_gate(
+        "m4d_set_float_mapped_gate",
+        "m4d_set_float_mapped_gate_emit",
+        sky_diagnostics::SKY_L0117,
+    );
+}

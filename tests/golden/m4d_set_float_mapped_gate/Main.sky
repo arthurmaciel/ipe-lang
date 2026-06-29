@@ -1,0 +1,15 @@
+module Main exposing (main)
+
+import Sky.Core.List as List
+import Sky.Core.Set as Set
+
+
+main =
+    let
+        floats =
+            List.map (\n -> n + 0.5) [ 1.0, 2.0, 3.0 ]
+
+        s =
+            Set.fromList floats
+    in
+    println (String.fromInt (Set.size s))

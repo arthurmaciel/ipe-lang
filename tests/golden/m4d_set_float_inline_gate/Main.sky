@@ -1,0 +1,7 @@
+module Main exposing (main)
+
+import Sky.Core.Set as Set
+
+
+main =
+    println (String.fromInt (Set.size (Set.fromList [ 1.5, 2.5 ])))
