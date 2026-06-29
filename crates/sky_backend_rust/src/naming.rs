@@ -288,6 +288,46 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // coercion, NO float truncation (the Go-bug divergence, PR #136).
         KernelFn::MathMin => "math_min",
         KernelFn::MathMax => "math_max",
+        // ── Math constants ───────────────────────────────────────────────────
+        KernelFn::MathPi => "math_pi",
+        KernelFn::MathE => "math_e",
+        KernelFn::MathPhi => "math_phi",
+        KernelFn::MathSqrt2 => "math_sqrt2",
+        KernelFn::MathInf => "math_inf",
+        KernelFn::MathNan => "math_nan",
+        // ── Math arity-1 (Int → Int) ─────────────────────────────────────────
+        KernelFn::MathAbs => "math_abs",
+        // ── Math arity-1 (Float → Float) ────────────────────────────────────
+        KernelFn::MathSqrt => "math_sqrt",
+        KernelFn::MathCbrt => "math_cbrt",
+        KernelFn::MathExp => "math_exp",
+        KernelFn::MathExp2 => "math_exp2",
+        KernelFn::MathLog => "math_log",
+        KernelFn::MathLog2 => "math_log2",
+        KernelFn::MathLog10 => "math_log10",
+        KernelFn::MathSin => "math_sin",
+        KernelFn::MathCos => "math_cos",
+        KernelFn::MathTan => "math_tan",
+        KernelFn::MathAsin => "math_asin",
+        KernelFn::MathAcos => "math_acos",
+        KernelFn::MathAtan => "math_atan",
+        KernelFn::MathSinh => "math_sinh",
+        KernelFn::MathCosh => "math_cosh",
+        KernelFn::MathTanh => "math_tanh",
+        KernelFn::MathAsinh => "math_asinh",
+        KernelFn::MathAcosh => "math_acosh",
+        KernelFn::MathAtanh => "math_atanh",
+        // ── Math arity-1 (Float → Int) ───────────────────────────────────────
+        KernelFn::MathFloor => "math_floor",
+        KernelFn::MathCeil => "math_ceil",
+        KernelFn::MathRound => "math_round",
+        KernelFn::MathTrunc => "math_trunc",
+        // ── Math arity-2 (Float → Float → Float) ────────────────────────────
+        KernelFn::MathPow => "math_pow",
+        KernelFn::MathHypot => "math_hypot",
+        KernelFn::MathAtan2 => "math_atan2",
+        KernelFn::MathMod => "math_mod",
+        KernelFn::MathRemainder => "math_remainder",
         KernelFn::ResultOkDefault => "ok_res",
     }
 }

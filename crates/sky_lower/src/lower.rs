@@ -1513,10 +1513,20 @@ impl<'a> Lowerer<'a> {
     /// [`KernelFn`]; a top-level binding's is its parameter-pattern count (a
     /// nullary constant has arity 0). The [`FuncId`] was assigned from the
     /// definitions in declaration order, so the same-index lookup is exact.
+    #[allow(clippy::too_many_lines)] // declarative kernel-arity table — each variant listed explicitly for safety
     fn callee_arity(&self, callee: &Callee) -> DResult<usize> {
         match callee {
             // Arity is fixed per kernel. Each variant is listed explicitly so a
             // new entry can never silently inherit a wrong count.
+            // ── Math constants — arity 0 ─────────────────────────────────────
+            Callee::Kernel(
+                KernelFn::MathPi
+                | KernelFn::MathE
+                | KernelFn::MathPhi
+                | KernelFn::MathSqrt2
+                | KernelFn::MathInf
+                | KernelFn::MathNan,
+            ) => Ok(0),
             Callee::Kernel(
                 KernelFn::StringFromInt
                 | KernelFn::StringFromFloat
@@ -1552,7 +1562,34 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListHead
                 | KernelFn::ListTail
                 | KernelFn::ListReverse
-                | KernelFn::ResultOkDefault,
+                | KernelFn::ResultOkDefault
+                // ── Math arity-1 (Int → Int) ─────────────────────────────────
+                | KernelFn::MathAbs
+                // ── Math arity-1 (Float → Float) ────────────────────────────
+                | KernelFn::MathSqrt
+                | KernelFn::MathCbrt
+                | KernelFn::MathExp
+                | KernelFn::MathExp2
+                | KernelFn::MathLog
+                | KernelFn::MathLog2
+                | KernelFn::MathLog10
+                | KernelFn::MathSin
+                | KernelFn::MathCos
+                | KernelFn::MathTan
+                | KernelFn::MathAsin
+                | KernelFn::MathAcos
+                | KernelFn::MathAtan
+                | KernelFn::MathSinh
+                | KernelFn::MathCosh
+                | KernelFn::MathTanh
+                | KernelFn::MathAsinh
+                | KernelFn::MathAcosh
+                | KernelFn::MathAtanh
+                // ── Math arity-1 (Float → Int) ───────────────────────────────
+                | KernelFn::MathFloor
+                | KernelFn::MathCeil
+                | KernelFn::MathRound
+                | KernelFn::MathTrunc,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -1575,7 +1612,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ResultWithDefault
                 | KernelFn::ResultMap
                 | KernelFn::MathMin
-                | KernelFn::MathMax,
+                | KernelFn::MathMax
+                // ── Math arity-2 (Float → Float → Float) ────────────────────
+                | KernelFn::MathPow
+                | KernelFn::MathHypot
+                | KernelFn::MathAtan2
+                | KernelFn::MathMod
+                | KernelFn::MathRemainder,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::StringReplace
@@ -1628,6 +1671,7 @@ impl<'a> Lowerer<'a> {
             .ok_or_else(|| bug("sky_lower::ctor_arity_of", "unknown constructor"))
     }
 
+    #[allow(clippy::too_many_lines)] // declarative kernel-name dispatch table
     fn lower_callee(&self, callee: &canon::Expr) -> DResult<Callee> {
         match &callee.value {
             canon::Expr_::VarKernel { module, name } => {
@@ -1704,6 +1748,46 @@ impl<'a> Lowerer<'a> {
                     // preserve the argument's value + type unchanged.
                     ("Math", "min") => Ok(Callee::Kernel(KernelFn::MathMin)),
                     ("Math", "max") => Ok(Callee::Kernel(KernelFn::MathMax)),
+                    // ── Math constants (arity 0) ─────────────────────────────
+                    ("Math", "pi") => Ok(Callee::Kernel(KernelFn::MathPi)),
+                    ("Math", "e") => Ok(Callee::Kernel(KernelFn::MathE)),
+                    ("Math", "phi") => Ok(Callee::Kernel(KernelFn::MathPhi)),
+                    ("Math", "sqrt2") => Ok(Callee::Kernel(KernelFn::MathSqrt2)),
+                    ("Math", "inf") => Ok(Callee::Kernel(KernelFn::MathInf)),
+                    ("Math", "nan") => Ok(Callee::Kernel(KernelFn::MathNan)),
+                    // ── Math arity-1 (Int → Int) ─────────────────────────────
+                    ("Math", "abs") => Ok(Callee::Kernel(KernelFn::MathAbs)),
+                    // ── Math arity-1 (Float → Float) ────────────────────────
+                    ("Math", "sqrt") => Ok(Callee::Kernel(KernelFn::MathSqrt)),
+                    ("Math", "cbrt") => Ok(Callee::Kernel(KernelFn::MathCbrt)),
+                    ("Math", "exp") => Ok(Callee::Kernel(KernelFn::MathExp)),
+                    ("Math", "exp2") => Ok(Callee::Kernel(KernelFn::MathExp2)),
+                    ("Math", "log") => Ok(Callee::Kernel(KernelFn::MathLog)),
+                    ("Math", "log2") => Ok(Callee::Kernel(KernelFn::MathLog2)),
+                    ("Math", "log10") => Ok(Callee::Kernel(KernelFn::MathLog10)),
+                    ("Math", "sin") => Ok(Callee::Kernel(KernelFn::MathSin)),
+                    ("Math", "cos") => Ok(Callee::Kernel(KernelFn::MathCos)),
+                    ("Math", "tan") => Ok(Callee::Kernel(KernelFn::MathTan)),
+                    ("Math", "asin") => Ok(Callee::Kernel(KernelFn::MathAsin)),
+                    ("Math", "acos") => Ok(Callee::Kernel(KernelFn::MathAcos)),
+                    ("Math", "atan") => Ok(Callee::Kernel(KernelFn::MathAtan)),
+                    ("Math", "sinh") => Ok(Callee::Kernel(KernelFn::MathSinh)),
+                    ("Math", "cosh") => Ok(Callee::Kernel(KernelFn::MathCosh)),
+                    ("Math", "tanh") => Ok(Callee::Kernel(KernelFn::MathTanh)),
+                    ("Math", "asinh") => Ok(Callee::Kernel(KernelFn::MathAsinh)),
+                    ("Math", "acosh") => Ok(Callee::Kernel(KernelFn::MathAcosh)),
+                    ("Math", "atanh") => Ok(Callee::Kernel(KernelFn::MathAtanh)),
+                    // ── Math arity-1 (Float → Int) ───────────────────────────
+                    ("Math", "floor") => Ok(Callee::Kernel(KernelFn::MathFloor)),
+                    ("Math", "ceil") => Ok(Callee::Kernel(KernelFn::MathCeil)),
+                    ("Math", "round") => Ok(Callee::Kernel(KernelFn::MathRound)),
+                    ("Math", "trunc") => Ok(Callee::Kernel(KernelFn::MathTrunc)),
+                    // ── Math arity-2 (Float → Float → Float) ────────────────
+                    ("Math", "pow") => Ok(Callee::Kernel(KernelFn::MathPow)),
+                    ("Math", "hypot") => Ok(Callee::Kernel(KernelFn::MathHypot)),
+                    ("Math", "atan2") => Ok(Callee::Kernel(KernelFn::MathAtan2)),
+                    ("Math", "mod") => Ok(Callee::Kernel(KernelFn::MathMod)),
+                    ("Math", "remainder") => Ok(Callee::Kernel(KernelFn::MathRemainder)),
                     // A kernel beyond the wired set (`Time.now`, …).
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),
