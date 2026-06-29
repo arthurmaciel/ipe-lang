@@ -1602,9 +1602,7 @@ impl<'a> Lowerer<'a> {
                     ("Maybe", "withDefault") => Ok(Callee::Kernel(KernelFn::MaybeWithDefault)),
                     ("Maybe", "map") => Ok(Callee::Kernel(KernelFn::MaybeMap)),
                     ("Maybe", "andThen") => Ok(Callee::Kernel(KernelFn::MaybeAndThen)),
-                    ("Result", "withDefault") => {
-                        Ok(Callee::Kernel(KernelFn::ResultWithDefault))
-                    }
+                    ("Result", "withDefault") => Ok(Callee::Kernel(KernelFn::ResultWithDefault)),
                     ("Result", "map") => Ok(Callee::Kernel(KernelFn::ResultMap)),
                     // A kernel beyond the wired set (`Time.now`, `String.length`, …).
                     // [SKY-L0108, feature: kernels]
