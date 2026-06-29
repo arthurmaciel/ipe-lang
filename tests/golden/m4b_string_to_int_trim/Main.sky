@@ -1,0 +1,9 @@
+module Main exposing (main)
+
+main =
+    case String.toInt " 42 " of
+        Just n ->
+            println (String.fromInt n)
+
+        Nothing ->
+            println "Nothing"

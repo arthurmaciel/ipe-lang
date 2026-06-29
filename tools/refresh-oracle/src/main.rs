@@ -22,6 +22,14 @@
 //!    `oracle_divergence = true` and a reason — exactly the "Go oracle can be
 //!    buggy" carve-out from the design doc.
 //!
+//! A golden may ALSO opt in to a **sanctioned divergence** by dropping a
+//! `sanctioned.divergence` marker file (its contents are the reason) in its
+//! directory. There the Go oracle SUCCEEDS but Sky-Rust is deliberately more
+//! correct (e.g. full-Unicode case mapping). The refresh tool short-circuits to
+//! skyc's output and records it with `oracle_divergence = true` and a
+//! `sanctioned: <reason>` note — WITHOUT requiring Go to fail. See
+//! `docs/architecture/divergence-policy.md`.
+//!
 //! `--all` refreshes only goldens that already carry an `oracle.meta`, so it
 //! re-captures registered runnable goldens without trying to run the negative /
 //! gate goldens (which have no program output). Register a new runnable golden
@@ -150,6 +158,14 @@ fn capture(name: &str, golden_dir: &Path, oracle_bin: &str) -> Result<Capture, S
     let scratch = std::env::temp_dir().join(format!("refresh_oracle_{name}"));
     let _ = std::fs::remove_dir_all(&scratch);
 
+    // Sanctioned-divergence goldens deliberately differ from a SUCCEEDING Go
+    // oracle (e.g. full-Unicode case mapping). Record skyc's output as the
+    // reference without requiring — or even running — the Go oracle.
+    if let Some(reason) = oracle::sanctioned_reason(golden_dir)? {
+        let prefixed = format!("{}{reason}", oracle::SANCTIONED_PREFIX);
+        return divergence_from_skyc(name, &main_sky, &scratch, prefixed);
+    }
+
     match run_go_oracle(oracle_bin, &main_sky, &scratch) {
         Ok(go) if go.exit_code == Some(0) => Ok(Capture::Go {
             stdout: go.stdout,
@@ -246,11 +262,17 @@ fn refresh_one(name: &str, golden_root: &Path, oracle_bin: &str) -> Result<(), S
     let version = go_version(oracle_bin);
 
     let cap = capture(name, &golden_dir, oracle_bin)?;
-    let diverged = write_oracle(&golden_dir, sha, version, &cap)?;
-    if diverged {
-        eprintln!("  {name}: refreshed (DIVERGENCE — skyc output cached, Go oracle is buggy here)");
-    } else {
-        eprintln!("  {name}: refreshed (Go oracle cached)");
+    let _ = write_oracle(&golden_dir, sha, version, &cap)?;
+    match &cap {
+        Capture::Go { .. } => eprintln!("  {name}: refreshed (Go oracle cached)"),
+        Capture::Divergence { reason, .. } if reason.starts_with(oracle::SANCTIONED_PREFIX) => {
+            eprintln!(
+                "  {name}: refreshed (SANCTIONED divergence — Sky-Rust output cached deliberately; Go succeeds)"
+            );
+        }
+        Capture::Divergence { .. } => eprintln!(
+            "  {name}: refreshed (Go-bug divergence — skyc output cached, Go oracle is buggy here)"
+        ),
     }
     Ok(())
 }
