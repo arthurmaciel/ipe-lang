@@ -1,0 +1,4 @@
+module Main exposing (main)
+
+main =
+    println (String.fromInt (Maybe.withDefault 0 (Just 5)))

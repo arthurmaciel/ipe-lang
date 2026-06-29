@@ -90,6 +90,19 @@ fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
     }
 }
 
+/// Whether a kernel's runtime function takes its two arguments in the OPPOSITE
+/// order to the Sky call. The `Maybe` / `Result` mapping combinators are
+/// container-first in the runtime (`sky_maybe_map(m, f)`) but function-first in
+/// Sky (`Maybe.map f m`); every other wired kernel matches the Sky order. Used by
+/// the [`Expr::Call`] emitter to reverse the rendered argument list.
+const fn kernel_swaps_first_two(k: sky_ir::KernelFn) -> bool {
+    use sky_ir::KernelFn;
+    matches!(
+        k,
+        KernelFn::MaybeMap | KernelFn::MaybeAndThen | KernelFn::ResultMap
+    )
+}
+
 /// Emit an expression. `indent` is the indentation level (in 4-space units) of
 /// the line the expression *starts* on; it is consumed only by the multi-line
 /// `match` form. All other M0 expressions render inline (no leading whitespace,
@@ -208,6 +221,14 @@ fn emit_expr_at(
             let mut parts = Vec::with_capacity(args.len());
             for arg in args {
                 parts.push(emit_expr_at(ctx, arg, indent, child, generics)?);
+            }
+            // A handful of Maybe/Result kernels take the container BEFORE the
+            // function in the runtime (`sky_maybe_map(m, f)`) whereas Sky passes
+            // the function first (`Maybe.map f m`). The lowerer keeps the Sky
+            // order; re-point the two arguments here so the runtime call is
+            // well-formed.
+            if matches!(callee, Callee::Kernel(k) if kernel_swaps_first_two(*k)) {
+                parts.reverse();
             }
             Ok(format!("{name}({})", parts.join(", ")))
         }

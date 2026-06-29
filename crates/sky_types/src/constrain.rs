@@ -1344,10 +1344,98 @@ impl<'a> Builder<'a> {
             name: self.builtins.task,
             args: vec![Ty::Unit],
         };
+        let bool_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.bool,
+            args: Vec::new(),
+        };
+        // The polymorphic kernel schemes below use `Ty::Var(n)` for their type
+        // variables. `instantiate` mints one fresh flexible variable per distinct
+        // raw id, sharing it across every occurrence within ONE scheme — so the
+        // ids only need to be distinct within a single arm (they are local to that
+        // arm's instantiation), exactly like a constructor scheme's variables.
+        let var = Ty::Var;
+        let fun = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b));
+        let list = |t: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.list,
+            args: vec![t],
+        };
+        let maybe = |t: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.maybe,
+            args: vec![t],
+        };
+        let result = |e: Ty, a: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.result,
+            args: vec![e, a],
+        };
         match (self.interner.resolve(module), self.interner.resolve(name)) {
             (Some("String"), Some("fromInt")) => Ty::Fun(Box::new(int), Box::new(string)),
             (Some("String"), Some("fromFloat")) => Ty::Fun(Box::new(float), Box::new(string)),
             (Some("Log"), Some("println")) => Ty::Fun(Box::new(string), Box::new(task_unit)),
+
+            // ── Sky.Core.List (kernel-anchored combinators) ──
+            // map : (a -> b) -> List a -> List b
+            (Some("List"), Some("map")) => fun(
+                fun(var(0), var(1)),
+                fun(list(var(0)), list(var(1))),
+            ),
+            // filter : (a -> Bool) -> List a -> List a
+            (Some("List"), Some("filter")) => fun(
+                fun(var(0), bool_ty),
+                fun(list(var(0)), list(var(0))),
+            ),
+            // foldl / foldr : (a -> b -> b) -> b -> List a -> b
+            (Some("List"), Some("foldl" | "foldr")) => fun(
+                fun(var(0), fun(var(1), var(1))),
+                fun(var(1), fun(list(var(0)), var(1))),
+            ),
+            // length : List a -> Int
+            (Some("List"), Some("length")) => fun(list(var(0)), int),
+            // head : List a -> Maybe a
+            (Some("List"), Some("head")) => fun(list(var(0)), maybe(var(0))),
+            // tail : List a -> Maybe (List a)
+            (Some("List"), Some("tail")) => fun(list(var(0)), maybe(list(var(0)))),
+            // member : a -> List a -> Bool
+            (Some("List"), Some("member")) => {
+                fun(var(0), fun(list(var(0)), bool_ty))
+            }
+            // range : Int -> Int -> List Int
+            (Some("List"), Some("range")) => {
+                fun(int.clone(), fun(int.clone(), list(int)))
+            }
+            // reverse : List a -> List a
+            (Some("List"), Some("reverse")) => fun(list(var(0)), list(var(0))),
+
+            // ── Sky.Core.Maybe ──
+            // withDefault : a -> Maybe a -> a
+            (Some("Maybe"), Some("withDefault")) => {
+                fun(var(0), fun(maybe(var(0)), var(0)))
+            }
+            // map : (a -> b) -> Maybe a -> Maybe b
+            (Some("Maybe"), Some("map")) => fun(
+                fun(var(0), var(1)),
+                fun(maybe(var(0)), maybe(var(1))),
+            ),
+            // andThen : (a -> Maybe b) -> Maybe a -> Maybe b
+            (Some("Maybe"), Some("andThen")) => fun(
+                fun(var(0), maybe(var(1))),
+                fun(maybe(var(0)), maybe(var(1))),
+            ),
+
+            // ── Sky.Core.Result ── (e = the error type variable)
+            // withDefault : a -> Result e a -> a
+            (Some("Result"), Some("withDefault")) => {
+                fun(var(0), fun(result(var(1), var(0)), var(0)))
+            }
+            // map : (a -> b) -> Result e a -> Result e b
+            (Some("Result"), Some("map")) => fun(
+                fun(var(0), var(1)),
+                fun(result(var(2), var(0)), result(var(2), var(1))),
+            ),
+
             // Unknown kernel: a single flexible variable. The raw id is chosen
             // to be distinct from any real interned symbol's typical range; it
             // only needs to differ between the two `Ty::Var` arms of one

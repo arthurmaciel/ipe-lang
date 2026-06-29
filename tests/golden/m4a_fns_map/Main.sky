@@ -1,0 +1,4 @@
+module Main exposing (main)
+
+main =
+    println (String.fromInt (List.foldl (\a x -> a + x) 0 (List.map (\x -> x * 2) [1, 2, 3])))

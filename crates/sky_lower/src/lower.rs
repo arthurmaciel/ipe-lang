@@ -1292,6 +1292,24 @@ impl<'a> Lowerer<'a> {
                 // non-function), so a non-equal count here is always partial.
                 let arity = self.ctor_arity_of(*name)?;
                 if args.len() == arity {
+                    // `Ok x` whose `Result e a` error type `e` is still
+                    // unconstrained after solving would emit an ambiguous
+                    // `SkyResult<_, _>` that rustc rejects (E0282). Route it to
+                    // the runtime's `ok_res`, which pins the error type to the
+                    // project's `SkyError`. Sound: the `Err` arm is unreachable
+                    // for an `Ok`, so any error type yields identical behaviour;
+                    // `SkyError` is the canonical default. A constrained `e`
+                    // (e.g. an annotated `Result String Int`) keeps the direct
+                    // `SkyResult::Ok` form, byte-identical to before.
+                    if arity == 1
+                        && self.resolve(*name)? == "Ok"
+                        && self.result_error_unresolved(call_span)
+                    {
+                        return Ok(Expr::Call {
+                            callee: Callee::Kernel(KernelFn::ResultOkDefault),
+                            args: lowered_args,
+                        });
+                    }
                     Ok(Expr::Ctor {
                         ty: *type_name,
                         variant: *name,
@@ -1497,11 +1515,30 @@ impl<'a> Lowerer<'a> {
     /// definitions in declaration order, so the same-index lookup is exact.
     fn callee_arity(&self, callee: &Callee) -> DResult<usize> {
         match callee {
-            // Every wired kernel takes a single argument; widen this match as
-            // the kernel set grows so a new entry can never silently inherit 1.
+            // Arity is fixed per kernel. Each variant is listed explicitly so a
+            // new entry can never silently inherit a wrong count.
             Callee::Kernel(
-                KernelFn::StringFromInt | KernelFn::StringFromFloat | KernelFn::LogPrintln,
+                KernelFn::StringFromInt
+                | KernelFn::StringFromFloat
+                | KernelFn::LogPrintln
+                | KernelFn::ListLength
+                | KernelFn::ListHead
+                | KernelFn::ListTail
+                | KernelFn::ListReverse
+                | KernelFn::ResultOkDefault,
             ) => Ok(1),
+            Callee::Kernel(
+                KernelFn::ListMap
+                | KernelFn::ListFilter
+                | KernelFn::ListMember
+                | KernelFn::ListRange
+                | KernelFn::MaybeWithDefault
+                | KernelFn::MaybeMap
+                | KernelFn::MaybeAndThen
+                | KernelFn::ResultWithDefault
+                | KernelFn::ResultMap,
+            ) => Ok(2),
+            Callee::Kernel(KernelFn::ListFoldl | KernelFn::ListFoldr) => Ok(3),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -1516,6 +1553,22 @@ impl<'a> Lowerer<'a> {
                     }
                 })
             }
+        }
+    }
+
+    /// Whether the `Result e a` value produced at `span` still has an
+    /// unconstrained error type `e` after solving. True only when the solved
+    /// region type is a `Result` constructor whose first argument (the error
+    /// type) is an unresolved [`Ty::Var`] — the case the backend cannot emit as a
+    /// bare `SkyResult::Ok` without tripping rustc's E0282 ambiguity. A missing
+    /// region type or a concrete error type yields `false`.
+    fn result_error_unresolved(&self, span: Span) -> bool {
+        match self.types.regions.get(&span) {
+            Some(Ty::Con { name, args, .. }) => {
+                self.resolve(*name).map(|n| n == "Result").unwrap_or(false)
+                    && matches!(args.first(), Some(Ty::Var(_)))
+            }
+            _ => false,
         }
     }
 
@@ -1536,7 +1589,24 @@ impl<'a> Lowerer<'a> {
                     ("Log", "println") => Ok(Callee::Kernel(KernelFn::LogPrintln)),
                     ("String", "fromInt") => Ok(Callee::Kernel(KernelFn::StringFromInt)),
                     ("String", "fromFloat") => Ok(Callee::Kernel(KernelFn::StringFromFloat)),
-                    // A kernel beyond the M0 set (`Time.now`, `String.length`, …).
+                    ("List", "map") => Ok(Callee::Kernel(KernelFn::ListMap)),
+                    ("List", "filter") => Ok(Callee::Kernel(KernelFn::ListFilter)),
+                    ("List", "foldl") => Ok(Callee::Kernel(KernelFn::ListFoldl)),
+                    ("List", "foldr") => Ok(Callee::Kernel(KernelFn::ListFoldr)),
+                    ("List", "length") => Ok(Callee::Kernel(KernelFn::ListLength)),
+                    ("List", "head") => Ok(Callee::Kernel(KernelFn::ListHead)),
+                    ("List", "tail") => Ok(Callee::Kernel(KernelFn::ListTail)),
+                    ("List", "member") => Ok(Callee::Kernel(KernelFn::ListMember)),
+                    ("List", "range") => Ok(Callee::Kernel(KernelFn::ListRange)),
+                    ("List", "reverse") => Ok(Callee::Kernel(KernelFn::ListReverse)),
+                    ("Maybe", "withDefault") => Ok(Callee::Kernel(KernelFn::MaybeWithDefault)),
+                    ("Maybe", "map") => Ok(Callee::Kernel(KernelFn::MaybeMap)),
+                    ("Maybe", "andThen") => Ok(Callee::Kernel(KernelFn::MaybeAndThen)),
+                    ("Result", "withDefault") => {
+                        Ok(Callee::Kernel(KernelFn::ResultWithDefault))
+                    }
+                    ("Result", "map") => Ok(Callee::Kernel(KernelFn::ResultMap)),
+                    // A kernel beyond the wired set (`Time.now`, `String.length`, …).
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),
                 }

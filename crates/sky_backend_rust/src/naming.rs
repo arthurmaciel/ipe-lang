@@ -222,6 +222,22 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::StringFromInt => "string_from_int",
         KernelFn::StringFromFloat => "string_from_float",
         KernelFn::LogPrintln => "log_println",
+        KernelFn::ListMap => "list_map_consume",
+        KernelFn::ListFilter => "list_filter",
+        KernelFn::ListFoldl => "list_foldl",
+        KernelFn::ListFoldr => "list_foldr",
+        KernelFn::ListLength => "list_length",
+        KernelFn::ListHead => "list_head",
+        KernelFn::ListTail => "list_tail",
+        KernelFn::ListMember => "list_member",
+        KernelFn::ListRange => "list_range",
+        KernelFn::ListReverse => "list_reverse",
+        KernelFn::MaybeWithDefault => "maybe_with_default",
+        KernelFn::MaybeMap => "sky_maybe_map",
+        KernelFn::MaybeAndThen => "sky_maybe_and_then",
+        KernelFn::ResultWithDefault => "result_with_default",
+        KernelFn::ResultMap => "sky_result_map",
+        KernelFn::ResultOkDefault => "ok_res",
     }
 }
 
