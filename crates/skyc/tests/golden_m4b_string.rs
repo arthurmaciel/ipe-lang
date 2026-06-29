@@ -133,3 +133,62 @@ fn char_is_digit_ascii_five() {
 fn char_is_alpha_ascii_x() {
     assert_runs_and_matches_oracle("m4b_char_is_alpha");
 }
+
+// ── Predicate Go-parity edges (exact General_Category, not Rust's broader std) ──
+
+/// `Char.isDigit '²'` → `False`. U+00B2 SUPERSCRIPT TWO is category No, not Nd;
+/// Go's `unicode.IsDigit` rejects it (Rust's `char::is_numeric` would accept).
+#[test]
+fn char_is_digit_superscript_two_is_false() {
+    assert_runs_and_matches_oracle("m4b_char_is_digit_superscript");
+}
+
+/// `Char.isLower 'ª'` → `False`. U+00AA FEMININE ORDINAL INDICATOR is category
+/// Lo (with the `Other_Lowercase` property); Go's `unicode.IsLower` rejects it
+/// (Rust's `char::is_lowercase` would accept via `Other_Lowercase`).
+#[test]
+fn char_is_lower_feminine_ordinal_is_false() {
+    assert_runs_and_matches_oracle("m4b_char_is_lower_ordinal");
+}
+
+// ── String.split "" — rune split, no boundary sentinels (Go strings.Split) ─────
+
+/// `String.split "" "abc" |> List.length` → `3` (one segment per rune; no
+/// leading/trailing "" entries that Rust's `str::split("")` would emit).
+#[test]
+fn string_split_empty_sep_ascii_three_runes() {
+    assert_runs_and_matches_oracle("m4b_string_split_empty_ascii");
+}
+
+/// `String.split "" "héllo" |> List.length` → `5` (rune-based, so the 2-byte
+/// 'é' counts as ONE segment).
+#[test]
+fn string_split_empty_sep_unicode_five_runes() {
+    assert_runs_and_matches_oracle("m4b_string_split_empty_unicode");
+}
+
+// ── String.toInt — NO trim (Go's observable `String_toInt`, Elm semantics) ─────
+
+/// `String.toInt " 42 "` → `Nothing`. The Go reference's emitted path is
+/// `strconv.Atoi(s)` (no `TrimSpace`), so surrounding whitespace fails the
+/// parse — matching Elm. The golden oracle pins `Nothing`.
+#[test]
+fn string_to_int_surrounding_space_is_nothing() {
+    assert_runs_and_matches_oracle("m4b_string_to_int_trim");
+}
+
+/// `String.toInt "1 "` → `Nothing` — a single trailing space is enough to fail
+/// the parse (no trim).
+#[test]
+fn string_to_int_trailing_space_is_nothing() {
+    assert_runs_and_matches_oracle("m4b_string_to_int_trailing");
+}
+
+// ── String.toFloat — DOES trim (Go's `String_toFloat` = ParseFloat(TrimSpace)) ─
+
+/// `String.toFloat " 1.5 "` → `Just 1.5` (printed `1.5`). Unlike `toInt`, Go's
+/// float path trims surrounding whitespace; the golden oracle pins `1.5`.
+#[test]
+fn string_to_float_surrounding_space_is_just() {
+    assert_runs_and_matches_oracle("m4b_string_to_float_trim");
+}

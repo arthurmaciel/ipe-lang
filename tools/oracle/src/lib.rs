@@ -27,6 +27,17 @@
 //! out-of-date expectation), a missing oracle is a hard failure (never a skip),
 //! and a Go-oracle *failure* is never cached as "correct" — it is routed to the
 //! divergence branch by the refresh tool, with skyc's output recorded instead.
+//!
+//! Two flavours of divergence are recorded, never silently:
+//!
+//! * **Go-bug divergence** — the Go oracle FAILS (panic / non-zero / build
+//!   error) on a shape skyc handles correctly. The refresh tool detects it and
+//!   records skyc's output with a `Go oracle failed: …` reason.
+//! * **Sanctioned divergence** — the Go oracle SUCCEEDS, but Sky-Rust is
+//!   deliberately MORE correct (e.g. full-Unicode case mapping). The golden
+//!   opts in with a [`SANCTIONED_FILE`] marker stating why; the refresh tool
+//!   records Sky-Rust's output with a `sanctioned: …` reason WITHOUT needing Go
+//!   to fail. See `docs/architecture/divergence-policy.md`.
 
 #![forbid(unsafe_code)]
 
@@ -42,6 +53,52 @@ pub const EXPECTED_FILE: &str = "expected_go.txt";
 pub const META_FILE: &str = "oracle.meta";
 /// The Sky entry point inside every golden directory.
 pub const MAIN_SKY: &str = "Main.sky";
+/// Marker file declaring a golden a SANCTIONED divergence.
+///
+/// When present in a golden's directory it means the Go oracle SUCCEEDS, but
+/// Sky-Rust deliberately produces different (more-correct) output. The file's
+/// contents are the human-readable reason, recorded as
+/// `divergence_reason = sanctioned: <reason>` with Sky-Rust's own output
+/// captured as the expected value. This is distinct from the Go-FAILURE
+/// divergence path (a Go bug), which needs no marker.
+pub const SANCTIONED_FILE: &str = "sanctioned.divergence";
+
+/// Prefix every sanctioned-divergence reason carries in `oracle.meta`. Lets the
+/// read side and humans tell a deliberate, reviewed divergence apart from a
+/// Go-bug divergence without re-running anything.
+pub const SANCTIONED_PREFIX: &str = "sanctioned: ";
+
+/// Read the sanctioned-divergence reason for the golden at `golden_dir`.
+///
+/// Returns `Ok(None)` when the marker file is absent (the default: byte parity
+/// with Go is expected), `Ok(Some(reason))` with the whitespace-flattened reason
+/// when present, and `Err` when the marker exists but is empty — a sanctioned
+/// divergence MUST state why, mirroring the `oracle.meta` "divergence needs a
+/// reason" invariant.
+///
+/// # Errors
+/// Returns a human-readable message when the marker file exists but cannot be
+/// read, or is present yet blank.
+pub fn sanctioned_reason(golden_dir: &Path) -> Result<Option<String>, String> {
+    let path = golden_dir.join(SANCTIONED_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            // Flatten so the reason is a single clean line, matching how
+            // `Meta::serialize` stores `divergence_reason`.
+            let reason = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if reason.is_empty() {
+                Err(format!(
+                    "{}: sanctioned divergence marker is empty — it must state why Sky-Rust diverges",
+                    path.display()
+                ))
+            } else {
+                Ok(Some(reason))
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("cannot read {}: {e}", path.display())),
+    }
+}
 
 /// Lowercase hex SHA-256 of `bytes`.
 ///
@@ -193,6 +250,10 @@ pub enum ParityError {
     Mismatch {
         golden: String,
         divergence: bool,
+        /// The cached `divergence_reason`, if any — used only to label whether
+        /// the expectation came from a SANCTIONED divergence (Sky-Rust's own
+        /// deliberate output) or a Go-bug divergence.
+        reason: Option<String>,
         expected: String,
         actual: String,
     },
@@ -226,13 +287,19 @@ impl fmt::Display for ParityError {
             Self::Mismatch {
                 golden,
                 divergence,
+                reason,
                 expected,
                 actual,
             } => {
-                let source = if *divergence {
-                    "skyc-divergence-expected"
-                } else {
+                let is_sanctioned = reason
+                    .as_deref()
+                    .is_some_and(|r| r.starts_with(SANCTIONED_PREFIX));
+                let source = if !*divergence {
                     "cached Go oracle"
+                } else if is_sanctioned {
+                    "sanctioned-divergence expected (Sky-Rust deliberate output)"
+                } else {
+                    "Go-bug-divergence expected (skyc output)"
                 };
                 write!(
                     f,
@@ -292,6 +359,7 @@ pub fn check_parity(
         return Err(ParityError::Mismatch {
             golden: golden_name.to_owned(),
             divergence: meta.oracle_divergence,
+            reason: meta.divergence_reason,
             expected,
             actual: skyc_stdout.to_owned(),
         });
@@ -412,7 +480,7 @@ pub fn build_and_run_rust(golden_name: &str, emitted_dir: &Path) -> Result<RunRe
 
 #[cfg(test)]
 mod tests {
-    use super::{Meta, ParityError, check_parity, sha256_hex};
+    use super::{Meta, ParityError, check_parity, sanctioned_reason, sha256_hex};
     use std::path::PathBuf;
 
     /// A throwaway directory unique to one test, holding a synthetic golden.
@@ -550,6 +618,60 @@ mod tests {
         assert!(
             matches!(outcome, Err(ParityError::MissingMeta { .. })),
             "a golden with no cached oracle must fail, got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn sanctioned_reason_absent_present_and_empty() {
+        let dir = fresh_golden("sanctioned");
+        // Absent marker → default Go-parity case.
+        assert_eq!(sanctioned_reason(&dir).ok(), Some(None));
+
+        // Present marker → trimmed, whitespace-flattened reason.
+        write(
+            &dir,
+            super::SANCTIONED_FILE,
+            "  full-Unicode case mapping\n  (ß→SS)\n",
+        );
+        assert_eq!(
+            sanctioned_reason(&dir).ok(),
+            Some(Some("full-Unicode case mapping (ß→SS)".to_owned()))
+        );
+
+        // Present but blank → hard error: a sanctioned divergence must state why.
+        write(&dir, super::SANCTIONED_FILE, "   \n\t\n");
+        assert!(
+            sanctioned_reason(&dir).is_err(),
+            "blank sanctioned marker must be a hard error"
+        );
+    }
+
+    #[test]
+    fn sanctioned_mismatch_is_labelled_distinctly_from_go_bug() {
+        let dir = fresh_golden("sanctioned_label");
+        let src = "main = 1\n";
+        write(&dir, "Main.sky", src);
+        write(&dir, "expected_go.txt", "UPPER\n");
+        let meta = Meta {
+            main_sky_sha256: sha256_hex(src.as_bytes()),
+            go_sky_version: "sky dev".to_owned(),
+            exit_code: 0,
+            oracle_divergence: true,
+            divergence_reason: Some("sanctioned: full-Unicode default case mapping".to_owned()),
+        };
+        write(&dir, "oracle.meta", &meta.serialize());
+
+        let err = check_parity(&dir, "sanctioned_label", "lower\n");
+        assert!(
+            matches!(err, Err(ParityError::Mismatch { .. })),
+            "expected a sanctioned Mismatch, got {err:?}"
+        );
+        // The Display string must label the expectation as sanctioned-sourced,
+        // distinct from a Go-bug divergence.
+        let shown = err.err().map_or_else(String::new, |e| e.to_string());
+        assert!(
+            shown.contains("sanctioned-divergence"),
+            "sanctioned mismatch must be labelled as such: {shown}"
         );
     }
 

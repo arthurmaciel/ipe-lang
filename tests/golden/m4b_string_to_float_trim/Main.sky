@@ -1,0 +1,9 @@
+module Main exposing (main)
+
+main =
+    case String.toFloat " 1.5 " of
+        Just f ->
+            println (String.fromFloat f)
+
+        Nothing ->
+            println "Nothing"
