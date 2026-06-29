@@ -7,7 +7,7 @@
 >
 > **Governing rules:** every divergence here, if/when adopted, becomes a
 > documented entry (per `PRINCIPLES.md`: a divergence is *documented*, never
-> silently wrong) and flips the relevant `docs/parity/runtime-parity.md` row from
+> silent) and flips the relevant `docs/parity/runtime-parity.md` row from
 > "mirrors Go" → "intentional Rust design + rationale + own tests." Until then we
 > still **mirror** upstream behaviour (so we can keep tracking it); these ideas are
 > the graduation path from *follower* to *designer*.
@@ -409,3 +409,18 @@ the compiler just gates `!` to Task-typed exprs in an effect context). `let x <-
 and `Task.chain` blocks remain options but LOSE inline effect-marking unless paired
 with a marker. Still UNDECIDED, post-M6 — but the criterion ordering is now: keep
 the `Task` type marker; prefer a VISIBLE per-call form (`!`) over invisible ones.
+
+## Idea — Elm-style time-travel debugger for live apps (dev-only) 🔬🧊
+
+A built-in debugger for TEA/live apps (Sky.Live + Webview + Tui), in the spirit of
+Elm's debugger: record the Msg history, step back/forward through states, inspect
+the Model at each step, import/export sessions. **Dev mode only** (off in
+production — no overhead, no surface).
+
+Future improvements to design when the time comes:
+- **Simulate Model-value changes** — edit a Model field in the debugger and replay
+  forward to see the effect (if feasible given the typed Model + serde round-trip).
+- Msg injection / replay, time-scrubbing, diff between adjacent states.
+
+Disposition: filed (2026-06-29). Post-M6 (needs the live runtime first). Ties to
+the hot-reload idea (Ideas 1-3) — same dev-loop family.
