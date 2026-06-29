@@ -1,0 +1,19 @@
+module Main exposing (main)
+
+import Sky.Core.Encoding as Encoding
+
+-- hexEncode "Hi!" = "486921" (lowercase Go hex).
+-- Decode is done from the known constant to avoid using `encoded` twice.
+main =
+    let
+        encoded = Encoding.hexEncode "Hi!"
+
+        decoded =
+            case Encoding.hexDecode "486921" of
+                Ok v ->
+                    v
+
+                Err _ ->
+                    "error"
+    in
+    println (String.join " " [ encoded, decoded ])

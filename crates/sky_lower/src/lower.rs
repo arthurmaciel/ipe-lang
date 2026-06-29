@@ -1709,6 +1709,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::BytesToHex
                 | KernelFn::BytesFromBase64
                 | KernelFn::BytesToBase64
+                // ── Encoding arity-1 (M4f) ────────────────────────────────────
+                | KernelFn::EncodingBase64Encode
+                | KernelFn::EncodingBase64Decode
+                | KernelFn::EncodingUrlEncode
+                | KernelFn::EncodingUrlDecode
+                | KernelFn::EncodingHexEncode
+                | KernelFn::EncodingHexDecode
                 // ── Math arity-1 (Int → Int) ─────────────────────────────────
                 | KernelFn::MathAbs
                 // ── Math arity-1 (Float → Float) ────────────────────────────
@@ -1995,6 +2002,17 @@ impl<'a> Lowerer<'a> {
                     ("Bytes", "toBase64") => Ok(Callee::Kernel(KernelFn::BytesToBase64)),
                     ("Bytes", "append") => Ok(Callee::Kernel(KernelFn::BytesAppend)),
                     ("Bytes", "slice") => Ok(Callee::Kernel(KernelFn::BytesSlice)),
+                    // ── Encoding kernels (M4f) ─────────────────────────────
+                    ("Encoding", "base64Encode") => {
+                        Ok(Callee::Kernel(KernelFn::EncodingBase64Encode))
+                    }
+                    ("Encoding", "base64Decode") => {
+                        Ok(Callee::Kernel(KernelFn::EncodingBase64Decode))
+                    }
+                    ("Encoding", "urlEncode") => Ok(Callee::Kernel(KernelFn::EncodingUrlEncode)),
+                    ("Encoding", "urlDecode") => Ok(Callee::Kernel(KernelFn::EncodingUrlDecode)),
+                    ("Encoding", "hexEncode") => Ok(Callee::Kernel(KernelFn::EncodingHexEncode)),
+                    ("Encoding", "hexDecode") => Ok(Callee::Kernel(KernelFn::EncodingHexDecode)),
                     // A kernel beyond the wired set (`Time.now`, …).
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),

@@ -1,0 +1,19 @@
+module Main exposing (main)
+
+import Sky.Core.Encoding as Encoding
+
+-- base64Encode "hello" = "aGVsbG8=" and base64Decode "aGVsbG8=" = "hello".
+-- Uses a known constant on the decode side to avoid moving `encoded` twice.
+main =
+    let
+        encoded = Encoding.base64Encode "hello"
+
+        decoded =
+            case Encoding.base64Decode "aGVsbG8=" of
+                Ok v ->
+                    v
+
+                Err _ ->
+                    "error"
+    in
+    println (String.join " " [ encoded, decoded ])

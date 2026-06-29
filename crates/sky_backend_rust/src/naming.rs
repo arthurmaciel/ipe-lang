@@ -370,6 +370,19 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::BytesToBase64 => "bytes_to_base64",
         KernelFn::BytesAppend => "bytes_append",
         KernelFn::BytesSlice => "bytes_slice",
+        // ── Encoding kernels (M4f) ──────────────────────────────────────────
+        // Encoders are total (infallible) — no type-inference issue.
+        KernelFn::EncodingBase64Encode => "base64_encode",
+        KernelFn::EncodingUrlEncode => "url_encode",
+        KernelFn::EncodingHexEncode => "encoding_hex_encode",
+        // Decoders return `Result Error String`. The upstream runtime uses a
+        // generic `E: From<String>` bound for flexibility, but generated Sky code
+        // always sets `SkyError = String`. Rust cannot infer `E` when the error
+        // arm is `Err _ ->` (discarded), so we route to concrete aliases that pin
+        // `E = String`, eliminating the ambiguity without changing semantics.
+        KernelFn::EncodingBase64Decode => "sky_base64_decode",
+        KernelFn::EncodingUrlDecode => "sky_url_decode",
+        KernelFn::EncodingHexDecode => "sky_encoding_hex_decode",
     }
 }
 
