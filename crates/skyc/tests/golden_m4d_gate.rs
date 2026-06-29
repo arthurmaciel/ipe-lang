@@ -2,14 +2,20 @@
 //!
 //! A `Set` element and a `Dict` key carry the Sky `comparable`-key obligation
 //! (the kernel's element / key variable is minted as a super-typed variable, the
-//! same path `Math.min` / `Math.max` take for ordering). Two failure classes
+//! same path `Math.min` / `Math.max` take for ordering). Three failure classes
 //! must be caught at `skyc` — never left to emit Rust `cargo` rejects:
 //!
-//! * **Non-comparable element / key** (a record, a user ADT, a function): fails
+//! * **Non-comparable element / key, direct call** (a record, a user ADT): fails
 //!   closed at type-check as `SKY-T0001` (the eager-pin mismatch — the
 //!   super-typed element variable meets a structure that does not support
 //!   ordering). This is also stricter than Sky's runtime, which keys a Set /
 //!   Dict on a stringified value.
+//! * **Non-comparable element / key, via a generic function** (a record or ADT
+//!   passed to `singletonSet : a -> Set a` / `singletonDict : a -> v -> Dict a v`):
+//!   fails closed at type-check as `SKY-T0014` (super-type unsatisfied — the
+//!   generic's binding-bound variable is instantiated at a non-comparable type,
+//!   the same path `Math.min` / `maxOf` take for ordering). Analogous to the
+//!   `m4c_math_min_rec_gate` / `m4c_math_min_fn_gate` pair.
 //! * **`Float` element / key** (`Set Float` / `Dict Float v`): `Float` IS Sky
 //!   `comparable`, so the type checker accepts it; but Rust's `f64` is neither
 //!   `Ord` nor `Hash` / `Eq`, so `BTreeSet<f64>` / `HashMap<f64, _>` cannot
@@ -192,5 +198,64 @@ fn dict_float_insert_is_sky_l0117() {
         "m4d_dict_float_insert_gate",
         "m4d_dict_float_insert_gate_emit",
         sky_diagnostics::SKY_L0117,
+    );
+}
+
+// ── Non-comparable element / key via generic function → SKY-T0014 ─────────────
+//
+// These four fixtures exercise the INDIRECT path: a user-written generic
+// `singletonSet : a -> Set a` / `singletonDict : a -> v -> Dict a v` whose body
+// uses `Set.fromList` / `Dict.fromList`.  The body's use of the kernel marks the
+// binding-bound variable `a` with the comparable-key obligation, so instantiating
+// the forwarder at a non-comparable type (record or user ADT) is rejected at
+// type-check as `SKY-T0014` (super-type unsatisfied), exactly as `Math.min`
+// does for ordering.  This is the direct Set / Dict analogue of
+// `m4c_math_min_rec_gate` / `m4c_math_min_fn_gate`.
+
+/// `singletonSet : a -> Set a` (body `Set.fromList [x]`) called at `{ x : Int }` —
+/// a record is not comparable, so the generic is rejected at the call site with
+/// `SKY-T0014`.
+#[test]
+fn set_rec_via_fn_is_sky_t0014() {
+    assert_gate(
+        "m4d_set_rec_fn_gate",
+        "m4d_set_rec_fn_gate_emit",
+        sky_diagnostics::SKY_T0014,
+    );
+}
+
+/// `singletonSet : a -> Set a` (body `Set.fromList [x]`) called at a user ADT
+/// `Color` — a user ADT is not comparable, so the generic is rejected with
+/// `SKY-T0014`.
+#[test]
+fn set_adt_via_fn_is_sky_t0014() {
+    assert_gate(
+        "m4d_set_adt_fn_gate",
+        "m4d_set_adt_fn_gate_emit",
+        sky_diagnostics::SKY_T0014,
+    );
+}
+
+/// `singletonDict : a -> v -> Dict a v` (body `Dict.fromList [(k, v)]`) called
+/// with a `{ x : Int }` record key — a record is not comparable, so the generic
+/// is rejected with `SKY-T0014`.
+#[test]
+fn dict_rec_via_fn_is_sky_t0014() {
+    assert_gate(
+        "m4d_dict_rec_fn_gate",
+        "m4d_dict_rec_fn_gate_emit",
+        sky_diagnostics::SKY_T0014,
+    );
+}
+
+/// `singletonDict : a -> v -> Dict a v` (body `Dict.fromList [(k, v)]`) called
+/// with a user ADT `Color` key — a user ADT is not comparable, so the generic is
+/// rejected with `SKY-T0014`.
+#[test]
+fn dict_adt_via_fn_is_sky_t0014() {
+    assert_gate(
+        "m4d_dict_adt_fn_gate",
+        "m4d_dict_adt_fn_gate_emit",
+        sky_diagnostics::SKY_T0014,
     );
 }

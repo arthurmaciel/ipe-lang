@@ -1,0 +1,29 @@
+module Main exposing (main)
+
+-- Companion to `m4d_dict_adt_gate` for the GENERIC-FUNCTION path.
+-- `singletonDict` is a generic `a -> v -> Dict a v` forwarder built on `Dict.fromList`.
+-- A user ADT (`Color`) is not a comparable type, so instantiating the forwarder
+-- at `Color` (as the Dict key) is rejected at type-check (SKY-T0014) rather than
+-- emitting an unbounded `singleton_dict::<T, V>` that `cargo` cannot build.
+-- (Calling `Dict.insert Red 1 Dict.empty` directly is the eager-pin sibling
+-- and surfaces SKY-T0001; both fail closed with no Rust emitted.)
+
+import Sky.Core.Dict as Dict
+
+
+type Color
+    = Red
+    | Green
+
+
+singletonDict : a -> v -> Dict a v
+singletonDict k v =
+    Dict.fromList [ ( k, v ) ]
+
+
+main =
+    let
+        _ =
+            singletonDict Red 42
+    in
+    println (String.fromInt 0)

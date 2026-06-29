@@ -1,0 +1,29 @@
+module Main exposing (main)
+
+-- Companion to `m4d_dict_adt_gate` for the GENERIC-FUNCTION path with a RECORD key.
+-- `singletonDict` is a generic `a -> v -> Dict a v` forwarder built on `Dict.fromList`.
+-- The Dict key variable carries the Sky `comparable`-key obligation
+-- (`TyBounds::dict_key`, → Rust `Hash + Eq + Ord`), so the forwarder generalises to
+-- a Rust generic bounded by those traits.  Instantiating it at a RECORD — which
+-- Rust cannot hash or order — is rejected at type-check (SKY-T0014) rather than
+-- emitting an unbounded `singleton_dict::<T, V>` that `cargo` cannot build.
+
+import Sky.Core.Dict as Dict
+
+
+singletonDict : a -> v -> Dict a v
+singletonDict k v =
+    Dict.fromList [ ( k, v ) ]
+
+
+rec : { x : Int }
+rec =
+    { x = 1 }
+
+
+main =
+    let
+        _ =
+            singletonDict rec 42
+    in
+    println (String.fromInt 0)
