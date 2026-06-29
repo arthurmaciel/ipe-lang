@@ -88,6 +88,15 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
                 format!("{base} {rendered}")
             }
         }
+        // The built-in `Maybe a` / `Result e a` render in source-like prefix
+        // form, exactly like a generic enum would.
+        IrType::Maybe(elem) => format!("Maybe {}", ir_type_name(interner, elem)),
+        IrType::Result(err, ok) => format!(
+            "Result {} {}",
+            ir_type_name(interner, err),
+            ir_type_name(interner, ok)
+        ),
+        IrType::List(elem) => format!("List {}", ir_type_name(interner, elem)),
         IrType::Tuple(elems) => {
             let inner = elems
                 .iter()
@@ -389,6 +398,7 @@ fn write_binding(
 fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) {
     match expr {
         Expr::Int(n) => line(out, level, &format!("Int {n}")),
+        Expr::Bool(b) => line(out, level, &format!("Bool {b}")),
         Expr::Float(f) => line(out, level, &format!("Float {f}")),
         Expr::Str(s) => line(out, level, &format!("Str {s:?}")),
         Expr::Char(c) => line(out, level, &format!("Char '{c}'")),
@@ -459,6 +469,8 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
                 write_expr(out, elem, interner, level + 1);
             }
         }
+        Expr::List { elem, items } => write_list(out, elem, items, interner, level),
+        Expr::Cons { head, tail } => write_cons(out, head, tail, interner, level),
         Expr::Record(fields) => write_record(out, fields, interner, level),
         Expr::Access { record, field } => {
             line(
@@ -494,6 +506,27 @@ fn write_fields(out: &mut String, fields: &[(Symbol, Expr)], interner: &Interner
 
 /// Render a `Record` literal node. Split from [`write_expr`] to keep that match
 /// small.
+/// Render a list literal node: a `List : <elem>` header line followed by each
+/// element expression one level deeper.
+fn write_list(out: &mut String, elem: &IrType, items: &[Expr], interner: &Interner, level: usize) {
+    line(
+        out,
+        level,
+        &format!("List : {}", ir_type_name(interner, elem)),
+    );
+    for item in items {
+        write_expr(out, item, interner, level + 1);
+    }
+}
+
+/// Render a cons node: a `Cons` header line followed by the head then the tail,
+/// each one level deeper.
+fn write_cons(out: &mut String, head: &Expr, tail: &Expr, interner: &Interner, level: usize) {
+    line(out, level, "Cons");
+    write_expr(out, head, interner, level + 1);
+    write_expr(out, tail, interner, level + 1);
+}
+
 fn write_record(out: &mut String, fields: &[(Symbol, Expr)], interner: &Interner, level: usize) {
     line(out, level, "Record");
     write_fields(out, fields, interner, level + 1);

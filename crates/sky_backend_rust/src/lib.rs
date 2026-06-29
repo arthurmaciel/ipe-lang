@@ -420,6 +420,28 @@ impl<'a> EmitCtx<'a> {
             })
     }
 
+    /// The runtime enum path for a built-in constructor's type, or `None` for a
+    /// user-declared enum. `Maybe` / `Result` are not user `type` declarations —
+    /// their constructors (`Just` / `Nothing` / `Ok` / `Err`) are Prelude
+    /// built-ins backed by the runtime's `SkyMaybe` / `SkyResult`, whose variant
+    /// names match Sky's verbatim. A `Some` result steers constructor and pattern
+    /// emission to the runtime type (no user-enum field-boxing lookup applies, as
+    /// neither is self-recursive).
+    fn builtin_runtime_enum(&self, ty: Symbol) -> Option<&'static str> {
+        // A declared user enum always wins: real Sky cannot name a `type` `Maybe`
+        // or `Result` (canonicalisation rejects shadowing a built-in), so a
+        // program-level enum carrying that symbol is a distinct, user-owned type
+        // and must route to its own emitted enum, not the runtime shortcut.
+        if self.enum_names.contains_key(&ty) {
+            return None;
+        }
+        match self.interner.resolve(ty) {
+            Some("Maybe") => Some("SkyMaybe"),
+            Some("Result") => Some("SkyResult"),
+            _ => None,
+        }
+    }
+
     fn func_name(&self, id: FuncId) -> DResult<&str> {
         self.func_names
             .get(&id)
@@ -483,6 +505,15 @@ fn collect_record_shapes(
                 collect_record_shapes(interner, arg, shapes)?;
             }
         }
+        // `Maybe a` / `Result e a` carry no struct of their own, but their
+        // element types may (`Maybe { x : Int }`).
+        IrType::Maybe(elem) | IrType::List(elem) => {
+            collect_record_shapes(interner, elem, shapes)?;
+        }
+        IrType::Result(err, ok) => {
+            collect_record_shapes(interner, err, shapes)?;
+            collect_record_shapes(interner, ok, shapes)?;
+        }
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -544,6 +575,13 @@ fn type_reaches_enum(
         IrType::Record(map) => map
             .values()
             .any(|v| type_reaches_enum(v, target, enums, visited)),
+        // `Maybe a` / `Result e a` are the runtime's own (already finite) types;
+        // a size cycle can still pass THROUGH their element types, so descend.
+        IrType::Maybe(elem) | IrType::List(elem) => type_reaches_enum(elem, target, enums, visited),
+        IrType::Result(err, ok) => {
+            type_reaches_enum(err, target, enums, visited)
+                || type_reaches_enum(ok, target, enums, visited)
+        }
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -565,6 +603,8 @@ fn contains_generic(ty: &IrType) -> bool {
         IrType::Record(map) => map.values().any(contains_generic),
         IrType::Fun(params, ret) => params.iter().any(contains_generic) || contains_generic(ret),
         IrType::Enum { args, .. } => args.iter().any(contains_generic),
+        IrType::Maybe(elem) | IrType::List(elem) => contains_generic(elem),
+        IrType::Result(err, ok) => contains_generic(err) || contains_generic(ok),
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -604,6 +644,11 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
             for a in args {
                 collect_generics(a, out);
             }
+        }
+        IrType::Maybe(elem) | IrType::List(elem) => collect_generics(elem, out),
+        IrType::Result(err, ok) => {
+            collect_generics(err, out);
+            collect_generics(ok, out);
         }
         IrType::Int
         | IrType::Float
@@ -763,6 +808,21 @@ fn match_template(
                     match_template(t, c, subst)?;
                 }
                 Ok(())
+            }
+            _ => Err(mismatch()),
+        },
+        IrType::Maybe(te) => match concrete {
+            IrType::Maybe(ce) => match_template(te, ce, subst),
+            _ => Err(mismatch()),
+        },
+        IrType::List(te) => match concrete {
+            IrType::List(ce) => match_template(te, ce, subst),
+            _ => Err(mismatch()),
+        },
+        IrType::Result(terr, tok) => match concrete {
+            IrType::Result(cerr, cok) => {
+                match_template(terr, cerr, subst)?;
+                match_template(tok, cok, subst)
             }
             _ => Err(mismatch()),
         },

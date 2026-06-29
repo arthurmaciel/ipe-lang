@@ -58,7 +58,19 @@ pub fn lower(
     // prepends a `Destructure` to the body. One per parameter position, sized to
     // the widest function arity, minted through the same owned `&mut Interner`.
     let param_binders = interner.fresh_symbols("arg_", lower::max_def_arity(m))?;
-    lower::Lowerer::new(m, types, &*interner, eta_params, param_binders).run()
+    // The built-in `Maybe` / `Result` types + constructors are Prelude
+    // built-ins (no `type` declaration), so the lowerer needs their symbols to
+    // seed the variant-set / arity tables it would otherwise read from
+    // `module.unions`. Mint them here through the owned `&mut Interner`.
+    let builtins = lower::BuiltinCtors {
+        maybe: interner.intern("Maybe")?,
+        result: interner.intern("Result")?,
+        just: interner.intern("Just")?,
+        nothing: interner.intern("Nothing")?,
+        ok: interner.intern("Ok")?,
+        err: interner.intern("Err")?,
+    };
+    lower::Lowerer::new(m, types, &*interner, eta_params, param_binders, &builtins).run()
 }
 
 #[cfg(test)]

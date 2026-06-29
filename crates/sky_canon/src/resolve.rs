@@ -357,7 +357,8 @@ fn bind_pattern_names(p: &src::Pattern_, env: &mut Env) {
                 bind_pattern_names(&a.value, env);
             }
         }
-        src::Pattern_::PTuple(elems) => {
+        // A tuple and a list pattern both bind every element's names.
+        src::Pattern_::PTuple(elems) | src::Pattern_::PList(elems) => {
             for e in elems {
                 bind_pattern_names(&e.value, env);
             }
@@ -372,6 +373,10 @@ fn bind_pattern_names(p: &src::Pattern_, env: &mut Env) {
             // The alias binds its name AND every name its inner pattern binds.
             bind_pattern_names(&inner.value, env);
             env.add_local(name.value);
+        }
+        src::Pattern_::PCons(head, tail) => {
+            bind_pattern_names(&head.value, env);
+            bind_pattern_names(&tail.value, env);
         }
     }
 }
@@ -430,6 +435,18 @@ fn canonicalise_pattern(
         src::Pattern_::PAlias(inner, name) => {
             let can_inner = canonicalise_pattern(inner, env, interner)?;
             canon::Pattern_::PAlias(Box::new(can_inner), *name)
+        }
+        src::Pattern_::PList(elems) => {
+            let mut can_elems = Vec::with_capacity(elems.len());
+            for e in elems {
+                can_elems.push(canonicalise_pattern(e, env, interner)?);
+            }
+            canon::Pattern_::PList(can_elems)
+        }
+        src::Pattern_::PCons(head, tail) => {
+            let can_head = canonicalise_pattern(head, env, interner)?;
+            let can_tail = canonicalise_pattern(tail, env, interner)?;
+            canon::Pattern_::PCons(Box::new(can_head), Box::new(can_tail))
         }
     };
     Ok(Located::new(span, node))
@@ -534,6 +551,15 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
                 can_elems.push(canonicalise_expr(elem, env, interner)?);
             }
             canon::Expr_::Tuple(can_elems)
+        }
+        src::Expr_::List(elems) => {
+            // A list literal introduces no bindings: every element resolves
+            // against the same enclosing scope.
+            let mut can_elems = Vec::with_capacity(elems.len());
+            for elem in elems {
+                can_elems.push(canonicalise_expr(elem, env, interner)?);
+            }
+            canon::Expr_::List(can_elems)
         }
         src::Expr_::Record(fields) => {
             // A record introduces no bindings: every field value resolves against
@@ -691,7 +717,7 @@ const fn op_precedence(op: &str) -> (i32, Assoc) {
     match op.as_bytes() {
         b"*" | b"/" | b"//" | b"%" => (7, Assoc::Left),
         b"+" | b"-" => (6, Assoc::Left),
-        b"++" => (5, Assoc::Right),
+        b"++" | b"::" => (5, Assoc::Right),
         b"==" | b"/=" | b"<" | b">" | b"<=" | b">=" => (4, Assoc::None),
         b"&&" => (3, Assoc::Right),
         b"||" => (2, Assoc::Right),
@@ -796,8 +822,17 @@ fn combine_binop(
     basics: Symbol,
     interner: &mut Interner,
 ) -> DResult<canon::Expr> {
-    let func = resolve_op_func(op.value, interner)?;
     let span = Span::new(lhs.span.lo, rhs.span.hi);
+    // The cons operator `::` is not a kernel binop — it builds a list node so
+    // the type checker can give it the proper `a -> List a -> List a` discipline
+    // and the backend can lower it to the runtime list prepend.
+    if interner.resolve(op.value) == Some("::") {
+        return Ok(Located::new(
+            span,
+            canon::Expr_::Cons(Box::new(lhs), Box::new(rhs)),
+        ));
+    }
+    let func = resolve_op_func(op.value, interner)?;
     Ok(Located::new(
         span,
         canon::Expr_::Binop {

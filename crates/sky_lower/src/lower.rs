@@ -48,6 +48,33 @@ fn bug(where_: &'static str, detail: impl Into<String>) -> Diagnostic {
     }
 }
 
+/// The `Maybe a` type carries exactly one argument; an arity-1 guard cleared it,
+/// so a missing first argument here is an unreachable internal invariant.
+fn maybe_arg_bug() -> Diagnostic {
+    bug(
+        "sky_lower::ir_type",
+        "Maybe applied without its element type",
+    )
+}
+
+/// The `Result e a` type carries exactly two arguments; an arity-2 guard cleared
+/// them, so a missing argument here is an unreachable internal invariant.
+fn result_arg_bug() -> Diagnostic {
+    bug(
+        "sky_lower::ir_type",
+        "Result applied without its error/success types",
+    )
+}
+
+/// The `List a` type carries exactly one argument; an arity-1 guard cleared it,
+/// so a missing element type here is an unreachable internal invariant.
+fn list_arg_bug() -> Diagnostic {
+    bug(
+        "sky_lower::ir_type",
+        "List applied without its element type",
+    )
+}
+
 /// Does this solved [`Ty`] contain a free type variable anywhere? Used to keep
 /// the lowerer's record-shape collection to fully-concrete shapes — a
 /// variable-bearing (generic) record reaches the backend through a signature,
@@ -178,6 +205,8 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::TaskUnit
         | IrType::Generic(_) => false,
         IrType::Enum { args, .. } => args.iter().any(ir_contains_fun),
+        IrType::Maybe(elem) | IrType::List(elem) => ir_contains_fun(elem),
+        IrType::Result(err, ok) => ir_contains_fun(err) || ir_contains_fun(ok),
         IrType::Tuple(elems) => elems.iter().any(ir_contains_fun),
         IrType::Record(fields) => fields.values().any(ir_contains_fun),
     }
@@ -232,6 +261,25 @@ pub struct Lowerer<'a> {
     param_binders: Vec<Symbol>,
 }
 
+/// The interned symbols of the built-in `Maybe` / `Result` types and their
+/// constructors, minted by [`crate::lower`] through its owned `&mut Interner`.
+///
+/// These constructors (`Just` / `Nothing` / `Ok` / `Err`) are Prelude built-ins,
+/// not user `type` declarations, so the lowerer cannot discover their variant
+/// sets or payload arities from `module.unions`. Threading the symbols in lets
+/// [`Lowerer::new`] seed `enum_variants` (the variant set [`Match::new`] needs to
+/// prove a `Maybe` / `Result` `case` exhaustive) and `ctor_arity` (the field
+/// count a saturated `Just x` / `Ok x` passes) for them, exactly as it does for a
+/// user enum.
+pub struct BuiltinCtors {
+    pub maybe: Symbol,
+    pub result: Symbol,
+    pub just: Symbol,
+    pub nothing: Symbol,
+    pub ok: Symbol,
+    pub err: Symbol,
+}
+
 /// The widest parameter-pattern count across the module's top-level bindings —
 /// the most parameters any single eta-expanded partial application can need.
 /// Drives the eta-parameter pool sizing in [`crate::lower`].
@@ -254,6 +302,7 @@ impl<'a> Lowerer<'a> {
         interner: &'a Interner,
         eta_params: Vec<Symbol>,
         param_binders: Vec<Symbol>,
+        builtins: &BuiltinCtors,
     ) -> Self {
         let mut func_ids = BTreeMap::new();
         for (idx, def) in m.defs.iter().enumerate() {
@@ -269,6 +318,16 @@ impl<'a> Lowerer<'a> {
                 ctor_arity.insert(ctor.name, ctor.arity);
             }
         }
+        // Seed the built-in `Maybe` / `Result` variant sets + payload arities so
+        // a `case m of Just x -> … ; Nothing -> …` takes the same validated
+        // `Match::new` enum-cover path a user enum does, and `Just x` / `Ok x`
+        // lower as saturated constructions.
+        enum_variants.insert(builtins.maybe, vec![builtins.just, builtins.nothing]);
+        enum_variants.insert(builtins.result, vec![builtins.ok, builtins.err]);
+        ctor_arity.insert(builtins.just, 1);
+        ctor_arity.insert(builtins.nothing, 0);
+        ctor_arity.insert(builtins.ok, 1);
+        ctor_arity.insert(builtins.err, 1);
 
         Self {
             m,
@@ -664,6 +723,25 @@ impl<'a> Lowerer<'a> {
                 "Bool" => Ok(IrType::Bool),
                 "String" => Ok(IrType::Str),
                 "Char" => Ok(IrType::Char),
+                // The built-in `Maybe a` / `Result e a` map to dedicated IR
+                // types, ahead of the user-enum lookup.
+                "Maybe" if args.len() == 1 => {
+                    let elem =
+                        self.ir_type_from_canon(args.first().ok_or_else(maybe_arg_bug)?, generics)?;
+                    Ok(IrType::Maybe(Box::new(elem)))
+                }
+                "Result" if args.len() == 2 => {
+                    let err = self
+                        .ir_type_from_canon(args.first().ok_or_else(result_arg_bug)?, generics)?;
+                    let ok =
+                        self.ir_type_from_canon(args.get(1).ok_or_else(result_arg_bug)?, generics)?;
+                    Ok(IrType::Result(Box::new(err), Box::new(ok)))
+                }
+                "List" if args.len() == 1 => {
+                    let elem =
+                        self.ir_type_from_canon(args.first().ok_or_else(list_arg_bug)?, generics)?;
+                    Ok(IrType::List(Box::new(elem)))
+                }
                 _ if self.enum_variants.contains_key(name) => {
                     let mut ir_args = Vec::with_capacity(args.len());
                     for a in args {
@@ -816,6 +894,41 @@ impl<'a> Lowerer<'a> {
     /// Convert a solved [`Ty`] (used for the return type of untyped bindings,
     /// e.g. `main : Task ()`) into an [`IrType`]. `span` blames the binding when
     /// the inferred type is a shape M0 does not model yet.
+    /// Lower a list literal `[]` / `[a, b, c]`. The element [`IrType`] comes from
+    /// the expression's solved region type (`List elem`), so the backend can
+    /// render an empty list as a typed `Vec::<T>::new()`; the items lower
+    /// element-wise.
+    fn lower_list(&self, elems: &[canon::Expr], span: Span) -> DResult<Expr> {
+        let elem = self.list_elem_ir(span)?;
+        let items = elems
+            .iter()
+            .map(|e| self.lower_expr(e))
+            .collect::<DResult<Vec<_>>>()?;
+        Ok(Expr::List { elem, items })
+    }
+
+    /// The element [`IrType`] of a list expression at `span`, read from its
+    /// solved region type (`List elem`). A missing region or a non-list type is
+    /// an internal invariant violation (the constraint generator pins every list
+    /// expression to a `List` type), surfaced as a [`bug`] rather than guessed.
+    fn list_elem_ir(&self, span: Span) -> DResult<IrType> {
+        let ty = self.types.regions.get(&span).ok_or_else(|| {
+            bug(
+                "sky_lower::list_elem_ir",
+                "no inferred type for a list literal",
+            )
+        })?;
+        match ty {
+            Ty::Con { name, args, .. } if self.resolve(*name)? == "List" && args.len() == 1 => {
+                self.ir_type_from_ty(args.first().ok_or_else(list_arg_bug)?, span)
+            }
+            _ => Err(bug(
+                "sky_lower::list_elem_ir",
+                "list literal's region type is not a `List`",
+            )),
+        }
+    }
+
     fn ir_type_from_ty(&self, t: &Ty, span: Span) -> DResult<IrType> {
         match t {
             Ty::Unit => Ok(IrType::Unit),
@@ -835,6 +948,25 @@ impl<'a> Lowerer<'a> {
                 // A `Task` carrying a non-unit result (`Task Int`); M0 models
                 // only `Task ()`. [SKY-L0104, feature: task-results]
                 "Task" => Err(unsupported(span, Feature::TaskResults)),
+                // The built-in `Maybe a` / `Result e a` map to dedicated IR
+                // types (the runtime's `SkyMaybe` / `SkyResult`); they are not
+                // user `type` declarations, so they precede the enum lookup.
+                "Maybe" if args.len() == 1 => {
+                    let elem =
+                        self.ir_type_from_ty(args.first().ok_or_else(maybe_arg_bug)?, span)?;
+                    Ok(IrType::Maybe(Box::new(elem)))
+                }
+                "Result" if args.len() == 2 => {
+                    let err =
+                        self.ir_type_from_ty(args.first().ok_or_else(result_arg_bug)?, span)?;
+                    let ok = self.ir_type_from_ty(args.get(1).ok_or_else(result_arg_bug)?, span)?;
+                    Ok(IrType::Result(Box::new(err), Box::new(ok)))
+                }
+                "List" if args.len() == 1 => {
+                    let elem =
+                        self.ir_type_from_ty(args.first().ok_or_else(list_arg_bug)?, span)?;
+                    Ok(IrType::List(Box::new(elem)))
+                }
                 _ if self.enum_variants.contains_key(name) => {
                     // A use-site enum type carries its solved type arguments, so
                     // `Opt Int` → `Enum { Opt, [Int] }` (rendered `MainOpt<i64>`).
@@ -962,6 +1094,14 @@ impl<'a> Lowerer<'a> {
             canon::Expr_::VarCtor {
                 type_name, name, ..
             } => {
+                // `True` / `False` are the Prelude-exposed nullary constructors of
+                // the built-in `Bool`; they lower to the IR boolean literal
+                // (rendered as Rust `true` / `false`), not an enum construction.
+                match self.resolve(*name)? {
+                    "True" => return Ok(Expr::Bool(true)),
+                    "False" => return Ok(Expr::Bool(false)),
+                    _ => {}
+                }
                 // A bare constructor reference. A nullary constructor is its own
                 // zero-payload value (`Nothing`, `Leaf`); a payload constructor
                 // referenced without arguments is a constructor-as-function value,
@@ -1012,6 +1152,11 @@ impl<'a> Lowerer<'a> {
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Expr::Tuple(elems))
             }
+            canon::Expr_::List(elems) => self.lower_list(elems, e.span),
+            canon::Expr_::Cons(head, tail) => Ok(Expr::Cons {
+                head: Box::new(self.lower_expr(head)?),
+                tail: Box::new(self.lower_expr(tail)?),
+            }),
             canon::Expr_::Record(fields) => {
                 // A record literal lowers field-wise. The IR carries fields in
                 // field-NAME order (the backend names struct-literal fields, so
@@ -1499,6 +1644,11 @@ impl<'a> Lowerer<'a> {
             // payload field's record type threaded here to recover the complete
             // field set; not yet plumbed. [SKY-L0112]
             canon::Pattern_::PRecord(_) => Err(unsupported(p.span, Feature::NestedPayloadPatterns)),
+            // List / cons sub-patterns carry no Rust `match`-over-`Vec` lowering
+            // yet — fail-closed (SKY-L0116) rather than mis-lowered.
+            canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => {
+                Err(unsupported(p.span, Feature::NestedCtorDiscrimination))
+            }
         }
     }
 
@@ -1540,6 +1690,11 @@ impl<'a> Lowerer<'a> {
             // top-level record binder is supported (via `lower_binder_pat`).
             // [SKY-L0112]
             canon::Pattern_::PRecord(_) => Err(unsupported(p.span, Feature::NestedPayloadPatterns)),
+            // List / cons elements are refutable AND have no `Vec` match lowering
+            // yet — fail-closed (SKY-L0116).
+            canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => {
+                Err(unsupported(p.span, Feature::NestedCtorDiscrimination))
+            }
         }
     }
 
@@ -1760,6 +1915,11 @@ impl<'a> Lowerer<'a> {
             }
             canon::Pattern_::PTuple(_) | canon::Pattern_::PRecord(_) => {
                 Err(unsupported(p.span, Feature::TuplePatternMatch))
+            }
+            // List / cons case-arm patterns have no `Vec` match lowering yet —
+            // fail-closed (SKY-L0116) rather than emitting unsound Rust.
+            canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => {
+                Err(unsupported(p.span, Feature::NestedCtorDiscrimination))
             }
         }
     }

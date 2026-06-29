@@ -40,6 +40,14 @@ pub enum Tok {
     RParen,
     LBrace,
     RBrace,
+    /// `[` — opens a list literal `[a, b, c]` or a list pattern.
+    LBracket,
+    /// `]` — closes a list literal / pattern.
+    RBracket,
+    /// `::` — the right-associative list cons operator (`x :: xs`) and the cons
+    /// pattern head. Lexed as ONE token (a maximal munch of `:`), never two
+    /// adjacent [`Tok::Colon`].
+    ColonColon,
     Equals,
     Pipe,
     Colon,
@@ -528,7 +536,11 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
         ')' => one_char(lx, Tok::RParen),
         '{' => one_char(lx, Tok::LBrace),
         '}' => one_char(lx, Tok::RBrace),
-        ':' => one_char(lx, Tok::Colon),
+        '[' => one_char(lx, Tok::LBracket),
+        ']' => one_char(lx, Tok::RBracket),
+        // `::` (list cons) is a maximal munch of `:`; a lone `:` is the type
+        // annotation colon.
+        ':' => one_or_two(lx, ':', Tok::ColonColon, Tok::Colon),
         '\\' => one_char(lx, Tok::Backslash),
         ',' => one_char(lx, Tok::Comma),
         '+' => one_or_two(lx, '+', Tok::PlusPlus, Tok::Plus),

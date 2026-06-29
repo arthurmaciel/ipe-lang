@@ -88,6 +88,17 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
                 format!("{base}<{}>", parts.join(", "))
             }
         }
+        // The built-in `Maybe a` / `Result e a` render to the runtime's shared
+        // representations, brought into scope by the emitted crate's
+        // `pub use sky_runtime::*`.
+        IrType::Maybe(elem) => format!("SkyMaybe<{}>", render_type(ctx, elem, generics)?),
+        IrType::Result(err, ok) => format!(
+            "SkyResult<{}, {}>",
+            render_type(ctx, err, generics)?,
+            render_type(ctx, ok, generics)?
+        ),
+        // The built-in `List a` is the runtime's `Vec<T>`.
+        IrType::List(elem) => format!("Vec<{}>", render_type(ctx, elem, generics)?),
         IrType::Tuple(elems) => {
             let mut parts = Vec::with_capacity(elems.len());
             for elem in elems {

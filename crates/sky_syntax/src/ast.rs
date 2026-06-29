@@ -186,6 +186,12 @@ pub enum Expr_ {
     /// the parser). Mirrors the Haskell compiler's `Src.Tuple e1 e2 [rest]`,
     /// flattened to one vector here.
     Tuple(Vec<Expr>),
+    /// A list literal `[]` / `[a, b, c]`. Elements are in source order; the empty
+    /// list carries an empty vector. The cons operator `::` is NOT a `List` node —
+    /// it flows through [`Expr_::Binops`] like the other right-associative
+    /// operators and is re-associated at canonicalisation. Mirrors the Haskell
+    /// compiler's `Src.List`.
+    List(Vec<Expr>),
     /// A record literal `{ field = expr, ... }`. Fields are `(name, value)`
     /// pairs in source order; the field name is a located lowercase identifier.
     /// Mirrors the Haskell compiler's `Src.Record`, narrowed to the closed-record
@@ -264,6 +270,14 @@ pub enum Pattern_ {
     /// binds the whole matched value to `name`. Mirrors the Haskell compiler's
     /// `Src.PAlias Pattern (A.Located String)`.
     PAlias(Box<Pattern>, Located<Symbol>),
+    /// A list pattern `[]` / `[a, b, c]` (M4a). The empty list is the nil cover;
+    /// a fixed-length `[a, b]` matches a list of exactly that length. Mirrors the
+    /// Haskell compiler's `Src.PList`.
+    PList(Vec<Pattern>),
+    /// A cons pattern `head :: tail` (M4a) — the right-associative list
+    /// deconstruction. `(x :: xs)` binds the first element to `head` and the rest
+    /// to `tail`. Mirrors the Haskell compiler's `Src.PCons`.
+    PCons(Box<Pattern>, Box<Pattern>),
 }
 
 /// Type-annotation node (M0 subset).

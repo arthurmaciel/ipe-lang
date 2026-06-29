@@ -153,6 +153,13 @@ pub enum Expr_ {
     /// single expression was unwrapped by the parser). Every element is resolved
     /// against the same enclosing scope — a tuple introduces no bindings.
     Tuple(Vec<Expr>),
+    /// A list literal `[]` / `[a, b, c]`. Elements are resolved in source order;
+    /// the empty list carries an empty vector. Introduces no bindings.
+    List(Vec<Expr>),
+    /// A cons `head :: tail` — the right-associative list-prepend. `head` is an
+    /// element; `tail` is a list. The parser's `::` operator chain is
+    /// re-associated to this node at canonicalisation.
+    Cons(Box<Expr>, Box<Expr>),
     /// A record literal `{ field = value, ... }`. Fields are `(name, value)`
     /// pairs; the name is a label (not a resolvable reference), the value is
     /// resolved against the enclosing scope. A record introduces no bindings.
@@ -228,6 +235,11 @@ pub enum Pattern_ {
     /// An alias / `as` pattern `inner as name` (M3b-3): matches `inner` and also
     /// binds the whole matched value to `name`.
     PAlias(Box<Pattern>, Located<Symbol>),
+    /// A list pattern `[]` / `[a, b, c]` (M4a). The empty list is the nil cover;
+    /// a fixed-length list matches exactly that many elements.
+    PList(Vec<Pattern>),
+    /// A cons pattern `head :: tail` (M4a) — binds the first element and the rest.
+    PCons(Box<Pattern>, Box<Pattern>),
 }
 
 /// Canonical type (M0 subset). Mirrors `Can.Type` narrowed to arrows, type

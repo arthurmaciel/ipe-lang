@@ -1,0 +1,10 @@
+module Main exposing (main)
+
+unwrap : Maybe Int -> Int
+unwrap m =
+    case m of
+        Just n -> n
+        Nothing -> 0
+
+main =
+    println (String.fromInt (unwrap (Just 42)))

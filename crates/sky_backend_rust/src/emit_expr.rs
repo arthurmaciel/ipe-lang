@@ -149,6 +149,8 @@ fn emit_expr_at(
                 _ => format!("{c:?}"),
             })
         }
+        // A boolean value renders as the Rust keyword constant.
+        Expr::Bool(b) => Ok(if *b { "true" } else { "false" }.to_owned()),
         // The unit value renders as the Rust unit expression `()`.
         Expr::Unit => Ok("()".to_owned()),
         Expr::Var(sym) => ctx.emit_ident(*sym),
@@ -219,6 +221,13 @@ fn emit_expr_at(
             }
             Ok(format!("({})", parts.join(", ")))
         }
+        Expr::List { elem, items } => emit_list(ctx, elem, items, indent, depth, generics),
+        Expr::Cons { head, tail } => {
+            // `head :: tail` renders through the runtime's move-only list prepend.
+            let h = emit_expr_at(ctx, head, indent, child, generics)?;
+            let t = emit_expr_at(ctx, tail, indent, child, generics)?;
+            Ok(format!("sky_runtime::list::sky_list_cons({h}, {t})"))
+        }
         // The record arms own several `Vec`/`String` locals; keeping their
         // bodies in dedicated functions (not inlined into this match) holds
         // `emit_expr_at`'s own stack frame small, so the depth guard — not a
@@ -244,6 +253,32 @@ fn emit_expr_at(
     }
 }
 
+/// Emit a list literal. A non-empty list renders as `vec![e0, e1, …]`; the empty
+/// list as a typed `Vec::<T>::new()` so its element type is never ambiguous (a
+/// bare `vec![]` could fail to infer in a polymorphic position). Kept out of the
+/// `emit_expr_at` match (`#[inline(never)]`) so its locals don't inflate the
+/// recursive frame.
+#[inline(never)]
+fn emit_list(
+    ctx: &EmitCtx,
+    elem: &IrType,
+    items: &[Expr],
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+) -> DResult<String> {
+    let child = depth + 1;
+    if items.is_empty() {
+        let ty = render_type(ctx, elem, generics)?;
+        return Ok(format!("Vec::<{ty}>::new()"));
+    }
+    let mut parts = Vec::with_capacity(items.len());
+    for item in items {
+        parts.push(emit_expr_at(ctx, item, indent, child, generics)?);
+    }
+    Ok(format!("vec![{}]", parts.join(", ")))
+}
+
 /// Emit a constructor application. A nullary constructor renders as the bare
 /// path `EnumName::Variant` (byte-identical to M0); a payload constructor renders
 /// `EnumName::Variant(arg0, arg1, …)`. A payload position on a type-size cycle
@@ -262,6 +297,20 @@ fn emit_ctor(
     generics: GenericScope,
 ) -> DResult<String> {
     let child = depth + 1;
+    // A built-in `Maybe` / `Result` constructor routes to the runtime enum
+    // (`SkyMaybe::Just(..)`, `SkyResult::Err(..)`); its payload is never a
+    // self-recursive user field, so no field-boxing lookup applies.
+    if let Some(runtime) = ctx.builtin_runtime_enum(ty) {
+        let path = format!("{runtime}::{}", ctx.emit_ident(variant)?);
+        if args.is_empty() {
+            return Ok(path);
+        }
+        let mut parts = Vec::with_capacity(args.len());
+        for arg in args {
+            parts.push(emit_expr_at(ctx, arg, indent, child, generics)?);
+        }
+        return Ok(format!("{path}({})", parts.join(", ")));
+    }
     let path = format!("{}::{}", ctx.enum_name(ty)?, ctx.emit_ident(variant)?);
     if args.is_empty() {
         return Ok(path);
@@ -367,6 +416,19 @@ fn emit_ctor_arm_pat(
     variant: Symbol,
     args: &[Pat],
 ) -> DResult<(String, String)> {
+    // A built-in `Maybe` / `Result` pattern matches the runtime enum; its
+    // payload is never a boxed self-edge field, so no unbox prelude is needed.
+    if let Some(runtime) = ctx.builtin_runtime_enum(ty) {
+        let path = format!("{runtime}::{}", ctx.emit_ident(variant)?);
+        if args.is_empty() {
+            return Ok((path, String::new()));
+        }
+        let mut sub_pats = Vec::with_capacity(args.len());
+        for sub in args {
+            sub_pats.push(render_pat(ctx, sub)?);
+        }
+        return Ok((format!("{path}({})", sub_pats.join(", ")), String::new()));
+    }
     let path = format!("{}::{}", ctx.enum_name(ty)?, ctx.emit_ident(variant)?);
     if args.is_empty() {
         return Ok((path, String::new()));
@@ -505,7 +567,12 @@ fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
             Ok(format!("({})", subs.join(", ")))
         }
         Pat::Ctor { ty, variant, args } => {
-            let path = format!("{}::{}", ctx.enum_name(*ty)?, ctx.emit_ident(*variant)?);
+            // A built-in `Maybe` / `Result` pattern routes to the runtime enum
+            // path; otherwise it is a user enum resolved by `enum_name`.
+            let path = match ctx.builtin_runtime_enum(*ty) {
+                Some(runtime) => format!("{runtime}::{}", ctx.emit_ident(*variant)?),
+                None => format!("{}::{}", ctx.enum_name(*ty)?, ctx.emit_ident(*variant)?),
+            };
             if args.is_empty() {
                 Ok(path)
             } else {

@@ -1,0 +1,10 @@
+module Main exposing (main)
+
+describe : Result String Int -> Int
+describe r =
+    case r of
+        Ok n -> n
+        Err _ -> 0
+
+main =
+    println (String.fromInt (describe (Ok 7)))

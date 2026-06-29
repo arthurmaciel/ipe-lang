@@ -58,8 +58,47 @@ impl Env {
             ..Self::default()
         };
         env.install_builtin_vars(interner)?;
+        env.install_builtin_ctors(interner)?;
         env.install_prelude_qualifiers(interner)?;
         Ok(env)
+    }
+
+    /// Register the Prelude-exposed built-in constructors so `Just` / `Nothing` /
+    /// `Ok` / `Err` / `True` / `False` resolve as constructors — both as value
+    /// expressions and in `case` patterns — without an explicit import. These
+    /// belong to the built-in `Maybe a` / `Result e a` / `Bool` types, which have
+    /// no user `type` declaration; `home` is left empty (matching how the builtin
+    /// type names carry no user module) and `type_name` is the built-in type's
+    /// symbol so downstream stages recognise it by name.
+    ///
+    /// # Errors
+    /// [`sky_diagnostics::Diagnostic::CompilerBug`] if the interner is exhausted.
+    fn install_builtin_ctors(&mut self, interner: &mut Interner) -> DResult<()> {
+        let maybe = interner.intern("Maybe")?;
+        let result = interner.intern("Result")?;
+        let bool_ = interner.intern("Bool")?;
+        // (constructor name, owning built-in type, index within the type, arity).
+        for (name, type_name, index, arity) in [
+            ("True", bool_, 0, 0),
+            ("False", bool_, 1, 0),
+            ("Just", maybe, 0, 1),
+            ("Nothing", maybe, 1, 0),
+            ("Ok", result, 0, 1),
+            ("Err", result, 1, 1),
+        ] {
+            let name = interner.intern(name)?;
+            self.ctors.insert(
+                name,
+                CtorHome {
+                    home: Vec::new(),
+                    type_name,
+                    name,
+                    index,
+                    arity,
+                },
+            );
+        }
+        Ok(())
     }
 
     /// Bind a name as a local (function parameter / `case` binding).

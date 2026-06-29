@@ -299,6 +299,19 @@ pub enum IrType {
         name: Symbol,
         args: Vec<Self>,
     },
+    /// The built-in `Maybe a` type, carrying its element type. Renders as the
+    /// runtime's `SkyMaybe<T>`. Distinct from a user [`IrType::Enum`] so the
+    /// backend maps it to the shared runtime representation (and the type
+    /// checker / lowerer never need a synthetic `type Maybe a = …` declaration).
+    Maybe(Box<Self>),
+    /// The built-in `Result e a` type, carrying its error type then its success
+    /// type (Sky's `Result e a` argument order). Renders as the runtime's
+    /// `SkyResult<E, A>`.
+    Result(Box<Self>, Box<Self>),
+    /// The built-in `List a` type, carrying its element type. Renders as the
+    /// runtime's `Vec<T>` (the representation the Rust runtime's list kernels
+    /// operate over).
+    List(Box<Self>),
     /// An anonymous product type `(T1, T2, ...)`.
     ///
     /// Invariant: the element list has arity ≥ 2. A 0-tuple is [`IrType::Unit`]
@@ -362,6 +375,11 @@ pub enum IrType {
 #[derive(Clone, PartialEq, Debug)]
 pub enum Expr {
     Int(i64),
+    /// A boolean literal `True` / `False` used as a VALUE. Sky's `Bool` is the
+    /// closed two-constructor type whose constructors are Prelude-exposed; the
+    /// backend renders this as the Rust `true` / `false` keyword constant. (A
+    /// `Bool` PATTERN is the separate [`Pat::Bool`] leaf.)
+    Bool(bool),
     /// A floating-point literal — the carried [`f64`] is the parsed value. The
     /// backend renders it as an f64-typed Rust literal (a whole-number value
     /// keeps its decimal point, `3.0`, so it never types as an integer).
@@ -442,6 +460,20 @@ pub enum Expr {
     /// upholds this; the backend remains total over any vector (it never panics
     /// on a degenerate arity).
     Tuple(Vec<Self>),
+    /// A list literal `[]` / `[e1, e2, …]`. `elem` is the element [`IrType`]
+    /// (recorded so the empty list renders with a concrete `Vec::<T>::new()`);
+    /// `items` are the element expressions in source order. Renders as a Rust
+    /// `vec![…]` (or a typed `Vec::new()` when empty).
+    List {
+        elem: IrType,
+        items: Vec<Self>,
+    },
+    /// A cons `head :: tail` — prepend one element to a list. Renders through the
+    /// runtime's `sky_list_cons(head, tail)`, the move-only list prepend.
+    Cons {
+        head: Box<Self>,
+        tail: Box<Self>,
+    },
     /// A record literal `{ x = e1, y = e2, ... }`.
     ///
     /// The fields are carried as `(field name, value)` pairs sorted by field
