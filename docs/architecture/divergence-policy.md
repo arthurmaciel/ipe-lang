@@ -118,6 +118,29 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   Sky-Rust; Sky/Go aliases Bytes = String — programs using Sky.Core.Bytes produce
   different output under the Go oracle`.
 
+- **`Encoding.base64Encode` / `Encoding.hexEncode` over non-ASCII text — Latin-1
+  char-as-byte vs Go's UTF-8 string bytes (M4f).** Sky's `Encoding.*` operate on
+  the `Bytes = String` surface. Go's `string` is an arbitrary UTF-8 byte
+  sequence, so Go encodes the UTF-8 bytes of the source text (`hexEncode "café" →
+  "636166c3a9"`). Rust's `String` is UTF-8-constrained, so the runtime models the
+  String-as-bytes surface with a Latin-1 char-as-byte convention (one codepoint
+  U+0000..U+00FF → one byte) — chosen because the binary pipeline (email
+  attachments with bytes ≥ 0x80, compression, WebSocket frames, the
+  `base64(hexDecode(hmac))` JWT-signature path) must round-trip raw bytes
+  losslessly through a Rust `String`. Hence `hexEncode "café" → "636166e9"` in
+  Sky-Rust. **ASCII input is byte-identical to Go** (every codepoint < 0x80 maps
+  one byte either way); only codepoints ≥ 0x80 diverge. Recorded as `divergence:
+  Encoding.base64Encode/hexEncode over non-ASCII text … Latin-1 char-as-byte …`
+  (golden `m4f_encoding_nonascii_divergence`). Rationale: Rust String UTF-8
+  invariant + lossless binary byte-pipeline.
+  **Tracked follow-up (post-M4f, not deferred silently):** migrate the
+  `Encoding.*` String-taking kernels and their runtime callers (`email.rs`,
+  `compression.rs`, `ws_client.rs`, `server.rs`) onto the `Bytes`(`Vec<u8>`)
+  primitive so the text path can UTF-8-encode (matching Go) while the binary path
+  stays lossless via `Bytes`, converging on `base64Encode s == Bytes.toBase64
+  (Bytes.fromString s)`. Doing so today would corrupt the existing Latin-1 binary
+  callers, so it is its own milestone, recorded here rather than left implicit.
+
 ## How to add a marker divergence (`divergence:` or `sanctioned:`)
 
 1. Decide the tag. `sanctioned:` — Sky-Rust is genuinely more correct
