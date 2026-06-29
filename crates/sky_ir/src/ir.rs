@@ -559,6 +559,92 @@ pub enum KernelFn {
     /// `String.fromFloat : Float -> String` — the float counterpart of
     /// [`KernelFn::StringFromInt`]; renders an `f64` to its decimal text.
     StringFromFloat,
+    // ── String kernels — arity 1 ─────────────────────────────────────────────
+    /// `String.length : String -> Int` — Unicode rune count.
+    StringLength,
+    /// `String.isEmpty : String -> Bool`.
+    StringIsEmpty,
+    /// `String.reverse : String -> String`.
+    StringReverse,
+    /// `String.toUpper : String -> String`.
+    StringToUpper,
+    /// `String.toLower : String -> String`.
+    StringToLower,
+    /// `String.casefold : String -> String` — Unicode case-fold for locale-neutral comparison.
+    StringCasefold,
+    /// `String.trim : String -> String` — remove leading and trailing whitespace.
+    StringTrim,
+    /// `String.trimStart : String -> String` — remove leading whitespace.
+    StringTrimStart,
+    /// `String.trimEnd : String -> String` — remove trailing whitespace.
+    StringTrimEnd,
+    /// `String.toInt : String -> Maybe Int`.
+    StringToInt,
+    /// `String.toFloat : String -> Maybe Float`.
+    StringToFloat,
+    /// `String.fromChar : Char -> String`.
+    StringFromChar,
+    /// `String.fromList : List Char -> String`.
+    StringFromList,
+    /// `String.concat : List String -> String`.
+    StringConcat,
+    /// `String.words : String -> List String`.
+    StringWords,
+    /// `String.lines : String -> List String`.
+    StringLines,
+    /// `String.toList : String -> List Char`.
+    StringToList,
+    /// `String.isEmail : String -> Bool`.
+    StringIsEmail,
+    /// `String.isUrl : String -> Bool`.
+    StringIsUrl,
+    // ── String kernels — arity 2 ─────────────────────────────────────────────
+    /// `String.append : String -> String -> String`.
+    StringAppend,
+    /// `String.contains : String -> String -> Bool` — `contains sub haystack`.
+    StringContains,
+    /// `String.startsWith : String -> String -> Bool` — `startsWith prefix s`.
+    StringStartsWith,
+    /// `String.endsWith : String -> String -> Bool` — `endsWith suffix s`.
+    StringEndsWith,
+    /// `String.equalFold : String -> String -> Bool` — case-insensitive equality.
+    StringEqualFold,
+    /// `String.join : String -> List String -> String`.
+    StringJoin,
+    /// `String.split : String -> String -> List String` — `split sep s`.
+    StringSplit,
+    /// `String.repeat : Int -> String -> String`.
+    StringRepeat,
+    /// `String.dropLeft : Int -> String -> String` — rune-based.
+    StringDropLeft,
+    /// `String.dropRight : Int -> String -> String` — rune-based.
+    StringDropRight,
+    // ── String kernels — arity 3 ─────────────────────────────────────────────
+    /// `String.replace : String -> String -> String -> String` — `replace old new s`.
+    StringReplace,
+    /// `String.slice : Int -> Int -> String -> String` — rune-indexed.
+    StringSlice,
+    /// `String.padLeft : Int -> Char -> String -> String`.
+    StringPadLeft,
+    /// `String.padRight : Int -> Char -> String -> String`.
+    StringPadRight,
+    // ── Char kernels — arity 1 ──────────────────────────────────────────────
+    /// `Char.isAlpha : Char -> Bool`.
+    CharIsAlpha,
+    /// `Char.isDigit : Char -> Bool`.
+    CharIsDigit,
+    /// `Char.isLower : Char -> Bool`.
+    CharIsLower,
+    /// `Char.isUpper : Char -> Bool`.
+    CharIsUpper,
+    /// `Char.toLower : Char -> String`.
+    CharToLower,
+    /// `Char.toUpper : Char -> String`.
+    CharToUpper,
+    /// `Char.toCode : Char -> Int`.
+    CharToCode,
+    /// `Char.fromCode : Int -> Char`.
+    CharFromCode,
     LogPrintln,
     /// `List.map : (a -> b) -> List a -> List b`.
     ListMap,
