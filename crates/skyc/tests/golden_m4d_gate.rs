@@ -109,12 +109,13 @@ fn dict_float_key_is_sky_l0117() {
     );
 }
 
-// ── Float Set via INFERENCE (no annotation) → SKY-L0117 ───────────────────────
+// ── Float Set / Dict via INFERENCE (no annotation) → SKY-L0117 ───────────────
 //
-// The fixtures above carry a `: Set Float` / `: Dict Float v` annotation, which
-// drives the shape gate in `ir_type_from_ty`. A Set produced purely by inference
-// never drives that conversion, so its own region type is the only place `Float`
-// surfaces — these fixtures exercise that inference path.
+// The annotated fixtures above carry a `: Set Float` / `: Dict Float v`
+// annotation, which drives the shape gate in `ir_type_from_ty`. A Set or Dict
+// produced purely by inference never drives that conversion; their own call-site
+// region type is the only place `Float` surfaces — these fixtures exercise that
+// inference path.
 
 /// Inline, unannotated `Set.fromList [1.5, 2.5]` — the producing call's region
 /// type (`Set Float`) is the only carrier of the `Float` element.
@@ -146,6 +147,50 @@ fn set_float_mapped_is_sky_l0117() {
     assert_gate(
         "m4d_set_float_mapped_gate",
         "m4d_set_float_mapped_gate_emit",
+        sky_diagnostics::SKY_L0117,
+    );
+}
+
+/// `Set.insert 1.5 Set.empty` — a float element introduced via `Set.insert`,
+/// no annotation, type fixed entirely by inference.
+#[test]
+fn set_float_insert_is_sky_l0117() {
+    assert_gate(
+        "m4d_set_float_insert_gate",
+        "m4d_set_float_insert_gate_emit",
+        sky_diagnostics::SKY_L0117,
+    );
+}
+
+/// Inline, unannotated `Dict.fromList [(1.0, "a")]` — the producing call's
+/// region type (`Dict Float String`) is the only carrier of the `Float` key.
+#[test]
+fn dict_float_inline_is_sky_l0117() {
+    assert_gate(
+        "m4d_dict_float_inline_gate",
+        "m4d_dict_float_inline_gate_emit",
+        sky_diagnostics::SKY_L0117,
+    );
+}
+
+/// `let d = Dict.fromList [(1.5, "cheap")]` — a `let`-bound float Dict with no
+/// annotation on the binding.
+#[test]
+fn dict_float_let_is_sky_l0117() {
+    assert_gate(
+        "m4d_dict_float_let_gate",
+        "m4d_dict_float_let_gate_emit",
+        sky_diagnostics::SKY_L0117,
+    );
+}
+
+/// `Dict.insert 1.5 "hello" Dict.empty` — a float key introduced via
+/// `Dict.insert`, no annotation, type fixed entirely by inference.
+#[test]
+fn dict_float_insert_is_sky_l0117() {
+    assert_gate(
+        "m4d_dict_float_insert_gate",
+        "m4d_dict_float_insert_gate_emit",
         sky_diagnostics::SKY_L0117,
     );
 }
