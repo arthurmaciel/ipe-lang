@@ -1,0 +1,33 @@
+module Main exposing (main)
+
+import Sky.Core.Encoding as Encoding
+
+-- Go url.QueryEscape leaves the ASCII unreserved set (A-Za-z0-9 plus the four
+-- marks `-` `_` `.` `~`) verbatim, while `+` and `@` ARE escaped (%2B / %40).
+-- This pins urlEncode/urlDecode parity over both shapes.
+--   urlEncode "a-b_c.d~e"             = "a-b_c.d~e"
+--   urlEncode "user+name@example.com" = "user%2Bname%40example.com"
+-- Decode side uses the known constants to avoid moving `slug`/`email` twice.
+main =
+    let
+        slug = Encoding.urlEncode "a-b_c.d~e"
+
+        email = Encoding.urlEncode "user+name@example.com"
+
+        slugBack =
+            case Encoding.urlDecode "a-b_c.d~e" of
+                Ok v ->
+                    v
+
+                Err _ ->
+                    "error"
+
+        emailBack =
+            case Encoding.urlDecode "user%2Bname%40example.com" of
+                Ok v ->
+                    v
+
+                Err _ ->
+                    "error"
+    in
+    println (String.join " " [ slug, email, slugBack, emailBack ])
