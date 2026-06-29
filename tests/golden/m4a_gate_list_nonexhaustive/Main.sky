@@ -1,0 +1,9 @@
+module Main exposing (main)
+
+firstOr0 : List Int -> Int
+firstOr0 xs =
+    case xs of
+        x :: rest -> x
+
+main =
+    println (String.fromInt (firstOr0 [1, 2, 3]))

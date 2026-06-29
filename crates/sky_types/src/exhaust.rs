@@ -114,8 +114,12 @@ impl Sigs {
         match head {
             Head::Tuple(n) => *n,
             Head::Adt(c) => self.ctor_arity.get(c).copied().unwrap_or(0),
-            // Literal heads carry no sub-patterns.
-            Head::Bool(_) | Head::Int(_) | Head::Char(_) | Head::Str(_) => 0,
+            // Literal heads carry no sub-patterns; the empty-list `[]` (`Nil`) is
+            // likewise nullary.
+            Head::Bool(_) | Head::Int(_) | Head::Char(_) | Head::Str(_) | Head::Nil => 0,
+            // The cons constructor `head :: tail` carries the head element and the
+            // tail list.
+            Head::Cons => 2,
         }
     }
 }
@@ -137,6 +141,13 @@ enum Head {
     Char(String),
     /// A string literal head. OPEN, like [`Head::Int`].
     Str(String),
+    /// The empty-list constructor `[]` (arity 0). `List` is the CLOSED
+    /// two-constructor type `Nil | Cons`, so a [`Head::Nil`] + [`Head::Cons`]
+    /// pair completes its signature.
+    Nil,
+    /// The cons constructor `head :: tail` (arity 2: the head element and the
+    /// tail list).
+    Cons,
 }
 
 /// A pattern abstracted for the usefulness algorithm: either a wildcard (which
@@ -172,11 +183,21 @@ fn to_upat(p: &canon::Pattern_) -> UPat {
         // An alias is transparent for coverage — it matches exactly what its
         // inner pattern matches.
         canon::Pattern_::PAlias(inner, _) => to_upat(&inner.value),
-        // List / cons patterns: a `case` containing one is excluded from the
-        // usefulness walk by [`pattern_uses_unknown_ctor`] (list-pattern lowering
-        // is a fail-closed gap, so no unsound code is emitted), so this arm is not
-        // reached in practice; it abstracts to a wildcard to stay total.
-        canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => UPat::Wild,
+        // `List` is the closed two-constructor type `Nil | Cons`. A cons pattern
+        // `head :: tail` abstracts to a [`Head::Cons`] over its two sub-patterns;
+        // a list literal `[a, b, c]` desugars to the right-nested cons spine
+        // `a :: b :: c :: []` so its coverage (and a missing-case witness) is
+        // judged with the SAME `Nil | Cons` signature.
+        canon::Pattern_::PCons(head, tail) => {
+            UPat::Ctor(Head::Cons, vec![to_upat(&head.value), to_upat(&tail.value)])
+        }
+        canon::Pattern_::PList(elems) => {
+            let mut acc = UPat::Ctor(Head::Nil, Vec::new());
+            for e in elems.iter().rev() {
+                acc = UPat::Ctor(Head::Cons, vec![to_upat(&e.value), acc]);
+            }
+            acc
+        }
     }
 }
 
@@ -208,9 +229,16 @@ fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
             .iter()
             .any(|e| pattern_uses_unknown_ctor(&e.value, sigs)),
         canon::Pattern_::PAlias(inner, _) => pattern_uses_unknown_ctor(&inner.value, sigs),
-        // List / cons patterns are gated at lowering; exclude their `case` from
-        // the coverage walk (sound — no code is emitted for a gated feature).
-        canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => true,
+        // List / cons patterns are over the built-in closed `Nil | Cons` type —
+        // analysable here. Their element / tail sub-patterns recurse (a nested
+        // unknown constructor still excludes the `case`).
+        canon::Pattern_::PCons(head, tail) => {
+            pattern_uses_unknown_ctor(&head.value, sigs)
+                || pattern_uses_unknown_ctor(&tail.value, sigs)
+        }
+        canon::Pattern_::PList(elems) => elems
+            .iter()
+            .any(|e| pattern_uses_unknown_ctor(&e.value, sigs)),
     }
 }
 
@@ -526,6 +554,17 @@ fn complete_signature(roots: &[Head], sigs: &Sigs) -> Option<Vec<(Head, usize)>>
         // Int / Char / String are OPEN — a finite set of literals never covers
         // the type, so the signature is never complete (a wildcard is required).
         Head::Int(_) | Head::Char(_) | Head::Str(_) => None,
+        // `List` is closed: the signature is complete once BOTH `[]` (`Nil`) and
+        // `_ :: _` (`Cons`) appear in the column.
+        Head::Nil | Head::Cons => {
+            let has_nil = roots.contains(&Head::Nil);
+            let has_cons = roots.contains(&Head::Cons);
+            if has_nil && has_cons {
+                Some(vec![(Head::Nil, 0), (Head::Cons, 2)])
+            } else {
+                None
+            }
+        }
         Head::Adt(c) => {
             let union = sigs.ctor_to_union.get(c)?;
             let all = sigs.union_ctors.get(union)?;
@@ -593,6 +632,21 @@ fn missing_heads(roots: &[Head], sigs: &Sigs) -> Vec<UPat> {
             }
             out
         }
+        // A `List` column missing one constructor: the precise witness is that
+        // constructor — `[]` (`Nil`) or `_ :: _` (`Cons` over two wildcards).
+        Some(Head::Nil | Head::Cons) => {
+            let mut out = Vec::new();
+            if !roots.contains(&Head::Nil) {
+                out.push(UPat::Ctor(Head::Nil, Vec::new()));
+            }
+            if !roots.contains(&Head::Cons) {
+                out.push(UPat::Ctor(Head::Cons, vec![UPat::Wild, UPat::Wild]));
+            }
+            if out.is_empty() {
+                out.push(UPat::Wild);
+            }
+            out
+        }
         // An OPEN literal column (Int / Char / String) is only completed by a
         // catch-all → witness `_`. An empty column, or a tuple column (always
         // complete, never reaches here), also witness `_`.
@@ -630,6 +684,21 @@ fn render_upat(p: &UPat, interner: &Interner, atom: bool) -> DResult<String> {
                 parts.push(render_upat(a, interner, false)?);
             }
             Ok(format!("({})", parts.join(", ")))
+        }
+        // `[]` and `head :: tail` (right-associative). The head renders as an atom
+        // so a nested cons head is parenthesised; the tail keeps the bare
+        // right-associative spelling. The whole cons is parenthesised when it sits
+        // in an atom position (a constructor / cons argument).
+        UPat::Ctor(Head::Nil, _) => Ok("[]".to_owned()),
+        UPat::Ctor(Head::Cons, args) => {
+            let head = render_upat(args.first().unwrap_or(&UPat::Wild), interner, true)?;
+            let tail = render_upat(args.get(1).unwrap_or(&UPat::Wild), interner, false)?;
+            let inner = format!("{head} :: {tail}");
+            if atom {
+                Ok(format!("({inner})"))
+            } else {
+                Ok(inner)
+            }
         }
         UPat::Ctor(Head::Adt(name), args) => {
             let name = resolve(interner, *name)?;

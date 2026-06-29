@@ -371,8 +371,16 @@ fn emit_match(
     // presence of a `Pat::Str` head is the reliable signal (the type checker
     // proved the scrutinee a `String`).
     let str_mode = m.arms().iter().any(|a| matches!(a.pat, Pat::Str(_)));
+    // A LIST scrutinee (the runtime's `Vec<T>`) is matched as a slice so the
+    // native Rust slice patterns `[]` / `[a, b]` / `[x, rest @ ..]` apply; the
+    // presence of a `Pat::Slice` head is the signal. Binders an arm introduces
+    // are borrows into that slice, rebound to owned Sky values in the arm body
+    // (see [`list_binder_rebinds`]).
+    let list_mode = m.arms().iter().any(|a| matches!(a.pat, Pat::Slice { .. }));
     let scrut = if str_mode {
         format!("({scrut_expr}).as_str()")
+    } else if list_mode {
+        format!("({scrut_expr}).as_slice()")
     } else {
         scrut_expr
     };
@@ -383,11 +391,14 @@ fn emit_match(
         let (pat, prelude) = if let Pat::Ctor { ty, variant, args } = &arm.pat {
             emit_ctor_arm_pat(ctx, *ty, *variant, args)?
         } else {
-            // A flat-match leaf head: literal / wildcard / variable / alias.
-            // `render_pat` is total over the whole pattern set. In string mode,
-            // rebind any binder it introduces to an owned `String`.
+            // A flat-match leaf head: literal / wildcard / variable / alias /
+            // slice. `render_pat` is total over the whole pattern set. In string
+            // mode, rebind any binder it introduces to an owned `String`; in list
+            // mode, rebind each slice binder to its owned Sky value.
             let prelude = if str_mode {
                 str_binder_rebinds(ctx, &arm.pat)?
+            } else if list_mode {
+                list_binder_rebinds(ctx, &arm.pat)?
             } else {
                 String::new()
             };
@@ -509,8 +520,129 @@ fn collect_str_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<()
         | Pat::Char(_)
         | Pat::Ctor { .. }
         | Pat::Tuple(_)
-        | Pat::Record(_) => Ok(()),
+        | Pat::Record(_)
+        | Pat::Slice { .. } => Ok(()),
     }
+}
+
+/// In LIST mode the scrutinee is matched as a slice (`(v).as_slice()`), so every
+/// binder a list arm introduces is a borrow: an ELEMENT binder is `&T` and a
+/// REST / whole-list binder is `&[T]`. This builds the `let … = …;` prelude that
+/// rebinds each to the owned Sky value the arm body expects — an element via
+/// `.clone()` (so the body sees `T`), a rest / whole list via `.to_vec()` (so the
+/// body sees `Vec<T>`). Cloning is the sound owned destructure of a shared slice;
+/// the lowerer gates a list `case` binding a still-generic (non-`Clone`) element
+/// type (SKY-L0102), so the `.clone()` / `.to_vec()` always resolve.
+fn list_binder_rebinds(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
+    let mut out = String::new();
+    match pat {
+        Pat::Slice { prefix, rest } => {
+            for sub in prefix {
+                collect_elem_rebinds(ctx, sub, &mut out)?;
+            }
+            if let Some(r) = rest {
+                collect_list_rebinds(ctx, r, &mut out)?;
+            }
+        }
+        // A whole-list catch-all binder (`xs ->`) or an alias over a list arm
+        // (`(x :: rest) as whole ->`): the matched value IS the list.
+        Pat::Var(_) => collect_list_rebinds(ctx, pat, &mut out)?,
+        Pat::Alias(inner, name) => {
+            rebind_to_vec(ctx, *name, &mut out)?;
+            out.push_str(&list_binder_rebinds(ctx, inner)?);
+        }
+        // A wildcard binds nothing; other heads never reach a list `case`.
+        Pat::Wildcard
+        | Pat::Str(_)
+        | Pat::Int(_)
+        | Pat::Bool(_)
+        | Pat::Char(_)
+        | Pat::Ctor { .. }
+        | Pat::Tuple(_)
+        | Pat::Record(_) => {}
+    }
+    Ok(out)
+}
+
+/// Collect the owned-by-`clone` rebinds for an ELEMENT sub-pattern (a head
+/// position of a slice). Every variable / alias binder there is `&T` and is
+/// cloned to `T`; nested tuple / constructor / record element patterns recurse.
+fn collect_elem_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<()> {
+    match pat {
+        Pat::Var(s) => rebind_clone(ctx, *s, out),
+        Pat::Alias(inner, name) => {
+            rebind_clone(ctx, *name, out)?;
+            collect_elem_rebinds(ctx, inner, out)
+        }
+        Pat::Tuple(subs) => {
+            for sub in subs {
+                collect_elem_rebinds(ctx, sub, out)?;
+            }
+            Ok(())
+        }
+        Pat::Ctor { args, .. } => {
+            for sub in args {
+                collect_elem_rebinds(ctx, sub, out)?;
+            }
+            Ok(())
+        }
+        Pat::Record(fields) => {
+            for (_, sub) in fields {
+                collect_elem_rebinds(ctx, sub, out)?;
+            }
+            Ok(())
+        }
+        // A wildcard / literal element binds nothing. A nested slice element is
+        // gated at lowering (it never reaches the backend), so it needs no rebind.
+        Pat::Wildcard
+        | Pat::Int(_)
+        | Pat::Bool(_)
+        | Pat::Char(_)
+        | Pat::Str(_)
+        | Pat::Slice { .. } => Ok(()),
+    }
+}
+
+/// Collect the owned-by-`to_vec` rebinds for a REST / whole-list binder (`&[T]`
+/// → `Vec<T>`). The lowerer admits only a variable / wildcard rest, so this is a
+/// single binder (an alias recurses defensively).
+fn collect_list_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<()> {
+    match pat {
+        Pat::Var(s) => rebind_to_vec(ctx, *s, out),
+        Pat::Alias(inner, name) => {
+            rebind_to_vec(ctx, *name, out)?;
+            collect_list_rebinds(ctx, inner, out)
+        }
+        Pat::Wildcard
+        | Pat::Int(_)
+        | Pat::Bool(_)
+        | Pat::Char(_)
+        | Pat::Str(_)
+        | Pat::Ctor { .. }
+        | Pat::Tuple(_)
+        | Pat::Record(_)
+        | Pat::Slice { .. } => Ok(()),
+    }
+}
+
+/// Emit `let <name> = <name>.clone();` — rebind a slice ELEMENT binder (`&T`) to
+/// the owned `T` the arm body expects.
+fn rebind_clone(ctx: &EmitCtx, sym: Symbol, out: &mut String) -> DResult<()> {
+    let name = ctx.emit_ident(sym)?;
+    write!(out, "let {name} = {name}.clone(); ").map_err(|e| Diagnostic::CompilerBug {
+        where_: "sky_backend_rust::list_binder_rebinds",
+        detail: format!("writing element rebind failed: {e}"),
+    })
+}
+
+/// Emit `let <name> = <name>.to_vec();` — rebind a slice REST / whole-list binder
+/// (`&[T]`) to the owned `Vec<T>` the arm body expects.
+fn rebind_to_vec(ctx: &EmitCtx, sym: Symbol, out: &mut String) -> DResult<()> {
+    let name = ctx.emit_ident(sym)?;
+    write!(out, "let {name} = {name}.to_vec(); ").map_err(|e| Diagnostic::CompilerBug {
+        where_: "sky_backend_rust::list_binder_rebinds",
+        detail: format!("writing rest rebind failed: {e}"),
+    })
 }
 
 /// Render a pattern to its Rust spelling. Total and recursive over the entire
@@ -584,6 +716,37 @@ fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
             }
         }
         Pat::Record(fields) => render_record_pat(ctx, fields),
+        // A list / cons pattern renders as a native Rust slice pattern. A closed
+        // (exact-length) pattern is `[p0, p1]`; an open cons tail is
+        // `[p0, p1, rest @ ..]` (binding the rest) or `[p0, p1, ..]` (ignoring
+        // it). The leading element patterns recurse through this same renderer.
+        Pat::Slice { prefix, rest } => {
+            let mut parts = Vec::with_capacity(prefix.len() + 1);
+            for sub in prefix {
+                parts.push(render_pat(ctx, sub)?);
+            }
+            match rest {
+                Some(r) => {
+                    parts.push(render_rest_pat(ctx, r)?);
+                    Ok(format!("[{}]", parts.join(", ")))
+                }
+                None => Ok(format!("[{}]", parts.join(", "))),
+            }
+        }
+    }
+}
+
+/// Render the open TAIL of a slice pattern — the `rest @ ..` / `..` suffix. A
+/// variable binds the remaining slice (`name @ ..`); a wildcard ignores it
+/// (`..`). The lowerer admits only these two rest shapes ([`crate`]-side
+/// `lower_rest_pat` gates the rest), so the renderer is total over them.
+fn render_rest_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
+    match pat {
+        Pat::Var(s) => Ok(format!("{} @ ..", ctx.emit_ident(*s)?)),
+        // A wildcard ignores the tail (`..`). No other rest shape is produced by
+        // the lowerer, so the catch-all stays total — a bare `..` ignores the
+        // tail rather than mis-rendering.
+        _ => Ok("..".to_owned()),
     }
 }
 
