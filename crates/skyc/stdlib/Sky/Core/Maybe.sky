@@ -1,0 +1,126 @@
+-- | Sky.Core.Maybe — combinators over the Maybe ADT.
+--
+-- v0.13 Layer 3 / Phase B1: Sky source for the user-visible
+-- combinator surface.  The Maybe ADT itself (`Maybe a`, `Just`,
+-- `Nothing` ctors) remains kernel-anchored so the type system +
+-- runtime SkyMaybe representation stay in lockstep.  Without
+-- monomorphisation (Phase A4/A5), call-site coercion would
+-- mismatch Go's type inference.  With Phase A5 wired, the call-
+-- site coerceArg gets the call's actual concrete type from
+-- `_cg_callSiteInstances` and emits e.g. `MaybeCoerce[string]`
+-- instead of `MaybeCoerce[any]`.
+module Sky.Core.Maybe exposing
+    ( withDefault
+    , map
+    , andThen
+    , map2, map3, map4, map5
+    , andMap
+    , combine
+    , isJust
+    , isNothing
+    )
+
+
+withDefault def m =
+    case m of
+        Just x -> x
+        Nothing -> def
+
+
+map fn m =
+    case m of
+        Just x -> Just (fn x)
+        Nothing -> Nothing
+
+
+andThen fn m =
+    case m of
+        Just x -> fn x
+        Nothing -> Nothing
+
+
+map2 fn ma mb =
+    case ma of
+        Just a ->
+            case mb of
+                Just b -> Just (fn a b)
+                Nothing -> Nothing
+        Nothing -> Nothing
+
+
+map3 fn ma mb mc =
+    case ma of
+        Just a ->
+            case mb of
+                Just b ->
+                    case mc of
+                        Just c -> Just (fn a b c)
+                        Nothing -> Nothing
+                Nothing -> Nothing
+        Nothing -> Nothing
+
+
+map4 fn ma mb mc md =
+    case ma of
+        Just a ->
+            case mb of
+                Just b ->
+                    case mc of
+                        Just c ->
+                            case md of
+                                Just d -> Just (fn a b c d)
+                                Nothing -> Nothing
+                        Nothing -> Nothing
+                Nothing -> Nothing
+        Nothing -> Nothing
+
+
+map5 fn ma mb mc md me =
+    case ma of
+        Just a ->
+            case mb of
+                Just b ->
+                    case mc of
+                        Just c ->
+                            case md of
+                                Just d ->
+                                    case me of
+                                        Just e -> Just (fn a b c d e)
+                                        Nothing -> Nothing
+                                Nothing -> Nothing
+                        Nothing -> Nothing
+                Nothing -> Nothing
+        Nothing -> Nothing
+
+
+andMap ma mfn =
+    case mfn of
+        Just fn ->
+            case ma of
+                Just a -> Just (fn a)
+                Nothing -> Nothing
+        Nothing -> Nothing
+
+
+combine maybes =
+    case maybes of
+        [] -> Just []
+        (m :: rest) ->
+            case m of
+                Just x ->
+                    case combine rest of
+                        Just xs -> Just (x :: xs)
+                        Nothing -> Nothing
+                Nothing -> Nothing
+
+
+isJust m =
+    case m of
+        Just _ -> True
+        Nothing -> False
+
+
+isNothing m =
+    case m of
+        Just _ -> False
+        Nothing -> True

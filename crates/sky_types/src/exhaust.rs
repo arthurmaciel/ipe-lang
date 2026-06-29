@@ -58,10 +58,35 @@ struct Sigs {
 }
 
 impl Sigs {
-    fn build(module: &canon::Module) -> Self {
+    fn build(module: &canon::Module, interner: &mut Interner) -> DResult<Self> {
         let mut ctor_to_union = BTreeMap::new();
         let mut union_ctors = BTreeMap::new();
         let mut ctor_arity = BTreeMap::new();
+
+        // Seed the Prelude-built-in closed unions `Maybe a` (`Just` / `Nothing`)
+        // and `Result e a` (`Ok` / `Err`) so a `case` over them is ANALYSED for
+        // exhaustiveness rather than skipped as an unknown-ctor scrutinee. Without
+        // this, a non-exhaustive `case m of Just x -> …` would slip past the
+        // soundness floor. `Bool` (`True` / `False`) is handled by the dedicated
+        // [`Head::Bool`] literal path and needs no union entry.
+        let maybe = interner.intern("Maybe")?;
+        let result = interner.intern("Result")?;
+        let just = interner.intern("Just")?;
+        let nothing = interner.intern("Nothing")?;
+        let ok = interner.intern("Ok")?;
+        let err = interner.intern("Err")?;
+        for (ctor, union, arity) in [
+            (just, maybe, 1usize),
+            (nothing, maybe, 0),
+            (ok, result, 1),
+            (err, result, 1),
+        ] {
+            ctor_to_union.insert(ctor, union);
+            ctor_arity.insert(ctor, arity);
+        }
+        union_ctors.insert(maybe, vec![(just, 1), (nothing, 0)]);
+        union_ctors.insert(result, vec![(ok, 1), (err, 1)]);
+
         for union in &module.unions {
             let mut ctors: Vec<&canon::Ctor> = union.ctors.iter().collect();
             ctors.sort_by_key(|c| c.index);
@@ -73,11 +98,11 @@ impl Sigs {
             }
             union_ctors.insert(union.name, list);
         }
-        Self {
+        Ok(Self {
             ctor_to_union,
             union_ctors,
             ctor_arity,
-        }
+        })
     }
 
     /// The payload arity of a head constructor. A [`Head::Tuple`] carries its own
@@ -147,13 +172,21 @@ fn to_upat(p: &canon::Pattern_) -> UPat {
         // An alias is transparent for coverage — it matches exactly what its
         // inner pattern matches.
         canon::Pattern_::PAlias(inner, _) => to_upat(&inner.value),
+        // List / cons patterns: a `case` containing one is excluded from the
+        // usefulness walk by [`pattern_uses_unknown_ctor`] (list-pattern lowering
+        // is a fail-closed gap, so no unsound code is emitted), so this arm is not
+        // reached in practice; it abstracts to a wildcard to stay total.
+        canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => UPat::Wild,
     }
 }
 
-/// Does any constructor (recursively) in `p` reference a name outside this
-/// module's unions? Such a `case` matches on an imported / unknown enum whose
-/// full constructor set is not available here, so it cannot be analysed soundly
-/// and is skipped (the lowerer rejects the unknown scrutinee enum separately).
+/// Does `p` reference a name / shape this end-of-checking pass cannot analyse
+/// soundly here? Two cases are excluded from the usefulness walk: a constructor
+/// outside this module's unions (an imported / unknown enum whose full
+/// constructor set is unavailable — the lowerer rejects the unknown scrutinee
+/// enum separately), and a list / cons pattern (whose lowering is a fail-closed
+/// not-yet gap, so the lowerer rejects it before any code is emitted — skipping
+/// the coverage walk for it cannot let unsound code through).
 fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
     match p {
         // Wildcards, variables, field-pun records, and literal leaves reference
@@ -175,6 +208,9 @@ fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
             .iter()
             .any(|e| pattern_uses_unknown_ctor(&e.value, sigs)),
         canon::Pattern_::PAlias(inner, _) => pattern_uses_unknown_ctor(&inner.value, sigs),
+        // List / cons patterns are gated at lowering; exclude their `case` from
+        // the coverage walk (sound — no code is emitted for a gated feature).
+        canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => true,
     }
 }
 
@@ -184,8 +220,8 @@ fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
 /// * [`TypeError::RedundantCaseBranch`] when an arm covers no new value.
 /// * [`TypeError::NonExhaustiveCase`] when the arms miss a value.
 /// * [`Diagnostic::CompilerBug`] if a constructor symbol cannot be resolved.
-pub fn check(module: &canon::Module, interner: &Interner) -> DResult<()> {
-    let sigs = Sigs::build(module);
+pub fn check(module: &canon::Module, interner: &mut Interner) -> DResult<()> {
+    let sigs = Sigs::build(module, interner)?;
     for def in &module.defs {
         let body = match def {
             canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
@@ -242,11 +278,15 @@ fn check_expr(e: &canon::Expr, sigs: &Sigs, interner: &Interner) -> DResult<()> 
             }
             check_expr(else_expr, sigs, interner)
         }
-        canon::Expr_::Tuple(elems) => {
+        canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
             for elem in elems {
                 check_expr(elem, sigs, interner)?;
             }
             Ok(())
+        }
+        canon::Expr_::Cons(head, tail) => {
+            check_expr(head, sigs, interner)?;
+            check_expr(tail, sigs, interner)
         }
         canon::Expr_::Record(fields) => {
             for (_, value) in fields {
@@ -627,6 +667,8 @@ fn arm_label(p: &canon::Pattern_, interner: &Interner) -> DResult<Box<str>> {
         canon::Pattern_::PAlias(inner, _) => return arm_label(&inner.value, interner),
         canon::Pattern_::PTuple(_) => "(…)".to_owned(),
         canon::Pattern_::PRecord(_) => "{…}".to_owned(),
+        canon::Pattern_::PList(_) => "[…]".to_owned(),
+        canon::Pattern_::PCons(_, _) => "_ :: _".to_owned(),
     };
     Ok(s.into_boxed_str())
 }

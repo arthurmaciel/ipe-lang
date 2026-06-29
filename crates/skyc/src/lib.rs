@@ -14,6 +14,8 @@
 //!
 //! Errors are typed ([`CliError`]); no operation panics or unwraps.
 
+pub mod stdlib;
+
 use std::fmt;
 use std::fs;
 use std::io::Write;

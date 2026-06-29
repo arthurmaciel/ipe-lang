@@ -1,0 +1,8 @@
+module Main exposing (main)
+
+firstOr : Int -> List Int -> Int
+firstOr d xs =
+    d
+
+main =
+    println (String.fromInt (firstOr 7 (1 :: 2 :: [3, 4, 5])))

@@ -46,6 +46,12 @@ pub enum TokenKind {
     RParen,
     LBrace,
     RBrace,
+    /// `[` — opens a list literal / pattern.
+    LBracket,
+    /// `]` — closes a list literal / pattern.
+    RBracket,
+    /// `::` — the list cons operator / pattern head.
+    ColonColon,
     Equals,
     Pipe,
     Colon,

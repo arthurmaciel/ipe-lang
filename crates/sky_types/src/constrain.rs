@@ -50,6 +50,23 @@ struct Builtins {
     string: Symbol,
     char: Symbol,
     task: Symbol,
+    maybe: Symbol,
+    result: Symbol,
+    list: Symbol,
+    /// Interned `Just` / `Nothing` / `Ok` / `Err` / `True` / `False` — the
+    /// Prelude-exposed built-in constructor names.
+    just: Symbol,
+    nothing: Symbol,
+    ok: Symbol,
+    err: Symbol,
+    true_: Symbol,
+    false_: Symbol,
+    /// Two distinct scheme type-variable symbols (`a`, `e`) used to build the
+    /// built-in constructor schemes. Their identity links a constructor's
+    /// payload to its result type, exactly like a user union's declared vars;
+    /// each use site instantiates them fresh through one shared map.
+    tv_a: Symbol,
+    tv_e: Symbol,
 }
 
 impl Builtins {
@@ -61,7 +78,89 @@ impl Builtins {
             string: interner.intern("String")?,
             char: interner.intern("Char")?,
             task: interner.intern("Task")?,
+            maybe: interner.intern("Maybe")?,
+            result: interner.intern("Result")?,
+            list: interner.intern("List")?,
+            just: interner.intern("Just")?,
+            nothing: interner.intern("Nothing")?,
+            ok: interner.intern("Ok")?,
+            err: interner.intern("Err")?,
+            true_: interner.intern("True")?,
+            false_: interner.intern("False")?,
+            tv_a: interner.intern("a")?,
+            tv_e: interner.intern("e")?,
         })
+    }
+
+    /// The Prelude-built-in constructor schemes, keyed by constructor name.
+    ///
+    /// `Bool` (`True` / `False` : `Bool`), `Maybe a` (`Just : a -> Maybe a`,
+    /// `Nothing : Maybe a`), and `Result e a` (`Ok : a -> Result e a`,
+    /// `Err : e -> Result e a`). These types have no user `type` declaration, so
+    /// their schemes are synthesised here; each is instantiated fresh per use
+    /// site exactly like a user constructor's scheme. The built-in `Con`s carry
+    /// an empty module path, matching how `from_canon` renders the builtin type
+    /// names (`Int` / `Bool` / …) and how the lowerer recognises them by name.
+    fn ctor_schemes(&self) -> Vec<(Symbol, CtorScheme)> {
+        let bool_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.bool,
+            args: Vec::new(),
+        };
+        let maybe_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.maybe,
+            args: vec![Ty::Var(self.tv_a.as_raw())],
+        };
+        let result_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.result,
+            args: vec![Ty::Var(self.tv_e.as_raw()), Ty::Var(self.tv_a.as_raw())],
+        };
+        vec![
+            (
+                self.true_,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: bool_ty.clone(),
+                },
+            ),
+            (
+                self.false_,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: bool_ty,
+                },
+            ),
+            (
+                self.just,
+                CtorScheme {
+                    arg_tys: vec![Ty::Var(self.tv_a.as_raw())],
+                    result: maybe_ty.clone(),
+                },
+            ),
+            (
+                self.nothing,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: maybe_ty,
+                },
+            ),
+            (
+                self.ok,
+                CtorScheme {
+                    arg_tys: vec![Ty::Var(self.tv_a.as_raw())],
+                    result: result_ty.clone(),
+                },
+            ),
+            (
+                self.err,
+                CtorScheme {
+                    arg_tys: vec![Ty::Var(self.tv_e.as_raw())],
+                    result: result_ty,
+                },
+            ),
+        ]
     }
 }
 
@@ -266,6 +365,15 @@ impl<'a> Builder<'a> {
             scheme_apps: Vec::new(),
             super_vars: Vec::new(),
         };
+
+        // Register the Prelude-built-in constructor schemes (`True` / `False` /
+        // `Just` / `Nothing` / `Ok` / `Err`) first, so a reference or pattern
+        // instantiates `Maybe a` / `Result e a` / `Bool` fresh per use site. A
+        // user `type` cannot shadow these names (the canon §3.2 gate rejects it),
+        // so the module-union loop below never collides with them.
+        for (name, scheme) in builder.builtins.ctor_schemes() {
+            builder.ctors.insert(name, scheme);
+        }
 
         // Register every data constructor's scheme up front, so a `VarCtor`
         // reference or a constructor pattern can instantiate it fresh. A
@@ -497,6 +605,46 @@ impl<'a> Builder<'a> {
 
     fn con_var(&mut self, module: Vec<Symbol>, name: Symbol, args: Vec<VarId>) -> DResult<VarId> {
         self.structure(FlatType::Con { module, name, args })
+    }
+
+    /// A `List elem` type variable over the element variable `elem`. The built-in
+    /// `List` carries an empty module path, matching the other builtins.
+    fn list_var(&mut self, elem: VarId) -> DResult<VarId> {
+        let name = self.builtins.list;
+        self.con_var(Vec::new(), name, vec![elem])
+    }
+
+    /// Constrain a list literal `[]` / `[a, b, c]`: every element shares one
+    /// element variable, and the whole expression is the `List` over it. An empty
+    /// list leaves the element variable flexible (inferred from context, else
+    /// numeric-defaulted like any unpinned variable). Returns the result variable.
+    fn constrain_list(
+        &mut self,
+        local: &BTreeMap<Symbol, VarId>,
+        elems: &[canon::Expr],
+    ) -> DResult<VarId> {
+        let elem = self.flex()?;
+        for e in elems {
+            let ev = self.constrain_expr(local, e)?;
+            self.eq(e.span, ev, elem);
+        }
+        self.list_var(elem)
+    }
+
+    /// Constrain a cons `head :: tail`: `head : elem`, `tail : List elem`, result
+    /// `List elem`. Imposing the `a -> List a -> List a` discipline directly makes
+    /// a non-list tail or a mismatched element a type error, not a backend crash.
+    fn constrain_cons(
+        &mut self,
+        local: &BTreeMap<Symbol, VarId>,
+        head: &canon::Expr,
+        tail: &canon::Expr,
+    ) -> DResult<VarId> {
+        let elem = self.constrain_expr(local, head)?;
+        let list = self.list_var(elem)?;
+        let tail_var = self.constrain_expr(local, tail)?;
+        self.eq(tail.span, tail_var, list);
+        Ok(list)
     }
 
     fn eq(&mut self, span: Span, lhs: VarId, rhs: VarId) {
@@ -849,6 +997,8 @@ impl<'a> Builder<'a> {
                 }
                 self.structure(FlatType::Tuple(elem_vars))?
             }
+            canon::Expr_::List(elems) => self.constrain_list(local, elems)?,
+            canon::Expr_::Cons(head, tail) => self.constrain_cons(local, head, tail)?,
             canon::Expr_::Record(fields) => self.constrain_record(local, fields)?,
             canon::Expr_::Access(record, field) => {
                 self.constrain_access(local, record, *field, span)?
@@ -1118,6 +1268,27 @@ impl<'a> Builder<'a> {
             canon::Pattern_::PAlias(inner, name) => {
                 local.insert(name.value, scrut_var);
                 self.constrain_pattern(local, inner, scrut_var)
+            }
+            // A list pattern `[a, b]` matches a `List elem`: each element
+            // sub-pattern is constrained against one shared element variable, and
+            // the scrutinee is tied to the list over it.
+            canon::Pattern_::PList(elems) => {
+                let elem = self.flex()?;
+                let list = self.list_var(elem)?;
+                self.eq(pat.span, list, scrut_var);
+                for sub in elems {
+                    self.constrain_pattern(local, sub, elem)?;
+                }
+                Ok(())
+            }
+            // A cons pattern `head :: tail` matches a `List elem`: `head : elem`,
+            // `tail : List elem` (the scrutinee's own type), scrutinee `List elem`.
+            canon::Pattern_::PCons(head, tail) => {
+                let elem = self.flex()?;
+                let list = self.list_var(elem)?;
+                self.eq(pat.span, list, scrut_var);
+                self.constrain_pattern(local, head, elem)?;
+                self.constrain_pattern(local, tail, list)
             }
         }
     }

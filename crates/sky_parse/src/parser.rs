@@ -85,6 +85,9 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::RParen => TokenKind::RParen,
         Tok::LBrace => TokenKind::LBrace,
         Tok::RBrace => TokenKind::RBrace,
+        Tok::LBracket => TokenKind::LBracket,
+        Tok::RBracket => TokenKind::RBracket,
+        Tok::ColonColon => TokenKind::ColonColon,
         Tok::Equals => TokenKind::Equals,
         Tok::Pipe => TokenKind::Pipe,
         Tok::Colon => TokenKind::Colon,
@@ -1015,6 +1018,7 @@ impl<'a> Parser<'a> {
             kind,
             Tok::LParen
                 | Tok::LBrace
+                | Tok::LBracket
                 | Tok::Int(_)
                 | Tok::Float(_)
                 | Tok::Str(_)
@@ -1047,6 +1051,7 @@ impl<'a> Parser<'a> {
             Tok::Ge => ">=",
             Tok::AmpAmp => "&&",
             Tok::PipePipe => "||",
+            Tok::ColonColon => "::",
             _ => return None,
         };
         Some((op, tok.span))
@@ -1111,6 +1116,7 @@ impl<'a> Parser<'a> {
         match &tok.kind {
             Tok::LParen => self.parse_paren_or_tuple(tok.span, depth + 1),
             Tok::LBrace => self.parse_record(tok.span, depth + 1),
+            Tok::LBracket => self.parse_list(tok.span, depth + 1),
             Tok::Int(n) => Ok(Located::new(tok.span, Expr_::Int(*n))),
             Tok::Float(f) => Ok(Located::new(tok.span, Expr_::Float(*f))),
             Tok::Str(s) => Ok(Located::new(tok.span, Expr_::Str(s.clone()))),
@@ -1159,6 +1165,49 @@ impl<'a> Parser<'a> {
         let close = self.expect_rparen(opener, Construct::Tuple)?;
         let span = Self::span_merge(opener, close);
         Ok(Located::new(span, Expr_::Tuple(elems)))
+    }
+
+    /// Parse what follows a just-consumed `[`: a list literal `[]` / `[a, b, c]`.
+    /// Elements are comma-separated full expressions; a trailing comma is not
+    /// permitted. `opener` is the `[`'s span; `depth` bounds inner recursion.
+    fn parse_list(&mut self, opener: Span, depth: u32) -> DResult<Expr> {
+        if depth > MAX_DEPTH {
+            return Err(self.too_deep(Construct::Expression));
+        }
+        // `[]` — the empty list.
+        if let Some(t) = self.peek().filter(|t| t.kind == Tok::RBracket) {
+            let close = t.span;
+            self.bump(Construct::Expression)?;
+            let span = Self::span_merge(opener, close);
+            return Ok(Located::new(span, Expr_::List(Vec::new())));
+        }
+        let mut elems = vec![self.parse_expr(0, depth + 1)?];
+        while self.peek_kind() == Some(&Tok::Comma) {
+            self.bump(Construct::Expression)?;
+            elems.push(self.parse_expr(0, depth + 1)?);
+        }
+        let close = self.expect_rbracket(opener)?;
+        let span = Self::span_merge(opener, close);
+        Ok(Located::new(span, Expr_::List(elems)))
+    }
+
+    /// Require a closing `]`, returning its span.
+    fn expect_rbracket(&mut self, opener: Span) -> DResult<Span> {
+        match self.peek() {
+            Some(t) if t.kind == Tok::RBracket => {
+                let span = t.span;
+                self.bump(Construct::Expression)?;
+                Ok(span)
+            }
+            Some(t) => Err(Diagnostic::Parse {
+                span: t.span,
+                msg: ParseError::UnclosedDelimiter { opener },
+            }),
+            None => Err(Diagnostic::Parse {
+                span: self.eof_err_span(),
+                msg: ParseError::UnclosedDelimiter { opener },
+            }),
+        }
     }
 
     /// Require a closing `)`, returning its span. Like [`Self::close_paren`] but
@@ -1716,6 +1765,19 @@ impl<'a> Parser<'a> {
         } else {
             head
         };
+        // A cons pattern `head :: tail` (M4a). `::` is right-associative and
+        // binds looser than constructor application, so the head parsed so far is
+        // the first element and the tail is parsed recursively (which nests
+        // rightward and consumes its own `as` alias). `a :: b :: rest` becomes
+        // `PCons(a, PCons(b, rest))`.
+        let pat = if self.peek_kind() == Some(&Tok::ColonColon) {
+            self.bump(Construct::Pattern)?;
+            let tail = self.parse_pattern(depth + 1)?;
+            let span = Self::span_merge(pat.span, tail.span);
+            Located::new(span, Pattern_::PCons(Box::new(pat), Box::new(tail)))
+        } else {
+            pat
+        };
         // An `as` alias binds the whole pattern parsed so far to a name
         // (`inner as name`). Mirrors the Haskell compiler's `pattern_` postfix
         // check; the inner sub-pattern keeps its shape and the alias wraps it.
@@ -1821,6 +1883,7 @@ impl<'a> Parser<'a> {
                     fields.push(self.parse_record_field_name()?);
                 }
             }
+            Tok::LBracket => self.parse_list_pattern(tok.span, depth + 1),
             Tok::Ident(text) => {
                 // `True` / `False` are the two Bool constructors; in pattern
                 // position they are boolean literal patterns (a closed
@@ -1857,6 +1920,29 @@ impl<'a> Parser<'a> {
     /// Whether the next token can begin a pattern ATOM in a position that admits
     /// refutable literal sub-patterns — namely a constructor's argument list
     /// (`Just 0`, `MkWrap 'a'`). Includes the literal starts.
+    /// Parse a list pattern `[]` / `[a, b, c]` after the `[` is consumed.
+    /// Comma-separated sub-patterns; the empty brackets are the nil cover.
+    /// `opener` is the `[`'s span.
+    fn parse_list_pattern(&mut self, opener: Span, depth: u32) -> DResult<Pattern> {
+        if depth > MAX_DEPTH {
+            return Err(self.too_deep(Construct::Pattern));
+        }
+        if let Some(t) = self.peek().filter(|t| t.kind == Tok::RBracket) {
+            let close = t.span;
+            self.bump(Construct::Pattern)?;
+            let span = Self::span_merge(opener, close);
+            return Ok(Located::new(span, Pattern_::PList(Vec::new())));
+        }
+        let mut elems = vec![self.parse_pattern(depth + 1)?];
+        while self.peek_kind() == Some(&Tok::Comma) {
+            self.bump(Construct::Pattern)?;
+            elems.push(self.parse_pattern(depth + 1)?);
+        }
+        let close = self.expect_rbracket(opener)?;
+        let span = Self::span_merge(opener, close);
+        Ok(Located::new(span, Pattern_::PList(elems)))
+    }
+
     fn peek_is_pattern_atom_start(&self) -> bool {
         matches!(
             self.peek_kind(),
@@ -1864,6 +1950,7 @@ impl<'a> Parser<'a> {
                 &(Tok::Underscore
                     | Tok::LParen
                     | Tok::LBrace
+                    | Tok::LBracket
                     | Tok::Ident(_)
                     | Tok::Int(_)
                     | Tok::Str(_)

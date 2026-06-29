@@ -1,0 +1,4 @@
+module Main exposing (main)
+
+main =
+    println (if True then "yes" else "no")
