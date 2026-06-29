@@ -325,6 +325,9 @@ fn parse_label(msg: &ParseError) -> Option<String> {
         ParseError::IntLiteralOutOfRange => {
             Some("this integer does not fit in 64 bits".to_string())
         }
+        ParseError::FloatLiteralOutOfRange => {
+            Some("this float is too large to represent".to_string())
+        }
         ParseError::UnterminatedString => Some("this string is never closed".to_string()),
         ParseError::MalformedChar => Some("this character literal is malformed".to_string()),
         ParseError::MalformedModuleHeader(defect) => Some(header_defect_str(*defect).to_string()),
@@ -480,6 +483,9 @@ fn hint_text(hint: Hint) -> String {
         Hint::IntegerLiteralRange => {
             "integer literals must fit between -9223372036854775808 and 9223372036854775807"
                 .to_string()
+        }
+        Hint::FloatLiteralRange => {
+            "float literals must not exceed f64's maximum magnitude (~1.8e308)".to_string()
         }
         Hint::AddTypeSignature => {
             "add a top-level type signature, e.g. `f : Int -> Int`".to_string()

@@ -327,6 +327,17 @@ fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
             where_: "sky_parse::lex_number",
             detail: format!("well-formed float lexeme {text:?} failed to parse: {e}"),
         })?;
+        // A magnitude past `f64::MAX` (e.g. `1e400`) parses to `inf`, which is
+        // not the number the source spelled. Rejecting it — rather than
+        // silently accepting infinity — restores parity with the Go reference
+        // (Go's lexer errors on the same literal) and the principle of least
+        // surprise. Finite literals (including a genuine `0.0`) pass through.
+        if !f.is_finite() {
+            return Err(Diagnostic::Parse {
+                span: Span::new(lo, hi),
+                msg: ParseError::FloatLiteralOutOfRange,
+            });
+        }
         Ok(Tok::Float(f))
     } else {
         // The integer part only pushed ASCII digits, so the sole parse failure

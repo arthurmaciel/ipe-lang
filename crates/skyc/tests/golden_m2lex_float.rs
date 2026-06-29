@@ -10,6 +10,10 @@
 //!   `12.56` at `area 2.0`.
 //! * `m2lex_float_compare` — a `Float` `>` comparison selecting between the
 //!   exponent literals `1.5e3` and `2e-2`, prints `1500`.
+//! * `m2lex_float_exp` — `String.fromFloat` of `0.00001` and `1.0e21`, which the
+//!   `'g'`-format runtime renders in exponent form, prints `1e-05|1e+21`. This
+//!   pins the exponent branch so the float-to-string port cannot regress to
+//!   positional-only coverage.
 //!
 //! Each emitted `main.rs` must be byte-identical to the checked-in golden, and
 //! (behind `SKY_E2E=1`) the emitted project must build and print the value the
@@ -21,9 +25,10 @@
 //!
 //! ```text
 //! $ sky run Main.sky   # Go backend
-//! 1.5      # m2lex_float
-//! 12.56    # m2lex_float_area
-//! 1500     # m2lex_float_compare
+//! 1.5            # m2lex_float
+//! 12.56          # m2lex_float_area
+//! 1500           # m2lex_float_compare
+//! 1e-05|1e+21    # m2lex_float_exp
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -127,8 +132,22 @@ fn float_compare_and_exponents_emit_byte_identical_main_rs() {
 }
 
 #[test]
+fn float_exponent_branch_emits_byte_identical_main_rs() {
+    assert_byte_identical("m2lex_float_exp");
+}
+
+#[test]
 fn float_division_builds_and_prints_one_point_five() {
     assert_runs_and_prints("m2lex_float", "1.5\n");
+}
+
+/// Exponent-branch parity floor: `String.fromFloat` of a sub-`1e-4` value and a
+/// `>= 1e21` value must render in `'g'` exponent form (`1e-05` / `1e+21`), the
+/// exact bytes the Go oracle produces. This guards against the float-to-string
+/// port regressing to exponent-free coverage only.
+#[test]
+fn float_exponent_branch_builds_and_prints_g_form() {
+    assert_runs_and_prints("m2lex_float_exp", "1e-05|1e+21\n");
 }
 
 #[test]
