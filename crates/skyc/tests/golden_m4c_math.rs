@@ -91,3 +91,67 @@ fn math_min_float_no_truncation() {
 fn math_max_string_lexicographic() {
     assert_runs_and_matches_oracle("m4c_math_max_string");
 }
+
+// ── abs ────────────────────────────────────────────────────────────────────────
+
+/// `Math.abs (-5)` → `5`. Integer absolute value.
+#[test]
+fn math_abs() {
+    assert_runs_and_matches_oracle("m4c_math_abs");
+}
+
+// ── sqrt ───────────────────────────────────────────────────────────────────────
+
+/// `Math.sqrt 9.0` → `3` (via `String.fromFloat` 'g' format: `3.0` → `"3"`).
+#[test]
+fn math_sqrt() {
+    assert_runs_and_matches_oracle("m4c_math_sqrt");
+}
+
+// ── floor ──────────────────────────────────────────────────────────────────────
+
+/// `Math.floor 3.7` → `3`. Float-to-Int truncation toward −∞.
+#[test]
+fn math_floor() {
+    assert_runs_and_matches_oracle("m4c_math_floor");
+}
+
+// ── round ──────────────────────────────────────────────────────────────────────
+
+/// `Math.round 3.5` → `4`. Half-away-from-zero rounding (Go `math.Round`).
+#[test]
+fn math_round() {
+    assert_runs_and_matches_oracle("m4c_math_round");
+}
+
+// ── pi constant ────────────────────────────────────────────────────────────────
+
+/// `Math.pi` → `"3.141592653589793"`. Zero-arity Float constant.
+#[test]
+fn math_pi() {
+    assert_runs_and_matches_oracle("m4c_math_pi");
+}
+
+// ── pow ────────────────────────────────────────────────────────────────────────
+
+/// `Math.pow 2.0 10.0` → `"1024"`. Arity-2 exponentiation.
+#[test]
+fn math_pow() {
+    assert_runs_and_matches_oracle("m4c_math_pow");
+}
+
+// ── mod ────────────────────────────────────────────────────────────────────────
+
+/// `Math.mod 5.5 2.0` → `"1.5"`. Modulo with dividend's sign (Go `math.Mod`).
+#[test]
+fn math_mod() {
+    assert_runs_and_matches_oracle("m4c_math_mod");
+}
+
+// ── nan constant ───────────────────────────────────────────────────────────────
+
+/// `Math.nan` → `"NaN"`. `string_from_float` special-cases NaN.
+#[test]
+fn math_nan() {
+    assert_runs_and_matches_oracle("m4c_math_nan");
+}

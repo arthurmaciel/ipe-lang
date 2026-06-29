@@ -247,9 +247,26 @@ impl Env {
             ("Result", &["withDefault", "map", "andThen", "mapError"]),
             // `Sky.Core.Math` — `min` / `max` are polymorphic `a -> a -> a`
             // (Elm `Basics.min`/`max` semantics). Wired in the lowerer to the
-            // runtime's generic compare; further Math entries (abs, sqrt, …)
-            // land with their own kernels.
-            ("Math", &["min", "max"]),
+            // runtime's generic compare. All other Math kernels have concrete
+            // monomorphic types (abs : Int->Int, sqrt : Float->Float, etc.).
+            (
+                "Math",
+                &[
+                    "min", "max",
+                    // constants
+                    "pi", "e", "phi", "sqrt2", "inf", "nan",
+                    // arity-1 Int→Int
+                    "abs",
+                    // arity-1 Float→Float
+                    "sqrt", "cbrt", "exp", "exp2", "log", "log2", "log10",
+                    "sin", "cos", "tan", "asin", "acos", "atan",
+                    "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+                    // arity-1 Float→Int
+                    "floor", "ceil", "round", "trunc",
+                    // arity-2 Float→Float→Float
+                    "pow", "hypot", "atan2", "mod", "remainder",
+                ],
+            ),
             (
                 "Basics",
                 &[

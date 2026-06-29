@@ -691,6 +691,81 @@ pub enum KernelFn {
     /// of [`KernelFn::MathMin`] (Elm `Basics.max`: `if a >= b then a else b`),
     /// with the same no-truncation, polymorphic-compare contract.
     MathMax,
+    // ── Math kernels — arity 0 (constants) ──────────────────────────────────
+    /// `Math.pi : Float` — π ≈ 3.141592653589793.
+    MathPi,
+    /// `Math.e : Float` — Euler's number ≈ 2.718281828459045.
+    MathE,
+    /// `Math.phi : Float` — the golden ratio ≈ 1.618033988749895.
+    MathPhi,
+    /// `Math.sqrt2 : Float` — √2 ≈ 1.4142135623730951.
+    MathSqrt2,
+    /// `Math.inf : Float` — positive infinity (`+Inf`).
+    MathInf,
+    /// `Math.nan : Float` — not-a-number (`NaN`; `nan == nan` is `False`).
+    MathNan,
+    // ── Math kernels — arity 1 (Int → Int) ──────────────────────────────────
+    /// `Math.abs : Int -> Int` — absolute value; saturates at `i64::MAX` on overflow.
+    MathAbs,
+    // ── Math kernels — arity 1 (Float → Float) ──────────────────────────────
+    /// `Math.sqrt : Float -> Float` — square root. `sqrt(-1.0)` → `NaN`.
+    MathSqrt,
+    /// `Math.cbrt : Float -> Float` — cube root.
+    MathCbrt,
+    /// `Math.exp : Float -> Float` — eˣ.
+    MathExp,
+    /// `Math.exp2 : Float -> Float` — 2ˣ.
+    MathExp2,
+    /// `Math.log : Float -> Float` — natural logarithm. `log(0.0)` → `-Inf`.
+    MathLog,
+    /// `Math.log2 : Float -> Float` — base-2 logarithm.
+    MathLog2,
+    /// `Math.log10 : Float -> Float` — base-10 logarithm.
+    MathLog10,
+    /// `Math.sin : Float -> Float` — sine (radians).
+    MathSin,
+    /// `Math.cos : Float -> Float` — cosine (radians).
+    MathCos,
+    /// `Math.tan : Float -> Float` — tangent (radians).
+    MathTan,
+    /// `Math.asin : Float -> Float` — arcsin. Out-of-domain → `NaN`.
+    MathAsin,
+    /// `Math.acos : Float -> Float` — arccos. Out-of-domain → `NaN`.
+    MathAcos,
+    /// `Math.atan : Float -> Float` — arctan (one-argument).
+    MathAtan,
+    /// `Math.sinh : Float -> Float` — hyperbolic sine.
+    MathSinh,
+    /// `Math.cosh : Float -> Float` — hyperbolic cosine.
+    MathCosh,
+    /// `Math.tanh : Float -> Float` — hyperbolic tangent.
+    MathTanh,
+    /// `Math.asinh : Float -> Float` — inverse hyperbolic sine.
+    MathAsinh,
+    /// `Math.acosh : Float -> Float` — inverse hyperbolic cosine.
+    MathAcosh,
+    /// `Math.atanh : Float -> Float` — inverse hyperbolic tangent.
+    MathAtanh,
+    // ── Math kernels — arity 1 (Float → Int) ────────────────────────────────
+    /// `Math.floor : Float -> Int` — round toward −∞.
+    MathFloor,
+    /// `Math.ceil : Float -> Int` — round toward +∞.
+    MathCeil,
+    /// `Math.round : Float -> Int` — half-away-from-zero (Go `math.Round`).
+    MathRound,
+    /// `Math.trunc : Float -> Int` — truncate toward zero.
+    MathTrunc,
+    // ── Math kernels — arity 2 (Float → Float → Float) ──────────────────────
+    /// `Math.pow : Float -> Float -> Float` — exponentiation `base^exp`.
+    MathPow,
+    /// `Math.hypot : Float -> Float -> Float` — √(a²+b²), avoiding overflow.
+    MathHypot,
+    /// `Math.atan2 : Float -> Float -> Float` — quadrant-aware arctan(y/x).
+    MathAtan2,
+    /// `Math.mod : Float -> Float -> Float` — modulo, result has dividend's sign (Go `math.Mod`).
+    MathMod,
+    /// `Math.remainder : Float -> Float -> Float` — IEEE 754 remainder (Go `math.Remainder`).
+    MathRemainder,
     /// Internal: construct `Ok x` with the project error type (`SkyError`) pinned.
     ///
     /// Not a Sky-source kernel — the lowerer emits this for an `Ok` constructor
