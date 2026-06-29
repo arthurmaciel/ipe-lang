@@ -132,6 +132,14 @@ pub struct Variant {
 ///   `String`), so the generated body can reuse it without a move error.
 /// * `clone` is the non-`Copy` counterpart — added when a reused value's type
 ///   may be `String`, where `Clone` is the available duplication trait.
+/// * `ord_total` realises a `Set` element's Rust requirement: `BTreeSet<A>`
+///   needs `A : Ord` (the TOTAL order), which is strictly stronger than the
+///   `ord` flag's `PartialOrd`. A generic `a -> Set a` carries `ord_total`.
+/// * `hash` realises a `Dict` key's Rust requirement: `HashMap<K, V>` needs
+///   `K : Hash + Eq`. Paired with `ord_total` on a Dict key (so the
+///   determinism-sorted `Dict.keys` / `Dict.toList` also compile, and `Eq`
+///   arrives as `Ord`'s supertrait) a generic `a -> Dict a v` carries
+///   `hash | ord_total | clone`.
 ///
 /// The flags are independent and compose: a Comparable-and-reused variable
 /// carries `ord | copy`; a numeric-add-and-reused variable carries `add | copy`.
@@ -139,19 +147,46 @@ pub struct Variant {
 /// is assembled fluently (`BoundSet::UNBOUNDED.with_add().with_copy()`); the
 /// `has_*` predicates read one flag back.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
-pub struct BoundSet(u8);
+pub struct BoundSet(u16);
 
 impl BoundSet {
-    const ADD: u8 = 1 << 0;
-    const SUB: u8 = 1 << 1;
-    const MUL: u8 = 1 << 2;
-    const ORD: u8 = 1 << 3;
-    const COPY: u8 = 1 << 4;
-    const CLONE: u8 = 1 << 5;
-    const EQ: u8 = 1 << 6;
+    const ADD: u16 = 1 << 0;
+    const SUB: u16 = 1 << 1;
+    const MUL: u16 = 1 << 2;
+    const ORD: u16 = 1 << 3;
+    const COPY: u16 = 1 << 4;
+    const CLONE: u16 = 1 << 5;
+    const EQ: u16 = 1 << 6;
+    const ORD_TOTAL: u16 = 1 << 7;
+    const HASH: u16 = 1 << 8;
 
     /// The empty bound set: an unconstrained, structurally-parametric variable.
     pub const UNBOUNDED: Self = Self(0);
+
+    /// This set with the `Ord` (total order, `BTreeSet` element) bound. Strictly
+    /// stronger than [`Self::with_ord`]'s `PartialOrd`.
+    #[must_use]
+    pub const fn with_ord_total(self) -> Self {
+        Self(self.0 | Self::ORD_TOTAL)
+    }
+
+    /// This set with the `::core::hash::Hash` (`HashMap` key) bound.
+    #[must_use]
+    pub const fn with_hash(self) -> Self {
+        Self(self.0 | Self::HASH)
+    }
+
+    /// Whether the `Ord` (total-order) bound is set.
+    #[must_use]
+    pub const fn has_ord_total(self) -> bool {
+        self.0 & Self::ORD_TOTAL != 0
+    }
+
+    /// Whether the `Hash` bound is set.
+    #[must_use]
+    pub const fn has_hash(self) -> bool {
+        self.0 & Self::HASH != 0
+    }
 
     /// Whether this set carries no bound at all — the variable is a true
     /// parametric pass-through and emits as a bare generic.

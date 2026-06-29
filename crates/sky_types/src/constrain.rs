@@ -220,6 +220,19 @@ const fn classify_binop(func: &str) -> BinopClass {
     }
 }
 
+/// The Sky `comparable`-key obligation a kernel module's element / key variable
+/// carries, or `None` for a module without such a position. `Set`'s element is
+/// keyed by `BTreeSet<A>` (`A : Ord`); `Dict`'s key by a determinism-sorted
+/// `HashMap<K, V>` (`K : Hash + Eq + Ord`). The obligation is attached to raw
+/// scheme-variable 0, which is the element / key in every `Set` / `Dict` kernel.
+fn key_obligation(interner: &Interner, module: Symbol) -> Option<TyBounds> {
+    match interner.resolve(module) {
+        Some("Set") => Some(TyBounds::set_elem()),
+        Some("Dict") => Some(TyBounds::dict_key()),
+        _ => None,
+    }
+}
+
 /// The constraint-generation state threaded through the walk.
 pub struct Builder<'a> {
     uf: &'a mut UnionFind<Content>,
@@ -906,6 +919,49 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// The type of a kernel reference (`Math.min`, `Set.insert`, …).
+    ///
+    /// Most kernels take the declarative scheme from [`Self::kernel_ty`] verbatim
+    /// via `instantiate`. Two families instead mint super-typed obligations so a
+    /// generic use lifts the matching Rust trait bound onto its annotation
+    /// skolem and a non-comparable argument fails closed at type-check:
+    ///
+    /// * `Math.min` / `Math.max` — `Comparable a => a -> a -> a`: the shared
+    ///   variable carries the ORDERING obligation, exactly as the `< > <= >=`
+    ///   operators and the user-fn `maxOf` do, so a generic use emits Rust
+    ///   `T: PartialOrd` and a function / record argument is rejected rather than
+    ///   emitting an unbounded `math_min<T>(…)` that `cargo` rejects.
+    /// * `Set` / `Dict` kernels — the element / key (raw scheme-variable 0 in
+    ///   every Set / Dict kernel) carries the Sky `comparable`-key obligation
+    ///   ([`key_obligation`]). The scheme is instantiated, then variable 0 is
+    ///   tied to a fresh super-typed variable carrying that obligation, so a
+    ///   non-comparable element / key (record, ADT, function) fails closed
+    ///   instead of emitting an unbounded `set_insert::<T>` / `dict_insert::<T>`
+    ///   call `cargo` rejects, and a generic `a -> Set a` lifts `Ord` (Set) /
+    ///   `Hash + Eq + Ord` (Dict) onto its annotation skolem (see `bounds_for`).
+    ///   This is also more conservative than Sky's runtime, which keys a Set /
+    ///   Dict on a stringified value.
+    fn constrain_var_kernel(&mut self, module: Symbol, name: Symbol, span: Span) -> DResult<VarId> {
+        if matches!(self.interner.resolve(module), Some("Math"))
+            && matches!(self.interner.resolve(name), Some("min" | "max"))
+        {
+            let s = self.super_var(TyBounds::ord(), span)?;
+            let inner = self.structure(FlatType::Fun(s, s))?;
+            return self.structure(FlatType::Fun(s, inner));
+        }
+        if let Some(bound) = key_obligation(self.interner, module) {
+            let ty = self.kernel_ty(module, name);
+            let (var, vars) = self.instantiate_tracked(&ty)?;
+            if let Some(&key_var) = vars.get(&0) {
+                let s = self.super_var(bound, span)?;
+                self.eq(span, key_var, s);
+            }
+            return Ok(var);
+        }
+        let ty = self.kernel_ty(module, name);
+        self.instantiate(&ty)
+    }
+
     fn constrain_expr(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
@@ -932,27 +988,7 @@ impl<'a> Builder<'a> {
             },
             canon::Expr_::VarTopLevel { name, .. } => self.constrain_var_top_level(*name, span)?,
             canon::Expr_::VarKernel { module, name } => {
-                // `Math.min` / `Math.max` are `Comparable a => a -> a -> a`: the
-                // shared variable must carry the ORDERING obligation, exactly as
-                // the `< > <= >=` operators and the user-fn `maxOf` do. Minting it
-                // as a super-typed (ordering) variable means a generic use lifts
-                // the bound onto the enclosing annotation skolem (emitting Rust
-                // `T: PartialOrd`), while a non-comparable argument (a function, a
-                // record) fails closed at type-check rather than emitting an
-                // unbounded `math_min<T>(…)` that `cargo` rejects — restoring the
-                // sky-build => cargo-build floor. The kernel-type table's bare
-                // `var(0)` arm cannot express this bound, so min/max take this
-                // dedicated path instead of the generic `instantiate`.
-                if matches!(self.interner.resolve(*module), Some("Math"))
-                    && matches!(self.interner.resolve(*name), Some("min" | "max"))
-                {
-                    let s = self.super_var(TyBounds::ord(), span)?;
-                    let inner = self.structure(FlatType::Fun(s, s))?;
-                    self.structure(FlatType::Fun(s, inner))?
-                } else {
-                    let ty = self.kernel_ty(*module, *name);
-                    self.instantiate(&ty)?
-                }
+                self.constrain_var_kernel(*module, *name, span)?
             }
             canon::Expr_::VarCtor {
                 home,
@@ -1500,6 +1536,16 @@ impl<'a> Builder<'a> {
             }
 
             // ── Sky.Core.Dict (M4d) ──
+            // NOTE: the key variable `var(0)` in every Dict arm below is written
+            // bare here, but the `VarKernel` walk does NOT take this scheme as-is
+            // for `Dict` kernels: it instantiates the scheme and then ties raw
+            // scheme-variable 0 (the key) to a fresh super-typed variable
+            // carrying the Sky `comparable`-key obligation (`TyBounds::dict_key`,
+            // → Rust `Hash + Eq + Ord`). So a non-comparable key fails closed at
+            // type-check, and a generic key lifts the bound onto the annotation
+            // skolem rather than emitting an unbounded `dict_*::<T>` call `cargo`
+            // rejects. The bare scheme is the SHAPE; the obligation is attached
+            // on the dedicated path (see `key_obligation` + the `VarKernel` arm).
             // empty : Dict k v  — arity-0 polymorphic value.
             (Some("Dict"), Some("empty")) => dict(var(0), var(1)),
             // isEmpty : Dict k v -> Bool
@@ -1507,9 +1553,10 @@ impl<'a> Builder<'a> {
             // size : Dict k v -> Int
             (Some("Dict"), Some("size")) => fun(dict(var(0), var(1)), int),
             // insert : k -> v -> Dict k v -> Dict k v
-            (Some("Dict"), Some("insert")) => {
-                fun(var(0), fun(var(1), fun(dict(var(0), var(1)), dict(var(0), var(1)))))
-            }
+            (Some("Dict"), Some("insert")) => fun(
+                var(0),
+                fun(var(1), fun(dict(var(0), var(1)), dict(var(0), var(1)))),
+            ),
             // get : k -> Dict k v -> Maybe v
             (Some("Dict"), Some("get")) => fun(var(0), fun(dict(var(0), var(1)), maybe(var(1)))),
             // remove : k -> Dict k v -> Dict k v
@@ -1541,19 +1588,24 @@ impl<'a> Builder<'a> {
                 fun(var(2), fun(dict(var(0), var(1)), var(2))),
             ),
             // union : Dict k v -> Dict k v -> Dict k v  (left-biased)
-            (Some("Dict"), Some("union")) => {
-                fun(dict(var(0), var(1)), fun(dict(var(0), var(1)), dict(var(0), var(1))))
-            }
+            (Some("Dict"), Some("union")) => fun(
+                dict(var(0), var(1)),
+                fun(dict(var(0), var(1)), dict(var(0), var(1))),
+            ),
 
             // ── Sky.Core.Set (M4d) ──
+            // NOTE: the element variable `var(0)` in every Set arm is written
+            // bare here; the `VarKernel` walk ties raw scheme-variable 0 (the
+            // element) to a fresh super-typed variable carrying the Sky
+            // `comparable`-key obligation (`TyBounds::set_elem`, → Rust `Ord`),
+            // exactly as the Dict arms above. See `key_obligation`.
             // empty : Set a  — arity-0 polymorphic value.
             (Some("Set"), Some("empty")) => set(var(0)),
             // size : Set a -> Int
             (Some("Set"), Some("size")) => fun(set(var(0)), int),
             // insert : a -> Set a -> Set a
-            (Some("Set"), Some("insert")) => fun(var(0), fun(set(var(0)), set(var(0)))),
             // remove : a -> Set a -> Set a
-            (Some("Set"), Some("remove")) => fun(var(0), fun(set(var(0)), set(var(0)))),
+            (Some("Set"), Some("insert" | "remove")) => fun(var(0), fun(set(var(0)), set(var(0)))),
             // member : a -> Set a -> Bool
             (Some("Set"), Some("member")) => fun(var(0), fun(set(var(0)), bool_ty)),
             // toList : Set a -> List a
@@ -1561,11 +1613,11 @@ impl<'a> Builder<'a> {
             // fromList : List a -> Set a
             (Some("Set"), Some("fromList")) => fun(list(var(0)), set(var(0))),
             // union : Set a -> Set a -> Set a
-            (Some("Set"), Some("union")) => fun(set(var(0)), fun(set(var(0)), set(var(0)))),
             // intersect : Set a -> Set a -> Set a
-            (Some("Set"), Some("intersect")) => fun(set(var(0)), fun(set(var(0)), set(var(0)))),
             // diff : Set a -> Set a -> Set a
-            (Some("Set"), Some("diff")) => fun(set(var(0)), fun(set(var(0)), set(var(0)))),
+            (Some("Set"), Some("union" | "intersect" | "diff")) => {
+                fun(set(var(0)), fun(set(var(0)), set(var(0))))
+            }
 
             // Unknown kernel: a single flexible variable. The raw id is chosen
             // to be distinct from any real interned symbol's typical range; it

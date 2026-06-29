@@ -19,8 +19,8 @@
 //! 5. on Go FAILURE (panic / non-zero / build error): does NOT cache the Go
 //!    failure as "correct". Instead it builds the SAME program with skyc, runs
 //!    it, and records skyc's (correct) output as the expected with
-//!    `oracle_divergence = true` and a reason — exactly the "Go oracle can be
-//!    buggy" carve-out from the design doc.
+//!    `oracle_divergence = true` and a reason — exactly the "Go oracle can fail
+//!    to produce a reference on a shape" carve-out from the design doc.
 //!
 //! A golden may ALSO opt in to a **Go-succeeds-but-we-differ divergence** by
 //! dropping a `sanctioned.divergence` marker file (its contents are the reason)
@@ -183,8 +183,8 @@ fn capture(name: &str, golden_dir: &Path, oracle_bin: &str) -> Result<Capture, S
         }),
         Ok(go) => {
             // Go BUILT but the program exited non-zero. Treat a non-zero exit as
-            // a Go-side failure on this shape and fall back to skyc, so a buggy
-            // Go runtime crash is never enshrined as the expected value.
+            // a Go-side failure on this shape and fall back to skyc, so a Go
+            // runtime non-zero exit is never enshrined as the expected value.
             let reason = format!(
                 "Go oracle program exited {:?} (non-zero); using skyc output as the reference",
                 go.exit_code

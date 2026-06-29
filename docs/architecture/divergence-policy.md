@@ -20,7 +20,7 @@ A mismatch is a hard failure.
 ## The three kinds of recorded divergence
 
 A divergence is **never silent**. PRINCIPLES.md §2 allows a deliberate
-divergence only when it is *documented rather than silently wrong*. The oracle
+divergence only when it is *documented rather than silent*. The oracle
 records exactly three kinds, all via `oracle_divergence = true` in `oracle.meta`,
 distinguished by the leading TAG on the `divergence_reason`:
 
@@ -29,8 +29,9 @@ distinguished by the leading TAG on the `divergence_reason`:
 The Go oracle panics, exits non-zero, or fails to build on a shape skyc handles
 correctly. The `refresh-oracle` tool detects the Go failure, falls back to
 skyc's own (correct) output, and records it with a reason such as
-`Go oracle failed: …`. This is the original "the Go reference can be buggy"
-carve-out. No marker file is needed — the failure itself triggers the branch.
+`Go oracle failed: …`. This is the original "the Go oracle can fail to produce a
+reference on a shape" carve-out. No marker file is needed — the failure itself
+triggers the branch.
 
 ### 2. `divergence:` kind (Sky's current behaviour differs; we follow a different target)
 

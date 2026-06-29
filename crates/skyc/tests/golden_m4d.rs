@@ -9,7 +9,7 @@
 //!
 //! Set golden tests exercise the `Set` kernel family:
 //!
-//! * `Set.member`                    → `True` (oracle_divergence = true — Go's
+//! * `Set.member`                    → `True` (`oracle_divergence` = true — Go's
 //!   `Set_member` panics on `rt.SkySet`; skyc output is the reference)
 //! * Set union / diff / intersect / dedup sizes → `4 1 2 3` (Go parity)
 //!
@@ -94,7 +94,7 @@ fn dict_keys_count() {
 
 /// `Set.member 3 (Set.fromList [1, 2, 3])` → `True`.
 ///
-/// oracle_divergence = true — Go's `Set_member` panics at runtime on
+/// `oracle_divergence` = true — Go's `Set_member` panics at runtime on
 /// `rt.SkySet`; skyc's correct output (`True`) is the reference.
 #[test]
 fn set_member_present() {
@@ -108,4 +108,20 @@ fn set_member_present() {
 #[test]
 fn set_ops_sizes() {
     assert_runs_and_matches_oracle("m4d_set_ops");
+}
+
+// ── Generic `a -> Set a` — the comparable-key bound lifts onto the skolem ─────
+
+/// `addTo : a -> Set a -> Set a` whose body is `Set.insert x s`. The Set element
+/// obligation lifts `Ord` onto the emitted Rust type parameter
+/// (`fn main_addTo<T1: Ord>(x: T1, s: BTreeSet<T1>) -> BTreeSet<T1>`), so the
+/// generic compiles and `Set.size (addTo 4 (Set.fromList [1, 2, 3]))` → `4`.
+/// Without the bound the emitted `BTreeSet<T1>` would lack `T1: Ord` and `cargo`
+/// would reject it.
+///
+/// `oracle_divergence` = true — the Go oracle program exits non-zero on this
+/// shape; skyc's `4` is the reference (same class as `set_member`).
+#[test]
+fn set_generic_add_to() {
+    assert_runs_and_matches_oracle("m4d_set_generic");
 }

@@ -77,8 +77,8 @@ pub fn build_and_run_emitted(golden_name: &str, emitted_dir: &Path) -> RunOutcom
 /// longer matches `oracle.meta`, fails loudly with "run refresh-oracle" rather
 /// than diffing against a stale `expected_go.txt`. A missing oracle is likewise
 /// a hard failure — never a skip. When the golden is marked `oracle_divergence`
-/// (the Go reference is buggy on this shape), the comparison is against skyc's
-/// own recorded-correct output.
+/// (the Go oracle fails on this shape, or we follow a different target), the
+/// comparison is against skyc's own recorded-correct output.
 #[allow(dead_code)] // exercised by the goldens that opt into cached parity
 pub fn assert_go_parity(golden_name: &str, golden_dir: &Path, skyc_stdout: &str) {
     let outcome = oracle::check_parity(golden_dir, golden_name, skyc_stdout);

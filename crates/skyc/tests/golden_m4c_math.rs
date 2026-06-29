@@ -9,10 +9,10 @@
 //!    own recorded output via a `sanctioned.divergence` marker tagged
 //!    `divergence:`. Rationale: Elm-conformance.
 //!
-//!      * `Math.min 0.4 1.3` → `0.4`   (Sky's AsInt coercion gives `0`)
-//!      * `Math.max 0.4 1.3` → `1.3`   (Sky's AsInt coercion gives `1`)
-//!      * `Math.min "b" "a"` → `"a"`   (lexicographic; Sky's AsInt compare is
-//!                                       not meaningful on String)
+//!      * `Math.min 0.4 1.3` → `0.4`   (Sky's `AsInt` coercion gives `0`)
+//!      * `Math.max 0.4 1.3` → `1.3`   (Sky's `AsInt` coercion gives `1`)
+//!      * `Math.min "b" "a"` → `"a"`   (lexicographic; Sky's `AsInt` compare is
+//!        not meaningful on String)
 //!      * `Math.max "b" "a"` → `"b"`
 //!
 //! 2. **Go parity** — the rest. Here Sky's output is the target, so the cached
@@ -85,7 +85,7 @@ fn math_max_int() {
 
 // ── min / max — Float (divergence-from-sky #136: polymorphic compare, no AsInt coercion) ──
 
-/// `Math.min 0.4 1.3` → `0.4`. Sky's AsInt coercion gives `0`; Sky-Rust
+/// `Math.min 0.4 1.3` → `0.4`. Sky's `AsInt` coercion gives `0`; Sky-Rust
 /// compares `f64`s directly and returns `0.4` unchanged. Divergence from Sky,
 /// rationale: Elm-conformance.
 #[test]
@@ -93,7 +93,7 @@ fn math_min_float_no_truncation() {
     assert_runs_and_matches_oracle("m4c_math_min_float");
 }
 
-/// `Math.max 0.4 1.3` → `1.3`. Sky's AsInt coercion gives `1`; Sky-Rust
+/// `Math.max 0.4 1.3` → `1.3`. Sky's `AsInt` coercion gives `1`; Sky-Rust
 /// returns `1.3`. Divergence from Sky, rationale: Elm-conformance.
 #[test]
 fn math_max_float_no_truncation() {
@@ -103,7 +103,7 @@ fn math_max_float_no_truncation() {
 // ── min / max — String (divergence-from-sky #136: lexicographic polymorphic compare) ──
 
 /// `Math.min "b" "a"` → `"a"`. Polymorphic compare on `String` (lexicographic).
-/// Sky's AsInt compare is not meaningful on String. Divergence from Sky,
+/// Sky's `AsInt` compare is not meaningful on String. Divergence from Sky,
 /// rationale: Elm-conformance.
 #[test]
 fn math_min_string_lexicographic() {

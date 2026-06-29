@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+import Sky.Core.Dict as Dict
+
+
+prices : Dict Float Int
+prices =
+    Dict.insert 1.5 100 Dict.empty
+
+
+main =
+    println (String.fromInt (Dict.size prices))

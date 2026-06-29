@@ -178,7 +178,8 @@ pub struct Meta {
     /// Process exit code recorded alongside `expected_go.txt`.
     pub exit_code: i32,
     /// `true` when `expected_go.txt` holds skyc's output because the Go oracle
-    /// was buggy on this shape (see `divergence_reason`), NOT the Go output.
+    /// failed on this shape, or we follow a different target (see
+    /// `divergence_reason`), NOT the Go output.
     pub oracle_divergence: bool,
     /// Human-readable reason, present only when `oracle_divergence` is `true`.
     pub divergence_reason: Option<String>,
@@ -308,7 +309,7 @@ pub enum ParityError {
         divergence: bool,
         /// The cached `divergence_reason`, if any — used only to label whether
         /// the expectation came from a SANCTIONED divergence (Sky-Rust's own
-        /// deliberate output) or a Go-bug divergence.
+        /// deliberate output) or a Go-failure divergence.
         reason: Option<String>,
         expected: String,
         actual: String,

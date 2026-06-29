@@ -315,8 +315,16 @@ impl Env {
             (
                 "Set",
                 &[
-                    "empty", "size", "insert", "remove", "member", "toList", "fromList", "union",
-                    "intersect", "diff",
+                    "empty",
+                    "size",
+                    "insert",
+                    "remove",
+                    "member",
+                    "toList",
+                    "fromList",
+                    "union",
+                    "intersect",
+                    "diff",
                 ],
             ),
         ];

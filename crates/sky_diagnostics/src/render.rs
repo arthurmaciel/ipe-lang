@@ -571,6 +571,13 @@ const fn feature_label(f: Feature) -> &'static str {
              machinery that is not in place yet \
              [feature: nested-ctor-discrimination]"
         }
+        Feature::FloatKeyedCollection => {
+            "a `Set Float` / `Dict Float _` has no sound Rust representation: \
+             `f64` is neither `Ord` (NaN has no total order) nor `Hash` / `Eq`, \
+             which `BTreeSet` / `HashMap` require — use an `Int`, `Char`, or \
+             `String` element / key instead. Divergence from Sky, rationale: \
+             Rust backend capability [feature: float-keyed-collection]"
+        }
     }
 }
 

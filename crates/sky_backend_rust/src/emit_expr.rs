@@ -967,9 +967,9 @@ fn emit_lambda(
 /// `n` is the variable's 1-based position, which is also its own Rust name
 /// `T{n}` — the arithmetic `::core::ops` traits take `Output = T{n}` so the
 /// operation stays closed over the parameter's type (`x + x : T{n}`). The trait
-/// order is fixed (`Add`, `Sub`, `Mul`, `PartialOrd`, `PartialEq`, `Copy`,
-/// `Clone`) so the emission is deterministic regardless of how the bound set was
-/// assembled.
+/// order is fixed (`Add`, `Sub`, `Mul`, `PartialOrd`, `PartialEq`, `Ord`,
+/// `Hash`, `Copy`, `Clone`) so the emission is deterministic regardless of how
+/// the bound set was assembled.
 fn render_bounds(bounds: BoundSet, n: usize) -> String {
     if bounds.is_unbounded() {
         return String::new();
@@ -989,6 +989,17 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
     }
     if bounds.has_eq() {
         traits.push("PartialEq".to_owned());
+    }
+    if bounds.has_ord_total() {
+        // `Ord` (total order) for a `Set` element / sorted `Dict` op; carries
+        // `Eq` + `PartialOrd` + `PartialEq` as supertraits, so a `Dict` key's
+        // `HashMap` `Eq` requirement is met without a separate `Eq` bound.
+        traits.push("Ord".to_owned());
+    }
+    if bounds.has_hash() {
+        // `Hash` for a `Dict` key's `HashMap` backing. Fully qualified — the
+        // trait (unlike its derive macro) is not in the Rust prelude.
+        traits.push("::core::hash::Hash".to_owned());
     }
     if bounds.has_copy() {
         traits.push("Copy".to_owned());
