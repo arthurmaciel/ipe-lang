@@ -327,6 +327,23 @@ impl Env {
                     "diff",
                 ],
             ),
+            // `Sky.Core.Bytes` — byte-buffer kernels (M4e).
+            (
+                "Bytes",
+                &[
+                    "empty",
+                    "length",
+                    "isEmpty",
+                    "fromString",
+                    "toString",
+                    "fromHex",
+                    "toHex",
+                    "fromBase64",
+                    "toBase64",
+                    "append",
+                    "slice",
+                ],
+            ),
         ];
 
         for (qual, funcs) in QUALIFIERS {

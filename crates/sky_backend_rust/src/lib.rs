@@ -530,6 +530,7 @@ fn collect_record_shapes(
         | IrType::Char
         | IrType::Unit
         | IrType::TaskUnit
+        | IrType::Bytes
         // A generic type variable carries no concrete record shape of its own.
         | IrType::Generic(_) => {}
     }
@@ -607,6 +608,7 @@ fn type_reaches_enum(
         | IrType::Char
         | IrType::Unit
         | IrType::TaskUnit
+        | IrType::Bytes
         | IrType::Fun(_, _)
         | IrType::Generic(_) => false,
     }
@@ -631,7 +633,8 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::Str
         | IrType::Char
         | IrType::Unit
-        | IrType::TaskUnit => false,
+        | IrType::TaskUnit
+        | IrType::Bytes => false,
     }
 }
 
@@ -681,7 +684,8 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::Str
         | IrType::Char
         | IrType::Unit
-        | IrType::TaskUnit => {}
+        | IrType::TaskUnit
+        | IrType::Bytes => {}
     }
 }
 
@@ -882,7 +886,8 @@ fn match_template(
         | IrType::Str
         | IrType::Char
         | IrType::Unit
-        | IrType::TaskUnit => {
+        | IrType::TaskUnit
+        | IrType::Bytes => {
             if template == concrete {
                 Ok(())
             } else {

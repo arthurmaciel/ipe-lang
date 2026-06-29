@@ -102,6 +102,22 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   (Divergence from Sky, rationale: Elm-conformance)`. (`Math.abs` stays
   `Int -> Int` — the `AsInt` path is correct there and is not a divergence.)
 
+- **`Sky.Core.Bytes` — `Vec<u8>` vs Sky's `type alias Bytes = String` (M4e).**
+  Sky/Go defines `type alias Bytes = String`. Go's `string` is an arbitrary byte
+  sequence (no UTF-8 constraint), so the alias is cost-free and correct in Go.
+  Rust's `String` is UTF-8-constrained: mapping `Bytes → String` would silently
+  corrupt non-UTF-8 binary payloads (e.g. image/audio/crypto buffers). Sky-Rust
+  makes `Bytes` a DISTINCT primitive lowering to `Vec<u8>`, providing lossless
+  handling of arbitrary binary data. String ↔ Bytes conversions are always
+  explicit: `Bytes.fromString` UTF-8-encodes; `Bytes.toString` UTF-8-decodes
+  returning `Maybe String`. This differs from Sky's surface (where `Bytes` is
+  `String`, so no conversion is needed), hence `oracle_divergence = true` for all
+  `Sky.Core.Bytes` golden tests. Rationale: Rust type-system correctness — a
+  lossless byte buffer is strictly more correct than a transparent alias whose
+  semantics only hold in Go. Recorded as `divergence: Bytes is Vec<u8> in
+  Sky-Rust; Sky/Go aliases Bytes = String — programs using Sky.Core.Bytes produce
+  different output under the Go oracle`.
+
 ## How to add a marker divergence (`divergence:` or `sanctioned:`)
 
 1. Decide the tag. `sanctioned:` — Sky-Rust is genuinely more correct

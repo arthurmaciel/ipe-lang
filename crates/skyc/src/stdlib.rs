@@ -39,6 +39,12 @@ const CHAR: &str = include_str!("../stdlib/Sky/Core/Char.sky");
 const DICT: &str = include_str!("../stdlib/Sky/Core/Dict.sky");
 /// `Sky.Core.Set` — unordered set of unique elements (M4d).
 const SET: &str = include_str!("../stdlib/Sky/Core/Set.sky");
+/// `Sky.Core.Bytes` — arbitrary byte buffer, distinct from `String` (M4e).
+///
+/// Divergence from Sky: Sky defines `type alias Bytes = String`; Sky-Rust
+/// makes `Bytes` a distinct primitive lowering to `Vec<u8>` (lossless for
+/// non-UTF-8 binary). See `docs/architecture/divergence-policy.md`.
+const BYTES: &str = include_str!("../stdlib/Sky/Core/Bytes.sky");
 
 /// Every embedded `Sky.Core` module, keyed by its dotted import name.
 ///
@@ -77,6 +83,10 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Sky.Core.Set",
         source: SET,
+    },
+    StdModule {
+        name: "Sky.Core.Bytes",
+        source: BYTES,
     },
 ];
 

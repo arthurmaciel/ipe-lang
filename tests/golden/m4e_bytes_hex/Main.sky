@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+import Sky.Core.Bytes as Bytes
+
+fromHexOrEmpty : String -> Bytes
+fromHexOrEmpty s =
+    case Bytes.fromHex s of
+        Just b ->
+            b
+
+        Nothing ->
+            Bytes.empty
+
+main =
+    let
+        hex = Bytes.toHex (Bytes.fromString "Hi!")
+
+        roundtrip = Bytes.toHex (fromHexOrEmpty "486921")
+
+        binary = Bytes.toHex (fromHexOrEmpty "9efe")
+    in
+    println (String.join " " [ hex, roundtrip, binary ])

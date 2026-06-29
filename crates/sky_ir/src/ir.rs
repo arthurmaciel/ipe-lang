@@ -406,6 +406,16 @@ pub enum IrType {
     /// `std::collections::BTreeSet`). Iteration is sorted on the Rust backend
     /// (Go uses an unordered internal map) — a conforming strengthening.
     Set(Box<Self>),
+    /// The built-in `Bytes` type — an arbitrary byte buffer.
+    ///
+    /// Divergence from Sky: Sky defines `type alias Bytes = String` (Go's
+    /// `string` is a byte sequence, making the alias cost-free). Rust's
+    /// `String` is UTF-8 constrained; mapping `Bytes` to `String` would be
+    /// unsound for non-UTF-8 binary payloads. Sky-Rust makes `Bytes` a
+    /// distinct primitive lowering to `Vec<u8>` — lossless for arbitrary
+    /// binary, with explicit UTF-8 conversion via `Bytes.fromString` /
+    /// `Bytes.toString`. Rationale: Rust type-system correctness.
+    Bytes,
 }
 
 /// An expression in the typed IR.
@@ -870,6 +880,33 @@ pub enum KernelFn {
     SetIntersect,
     /// `Set.diff : Set a -> Set a -> Set a`.
     SetDiff,
+    // ── Bytes kernels (M4e) ─────────────────────────────────────────────────
+    /// `Bytes.empty : Bytes` — the empty byte buffer (arity 0).
+    BytesEmpty,
+    /// `Bytes.length : Bytes -> Int` — byte count of the buffer.
+    BytesLength,
+    /// `Bytes.isEmpty : Bytes -> Bool`.
+    BytesIsEmpty,
+    /// `Bytes.fromString : String -> Bytes` — UTF-8 encode a Sky string into bytes.
+    BytesFromString,
+    /// `Bytes.toString : Bytes -> Maybe String` — UTF-8 decode bytes; `Nothing`
+    /// when the buffer is not valid UTF-8.
+    BytesToString,
+    /// `Bytes.fromHex : String -> Maybe Bytes` — parse a lowercase/uppercase hex
+    /// string into bytes; `Nothing` on any non-hex character or odd length.
+    BytesFromHex,
+    /// `Bytes.toHex : Bytes -> String` — hex-encode bytes (lowercase).
+    BytesToHex,
+    /// `Bytes.fromBase64 : String -> Maybe Bytes` — standard-base64 decode;
+    /// `Nothing` on bad padding or non-base64 characters.
+    BytesFromBase64,
+    /// `Bytes.toBase64 : Bytes -> String` — standard-base64 encode.
+    BytesToBase64,
+    /// `Bytes.append : Bytes -> Bytes -> Bytes` — concatenate two byte buffers.
+    BytesAppend,
+    /// `Bytes.slice : Int -> Int -> Bytes -> Bytes` — byte-indexed slice with
+    /// negative-index-from-end semantics (mirrors `String.slice`).
+    BytesSlice,
 }
 
 /// Binary operators.

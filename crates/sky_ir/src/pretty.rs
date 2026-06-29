@@ -103,6 +103,7 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
             ir_type_name(interner, v)
         ),
         IrType::Set(a) => format!("Set {}", ir_type_name(interner, a)),
+        IrType::Bytes => "Bytes".to_owned(),
         IrType::Tuple(elems) => {
             let inner = elems
                 .iter()
@@ -299,6 +300,18 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SetUnion => "Set.union",
         KernelFn::SetIntersect => "Set.intersect",
         KernelFn::SetDiff => "Set.diff",
+        // ── Bytes kernels (M4e) ──────────────────────────────────────────────
+        KernelFn::BytesEmpty => "Bytes.empty",
+        KernelFn::BytesLength => "Bytes.length",
+        KernelFn::BytesIsEmpty => "Bytes.isEmpty",
+        KernelFn::BytesFromString => "Bytes.fromString",
+        KernelFn::BytesToString => "Bytes.toString",
+        KernelFn::BytesFromHex => "Bytes.fromHex",
+        KernelFn::BytesToHex => "Bytes.toHex",
+        KernelFn::BytesFromBase64 => "Bytes.fromBase64",
+        KernelFn::BytesToBase64 => "Bytes.toBase64",
+        KernelFn::BytesAppend => "Bytes.append",
+        KernelFn::BytesSlice => "Bytes.slice",
     }
 }
 

@@ -1,0 +1,6 @@
+# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
+main_sky_sha256 = 3893c99a45cbb777a0175fba94f5d026edd17723af6fc3304d8ad0f0de2a8b87
+go_sky_version = sky dev
+exit_code = 0
+oracle_divergence = true
+divergence_reason = divergence: Bytes is Vec<u8> in Sky-Rust; Sky/Go aliases Bytes = String — programs using Sky.Core.Bytes produce different output under the Go oracle
