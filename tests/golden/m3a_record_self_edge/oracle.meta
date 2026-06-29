@@ -1,0 +1,6 @@
+# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
+main_sky_sha256 = ec92cb7c7b1ece253eb2e491d1152fae2d0bdb52c44cd238c952723317266c07
+go_sky_version = sky dev
+exit_code = 0
+oracle_divergence = true
+divergence_reason = Go oracle failed: Go `sky build` exited Some(1): -- Discovering modules -- PARSE ERROR ─────────────────────────────────────── Main.sky:4:28 [E0001] 2 | import Sky.Core.Prelude exposing (..) 3 | 4 | type RChain = REnd | RNode { rest : RChain, val : Int } | ^ 5 | Unexpected token here while parsing the module body. The module body is a sequence of top-level declarations (`name = ...`, `type alias`, `type`, `import`). This usually means: * A typo in a keyword (`tyep` for `type`). * An expression continuing onto the next line without enough indentation to count as a continuation. * A stray `=` or `:` not associated with any binding.; using skyc output as the reference

@@ -99,9 +99,13 @@ fn end_to_end_builds_and_prints_six() {
     assert!(built.is_ok(), "build failed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("m1_nested_lambda", &out);
-    assert_eq!(
-        outcome.stdout, "6\n",
-        "program prints 6 (Go-backend parity)"
+    support::assert_go_parity(
+        "m1_nested_lambda",
+        &repo_root()
+            .join("tests")
+            .join("golden")
+            .join("m1_nested_lambda"),
+        &outcome.stdout,
     );
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
 }

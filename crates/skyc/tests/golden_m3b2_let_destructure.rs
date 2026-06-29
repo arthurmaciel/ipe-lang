@@ -78,9 +78,13 @@ fn end_to_end_builds_and_prints_eighty_four() {
     assert!(built.is_ok(), "build failed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("m3b2_let_destructure", &out);
-    assert_eq!(
-        outcome.stdout, "84\n",
-        "program prints 84 (Go-backend parity)"
+    support::assert_go_parity(
+        "m3b2_let_destructure",
+        &repo_root()
+            .join("tests")
+            .join("golden")
+            .join("m3b2_let_destructure"),
+        &outcome.stdout,
     );
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
 }

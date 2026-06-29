@@ -89,17 +89,31 @@ fn run_go_oracle(oracle_bin: &str, main_sky: &Path, scratch: &Path) -> Result<Ru
     let dest = scratch.join(MAIN_SKY);
     std::fs::copy(main_sky, &dest).map_err(|e| format!("cannot copy Main.sky: {e}"))?;
 
+    // The Go `sky` binary ALSO honours `SKY_RUNTIME_DIR` — but that variable is
+    // ours, pointing at the *Rust* runtime so skyc can resolve it on the
+    // divergence path. If it leaks into the Go build the Go compiler vendors a
+    // bogus single-file `rt.go` from the Rust tree and `go build` fails with a
+    // wall of `undefined: rt.*`. Strip it for the Go subprocess only; the tool's
+    // own env keeps it for the skyc fallback.
     let build = Command::new(oracle_bin)
         .arg("build")
         .arg(MAIN_SKY)
         .current_dir(scratch)
+        .env_remove("SKY_RUNTIME_DIR")
         .output()
         .map_err(|e| format!("cannot spawn Go `sky build`: {e}"))?;
     if !build.status.success() {
+        // The Go reference prints its formatted diagnostics to stdout (the parse
+        // / type errors) AND plain `go build` errors to stderr. Capture both so
+        // the recorded divergence note documents *why* Go could not produce a
+        // reference, not just the exit code.
+        let stdout = String::from_utf8_lossy(&build.stdout);
+        let stderr = String::from_utf8_lossy(&build.stderr);
+        let diag = format!("{stdout}{stderr}");
+        let diag = diag.trim();
         return Err(format!(
-            "Go `sky build` exited {:?}\n{}",
+            "Go `sky build` exited {:?}: {diag}",
             build.status.code(),
-            String::from_utf8_lossy(&build.stderr)
         ));
     }
 
