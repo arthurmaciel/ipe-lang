@@ -360,6 +360,17 @@ pub enum IrType {
     /// are NOT representable here: they are rejected at lowering (M2c) so every
     /// `Generic` the backend sees is a true parametric pass-through.
     Generic(Symbol),
+    /// The built-in `Dict k v` associative map type, carrying its key type then
+    /// its value type. Renders as the runtime's `HashMap<K, V>` (backed by
+    /// `std::collections::HashMap`). Distinct from a user [`IrType::Enum`] so
+    /// the backend maps it to the shared runtime representation. Key iteration
+    /// is sorted for determinism on the Rust backend (Go iterates map-order).
+    Dict(Box<Self>, Box<Self>),
+    /// The built-in `Set a` unordered-set type, carrying its element type.
+    /// Renders as the runtime's `BTreeSet<A>` (backed by
+    /// `std::collections::BTreeSet`). Iteration is sorted on the Rust backend
+    /// (Go uses an unordered internal map) — a conforming strengthening.
+    Set(Box<Self>),
 }
 
 /// An expression in the typed IR.
@@ -774,6 +785,56 @@ pub enum KernelFn {
     /// ambiguous `SkyResult<_, _>` (which rustc rejects with E0282). It maps to
     /// the runtime's `ok_res` helper.
     ResultOkDefault,
+    // ── Dict kernels (M4d) ──────────────────────────────────────────────────
+    /// `Dict.empty : Dict k v` — the empty dictionary (arity 0).
+    DictEmpty,
+    /// `Dict.isEmpty : Dict k v -> Bool`.
+    DictIsEmpty,
+    /// `Dict.size : Dict k v -> Int`.
+    DictSize,
+    /// `Dict.keys : Dict k v -> List k` — all keys (sorted on Rust backend).
+    DictKeys,
+    /// `Dict.values : Dict k v -> List v` — all values (key-sorted on Rust backend).
+    DictValues,
+    /// `Dict.toList : Dict k v -> List (k, v)` — all pairs (key-sorted on Rust backend).
+    DictToList,
+    /// `Dict.fromList : List (k, v) -> Dict k v`.
+    DictFromList,
+    /// `Dict.get : k -> Dict k v -> Maybe v`.
+    DictGet,
+    /// `Dict.member : k -> Dict k v -> Bool`.
+    DictMember,
+    /// `Dict.remove : k -> Dict k v -> Dict k v`.
+    DictRemove,
+    /// `Dict.union : Dict k v -> Dict k v -> Dict k v` — left-biased merge.
+    DictUnion,
+    /// `Dict.map : (k -> v -> w) -> Dict k v -> Dict k w`.
+    DictMap,
+    /// `Dict.insert : k -> v -> Dict k v -> Dict k v`.
+    DictInsert,
+    /// `Dict.foldl : (k -> v -> a -> a) -> a -> Dict k v -> a`.
+    DictFoldl,
+    // ── Set kernels (M4d) ───────────────────────────────────────────────────
+    /// `Set.empty : Set a` — the empty set (arity 0).
+    SetEmpty,
+    /// `Set.size : Set a -> Int`.
+    SetSize,
+    /// `Set.toList : Set a -> List a` — all elements (sorted on Rust backend).
+    SetToList,
+    /// `Set.fromList : List a -> Set a` — deduplicated.
+    SetFromList,
+    /// `Set.member : a -> Set a -> Bool`.
+    SetMember,
+    /// `Set.insert : a -> Set a -> Set a`.
+    SetInsert,
+    /// `Set.remove : a -> Set a -> Set a`.
+    SetRemove,
+    /// `Set.union : Set a -> Set a -> Set a`.
+    SetUnion,
+    /// `Set.intersect : Set a -> Set a -> Set a`.
+    SetIntersect,
+    /// `Set.diff : Set a -> Set a -> Set a`.
+    SetDiff,
 }
 
 /// Binary operators.

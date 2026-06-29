@@ -331,6 +331,32 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::MathMod => "math_mod",
         KernelFn::MathRemainder => "math_remainder",
         KernelFn::ResultOkDefault => "ok_res",
+        // ── Dict kernels ────────────────────────────────────────────────────
+        KernelFn::DictEmpty => "dict_empty",
+        KernelFn::DictIsEmpty => "dict_is_empty",
+        KernelFn::DictSize => "dict_size",
+        KernelFn::DictKeys => "dict_keys",
+        KernelFn::DictValues => "dict_values",
+        KernelFn::DictToList => "dict_to_list",
+        KernelFn::DictFromList => "dict_from_list",
+        KernelFn::DictGet => "dict_get",
+        KernelFn::DictMember => "dict_member",
+        KernelFn::DictRemove => "dict_remove",
+        KernelFn::DictUnion => "dict_union",
+        KernelFn::DictMap => "dict_map",
+        KernelFn::DictInsert => "dict_insert",
+        KernelFn::DictFoldl => "dict_foldl",
+        // ── Set kernels ─────────────────────────────────────────────────────
+        KernelFn::SetEmpty => "set_empty",
+        KernelFn::SetSize => "set_size",
+        KernelFn::SetToList => "set_to_list",
+        KernelFn::SetFromList => "set_from_list",
+        KernelFn::SetMember => "set_member",
+        KernelFn::SetInsert => "set_insert",
+        KernelFn::SetRemove => "set_remove",
+        KernelFn::SetUnion => "set_union",
+        KernelFn::SetIntersect => "set_intersect",
+        KernelFn::SetDiff => "set_diff",
     }
 }
 

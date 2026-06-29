@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+import Sky.Core.Set as Set
+
+main =
+    let
+        u = Set.size (Set.union (Set.fromList [1, 2, 3]) (Set.fromList [2, 3, 4]))
+        d = Set.size (Set.diff (Set.fromList [1, 2, 3]) (Set.fromList [2, 3]))
+        i = Set.size (Set.intersect (Set.fromList [1, 2, 3]) (Set.fromList [2, 3, 4]))
+        s = Set.size (Set.fromList [1, 1, 2, 2, 3])
+    in
+    println (String.join " " [String.fromInt u, String.fromInt d, String.fromInt i, String.fromInt s])

@@ -75,6 +75,24 @@ fn list_arg_bug() -> Diagnostic {
     )
 }
 
+/// The `Dict k v` type carries exactly two arguments; an arity-2 guard cleared
+/// them, so a missing argument here is an unreachable internal invariant.
+fn dict_arg_bug() -> Diagnostic {
+    bug(
+        "sky_lower::ir_type",
+        "Dict applied without its key/value types",
+    )
+}
+
+/// The `Set a` type carries exactly one argument; an arity-1 guard cleared it,
+/// so a missing element type here is an unreachable internal invariant.
+fn set_arg_bug() -> Diagnostic {
+    bug(
+        "sky_lower::ir_type",
+        "Set applied without its element type",
+    )
+}
+
 /// Does this solved [`Ty`] contain a free type variable anywhere? Used to keep
 /// the lowerer's record-shape collection to fully-concrete shapes — a
 /// variable-bearing (generic) record reaches the backend through a signature,
@@ -207,6 +225,8 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         IrType::Enum { args, .. } => args.iter().any(ir_contains_fun),
         IrType::Maybe(elem) | IrType::List(elem) => ir_contains_fun(elem),
         IrType::Result(err, ok) => ir_contains_fun(err) || ir_contains_fun(ok),
+        IrType::Dict(k, v) => ir_contains_fun(k) || ir_contains_fun(v),
+        IrType::Set(a) => ir_contains_fun(a),
         IrType::Tuple(elems) => elems.iter().any(ir_contains_fun),
         IrType::Record(fields) => fields.values().any(ir_contains_fun),
     }
@@ -742,6 +762,18 @@ impl<'a> Lowerer<'a> {
                         self.ir_type_from_canon(args.first().ok_or_else(list_arg_bug)?, generics)?;
                     Ok(IrType::List(Box::new(elem)))
                 }
+                "Dict" if args.len() == 2 => {
+                    let k =
+                        self.ir_type_from_canon(args.first().ok_or_else(dict_arg_bug)?, generics)?;
+                    let v =
+                        self.ir_type_from_canon(args.get(1).ok_or_else(dict_arg_bug)?, generics)?;
+                    Ok(IrType::Dict(Box::new(k), Box::new(v)))
+                }
+                "Set" if args.len() == 1 => {
+                    let elem =
+                        self.ir_type_from_canon(args.first().ok_or_else(set_arg_bug)?, generics)?;
+                    Ok(IrType::Set(Box::new(elem)))
+                }
                 _ if self.enum_variants.contains_key(name) => {
                     let mut ir_args = Vec::with_capacity(args.len());
                     for a in args {
@@ -966,6 +998,16 @@ impl<'a> Lowerer<'a> {
                     let elem =
                         self.ir_type_from_ty(args.first().ok_or_else(list_arg_bug)?, span)?;
                     Ok(IrType::List(Box::new(elem)))
+                }
+                "Dict" if args.len() == 2 => {
+                    let k = self.ir_type_from_ty(args.first().ok_or_else(dict_arg_bug)?, span)?;
+                    let v = self.ir_type_from_ty(args.get(1).ok_or_else(dict_arg_bug)?, span)?;
+                    Ok(IrType::Dict(Box::new(k), Box::new(v)))
+                }
+                "Set" if args.len() == 1 => {
+                    let elem =
+                        self.ir_type_from_ty(args.first().ok_or_else(set_arg_bug)?, span)?;
+                    Ok(IrType::Set(Box::new(elem)))
                 }
                 _ if self.enum_variants.contains_key(name) => {
                     // A use-site enum type carries its solved type arguments, so
@@ -1518,14 +1560,16 @@ impl<'a> Lowerer<'a> {
         match callee {
             // Arity is fixed per kernel. Each variant is listed explicitly so a
             // new entry can never silently inherit a wrong count.
-            // ── Math constants — arity 0 ─────────────────────────────────────
+            // ── Math constants / Dict.empty / Set.empty — arity 0 ───────────
             Callee::Kernel(
                 KernelFn::MathPi
                 | KernelFn::MathE
                 | KernelFn::MathPhi
                 | KernelFn::MathSqrt2
                 | KernelFn::MathInf
-                | KernelFn::MathNan,
+                | KernelFn::MathNan
+                | KernelFn::DictEmpty
+                | KernelFn::SetEmpty,
             ) => Ok(0),
             Callee::Kernel(
                 KernelFn::StringFromInt
@@ -1563,6 +1607,17 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListTail
                 | KernelFn::ListReverse
                 | KernelFn::ResultOkDefault
+                // ── Dict arity-1 ─────────────────────────────────────────────
+                | KernelFn::DictIsEmpty
+                | KernelFn::DictSize
+                | KernelFn::DictKeys
+                | KernelFn::DictValues
+                | KernelFn::DictToList
+                | KernelFn::DictFromList
+                // ── Set arity-1 ──────────────────────────────────────────────
+                | KernelFn::SetSize
+                | KernelFn::SetToList
+                | KernelFn::SetFromList
                 // ── Math arity-1 (Int → Int) ─────────────────────────────────
                 | KernelFn::MathAbs
                 // ── Math arity-1 (Float → Float) ────────────────────────────
@@ -1613,6 +1668,19 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ResultMap
                 | KernelFn::MathMin
                 | KernelFn::MathMax
+                // ── Dict arity-2 ─────────────────────────────────────────────
+                | KernelFn::DictGet
+                | KernelFn::DictMember
+                | KernelFn::DictRemove
+                | KernelFn::DictUnion
+                | KernelFn::DictMap
+                // ── Set arity-2 ──────────────────────────────────────────────
+                | KernelFn::SetMember
+                | KernelFn::SetInsert
+                | KernelFn::SetRemove
+                | KernelFn::SetUnion
+                | KernelFn::SetIntersect
+                | KernelFn::SetDiff
                 // ── Math arity-2 (Float → Float → Float) ────────────────────
                 | KernelFn::MathPow
                 | KernelFn::MathHypot
@@ -1626,7 +1694,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StringPadLeft
                 | KernelFn::StringPadRight
                 | KernelFn::ListFoldl
-                | KernelFn::ListFoldr,
+                | KernelFn::ListFoldr
+                // ── Dict arity-3 ─────────────────────────────────────────────
+                | KernelFn::DictInsert
+                | KernelFn::DictFoldl,
             ) => Ok(3),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
@@ -1790,6 +1861,32 @@ impl<'a> Lowerer<'a> {
                     ("Math", "atan2") => Ok(Callee::Kernel(KernelFn::MathAtan2)),
                     ("Math", "mod") => Ok(Callee::Kernel(KernelFn::MathMod)),
                     ("Math", "remainder") => Ok(Callee::Kernel(KernelFn::MathRemainder)),
+                    // ── Dict kernels ───────────────────────────────────────
+                    ("Dict", "empty") => Ok(Callee::Kernel(KernelFn::DictEmpty)),
+                    ("Dict", "isEmpty") => Ok(Callee::Kernel(KernelFn::DictIsEmpty)),
+                    ("Dict", "size") => Ok(Callee::Kernel(KernelFn::DictSize)),
+                    ("Dict", "keys") => Ok(Callee::Kernel(KernelFn::DictKeys)),
+                    ("Dict", "values") => Ok(Callee::Kernel(KernelFn::DictValues)),
+                    ("Dict", "toList") => Ok(Callee::Kernel(KernelFn::DictToList)),
+                    ("Dict", "fromList") => Ok(Callee::Kernel(KernelFn::DictFromList)),
+                    ("Dict", "get") => Ok(Callee::Kernel(KernelFn::DictGet)),
+                    ("Dict", "member") => Ok(Callee::Kernel(KernelFn::DictMember)),
+                    ("Dict", "remove") => Ok(Callee::Kernel(KernelFn::DictRemove)),
+                    ("Dict", "union") => Ok(Callee::Kernel(KernelFn::DictUnion)),
+                    ("Dict", "map") => Ok(Callee::Kernel(KernelFn::DictMap)),
+                    ("Dict", "insert") => Ok(Callee::Kernel(KernelFn::DictInsert)),
+                    ("Dict", "foldl") => Ok(Callee::Kernel(KernelFn::DictFoldl)),
+                    // ── Set kernels ────────────────────────────────────────
+                    ("Set", "empty") => Ok(Callee::Kernel(KernelFn::SetEmpty)),
+                    ("Set", "size") => Ok(Callee::Kernel(KernelFn::SetSize)),
+                    ("Set", "toList") => Ok(Callee::Kernel(KernelFn::SetToList)),
+                    ("Set", "fromList") => Ok(Callee::Kernel(KernelFn::SetFromList)),
+                    ("Set", "member") => Ok(Callee::Kernel(KernelFn::SetMember)),
+                    ("Set", "insert") => Ok(Callee::Kernel(KernelFn::SetInsert)),
+                    ("Set", "remove") => Ok(Callee::Kernel(KernelFn::SetRemove)),
+                    ("Set", "union") => Ok(Callee::Kernel(KernelFn::SetUnion)),
+                    ("Set", "intersect") => Ok(Callee::Kernel(KernelFn::SetIntersect)),
+                    ("Set", "diff") => Ok(Callee::Kernel(KernelFn::SetDiff)),
                     // A kernel beyond the wired set (`Time.now`, …).
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),

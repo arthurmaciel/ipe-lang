@@ -1,0 +1,7 @@
+module Main exposing (main)
+
+import Sky.Core.Dict as Dict
+import Sky.Core.Maybe as Maybe
+
+main =
+    println (String.fromInt (Maybe.withDefault (-1) (Dict.get "a" (Dict.insert "a" 42 Dict.empty))))
