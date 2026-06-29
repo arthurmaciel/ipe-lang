@@ -1435,44 +1435,24 @@ impl<'a> Builder<'a> {
             // divergence, PR #136), so the result keeps the argument's type.
             (Some("Math"), Some("min" | "max")) => fun(var(0), fun(var(0), var(0))),
             // Constants — bare Float values (arity 0).
-            (
-                Some("Math"),
-                Some("pi" | "e" | "phi" | "sqrt2" | "inf" | "nan"),
-            ) => float,
+            (Some("Math"), Some("pi" | "e" | "phi" | "sqrt2" | "inf" | "nan")) => float,
             // abs : Int -> Int.
             (Some("Math"), Some("abs")) => fun(int.clone(), int),
             // Arity-1 Float -> Float.
             (
                 Some("Math"),
                 Some(
-                    "sqrt"
-                    | "cbrt"
-                    | "exp"
-                    | "exp2"
-                    | "log"
-                    | "log2"
-                    | "log10"
-                    | "sin"
-                    | "cos"
-                    | "tan"
-                    | "asin"
-                    | "acos"
-                    | "atan"
-                    | "sinh"
-                    | "cosh"
-                    | "tanh"
-                    | "asinh"
-                    | "acosh"
-                    | "atanh",
+                    "sqrt" | "cbrt" | "exp" | "exp2" | "log" | "log2" | "log10" | "sin" | "cos"
+                    | "tan" | "asin" | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh"
+                    | "acosh" | "atanh",
                 ),
             ) => fun(float.clone(), float),
             // Arity-1 Float -> Int (rounding functions).
             (Some("Math"), Some("floor" | "ceil" | "round" | "trunc")) => fun(float, int),
             // Arity-2 Float -> Float -> Float.
-            (
-                Some("Math"),
-                Some("pow" | "hypot" | "atan2" | "mod" | "remainder"),
-            ) => fun(float.clone(), fun(float.clone(), float)),
+            (Some("Math"), Some("pow" | "hypot" | "atan2" | "mod" | "remainder")) => {
+                fun(float.clone(), fun(float.clone(), float))
+            }
 
             // Unknown kernel: a single flexible variable. The raw id is chosen
             // to be distinct from any real interned symbol's typical range; it
