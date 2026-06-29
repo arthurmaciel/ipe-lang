@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+import Sky.Core.Bytes as Bytes
+
+toStringOr : String -> Bytes -> String
+toStringOr fallback b =
+    case Bytes.toString b of
+        Just s ->
+            s
+
+        Nothing ->
+            fallback
+
+fromHexOrEmpty : String -> Bytes
+fromHexOrEmpty s =
+    case Bytes.fromHex s of
+        Just b ->
+            b
+
+        Nothing ->
+            Bytes.empty
+
+main =
+    let
+        asciiStr = toStringOr "<invalid>" (Bytes.fromString "Hi!")
+
+        binaryStr = toStringOr "<invalid>" (fromHexOrEmpty "9efe")
+
+        appended = Bytes.toHex (Bytes.append (Bytes.fromString "Hi!") (Bytes.fromString "Hi!"))
+    in
+    println (String.join " " [ asciiStr, binaryStr, appended ])

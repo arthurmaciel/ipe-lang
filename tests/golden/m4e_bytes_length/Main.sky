@@ -1,0 +1,15 @@
+module Main exposing (main)
+
+import Sky.Core.Bytes as Bytes
+
+main =
+    let
+        e = Bytes.length Bytes.empty
+
+        s = Bytes.length (Bytes.fromString "Hello")
+
+        isEmpty0 = if Bytes.isEmpty Bytes.empty then 1 else 0
+
+        isEmpty1 = if Bytes.isEmpty (Bytes.fromString "x") then 1 else 0
+    in
+    println (String.join " " [ String.fromInt e, String.fromInt s, String.fromInt isEmpty0, String.fromInt isEmpty1 ])

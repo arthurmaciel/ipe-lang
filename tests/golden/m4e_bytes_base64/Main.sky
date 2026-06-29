@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+import Sky.Core.Bytes as Bytes
+
+fromBase64OrEmpty : String -> Bytes
+fromBase64OrEmpty s =
+    case Bytes.fromBase64 s of
+        Just b ->
+            b
+
+        Nothing ->
+            Bytes.empty
+
+main =
+    let
+        b64 = Bytes.toBase64 (Bytes.fromString "Hi!")
+
+        roundtrip = Bytes.toHex (fromBase64OrEmpty "SGkh")
+
+        binary = Bytes.toBase64 (fromBase64OrEmpty "nv4=")
+    in
+    println (String.join " " [ b64, roundtrip, binary ])

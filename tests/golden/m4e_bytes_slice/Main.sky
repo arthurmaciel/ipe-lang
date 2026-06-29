@@ -1,0 +1,13 @@
+module Main exposing (main)
+
+import Sky.Core.Bytes as Bytes
+
+main =
+    let
+        middle = Bytes.toHex (Bytes.slice 1 4 (Bytes.fromString "Hello!"))
+
+        none = Bytes.length (Bytes.slice 3 3 (Bytes.fromString "Hello!"))
+
+        oob = Bytes.length (Bytes.slice 2 100 (Bytes.fromString "Hello!"))
+    in
+    println (String.join " " [ middle, String.fromInt none, String.fromInt oob ])

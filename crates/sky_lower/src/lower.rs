@@ -218,6 +218,7 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::Char
         | IrType::Unit
         | IrType::TaskUnit
+        | IrType::Bytes
         | IrType::Generic(_) => false,
         IrType::Enum { args, .. } => args.iter().any(ir_contains_fun),
         IrType::Maybe(elem) | IrType::List(elem) => ir_contains_fun(elem),
@@ -754,6 +755,10 @@ impl<'a> Lowerer<'a> {
                 "Bool" => Ok(IrType::Bool),
                 "String" => Ok(IrType::Str),
                 "Char" => Ok(IrType::Char),
+                // `Bytes` is a built-in distinct primitive (Vec<u8> on Rust;
+                // distinct from String). Divergence from Sky: Sky aliases
+                // Bytes = String; Sky-Rust makes Bytes a proper byte type.
+                "Bytes" => Ok(IrType::Bytes),
                 // The built-in `Maybe a` / `Result e a` map to dedicated IR
                 // types, ahead of the user-enum lookup.
                 "Maybe" if args.len() == 1 => {
@@ -985,6 +990,9 @@ impl<'a> Lowerer<'a> {
                 "Bool" => Ok(IrType::Bool),
                 "String" => Ok(IrType::Str),
                 "Char" => Ok(IrType::Char),
+                // `Bytes` is a built-in distinct primitive (Vec<u8> on Rust).
+                // Divergence from Sky: Sky aliases Bytes = String.
+                "Bytes" => Ok(IrType::Bytes),
                 "Task" if args.len() == 1 && matches!(args.first(), Some(Ty::Unit)) => {
                     Ok(IrType::TaskUnit)
                 }
@@ -1641,7 +1649,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MathInf
                 | KernelFn::MathNan
                 | KernelFn::DictEmpty
-                | KernelFn::SetEmpty,
+                | KernelFn::SetEmpty
+                // ── Bytes arity-0 ────────────────────────────────────────────
+                | KernelFn::BytesEmpty,
             ) => Ok(0),
             Callee::Kernel(
                 KernelFn::StringFromInt
@@ -1690,6 +1700,15 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SetSize
                 | KernelFn::SetToList
                 | KernelFn::SetFromList
+                // ── Bytes arity-1 ────────────────────────────────────────────
+                | KernelFn::BytesLength
+                | KernelFn::BytesIsEmpty
+                | KernelFn::BytesFromString
+                | KernelFn::BytesToString
+                | KernelFn::BytesFromHex
+                | KernelFn::BytesToHex
+                | KernelFn::BytesFromBase64
+                | KernelFn::BytesToBase64
                 // ── Math arity-1 (Int → Int) ─────────────────────────────────
                 | KernelFn::MathAbs
                 // ── Math arity-1 (Float → Float) ────────────────────────────
@@ -1753,6 +1772,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SetUnion
                 | KernelFn::SetIntersect
                 | KernelFn::SetDiff
+                // ── Bytes arity-2 ────────────────────────────────────────────
+                | KernelFn::BytesAppend
                 // ── Math arity-2 (Float → Float → Float) ────────────────────
                 | KernelFn::MathPow
                 | KernelFn::MathHypot
@@ -1769,7 +1790,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListFoldr
                 // ── Dict arity-3 ─────────────────────────────────────────────
                 | KernelFn::DictInsert
-                | KernelFn::DictFoldl,
+                | KernelFn::DictFoldl
+                // ── Bytes arity-3 ────────────────────────────────────────────
+                | KernelFn::BytesSlice,
             ) => Ok(3),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
@@ -1959,6 +1982,19 @@ impl<'a> Lowerer<'a> {
                     ("Set", "union") => Ok(Callee::Kernel(KernelFn::SetUnion)),
                     ("Set", "intersect") => Ok(Callee::Kernel(KernelFn::SetIntersect)),
                     ("Set", "diff") => Ok(Callee::Kernel(KernelFn::SetDiff)),
+                    // ── Bytes kernels (M4e) ────────────────────────────────
+                    // Divergence from Sky: Bytes is Vec<u8> not String alias.
+                    ("Bytes", "empty") => Ok(Callee::Kernel(KernelFn::BytesEmpty)),
+                    ("Bytes", "length") => Ok(Callee::Kernel(KernelFn::BytesLength)),
+                    ("Bytes", "isEmpty") => Ok(Callee::Kernel(KernelFn::BytesIsEmpty)),
+                    ("Bytes", "fromString") => Ok(Callee::Kernel(KernelFn::BytesFromString)),
+                    ("Bytes", "toString") => Ok(Callee::Kernel(KernelFn::BytesToString)),
+                    ("Bytes", "fromHex") => Ok(Callee::Kernel(KernelFn::BytesFromHex)),
+                    ("Bytes", "toHex") => Ok(Callee::Kernel(KernelFn::BytesToHex)),
+                    ("Bytes", "fromBase64") => Ok(Callee::Kernel(KernelFn::BytesFromBase64)),
+                    ("Bytes", "toBase64") => Ok(Callee::Kernel(KernelFn::BytesToBase64)),
+                    ("Bytes", "append") => Ok(Callee::Kernel(KernelFn::BytesAppend)),
+                    ("Bytes", "slice") => Ok(Callee::Kernel(KernelFn::BytesSlice)),
                     // A kernel beyond the wired set (`Time.now`, …).
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),

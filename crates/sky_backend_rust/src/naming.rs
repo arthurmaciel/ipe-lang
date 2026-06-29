@@ -358,6 +358,18 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::SetUnion => "set_union",
         KernelFn::SetIntersect => "set_intersect",
         KernelFn::SetDiff => "set_diff",
+        // ── Bytes kernels (M4e) ─────────────────────────────────────────────
+        KernelFn::BytesEmpty => "bytes_empty",
+        KernelFn::BytesLength => "bytes_length",
+        KernelFn::BytesIsEmpty => "bytes_is_empty",
+        KernelFn::BytesFromString => "bytes_from_string",
+        KernelFn::BytesToString => "bytes_to_string",
+        KernelFn::BytesFromHex => "bytes_from_hex",
+        KernelFn::BytesToHex => "bytes_to_hex",
+        KernelFn::BytesFromBase64 => "bytes_from_base64",
+        KernelFn::BytesToBase64 => "bytes_to_base64",
+        KernelFn::BytesAppend => "bytes_append",
+        KernelFn::BytesSlice => "bytes_slice",
     }
 }
 

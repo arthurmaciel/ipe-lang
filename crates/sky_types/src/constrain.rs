@@ -65,6 +65,10 @@ struct Builtins {
     dict: Symbol,
     /// `Sky.Core.Set` type constructor symbol.
     set: Symbol,
+    /// `Sky.Core.Bytes` type constructor symbol.
+    /// Divergence from Sky: Bytes is a distinct primitive in Sky-Rust (Vec<u8>),
+    /// not a String alias as in the Go reference.
+    bytes: Symbol,
     /// Two distinct scheme type-variable symbols (`a`, `e`) used to build the
     /// built-in constructor schemes. Their identity links a constructor's
     /// payload to its result type, exactly like a user union's declared vars;
@@ -87,6 +91,7 @@ impl Builtins {
             list: interner.intern("List")?,
             dict: interner.intern("Dict")?,
             set: interner.intern("Set")?,
+            bytes: interner.intern("Bytes")?,
             just: interner.intern("Just")?,
             nothing: interner.intern("Nothing")?,
             ok: interner.intern("Ok")?,
@@ -1443,6 +1448,12 @@ impl<'a> Builder<'a> {
             name: self.builtins.set,
             args: vec![a],
         };
+        // `bytes` is a zero-argument constructor: `Bytes`.
+        let bytes = Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.bytes,
+            args: Vec::new(),
+        };
         let tuple2 = |a: Ty, b: Ty| Ty::Tuple(vec![a, b]);
         match (self.interner.resolve(module), self.interner.resolve(name)) {
             (Some("String"), Some("fromInt")) => Ty::Fun(Box::new(int), Box::new(string)),
@@ -1618,6 +1629,29 @@ impl<'a> Builder<'a> {
             (Some("Set"), Some("union" | "intersect" | "diff")) => {
                 fun(set(var(0)), fun(set(var(0)), set(var(0))))
             }
+
+            // ── Sky.Core.Bytes (M4e) ─────────────────────────────────────
+            // Divergence from Sky: Bytes is Vec<u8> not a String alias;
+            // conversions are explicit and toString returns Maybe String.
+            //
+            // empty : Bytes  — arity-0 value.
+            (Some("Bytes"), Some("empty")) => bytes,
+            // length : Bytes -> Int
+            (Some("Bytes"), Some("length")) => fun(bytes, int),
+            // isEmpty : Bytes -> Bool
+            (Some("Bytes"), Some("isEmpty")) => fun(bytes, bool_ty),
+            // fromString : String -> Bytes
+            (Some("Bytes"), Some("fromString")) => fun(string, bytes),
+            // toString : Bytes -> Maybe String
+            (Some("Bytes"), Some("toString")) => fun(bytes, maybe(string)),
+            // fromHex | fromBase64 : String -> Maybe Bytes
+            (Some("Bytes"), Some("fromHex" | "fromBase64")) => fun(string, maybe(bytes)),
+            // toHex | toBase64 : Bytes -> String
+            (Some("Bytes"), Some("toHex" | "toBase64")) => fun(bytes, string),
+            // append : Bytes -> Bytes -> Bytes
+            (Some("Bytes"), Some("append")) => fun(bytes.clone(), fun(bytes.clone(), bytes)),
+            // slice : Int -> Int -> Bytes -> Bytes
+            (Some("Bytes"), Some("slice")) => fun(int.clone(), fun(int, fun(bytes.clone(), bytes))),
 
             // Unknown kernel: a single flexible variable. The raw id is chosen
             // to be distinct from any real interned symbol's typical range; it

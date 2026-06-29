@@ -1,0 +1,1 @@
+divergence: Bytes is Vec<u8> in Sky-Rust; Sky/Go aliases Bytes = String — programs using Sky.Core.Bytes produce different output under the Go oracle
