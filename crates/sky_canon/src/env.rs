@@ -344,6 +344,18 @@ impl Env {
                     "slice",
                 ],
             ),
+            // `Sky.Core.Encoding` — text encoding helpers (M4f).
+            (
+                "Encoding",
+                &[
+                    "base64Encode",
+                    "base64Decode",
+                    "urlEncode",
+                    "urlDecode",
+                    "hexEncode",
+                    "hexDecode",
+                ],
+            ),
         ];
 
         for (qual, funcs) in QUALIFIERS {

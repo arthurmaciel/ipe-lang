@@ -907,6 +907,27 @@ pub enum KernelFn {
     /// `Bytes.slice : Int -> Int -> Bytes -> Bytes` — byte-indexed slice with
     /// negative-index-from-end semantics (mirrors `String.slice`).
     BytesSlice,
+    // ── Encoding kernels (M4f) ──────────────────────────────────────────────
+    /// `Encoding.base64Encode : String -> String` — standard base64 encode
+    /// (RFC 4648, with `=` padding). Mirrors Go `base64.StdEncoding.EncodeToString`.
+    EncodingBase64Encode,
+    /// `Encoding.base64Decode : String -> Result Error String` — standard
+    /// base64 decode. Returns `Err` on invalid padding or non-base64 characters.
+    EncodingBase64Decode,
+    /// `Encoding.urlEncode : String -> String` — URL query-string encode.
+    /// Mirrors Go `url.QueryEscape`: space → `+`, other non-alphanumerics →
+    /// `%XX` percent-encoded.
+    EncodingUrlEncode,
+    /// `Encoding.urlDecode : String -> Result Error String` — URL
+    /// query-string decode (`+` → space, `%XX` → byte). Returns `Err` on
+    /// invalid percent-escape sequences.
+    EncodingUrlDecode,
+    /// `Encoding.hexEncode : String -> String` — lowercase hex encoding.
+    /// Mirrors Go `hex.EncodeToString([]byte(s))`.
+    EncodingHexEncode,
+    /// `Encoding.hexDecode : String -> Result Error String` — hex decode.
+    /// Returns `Err` on an odd-length string or any non-hex character.
+    EncodingHexDecode,
 }
 
 /// Binary operators.

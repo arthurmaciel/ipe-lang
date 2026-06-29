@@ -1,0 +1,19 @@
+module Main exposing (main)
+
+import Sky.Core.Encoding as Encoding
+
+-- urlEncode "a b&c" = "a+b%26c" (Go QueryEscape: space→+).
+-- Decode is done from the known constant to avoid using `encoded` twice.
+main =
+    let
+        encoded = Encoding.urlEncode "a b&c"
+
+        decoded =
+            case Encoding.urlDecode "a+b%26c" of
+                Ok v ->
+                    v
+
+                Err _ ->
+                    "error"
+    in
+    println (String.join " " [ encoded, decoded ])

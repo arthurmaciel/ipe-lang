@@ -312,6 +312,13 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::BytesToBase64 => "Bytes.toBase64",
         KernelFn::BytesAppend => "Bytes.append",
         KernelFn::BytesSlice => "Bytes.slice",
+        // ── Encoding (M4f) ────────────────────────────────────────────────────
+        KernelFn::EncodingBase64Encode => "Encoding.base64Encode",
+        KernelFn::EncodingBase64Decode => "Encoding.base64Decode",
+        KernelFn::EncodingUrlEncode => "Encoding.urlEncode",
+        KernelFn::EncodingUrlDecode => "Encoding.urlDecode",
+        KernelFn::EncodingHexEncode => "Encoding.hexEncode",
+        KernelFn::EncodingHexDecode => "Encoding.hexDecode",
     }
 }
 
