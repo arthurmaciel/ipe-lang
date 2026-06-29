@@ -145,8 +145,8 @@ The existing `sky-rust-backend` skills are this machinery — `sync-with-upstrea
   Rust). The `keep-go-parity` skill drives this.
 - `docs/parity/runtime-parity.md` is the per-function ledger: `present` /
   `missing` / `diverged`. **Deliberate divergence is allowed but MUST be recorded
-  with a rationale + its own tests** (PRINCIPLES: a divergence is documented, never
-  silently wrong). This ledger is also the graduation path from *follower* to
+  with a rationale + its own tests** (PRINCIPLES: a divergence is documented and
+  explicit, never left unrecorded). This ledger is also the graduation path from *follower* to
   *designer*: a function flips from "mirrors Go" to "intentional Rust design +
   rationale" one entry at a time, low-risk and reversible.
 
