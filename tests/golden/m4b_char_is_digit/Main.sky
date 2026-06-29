@@ -1,0 +1,7 @@
+module Main exposing (main)
+
+main =
+    if Char.isDigit '5' then
+        println "True"
+    else
+        println "False"
