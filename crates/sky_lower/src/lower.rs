@@ -1437,8 +1437,11 @@ impl<'a> Lowerer<'a> {
             "ge" => Ok(BinOp::Ge),
             "and" => Ok(BinOp::And),
             "or" => Ok(BinOp::Or),
-            // List / string operators (`++` → `append`, `::` → `cons`) await
-            // those types. [SKY-L0101, feature: binops]
+            // `++` is string append; the type checker pinned both operands to
+            // `String`, so the backend's `format!` concatenation is sound.
+            "append" => Ok(BinOp::Append),
+            // The remaining list operator (`::` → `cons`) awaits the list type.
+            // [SKY-L0101, feature: binops]
             _ => Err(unsupported(span, Feature::BinOps)),
         }
     }

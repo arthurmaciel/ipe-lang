@@ -341,6 +341,34 @@ mod tests {
     }
 
     #[test]
+    fn plus_plus_lexes_as_one_append_token() {
+        use lexer::{Tok, lex};
+        let kinds = |src: &str| -> Vec<Tok> {
+            lex(src).map_or_else(
+                |_| Vec::new(),
+                |toks| toks.into_iter().map(|t| t.kind).collect(),
+            )
+        };
+        // `++` is a single append token (maximal munch of `+`), not two `Plus`.
+        assert_eq!(kinds("++"), vec![Tok::PlusPlus]);
+        // A lone `+` is still arithmetic addition.
+        assert_eq!(kinds("+"), vec![Tok::Plus]);
+        // A spaced pair is two separate `Plus` tokens — only adjacency forms `++`.
+        assert_eq!(kinds("+ +"), vec![Tok::Plus, Tok::Plus]);
+        // Maximal munch takes exactly two: `+++` is `++` then a trailing `+`.
+        assert_eq!(kinds("+++"), vec![Tok::PlusPlus, Tok::Plus]);
+        // In context: a string append chain `"a" ++ "b"`.
+        assert_eq!(
+            kinds("\"a\" ++ \"b\""),
+            vec![
+                Tok::Str("a".to_owned()),
+                Tok::PlusPlus,
+                Tok::Str("b".to_owned())
+            ]
+        );
+    }
+
+    #[test]
     fn leading_dot_is_not_a_float() {
         // Elm-style requires a leading digit, so `.5` is a stray `.` (SKY-P0011),
         // never a float.

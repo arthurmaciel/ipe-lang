@@ -600,6 +600,7 @@ const fn token_kind_str(t: TokenKind) -> &'static str {
         TokenKind::Comma => "`,`",
         TokenKind::Underscore => "`_`",
         TokenKind::Plus => "`+`",
+        TokenKind::PlusPlus => "`++`",
         TokenKind::Minus => "`-`",
         TokenKind::Star => "`*`",
         TokenKind::Slash => "`/`",
