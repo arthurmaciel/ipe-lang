@@ -87,9 +87,15 @@ enum BinopClass {
     Equality,
     /// `&& ||`: `Bool -> Bool -> Bool`.
     Boolean,
-    /// Any other operator (`++`, `::`, …): `a -> a -> a`. The numeric/ordering
-    /// super-types do not cover string/list append (`Appendable`), so it stays a
-    /// plain pass-through here and is gated at lowering rather than mis-typed.
+    /// `++`: `String -> String -> String`. The general `Appendable` super-type
+    /// (which would also cover `List a -> List a -> List a`) is a later batch;
+    /// for now both operands and the result are pinned to `String`, so applying
+    /// `++` to any other type (a would-be `List`) is a fail-closed type error
+    /// rather than a mis-typed pass-through.
+    Append,
+    /// Any other operator (`::`, …): `a -> a -> a`. The numeric/ordering
+    /// super-types do not cover list cons, so it stays a plain pass-through here
+    /// and is gated at lowering rather than mis-typed.
     Poly,
 }
 
@@ -104,6 +110,7 @@ const fn classify_binop(func: &str) -> BinopClass {
         b"lt" | b"gt" | b"le" | b"ge" => BinopClass::Order,
         b"eq" | b"neq" => BinopClass::Equality,
         b"and" | b"or" => BinopClass::Boolean,
+        b"append" => BinopClass::Append,
         _ => BinopClass::Poly,
     }
 }
@@ -468,6 +475,17 @@ impl<'a> Builder<'a> {
                 let rb = self.bool_var()?;
                 self.eq(rhs.span, rv, rb);
                 self.bool_var()
+            }
+            BinopClass::Append => {
+                // `++` is `String -> String -> String`: both operands and the
+                // result are pinned to `String`. A non-String operand (a
+                // would-be `List`) fails to unify with `String` and surfaces as
+                // a type error rather than reaching the backend.
+                let ls = self.string_var()?;
+                self.eq(lhs.span, lv, ls);
+                let rs = self.string_var()?;
+                self.eq(rhs.span, rv, rs);
+                self.string_var()
             }
             BinopClass::Poly => {
                 // `a -> a -> a`: operands and result share one type.

@@ -55,6 +55,10 @@ pub enum Tok {
     Comma,
     Underscore,
     Plus,
+    /// The string/list append operator `++`. Lexed as ONE token (a maximal
+    /// munch of `+`), never as two adjacent [`Tok::Plus`], so the parser sees
+    /// the binary operator the reference grammar defines at precedence 5.
+    PlusPlus,
     Minus,
     Star,
     Slash,
@@ -516,7 +520,7 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
         ':' => one_char(lx, Tok::Colon),
         '\\' => one_char(lx, Tok::Backslash),
         ',' => one_char(lx, Tok::Comma),
-        '+' => one_char(lx, Tok::Plus),
+        '+' => one_or_two(lx, '+', Tok::PlusPlus, Tok::Plus),
         '*' => one_char(lx, Tok::Star),
         '=' => one_or_two(lx, '=', Tok::EqEq, Tok::Equals),
         '|' => one_or_two(lx, '|', Tok::PipePipe, Tok::Pipe),

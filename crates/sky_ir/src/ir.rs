@@ -522,8 +522,9 @@ pub enum KernelFn {
 /// Binary operators.
 ///
 /// M0 shipped `Add`/`Sub`; M1 core widens the set with the remaining
-/// arithmetic, comparison, and boolean operators. List/string operators
-/// (`++`, `::`) are deferred until those types land.
+/// arithmetic, comparison, and boolean operators. `Append` (`++`) carries
+/// string concatenation; list `++` and `::` are deferred until the list type
+/// lands.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BinOp {
     Add,
@@ -538,6 +539,10 @@ pub enum BinOp {
     Ge,
     And,
     Or,
+    /// String append `++`. Unlike the infix arithmetic/comparison operators,
+    /// this has no single Rust infix form for two `String`s, so the backend
+    /// emits it as a `format!` concatenation rather than via `op_str`.
+    Append,
 }
 
 /// One arm of a [`Match`]: a constructor pattern and the body it guards.

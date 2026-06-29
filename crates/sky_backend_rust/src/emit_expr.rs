@@ -46,6 +46,9 @@ const fn op_str(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::And => "&&",
         BinOp::Or => "||",
+        // `Append` has no infix Rust form; the `BinOp` arm special-cases it to a
+        // `format!` before reaching here. The `++` token keeps the match total.
+        BinOp::Append => "++",
     }
 }
 
@@ -155,7 +158,16 @@ fn emit_expr_at(
         Expr::BinOp { op, lhs, rhs } => {
             let l = emit_expr_at(ctx, lhs, indent, child, generics)?;
             let r = emit_expr_at(ctx, rhs, indent, child, generics)?;
-            Ok(format!("({} {} {})", l, op_str(*op), r))
+            // `++` (string append) has no Rust infix form for two owned
+            // `String`s, so it renders as a `format!` concatenation, which
+            // borrows both operands via `Display` and yields a fresh `String` —
+            // no ownership or clone obligation on either side. Every other
+            // operator renders infix via `op_str`.
+            if matches!(op, BinOp::Append) {
+                Ok(format!("format!(\"{{}}{{}}\", {l}, {r})"))
+            } else {
+                Ok(format!("({} {} {})", l, op_str(*op), r))
+            }
         }
         Expr::Let { name, value, body } => {
             // A `let` expression renders as a parenthesised Rust block so it

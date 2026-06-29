@@ -1,0 +1,8 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+sentence : String
+sentence = "a" ++ "b" ++ "c" ++ "d"
+
+main =
+    println sentence

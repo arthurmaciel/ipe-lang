@@ -95,6 +95,7 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Comma => TokenKind::Comma,
         Tok::Underscore => TokenKind::Underscore,
         Tok::Plus => TokenKind::Plus,
+        Tok::PlusPlus => TokenKind::PlusPlus,
         Tok::Minus => TokenKind::Minus,
         Tok::Star => TokenKind::Star,
         Tok::Slash => TokenKind::Slash,
@@ -1023,9 +1024,10 @@ impl<'a> Parser<'a> {
     }
 
     /// Peek a binary operator that continues the current block. Recognises the
-    /// full M1-core set: arithmetic (`+ - * /`), comparison (`== /= < > <= >=`),
-    /// and boolean (`&& ||`). Precedence + associativity are resolved later, at
-    /// canonicalisation, from the flat chain this records.
+    /// full M1-core set: arithmetic (`+ - * /`), string append (`++`),
+    /// comparison (`== /= < > <= >=`), and boolean (`&& ||`). Precedence +
+    /// associativity are resolved later, at canonicalisation, from the flat
+    /// chain this records.
     fn peek_binop(&self, threshold: u32) -> Option<(&'static str, Span)> {
         let tok = self.peek()?;
         if !layout::continues_block(tok, threshold) {
@@ -1033,6 +1035,7 @@ impl<'a> Parser<'a> {
         }
         let op = match tok.kind {
             Tok::Plus => "+",
+            Tok::PlusPlus => "++",
             Tok::Minus => "-",
             Tok::Star => "*",
             Tok::Slash => "/",

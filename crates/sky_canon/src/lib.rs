@@ -728,6 +728,33 @@ mod tests {
     }
 
     #[test]
+    fn append_is_right_associative_and_maps_to_append_kernel() {
+        // `a ++ b ++ c` ⇒ `append(a, append(b, c))` (right-assoc, prec 5), and
+        // the `++` operator resolves to the `append` kernel.
+        let mut i = Interner::new();
+        let body = canon_body(
+            &mut i,
+            "module Main exposing (f)\nf : String -> String -> String -> String\nf a b c =\n    a ++ b ++ c\n",
+            "f",
+        );
+        assert!(body.is_some(), "f must canonicalise");
+        let Some(body) = body else { return };
+        let top = as_binop(&i, &body);
+        assert!(top.is_some(), "top is a binop");
+        let Some((top, lhs, rhs)) = top else { return };
+        assert_eq!(top, "append", "`++` resolves to the append kernel");
+        assert!(
+            matches!(lhs.value, Expr_::VarLocal(_)),
+            "lhs is the lone `a` (right-assoc keeps the tail nested)"
+        );
+        assert_eq!(
+            as_binop(&i, &rhs.value).map(|t| t.0),
+            Some("append".to_owned()),
+            "the right operand is itself an append"
+        );
+    }
+
+    #[test]
     fn let_binds_names_as_locals() {
         // `let x = 2 in x + x` → a `Let` whose in-body is a Binop over the
         // let-bound local `x`.

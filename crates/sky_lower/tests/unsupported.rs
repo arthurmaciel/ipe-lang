@@ -558,12 +558,13 @@ fn unknown_kernel_call() -> DResult<()> {
 fn unsupported_binary_operator() -> DResult<()> {
     let mut i = Interner::new();
     let f = i.intern("f")?;
-    let op = i.intern("++")?;
+    let op = i.intern("::")?;
     let home = i.intern("Basics")?;
-    let func = i.intern("append")?;
+    let func = i.intern("cons")?;
     let ty = con_int(&mut i)?;
-    // 1 ++ 2 — list/string operators (`++` → append, `::` → cons) await those
-    // types; the M1-core arithmetic/comparison/boolean set is supported.
+    // 1 :: 2 — the list cons operator (`::` → cons) awaits the list type; the
+    // M1-core arithmetic/comparison/boolean set plus string append (`++` →
+    // append) are supported, so cons is the remaining gated binop.
     let body = Located::new(
         Span::new(112, 117),
         canon::Expr_::Binop {

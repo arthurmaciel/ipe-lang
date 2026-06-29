@@ -58,6 +58,8 @@ pub enum TokenKind {
     Comma,
     Underscore,
     Plus,
+    /// The append operator `++`.
+    PlusPlus,
     Minus,
     Star,
     Slash,

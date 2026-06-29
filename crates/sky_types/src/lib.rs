@@ -1323,6 +1323,39 @@ mod tests {
     }
 
     #[test]
+    fn string_append_infers_string() {
+        // `"a" ++ "b"` — `++` is `String -> String -> String`, so the result
+        // type is `String`.
+        let opt = infer_env_ty("module Main exposing (v)\nv =\n    \"a\" ++ \"b\"\n", "v");
+        assert!(opt.is_some(), "v must infer");
+        let Some((ty, i)) = opt else { return };
+        assert_eq!(
+            ty_con_name(&ty, &i).as_deref(),
+            Some("String"),
+            "`++` of two strings infers String, got {ty:?}"
+        );
+    }
+
+    #[test]
+    fn append_on_non_string_operand_is_rejected() {
+        // `++` is pinned to `String`; an `Int` operand fails to unify and so is
+        // a type error rather than reaching the backend (fail-closed — list
+        // `++` is a later batch). Mirrors the would-be `List` rejection.
+        let mut i = Interner::new();
+        let source = "module Main exposing (v)\nv : Int\nv =\n    1 ++ 2\n";
+        let parsed = sky_parse::parse_module(source, &mut i);
+        assert!(parsed.is_ok(), "must parse");
+        let Ok(src) = parsed else { return };
+        let canon = sky_canon::canonicalise(&src, &mut i);
+        assert!(canon.is_ok(), "must canonicalise");
+        let Ok(m) = canon else { return };
+        assert!(
+            infer(&m, &mut i).is_err(),
+            "Int operand to ++ must be a type error"
+        );
+    }
+
+    #[test]
     fn tuple_value_infers_tuple_type() {
         // Untyped `v = (1, 2)` infers the product type `(Int, Int)`.
         let opt = infer_env_ty("module Main exposing (v)\nv =\n    (1, 2)\n", "v");
