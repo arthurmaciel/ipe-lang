@@ -22,13 +22,21 @@
 //!    `oracle_divergence = true` and a reason — exactly the "Go oracle can be
 //!    buggy" carve-out from the design doc.
 //!
-//! A golden may ALSO opt in to a **sanctioned divergence** by dropping a
-//! `sanctioned.divergence` marker file (its contents are the reason) in its
-//! directory. There the Go oracle SUCCEEDS but Sky-Rust is deliberately more
-//! correct (e.g. full-Unicode case mapping). The refresh tool short-circuits to
-//! skyc's output and records it with `oracle_divergence = true` and a
-//! `sanctioned: <reason>` note — WITHOUT requiring Go to fail. See
-//! `docs/architecture/divergence-policy.md`.
+//! A golden may ALSO opt in to a **Go-succeeds-but-we-differ divergence** by
+//! dropping a `sanctioned.divergence` marker file (its contents are the reason)
+//! in its directory. There the Go oracle SUCCEEDS yet Sky-Rust records its own
+//! output — the refresh tool short-circuits to skyc and writes
+//! `oracle_divergence = true` WITHOUT requiring (or running) Go. The marker's
+//! reason carries a TAGGED prefix declaring *why*:
+//!
+//!   * `go-bug: …`  — Go succeeds but is itself buggy on this shape (e.g.
+//!     `go-bug: PR #136 Math.min/max AsInt truncation`). Sky-Rust records the
+//!     CORRECT output and re-converges to byte parity once upstream Go is fixed
+//!     and the vendored Go syncs.
+//!   * `sanctioned: …` — Sky-Rust is deliberately more correct (e.g.
+//!     full-Unicode case mapping). An untagged reason defaults to this tag.
+//!
+//! See `docs/architecture/divergence-policy.md`.
 //!
 //! `--all` refreshes only goldens that already carry an `oracle.meta`, so it
 //! re-captures registered runnable goldens without trying to run the negative /
@@ -158,12 +166,14 @@ fn capture(name: &str, golden_dir: &Path, oracle_bin: &str) -> Result<Capture, S
     let scratch = std::env::temp_dir().join(format!("refresh_oracle_{name}"));
     let _ = std::fs::remove_dir_all(&scratch);
 
-    // Sanctioned-divergence goldens deliberately differ from a SUCCEEDING Go
-    // oracle (e.g. full-Unicode case mapping). Record skyc's output as the
-    // reference without requiring — or even running — the Go oracle.
+    // Marker-divergence goldens deliberately differ from a SUCCEEDING Go oracle.
+    // The marker's reason carries its own tag: `go-bug:` (Go succeeds but is
+    // buggy here — e.g. Math.min/max #136) or `sanctioned:` (Sky-Rust is more
+    // correct); an untagged reason defaults to sanctioned. Either way we record
+    // skyc's output as the reference WITHOUT requiring — or even running — Go.
     if let Some(reason) = oracle::sanctioned_reason(golden_dir)? {
-        let prefixed = format!("{}{reason}", oracle::SANCTIONED_PREFIX);
-        return divergence_from_skyc(name, &main_sky, &scratch, prefixed);
+        let tagged = oracle::tag_divergence_reason(&reason);
+        return divergence_from_skyc(name, &main_sky, &scratch, tagged);
     }
 
     match run_go_oracle(oracle_bin, &main_sky, &scratch) {
@@ -270,8 +280,13 @@ fn refresh_one(name: &str, golden_root: &Path, oracle_bin: &str) -> Result<(), S
                 "  {name}: refreshed (SANCTIONED divergence — Sky-Rust output cached deliberately; Go succeeds)"
             );
         }
+        Capture::Divergence { reason, .. } if reason.starts_with(oracle::GO_BUG_PREFIX) => {
+            eprintln!(
+                "  {name}: refreshed (go-bug divergence — Sky-Rust output cached; Go succeeds but is buggy here, re-converges when upstream Go is fixed + synced)"
+            );
+        }
         Capture::Divergence { .. } => eprintln!(
-            "  {name}: refreshed (Go-bug divergence — skyc output cached, Go oracle is buggy here)"
+            "  {name}: refreshed (Go-failure divergence — skyc output cached, Go oracle failed to produce a reference here)"
         ),
     }
     Ok(())
