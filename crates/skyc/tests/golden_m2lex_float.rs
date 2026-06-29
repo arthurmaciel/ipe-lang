@@ -32,7 +32,8 @@
 //! ```
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+mod support;
 
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
@@ -89,31 +90,9 @@ fn assert_runs_and_prints(name: &str, want: &str) {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed for {name}: {:?}", built.err());
 
-    let status = Command::new("cargo")
-        .arg("build")
-        .current_dir(&out)
-        .env("CARGO_TARGET_DIR", out.join("target"))
-        .status();
-    assert!(
-        matches!(&status, Ok(s) if s.success()),
-        "emitted {name} project must build: {status:?}"
-    );
-
-    let bin = out.join("target").join("debug").join("sky-app");
-    let output = Command::new(&bin).output();
-    assert!(
-        output.is_ok(),
-        "emitted {name} binary must run: {:?}",
-        output.as_ref().err()
-    );
-    let Ok(output) = output else { return };
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        want,
-        "{name} prints the Go-backend value"
-    );
-    assert!(output.status.success(), "exit 0, matching the Go oracle");
-    let _ = std::fs::remove_dir_all(out.join("target"));
+    let outcome = support::build_and_run_emitted(name, &out);
+    assert_eq!(outcome.stdout, want, "{name} prints the Go-backend value");
+    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
 }
 
 #[test]

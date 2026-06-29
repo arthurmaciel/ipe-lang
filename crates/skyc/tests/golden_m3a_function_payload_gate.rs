@@ -24,7 +24,8 @@
 //! strict improvement over the Go reference, not a divergence.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+mod support;
 
 use skyc::CliError;
 
@@ -80,29 +81,10 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
-    let status = Command::new("cargo")
-        .arg("build")
-        .current_dir(&out)
-        .env("CARGO_TARGET_DIR", out.join("target"))
-        .status();
-    assert!(
-        matches!(&status, Ok(s) if s.success()),
-        "an accepted function-in-generic-payload program must build (never a \
-         silent cargo-fail): {status:?}"
-    );
-    let bin = out.join("target").join("debug").join("sky-app");
-    let output = Command::new(&bin).output();
-    assert!(
-        output.is_ok(),
-        "emitted binary must run: {:?}",
-        output.as_ref().err()
-    );
-    let Ok(output) = output else { return };
+    let outcome = support::build_and_run_emitted("m3a_function_payload_gate", &out);
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "2\n",
+        outcome.stdout, "2\n",
         "accepted program must print the semantically-correct 2"
     );
-    assert!(output.status.success(), "exit 0");
-    let _ = std::fs::remove_dir_all(out.join("target"));
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }
