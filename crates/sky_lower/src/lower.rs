@@ -1339,12 +1339,57 @@ impl<'a> Lowerer<'a> {
     /// A non-named callee — a local (function-typed) binding, a lambda, or
     /// another expression's result — is a first-class function *value* applied
     /// via [`Expr::Apply`] (a boxed `dyn Fn` auto-derefs at the call site).
+    /// Soundness gate (inference path): reject a Set/Dict-producing expression
+    /// whose solved region type pins the element / key to `Float`.
+    ///
+    /// The shape gate in [`Self::ir_type_from_ty`] catches a `Set Float` /
+    /// `Dict Float v` only when an annotation or binding type drives a
+    /// conversion to IR. A Set / Dict synthesised purely by inference —
+    /// `Set.fromList [1.5, 2.5]`, a `let`-bound `Set.fromList`, or a Set built
+    /// from a `List.map` result — never drives that conversion, so its own
+    /// region type is the only place the `Float` element / key surfaces. `f64`
+    /// is neither `Ord` nor `Hash` / `Eq` (NaN has no total order), so the Rust
+    /// backing `BTreeSet<f64>` / `HashMap<f64, _>` cannot exist. Fail closed
+    /// with the same dedicated diagnostic. Divergence from Sky, rationale: Rust
+    /// backend capability.
+    ///
+    /// A bare-variable element / key (`Set.empty`, an unpinned polymorphic Set)
+    /// is left untouched: it carries no concrete `Float`, so it is sound to lower
+    /// (and forcing it through [`Self::ir_type_from_ty`] would mis-report it as
+    /// the polymorphism gap rather than this capability gap).
+    fn reject_float_keyed_collection(&self, span: Span) -> DResult<()> {
+        let Some(Ty::Con { name, args, .. }) = self.types.regions.get(&span) else {
+            return Ok(());
+        };
+        let key = match (self.resolve(*name)?, args.as_slice()) {
+            ("Set", [elem]) => elem,
+            ("Dict", [k, _]) => k,
+            _ => return Ok(()),
+        };
+        if self.is_concrete_float(key)? {
+            return Err(unsupported(span, Feature::FloatKeyedCollection));
+        }
+        Ok(())
+    }
+
+    /// Whether a solved type is the concrete builtin `Float` (a nullary `Ty::Con`
+    /// resolving to `"Float"`). A bare `Ty::Var` is deliberately NOT a float —
+    /// an unpinned polymorphic element is sound to lower.
+    fn is_concrete_float(&self, t: &Ty) -> DResult<bool> {
+        Ok(
+            matches!(t, Ty::Con { name, args, .. } if args.is_empty() && self.resolve(*name)? == "Float"),
+        )
+    }
+
     fn lower_call(
         &self,
         callee: &canon::Expr,
         args: &[canon::Expr],
         call_span: Span,
     ) -> DResult<Expr> {
+        // A Set / Dict produced by inference (no annotation driving an
+        // `ir_type_from_ty` conversion) is gated here on its own region type.
+        self.reject_float_keyed_collection(call_span)?;
         let lowered_args = args
             .iter()
             .map(|a| self.lower_expr(a))
