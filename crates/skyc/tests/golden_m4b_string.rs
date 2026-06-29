@@ -109,3 +109,27 @@ fn string_join_with_separator() {
 fn string_drop_left_unicode_rune_based() {
     assert_runs_and_matches_oracle("m4b_string_drop_left");
 }
+
+// ── Char.toUpper ──────────────────────────────────────────────────────────────
+
+/// `Char.toUpper 'a'` → `"A"`. Returns a single-rune String (Go kernel shape).
+#[test]
+fn char_to_upper_ascii() {
+    assert_runs_and_matches_oracle("m4b_char_to_upper");
+}
+
+// ── Char.isDigit ──────────────────────────────────────────────────────────────
+
+/// `Char.isDigit '5'` → `True` (printed via `if` to avoid Bool→String conv).
+#[test]
+fn char_is_digit_ascii_five() {
+    assert_runs_and_matches_oracle("m4b_char_is_digit");
+}
+
+// ── Char.isAlpha ──────────────────────────────────────────────────────────────
+
+/// `Char.isAlpha 'x'` → `True`.
+#[test]
+fn char_is_alpha_ascii_x() {
+    assert_runs_and_matches_oracle("m4b_char_is_alpha");
+}

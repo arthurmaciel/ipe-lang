@@ -159,6 +159,7 @@ impl Env {
     /// Auto-qualified prelude kernel modules. M0 subset of
     /// `Environment.preludeQualifiers` — `String.fromInt`, `String.fromFloat`,
     /// etc. resolve without an explicit `import String`.
+    #[allow(clippy::too_many_lines)] // declarative table — extracting a helper would obscure the data
     fn install_prelude_qualifiers(&mut self, interner: &mut Interner) -> DResult<()> {
         const QUALIFIERS: &[(&str, &[&str])] = &[
             (
@@ -213,13 +214,7 @@ impl Env {
             (
                 "Char",
                 &[
-                    "isAlpha",
-                    "isDigit",
-                    "isLower",
-                    "isUpper",
-                    "toLower",
-                    "toUpper",
-                    "toCode",
+                    "isAlpha", "isDigit", "isLower", "isUpper", "toLower", "toUpper", "toCode",
                     "fromCode",
                 ],
             ),
