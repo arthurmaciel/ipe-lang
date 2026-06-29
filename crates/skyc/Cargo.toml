@@ -23,9 +23,11 @@ sky_backend = { path = "../sky_backend" }
 sky_backend_rust = { path = "../sky_backend_rust" }
 
 [dev-dependencies]
-# Parses `cargo build --message-format=json` output in the shared E2E build
-# helper (tests/support/mod.rs) to locate the produced binary robustly.
-serde_json = "1"
+# Cached Go-oracle format + staleness gate + the shared build/run-emitted core
+# used by the golden parity tests (tests/support/mod.rs). The `cargo build
+# --message-format=json` parsing that locates the produced binary now lives in
+# the `oracle` crate, so serde_json is pulled in transitively, not directly.
+oracle = { path = "../../tools/oracle" }
 
 [lints]
 workspace = true

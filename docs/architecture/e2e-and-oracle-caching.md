@@ -24,6 +24,16 @@ per-project `/tmp/.../target`. Locate where the harness sets the per-project tar
   first cold build holds the lock once. Net win >> the lock cost.
 
 ## Fix 2 — cache the Go oracle as a committed golden value
+
+> Status: IMPLEMENTED. On-disk format = `tests/golden/<name>/expected_go.txt`
+> (clean program stdout) + `oracle.meta` (`main_sky_sha256` + `go_sky_version` +
+> `exit_code` + `oracle_divergence` [+ `divergence_reason`]). Format + staleness
+> gate + the shared build/run core live in the `oracle` crate (`tools/oracle`);
+> the `refresh-oracle` binary (`tools/refresh-oracle`) (re)captures the cache
+> (Go success → cache Go; Go failure → cache skyc with `oracle_divergence=true`).
+> The golden read path is `support::assert_go_parity` → `oracle::check_parity`
+> (NO live Go), wired into the M2-lex goldens. `oracle`'s unit tests pin all four
+> rigour invariants (match / stale / missing / divergence).
 Per golden, commit `expected_go.txt` + `oracle.meta` = { `hash(Main.sky)`,
 Go `sky` version }. Parity = run skyc, diff vs `expected_go.txt`. No Go build in the
 hot path; parity also runs with no Go binary present (helps headless cron/CI).
