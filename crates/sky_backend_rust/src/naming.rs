@@ -285,7 +285,9 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // `Math.min` / `Math.max` map to the runtime's generic
         // `math_min<T: PartialOrd>` / `math_max<T: PartialOrd>`: a real
         // polymorphic compare at the argument's actual type — NO `Int`
-        // coercion, NO float truncation (the Go-bug divergence, PR #136).
+        // coercion, NO float truncation. Divergence from Sky (PR #136):
+        // Sky routes args through AsInt; Sky-Rust follows Elm's polymorphic
+        // comparable (a -> a -> a). Rationale: Elm-conformance.
         KernelFn::MathMin => "math_min",
         KernelFn::MathMax => "math_max",
         // ── Math constants ───────────────────────────────────────────────────

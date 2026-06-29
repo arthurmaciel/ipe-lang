@@ -1,27 +1,27 @@
 //! M4c `Sky.Core.Math` parity gate — two classes of golden in one file:
 //!
-//! 1. **Go-bug divergence** (anzellai/sky PR #136, OPEN). `Math.min` / `Math.max`
-//!    are polymorphic `comparable` (`a -> a -> a`, Elm `Basics.min`/`max`). The
-//!    current Go reference routes BOTH arguments through `AsInt` before the
-//!    compare, which truncates floats (`AsInt 0.4 = 0`, `AsInt 1.3 = 1`) and is
-//!    meaningless on `String`. Sky-Rust compares at the argument's actual type
-//!    and returns the lesser / greater value UNCHANGED. These goldens therefore
-//!    assert against Sky-Rust's OWN recorded-correct output via a
-//!    `sanctioned.divergence` marker tagged `go-bug:` — they re-converge to byte
-//!    parity once #136 merges and the vendored Go syncs.
+//! 1. **Divergence from Sky** (PR #136). `Math.min` / `Math.max` are polymorphic
+//!    `comparable` (`a -> a -> a`, Elm `Basics.min`/`max`). Sky routes BOTH
+//!    arguments through `AsInt` before the compare, coercing floats to `Int`
+//!    (`AsInt 0.4 = 0`, `AsInt 1.3 = 1`) and yielding a meaningless compare for
+//!    `String`. Sky-Rust compares at the argument's actual type and returns the
+//!    lesser / greater value unchanged. These goldens assert against Sky-Rust's
+//!    own recorded output via a `sanctioned.divergence` marker tagged
+//!    `divergence:`. Rationale: Elm-conformance.
 //!
-//!      * `Math.min 0.4 1.3` → `0.4`   (Go would wrongly give `0`)
-//!      * `Math.max 0.4 1.3` → `1.3`   (Go would wrongly give `1`)
-//!      * `Math.min "b" "a"` → `"a"`   (lexicographic; Go's `AsInt` is meaningless)
+//!      * `Math.min 0.4 1.3` → `0.4`   (Sky's AsInt coercion gives `0`)
+//!      * `Math.max 0.4 1.3` → `1.3`   (Sky's AsInt coercion gives `1`)
+//!      * `Math.min "b" "a"` → `"a"`   (lexicographic; Sky's AsInt compare is
+//!                                       not meaningful on String)
 //!      * `Math.max "b" "a"` → `"b"`
 //!
-//! 2. **Go parity** — the rest. Here the Go reference is correct, so the cached
+//! 2. **Go parity** — the rest. Here Sky's output is the target, so the cached
 //!    oracle is the Go output (`oracle_divergence = false`) and Sky-Rust must
-//!    match it byte-for-byte: `Math.min` / `Math.max` on `Int` (Go's `AsInt`
-//!    path is correct for integers), `abs`, `sqrt` (incl. the `sqrt (-1.0)` NaN
-//!    domain edge), `pow`, `round` (half-away-from-zero, both signs), `floor` /
-//!    `ceil` / `trunc` on a negative (the three round differently), `mod` vs
-//!    `remainder`, and the `pi` / `nan` constants.
+//!    match it byte-for-byte: `Math.min` / `Math.max` on `Int` (Sky's `AsInt`
+//!    path gives the correct result for integers), `abs`, `sqrt` (incl. the
+//!    `sqrt (-1.0)` NaN domain edge), `pow`, `round` (half-away-from-zero, both
+//!    signs), `floor` / `ceil` / `trunc` on a negative (the three round
+//!    differently), `mod` vs `remainder`, and the `pi` / `nan` constants.
 //!
 //! Every test is gated on `SKY_E2E=1`; without it the test returns early. Run:
 //!
@@ -45,8 +45,8 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
 /// run it, and assert its stdout matches the cached oracle (the Go reference
-/// for a parity case, or Sky-Rust's own recorded-correct output for a
-/// `go-bug:` divergence). Gated on `SKY_E2E=1`.
+/// for a parity case, or Sky-Rust's own recorded output for a `divergence:`
+/// entry). Gated on `SKY_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
     if std::env::var("SKY_E2E").is_err() {
         return;
@@ -83,31 +83,34 @@ fn math_max_int() {
     assert_runs_and_matches_oracle("m4c_math_max_int");
 }
 
-// ── min / max — Float (go-bug #136 divergence: no truncation) ─────────────────
+// ── min / max — Float (divergence-from-sky #136: polymorphic compare, no AsInt coercion) ──
 
-/// `Math.min 0.4 1.3` → `0.4`. Go truncates the compare to ints (`0 < 1`); we
-/// compare the `f64`s and return `0.4` unchanged.
+/// `Math.min 0.4 1.3` → `0.4`. Sky's AsInt coercion gives `0`; Sky-Rust
+/// compares `f64`s directly and returns `0.4` unchanged. Divergence from Sky,
+/// rationale: Elm-conformance.
 #[test]
 fn math_min_float_no_truncation() {
     assert_runs_and_matches_oracle("m4c_math_min_float");
 }
 
-/// `Math.max 0.4 1.3` → `1.3`. Go would truncate to `1`; we return `1.3`.
+/// `Math.max 0.4 1.3` → `1.3`. Sky's AsInt coercion gives `1`; Sky-Rust
+/// returns `1.3`. Divergence from Sky, rationale: Elm-conformance.
 #[test]
 fn math_max_float_no_truncation() {
     assert_runs_and_matches_oracle("m4c_math_max_float");
 }
 
-// ── min / max — String (go-bug #136 divergence: lexicographic) ────────────────
+// ── min / max — String (divergence-from-sky #136: lexicographic polymorphic compare) ──
 
-/// `Math.min "b" "a"` → `"a"`. Polymorphic compare on `String` (lexicographic),
-/// where Go's `AsInt` compare is meaningless.
+/// `Math.min "b" "a"` → `"a"`. Polymorphic compare on `String` (lexicographic).
+/// Sky's AsInt compare is not meaningful on String. Divergence from Sky,
+/// rationale: Elm-conformance.
 #[test]
 fn math_min_string_lexicographic() {
     assert_runs_and_matches_oracle("m4c_math_min_string");
 }
 
-/// `Math.max "b" "a"` → `"b"`.
+/// `Math.max "b" "a"` → `"b"`. Divergence from Sky, rationale: Elm-conformance.
 #[test]
 fn math_max_string_lexicographic() {
     assert_runs_and_matches_oracle("m4c_math_max_string");

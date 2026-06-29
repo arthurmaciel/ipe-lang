@@ -1,1 +1,1 @@
-go-bug: Math.min/max route args through AsInt in current Go (anzellai/sky PR #136, open); on String the AsInt compare is meaningless. Correct behaviour compares lexicographically; Math.max "b" "a" = "b". Re-converges to byte parity when #136 merges and the vendored Go syncs.
+divergence: Sky compares Math.max arguments through AsInt; on String the AsInt compare is not meaningful. Sky-Rust follows Elm's polymorphic comparable (a -> a -> a), comparing lexicographically; Math.max "b" "a" = "b". Divergence from Sky, rationale: Elm-conformance.

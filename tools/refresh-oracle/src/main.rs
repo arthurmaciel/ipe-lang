@@ -29,10 +29,9 @@
 //! `oracle_divergence = true` WITHOUT requiring (or running) Go. The marker's
 //! reason carries a TAGGED prefix declaring *why*:
 //!
-//!   * `go-bug: …`  — Go succeeds but is itself buggy on this shape (e.g.
-//!     `go-bug: PR #136 Math.min/max AsInt truncation`). Sky-Rust records the
-//!     CORRECT output and re-converges to byte parity once upstream Go is fixed
-//!     and the vendored Go syncs.
+//!   * `divergence: …` — Sky's current behaviour differs on this shape; Sky-Rust
+//!     follows a different target (e.g. `divergence: Math.min/max Elm-conformant
+//!     polymorphic comparable. Divergence from Sky, rationale: Elm-conformance`).
 //!   * `sanctioned: …` — Sky-Rust is deliberately more correct (e.g.
 //!     full-Unicode case mapping). An untagged reason defaults to this tag.
 //!
@@ -167,10 +166,11 @@ fn capture(name: &str, golden_dir: &Path, oracle_bin: &str) -> Result<Capture, S
     let _ = std::fs::remove_dir_all(&scratch);
 
     // Marker-divergence goldens deliberately differ from a SUCCEEDING Go oracle.
-    // The marker's reason carries its own tag: `go-bug:` (Go succeeds but is
-    // buggy here — e.g. Math.min/max #136) or `sanctioned:` (Sky-Rust is more
-    // correct); an untagged reason defaults to sanctioned. Either way we record
-    // skyc's output as the reference WITHOUT requiring — or even running — Go.
+    // The marker's reason carries its own tag: `divergence:` (Sky's current
+    // behaviour differs — e.g. Math.min/max Elm-conformant comparable vs Sky's
+    // AsInt coercion) or `sanctioned:` (Sky-Rust is more correct); an untagged
+    // reason defaults to sanctioned. Either way we record skyc's output as the
+    // reference WITHOUT requiring — or even running — Go.
     if let Some(reason) = oracle::sanctioned_reason(golden_dir)? {
         let tagged = oracle::tag_divergence_reason(&reason);
         return divergence_from_skyc(name, &main_sky, &scratch, tagged);
@@ -280,9 +280,9 @@ fn refresh_one(name: &str, golden_root: &Path, oracle_bin: &str) -> Result<(), S
                 "  {name}: refreshed (SANCTIONED divergence — Sky-Rust output cached deliberately; Go succeeds)"
             );
         }
-        Capture::Divergence { reason, .. } if reason.starts_with(oracle::GO_BUG_PREFIX) => {
+        Capture::Divergence { reason, .. } if reason.starts_with(oracle::DIVERGENCE_PREFIX) => {
             eprintln!(
-                "  {name}: refreshed (go-bug divergence — Sky-Rust output cached; Go succeeds but is buggy here, re-converges when upstream Go is fixed + synced)"
+                "  {name}: refreshed (divergence-from-sky — Sky-Rust output cached; Go oracle succeeds with different behaviour; rationale recorded in sanctioned.divergence)"
             );
         }
         Capture::Divergence { .. } => eprintln!(
