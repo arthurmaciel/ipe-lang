@@ -1,0 +1,25 @@
+module Main exposing (main)
+
+-- Companion to `m4c_math_min_fn_gate` for a RECORD value. `Math.min` carries the
+-- ORDERING obligation (`Comparable a => a -> a -> a`), so the `pickMin` forwarder
+-- built on it generalises to a Rust `T: PartialOrd` bound. The runtime ordering
+-- bound is satisfied only by the scalar comparables (`Int` / `Float` / `Char` /
+-- `Bool`); a record is not one, so instantiating the forwarder at `{ x : Int }`
+-- is rejected here at type-check (SKY-T0014) instead of emitting an unbounded
+-- `math_min<T>(…)` that `cargo` cannot build. Fails closed, no Rust emitted.
+pickMin : a -> a -> a
+pickMin x y =
+    Math.min x y
+
+
+rec : { x : Int }
+rec =
+    { x = 1 }
+
+
+main =
+    let
+        _ =
+            pickMin rec rec
+    in
+    println (String.fromInt 0)

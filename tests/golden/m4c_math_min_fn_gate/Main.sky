@@ -1,0 +1,27 @@
+module Main exposing (main)
+
+-- `Math.min` / `Math.max` are `Comparable a => a -> a -> a` (Elm `Basics.min`).
+-- The shared type variable carries the ORDERING obligation, exactly like the
+-- user-defined `pickMin` forwarder below and like the `< > <= >=` operators.
+-- A comparable forwarder built on `Math.min` therefore generalises to a Rust
+-- `T: PartialOrd` bound; instantiating it at a FUNCTION type — which Rust never
+-- orders — is rejected here at type-check (SKY-T0014) rather than emitting an
+-- unbounded `math_min<T>(…)` that `cargo` cannot build. (Calling `Math.min`
+-- directly on two functions is the eager-pin sibling and surfaces SKY-T0001;
+-- both fail closed with no Rust emitted.)
+pickMin : a -> a -> a
+pickMin x y =
+    Math.min x y
+
+
+apply : (Int -> Int) -> Int -> Int
+apply f x =
+    f x
+
+
+main =
+    let
+        _ =
+            pickMin apply apply
+    in
+    println (String.fromInt 0)

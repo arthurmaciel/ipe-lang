@@ -926,8 +926,27 @@ impl<'a> Builder<'a> {
             },
             canon::Expr_::VarTopLevel { name, .. } => self.constrain_var_top_level(*name, span)?,
             canon::Expr_::VarKernel { module, name } => {
-                let ty = self.kernel_ty(*module, *name);
-                self.instantiate(&ty)?
+                // `Math.min` / `Math.max` are `Comparable a => a -> a -> a`: the
+                // shared variable must carry the ORDERING obligation, exactly as
+                // the `< > <= >=` operators and the user-fn `maxOf` do. Minting it
+                // as a super-typed (ordering) variable means a generic use lifts
+                // the bound onto the enclosing annotation skolem (emitting Rust
+                // `T: PartialOrd`), while a non-comparable argument (a function, a
+                // record) fails closed at type-check rather than emitting an
+                // unbounded `math_min<T>(…)` that `cargo` rejects — restoring the
+                // sky-build => cargo-build floor. The kernel-type table's bare
+                // `var(0)` arm cannot express this bound, so min/max take this
+                // dedicated path instead of the generic `instantiate`.
+                if matches!(self.interner.resolve(*module), Some("Math"))
+                    && matches!(self.interner.resolve(*name), Some("min" | "max"))
+                {
+                    let s = self.super_var(TyBounds::ord(), span)?;
+                    let inner = self.structure(FlatType::Fun(s, s))?;
+                    self.structure(FlatType::Fun(s, inner))?
+                } else {
+                    let ty = self.kernel_ty(*module, *name);
+                    self.instantiate(&ty)?
+                }
             }
             canon::Expr_::VarCtor {
                 home,
@@ -1429,10 +1448,17 @@ impl<'a> Builder<'a> {
             ),
 
             // ── Sky.Core.Math ──
-            // min / max : a -> a -> a — polymorphic `comparable`, the same type
-            // variable in every position. Lowered to the runtime's generic
-            // compare (no `Int` coercion, no float truncation — the Go-bug
-            // divergence, PR #136), so the result keeps the argument's type.
+            // NOTE: `Math.min` / `Math.max` do NOT use this arm — they are handled
+            // on a dedicated path in the `VarKernel` walk that mints the shared
+            // variable with the ORDERING obligation (`Comparable a => a -> a -> a`,
+            // Elm Basics-conformant). This bare `var(0)` table entry would emit an
+            // UNBOUNDED variable, which lowers to a `math_min<T>(…)` call that
+            // `cargo` rejects (the runtime helper requires `T: PartialOrd`); the
+            // bounded path fails closed at type-check on non-comparable arguments
+            // instead. Kept only as a safety net should the dedicated path ever be
+            // bypassed; it is unreachable in normal lowering. The no-truncation /
+            // type-preserving behaviour (the Go-bug divergence, PR #136) is a
+            // property of the runtime compare the bounded variable lowers to.
             (Some("Math"), Some("min" | "max")) => fun(var(0), fun(var(0), var(0))),
             // Constants — bare Float values (arity 0).
             (Some("Math"), Some("pi" | "e" | "phi" | "sqrt2" | "inf" | "nan")) => float,
