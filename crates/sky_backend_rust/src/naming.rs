@@ -282,6 +282,12 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::MaybeAndThen => "sky_maybe_and_then",
         KernelFn::ResultWithDefault => "result_with_default",
         KernelFn::ResultMap => "sky_result_map",
+        // `Math.min` / `Math.max` map to the runtime's generic
+        // `math_min<T: PartialOrd>` / `math_max<T: PartialOrd>`: a real
+        // polymorphic compare at the argument's actual type — NO `Int`
+        // coercion, NO float truncation (the Go-bug divergence, PR #136).
+        KernelFn::MathMin => "math_min",
+        KernelFn::MathMax => "math_max",
         KernelFn::ResultOkDefault => "ok_res",
     }
 }

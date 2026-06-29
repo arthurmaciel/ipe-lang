@@ -223,6 +223,8 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::MaybeAndThen => "Maybe.andThen",
         KernelFn::ResultWithDefault => "Result.withDefault",
         KernelFn::ResultMap => "Result.map",
+        KernelFn::MathMin => "Math.min",
+        KernelFn::MathMax => "Math.max",
         KernelFn::ResultOkDefault => "Result.Ok",
     }
 }

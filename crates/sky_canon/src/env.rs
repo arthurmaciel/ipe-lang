@@ -245,6 +245,11 @@ impl Env {
             ),
             ("Maybe", &["withDefault", "map", "andThen"]),
             ("Result", &["withDefault", "map", "andThen", "mapError"]),
+            // `Sky.Core.Math` — `min` / `max` are polymorphic `a -> a -> a`
+            // (Elm `Basics.min`/`max` semantics). Wired in the lowerer to the
+            // runtime's generic compare; further Math entries (abs, sqrt, …)
+            // land with their own kernels.
+            ("Math", &["min", "max"]),
             (
                 "Basics",
                 &[

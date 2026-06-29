@@ -676,6 +676,21 @@ pub enum KernelFn {
     ResultWithDefault,
     /// `Result.map : (a -> b) -> Result e a -> Result e b`.
     ResultMap,
+    // ── Math kernels ────────────────────────────────────────────────────────
+    /// `Math.min : a -> a -> a` — the lesser of two values under the polymorphic
+    /// `comparable` ordering (Elm `Basics.min` semantics: `if a <= b then a else
+    /// b`). Lowered to the runtime's generic `math_min<T: PartialOrd>`, which
+    /// compares the arguments AT THEIR ACTUAL TYPE — `f64`/`i64`/`String`/`char`
+    /// — and returns the original value unchanged. It deliberately does NOT route
+    /// through any `Int` coercion: current Go (`Math_min`) compares via `AsInt`,
+    /// truncating floats and rendering strings meaningless (anzellai/sky PR #136,
+    /// open). We implement the correct polymorphic compare and record the
+    /// divergence; parity auto-restores when #136 merges.
+    MathMin,
+    /// `Math.max : a -> a -> a` — the greater of two values; the `max` companion
+    /// of [`KernelFn::MathMin`] (Elm `Basics.max`: `if a >= b then a else b`),
+    /// with the same no-truncation, polymorphic-compare contract.
+    MathMax,
     /// Internal: construct `Ok x` with the project error type (`SkyError`) pinned.
     ///
     /// Not a Sky-source kernel — the lowerer emits this for an `Ok` constructor
