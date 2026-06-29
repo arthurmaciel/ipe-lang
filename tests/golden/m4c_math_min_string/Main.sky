@@ -1,4 +1,4 @@
 module Main exposing (main)
 
 main =
-    println (Math.max "b" "a")
+    println (Math.min "b" "a")

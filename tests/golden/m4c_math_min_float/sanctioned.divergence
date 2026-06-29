@@ -1,1 +1,1 @@
-go-bug: Math.min/max route args through AsInt in current Go (anzellai/sky PR #136, open), truncating floats to ints before the compare. Correct behaviour compares at the value type; Math.min 0.4 1.3 = 0.4. Re-converges to byte parity when #136 merges and the vendored Go syncs.
+go-bug: Math.min/max route args through AsInt in current Go (anzellai/sky PR #136, open), truncating floats to ints before the compare. Correct behaviour compares at the value type; Math.min 0.4 1.3 = 0.4 (Go would wrongly give 0). Re-converges to byte parity when #136 merges and the vendored Go syncs.

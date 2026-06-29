@@ -1121,11 +1121,81 @@ impl<'a> Parser<'a> {
             Tok::Float(f) => Ok(Located::new(tok.span, Expr_::Float(*f))),
             Tok::Str(s) => Ok(Located::new(tok.span, Expr_::Str(s.clone()))),
             Tok::Char(c) => Ok(Located::new(tok.span, Expr_::Char(c.clone()))),
+            Tok::Minus => self.parse_negative_literal(tok.span),
             Tok::Ident(text) => {
                 let expr = self.ident_expr(text, tok.span)?;
                 Ok(Located::new(tok.span, expr))
             }
             _ => Err(Self::unexpected_token(&tok, &[Expected::Expression])),
+        }
+    }
+
+    /// Parse a negative numeric literal in atom (prefix) position, the `-`
+    /// already consumed at `minus_span`.
+    ///
+    /// Mirrors the Go reference's `Src.Negate` of a numeric literal, but folds
+    /// the sign directly into a signed [`Expr_::Int`] / [`Expr_::Float`] node so
+    /// no downstream `Negate` AST / canon / type / codegen arm is required — the
+    /// observable value is identical (`-5`, `-2.7`) for a literal operand.
+    ///
+    /// Only a numeric literal *immediately* following the `-` (byte-adjacent
+    /// spans — Go's "minus followed by a digit without space" rule) is a
+    /// negation. Any other prefix `-` (a space before the literal, or a `-`
+    /// before a non-literal atom) stays a parse error: general unary negation of
+    /// an arbitrary expression is not yet modelled. Binary subtraction `a - b`
+    /// never reaches here — `peek_binop` consumes the `-` after an operand in
+    /// [`Self::parse_expr`], so this method is only entered when an atom (a fresh
+    /// operand) was expected.
+    fn parse_negative_literal(&mut self, minus_span: Span) -> DResult<Expr> {
+        // Snapshot the Copy payload of the following token, then drop the borrow
+        // before consuming it. A non-adjacent or non-literal follower is not a
+        // negative literal.
+        enum NegLit {
+            Int(i64, Span),
+            Float(f64, Span),
+        }
+        let lit = self.peek().and_then(|t| {
+            if t.span.lo != minus_span.hi {
+                return None; // whitespace between `-` and the token
+            }
+            match &t.kind {
+                Tok::Int(n) => Some(NegLit::Int(*n, t.span)),
+                Tok::Float(f) => Some(NegLit::Float(*f, t.span)),
+                _ => None,
+            }
+        });
+        match lit {
+            Some(NegLit::Int(n, lit_span)) => {
+                self.bump(Construct::Expression)?;
+                // A positive `Int` token is bounded by `i64::MAX` at lex time, so
+                // `checked_neg` never overflows here; the fail-closed branch keeps
+                // the parser panic-free regardless.
+                let value = n.checked_neg().ok_or_else(|| Diagnostic::Parse {
+                    span: Self::span_merge(minus_span, lit_span),
+                    msg: ParseError::UnexpectedToken {
+                        found: tok_kind(&Tok::Int(n)),
+                        expected: ExpectedSet([Expected::Expression].into()),
+                    },
+                })?;
+                Ok(Located::new(
+                    Self::span_merge(minus_span, lit_span),
+                    Expr_::Int(value),
+                ))
+            }
+            Some(NegLit::Float(f, lit_span)) => {
+                self.bump(Construct::Expression)?;
+                Ok(Located::new(
+                    Self::span_merge(minus_span, lit_span),
+                    Expr_::Float(-f),
+                ))
+            }
+            None => Err(Diagnostic::Parse {
+                span: minus_span,
+                msg: ParseError::UnexpectedToken {
+                    found: tok_kind(&Tok::Minus),
+                    expected: ExpectedSet([Expected::Expression].into()),
+                },
+            }),
         }
     }
 

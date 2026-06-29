@@ -1314,4 +1314,96 @@ mod tests {
         assert_eq!(m.unions.len(), 1, "one union");
         assert_eq!(m.aliases.len(), 0, "no aliases");
     }
+
+    #[test]
+    fn parses_negative_int_literal() {
+        // `(-5)` in atom (prefix) position folds the sign into a signed
+        // `Expr_::Int(-5)` node, mirroring the Go reference's `Src.Negate` of a
+        // numeric literal. The parens are unwrapped, so the body is the literal.
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\nv =\n    (-5)\n";
+        let result = parse_module(src, &mut i);
+        assert!(
+            result.is_ok(),
+            "negative int literal must parse: {result:?}"
+        );
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|val| matches!(val.body.value, Expr_::Int(-5))),
+            "body must be Int(-5)"
+        );
+    }
+
+    #[test]
+    fn parses_negative_float_literal() {
+        // `(-2.7)` folds to `Expr_::Float(-2.7)`.
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\nv =\n    (-2.7)\n";
+        let result = parse_module(src, &mut i);
+        assert!(
+            result.is_ok(),
+            "negative float literal must parse: {result:?}"
+        );
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(
+                |val| matches!(val.body.value, Expr_::Float(f) if (f + 2.7).abs() < 1e-9)
+            ),
+            "body must be Float(-2.7)"
+        );
+    }
+
+    #[test]
+    fn parses_negative_literal_as_application_argument() {
+        // `f (-5)`: the negative literal is the (parenthesised) argument; the
+        // body is a `Call` with one `Int(-5)` argument. This is the shape the
+        // M4c Math goldens rely on (`Math.abs (-5)`, `Math.floor (-2.7)`, …).
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\nv f =\n    f (-5)\n";
+        let result = parse_module(src, &mut i);
+        assert!(result.is_ok(), "f (-5) must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        let is_call_neg = v.is_some_and(|val| match &val.body.value {
+            Expr_::Call(_, args) => {
+                args.len() == 1 && matches!(args.first().map(|a| &a.value), Some(Expr_::Int(-5)))
+            }
+            _ => false,
+        });
+        assert!(is_call_neg, "body must be Call(f, [Int(-5)])");
+    }
+
+    #[test]
+    fn binary_subtraction_is_unaffected_by_negative_literal_parsing() {
+        // `2 - 5` stays a subtraction (a `Binops` chain), never a negative
+        // literal: the `-` is consumed as an infix operator after the `2`
+        // operand, so prefix negation parsing never sees it.
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\nv =\n    2 - 5\n";
+        let result = parse_module(src, &mut i);
+        assert!(result.is_ok(), "subtraction must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|val| matches!(&val.body.value, Expr_::Binops(ops, _) if ops.len() == 1)),
+            "body must be a one-operator Binops chain (subtraction)"
+        );
+    }
+
+    #[test]
+    fn space_between_minus_and_literal_is_not_a_negative_literal() {
+        // Go matches a negative literal only when the `-` is immediately
+        // followed by the digit (no space). `(- 5)` therefore is not a negative
+        // literal and, with no operand before the `-`, is a parse error rather
+        // than a silently-accepted negation.
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\nv =\n    (- 5)\n";
+        let result = parse_module(src, &mut i);
+        assert!(
+            result.is_err(),
+            "`(- 5)` (space after `-`) must NOT parse as a negative literal"
+        );
+    }
 }

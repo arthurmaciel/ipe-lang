@@ -1,4 +1,4 @@
 module Main exposing (main)
 
 main =
-    println (String.fromFloat (Math.sqrt 9.0))
+    println (String.fromFloat (Math.sqrt 2.0))

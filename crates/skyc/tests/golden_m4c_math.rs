@@ -1,26 +1,29 @@
-//! M4c Sky.Core.Math parity gate: `Math.min` / `Math.max` are polymorphic
-//! `comparable` (`a -> a -> a`, Elm `Basics.min`/`max` semantics) and compile +
-//! run with the CORRECT result — comparing at the argument's actual type, never
-//! routing through an `Int` coercion.
+//! M4c `Sky.Core.Math` parity gate — two classes of golden in one file:
 //!
-//! Semantic invariants verified here:
+//! 1. **Go-bug divergence** (anzellai/sky PR #136, OPEN). `Math.min` / `Math.max`
+//!    are polymorphic `comparable` (`a -> a -> a`, Elm `Basics.min`/`max`). The
+//!    current Go reference routes BOTH arguments through `AsInt` before the
+//!    compare, which truncates floats (`AsInt 0.4 = 0`, `AsInt 1.3 = 1`) and is
+//!    meaningless on `String`. Sky-Rust compares at the argument's actual type
+//!    and returns the lesser / greater value UNCHANGED. These goldens therefore
+//!    assert against Sky-Rust's OWN recorded-correct output via a
+//!    `sanctioned.divergence` marker tagged `go-bug:` — they re-converge to byte
+//!    parity once #136 merges and the vendored Go syncs.
 //!
-//! * `Math.min 3 5` → `3` — integers. This shape is TRUE byte parity with the
-//!   Go reference: Go's `Math_min` compares via `AsInt`, which is correct for
-//!   `Int`, so the cached oracle is the Go output (`oracle_divergence = false`).
-//! * `Math.min 0.4 1.3` → `0.4` — floats. Current Go truncates BOTH arguments
-//!   through `AsInt` before comparing (`AsInt 0.4 = 0`, `AsInt 1.3 = 1`), a
-//!   documented Go bug (anzellai/sky PR #136, OPEN). Sky-Rust compares the
-//!   `f64`s directly and returns the lesser value unchanged. Recorded as a
-//!   `go-bug:` divergence; it re-converges to byte parity once #136 merges and
-//!   the vendored Go syncs.
-//! * `Math.max "apple" "banana"` → `"banana"` — strings. Go's `AsInt` compare is
-//!   meaningless on `String`; the correct behaviour is the lexicographic
-//!   ordering. Also a `go-bug:` divergence.
+//!      * `Math.min 0.4 1.3` → `0.4`   (Go would wrongly give `0`)
+//!      * `Math.max 0.4 1.3` → `1.3`   (Go would wrongly give `1`)
+//!      * `Math.min "b" "a"` → `"a"`   (lexicographic; Go's `AsInt` is meaningless)
+//!      * `Math.max "b" "a"` → `"b"`
 //!
-//! The float / string goldens therefore assert against Sky-Rust's OWN recorded
-//! (correct) output, the int golden against the Go oracle. Every test is gated
-//! on `SKY_E2E=1`; without it the test returns early. Run with:
+//! 2. **Go parity** — the rest. Here the Go reference is correct, so the cached
+//!    oracle is the Go output (`oracle_divergence = false`) and Sky-Rust must
+//!    match it byte-for-byte: `Math.min` / `Math.max` on `Int` (Go's `AsInt`
+//!    path is correct for integers), `abs`, `sqrt` (incl. the `sqrt (-1.0)` NaN
+//!    domain edge), `pow`, `round` (half-away-from-zero, both signs), `floor` /
+//!    `ceil` / `trunc` on a negative (the three round differently), `mod` vs
+//!    `remainder`, and the `pi` / `nan` constants.
+//!
+//! Every test is gated on `SKY_E2E=1`; without it the test returns early. Run:
 //!
 //! ```text
 //! SKY_E2E=1 SKY_RUNTIME_DIR=<path-to-runtime-rust/src/sky_runtime> \
@@ -42,7 +45,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
 /// run it, and assert its stdout matches the cached oracle (the Go reference
-/// for the parity case, or Sky-Rust's own recorded-correct output for a
+/// for a parity case, or Sky-Rust's own recorded-correct output for a
 /// `go-bug:` divergence). Gated on `SKY_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
     if std::env::var("SKY_E2E").is_err() {
@@ -66,91 +69,137 @@ fn assert_runs_and_matches_oracle(name: &str) {
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the oracle");
 }
 
-// ── min — Int (TRUE Go parity) ────────────────────────────────────────────────
+// ── min / max — Int (TRUE Go parity: AsInt path is correct on integers) ───────
 
-/// `Math.min 3 5` → `3`. Integer compare matches Go's `AsInt` path exactly.
+/// `Math.min 3 7` → `3`.
 #[test]
 fn math_min_int() {
     assert_runs_and_matches_oracle("m4c_math_min_int");
 }
 
-// ── min — Float (go-bug #136 divergence: no truncation) ───────────────────────
+/// `Math.max 3 7` → `7`.
+#[test]
+fn math_max_int() {
+    assert_runs_and_matches_oracle("m4c_math_max_int");
+}
 
-/// `Math.min 0.4 1.3` → `0.4`. The Go reference truncates the compare to ints
-/// (`0 < 1`) — we compare the `f64`s and return `0.4`.
+// ── min / max — Float (go-bug #136 divergence: no truncation) ─────────────────
+
+/// `Math.min 0.4 1.3` → `0.4`. Go truncates the compare to ints (`0 < 1`); we
+/// compare the `f64`s and return `0.4` unchanged.
 #[test]
 fn math_min_float_no_truncation() {
     assert_runs_and_matches_oracle("m4c_math_min_float");
 }
 
-// ── max — String (go-bug #136 divergence: lexicographic) ──────────────────────
+/// `Math.max 0.4 1.3` → `1.3`. Go would truncate to `1`; we return `1.3`.
+#[test]
+fn math_max_float_no_truncation() {
+    assert_runs_and_matches_oracle("m4c_math_max_float");
+}
 
-/// `Math.max "apple" "banana"` → `"banana"`. Polymorphic compare on `String`
-/// (lexicographic), where Go's `AsInt` compare is meaningless.
+// ── min / max — String (go-bug #136 divergence: lexicographic) ────────────────
+
+/// `Math.min "b" "a"` → `"a"`. Polymorphic compare on `String` (lexicographic),
+/// where Go's `AsInt` compare is meaningless.
+#[test]
+fn math_min_string_lexicographic() {
+    assert_runs_and_matches_oracle("m4c_math_min_string");
+}
+
+/// `Math.max "b" "a"` → `"b"`.
 #[test]
 fn math_max_string_lexicographic() {
     assert_runs_and_matches_oracle("m4c_math_max_string");
 }
 
-// ── abs ────────────────────────────────────────────────────────────────────────
+// ── abs ──────────────────────────────────────────────────────────────────────
 
-/// `Math.abs (-5)` → `5`. Integer absolute value.
+/// `Math.abs (-5)` → `5`. Integer absolute value (`AsInt` is correct here).
 #[test]
 fn math_abs() {
     assert_runs_and_matches_oracle("m4c_math_abs");
 }
 
-// ── sqrt ───────────────────────────────────────────────────────────────────────
+// ── sqrt + NaN domain edge ────────────────────────────────────────────────────
 
-/// `Math.sqrt 9.0` → `3` (via `String.fromFloat` 'g' format: `3.0` → `"3"`).
+/// `Math.sqrt 2.0` → `1.4142135623730951`.
 #[test]
 fn math_sqrt() {
     assert_runs_and_matches_oracle("m4c_math_sqrt");
 }
 
-// ── floor ──────────────────────────────────────────────────────────────────────
-
-/// `Math.floor 3.7` → `3`. Float-to-Int truncation toward −∞.
+/// `Math.sqrt (-1.0)` → `NaN`. Domain edge: `string_from_float` special-cases NaN.
 #[test]
-fn math_floor() {
-    assert_runs_and_matches_oracle("m4c_math_floor");
+fn math_sqrt_negative_is_nan() {
+    assert_runs_and_matches_oracle("m4c_math_sqrt_neg");
 }
 
-// ── round ──────────────────────────────────────────────────────────────────────
+// ── pow ──────────────────────────────────────────────────────────────────────
 
-/// `Math.round 3.5` → `4`. Half-away-from-zero rounding (Go `math.Round`).
-#[test]
-fn math_round() {
-    assert_runs_and_matches_oracle("m4c_math_round");
-}
-
-// ── pi constant ────────────────────────────────────────────────────────────────
-
-/// `Math.pi` → `"3.141592653589793"`. Zero-arity Float constant.
-#[test]
-fn math_pi() {
-    assert_runs_and_matches_oracle("m4c_math_pi");
-}
-
-// ── pow ────────────────────────────────────────────────────────────────────────
-
-/// `Math.pow 2.0 10.0` → `"1024"`. Arity-2 exponentiation.
+/// `Math.pow 2.0 10.0` → `1024`. Arity-2 exponentiation.
 #[test]
 fn math_pow() {
     assert_runs_and_matches_oracle("m4c_math_pow");
 }
 
-// ── mod ────────────────────────────────────────────────────────────────────────
+// ── round — half-away-from-zero, both signs ───────────────────────────────────
 
-/// `Math.mod 5.5 2.0` → `"1.5"`. Modulo with dividend's sign (Go `math.Mod`).
+/// `Math.round 2.5` → `3`. Go `math.Round` rounds halves away from zero.
+#[test]
+fn math_round_half_away() {
+    assert_runs_and_matches_oracle("m4c_math_round");
+}
+
+/// `Math.round (-2.5)` → `-3`. Half-away-from-zero on the negative side.
+#[test]
+fn math_round_negative_half_away() {
+    assert_runs_and_matches_oracle("m4c_math_round_neg");
+}
+
+// ── floor / ceil / trunc — the three round a negative differently ─────────────
+
+/// `Math.floor (-2.7)` → `-3`. Toward −∞.
+#[test]
+fn math_floor_negative() {
+    assert_runs_and_matches_oracle("m4c_math_floor");
+}
+
+/// `Math.ceil (-2.7)` → `-2`. Toward +∞.
+#[test]
+fn math_ceil_negative() {
+    assert_runs_and_matches_oracle("m4c_math_ceil");
+}
+
+/// `Math.trunc (-2.7)` → `-2`. Toward zero.
+#[test]
+fn math_trunc_negative() {
+    assert_runs_and_matches_oracle("m4c_math_trunc");
+}
+
+// ── mod vs remainder ──────────────────────────────────────────────────────────
+
+/// `Math.mod 7.0 3.0` → `1`. Modulo carrying the dividend's sign (Go `math.Mod`).
 #[test]
 fn math_mod() {
     assert_runs_and_matches_oracle("m4c_math_mod");
 }
 
-// ── nan constant ───────────────────────────────────────────────────────────────
+/// `Math.remainder 7.0 3.0` → `1`. IEEE 754 remainder (Go `math.Remainder`).
+#[test]
+fn math_remainder() {
+    assert_runs_and_matches_oracle("m4c_math_remainder");
+}
 
-/// `Math.nan` → `"NaN"`. `string_from_float` special-cases NaN.
+// ── constants ─────────────────────────────────────────────────────────────────
+
+/// `Math.pi` → `3.141592653589793`. Zero-arity Float constant.
+#[test]
+fn math_pi() {
+    assert_runs_and_matches_oracle("m4c_math_pi");
+}
+
+/// `Math.nan` → `NaN`. `string_from_float` special-cases NaN.
 #[test]
 fn math_nan() {
     assert_runs_and_matches_oracle("m4c_math_nan");

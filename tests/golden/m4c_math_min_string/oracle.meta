@@ -1,0 +1,6 @@
+# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
+main_sky_sha256 = 284f9ef3d6eb84be03c45a7f9cae07d614faa2a3241dc44a151122910df6be89
+go_sky_version = sky dev
+exit_code = 0
+oracle_divergence = true
+divergence_reason = go-bug: Math.min/max route args through AsInt in current Go (anzellai/sky PR #136, open); on String the AsInt compare is meaningless. Correct behaviour compares lexicographically; Math.min "b" "a" = "a". Re-converges to byte parity when #136 merges and the vendored Go syncs.

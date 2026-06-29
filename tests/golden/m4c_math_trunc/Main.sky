@@ -1,0 +1,4 @@
+module Main exposing (main)
+
+main =
+    println (String.fromInt (Math.trunc (-2.7)))
