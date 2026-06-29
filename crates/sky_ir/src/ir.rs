@@ -416,6 +416,16 @@ pub enum IrType {
     /// binary, with explicit UTF-8 conversion via `Bytes.fromString` /
     /// `Bytes.toString`. Rationale: Rust type-system correctness.
     Bytes,
+    /// The JSON value type — an opaque, dynamically-typed JSON node.
+    ///
+    /// The Sky `Value` type alias (`Value = any`) creates an unresolved
+    /// `Ty::Var` at use sites.  In a JSON-kernel context the concrete Rust
+    /// type is always `serde_json::Value`, re-exported from the runtime as
+    /// `JsonVal`.  The lowerer produces this variant when a `Ty::Var`
+    /// appears in the argument or return position of a `JsonEnc.*` kernel
+    /// call — the only place in the M4g subset where `any` is meaningful.
+    /// The backend emits `JsonVal`.
+    Json,
 }
 
 /// An expression in the typed IR.
@@ -928,6 +938,28 @@ pub enum KernelFn {
     /// `Encoding.hexDecode : String -> Result Error String` — hex decode.
     /// Returns `Err` on an odd-length string or any non-hex character.
     EncodingHexDecode,
+    // ── Json.Encode kernels (M4g) ──────────────────────────────────────────────
+    /// `JsonEnc.string : String -> Value` — wrap a `String` as a JSON string value.
+    JsonEncString,
+    /// `JsonEnc.int : Int -> Value` — wrap an `Int` as a JSON number value.
+    JsonEncInt,
+    /// `JsonEnc.float : Float -> Value` — wrap a `Float` as a JSON number value.
+    JsonEncFloat,
+    /// `JsonEnc.bool : Bool -> Value` — wrap a `Bool` as a JSON boolean value.
+    JsonEncBool,
+    /// `JsonEnc.null : Value` — the JSON null constant (arity 0).
+    JsonEncNull,
+    /// `JsonEnc.list : (a -> Value) -> List a -> Value` — encode a list with a
+    /// per-element encoder (Elm-shaped: encoder first, list second).
+    JsonEncList,
+    /// `JsonEnc.object : List (String, Value) -> Value` — build a JSON object from
+    /// key-value pairs. Key order follows Go: `json.Marshal(map[string]any{})`
+    /// sorts keys alphabetically via `BTreeMap` in the Rust runtime.
+    JsonEncObject,
+    /// `JsonEnc.encode : Int -> Value -> String` — serialise a `Value` to JSON text.
+    /// `indent=0` → compact (no whitespace); `indent=N` → N-space pretty-print
+    /// matching Go's `json.MarshalIndent(val, "", strings.Repeat(" ", N))`.
+    JsonEncEncode,
 }
 
 /// Binary operators.

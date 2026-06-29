@@ -356,6 +356,11 @@ impl Env {
                     "hexDecode",
                 ],
             ),
+            // `Sky.Core.Json.Encode` — JSON encoder (M4g).
+            (
+                "JsonEnc",
+                &["string", "int", "float", "bool", "null", "list", "object", "encode"],
+            ),
         ];
 
         for (qual, funcs) in QUALIFIERS {

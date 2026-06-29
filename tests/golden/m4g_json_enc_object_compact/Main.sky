@@ -1,0 +1,15 @@
+module Main exposing (main)
+
+-- Nested object: { name, age, tags:[...] } encoded at indent=0 (compact).
+-- Go: json.Marshal(map[string]any{}) sorts keys alphabetically →
+-- "age" < "name" < "tags".
+main =
+    let
+        v =
+            JsonEnc.object
+                [ ( "name", JsonEnc.string "Alice" )
+                , ( "age", JsonEnc.int 30 )
+                , ( "tags", JsonEnc.list JsonEnc.string [ "go", "rust" ] )
+                ]
+    in
+    println (JsonEnc.encode 0 v)
