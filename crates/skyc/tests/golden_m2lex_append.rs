@@ -66,16 +66,18 @@ fn assert_byte_identical(name: &str) {
     );
 }
 
-/// Full spine: compile, build the emitted Cargo project, run it, and assert it
-/// prints `want` — the value the Go backend produces. Gated on `SKY_E2E=1` so
-/// the default `cargo test` stays fast.
-fn assert_runs_and_prints(name: &str, want: &str) {
+/// Full spine: compile, build the emitted Cargo project, run it, and assert its
+/// stdout matches the golden's CACHED Go oracle (`expected_go.txt`) via the
+/// staleness-gated `support::assert_go_parity` — NO live Go run in this path.
+/// Gated on `SKY_E2E=1` so the default `cargo test` stays fast.
+fn assert_runs_and_matches_oracle(name: &str) {
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
 
     let root = repo_root();
-    let entry = golden_dir(&root, name).join("Main.sky");
+    let dir = golden_dir(&root, name);
+    let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
@@ -86,7 +88,7 @@ fn assert_runs_and_prints(name: &str, want: &str) {
     assert!(built.is_ok(), "build failed for {name}: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted(name, &out);
-    assert_eq!(outcome.stdout, want, "{name} prints the Go-backend value");
+    support::assert_go_parity(name, &dir, &outcome.stdout);
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
 }
 
@@ -102,10 +104,10 @@ fn append_literal_chain_emits_byte_identical_main_rs() {
 
 #[test]
 fn append_chain_builds_and_prints_greeting() {
-    assert_runs_and_prints("m2lex_append", "hi, world!\n");
+    assert_runs_and_matches_oracle("m2lex_append");
 }
 
 #[test]
 fn append_literal_chain_builds_and_prints_abcd() {
-    assert_runs_and_prints("m2lex_append_chain", "abcd\n");
+    assert_runs_and_matches_oracle("m2lex_append_chain");
 }

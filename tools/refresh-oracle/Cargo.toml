@@ -1,0 +1,16 @@
+[package]
+name = "refresh-oracle"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "refresh-oracle"
+path = "src/main.rs"
+
+[dependencies]
+oracle = { path = "../oracle" }
+skyc = { path = "../../crates/skyc" }
+
+[lints]
+workspace = true

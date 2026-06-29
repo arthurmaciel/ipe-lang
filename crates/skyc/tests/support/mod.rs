@@ -20,9 +20,12 @@
 //!
 //! Rigour: a build failure FAILS the test (the build assert carries cargo's
 //! stderr); it is never skipped and never reported as a false green.
+//!
+//! The build/run plumbing and the cached-oracle format both live in the shared
+//! [`oracle`] crate so the `refresh-oracle` tool and these tests cannot drift —
+//! the tool WRITES the cache via the same code the tests READ it through.
 
 use std::path::Path;
-use std::process::Command;
 
 /// Outcome of building and running an emitted Sky project.
 pub struct RunOutcome {
@@ -32,94 +35,11 @@ pub struct RunOutcome {
     pub exit_code: Option<i32>,
 }
 
-impl RunOutcome {
-    /// The empty outcome returned only on a path that the preceding `assert!`
-    /// has already failed the test on — keeps the type checker satisfied without
-    /// reaching for a deny-listed `unwrap`/`expect`/`panic!`.
-    const fn aborted() -> Self {
-        Self {
-            stdout: String::new(),
-            exit_code: None,
-        }
-    }
-}
-
-/// Turn an arbitrary golden name into a cargo-package-safe suffix: cargo names
-/// permit only ASCII alphanumerics, `-`, and `_`. Anything else becomes `_`.
-fn sanitize(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-/// Rewrite the emitted `Cargo.toml` so its package — and hence its default
-/// binary — carries a name unique to this golden. The emitter always writes
-/// `name = "sky-app"`; we swap in `sky-app-e2e-<golden>` so the binaries from
-/// every golden coexist in the one shared target.
-///
-/// Returns the unique package name on success, or an error string describing
-/// what went wrong (missing manifest, unexpected manifest shape).
-fn rewrite_package_name(emitted_dir: &Path, golden_name: &str) -> Result<String, String> {
-    const ANCHOR: &str = "name = \"sky-app\"";
-
-    let manifest = emitted_dir.join("Cargo.toml");
-    let original = std::fs::read_to_string(&manifest)
-        .map_err(|e| format!("cannot read {}: {e}", manifest.display()))?;
-
-    if !original.contains(ANCHOR) {
-        return Err(format!(
-            "emitted manifest {} did not contain the expected `{ANCHOR}` anchor",
-            manifest.display()
-        ));
-    }
-
-    let unique = format!("sky-app-e2e-{}", sanitize(golden_name));
-    // Replace only the first occurrence (the `[package]` name); the dependency
-    // table never spells `name = "sky-app"`.
-    let rewritten = original.replacen(ANCHOR, &format!("name = \"{unique}\""), 1);
-    std::fs::write(&manifest, rewritten)
-        .map_err(|e| format!("cannot write {}: {e}", manifest.display()))?;
-    Ok(unique)
-}
-
-/// Parse `cargo build --message-format=json` stdout for the produced binary.
-///
-/// cargo emits one JSON object per line. The binary we want is the unique
-/// `compiler-artifact` whose `executable` field is a non-null string (library
-/// dependencies have a null `executable`). We additionally require the
-/// artifact's package id to mention our unique package name, so a stray
-/// executable artifact can never be mistaken for ours.
-fn find_executable(json_stdout: &str, unique_pkg: &str) -> Option<String> {
-    let mut found: Option<String> = None;
-    for line in json_stdout.lines() {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if value.get("reason").and_then(serde_json::Value::as_str) != Some("compiler-artifact") {
-            continue;
-        }
-        let Some(exe) = value.get("executable").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let pkg_id = value
-            .get("package_id")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        if pkg_id.contains(unique_pkg) {
-            found = Some(exe.to_owned());
-        }
-    }
-    found
-}
-
 /// Build the emitted project at `emitted_dir` into the shared target and run the
 /// resulting binary, returning its captured stdout and exit code.
+///
+/// Delegates to [`oracle::build_and_run_rust`] (the same core the refresh tool
+/// uses) and wraps its `Result` in a test assertion.
 ///
 /// # Panics
 ///
@@ -130,60 +50,41 @@ fn find_executable(json_stdout: &str, unique_pkg: &str) -> Option<String> {
 #[must_use]
 #[allow(dead_code)] // not every golden test binary exercises every helper
 pub fn build_and_run_emitted(golden_name: &str, emitted_dir: &Path) -> RunOutcome {
-    let retargeted = rewrite_package_name(emitted_dir, golden_name);
+    let result = oracle::build_and_run_rust(golden_name, emitted_dir);
     assert!(
-        retargeted.is_ok(),
-        "{golden_name}: {}",
-        retargeted.as_ref().err().map_or("", String::as_str)
+        result.is_ok(),
+        "{}",
+        result.as_ref().err().map_or("", String::as_str)
     );
-    let Ok(unique_pkg) = retargeted else {
-        return RunOutcome::aborted();
+    let Ok(result) = result else {
+        // Unreachable on a green path: the assert above already failed the test.
+        return RunOutcome {
+            stdout: String::new(),
+            exit_code: None,
+        };
     };
-
-    // No CARGO_TARGET_DIR override: the build inherits the global shared target
-    // from ~/.cargo/config.toml, so deps are reused, not recompiled per golden.
-    let build = Command::new("cargo")
-        .arg("build")
-        .arg("--message-format=json")
-        .current_dir(emitted_dir)
-        .output();
-    assert!(
-        build.is_ok(),
-        "{golden_name}: failed to spawn `cargo build`: {:?}",
-        build.as_ref().err()
-    );
-    let Ok(build) = build else {
-        return RunOutcome::aborted();
-    };
-
-    assert!(
-        build.status.success(),
-        "{golden_name}: emitted project must build\n--- cargo stderr ---\n{}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let json_stdout = String::from_utf8_lossy(&build.stdout);
-    let exe = find_executable(&json_stdout, &unique_pkg);
-    assert!(
-        exe.is_some(),
-        "{golden_name}: no `executable` artifact for package `{unique_pkg}` in cargo JSON output"
-    );
-    let Some(exe) = exe else {
-        return RunOutcome::aborted();
-    };
-
-    let run = Command::new(&exe).output();
-    assert!(
-        run.is_ok(),
-        "{golden_name}: emitted binary `{exe}` must run: {:?}",
-        run.as_ref().err()
-    );
-    let Ok(run) = run else {
-        return RunOutcome::aborted();
-    };
-
     RunOutcome {
-        stdout: String::from_utf8_lossy(&run.stdout).into_owned(),
-        exit_code: run.status.code(),
+        stdout: result.stdout,
+        exit_code: result.exit_code,
     }
+}
+
+/// Assert skyc's stdout matches the golden's CACHED Go oracle, with the
+/// staleness gate enforced first.
+///
+/// This is the read side of the cached-oracle infra: it NEVER runs the Go
+/// backend. It re-hashes `tests/golden/<name>/Main.sky` and, if the hash no
+/// longer matches `oracle.meta`, fails loudly with "run refresh-oracle" rather
+/// than diffing against a stale `expected_go.txt`. A missing oracle is likewise
+/// a hard failure — never a skip. When the golden is marked `oracle_divergence`
+/// (the Go reference is buggy on this shape), the comparison is against skyc's
+/// own recorded-correct output.
+#[allow(dead_code)] // exercised by the goldens that opt into cached parity
+pub fn assert_go_parity(golden_name: &str, golden_dir: &Path, skyc_stdout: &str) {
+    let outcome = oracle::check_parity(golden_dir, golden_name, skyc_stdout);
+    assert!(
+        outcome.is_ok(),
+        "{}",
+        outcome.err().map_or(String::new(), |e| e.to_string())
+    );
 }
