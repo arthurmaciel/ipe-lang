@@ -1378,15 +1378,13 @@ impl<'a> Builder<'a> {
 
             // ── Sky.Core.List (kernel-anchored combinators) ──
             // map : (a -> b) -> List a -> List b
-            (Some("List"), Some("map")) => fun(
-                fun(var(0), var(1)),
-                fun(list(var(0)), list(var(1))),
-            ),
+            (Some("List"), Some("map")) => {
+                fun(fun(var(0), var(1)), fun(list(var(0)), list(var(1))))
+            }
             // filter : (a -> Bool) -> List a -> List a
-            (Some("List"), Some("filter")) => fun(
-                fun(var(0), bool_ty),
-                fun(list(var(0)), list(var(0))),
-            ),
+            (Some("List"), Some("filter")) => {
+                fun(fun(var(0), bool_ty), fun(list(var(0)), list(var(0))))
+            }
             // foldl / foldr : (a -> b -> b) -> b -> List a -> b
             (Some("List"), Some("foldl" | "foldr")) => fun(
                 fun(var(0), fun(var(1), var(1))),
@@ -1399,26 +1397,19 @@ impl<'a> Builder<'a> {
             // tail : List a -> Maybe (List a)
             (Some("List"), Some("tail")) => fun(list(var(0)), maybe(list(var(0)))),
             // member : a -> List a -> Bool
-            (Some("List"), Some("member")) => {
-                fun(var(0), fun(list(var(0)), bool_ty))
-            }
+            (Some("List"), Some("member")) => fun(var(0), fun(list(var(0)), bool_ty)),
             // range : Int -> Int -> List Int
-            (Some("List"), Some("range")) => {
-                fun(int.clone(), fun(int.clone(), list(int)))
-            }
+            (Some("List"), Some("range")) => fun(int.clone(), fun(int.clone(), list(int))),
             // reverse : List a -> List a
             (Some("List"), Some("reverse")) => fun(list(var(0)), list(var(0))),
 
             // ── Sky.Core.Maybe ──
             // withDefault : a -> Maybe a -> a
-            (Some("Maybe"), Some("withDefault")) => {
-                fun(var(0), fun(maybe(var(0)), var(0)))
-            }
+            (Some("Maybe"), Some("withDefault")) => fun(var(0), fun(maybe(var(0)), var(0))),
             // map : (a -> b) -> Maybe a -> Maybe b
-            (Some("Maybe"), Some("map")) => fun(
-                fun(var(0), var(1)),
-                fun(maybe(var(0)), maybe(var(1))),
-            ),
+            (Some("Maybe"), Some("map")) => {
+                fun(fun(var(0), var(1)), fun(maybe(var(0)), maybe(var(1))))
+            }
             // andThen : (a -> Maybe b) -> Maybe a -> Maybe b
             (Some("Maybe"), Some("andThen")) => fun(
                 fun(var(0), maybe(var(1))),

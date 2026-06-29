@@ -28,9 +28,12 @@
 //! is irrefutable. It therefore abstracts to a wildcard ([`UPat::Wild`]) for
 //! coverage purposes. Tuples are single-constructor product types, abstracted to
 //! [`UPat::Ctor`] with a [`Head::Tuple`] head whose element sub-patterns recurse.
-//! ADT constructors abstract to [`Head::Adt`]. Literal / cons / alias patterns
-//! are outside the analysed subset (the parser does not admit them in `case`),
-//! so every pattern reaching here is var / wildcard / ctor / tuple / record.
+//! ADT constructors abstract to [`Head::Adt`]. Literal patterns abstract to a
+//! zero-arity head of their value, alias patterns are transparent (they cover
+//! exactly their inner pattern), and list / cons patterns are judged with the
+//! built-in closed `Nil | Cons` signature. Every pattern shape the grammar
+//! admits in `case` is analysed here — so list/cons exhaustiveness is THIS
+//! pass's responsibility (do not weaken it assuming the lowerer rejects them).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -201,13 +204,13 @@ fn to_upat(p: &canon::Pattern_) -> UPat {
     }
 }
 
-/// Does `p` reference a name / shape this end-of-checking pass cannot analyse
-/// soundly here? Two cases are excluded from the usefulness walk: a constructor
-/// outside this module's unions (an imported / unknown enum whose full
-/// constructor set is unavailable — the lowerer rejects the unknown scrutinee
-/// enum separately), and a list / cons pattern (whose lowering is a fail-closed
-/// not-yet gap, so the lowerer rejects it before any code is emitted — skipping
-/// the coverage walk for it cannot let unsound code through).
+/// Does `p` reference a name this end-of-checking pass cannot analyse soundly
+/// here? The one excluded case is a constructor outside this module's unions (an
+/// imported / unknown enum whose full constructor set is unavailable — the
+/// lowerer rejects the unknown scrutinee enum separately). List / cons patterns
+/// are NOT excluded: they are analysed via the built-in closed `Nil | Cons`
+/// signature (see `to_upat`), so their exhaustiveness (SKY-T0010) is enforced
+/// here — a nested unknown constructor inside one still excludes the `case`.
 fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
     match p {
         // Wildcards, variables, field-pun records, and literal leaves reference
