@@ -86,6 +86,7 @@ fn end_to_end_builds_and_prints_forty_two() {
     let status = Command::new("cargo")
         .arg("build")
         .current_dir(&out)
+        .env("CARGO_TARGET_DIR", out.join("target"))
         .status();
     assert!(
         matches!(&status, Ok(s) if s.success()),

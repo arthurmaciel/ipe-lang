@@ -87,6 +87,7 @@ fn assert_runs_and_prints(name: &str, want: &str) {
     let status = Command::new("cargo")
         .arg("build")
         .current_dir(&out)
+        .env("CARGO_TARGET_DIR", out.join("target"))
         .status();
     assert!(
         matches!(&status, Ok(s) if s.success()),
