@@ -97,6 +97,12 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
             ir_type_name(interner, ok)
         ),
         IrType::List(elem) => format!("List {}", ir_type_name(interner, elem)),
+        IrType::Dict(k, v) => format!(
+            "Dict {} {}",
+            ir_type_name(interner, k),
+            ir_type_name(interner, v)
+        ),
+        IrType::Set(a) => format!("Set {}", ir_type_name(interner, a)),
         IrType::Tuple(elems) => {
             let inner = elems
                 .iter()
@@ -266,6 +272,32 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::MathMod => "Math.mod",
         KernelFn::MathRemainder => "Math.remainder",
         KernelFn::ResultOkDefault => "Result.Ok",
+        // ── Dict kernels ─────────────────────────────────────────────────────
+        KernelFn::DictEmpty => "Dict.empty",
+        KernelFn::DictIsEmpty => "Dict.isEmpty",
+        KernelFn::DictSize => "Dict.size",
+        KernelFn::DictKeys => "Dict.keys",
+        KernelFn::DictValues => "Dict.values",
+        KernelFn::DictToList => "Dict.toList",
+        KernelFn::DictFromList => "Dict.fromList",
+        KernelFn::DictGet => "Dict.get",
+        KernelFn::DictMember => "Dict.member",
+        KernelFn::DictRemove => "Dict.remove",
+        KernelFn::DictUnion => "Dict.union",
+        KernelFn::DictMap => "Dict.map",
+        KernelFn::DictInsert => "Dict.insert",
+        KernelFn::DictFoldl => "Dict.foldl",
+        // ── Set kernels ──────────────────────────────────────────────────────
+        KernelFn::SetEmpty => "Set.empty",
+        KernelFn::SetSize => "Set.size",
+        KernelFn::SetToList => "Set.toList",
+        KernelFn::SetFromList => "Set.fromList",
+        KernelFn::SetMember => "Set.member",
+        KernelFn::SetInsert => "Set.insert",
+        KernelFn::SetRemove => "Set.remove",
+        KernelFn::SetUnion => "Set.union",
+        KernelFn::SetIntersect => "Set.intersect",
+        KernelFn::SetDiff => "Set.diff",
     }
 }
 

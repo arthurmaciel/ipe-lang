@@ -35,6 +35,10 @@ const LIST: &str = include_str!("../stdlib/Sky/Core/List.sky");
 const STRING: &str = include_str!("../stdlib/Sky/Core/String.sky");
 /// `Sky.Core.Char` — single-character helpers (M4b).
 const CHAR: &str = include_str!("../stdlib/Sky/Core/Char.sky");
+/// `Sky.Core.Dict` — string-keyed associative map (M4d).
+const DICT: &str = include_str!("../stdlib/Sky/Core/Dict.sky");
+/// `Sky.Core.Set` — unordered set of unique elements (M4d).
+const SET: &str = include_str!("../stdlib/Sky/Core/Set.sky");
 
 /// Every embedded `Sky.Core` module, keyed by its dotted import name.
 ///
@@ -65,6 +69,14 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Sky.Core.Char",
         source: CHAR,
+    },
+    StdModule {
+        name: "Sky.Core.Dict",
+        source: DICT,
+    },
+    StdModule {
+        name: "Sky.Core.Set",
+        source: SET,
     },
 ];
 

@@ -514,6 +514,15 @@ fn collect_record_shapes(
             collect_record_shapes(interner, err, shapes)?;
             collect_record_shapes(interner, ok, shapes)?;
         }
+        // `Dict k v` / `Set a` carry no struct of their own, but their element
+        // types may (`Dict String { x : Int }`).
+        IrType::Dict(k, v) => {
+            collect_record_shapes(interner, k, shapes)?;
+            collect_record_shapes(interner, v, shapes)?;
+        }
+        IrType::Set(a) => {
+            collect_record_shapes(interner, a, shapes)?;
+        }
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -582,6 +591,15 @@ fn type_reaches_enum(
             type_reaches_enum(err, target, enums, visited)
                 || type_reaches_enum(ok, target, enums, visited)
         }
+        // `Dict k v` / `Set a` are heap-allocated (pointer-sized); they cannot
+        // participate in an infinite-size cycle. Recurse into element types for
+        // completeness (a Dict/Set whose element type reaches the target enum is
+        // still finite because the backing HashMap/BTreeSet is a heap pointer).
+        IrType::Dict(k, v) => {
+            type_reaches_enum(k, target, enums, visited)
+                || type_reaches_enum(v, target, enums, visited)
+        }
+        IrType::Set(a) => type_reaches_enum(a, target, enums, visited),
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -605,6 +623,8 @@ fn contains_generic(ty: &IrType) -> bool {
         IrType::Enum { args, .. } => args.iter().any(contains_generic),
         IrType::Maybe(elem) | IrType::List(elem) => contains_generic(elem),
         IrType::Result(err, ok) => contains_generic(err) || contains_generic(ok),
+        IrType::Dict(k, v) => contains_generic(k) || contains_generic(v),
+        IrType::Set(a) => contains_generic(a),
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -650,6 +670,11 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
             collect_generics(err, out);
             collect_generics(ok, out);
         }
+        IrType::Dict(k, v) => {
+            collect_generics(k, out);
+            collect_generics(v, out);
+        }
+        IrType::Set(a) => collect_generics(a, out),
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -723,6 +748,18 @@ fn skeleton_ty(ty: &IrType, idx: &mut BTreeMap<Symbol, usize>, out: &mut String)
                 skeleton_ty(a, idx, out);
                 out.push(',');
             }
+            out.push('>');
+        }
+        IrType::Dict(k, v) => {
+            out.push_str("Dict<");
+            skeleton_ty(k, idx, out);
+            out.push(',');
+            skeleton_ty(v, idx, out);
+            out.push('>');
+        }
+        IrType::Set(a) => {
+            out.push_str("Set<");
+            skeleton_ty(a, idx, out);
             out.push('>');
         }
         // Scalar / leaf types (Int / Bool / …): their `Debug` form is a stable,
@@ -824,6 +861,17 @@ fn match_template(
                 match_template(terr, cerr, subst)?;
                 match_template(tok, cok, subst)
             }
+            _ => Err(mismatch()),
+        },
+        IrType::Dict(tk, tv) => match concrete {
+            IrType::Dict(ck, cv) => {
+                match_template(tk, ck, subst)?;
+                match_template(tv, cv, subst)
+            }
+            _ => Err(mismatch()),
+        },
+        IrType::Set(te) => match concrete {
+            IrType::Set(ce) => match_template(te, ce, subst),
             _ => Err(mismatch()),
         },
         // A concrete leaf must equal the use-site leaf exactly.

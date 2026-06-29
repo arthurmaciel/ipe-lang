@@ -303,6 +303,22 @@ impl Env {
                     "compare", "negate", "abs", "sqrt", "min", "max",
                 ],
             ),
+            // `Sky.Core.Dict` — associative map kernels (M4d).
+            (
+                "Dict",
+                &[
+                    "empty", "isEmpty", "size", "insert", "get", "remove", "member", "keys",
+                    "values", "toList", "fromList", "map", "foldl", "union",
+                ],
+            ),
+            // `Sky.Core.Set` — set kernels (M4d).
+            (
+                "Set",
+                &[
+                    "empty", "size", "insert", "remove", "member", "toList", "fromList", "union",
+                    "intersect", "diff",
+                ],
+            ),
         ];
 
         for (qual, funcs) in QUALIFIERS {

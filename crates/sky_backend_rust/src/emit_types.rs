@@ -99,6 +99,14 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         ),
         // The built-in `List a` is the runtime's `Vec<T>`.
         IrType::List(elem) => format!("Vec<{}>", render_type(ctx, elem, generics)?),
+        // `Dict k v` is the runtime's `HashMap<K, V>`.
+        IrType::Dict(k, v) => format!(
+            "HashMap<{}, {}>",
+            render_type(ctx, k, generics)?,
+            render_type(ctx, v, generics)?
+        ),
+        // `Set a` is the runtime's `BTreeSet<A>`.
+        IrType::Set(a) => format!("BTreeSet<{}>", render_type(ctx, a, generics)?),
         IrType::Tuple(elems) => {
             let mut parts = Vec::with_capacity(elems.len());
             for elem in elems {

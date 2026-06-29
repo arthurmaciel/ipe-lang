@@ -61,6 +61,10 @@ struct Builtins {
     err: Symbol,
     true_: Symbol,
     false_: Symbol,
+    /// `Sky.Core.Dict` type constructor symbol.
+    dict: Symbol,
+    /// `Sky.Core.Set` type constructor symbol.
+    set: Symbol,
     /// Two distinct scheme type-variable symbols (`a`, `e`) used to build the
     /// built-in constructor schemes. Their identity links a constructor's
     /// payload to its result type, exactly like a user union's declared vars;
@@ -81,6 +85,8 @@ impl Builtins {
             maybe: interner.intern("Maybe")?,
             result: interner.intern("Result")?,
             list: interner.intern("List")?,
+            dict: interner.intern("Dict")?,
+            set: interner.intern("Set")?,
             just: interner.intern("Just")?,
             nothing: interner.intern("Nothing")?,
             ok: interner.intern("Ok")?,
@@ -1391,6 +1397,17 @@ impl<'a> Builder<'a> {
             name: self.builtins.result,
             args: vec![e, a],
         };
+        let dict = |k: Ty, v: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.dict,
+            args: vec![k, v],
+        };
+        let set = |a: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.set,
+            args: vec![a],
+        };
+        let tuple2 = |a: Ty, b: Ty| Ty::Tuple(vec![a, b]);
         match (self.interner.resolve(module), self.interner.resolve(name)) {
             (Some("String"), Some("fromInt")) => Ty::Fun(Box::new(int), Box::new(string)),
             (Some("String"), Some("fromFloat")) => Ty::Fun(Box::new(float), Box::new(string)),
@@ -1481,6 +1498,74 @@ impl<'a> Builder<'a> {
             (Some("Math"), Some("pow" | "hypot" | "atan2" | "mod" | "remainder")) => {
                 fun(float.clone(), fun(float.clone(), float))
             }
+
+            // ── Sky.Core.Dict (M4d) ──
+            // empty : Dict k v  — arity-0 polymorphic value.
+            (Some("Dict"), Some("empty")) => dict(var(0), var(1)),
+            // isEmpty : Dict k v -> Bool
+            (Some("Dict"), Some("isEmpty")) => fun(dict(var(0), var(1)), bool_ty),
+            // size : Dict k v -> Int
+            (Some("Dict"), Some("size")) => fun(dict(var(0), var(1)), int),
+            // insert : k -> v -> Dict k v -> Dict k v
+            (Some("Dict"), Some("insert")) => {
+                fun(var(0), fun(var(1), fun(dict(var(0), var(1)), dict(var(0), var(1)))))
+            }
+            // get : k -> Dict k v -> Maybe v
+            (Some("Dict"), Some("get")) => fun(var(0), fun(dict(var(0), var(1)), maybe(var(1)))),
+            // remove : k -> Dict k v -> Dict k v
+            (Some("Dict"), Some("remove")) => {
+                fun(var(0), fun(dict(var(0), var(1)), dict(var(0), var(1))))
+            }
+            // member : k -> Dict k v -> Bool
+            (Some("Dict"), Some("member")) => fun(var(0), fun(dict(var(0), var(1)), bool_ty)),
+            // keys : Dict k v -> List k
+            (Some("Dict"), Some("keys")) => fun(dict(var(0), var(1)), list(var(0))),
+            // values : Dict k v -> List v
+            (Some("Dict"), Some("values")) => fun(dict(var(0), var(1)), list(var(1))),
+            // toList : Dict k v -> List (k, v)
+            (Some("Dict"), Some("toList")) => {
+                fun(dict(var(0), var(1)), list(tuple2(var(0), var(1))))
+            }
+            // fromList : List (k, v) -> Dict k v
+            (Some("Dict"), Some("fromList")) => {
+                fun(list(tuple2(var(0), var(1))), dict(var(0), var(1)))
+            }
+            // map : (k -> a -> b) -> Dict k a -> Dict k b
+            (Some("Dict"), Some("map")) => fun(
+                fun(var(0), fun(var(1), var(2))),
+                fun(dict(var(0), var(1)), dict(var(0), var(2))),
+            ),
+            // foldl : (k -> v -> b -> b) -> b -> Dict k v -> b
+            (Some("Dict"), Some("foldl")) => fun(
+                fun(var(0), fun(var(1), fun(var(2), var(2)))),
+                fun(var(2), fun(dict(var(0), var(1)), var(2))),
+            ),
+            // union : Dict k v -> Dict k v -> Dict k v  (left-biased)
+            (Some("Dict"), Some("union")) => {
+                fun(dict(var(0), var(1)), fun(dict(var(0), var(1)), dict(var(0), var(1))))
+            }
+
+            // ── Sky.Core.Set (M4d) ──
+            // empty : Set a  — arity-0 polymorphic value.
+            (Some("Set"), Some("empty")) => set(var(0)),
+            // size : Set a -> Int
+            (Some("Set"), Some("size")) => fun(set(var(0)), int),
+            // insert : a -> Set a -> Set a
+            (Some("Set"), Some("insert")) => fun(var(0), fun(set(var(0)), set(var(0)))),
+            // remove : a -> Set a -> Set a
+            (Some("Set"), Some("remove")) => fun(var(0), fun(set(var(0)), set(var(0)))),
+            // member : a -> Set a -> Bool
+            (Some("Set"), Some("member")) => fun(var(0), fun(set(var(0)), bool_ty)),
+            // toList : Set a -> List a
+            (Some("Set"), Some("toList")) => fun(set(var(0)), list(var(0))),
+            // fromList : List a -> Set a
+            (Some("Set"), Some("fromList")) => fun(list(var(0)), set(var(0))),
+            // union : Set a -> Set a -> Set a
+            (Some("Set"), Some("union")) => fun(set(var(0)), fun(set(var(0)), set(var(0)))),
+            // intersect : Set a -> Set a -> Set a
+            (Some("Set"), Some("intersect")) => fun(set(var(0)), fun(set(var(0)), set(var(0)))),
+            // diff : Set a -> Set a -> Set a
+            (Some("Set"), Some("diff")) => fun(set(var(0)), fun(set(var(0)), set(var(0)))),
 
             // Unknown kernel: a single flexible variable. The raw id is chosen
             // to be distinct from any real interned symbol's typical range; it
