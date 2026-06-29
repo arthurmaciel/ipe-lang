@@ -108,4 +108,5 @@ fn end_to_end_builds_and_prints_twenty_two() {
         "program prints 22 (Go-backend parity)"
     );
     assert!(output.status.success(), "exit 0, matching the Go oracle");
+    let _ = std::fs::remove_dir_all(out.join("target"));
 }

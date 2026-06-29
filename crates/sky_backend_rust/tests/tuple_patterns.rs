@@ -247,6 +247,7 @@ fn build_and_assert(
         "tuple-pattern program output must match the Go oracle"
     );
     assert!(output.status.success(), "exit 0, matching the Go oracle");
+    let _ = std::fs::remove_dir_all(out.join("target"));
     Ok(())
 }
 

@@ -94,4 +94,5 @@ fn end_to_end_builds_and_prints_one() {
         "program prints 1 (Go-backend parity)"
     );
     assert!(output.status.success(), "exit 0, matching the Go oracle");
+    let _ = std::fs::remove_dir_all(out.join("target"));
 }

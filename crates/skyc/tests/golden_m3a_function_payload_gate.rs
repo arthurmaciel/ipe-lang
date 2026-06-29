@@ -104,4 +104,5 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
         "accepted program must print the semantically-correct 2"
     );
     assert!(output.status.success(), "exit 0");
+    let _ = std::fs::remove_dir_all(out.join("target"));
 }
