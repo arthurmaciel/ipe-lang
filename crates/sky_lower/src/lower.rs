@@ -1573,7 +1573,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MaybeMap
                 | KernelFn::MaybeAndThen
                 | KernelFn::ResultWithDefault
-                | KernelFn::ResultMap,
+                | KernelFn::ResultMap
+                | KernelFn::MathMin
+                | KernelFn::MathMax,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::StringReplace
@@ -1694,6 +1696,14 @@ impl<'a> Lowerer<'a> {
                     // ── Result kernels ─────────────────────────────────────
                     ("Result", "withDefault") => Ok(Callee::Kernel(KernelFn::ResultWithDefault)),
                     ("Result", "map") => Ok(Callee::Kernel(KernelFn::ResultMap)),
+                    // ── Math kernels ───────────────────────────────────────
+                    // `min` / `max` are polymorphic `a -> a -> a` — lowered to
+                    // the runtime's generic compare, NOT through any `Int`
+                    // coercion (the Go-bug divergence, PR #136). The args keep
+                    // their solved type, so `math_min`/`math_max` infer `T` and
+                    // preserve the argument's value + type unchanged.
+                    ("Math", "min") => Ok(Callee::Kernel(KernelFn::MathMin)),
+                    ("Math", "max") => Ok(Callee::Kernel(KernelFn::MathMax)),
                     // A kernel beyond the wired set (`Time.now`, …).
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),

@@ -1427,6 +1427,13 @@ impl<'a> Builder<'a> {
                 fun(result(var(2), var(0)), result(var(2), var(1))),
             ),
 
+            // ── Sky.Core.Math ──
+            // min / max : a -> a -> a — polymorphic `comparable`, the same type
+            // variable in every position. Lowered to the runtime's generic
+            // compare (no `Int` coercion, no float truncation — the Go-bug
+            // divergence, PR #136), so the result keeps the argument's type.
+            (Some("Math"), Some("min" | "max")) => fun(var(0), fun(var(0), var(0))),
+
             // Unknown kernel: a single flexible variable. The raw id is chosen
             // to be distinct from any real interned symbol's typical range; it
             // only needs to differ between the two `Ty::Var` arms of one
