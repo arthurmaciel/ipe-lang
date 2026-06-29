@@ -9,10 +9,11 @@
 //!
 //! M4a embeds the foundational set — `Basics`, `Maybe`, `Result`, `List` — and
 //! resolves `Sky.Core.Prelude` to `Basics` (the Prelude re-exports the
-//! non-numeric basics, exactly as the reference compiler maps it). The source is
-//! ordinary Sky: the same parser that reads user code reads it (the `parses`
-//! test proves it), so it is the substrate the import resolver compiles once
-//! whole-program let-generalisation lands.
+//! non-numeric basics, exactly as the reference compiler maps it). M4b adds
+//! `Sky.Core.String` and `Sky.Core.Char`. The source is ordinary Sky: the same
+//! parser that reads user code reads it (the `parses` test proves it), so it is
+//! the substrate the import resolver compiles once whole-program
+//! let-generalisation lands.
 
 /// One embedded standard-library module: its dotted name and its Sky source.
 pub struct StdModule {
@@ -30,6 +31,10 @@ const MAYBE: &str = include_str!("../stdlib/Sky/Core/Maybe.sky");
 const RESULT: &str = include_str!("../stdlib/Sky/Core/Result.sky");
 /// `Sky.Core.List` — list combinators.
 const LIST: &str = include_str!("../stdlib/Sky/Core/List.sky");
+/// `Sky.Core.String` — string combinators (M4b).
+const STRING: &str = include_str!("../stdlib/Sky/Core/String.sky");
+/// `Sky.Core.Char` — single-character helpers (M4b).
+const CHAR: &str = include_str!("../stdlib/Sky/Core/Char.sky");
 
 /// Every embedded `Sky.Core` module, keyed by its dotted import name.
 ///
@@ -52,6 +57,14 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Sky.Core.List",
         source: LIST,
+    },
+    StdModule {
+        name: "Sky.Core.String",
+        source: STRING,
+    },
+    StdModule {
+        name: "Sky.Core.Char",
+        source: CHAR,
     },
 ];
 

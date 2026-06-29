@@ -1520,6 +1520,33 @@ impl<'a> Lowerer<'a> {
             Callee::Kernel(
                 KernelFn::StringFromInt
                 | KernelFn::StringFromFloat
+                | KernelFn::StringLength
+                | KernelFn::StringIsEmpty
+                | KernelFn::StringReverse
+                | KernelFn::StringToUpper
+                | KernelFn::StringToLower
+                | KernelFn::StringCasefold
+                | KernelFn::StringTrim
+                | KernelFn::StringTrimStart
+                | KernelFn::StringTrimEnd
+                | KernelFn::StringToInt
+                | KernelFn::StringToFloat
+                | KernelFn::StringFromChar
+                | KernelFn::StringFromList
+                | KernelFn::StringConcat
+                | KernelFn::StringWords
+                | KernelFn::StringLines
+                | KernelFn::StringToList
+                | KernelFn::StringIsEmail
+                | KernelFn::StringIsUrl
+                | KernelFn::CharIsAlpha
+                | KernelFn::CharIsDigit
+                | KernelFn::CharIsLower
+                | KernelFn::CharIsUpper
+                | KernelFn::CharToLower
+                | KernelFn::CharToUpper
+                | KernelFn::CharToCode
+                | KernelFn::CharFromCode
                 | KernelFn::LogPrintln
                 | KernelFn::ListLength
                 | KernelFn::ListHead
@@ -1528,7 +1555,17 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ResultOkDefault,
             ) => Ok(1),
             Callee::Kernel(
-                KernelFn::ListMap
+                KernelFn::StringAppend
+                | KernelFn::StringContains
+                | KernelFn::StringStartsWith
+                | KernelFn::StringEndsWith
+                | KernelFn::StringEqualFold
+                | KernelFn::StringJoin
+                | KernelFn::StringSplit
+                | KernelFn::StringRepeat
+                | KernelFn::StringDropLeft
+                | KernelFn::StringDropRight
+                | KernelFn::ListMap
                 | KernelFn::ListFilter
                 | KernelFn::ListMember
                 | KernelFn::ListRange
@@ -1538,7 +1575,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ResultWithDefault
                 | KernelFn::ResultMap,
             ) => Ok(2),
-            Callee::Kernel(KernelFn::ListFoldl | KernelFn::ListFoldr) => Ok(3),
+            Callee::Kernel(
+                KernelFn::StringReplace
+                | KernelFn::StringSlice
+                | KernelFn::StringPadLeft
+                | KernelFn::StringPadRight
+                | KernelFn::ListFoldl
+                | KernelFn::ListFoldr,
+            ) => Ok(3),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -1587,8 +1631,52 @@ impl<'a> Lowerer<'a> {
             canon::Expr_::VarKernel { module, name } => {
                 match (self.resolve(*module)?, self.resolve(*name)?) {
                     ("Log", "println") => Ok(Callee::Kernel(KernelFn::LogPrintln)),
+                    // ── String kernels ─────────────────────────────────────
                     ("String", "fromInt") => Ok(Callee::Kernel(KernelFn::StringFromInt)),
                     ("String", "fromFloat") => Ok(Callee::Kernel(KernelFn::StringFromFloat)),
+                    ("String", "length") => Ok(Callee::Kernel(KernelFn::StringLength)),
+                    ("String", "isEmpty") => Ok(Callee::Kernel(KernelFn::StringIsEmpty)),
+                    ("String", "reverse") => Ok(Callee::Kernel(KernelFn::StringReverse)),
+                    ("String", "toUpper") => Ok(Callee::Kernel(KernelFn::StringToUpper)),
+                    ("String", "toLower") => Ok(Callee::Kernel(KernelFn::StringToLower)),
+                    ("String", "casefold") => Ok(Callee::Kernel(KernelFn::StringCasefold)),
+                    ("String", "trim") => Ok(Callee::Kernel(KernelFn::StringTrim)),
+                    ("String", "trimStart") => Ok(Callee::Kernel(KernelFn::StringTrimStart)),
+                    ("String", "trimEnd") => Ok(Callee::Kernel(KernelFn::StringTrimEnd)),
+                    ("String", "toInt") => Ok(Callee::Kernel(KernelFn::StringToInt)),
+                    ("String", "toFloat") => Ok(Callee::Kernel(KernelFn::StringToFloat)),
+                    ("String", "fromChar") => Ok(Callee::Kernel(KernelFn::StringFromChar)),
+                    ("String", "fromList") => Ok(Callee::Kernel(KernelFn::StringFromList)),
+                    ("String", "concat") => Ok(Callee::Kernel(KernelFn::StringConcat)),
+                    ("String", "words") => Ok(Callee::Kernel(KernelFn::StringWords)),
+                    ("String", "lines") => Ok(Callee::Kernel(KernelFn::StringLines)),
+                    ("String", "toList") => Ok(Callee::Kernel(KernelFn::StringToList)),
+                    ("String", "isEmail") => Ok(Callee::Kernel(KernelFn::StringIsEmail)),
+                    ("String", "isUrl") => Ok(Callee::Kernel(KernelFn::StringIsUrl)),
+                    ("String", "append") => Ok(Callee::Kernel(KernelFn::StringAppend)),
+                    ("String", "contains") => Ok(Callee::Kernel(KernelFn::StringContains)),
+                    ("String", "startsWith") => Ok(Callee::Kernel(KernelFn::StringStartsWith)),
+                    ("String", "endsWith") => Ok(Callee::Kernel(KernelFn::StringEndsWith)),
+                    ("String", "equalFold") => Ok(Callee::Kernel(KernelFn::StringEqualFold)),
+                    ("String", "join") => Ok(Callee::Kernel(KernelFn::StringJoin)),
+                    ("String", "split") => Ok(Callee::Kernel(KernelFn::StringSplit)),
+                    ("String", "repeat") => Ok(Callee::Kernel(KernelFn::StringRepeat)),
+                    ("String", "dropLeft") => Ok(Callee::Kernel(KernelFn::StringDropLeft)),
+                    ("String", "dropRight") => Ok(Callee::Kernel(KernelFn::StringDropRight)),
+                    ("String", "replace") => Ok(Callee::Kernel(KernelFn::StringReplace)),
+                    ("String", "slice") => Ok(Callee::Kernel(KernelFn::StringSlice)),
+                    ("String", "padLeft") => Ok(Callee::Kernel(KernelFn::StringPadLeft)),
+                    ("String", "padRight") => Ok(Callee::Kernel(KernelFn::StringPadRight)),
+                    // ── Char kernels ───────────────────────────────────────
+                    ("Char", "isAlpha") => Ok(Callee::Kernel(KernelFn::CharIsAlpha)),
+                    ("Char", "isDigit") => Ok(Callee::Kernel(KernelFn::CharIsDigit)),
+                    ("Char", "isLower") => Ok(Callee::Kernel(KernelFn::CharIsLower)),
+                    ("Char", "isUpper") => Ok(Callee::Kernel(KernelFn::CharIsUpper)),
+                    ("Char", "toLower") => Ok(Callee::Kernel(KernelFn::CharToLower)),
+                    ("Char", "toUpper") => Ok(Callee::Kernel(KernelFn::CharToUpper)),
+                    ("Char", "toCode") => Ok(Callee::Kernel(KernelFn::CharToCode)),
+                    ("Char", "fromCode") => Ok(Callee::Kernel(KernelFn::CharFromCode)),
+                    // ── List kernels ───────────────────────────────────────
                     ("List", "map") => Ok(Callee::Kernel(KernelFn::ListMap)),
                     ("List", "filter") => Ok(Callee::Kernel(KernelFn::ListFilter)),
                     ("List", "foldl") => Ok(Callee::Kernel(KernelFn::ListFoldl)),
@@ -1599,12 +1687,14 @@ impl<'a> Lowerer<'a> {
                     ("List", "member") => Ok(Callee::Kernel(KernelFn::ListMember)),
                     ("List", "range") => Ok(Callee::Kernel(KernelFn::ListRange)),
                     ("List", "reverse") => Ok(Callee::Kernel(KernelFn::ListReverse)),
+                    // ── Maybe kernels ──────────────────────────────────────
                     ("Maybe", "withDefault") => Ok(Callee::Kernel(KernelFn::MaybeWithDefault)),
                     ("Maybe", "map") => Ok(Callee::Kernel(KernelFn::MaybeMap)),
                     ("Maybe", "andThen") => Ok(Callee::Kernel(KernelFn::MaybeAndThen)),
+                    // ── Result kernels ─────────────────────────────────────
                     ("Result", "withDefault") => Ok(Callee::Kernel(KernelFn::ResultWithDefault)),
                     ("Result", "map") => Ok(Callee::Kernel(KernelFn::ResultMap)),
-                    // A kernel beyond the wired set (`Time.now`, `String.length`, …).
+                    // A kernel beyond the wired set (`Time.now`, …).
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),
                 }
