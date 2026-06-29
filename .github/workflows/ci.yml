@@ -1,0 +1,103 @@
+name: CI
+
+# Public repo → GitHub-hosted runners (4-core/16GB, ephemeral) with matrix
+# parallelism. Cheap gates fail fast; E2E is sharded; sccache (GHA backend) keeps
+# builds warm across runs. See docs/architecture/ci-and-hosting.md.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: '0 4 * * *'        # nightly full sweep (catches dep/upstream drift)
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true     # newer push supersedes in-progress (never cancels tags)
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  CARGO_INCREMENTAL: "0"       # required by sccache
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --workspace -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run --workspace          # E2E tests no-op without SKY_E2E
+      - run: cargo test --doc --workspace           # nextest doesn't run doctests
+
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +nightly miri test -p sky_intern -p sky_ir -p sky_types -p sky_lower -p sky_diagnostics -p sky_backend_rust
+
+  # E2E builds+runs the emitted Rust per golden (the soundness floor). Sharded
+  # across runners via nextest partitioning. Behavioural parity vs the Go oracle
+  # rides the CACHED oracle (committed expected_go.txt — see
+  # docs/architecture/e2e-and-oracle-caching.md), so NO Go toolchain is needed here.
+  #
+  # Requires the full Sky runtime. Until the repo reorg vendors it
+  # (docs/architecture/repo-layout-and-mirroring.md → vendor/upstream-sky), the
+  # shard self-skips and CI stays green; it auto-activates once the runtime lands.
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive          # vendor/upstream-sky once it exists
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Detect vendored runtime
+        id: rt
+        run: |
+          if [ -d vendor/upstream-sky/runtime-rust/src/sky_runtime ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Sky runtime not vendored yet — E2E shard ${{ matrix.shard }}/4 skipped (enables after vendor/upstream-sky lands)"
+          fi
+      - name: E2E shard ${{ matrix.shard }}/4
+        if: steps.rt.outputs.available == 'true'
+        env:
+          SKY_E2E: "1"
+          SKY_RUNTIME_DIR: ${{ github.workspace }}/vendor/upstream-sky/runtime-rust/src/sky_runtime
+        run: cargo nextest run --workspace --partition count:${{ matrix.shard }}/4
