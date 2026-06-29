@@ -16,7 +16,8 @@
 //! `Main.sky` to stdout `32\n`, exit 0 — hand-verified in a temp dir. The
 //! hand-computed `32` is the in-test oracle.
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+mod support;
 
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
@@ -81,29 +82,10 @@ fn end_to_end_builds_and_prints_thirty_two() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed: {:?}", built.err());
 
-    let status = Command::new("cargo")
-        .arg("build")
-        .current_dir(&out)
-        .env("CARGO_TARGET_DIR", out.join("target"))
-        .status();
-    assert!(
-        matches!(&status, Ok(s) if s.success()),
-        "emitted project must build: {status:?}"
-    );
-
-    let bin = out.join("target").join("debug").join("sky-app");
-    let output = Command::new(&bin).output();
-    assert!(
-        output.is_ok(),
-        "emitted binary must run: {:?}",
-        output.as_ref().err()
-    );
-    let Ok(output) = output else { return };
+    let outcome = support::build_and_run_emitted("m3a_shape", &out);
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "32\n",
+        outcome.stdout, "32\n",
         "program prints 32 (Go-backend parity)"
     );
-    assert!(output.status.success(), "exit 0, matching the Go oracle");
-    let _ = std::fs::remove_dir_all(out.join("target"));
+    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
 }
