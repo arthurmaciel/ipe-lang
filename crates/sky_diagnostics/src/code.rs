@@ -65,6 +65,8 @@ pub const SKY_P0013: Code = Code("SKY-P0013");
 pub const SKY_P0014: Code = Code("SKY-P0014");
 /// malformed character literal
 pub const SKY_P0015: Code = Code("SKY-P0015");
+/// float literal out of range
+pub const SKY_P0016: Code = Code("SKY-P0016");
 /// malformed module header
 pub const SKY_P0020: Code = Code("SKY-P0020");
 /// malformed exposing list
@@ -215,6 +217,7 @@ pub fn title(c: Code) -> &'static str {
         SKY_P0013 => "integer literal out of range",
         SKY_P0014 => "unterminated string literal",
         SKY_P0015 => "malformed character literal",
+        SKY_P0016 => "float literal out of range",
         SKY_P0020 => "malformed module header",
         SKY_P0021 => "malformed exposing list",
         SKY_P0030 => "missing '=' in definition",
@@ -297,6 +300,7 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         SKY_P0013 => Some(include_str!("../explain/SKY-P0013.md")),
         SKY_P0014 => Some(include_str!("../explain/SKY-P0014.md")),
         SKY_P0015 => Some(include_str!("../explain/SKY-P0015.md")),
+        SKY_P0016 => Some(include_str!("../explain/SKY-P0016.md")),
         SKY_P0020 => Some(include_str!("../explain/SKY-P0020.md")),
         SKY_P0021 => Some(include_str!("../explain/SKY-P0021.md")),
         SKY_P0030 => Some(include_str!("../explain/SKY-P0030.md")),
@@ -364,19 +368,19 @@ mod tests {
     /// Every taxonomy code this module exposes, for round-trip / coverage tests.
     const ALL: &[Code] = &[
         SKY_P0001, SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014,
-        SKY_P0015, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050,
-        SKY_P0060, SKY_P0061, SKY_P0062, SKY_N0001, SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005,
-        SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004,
-        SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_L0100, SKY_L0101, SKY_L0102,
-        SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111,
-        SKY_L0112, SKY_L0113, SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0200, SKY_I0001, SKY_I0010,
-        SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200, SKY_I0201, SKY_I0202,
-        SKY_I0203,
+        SKY_P0015, SKY_P0016, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041,
+        SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_N0001, SKY_N0002, SKY_N0003, SKY_N0004,
+        SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_T0001, SKY_T0002, SKY_T0003,
+        SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_L0100, SKY_L0101,
+        SKY_L0102, SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110,
+        SKY_L0111, SKY_L0112, SKY_L0113, SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0200, SKY_I0001,
+        SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200, SKY_I0201,
+        SKY_I0202, SKY_I0203,
     ];
 
     #[test]
-    fn taxonomy_has_sixty_five_codes() {
-        assert_eq!(ALL.len(), 65);
+    fn taxonomy_has_sixty_six_codes() {
+        assert_eq!(ALL.len(), 66);
     }
 
     #[test]
@@ -394,7 +398,7 @@ mod tests {
             assert!(s.starts_with("SKY-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 65);
+        assert_eq!(seen.len(), 66);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.

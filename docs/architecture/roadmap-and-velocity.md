@@ -101,6 +101,21 @@ the parity ledger. Dev tool, outside the trust path. See memory `skydex-tool`.
   Wall #2 demand-driven path FFI reuses). The FFI subsystem is M4.5 above, not a
   loose cross-cut — designed-for from M0 (`docs/architecture/ffi-design.md`).
 
+## Known parity gaps (tracked, fail-closed)
+
+These are deliberate, recorded divergences from the Go reference that a
+later milestone closes. Each is fail-closed today (a type error, never
+wrong output), so the gap is a missing capability, not a silent bug.
+
+- **`++` is String-only.** The Go reference's `++` is `Appendable` — it
+  concatenates both `String` and `List a` (and resolves to the matching
+  kernel per operand type). The Rust backend types `++` as
+  `String -> String -> String` for now; a `List ++` use fails to unify
+  rather than miscompiling. Closed by the **Appendable super-type batch**
+  (the generic-append constraint mirroring `Number` / `Comparable`),
+  which lands alongside `List` in **M4**. Until then, build lists with the
+  `List` kernels rather than `++`.
+
 ## How a milestone runs (concrete)
 
 ```

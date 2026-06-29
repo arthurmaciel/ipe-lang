@@ -385,6 +385,25 @@ mod tests {
     }
 
     #[test]
+    fn float_past_f64_max_is_p0016() {
+        use lexer::{Tok, lex};
+        let kinds = |src: &str| -> Vec<Tok> {
+            lex(src).map_or_else(
+                |_| Vec::new(),
+                |toks| toks.into_iter().map(|t| t.kind).collect(),
+            )
+        };
+        // `1e400` overflows f64 to infinity; rejecting it (rather than silently
+        // accepting `inf`) keeps parity with the Go reference. A finite literal,
+        // including the largest in-range exponent, still lexes cleanly.
+        assert_eq!(err_code("1e400"), "SKY-P0016");
+        assert_eq!(err_code("1.0e309"), "SKY-P0016");
+        assert_eq!(kinds("1e308"), vec![Tok::Float(1e308)]);
+        // A genuine `0.0` is finite and must not be mistaken for an overflow.
+        assert_eq!(kinds("0.0"), vec![Tok::Float(0.0)]);
+    }
+
+    #[test]
     fn malformed_module_header_is_p0020() {
         // Not `module`.
         assert_eq!(err_code("import X exposing (..)"), "SKY-P0020");

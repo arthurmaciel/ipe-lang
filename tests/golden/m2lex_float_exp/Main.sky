@@ -1,0 +1,11 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+small : Float
+small = 0.00001
+
+large : Float
+large = 1.0e21
+
+main =
+    println (String.fromFloat small ++ "|" ++ String.fromFloat large)
