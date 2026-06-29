@@ -70,6 +70,8 @@ impl TyBounds {
     const MUL: u8 = 1 << 2;
     const ORD: u8 = 1 << 3;
     const EQ: u8 = 1 << 4;
+    const SET_ELEM: u8 = 1 << 5;
+    const DICT_KEY: u8 = 1 << 6;
 
     /// No obligation — a structurally-parametric variable.
     pub const EMPTY: Self = Self(0);
@@ -97,6 +99,26 @@ impl TyBounds {
     pub const fn eq() -> Self {
         Self(Self::EQ)
     }
+    /// The Set-element obligation: this variable is used as a `Set` element, so
+    /// it must be a Sky `comparable` whose Rust backing — `BTreeSet<A>` —
+    /// requires `A : Ord`. Distinct from [`Self::ord`] (which renders Rust
+    /// `PartialOrd`, insufficient for `BTreeSet`'s key requirement): a generic
+    /// `a -> Set a` must lift `Ord` onto its emitted type parameter.
+    #[must_use]
+    pub const fn set_elem() -> Self {
+        Self(Self::SET_ELEM)
+    }
+    /// The Dict-key obligation: this variable is used as a `Dict` key, so it
+    /// must be a Sky `comparable` whose Rust backing — `HashMap<K, V>` with
+    /// determinism-sorted key iteration — requires `K : Hash + Eq + Ord`.
+    /// Distinct from [`Self::ord`] / [`Self::eq`] (which render `PartialOrd` /
+    /// `PartialEq`, neither of which satisfies `HashMap`'s `Hash + Eq` nor the
+    /// sorted-iteration `Ord`): a generic `a -> Dict a v` must lift the full
+    /// trait set onto its emitted type parameter.
+    #[must_use]
+    pub const fn dict_key() -> Self {
+        Self(Self::DICT_KEY)
+    }
 
     /// Whether this set carries no obligation at all.
     #[must_use]
@@ -122,6 +144,24 @@ impl TyBounds {
     #[must_use]
     pub const fn has_eq(self) -> bool {
         self.0 & Self::EQ != 0
+    }
+    /// Whether the Set-element obligation is set.
+    #[must_use]
+    pub const fn has_set_elem(self) -> bool {
+        self.0 & Self::SET_ELEM != 0
+    }
+    /// Whether the Dict-key obligation is set.
+    #[must_use]
+    pub const fn has_dict_key(self) -> bool {
+        self.0 & Self::DICT_KEY != 0
+    }
+    /// Whether this variable carries a Sky `comparable`-key obligation — used as
+    /// a `Set` element or a `Dict` key. Both are satisfied by exactly the Sky
+    /// `comparable` scalar primitives at type-check; the per-container Rust
+    /// trait differences (`Ord` vs `Hash + Eq + Ord`) surface only at emission.
+    #[must_use]
+    pub const fn has_comparable_key(self) -> bool {
+        self.0 & (Self::SET_ELEM | Self::DICT_KEY) != 0
     }
 
     /// Whether any numeric operator (`+ - *`) constrains this variable — i.e. it

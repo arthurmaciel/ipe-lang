@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+import Sky.Core.Dict as Dict
+
+
+type Color
+    = Red
+    | Green
+
+
+main =
+    println (String.fromInt (Dict.size (Dict.insert Red 1 Dict.empty)))

@@ -781,6 +781,7 @@ fn skeleton_ty(ty: &IrType, idx: &mut BTreeMap<Symbol, usize>, out: &mut String)
 /// A mismatch means a use site that does not instantiate the struct template —
 /// an upstream-contract violation surfaced as a [`Diagnostic::CompilerBug`]
 /// (SKY-I0205), never a silent mis-emit.
+#[allow(clippy::too_many_lines)]
 fn match_template(
     template: &IrType,
     concrete: &IrType,

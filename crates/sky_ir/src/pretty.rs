@@ -164,6 +164,7 @@ const fn binop_token(op: BinOp) -> &'static str {
 }
 
 /// Render a kernel function's qualified source name.
+#[allow(clippy::too_many_lines)]
 const fn kernel_name(kernel: KernelFn) -> &'static str {
     match kernel {
         KernelFn::StringFromInt => "String.fromInt",
@@ -469,6 +470,12 @@ fn bound_suffix(bounds: BoundSet) -> String {
     }
     if bounds.has_eq() {
         parts.push("Eq");
+    }
+    if bounds.has_ord_total() {
+        parts.push("OrdTotal");
+    }
+    if bounds.has_hash() {
+        parts.push("Hash");
     }
     if bounds.has_copy() {
         parts.push("Copy");

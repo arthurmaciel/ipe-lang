@@ -58,7 +58,14 @@ fn super_concrete_ok(interner: &Interner, bounds: TyBounds, flat: &FlatType) -> 
     };
     let number_ok = matches!(prim, Some("Int" | "Float"));
     let ord_ok = matches!(prim, Some("Int" | "Float" | "Char" | "String" | "Bool"));
-    (!bounds.has_number() || number_ok) && (!bounds.has_ord() || ord_ok)
+    // A `Set` element / `Dict` key obligation is a Sky `comparable` — the same
+    // scalar set ordering admits. `Float` passes here (it IS `comparable` in
+    // Sky, so the typing follows Sky), and the Rust-backend reality that `f64`
+    // is neither `Ord` nor `Hash` is enforced at lowering with a dedicated
+    // diagnostic — not as a confusing type mismatch at this head pin.
+    (!bounds.has_number() || number_ok)
+        && (!bounds.has_ord() || ord_ok)
+        && (!bounds.has_comparable_key() || ord_ok)
 }
 
 /// Unify the types of variables `a` and `b` in place.

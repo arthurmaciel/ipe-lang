@@ -257,9 +257,15 @@ fn emitted_bound_satisfied(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bo
     };
     let number_ok = matches!(prim, Some("Int" | "Float"));
     let ord_ok = matches!(prim, Some("Int" | "Float" | "Char" | "Bool"));
+    // A `Set` element / `Dict` key emission carries no `Copy` (the runtime
+    // helpers consume by value; `String` keys must be admitted), so the
+    // generic-use gate uses the `String`-inclusive scalar set rather than the
+    // `Copy`-restricted ordering set above.
+    let key_ok = matches!(prim, Some("Int" | "Float" | "Char" | "String" | "Bool"));
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
         && (!bounds.has_eq() || ty_is_equatable(ty))
+        && (!bounds.has_comparable_key() || key_ok)
 }
 
 /// Whether a resolved concrete type satisfies super-type obligations `bounds`
@@ -279,9 +285,13 @@ pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) 
     };
     let number_ok = matches!(prim, Some("Int" | "Float"));
     let ord_ok = matches!(prim, Some("Int" | "Float" | "Char" | "String" | "Bool"));
+    // A `Set` element / `Dict` key pinned directly to a concrete type: the Sky
+    // `comparable` scalar set, exactly as ordering. `Float` satisfies the Sky
+    // typing here; the Rust-backend `f64`-as-key reality is gated at lowering.
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
         && (!bounds.has_eq() || ty_is_equatable(ty))
+        && (!bounds.has_comparable_key() || ord_ok)
 }
 
 /// Whether a resolved type derives Rust's `PartialEq`: true for every fully
@@ -310,7 +320,10 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
     if bounds.has_number() {
         classes.push("Number");
     }
-    if bounds.has_ord() {
+    // A `Set` element / `Dict` key obligation is a Sky `Comparable` (the same
+    // class the ordering operators impose); name it once even when both an
+    // ordering use and a Set/Dict use constrained the variable.
+    if bounds.has_ord() || bounds.has_comparable_key() {
         classes.push("Comparable");
     }
     if bounds.has_eq() {

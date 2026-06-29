@@ -41,10 +41,10 @@ hot path; parity also runs with no Go binary present (helps headless cron/CI).
   run refresh", never silently diff against a stale expected.
 - **`refresh-oracle` step** (run when a golden is added/changed or the Go pin bumps):
   rebuild Go, recapture `expected_go.txt`, update meta.
-- **Go-failure handling (load-bearing — the oracle can be buggy):** if Go
-  panics / errors / non-zero-unexpectedly on a golden (e.g. the 3-deep nested-pattern
-  panic), DO NOT cache that as `expected_go.txt` (would enshrine a Go bug as
-  "correct"). Instead mark the golden `oracle_divergence = true` with a note + the
+- **Go-failure handling (load-bearing — the oracle can fail on a shape):** if Go
+  panics / errors / exits non-zero on a golden (e.g. the 3-deep nested-pattern
+  shape), DO NOT cache that as `expected_go.txt` (it would enshrine a non-zero exit
+  as "correct"). Instead mark the golden `oracle_divergence = true` with a note + the
   reason, and use skyc's CORRECT output as the expected. See the parity-oracle caveat
   in `repo-layout-and-mirroring.md`. The refresh step must distinguish "Go produced a
   valid reference" from "Go failed" and route the latter to divergence, not to cache.

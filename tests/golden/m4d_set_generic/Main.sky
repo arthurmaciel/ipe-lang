@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+import Sky.Core.Set as Set
+
+
+addTo : a -> Set a -> Set a
+addTo x s =
+    Set.insert x s
+
+
+main =
+    println (String.fromInt (Set.size (addTo 4 (Set.fromList [ 1, 2, 3 ]))))

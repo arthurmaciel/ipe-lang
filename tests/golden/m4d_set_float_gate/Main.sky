@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+import Sky.Core.Set as Set
+
+
+floats : Set Float
+floats =
+    Set.fromList [ 1.5, 2.5 ]
+
+
+main =
+    println (String.fromInt (Set.size floats))

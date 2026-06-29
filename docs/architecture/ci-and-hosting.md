@@ -28,8 +28,9 @@ Woodpecker agent, no systemd service, no "if the dev box is off, CI queues."
    (compiler crates), `e2e` (sharded `nextest --partition`, `SKY_E2E=1`).
 4. **Parity needs no Go toolchain in CI** — it rides the **cached Go oracle**
    (committed `expected_go.txt`; see `e2e-and-oracle-caching.md`). A Go panic is
-   recorded as an `oracle_divergence`, never cached as "correct" (the Go reference
-   can be buggy — see `repo-layout-and-mirroring.md`).
+   recorded as an `oracle_divergence`, never cached as "correct" (the Go oracle
+   can panic / fail to produce a reference on a shape — see
+   `repo-layout-and-mirroring.md`).
 5. **E2E needs the Sky runtime.** Until the repo reorg vendors it
    (`vendor/upstream-sky`, see `repo-layout-and-mirroring.md`), the `e2e` shards
    **self-skip** (`::notice::`) and CI stays green; they auto-activate once the

@@ -217,6 +217,7 @@ pub fn record_struct_name(field_names: &[String]) -> String {
 /// The Rust runtime function name for a kernel built-in (M0 subset). Mirrors
 /// `Kernel.kernelToRust`.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub const fn kernel_name(k: KernelFn) -> &'static str {
     match k {
         KernelFn::StringFromInt => "string_from_int",

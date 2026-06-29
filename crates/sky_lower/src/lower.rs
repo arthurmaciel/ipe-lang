@@ -87,10 +87,7 @@ fn dict_arg_bug() -> Diagnostic {
 /// The `Set a` type carries exactly one argument; an arity-1 guard cleared it,
 /// so a missing element type here is an unreachable internal invariant.
 fn set_arg_bug() -> Diagnostic {
-    bug(
-        "sky_lower::ir_type",
-        "Set applied without its element type",
-    )
+    bug("sky_lower::ir_type", "Set applied without its element type")
 }
 
 /// Does this solved [`Ty`] contain a free type variable anywhere? Used to keep
@@ -606,7 +603,9 @@ impl<'a> Lowerer<'a> {
     /// type checker's super-type obligations ([`TyBounds`]) into the backend's
     /// [`BoundSet`]. A numeric obligation maps to the std arithmetic op trait it
     /// used (`Add` / `Sub` / `Mul`); an ordering obligation maps to `PartialOrd`;
-    /// an equality obligation maps to `PartialEq`.
+    /// an equality obligation maps to `PartialEq`. A `Set`-element obligation maps
+    /// to `Ord` (`BTreeSet`); a `Dict`-key obligation to `Hash + Ord + Clone`
+    /// (`HashMap` + sorted key ops + key-duplicating merges).
     ///
     /// A `Number` / `Comparable` variable also gains `Copy`: those operations
     /// consume their operands by value (Rust's `Add` takes `self`), and a body
@@ -639,6 +638,18 @@ impl<'a> Lowerer<'a> {
         }
         if b.has_eq() {
             set = set.with_eq();
+        }
+        // A `Set` element needs Rust `Ord` (`BTreeSet<A>`); a `Dict` key needs
+        // `Hash + Ord` (`HashMap<K, V>` + the determinism-sorted key ops) plus
+        // `Clone` (`Dict.union` / `Dict.map` duplicate keys). `Eq` arrives as
+        // `Ord`'s supertrait, so it is not emitted separately. Neither adds
+        // `Copy`: the runtime kernels consume by value and a `String` key /
+        // element must stay admissible.
+        if b.has_set_elem() {
+            set = set.with_ord_total();
+        }
+        if b.has_dict_key() {
+            set = set.with_hash().with_ord_total().with_clone();
         }
         // Number / Comparable operations move their operand (`Add::add(self)`,
         // and the body reuses it), so the parameter must be `Copy`. Equality
@@ -1002,11 +1013,27 @@ impl<'a> Lowerer<'a> {
                 "Dict" if args.len() == 2 => {
                     let k = self.ir_type_from_ty(args.first().ok_or_else(dict_arg_bug)?, span)?;
                     let v = self.ir_type_from_ty(args.get(1).ok_or_else(dict_arg_bug)?, span)?;
+                    // `Dict Float v` type-checks (Sky `Float` IS `comparable`),
+                    // but the Rust backing `HashMap<f64, V>` cannot exist: `f64`
+                    // is neither `Hash` nor `Eq` (NaN breaks both). Fail closed
+                    // here with a dedicated diagnostic rather than emit Rust
+                    // `cargo` rejects. Divergence from Sky, rationale: Rust
+                    // backend capability (`f64` is not a hashable total order).
+                    if matches!(k, IrType::Float) {
+                        return Err(unsupported(span, Feature::FloatKeyedCollection));
+                    }
                     Ok(IrType::Dict(Box::new(k), Box::new(v)))
                 }
                 "Set" if args.len() == 1 => {
-                    let elem =
-                        self.ir_type_from_ty(args.first().ok_or_else(set_arg_bug)?, span)?;
+                    let elem = self.ir_type_from_ty(args.first().ok_or_else(set_arg_bug)?, span)?;
+                    // `Set Float` type-checks but its Rust backing
+                    // `BTreeSet<f64>` cannot exist: `f64` is not `Ord` (NaN has
+                    // no total order). Fail closed with the same dedicated
+                    // diagnostic as `Dict Float`. Divergence from Sky, rationale:
+                    // Rust backend capability.
+                    if matches!(elem, IrType::Float) {
+                        return Err(unsupported(span, Feature::FloatKeyedCollection));
+                    }
                     Ok(IrType::Set(Box::new(elem)))
                 }
                 _ if self.enum_variants.contains_key(name) => {
