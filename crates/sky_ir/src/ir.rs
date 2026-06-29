@@ -660,6 +660,28 @@ pub enum Pat {
     /// set resolves the synthesised struct unambiguously, exactly as a record
     /// literal does. The backend stays total over any entry vector it receives.
     Record(Vec<(Symbol, Self)>),
+    /// A list / cons pattern, flattened to a Rust slice-pattern shape (M4a): a
+    /// `prefix` of fixed leading element sub-patterns plus an optional `rest`
+    /// tail binder.
+    ///
+    /// * `rest = None` is a CLOSED, exact-length list pattern — `[]`
+    ///   (`prefix` empty) or `[a, b]` (`prefix` = `[a, b]`). It matches only a
+    ///   list of exactly `prefix.len()` elements.
+    /// * `rest = Some(p)` is an OPEN cons tail — `x :: xs` (`prefix` = `[x]`,
+    ///   `rest` = `xs`) or `a :: b :: rest` (`prefix` = `[a, b]`, `rest` =
+    ///   `rest`). It matches any list with AT LEAST `prefix.len()` elements; `p`
+    ///   binds the remaining list (a variable / wildcard / alias).
+    ///
+    /// The element sub-patterns (`prefix`) and the tail binder (`rest`) are
+    /// arbitrary [`Pat`]s and recurse. The List type is the closed two-constructor
+    /// type `Nil | Cons`, so a `[]` arm plus an `_ :: _`-shaped arm is an
+    /// exhaustive cover; coverage over the flattened shape is the type phase's
+    /// usefulness check (SKY-T0010), proven before lowering. The backend renders
+    /// this directly as a Rust slice pattern (`[p0, p1]` / `[p0, p1, rest @ ..]`).
+    Slice {
+        prefix: Vec<Self>,
+        rest: Option<Box<Self>>,
+    },
 }
 
 /// Whether a pattern matches EVERY value of its scrutinee type — a wildcard, a
@@ -670,6 +692,32 @@ pub fn is_irrefutable(pat: &Pat) -> bool {
     match pat {
         Pat::Wildcard | Pat::Var(_) => true,
         Pat::Alias(inner, _) => is_irrefutable(inner),
+        Pat::Int(_)
+        | Pat::Bool(_)
+        | Pat::Char(_)
+        | Pat::Str(_)
+        | Pat::Ctor { .. }
+        | Pat::Tuple(_)
+        | Pat::Record(_)
+        // A slice / cons pattern is refutable: `[]` matches only the empty list,
+        // and `[x, rest @ ..]` matches only a non-empty one. (The lowerer never
+        // produces an empty-`prefix` open `[rest @ ..]`, which would be the lone
+        // irrefutable slice shape — a whole-list binder stays a [`Pat::Var`].)
+        | Pat::Slice { .. } => false,
+    }
+}
+
+/// Whether a pattern is LIST-SHAPED — a slice / cons pattern ([`Pat::Slice`]), an
+/// irrefutable whole-list binder (a variable / wildcard catch-all over a list
+/// scrutinee), or an alias whose inner pattern is itself list-shaped. Used by
+/// [`Match::new_flat`] to recognise a list `case` (whose `Nil | Cons` coverage
+/// the upstream Maranget check already proved) as a structurally-exhaustive arm
+/// set, distinct from a constructor / literal cover.
+#[must_use]
+pub fn is_list_shaped(pat: &Pat) -> bool {
+    match pat {
+        Pat::Slice { .. } | Pat::Wildcard | Pat::Var(_) => true,
+        Pat::Alias(inner, _) => is_list_shaped(inner),
         Pat::Int(_)
         | Pat::Bool(_)
         | Pat::Char(_)
@@ -697,7 +745,8 @@ pub fn is_ctor_headed(pat: &Pat) -> bool {
         | Pat::Char(_)
         | Pat::Str(_)
         | Pat::Tuple(_)
-        | Pat::Record(_) => false,
+        | Pat::Record(_)
+        | Pat::Slice { .. } => false,
     }
 }
 
@@ -835,12 +884,21 @@ impl Match {
         // trailing catch-all (`Som (Som x) as w` then `Som Non` then `Non`) is
         // still sound here.
         let all_ctor_headed = arms.iter().all(|a| is_ctor_headed(&a.pat));
-        if !trailing_catch_all && !bool_complete && !all_ctor_headed {
+        // A list `case`: every arm is list-shaped (a slice / cons pattern, an
+        // irrefutable whole-list binder, or an alias over those) and at least one
+        // is a genuine slice pattern. The List type is the closed `Nil | Cons`
+        // type, so a `[]` arm plus an `_ :: _`-shaped arm covers it; that coverage
+        // was proven UPSTREAM by the Maranget usefulness check (SKY-T0010), so an
+        // arm set in this shape with no trailing catch-all (`x :: rest` then `[]`)
+        // is still sound here.
+        let all_list_shaped = arms.iter().all(|a| is_list_shaped(&a.pat))
+            && arms.iter().any(|a| matches!(a.pat, Pat::Slice { .. }));
+        if !trailing_catch_all && !bool_complete && !all_ctor_headed && !all_list_shaped {
             return Err(Diagnostic::CompilerBug {
                 where_: "sky_ir::Match::new_flat",
                 detail: "flat match is not structurally exhaustive (no trailing \
-                         catch-all, not a complete Bool cover, and not a \
-                         constructor-headed cover)"
+                         catch-all, not a complete Bool cover, not a \
+                         constructor-headed cover, and not a list cover)"
                     .to_owned(),
             });
         }

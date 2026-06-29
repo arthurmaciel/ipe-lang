@@ -1858,6 +1858,28 @@ impl<'a> Lowerer<'a> {
             })
             .collect::<DResult<Vec<_>>>()?;
 
+        // A list `case` that BINDS a value (a head element or a rest list) needs
+        // the backend's owned-rebind (`x.clone()` / `rest.to_vec()`), which
+        // requires the element type to be `Clone`. Every CONCRETE element type
+        // the backend emits derives `Clone`; a still-generic element type carries
+        // no such bound (function generics emit bound-free, M2a), so binding one
+        // would emit Rust that fails `go build` — a polymorphic-element list
+        // pattern is a not-yet gap (SKY-L0102, feature: polymorphism) rather than
+        // broken Rust. A non-binding list `case` (`[] -> … ; _ :: _ -> …`) clones
+        // nothing and is unaffected.
+        let is_list_case = branches.iter().any(|br| {
+            matches!(
+                br.pat.value,
+                canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _)
+            )
+        });
+        if is_list_case
+            && arms.iter().any(|a| Self::pat_binds_value(&a.pat))
+            && matches!(self.list_elem_ir(scrut.span)?, IrType::Generic(_))
+        {
+            return Err(unsupported(first.pat.span, Feature::Polymorphism));
+        }
+
         if all_ctor {
             // The scrutinee's enum is one this module declared (the type checker
             // pinned the constructor's union), so it is always in
@@ -1916,10 +1938,94 @@ impl<'a> Lowerer<'a> {
             canon::Pattern_::PTuple(_) | canon::Pattern_::PRecord(_) => {
                 Err(unsupported(p.span, Feature::TuplePatternMatch))
             }
-            // List / cons case-arm patterns have no `Vec` match lowering yet —
-            // fail-closed (SKY-L0116) rather than emitting unsound Rust.
-            canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => {
-                Err(unsupported(p.span, Feature::NestedCtorDiscrimination))
+            // A list (`[a, b]`) or cons (`x :: xs`) case-arm head flattens to the
+            // slice-shaped IR [`Pat::Slice`] (M4a).
+            canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => Self::lower_list_arm_pat(p),
+        }
+    }
+
+    /// Lower a list (`[a, b]`) or cons (`x :: xs`) case-arm pattern to the
+    /// flattened IR [`Pat::Slice`]. A cons chain `a :: b :: rest` flattens to a
+    /// prefix `[a, b]` with the open tail binder `rest`; a `[a, b]` literal
+    /// flattens to the same prefix with no tail (an exact-length match); a mixed
+    /// `x :: [a, b]` flattens to the closed prefix `[x, a, b]`. Each element
+    /// sub-pattern lowers through [`Self::lower_payload_pat`] (variable /
+    /// wildcard / literal / alias / nested tuple / constructor); the open tail
+    /// binds a variable / wildcard / alias via [`Self::lower_rest_pat`].
+    fn lower_list_arm_pat(p: &canon::Pattern) -> DResult<Pat> {
+        let mut prefix = Vec::new();
+        let mut cur = p;
+        loop {
+            match &cur.value {
+                // A closed list literal terminates the prefix with no open tail.
+                canon::Pattern_::PList(elems) => {
+                    for e in elems {
+                        prefix.push(Self::lower_payload_pat(e)?);
+                    }
+                    return Ok(Pat::Slice { prefix, rest: None });
+                }
+                canon::Pattern_::PCons(head, tail) => {
+                    prefix.push(Self::lower_payload_pat(head)?);
+                    match &tail.value {
+                        // A cons / list tail keeps extending the same flattened
+                        // slice (`a :: b :: rest`, `x :: [a, b]`).
+                        canon::Pattern_::PCons(_, _) | canon::Pattern_::PList(_) => {
+                            cur = tail;
+                        }
+                        // A variable / wildcard tail is the open rest binder —
+                        // the remaining list.
+                        canon::Pattern_::PVar(_) | canon::Pattern_::PAnything => {
+                            let rest = Self::lower_rest_pat(tail)?;
+                            return Ok(Pat::Slice {
+                                prefix,
+                                rest: Some(Box::new(rest)),
+                            });
+                        }
+                        // Any other tail shape (an alias / literal / constructor /
+                        // tuple / record in tail position) is not a list pattern
+                        // this lowerer models. [SKY-L0116]
+                        _ => return Err(unsupported(tail.span, Feature::NestedCtorDiscrimination)),
+                    }
+                }
+                // Only PList / PCons reach here (the caller dispatches on them); a
+                // non-list head is a violated invariant.
+                _ => {
+                    return Err(bug(
+                        "sky_lower::lower_list_arm_pat",
+                        "non-list pattern reached list-arm lowering",
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Lower the open TAIL of a cons pattern — the remaining-list binder. A
+    /// variable binds the rest list; a wildcard ignores it. A richer tail (an
+    /// alias, or a sub-list pattern to match against the rest) is not modelled
+    /// yet — it would need a slice binding shape the backend does not emit.
+    /// [SKY-L0116]
+    const fn lower_rest_pat(p: &canon::Pattern) -> DResult<Pat> {
+        match &p.value {
+            canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
+            canon::Pattern_::PAnything => Ok(Pat::Wildcard),
+            _ => Err(unsupported(p.span, Feature::NestedCtorDiscrimination)),
+        }
+    }
+
+    /// Whether an IR pattern introduces a value-binding name (a [`Pat::Var`] or a
+    /// [`Pat::Alias`]) anywhere within it. A wildcard / literal binds nothing.
+    /// Used by [`Self::lower_case`] to decide whether a list `case` needs the
+    /// backend's owned-rebind (and so the element type's `Clone` bound).
+    fn pat_binds_value(pat: &Pat) -> bool {
+        match pat {
+            Pat::Var(_) | Pat::Alias(_, _) => true,
+            Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => false,
+            Pat::Tuple(subs) => subs.iter().any(Self::pat_binds_value),
+            Pat::Ctor { args, .. } => args.iter().any(Self::pat_binds_value),
+            Pat::Record(fields) => fields.iter().any(|(_, p)| Self::pat_binds_value(p)),
+            Pat::Slice { prefix, rest } => {
+                prefix.iter().any(Self::pat_binds_value)
+                    || rest.as_deref().is_some_and(Self::pat_binds_value)
             }
         }
     }

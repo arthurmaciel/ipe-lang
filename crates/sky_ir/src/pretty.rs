@@ -224,6 +224,17 @@ fn pat_name(interner: &Interner, pat: &Pat) -> String {
                 .join(", ");
             format!("{{ {inner} }}")
         }
+        Pat::Slice { prefix, rest } => {
+            let parts = prefix
+                .iter()
+                .map(|p| pat_name(interner, p))
+                .collect::<Vec<_>>()
+                .join(", ");
+            rest.as_ref().map_or_else(
+                || format!("[{parts}]"),
+                |r| format!("[{parts}, {} @ ..]", pat_name(interner, r)),
+            )
+        }
     }
 }
 

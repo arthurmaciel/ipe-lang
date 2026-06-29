@@ -1,0 +1,10 @@
+module Main exposing (main)
+
+sum : List Int -> Int
+sum xs =
+    case xs of
+        [] -> 0
+        x :: rest -> x + sum rest
+
+main =
+    println (String.fromInt (sum [1, 2, 3]))
