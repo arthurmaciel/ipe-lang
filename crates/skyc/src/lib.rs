@@ -944,6 +944,7 @@ mod tests {
             "generic-record program prints 42 (Go-backend parity)"
         );
         assert!(run.status.success(), "exit 0, matching the Go oracle");
+        let _ = std::fs::remove_dir_all(out.join("target"));
     }
 
     /// A runtime `false` the optimiser cannot fold, so `assert!(false_marker())`

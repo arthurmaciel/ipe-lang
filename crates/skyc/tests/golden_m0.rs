@@ -98,6 +98,7 @@ fn end_to_end_builds_and_prints_one() {
         "1\n",
         "program prints 1"
     );
+    let _ = std::fs::remove_dir_all(out.join("target"));
 }
 
 /// A `CliError::Pipeline` must render as a coded, rustc/Elm-style report — not a

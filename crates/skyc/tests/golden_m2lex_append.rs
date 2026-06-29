@@ -108,6 +108,7 @@ fn assert_runs_and_prints(name: &str, want: &str) {
         "{name} prints the Go-backend value"
     );
     assert!(output.status.success(), "exit 0, matching the Go oracle");
+    let _ = std::fs::remove_dir_all(out.join("target"));
 }
 
 #[test]
