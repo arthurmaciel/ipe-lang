@@ -77,7 +77,11 @@ fn end_to_end_builds_and_prints_one() {
     assert!(built.is_ok(), "build failed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("m0", &out);
-    assert_eq!(outcome.stdout, "1\n", "program prints 1");
+    support::assert_go_parity(
+        "m0",
+        &repo_root().join("tests").join("golden").join("m0"),
+        &outcome.stdout,
+    );
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
 }
 

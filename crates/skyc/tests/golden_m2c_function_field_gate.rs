@@ -83,9 +83,13 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
         return;
     }
     let outcome = support::build_and_run_emitted("m2c_function_field_gate", &out);
-    assert_eq!(
-        outcome.stdout, "42\n",
-        "accepted program must print the semantically-correct 42"
+    support::assert_go_parity(
+        "m2c_function_field_gate",
+        &repo_root()
+            .join("tests")
+            .join("golden")
+            .join("m2c_function_field_gate"),
+        &outcome.stdout,
     );
     assert_eq!(outcome.exit_code, Some(0), "exit 0");
 }

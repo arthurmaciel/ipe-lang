@@ -80,7 +80,12 @@ impl Meta {
             .divergence_reason
             .as_ref()
             .map_or_else(String::new, |reason| {
-                format!("divergence_reason = {reason}\n")
+                // The on-disk format is line-based `key = value`; a reason with
+                // embedded newlines (e.g. a multi-line Go diagnostic) would parse
+                // back as bogus extra lines. Collapse all ASCII whitespace runs to
+                // single spaces so the value always stays on one line.
+                let flattened = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+                format!("divergence_reason = {flattened}\n")
             });
         format!(
             "# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.\n\
@@ -452,6 +457,34 @@ mod tests {
         };
         let parsed = Meta::parse(&meta.serialize());
         assert_eq!(parsed.ok(), Some(meta));
+    }
+
+    #[test]
+    fn meta_multiline_reason_stays_single_line_and_round_trips() {
+        // A real Go diagnostic spans many lines; the serialized `oracle.meta`
+        // must keep `divergence_reason` on ONE line or `parse` chokes on the
+        // continuation lines.
+        let meta = Meta {
+            main_sky_sha256: "abc".to_owned(),
+            go_sky_version: "sky dev".to_owned(),
+            exit_code: 0,
+            oracle_divergence: true,
+            divergence_reason: Some(
+                "Go `sky build` exited Some(1):\n  PARSE ERROR\n  unexpected `{`".to_owned(),
+            ),
+        };
+        let text = meta.serialize();
+        let reason_lines = text
+            .lines()
+            .filter(|l| l.starts_with("divergence_reason"))
+            .count();
+        assert_eq!(reason_lines, 1, "reason must be exactly one line:\n{text}");
+        let parsed = Meta::parse(&text);
+        assert!(parsed.is_ok(), "multiline reason must re-parse: {parsed:?}");
+        assert_eq!(
+            parsed.ok().and_then(|m| m.divergence_reason),
+            Some("Go `sky build` exited Some(1): PARSE ERROR unexpected `{`".to_owned())
+        );
     }
 
     #[test]

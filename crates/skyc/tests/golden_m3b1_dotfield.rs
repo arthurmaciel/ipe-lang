@@ -90,9 +90,13 @@ fn end_to_end_builds_and_prints_forty_two() {
     assert!(built.is_ok(), "build failed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("m3b1_dotfield", &out);
-    assert_eq!(
-        outcome.stdout, "42\n",
-        "program prints 42 (Go-backend parity)"
+    support::assert_go_parity(
+        "m3b1_dotfield",
+        &repo_root()
+            .join("tests")
+            .join("golden")
+            .join("m3b1_dotfield"),
+        &outcome.stdout,
     );
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
 }
