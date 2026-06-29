@@ -111,6 +111,10 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // Sky: Sky aliases Bytes = String; Rust's String is UTF-8 constrained,
         // so Bytes maps to Vec<u8> for lossless arbitrary binary.
         IrType::Bytes => "Vec<u8>".to_owned(),
+        // `Json` is the opaque JSON value type, `serde_json::Value`, exposed
+        // from the runtime as `JsonVal` (re-exported via `pub use sky_runtime::*`
+        // in the emitted crate).
+        IrType::Json => "JsonVal".to_owned(),
         IrType::Tuple(elems) => {
             let mut parts = Vec::with_capacity(elems.len());
             for elem in elems {

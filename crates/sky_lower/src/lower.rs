@@ -219,6 +219,7 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::Unit
         | IrType::TaskUnit
         | IrType::Bytes
+        | IrType::Json
         | IrType::Generic(_) => false,
         IrType::Enum { args, .. } => args.iter().any(ir_contains_fun),
         IrType::Maybe(elem) | IrType::List(elem) => ir_contains_fun(elem),
@@ -968,7 +969,10 @@ impl<'a> Lowerer<'a> {
         })?;
         match ty {
             Ty::Con { name, args, .. } if self.resolve(*name)? == "List" && args.len() == 1 => {
-                self.ir_type_from_ty(args.first().ok_or_else(list_arg_bug)?, span)
+                // Use the JSON-aware path: a `Value = any = Ty::Var` element
+                // type (e.g. `List (String, Value)` passed to `JsonEnc.object`)
+                // maps to `IrType::Json` rather than failing with Polymorphism.
+                self.ir_type_from_ty_json(args.first().ok_or_else(list_arg_bug)?, span)
             }
             _ => Err(bug(
                 "sky_lower::list_elem_ir",
@@ -1110,6 +1114,79 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Like [`ir_type_from_ty`] but treats an unresolved `Ty::Var` as
+    /// [`IrType::Json`] instead of failing with `Feature::Polymorphism`.
+    ///
+    /// Used for JSON-kernel argument / return / list-element positions where
+    /// `Value = any` legitimately leaves a bare type variable after HM solving.
+    /// All other type forms delegate to the strict [`ir_type_from_ty`].
+    fn ir_type_from_ty_json(&self, t: &Ty, span: Span) -> DResult<IrType> {
+        match t {
+            // The key difference: `Ty::Var` in a JSON context is `JsonVal`.
+            Ty::Var(_) => Ok(IrType::Json),
+            // Recursively handle compound types so embedded `Ty::Var`s also
+            // map to `IrType::Json`.
+            Ty::Tuple(elems) => {
+                let lowered = elems
+                    .iter()
+                    .map(|e| self.ir_type_from_ty_json(e, span))
+                    .collect::<DResult<Vec<_>>>()?;
+                Ok(IrType::Tuple(lowered))
+            }
+            Ty::Fun(_, _) => {
+                let mut params = Vec::new();
+                let mut cur = t;
+                while let Ty::Fun(arg, rest) = cur {
+                    params.push(self.ir_type_from_ty_json(arg, span)?);
+                    cur = rest.as_ref();
+                }
+                let ret = self.ir_type_from_ty_json(cur, span)?;
+                Ok(IrType::Fun(params, Box::new(ret)))
+            }
+            // For all other type forms, delegate to the strict helper.
+            _ => self.ir_type_from_ty(t, span),
+        }
+    }
+
+    /// Returns the exact [`IrType::Fun`] for kernels that may appear as
+    /// first-class values and whose region type cannot be recovered from the Sky
+    /// HM region map alone — most commonly because the return type is
+    /// `Value = any = Ty::Var`, which [`Self::ir_type_from_ty_json`] maps to the
+    /// opaque `IrType::Json` scalar (not `IrType::Fun`).
+    ///
+    /// The lookup is *only* consulted as a fallback inside the `VarKernel`
+    /// value-reference path when the region type does not produce a
+    /// `Fun` IR type.  Kernels handled by the arity-0 early-return (`JsonEncNull`)
+    /// and the generic-`A` kernel (`JsonEncList`, which is never used as a bare
+    /// value) are intentionally omitted.
+    fn kernel_native_ir_type(k: KernelFn) -> Option<IrType> {
+        Some(match k {
+            KernelFn::JsonEncString => {
+                IrType::Fun(vec![IrType::Str], Box::new(IrType::Json))
+            }
+            KernelFn::JsonEncInt => {
+                IrType::Fun(vec![IrType::Int], Box::new(IrType::Json))
+            }
+            KernelFn::JsonEncFloat => {
+                IrType::Fun(vec![IrType::Float], Box::new(IrType::Json))
+            }
+            KernelFn::JsonEncBool => {
+                IrType::Fun(vec![IrType::Bool], Box::new(IrType::Json))
+            }
+            KernelFn::JsonEncObject => IrType::Fun(
+                vec![IrType::List(Box::new(IrType::Tuple(vec![
+                    IrType::Str,
+                    IrType::Json,
+                ])))],
+                Box::new(IrType::Json),
+            ),
+            KernelFn::JsonEncEncode => {
+                IrType::Fun(vec![IrType::Int, IrType::Json], Box::new(IrType::Str))
+            }
+            _ => return None,
+        })
+    }
+
     /// Reject a record field whose value is function-typed.
     ///
     /// A function value lowers to a `Box<dyn Fn(..) -> R>`, but a synthesised
@@ -1159,6 +1236,10 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    // `lower_expr` is a large dispatch function that covers every canon AST
+    // variant in one place for readability; split would add indirection without
+    // clarity.
+    #[allow(clippy::too_many_lines)]
     fn lower_expr(&self, e: &canon::Expr) -> DResult<Expr> {
         self.reject_function_through_type_var(e)?;
         match &e.value {
@@ -1266,21 +1347,59 @@ impl<'a> Lowerer<'a> {
             // its zero-argument call.
             canon::Expr_::VarTopLevel { .. } | canon::Expr_::VarKernel { .. } => {
                 let callee = self.lower_callee(e)?;
+                // Arity-0 kernels (nullary constants such as `JsonEnc.null`)
+                // are zero-argument calls regardless of the solved return type.
+                // Bypassing `ir_type_from_ty` avoids a `Polymorphism` error
+                // when the return type is `Value = any = Ty::Var`.  Rust
+                // infers the concrete return type from the Rust function's
+                // own declared signature.
+                if matches!(&callee, Callee::Kernel(_))
+                    && self.callee_arity(&callee)? == 0
+                {
+                    return Ok(Expr::Call {
+                        callee,
+                        args: Vec::new(),
+                    });
+                }
                 let ty = self.types.regions.get(&e.span).ok_or_else(|| {
                     bug(
                         "sky_lower::lower_expr",
                         "no inferred type for a function/value reference",
                     )
                 })?;
-                match self.ir_type_from_ty(ty, e.span)? {
-                    fun @ IrType::Fun(_, _) => Ok(Expr::FuncValue { callee, ty: fun }),
-                    // A nullary top-level constant referenced as a value is its
-                    // own zero-argument call (`x` → `x()`); a kernel is always
-                    // function-typed, so this branch is the constant case.
-                    _ => Ok(Expr::Call {
+                // For kernel callees use the JSON-aware type resolver so that
+                // a `Value = any = Ty::Var` in the argument / return position
+                // of a JSON kernel (e.g. `JsonEnc.string : String -> Value`)
+                // maps to `IrType::Json` rather than failing with Polymorphism.
+                // User top-level bindings keep the strict resolver.
+                let ty_ir = if matches!(&callee, Callee::Kernel(_)) {
+                    self.ir_type_from_ty_json(ty, e.span)?
+                } else {
+                    self.ir_type_from_ty(ty, e.span)?
+                };
+                if let fun @ IrType::Fun(_, _) = ty_ir {
+                    Ok(Expr::FuncValue { callee, ty: fun })
+                } else {
+                    // When a kernel with arity > 0 has an unresolved region
+                    // type (e.g. `Value = any = Ty::Var` → `IrType::Json`),
+                    // the kernel is being used as a first-class function
+                    // value.  Fall back to the kernel's known native
+                    // signature so the backend emits a properly typed
+                    // `FuncValue` (`Box::new(name)`) instead of a spurious
+                    // zero-argument call (`name()`).
+                    if let Callee::Kernel(k) = &callee {
+                        let arity = self.callee_arity(&callee)?;
+                        if arity > 0 && let Some(fun_ty) = Self::kernel_native_ir_type(*k) {
+                            return Ok(Expr::FuncValue { callee, ty: fun_ty });
+                        }
+                    }
+                    // A nullary top-level constant or zero-arg kernel
+                    // referenced as a value is its own zero-argument call
+                    // (`x` → `x()`).
+                    Ok(Expr::Call {
                         callee,
                         args: Vec::new(),
-                    }),
+                    })
                 }
             }
         }
@@ -1651,7 +1770,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DictEmpty
                 | KernelFn::SetEmpty
                 // ── Bytes arity-0 ────────────────────────────────────────────
-                | KernelFn::BytesEmpty,
+                | KernelFn::BytesEmpty
+                // ── JsonEnc arity-0 (M4g) ────────────────────────────────────
+                | KernelFn::JsonEncNull,
             ) => Ok(0),
             Callee::Kernel(
                 KernelFn::StringFromInt
@@ -1716,6 +1837,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::EncodingUrlDecode
                 | KernelFn::EncodingHexEncode
                 | KernelFn::EncodingHexDecode
+                // ── JsonEnc arity-1 (M4g) ─────────────────────────────────────
+                | KernelFn::JsonEncString
+                | KernelFn::JsonEncInt
+                | KernelFn::JsonEncFloat
+                | KernelFn::JsonEncBool
+                | KernelFn::JsonEncObject
                 // ── Math arity-1 (Int → Int) ─────────────────────────────────
                 | KernelFn::MathAbs
                 // ── Math arity-1 (Float → Float) ────────────────────────────
@@ -1781,6 +1908,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SetDiff
                 // ── Bytes arity-2 ────────────────────────────────────────────
                 | KernelFn::BytesAppend
+                // ── JsonEnc arity-2 (M4g) ─────────────────────────────────────
+                | KernelFn::JsonEncList
+                | KernelFn::JsonEncEncode
                 // ── Math arity-2 (Float → Float → Float) ────────────────────
                 | KernelFn::MathPow
                 | KernelFn::MathHypot
@@ -2013,6 +2143,15 @@ impl<'a> Lowerer<'a> {
                     ("Encoding", "urlDecode") => Ok(Callee::Kernel(KernelFn::EncodingUrlDecode)),
                     ("Encoding", "hexEncode") => Ok(Callee::Kernel(KernelFn::EncodingHexEncode)),
                     ("Encoding", "hexDecode") => Ok(Callee::Kernel(KernelFn::EncodingHexDecode)),
+                    // ── JsonEnc kernels (M4g) ──────────────────────────────────
+                    ("JsonEnc", "string") => Ok(Callee::Kernel(KernelFn::JsonEncString)),
+                    ("JsonEnc", "int") => Ok(Callee::Kernel(KernelFn::JsonEncInt)),
+                    ("JsonEnc", "float") => Ok(Callee::Kernel(KernelFn::JsonEncFloat)),
+                    ("JsonEnc", "bool") => Ok(Callee::Kernel(KernelFn::JsonEncBool)),
+                    ("JsonEnc", "null") => Ok(Callee::Kernel(KernelFn::JsonEncNull)),
+                    ("JsonEnc", "list") => Ok(Callee::Kernel(KernelFn::JsonEncList)),
+                    ("JsonEnc", "object") => Ok(Callee::Kernel(KernelFn::JsonEncObject)),
+                    ("JsonEnc", "encode") => Ok(Callee::Kernel(KernelFn::JsonEncEncode)),
                     // A kernel beyond the wired set (`Time.now`, …).
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),

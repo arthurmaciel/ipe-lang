@@ -104,6 +104,7 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         ),
         IrType::Set(a) => format!("Set {}", ir_type_name(interner, a)),
         IrType::Bytes => "Bytes".to_owned(),
+        IrType::Json => "Json".to_owned(),
         IrType::Tuple(elems) => {
             let inner = elems
                 .iter()
@@ -319,6 +320,15 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::EncodingUrlDecode => "Encoding.urlDecode",
         KernelFn::EncodingHexEncode => "Encoding.hexEncode",
         KernelFn::EncodingHexDecode => "Encoding.hexDecode",
+        // ── JsonEnc (M4g) ────────────────────────────────────────────────────
+        KernelFn::JsonEncString => "JsonEnc.string",
+        KernelFn::JsonEncInt => "JsonEnc.int",
+        KernelFn::JsonEncFloat => "JsonEnc.float",
+        KernelFn::JsonEncBool => "JsonEnc.bool",
+        KernelFn::JsonEncNull => "JsonEnc.null",
+        KernelFn::JsonEncList => "JsonEnc.list",
+        KernelFn::JsonEncObject => "JsonEnc.object",
+        KernelFn::JsonEncEncode => "JsonEnc.encode",
     }
 }
 

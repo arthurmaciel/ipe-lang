@@ -1,0 +1,8 @@
+module Main exposing (main)
+
+-- String with characters that JSON must escape: a double-quote inside the value.
+-- Sky string "say \"hi\"" has value:  say "hi"
+-- JSON-encoded: "say \"hi\""  (double-quotes escaped as \").
+-- Pins that serde_json escapes \"  the same way Go's json.Marshal does.
+main =
+    println (JsonEnc.encode 0 (JsonEnc.string "say \"hi\""))

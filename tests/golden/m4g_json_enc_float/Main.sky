@@ -1,0 +1,13 @@
+module Main exposing (main)
+
+-- Float 1.5 encodes to "1.5"; bool True to "true"; null to "null".
+-- Pins the primitive scalar encoders against the Go oracle.
+main =
+    let
+        f = JsonEnc.encode 0 (JsonEnc.float 1.5)
+
+        b = JsonEnc.encode 0 (JsonEnc.bool True)
+
+        n = JsonEnc.encode 0 JsonEnc.null
+    in
+    println (String.join " " [ f, b, n ])

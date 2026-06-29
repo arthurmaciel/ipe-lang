@@ -383,6 +383,15 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::EncodingBase64Decode => "sky_base64_decode",
         KernelFn::EncodingUrlDecode => "sky_url_decode",
         KernelFn::EncodingHexDecode => "sky_encoding_hex_decode",
+        // ── JsonEnc kernels (M4g) ────────────────────────────────────────────
+        KernelFn::JsonEncString => "json_enc_string",
+        KernelFn::JsonEncInt => "json_enc_int",
+        KernelFn::JsonEncFloat => "json_enc_float",
+        KernelFn::JsonEncBool => "json_enc_bool",
+        KernelFn::JsonEncNull => "json_enc_null",
+        KernelFn::JsonEncList => "json_enc_list",
+        KernelFn::JsonEncObject => "json_enc_object",
+        KernelFn::JsonEncEncode => "json_enc_encode",
     }
 }
 

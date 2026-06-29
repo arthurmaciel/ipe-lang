@@ -1,0 +1,14 @@
+module Main exposing (main)
+
+-- Nested object: { name, age, tags:[...] } encoded at indent=2 (pretty).
+-- Go: json.MarshalIndent(val, "", "  ") — 2-space indent, keys sorted.
+main =
+    let
+        v =
+            JsonEnc.object
+                [ ( "name", JsonEnc.string "Alice" )
+                , ( "age", JsonEnc.int 30 )
+                , ( "tags", JsonEnc.list JsonEnc.string [ "go", "rust" ] )
+                ]
+    in
+    println (JsonEnc.encode 2 v)
