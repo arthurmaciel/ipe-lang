@@ -1,4 +1,4 @@
 module Main exposing (main)
 
 main =
-    println (String.fromInt (Math.round 3.5))
+    println (String.fromInt (Math.round 2.5))

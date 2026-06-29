@@ -1,0 +1,4 @@
+module Main exposing (main)
+
+main =
+    println (String.fromFloat (Math.remainder 7.0 3.0))

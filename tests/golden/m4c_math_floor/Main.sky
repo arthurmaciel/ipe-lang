@@ -1,4 +1,4 @@
 module Main exposing (main)
 
 main =
-    println (String.fromInt (Math.floor 3.7))
+    println (String.fromInt (Math.floor (-2.7)))

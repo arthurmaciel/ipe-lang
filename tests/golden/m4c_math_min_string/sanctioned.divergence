@@ -1,0 +1,1 @@
+go-bug: Math.min/max route args through AsInt in current Go (anzellai/sky PR #136, open); on String the AsInt compare is meaningless. Correct behaviour compares lexicographically; Math.min "b" "a" = "a". Re-converges to byte parity when #136 merges and the vendored Go syncs.
