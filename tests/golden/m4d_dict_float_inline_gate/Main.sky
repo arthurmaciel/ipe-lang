@@ -1,0 +1,7 @@
+module Main exposing (main)
+
+import Sky.Core.Dict as Dict
+
+
+main =
+    println (String.fromInt (Dict.size (Dict.fromList [ (1.0, "a"), (2.0, "b") ])))

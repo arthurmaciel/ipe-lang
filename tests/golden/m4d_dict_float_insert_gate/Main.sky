@@ -1,0 +1,11 @@
+module Main exposing (main)
+
+import Sky.Core.Dict as Dict
+
+
+main =
+    let
+        d =
+            Dict.insert 1.5 "hello" Dict.empty
+    in
+    println (String.fromInt (Dict.size d))
