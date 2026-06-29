@@ -1,0 +1,4 @@
+module Main exposing (main)
+
+main =
+    println (String.fromInt (Maybe.withDefault 0 (Maybe.andThen (\x -> Just (x + 1)) (Maybe.map (\x -> x * 10) (Just 5)))))

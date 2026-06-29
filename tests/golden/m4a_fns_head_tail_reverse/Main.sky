@@ -1,0 +1,4 @@
+module Main exposing (main)
+
+main =
+    println (String.fromInt (Maybe.withDefault 0 (List.head (List.reverse (Maybe.withDefault [] (List.tail [1, 2, 3]))))))

@@ -1,0 +1,4 @@
+module Main exposing (main)
+
+main =
+    println (String.fromInt (List.foldr (\x a -> x - a) 0 [1, 2, 3]))

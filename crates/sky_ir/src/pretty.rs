@@ -163,6 +163,22 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::StringFromInt => "String.fromInt",
         KernelFn::StringFromFloat => "String.fromFloat",
         KernelFn::LogPrintln => "Log.println",
+        KernelFn::ListMap => "List.map",
+        KernelFn::ListFilter => "List.filter",
+        KernelFn::ListFoldl => "List.foldl",
+        KernelFn::ListFoldr => "List.foldr",
+        KernelFn::ListLength => "List.length",
+        KernelFn::ListHead => "List.head",
+        KernelFn::ListTail => "List.tail",
+        KernelFn::ListMember => "List.member",
+        KernelFn::ListRange => "List.range",
+        KernelFn::ListReverse => "List.reverse",
+        KernelFn::MaybeWithDefault => "Maybe.withDefault",
+        KernelFn::MaybeMap => "Maybe.map",
+        KernelFn::MaybeAndThen => "Maybe.andThen",
+        KernelFn::ResultWithDefault => "Result.withDefault",
+        KernelFn::ResultMap => "Result.map",
+        KernelFn::ResultOkDefault => "Result.Ok",
     }
 }
 

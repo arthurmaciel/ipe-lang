@@ -541,7 +541,18 @@ pub enum Callee {
     Kernel(KernelFn),
 }
 
-/// Built-in kernel functions reachable from M0 programs.
+/// Built-in kernel functions — the standard-library surface that lowers to a
+/// runtime call rather than to user Sky code.
+///
+/// The `String` / `Log` trio is the M0 set. M4a adds the `Sky.Core.List`,
+/// `Sky.Core.Maybe`, and `Sky.Core.Result` combinators that stay kernel-anchored
+/// (the higher-order ones — `map` / `filter` / `foldl` / `foldr` — exactly as the
+/// reference compiler keeps them, because a cross-module polymorphic HOF needs
+/// monomorphisation the front end does not yet perform; routing them to the
+/// generic runtime functions sidesteps that). Each variant names one runtime
+/// function (see the backend's `kernel_name`); the argument order at the call
+/// site is the Sky order, which the backend re-points to the runtime's order
+/// where the two differ.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum KernelFn {
     StringFromInt,
@@ -549,6 +560,44 @@ pub enum KernelFn {
     /// [`KernelFn::StringFromInt`]; renders an `f64` to its decimal text.
     StringFromFloat,
     LogPrintln,
+    /// `List.map : (a -> b) -> List a -> List b`.
+    ListMap,
+    /// `List.filter : (a -> Bool) -> List a -> List a`.
+    ListFilter,
+    /// `List.foldl : (a -> b -> b) -> b -> List a -> b` — left fold.
+    ListFoldl,
+    /// `List.foldr : (a -> b -> b) -> b -> List a -> b` — right fold.
+    ListFoldr,
+    /// `List.length : List a -> Int`.
+    ListLength,
+    /// `List.head : List a -> Maybe a`.
+    ListHead,
+    /// `List.tail : List a -> Maybe (List a)`.
+    ListTail,
+    /// `List.member : a -> List a -> Bool`.
+    ListMember,
+    /// `List.range : Int -> Int -> List Int` — inclusive on both ends.
+    ListRange,
+    /// `List.reverse : List a -> List a`.
+    ListReverse,
+    /// `Maybe.withDefault : a -> Maybe a -> a`.
+    MaybeWithDefault,
+    /// `Maybe.map : (a -> b) -> Maybe a -> Maybe b`.
+    MaybeMap,
+    /// `Maybe.andThen : (a -> Maybe b) -> Maybe a -> Maybe b`.
+    MaybeAndThen,
+    /// `Result.withDefault : a -> Result e a -> a`.
+    ResultWithDefault,
+    /// `Result.map : (a -> b) -> Result e a -> Result e b`.
+    ResultMap,
+    /// Internal: construct `Ok x` with the project error type (`SkyError`) pinned.
+    ///
+    /// Not a Sky-source kernel — the lowerer emits this for an `Ok` constructor
+    /// whose `Result e a` error type `e` is still unconstrained after solving, so
+    /// the emitted Rust has a concrete `SkyResult<SkyError, _>` instead of an
+    /// ambiguous `SkyResult<_, _>` (which rustc rejects with E0282). It maps to
+    /// the runtime's `ok_res` helper.
+    ResultOkDefault,
 }
 
 /// Binary operators.

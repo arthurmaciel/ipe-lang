@@ -1,0 +1,4 @@
+module Main exposing (main)
+
+main =
+    println (String.fromInt (Result.withDefault 0 (Result.map (\x -> x + 1) (Ok 2))))
