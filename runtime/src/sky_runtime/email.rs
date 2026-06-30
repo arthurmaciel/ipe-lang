@@ -85,7 +85,7 @@ fn email_gen_id() -> String {
 
 fn email_endpoint(provider: &str, def: &str) -> String {
     let env = format!("SKY_EMAIL_ENDPOINT_{}", provider.to_uppercase());
-    std::env::var(env).unwrap_or_else(|_| def.to_string())
+    crate::sky_runtime::system::read_env_var(&env).unwrap_or_else(|_| def.to_string())
 }
 
 /// Email.send : EmailProvider -> EmailMessage -> Task Error String
@@ -94,7 +94,7 @@ pub fn email_send<E: From<String> + Send + 'static>(
     msg: EmailMessage,
 ) -> SkyTask<E, String> {
     Box::pin(async move {
-        if std::env::var("SKY_EMAIL_DRY_RUN").as_deref() == Ok("1") {
+        if crate::sky_runtime::system::read_env_var("SKY_EMAIL_DRY_RUN").as_deref() == Ok("1") {
             return SkyResult::Ok(format!("dry-run-{}", email_gen_id()));
         }
         if msg.from.is_empty() {
@@ -147,21 +147,45 @@ async fn email_post_json<E: From<String>>(
         Err(e) => return Err(format!("email: request failed: {}", e).into()),
     };
     let status = resp.status().as_u16();
-    // Bound the provider response so a misbehaving/compromised endpoint can't make
-    // us buffer an arbitrarily large body. Provider id-JSON responses are tiny; a
-    // declared length over 1 MiB is rejected. (Residual: a provider that omits
-    // Content-Length AND streams unboundedly isn't caught here — providers are
-    // operator-configured/trusted, so this length check is the proportionate bound.)
-    if let Some(len) = resp.content_length() {
-        if len > 1024 * 1024 {
-            return Err(format!("email: provider response too large ({} bytes)", len).into());
-        }
-    }
-    let body = resp.text().await.unwrap_or_default();
+    // Bound the provider response by STREAMING bytes up to a hard cap, never by
+    // trusting `Content-Length`: a misbehaving/compromised endpoint can declare a
+    // small (or omit the) length and then stream unboundedly, so a length-only
+    // precheck is bypassable. Mirror `http_client::read_body_capped`'s incremental
+    // cap. Provider id-JSON responses are tiny; 1 MiB is a generous ceiling.
+    let body = read_email_body_capped::<E>(resp, EMAIL_RESPONSE_CAP).await?;
     if status >= 400 {
         return Err(format!("email: status {}: {}", status, body).into());
     }
     Ok(serde_json::from_str(&body).unwrap_or(serde_json::Value::Null))
+}
+
+/// Hard cap on a provider HTTP response body (1 MiB). Provider id-JSON responses
+/// are a few hundred bytes; anything past this is a misbehaving/compromised
+/// endpoint and is rejected rather than buffered.
+const EMAIL_RESPONSE_CAP: usize = 1024 * 1024;
+
+/// Read a response body into a `String`, bounding the buffered bytes at `cap` by
+/// draining the byte stream incrementally. Unlike `Content-Length`, this can't be
+/// defeated by a lying/omitted header or a chunked/compressed body — the resident
+/// buffer is bounded to `cap` regardless. UTF-8 lossy (provider bodies are JSON).
+async fn read_email_body_capped<E: From<String>>(
+    resp: reqwest::Response,
+    cap: usize,
+) -> Result<String, E> {
+    use futures_util::StreamExt;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let bytes = match chunk {
+            Ok(b) => b,
+            Err(e) => return Err(format!("email: reading provider response failed: {}", e).into()),
+        };
+        if buf.len().saturating_add(bytes.len()) > cap {
+            return Err(format!("email: provider response too large (> {} bytes)", cap).into());
+        }
+        buf.extend_from_slice(&bytes);
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 // ──────────────────── Resend ────────────────────

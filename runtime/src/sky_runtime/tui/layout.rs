@@ -697,8 +697,16 @@ fn walk_attrs<M>(attrs: &[Attribute<M>], inherited: Style) -> Walked {
                 border_width = *n;
                 sides = (true, true, true, true);
             }
-            Attribute::AttrBorderWidthEach(t, r, b, l) if t + r + b + l > 0 => {
-                border_width = (t + r + b + l).max(1);
+            Attribute::AttrBorderWidthEach(t, r, b, l)
+                if t.saturating_add(*r).saturating_add(*b).saturating_add(*l) > 0 =>
+            {
+                // Saturating: each side is an arbitrary Sky `Int`; a plain
+                // `t + r + b + l` overflows i64 (debug panic) on large widths.
+                border_width = t
+                    .saturating_add(*r)
+                    .saturating_add(*b)
+                    .saturating_add(*l)
+                    .max(1);
                 sides = (*t > 0, *r > 0, *b > 0, *l > 0);
             }
             Attribute::AttrBorderColor(c) => border_color = Some(c.clone()),
@@ -902,9 +910,16 @@ fn apply_padding(inner: Rendered, w: &Walked, canvas: Canvas, self_style: Style)
     let left = canvas.cells_x(w.pad_left);
     let right = canvas.cells_x(w.pad_right);
     let inner_w = inner.block.width();
-    let total_w = inner_w + left + right;
+    // Saturating + clamped: `left`/`right` derive from `Ui.padding N` (arbitrary
+    // Sky Int); an unclamped `inner_w + left + right` can overflow usize and, at
+    // any rate, feed `" ".repeat(total_w)` an OOM-sized count. MAX_CELLS is the
+    // same ceiling every other repeat site uses.
+    let total_w = inner_w
+        .saturating_add(left)
+        .saturating_add(right)
+        .min(MAX_CELLS);
     let pad_run = |n: usize| Run {
-        text: " ".repeat(n),
+        text: " ".repeat(n.min(MAX_CELLS)),
         style: self_style,
     };
 
@@ -1149,8 +1164,14 @@ fn render_input<M: Clone>(
     for a in attrs {
         match a {
             Attribute::AttrBorderWidth(n) if *n > 0 => bw = *n,
-            Attribute::AttrBorderWidthEach(t, r, b, l) if t + r + b + l > 0 => {
-                bw = (t + r + b + l).max(1)
+            Attribute::AttrBorderWidthEach(t, r, b, l)
+                if t.saturating_add(*r).saturating_add(*b).saturating_add(*l) > 0 =>
+            {
+                bw = t
+                    .saturating_add(*r)
+                    .saturating_add(*b)
+                    .saturating_add(*l)
+                    .max(1)
             }
             Attribute::AttrBorderColor(c) => bcolor = Some(c.clone()),
             Attribute::AttrBorderStyle(s) => bsty = s.clone(),
@@ -1789,6 +1810,12 @@ fn render_grid_tracked<M: Clone>(
     let ncols = w.grid_cols.len().max(1);
     let avail = content_avail.max(1);
     let total_gap = gap_x.saturating_mul(ncols.saturating_sub(1));
+    // Saturating folds, not `.sum()`: a well-typed Sky `Grid.px N` / `Grid.fr N`
+    // takes an arbitrary Int, so an unclamped sum of large track weights
+    // overflows usize — in release that wraps to a tiny `fr_total` divisor →
+    // huge per-track width → `" ".repeat(huge)` OOM/capacity panic (top-critical
+    // audit finding). Each Fr weight is clamped at MAX_CELLS before summing, and
+    // the fold saturates so the total can never wrap.
     let fixed: usize = w
         .grid_cols
         .iter()
@@ -1796,16 +1823,16 @@ fn render_grid_tracked<M: Clone>(
             GridTrack::Px(n) => canvas.cells_x(*n),
             _ => 0,
         })
-        .sum();
+        .fold(0usize, usize::saturating_add);
     let fr_total: usize = w
         .grid_cols
         .iter()
         .map(|t| match t {
-            GridTrack::Fr(n) => (*n).max(0) as usize,
+            GridTrack::Fr(n) => ((*n).max(0) as usize).min(MAX_CELLS),
             GridTrack::Auto => 1,
             _ => 0,
         })
-        .sum::<usize>()
+        .fold(0usize, usize::saturating_add)
         .max(1);
     let leftover = avail.saturating_sub(fixed + total_gap);
     let widths: Vec<usize> = w
@@ -1813,7 +1840,10 @@ fn render_grid_tracked<M: Clone>(
         .iter()
         .map(|t| match t {
             GridTrack::Px(n) => canvas.cells_x(*n).max(1),
-            GridTrack::Fr(n) => (leftover.saturating_mul((*n).max(0) as usize) / fr_total).max(1),
+            GridTrack::Fr(n) => (leftover
+                .saturating_mul(((*n).max(0) as usize).min(MAX_CELLS))
+                / fr_total)
+                .max(1),
             GridTrack::Auto => (leftover / fr_total).max(1),
         })
         .collect();
@@ -2257,7 +2287,7 @@ const SGR_RESET: &str = "\x1b[0m";
 fn no_color() -> bool {
     static NC: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *NC.get_or_init(|| {
-        std::env::var_os("NO_COLOR")
+        crate::sky_runtime::system::read_env_var_os("NO_COLOR")
             .map(|v| !v.is_empty())
             .unwrap_or(false)
     })

@@ -14,7 +14,7 @@ fn buffer_capacity() -> usize {
     const DEFAULT: usize = 16;
     const MIN: usize = 1;
     const MAX: usize = 1024;
-    std::env::var("SKY_LIVE_SSE_BUFFER")
+    crate::sky_runtime::system::read_env_var("SKY_LIVE_SSE_BUFFER")
         .ok()
         .and_then(|s| s.trim().parse::<usize>().ok())
         .map(|n| n.clamp(MIN, MAX))

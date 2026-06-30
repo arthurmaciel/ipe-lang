@@ -152,7 +152,7 @@ impl ConsoleAuthMode {
 /// The ONE parse of `SKY_CONSOLE_AUTH` (trim + lowercase; unknown → `Off`, no
 /// silent widen). Unset → `DevOpen` in dev / `UnsetProd` in production.
 fn resolve_console_auth_mode() -> ConsoleAuthMode {
-    let raw = std::env::var("SKY_CONSOLE_AUTH").unwrap_or_default();
+    let raw = crate::sky_runtime::system::read_env_var("SKY_CONSOLE_AUTH").unwrap_or_default();
     match raw.trim().to_ascii_lowercase().as_str() {
         "off" => ConsoleAuthMode::Off,
         "token" => ConsoleAuthMode::Token,
@@ -212,16 +212,16 @@ pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::R
     // aliases SKY_CONSOLE_TOKEN and SKY_METRICS_TOKEN (Go honours SKY_METRICS_TOKEN
     // as a back-compat alias — without it a prod operator who only set the legacy
     // var is locked out / forced to a weaker config).
-    let want = std::env::var("SKY_ADMIN_TOKEN")
+    let want = crate::sky_runtime::system::read_env_var("SKY_ADMIN_TOKEN")
         .ok()
         .filter(|t| !t.is_empty())
         .or_else(|| {
-            std::env::var("SKY_CONSOLE_TOKEN")
+            crate::sky_runtime::system::read_env_var("SKY_CONSOLE_TOKEN")
                 .ok()
                 .filter(|t| !t.is_empty())
         })
         .or_else(|| {
-            std::env::var("SKY_METRICS_TOKEN")
+            crate::sky_runtime::system::read_env_var("SKY_METRICS_TOKEN")
                 .ok()
                 .filter(|t| !t.is_empty())
         });
@@ -346,7 +346,7 @@ fn fold_log(it: &serde_json::Value) {
 /// is absent or wrong (constant-time compare). Unset → `None` (open endpoint).
 fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::Response> {
     use subtle::ConstantTimeEq;
-    let want = match std::env::var("SKY_INGEST_TOKEN")
+    let want = match crate::sky_runtime::system::read_env_var("SKY_INGEST_TOKEN")
         .ok()
         .filter(|t| !t.is_empty())
     {

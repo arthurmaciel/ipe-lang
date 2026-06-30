@@ -442,9 +442,34 @@ where
 
 // ── Overview, ServiceStats, Identity ────────────────────────────────────────
 
-/// `count(*)` for one table; 0 on any failure (total).
-async fn count_table(pool: &SqlitePool, table: &str) -> i64 {
-    let sql = format!("SELECT COUNT(*) AS n FROM {table}");
+/// The fixed set of telemetry tables [`count_table`] may count. Modelling the
+/// table as a closed enum (not a `&str`) makes a runtime-derived table name
+/// unrepresentable, so the `format!`-built SQL can only ever interpolate a
+/// hardcoded literal — SQL injection here is impossible by construction, not
+/// by caller discipline.
+#[derive(Clone, Copy)]
+enum TelemetryTable {
+    Log,
+    Metric,
+    Span,
+}
+
+impl TelemetryTable {
+    /// The hardcoded table name. Never derived from runtime input.
+    const fn name(self) -> &'static str {
+        match self {
+            TelemetryTable::Log => "telemetry_log",
+            TelemetryTable::Metric => "telemetry_metric",
+            TelemetryTable::Span => "telemetry_span",
+        }
+    }
+}
+
+/// `count(*)` for one telemetry table; 0 on any failure (total).
+async fn count_table(pool: &SqlitePool, table: TelemetryTable) -> i64 {
+    // `table.name()` is a compile-time constant from a closed enum; the
+    // interpolation cannot carry attacker input.
+    let sql = format!("SELECT COUNT(*) AS n FROM {}", table.name());
     match sqlx::query(&sql).fetch_one(pool).await {
         Ok(row) => row.try_get::<i64, _>("n").unwrap_or(0),
         Err(_) => 0,
@@ -461,9 +486,9 @@ where
     Box::pin(async move {
         let (logs, metrics, spans) = match open_spill(&db_path).await {
             Some(pool) => (
-                count_table(&pool, "telemetry_log").await,
-                count_table(&pool, "telemetry_metric").await,
-                count_table(&pool, "telemetry_span").await,
+                count_table(&pool, TelemetryTable::Log).await,
+                count_table(&pool, TelemetryTable::Metric).await,
+                count_table(&pool, TelemetryTable::Span).await,
             ),
             None => (0, 0, 0),
         };

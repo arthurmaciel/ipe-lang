@@ -24,7 +24,7 @@ const LOG_LEVEL_ERROR: i32 = 3;
 /// `SKY_LOG_LEVEL` → numeric threshold. Mirrors Go's `logLevelFromEnv`
 /// (`debug` / `warn`|`warning` / `error`; everything else → info).
 fn log_threshold() -> i32 {
-    match std::env::var("SKY_LOG_LEVEL")
+    match crate::sky_runtime::system::read_env_var("SKY_LOG_LEVEL")
         .unwrap_or_default()
         .to_ascii_lowercase()
         .as_str()
@@ -37,7 +37,7 @@ fn log_threshold() -> i32 {
 }
 
 fn log_json() -> bool {
-    std::env::var("SKY_LOG_FORMAT").unwrap_or_default() == "json"
+    crate::sky_runtime::system::read_env_var("SKY_LOG_FORMAT").unwrap_or_default() == "json"
 }
 
 /// Current UTC instant in Go's `time.RFC3339Nano` layout

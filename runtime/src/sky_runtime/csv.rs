@@ -50,7 +50,7 @@ fn parse_delim<E: From<String>>(text: &str, delim: u8) -> SkyResult<E, CsvDoc> {
     // Row cap: a large/untrusted input would otherwise accumulate unbounded into
     // `rows`. Bound it (SKY_CSV_MAX_ROWS, default 10M) → Err rather than OOM.
     // Mirrors csv_parse_stream_from_file's cap.
-    let max_rows: usize = std::env::var("SKY_CSV_MAX_ROWS")
+    let max_rows: usize = crate::sky_runtime::system::read_env_var("SKY_CSV_MAX_ROWS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
@@ -85,7 +85,9 @@ fn parse_delim<E: From<String>>(text: &str, delim: u8) -> SkyResult<E, CsvDoc> {
 /// caller opts in when serving CSV to spreadsheet users, accepting the tradeoff.
 fn csv_formula_guard_enabled() -> bool {
     matches!(
-        std::env::var("SKY_CSV_SANITIZE_FORMULAS").ok().as_deref(),
+        crate::sky_runtime::system::read_env_var("SKY_CSV_SANITIZE_FORMULAS")
+            .ok()
+            .as_deref(),
         Some("1") | Some("on") | Some("true") | Some("yes")
     )
 }
@@ -173,7 +175,7 @@ pub fn csv_parse_stream_from_file<E: From<String> + Send + 'static>(
         // Row cap: although rows stream in, they all accumulate in `out`, so an
         // untrusted huge file is still an unbounded allocation. Bound it
         // (SKY_CSV_MAX_ROWS, default 10M) → Err rather than OOM.
-        let max_rows: usize = std::env::var("SKY_CSV_MAX_ROWS")
+        let max_rows: usize = crate::sky_runtime::system::read_env_var("SKY_CSV_MAX_ROWS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .filter(|n| *n > 0)

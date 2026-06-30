@@ -6,12 +6,15 @@
 //! struct directly. Field names match the Sky records verbatim (camelCase
 //! `followRedirects` / `maxRedirects` — hence the non_snake_case allow).
 //!
-//! ## SSRF protection (opt-in)
+//! ## SSRF protection (default-ON in production)
 //!
-//! Set `SKY_HTTP_DENY_PRIVATE=1` (or `on` / `true`) to block requests whose
-//! resolved host is loopback, RFC-1918 private, link-local, unique-local (ULA),
-//! unspecified, or v4-mapped-private. This guard is OFF by default so that
-//! development against `localhost` keeps working unchanged.
+//! The guard blocks requests whose resolved host is loopback, RFC-1918 private,
+//! link-local, unique-local (ULA), unspecified, or v4-mapped-private. It is
+//! ON by default in production (`ENV`/`SKY_ENV` not in {unset, dev, development,
+//! local}) and OFF in dev so development against `localhost` keeps working
+//! unchanged. `SKY_HTTP_DENY_PRIVATE=1`/`on`/`true` forces it ON; setting it to
+//! any other value (`0`/`off`/`false`) is the explicit production opt-out. See
+//! `ssrf::ssrf_deny_private_enabled`.
 //!
 //! When ON the check runs in three layers:
 //! 1. **Pre-send resolve + pin (DNS-rebinding defence)**: parse the URL;
@@ -129,6 +132,27 @@ impl reqwest::dns::Resolve for DenyPrivateResolver {
     }
 }
 
+/// Redact a `user:pass@` userinfo segment from a URL string for safe inclusion
+/// in an error message. Used on the parse-FAILURE path where the `url` crate
+/// can't help, so it's a best-effort split (no raw indexing — `indexing_slicing`
+/// is denied crate-wide). Removes the `userinfo@` between `://` and the next `/`.
+fn redact_userinfo(url: &str) -> String {
+    match url.split_once("://") {
+        None => url.to_string(),
+        Some((scheme, rest)) => {
+            let (authority, path) = match rest.split_once('/') {
+                Some((a, p)) => (a, Some(p)),
+                None => (rest, None),
+            };
+            let host = authority.rsplit_once('@').map_or(authority, |(_ui, h)| h);
+            match path {
+                Some(p) => format!("{scheme}://{host}/{p}"),
+                None => format!("{scheme}://{host}"),
+            }
+        }
+    }
+}
+
 pub(crate) fn ssrf_apply(
     mut builder: reqwest::ClientBuilder,
     url: &str,
@@ -140,7 +164,8 @@ pub(crate) fn ssrf_apply(
         let parsed = reqwest::Url::parse(url).map_err(|e| {
             format!(
                 "http: blocked: invalid URL {:?}: {} (SKY_HTTP_DENY_PRIVATE)",
-                url, e
+                redact_userinfo(url),
+                e
             )
         })?;
         let scheme = parsed.scheme();
@@ -215,7 +240,8 @@ async fn do_request<E: From<String> + Send + 'static>(
                 return SkyResult::Err(
                     format!(
                         "http: blocked: invalid URL {:?}: {} (SKY_HTTP_DENY_PRIVATE)",
-                        req.url, e
+                        redact_userinfo(&req.url),
+                        e
                     )
                     .into(),
                 );
@@ -258,8 +284,13 @@ async fn do_request<E: From<String> + Send + 'static>(
     }
     let resp = match rb.send().await {
         Ok(r) => r,
+        // [B8] Route the transport error through the redacting constructor: a
+        // reqwest/hyper error Display can echo `req.url` (which may carry userinfo
+        // / a query-string API key) and the resolved address. The raw detail is
+        // logged server-side under a correlation id; Sky sees only the generic
+        // `external operation failed (ref <id>)`. Mirrors http_stream.rs.
         Err(e) => {
-            return SkyResult::Err(format!("http: request to {} failed: {}", req.url, e).into());
+            return SkyResult::Err(sky_error_from_foreign(e));
         }
     };
     let status = resp.status().as_u16() as i64;
@@ -288,7 +319,7 @@ async fn do_request<E: From<String> + Send + 'static>(
 const HTTP_BODY_CAP_DEFAULT: usize = 100 * 1024 * 1024;
 
 fn http_body_cap() -> usize {
-    std::env::var("SKY_HTTP_MAX_BODY_BYTES")
+    crate::sky_runtime::system::read_env_var("SKY_HTTP_MAX_BODY_BYTES")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
@@ -325,7 +356,10 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
     while let Some(chunk) = stream.next().await {
         let bytes = match chunk {
             Ok(b) => b,
-            Err(e) => return SkyResult::Err(format!("http: reading body failed: {}", e).into()),
+            // [B8] Redact: a body-read transport error can also echo the URL /
+            // resolved address. Log server-side under a correlation id, return
+            // only the generic ref to Sky.
+            Err(e) => return SkyResult::Err(sky_error_from_foreign(e)),
         };
         if buf.len().saturating_add(bytes.len()) > cap {
             return SkyResult::Err(

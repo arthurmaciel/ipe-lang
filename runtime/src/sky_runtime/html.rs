@@ -603,6 +603,27 @@ fn sanitise_url_attr<'a>(name: &str, value: &'a str) -> &'a str {
     }
 }
 
+/// Sanitise an attribute `(name, value)` pair destined for a Sky.Live SSE
+/// patch that the browser applies via `setAttribute`. Returns the safe pair to
+/// set, or `None` to DROP the attribute entirely.
+///
+/// SSE patches bypass `render_into_ctx` (the first-paint XSS gate), so this is
+/// the gate for the patch path — it applies the SAME policy by construction:
+/// the name must pass [`SafeAttrName`] (rejects `on*` handlers, `srcdoc`, and
+/// structural-breakout charsets) and a URL-bearing value is scheme-checked via
+/// [`sanitise_url_attr`]. No HTML-entity escaping is applied: `setAttribute`
+/// sets a raw DOM attribute value and does NOT re-parse it as HTML, so escaping
+/// would corrupt legitimate values (and is unnecessary for safety). A name that
+/// fails policy is dropped, which also covers the removal sentinel (an empty
+/// value on a dangerous name must never reach `setAttribute`).
+///
+/// `live`-gated: its sole consumer is `live/diff.rs` (the SSE patch builder).
+#[cfg(feature = "live")]
+pub(crate) fn safe_patch_attr<'a>(name: &'a str, value: &'a str) -> Option<(&'a str, &'a str)> {
+    let SafeAttrName(safe_name) = SafeAttrName::parse(name)?;
+    Some((safe_name, sanitise_url_attr(name, value)))
+}
+
 /// Stamp every HElement (not HText/HRaw) with a stable `sky-id` attribute derived
 /// from its path. Idempotent: an existing sky-id is overwritten with the same
 /// value. HText/HRaw nodes are unaddressable (Go parity).

@@ -15,14 +15,28 @@ use super::*;
 static ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
 /// Read an environment variable under the shared env read lock (excluded against
-/// any concurrent mutator so the `environ` walk can't race a realloc).
-fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
+/// any concurrent mutator so the `environ` walk can't race a realloc). `pub(crate)`
+/// so every non-test process-env read in the crate routes through this one lock —
+/// that's what makes the reader↔mutator serialisation true by construction.
+pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
     let _guard = ENV_LOCK.read().unwrap_or_else(|p| p.into_inner());
     std::env::var(key)
 }
 
+/// Read an environment variable as an `OsString` under the shared env read lock —
+/// the `var_os` companion of `read_env_var` (same poison handling, same race
+/// guarantee). `None` when unset or — unlike `read_env_var` — when the value is
+/// not valid Unicode. Gated to the feature whose module actually reads `var_os`
+/// (`tui` — the `NO_COLOR` probe); widen the gate when another feature gains a
+/// `var_os` reader, so it never sits as dead code under `-D warnings`.
+#[cfg(feature = "tui")]
+pub(crate) fn read_env_var_os(key: &str) -> Option<std::ffi::OsString> {
+    let _guard = ENV_LOCK.read().unwrap_or_else(|p| p.into_inner());
+    std::env::var_os(key)
+}
+
 /// Set an environment variable under the exclusive env write lock.
-fn locked_set_var(key: &str, val: &str) {
+pub(crate) fn locked_set_var(key: &str, val: &str) {
     // std::env::set_var PANICS on an empty key, a key containing '=' or NUL, or a
     // value containing NUL. Skip such a key/value (no-op) rather than panic.
     if key.is_empty() || key.contains('=') || key.contains('\0') || val.contains('\0') {
@@ -32,8 +46,23 @@ fn locked_set_var(key: &str, val: &str) {
     std::env::set_var(key, val);
 }
 
+/// Set an environment variable ONLY if it is currently absent, performing the
+/// presence check and the set atomically under a SINGLE write-lock acquisition.
+/// This avoids the TOCTOU window a separate `read_env_var_os` + `locked_set_var`
+/// pair would open (a concurrent mutator could set the key between the two lock
+/// acquisitions). Same invalid-key/value guard as `locked_set_var` — never panics.
+pub(crate) fn locked_set_var_if_absent(key: &str, val: &str) {
+    if key.is_empty() || key.contains('=') || key.contains('\0') || val.contains('\0') {
+        return;
+    }
+    let _guard = ENV_LOCK.write().unwrap_or_else(|p| p.into_inner());
+    if std::env::var_os(key).is_none() {
+        std::env::set_var(key, val);
+    }
+}
+
 /// Remove an environment variable under the exclusive env write lock.
-fn locked_remove_var(key: &str) {
+pub(crate) fn locked_remove_var(key: &str) {
     // std::env::remove_var panics on the same invalid keys as set_var — guard it.
     if key.is_empty() || key.contains('=') || key.contains('\0') {
         return;
@@ -261,9 +290,10 @@ pub fn system_load_env<E: Send + 'static>(_: ()) -> SkyTask<E, ()> {
                 if let Some((k, v)) = line.split_once('=') {
                     let k = k.trim();
                     let v = v.trim().trim_matches('"').trim_matches('\'');
-                    if read_env_var(k).is_err() {
-                        locked_set_var(k, v);
-                    }
+                    // Atomic check-and-set under one write lock — avoids the
+                    // TOCTOU window a separate read + set would open against a
+                    // concurrent mutator.
+                    locked_set_var_if_absent(k, v);
                 }
             }
         }

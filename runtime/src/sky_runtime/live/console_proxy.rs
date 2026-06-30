@@ -50,7 +50,7 @@ static CHILD: Mutex<Option<Child>> = Mutex::new(None);
 /// exists (→ the caller falls back to the in-process console; first build
 /// before the console is pre-built, or a build env where it couldn't be).
 pub fn console_bin_path() -> Option<std::path::PathBuf> {
-    if let Ok(p) = std::env::var(CONSOLE_BIN_ENV) {
+    if let Ok(p) = crate::sky_runtime::system::read_env_var(CONSOLE_BIN_ENV) {
         if !p.is_empty() {
             let pb = std::path::PathBuf::from(p);
             return if pb.is_file() { Some(pb) } else { None };
@@ -62,7 +62,7 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
     // caches the console binary under the SAME version — so both agree on the
     // `~/.cache/sky/rust-console/<ver>/sky-console` path.
     let ver = option_env!("SKY_VERSION").unwrap_or("dev");
-    let home = std::env::var("HOME").ok()?;
+    let home = crate::sky_runtime::system::read_env_var("HOME").ok()?;
     let pb = std::path::Path::new(&home)
         .join(".cache/sky/rust-console")
         .join(ver)
@@ -77,7 +77,7 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
 pub fn gate_allows() -> bool {
     // Sub-app context: the parent owns its own console; a nested app must not
     // recursively mount one.
-    if std::env::var("SKY_LIVE_BASE_PATH")
+    if crate::sky_runtime::system::read_env_var("SKY_LIVE_BASE_PATH")
         .map(|v| !v.is_empty())
         .unwrap_or(false)
     {
@@ -85,12 +85,12 @@ pub fn gate_allows() -> bool {
     }
     // Explicit opt-outs.
     if matches!(
-        std::env::var("SKY_CONSOLE_EMBED").as_deref(),
+        crate::sky_runtime::system::read_env_var("SKY_CONSOLE_EMBED").as_deref(),
         Ok("off") | Ok("0") | Ok("false")
     ) {
         return false;
     }
-    if std::env::var("SKY_CONSOLE_AUTH")
+    if crate::sky_runtime::system::read_env_var("SKY_CONSOLE_AUTH")
         .map(|v| v.trim().eq_ignore_ascii_case("off"))
         .unwrap_or(false)
     {
@@ -98,10 +98,10 @@ pub fn gate_allows() -> bool {
     }
     // Production without an admin token → no silent open-to-the-world mount.
     if super::super::telemetry::production_from_env()
-        && std::env::var("SKY_ADMIN_TOKEN")
+        && crate::sky_runtime::system::read_env_var("SKY_ADMIN_TOKEN")
             .map(|v| v.is_empty())
             .unwrap_or(true)
-        && std::env::var("SKY_CONSOLE_TOKEN")
+        && crate::sky_runtime::system::read_env_var("SKY_CONSOLE_TOKEN")
             .map(|v| v.is_empty())
             .unwrap_or(true)
     {
@@ -392,7 +392,7 @@ fn pick_free_port() -> Option<u16> {
 /// temp file so the console works zero-config (a lean app gets a live console
 /// without configuring durability).
 fn console_store_path() -> String {
-    match std::env::var("SKY_CONSOLE_DB_PATH") {
+    match crate::sky_runtime::system::read_env_var("SKY_CONSOLE_DB_PATH") {
         Ok(p) if !p.is_empty() => p,
         // Default to a per-process file in the temp dir, but add an UNGUESSABLE
         // suffix: a bare `sky-console-<pid>.db` is predictable, so a local

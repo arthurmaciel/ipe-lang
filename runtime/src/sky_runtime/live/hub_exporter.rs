@@ -79,14 +79,14 @@ pub async fn enable_from_env() {
     // leading-whitespace value (" https://hub") otherwise passes the scheme
     // check (which trims) yet leaves the space in `base`, so every push fails
     // with an invalid URL.
-    let hub = match std::env::var(HUB_ENV) {
+    let hub = match crate::sky_runtime::system::read_env_var(HUB_ENV) {
         Ok(h) if !h.trim().is_empty() => h.trim().to_string(),
         _ => return,
     };
     if SENDER.get().is_some() {
         return;
     }
-    let token = std::env::var(TOKEN_ENV).unwrap_or_default();
+    let token = crate::sky_runtime::system::read_env_var(TOKEN_ENV).unwrap_or_default();
     if token.len() < MIN_TOKEN_BYTES {
         eprintln!(
             "[sky.hub] {TOKEN_ENV} must be ≥{MIN_TOKEN_BYTES} bytes to push to {hub}; exporter disabled"
@@ -118,12 +118,12 @@ pub async fn enable_from_env() {
         );
         return;
     }
-    let interval_ms = std::env::var(INTERVAL_ENV)
+    let interval_ms = crate::sky_runtime::system::read_env_var(INTERVAL_ENV)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_INTERVAL_MS)
         .max(MIN_INTERVAL_MS);
-    let service = match std::env::var(SERVICE_ENV) {
+    let service = match crate::sky_runtime::system::read_env_var(SERVICE_ENV) {
         Ok(s) if !s.is_empty() => s,
         _ => "app".to_string(),
     };

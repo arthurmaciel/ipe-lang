@@ -263,7 +263,7 @@ where
     FRender: Fn(&Model) -> String + Send + 'static,
 {
     Box::pin(async move {
-        if std::env::var("TERM").as_deref() == Ok("dumb") {
+        if crate::sky_runtime::system::read_env_var("TERM").as_deref() == Ok("dumb") {
             return SkyResult::Err(
                 "Tui: TERM=dumb is not an interactive terminal"
                     .to_string()
@@ -401,7 +401,7 @@ where
     FOnKey: Fn(String, String) -> Msg + Send + 'static,
 {
     Box::pin(async move {
-        if std::env::var("TERM").as_deref() == Ok("dumb") {
+        if crate::sky_runtime::system::read_env_var("TERM").as_deref() == Ok("dumb") {
             return SkyResult::Err(
                 "Tui: TERM=dumb is not an interactive terminal"
                     .to_string()

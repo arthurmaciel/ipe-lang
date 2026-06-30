@@ -63,11 +63,38 @@ pub fn config_decode_toml<E: From<String> + 'static, T>(
     )
 }
 
+/// Default cap on a YAML source string parsed directly via `Config.decodeYaml`
+/// (the file-load path enforces its own `SKY_CONFIG_MAX_BYTES` cap before reading).
+/// 4 MiB; override via `SKY_YAML_MAX_BYTES`.
+const YAML_SOURCE_CAP_DEFAULT: usize = 4 * 1024 * 1024;
+
+fn yaml_source_cap() -> usize {
+    crate::sky_runtime::system::read_env_var("SKY_YAML_MAX_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(YAML_SOURCE_CAP_DEFAULT)
+}
+
 // Config.decodeYaml : String -> Decoder a -> Result Error a
 pub fn config_decode_yaml<E: From<String> + 'static, T>(
     s: String,
     decoder: Decoder<E, T>,
 ) -> SkyResult<E, T> {
+    // Defence-in-depth against YAML "billion laughs" / anchor-alias bombs:
+    //   1. Bound the SOURCE size so a huge input can't be parsed at all (this is
+    //      the cheap, behaviour-preserving guard the audit asks for).
+    //   2. serde_yaml 0.9 itself bounds alias/anchor EXPANSION — a recursive
+    //      anchor bomb trips its built-in "repetition limit exceeded" (verified),
+    //      so a small-but-exponential input cannot expand without bound.
+    let cap = yaml_source_cap();
+    if s.len() > cap {
+        return SkyResult::Err(str_err(&format!(
+            "yaml parse: input is {} bytes, over the {} byte cap (SKY_YAML_MAX_BYTES)",
+            s.len(),
+            cap
+        )));
+    }
     run_decoder(
         serde_yaml::from_str(&s).map_err(|e| format!("yaml parse: {}", e)),
         decoder,
@@ -84,7 +111,7 @@ pub fn config_load_from_file<E: From<String> + Send + 'static, T: Send + 'static
         // Cap the file size before slurping it into memory so a Config.loadFromFile
         // on an attacker-influenced path can't force an unbounded in-memory copy
         // (memory DoS). Default 16 MiB; override via SKY_CONFIG_MAX_BYTES.
-        let cap: u64 = std::env::var("SKY_CONFIG_MAX_BYTES")
+        let cap: u64 = crate::sky_runtime::system::read_env_var("SKY_CONFIG_MAX_BYTES")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .filter(|n| *n > 0)

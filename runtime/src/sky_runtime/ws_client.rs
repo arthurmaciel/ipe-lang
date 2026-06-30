@@ -108,6 +108,41 @@ fn deregister(id: i64) {
 
 static WS_CLIENT_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 
+/// Redact any `user:pass@` userinfo from a URL before it is echoed in an error
+/// message. WebSocket URLs legitimately carry credentials (`ws://user:pass@host`),
+/// and connect-error strings flow to `Std.Log` / structured logs, so the raw URL
+/// would leak the secret (PRINCIPLES #1: no secret leakage into errors/logs).
+/// Parse-and-rebuild via the `url` crate when possible; fall back to a manual
+/// `scheme://...@` strip so a URL the parser rejects (the bad-url error path)
+/// still never echoes credentials. Total — no unwrap/index/panic.
+fn redact_ws_url(url: &str) -> String {
+    if let Ok(mut u) = url::Url::parse(url) {
+        if !u.username().is_empty() || u.password().is_some() {
+            // set_username/set_password return Err only for cannot-be-a-base URLs,
+            // which can't reach here (they have no userinfo); ignore either way.
+            let _ = u.set_username("");
+            let _ = u.set_password(None);
+        }
+        return u.to_string();
+    }
+    // Unparseable URL: strip a leading `scheme://userinfo@` manually. Only the
+    // authority's userinfo (before the first '/', '?' or '#') is considered, so a
+    // later `@` in a path/query is preserved.
+    match url.split_once("://") {
+        Some((scheme, rest)) => {
+            let authority_end = rest
+                .find(['/', '?', '#'])
+                .unwrap_or(rest.len());
+            let (authority, tail) = rest.split_at(authority_end);
+            match authority.rsplit_once('@') {
+                Some((_userinfo, host)) => format!("{scheme}://{host}{tail}"),
+                None => url.to_string(),
+            }
+        }
+        None => url.to_string(),
+    }
+}
+
 async fn do_connect<E: From<String> + Send + 'static>(
     url: String,
     headers: Vec<(String, String)>,
@@ -116,6 +151,9 @@ async fn do_connect<E: From<String> + Send + 'static>(
 ) -> SkyResult<E, i64> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
+    // Build the credential-stripped form ONCE; every error message below echoes
+    // this, never the raw `url`.
+    let safe_url = redact_ws_url(&url);
     // SSRF guard: when SKY_HTTP_DENY_PRIVATE is set, reject a ws/wss URL whose host
     // resolves to a private/loopback/link-local address BEFORE the handshake — the
     // WebSocket surface previously connected with no deny-private check, so an
@@ -128,7 +166,9 @@ async fn do_connect<E: From<String> + Send + 'static>(
     let mut req = match url.as_str().into_client_request() {
         Ok(r) => r,
         Err(e) => {
-            return SkyResult::Err(format!("WebSocket.connect {}: bad url: {}", url, e).into());
+            return SkyResult::Err(
+                format!("WebSocket.connect {}: bad url: {}", safe_url, e).into(),
+            );
         }
     };
     // Fail CLOSED on an unparseable caller-supplied header: a credential (e.g.
@@ -140,7 +180,8 @@ async fn do_connect<E: From<String> + Send + 'static>(
             Ok(n) => n,
             Err(_) => {
                 return SkyResult::Err(
-                    format!("WebSocket.connect {}: invalid header name {:?}", url, k).into(),
+                    format!("WebSocket.connect {}: invalid header name {:?}", safe_url, k)
+                        .into(),
                 );
             }
         };
@@ -150,7 +191,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
                 return SkyResult::Err(
                     format!(
                         "WebSocket.connect {}: invalid value for header {:?}",
-                        url, k
+                        safe_url, k
                     )
                     .into(),
                 );
@@ -166,7 +207,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
     //
     // tokio-tungstenite 0.24 exposes connect_async_with_config which passes a
     // tungstenite::protocol::WebSocketConfig directly to the handshake.
-    let max_msg: usize = std::env::var("SKY_WS_MAX_MESSAGE_BYTES")
+    let max_msg: usize = crate::sky_runtime::system::read_env_var("SKY_WS_MAX_MESSAGE_BYTES")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
@@ -203,7 +244,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
                 if url.starts_with("wss://") {
                     return SkyResult::Err(format!(
                         "WebSocket.connect {}: wss with SKY_HTTP_DENY_PRIVATE is unsupported (no TLS feature to pin the connection)",
-                        url
+                        safe_url
                     ).into());
                 }
                 // Dial INSIDE the future so the single handshake timeout below
@@ -243,13 +284,13 @@ async fn do_connect<E: From<String> + Send + 'static>(
         match tokio::time::timeout(std::time::Duration::from_millis(to_ms), connect_fut).await {
             Ok(Ok(ok)) => ok,
             Ok(Err(e)) => {
-                return SkyResult::Err(format!("WebSocket.connect {}: {}", url, e).into());
+                return SkyResult::Err(format!("WebSocket.connect {}: {}", safe_url, e).into());
             }
             Err(_) => {
                 return SkyResult::Err(
                     format!(
                         "WebSocket.connect {}: handshake timed out after {}ms",
-                        url, to_ms
+                        safe_url, to_ms
                     )
                     .into(),
                 );
@@ -638,5 +679,25 @@ mod tests {
         assert_eq!(ws_close_code(1003), WsCloseCode::UnsupportedData);
         assert_eq!(ws_close_code(1011), WsCloseCode::InternalError);
         assert_eq!(ws_close_code(4000), WsCloseCode::Custom(4000));
+    }
+
+    #[test]
+    fn redact_ws_url_strips_userinfo() {
+        // Credentials must never survive into an error/log string.
+        let r = redact_ws_url("ws://user:s3cret@example.com:9000/feed?token=abc");
+        assert!(!r.contains("s3cret"), "password leaked: {r}");
+        assert!(!r.contains("user:"), "username leaked: {r}");
+        assert!(r.contains("example.com"));
+        // Username-only (no password) is also stripped.
+        let r2 = redact_ws_url("wss://admin@host/x");
+        assert!(!r2.contains("admin@"), "username leaked: {r2}");
+        // No userinfo → unchanged host/path.
+        let r3 = redact_ws_url("ws://example.com/feed");
+        assert!(r3.contains("example.com") && !r3.contains('@'));
+        // Unparseable URL still strips a leading scheme://userinfo@ and keeps a
+        // later '@' in the path intact.
+        let r4 = redact_ws_url("ws://bob:pw@@@host/a@b");
+        assert!(!r4.contains("bob:pw"), "creds leaked from bad url: {r4}");
+        assert!(r4.contains("a@b"), "path '@' wrongly stripped: {r4}");
     }
 }

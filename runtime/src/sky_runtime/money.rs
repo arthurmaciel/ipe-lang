@@ -135,7 +135,12 @@ pub fn money_format(code: String, amount: Decimal) -> String {
     };
     let neg = amount.0.is_sign_negative();
     let abs = if neg { -amount.0 } else { amount.0 };
-    let fixed = format!("{:.*}", minor as usize, abs);
+    // Pre-ROUND to the target minor units before formatting. `format!("{:.*}")`
+    // over a raw Decimal TRUNCATES when precision < scale (rust_decimal
+    // to_str_internal), so "12.345" at 2dp would render "12.34". Go's
+    // shopspring StringFixed/format use HALF-AWAY-FROM-ZERO, so "2.545" → "2.55".
+    let rounded = abs.round_dp_with_strategy(minor, RoundingStrategy::MidpointAwayFromZero);
+    let fixed = format!("{:.*}", minor as usize, rounded);
     if neg {
         format!("-{}{}", symbol, fixed)
     } else {
@@ -150,7 +155,12 @@ pub fn money_format_with_code(code: String, amount: Decimal) -> String {
         Some(c) => c.minor_units,
         None => 2,
     };
-    format!("{:.*} {}", minor as usize, amount.0, upper)
+    // Pre-ROUND (half-away-from-zero, Go parity) before formatting so the raw
+    // Decimal is not truncated when its scale exceeds the currency's minor units.
+    let rounded = amount
+        .0
+        .round_dp_with_strategy(minor, RoundingStrategy::MidpointAwayFromZero);
+    format!("{:.*} {}", minor as usize, rounded, upper)
 }
 
 // ── FX rate registry ───────────────────────────────────────────────
@@ -191,14 +201,19 @@ pub fn money_set_rate<E: From<String>>(
     // operation, but a subnormal or denormal Decimal could still produce None —
     // skip the auto-inverse rather than panic.
     if let Some(inv) = RD::from(1).checked_div(rate.0) {
-        // Cap the auto-inverse to 16 decimal places, matching Go shopspring's
-        // DivisionPrecision = 16. Without the cap a non-terminating inverse
-        // (e.g. 1/3) would carry rust_decimal's full mantissa precision and
-        // Money.getRate of the inverse pair would diverge from Go.
-        map.insert(
-            (to, from),
-            inv.round_dp_with_strategy(16, RoundingStrategy::MidpointAwayFromZero),
-        );
+        // Honour MAX_RATES for the auto-inverse too: when the map is at capacity
+        // and the reverse pair does not already exist, skip the inverse insert so
+        // the registry can never exceed MAX_RATES (was +1 per near-full pair).
+        if map.len() < MAX_RATES || map.contains_key(&(to.clone(), from.clone())) {
+            // Cap the auto-inverse to 16 decimal places, matching Go shopspring's
+            // DivisionPrecision = 16. Without the cap a non-terminating inverse
+            // (e.g. 1/3) would carry rust_decimal's full mantissa precision and
+            // Money.getRate of the inverse pair would diverge from Go.
+            map.insert(
+                (to, from),
+                inv.round_dp_with_strategy(16, RoundingStrategy::MidpointAwayFromZero),
+            );
+        }
     }
     SkyResult::Ok(())
 }
@@ -298,7 +313,12 @@ pub fn money_allocate(places: i64, parts: i64, amount: Decimal) -> Vec<Decimal> 
     // `base - 1` (more negative); for positive, `base + 1` — either way the shares
     // sum back to the exact input.
     let rem_int = remainder.trunc().to_i64().unwrap_or(0);
-    let extra_slots = rem_int.unsigned_abs() as i64;
+    // saturating_abs (not `unsigned_abs() as i64`): for the theoretical
+    // rem_int == i64::MIN edge, `unsigned_abs() as i64` wraps back to i64::MIN
+    // (negative), making the `i < extra_slots` loop never fire and silently
+    // dropping the entire residue. saturating_abs yields i64::MAX (harmlessly
+    // large given the parts ≤ 100k bound below).
+    let extra_slots = rem_int.saturating_abs();
     let step: i64 = if rem_int < 0 { -1 } else { 1 };
     let inv_scale = RD::from(factor);
     // Bound the share count: `parts` is caller-controlled; a huge value both
@@ -384,6 +404,21 @@ mod tests {
         assert_eq!(shares[2].0, RD::from_str("33.33").unwrap());
         let sum: RD = shares.iter().fold(RD::from(0), |acc, s| acc + s.0);
         assert_eq!(sum, RD::from_str("100.00").unwrap());
+    }
+
+    #[test]
+    fn test_money_format_rounds_half_away_from_zero() {
+        // CORRECTNESS regression: format must pre-ROUND to the currency's minor
+        // units (half-away-from-zero, Go shopspring parity), NOT truncate.
+        // "2.545" at 2dp → "2.55" (truncation would give "2.54").
+        assert_eq!(money_format("USD".into(), d("2.545")), "$2.55");
+        assert_eq!(money_format_with_code("USD".into(), d("2.545")), "2.55 USD");
+        // 12.345 → 12.35 (was 12.34 under truncation).
+        assert_eq!(money_format("USD".into(), d("12.345")), "$12.35");
+        // Negative ties round away from zero in magnitude: -2.545 → -$2.55.
+        assert_eq!(money_format("USD".into(), d("-2.545")), "-$2.55");
+        // JPY has 0 minor units: 2.5 → 3 (half-away-from-zero).
+        assert_eq!(money_format("JPY".into(), d("2.5")), "¥3");
     }
 
     #[test]

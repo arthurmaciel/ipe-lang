@@ -27,7 +27,7 @@ fn decompress_max_bytes() -> u64 {
     use std::sync::OnceLock;
     static CAP: OnceLock<u64> = OnceLock::new();
     *CAP.get_or_init(|| {
-        std::env::var("SKY_DECOMPRESS_MAX_BYTES")
+        crate::sky_runtime::system::read_env_var("SKY_DECOMPRESS_MAX_BYTES")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(256 * 1024 * 1024) // 256 MiB

@@ -9,7 +9,7 @@ use super::*;
 /// explicit cap use `File.readFileLimit`; reading past the ceiling is an `Err`,
 /// never a silent truncation.
 fn file_read_ceiling() -> u64 {
-    std::env::var("SKY_FILE_READ_MAX")
+    crate::sky_runtime::system::read_env_var("SKY_FILE_READ_MAX")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|n| *n > 0)
