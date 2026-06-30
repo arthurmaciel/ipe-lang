@@ -212,7 +212,7 @@ fn sanitise_path(path: &str) -> String {
 fn is_sub_app() -> bool {
     static SUB_APP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *SUB_APP.get_or_init(|| {
-        std::env::var("SKY_LIVE_BASE_PATH")
+        crate::sky_runtime::system::read_env_var("SKY_LIVE_BASE_PATH")
             .map(|v| !v.is_empty())
             .unwrap_or(false)
     })

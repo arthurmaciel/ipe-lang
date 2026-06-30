@@ -118,7 +118,7 @@ impl SkyStringify for i64 {
 impl SkyStringify for f64 {
     // Go's `%v` on a float64 is `strconv.FormatFloat(f, 'g', -1, 64)`: the
     // shortest round-trippable digits, formatted with `%e` when the decimal
-    // exponent is < -4 or >= 21 and `%f` otherwise, with `+Inf`/`-Inf`/`NaN`
+    // exponent is < -4 or >= 6 and `%f` otherwise, with `+Inf`/`-Inf`/`NaN`
     // for the non-finite values. Rust's `f64::to_string` matches Go's `%f`
     // branch exactly (42.5 -> "42.5", 1.0 -> "1", 0.0001 -> "0.0001"), but
     // diverges on infinities (`inf`/`-inf`) and never emits exponent form
@@ -137,9 +137,12 @@ impl SkyStringify for f64 {
         // no `+` and no zero-padding on the exponent (e.g. "1e21", "1.5e-5").
         let sci = format!("{f:e}");
         match sci.split_once('e') {
-            // Go uses exponent form iff exp < -4 || exp >= 21 (shortest `%g`).
+            // Go uses exponent form iff exp < -4 || exp >= 6, same threshold as
+            // string_from_float (see string.rs): Go's older public comment said
+            // 21, but the shipped implementation + oracle use 6, so 1e6 prints
+            // "1e+06" (not "1000000").
             Some((mantissa, exp_str)) => match exp_str.parse::<i32>() {
-                Ok(exp) if !(-4..21).contains(&exp) => {
+                Ok(exp) if !(-4..6).contains(&exp) => {
                     // Go's `%e` exponent: explicit sign, minimum two digits.
                     // i64 widen so `-exp` can't overflow for any i32.
                     let (sign, mag) = if exp < 0 {
@@ -341,6 +344,16 @@ mod tests {
     #[test]
     fn float_whole() {
         assert_eq!(1.0f64.sky_show(), "1");
+    }
+
+    #[test]
+    fn float_exponent_threshold_is_six() {
+        // Go parity: the switch to scientific notation happens at exponent 6,
+        // not 21. 1e6 must format exponential; 1e5 must stay positional.
+        assert_eq!(1e5f64.sky_show(), "100000"); // exp 5 → positional
+        assert_eq!(1e6f64.sky_show(), "1e+06"); // exp 6 → scientific
+        assert_eq!(1e20f64.sky_show(), "1e+20");
+        assert_eq!(1e21f64.sky_show(), "1e+21");
     }
 
     #[test]

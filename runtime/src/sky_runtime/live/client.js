@@ -373,7 +373,6 @@ function __skyPatch(t) {
   __skyReplaceHTMLPreservingFocus(root, t);
   window.scrollTo(scrollX, scrollY);
   __skyBindEvents(document);
-  __skyRunEvals(root);
   __skyRunPaths(root);
   __skyReviveScripts(root);
 }
@@ -570,23 +569,48 @@ function __skyCollectPendingBatch() {
   return batch;
 }
 
-// __skyFlushPendingBeacon — POST pending debounces via sendBeacon so
-// the request survives page unload. Single beacon carries the whole
-// batch + the latest inputState snapshot so the server ingests the
-// final DOM values before dispatching. Silent no-op when there's
-// nothing pending or the browser lacks sendBeacon support.
+// __skyFlushPendingBeacon — POST pending debounces on page unload so
+// the request survives. Single payload carries the whole batch + the
+// latest inputState snapshot so the server ingests the final DOM
+// values before dispatching. Silent no-op when there's nothing
+// pending.
+//
+// Uses a keepalive fetch (not navigator.sendBeacon) because the CSRF
+// middleware rejects POSTs to /_sky/event without a matching
+// X-Sky-Csrf header — and sendBeacon cannot set request headers, so a
+// beacon would be silently dropped whenever CSRF is enabled. keepalive
+// fetch survives unload AND carries the header. sendBeacon remains a
+// best-effort fallback only when CSRF is disabled (empty token) or
+// keepalive is unsupported.
 function __skyFlushPendingBeacon() {
-  if (!navigator || typeof navigator.sendBeacon !== "function") return;
   var batch = __skyCollectPendingBatch();
   var snapshot = __skyInputsSnapshot();
   if (!batch && !snapshot) return;
   var body = { sessionId: __skySid };
   if (batch)    body.batch = batch;
   if (snapshot) body.inputState = snapshot;
+  var json = JSON.stringify(body);
   try {
-    var blob = new Blob([JSON.stringify(body)], {type: "application/json"});
-    navigator.sendBeacon(__skyBase + "/_sky/event", blob);
+    var headers = {"Content-Type":"application/json"};
+    if (__skyCsrfToken) headers["X-Sky-Csrf"] = __skyCsrfToken;
+    fetch(__skyBase + "/_sky/event", {
+      method: "POST",
+      headers: headers,
+      body: json,
+      credentials: "same-origin",
+      keepalive: true
+    }).catch(function(_){});
+    return;
   } catch (_) {}
+  // Legacy fallback: keepalive fetch unsupported. sendBeacon cannot
+  // carry the CSRF header, so this only reaches the server when CSRF
+  // is disabled; otherwise it is dropped (no worse than no flush).
+  if (navigator && typeof navigator.sendBeacon === "function") {
+    try {
+      var blob = new Blob([json], {type: "application/json"});
+      navigator.sendBeacon(__skyBase + "/_sky/event", blob);
+    } catch (_) {}
+  }
 }
 
 // __skyFlushPendingSync — synchronous variant for same-page
@@ -961,11 +985,6 @@ function __skyBindEvents(root) {
   for (var i = 0; i < events.length; i++) {
     __skyBindOne(root, events[i]);
   }
-}
-
-function __skyRunEvals(root) {
-  var el = (root || document).querySelector("[data-sky-eval]");
-  if (el) { try { (new Function(el.getAttribute("data-sky-eval")))(); } catch(e) {} el.remove(); }
 }
 
 // __skyRunPaths: safer, CSP-friendly alternative to data-sky-eval for

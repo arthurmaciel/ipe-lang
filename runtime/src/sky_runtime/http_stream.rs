@@ -103,8 +103,16 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(req: HttpRequest) -> S
             Ok(c) => c,
             Err(e) => return SkyResult::Err(format!("http.stream.open: client: {}", e).into()),
         };
-        let method = reqwest::Method::from_bytes(req.method.to_uppercase().as_bytes())
-            .unwrap_or(reqwest::Method::GET);
+        // An unparseable/invalid HTTP method must ERROR, not silently downgrade
+        // to GET (which would issue a request the caller never asked for).
+        let method = match reqwest::Method::from_bytes(req.method.to_uppercase().as_bytes()) {
+            Ok(m) => m,
+            Err(_) => {
+                return SkyResult::Err(
+                    format!("http.stream.open: invalid HTTP method: {}", req.method).into(),
+                )
+            }
+        };
         let mut rb = client.request(method, &req.url);
         for (k, v) in &req.headers {
             rb = rb.header(k.as_str(), v.as_str());
@@ -278,4 +286,30 @@ where
         }
         tokio::spawn(async {}) // dummy handle for the SubManager to abort harmlessly
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn open_rejects_invalid_method() {
+        // An unparseable HTTP method must yield Err — never a silent downgrade
+        // to GET. "BAD METHOD" contains a space, invalid per HTTP token rules,
+        // so the error fires before any network I/O.
+        let req = HttpRequest {
+            method: "BAD METHOD".to_string(),
+            url: "http://example.com".to_string(),
+            body: String::new(),
+            headers: Vec::new(),
+            timeout: 0,
+            followRedirects: false,
+            maxRedirects: 0,
+        };
+        let r: SkyResult<String, i64> = http_stream_open(req).await;
+        assert!(
+            matches!(r, SkyResult::Err(_)),
+            "invalid method must error, not downgrade to GET"
+        );
+    }
 }

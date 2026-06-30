@@ -18,12 +18,25 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use url::Url;
 
-/// Returns `true` when `SKY_HTTP_DENY_PRIVATE` is set to a truthy value
-/// (`1`, `on`, `true`, case-insensitive).
+/// Returns `true` when the SSRF deny-private guard is active.
+///
+/// Default-ON in production (PRINCIPLES #1: the safe outcome must be the default
+/// for untrusted input). The decision:
+///   * `SKY_HTTP_DENY_PRIVATE` set to a truthy value (`1`/`on`/`true`) → ON.
+///   * `SKY_HTTP_DENY_PRIVATE` set to anything else (`0`/`off`/`false`/…) → OFF
+///     (explicit opt-out, so a production deploy that genuinely needs to reach a
+///     private host can disable it deliberately).
+///   * `SKY_HTTP_DENY_PRIVATE` UNSET → tied to the production gate
+///     (`production_from_env`): ON in production (`ENV`/`SKY_ENV` not in
+///     {unset, dev, development, local}), OFF in dev so localhost development
+///     keeps working unchanged.
+///
+/// Env is read only through the crate's locked accessors (`read_env_var` +
+/// `production_from_env`), never raw `std::env`.
 pub(crate) fn ssrf_deny_private_enabled() -> bool {
-    match std::env::var("SKY_HTTP_DENY_PRIVATE") {
+    match crate::sky_runtime::system::read_env_var("SKY_HTTP_DENY_PRIVATE") {
         Ok(v) => matches!(v.to_ascii_lowercase().trim(), "1" | "on" | "true"),
-        Err(_) => false,
+        Err(_) => crate::sky_runtime::telemetry::production_from_env(),
     }
 }
 

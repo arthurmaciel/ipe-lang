@@ -49,7 +49,9 @@ pub fn csrf_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
         !matches!(
-            std::env::var("SKY_CSRF").ok().as_deref(),
+            crate::sky_runtime::system::read_env_var("SKY_CSRF")
+                .ok()
+                .as_deref(),
             Some("off") | Some("0") | Some("false")
         )
     })
@@ -160,7 +162,10 @@ fn origin_mismatch(headers: &HeaderMap) -> bool {
     fn origin_check_enabled() -> bool {
         use std::sync::OnceLock;
         static CHECK: OnceLock<bool> = OnceLock::new();
-        *CHECK.get_or_init(|| std::env::var("SKY_LIVE_CSRF_ORIGIN_CHECK").as_deref() == Ok("on"))
+        *CHECK.get_or_init(|| {
+            crate::sky_runtime::system::read_env_var("SKY_LIVE_CSRF_ORIGIN_CHECK").as_deref()
+                == Ok("on")
+        })
     }
     if !origin_check_enabled() {
         return false;

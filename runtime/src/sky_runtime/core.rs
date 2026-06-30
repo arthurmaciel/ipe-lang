@@ -64,7 +64,7 @@ pub fn sky_error_from_foreign<ForeignE: std::fmt::Debug, E: From<String>>(e: For
 /// `classify_and_log_panic` log shape (kind `ForeignError`). Total — no
 /// unwrap/index/panic.
 fn log_foreign_error(err_id: &str, detail: &str) {
-    let json = std::env::var("SKY_LOG_FORMAT")
+    let json = crate::sky_runtime::system::read_env_var("SKY_LOG_FORMAT")
         .map(|v| v.eq_ignore_ascii_case("json"))
         .unwrap_or(false);
     if json {
@@ -86,8 +86,9 @@ fn log_foreign_error(err_id: &str, detail: &str) {
 /// log records (CR/LF) or terminal escape sequences into the plain-format server
 /// log. The JSON branches already route through `telemetry::json_escape`; this is
 /// the plain-branch counterpart, shared by `log_foreign_error` and
-/// `classify_and_log_panic`. Total — no unwrap/index/panic.
-fn scrub_log_controls(s: &str) -> String {
+/// `classify_and_log_panic`, plus `Trace.attr`/`event`/`span` output. Total — no
+/// unwrap/index/panic.
+pub(crate) fn scrub_log_controls(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()
@@ -96,13 +97,11 @@ fn scrub_log_controls(s: &str) -> String {
 /// Bake a config-derived default for an env var: set `key=val` ONLY when the
 /// var is unset, so shell env / `.env` still win (precedence: process env >
 /// baked default). Go parity: the generated `init()`'s `rt.SetPortDefault` +
-/// `tomlSkyEnv` family. The generated `main()` calls this BEFORE the async
-/// runtime / any thread starts, so the `set_var` is race-free (the one window
-/// where mutating the process environment is sound).
+/// `tomlSkyEnv` family. Routed through the process-global env lock
+/// (`locked_set_var_if_absent`) so it is sound by construction even if a thread
+/// is already reading the environment.
 pub fn set_env_default(key: &str, val: &str) {
-    if std::env::var_os(key).is_none() {
-        std::env::set_var(key, val);
-    }
+    crate::sky_runtime::system::locked_set_var_if_absent(key, val);
 }
 
 // ===========================================
@@ -525,7 +524,7 @@ pub fn classify_and_log_panic(payload: &(dyn std::any::Any + Send)) -> String {
     };
     let kind = classify_panic(&msg);
     let err_id = short_err_id();
-    let json = std::env::var("SKY_LOG_FORMAT")
+    let json = crate::sky_runtime::system::read_env_var("SKY_LOG_FORMAT")
         .map(|v| v.eq_ignore_ascii_case("json"))
         .unwrap_or(false);
     if json {

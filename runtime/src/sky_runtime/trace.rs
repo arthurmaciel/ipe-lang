@@ -8,8 +8,17 @@
 use super::*;
 use std::time::Instant;
 
+/// Scrub control characters (CR/LF, ESC, other C0/C1) from a trace string before
+/// it is written to the stderr trace log. `Trace.attr` / `event` / `span` names
+/// and values are app/user-supplied, so an attacker-influenced value could
+/// otherwise inject forged log records (CR/LF) or terminal escape sequences into
+/// the operator's console. Reuses the crate-wide plain-log scrubber.
+fn scrub(s: &str) -> String {
+    crate::sky_runtime::core::scrub_log_controls(s)
+}
+
 fn trace_enabled() -> bool {
-    std::env::var("SKY_TRACE")
+    crate::sky_runtime::system::read_env_var("SKY_TRACE")
         .map(|v| !v.is_empty() && v != "0" && v != "false")
         .unwrap_or(false)
 }
@@ -23,7 +32,7 @@ pub fn trace_span<E: Send + 'static, A: Send + 'static>(
         let on = trace_enabled();
         let start = Instant::now();
         if on {
-            eprintln!("[trace] span start {}", name);
+            eprintln!("[trace] span start {}", scrub(&name));
         }
         let result = task.await;
         let elapsed = start.elapsed();
@@ -35,7 +44,7 @@ pub fn trace_span<E: Send + 'static, A: Send + 'static>(
             let outcome = if ok { "ok" } else { "err" };
             eprintln!(
                 "[trace] span end {} ({} ms, {})",
-                name,
+                scrub(&name),
                 elapsed.as_millis(),
                 outcome
             );
@@ -48,7 +57,7 @@ pub fn trace_span<E: Send + 'static, A: Send + 'static>(
 pub fn trace_event<E: Send + 'static>(name: String) -> SkyTask<E, ()> {
     Box::pin(async move {
         if trace_enabled() {
-            eprintln!("[trace] event {}", name);
+            eprintln!("[trace] event {}", scrub(&name));
         }
         ok_res(())
     })
@@ -59,8 +68,29 @@ pub fn trace_event<E: Send + 'static>(name: String) -> SkyTask<E, ()> {
 pub fn trace_attr<E: Send + 'static>(key: String, value: String) -> SkyTask<E, ()> {
     Box::pin(async move {
         if trace_enabled() {
-            eprintln!("[trace] attr sky.trace.{} = {}", key, value);
+            eprintln!("[trace] attr sky.trace.{} = {}", scrub(&key), scrub(&value));
         }
         ok_res(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrub_strips_log_and_terminal_injection() {
+        // A trace value carrying CRLF + an ANSI escape must not survive into the
+        // emitted line — control chars become spaces so it can neither forge a
+        // log record nor inject a terminal control sequence.
+        let evil = "ok\r\n[error] forged record\x1b[2J\x07";
+        let cleaned = scrub(evil);
+        assert!(!cleaned.contains('\r'));
+        assert!(!cleaned.contains('\n'));
+        assert!(!cleaned.contains('\x1b'));
+        assert!(!cleaned.contains('\x07'));
+        // Printable content is preserved (only controls are replaced).
+        assert!(cleaned.contains("forged record"));
+        assert!(cleaned.starts_with("ok"));
+    }
 }

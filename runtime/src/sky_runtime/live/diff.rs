@@ -163,16 +163,28 @@ fn diff_attrs<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
     let (om, nm) = (collect(old), collect(new));
     for (k, v) in &nm {
         if om.get(k) != Some(v) {
-            p.attrs.insert(k.clone(), v.clone());
+            insert_safe_attr(p, k, v);
         }
     }
     for k in om.keys() {
         if !nm.contains_key(k) {
             // Signal removal with empty string (Go convention).
-            p.attrs.insert(k.clone(), String::new());
+            insert_safe_attr(p, k, "");
         }
     }
     diff_events(old, new, p);
+}
+
+/// Insert an attribute into a patch ONLY if it passes the same XSS policy the
+/// first-paint renderer applies ([`crate::sky_runtime::html::safe_patch_attr`]):
+/// attribute-name gate (no `on*` handlers / `srcdoc` / structural-breakout
+/// charset) + URL-scheme sanitisation of the value. SSE patches are applied by
+/// the browser via `setAttribute`, which bypasses `render_into_ctx`'s gates, so
+/// this is THE gate for the patch path. A name that fails policy is dropped.
+fn insert_safe_attr(p: &mut Patch, key: &str, val: &str) {
+    if let Some((k, v)) = crate::sky_runtime::html::safe_patch_attr(key, val) {
+        p.attrs.insert(k.to_string(), v.to_string());
+    }
 }
 
 /// Event-handler delta. Mirrors Go `diffNodes`' Events block: an element gaining
@@ -206,15 +218,15 @@ fn diff_events<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
     let id = p.id.clone();
     for ev in &nn {
         if !on.contains(ev) {
-            p.attrs.insert(ev_key(ev), ev.clone());
-            p.attrs.insert("data-sky-hid".into(), id.clone());
+            insert_safe_attr(p, &ev_key(ev), ev);
+            insert_safe_attr(p, "data-sky-hid", &id);
         }
     }
     for ev in &on {
         if !nn.contains(ev) {
-            p.attrs.insert(ev_key(ev), String::new());
+            insert_safe_attr(p, &ev_key(ev), "");
             if nn.is_empty() {
-                p.attrs.insert("data-sky-hid".into(), String::new());
+                insert_safe_attr(p, "data-sky-hid", "");
             }
         }
     }
@@ -272,6 +284,61 @@ mod tests {
         let attrs = &p[0].attrs;
         assert_eq!(attrs.get("class").map(String::as_str), Some("y"));
         assert_eq!(attrs.get("title").map(String::as_str), Some("t"));
+    }
+
+    #[test]
+    fn diff_drops_event_handler_attr_name_in_patch() {
+        // SSE-patch XSS gate: an attacker-influenced attribute change to an
+        // event-handler name (onerror) must be DROPPED from the patch — the
+        // browser applies patches via setAttribute, bypassing the first-paint
+        // render gate, so this is the only thing standing between the value and
+        // an executing handler.
+        let mut a: Html<()> = Html::HElement(
+            "img".into(),
+            vec![Attribute::Attr("src".into(), "/a.png".into())],
+            vec![],
+        );
+        let mut b: Html<()> = Html::HElement(
+            "img".into(),
+            vec![
+                Attribute::Attr("src".into(), "/a.png".into()),
+                Attribute::Attr("onerror".into(), "alert(1)".into()),
+            ],
+            vec![],
+        );
+        ids(&mut a);
+        ids(&mut b);
+        let p = diff(&a, &b);
+        // The onerror attr never reaches the patch; only the (unchanged) src is
+        // absent too, so the patch carries no dangerous attribute.
+        assert!(
+            p.iter().all(|patch| !patch.attrs.contains_key("onerror")),
+            "onerror must be gated out of the patch"
+        );
+    }
+
+    #[test]
+    fn diff_neutralises_javascript_url_in_patch() {
+        // A href changing to a javascript: scheme must be neutralised to empty
+        // in the patch (same policy as the render sink), not passed through to
+        // setAttribute verbatim.
+        let mut a: Html<()> = Html::HElement(
+            "a".into(),
+            vec![Attribute::Attr("href".into(), "/safe".into())],
+            vec![],
+        );
+        let mut b: Html<()> = Html::HElement(
+            "a".into(),
+            vec![Attribute::Attr("href".into(), "javascript:alert(1)".into())],
+            vec![],
+        );
+        ids(&mut a);
+        ids(&mut b);
+        let p = diff(&a, &b);
+        assert_eq!(p.len(), 1);
+        // href is still patched (the key passes the name gate) but the
+        // dangerous value is neutralised to empty.
+        assert_eq!(p[0].attrs.get("href").map(String::as_str), Some(""));
     }
 
     #[test]

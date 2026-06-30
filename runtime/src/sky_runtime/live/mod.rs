@@ -178,14 +178,14 @@ pub fn render_page(body: &str) -> String {
 /// falls back to Go's default; never panics.
 fn live_client_config_js() -> String {
     fn num(var: &str, default: u64) -> u64 {
-        std::env::var(var)
+        crate::sky_runtime::system::read_env_var(var)
             .ok()
             .and_then(|s| s.trim().parse::<u64>().ok())
             .unwrap_or(default)
     }
     // SKY_LIVE_BANNER: off/0/false → disabled (Go parity); anything else → on.
     let banner = !matches!(
-        std::env::var("SKY_LIVE_BANNER")
+        crate::sky_runtime::system::read_env_var("SKY_LIVE_BANNER")
             .ok()
             .map(|s| s.trim().to_ascii_lowercase()),
         Some(ref v) if v == "off" || v == "0" || v == "false"
@@ -251,9 +251,9 @@ fn dev_console_banner(base: &str) -> String {
         return String::new();
     }
     if matches!(
-        std::env::var("SKY_CONSOLE_EMBED").as_deref(),
+        crate::sky_runtime::system::read_env_var("SKY_CONSOLE_EMBED").as_deref(),
         Ok("off") | Ok("0") | Ok("false")
-    ) || std::env::var("SKY_CONSOLE_AUTH")
+    ) || crate::sky_runtime::system::read_env_var("SKY_CONSOLE_AUTH")
         .map(|v| v == "off")
         .unwrap_or(false)
     {
@@ -263,7 +263,7 @@ fn dev_console_banner(base: &str) -> String {
     // monospace blue styling, and the `&#128269;` entity (NOT a literal emoji) so
     // both backends emit identical bytes. href honours SKY_CONSOLE_URL (default
     // /_sky/console), attribute-escaped against a hostile env value.
-    let url = std::env::var("SKY_CONSOLE_URL")
+    let url = crate::sky_runtime::system::read_env_var("SKY_CONSOLE_URL")
         .map(|v| v.trim().to_string())
         .ok()
         .filter(|v| !v.is_empty())
@@ -411,7 +411,7 @@ impl<Model, Msg, FInit, FUpdate, FView, FSubs> Clone
 /// (opt-out). Default 50_000 — far above any single-instance real load, low
 /// enough to bound memory under a session-creation flood. Env SKY_LIVE_MAX_SESSIONS.
 fn max_sessions() -> usize {
-    std::env::var("SKY_LIVE_MAX_SESSIONS")
+    crate::sky_runtime::system::read_env_var("SKY_LIVE_MAX_SESSIONS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(50_000)
@@ -776,7 +776,9 @@ fn cookie_path_for(base: &str) -> String {
 /// reaches this child only through the parent proxy, which strips the prefix
 /// before forwarding — so the child's own router stays root-relative.
 fn live_base_path() -> String {
-    normalise_base_path(&std::env::var("SKY_LIVE_BASE_PATH").unwrap_or_default())
+    normalise_base_path(
+        &crate::sky_runtime::system::read_env_var("SKY_LIVE_BASE_PATH").unwrap_or_default(),
+    )
 }
 
 /// The active session cookie name (read AND write must agree, so both
@@ -860,7 +862,7 @@ fn page_response(sid: &str, body: &str, csrf_token: &str) -> axum::response::Res
 /// (runtime-go/rt/live.go ~l3911). The default covers `Event.onFile` /
 /// `Event.onImage` data-URL payloads; override for larger file uploads.
 fn live_max_body_bytes() -> usize {
-    std::env::var("SKY_LIVE_MAX_BODY_BYTES")
+    crate::sky_runtime::system::read_env_var("SKY_LIVE_MAX_BODY_BYTES")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(5 << 20)
@@ -869,7 +871,7 @@ fn live_max_body_bytes() -> usize {
 /// Session idle-TTL: `SKY_LIVE_TTL` seconds, default 1800 (30 min) — matches the
 /// Go `[live] ttl` default.
 fn live_ttl() -> std::time::Duration {
-    let secs = std::env::var("SKY_LIVE_TTL")
+    let secs = crate::sky_runtime::system::read_env_var("SKY_LIVE_TTL")
         .ok()
         .and_then(|s| parse_duration_secs(&s))
         .unwrap_or(1800u64);
@@ -931,7 +933,7 @@ fn parse_duration_secs(raw: &str) -> Option<u64> {
 /// drops them (the browser banner flips to "Reconnecting…", same UX as a deploy).
 /// Tunable via `SKY_LIVE_SHUTDOWN_GRACE_MS` (default 1500 ms; 0 = exit at once).
 fn shutdown_grace() -> std::time::Duration {
-    let ms = std::env::var("SKY_LIVE_SHUTDOWN_GRACE_MS")
+    let ms = crate::sky_runtime::system::read_env_var("SKY_LIVE_SHUTDOWN_GRACE_MS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(1500);
@@ -1727,7 +1729,7 @@ where
         // dir — the dir is author-controlled (sky.toml [live] static), so that is the
         // intended contract + Go-parity, NOT a confinement guarantee. Absent/empty →
         // no static mount.
-        if let Some(dir) = std::env::var("SKY_LIVE_STATIC_DIR")
+        if let Some(dir) = crate::sky_runtime::system::read_env_var("SKY_LIVE_STATIC_DIR")
             .ok()
             .filter(|d| !d.is_empty())
         {
@@ -1778,7 +1780,7 @@ where
 
         pubsub::mark_live_running();
 
-        let port: i64 = std::env::var("SKY_LIVE_PORT")
+        let port: i64 = crate::sky_runtime::system::read_env_var("SKY_LIVE_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(8000);

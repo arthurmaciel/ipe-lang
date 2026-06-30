@@ -8,8 +8,42 @@ use std::collections::HashMap;
 
 pub type Db = DbPool;
 
+/// Build a Sky-visible `Error` from a sqlx error WITHOUT leaking row/column
+/// VALUES. The `Display` of a driver error (PostgreSQL/MySQL especially) embeds
+/// the offending value in a constraint-violation message — e.g.
+/// `... Key (email)=(victim@example.com) already exists` — so funnelling the raw
+/// `format!("{}", e)` into the returned `Error` leaks private row data the moment
+/// an app surfaces or logs it (PRINCIPLES #1). For a database-level error we
+/// therefore build a STRUCTURAL message from the safe-to-expose fields only:
+/// the SQLSTATE code (a correlation id operators can trace) and the constraint
+/// NAME (a schema identifier, not row data) — never the value. Non-database
+/// errors (pool acquisition, connect, decode, IO) carry no row values, so their
+/// `Display` is kept for diagnosability. Total — no unwrap/index/panic.
 fn sky_err<E: From<String> + Send>(e: &sqlx::Error) -> E {
-    str_err(&format!("{}", e))
+    if let Some(dbe) = e.as_database_error() {
+        let mut msg = String::from("db: database error");
+        if let Some(code) = dbe.code() {
+            // SQLSTATE / driver code — structural, value-free.
+            msg.push_str(&format!(" [{}]", code));
+        }
+        if let Some(constraint) = dbe.constraint() {
+            // Constraint NAME is a schema identifier (e.g. `users_email_key`),
+            // not the offending value — safe to expose and useful for the caller.
+            msg.push_str(&format!(" (constraint {})", constraint));
+        }
+        return str_err(&msg);
+    }
+    // Non-database errors generally carry no row VALUES, but `ColumnDecode` /
+    // `Decode` can embed `source` text that may include a column value — keep
+    // those structural (index / variant only). Io / Tls / Protocol /
+    // PoolTimedOut / RowNotFound carry no row data, so their `Display` is kept.
+    match e {
+        sqlx::Error::ColumnDecode { index, .. } => {
+            str_err(&format!("db: column decode error at index {index}"))
+        }
+        sqlx::Error::Decode(_) => str_err("db: decode error"),
+        other => str_err(&format!("{other}")),
+    }
 }
 
 // ─── Transaction connection routing (task-local) ──────────────────────────────
@@ -532,7 +566,7 @@ fn url_is_cacheable(url: &str) -> bool {
 /// server's connection limit; raise via `SKY_DB_MAX_CONNECTIONS` for workloads
 /// that genuinely need more headroom.
 fn max_pool_connections() -> u32 {
-    std::env::var("SKY_DB_MAX_CONNECTIONS")
+    crate::sky_runtime::system::read_env_var("SKY_DB_MAX_CONNECTIONS")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .filter(|n| *n > 0)
@@ -545,7 +579,7 @@ fn max_pool_connections() -> u32 {
 /// UNCACHED pool — still fully functional, just rebuilt per connect for that URL.
 /// Env SKY_DB_MAX_POOLS; default 32 (far above the typical 1–2 DBs per app).
 fn max_db_pools() -> usize {
-    std::env::var("SKY_DB_MAX_POOLS")
+    crate::sky_runtime::system::read_env_var("SKY_DB_MAX_POOLS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
@@ -855,7 +889,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
 ) -> SkyTask<E, Vec<String>> {
     Box::pin(async move {
         // CLI op mode (empty when unset → library Task-return path, unchanged).
-        let op: String = std::env::var("SKY_DB_OP")
+        let op: String = crate::sky_runtime::system::read_env_var("SKY_DB_OP")
             .map(|v| v.trim().to_ascii_lowercase())
             .unwrap_or_default();
         // In `migrate` op mode an infra error prints context to stderr + exits 1;
@@ -1809,11 +1843,23 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
             where_clauses.push(format!("{} = ?", col));
             args.push(p);
         }
-        let mut sql = format!("UPDATE {} SET {}", table, set_clauses.join(", "));
-        if !where_clauses.is_empty() {
-            sql.push_str(" WHERE ");
-            sql.push_str(&where_clauses.join(" AND "));
+        // Refuse an unscoped UPDATE: an empty WHERE-column set would emit
+        // `UPDATE <table> SET ...` with no WHERE, silently rewriting EVERY row
+        // (a wrong-default footgun reachable when a request-derived WHERE list
+        // comes back empty). Fail closed instead of mass-updating.
+        if where_clauses.is_empty() {
+            return SkyResult::Err(
+                "db.updateFields: refusing unscoped UPDATE (no WHERE); pass an explicit condition"
+                    .to_string()
+                    .into(),
+            );
         }
+        let sql = format!(
+            "UPDATE {} SET {} WHERE {}",
+            table,
+            set_clauses.join(", "),
+            where_clauses.join(" AND ")
+        );
         let sql = db_format_sql(sql);
         let mut q = sqlx::query(&sql);
         for p in args {
@@ -1963,6 +2009,40 @@ mod tests {
         sqlx::query("CREATE TABLE todos (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)")
             .execute(&pool).await.expect("create table");
         pool
+    }
+
+    #[tokio::test]
+    async fn sky_err_redacts_db_row_values() {
+        // A UNIQUE-constraint failure must NOT echo the offending row VALUE into
+        // the Sky-visible Error (PRINCIPLES #1 info-leak). `sky_err` builds a
+        // structural message (SQLSTATE/driver code + constraint name) from the
+        // structured error fields instead of the raw Display, which on
+        // PostgreSQL/MySQL embeds `Key (email)=(victim@…) already exists`.
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
+        sqlx::query("CREATE TABLE secrets (email TEXT UNIQUE NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("create table");
+        let secret = "victim-PII@example.com";
+        let insert = format!("INSERT INTO secrets (email) VALUES ('{}')", secret);
+        let r1: SkyResult<String, i64> = db_exec(pool.clone(), insert.clone(), Vec::new()).await;
+        assert!(matches!(r1, SkyResult::Ok(_)), "first insert should succeed");
+        let r2: SkyResult<String, i64> = db_exec(pool.clone(), insert, Vec::new()).await;
+        match r2 {
+            SkyResult::Err(e) => {
+                assert!(!e.contains(secret), "row value leaked into db error: {e}");
+                assert!(
+                    e.starts_with("db: database error"),
+                    "expected redacted structural form, got: {e}"
+                );
+            }
+            SkyResult::Ok(_) => panic!("duplicate insert should violate the UNIQUE constraint"),
+        }
     }
 
     #[test]
@@ -2789,5 +2869,56 @@ mod tests {
             SkyResult::Ok(v) => assert_eq!(v.len(), 1, "injection must not have dropped the table"),
             other => panic!("table gone or errored: {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn update_fields_refuses_unscoped_update() {
+        let db = fresh_db().await;
+        let mk: SkyResult<String, i64> = db_exec_raw(
+            db.clone(),
+            "CREATE TABLE acct (id INTEGER PRIMARY KEY, bal INTEGER)".to_string(),
+        )
+        .await;
+        assert!(matches!(mk, SkyResult::Ok(_)), "create: {mk:?}");
+        let _: SkyResult<String, i64> =
+            db_exec_raw(db.clone(), "INSERT INTO acct (bal) VALUES (10), (20)".to_string()).await;
+
+        // Empty WHERE-column set MUST be refused (would otherwise mass-update
+        // every row), NOT silently rewrite the whole table.
+        let r: SkyResult<String, i64> = db_update_fields(
+            db.clone(),
+            "acct".to_string(),
+            vec![], // no WHERE
+            vec![("bal".to_string(), Some(SqlParam::Int(0)))],
+        )
+        .await;
+        assert!(
+            matches!(r, SkyResult::Err(_)),
+            "empty WHERE must be refused, got {r:?}"
+        );
+        // No row should have been zeroed.
+        let zeroed: SkyResult<String, Vec<HashMap<String, String>>> = db_query_params(
+            db.clone(),
+            "SELECT bal FROM acct WHERE bal = ?".to_string(),
+            vec![SqlParam::Int(0)],
+        )
+        .await;
+        assert_eq!(
+            zeroed.with_default(Vec::new()).len(),
+            0,
+            "no row should have been mass-updated"
+        );
+        // A scoped update still works (affects exactly 1 row).
+        let ok: SkyResult<String, i64> = db_update_fields(
+            db.clone(),
+            "acct".to_string(),
+            vec![("id".to_string(), SqlParam::Int(1))],
+            vec![("bal".to_string(), Some(SqlParam::Int(99)))],
+        )
+        .await;
+        assert!(
+            matches!(ok, SkyResult::Ok(1)),
+            "scoped update should affect 1 row: {ok:?}"
+        );
     }
 }

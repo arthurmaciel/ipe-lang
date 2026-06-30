@@ -64,11 +64,11 @@ static SENDER: OnceLock<mpsc::Sender<Entry>> = OnceLock::new();
 /// (i.e. this process runs as a sub-app pushing UP to its parent's ingest —
 /// federation). Idempotent. Call once at Live boot.
 pub async fn enable_from_env() {
-    let parent = match std::env::var(PARENT_ENV) {
+    let parent = match crate::sky_runtime::system::read_env_var(PARENT_ENV) {
         Ok(p) if !p.is_empty() => p,
         _ => return,
     };
-    let interval_ms = std::env::var(INTERVAL_ENV)
+    let interval_ms = crate::sky_runtime::system::read_env_var(INTERVAL_ENV)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_INTERVAL_MS);
@@ -95,12 +95,14 @@ fn enable(label: &str, ingest_url: String, interval_ms: u64) {
         return;
     }
     let interval_ms = interval_ms.max(MIN_INTERVAL_MS);
-    let cap = std::env::var(BUFFER_ENV)
+    let cap = crate::sky_runtime::system::read_env_var(BUFFER_ENV)
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&c| c > 0)
         .unwrap_or(DEFAULT_QUEUE_CAP);
-    let token = std::env::var(TOKEN_ENV).ok().filter(|t| !t.is_empty());
+    let token = crate::sky_runtime::system::read_env_var(TOKEN_ENV)
+        .ok()
+        .filter(|t| !t.is_empty());
     let (tx, rx) = mpsc::channel::<Entry>(cap);
     if SENDER.set(tx).is_err() {
         return; // lost an enable race

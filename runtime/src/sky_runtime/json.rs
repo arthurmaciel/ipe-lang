@@ -66,7 +66,14 @@ pub fn json_enc_encode(indent: i64, val: JsonVal) -> String {
         // PrettyFormatter::with_indent honours the exact N-space indent that
         // Go's json.MarshalIndent produces — `to_string_pretty` always emits
         // 2 spaces and would diverge for indent ≠ 2.
-        let indent_string = " ".repeat(indent as usize);
+        //
+        // Clamp the indent width: `indent` is attacker-supplyable (e.g. a value
+        // threaded from request input), and an unbounded `str::repeat` would let
+        // a huge count blow up memory / CPU per emitted line. 16 spaces is far
+        // beyond any legitimate pretty-print width; larger requests saturate to it.
+        const MAX_JSON_INDENT: usize = 16;
+        let indent_width = (indent as usize).min(MAX_JSON_INDENT);
+        let indent_string = " ".repeat(indent_width);
         let inner = serde_json::ser::PrettyFormatter::with_indent(indent_string.as_bytes());
         let mut ser = serde_json::Serializer::with_formatter(&mut buf, GoFormatter(inner));
         serde::Serialize::serialize(&val, &mut ser).ok();
@@ -1355,12 +1362,17 @@ pub fn decode_pipeline_optional<
     let def = default;
     Decoder::new(
         Box::new(move |v| {
+            // Elm/Go `optional` contract: the default is used ONLY when the field
+            // is genuinely ABSENT or null. A field that is PRESENT but fails to
+            // decode (e.g. {"age":"x"} with an int decoder) must PROPAGATE the
+            // decode error — swallowing it into the default would mask malformed
+            // / adversarial input (a validation bypass).
             let field_val = match v.get(&n) {
-                Some(val) => match (d.run)(val) {
+                Some(val) if !val.is_null() => match (d.run)(val) {
                     SkyResult::Ok(t) => t,
-                    _ => def.clone(),
+                    SkyResult::Err(e) => return SkyResult::Err(e),
                 },
-                None => def.clone(),
+                _ => def.clone(),
             };
             match (nd.run)(v) {
                 SkyResult::Ok(f) => SkyResult::Ok(f(field_val)),
@@ -1439,4 +1451,73 @@ pub fn decode_pipeline_custom<E: From<String> + 'static, T: 'static, F: 'static>
         }),
         fields,
     )
+}
+
+#[cfg(test)]
+mod enc_tests {
+    use super::*;
+
+    #[test]
+    fn json_encode_indent_is_clamped() {
+        // A pathological attacker-supplied indent must not trigger an unbounded
+        // `str::repeat`: the per-level indent width saturates at 16 spaces.
+        let val = json_enc_object(vec![("k".to_string(), json_enc_int(1))]);
+        let out = json_enc_encode(1_000_000_000, val);
+        let sixteen = " ".repeat(16);
+        let seventeen = " ".repeat(17);
+        assert!(out.contains(&sixteen), "expected clamped 16-space indent: {out:?}");
+        assert!(!out.contains(&seventeen), "indent exceeded the clamp: {out:?}");
+        assert!(out.len() < 1000, "output unexpectedly large ({} bytes)", out.len());
+    }
+}
+
+#[cfg(test)]
+mod optional_tests {
+    use super::*;
+
+    fn build() -> Decoder<String, i64> {
+        // next_decoder is the identity continuation: Decoder<.., FnOnce(i64)->i64>.
+        let nd: Decoder<String, Box<dyn FnOnce(i64) -> i64 + Send>> = decode_succeed(Box::new(
+            || Box::new(|x: i64| x) as Box<dyn FnOnce(i64) -> i64 + Send>,
+        ));
+        decode_pipeline_optional::<String, i64, i64>(
+            "age".to_string(),
+            json_decode_int(),
+            -1, // default
+            nd,
+        )
+    }
+
+    #[test]
+    fn optional_present_but_wrong_type_propagates_error() {
+        // PRESENT-but-malformed field must PROPAGATE the decode error, not fall
+        // back to the default (Elm/Go `optional` contract).
+        let dec = build();
+        let v: JsonVal = serde_json::json!({ "age": "not-an-int" });
+        assert!(
+            matches!((dec.run)(&v), SkyResult::Err(_)),
+            "present-but-wrong-type must yield Err"
+        );
+    }
+
+    #[test]
+    fn optional_absent_uses_default() {
+        let dec = build();
+        let v: JsonVal = serde_json::json!({});
+        assert!(matches!((dec.run)(&v), SkyResult::Ok(-1)));
+    }
+
+    #[test]
+    fn optional_null_uses_default() {
+        let dec = build();
+        let v: JsonVal = serde_json::json!({ "age": null });
+        assert!(matches!((dec.run)(&v), SkyResult::Ok(-1)));
+    }
+
+    #[test]
+    fn optional_present_valid_decodes() {
+        let dec = build();
+        let v: JsonVal = serde_json::json!({ "age": 42 });
+        assert!(matches!((dec.run)(&v), SkyResult::Ok(42)));
+    }
 }

@@ -80,7 +80,7 @@ pub fn is_enabled() -> bool {
 }
 
 fn service_name() -> String {
-    match std::env::var(SERVICE_ENV) {
+    match crate::sky_runtime::system::read_env_var(SERVICE_ENV) {
         Ok(s) if !s.is_empty() => s,
         _ => "app".to_string(),
     }
@@ -101,7 +101,7 @@ fn rfc3339(ts_ms: u64) -> String {
 /// missing env var or any open/schema failure leaves the in-RAM sink untouched.
 /// Call once from the runtime entry boot path (db-gated).
 pub async fn enable_from_env() {
-    let path = match std::env::var(SPILL_ENV) {
+    let path = match crate::sky_runtime::system::read_env_var(SPILL_ENV) {
         Ok(p) if !p.is_empty() => p,
         _ => return,
     };

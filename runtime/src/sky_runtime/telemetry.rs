@@ -141,11 +141,11 @@ pub fn spans_json(limit: usize) -> String {
 /// Production gate (Go's `productionFromEnv`): `ENV` then `SKY_ENV`; unset OR a
 /// dev marker (`dev`/`development`/`local`) → dev (false); anything else → true.
 pub fn production_from_env() -> bool {
-    let mut e = std::env::var("ENV")
+    let mut e = crate::sky_runtime::system::read_env_var("ENV")
         .unwrap_or_default()
         .to_ascii_lowercase();
     if e.is_empty() {
-        e = std::env::var("SKY_ENV")
+        e = crate::sky_runtime::system::read_env_var("SKY_ENV")
             .unwrap_or_default()
             .to_ascii_lowercase();
     }
@@ -167,7 +167,19 @@ pub fn production_from_env() -> bool {
 pub fn frame_ancestors() -> Option<&'static str> {
     use std::sync::OnceLock;
     static FA: OnceLock<String> = OnceLock::new();
-    let v = FA.get_or_init(|| std::env::var("SKY_LIVE_FRAME_ANCESTORS").unwrap_or_default());
+    let v = FA.get_or_init(|| {
+        // Strip CR / LF / NUL: this value is spliced verbatim into the
+        // Content-Security-Policy response header (server.rs / live). A CR or
+        // LF would terminate the header line and inject a new response header
+        // (HTTP response splitting); NUL is rejected by header encoders. The
+        // remaining `frame-ancestors` source-list grammar is the operator's
+        // responsibility — we only close the response-splitting vector.
+        crate::sky_runtime::system::read_env_var("SKY_LIVE_FRAME_ANCESTORS")
+            .unwrap_or_default()
+            .chars()
+            .filter(|c| !matches!(c, '\r' | '\n' | '\0'))
+            .collect()
+    });
     if v.is_empty() { None } else { Some(v.as_str()) }
 }
 
@@ -577,6 +589,12 @@ pub fn json_escape(s: &str) -> String {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            // U+2028 LINE SEPARATOR / U+2029 PARAGRAPH SEPARATOR are valid JSON
+            // but are JS line terminators — unescaped, they break this payload
+            // when it is embedded in an inline <script> block (the console
+            // bootstrap does exactly that). Escape them defensively.
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
             c => out.push(c),
         }
     }
@@ -602,6 +620,17 @@ pub fn entries_json(entries: &[LogEntry]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_escape_neutralises_js_line_terminators_and_controls() {
+        // U+2028 / U+2029 are valid JSON but break an inline <script> JSON
+        // payload (JS line terminators) — must be \u-escaped, not passed raw.
+        assert_eq!(json_escape("a\u{2028}b"), "a\\u2028b");
+        assert_eq!(json_escape("a\u{2029}b"), "a\\u2029b");
+        // Quotes, backslashes, and C0 controls stay escaped.
+        assert_eq!(json_escape("\"\\\n\t"), "\\\"\\\\\\n\\t");
+        assert_eq!(json_escape("\u{0001}"), "\\u0001");
+    }
 
     #[test]
     fn variant_name_extracts_only_the_bounded_variant_ident() {

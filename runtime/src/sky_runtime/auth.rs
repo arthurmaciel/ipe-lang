@@ -129,12 +129,24 @@ pub fn auth_sign_token<E: From<String>>(
                 .into(),
         );
     }
+    // A negative TTL must NOT mint a token. Without this guard a negative
+    // `expiry_seconds` (e.g. i64::MIN) underflows `now + expiry_seconds`, and
+    // the `unwrap_or(i64::MAX)` fallback would invert intent into a
+    // never-expiring token. Reject up front so the safe outcome is the only
+    // reachable one.
+    if expiry_seconds < 0 {
+        return SkyResult::Err(
+            "auth.signToken: expiry_seconds must be non-negative"
+                .to_string()
+                .into(),
+        );
+    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
     // Saturate to i64::MAX on overflow so a caller-controlled large
-    // expiry_seconds (or i64::MIN) never panics under debug overflow-checks.
+    // expiry_seconds never panics under debug overflow-checks.
     // i64::MAX is a far-future timestamp (~292 billion years) — a safe floor.
     let exp = now.checked_add(expiry_seconds).unwrap_or(i64::MAX);
     let iat = now; // issued-at = current unix seconds (mirrors Go's Auth_signToken)
@@ -301,7 +313,16 @@ pub fn auth_login<E: Send + From<String> + 'static>(
         match sqlx::query(&sql).bind(&email).fetch_optional(&conn).await {
             Ok(Some(row)) => {
                 use sqlx::Row;
-                let id: i64 = row.try_get(0).unwrap_or(0);
+                // A failed id-column read MUST NOT silently default to user 0
+                // (authenticating as the wrong/zero user). Fail closed instead.
+                let id: i64 = match row.try_get(0) {
+                    Ok(id) => id,
+                    Err(_) => {
+                        return SkyResult::Err(
+                            "auth.login: invalid credentials".to_string().into(),
+                        )
+                    }
+                };
                 let hash: String = row.try_get(1).unwrap_or_default();
                 // bcrypt::verify is CPU-bound + blocking → blocking pool (see register).
                 let ok = tokio::task::spawn_blocking(move || {
@@ -499,5 +520,61 @@ mod tests {
         // set role
         let role: SkyResult<String, ()> = auth_set_role(pool, user_id, "admin".into()).await;
         assert!(matches!(role, SkyResult::Ok(())));
+    }
+
+    #[test]
+    fn test_sign_token_negative_expiry_rejected() {
+        // A negative TTL must NOT mint a token (it would otherwise underflow
+        // into a never-expiring token). Expect Err.
+        let secret = "a-test-secret-of-32-bytes-padding".to_string();
+        let token: SkyResult<String, String> =
+            auth_sign_token(secret, HashMap::new(), -1);
+        assert!(
+            matches!(token, SkyResult::Err(_)),
+            "negative expiry must be rejected"
+        );
+        // i64::MIN (the pathological underflow case) must also be rejected.
+        let secret = "a-test-secret-of-32-bytes-padding".to_string();
+        let token2: SkyResult<String, String> =
+            auth_sign_token(secret, HashMap::new(), i64::MIN);
+        assert!(matches!(token2, SkyResult::Err(_)));
+    }
+
+    #[tokio::test]
+    async fn test_login_id_decode_failure_yields_err_not_user_zero() {
+        let pool = match DbPool::connect("sqlite::memory:").await {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        // Pre-create the users table with a TEXT id so a row's id column will
+        // FAIL to decode into i64. ensure_users_schema uses CREATE TABLE IF NOT
+        // EXISTS, so it leaves this schema in place.
+        sqlx::query(
+            "CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                created_at BIGINT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create table");
+        sqlx::query(
+            "INSERT INTO users (id, email, password_hash, role, created_at) \
+             VALUES ('not-a-number', 'badid@example.com', 'x', 'user', 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert");
+        // The matched-email branch reads id first; a decode failure must fail
+        // closed (Err), NOT silently authenticate as user 0.
+        let login: SkyResult<String, i64> =
+            auth_login(pool, "badid@example.com".into(), "whatever".into()).await;
+        assert!(
+            matches!(login, SkyResult::Err(_)),
+            "a failed id-column decode must yield Err, never Ok(0)"
+        );
     }
 }

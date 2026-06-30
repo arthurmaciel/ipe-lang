@@ -108,7 +108,10 @@ pub fn cache_new_raw<E: Send + From<String> + 'static>(cfg: CacheCfg) -> SkyTask
         }
         let h = {
             let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
-            g.0 += 1;
+            // Saturating: monotonic handle counter — `+= 1` would debug-panic on
+            // i64 overflow. (Saturating at i64::MAX is benign: reaching it needs
+            // ~2^63 cache allocations; the cap merely keeps the op total.)
+            g.0 = g.0.saturating_add(1);
             let h = g.0;
             g.1.push((
                 h,
@@ -137,7 +140,7 @@ where
 {
     Box::pin(async move {
         with_slot(handle, (), |slot| {
-            slot.seq += 1;
+            slot.seq = slot.seq.saturating_add(1);
             let seq = slot.seq;
             let max = slot.cfg.maxEntries;
             let ttl = slot.cfg.ttlMs;
@@ -190,8 +193,8 @@ where
                     }
                 }
             };
-            slot.entries += added - evicted;
-            slot.evictions += evicted;
+            slot.entries = slot.entries.saturating_add(added).saturating_sub(evicted);
+            slot.evictions = slot.evictions.saturating_add(evicted);
         });
         ok_res(())
     })
@@ -206,7 +209,7 @@ where
 {
     Box::pin(async move {
         let out = with_slot(handle, SkyMaybe::Nothing, |slot| {
-            slot.seq += 1;
+            slot.seq = slot.seq.saturating_add(1);
             let seq = slot.seq;
             let now = Instant::now();
             enum Outcome<V> {
@@ -247,16 +250,16 @@ where
             };
             match outcome {
                 Outcome::Hit(v) => {
-                    slot.hits += 1;
+                    slot.hits = slot.hits.saturating_add(1);
                     SkyMaybe::Just(v)
                 }
                 Outcome::Expired => {
-                    slot.misses += 1;
-                    slot.entries -= 1;
+                    slot.misses = slot.misses.saturating_add(1);
+                    slot.entries = slot.entries.saturating_sub(1);
                     SkyMaybe::Nothing
                 }
                 Outcome::Miss => {
-                    slot.misses += 1;
+                    slot.misses = slot.misses.saturating_add(1);
                     SkyMaybe::Nothing
                 }
             }
@@ -285,7 +288,7 @@ where
             {
                 vec.retain(|e| e.key != key);
                 let removed = (before - vec.len()) as i64;
-                slot.entries -= removed;
+                slot.entries = slot.entries.saturating_sub(removed);
             }
         });
         ok_res(())

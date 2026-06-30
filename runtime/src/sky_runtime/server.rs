@@ -355,7 +355,7 @@ const DEFAULT_MAX_BODY: usize = 32 * 1024 * 1024; // 32 MiB
 /// Request-body cap. Overridable via SKY_LIVE_MAX_BODY_BYTES (same env var as the
 /// Go runtime's `[live] maxBodyBytes`); falls back to 32 MiB.
 fn max_body() -> usize {
-    std::env::var("SKY_LIVE_MAX_BODY_BYTES")
+    crate::sky_runtime::system::read_env_var("SKY_LIVE_MAX_BODY_BYTES")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|&n| n > 0)
@@ -447,7 +447,7 @@ async fn build_request(
         .extensions
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0.ip().to_string());
-    let trust_proxy = std::env::var("SKY_TRUSTED_PROXY")
+    let trust_proxy = crate::sky_runtime::system::read_env_var("SKY_TRUSTED_PROXY")
         .map(|v| !v.is_empty() && v != "0" && v != "false")
         .unwrap_or(false);
     let remote_addr = if trust_proxy {
@@ -649,7 +649,7 @@ pub fn server_listen<E: From<String> + Send + 'static>(
         // Bind host is overridable via SKY_HTTP_BIND (e.g. 127.0.0.1 to avoid
         // exposing on every interface). Default stays 0.0.0.0 for byte-identical
         // behaviour with prior releases; an empty/blank override falls back too.
-        let host = std::env::var("SKY_HTTP_BIND")
+        let host = crate::sky_runtime::system::read_env_var("SKY_HTTP_BIND")
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -727,7 +727,7 @@ enum WsOut {
 /// the message (the send kernel returns Err), giving real backpressure. Override
 /// via SKY_WS_SEND_BUFFER; default 256 frames.
 fn ws_send_buffer() -> usize {
-    std::env::var("SKY_WS_SEND_BUFFER")
+    crate::sky_runtime::system::read_env_var("SKY_WS_SEND_BUFFER")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
@@ -812,8 +812,8 @@ async fn ws_loop<E: From<String> + Send + 'static>(
 }
 
 fn ws_production() -> bool {
-    let v = std::env::var("ENV")
-        .or_else(|_| std::env::var("SKY_ENV"))
+    let v = crate::sky_runtime::system::read_env_var("ENV")
+        .or_else(|_| crate::sky_runtime::system::read_env_var("SKY_ENV"))
         .unwrap_or_default();
     !matches!(v.as_str(), "" | "dev" | "development" | "local")
 }
