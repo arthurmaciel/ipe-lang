@@ -6,11 +6,12 @@
 //! expose real divergences; passing tests anchor the exact Go-observable
 //! behaviour permanently.
 //!
-//! Divergences documented here (not fixed — genuine differences):
-//! * Division precision for non-exact fractions: Go shopspring uses
-//!   `DivisionPrecision = 16` significant digits; rust_decimal's checked_div
-//!   uses a different algorithm.  Affects only non-terminating decimals (1/3,
-//!   etc.).  All money-scale / exact-fraction cases are bit-identical.
+//! Division precision (FIXED to match Go — not a divergence): Go shopspring's
+//! `Div` is `DivRound(…, DivisionPrecision)` with `DivisionPrecision = 16` and
+//! half-away-from-zero rounding.  `decimal_div` caps its quotient to 16 decimal
+//! places with `MidpointAwayFromZero` after the `checked_div`, so non-terminating
+//! fractions (1/3, 2/3, 1/7, 10/3, …) match Go exactly.  Exact fractions with
+//! ≤16 dp are unaffected by the cap.  All money-scale cases stay bit-identical.
 
 use sky_runtime_rust::*;
 
@@ -50,10 +51,7 @@ fn from_string_to_string_round_trip() {
 #[test]
 fn from_int_to_string() {
     // Go: `Decimal_fromInt 42 |> Decimal_toString` = "42"
-    assert_eq!(
-        s(sky_runtime::decimal::decimal_from_int(42)),
-        "42"
-    );
+    assert_eq!(s(sky_runtime::decimal::decimal_from_int(42)), "42");
 }
 
 #[test]
@@ -103,8 +101,14 @@ fn mul_point_one_times_point_two_is_exact() {
 
 #[test]
 fn add_sub_mul_exact() {
-    assert_eq!(s(sky_runtime::decimal::decimal_add(d("1.5"), d("2.25"))), "3.75");
-    assert_eq!(s(sky_runtime::decimal::decimal_sub(d("5"), d("2.5"))), "2.5");
+    assert_eq!(
+        s(sky_runtime::decimal::decimal_add(d("1.5"), d("2.25"))),
+        "3.75"
+    );
+    assert_eq!(
+        s(sky_runtime::decimal::decimal_sub(d("5"), d("2.5"))),
+        "2.5"
+    );
     assert_eq!(s(sky_runtime::decimal::decimal_mul(d("1.5"), d("4"))), "6");
 }
 
@@ -121,6 +125,21 @@ fn div_exact_fraction() {
 }
 
 #[test]
+fn div_precision_capped_to_16_dp_matches_go() {
+    // Go shopspring `Div` = `DivRound(…, 16)` (half-away-from-zero). Sky-Rust
+    // caps `decimal_div` to 16 dp with MidpointAwayFromZero, so non-terminating
+    // quotients match the Go reference exactly.
+    // 1/3 = 0.3333… → 17th digit 3 rounds down → sixteen 3s.
+    assert_eq!(s(div_ok(d("1"), d("3"))), "0.3333333333333333");
+    // 2/3 = 0.6666… → 17th digit 6 rounds last digit up → …667.
+    assert_eq!(s(div_ok(d("2"), d("3"))), "0.6666666666666667");
+    // 1/7 = 0.142857142857… → 16 dp half-away → …1429.
+    assert_eq!(s(div_ok(d("1"), d("7"))), "0.1428571428571429");
+    // 10/3 = 3.3333… → sixteen 3s after the point.
+    assert_eq!(s(div_ok(d("10"), d("3"))), "3.3333333333333333");
+}
+
+#[test]
 fn div_by_zero_is_err() {
     let r = sky_runtime::decimal::decimal_div::<SkyError>(d("1"), d("0"));
     assert!(r.is_err(), "divide by zero must be Err, never panic");
@@ -134,14 +153,8 @@ fn mod_by_zero_is_err() {
 
 #[test]
 fn neg_and_abs() {
-    assert_eq!(
-        s(sky_runtime::decimal::decimal_neg(d("3.14"))),
-        "-3.14"
-    );
-    assert_eq!(
-        s(sky_runtime::decimal::decimal_abs(d("-3.14"))),
-        "3.14"
-    );
+    assert_eq!(s(sky_runtime::decimal::decimal_neg(d("3.14"))), "-3.14");
+    assert_eq!(s(sky_runtime::decimal::decimal_abs(d("-3.14"))), "3.14");
 }
 
 // ── Banker's rounding (Decimal.round matches Go RoundBank) ─────────────────
@@ -172,10 +185,7 @@ fn bankers_rounding_ties_go_to_even() {
 fn to_string_fixed_adds_trailing_zeros() {
     // Go: `Decimal_toStringFixed 2 3` = "3.00"
     assert_eq!(
-        sky_runtime::decimal::decimal_to_string_fixed(
-            2,
-            sky_runtime::decimal::decimal_from_int(3)
-        ),
+        sky_runtime::decimal::decimal_to_string_fixed(2, sky_runtime::decimal::decimal_from_int(3)),
         "3.00"
     );
     // `Decimal_toStringFixed 2 3.1` = "3.10"
@@ -297,12 +307,7 @@ fn format_with_uses_half_away_from_zero_not_bankers() {
     // Go's formatWith calls StringFixed which is half-away-from-zero.
     // Banker's (current Rust) would give "2.54".
     assert_eq!(
-        sky_runtime::decimal::decimal_format_with(
-            "".to_string(),
-            ".".to_string(),
-            2,
-            d("2.545")
-        ),
+        sky_runtime::decimal::decimal_format_with("".to_string(), ".".to_string(), 2, d("2.545")),
         "2.55",
         "formatWith must match Go StringFixed (half-away-from-zero)"
     );
@@ -313,18 +318,9 @@ fn format_with_uses_half_away_from_zero_not_bankers() {
 #[test]
 fn comparisons_match_go() {
     // Go: `Decimal_compare 5 7` = -1, `compare 7 5` = 1, `compare 5 5` = 0
-    assert_eq!(
-        sky_runtime::decimal::decimal_compare(d("5"), d("7")),
-        -1
-    );
-    assert_eq!(
-        sky_runtime::decimal::decimal_compare(d("7"), d("5")),
-        1
-    );
-    assert_eq!(
-        sky_runtime::decimal::decimal_compare(d("5"), d("5")),
-        0
-    );
+    assert_eq!(sky_runtime::decimal::decimal_compare(d("5"), d("7")), -1);
+    assert_eq!(sky_runtime::decimal::decimal_compare(d("7"), d("5")), 1);
+    assert_eq!(sky_runtime::decimal::decimal_compare(d("5"), d("5")), 0);
     // Bool predicates
     assert!(sky_runtime::decimal::decimal_lt(d("5"), d("7")));
     assert!(!sky_runtime::decimal::decimal_gt(d("5"), d("7")));
@@ -336,14 +332,8 @@ fn comparisons_match_go() {
 
 #[test]
 fn min_max_match_go() {
-    assert_eq!(
-        s(sky_runtime::decimal::decimal_min(d("3"), d("5"))),
-        "3"
-    );
-    assert_eq!(
-        s(sky_runtime::decimal::decimal_max(d("3"), d("5"))),
-        "5"
-    );
+    assert_eq!(s(sky_runtime::decimal::decimal_min(d("3"), d("5"))), "3");
+    assert_eq!(s(sky_runtime::decimal::decimal_max(d("3"), d("5"))), "5");
 }
 
 // ── Sign predicates ──────────────────────────────────────────────────────────
@@ -377,10 +367,7 @@ fn round_half_up_matches_go() {
 #[test]
 fn truncate_floor_ceil_match_go() {
     // truncate: toward zero
-    assert_eq!(
-        s(sky_runtime::decimal::decimal_truncate(0, d("3.7"))),
-        "3"
-    );
+    assert_eq!(s(sky_runtime::decimal::decimal_truncate(0, d("3.7"))), "3");
     assert_eq!(
         s(sky_runtime::decimal::decimal_truncate(0, d("-3.7"))),
         "-3"
