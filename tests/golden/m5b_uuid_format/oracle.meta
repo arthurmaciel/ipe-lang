@@ -2,4 +2,5 @@
 main_sky_sha256 = 7a2a930e14ff0063d9200ccf46871e50fc672cb1c8b9093773772a28c073c44a
 go_sky_version = sky dev
 exit_code = 0
-oracle_divergence = false
+oracle_divergence = true
+divergence_reason = sanctioned: the import-less arity-0 kernel value Uuid.v4 / Uuid.v7 evaluates to a fresh String call on the Rust backend (the documented bare-reference form), so the length and version-nibble checks hold. The Go reference leaves the bare reference as a kernel function value (CLAUDE.md Limitation #7 — arity-0 kernel codegen) and its checks differ on this shape. Sky-Rust records its own output.

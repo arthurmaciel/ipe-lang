@@ -1,31 +1,57 @@
-//! M5b `Sky.Core.Uuid` + `Sky.Core.Jwt` parity gate —
+//! M5b `Sky.Core.Uuid` + `Sky.Core.Jwt` gate —
 //! UUID generation/parsing and JWT HS256/RS256 encode/decode.
 //!
 //! Every test compiles a Sky program through `skyc`, builds the emitted Rust
-//! project with the shared cargo target, runs the binary, and asserts its stdout
-//! matches the cached oracle (`tests/golden/m5b_*/expected_go.txt`).
-//! All tests are gated on `SKY_E2E=1`; without it they return early.
+//! project with the shared cargo target, runs the binary, and checks its stdout
+//! against the cached oracle (`tests/golden/m5b_*/oracle.meta` +
+//! `expected_go.txt`). All tests are gated on `SKY_E2E=1`; without it they
+//! return early.
+//!
+//! ## Oracle provenance — what is and isn't Go-compared here
+//!
+//! These goldens are NOT shared-`Main.sky` Go-parity goldens. Two distinct
+//! reasons (both recorded as `oracle_divergence = true` with a tagged reason in
+//! each golden's `sanctioned.divergence` marker):
+//!
+//! * **JWT (`m5b_jwt_*`) — API-surface divergence.** The Rust backend surfaces
+//!   FLAT kernels (`Jwt.encodeHs256` / `decodeHs256` / `encodeRs256` /
+//!   `decodeRs256`); the Go backend exposes only the builder API
+//!   (`Jwt.encode` / `hs256` / `rs256` / `claims` / `decode`). So this exact
+//!   `Main.sky` does not compile on the Go reference and the cached expected is
+//!   skyc's own output, NOT a Go run of the same source.
+//!
+//! * **UUID (`m5b_uuid_*`) — behavioural divergence.** The Go reference produces
+//!   a different result on these shapes (bare arity-0 `Uuid.v4` kernel value;
+//!   `Uuid.parse` of a canonical UUID). The cached expected is skyc's
+//!   (semantically correct) output.
+//!
+//! ## Byte-parity with Go IS proven — separately and explicitly
+//!
+//! Although the shared-`Main.sky` oracle cannot run the flat-kernel program on
+//! Go, the produced JWT bytes ARE byte-identical to the Go backend. The
+//! `m5b_jwt_hs256_bytes` / `m5b_jwt_rs256_bytes` goldens print the token, and
+//! [`jwt_hs256_bytes`] / [`jwt_rs256_bytes`] assert that printed token equals a
+//! token captured verbatim from the Go reference compiler running the
+//! equivalent builder-API program (`Jwt.encode (Jwt.hs256 secret) (claims …)`).
+//! The same constants are byte-checked at the unit level in
+//! `runtime/src/sky_runtime/jwt.rs`.
 //!
 //! ## Golden catalogue
 //!
-//! * `m5b_uuid_format` — `Uuid.v4` length is 36 and version nibble is '4';
-//!   `Uuid.v7` length is 36 and version nibble is '7'; both round-trip through
-//!   `Uuid.parse`.  Output: `"ok"`.
-//!
+//! * `m5b_uuid_format` — `Uuid.v4`/`v7` length is 36 and the version nibble is
+//!   `4`/`7`; both round-trip through `Uuid.parse`.  Output: `"ok"`.
 //! * `m5b_uuid_parse` — `Uuid.parse "not-a-uuid"` → `Nothing`;
 //!   `Uuid.parse "<valid-uuid>"` → `Just _`.  Output: `"ok"`.
-//!
-//! * `m5b_jwt_hs256_roundtrip` — `Jwt.encodeHs256` with a 32-byte key and
-//!   fixed claims, then `Jwt.decodeHs256` with the same key succeeds.
-//!   Output: `"ok"`.
-//!
-//! * `m5b_jwt_hs256_tamper` — appending `"x"` to an HS256 token causes
-//!   `Jwt.decodeHs256` to reject the tampered input.
-//!   Output: `"tamper-detected"`.
-//!
-//! * `m5b_jwt_rs256_roundtrip` — `Jwt.encodeRs256` with a PKCS#8 RSA-2048
-//!   private key and `Jwt.decodeRs256` with the matching SPKI public key
-//!   completes the round-trip without error.  Output: `"ok"`.
+//! * `m5b_jwt_hs256_roundtrip` — `encodeHs256` then `decodeHs256` with the same
+//!   32-byte key succeeds.  Output: `"ok"`.
+//! * `m5b_jwt_hs256_tamper` — appending `"x"` to an HS256 token makes
+//!   `decodeHs256` reject it.  Output: `"tamper-detected"`.
+//! * `m5b_jwt_rs256_roundtrip` — `encodeRs256` (PKCS#8 RSA-2048) then
+//!   `decodeRs256` (SPKI public key) round-trips.  Output: `"ok"`.
+//! * `m5b_jwt_hs256_bytes` — prints the HS256 token; asserted byte-identical to
+//!   the captured Go token.
+//! * `m5b_jwt_rs256_bytes` — prints the RS256 token; asserted byte-identical to
+//!   the captured Go token (RS256/PKCS#1 v1.5 is deterministic).
 //!
 //! Run:
 //!
@@ -37,6 +63,18 @@ use std::path::{Path, PathBuf};
 
 mod support;
 
+/// The genuine Go-backend HS256 token for the equivalent builder-API program
+/// `Jwt.encode (Jwt.hs256 "test-secret-key-0123456789abcdef")
+///  (claims |> subject "alice" |> expiresAt 9999999999)`, captured verbatim
+/// from the Go reference compiler. `m5b_jwt_hs256_bytes` must reproduce it.
+const GO_HS256_TOKEN: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjk5OTk5OTk5OTksInN1YiI6ImFsaWNlIn0.O6u4Zgjn9lL3myvfLfP5QFaGIHx-KBfzZ7lgkbJL_N0";
+
+/// The genuine Go-backend RS256 token for the equivalent builder-API program
+/// over the same fixed RSA-2048 key and `claims |> subject "bob" |> expiresAt …`,
+/// captured verbatim from the Go reference compiler. RS256 (PKCS#1 v1.5) is
+/// deterministic, so `m5b_jwt_rs256_bytes` must reproduce it byte for byte.
+const GO_RS256_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjk5OTk5OTk5OTksInN1YiI6ImJvYiJ9.GJ29fLyt4u8M_CMSvhSizRpjWXEDsrVtDL92QOX27HwB9YvKI4_ksftEN8-wK1xiT5y1tmrWmUs3_UHPTepyCJ9Y02JDphZ5X4k0784CIKxNvdr1RcAn-V24Wyc_rTFOELDR9XeBPNIhYRzVuQnaQ27PbmpF3skoyH40eOI7emrTVlbPhkgnWsoULuKOEI3yF9VU62QFoPDEuio_59LMcuk2EZrnh-Rql1zF5cNixt30_Vu5mUwBHkYZ2J2ZEm_S2VIrXvIluIfp5pzNmOK1TdLv9yQHY1PPcfcvHizHK4IKnMNTXrkk8W0NCaP5faf4hzaZVPIoqJ7D220PHPgWEg";
+
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
@@ -46,14 +84,10 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
     root.join("tests").join("golden").join(name)
 }
 
-/// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
-/// run it, and assert its stdout matches the cached oracle.  Gated on
-/// `SKY_E2E=1`.
-fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
-        return;
-    }
-
+/// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project, run
+/// it, and return the golden directory plus the run outcome. The caller gates on
+/// `SKY_E2E`. Fails the test on any build/runtime error.
+fn build_run(name: &str) -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
     let entry = dir.join("Main.sky");
@@ -62,20 +96,59 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
     let runtime = skyc::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
-    let Ok(runtime) = runtime else { return };
+    let Ok(runtime) = runtime else {
+        return (
+            dir,
+            support::RunOutcome {
+                stdout: String::new(),
+                exit_code: None,
+            },
+        );
+    };
     let built = skyc::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed for {name}: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted(name, &out);
+    (dir, outcome)
+}
+
+/// Compile/build/run the golden and assert its stdout matches the cached oracle.
+/// Gated on `SKY_E2E=1`.
+fn assert_runs_and_matches_oracle(name: &str) {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    let (dir, outcome) = build_run(name);
+    support::assert_go_parity(name, &dir, &outcome.stdout);
+    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the oracle");
+}
+
+/// Compile/build/run a byte-parity golden and assert its emitted token equals
+/// the `go_token` captured from the Go reference compiler — the explicit
+/// Go-byte-equality proof — AND that it still matches the cached oracle.
+fn assert_token_byte_identical_to_go(name: &str, go_token: &str) {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    let (dir, outcome) = build_run(name);
+    assert_eq!(
+        outcome.stdout.trim_end(),
+        go_token,
+        "{name}: emitted token must be byte-identical to the captured Go token"
+    );
+    // Keep the cached-oracle gate honest too (expected holds the same bytes).
     support::assert_go_parity(name, &dir, &outcome.stdout);
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the oracle");
 }
 
 // ── UUID format + version nibble ─────────────────────────────────────────────
 
-/// `Uuid.v4` produces a 36-character string with version nibble '4' at index 14;
-/// `Uuid.v7` produces a 36-character string with version nibble '7' at index 14;
-/// both round-trip through `Uuid.parse`.  Output: `"ok"`.
+/// `Uuid.v4` produces a 36-char string with version nibble `4`; `Uuid.v7`
+/// likewise with `7`; both round-trip through `Uuid.parse`.  Output: `"ok"`.
+///
+/// Recorded divergence (NOT Go-parity): the Go reference leaves the bare
+/// arity-0 `Uuid.v4` as a kernel function value (Limitation #7), so it differs
+/// on this shape. Expected holds skyc's correct output.
 #[test]
 fn uuid_format() {
     assert_runs_and_matches_oracle("m5b_uuid_format");
@@ -85,6 +158,9 @@ fn uuid_format() {
 
 /// `Uuid.parse "not-a-uuid"` → `Nothing`; `Uuid.parse "<valid-uuid>"` → `Just _`.
 /// Output: `"ok"`.
+///
+/// Recorded divergence (NOT Go-parity): the Go reference returns `Nothing` for
+/// the canonical UUID on this shape. Expected holds skyc's correct output.
 #[test]
 fn uuid_parse() {
     assert_runs_and_matches_oracle("m5b_uuid_parse");
@@ -92,9 +168,11 @@ fn uuid_parse() {
 
 // ── JWT HS256 round-trip ──────────────────────────────────────────────────────
 
-/// `Jwt.encodeHs256 secret claims` followed by `Jwt.decodeHs256 secret token`
-/// with the same 32-byte key succeeds.  Output: `"ok"`.
-/// The HS256 token is deterministic for fixed key + claims, providing Go parity.
+/// `encodeHs256 secret claims` then `decodeHs256 secret token` with the same
+/// 32-byte key succeeds.  Output: `"ok"`.
+///
+/// Recorded API-surface divergence (the flat kernel does not exist in the Go
+/// backend); the token bytes are Go-identical — see [`jwt_hs256_bytes`].
 #[test]
 fn jwt_hs256_roundtrip() {
     assert_runs_and_matches_oracle("m5b_jwt_hs256_roundtrip");
@@ -102,8 +180,8 @@ fn jwt_hs256_roundtrip() {
 
 // ── JWT HS256 tamper detection ────────────────────────────────────────────────
 
-/// Appending `"x"` to a valid HS256 token causes `Jwt.decodeHs256` to reject it.
-/// Output: `"tamper-detected"`.
+/// Appending `"x"` to a valid HS256 token makes `decodeHs256` reject it.
+/// Output: `"tamper-detected"`. Recorded API-surface divergence.
 #[test]
 fn jwt_hs256_tamper() {
     assert_runs_and_matches_oracle("m5b_jwt_hs256_tamper");
@@ -111,9 +189,33 @@ fn jwt_hs256_tamper() {
 
 // ── JWT RS256 round-trip ──────────────────────────────────────────────────────
 
-/// `Jwt.encodeRs256 privKeyPem claims` followed by `Jwt.decodeRs256 pubKeyPem token`
-/// with a matching RSA-2048 PKCS#8/SPKI key pair succeeds.  Output: `"ok"`.
+/// `encodeRs256 privKeyPem claims` then `decodeRs256 pubKeyPem token` with a
+/// matching RSA-2048 PKCS#8/SPKI key pair round-trips.  Output: `"ok"`.
+///
+/// Recorded API-surface divergence; the token bytes are Go-identical — see
+/// [`jwt_rs256_bytes`].
 #[test]
 fn jwt_rs256_roundtrip() {
     assert_runs_and_matches_oracle("m5b_jwt_rs256_roundtrip");
+}
+
+// ── JWT HS256 byte-parity with Go ─────────────────────────────────────────────
+
+/// The HS256 token `encodeHs256` emits is byte-identical to the token the Go
+/// reference compiler produces for the equivalent builder-API program. This is
+/// the explicit Go-byte-equality proof the flat-kernel goldens otherwise can't
+/// express through the shared-`Main.sky` oracle.
+#[test]
+fn jwt_hs256_bytes() {
+    assert_token_byte_identical_to_go("m5b_jwt_hs256_bytes", GO_HS256_TOKEN);
+}
+
+// ── JWT RS256 byte-parity with Go ─────────────────────────────────────────────
+
+/// The RS256 token `encodeRs256` emits is byte-identical to the token the Go
+/// reference compiler produces for the equivalent builder-API program (RS256 is
+/// deterministic).
+#[test]
+fn jwt_rs256_bytes() {
+    assert_token_byte_identical_to_go("m5b_jwt_rs256_bytes", GO_RS256_TOKEN);
 }

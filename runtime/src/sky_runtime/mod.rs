@@ -63,9 +63,13 @@ pub use bytes::*;
 pub mod regex_kernel;
 pub use regex_kernel::*;
 
-#[cfg(feature = "json")]
+// JWT needs BOTH json (jsonwebtoken decode + the Go-parity JSON encoder for the
+// token payload) AND crypto (the HMAC / RSA signing primitives the encode path
+// reuses for byte-identical-to-Go tokens). Gating on both keeps a hypothetical
+// json-only build sound; generated projects always enable both.
+#[cfg(all(feature = "json", feature = "crypto"))]
 pub mod jwt;
-#[cfg(feature = "json")]
+#[cfg(all(feature = "json", feature = "crypto"))]
 pub use jwt::*;
 
 pub mod decimal;
