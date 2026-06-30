@@ -391,6 +391,29 @@ impl Env {
                 "JsonDecP",
                 &["required", "optional", "custom", "requiredAt"],
             ),
+            // `Sky.Core.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random (M5a).
+            (
+                "Crypto",
+                &[
+                    "sha256",
+                    "sha512",
+                    "sha1",
+                    "md5",
+                    "hmacSha256",
+                    "hmacSha512",
+                    "rsaSha256Sign",
+                    "rsaSha256Verify",
+                    "constantTimeEqual",
+                    "aesGcmEncrypt",
+                    "aesGcmDecrypt",
+                    "chacha20Encrypt",
+                    "chacha20Decrypt",
+                    "aesKeyFromPassword",
+                    "chachaKeyFromPassword",
+                    "randomBytes",
+                    "randomToken",
+                ],
+            ),
         ];
 
         for (qual, funcs) in QUALIFIERS {

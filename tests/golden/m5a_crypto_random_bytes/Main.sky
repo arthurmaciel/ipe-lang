@@ -1,0 +1,9 @@
+module Main exposing (main)
+
+-- Crypto.randomBytes: verify the call compiles and the program exits cleanly.
+-- The result is discarded (auto-drop in Rust; auto-forced in Go — both print "ok").
+main =
+    let
+        _ = Crypto.randomBytes 16
+    in
+    println "ok"

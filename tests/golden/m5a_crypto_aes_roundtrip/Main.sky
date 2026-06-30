@@ -1,0 +1,25 @@
+module Main exposing (main)
+
+-- AES-GCM round-trip: encrypt then decrypt returns the original plaintext.
+-- Keys are derived inline (PBKDF2 is deterministic, same inputs → same key).
+-- The nonce is random so the ciphertext differs each run; only "ok" is tested.
+main =
+    let
+        result =
+            case Crypto.aesGcmEncrypt (Crypto.aesKeyFromPassword "password" "salt") "hello" of
+                Ok ciphertext ->
+                    case Crypto.aesGcmDecrypt (Crypto.aesKeyFromPassword "password" "salt") ciphertext of
+                        Ok plaintext ->
+                            if plaintext == "hello" then
+                                "ok"
+
+                            else
+                                "wrong"
+
+                        Err _ ->
+                            "decrypt-failed"
+
+                Err _ ->
+                    "encrypt-failed"
+    in
+    println result

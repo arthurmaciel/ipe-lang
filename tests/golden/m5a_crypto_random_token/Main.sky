@@ -1,0 +1,9 @@
+module Main exposing (main)
+
+-- Crypto.randomToken: verify the call compiles and the program exits cleanly.
+-- The result is discarded (auto-drop in Rust; auto-forced in Go — both print "ok").
+main =
+    let
+        _ = Crypto.randomToken 8
+    in
+    println "ok"

@@ -458,6 +458,43 @@ pub fn crypto_chacha_key_from_password(password: String, salt: String) -> String
     crypto_aes_key_from_password(password, salt)
 }
 
+// ── Concrete (non-generic) wrappers for generated Sky code (M5a) ─────────────
+//
+// The generic `crypto_aes_gcm_encrypt<E>`, `crypto_aes_gcm_decrypt<E>`,
+// `crypto_chacha20_encrypt<E>`, `crypto_chacha20_decrypt<E>`,
+// `crypto_rsa_sha256_sign<E>` above use a flexible `E: From<String>` bound so
+// the error type can be inferred from context. Generated Sky code always sets
+// `SkyError = String`, but Rust's type inference cannot pin `E` when the error
+// arm is discarded (e.g. `Err _ ->` in a case expression). These concrete
+// aliases pin `E = String` up-front, eliminating the ambiguity without
+// changing runtime semantics.
+
+/// Generated-code alias for `crypto_aes_gcm_encrypt` with `E = String`.
+pub fn sky_aes_gcm_encrypt(key: String, plaintext: String) -> SkyResult<String, String> {
+    crypto_aes_gcm_encrypt(key, plaintext)
+}
+
+/// Generated-code alias for `crypto_aes_gcm_decrypt` with `E = String`.
+pub fn sky_aes_gcm_decrypt(key: String, encoded: String) -> SkyResult<String, String> {
+    crypto_aes_gcm_decrypt(key, encoded)
+}
+
+/// Generated-code alias for `crypto_chacha20_encrypt` with `E = String`.
+pub fn sky_chacha20_encrypt(key: String, plaintext: String) -> SkyResult<String, String> {
+    crypto_chacha20_encrypt(key, plaintext)
+}
+
+/// Generated-code alias for `crypto_chacha20_decrypt` with `E = String`.
+pub fn sky_chacha20_decrypt(key: String, encoded: String) -> SkyResult<String, String> {
+    crypto_chacha20_decrypt(key, encoded)
+}
+
+/// Generated-code alias for `crypto_rsa_sha256_sign` with `E = String`.
+#[cfg(feature = "crypto")]
+pub fn sky_crypto_rsa_sha256_sign(key_pem: String, msg: String) -> SkyResult<String, String> {
+    crypto_rsa_sha256_sign(key_pem, msg)
+}
+
 #[cfg(test)]
 mod tests_more_hashes {
     use super::*;

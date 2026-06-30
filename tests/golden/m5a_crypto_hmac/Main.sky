@@ -1,0 +1,17 @@
+module Main exposing (main)
+
+-- HMAC-SHA256 / HMAC-SHA512 — RFC 4231 test case 1.
+-- key = 0x0b repeated 20 times (byte value 11 = vertical tab)
+-- msg = "Hi There"
+-- Two key bindings avoid the Rust move issue (key is consumed by each HMAC call).
+main =
+    let
+        key1 = String.repeat 20 (String.fromChar (Char.fromCode 11))
+
+        key2 = String.repeat 20 (String.fromChar (Char.fromCode 11))
+
+        h256 = Crypto.hmacSha256 key1 "Hi There"
+
+        h512 = Crypto.hmacSha512 key2 "Hi There"
+    in
+    println (String.join " " [ h256, h512 ])
