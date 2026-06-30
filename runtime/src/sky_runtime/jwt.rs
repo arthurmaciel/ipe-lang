@@ -72,6 +72,33 @@ fn payload_json(claims_json: &str) -> Result<String, String> {
     Ok(super::json_enc_encode(0, value))
 }
 
+/// True when the token's payload carries `exp == 0`.
+///
+/// The decoders set `reject_tokens_expiring_in_less_than = 1` so jsonwebtoken's
+/// reject condition becomes `exp - 1 < now` (≡ Go's `now >= exp`). It evaluates
+/// `exp - 1` in `u64`, so an `exp` of `0` underflows — a panic in a debug build,
+/// a wrap to `u64::MAX` (silently accepting an always-expired token) in release.
+/// An `exp` of 0 is 1970-01-01, unconditionally in the past, so Go's `now >= exp`
+/// rejects it; we detect that case here and short-circuit to the same rejection
+/// before the subtraction can run. Reading the unverified payload is safe: the
+/// only action taken is the conservative one (reject).
+fn exp_is_zero(token: &str) -> bool {
+    let mut parts = token.split('.');
+    let payload = match (parts.next(), parts.next()) {
+        (Some(_header), Some(payload)) => payload,
+        _ => return false,
+    };
+    let bytes = match URL_SAFE_NO_PAD.decode(payload) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let value: JsonValue = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    matches!(value.get("exp").and_then(JsonValue::as_u64), Some(0))
+}
+
 /// Sky `Jwt_encodeHs256 : String -> String -> Result Error String`
 ///
 /// Byte-identical to the Go backend's `Jwt.encode (Jwt.hs256 secret) claims`.
@@ -128,13 +155,26 @@ pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> SkyRe
                 .into(),
         );
     }
+    // Guard the u64 underflow that reject_tokens_expiring_in_less_than = 1
+    // (set below) would hit on an `exp` of 0. See `exp_is_zero` — exp 0 is
+    // always expired, so this matches Go's `now >= exp` rejection.
+    if exp_is_zero(&token) {
+        return SkyResult::Err("jwt-decode: token has expired".to_string().into());
+    }
     let key = DecodingKey::from_secret(secret.as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
-    // leeway = 0: the Go oracle applies no clock skew — `now >= exp` rejects
-    // immediately. Pin leeway to 0 so the Rust verifier never accepts an expired
-    // token the Go backend rejects (a security primitive must not diverge
-    // in the less-safe direction).
+    // Go's oracle rejects at `now >= exp` with zero clock skew (validateTime →
+    // pastClaim: `now >= ts`). jsonwebtoken's native boundary with leeway = 0 is
+    // `exp < now` — it rejects only once `now` is STRICTLY past `exp`, so at the
+    // exact instant `now == exp` it would ACCEPT a token Go rejects. Setting
+    // reject_tokens_expiring_in_less_than = 1 shifts the reject condition to
+    // `exp - 1 < now` (≡ `now >= exp`), restoring parity. leeway stays 0 so no
+    // other skew is introduced; the exp == 0 underflow of `exp - 1` is guarded
+    // above. nbf parity needs no shift: Go rejects at `now < nbf` (accept at
+    // `now == nbf`), and jsonwebtoken with leeway 0 rejects at `nbf > now`
+    // (accept at `now == nbf`) — already identical.
     validation.leeway = 0;
+    validation.reject_tokens_expiring_in_less_than = 1;
     // exp/nbf are OPTIONAL per the JWT spec (RFC 7519 §4.1.4-5) and per Go's
     // behaviour: a token with no `exp` is treated as non-expiring and ACCEPTED;
     // a token with no `nbf` has no not-before constraint and is ACCEPTED.
@@ -197,6 +237,12 @@ pub fn jwt_encode_rs256<E: From<String>>(
 
 /// Sky `Jwt_decodeRs256 : String -> String -> Result Error String`
 pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> SkyResult<E, String> {
+    // Guard the u64 underflow that reject_tokens_expiring_in_less_than = 1
+    // (set below) would hit on an `exp` of 0. See `exp_is_zero` — exp 0 is
+    // always expired, so this matches Go's `now >= exp` rejection.
+    if exp_is_zero(&token) {
+        return SkyResult::Err("jwt-decode-rs: token has expired".to_string().into());
+    }
     let key = match DecodingKey::from_rsa_pem(key_pem.as_bytes()) {
         Ok(k) => k,
         // Suppress the parse-error detail to avoid leaking structural hints
@@ -204,11 +250,18 @@ pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> SkyR
         Err(_) => return SkyResult::Err("jwt-decode-rs: invalid RSA key".to_string().into()),
     };
     let mut validation = Validation::new(Algorithm::RS256);
-    // leeway = 0: the Go oracle applies no clock skew — `now >= exp` rejects
-    // immediately. Pin leeway to 0 so the Rust verifier never accepts an expired
-    // token the Go backend rejects (a security primitive must not diverge
-    // in the less-safe direction).
+    // Go's oracle rejects at `now >= exp` with zero clock skew (validateTime →
+    // pastClaim: `now >= ts`). jsonwebtoken's native boundary with leeway = 0 is
+    // `exp < now` — it rejects only once `now` is STRICTLY past `exp`, so at the
+    // exact instant `now == exp` it would ACCEPT a token Go rejects. Setting
+    // reject_tokens_expiring_in_less_than = 1 shifts the reject condition to
+    // `exp - 1 < now` (≡ `now >= exp`), restoring parity. leeway stays 0 so no
+    // other skew is introduced; the exp == 0 underflow of `exp - 1` is guarded
+    // above. nbf parity needs no shift: Go rejects at `now < nbf` (accept at
+    // `now == nbf`), and jsonwebtoken with leeway 0 rejects at `nbf > now`
+    // (accept at `now == nbf`) — already identical.
     validation.leeway = 0;
+    validation.reject_tokens_expiring_in_less_than = 1;
     // exp/nbf are OPTIONAL per the JWT spec (RFC 7519 §4.1.4-5) and per Go's
     // behaviour: a token with no `exp` is treated as non-expiring and ACCEPTED;
     // a token with no `nbf` has no not-before constraint and is ACCEPTED.
@@ -412,6 +465,83 @@ mod tests {
         assert!(matches!(dec, SkyResult::Err(_)));
     }
 
+    /// Parity edge: `now == exp` must REJECT, matching Go's `now >= exp`
+    /// (validateTime → pastClaim). jsonwebtoken's native leeway-0 boundary is
+    /// `exp < now` (accepts at `now == exp`); reject_tokens_expiring_in_less_than
+    /// = 1 shifts it to `now >= exp`. This test pins the exact second-boundary —
+    /// far-from-boundary goldens never cross it. Robust against the live clock:
+    /// at decode jsonwebtoken's clock is `>= exp`, so the reject is stable.
+    #[test]
+    fn test_hs256_now_eq_exp_rejected() {
+        let secret = "exp-edge-secret-0123456789abcdef0".to_string();
+        let exp = now_unix(); // now == exp
+        let claims = format!(r#"{{"sub":"x","exp":{}}}"#, exp);
+        let token: SkyResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
+        let token = match token {
+            SkyResult::Ok(t) => t,
+            SkyResult::Err(e) => panic!("encode: {}", e),
+        };
+        let decoded: SkyResult<String, String> = jwt_decode_hs256(secret, token);
+        assert!(
+            matches!(decoded, SkyResult::Err(_)),
+            "now == exp must be rejected to match Go's `now >= exp`"
+        );
+    }
+
+    /// Parity edge: `now == exp - 1` (one second before expiry) must ACCEPT.
+    /// Go rejects only at `now >= exp`, so one second earlier is still valid.
+    /// We anchor `exp = now + 1`. A second-boundary tick between building the
+    /// claim and jsonwebtoken's internal clock read would push `now` up to `exp`
+    /// and flip the result, so retry on that rare straddle — each attempt is
+    /// deterministic, the bounded loop only guards the cross-second race (5
+    /// consecutive straddles is astronomically unlikely and keeps the test
+    /// finite per the timeout principle).
+    #[test]
+    fn test_hs256_now_eq_exp_minus_1_accepted() {
+        let secret = "exp-edge-secret-0123456789abcdef0".to_string();
+        let mut accepted = false;
+        for _ in 0..5 {
+            let exp = now_unix() + 1; // now == exp - 1
+            let claims = format!(r#"{{"sub":"x","exp":{}}}"#, exp);
+            let token = match jwt_encode_hs256::<String>(secret.clone(), claims) {
+                SkyResult::Ok(t) => t,
+                SkyResult::Err(e) => panic!("encode: {}", e),
+            };
+            if matches!(
+                jwt_decode_hs256::<String>(secret.clone(), token),
+                SkyResult::Ok(_)
+            ) {
+                accepted = true;
+                break;
+            }
+        }
+        assert!(
+            accepted,
+            "now == exp - 1 must be accepted (one second before expiry is valid)"
+        );
+    }
+
+    /// Parity edge: `now == nbf` must ACCEPT, matching Go's futureClaim
+    /// (`now < nbf` rejects → `now >= nbf` accepts). Robust against the live
+    /// clock: jsonwebtoken's clock at decode is `>= nbf`, so the accept is
+    /// stable. No `exp` claim → non-expiring, isolating the nbf boundary.
+    #[test]
+    fn test_hs256_now_eq_nbf_accepted() {
+        let secret = "nbf-edge-secret-0123456789abcdef0".to_string();
+        let nbf = now_unix(); // now == nbf
+        let claims = format!(r#"{{"sub":"x","nbf":{}}}"#, nbf);
+        let token: SkyResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
+        let token = match token {
+            SkyResult::Ok(t) => t,
+            SkyResult::Err(e) => panic!("encode: {}", e),
+        };
+        let decoded: SkyResult<String, String> = jwt_decode_hs256(secret, token);
+        assert!(
+            matches!(decoded, SkyResult::Ok(_)),
+            "now == nbf must be accepted to match Go's `now >= nbf`"
+        );
+    }
+
     /// Golden (c): token with NO `exp` claim must be ACCEPTED — matching Go's
     /// behaviour where an absent `exp` means "non-expiring". Guarding against
     /// a regression where `required_spec_claims` includes "exp" (the
@@ -460,14 +590,12 @@ mod tests {
     #[test]
     fn test_rs256_no_exp_accepted() {
         let claims = r#"{"sub":"bob"}"#.to_string();
-        let token: SkyResult<String, String> =
-            jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
+        let token: SkyResult<String, String> = jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
         let token = match token {
             SkyResult::Ok(t) => t,
             SkyResult::Err(e) => panic!("encode-rs: {}", e),
         };
-        let decoded: SkyResult<String, String> =
-            jwt_decode_rs256(RS256_PUB_PEM.to_string(), token);
+        let decoded: SkyResult<String, String> = jwt_decode_rs256(RS256_PUB_PEM.to_string(), token);
         assert!(
             matches!(decoded, SkyResult::Ok(_)),
             "an RS256 token with no exp claim must be accepted (non-expiring, matching Go)"
@@ -481,14 +609,12 @@ mod tests {
     #[test]
     fn test_rs256_future_nbf_rejected() {
         let claims = format!(r#"{{"sub":"bob","nbf":{}}}"#, now_unix() + 300);
-        let token: SkyResult<String, String> =
-            jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
+        let token: SkyResult<String, String> = jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
         let token = match token {
             SkyResult::Ok(t) => t,
             SkyResult::Err(e) => panic!("encode-rs: {}", e),
         };
-        let decoded: SkyResult<String, String> =
-            jwt_decode_rs256(RS256_PUB_PEM.to_string(), token);
+        let decoded: SkyResult<String, String> = jwt_decode_rs256(RS256_PUB_PEM.to_string(), token);
         assert!(
             matches!(decoded, SkyResult::Err(_)),
             "an RS256 token with nbf 300s in the future must be rejected (no leeway, matching Go)"

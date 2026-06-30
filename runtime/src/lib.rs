@@ -15,6 +15,18 @@
 //! uses these freely. The only `#[allow(clippy::panic)]` in the crate are the 2
 //! `ffi_polyfills` dynamic-dispatch fallbacks (unconstrained generic `T` return
 //! → no total value); see README "Soundness attention points".
+//!
+//! # `unsafe` posture
+//! The crate is NOT under a blanket `#![forbid(unsafe_code)]` because there is
+//! exactly one legitimate `unsafe` block: the `pre_exec` / `prctl(PR_SET_PDEATHSIG)`
+//! parent-death-signal hardening in `live::console_proxy` (Linux-only, async-
+//! signal-safe, best-effort — see its `// SAFETY:` note). That single carve-out
+//! is the reason a crate-wide forbid is not applied. Every other module is
+//! `unsafe`-free; security-sensitive kernels (`jwt`, `crypto`, `auth`) contain
+//! no `unsafe` whatsoever. The panic-class `deny`s above plus the
+//! `unwrap_used`/`expect_used` denies in `Cargo.toml` are the enforced floor for
+//! the no-runtime-errors guarantee; introducing `unsafe` anywhere else would be
+//! a deliberate, reviewed addition (the lone existing block predates this note).
 
 #![cfg_attr(
     not(test),
