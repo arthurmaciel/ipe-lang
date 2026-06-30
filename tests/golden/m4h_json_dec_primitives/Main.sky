@@ -1,23 +1,22 @@
 module Main exposing (main)
 
--- Decode an integer and a string from JSON; output both on one line.
--- Exercises the `JsonDec.int` and `JsonDec.string` primitive decoders via
--- `JsonDec.decodeString` (parses the JSON string, runs the decoder, returns
--- `Result Error a`).
+-- JsonDec.int matches Go's lenient `int(f)`: every JSON number unmarshals to a
+-- float, then truncates toward zero — it does NOT reject non-integral numbers.
+--   "3.0" -> 3
+--   "3.5" -> 3      (truncation, not rounding)
+--   "1e2" -> 100    (exponent literal accepted)
+-- JsonDec.string rides along to keep the primitive-decoder coverage.
 main =
     let
-        r1 = JsonDec.decodeString JsonDec.int "42"
+        a = Result.withDefault 0 (JsonDec.decodeString JsonDec.int "3.0")
 
-        r2 = JsonDec.decodeString JsonDec.string "\"hello\""
+        b = Result.withDefault 0 (JsonDec.decodeString JsonDec.int "3.5")
+
+        c = Result.withDefault 0 (JsonDec.decodeString JsonDec.int "1e2")
+
+        s = Result.withDefault "?" (JsonDec.decodeString JsonDec.string "\"hello\"")
     in
-    case r1 of
-        Ok n ->
-            case r2 of
-                Ok s ->
-                    println (String.fromInt n ++ " " ++ s)
-
-                Err _ ->
-                    println "err2"
-
-        Err _ ->
-            println "err1"
+    println
+        (String.join " "
+            [ String.fromInt a, String.fromInt b, String.fromInt c, s ]
+        )

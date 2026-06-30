@@ -1054,11 +1054,15 @@ impl<'a> Lowerer<'a> {
                 // Maps to `sky_runtime::json::Decoder<SkyError, T>`, aliased as
                 // `Decoder<T>` in the emitted project's preamble.
                 "Decoder" if args.len() == 1 => {
-                    let inner =
-                        self.ir_type_from_ty(args.first().ok_or_else(|| bug(
-                            "sky_lower::ir_type_from_ty",
-                            "Decoder applied without its element type",
-                        ))?, span)?;
+                    let inner = self.ir_type_from_ty(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_ty",
+                                "Decoder applied without its element type",
+                            )
+                        })?,
+                        span,
+                    )?;
                     Ok(IrType::Decoder(Box::new(inner)))
                 }
                 _ if self.enum_variants.contains_key(name) => {
@@ -1174,18 +1178,10 @@ impl<'a> Lowerer<'a> {
     /// value) are intentionally omitted.
     fn kernel_native_ir_type(k: KernelFn) -> Option<IrType> {
         Some(match k {
-            KernelFn::JsonEncString => {
-                IrType::Fun(vec![IrType::Str], Box::new(IrType::Json))
-            }
-            KernelFn::JsonEncInt => {
-                IrType::Fun(vec![IrType::Int], Box::new(IrType::Json))
-            }
-            KernelFn::JsonEncFloat => {
-                IrType::Fun(vec![IrType::Float], Box::new(IrType::Json))
-            }
-            KernelFn::JsonEncBool => {
-                IrType::Fun(vec![IrType::Bool], Box::new(IrType::Json))
-            }
+            KernelFn::JsonEncString => IrType::Fun(vec![IrType::Str], Box::new(IrType::Json)),
+            KernelFn::JsonEncInt => IrType::Fun(vec![IrType::Int], Box::new(IrType::Json)),
+            KernelFn::JsonEncFloat => IrType::Fun(vec![IrType::Float], Box::new(IrType::Json)),
+            KernelFn::JsonEncBool => IrType::Fun(vec![IrType::Bool], Box::new(IrType::Json)),
             KernelFn::JsonEncObject => IrType::Fun(
                 vec![IrType::List(Box::new(IrType::Tuple(vec![
                     IrType::Str,
@@ -1366,9 +1362,7 @@ impl<'a> Lowerer<'a> {
                 // when the return type is `Value = any = Ty::Var`.  Rust
                 // infers the concrete return type from the Rust function's
                 // own declared signature.
-                if matches!(&callee, Callee::Kernel(_))
-                    && self.callee_arity(&callee)? == 0
-                {
+                if matches!(&callee, Callee::Kernel(_)) && self.callee_arity(&callee)? == 0 {
                     return Ok(Expr::Call {
                         callee,
                         args: Vec::new(),
@@ -1402,7 +1396,9 @@ impl<'a> Lowerer<'a> {
                     // zero-argument call (`name()`).
                     if let Callee::Kernel(k) = &callee {
                         let arity = self.callee_arity(&callee)?;
-                        if arity > 0 && let Some(fun_ty) = Self::kernel_native_ir_type(*k) {
+                        if arity > 0
+                            && let Some(fun_ty) = Self::kernel_native_ir_type(*k)
+                        {
                             return Ok(Expr::FuncValue { callee, ty: fun_ty });
                         }
                     }
@@ -2215,9 +2211,7 @@ impl<'a> Lowerer<'a> {
                     ("JsonDecP", "required") => Ok(Callee::Kernel(KernelFn::JsonDecPRequired)),
                     ("JsonDecP", "optional") => Ok(Callee::Kernel(KernelFn::JsonDecPOptional)),
                     ("JsonDecP", "custom") => Ok(Callee::Kernel(KernelFn::JsonDecPCustom)),
-                    ("JsonDecP", "requiredAt") => {
-                        Ok(Callee::Kernel(KernelFn::JsonDecPRequiredAt))
-                    }
+                    ("JsonDecP", "requiredAt") => Ok(Callee::Kernel(KernelFn::JsonDecPRequiredAt)),
                     // A kernel beyond the wired set (`Time.now`, …).
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),

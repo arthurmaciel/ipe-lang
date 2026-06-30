@@ -1,13 +1,22 @@
 module Main exposing (main)
 
--- Float 1.5 encodes to "1.5"; bool True to "true"; null to "null".
--- Pins the primitive scalar encoders against the Go oracle.
+-- Float encoding must byte-match Go's encoding/json floatEncoder, not serde's
+-- Ryū default. Go uses decimal ('f') form unless |x| < 1e-6 or |x| >= 1e21, in
+-- which case it uses exponent ('e') form. serde would render 1e20 / 1.23e17 in
+-- exponent form and 1e-6 with a different shape, so these pin the reshaped path:
+--   1.5      -> "1.5"
+--   1e20     -> "100000000000000000000"   (< 1e21 → decimal)
+--   1e-6     -> "0.000001"                (== 1e-6, boundary is exclusive → decimal)
+--   1.23e17  -> "123000000000000000"      (< 1e21 → decimal)
+-- bool/null scalars ride along.
 main =
-    let
-        f = JsonEnc.encode 0 (JsonEnc.float 1.5)
-
-        b = JsonEnc.encode 0 (JsonEnc.bool True)
-
-        n = JsonEnc.encode 0 JsonEnc.null
-    in
-    println (String.join " " [ f, b, n ])
+    println
+        (String.join " "
+            [ JsonEnc.encode 0 (JsonEnc.float 1.5)
+            , JsonEnc.encode 0 (JsonEnc.float 1e20)
+            , JsonEnc.encode 0 (JsonEnc.float 1e-6)
+            , JsonEnc.encode 0 (JsonEnc.float 1.23e17)
+            , JsonEnc.encode 0 (JsonEnc.bool True)
+            , JsonEnc.encode 0 JsonEnc.null
+            ]
+        )

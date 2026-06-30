@@ -4,7 +4,9 @@
 //! Tests exercise the `JsonDec` and `JsonDecP` kernel families end-to-end:
 //!
 //! * `JsonDec.int` + `JsonDec.string` via `JsonDec.decodeString` — primitive
-//!   decoders on bare JSON values.
+//!   decoders on bare JSON values.  `JsonDec.int` mirrors Go's lenient `int(f)`
+//!   truncation, so `"3.0"`/`"3.5"`/`"1e2"` decode to `3`/`3`/`100` rather than
+//!   rejecting the non-integral / exponent forms.
 //!   (`m4h_json_dec_primitives`)
 //!
 //! * `JsonDec.list JsonDec.int` on `"[1,2,3]"` — the list combinator wraps its
@@ -76,8 +78,8 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
 // ── primitives ───────────────────────────────────────────────────────────────
 
-/// `JsonDec.int "42"` → 42; `JsonDec.string "\"hello\""` → "hello".
-/// Output: `"42 hello"`.
+/// `JsonDec.int` on `"3.0"`/`"3.5"`/`"1e2"` → `3`/`3`/`100` (Go's `int(f)`
+/// truncation); `JsonDec.string "\"hello\""` → "hello".  Output: `"3 3 100 hello"`.
 #[test]
 fn json_dec_primitives() {
     assert_runs_and_matches_oracle("m4h_json_dec_primitives");
