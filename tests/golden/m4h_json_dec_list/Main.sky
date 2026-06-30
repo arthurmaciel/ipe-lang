@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+-- Decode a JSON array of integers; print the length of the resulting list.
+-- Exercises `JsonDec.list` (which wraps an element decoder in a factory so
+-- it can be reused per element) and `JsonDec.int`.
+main =
+    case JsonDec.decodeString (JsonDec.list JsonDec.int) "[1,2,3]" of
+        Ok ns ->
+            println (String.fromInt (List.length ns))
+
+        Err _ ->
+            println "got error"

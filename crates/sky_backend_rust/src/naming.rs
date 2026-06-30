@@ -392,6 +392,29 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::JsonEncList => "json_enc_list",
         KernelFn::JsonEncObject => "json_enc_object",
         KernelFn::JsonEncEncode => "json_enc_encode",
+        // ── JsonDec kernels (M4h) ────────────────────────────────────────────
+        KernelFn::JsonDecString => "json_decode_string",
+        KernelFn::JsonDecInt => "json_decode_int",
+        KernelFn::JsonDecFloat => "json_decode_float",
+        KernelFn::JsonDecBool => "json_decode_bool",
+        KernelFn::JsonDecDecodeString => "decode_from_json_string",
+        KernelFn::JsonDecField => "decode_field",
+        KernelFn::JsonDecAt => "decode_at",
+        KernelFn::JsonDecIndex => "decode_index",
+        KernelFn::JsonDecList => "decode_list",
+        KernelFn::JsonDecMap => "decode_map",
+        KernelFn::JsonDecAndThen => "decode_and_then",
+        KernelFn::JsonDecSucceed => "decode_succeed",
+        KernelFn::JsonDecFail => "decode_fail",
+        KernelFn::JsonDecOneOf => "decode_one_of",
+        KernelFn::JsonDecMap2 => "decode_map2",
+        KernelFn::JsonDecMap3 => "decode_map3",
+        KernelFn::JsonDecMap4 => "decode_map4",
+        // ── JsonDecP pipeline kernels (M4h) ──────────────────────────────────
+        KernelFn::JsonDecPRequired => "decode_pipeline_required",
+        KernelFn::JsonDecPOptional => "decode_pipeline_optional",
+        KernelFn::JsonDecPCustom => "decode_pipeline_custom",
+        KernelFn::JsonDecPRequiredAt => "decode_pipeline_required_at",
     }
 }
 

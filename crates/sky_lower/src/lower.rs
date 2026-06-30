@@ -220,6 +220,8 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::TaskUnit
         | IrType::Bytes
         | IrType::Json
+        // `Decoder<T>` is an opaque struct, not a function type.
+        | IrType::Decoder(_)
         | IrType::Generic(_) => false,
         IrType::Enum { args, .. } => args.iter().any(ir_contains_fun),
         IrType::Maybe(elem) | IrType::List(elem) => ir_contains_fun(elem),
@@ -1048,6 +1050,17 @@ impl<'a> Lowerer<'a> {
                     }
                     Ok(IrType::Set(Box::new(elem)))
                 }
+                // `Decoder a` — the opaque JSON decoder type introduced by M4h.
+                // Maps to `sky_runtime::json::Decoder<SkyError, T>`, aliased as
+                // `Decoder<T>` in the emitted project's preamble.
+                "Decoder" if args.len() == 1 => {
+                    let inner =
+                        self.ir_type_from_ty(args.first().ok_or_else(|| bug(
+                            "sky_lower::ir_type_from_ty",
+                            "Decoder applied without its element type",
+                        ))?, span)?;
+                    Ok(IrType::Decoder(Box::new(inner)))
+                }
                 _ if self.enum_variants.contains_key(name) => {
                     // A use-site enum type carries its solved type arguments, so
                     // `Opt Int` → `Enum { Opt, [Int] }` (rendered `MainOpt<i64>`).
@@ -1772,7 +1785,12 @@ impl<'a> Lowerer<'a> {
                 // ── Bytes arity-0 ────────────────────────────────────────────
                 | KernelFn::BytesEmpty
                 // ── JsonEnc arity-0 (M4g) ────────────────────────────────────
-                | KernelFn::JsonEncNull,
+                | KernelFn::JsonEncNull
+                // ── JsonDec primitive decoders — arity 0 (M4h) ────────────────
+                | KernelFn::JsonDecString
+                | KernelFn::JsonDecInt
+                | KernelFn::JsonDecFloat
+                | KernelFn::JsonDecBool,
             ) => Ok(0),
             Callee::Kernel(
                 KernelFn::StringFromInt
@@ -1843,6 +1861,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JsonEncFloat
                 | KernelFn::JsonEncBool
                 | KernelFn::JsonEncObject
+                // ── JsonDec arity-1 combinators (M4h) ─────────────────────────
+                | KernelFn::JsonDecList
+                | KernelFn::JsonDecSucceed
+                | KernelFn::JsonDecFail
+                | KernelFn::JsonDecOneOf
                 // ── Math arity-1 (Int → Int) ─────────────────────────────────
                 | KernelFn::MathAbs
                 // ── Math arity-1 (Float → Float) ────────────────────────────
@@ -1911,6 +1934,14 @@ impl<'a> Lowerer<'a> {
                 // ── JsonEnc arity-2 (M4g) ─────────────────────────────────────
                 | KernelFn::JsonEncList
                 | KernelFn::JsonEncEncode
+                // ── JsonDec arity-2 (M4h) ─────────────────────────────────────
+                | KernelFn::JsonDecDecodeString
+                | KernelFn::JsonDecField
+                | KernelFn::JsonDecAt
+                | KernelFn::JsonDecIndex
+                | KernelFn::JsonDecMap
+                | KernelFn::JsonDecAndThen
+                | KernelFn::JsonDecPCustom
                 // ── Math arity-2 (Float → Float → Float) ────────────────────
                 | KernelFn::MathPow
                 | KernelFn::MathHypot
@@ -1929,8 +1960,16 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DictInsert
                 | KernelFn::DictFoldl
                 // ── Bytes arity-3 ────────────────────────────────────────────
-                | KernelFn::BytesSlice,
+                | KernelFn::BytesSlice
+                // ── JsonDec arity-3 (M4h) ─────────────────────────────────────
+                | KernelFn::JsonDecMap2
+                | KernelFn::JsonDecPRequired
+                | KernelFn::JsonDecPRequiredAt,
             ) => Ok(3),
+            // ── JsonDec arity-4 (M4h) ─────────────────────────────────────────
+            Callee::Kernel(KernelFn::JsonDecMap3 | KernelFn::JsonDecPOptional) => Ok(4),
+            // ── JsonDec arity-5 (M4h) ─────────────────────────────────────────
+            Callee::Kernel(KernelFn::JsonDecMap4) => Ok(5),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -2152,6 +2191,33 @@ impl<'a> Lowerer<'a> {
                     ("JsonEnc", "list") => Ok(Callee::Kernel(KernelFn::JsonEncList)),
                     ("JsonEnc", "object") => Ok(Callee::Kernel(KernelFn::JsonEncObject)),
                     ("JsonEnc", "encode") => Ok(Callee::Kernel(KernelFn::JsonEncEncode)),
+                    // ── Json.Decode (M4h) ─────────────────────────────────────
+                    ("JsonDec", "string") => Ok(Callee::Kernel(KernelFn::JsonDecString)),
+                    ("JsonDec", "int") => Ok(Callee::Kernel(KernelFn::JsonDecInt)),
+                    ("JsonDec", "float") => Ok(Callee::Kernel(KernelFn::JsonDecFloat)),
+                    ("JsonDec", "bool") => Ok(Callee::Kernel(KernelFn::JsonDecBool)),
+                    ("JsonDec", "decodeString") => {
+                        Ok(Callee::Kernel(KernelFn::JsonDecDecodeString))
+                    }
+                    ("JsonDec", "field") => Ok(Callee::Kernel(KernelFn::JsonDecField)),
+                    ("JsonDec", "at") => Ok(Callee::Kernel(KernelFn::JsonDecAt)),
+                    ("JsonDec", "index") => Ok(Callee::Kernel(KernelFn::JsonDecIndex)),
+                    ("JsonDec", "list") => Ok(Callee::Kernel(KernelFn::JsonDecList)),
+                    ("JsonDec", "map") => Ok(Callee::Kernel(KernelFn::JsonDecMap)),
+                    ("JsonDec", "andThen") => Ok(Callee::Kernel(KernelFn::JsonDecAndThen)),
+                    ("JsonDec", "succeed") => Ok(Callee::Kernel(KernelFn::JsonDecSucceed)),
+                    ("JsonDec", "fail") => Ok(Callee::Kernel(KernelFn::JsonDecFail)),
+                    ("JsonDec", "oneOf") => Ok(Callee::Kernel(KernelFn::JsonDecOneOf)),
+                    ("JsonDec", "map2") => Ok(Callee::Kernel(KernelFn::JsonDecMap2)),
+                    ("JsonDec", "map3") => Ok(Callee::Kernel(KernelFn::JsonDecMap3)),
+                    ("JsonDec", "map4") => Ok(Callee::Kernel(KernelFn::JsonDecMap4)),
+                    // ── Json.Decode.Pipeline (M4h) ────────────────────────────
+                    ("JsonDecP", "required") => Ok(Callee::Kernel(KernelFn::JsonDecPRequired)),
+                    ("JsonDecP", "optional") => Ok(Callee::Kernel(KernelFn::JsonDecPOptional)),
+                    ("JsonDecP", "custom") => Ok(Callee::Kernel(KernelFn::JsonDecPCustom)),
+                    ("JsonDecP", "requiredAt") => {
+                        Ok(Callee::Kernel(KernelFn::JsonDecPRequiredAt))
+                    }
                     // A kernel beyond the wired set (`Time.now`, …).
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),

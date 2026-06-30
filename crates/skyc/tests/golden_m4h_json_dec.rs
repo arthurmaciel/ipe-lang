@@ -1,0 +1,134 @@
+//! M4h `Sky.Core.Json.Decode` + `Sky.Core.Json.Decode.Pipeline` parity gate —
+//! JSON decoder combinators with byte-for-byte Go parity.
+//!
+//! Tests exercise the `JsonDec` and `JsonDecP` kernel families end-to-end:
+//!
+//! * `JsonDec.int` + `JsonDec.string` via `JsonDec.decodeString` — primitive
+//!   decoders on bare JSON values.
+//!   (`m4h_json_dec_primitives`)
+//!
+//! * `JsonDec.list JsonDec.int` on `"[1,2,3]"` — the list combinator wraps its
+//!   element decoder in a factory so it can be reused per element.
+//!   (`m4h_json_dec_list`)
+//!
+//! * `JsonDec.field`, `JsonDec.at`, `JsonDec.index` — structural access into
+//!   JSON objects and arrays.
+//!   (`m4h_json_dec_field_at_index`)
+//!
+//! * `JsonDec.int` on a string value — verifies that a type mismatch produces
+//!   `Err _`, not a panic.
+//!   (`m4h_json_dec_fail`)
+//!
+//! * `JsonDec.oneOf [map fromInt int, string]` — tries decoders in order;
+//!   first success wins.
+//!   (`m4h_json_dec_one_of`)
+//!
+//! * `JsonDec.succeed makePerson |> JsonDecP.required "name" string |>
+//!   JsonDecP.required "age" int |> JsonDecP.optional "nickname" string "unknown"` —
+//!   pipeline-style record decoder; the optional field supplies a default when
+//!   absent.
+//!   (`m4h_json_dec_pipeline`)
+//!
+//! Every test is gated on `SKY_E2E=1`; without it the test returns early.  Run:
+//!
+//! ```text
+//! SKY_E2E=1 SKY_RUNTIME_DIR=<path-to-runtime-rust/src/sky_runtime> \
+//!     cargo test golden_m4h
+//! ```
+
+use std::path::{Path, PathBuf};
+
+mod support;
+
+fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+fn golden_dir(root: &Path, name: &str) -> PathBuf {
+    root.join("tests").join("golden").join(name)
+}
+
+/// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
+/// run it, and assert its stdout matches the cached oracle.  Gated on
+/// `SKY_E2E=1`.
+fn assert_runs_and_matches_oracle(name: &str) {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+
+    let root = repo_root();
+    let dir = golden_dir(&root, name);
+    let entry = dir.join("Main.sky");
+    let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve for E2E");
+    let Ok(runtime) = runtime else { return };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(built.is_ok(), "build failed for {name}: {:?}", built.err());
+
+    let outcome = support::build_and_run_emitted(name, &out);
+    support::assert_go_parity(name, &dir, &outcome.stdout);
+    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the oracle");
+}
+
+// ── primitives ───────────────────────────────────────────────────────────────
+
+/// `JsonDec.int "42"` → 42; `JsonDec.string "\"hello\""` → "hello".
+/// Output: `"42 hello"`.
+#[test]
+fn json_dec_primitives() {
+    assert_runs_and_matches_oracle("m4h_json_dec_primitives");
+}
+
+// ── list combinator ──────────────────────────────────────────────────────────
+
+/// `JsonDec.list JsonDec.int "[1,2,3]"` → `[1,2,3]`; print `List.length`.
+/// Output: `"3"`.
+#[test]
+fn json_dec_list() {
+    assert_runs_and_matches_oracle("m4h_json_dec_list");
+}
+
+// ── structural access ────────────────────────────────────────────────────────
+
+/// `field "name"`, `at ["nested","score"]`, `index 1 bool` access.
+/// Output: `"Alice 99 y"`.
+#[test]
+fn json_dec_field_at_index() {
+    assert_runs_and_matches_oracle("m4h_json_dec_field_at_index");
+}
+
+// ── failing decode ───────────────────────────────────────────────────────────
+
+/// `JsonDec.int "\"not an int\""` → `Err _`.  Output: `"got error"`.
+#[test]
+fn json_dec_fail() {
+    assert_runs_and_matches_oracle("m4h_json_dec_fail");
+}
+
+// ── oneOf ────────────────────────────────────────────────────────────────────
+
+/// `oneOf [map fromInt int, string]` on `42` → `"42"`, on `"hello"` → `"hello"`.
+/// Output: `"42 hello"`.
+#[test]
+fn json_dec_one_of() {
+    assert_runs_and_matches_oracle("m4h_json_dec_one_of");
+}
+
+// ── pipeline ─────────────────────────────────────────────────────────────────
+
+/// `succeed makePerson |> required "name" string |> required "age" int |>
+/// optional "nickname" string "unknown"`.  First JSON has no nickname;
+/// second has `"Bobby"`.
+/// Output:
+/// ```text
+/// Alice|30|unknown
+/// Bob|25|Bobby
+/// ```
+#[test]
+fn json_dec_pipeline() {
+    assert_runs_and_matches_oracle("m4h_json_dec_pipeline");
+}

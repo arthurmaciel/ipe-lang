@@ -103,7 +103,7 @@ fn deeply_nested_expr_fails_fast_not_stack_overflow() -> DResult<()> {
     let func = interner.intern("deep")?;
 
     // 4096 left-nested additions: (((… + 1) + 1) + 1). The leaf sits far below
-    // the backend's MAX_EMIT_DEPTH (256), so the guard trips long before.
+    // the backend's MAX_EMIT_DEPTH (~96), so the guard trips long before.
     let mut body = Expr::Int(0);
     for _ in 0..4096 {
         body = Expr::BinOp {
@@ -142,9 +142,9 @@ fn nesting_at_the_bound_still_emits() -> DResult<()> {
     let main_mod = interner.intern("Main")?;
     let func = interner.intern("ok")?;
 
-    // 200 levels: comfortably under the 256 ceiling.
+    // 64 levels: comfortably under the emit-depth ceiling.
     let mut body = Expr::Int(0);
-    for _ in 0..200 {
+    for _ in 0..64 {
         body = Expr::BinOp {
             op: BinOp::Add,
             lhs: Box::new(body),

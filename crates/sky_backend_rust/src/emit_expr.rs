@@ -21,8 +21,10 @@ use crate::naming::kernel_name;
 /// buggily deep IR spine would otherwise overflow the native stack with no
 /// diagnostic. The parser already caps *source* nesting at 256 (SKY-P0003);
 /// this matching bound is defence-in-depth against an IR produced past that —
-/// well below the native stack ceiling, so the guard fires first.
-const MAX_EMIT_DEPTH: u16 = 256;
+/// well below the native stack ceiling (≤ 2 MB default thread stack), so the
+/// guard fires first. Sized conservatively to leave headroom for the frame size
+/// of `emit_expr_at` in debug builds.
+const MAX_EMIT_DEPTH: u16 = 96;
 
 /// One indentation level: four spaces, matching the golden's formatting.
 fn indent_of(level: usize) -> String {
@@ -99,7 +101,12 @@ const fn kernel_swaps_first_two(k: sky_ir::KernelFn) -> bool {
     use sky_ir::KernelFn;
     matches!(
         k,
-        KernelFn::MaybeMap | KernelFn::MaybeAndThen | KernelFn::ResultMap
+        KernelFn::MaybeMap
+            | KernelFn::MaybeAndThen
+            | KernelFn::ResultMap
+            // `JsonDec.andThen f decoder` — Sky passes fn first; Rust runtime
+            // `decode_and_then(decoder, f)` expects decoder first.
+            | KernelFn::JsonDecAndThen
     )
 }
 
@@ -122,9 +129,76 @@ pub fn emit_expr(
     emit_expr_at(ctx, expr, indent, 0, generics)
 }
 
+/// Handle JSON decoder kernel calls that require custom argument wrapping.
+///
+/// Returns `Some(emitted)` for the three special cases:
+///
+/// * **Arity-0 primitive decoders** (`JsonDecString/Int/Float/Bool`) — these
+///   carry a free `E: From<String>` type parameter that Rust cannot infer when
+///   passed to another polymorphic function (e.g. `decode_from_json_string`).
+///   Emits with an explicit `SkyError` turbofish.
+///
+/// * **`JsonDecSucceed` applied to a named multi-arg function** — `decode_succeed`
+///   expects a `Box<dyn Fn() -> A + Send>` FACTORY. A named N-arg function
+///   `makeUser` is wrapped as `decode_succeed(curry_N(makeUser))`.
+///
+/// * **`JsonDecList`** — `decode_list` expects `impl Fn() -> Decoder<E, T> + Send`
+///   (a factory) rather than the decoder value. Wraps the argument in a
+///   `move` closure: `decode_list(move || { inner })`.
+///
+/// Returns `None` for all other `Expr::Call` shapes, which fall through to the
+/// standard emitter.  Factored out of `emit_expr_at` to avoid inflating that
+/// function's stack frame (the depth-guard test relies on a bounded frame size).
+#[inline(never)]
+fn emit_json_decoder_call(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    // ── Arity-0 primitives — turbofish SkyError ──────────────────────────────
+    if args.is_empty()
+        && matches!(
+            callee,
+            Callee::Kernel(
+                sky_ir::KernelFn::JsonDecString
+                    | sky_ir::KernelFn::JsonDecInt
+                    | sky_ir::KernelFn::JsonDecFloat
+                    | sky_ir::KernelFn::JsonDecBool
+            )
+        )
+    {
+        let name = callee_name(ctx, callee)?;
+        return Ok(Some(format!("{name}::<SkyError>()")));
+    }
+    // ── JsonDecSucceed with named function argument ───────────────────────────
+    if matches!(callee, Callee::Kernel(sky_ir::KernelFn::JsonDecSucceed))
+        && let Some(Expr::FuncValue {
+            callee: fn_callee,
+            ty: IrType::Fun(params, _),
+        }) = args.first()
+        && !params.is_empty()
+    {
+        let fn_name = callee_name(ctx, fn_callee)?;
+        let n = params.len();
+        return Ok(Some(format!("decode_succeed(curry{n}({fn_name}))")));
+    }
+    // ── JsonDecList — wrap argument in factory closure ────────────────────────
+    if matches!(callee, Callee::Kernel(sky_ir::KernelFn::JsonDecList))
+        && let Some(inner) = args.first()
+    {
+        let inner_s = emit_expr_at(ctx, inner, indent, child, generics)?;
+        return Ok(Some(format!("decode_list(move || {{ {inner_s} }})")));
+    }
+    Ok(None)
+}
+
 /// Depth-tracked recursion behind [`emit_expr`]. `depth` is the IR-nesting level
 /// of `expr` (0 at the function body); it gates the bounded-emit guard and is
 /// independent of `indent` (the textual indentation of `match` arms).
+#[allow(clippy::too_many_lines)]
 fn emit_expr_at(
     ctx: &EmitCtx,
     expr: &Expr,
@@ -217,6 +291,15 @@ fn emit_expr_at(
             Ok(format!("(if {cond} {{ {then_} }} else {{ {else_} }})"))
         }
         Expr::Call { callee, args } => {
+            // JSON decoder kernel special cases are factored into a separate
+            // `#[inline(never)]` helper to keep the `emit_expr_at` stack frame
+            // small enough for the depth-guard test (SKY-L0200). The helper
+            // returns `None` when no special case applies.
+            if let Some(result) =
+                emit_json_decoder_call(ctx, callee, args, indent, child, generics)?
+            {
+                return Ok(result);
+            }
             let name = callee_name(ctx, callee)?;
             let mut parts = Vec::with_capacity(args.len());
             for arg in args {

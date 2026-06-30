@@ -1,0 +1,11 @@
+module Main exposing (main)
+
+-- A decoder applied to a value of the wrong type must return `Err`.
+-- `JsonDec.int` on the string `"not an int"` must fail.
+main =
+    case JsonDec.decodeString JsonDec.int "\"not an int\"" of
+        Ok _ ->
+            println "ok"
+
+        Err _ ->
+            println "got error"
