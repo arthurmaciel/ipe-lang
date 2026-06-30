@@ -141,6 +141,45 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   (Bytes.fromString s)`. Doing so today would corrupt the existing Latin-1 binary
   callers, so it is its own milestone, recorded here rather than left implicit.
 
+- **`Sky.Core.Jwt` API surface — flat kernels vs the Go builder API (M5b
+  interim).** The Go backend exposes JWT through a builder API: `Jwt.encode
+  (Jwt.hs256 secret) (Jwt.claims |> Jwt.subject … |> Jwt.expiresAt …)` and
+  `Jwt.decode (Jwt.hs256 secret) now token`, with `Algorithm` / `Claims` types.
+  The Rust backend currently surfaces four FLAT kernels —
+  `Jwt.encodeHs256` / `decodeHs256` / `encodeRs256` / `decodeRs256` — taking the
+  claims as a JSON string directly. **The token BYTES are identical to Go**: the
+  encode path rebuilds the compact JWS through the same Go-parity primitives the
+  Go module uses (`Json.Encode.encode 0` for header + payload, `Crypto.hmacSha256`
+  / `Crypto.rsaSha256Sign` for the signature), so for a fixed key + claims the
+  emitted token equals the Go reference token byte-for-byte (proven by the
+  captured-Go-token goldens `m5b_jwt_hs256_bytes` / `m5b_jwt_rs256_bytes` and the
+  byte-equality assertions in `crates/skyc/tests/golden_m5b_uuid_jwt.rs` +
+  `runtime/src/sky_runtime/jwt.rs`). Only the CALL SURFACE differs, so a
+  Go-targeted program using the builder API does not yet compile on the Rust
+  backend, and the flat-kernel goldens cannot run the same `Main.sky` on the Go
+  oracle — hence `oracle_divergence = true` (`divergence:` reason) for every
+  `m5b_jwt_*` golden, with skyc's own output cached. Recorded as `divergence:
+  Sky.Core.Jwt flat encode/decode kernels are the Rust-backend M5b interim
+  surface; the Go backend exposes the builder API`. **Tracked follow-up (not
+  deferred silently):** add the Go-shaped builder API (`Jwt.encode` / `hs256` /
+  `rs256` / `claims` / `decode` + `Algorithm` / `Claims`) on the Rust backend so
+  a Go-targeted JWT program compiles unchanged and the goldens become
+  shared-`Main.sky` Go-parity goldens — the byte layout is already identical, so
+  this is a surface/API milestone, not a codec change.
+
+- **`Sky.Core.Uuid` — Rust evaluates the kernels where the Go reference differs
+  on these shapes (M5b).** Two recorded behavioural divergences, both with
+  Sky-Rust producing the semantically-correct result (`sanctioned:` reason,
+  skyc's output cached): (1) the bare arity-0 kernel value `Uuid.v4` / `Uuid.v7`
+  evaluates to a fresh `String` call on the Rust backend (the documented
+  bare-reference form), whereas the Go reference leaves the bare reference as a
+  kernel function value (CLAUDE.md Limitation #7 — arity-0 kernel codegen), so
+  `m5b_uuid_format`'s length/version-nibble checks differ on Go; (2) the Rust
+  backend's `Uuid.parse` accepts a canonical hyphenated UUID (`Just`) and rejects
+  malformed input (`Nothing`), whereas the Go reference returns `Nothing` for the
+  same canonical UUID on this shape (`m5b_uuid_parse`). Recorded as `sanctioned:`
+  markers in each golden directory.
+
 ## How to add a marker divergence (`divergence:` or `sanctioned:`)
 
 1. Decide the tag. `sanctioned:` — Sky-Rust is genuinely more correct

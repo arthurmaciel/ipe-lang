@@ -2249,7 +2249,9 @@ impl<'a> Lowerer<'a> {
                     ("Crypto", "md5") => Ok(Callee::Kernel(KernelFn::CryptoMd5)),
                     ("Crypto", "hmacSha256") => Ok(Callee::Kernel(KernelFn::CryptoHmacSha256)),
                     ("Crypto", "hmacSha512") => Ok(Callee::Kernel(KernelFn::CryptoHmacSha512)),
-                    ("Crypto", "rsaSha256Sign") => Ok(Callee::Kernel(KernelFn::CryptoRsaSha256Sign)),
+                    ("Crypto", "rsaSha256Sign") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoRsaSha256Sign))
+                    }
                     ("Crypto", "rsaSha256Verify") => {
                         Ok(Callee::Kernel(KernelFn::CryptoRsaSha256Verify))
                     }

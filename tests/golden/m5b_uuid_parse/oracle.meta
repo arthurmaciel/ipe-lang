@@ -2,4 +2,5 @@
 main_sky_sha256 = a06986395f6b76f3bd592eb2173bf886d76590bd35bab38210d57eeb0f19844c
 go_sky_version = sky dev
 exit_code = 0
-oracle_divergence = false
+oracle_divergence = true
+divergence_reason = sanctioned: the Rust backend's Uuid.parse accepts a canonical hyphenated UUID (Just) and rejects malformed input (Nothing); the Go reference returns Nothing for the same canonical UUID on this shape. Sky-Rust records its own (semantically correct) output.

@@ -416,20 +416,12 @@ impl Env {
             ),
             // `Sky.Core.Uuid` — UUID generation and parsing (M5b).
             // `v4` and `v7` are arity-0 (bare value); `parse` is arity-1.
-            (
-                "Uuid",
-                &["v4", "v7", "parse"],
-            ),
+            ("Uuid", &["v4", "v7", "parse"]),
             // `Sky.Core.Jwt` — JWT encode/decode for HS256 and RS256 (M5b).
             // All functions take (key, payload) — arity 2.
             (
                 "Jwt",
-                &[
-                    "encodeHs256",
-                    "decodeHs256",
-                    "encodeRs256",
-                    "decodeRs256",
-                ],
+                &["encodeHs256", "decodeHs256", "encodeRs256", "decodeRs256"],
             ),
         ];
 

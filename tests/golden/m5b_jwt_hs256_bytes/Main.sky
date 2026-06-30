@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+-- JWT HS256 byte-parity: emit the token for a fixed 32-byte key + claims and
+-- print it verbatim. The emitted token is byte-identical to the genuine
+-- Go-backend token captured from the equivalent builder-API program
+-- `Jwt.encode (Jwt.hs256 secret) (claims |> subject "alice" |> expiresAt …)`.
+-- See oracle.meta (divergence note) and the byte-parity assertion in
+-- crates/skyc/tests/golden_m5b_uuid_jwt.rs.
+-- Secret is exactly 32 bytes, clearing the RFC 7518 §3.2 floor.
+main =
+    let
+        secret = "test-secret-key-0123456789abcdef"
+
+        claims = "{\"sub\":\"alice\",\"exp\":9999999999}"
+    in
+    println
+        (case Jwt.encodeHs256 secret claims of
+            Ok token ->
+                token
+
+            Err e ->
+                "encode-error: " ++ e)
