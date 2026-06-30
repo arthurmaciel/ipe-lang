@@ -424,3 +424,46 @@ Future improvements to design when the time comes:
 
 Disposition: filed (2026-06-29). Post-M6 (needs the live runtime first). Ties to
 the hot-reload idea (Ideas 1-3) — same dev-loop family.
+
+## Idea — Language-level ADT⇄string ergonomics (parse-don't-validate, facilitated) 🔬🧊
+
+`parse, don't validate` is a rule WE enforce on the compiler — but the language
+itself should make it cheap for the *user* to follow. The recurring case: a sum
+type used as an option set —
+
+```elm
+type Theme = Light | Dark | Purple
+```
+
+— almost always needs a `Theme -> String` (rendering UI, persisting, query
+params) AND a `String -> Maybe Theme` (parsing a request/stored value back into
+the typed value). Today the user hand-writes both, and they drift. Two
+directions to brainstorm (keep ipê's syntax clean — this is the open question):
+
+1. **LSP-assisted, no new syntax.** An LSP code-action that generates the
+   `toString` / `fromString` (and a round-trip property test) from the variant
+   list — regenerated when variants change. Zero magic in the language; the
+   functions are ordinary, visible Sky. Scales to many variants without
+   boilerplate. (Depends on good LSP — ties to [[incremental-compilation-salsa]].)
+
+2. **Syntax extension — variant name + stringified name as a single SSOT.**
+   Declare the wire/display name alongside each variant once, and the compiler
+   derives `Theme.toString` / `Theme.fromString` automatically, e.g. a sketch:
+
+   ```elm
+   type Theme = Light "light" | Dark "dark" | Purple "purple"
+   -- auto: Theme.toString Light == "light"; Theme.fromString "dark" == Just Dark
+   ```
+
+   Single source of truth, no drift. But it's "magic" derivation — the core
+   question is whether that magic is *good* (ergonomic, predictable) or *bad*
+   (hidden behaviour, surprises). Compare: Rust `#[derive(Display/FromStr)]` +
+   `strum`, Haskell `deriving (Show/Read)` vs custom, Elm's explicit-everything
+   stance (which would reject the magic). The variant-with-payload case
+   (`type Shape = Circle Float | Rect Float Float`) complicates a blanket
+   derive — decide whether the SSOT name applies only to the *tag*.
+
+Disposition: filed (2026-06-30). Brainstorm post-core. The "is this magic good?"
+judgement is the crux — lean toward the LSP route if the magic proves
+surprising. Connects to the parse-don't-validate principle and the
+namespace/identity rethink ([[post-completion-rename-and-namespace]]).

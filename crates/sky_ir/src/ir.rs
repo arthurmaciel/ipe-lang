@@ -1202,6 +1202,58 @@ pub enum KernelFn {
     FileRename,
     /// `File.delete : String -> Task Error ()` — alias of `File.remove`. Arity 1.
     FileDelete,
+    // ── Http kernels (M5b) ──────────────────────────────────────────────────
+    /// `Http.get : String -> Task Error HttpResponse` — arity 1.
+    ///
+    /// Routes through `sky_runtime::http_client::http_get`; the SSRF guard,
+    /// body cap, timeout floor, and error redaction are all inside the runtime.
+    /// The returned `sky_runtime::HttpResponse` is converted to the synthesised
+    /// Sky record struct `{body, headers, status}` via an inline `task_map`
+    /// closure in the emitter (Design B — no nominal runtime-struct bridge).
+    HttpGet,
+    /// `Http.post : String -> String -> Task Error HttpResponse` — arity 2.
+    ///
+    /// First arg is the URL, second is the body string. Same runtime guards as
+    /// `Http.get`; same `task_map` conversion on the response.
+    HttpPost,
+    /// `Http.request : HttpRequest -> Task Error HttpResponse` — arity 1.
+    ///
+    /// Accepts the full `HttpRequest` record (`{method, url, body, headers,
+    /// timeout, followRedirects, maxRedirects}`), field-for-field converted to
+    /// `sky_runtime::HttpRequest` before the runtime call. The emitter binds
+    /// the synthesised struct to `__req` to avoid partial-move hazards.
+    HttpRequest,
+    /// `Http.parseQuery : String -> Dict String String` — arity 1, pure.
+    ///
+    /// Trims a leading `?`, splits on `&`/`=`, percent-decodes, first-key-wins.
+    /// No turbofish needed: `http_parse_query` returns `HashMap<String,String>`
+    /// which is `Dict String String` — the standard `Expr::Call` path is correct.
+    HttpParseQuery,
+    // ── Http builder kernels (M5b) ───────────────────────────────────────────
+    /// `Http.defaultRequest : String -> HttpRequest` — arity 1, pure.
+    ///
+    /// Constructs an `HttpRequest` with sensible defaults: `method = "GET"`,
+    /// `body = ""`, `headers = []`, `timeout = 30000`, `followRedirects = true`,
+    /// `maxRedirects = 10`. Emitted as an inline struct literal — no runtime call.
+    HttpDefaultRequest,
+    /// `Http.withMethod : String -> HttpRequest -> HttpRequest` — arity 2, pure.
+    ///
+    /// Returns the request with the `method` field replaced. Emitted as a
+    /// clone-and-reassign block matching the `emit_update` pattern.
+    HttpWithMethod,
+    /// `Http.withTimeout : Int -> HttpRequest -> HttpRequest` — arity 2, pure.
+    ///
+    /// Returns the request with the `timeout` field replaced (milliseconds).
+    HttpWithTimeout,
+    /// `Http.withBody : String -> HttpRequest -> HttpRequest` — arity 2, pure.
+    ///
+    /// Returns the request with the `body` field replaced.
+    HttpWithBody,
+    /// `Http.withHeader : String -> String -> HttpRequest -> HttpRequest` — arity 3, pure.
+    ///
+    /// PREPENDS `(key, value)` to the request's `headers` list — latest-added
+    /// appears first (cons-prepend), matching the Go reference implementation.
+    HttpWithHeader,
 }
 
 /// Binary operators.

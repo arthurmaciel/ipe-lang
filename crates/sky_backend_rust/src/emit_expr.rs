@@ -8,7 +8,7 @@ use core::fmt::Write as _;
 
 use sky_diagnostics::{DResult, Diagnostic, LowerError, Span};
 use sky_intern::Symbol;
-use sky_ir::{BinOp, BoundSet, Callee, Expr, Func, IrType, Match, Pat};
+use sky_ir::{BinOp, BoundSet, Callee, Expr, Func, IrType, KernelFn, Match, Pat};
 
 use crate::EmitCtx;
 use crate::emit_types::{GenericScope, render_type};
@@ -98,7 +98,6 @@ fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
 /// Sky (`Maybe.map f m`); every other wired kernel matches the Sky order. Used by
 /// the [`Expr::Call`] emitter to reverse the rendered argument list.
 const fn kernel_swaps_first_two(k: sky_ir::KernelFn) -> bool {
-    use sky_ir::KernelFn;
     matches!(
         k,
         KernelFn::MaybeMap
@@ -108,6 +107,320 @@ const fn kernel_swaps_first_two(k: sky_ir::KernelFn) -> bool {
             // `decode_and_then(decoder, f)` expects decoder first.
             | KernelFn::JsonDecAndThen
     )
+}
+
+/// Handle Http kernel calls that require custom argument wrapping.
+///
+/// Returns `Some(emitted)` for the three network-effect kernels
+/// (`HttpGet` / `HttpPost` / `HttpRequest`), which need a `task_map`
+/// closure that converts `sky_runtime::HttpResponse` into the synthesised
+/// Sky record struct for `{body, headers, status}`.
+///
+/// `HttpParseQuery` returns `HashMap<String,String>` which is exactly
+/// `Dict String String` — the standard `Expr::Call` emitter is correct
+/// and this function returns `None` for it.
+///
+/// The conversion is a PURE FIELD-FOR-FIELD MOVE — no validation, no
+/// second parse boundary. All guards (SSRF, body cap, timeout, error
+/// redaction) live inside the runtime entry points; the emitter only
+/// wraps the response record.
+///
+/// All three network kernels emit explicit `::<SkyError>` turbofish so
+/// Rust can infer the error channel even when the `Err` arm is discarded.
+/// The closure parameter is typed `|r: sky_runtime::HttpResponse|` so
+/// the closure's input type is never ambiguous.
+///
+/// Factored out of `emit_expr_at` to keep that function's stack frame
+/// small (matching the `emit_json_decoder_call` pattern).
+#[inline(never)]
+fn emit_http_call(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    // Only the three network kernels need special treatment.
+    let Callee::Kernel(k @ (KernelFn::HttpGet | KernelFn::HttpPost | KernelFn::HttpRequest)) =
+        callee
+    else {
+        return Ok(None);
+    };
+
+    // Resolve the synthesised struct name for the HttpResponse field set
+    // {body, headers, status}. The field set is sorted alphabetically;
+    // these three names are already in alphabetical order.
+    let resp_key: Vec<String> = vec!["body".to_owned(), "headers".to_owned(), "status".to_owned()];
+    let resp_struct = ctx
+        .record_struct_by_key(&resp_key)
+        .map_err(|_| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_http_call",
+            detail: "no synthesised struct for HttpResponse fieldset {body, headers, status}; \
+                     the lowerer must surface the HttpResponse record type before emission"
+                .to_owned(),
+        })?;
+    let resp_name = &resp_struct.name;
+
+    // Build the task_map conversion closure shared by all three variants.
+    // The closure is a pure field-for-field move — soundness note: all
+    // fields are owned (String / i64 / HashMap), no borrows, no boxing.
+    let conv = format!(
+        "|r: sky_runtime::HttpResponse| {resp_name} {{ \
+         body: r.body, headers: r.headers, status: r.status }}"
+    );
+
+    match k {
+        KernelFn::HttpGet => {
+            // Http.get : String -> Task Error HttpResponse
+            // args[0] = url : String
+            let url = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_call",
+                detail: "HttpGet expects exactly 1 argument (url)".to_owned(),
+            })?;
+            let url_s = emit_expr_at(ctx, url, indent, child, generics)?;
+            Ok(Some(format!(
+                "task_map(Box::new({conv}), \
+                 sky_runtime::http_client::http_get::<SkyError>({url_s}))"
+            )))
+        }
+        KernelFn::HttpPost => {
+            // Http.post : String -> String -> Task Error HttpResponse
+            // args[0] = url, args[1] = body
+            let url = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_call",
+                detail: "HttpPost expects 2 arguments (url, body)".to_owned(),
+            })?;
+            let body_arg = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_call",
+                detail: "HttpPost expects 2 arguments (url, body)".to_owned(),
+            })?;
+            let url_s = emit_expr_at(ctx, url, indent, child, generics)?;
+            let body_s = emit_expr_at(ctx, body_arg, indent, child, generics)?;
+            Ok(Some(format!(
+                "task_map(Box::new({conv}), \
+                 sky_runtime::http_client::http_post::<SkyError>({url_s}, {body_s}))"
+            )))
+        }
+        KernelFn::HttpRequest => {
+            // Http.request : HttpRequest -> Task Error HttpResponse
+            // args[0] = req : HttpRequest (synthesised record struct)
+            //
+            // Resolve the request struct field set for {body, followRedirects,
+            // headers, maxRedirects, method, timeout, url} (alphabetical).
+            let req_key: Vec<String> = vec![
+                "body".to_owned(),
+                "followRedirects".to_owned(),
+                "headers".to_owned(),
+                "maxRedirects".to_owned(),
+                "method".to_owned(),
+                "timeout".to_owned(),
+                "url".to_owned(),
+            ];
+            let req_struct =
+                ctx.record_struct_by_key(&req_key)
+                    .map_err(|_| Diagnostic::CompilerBug {
+                        where_: "sky_backend_rust::emit_http_call",
+                        detail: "no synthesised struct for HttpRequest fieldset \
+                             {body, followRedirects, headers, maxRedirects, method, timeout, url}; \
+                             the lowerer must surface the HttpRequest record type"
+                            .to_owned(),
+                    })?;
+            // Suppress the unused warning — the struct name is only needed for
+            // the diagnostic above; field access uses the `__req` binding below.
+            let _ = &req_struct.name;
+
+            let req_expr = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_call",
+                detail: "HttpRequest expects exactly 1 argument (req record)".to_owned(),
+            })?;
+            let req_s = emit_expr_at(ctx, req_expr, indent, child, generics)?;
+            // Bind the synthesised request struct once (`__req`) and move each
+            // field exactly once into `sky_runtime::HttpRequest`. The runtime
+            // struct uses `#[allow(non_snake_case)]` camelCase field names
+            // verbatim — `followRedirects`, `maxRedirects` — so they must match
+            // here exactly. The Sky names emit via `emit_ident` as-is (none are
+            // Rust keywords); the runtime names are string literals.
+            Ok(Some(format!(
+                "({{ let __req = {req_s}; task_map(Box::new({conv}), \
+                 sky_runtime::http_client::http_request::<SkyError>(\
+                 sky_runtime::HttpRequest {{ \
+                 method: __req.method, url: __req.url, body: __req.body, \
+                 headers: __req.headers, timeout: __req.timeout, \
+                 followRedirects: __req.followRedirects, \
+                 maxRedirects: __req.maxRedirects }}))\
+                 }})"
+            )))
+        }
+        // The non-network Http kernels (HttpParseQuery) fall through to
+        // `None` — handled above by the `match k` guard.
+        _ => Ok(None),
+    }
+}
+
+/// Handle Http builder kernel calls that emit inline struct construction or
+/// clone-and-reassign record updates.
+///
+/// Returns `Some(emitted)` for the five pure builder kernels:
+///
+/// * **`HttpDefaultRequest url`** — emits a struct literal with sensible
+///   defaults: `method = "GET"`, `body = ""`, `headers = []`,
+///   `timeout = 30000`, `followRedirects = true`, `maxRedirects = 10`.
+///
+/// * **`HttpWithMethod m req`**, **`HttpWithTimeout t req`**,
+///   **`HttpWithBody b req`** — each emits a clone-and-reassign block
+///   (`{ let mut __sky_rec = (req).clone(); __sky_rec.field = val; __sky_rec }`)
+///   matching the `emit_update` pattern so the source record is moved once.
+///
+/// * **`HttpWithHeader k v req`** — emits a prepend:
+///   `{ let mut __sky_rec = (req).clone(); __sky_rec.headers.insert(0, (k, v)); __sky_rec }`.
+///   PREPEND (cons-prepend) matches the Go reference implementation in `Http.sky`
+///   (`{ req | headers = (k, v) :: req.headers }`), so `withHeader "B" "2"` after
+///   `withHeader "A" "1"` yields `B:2,A:1` in iteration order.
+///
+/// Returns `None` for any other callee — the caller falls through to the
+/// standard call path. Factored out of `emit_expr_at` to keep its stack frame
+/// small (same rationale as `emit_http_call`).
+#[inline(never)]
+#[allow(clippy::too_many_lines)] // 5 match arms × ~20 lines = inherently verbose but linear
+fn emit_http_builder_call(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    let Callee::Kernel(
+        k @ (KernelFn::HttpDefaultRequest
+        | KernelFn::HttpWithMethod
+        | KernelFn::HttpWithTimeout
+        | KernelFn::HttpWithBody
+        | KernelFn::HttpWithHeader),
+    ) = callee
+    else {
+        return Ok(None);
+    };
+
+    // Resolve the synthesised struct for the HttpRequest fieldset
+    // {body, followRedirects, headers, maxRedirects, method, timeout, url}.
+    // The field set is sorted alphabetically and matches the `req_key` in
+    // `emit_http_call`. The builder always returns this same struct type.
+    let req_key: Vec<String> = vec![
+        "body".to_owned(),
+        "followRedirects".to_owned(),
+        "headers".to_owned(),
+        "maxRedirects".to_owned(),
+        "method".to_owned(),
+        "timeout".to_owned(),
+        "url".to_owned(),
+    ];
+    let req_name = ctx
+        .record_struct_by_key(&req_key)
+        .map_err(|_| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_http_builder_call",
+            detail: "no synthesised struct for HttpRequest fieldset \
+                 {body, followRedirects, headers, maxRedirects, method, timeout, url}; \
+                 the lowerer must surface the HttpRequest record type before emission"
+                .to_owned(),
+        })?
+        .name
+        .clone();
+
+    match k {
+        KernelFn::HttpDefaultRequest => {
+            // defaultRequest : String -> HttpRequest  — inline struct literal
+            let url = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpDefaultRequest expects 1 argument (url)".to_owned(),
+            })?;
+            let url_s = emit_expr_at(ctx, url, indent, child, generics)?;
+            Ok(Some(format!(
+                "{req_name} {{ body: String::new(), followRedirects: true, \
+                 headers: Vec::new(), maxRedirects: 10i64, \
+                 method: \"GET\".to_string(), timeout: 30000i64, url: {url_s} }}"
+            )))
+        }
+        KernelFn::HttpWithMethod => {
+            // withMethod : String -> HttpRequest -> HttpRequest
+            let m = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithMethod expects 2 arguments (method, req)".to_owned(),
+            })?;
+            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithMethod expects 2 arguments (method, req)".to_owned(),
+            })?;
+            let m_s = emit_expr_at(ctx, m, indent, child, generics)?;
+            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({req_s}).clone(); \
+                 __sky_rec.method = {m_s}; __sky_rec }}"
+            )))
+        }
+        KernelFn::HttpWithTimeout => {
+            // withTimeout : Int -> HttpRequest -> HttpRequest
+            let t = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithTimeout expects 2 arguments (timeout, req)".to_owned(),
+            })?;
+            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithTimeout expects 2 arguments (timeout, req)".to_owned(),
+            })?;
+            let t_s = emit_expr_at(ctx, t, indent, child, generics)?;
+            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({req_s}).clone(); \
+                 __sky_rec.timeout = {t_s}; __sky_rec }}"
+            )))
+        }
+        KernelFn::HttpWithBody => {
+            // withBody : String -> HttpRequest -> HttpRequest
+            let b = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithBody expects 2 arguments (body, req)".to_owned(),
+            })?;
+            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithBody expects 2 arguments (body, req)".to_owned(),
+            })?;
+            let b_s = emit_expr_at(ctx, b, indent, child, generics)?;
+            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({req_s}).clone(); \
+                 __sky_rec.body = {b_s}; __sky_rec }}"
+            )))
+        }
+        KernelFn::HttpWithHeader => {
+            // withHeader : String -> String -> HttpRequest -> HttpRequest
+            // PREPENDS (key, value) — matches Go reference `(k,v) :: req.headers`.
+            let k_arg = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithHeader expects 3 arguments (key, value, req)".to_owned(),
+            })?;
+            let v_arg = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithHeader expects 3 arguments (key, value, req)".to_owned(),
+            })?;
+            let req = args.get(2).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithHeader expects 3 arguments (key, value, req)".to_owned(),
+            })?;
+            let k_s = emit_expr_at(ctx, k_arg, indent, child, generics)?;
+            let v_s = emit_expr_at(ctx, v_arg, indent, child, generics)?;
+            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({req_s}).clone(); \
+                 __sky_rec.headers.insert(0, ({k_s}, {v_s})); __sky_rec }}"
+            )))
+        }
+        // Unreachable: the guard at the top of this function constrains `k` to the
+        // five variants matched above. The `_ =>` arm keeps Rust's exhaustiveness
+        // checker satisfied without introducing a catch-all over the full `KernelFn`
+        // set (which would violate the no-catch-all principle for the logic above).
+        _ => Ok(None),
+    }
 }
 
 /// Emit an expression. `indent` is the indentation level (in 4-space units) of
@@ -299,6 +612,33 @@ fn emit_expr_at(
                 emit_json_decoder_call(ctx, callee, args, indent, child, generics)?
             {
                 return Ok(result);
+            }
+            // Http network kernel special cases: Http.get / Http.post /
+            // Http.request need a task_map conversion closure (Design B).
+            // Http.parseQuery falls through (standard path is correct).
+            if let Some(result) = emit_http_call(ctx, callee, args, indent, child, generics)? {
+                return Ok(result);
+            }
+            // Http builder kernels: Http.defaultRequest / Http.withMethod /
+            // Http.withTimeout / Http.withBody / Http.withHeader emit inline
+            // struct construction or clone-and-reassign record updates.
+            if let Some(result) =
+                emit_http_builder_call(ctx, callee, args, indent, child, generics)?
+            {
+                return Ok(result);
+            }
+            // Dict.get borrows semantics: the runtime takes the HashMap by
+            // value, but Sky dicts are persistent — the same dict binding may
+            // be passed to multiple Dict.get calls in one let-chain (e.g.
+            // `let a = Dict.get "a" d; let b = Dict.get "b" d`).  Cloning the
+            // dict arg before each call keeps the original binding alive and
+            // avoids the "use of moved value" Rust compile error.
+            if matches!(callee, Callee::Kernel(KernelFn::DictGet))
+                && let [key_arg, dict_arg] = args.as_slice()
+            {
+                let key_s = emit_expr_at(ctx, key_arg, indent, child, generics)?;
+                let dict_s = emit_expr_at(ctx, dict_arg, indent, child, generics)?;
+                return Ok(format!("dict_get({key_s}, {dict_s}.clone())"));
             }
             let name = callee_name(ctx, callee)?;
             let mut parts = Vec::with_capacity(args.len());

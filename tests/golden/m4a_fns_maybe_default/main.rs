@@ -230,6 +230,10 @@ pub fn crypto_random_bytes(n: i64) -> SkyTask<String> {
 pub fn crypto_random_token(n: i64) -> SkyTask<String> {
     sky_runtime::crypto::crypto_random_token(n)
 }
+// ── Http kernels (M5b) ─────────────────────────────────────────────────────
+pub fn http_parse_query(raw: String) -> HashMap<String, String> {
+    sky_runtime::http_client::http_parse_query(raw)
+}
 
 pub fn sky_main() -> SkyTask<()> {
     log_println(string_from_int(maybe_with_default(0, SkyMaybe::Just(5))))

@@ -538,6 +538,49 @@ pub fn build_and_run_rust(golden_name: &str, emitted_dir: &Path) -> Result<RunRe
     })
 }
 
+/// Build the emitted Rust project at `emitted_dir` into the shared cargo target
+/// and return the path of the resulting binary WITHOUT running it.
+///
+/// This is the build-only companion to [`build_and_run_rust`]. It is used by
+/// the E2E test harness when the test needs to control how the binary is
+/// launched (custom env vars, pre-started fixture server, SSRF guard flags, …)
+/// rather than delegating execution to this library.
+///
+/// The function:
+/// 1. Rewrites the emitted `Cargo.toml` package name to a golden-unique string
+///    so binaries from different goldens can coexist in the shared cargo target.
+/// 2. Runs `cargo build --message-format=json` in the emitted directory (no
+///    `CARGO_TARGET_DIR` override — the global `~/.cargo/config.toml` shared
+///    target is used so deps are not recompiled per golden).
+/// 3. Parses the JSON output to locate the `compiler-artifact` line for the
+///    unique package and returns the `executable` path.
+///
+/// # Errors
+/// Returns a message if the manifest cannot be retargeted, `cargo build` fails
+/// (the message carries cargo's stderr), or the binary cannot be located in
+/// the JSON output.
+pub fn build_rust_binary(golden_name: &str, emitted_dir: &Path) -> Result<String, String> {
+    let unique_pkg = rewrite_package_name(emitted_dir, golden_name)?;
+
+    let build = Command::new("cargo")
+        .arg("build")
+        .arg("--message-format=json")
+        .current_dir(emitted_dir)
+        .output()
+        .map_err(|e| format!("{golden_name}: failed to spawn `cargo build`: {e}"))?;
+    if !build.status.success() {
+        return Err(format!(
+            "{golden_name}: emitted project must build\n--- cargo stderr ---\n{}",
+            String::from_utf8_lossy(&build.stderr)
+        ));
+    }
+
+    let json_stdout = String::from_utf8_lossy(&build.stdout);
+    find_executable(&json_stdout, &unique_pkg).ok_or_else(|| {
+        format!("{golden_name}: no `executable` artifact for package `{unique_pkg}` in cargo JSON")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
