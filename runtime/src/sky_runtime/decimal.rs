@@ -60,8 +60,11 @@ pub fn decimal_to_string_fixed(places: i64, d: Decimal) -> String {
     // so a huge `places` (e.g. 1e9) would only force a multi-GB allocation for
     // trailing zeros. Cap the format width to keep the kernel bounded.
     let p = places.clamp(0, RD::MAX_SCALE as i64) as u32;
+    // Go oracle: shopspring StringFixed calls Round (half-away-from-zero), NOT
+    // RoundBank (banker's).  Use MidpointAwayFromZero to match Go byte-for-byte
+    // at tie values (e.g. "2.545" at 2 dp → "2.55" in Go).
     let r =
-        d.0.round_dp_with_strategy(p, RoundingStrategy::MidpointNearestEven);
+        d.0.round_dp_with_strategy(p, RoundingStrategy::MidpointAwayFromZero);
     format!("{:.*}", p as usize, r)
 }
 pub fn decimal_to_float(d: Decimal) -> f64 {
@@ -288,10 +291,13 @@ pub fn decimal_format_with(grp_sep: String, dec_sep: String, places: i64, d: Dec
     // so a huge `places` only inflates the format-width allocation (DoS) without
     // adding precision.
     let p = places.clamp(0, RD::MAX_SCALE as i64) as u32;
+    // Go oracle: formatWith calls StringFixed which uses Round (half-away-from-
+    // zero), NOT RoundBank (banker's).  Use MidpointAwayFromZero so tie values
+    // (e.g. "2.545" at 2 dp → "2.55") match Go byte-for-byte.
     let rounded = if p > 0 {
-        d.0.round_dp_with_strategy(p, RoundingStrategy::MidpointNearestEven)
+        d.0.round_dp_with_strategy(p, RoundingStrategy::MidpointAwayFromZero)
     } else {
-        d.0.round_dp_with_strategy(0, RoundingStrategy::MidpointNearestEven)
+        d.0.round_dp_with_strategy(0, RoundingStrategy::MidpointAwayFromZero)
     };
     // StringFixed-equivalent: pad trailing zeros to `p` places.
     let fixed = format!("{:.*}", p as usize, rounded);
