@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+-- UUID v4: length must be 36 and version nibble at index 14 must be '4'.
+-- UUID v7: length must be 36 and version nibble at index 14 must be '7'.
+-- Parse: a freshly generated v4 UUID round-trips through Uuid.parse.
+-- Each Uuid.v4 / Uuid.v7 reference calls the generator once; no variable is
+-- used more than once, which is required by the current Rust lowering.
+main =
+    let
+        lenOk4 = String.length Uuid.v4 == 36
+
+        versionOk4 = String.slice 14 15 Uuid.v4 == "4"
+
+        lenOk7 = String.length Uuid.v7 == 36
+
+        versionOk7 = String.slice 14 15 Uuid.v7 == "7"
+
+        parseOk =
+            case Uuid.parse Uuid.v4 of
+                Just _ ->
+                    True
+
+                Nothing ->
+                    False
+    in
+    println
+        (if lenOk4 && versionOk4 && lenOk7 && versionOk7 && parseOk then
+            "ok"
+
+         else
+            "fail")

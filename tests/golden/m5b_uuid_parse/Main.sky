@@ -1,0 +1,23 @@
+module Main exposing (main)
+
+-- Uuid.parse: a canonical UUID string round-trips; an invalid string yields Nothing.
+main =
+    let
+        validId = "550e8400-e29b-41d4-a716-446655440000"
+
+        invalid = Uuid.parse "not-a-uuid"
+
+        valid = Uuid.parse validId
+    in
+    println
+        (case invalid of
+            Nothing ->
+                case valid of
+                    Just _ ->
+                        "ok"
+
+                    Nothing ->
+                        "fail-valid-not-parsed"
+
+            Just _ ->
+                "fail-invalid-parsed")

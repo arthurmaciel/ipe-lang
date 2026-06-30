@@ -371,6 +371,15 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::CryptoChachaKeyFromPassword => "Crypto.chachaKeyFromPassword",
         KernelFn::CryptoRandomBytes => "Crypto.randomBytes",
         KernelFn::CryptoRandomToken => "Crypto.randomToken",
+        // ── Uuid kernels (M5b) ───────────────────────────────────────────────
+        KernelFn::UuidV4 => "Uuid.v4",
+        KernelFn::UuidV7 => "Uuid.v7",
+        KernelFn::UuidParse => "Uuid.parse",
+        // ── Jwt kernels (M5b) ────────────────────────────────────────────────
+        KernelFn::JwtEncodeHs256 => "Jwt.encodeHs256",
+        KernelFn::JwtDecodeHs256 => "Jwt.decodeHs256",
+        KernelFn::JwtEncodeRs256 => "Jwt.encodeRs256",
+        KernelFn::JwtDecodeRs256 => "Jwt.decodeRs256",
     }
 }
 

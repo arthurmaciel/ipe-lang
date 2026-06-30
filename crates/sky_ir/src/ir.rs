@@ -1059,6 +1059,31 @@ pub enum KernelFn {
     CryptoRandomBytes,
     /// `Crypto.randomToken : Int -> Task Error String`
     CryptoRandomToken,
+
+    // ── Uuid kernels (M5b) ─────────────────────────────────────────────────
+    /// `Uuid.v4 : String` — random UUID v4 (CSPRNG). Arity 0.
+    UuidV4,
+    /// `Uuid.v7 : String` — time-ordered UUID v7. Arity 0.
+    /// SECURITY: v7 embeds a millisecond timestamp — sortable and NOT a secret.
+    UuidV7,
+    /// `Uuid.parse : String -> Maybe String` — canonicalise or Nothing. Arity 1.
+    UuidParse,
+
+    // ── Jwt kernels (M5b) ──────────────────────────────────────────────────
+    /// `Jwt.encodeHs256 : String -> String -> Result Error String`
+    /// `encodeHs256 secret claimsJson` — HMAC-SHA256 signed JWT.
+    /// Secret must be ≥32 bytes (RFC 7518 §3.2). Arity 2.
+    JwtEncodeHs256,
+    /// `Jwt.decodeHs256 : String -> String -> Result Error String`
+    /// `decodeHs256 secret token` — verify signature + exp/nbf, return claims JSON.
+    /// Secret must be ≥32 bytes (RFC 7518 §3.2). Arity 2.
+    JwtDecodeHs256,
+    /// `Jwt.encodeRs256 : String -> String -> Result Error String`
+    /// `encodeRs256 privateKeyPem claimsJson` — RSA-SHA256 signed JWT. Arity 2.
+    JwtEncodeRs256,
+    /// `Jwt.decodeRs256 : String -> String -> Result Error String`
+    /// `decodeRs256 publicKeyPem token` — verify RS256 signature + exp/nbf. Arity 2.
+    JwtDecodeRs256,
 }
 
 /// Binary operators.
