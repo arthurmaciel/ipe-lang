@@ -1,0 +1,13 @@
+[package]
+name = "selfref-builder-proof"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone, NO dependencies — so `cargo +nightly miri test` runs fast and clean
+# (MIRI struggles with tokio/syscalls; this proof needs none). NOT part of the
+# runtime-rust crate (runtime-rust has no [workspace], and integration tests are
+# tests/*.rs files, never subdir crates) — it is an isolated soundness proof.
+
+[lib]
+path = "src/lib.rs"

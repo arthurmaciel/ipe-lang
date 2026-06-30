@@ -1,2 +1,5 @@
-# clippy.toml
-# (empty for now; thresholds added as needed)
+# Allow unwrap/expect in test code (integration tests and #[cfg(test)] blocks).
+# The runtime crate has strict deny of these in production paths; the exemption
+# lets test assertions stay readable without #[allow] noise at every call site.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

@@ -1,0 +1,145 @@
+[package]
+name = "sky-runtime-rust"
+version = "0.1.0"
+edition = "2021"
+description = "Sky language runtime for Rust — primitives, collections, FFI"
+
+[dependencies]
+tokio = { version = "1", features = ["full"], optional = true }
+serde_json = { version = "1", optional = true }
+jsonwebtoken = { version = "9", optional = true }
+sha2 = { version = "0.10", optional = true }
+rsa = { version = "0.9", features = ["sha2"], optional = true }
+aes-gcm = { version = "0.10", optional = true }
+chacha20poly1305 = { version = "0.10", optional = true }
+pbkdf2 = { version = "0.12", optional = true }
+flate2 = { version = "1", optional = true }
+zstd = { version = "0.13", optional = true }
+csv = { version = "1", optional = true }
+toml = { version = "0.8", optional = true }
+serde_yaml = { version = "0.9", optional = true }
+axum = { version = "0.7", features = ["ws"], optional = true }
+tower-http = { version = "0.5", features = ["fs", "catch-panic"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "stream"], optional = true }
+# `url`: direct dep for the reqwest-free `ssrf` module (reqwest re-exports this
+# exact crate as `reqwest::Url`). Resolves to the same lockfile node as reqwest's.
+url = { version = "2", optional = true }
+lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "pool", "tokio1", "tokio1-rustls-tls"], optional = true }
+tokio-tungstenite = { version = "0.24", optional = true }
+futures-util = { version = "0.3", optional = true }
+# NON-optional: the always-compiled `core.rs` derives `serde::Serialize`/`Deserialize`
+# on `SkyMaybe`/`SkyResult` unconditionally, so serde is needed by EVERY feature subset
+# (the `optional = true` was a lie — it left ~12 narrow `--features X` subsets failing
+# with E0433). Matches crate-specs.toml + the generated-project Cargo.toml, which both
+# declare serde non-optional. Generic-bound (`impl<T: Serialize>`) so a non-serde inner
+# type is unaffected.
+serde = { version = "1", features = ["derive"] }
+serde_urlencoded = { version = "0.7", optional = true }
+subtle = "2"
+hmac = "0.12"
+sha1 = "0.10"
+md-5 = "0.10"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "postgres"], optional = true }
+redis = { version = "0.27", features = ["tokio-comp"], optional = true }
+regex = "1"
+# Exact Unicode General_Category lookup. NON-optional: char_kernel.rs (always
+# compiled) needs it to match Go's `unicode.Is{Digit,Letter,Lower,Upper}` —
+# which key off precise GCs (Nd / L* / Ll / Lu), narrower than Rust std's
+# `char::is_numeric`/`is_lowercase`/`is_uppercase` (which fold in No/Nl,
+# Other_Lowercase, Other_Uppercase). See char_kernel.rs.
+unicode-general-category = "1"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4", "v7"] }
+hex = "0.4"
+percent-encoding = "2"
+chrono = "0.4"
+chrono-tz = "0.10"
+rust_decimal = { version = "1", features = ["serde"] }
+bcrypt = { version = "0.17", optional = true }
+async-trait = { version = "0.1", optional = true }
+unicode-width = { version = "0.1", optional = true }
+crossterm = { version = "0.28", optional = true }
+# Sky.Webview native window. Modern wry/tao (objc2 + current windows-rs) build on
+# macOS-15/Xcode-16 + Windows-2025; on Linux they target webkit2gtk-4.1 + libsoup-3.0.
+wry = { version = "0.55", optional = true }
+tao = { version = "0.35", optional = true }
+
+# Unix-only: the Std.Live console reverse-proxy (live/console_proxy.rs) uses
+# libc::prctl(PR_SET_PDEATHSIG) on Linux so the spawned console child dies with
+# the parent even on SIGKILL. Tiny, ubiquitous; referenced only under
+# cfg(target_os = "linux").
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[features]
+default = []
+async = ["tokio"]
+json = ["serde_json", "jsonwebtoken"]
+# `sha2` is required by `db_migrate_apply` (the `_sky_migrations` ledger stores a
+# sha256-hex checksum per migration — a cross-backend DB contract that must match
+# the Go backend byte-for-byte). Generated projects always enable `crypto`
+# (which also pulls sha2); listing it here fixes the standalone `--features db`
+# build, which has no crypto. (serde is now a non-optional dep — see [dependencies] —
+# so it is NOT listed here.)
+db = ["sqlx", "tokio", "serde_json", "json", "sha2"]
+redis_store = ["redis", "tokio", "serde_json", "async-trait"]
+crypto = ["sha2", "rsa", "bcrypt", "aes-gcm", "chacha20poly1305", "pbkdf2"]
+compression = ["flate2", "zstd", "tokio"]
+csv_kernel = ["csv", "tokio"]
+cache_kernel = ["tokio"]
+# `tokio`: tea.rs (the shared Cli/Tui event loop, pulled by tui/app.rs) uses
+# `tokio::sync::mpsc`. Without it the standalone `--features tui` build fails to
+# resolve the `tea` module + `tokio`.
+tui = ["unicode-width", "crossterm", "tokio"]
+# Real native-window Webview backend (opt-in; needs the system webview dev libs).
+# NOT in `full` — default/CI builds compile the cross-platform stub instead.
+# Pulls `live` to reuse its Html renderer + event-dispatch (HandlerIndex) for the
+# in-process IPC bridge.
+webview = ["wry", "tao", "live"]
+config = ["json", "toml", "serde_yaml"]
+server = ["tokio", "axum", "tower-http", "futures-util"]
+# `url`: the reqwest-free `ssrf` module parses URLs via the `url` crate (which
+# reqwest re-exports as `reqwest::Url`). Pulled by both http_client and
+# websocket_client so the SSRF validators are available to each.
+http_client = ["tokio", "reqwest", "futures-util", "url"]
+# `http_client`: email.rs reuses `http_client::ssrf_apply` for outbound-request
+# SSRF hardening; ws_client.rs reuses `http_client::ssrf_validate_url` +
+# `ssrf_pinned_ws_addr`. Both need the http_client module present.
+email = ["tokio", "reqwest", "lettre", "serde_json", "sha2", "http_client"]
+# ws needs ONLY the reqwest-free ssrf validators (via `url`), NOT the reqwest
+# HTTP client — so it pulls `url`, not `http_client`. (Was `http_client` in
+# batch-19; option B factored the validators into the reqwest-free `ssrf` module.)
+websocket_client = ["tokio", "tokio-tungstenite", "futures-util", "url"]
+# `aes-gcm` (CSRF cookie AEAD — live/csrf.rs) + `sha2` (client-JS SRI integrity
+# hash — live/mod.rs) are used by always-compiled-under-live code. Generated Live
+# projects get them via the always-on `crypto` default; the standalone `live`
+# feature must pull them directly. (`subtle` for the constant-time compare is a
+# non-optional dep; `OsRng` rides in with `aes-gcm`.) serde is non-optional now.
+live = ["server", "http_client", "serde_json", "serde_urlencoded", "async-trait", "aes-gcm", "sha2"]
+full = ["async", "json", "db", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "live"]
+
+[dev-dependencies]
+regex = "1"
+proptest = "1"
+# `tower` (util feature) is a TEST-ONLY dep for `ServiceExt::oneshot`, which
+# drives a Router through a single request in unit tests (e.g. asserting a
+# panicking handler is caught as a 500). It does NOT propagate to generated
+# projects — those emit their own Cargo.toml from crate-specs.toml.
+tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1", features = ["full", "test-util", "macros"] }
+serde_json = "1"
+sha2 = "0.10"
+jsonwebtoken = "9"
+bcrypt = "0.17"
+aes-gcm = "0.10"
+chacha20poly1305 = "0.10"
+pbkdf2 = "0.12"
+
+[lints.clippy]
+# No-runtime-errors gate: a panic vector reached from well-typed code is a bug.
+# The only permitted exceptions are the 3 INFALLIBLE-tagged HMAC #[allow] sites.
+unwrap_used = "deny"
+expect_used = "deny"
+
+[package.metadata.sky]
+runtime_version = "0.16.29"

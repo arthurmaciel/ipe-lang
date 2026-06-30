@@ -1,0 +1,172 @@
+//! Sky.Core.Basics kernels: modBy + errorToString.
+//!
+//! Mirrors Go's runtime-go/rt/rt.go (Basics_modByT, etc.).
+
+/// Sky `modBy : Int -> Int -> Int`. Divisor-first convention (Elm/pipeline order).
+/// Mirrors Go's `Basics_modByT` exactly:
+///   - divisor == 0  → 0
+///   - r = n % divisor; if r < 0 { r += divisor }
+///
+/// Adjust fires ONLY when r < 0 (irrespective of divisor sign) — Go parity.
+///
+/// Overflow guard: `i64::MIN % -1` is undefined behaviour in Rust debug/release
+/// (the mathematical result is 0).  `checked_rem` returns `None` for that case;
+/// we map it to r = 0, which is the correct mathematical remainder and leaves
+/// the adjust condition (`0 < 0`) false, so the final result is 0.
+pub fn basics_mod_by(divisor: i64, n: i64) -> i64 {
+    if divisor == 0 {
+        return 0;
+    }
+    // checked_rem returns None only for i64::MIN % -1 (overflow); treat as 0.
+    let r = n.checked_rem(divisor).unwrap_or(0);
+    if r < 0 { r.wrapping_add(divisor) } else { r }
+}
+
+/// Sky `fst : (a, b) -> a` / `snd : (a, b) -> b`. Pure in stdlib, but the
+/// Prelude re-export lowers as a `VarKernel "Basics" "fst"`, so the Rust
+/// backend routes it to a runtime kernel. Tuples lower to Rust tuples.
+pub fn basics_fst<A, B>(t: (A, B)) -> A {
+    t.0
+}
+pub fn basics_snd<A, B>(t: (A, B)) -> B {
+    t.1
+}
+
+/// Sky `identity : a -> a` and `always : a -> b -> a`. Pure in the stdlib
+/// (`identity x = x`, `always x _ = x`) but the Prelude re-export lowers each as
+/// a `VarKernel "Basics" …`, so the Rust backend routes them to runtime kernels
+/// (same convention as `fst`/`snd`). `always` is the tupled 2-arg form the
+/// codegen emits; partial application (`always 0`) is wrapped into a closure by
+/// the codegen, so the plain `(A, B) -> A` shape here is correct.
+pub fn basics_identity<A>(x: A) -> A {
+    x
+}
+pub fn basics_always<A, B>(x: A, _y: B) -> A {
+    x
+}
+
+/// Sky `errorToString : a -> String` — universal Sky stringifier.
+/// Used by Sky.Test.debugShow and friends to render any Sky value into
+/// a diagnostic string. Backed by the total `SkyStringify` trait, which
+/// mirrors Go's `Basics_errorToString` EXACTLY: a `String` renders UNQUOTED
+/// (`hi`, not `"hi"`), scalars render like `%v`, and slices/tuples/maps follow
+/// Go's space-separated layout. Every codegen-emitted record/ADT gets a
+/// `SkyStringify` impl (Emitter.hs), so the bound is always satisfiable —
+/// the generic `debugShow : a -> String` body type-checks and is total.
+pub fn basics_error_to_string<T: crate::sky_runtime::stringify::SkyStringify>(v: T) -> String {
+    v.sky_show()
+}
+
+/// Sky `Debug.toString` — the `{{expr}}` string-interpolation stringifier.
+/// Display-based, NOT Debug: a `String` interpolates as itself (no surrounding
+/// quotes) and scalars format like Go's `%v`. Mirrors Go's `Debug_toString`
+/// (`String → s`, else `Sprintf("%v", …)`).
+pub fn debug_to_string<T: std::fmt::Display>(v: T) -> String {
+    format!("{}", v)
+}
+
+/// Sky `Basics.toString : a -> String` — Go's `fmt.Sprintf("%v", …)`. Display-
+/// based (NOT Debug, so a `String` renders unquoted and scalars format like Go's
+/// `%v`); same semantics as `Debug.toString`. The `Display` bound is deliberate:
+/// `toString` on a scalar (Int/Float/Bool/String) is the overwhelmingly common
+/// case and matches Go exactly, while `toString` on a composite (record/ADT)
+/// — which has no `Display` impl — fails at COMPILE time (E0277), never at
+/// runtime. That honours the "no runtime errors" rule (Go would reflect at
+/// runtime; Rust catches it before a binary exists). A future type-directed
+/// lowering could route composites to a derived renderer if that case arises.
+pub fn basics_to_string<T: std::fmt::Display>(v: T) -> String {
+    format!("{}", v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mod_by_positive_divisor() {
+        assert_eq!(basics_mod_by(3, 10), 1);
+    }
+    #[test]
+    fn test_mod_by_zero_divisor() {
+        assert_eq!(basics_mod_by(0, 5), 0);
+    }
+    #[test]
+    fn test_mod_by_negative_dividend_positive_divisor() {
+        // -1 % 3 = -1 in Rust; Sky/Elm wants 2 (same sign as divisor)
+        assert_eq!(basics_mod_by(3, -1), 2);
+        assert_eq!(basics_mod_by(3, -4), 2);
+    }
+    #[test]
+    fn test_mod_by_exact() {
+        assert_eq!(basics_mod_by(5, 10), 0);
+    }
+
+    // Go parity: adjust fires only when r < 0.
+    // positive divisor, positive dividend — no adjust needed.
+    #[test]
+    fn test_mod_by_pos_div_pos_n() {
+        assert_eq!(basics_mod_by(3, 7), 1);
+    }
+    // negative divisor, positive dividend — r > 0, no adjust (was wrong pre-fix).
+    // Go: 7 % -3 = 1; 1 >= 0 → no adjust → 1.
+    #[test]
+    fn test_mod_by_neg_divisor_pos_n() {
+        assert_eq!(basics_mod_by(-3, 7), 1);
+    }
+    // negative divisor, negative dividend — r < 0 → adjust.
+    // Go: -7 % -3 = -1; -1 < 0 → -1 + (-3) = -4.  Wait — divisor=-3 so r+divisor=-4.
+    // Verify: Go does r += divisor → -1 + (-3) = -4.
+    #[test]
+    fn test_mod_by_neg_divisor_neg_n() {
+        assert_eq!(basics_mod_by(-3, -7), -4);
+    }
+    // Overflow guard: i64::MIN % -1 must not panic, result = 0.
+    #[test]
+    fn test_mod_by_min_i64_neg1() {
+        assert_eq!(basics_mod_by(-1, i64::MIN), 0);
+    }
+
+    #[test]
+    fn test_error_to_string_i64() {
+        assert_eq!(basics_error_to_string(42i64), "42");
+    }
+    // String renders UNQUOTED now (Go parity) — the primary fix.
+    #[test]
+    fn test_error_to_string_string() {
+        assert_eq!(basics_error_to_string("hi".to_string()), "hi");
+    }
+    // Vec renders space-separated (Go's `%v`: `[1 2 3]`, NOT `[1, 2, 3]`).
+    #[test]
+    fn test_error_to_string_vec() {
+        assert_eq!(basics_error_to_string(vec![1i64, 2, 3]), "[1 2 3]");
+    }
+
+    // Regression: identity/always were missing from the runtime (emitted as
+    // `basics_identity`/`basics_always` calls but undefined → E0425).
+    #[test]
+    fn test_identity() {
+        assert_eq!(basics_identity(7i64), 7);
+    }
+    #[test]
+    fn test_always_returns_first() {
+        assert_eq!(basics_always(7i64, "discarded"), 7);
+    }
+
+    // Basics.toString = Go's %v: Display-based, unquoted strings, clean scalars.
+    #[test]
+    fn test_to_string_int() {
+        assert_eq!(basics_to_string(42i64), "42");
+    }
+    #[test]
+    fn test_to_string_bool() {
+        assert_eq!(basics_to_string(true), "true");
+    }
+    #[test]
+    fn test_to_string_string_unquoted() {
+        assert_eq!(basics_to_string("hi".to_string()), "hi");
+    }
+    #[test]
+    fn test_to_string_float() {
+        assert_eq!(basics_to_string(42.5f64), "42.5");
+    }
+}

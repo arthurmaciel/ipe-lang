@@ -1,0 +1,394 @@
+//! Sky.Live observability endpoints — the operator surface mounted on every
+//! Live app, mirroring Go's `runtime-go/rt/observability.go`:
+//!
+//! - `GET /_sky/healthz`  — liveness probe, always `{"status":"ok"}`.
+//! - `GET /_sky/readyz`   — readiness probe, `{"status":"ready"}` (200) or
+//!   `{"status":"draining"}` (503) once shutdown is signalled.
+//! - `GET /_sky/buildinfo`— commit / builtAt / skyVersion JSON.
+//! - `GET /_sky/metrics`  — Prometheus text: `sky_live_requests_total`.
+//!
+//! Requests are counted by the `track` middleware layer. No panic vectors: every
+//! handler returns a static or counter-derived body; nothing can fail.
+//!
+//! Out of scope here (staged for the console mini-app port): `/_sky/console/*`
+//! (the Std.Ui dashboard), `/_sky/observability/ingest` (sub-app federation), and
+//! the in-RAM log/span ring buffers the console renders.
+
+use axum::http::{StatusCode, header};
+use axum::response::IntoResponse;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Readiness flag. Starts ready; a graceful-shutdown signal flips it so
+/// `/_sky/readyz` reports `draining` and load balancers stop routing new traffic
+/// while in-flight requests finish (Go parity: `readinessReady`).
+static READY: AtomicBool = AtomicBool::new(true);
+
+/// Flip readiness to draining (call from a shutdown handler). Idempotent.
+pub fn mark_draining() {
+    READY.store(false, Ordering::SeqCst);
+}
+
+const JSON: (header::HeaderName, &str) = (header::CONTENT_TYPE, "application/json");
+
+/// `GET /_sky/healthz` — liveness. Always OK while the process is up.
+pub async fn healthz() -> impl IntoResponse {
+    (StatusCode::OK, [JSON], r#"{"status":"ok"}"#)
+}
+
+/// `GET /_sky/readyz` — readiness. 200 `ready`, or 503 `draining` once shutdown
+/// is signalled.
+pub async fn readyz() -> impl IntoResponse {
+    if READY.load(Ordering::SeqCst) {
+        (StatusCode::OK, [JSON], r#"{"status":"ready"}"#)
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [JSON],
+            r#"{"status":"draining"}"#,
+        )
+    }
+}
+
+/// `GET /_sky/buildinfo` — build provenance. Values come from compile-time env
+/// (`SKY_BUILD_COMMIT` / `SKY_BUILD_AT` / `SKY_VERSION`), defaulting to `dev`.
+pub async fn buildinfo() -> impl IntoResponse {
+    let commit = option_env!("SKY_BUILD_COMMIT").unwrap_or("dev");
+    let built_at = option_env!("SKY_BUILD_AT").unwrap_or("unknown");
+    let version = option_env!("SKY_VERSION").unwrap_or("dev");
+    let body =
+        format!(r#"{{"commit":"{commit}","builtAt":"{built_at}","skyVersion":"{version}"}}"#);
+    (StatusCode::OK, [JSON], body)
+}
+
+/// `GET /_sky/metrics` — full Prometheus 0.0.4 text exposition.
+pub async fn metrics() -> impl IntoResponse {
+    // The whole exposition comes from the labeled registry (Go parity:
+    // prometheus.go's WriteProm) — active sessions, SSE connections, 5xx errors,
+    // request-latency histogram, AND `sky_live_requests_total{method,status}`
+    // written per request by the `track` middleware below. `write_prom` emits
+    // exactly one #HELP/#TYPE per metric name, so there is NO hand-printed
+    // unlabeled `sky_live_requests_total` line here: a second, unlabeled series
+    // under the same name would mean a duplicate #HELP/#TYPE block, which makes
+    // a Prometheus scraper reject the entire exposition.
+    let body = crate::sky_runtime::telemetry::write_prom();
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        body,
+    )
+}
+
+/// axum middleware: per-request observability (Go parity — its access-log +
+/// OTel-span middleware wraps the whole mux). Counts every request, and for
+/// user-facing requests auto-records a span + an access log so the console has
+/// data without the app calling `Std.Trace`/`Std.Log` itself.
+pub async fn track(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    // Gate the console + metrics surface (off / production-auth) before serving.
+    let path = req.uri().path().to_string();
+    let method = req.method().as_str().to_string();
+    if path == "/_sky/metrics" || path.starts_with("/_sky/console") {
+        if let Some(blocked) = super::console::gate_blocked(req.headers()) {
+            super::super::telemetry::record_request(blocked.status().as_u16());
+            return blocked;
+        }
+    }
+    let start = std::time::Instant::now();
+    let resp = next.run(req).await;
+    let status = resp.status().as_u16();
+    // Feed the Sky Console telemetry (request count + 5xx error count).
+    super::super::telemetry::record_request(status);
+    // Auto request span + access log — but NOT for the internal observability
+    // surface (SSE long-poll → multi-minute span; console proxy / metrics /
+    // health → console's own polling noise) and NOT for a sub-app. A sub-app
+    // (`SKY_LIVE_BASE_PATH` set — e.g. the console child collector) must not
+    // self-instrument into the store it serves; it shows the PARENT's pushed
+    // telemetry, not its own page renders.
+    if !is_internal_path(&path) && !is_sub_app() {
+        let dur_us = start.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        // Request-latency histogram (Go parity: Observe sky_live_request_seconds).
+        // UNLABELED on purpose — labeling by the raw path would be an unbounded-
+        // cardinality memory-DoS (the registry never evicts); Go labels by a
+        // bounded route template, which the Rust middleware doesn't have here.
+        super::super::telemetry::metric_observe(
+            "sky_live_request_seconds",
+            &[],
+            dur_us as f64 / 1_000_000.0,
+        );
+        // Labeled request counter (Go parity: prometheus.go's
+        // sky_live_requests_total{method,route,status}). We keep Go's two
+        // BOUNDED labels — `method` normalised to a closed set, and the full
+        // numeric `status` (bounded by the HTTP spec) — but DROP Go's `route`
+        // label: it is derived from the raw request path, an attacker-
+        // controllable, UNBOUNDED value, and the registry never evicts (the
+        // classic Prometheus cardinality memory-DoS). The histogram above drops
+        // its label for the same reason. `method` is itself bounded here because
+        // HTTP permits arbitrary extension-method tokens.
+        let status_str = status.to_string();
+        super::super::telemetry::metric_inc(
+            "sky_live_requests_total",
+            &[
+                ("method", normalize_method(&method)),
+                ("status", &status_str),
+            ],
+            1,
+        );
+        let ok = status < 500;
+        // Bound + sanitise the (attacker-controllable) raw path before it enters
+        // the in-RAM log ring / OTLP push: cap the length and strip control bytes
+        // so a `/<huge-or-control-char path>` can't inject ANSI/control sequences
+        // into the operator console or amplify per-entry memory.
+        let safe_path = sanitise_path(&path);
+        super::super::telemetry::record_span(&format!("{method} {safe_path}"), dur_us, ok);
+        let level = if status >= 500 { "error" } else { "info" };
+        super::super::telemetry::record_log(
+            level,
+            &format!("{method} {safe_path} -> {status} ({}ms)", dur_us / 1000),
+        );
+    }
+    resp
+}
+
+/// Map an HTTP method token to one of a CLOSED set of labels, so the
+/// `sky_live_requests_total{method=…}` series can never explode in cardinality.
+/// HTTP permits arbitrary extension-method tokens and `req.method()` preserves
+/// the on-wire bytes verbatim, so without this an attacker could mint an
+/// unbounded number of distinct `method` label values against a registry that
+/// never evicts (a memory-DoS). Only the RFC-canonical UPPER-CASE spellings
+/// match; any case-variant (`get`/`Get`) or non-standard token deliberately
+/// buckets to `"other"` — a non-conformant client is not worth a distinct
+/// series, and bounded cardinality outranks label fidelity. Returns a
+/// `&'static str` so the labelling path stays zero-allocation (no `to_uppercase`
+/// — case-folding would allocate per request for zero cardinality benefit, since
+/// every variant already collapses to one arm here).
+fn normalize_method(method: &str) -> &'static str {
+    match method {
+        "GET" => "GET",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "DELETE" => "DELETE",
+        "PATCH" => "PATCH",
+        "HEAD" => "HEAD",
+        "OPTIONS" => "OPTIONS",
+        "TRACE" => "TRACE",
+        "CONNECT" => "CONNECT",
+        _ => "other",
+    }
+}
+
+/// Cap the request path to a sane length and strip control characters before it
+/// is recorded into the telemetry rings / federation push. Mirrors the Sky.Tui
+/// `sanitiseRune` discipline — the path is user-supplied and otherwise
+/// unbounded, a low-grade log-injection / memory-amplification vector.
+fn sanitise_path(path: &str) -> String {
+    const MAX_PATH_BYTES: usize = 256;
+    let mut out = String::with_capacity(path.len().min(MAX_PATH_BYTES));
+    for ch in path.chars() {
+        // Drop ASCII/Unicode control chars (incl. ESC for ANSI, NUL, newlines).
+        if ch.is_control() {
+            continue;
+        }
+        if out.len() + ch.len_utf8() > MAX_PATH_BYTES {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Internal observability/transport paths that must NOT be auto-instrumented:
+/// the SSE long-poll (a multi-minute span), the console reverse-proxy + its
+/// events (the console's own traffic), and the health/metrics/build/ingest
+/// endpoints (operator polling noise).
+/// True when this process runs as a sub-app (mounted behind a parent's proxy,
+/// `SKY_LIVE_BASE_PATH` non-empty) — e.g. the bundled console child.
+/// `SKY_LIVE_BASE_PATH` is fixed for the process lifetime (set once at spawn by
+/// the parent's `MountSubApp`), so the env read is memoized: `track` runs this on
+/// every user-facing request, and `env::var` both locks the process-global env
+/// mutex and heap-allocates a `String` per call.
+fn is_sub_app() -> bool {
+    static SUB_APP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SUB_APP.get_or_init(|| {
+        std::env::var("SKY_LIVE_BASE_PATH")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+    })
+}
+
+fn is_internal_path(path: &str) -> bool {
+    path == "/_sky/sse"
+        || path == "/_sky/event"
+        || path == "/_sky/metrics"
+        || path == "/_sky/healthz"
+        || path == "/_sky/readyz"
+        || path == "/_sky/buildinfo"
+        || path == "/_sky/observability/ingest"
+        || path.starts_with("/_sky/console")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use axum::response::IntoResponse;
+
+    async fn body_string(r: axum::response::Response) -> String {
+        let bytes = to_bytes(r.into_body(), 64 * 1024).await.unwrap_or_default();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    #[test]
+    fn internal_paths_are_not_auto_instrumented() {
+        // SSE long-poll, event transport, console proxy, ops endpoints → skipped.
+        assert!(super::is_internal_path("/_sky/sse"));
+        assert!(super::is_internal_path("/_sky/event"));
+        assert!(super::is_internal_path("/_sky/console"));
+        assert!(super::is_internal_path("/_sky/console/_sky/sse"));
+        assert!(super::is_internal_path("/_sky/healthz"));
+        // User-facing routes → instrumented.
+        assert!(!super::is_internal_path("/"));
+        assert!(!super::is_internal_path("/api/users"));
+        assert!(!super::is_internal_path("/dashboard"));
+    }
+
+    #[tokio::test]
+    async fn healthz_ok() {
+        let r = healthz().await.into_response();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(body_string(r).await, r#"{"status":"ok"}"#);
+    }
+
+    #[tokio::test]
+    async fn buildinfo_is_json_with_fields() {
+        let r = buildinfo().await.into_response();
+        assert_eq!(r.status(), StatusCode::OK);
+        let b = body_string(r).await;
+        assert!(b.contains("\"commit\""), "{b}");
+        assert!(b.contains("\"skyVersion\""), "{b}");
+    }
+
+    #[tokio::test]
+    async fn metrics_exposes_counter() {
+        // The registry is empty until the first inc (matches Go, whose own
+        // metrics test Incs first); the `track` middleware writes this series
+        // per request. Seed one labeled series, then assert the name + its
+        // bounded labels appear. Substring-only assertions keep this
+        // order-independent against the process-global registry.
+        crate::sky_runtime::telemetry::metric_inc(
+            "sky_live_requests_total",
+            &[("method", "GET"), ("status", "200")],
+            1,
+        );
+        let r = metrics().await.into_response();
+        assert_eq!(r.status(), StatusCode::OK);
+        let b = body_string(r).await;
+        assert!(b.contains("sky_live_requests_total"), "{b}");
+        assert!(b.contains("method=\"GET\""), "{b}");
+        assert!(b.contains("status=\"200\""), "{b}");
+    }
+
+    #[test]
+    fn normalize_method_buckets_unknown_and_case_variants() {
+        // Canonical methods pass through verbatim.
+        assert_eq!(super::normalize_method("GET"), "GET");
+        assert_eq!(super::normalize_method("POST"), "POST");
+        assert_eq!(super::normalize_method("CONNECT"), "CONNECT");
+        // Case variants of a known method are non-canonical → bucketed.
+        assert_eq!(super::normalize_method("get"), "other");
+        assert_eq!(super::normalize_method("Get"), "other");
+        // Arbitrary extension-method token / empty → bucketed (cardinality guard).
+        assert_eq!(super::normalize_method("FOOBAR"), "other");
+        assert_eq!(super::normalize_method(""), "other");
+    }
+
+    // Regression: a panicking handler must become a 500 (not an unwound, dropped
+    // connection) AND still be counted by `track` as status 500 — the Go-parity
+    // contract for the new `CatchPanicLayer` placed INNER of `track` in the
+    // Sky.Live router. Well-typed Sky can't panic (the no-panic thesis), so this
+    // defense-in-depth floor can only be exercised from a test handler that
+    // deliberately panics. NOTE: `.unwrap()`/`.expect()` are denied on ALL
+    // targets (incl. tests); `panic!` and `match Infallible {}` are the allowed
+    // totals here.
+    #[tokio::test]
+    async fn handler_panic_becomes_500_and_is_counted() {
+        use axum::Router;
+        use axum::body::Body;
+        use axum::http::Request;
+        use axum::routing::get;
+        use tower::ServiceExt; // oneshot
+
+        // Test-only handler that deliberately panics — the behaviour under test
+        // (what `CatchPanicLayer` must convert to a 500). Explicit `-> Response`
+        // return so the never type doesn't trip the denied
+        // `dependency_on_unit_never_type_fallback` lint; `#[cfg(test)]` marks it
+        // as genuine test code for the risk-lint precheck.
+        // The panic message embeds a FAKE SECRET — the no-leak assertion below
+        // proves it never reaches the client (it goes to the server log only).
+        #[cfg(test)]
+        async fn boom() -> axum::response::Response {
+            panic!("token=SECRET123 internal /etc/secret leaked")
+        }
+
+        // Mirror the real Sky.Live nesting: track( catch_panic( handler ) ) with
+        // the REAL shared responder. csrf is omitted — it only acts on mutating
+        // methods, so a GET panic exercises the catch_panic→500 path + track's
+        // post-`next.run` metering identically.
+        let app = Router::new()
+            .route("/boom", get(boom))
+            .layer(tower_http::catch_panic::CatchPanicLayer::custom(
+                |err: Box<dyn std::any::Any + Send + 'static>| {
+                    use axum::response::IntoResponse;
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        crate::sky_runtime::core::panic_500_body(&*err),
+                    )
+                        .into_response()
+                },
+            ))
+            .layer(axum::middleware::from_fn(track));
+
+        let req = match Request::builder().uri("/boom").body(Body::empty()) {
+            Ok(r) => r,
+            Err(e) => panic!("build request: {e}"),
+        };
+        // Router's Service error is `Infallible`; `match e {}` is total.
+        let resp = app.oneshot(req).await.unwrap_or_else(|e| match e {});
+        // Panic was caught and converted, not propagated.
+        let status = resp.status();
+        let body = body_string(resp).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        // SECURITY (the load-bearing invariant): the 500 body carries ONLY the
+        // errId — the panic message (here a fake secret) must NEVER reach the
+        // client.
+        assert!(
+            body.contains("ref"),
+            "expected an errId `ref` in the body: {body}"
+        );
+        assert!(
+            !body.contains("SECRET123") && !body.contains("/etc/secret"),
+            "panic message LEAKED into the 500 response body: {body}"
+        );
+        // Go parity: the converted 500 returns through `track` normally, so the
+        // request is counted with status="500" (not skipped via an unwind).
+        let m = crate::sky_runtime::telemetry::write_prom();
+        assert!(m.contains("sky_live_requests_total"), "{m}");
+        assert!(m.contains("status=\"500\""), "{m}");
+    }
+
+    #[tokio::test]
+    async fn readyz_flips_to_draining() {
+        // Default ready.
+        let r = readyz().await.into_response();
+        assert_eq!(r.status(), StatusCode::OK);
+        mark_draining();
+        let r2 = readyz().await.into_response();
+        assert_eq!(r2.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(body_string(r2).await.contains("draining"));
+        // Restore for any other test ordering (process-global flag).
+        READY.store(true, Ordering::SeqCst);
+    }
+}
