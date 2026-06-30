@@ -523,6 +523,11 @@ fn collect_record_shapes(
         IrType::Set(a) => {
             collect_record_shapes(interner, a, shapes)?;
         }
+        // `Decoder<T>` is an opaque type alias; descend into its inner type for
+        // any nested record shape (e.g. `Decoder { name : String, age : Int }`).
+        IrType::Decoder(inner) => {
+            collect_record_shapes(interner, inner, shapes)?;
+        }
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -602,6 +607,8 @@ fn type_reaches_enum(
                 || type_reaches_enum(v, target, enums, visited)
         }
         IrType::Set(a) => type_reaches_enum(a, target, enums, visited),
+        // `Decoder<T>` is heap-allocated (pointer-sized); descend for completeness.
+        IrType::Decoder(inner) => type_reaches_enum(inner, target, enums, visited),
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -629,6 +636,7 @@ fn contains_generic(ty: &IrType) -> bool {
         IrType::Result(err, ok) => contains_generic(err) || contains_generic(ok),
         IrType::Dict(k, v) => contains_generic(k) || contains_generic(v),
         IrType::Set(a) => contains_generic(a),
+        IrType::Decoder(inner) => contains_generic(inner),
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -681,6 +689,7 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
             collect_generics(v, out);
         }
         IrType::Set(a) => collect_generics(a, out),
+        IrType::Decoder(inner) => collect_generics(inner, out),
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -881,6 +890,10 @@ fn match_template(
         },
         IrType::Set(te) => match concrete {
             IrType::Set(ce) => match_template(te, ce, subst),
+            _ => Err(mismatch()),
+        },
+        IrType::Decoder(te) => match concrete {
+            IrType::Decoder(ce) => match_template(te, ce, subst),
             _ => Err(mismatch()),
         },
         // A concrete leaf must equal the use-site leaf exactly.

@@ -1,0 +1,50 @@
+module Main exposing (main)
+
+-- `JsonDec.field` — read a named key from a JSON object.
+-- `JsonDec.at`    — follow a path of keys into nested objects.
+-- `JsonDec.index` — read the N-th element of a JSON array.
+-- Expected: "Alice 99 y"
+main =
+    let
+        r1 =
+            JsonDec.decodeString
+                (JsonDec.field "name" JsonDec.string)
+                "{\"name\":\"Alice\",\"nested\":{\"score\":99}}"
+
+        r2 =
+            JsonDec.decodeString
+                (JsonDec.at [ "nested", "score" ] JsonDec.int)
+                "{\"name\":\"Alice\",\"nested\":{\"score\":99}}"
+
+        r3 =
+            JsonDec.decodeString
+                (JsonDec.index 1 JsonDec.bool)
+                "[false,true]"
+    in
+    case r1 of
+        Ok name ->
+            case r2 of
+                Ok score ->
+                    case r3 of
+                        Ok b ->
+                            println
+                                (name
+                                    ++ " "
+                                    ++ String.fromInt score
+                                    ++ " "
+                                    ++ (if b then
+                                            "y"
+
+                                        else
+                                            "n"
+                                       )
+                                )
+
+                        Err _ ->
+                            println "err3"
+
+                Err _ ->
+                    println "err2"
+
+        Err _ ->
+            println "err1"

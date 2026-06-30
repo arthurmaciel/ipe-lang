@@ -115,6 +115,11 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // from the runtime as `JsonVal` (re-exported via `pub use sky_runtime::*`
         // in the emitted crate).
         IrType::Json => "JsonVal".to_owned(),
+        // `Decoder<T>` is the JSON decoder type, aliased in the emitted project's
+        // preamble as `pub type Decoder<T> = sky_runtime::json::Decoder<SkyError, T>`.
+        IrType::Decoder(inner) => {
+            format!("Decoder<{}>", render_type(ctx, inner, generics)?)
+        }
         IrType::Tuple(elems) => {
             let mut parts = Vec::with_capacity(elems.len());
             for elem in elems {

@@ -105,6 +105,7 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::Set(a) => format!("Set {}", ir_type_name(interner, a)),
         IrType::Bytes => "Bytes".to_owned(),
         IrType::Json => "Json".to_owned(),
+        IrType::Decoder(inner) => format!("Decoder {}", ir_type_name(interner, inner)),
         IrType::Tuple(elems) => {
             let inner = elems
                 .iter()
@@ -329,6 +330,29 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::JsonEncList => "JsonEnc.list",
         KernelFn::JsonEncObject => "JsonEnc.object",
         KernelFn::JsonEncEncode => "JsonEnc.encode",
+        // ── JsonDec (M4h) ────────────────────────────────────────────────────
+        KernelFn::JsonDecString => "JsonDec.string",
+        KernelFn::JsonDecInt => "JsonDec.int",
+        KernelFn::JsonDecFloat => "JsonDec.float",
+        KernelFn::JsonDecBool => "JsonDec.bool",
+        KernelFn::JsonDecDecodeString => "JsonDec.decodeString",
+        KernelFn::JsonDecField => "JsonDec.field",
+        KernelFn::JsonDecAt => "JsonDec.at",
+        KernelFn::JsonDecIndex => "JsonDec.index",
+        KernelFn::JsonDecList => "JsonDec.list",
+        KernelFn::JsonDecMap => "JsonDec.map",
+        KernelFn::JsonDecAndThen => "JsonDec.andThen",
+        KernelFn::JsonDecSucceed => "JsonDec.succeed",
+        KernelFn::JsonDecFail => "JsonDec.fail",
+        KernelFn::JsonDecOneOf => "JsonDec.oneOf",
+        KernelFn::JsonDecMap2 => "JsonDec.map2",
+        KernelFn::JsonDecMap3 => "JsonDec.map3",
+        KernelFn::JsonDecMap4 => "JsonDec.map4",
+        // ── JsonDecP (M4h) ───────────────────────────────────────────────────
+        KernelFn::JsonDecPRequired => "JsonDecP.required",
+        KernelFn::JsonDecPOptional => "JsonDecP.optional",
+        KernelFn::JsonDecPCustom => "JsonDecP.custom",
+        KernelFn::JsonDecPRequiredAt => "JsonDecP.requiredAt",
     }
 }
 

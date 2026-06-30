@@ -426,6 +426,13 @@ pub enum IrType {
     /// call — the only place in the M4g subset where `any` is meaningful.
     /// The backend emits `JsonVal`.
     Json,
+    /// The `Decoder a` type — an opaque decoder that reads a JSON value and
+    /// produces a value of type `a`.
+    ///
+    /// Introduced in M4h (`Sky.Core.Json.Decode`).  Renders as
+    /// `Decoder<T>` using the emitted project's preamble type alias:
+    /// `pub type Decoder<T> = sky_runtime::json::Decoder<SkyError, T>`.
+    Decoder(Box<Self>),
 }
 
 /// An expression in the typed IR.
@@ -960,6 +967,62 @@ pub enum KernelFn {
     /// `indent=0` → compact (no whitespace); `indent=N` → N-space pretty-print
     /// matching Go's `json.MarshalIndent(val, "", strings.Repeat(" ", N))`.
     JsonEncEncode,
+    // ── Json.Decode kernels (M4h) ──────────────────────────────────────────────
+    /// `JsonDec.string : Decoder String` — primitive string decoder (arity 0).
+    JsonDecString,
+    /// `JsonDec.int : Decoder Int` — primitive integer decoder (arity 0).
+    JsonDecInt,
+    /// `JsonDec.float : Decoder Float` — primitive float decoder (arity 0).
+    JsonDecFloat,
+    /// `JsonDec.bool : Decoder Bool` — primitive boolean decoder (arity 0).
+    JsonDecBool,
+    /// `JsonDec.decodeString : Decoder a -> String -> Result Error a` — run a
+    /// decoder against a raw JSON string.
+    JsonDecDecodeString,
+    /// `JsonDec.field : String -> Decoder a -> Decoder a` — decode the named
+    /// object field.
+    JsonDecField,
+    /// `JsonDec.at : List String -> Decoder a -> Decoder a` — decode through a
+    /// nested field path.
+    JsonDecAt,
+    /// `JsonDec.index : Int -> Decoder a -> Decoder a` — decode the n-th array
+    /// element.
+    JsonDecIndex,
+    /// `JsonDec.list : Decoder a -> Decoder (List a)` — decode a JSON array into
+    /// a `List` by applying `Decoder a` to each element.
+    JsonDecList,
+    /// `JsonDec.map : (a -> b) -> Decoder a -> Decoder b` — transform a decoded
+    /// value.
+    JsonDecMap,
+    /// `JsonDec.andThen : (a -> Decoder b) -> Decoder a -> Decoder b` — chain
+    /// decoders.  Sky arg order: fn first; Rust runtime arg order: decoder first.
+    /// `kernel_swaps_first_two` reverses the two args at emit time.
+    JsonDecAndThen,
+    /// `JsonDec.succeed : a -> Decoder a` — a decoder that always succeeds with
+    /// the given value.  When the argument is a function, the backend wraps it
+    /// with `curry_N` so the Rust factory contract is met.
+    JsonDecSucceed,
+    /// `JsonDec.fail : String -> Decoder a` — a decoder that always fails with the
+    /// given message.
+    JsonDecFail,
+    /// `JsonDec.oneOf : List (Decoder a) -> Decoder a` — try each decoder in
+    /// order; succeed with the first to match.
+    JsonDecOneOf,
+    /// `JsonDec.map2 : (a -> b -> c) -> Decoder a -> Decoder b -> Decoder c`.
+    JsonDecMap2,
+    /// `JsonDec.map3 : (a -> b -> c -> d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d`.
+    JsonDecMap3,
+    /// `JsonDec.map4 : (a -> b -> c -> d -> e) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e`.
+    JsonDecMap4,
+    // ── Json.Decode.Pipeline kernels (M4h) ────────────────────────────────────
+    /// `Pipeline.required : String -> Decoder a -> Decoder (a -> b) -> Decoder b`.
+    JsonDecPRequired,
+    /// `Pipeline.optional : String -> Decoder a -> a -> Decoder (a -> b) -> Decoder b`.
+    JsonDecPOptional,
+    /// `Pipeline.custom : Decoder a -> Decoder (a -> b) -> Decoder b`.
+    JsonDecPCustom,
+    /// `Pipeline.requiredAt : List String -> Decoder a -> Decoder (a -> b) -> Decoder b`.
+    JsonDecPRequiredAt,
 }
 
 /// Binary operators.

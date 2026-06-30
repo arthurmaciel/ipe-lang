@@ -361,6 +361,19 @@ impl Env {
                 "JsonEnc",
                 &["string", "int", "float", "bool", "null", "list", "object", "encode"],
             ),
+            // `Sky.Core.Json.Decode` — JSON decoder combinators (M4h).
+            (
+                "JsonDec",
+                &[
+                    "string", "int", "float", "bool", "decodeString", "field", "at", "index",
+                    "list", "map", "andThen", "succeed", "fail", "oneOf", "map2", "map3", "map4",
+                ],
+            ),
+            // `Sky.Core.Json.Decode.Pipeline` — pipeline-style record decoders (M4h).
+            (
+                "JsonDecP",
+                &["required", "optional", "custom", "requiredAt"],
+            ),
         ];
 
         for (qual, funcs) in QUALIFIERS {

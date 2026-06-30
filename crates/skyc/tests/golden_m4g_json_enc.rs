@@ -19,7 +19,7 @@
 //!
 //! * `JsonEnc.string "say \"hi\""` — a string whose value contains `"` chars
 //!   that JSON must escape as `\"`.  Pins byte-for-byte agreement between
-//!   serde_json and Go's `encoding/json`.
+//!   `serde_json` and Go's `encoding/json`.
 //!   (`m4g_json_enc_escape`)
 //!
 //! Every test is gated on `SKY_E2E=1`; without it the test returns early.  Run:
@@ -97,7 +97,7 @@ fn json_enc_float_bool_null() {
 // ── string escaping ──────────────────────────────────────────────────────────
 
 /// `JsonEnc.string "say \"hi\""` → `"say \"hi\""`.  Pins `"` → `\"` JSON
-/// escaping parity between serde_json and Go's `encoding/json`.
+/// escaping parity between `serde_json` and Go's `encoding/json`.
 #[test]
 fn json_enc_string_escape() {
     assert_runs_and_matches_oracle("m4g_json_enc_escape");
