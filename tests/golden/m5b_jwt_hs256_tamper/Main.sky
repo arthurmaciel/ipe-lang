@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+-- JWT HS256 tamper detection: appending a character to the token must cause
+-- decode to fail — any signature modification is rejected.
+-- Two separate bindings for the secret avoid double-move of the String.
+-- Secret is exactly 32 bytes, clearing the RFC 7518 §3.2 floor.
+main =
+    let
+        encSecret = "test-secret-key-0123456789abcdef"
+
+        decSecret = "test-secret-key-0123456789abcdef"
+
+        claims = "{\"sub\":\"alice\",\"exp\":9999999999}"
+
+        result =
+            case Jwt.encodeHs256 encSecret claims of
+                Err _ ->
+                    "encode-failed"
+
+                Ok token ->
+                    let
+                        tampered = token ++ "x"
+                    in
+                    case Jwt.decodeHs256 decSecret tampered of
+                        Err _ ->
+                            "tamper-detected"
+
+                        Ok _ ->
+                            "tamper-missed"
+    in
+    println result

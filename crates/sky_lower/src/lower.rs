@@ -1786,7 +1786,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JsonDecString
                 | KernelFn::JsonDecInt
                 | KernelFn::JsonDecFloat
-                | KernelFn::JsonDecBool,
+                | KernelFn::JsonDecBool
+                // ── Uuid arity-0 (M5b) ────────────────────────────────────────
+                | KernelFn::UuidV4
+                | KernelFn::UuidV7,
             ) => Ok(0),
             Callee::Kernel(
                 KernelFn::StringFromInt
@@ -1895,7 +1898,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CryptoSha1
                 | KernelFn::CryptoMd5
                 | KernelFn::CryptoRandomBytes
-                | KernelFn::CryptoRandomToken,
+                | KernelFn::CryptoRandomToken
+                // ── Uuid arity-1 (M5b) ────────────────────────────────────────
+                | KernelFn::UuidParse,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -1961,7 +1966,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CryptoChacha20Encrypt
                 | KernelFn::CryptoChacha20Decrypt
                 | KernelFn::CryptoAesKeyFromPassword
-                | KernelFn::CryptoChachaKeyFromPassword,
+                | KernelFn::CryptoChachaKeyFromPassword
+                // ── Jwt arity-2 (M5b) ─────────────────────────────────────────
+                | KernelFn::JwtEncodeHs256
+                | KernelFn::JwtDecodeHs256
+                | KernelFn::JwtEncodeRs256
+                | KernelFn::JwtDecodeRs256,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::StringReplace
@@ -2266,6 +2276,15 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Crypto", "randomBytes") => Ok(Callee::Kernel(KernelFn::CryptoRandomBytes)),
                     ("Crypto", "randomToken") => Ok(Callee::Kernel(KernelFn::CryptoRandomToken)),
+                    // ── Uuid kernels (M5b) ────────────────────────────────────
+                    ("Uuid", "v4") => Ok(Callee::Kernel(KernelFn::UuidV4)),
+                    ("Uuid", "v7") => Ok(Callee::Kernel(KernelFn::UuidV7)),
+                    ("Uuid", "parse") => Ok(Callee::Kernel(KernelFn::UuidParse)),
+                    // ── Jwt kernels (M5b) ─────────────────────────────────────
+                    ("Jwt", "encodeHs256") => Ok(Callee::Kernel(KernelFn::JwtEncodeHs256)),
+                    ("Jwt", "decodeHs256") => Ok(Callee::Kernel(KernelFn::JwtDecodeHs256)),
+                    ("Jwt", "encodeRs256") => Ok(Callee::Kernel(KernelFn::JwtEncodeRs256)),
+                    ("Jwt", "decodeRs256") => Ok(Callee::Kernel(KernelFn::JwtDecodeRs256)),
                     // A kernel beyond the wired set (`Time.now`, …).
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),

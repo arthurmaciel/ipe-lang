@@ -436,6 +436,19 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::CryptoChachaKeyFromPassword => "crypto_chacha_key_from_password",
         KernelFn::CryptoRandomBytes => "crypto_random_bytes",
         KernelFn::CryptoRandomToken => "crypto_random_token",
+        // ── Uuid kernels (M5b) ──────────────────────────────────────────────
+        // uuid_v4 / uuid_v7 return String directly — no E type, no concretisation.
+        KernelFn::UuidV4 => "uuid_v4",
+        KernelFn::UuidV7 => "uuid_v7",
+        // uuid_parse returns SkyMaybe<String> — no E type, no concretisation.
+        KernelFn::UuidParse => "uuid_parse",
+        // ── Jwt kernels (M5b) ───────────────────────────────────────────────
+        // Concrete aliases pin E=String so Rust can infer the error type at
+        // call sites where the Err arm is discarded (matches the Crypto pattern).
+        KernelFn::JwtEncodeHs256 => "sky_jwt_encode_hs256",
+        KernelFn::JwtDecodeHs256 => "sky_jwt_decode_hs256",
+        KernelFn::JwtEncodeRs256 => "sky_jwt_encode_rs256",
+        KernelFn::JwtDecodeRs256 => "sky_jwt_decode_rs256",
     }
 }
 

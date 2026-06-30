@@ -122,6 +122,38 @@ pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> SkyR
     }
 }
 
+// ── Concrete aliases for generated Rust code ─────────────────────────────────
+//
+// The generic `jwt_encode_hs256<E: From<String>>` and friends cannot be
+// called directly from generated code where the `Err` arm may be discarded —
+// Rust cannot infer `E` in that context. These monomorphic aliases pin
+// `E = String` and are what `naming::kernel_name()` maps the Jwt kernels to,
+// mirroring the `sky_aes_gcm_encrypt` pattern in `crypto.rs`.
+//
+// SECURITY: only the error message crosses the `From<String>` boundary; no
+// key material is included in error text (see the suppressed RSA key detail
+// above). These wrappers add no new logging surface.
+
+/// Generated-code alias for `jwt_encode_hs256` with `E = String`.
+pub fn sky_jwt_encode_hs256(secret: String, claims_json: String) -> SkyResult<String, String> {
+    jwt_encode_hs256(secret, claims_json)
+}
+
+/// Generated-code alias for `jwt_decode_hs256` with `E = String`.
+pub fn sky_jwt_decode_hs256(secret: String, token: String) -> SkyResult<String, String> {
+    jwt_decode_hs256(secret, token)
+}
+
+/// Generated-code alias for `jwt_encode_rs256` with `E = String`.
+pub fn sky_jwt_encode_rs256(key_pem: String, claims_json: String) -> SkyResult<String, String> {
+    jwt_encode_rs256(key_pem, claims_json)
+}
+
+/// Generated-code alias for `jwt_decode_rs256` with `E = String`.
+pub fn sky_jwt_decode_rs256(key_pem: String, token: String) -> SkyResult<String, String> {
+    jwt_decode_rs256(key_pem, token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
