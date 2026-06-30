@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+import Sky.Core.Http as Http
+
+
+-- Http builder chain test: verifies that Http.defaultRequest / Http.withMethod /
+-- Http.withTimeout / Http.withHeader / Http.withBody all resolve through the
+-- kernel dispatch path and produce a correctly-shaped HttpRequest record.
+-- withHeader PREPENDS (latest-added first) — B:2 appears before A:1.
+
+
+headerStr : ( String, String ) -> String
+headerStr pair =
+    case pair of
+        ( k, v ) -> k ++ ":" ++ v
+
+
+printReq : { body : String, followRedirects : Bool, headers : List ( String, String ), maxRedirects : Int, method : String, timeout : Int, url : String } -> String
+printReq req =
+    String.join "\n" [ req.method, req.url, String.fromInt req.timeout, req.body, String.join "," (List.map headerStr req.headers) ]
+
+
+main =
+    println
+        (printReq
+            (Http.withBody "hello"
+                (Http.withHeader "B" "2"
+                    (Http.withHeader "A" "1"
+                        (Http.withTimeout 5000
+                            (Http.withMethod "POST"
+                                (Http.defaultRequest "http://example.com")))))))

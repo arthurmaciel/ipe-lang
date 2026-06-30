@@ -432,6 +432,16 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::FileCopy => "File.copy",
         KernelFn::FileRename => "File.rename",
         KernelFn::FileDelete => "File.delete",
+        // ── Http kernels (M5b) ──────────────────────────────────────────────
+        KernelFn::HttpGet => "Http.get",
+        KernelFn::HttpPost => "Http.post",
+        KernelFn::HttpRequest => "Http.request",
+        KernelFn::HttpParseQuery => "Http.parseQuery",
+        KernelFn::HttpDefaultRequest => "Http.defaultRequest",
+        KernelFn::HttpWithMethod => "Http.withMethod",
+        KernelFn::HttpWithTimeout => "Http.withTimeout",
+        KernelFn::HttpWithBody => "Http.withBody",
+        KernelFn::HttpWithHeader => "Http.withHeader",
     }
 }
 

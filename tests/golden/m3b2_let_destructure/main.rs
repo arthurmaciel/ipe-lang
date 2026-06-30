@@ -239,6 +239,10 @@ pub fn crypto_random_bytes(n: i64) -> SkyTask<String> {
 pub fn crypto_random_token(n: i64) -> SkyTask<String> {
     sky_runtime::crypto::crypto_random_token(n)
 }
+// ── Http kernels (M5b) ─────────────────────────────────────────────────────
+pub fn http_parse_query(raw: String) -> HashMap<String, String> {
+    sky_runtime::http_client::http_parse_query(raw)
+}
 
 pub fn main_tuple_parts() -> i64 {
     ({ let (a, b) = (40, 2); (a + b) })

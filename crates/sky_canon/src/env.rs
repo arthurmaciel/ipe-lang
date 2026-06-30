@@ -484,6 +484,30 @@ impl Env {
                     "delete",
                 ],
             ),
+            // `Sky.Core.Http` — outbound HTTP client (M5b).
+            // `get` / `post` / `request` are effect kernels (Task Error
+            // HttpResponse); `parseQuery` is a pure kernel (String -> Dict
+            // String String); the `with*` builders + `defaultRequest` are ALSO
+            // pure kernels (HttpRequest record-update emission in the backend) —
+            // cross-module pure-Sky stdlib calls are not resolved by skyc, so the
+            // builders cannot live as pure Sky in Http.sky. Every name below is
+            // registered so `Http.foo` resolves during name-resolution and lands
+            // as `Callee::Kernel` (see lower.rs ("Http", _) arms + constrain.rs
+            // kernel_ty Http entries that give each its record type).
+            (
+                "Http",
+                &[
+                    "get",
+                    "post",
+                    "request",
+                    "defaultRequest",
+                    "withMethod",
+                    "withHeader",
+                    "withTimeout",
+                    "withBody",
+                    "parseQuery",
+                ],
+            ),
         ];
 
         for (qual, funcs) in QUALIFIERS {

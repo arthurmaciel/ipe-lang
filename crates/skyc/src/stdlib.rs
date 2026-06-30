@@ -59,6 +59,8 @@ const SYSTEM: &str = include_str!("../stdlib/Sky/Core/System.sky");
 const RANDOM: &str = include_str!("../stdlib/Sky/Core/Random.sky");
 /// `Sky.Core.File` — file-system effect kernels (M5a).
 const FILE: &str = include_str!("../stdlib/Sky/Core/File.sky");
+/// `Sky.Core.Http` — outbound HTTP client kernels + pure builders (M5b).
+const HTTP: &str = include_str!("../stdlib/Sky/Core/Http.sky");
 
 /// Every embedded `Sky.Core` module, keyed by its dotted import name.
 ///
@@ -129,6 +131,10 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Sky.Core.File",
         source: FILE,
+    },
+    StdModule {
+        name: "Sky.Core.Http",
+        source: HTTP,
     },
 ];
 

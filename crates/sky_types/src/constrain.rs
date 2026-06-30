@@ -80,6 +80,28 @@ struct Builtins {
     /// each use site instantiates them fresh through one shared map.
     tv_a: Symbol,
     tv_e: Symbol,
+    // ── Http field-name symbols ──────────────────────────────────────────────
+    // Pre-interned because `kernel_ty` takes `&self` (the interner is immutable
+    // at that point); these symbols give `Ty::Record` the correct BTreeMap keys
+    // for `HttpResponse` and `HttpRequest` so the emit prepass registers both
+    // record shapes.
+    /// `"body"` — shared by `HttpResponse` and `HttpRequest`.
+    http_f_body: Symbol,
+    /// `"headers"` — shared by `HttpResponse` (`Dict String String`) and
+    /// `HttpRequest` (`List (String, String)`).
+    http_f_headers: Symbol,
+    /// `"status"` — `HttpResponse` only.
+    http_f_status: Symbol,
+    /// `"method"` — `HttpRequest` only.
+    http_f_method: Symbol,
+    /// `"url"` — `HttpRequest` only.
+    http_f_url: Symbol,
+    /// `"timeout"` — `HttpRequest` only.
+    http_f_timeout: Symbol,
+    /// `"followRedirects"` — `HttpRequest` only (camelCase Sky field name).
+    http_f_follow_redirects: Symbol,
+    /// `"maxRedirects"` — `HttpRequest` only (camelCase Sky field name).
+    http_f_max_redirects: Symbol,
 }
 
 impl Builtins {
@@ -106,6 +128,15 @@ impl Builtins {
             error: interner.intern("Error")?,
             tv_a: interner.intern("a")?,
             tv_e: interner.intern("e")?,
+            // Http field names (camelCase, as they appear in Sky source).
+            http_f_body: interner.intern("body")?,
+            http_f_headers: interner.intern("headers")?,
+            http_f_status: interner.intern("status")?,
+            http_f_method: interner.intern("method")?,
+            http_f_url: interner.intern("url")?,
+            http_f_timeout: interner.intern("timeout")?,
+            http_f_follow_redirects: interner.intern("followRedirects")?,
+            http_f_max_redirects: interner.intern("maxRedirects")?,
         })
     }
 
@@ -2090,6 +2121,193 @@ impl<'a> Builder<'a> {
                     args: vec![list(int)],
                 };
                 fun(string, task_bytes)
+            }
+
+            // ── Sky.Core.Http (M5b) ──────────────────────────────────────────
+            //
+            // `HttpResponse = { body : String, headers : Dict String String, status : Int }`
+            // `HttpRequest  = { body : String, followRedirects : Bool, headers : List (String, String),
+            //                   maxRedirects : Int, method : String, timeout : Int, url : String }`
+            //
+            // Both record types are returned as `Ty::Record(BTreeMap<Symbol, Ty>)`
+            // so the `collect_record_types` prepass in the lowerer can register the
+            // synthesised struct shapes for `HttpResponse` and `HttpRequest`.
+            // The field name symbols are pre-interned in `Builtins::new()` because
+            // `kernel_ty` has `&self` — the interner is immutable here.
+            (Some("Http"), Some("get")) => {
+                // get : String -> Task HttpResponse
+                let mut resp_fields = BTreeMap::new();
+                resp_fields.insert(self.builtins.http_f_body, string.clone());
+                resp_fields.insert(
+                    self.builtins.http_f_headers,
+                    dict(string.clone(), string.clone()),
+                );
+                // `int` is not used after this point in the arm → move, no clone.
+                resp_fields.insert(self.builtins.http_f_status, int);
+                let http_response = Ty::Record(resp_fields);
+                let task_resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![http_response],
+                };
+                // `string` last use → move.
+                fun(string, task_resp)
+            }
+            (Some("Http"), Some("post")) => {
+                // post : String -> String -> Task HttpResponse
+                let mut resp_fields = BTreeMap::new();
+                resp_fields.insert(self.builtins.http_f_body, string.clone());
+                resp_fields.insert(
+                    self.builtins.http_f_headers,
+                    dict(string.clone(), string.clone()),
+                );
+                // `int` last use → move.
+                resp_fields.insert(self.builtins.http_f_status, int);
+                let http_response = Ty::Record(resp_fields);
+                let task_resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![http_response],
+                };
+                fun(string.clone(), fun(string, task_resp))
+            }
+            (Some("Http"), Some("request")) => {
+                // request : HttpRequest -> Task HttpResponse
+                let mut req_fields = BTreeMap::new();
+                req_fields.insert(self.builtins.http_f_body, string.clone());
+                // `bool_ty` not used after this point in the arm → move.
+                req_fields.insert(self.builtins.http_f_follow_redirects, bool_ty);
+                req_fields.insert(
+                    self.builtins.http_f_headers,
+                    list(tuple2(string.clone(), string.clone())),
+                );
+                req_fields.insert(self.builtins.http_f_max_redirects, int.clone());
+                req_fields.insert(self.builtins.http_f_method, string.clone());
+                req_fields.insert(self.builtins.http_f_timeout, int.clone());
+                req_fields.insert(self.builtins.http_f_url, string.clone());
+                let http_request = Ty::Record(req_fields);
+                let mut resp_fields = BTreeMap::new();
+                resp_fields.insert(self.builtins.http_f_body, string.clone());
+                // Second `string` in dict is the last use of `string` in this arm → move.
+                resp_fields.insert(self.builtins.http_f_headers, dict(string.clone(), string));
+                // `int` last use → move.
+                resp_fields.insert(self.builtins.http_f_status, int);
+                let http_response = Ty::Record(resp_fields);
+                let task_resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![http_response],
+                };
+                fun(http_request, task_resp)
+            }
+            (Some("Http"), Some("parseQuery")) => {
+                // parseQuery : String -> Dict String String  (pure)
+                fun(string.clone(), dict(string.clone(), string))
+            }
+            (Some("Http"), Some("defaultRequest")) => {
+                // defaultRequest : String -> HttpRequest  (pure builder)
+                let mut req_fields = BTreeMap::new();
+                req_fields.insert(self.builtins.http_f_body, string.clone());
+                // `bool_ty` not used after this point → move.
+                req_fields.insert(self.builtins.http_f_follow_redirects, bool_ty);
+                req_fields.insert(
+                    self.builtins.http_f_headers,
+                    list(tuple2(string.clone(), string.clone())),
+                );
+                req_fields.insert(self.builtins.http_f_max_redirects, int.clone());
+                req_fields.insert(self.builtins.http_f_method, string.clone());
+                // `int` last use → move.
+                req_fields.insert(self.builtins.http_f_timeout, int);
+                req_fields.insert(self.builtins.http_f_url, string.clone());
+                let http_request = Ty::Record(req_fields);
+                // `string` last use → move.
+                fun(string, http_request)
+            }
+            (Some("Http"), Some("withMethod")) => {
+                // withMethod : String -> HttpRequest -> HttpRequest  (pure builder)
+                let mut req_fields = BTreeMap::new();
+                req_fields.insert(self.builtins.http_f_body, string.clone());
+                // `bool_ty` not used after this point → move.
+                req_fields.insert(self.builtins.http_f_follow_redirects, bool_ty);
+                req_fields.insert(
+                    self.builtins.http_f_headers,
+                    list(tuple2(string.clone(), string.clone())),
+                );
+                req_fields.insert(self.builtins.http_f_max_redirects, int.clone());
+                req_fields.insert(self.builtins.http_f_method, string.clone());
+                // `int` last use → move.
+                req_fields.insert(self.builtins.http_f_timeout, int);
+                // `string` last use in req_fields (fun(string, …) is the outer arg) → move.
+                req_fields.insert(self.builtins.http_f_url, string.clone());
+                let http_request_a = Ty::Record(req_fields.clone());
+                let http_request_b = Ty::Record(req_fields);
+                // `string` last use → move.
+                fun(string, fun(http_request_a, http_request_b))
+            }
+            (Some("Http"), Some("withTimeout")) => {
+                // withTimeout : Int -> HttpRequest -> HttpRequest  (pure builder)
+                let mut req_fields = BTreeMap::new();
+                req_fields.insert(self.builtins.http_f_body, string.clone());
+                // `bool_ty` not used after this point → move.
+                req_fields.insert(self.builtins.http_f_follow_redirects, bool_ty);
+                req_fields.insert(
+                    self.builtins.http_f_headers,
+                    list(tuple2(string.clone(), string.clone())),
+                );
+                req_fields.insert(self.builtins.http_f_max_redirects, int.clone());
+                req_fields.insert(self.builtins.http_f_method, string.clone());
+                // `int` at timeout is NOT the last use — `int` is also the outer `fun`
+                // arg at `fun(int, …)`, so the clone here is needed.
+                req_fields.insert(self.builtins.http_f_timeout, int.clone());
+                // `string` last use → move.
+                req_fields.insert(self.builtins.http_f_url, string);
+                let http_request_a = Ty::Record(req_fields.clone());
+                let http_request_b = Ty::Record(req_fields);
+                // `int` last use → move.
+                fun(int, fun(http_request_a, http_request_b))
+            }
+            (Some("Http"), Some("withBody")) => {
+                // withBody : String -> HttpRequest -> HttpRequest  (pure builder)
+                let mut req_fields = BTreeMap::new();
+                req_fields.insert(self.builtins.http_f_body, string.clone());
+                // `bool_ty` not used after this point → move.
+                req_fields.insert(self.builtins.http_f_follow_redirects, bool_ty);
+                req_fields.insert(
+                    self.builtins.http_f_headers,
+                    list(tuple2(string.clone(), string.clone())),
+                );
+                req_fields.insert(self.builtins.http_f_max_redirects, int.clone());
+                req_fields.insert(self.builtins.http_f_method, string.clone());
+                // `int` last use → move.
+                req_fields.insert(self.builtins.http_f_timeout, int);
+                req_fields.insert(self.builtins.http_f_url, string.clone());
+                let http_request_a = Ty::Record(req_fields.clone());
+                let http_request_b = Ty::Record(req_fields);
+                // `string` last use → move.
+                fun(string, fun(http_request_a, http_request_b))
+            }
+            (Some("Http"), Some("withHeader")) => {
+                // withHeader : String -> String -> HttpRequest -> HttpRequest  (pure builder)
+                let mut req_fields = BTreeMap::new();
+                req_fields.insert(self.builtins.http_f_body, string.clone());
+                // `bool_ty` not used after this point → move.
+                req_fields.insert(self.builtins.http_f_follow_redirects, bool_ty);
+                req_fields.insert(
+                    self.builtins.http_f_headers,
+                    list(tuple2(string.clone(), string.clone())),
+                );
+                req_fields.insert(self.builtins.http_f_max_redirects, int.clone());
+                req_fields.insert(self.builtins.http_f_method, string.clone());
+                // `int` last use → move.
+                req_fields.insert(self.builtins.http_f_timeout, int);
+                req_fields.insert(self.builtins.http_f_url, string.clone());
+                let http_request_a = Ty::Record(req_fields.clone());
+                let http_request_b = Ty::Record(req_fields);
+                // `string` used twice in fun(string.clone(), fun(string, …)) → clone first.
+                fun(
+                    string.clone(),
+                    fun(string, fun(http_request_a, http_request_b)),
+                )
             }
 
             // Unknown kernel: a single flexible variable. The raw id is chosen

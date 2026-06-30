@@ -61,7 +61,7 @@ fn anchor_missing(anchor: &str) -> Diagnostic {
 /// are identical for every M0 program, so they are sliced out of the embedded
 /// golden rather than hand-retyped — the same drift-free strategy the
 /// preamble/epilogue use. The slice is anchored entirely on its *own* content
-/// (the first alias and the final `crypto_random_token` wrapper), independent of
+/// (the first alias and the final `http_parse_query` wrapper), independent of
 /// the surrounding user code.
 ///
 /// # Errors
@@ -71,7 +71,7 @@ fn anchor_missing(anchor: &str) -> Diagnostic {
 /// instead of a silent empty slice.
 fn runtime_bindings() -> DResult<&'static str> {
     const START: &str = "type SkyError = String;";
-    const END: &str = "    sky_runtime::crypto::crypto_random_token(n)\n}\n";
+    const END: &str = "    sky_runtime::http_client::http_parse_query(raw)\n}\n";
     let start = GOLDEN.find(START).ok_or_else(|| anchor_missing(START))?;
     let rest = GOLDEN.get(start..).ok_or_else(|| anchor_missing(START))?;
     let end_in_rest = rest.find(END).ok_or_else(|| anchor_missing(END))?;

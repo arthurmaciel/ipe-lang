@@ -501,6 +501,24 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::FileCopy => "file_copy",
         KernelFn::FileRename => "file_rename",
         KernelFn::FileDelete => "file_delete",
+        // ── Http kernels (M5b) ──────────────────────────────────────────────
+        // `HttpParseQuery` maps to `http_parse_query` (pure, no E type).
+        // `HttpGet` / `HttpPost` / `HttpRequest` emit through `emit_http_call`
+        // (not the standard callee_name path) because they need a `task_map`
+        // conversion closure; these names are still registered here so
+        // `kernel_name` is total over all KernelFn variants (no _ catch-all).
+        // The five builder kernels (`HttpDefaultRequest` / `HttpWith*`) likewise
+        // emit through `emit_http_builder_call` rather than the standard
+        // `callee_name` path; their entries here keep the function total.
+        KernelFn::HttpGet => "http_get",
+        KernelFn::HttpPost => "http_post",
+        KernelFn::HttpRequest => "http_request",
+        KernelFn::HttpParseQuery => "http_parse_query",
+        KernelFn::HttpDefaultRequest => "http_default_request",
+        KernelFn::HttpWithMethod => "http_with_method",
+        KernelFn::HttpWithTimeout => "http_with_timeout",
+        KernelFn::HttpWithBody => "http_with_body",
+        KernelFn::HttpWithHeader => "http_with_header",
     }
 }
 
@@ -539,6 +557,19 @@ mod tests {
         assert_eq!(kernel_name(KernelFn::StringFromInt), "string_from_int");
         assert_eq!(kernel_name(KernelFn::StringFromFloat), "string_from_float");
         assert_eq!(kernel_name(KernelFn::LogPrintln), "log_println");
+        // ── Http kernels (M5b) ──────────────────────────────────────────────
+        assert_eq!(kernel_name(KernelFn::HttpGet), "http_get");
+        assert_eq!(kernel_name(KernelFn::HttpPost), "http_post");
+        assert_eq!(kernel_name(KernelFn::HttpRequest), "http_request");
+        assert_eq!(kernel_name(KernelFn::HttpParseQuery), "http_parse_query");
+        assert_eq!(
+            kernel_name(KernelFn::HttpDefaultRequest),
+            "http_default_request"
+        );
+        assert_eq!(kernel_name(KernelFn::HttpWithMethod), "http_with_method");
+        assert_eq!(kernel_name(KernelFn::HttpWithTimeout), "http_with_timeout");
+        assert_eq!(kernel_name(KernelFn::HttpWithBody), "http_with_body");
+        assert_eq!(kernel_name(KernelFn::HttpWithHeader), "http_with_header");
     }
 
     #[test]

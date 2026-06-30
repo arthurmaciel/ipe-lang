@@ -1995,7 +1995,16 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FileIsDir
                 | KernelFn::FileTempFile
                 | KernelFn::FileTempDir
-                | KernelFn::FileDelete,
+                | KernelFn::FileDelete
+                // ── Http arity-1 (M5b) ────────────────────────────────────────
+                // `HttpGet` : String -> Task Error HttpResponse
+                // `HttpRequest` : HttpRequest -> Task Error HttpResponse
+                // `HttpParseQuery` : String -> Dict String String (pure)
+                // `HttpDefaultRequest` : String -> HttpRequest (pure builder)
+                | KernelFn::HttpGet
+                | KernelFn::HttpRequest
+                | KernelFn::HttpParseQuery
+                | KernelFn::HttpDefaultRequest,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -2084,7 +2093,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FileReadFileLimit
                 | KernelFn::FileAppend
                 | KernelFn::FileCopy
-                | KernelFn::FileRename,
+                | KernelFn::FileRename
+                // ── Http arity-2 (M5b) ────────────────────────────────────────
+                // `HttpPost` : String -> String -> Task Error HttpResponse
+                // `HttpWithMethod` / `HttpWithTimeout` / `HttpWithBody` : pure builders
+                | KernelFn::HttpPost
+                | KernelFn::HttpWithMethod
+                | KernelFn::HttpWithTimeout
+                | KernelFn::HttpWithBody,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::StringReplace
@@ -2103,7 +2119,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JsonDecPRequired
                 | KernelFn::JsonDecPRequiredAt
                 // ── Crypto arity-3 (M5a) ─────────────────────────────────────
-                | KernelFn::CryptoRsaSha256Verify,
+                | KernelFn::CryptoRsaSha256Verify
+                // ── Http arity-3 (M5b) ───────────────────────────────────────
+                // `HttpWithHeader` : String -> String -> HttpRequest -> HttpRequest
+                | KernelFn::HttpWithHeader,
             ) => Ok(3),
             // ── JsonDec arity-4 (M4h) ─────────────────────────────────────────
             Callee::Kernel(KernelFn::JsonDecMap3 | KernelFn::JsonDecPOptional) => Ok(4),
@@ -2452,6 +2471,16 @@ impl<'a> Lowerer<'a> {
                     ("File", "copy") => Ok(Callee::Kernel(KernelFn::FileCopy)),
                     ("File", "rename") => Ok(Callee::Kernel(KernelFn::FileRename)),
                     ("File", "delete") => Ok(Callee::Kernel(KernelFn::FileDelete)),
+                    // ── Http kernels (M5b) ────────────────────────────────────
+                    ("Http", "get") => Ok(Callee::Kernel(KernelFn::HttpGet)),
+                    ("Http", "post") => Ok(Callee::Kernel(KernelFn::HttpPost)),
+                    ("Http", "request") => Ok(Callee::Kernel(KernelFn::HttpRequest)),
+                    ("Http", "parseQuery") => Ok(Callee::Kernel(KernelFn::HttpParseQuery)),
+                    ("Http", "defaultRequest") => Ok(Callee::Kernel(KernelFn::HttpDefaultRequest)),
+                    ("Http", "withMethod") => Ok(Callee::Kernel(KernelFn::HttpWithMethod)),
+                    ("Http", "withTimeout") => Ok(Callee::Kernel(KernelFn::HttpWithTimeout)),
+                    ("Http", "withBody") => Ok(Callee::Kernel(KernelFn::HttpWithBody)),
+                    ("Http", "withHeader") => Ok(Callee::Kernel(KernelFn::HttpWithHeader)),
                     // A kernel beyond the wired set.
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),
