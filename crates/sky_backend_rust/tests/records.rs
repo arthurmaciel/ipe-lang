@@ -350,7 +350,7 @@ fn end_to_end_builds_and_prints_five() -> DResult<()> {
     // Vendor the runtime tree next to the emitted main.rs.
     let runtime = resolve_runtime().ok_or_else(|| Diagnostic::CompilerBug {
         where_: "records e2e",
-        detail: "could not locate runtime-rust/src/sky_runtime".to_owned(),
+        detail: "could not locate runtime/src/sky_runtime".to_owned(),
     })?;
     copy_dir(&runtime, &src.join("sky_runtime"))?;
 
@@ -394,8 +394,8 @@ fn io_bug(path: &Path, e: &std::io::Error) -> Diagnostic {
     }
 }
 
-/// Locate the vendored Rust runtime (`runtime-rust/src/sky_runtime`), via
-/// `SKY_RUNTIME_DIR` or an upward search for a sibling `sky` checkout.
+/// Locate the Sky runtime module tree (`runtime/src/sky_runtime`), via
+/// `SKY_RUNTIME_DIR` or an upward search from the current directory.
 fn resolve_runtime() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("SKY_RUNTIME_DIR") {
         let p = PathBuf::from(dir);
@@ -407,10 +407,14 @@ fn resolve_runtime() -> Option<PathBuf> {
     let mut here: Option<&Path> = Some(cwd.as_path());
     while let Some(dir) = here {
         for candidate in [
+            // In-repo runtime (sky-rust monorepo).
+            dir.join("runtime").join("src").join("sky_runtime"),
+            // Legacy: sibling `sky` checkout.
             dir.join("sky")
                 .join("runtime-rust")
                 .join("src")
                 .join("sky_runtime"),
+            // Legacy: sibling `runtime-rust` directory.
             dir.join("runtime-rust").join("src").join("sky_runtime"),
         ] {
             if candidate.is_dir() {

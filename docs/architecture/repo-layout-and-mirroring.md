@@ -1,6 +1,8 @@
 # Repo layout, project coupling, and the upstream-mirroring model
 
-> **Status:** plan / decision record. Written 2026-06-27. Not yet executed.
+> **Status:** plan / decision record. Written 2026-06-27.
+> §5 step 3 (runtime relocation) is **done** — the runtime lives at `runtime/` in-repo.
+> Remaining steps (vendor upstream, edition bump, ledgers) are still pending.
 > **Owner:** sky-rust coordinator (downstream of upstream Sky by anzellai).
 
 ## 0. Pivot (2026-06-27): drop the fork's Haskell Rust backend; mirror behaviour, not bytes
@@ -106,10 +108,10 @@ sky-rust/                          # the monorepo
 
 Notes:
 - `vendor/upstream-sky` is **read-only** to us; we never patch it, we bump its pin.
-- The runtime moves from `sky/runtime-rust` into `backends/rust/runtime/` and is
-  **embedded** into `skyc` (via `include_dir!`/`build.rs`, mirroring how the
-  Haskell binary TH-embeds its runtime), killing the current sibling-path
-  `resolve_runtime` hack and making CI self-contained.
+- The runtime is at `runtime/` in-repo (§5 step 3 is done). The long-term plan
+  moves it into `backends/rust/runtime/` and **embeds** it into `skyc` (via
+  `include_dir!`/`build.rs`). The sibling-path fallback in `resolve_runtime` is
+  now a legacy override; the in-repo path is the default.
 - During the port, the pinned upstream's `sky` (Haskell+**Go**) is built/used in CI
   to run behavioural parity diffs and as the semantics reference. The fork's
   Haskell Rust backend is not built or used.
@@ -172,11 +174,10 @@ unification (see `BUMPING-EDITIONS.md`) so the tree is disrupted **once**.
 2. **Vendor upstream mainline.** Add `vendor/upstream-sky` as a submodule pinned to
    `v0.17.0`. Wire CI to build/use `sky` (Haskell+**Go**) as the behavioural oracle
    + the `runtime-go` source. (Not the fork's Rust backend.)
-3. **Move the runtime in.** Relocate `runtime-rust` → `backends/rust/runtime/`
-   (it is already canonical and ours); switch `skyc` from sibling-path copy to
-   embedded (`include_dir!`/`build.rs`); delete the `resolve_runtime` upward-search
-   hack. No upstream coordination needed — the fork's Rust backend is retired, so
-   nothing else consumes `runtime-rust`.
+3. **Move the runtime in.** ✅ *Done (2026-06-29).* The runtime now lives at
+   `runtime/` in-repo; `resolve_runtime` defaults to `runtime/src/sky_runtime`
+   without any external env var. Long-term: relocate to `backends/rust/runtime/`
+   and embed via `include_dir!`/`build.rs` for a fully self-contained binary.
 4. **Apply the edition-2024 unification** (now a *one-repo* change — the emitted
    edition is purely ours; no Haskell-emitter coordination — see the simplified
    `BUMPING-EDITIONS.md`). Refresh `tests/snapshots/` via insta review.

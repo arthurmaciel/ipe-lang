@@ -20,8 +20,7 @@
 //! compile-output gates above it still run). Run with:
 //!
 //! ```text
-//! SKY_E2E=1 SKY_RUNTIME_DIR=<path-to-runtime-rust/src/sky_runtime> \
-//!     cargo test golden_m4b_string
+//! SKY_E2E=1 cargo test golden_m4b_string
 //! ```
 
 use std::path::{Path, PathBuf};

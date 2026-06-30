@@ -10,7 +10,8 @@
 //! Generated Rust projects do not depend on the runtime as a Cargo path crate;
 //! instead `main.rs` declares `mod sky_runtime;` and the runtime sources are
 //! copied in beside it. The driver therefore must locate
-//! `runtime-rust/src/sky_runtime/` and copy it under `<out>/src/sky_runtime/`.
+//! `runtime/src/sky_runtime/` (the in-repo copy) and vendor it under
+//! `<out>/src/sky_runtime/`.
 //!
 //! Errors are typed ([`CliError`]); no operation panics or unwraps.
 
@@ -141,7 +142,8 @@ impl fmt::Display for CliError {
             }
             Self::RuntimeNotFound => write!(
                 f,
-                "could not locate the Sky runtime; set SKY_RUNTIME_DIR or pass --runtime <dir>"
+                "could not locate the Sky runtime; \
+                 set SKY_RUNTIME_DIR to an explicit path or pass --runtime <dir>"
             ),
             Self::UnknownCode { input, suggestions } => {
                 write!(f, "unknown error code `{input}`")?;
@@ -215,11 +217,15 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
     Ok(())
 }
 
-/// Locate the Sky runtime module tree (`runtime-rust/src/sky_runtime/`).
+/// Locate the Sky runtime module tree (`runtime/src/sky_runtime/`).
 ///
-/// Resolution order: `$SKY_RUNTIME_DIR`, then an upward search from the current
-/// directory for a sibling `sky/runtime-rust/src/sky_runtime` or
-/// `runtime-rust/src/sky_runtime`.
+/// Resolution order:
+/// 1. `$SKY_RUNTIME_DIR` — explicit override, allows pointing at any tree.
+/// 2. Upward walk from the current directory, checking in order:
+///    - `runtime/src/sky_runtime` (the in-repo copy — found immediately when
+///      running from anywhere inside the sky-rust workspace)
+///    - `sky/runtime-rust/src/sky_runtime` (sibling sky checkout — legacy)
+///    - `runtime-rust/src/sky_runtime` (legacy sibling path)
 ///
 /// # Errors
 /// Returns [`CliError::RuntimeNotFound`] when no candidate directory exists, or
@@ -236,10 +242,15 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
     let mut here: Option<&Path> = Some(cwd.as_path());
     while let Some(dir) = here {
         for candidate in [
+            // In-repo runtime (sky-rust monorepo): found when CWD is anywhere
+            // inside the workspace.
+            dir.join("runtime").join("src").join("sky_runtime"),
+            // Legacy: sibling `sky` checkout.
             dir.join("sky")
                 .join("runtime-rust")
                 .join("src")
                 .join("sky_runtime"),
+            // Legacy: sibling `runtime-rust` directory.
             dir.join("runtime-rust").join("src").join("sky_runtime"),
         ] {
             if candidate.is_dir() {

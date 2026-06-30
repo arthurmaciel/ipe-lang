@@ -215,7 +215,7 @@ fn build_and_assert(
 
     let runtime = resolve_runtime().ok_or_else(|| Diagnostic::CompilerBug {
         where_: "tuple_patterns e2e",
-        detail: "could not locate runtime-rust/src/sky_runtime".to_owned(),
+        detail: "could not locate runtime/src/sky_runtime".to_owned(),
     })?;
     copy_dir(&runtime, &src.join("sky_runtime"))?;
 
@@ -269,10 +269,14 @@ fn resolve_runtime() -> Option<PathBuf> {
     let mut here: Option<&Path> = Some(cwd.as_path());
     while let Some(dir) = here {
         for candidate in [
+            // In-repo runtime (sky-rust monorepo).
+            dir.join("runtime").join("src").join("sky_runtime"),
+            // Legacy: sibling `sky` checkout.
             dir.join("sky")
                 .join("runtime-rust")
                 .join("src")
                 .join("sky_runtime"),
+            // Legacy: sibling `runtime-rust` directory.
             dir.join("runtime-rust").join("src").join("sky_runtime"),
         ] {
             if candidate.is_dir() {
