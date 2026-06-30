@@ -423,6 +423,67 @@ impl Env {
                 "Jwt",
                 &["encodeHs256", "decodeHs256", "encodeRs256", "decodeRs256"],
             ),
+            // `Sky.Core.Task` — Task combinators (M5a).
+            (
+                "Task",
+                &[
+                    "succeed",
+                    "fail",
+                    "map",
+                    "andThen",
+                    "mapError",
+                    "onError",
+                    "fromResult",
+                    "andThenResult",
+                    "sequence",
+                    "parallel",
+                    "run",
+                ],
+            ),
+            // `Sky.Core.Io` — I/O effects (M5a).
+            ("Io", &["readLine", "writeStdout", "writeStderr"]),
+            // `Sky.Core.Time` — time effects (M5a).
+            ("Time", &["now", "sleep", "unixMillis"]),
+            // `Sky.Core.System` — system effects (M5a).
+            (
+                "System",
+                &[
+                    "args",
+                    "getenv",
+                    "getenvOr",
+                    "getArg",
+                    "getenvInt",
+                    "getenvBool",
+                    "setenv",
+                    "unsetenv",
+                    "cwd",
+                    "loadEnv",
+                    "exit",
+                ],
+            ),
+            // `Sky.Core.Random` — random effects (M5a).
+            ("Random", &["int", "float", "choice"]),
+            // `Sky.Core.File` — file effects (M5a).
+            (
+                "File",
+                &[
+                    "readFile",
+                    "writeFile",
+                    "exists",
+                    "remove",
+                    "mkdirAll",
+                    "readFileLimit",
+                    "readFileBytes",
+                    "append",
+                    "readDir",
+                    "isDir",
+                    "tempFile",
+                    "tempDir",
+                    "copy",
+                    "rename",
+                    "delete",
+                ],
+            ),
         ];
 
         for (qual, funcs) in QUALIFIERS {

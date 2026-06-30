@@ -354,6 +354,22 @@ fn emit_expr_at(
         Expr::Apply { func, args } => emit_apply(ctx, func, args, indent, depth, generics),
         Expr::FuncValue { callee, ty } => emit_func_value(ctx, callee, ty, generics),
         Expr::Match(m) => emit_match(ctx, m, indent, depth, generics),
+        // F1 (auto-force): a discarded Task binding becomes
+        //   task_and_then(Box::new(move |_| { <rest> }), <effect>)
+        // so the future is properly awaited rather than silently dropped.
+        // The closure parameter type and return type are inferred by Rust from
+        // the task_and_then signature — `effect_s: SkyTask<A>` pins A (the
+        // discarded type) and `rest_s: SkyTask<B>` pins B (the result type),
+        // avoiding the incorrect hardcoded `()` that would fail for any non-unit
+        // effect type or non-unit rest type.
+        Expr::TaskSeq { effect, rest } => {
+            let child = depth + 1;
+            let effect_s = emit_expr_at(ctx, effect, indent, child, generics)?;
+            let rest_s = emit_expr_at(ctx, rest, indent, child, generics)?;
+            Ok(format!(
+                "task_and_then(Box::new(move |_| {{ {rest_s} }}), {effect_s})"
+            ))
+        }
     }
 }
 

@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use sky_canon::ast as canon;
 use sky_diagnostics::{
-    Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0101, SKY_L0102, SKY_L0104,
-    SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, Span,
+    Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0101, SKY_L0102, SKY_L0105,
+    SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, Span,
 };
 use sky_intern::{Interner, Symbol};
 use sky_ir::{BoundSet, Callee, Expr, FuncId, IrType, KernelFn};
@@ -267,11 +267,15 @@ fn unresolved_type_variable_in_value_position() -> DResult<()> {
 
 #[test]
 fn task_with_non_unit_result() -> DResult<()> {
+    // M5a lifts the SKY-L0104 gate: `Task Int` (and all `Task a`) now lower
+    // successfully to `IrType::Task(IrType::Int)`. This test was previously
+    // checking for the Feature::TaskResults error; it now checks the positive
+    // path — the lowering must succeed and the function's return type must be
+    // the parametric Task IR type.
     let mut i = Interner::new();
     let f = i.intern("f")?;
     let task = i.intern("Task")?;
     let int_name = i.intern("Int")?;
-    // Inferred type: Task Int (only Task () is modelled).
     let mut env = BTreeMap::new();
     env.insert(
         f,
@@ -290,11 +294,17 @@ fn task_with_non_unit_result() -> DResult<()> {
         patterns: Vec::new(),
         body: int(Span::new(52, 53), 0),
     };
-    assert_unsupported(
-        run(Vec::new(), vec![def], env, &mut i),
-        Feature::TaskResults,
-        SKY_L0104,
-        Span::new(50, 51),
+    let res = run(Vec::new(), vec![def], env, &mut i);
+    // Must succeed now that the TaskResults gate is lifted.
+    assert!(
+        res.is_ok(),
+        "Task Int should lower successfully in M5a, got {res:?}"
+    );
+    let func = single_func(&res).expect("no function in the lowered program");
+    assert_eq!(
+        func.ret,
+        sky_ir::IrType::Task(Box::new(sky_ir::IrType::Int)),
+        "Task Int must lower to IrType::Task(IrType::Int)"
     );
     Ok(())
 }
@@ -522,10 +532,12 @@ fn value_callee_lowers_to_apply() -> DResult<()> {
 
 #[test]
 fn unknown_kernel_call() -> DResult<()> {
+    // M5a wired `Time.now` and many other kernels. Use a genuinely-unwired
+    // module name (`UnknownMod`) so the catch-all arm still fires SKY-L0108.
     let mut i = Interner::new();
     let f = i.intern("f")?;
-    let module = i.intern("Time")?;
-    let fname = i.intern("now")?;
+    let module = i.intern("UnknownMod")?;
+    let fname = i.intern("unknownFn")?;
     let ty = con_int(&mut i)?;
     let callee_ref = Box::new(Located::new(
         Span::new(92, 100),

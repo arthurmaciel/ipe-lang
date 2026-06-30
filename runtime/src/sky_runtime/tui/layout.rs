@@ -1840,10 +1840,9 @@ fn render_grid_tracked<M: Clone>(
         .iter()
         .map(|t| match t {
             GridTrack::Px(n) => canvas.cells_x(*n).max(1),
-            GridTrack::Fr(n) => (leftover
-                .saturating_mul(((*n).max(0) as usize).min(MAX_CELLS))
-                / fr_total)
-                .max(1),
+            GridTrack::Fr(n) => {
+                (leftover.saturating_mul(((*n).max(0) as usize).min(MAX_CELLS)) / fr_total).max(1)
+            }
             GridTrack::Auto => (leftover / fr_total).max(1),
         })
         .collect();

@@ -1,0 +1,58 @@
+-- | Sky.Core.File — file-system effect kernels (Layer 3 Sky source, M5a).
+module Sky.Core.File exposing
+    ( readFile, readFileLimit, readFileBytes
+    , writeFile, append
+    , exists, remove, delete, mkdirAll
+    , readDir, isDir
+    , tempFile, tempDir
+    , copy, rename
+    )
+
+
+import Sky.Ffi as Ffi
+
+
+readFile : String -> Task Error String
+readFile = Ffi.kernel "File_readFile"
+
+readFileLimit : String -> Int -> Task Error String
+readFileLimit = Ffi.kernel "File_readFileLimit"
+
+readFileBytes : String -> Task Error (List Int)
+readFileBytes = Ffi.kernel "File_readFileBytes"
+
+writeFile : String -> String -> Task Error ()
+writeFile = Ffi.kernel "File_writeFile"
+
+append : String -> String -> Task Error ()
+append = Ffi.kernel "File_append"
+
+exists : String -> Task Error Bool
+exists = Ffi.kernel "File_exists"
+
+remove : String -> Task Error ()
+remove = Ffi.kernel "File_remove"
+
+delete : String -> Task Error ()
+delete = Ffi.kernel "File_delete"
+
+mkdirAll : String -> Task Error ()
+mkdirAll = Ffi.kernel "File_mkdirAll"
+
+readDir : String -> Task Error (List String)
+readDir = Ffi.kernel "File_readDir"
+
+isDir : String -> Task Error Bool
+isDir = Ffi.kernel "File_isDir"
+
+tempFile : String -> Task Error String
+tempFile = Ffi.kernel "File_tempFile"
+
+tempDir : String -> Task Error String
+tempDir = Ffi.kernel "File_tempDir"
+
+copy : String -> String -> Task Error ()
+copy = Ffi.kernel "File_copy"
+
+rename : String -> String -> Task Error ()
+rename = Ffi.kernel "File_rename"

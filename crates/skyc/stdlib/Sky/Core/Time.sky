@@ -1,0 +1,17 @@
+-- | Sky.Core.Time — time effect kernels (Layer 3 Sky source, M5a).
+module Sky.Core.Time exposing
+    ( now, sleep, unixMillis
+    )
+
+
+import Sky.Ffi as Ffi
+
+
+now : () -> Task Error Int
+now = Ffi.kernel "Time_now"
+
+sleep : Int -> Task Error ()
+sleep = Ffi.kernel "Time_sleep"
+
+unixMillis : () -> Task Error Int
+unixMillis = Ffi.kernel "Time_unixMillis"

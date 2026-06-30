@@ -320,7 +320,7 @@ pub fn auth_login<E: Send + From<String> + 'static>(
                     Err(_) => {
                         return SkyResult::Err(
                             "auth.login: invalid credentials".to_string().into(),
-                        )
+                        );
                     }
                 };
                 let hash: String = row.try_get(1).unwrap_or_default();
@@ -527,16 +527,14 @@ mod tests {
         // A negative TTL must NOT mint a token (it would otherwise underflow
         // into a never-expiring token). Expect Err.
         let secret = "a-test-secret-of-32-bytes-padding".to_string();
-        let token: SkyResult<String, String> =
-            auth_sign_token(secret, HashMap::new(), -1);
+        let token: SkyResult<String, String> = auth_sign_token(secret, HashMap::new(), -1);
         assert!(
             matches!(token, SkyResult::Err(_)),
             "negative expiry must be rejected"
         );
         // i64::MIN (the pathological underflow case) must also be rejected.
         let secret = "a-test-secret-of-32-bytes-padding".to_string();
-        let token2: SkyResult<String, String> =
-            auth_sign_token(secret, HashMap::new(), i64::MIN);
+        let token2: SkyResult<String, String> = auth_sign_token(secret, HashMap::new(), i64::MIN);
         assert!(matches!(token2, SkyResult::Err(_)));
     }
 

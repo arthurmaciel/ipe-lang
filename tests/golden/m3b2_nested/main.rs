@@ -142,6 +142,124 @@ pub fn file_write_file(path: String, content: String) -> SkyTask<()> {
 pub fn file_delete(path: String) -> SkyTask<()> {
     sky_runtime::file::file_delete(path)
 }
+// ── Task combinators (M5a) ─────────────────────────────────────────────────
+pub fn task_fail<A: Send + 'static>(e: SkyError) -> SkyTask<A> {
+    sky_runtime::task::task_fail(e)
+}
+pub fn task_map<A: Send + 'static, B: Send + 'static>(
+    f: Box<dyn Fn(A) -> B + Send + 'static>,
+    t: SkyTask<A>,
+) -> SkyTask<B> {
+    sky_runtime::task::task_map(f, t)
+}
+pub fn task_and_then<A: Send + 'static, B: Send + 'static>(
+    f: Box<dyn Fn(A) -> SkyTask<B> + Send + 'static>,
+    t: SkyTask<A>,
+) -> SkyTask<B> {
+    sky_runtime::task::task_and_then(f, t)
+}
+pub fn task_map_error<A: Send + 'static>(
+    f: Box<dyn Fn(SkyError) -> SkyError + Send + 'static>,
+    t: SkyTask<A>,
+) -> SkyTask<A> {
+    sky_runtime::task::task_map_error(f, t)
+}
+pub fn task_on_error<A: Send + 'static>(
+    f: Box<dyn Fn(SkyError) -> SkyTask<A> + Send + 'static>,
+    t: SkyTask<A>,
+) -> SkyTask<A> {
+    sky_runtime::task::task_on_error(f, t)
+}
+pub fn task_from_result<A: Send + 'static>(r: SkyResult<SkyError, A>) -> SkyTask<A> {
+    sky_runtime::task::task_from_result(r)
+}
+pub fn task_and_then_result<A: Send + 'static, B: Send + 'static>(
+    f: Box<dyn Fn(A) -> SkyResult<SkyError, B> + Send + 'static>,
+    t: SkyTask<A>,
+) -> SkyTask<B> {
+    sky_runtime::task::task_and_then_result(f, t)
+}
+pub fn task_sequence<A: Send + 'static>(tasks: Vec<SkyTask<A>>) -> SkyTask<Vec<A>> {
+    sky_runtime::task::task_sequence(tasks)
+}
+pub fn task_parallel<A: Send + 'static>(tasks: Vec<SkyTask<A>>) -> SkyTask<Vec<A>> {
+    sky_runtime::task::task_parallel(tasks)
+}
+pub fn task_run<A: Send + 'static>(t: SkyTask<A>) -> SkyResult<SkyError, A> {
+    sky_runtime::task::task_run(t)
+}
+// ── Io kernels (M5a) ───────────────────────────────────────────────────────
+pub fn io_read_line(_: ()) -> SkyTask<String> {
+    sky_runtime::io::io_read_line(())
+}
+pub fn io_write_stdout(s: String) -> SkyTask<()> {
+    sky_runtime::io::io_write_stdout(s)
+}
+pub fn io_write_stderr(s: String) -> SkyTask<()> {
+    sky_runtime::io::io_write_stderr(s)
+}
+// ── System kernels (M5a) ───────────────────────────────────────────────────
+pub fn system_getenv(key: String) -> SkyTask<String> {
+    sky_runtime::system::system_getenv(key)
+}
+pub fn system_getenv_or(key: String, default: String) -> String {
+    sky_runtime::system::system_getenv_or(key, default)
+}
+pub fn system_get_arg(n: i64) -> SkyTask<SkyMaybe<String>> {
+    sky_runtime::system::system_get_arg(n)
+}
+pub fn system_getenv_int(key: String) -> SkyTask<i64> {
+    sky_runtime::system::system_getenv_int(key)
+}
+pub fn system_getenv_bool(key: String) -> SkyTask<bool> {
+    sky_runtime::system::system_getenv_bool(key)
+}
+pub fn system_cwd(_: ()) -> SkyTask<String> {
+    sky_runtime::system::system_cwd(())
+}
+pub fn system_load_env(_: ()) -> SkyTask<()> {
+    sky_runtime::system::system_load_env(())
+}
+pub fn system_exit(code: i64) -> ! {
+    sky_runtime::system::system_exit(code)
+}
+// ── File kernels (M5a) ─────────────────────────────────────────────────────
+pub fn file_exists(path: String) -> SkyTask<bool> {
+    sky_runtime::file::file_exists(path)
+}
+pub fn file_remove(path: String) -> SkyTask<()> {
+    sky_runtime::file::file_remove(path)
+}
+pub fn file_mkdir_all(path: String) -> SkyTask<()> {
+    sky_runtime::file::file_mkdir_all(path)
+}
+pub fn file_read_file_limit(path: String, limit: i64) -> SkyTask<String> {
+    sky_runtime::file::file_read_file_limit(path, limit)
+}
+pub fn file_read_file_bytes(path: String) -> SkyTask<Vec<i64>> {
+    sky_runtime::file::file_read_file_bytes(path)
+}
+pub fn file_append(path: String, content: String) -> SkyTask<()> {
+    sky_runtime::file::file_append(path, content)
+}
+pub fn file_read_dir(path: String) -> SkyTask<Vec<String>> {
+    sky_runtime::file::file_read_dir(path)
+}
+pub fn file_is_dir(path: String) -> SkyTask<bool> {
+    sky_runtime::file::file_is_dir(path)
+}
+pub fn file_temp_file(prefix: String) -> SkyTask<String> {
+    sky_runtime::file::file_temp_file(prefix)
+}
+pub fn file_temp_dir(prefix: String) -> SkyTask<String> {
+    sky_runtime::file::file_temp_dir(prefix)
+}
+pub fn file_copy(src: String, dst: String) -> SkyTask<()> {
+    sky_runtime::file::file_copy(src, dst)
+}
+pub fn file_rename(src: String, dst: String) -> SkyTask<()> {
+    sky_runtime::file::file_rename(src, dst)
+}
 pub fn crypto_random_bytes(n: i64) -> SkyTask<String> {
     sky_runtime::crypto::crypto_random_bytes(n)
 }

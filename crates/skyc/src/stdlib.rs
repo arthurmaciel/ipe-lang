@@ -47,6 +47,18 @@ const SET: &str = include_str!("../stdlib/Sky/Core/Set.sky");
 const BYTES: &str = include_str!("../stdlib/Sky/Core/Bytes.sky");
 /// `Sky.Core.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random (M5a).
 const CRYPTO: &str = include_str!("../stdlib/Sky/Core/Crypto.sky");
+/// `Sky.Core.Task` — Task combinator surface (M5a).
+const TASK: &str = include_str!("../stdlib/Sky/Core/Task.sky");
+/// `Sky.Core.Io` — standard-I/O effect kernels (M5a).
+const IO: &str = include_str!("../stdlib/Sky/Core/Io.sky");
+/// `Sky.Core.Time` — time effect kernels (M5a).
+const TIME: &str = include_str!("../stdlib/Sky/Core/Time.sky");
+/// `Sky.Core.System` — process / environment effect kernels (M5a).
+const SYSTEM: &str = include_str!("../stdlib/Sky/Core/System.sky");
+/// `Sky.Core.Random` — entropy-backed randomness effect kernels (M5a).
+const RANDOM: &str = include_str!("../stdlib/Sky/Core/Random.sky");
+/// `Sky.Core.File` — file-system effect kernels (M5a).
+const FILE: &str = include_str!("../stdlib/Sky/Core/File.sky");
 
 /// Every embedded `Sky.Core` module, keyed by its dotted import name.
 ///
@@ -93,6 +105,30 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Sky.Core.Crypto",
         source: CRYPTO,
+    },
+    StdModule {
+        name: "Sky.Core.Task",
+        source: TASK,
+    },
+    StdModule {
+        name: "Sky.Core.Io",
+        source: IO,
+    },
+    StdModule {
+        name: "Sky.Core.Time",
+        source: TIME,
+    },
+    StdModule {
+        name: "Sky.Core.System",
+        source: SYSTEM,
+    },
+    StdModule {
+        name: "Sky.Core.Random",
+        source: RANDOM,
+    },
+    StdModule {
+        name: "Sky.Core.File",
+        source: FILE,
     },
 ];
 

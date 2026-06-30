@@ -320,7 +320,11 @@ pub enum IrType {
     /// A Unicode scalar value `Char`. Renders as Rust's `char`.
     Char,
     Unit,
-    TaskUnit,
+    /// A task producing a value of type `A` (`Task Error A` in Sky). Renders as
+    /// the project-level alias `SkyTask<A>` (which expands to
+    /// `sky_runtime::SkyTask<SkyError, A>`). Replaces the former `TaskUnit`
+    /// leaf — `Task Error ()` is now `Task(Box::new(Unit))`.
+    Task(Box<Self>),
     /// A user-declared enum type, applied to its type arguments.
     ///
     /// `name` is the enum's bare type [`Symbol`]; `args` are the concrete type
@@ -604,6 +608,16 @@ pub enum Expr {
     FuncValue {
         callee: Callee,
         ty: IrType,
+    },
+    /// Force-and-sequence a Task effect, discarding its result, then continue
+    /// with `rest`. Produced by `lower_let` when a `let _ = <task>` binding
+    /// discards a Task-typed value; the backend emits
+    /// `task_and_then(Box::new(move |_: ()| -> SkyTask<()> { <rest> }), <effect>)`.
+    /// This is the auto-force fix (F1): without `TaskSeq`, the future would be
+    /// silently dropped unawaited.
+    TaskSeq {
+        effect: Box<Self>,
+        rest: Box<Self>,
     },
 }
 
@@ -1084,6 +1098,110 @@ pub enum KernelFn {
     /// `Jwt.decodeRs256 : String -> String -> Result Error String`
     /// `decodeRs256 publicKeyPem token` — verify RS256 signature + exp/nbf. Arity 2.
     JwtDecodeRs256,
+
+    // ── Task combinators (M5a) ────────────────────────────────────────────────
+    /// `Task.succeed : a -> Task Error a` — lift a pure value into a task. Arity 1.
+    TaskSucceed,
+    /// `Task.fail : Error -> Task Error a` — a task that immediately fails. Arity 1.
+    TaskFail,
+    /// `Task.map : (a -> b) -> Task Error a -> Task Error b` — transform the success value. Arity 2.
+    TaskMap,
+    /// `Task.andThen : (a -> Task Error b) -> Task Error a -> Task Error b` — sequential composition. Arity 2.
+    TaskAndThen,
+    /// `Task.mapError : (Error -> Error) -> Task Error a -> Task Error a`. Arity 2.
+    TaskMapError,
+    /// `Task.onError : (Error -> Task Error a) -> Task Error a -> Task Error a`. Arity 2.
+    TaskOnError,
+    /// `Task.fromResult : Result Error a -> Task Error a`. Arity 1.
+    TaskFromResult,
+    /// `Task.andThenResult : (a -> Result Error b) -> Task Error a -> Task Error b`. Arity 2.
+    TaskAndThenResult,
+    /// `Task.sequence : List (Task Error a) -> Task Error (List a)`. Arity 1.
+    TaskSequence,
+    /// `Task.parallel : List (Task Error a) -> Task Error (List a)`. Arity 1.
+    TaskParallel,
+    /// `Task.run : Task Error a -> Result Error a` — run a task synchronously. Arity 1.
+    TaskRun,
+
+    // ── Io kernels (M5a) ──────────────────────────────────────────────────────
+    /// `Io.readLine : () -> Task Error String` — read one line from stdin. Arity 1.
+    IoReadLine,
+    /// `Io.writeStdout : String -> Task Error ()` — write to stdout. Arity 1.
+    IoWriteStdout,
+    /// `Io.writeStderr : String -> Task Error ()` — write to stderr. Arity 1.
+    IoWriteStderr,
+
+    // ── Time kernels (M5a) ────────────────────────────────────────────────────
+    /// `Time.now : () -> Task Error Int` — current Unix milliseconds. Arity 1.
+    TimeNow,
+    /// `Time.sleep : Int -> Task Error ()` — sleep for N milliseconds. Arity 1.
+    TimeSleep,
+    /// `Time.unixMillis : () -> Task Error Int` — alias of `Time.now`. Arity 1.
+    TimeUnixMillis,
+
+    // ── System kernels (M5a) ──────────────────────────────────────────────────
+    /// `System.args : () -> Task Error (List String)` — command-line arguments. Arity 1.
+    SystemArgs,
+    /// `System.getenv : String -> Task Error String` — read env var or fail. Arity 1.
+    SystemGetenv,
+    /// `System.getenvOr : String -> String -> String` — read env var with fallback (pure). Arity 2.
+    SystemGetenvOr,
+    /// `System.getArg : Int -> Task Error (Maybe String)` — nth command-line arg. Arity 1.
+    SystemGetArg,
+    /// `System.getenvInt : String -> Task Error Int` — env var parsed as Int. Arity 1.
+    SystemGetenvInt,
+    /// `System.getenvBool : String -> Task Error Bool` — env var parsed as Bool. Arity 1.
+    SystemGetenvBool,
+    /// `System.setenv : String -> String -> Task Error ()` — set an env var. Arity 2.
+    SystemSetenv,
+    /// `System.unsetenv : String -> Task Error ()` — unset an env var. Arity 1.
+    SystemUnsetenv,
+    /// `System.cwd : () -> Task Error String` — current working directory. Arity 1.
+    SystemCwd,
+    /// `System.loadEnv : () -> Task Error ()` — load `.env` file. Arity 1.
+    SystemLoadEnv,
+    /// `System.exit : Int -> a` — terminate the process (diverging). Arity 1.
+    SystemExit,
+
+    // ── Random kernels (M5a) ──────────────────────────────────────────────────
+    /// `Random.int : Int -> Int -> Task Error Int` — random int in `[lo, hi]`. Arity 2.
+    RandomInt,
+    /// `Random.float : Float -> Float -> Task Error Float` — random float. Arity 2.
+    RandomFloat,
+    /// `Random.choice : List a -> Task Error a` — random element. Arity 1.
+    RandomChoice,
+
+    // ── File kernels (M5a) ────────────────────────────────────────────────────
+    /// `File.readFile : String -> Task Error String`. Arity 1.
+    FileReadFile,
+    /// `File.writeFile : String -> String -> Task Error ()`. Arity 2.
+    FileWriteFile,
+    /// `File.exists : String -> Task Error Bool`. Arity 1.
+    FileExists,
+    /// `File.remove : String -> Task Error ()` — remove a file. Arity 1.
+    FileRemove,
+    /// `File.mkdirAll : String -> Task Error ()` — mkdir -p. Arity 1.
+    FileMkdirAll,
+    /// `File.readFileLimit : String -> Int -> Task Error String`. Arity 2.
+    FileReadFileLimit,
+    /// `File.readFileBytes : String -> Task Error (List Int)`. Arity 1.
+    FileReadFileBytes,
+    /// `File.append : String -> String -> Task Error ()`. Arity 2.
+    FileAppend,
+    /// `File.readDir : String -> Task Error (List String)`. Arity 1.
+    FileReadDir,
+    /// `File.isDir : String -> Task Error Bool`. Arity 1.
+    FileIsDir,
+    /// `File.tempFile : String -> Task Error String`. Arity 1.
+    FileTempFile,
+    /// `File.tempDir : String -> Task Error String`. Arity 1.
+    FileTempDir,
+    /// `File.copy : String -> String -> Task Error ()`. Arity 2.
+    FileCopy,
+    /// `File.rename : String -> String -> Task Error ()`. Arity 2.
+    FileRename,
+    /// `File.delete : String -> Task Error ()` — alias of `File.remove`. Arity 1.
+    FileDelete,
 }
 
 /// Binary operators.
@@ -2009,7 +2127,7 @@ mod tests {
             name: main_sym,
             type_params: vec![],
             params: vec![],
-            ret: IrType::TaskUnit,
+            ret: IrType::Task(Box::new(IrType::Unit)),
             body: Expr::Call {
                 callee: Callee::Kernel(KernelFn::LogPrintln),
                 args: vec![Expr::Call {

@@ -110,7 +110,7 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
         name: main,
         type_params: vec![],
         params: vec![],
-        ret: IrType::TaskUnit,
+        ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
             callee: Callee::Kernel(KernelFn::LogPrintln),
             args: vec![Expr::Call {

@@ -90,6 +90,15 @@ fn set_arg_bug() -> Diagnostic {
     bug("sky_lower::ir_type", "Set applied without its element type")
 }
 
+/// `Task Error a` carries two arguments in a user annotation (Error, a); an
+/// arity guard cleared that, so a missing argument is an internal invariant.
+fn task_arg_bug() -> Diagnostic {
+    bug(
+        "sky_lower::ir_type",
+        "Task applied without its success type",
+    )
+}
+
 /// Does this solved [`Ty`] contain a free type variable anywhere? Used to keep
 /// the lowerer's record-shape collection to fully-concrete shapes — a
 /// variable-bearing (generic) record reaches the backend through a signature,
@@ -211,13 +220,13 @@ fn collect_type_vars(t: &canon::Type, out: &mut BTreeSet<Symbol>) {
 fn ir_contains_fun(ty: &IrType) -> bool {
     match ty {
         IrType::Fun(_, _) => true,
+        IrType::Task(inner) => ir_contains_fun(inner),
         IrType::Int
         | IrType::Float
         | IrType::Bool
         | IrType::Str
         | IrType::Char
         | IrType::Unit
-        | IrType::TaskUnit
         | IrType::Bytes
         | IrType::Json
         // `Decoder<T>` is an opaque struct, not a function type.
@@ -746,6 +755,7 @@ impl<'a> Lowerer<'a> {
     /// resolves to neither a builtin nor a declared union, or a `Type::Var`
     /// missing from the binding's free-variable set), so no node `span` is
     /// threaded — those are [`bug`]s, not span-carrying feature gaps.
+    #[allow(clippy::too_many_lines)] // declarative type-constructor dispatch — each builtin listed explicitly for safety
     fn ir_type_from_canon(&self, t: &canon::Type, generics: &[Symbol]) -> DResult<IrType> {
         match t {
             // A type-constructor application. A builtin (`Int`, `Bool`, …) carries
@@ -756,7 +766,10 @@ impl<'a> Lowerer<'a> {
                 "Int" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
-                "String" => Ok(IrType::Str),
+                // `Error` is Sky's fixed error-channel type, backed by `SkyError =
+                // String` in the runtime.  Merged with `String` here since they
+                // share the same IR representation (`IrType::Str`).
+                "String" | "Error" => Ok(IrType::Str),
                 "Char" => Ok(IrType::Char),
                 // `Bytes` is a built-in distinct primitive (Vec<u8> on Rust;
                 // distinct from String). Divergence from Sky: Sky aliases
@@ -793,6 +806,29 @@ impl<'a> Lowerer<'a> {
                         self.ir_type_from_canon(args.first().ok_or_else(set_arg_bug)?, generics)?;
                     Ok(IrType::Set(Box::new(elem)))
                 }
+                // `Task Error a` — the canonical user annotation has two type
+                // args: the error type (arg 0, always the implicit `Error`) and
+                // the success type (arg 1). The IR discards the error type since
+                // it is always `SkyError = String` at the Rust level.
+                "Task" if args.len() == 2 => {
+                    let inner =
+                        self.ir_type_from_canon(args.get(1).ok_or_else(task_arg_bug)?, generics)?;
+                    Ok(IrType::Task(Box::new(inner)))
+                }
+                // `Task a` — rare single-arg form (e.g. inside a user type alias
+                // that already applied the error parameter).
+                "Task" if args.len() == 1 => {
+                    let inner =
+                        self.ir_type_from_canon(args.first().ok_or_else(task_arg_bug)?, generics)?;
+                    Ok(IrType::Task(Box::new(inner)))
+                }
+                "Task" => Err(bug(
+                    "sky_lower::ir_type_from_canon",
+                    format!(
+                        "Task applied to {} type argument(s); expected 1 or 2",
+                        args.len()
+                    ),
+                )),
                 _ if self.enum_variants.contains_key(name) => {
                     let mut ir_args = Vec::with_capacity(args.len());
                     for a in args {
@@ -983,6 +1019,10 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    // The match has one arm per Sky builtin type — each arm adds ~5-10 lines;
+    // pushing past clippy's 100-line ceiling is unavoidable without splitting on
+    // an arbitrary boundary. The allow is narrow: only this function.
+    #[allow(clippy::too_many_lines)]
     fn ir_type_from_ty(&self, t: &Ty, span: Span) -> DResult<IrType> {
         match t {
             Ty::Unit => Ok(IrType::Unit),
@@ -994,17 +1034,34 @@ impl<'a> Lowerer<'a> {
                 "Int" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
-                "String" => Ok(IrType::Str),
+                // `Error` is Sky's fixed error-channel type, backed by `SkyError =
+                // String` in the runtime.  Lambda parameters typed as `Error` (e.g.
+                // the `e` in `\e -> ...` when `onError`/`mapError` pins the handler)
+                // must lower to `IrType::Str`.  Merged with `String` since they share
+                // the same IR representation.
+                "String" | "Error" => Ok(IrType::Str),
                 "Char" => Ok(IrType::Char),
                 // `Bytes` is a built-in distinct primitive (Vec<u8> on Rust).
                 // Divergence from Sky: Sky aliases Bytes = String.
                 "Bytes" => Ok(IrType::Bytes),
-                "Task" if args.len() == 1 && matches!(args.first(), Some(Ty::Unit)) => {
-                    Ok(IrType::TaskUnit)
+                // M5a: all `Task a` shapes are now supported — `Task ()` →
+                // `IrType::Task(Unit)`, `Task Int` → `IrType::Task(Int)`, etc.
+                "Task" if args.len() == 1 => {
+                    let inner = self.ir_type_from_ty(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_ty",
+                                "Task applied without its type argument",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Task(Box::new(inner)))
                 }
-                // A `Task` carrying a non-unit result (`Task Int`); M0 models
-                // only `Task ()`. [SKY-L0104, feature: task-results]
-                "Task" => Err(unsupported(span, Feature::TaskResults)),
+                "Task" => Err(bug(
+                    "sky_lower::ir_type_from_ty",
+                    "Task applied to wrong number of type arguments",
+                )),
                 // The built-in `Maybe a` / `Result e a` map to dedicated IR
                 // types (the runtime's `SkyMaybe` / `SkyResult`); they are not
                 // user `type` declarations, so they precede the enum lookup.
@@ -1900,7 +1957,45 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CryptoRandomBytes
                 | KernelFn::CryptoRandomToken
                 // ── Uuid arity-1 (M5b) ────────────────────────────────────────
-                | KernelFn::UuidParse,
+                | KernelFn::UuidParse
+                // ── Task combinators arity-1 (M5a) ────────────────────────────
+                | KernelFn::TaskSucceed
+                | KernelFn::TaskFail
+                | KernelFn::TaskFromResult
+                | KernelFn::TaskSequence
+                | KernelFn::TaskParallel
+                | KernelFn::TaskRun
+                // ── Io arity-1 (M5a) ──────────────────────────────────────────
+                | KernelFn::IoReadLine
+                | KernelFn::IoWriteStdout
+                | KernelFn::IoWriteStderr
+                // ── Time arity-1 (M5a) ────────────────────────────────────────
+                | KernelFn::TimeNow
+                | KernelFn::TimeSleep
+                | KernelFn::TimeUnixMillis
+                // ── System arity-1 (M5a) ──────────────────────────────────────
+                | KernelFn::SystemArgs
+                | KernelFn::SystemGetenv
+                | KernelFn::SystemGetArg
+                | KernelFn::SystemGetenvInt
+                | KernelFn::SystemGetenvBool
+                | KernelFn::SystemUnsetenv
+                | KernelFn::SystemCwd
+                | KernelFn::SystemLoadEnv
+                | KernelFn::SystemExit
+                // ── Random arity-1 (M5a) ──────────────────────────────────────
+                | KernelFn::RandomChoice
+                // ── File arity-1 (M5a) ────────────────────────────────────────
+                | KernelFn::FileReadFile
+                | KernelFn::FileExists
+                | KernelFn::FileRemove
+                | KernelFn::FileMkdirAll
+                | KernelFn::FileReadFileBytes
+                | KernelFn::FileReadDir
+                | KernelFn::FileIsDir
+                | KernelFn::FileTempFile
+                | KernelFn::FileTempDir
+                | KernelFn::FileDelete,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -1971,7 +2066,25 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JwtEncodeHs256
                 | KernelFn::JwtDecodeHs256
                 | KernelFn::JwtEncodeRs256
-                | KernelFn::JwtDecodeRs256,
+                | KernelFn::JwtDecodeRs256
+                // ── Task combinators arity-2 (M5a) ────────────────────────────
+                | KernelFn::TaskMap
+                | KernelFn::TaskAndThen
+                | KernelFn::TaskMapError
+                | KernelFn::TaskOnError
+                | KernelFn::TaskAndThenResult
+                // ── System arity-2 (M5a) ──────────────────────────────────────
+                | KernelFn::SystemGetenvOr
+                | KernelFn::SystemSetenv
+                // ── Random arity-2 (M5a) ──────────────────────────────────────
+                | KernelFn::RandomInt
+                | KernelFn::RandomFloat
+                // ── File arity-2 (M5a) ────────────────────────────────────────
+                | KernelFn::FileWriteFile
+                | KernelFn::FileReadFileLimit
+                | KernelFn::FileAppend
+                | KernelFn::FileCopy
+                | KernelFn::FileRename,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::StringReplace
@@ -2287,7 +2400,59 @@ impl<'a> Lowerer<'a> {
                     ("Jwt", "decodeHs256") => Ok(Callee::Kernel(KernelFn::JwtDecodeHs256)),
                     ("Jwt", "encodeRs256") => Ok(Callee::Kernel(KernelFn::JwtEncodeRs256)),
                     ("Jwt", "decodeRs256") => Ok(Callee::Kernel(KernelFn::JwtDecodeRs256)),
-                    // A kernel beyond the wired set (`Time.now`, …).
+                    // ── Task combinators (M5a) ────────────────────────────────
+                    ("Task", "succeed") => Ok(Callee::Kernel(KernelFn::TaskSucceed)),
+                    ("Task", "fail") => Ok(Callee::Kernel(KernelFn::TaskFail)),
+                    ("Task", "map") => Ok(Callee::Kernel(KernelFn::TaskMap)),
+                    ("Task", "andThen") => Ok(Callee::Kernel(KernelFn::TaskAndThen)),
+                    ("Task", "mapError") => Ok(Callee::Kernel(KernelFn::TaskMapError)),
+                    ("Task", "onError") => Ok(Callee::Kernel(KernelFn::TaskOnError)),
+                    ("Task", "fromResult") => Ok(Callee::Kernel(KernelFn::TaskFromResult)),
+                    ("Task", "andThenResult") => Ok(Callee::Kernel(KernelFn::TaskAndThenResult)),
+                    ("Task", "sequence") => Ok(Callee::Kernel(KernelFn::TaskSequence)),
+                    ("Task", "parallel") => Ok(Callee::Kernel(KernelFn::TaskParallel)),
+                    ("Task", "run") => Ok(Callee::Kernel(KernelFn::TaskRun)),
+                    // ── Io kernels (M5a) ──────────────────────────────────────
+                    ("Io", "readLine") => Ok(Callee::Kernel(KernelFn::IoReadLine)),
+                    ("Io", "writeStdout") => Ok(Callee::Kernel(KernelFn::IoWriteStdout)),
+                    ("Io", "writeStderr") => Ok(Callee::Kernel(KernelFn::IoWriteStderr)),
+                    // ── Time kernels (M5a) ────────────────────────────────────
+                    ("Time", "now") => Ok(Callee::Kernel(KernelFn::TimeNow)),
+                    ("Time", "sleep") => Ok(Callee::Kernel(KernelFn::TimeSleep)),
+                    ("Time", "unixMillis") => Ok(Callee::Kernel(KernelFn::TimeUnixMillis)),
+                    // ── System kernels (M5a) ──────────────────────────────────
+                    ("System", "args") => Ok(Callee::Kernel(KernelFn::SystemArgs)),
+                    ("System", "getenv") => Ok(Callee::Kernel(KernelFn::SystemGetenv)),
+                    ("System", "getenvOr") => Ok(Callee::Kernel(KernelFn::SystemGetenvOr)),
+                    ("System", "getArg") => Ok(Callee::Kernel(KernelFn::SystemGetArg)),
+                    ("System", "getenvInt") => Ok(Callee::Kernel(KernelFn::SystemGetenvInt)),
+                    ("System", "getenvBool") => Ok(Callee::Kernel(KernelFn::SystemGetenvBool)),
+                    ("System", "setenv") => Ok(Callee::Kernel(KernelFn::SystemSetenv)),
+                    ("System", "unsetenv") => Ok(Callee::Kernel(KernelFn::SystemUnsetenv)),
+                    ("System", "cwd") => Ok(Callee::Kernel(KernelFn::SystemCwd)),
+                    ("System", "loadEnv") => Ok(Callee::Kernel(KernelFn::SystemLoadEnv)),
+                    ("System", "exit") => Ok(Callee::Kernel(KernelFn::SystemExit)),
+                    // ── Random kernels (M5a) ──────────────────────────────────
+                    ("Random", "int") => Ok(Callee::Kernel(KernelFn::RandomInt)),
+                    ("Random", "float") => Ok(Callee::Kernel(KernelFn::RandomFloat)),
+                    ("Random", "choice") => Ok(Callee::Kernel(KernelFn::RandomChoice)),
+                    // ── File kernels (M5a) ────────────────────────────────────
+                    ("File", "readFile") => Ok(Callee::Kernel(KernelFn::FileReadFile)),
+                    ("File", "writeFile") => Ok(Callee::Kernel(KernelFn::FileWriteFile)),
+                    ("File", "exists") => Ok(Callee::Kernel(KernelFn::FileExists)),
+                    ("File", "remove") => Ok(Callee::Kernel(KernelFn::FileRemove)),
+                    ("File", "mkdirAll") => Ok(Callee::Kernel(KernelFn::FileMkdirAll)),
+                    ("File", "readFileLimit") => Ok(Callee::Kernel(KernelFn::FileReadFileLimit)),
+                    ("File", "readFileBytes") => Ok(Callee::Kernel(KernelFn::FileReadFileBytes)),
+                    ("File", "append") => Ok(Callee::Kernel(KernelFn::FileAppend)),
+                    ("File", "readDir") => Ok(Callee::Kernel(KernelFn::FileReadDir)),
+                    ("File", "isDir") => Ok(Callee::Kernel(KernelFn::FileIsDir)),
+                    ("File", "tempFile") => Ok(Callee::Kernel(KernelFn::FileTempFile)),
+                    ("File", "tempDir") => Ok(Callee::Kernel(KernelFn::FileTempDir)),
+                    ("File", "copy") => Ok(Callee::Kernel(KernelFn::FileCopy)),
+                    ("File", "rename") => Ok(Callee::Kernel(KernelFn::FileRename)),
+                    ("File", "delete") => Ok(Callee::Kernel(KernelFn::FileDelete)),
+                    // A kernel beyond the wired set.
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),
                 }
@@ -2533,6 +2698,18 @@ impl<'a> Lowerer<'a> {
     /// single-symbol [`Expr::Let`]; an irrefutable destructure (`(a, b) = e`,
     /// `{ x } = e`, `_ = e`) lowers to an [`Expr::Destructure`] whose binder is
     /// built by [`Self::lower_binder_pat`] (a refutable binder is rejected there).
+    /// Return `true` if the expression at `span` has a `Task` type according to
+    /// the HM solver's region table. Used by [`lower_let`] to decide whether a
+    /// wildcard binding (`let _ = expr`) should auto-force the task via
+    /// [`Expr::TaskSeq`] rather than silently dropping the unawaited future (F1).
+    fn is_task_typed(&self, span: Span) -> bool {
+        matches!(
+            self.types.regions.get(&span),
+            Some(Ty::Con { name, .. })
+                if self.interner.resolve(*name).is_some_and(|n| n == "Task")
+        )
+    }
+
     fn lower_let(&self, bindings: &[canon::LetBinding], body: &canon::Expr) -> DResult<Expr> {
         let mut acc = self.lower_expr(body)?;
         for b in bindings.iter().rev() {
@@ -2543,6 +2720,24 @@ impl<'a> Lowerer<'a> {
                     value: Box::new(value),
                     body: Box::new(acc),
                 },
+                // F1 (auto-force): `let _ = <task>` — if the discarded value is
+                // Task-typed, sequence it via `TaskSeq` so the future is awaited
+                // rather than silently dropped. Non-Task wildcards keep the plain
+                // `Destructure(Wildcard, …)` form (which lowers to `let _ = …;`).
+                canon::Pattern_::PAnything => {
+                    if self.is_task_typed(b.body.span) {
+                        Expr::TaskSeq {
+                            effect: Box::new(value),
+                            rest: Box::new(acc),
+                        }
+                    } else {
+                        Expr::Destructure {
+                            binder: self.lower_binder_pat(&b.pat, &b.body)?,
+                            value: Box::new(value),
+                            body: Box::new(acc),
+                        }
+                    }
+                }
                 _ => Expr::Destructure {
                     binder: self.lower_binder_pat(&b.pat, &b.body)?,
                     value: Box::new(value),

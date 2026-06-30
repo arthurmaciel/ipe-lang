@@ -19,7 +19,7 @@ use sky_canon::ast as canon;
 use sky_diagnostics::{DResult, Diagnostic, Span, TypeError};
 use sky_intern::{Interner, Symbol};
 
-use crate::doc::canon_type_to_doc;
+use crate::doc::{VarNamer, canon_type_to_doc, ty_to_doc};
 use crate::solve::{Budget, Constraint};
 use crate::ty::{Content, FlatType, Ty, TyBounds, from_canon};
 use crate::unionfind::{UnionFind, VarId};
@@ -69,6 +69,11 @@ struct Builtins {
     /// Divergence from Sky: Bytes is a distinct primitive in Sky-Rust (Vec<u8>),
     /// not a String alias as in the Go reference.
     bytes: Symbol,
+    /// The interned `Error` symbol, used to validate the error channel in
+    /// `Task Error a` annotations (normalised to unary `Task a`) and to pin the
+    /// handler parameter type in `mapError` / `onError` so a bare lambda `\e ->
+    /// ...` infers `e : Error` without leaving a free variable.
+    error: Symbol,
     /// Two distinct scheme type-variable symbols (`a`, `e`) used to build the
     /// built-in constructor schemes. Their identity links a constructor's
     /// payload to its result type, exactly like a user union's declared vars;
@@ -98,6 +103,7 @@ impl Builtins {
             err: interner.intern("Err")?,
             true_: interner.intern("True")?,
             false_: interner.intern("False")?,
+            error: interner.intern("Error")?,
             tv_a: interner.intern("a")?,
             tv_e: interner.intern("e")?,
         })
@@ -440,7 +446,8 @@ impl<'a> Builder<'a> {
         for def in &module.defs {
             match def {
                 canon::Def::Typed { name, ty, .. } => {
-                    builder.top_level.insert(name.value, from_canon(ty));
+                    let normalized = builder.normalize_annotation_ty(from_canon(ty), name.span)?;
+                    builder.top_level.insert(name.value, normalized);
                 }
                 canon::Def::Untyped { name, .. } => {
                     let v = builder.flex()?;
@@ -816,12 +823,12 @@ impl<'a> Builder<'a> {
                         // signature, not a CompilerBug.
                         _ => return Err(self.too_many_parameters(name, ty)),
                     };
-                    let arg = from_canon(arg_ty);
+                    let arg = self.normalize_annotation_ty(from_canon(arg_ty), name.span)?;
                     let arg_var = self.instantiate_rigid(&arg, &mut rigid_vars)?;
                     self.constrain_pattern(&mut local, pat, arg_var)?;
                     cursor = rest;
                 }
-                let ret_ty = from_canon(cursor);
+                let ret_ty = self.normalize_annotation_ty(from_canon(cursor), name.span)?;
                 let ret_var = self.instantiate_rigid(&ret_ty, &mut rigid_vars)?;
                 let body_var = self.constrain_expr(&local, body)?;
                 self.eq(body.span, body_var, ret_var);
@@ -904,6 +911,134 @@ impl<'a> Builder<'a> {
             },
             Err(bug) => bug,
         }
+    }
+
+    /// Reduce a 2-arg `Task Error a` annotation type to the internal unary
+    /// `Task a`, validating that the error channel is the `Error` type, and
+    /// recursively normalise nested occurrences in any composite type.
+    ///
+    /// Sky mandates `Task Error a` as the canonical user-facing form, but the
+    /// type-checker's internal model is unary `Task a` — the error channel is
+    /// always `Error` and therefore implicit in the IR.  This bridge is applied
+    /// to every result of [`from_canon`] so user annotations unify with the
+    /// kernel-built unary forms.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SKY-T0001` when the error channel is not `Error` (e.g.
+    /// `Task String a` or `Task Int a`).  Returns a `CompilerBug` when a
+    /// `Task` annotation has a number of type arguments other than 1 or 2
+    /// (canonicalisation rules out arity-0 or arity-3+ applications).
+    fn normalize_annotation_ty(&self, ty: Ty, span: Span) -> DResult<Ty> {
+        match ty {
+            Ty::Con { module, name, args } => {
+                if name == self.builtins.task {
+                    match args.len() {
+                        // 1-arg: already the internal unary form; recurse inside.
+                        1 => {
+                            let inner =
+                                args.into_iter()
+                                    .next()
+                                    .ok_or_else(|| Diagnostic::CompilerBug {
+                                        where_: STAGE,
+                                        detail: "Task 1-arg: iterator exhausted (internal)".into(),
+                                    })?;
+                            let inner = self.normalize_annotation_ty(inner, span)?;
+                            Ok(Ty::Con {
+                                module,
+                                name,
+                                args: vec![inner],
+                            })
+                        }
+                        // 2-arg: `Task Error a` — validate error channel, reduce.
+                        2 => {
+                            let mut it = args.into_iter();
+                            let e_ty = it.next().ok_or_else(|| Diagnostic::CompilerBug {
+                                where_: STAGE,
+                                detail: "Task 2-arg: first arg missing (internal)".into(),
+                            })?;
+                            let a_ty = it.next().ok_or_else(|| Diagnostic::CompilerBug {
+                                where_: STAGE,
+                                detail: "Task 2-arg: second arg missing (internal)".into(),
+                            })?;
+                            if !self.is_error_ty(&e_ty) {
+                                // Render both sides for a clear SKY-T0001 diagnostic.
+                                let mut namer = VarNamer::new();
+                                let expected = ty_to_doc(
+                                    &Ty::Con {
+                                        module: Vec::new(),
+                                        name: self.builtins.error,
+                                        args: Vec::new(),
+                                    },
+                                    self.interner,
+                                    &mut namer,
+                                )?;
+                                let found = ty_to_doc(&e_ty, self.interner, &mut namer)?;
+                                return Err(Diagnostic::Type {
+                                    span,
+                                    msg: TypeError::TypeMismatch {
+                                        expected: Box::new(expected),
+                                        found: Box::new(found),
+                                        definition: None,
+                                        path: Box::new([]),
+                                    },
+                                });
+                            }
+                            let inner = self.normalize_annotation_ty(a_ty, span)?;
+                            Ok(Ty::Con {
+                                module,
+                                name,
+                                args: vec![inner],
+                            })
+                        }
+                        n => Err(Diagnostic::CompilerBug {
+                            where_: STAGE,
+                            detail: format!(
+                                "Task annotation with {n} type argument(s); expected 1 or 2"
+                            ),
+                        }),
+                    }
+                } else {
+                    // Non-Task constructor: recurse into type arguments.
+                    let args = args
+                        .into_iter()
+                        .map(|a| self.normalize_annotation_ty(a, span))
+                        .collect::<DResult<Vec<_>>>()?;
+                    Ok(Ty::Con { module, name, args })
+                }
+            }
+            Ty::Fun(a, b) => {
+                let a = self.normalize_annotation_ty(*a, span)?;
+                let b = self.normalize_annotation_ty(*b, span)?;
+                Ok(Ty::Fun(Box::new(a), Box::new(b)))
+            }
+            Ty::Tuple(elems) => {
+                let elems = elems
+                    .into_iter()
+                    .map(|e| self.normalize_annotation_ty(e, span))
+                    .collect::<DResult<Vec<_>>>()?;
+                Ok(Ty::Tuple(elems))
+            }
+            Ty::Record(fields) => {
+                let fields = fields
+                    .into_iter()
+                    .map(|(k, v)| self.normalize_annotation_ty(v, span).map(|v| (k, v)))
+                    .collect::<DResult<_>>()?;
+                Ok(Ty::Record(fields))
+            }
+            // Leaf types: pass through unchanged.
+            other @ (Ty::Var(_) | Ty::Unit) => Ok(other),
+        }
+    }
+
+    /// Check whether `ty` is the built-in `Error` type — a nullary type
+    /// constructor named `"Error"`.  The module path is intentionally ignored so
+    /// both bare `Error` and fully-qualified `Sky.Core.Error.Error` are accepted.
+    fn is_error_ty(&self, ty: &Ty) -> bool {
+        matches!(
+            ty,
+            Ty::Con { name, args, .. } if *name == self.builtins.error && args.is_empty()
+        )
     }
 
     /// Constrain a reference to a top-level binding. A typed binding is
@@ -1652,6 +1787,310 @@ impl<'a> Builder<'a> {
             (Some("Bytes"), Some("append")) => fun(bytes.clone(), fun(bytes.clone(), bytes)),
             // slice : Int -> Int -> Bytes -> Bytes
             (Some("Bytes"), Some("slice")) => fun(int.clone(), fun(int, fun(bytes.clone(), bytes))),
+
+            // ── Sky.Core.Task (M5a) ──────────────────────────────────────────
+            // A helper closure to build `Task a` with one success-type argument.
+            // The HM error type is always the implicit `SkyError` alias, so only
+            // the success type is carried in the IR.
+            //
+            // succeed : a -> Task a
+            (Some("Task"), Some("succeed")) => {
+                let task_a = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                fun(var(0), task_a)
+            }
+            // fail : e -> Task a   (e is unconstrained — the error channel)
+            (Some("Task"), Some("fail")) => {
+                let task_a = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                fun(var(1), task_a)
+            }
+            // map : (a -> b) -> Task a -> Task b
+            (Some("Task"), Some("map")) => {
+                let task_a = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                let task_b = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(1)],
+                };
+                fun(fun(var(0), var(1)), fun(task_a, task_b))
+            }
+            // andThen : (a -> Task b) -> Task a -> Task b
+            (Some("Task"), Some("andThen")) => {
+                let task_a = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                let task_b_inner = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(1)],
+                };
+                let task_b_outer = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(1)],
+                };
+                fun(fun(var(0), task_b_inner), fun(task_a, task_b_outer))
+            }
+            // mapError : (Error -> Error) -> Task a -> Task a
+            // Pin the handler's parameter and return to the fixed `Error` type so
+            // `\e -> ...` infers `e : Error` without an unconstrained free variable
+            // (which would stay polymorphic → SKY-L0102).
+            (Some("Task"), Some("mapError")) => {
+                let error_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.error,
+                    args: Vec::new(),
+                };
+                let task_a_in = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                let task_a_out = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                fun(fun(error_ty.clone(), error_ty), fun(task_a_in, task_a_out))
+            }
+            // onError : (Error -> Task a) -> Task a -> Task a
+            // Pin the handler's parameter to the fixed `Error` type so `\e -> ...`
+            // infers `e : Error` without an unconstrained free variable (SKY-L0102).
+            (Some("Task"), Some("onError")) => {
+                let error_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.error,
+                    args: Vec::new(),
+                };
+                let task_a_f = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                let task_a_in = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                let task_a_out = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                fun(fun(error_ty, task_a_f), fun(task_a_in, task_a_out))
+            }
+            // fromResult : Result e a -> Task a
+            (Some("Task"), Some("fromResult")) => {
+                let res = result(var(0), var(1));
+                let task_a = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(1)],
+                };
+                fun(res, task_a)
+            }
+            // andThenResult : (a -> Result e b) -> Task a -> Task b
+            (Some("Task"), Some("andThenResult")) => {
+                let task_a = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                let task_b = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(2)],
+                };
+                fun(fun(var(0), result(var(1), var(2))), fun(task_a, task_b))
+            }
+            // sequence : List (Task a) -> Task (List a)
+            (Some("Task"), Some("sequence" | "parallel")) => {
+                let task_a = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                let task_list_a = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![list(var(0))],
+                };
+                fun(list(task_a), task_list_a)
+            }
+            // run : Task a -> Result e a
+            (Some("Task"), Some("run")) => {
+                let task_a = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                fun(task_a, result(var(1), var(0)))
+            }
+
+            // ── Sky.Core.Io / File: String -> Task () ────────────────────────
+            // Io.writeStdout, Io.writeStderr, File.remove, File.mkdirAll,
+            // File.delete, File.unsetenv — all share String -> Task () shape.
+            (Some("Io"), Some("writeStdout" | "writeStderr"))
+            | (Some("File"), Some("remove" | "mkdirAll" | "delete"))
+            | (Some("System"), Some("unsetenv")) => fun(string, task_unit),
+
+            // ── () -> Task String: Io.readLine, System.cwd ───────────────────
+            (Some("Io"), Some("readLine")) | (Some("System"), Some("cwd")) => {
+                let task_string = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![string],
+                };
+                fun(Ty::Unit, task_string)
+            }
+
+            // ── Sky.Core.Time (M5a) ──────────────────────────────────────────
+            // now : () -> Task Int
+            // unixMillis : () -> Task Int
+            (Some("Time"), Some("now" | "unixMillis")) => {
+                let task_int = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![int],
+                };
+                fun(Ty::Unit, task_int)
+            }
+            // sleep : Int -> Task ()
+            (Some("Time"), Some("sleep")) => fun(int, task_unit),
+
+            // ── Sky.Core.System (M5a) ────────────────────────────────────────
+            // getenv : String -> Task String
+            // File.readFile : String -> Task String
+            // File.tempFile, File.tempDir : String -> Task String
+            (Some("System"), Some("getenv"))
+            | (Some("File"), Some("readFile" | "tempFile" | "tempDir")) => {
+                let task_string = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![string.clone()],
+                };
+                fun(string, task_string)
+            }
+            // getenvOr : String -> String -> String   (pure — has fallback)
+            (Some("System"), Some("getenvOr")) => fun(string.clone(), fun(string.clone(), string)),
+            // args : () -> Task (List String)
+            (Some("System"), Some("args")) => {
+                let task_list_string = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![list(string)],
+                };
+                fun(Ty::Unit, task_list_string)
+            }
+            // loadEnv : () -> Task ()
+            (Some("System"), Some("loadEnv")) => fun(Ty::Unit, task_unit),
+            // setenv : String -> String -> Task ()
+            // File.writeFile, File.append, File.copy, File.rename: same shape
+            (Some("System"), Some("setenv"))
+            | (Some("File"), Some("writeFile" | "append" | "copy" | "rename")) => {
+                fun(string.clone(), fun(string, task_unit))
+            }
+            // getArg : Int -> Task (Maybe String)
+            (Some("System"), Some("getArg")) => {
+                let task_maybe_string = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![maybe(string)],
+                };
+                fun(int, task_maybe_string)
+            }
+            // getenvInt : String -> Task Int
+            (Some("System"), Some("getenvInt")) => {
+                let task_int = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![int],
+                };
+                fun(string, task_int)
+            }
+            // getenvBool : String -> Task Bool
+            // File.exists, File.isDir : String -> Task Bool
+            (Some("System"), Some("getenvBool")) | (Some("File"), Some("exists" | "isDir")) => {
+                let task_bool = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![bool_ty],
+                };
+                fun(string, task_bool)
+            }
+            // exit : Int -> a   (diverging — polymorphic return)
+            (Some("System"), Some("exit")) => fun(int, var(0)),
+
+            // ── Sky.Core.Random (M5a) ────────────────────────────────────────
+            // int : Int -> Int -> Task Int
+            (Some("Random"), Some("int")) => {
+                let task_int = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![int.clone()],
+                };
+                fun(int.clone(), fun(int, task_int))
+            }
+            // float : Float -> Float -> Task Float
+            (Some("Random"), Some("float")) => {
+                let task_float = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![float.clone()],
+                };
+                fun(float.clone(), fun(float, task_float))
+            }
+            // choice : List a -> Task a
+            (Some("Random"), Some("choice")) => {
+                let task_a = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                fun(list(var(0)), task_a)
+            }
+
+            // ── Sky.Core.File (M5a) ──────────────────────────────────────────
+            // readDir : String -> Task (List String)
+            (Some("File"), Some("readDir")) => {
+                let task_list_string = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![list(string.clone())],
+                };
+                fun(string, task_list_string)
+            }
+            // readFileLimit : String -> Int -> Task String
+            (Some("File"), Some("readFileLimit")) => {
+                let task_string = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![string.clone()],
+                };
+                fun(string, fun(int, task_string))
+            }
+            // readFileBytes : String -> Task (List Int)
+            (Some("File"), Some("readFileBytes")) => {
+                let task_bytes = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![list(int)],
+                };
+                fun(string, task_bytes)
+            }
 
             // Unknown kernel: a single flexible variable. The raw id is chosen
             // to be distinct from any real interned symbol's typical range; it
