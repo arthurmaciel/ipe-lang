@@ -2129,3 +2129,39 @@ Sky code in user projects.
 | LSP capabilities | `docs/tooling/lsp.md` |
 | `sky.toml` schema | `docs/sky-toml.md` |
 | Brand-new module | "What's in the box" in `README.md` |
+
+## Agent learnings
+
+Verified, generalizable pitfalls discovered during development.  Each entry is
+**correct + sound** — verified by a passing test.  Do NOT blind-append; update
+or dedupe when related work arrives.
+
+### Decimal: two distinct rounding modes for two distinct public APIs
+
+**Verified** by `runtime/tests/decimal_parity.rs` (commit b9794d7).
+
+`Std.Decimal` exposes two rounding entry points with DIFFERENT Go strategies:
+
+| Sky function | Go oracle | Rust strategy |
+|---|---|---|
+| `Decimal.round` | `shopspring.RoundBank` (banker's / half-to-even) | `MidpointNearestEven` |
+| `Decimal.toStringFixed` | `shopspring.StringFixed → Round` (half-away-from-zero) | `MidpointAwayFromZero` |
+| `Decimal.formatWith` (rounding step) | same as `StringFixed` | `MidpointAwayFromZero` |
+
+The trap: `round` (banker's) and `toStringFixed`/`formatWith` (half-away) look
+related but go through **different** shopspring primitives (`RoundBank` vs
+`Round`).  Using `MidpointNearestEven` in `toStringFixed`/`formatWith` produces
+the wrong result at tie values — e.g., "2.545" at 2 dp gives "2.54" (banker's)
+instead of "2.55" (Go).  This is a real money-precision divergence.
+
+**Rule**: any new Decimal kernel that uses `StringFixed` or `Round` in Go MUST
+use `MidpointAwayFromZero` in Rust.  Only kernels using `RoundBank` in Go
+should use `MidpointNearestEven`.
+
+### Decimal: division precision for non-terminating fractions is a documented divergence
+
+Go shopspring uses `DivisionPrecision = 16` digits for non-exact divisions
+(e.g., `1/3 = "0.3333333333333333"`).  rust_decimal's `checked_div` uses a
+different algorithm and may produce a different digit count.  This affects only
+non-terminating decimals; all exact fractions (money-scale operations, powers-
+of-10 denominators) give bit-identical results.
