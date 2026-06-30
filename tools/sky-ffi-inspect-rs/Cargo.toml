@@ -1,0 +1,24 @@
+[package]
+name = "sky-ffi-inspect-rs"
+version = "0.2.0"
+edition = "2021"
+description = "Rust crate inspector for Sky FFI — uses rustdoc JSON for complete API discovery including macro-generated items"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+
+[lints.clippy]
+# This tool is a large code-analysis binary; unwrap/expect/panic are used in
+# test assertions and controlled production paths (CLI exit-on-error). Keep the
+# strict deny set off for this crate to avoid hundreds of mechanical churn fixes
+# unrelated to the tool's correctness.
+unwrap_used = "allow"
+expect_used = "allow"
+panic = "allow"
+pedantic = "allow"
+nursery = "allow"
+# Documentation formatting lints that fire as default warnings.
+doc_lazy_continuation = "allow"
+redundant_closure = "allow"
