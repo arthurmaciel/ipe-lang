@@ -38,6 +38,7 @@ use super::SkyResult;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde_json::Value as JsonValue;
+use std::collections::HashSet;
 
 /// base64url, no padding (RFC 7515) — the encoding every JWS segment uses.
 /// Equivalent to Go's `standardToUrl(base64Encode(bytes))` in `Jwt.sky`.
@@ -129,14 +130,22 @@ pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> SkyRe
     }
     let key = DecodingKey::from_secret(secret.as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
+    // leeway = 0: the Go oracle applies no clock skew — `now >= exp` rejects
+    // immediately. Pin leeway to 0 so the Rust verifier never accepts an expired
+    // token the Go backend rejects (a security primitive must not diverge
+    // in the less-safe direction).
+    validation.leeway = 0;
+    // exp/nbf are OPTIONAL per the JWT spec (RFC 7519 §4.1.4-5) and per Go's
+    // behaviour: a token with no `exp` is treated as non-expiring and ACCEPTED;
+    // a token with no `nbf` has no not-before constraint and is ACCEPTED.
+    // jsonwebtoken's Validation::new() puts "exp" in required_spec_claims by
+    // default, which would reject any no-exp token. Clear the set so exp/nbf
+    // are not required — but keep validate_exp/validate_nbf = true so that
+    // WHEN these claims are present they are still validated (expired → Err,
+    // nbf in the future → Err). This matches Go exactly.
+    validation.required_spec_claims = HashSet::new();
     validation.validate_exp = true;
     validation.validate_nbf = true;
-    // jsonwebtoken defaults `leeway` to 60s, which would accept a token up to 60s
-    // PAST `exp` (and 60s BEFORE `nbf`). The Go oracle applies no clock skew —
-    // `now >= exp` rejects immediately. Pin leeway to 0 so the Rust verifier does
-    // not accept expired tokens the Go backend rejects (a security primitive must
-    // not diverge in the less-safe direction).
-    validation.leeway = 0;
     // These are GENERIC decoders with no expected-audience argument, so a specific
     // `aud` cannot be enforced here. jsonwebtoken's default `validate_aud = true`
     // would then REJECT any token that merely CARRIES an `aud` claim (error
@@ -144,12 +153,6 @@ pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> SkyRe
     // Disable aud validation; audience-scoped checks belong to a future
     // expected-audience decoder variant.
     validation.validate_aud = false;
-    // Divergence from Sky (fail-closed): jsonwebtoken's default keeps `exp`
-    // REQUIRED, so an omitted-exp token is rejected here. The Go backend treats
-    // an absent `exp`/`nbf` as non-expiring and ACCEPTS such a token. Rust keeps
-    // the stricter behaviour deliberately — a token with no expiry is the
-    // less-safe case, and auth.rs's verify path likewise never clears required
-    // claims. Documented rather than aligned-down.
     match decode::<JsonValue>(&token, &key, &validation) {
         Ok(data) => match serde_json::to_string(&data.claims) {
             Ok(s) => SkyResult::Ok(s),
@@ -201,14 +204,22 @@ pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> SkyR
         Err(_) => return SkyResult::Err("jwt-decode-rs: invalid RSA key".to_string().into()),
     };
     let mut validation = Validation::new(Algorithm::RS256);
+    // leeway = 0: the Go oracle applies no clock skew — `now >= exp` rejects
+    // immediately. Pin leeway to 0 so the Rust verifier never accepts an expired
+    // token the Go backend rejects (a security primitive must not diverge
+    // in the less-safe direction).
+    validation.leeway = 0;
+    // exp/nbf are OPTIONAL per the JWT spec (RFC 7519 §4.1.4-5) and per Go's
+    // behaviour: a token with no `exp` is treated as non-expiring and ACCEPTED;
+    // a token with no `nbf` has no not-before constraint and is ACCEPTED.
+    // jsonwebtoken's Validation::new() puts "exp" in required_spec_claims by
+    // default, which would reject any no-exp token. Clear the set so exp/nbf
+    // are not required — but keep validate_exp/validate_nbf = true so that
+    // WHEN these claims are present they are still validated (expired → Err,
+    // nbf in the future → Err). This matches Go exactly.
+    validation.required_spec_claims = HashSet::new();
     validation.validate_exp = true;
     validation.validate_nbf = true;
-    // jsonwebtoken defaults `leeway` to 60s, which would accept a token up to 60s
-    // PAST `exp` (and 60s BEFORE `nbf`). The Go oracle applies no clock skew —
-    // `now >= exp` rejects immediately. Pin leeway to 0 so the Rust verifier does
-    // not accept expired tokens the Go backend rejects (a security primitive must
-    // not diverge in the less-safe direction).
-    validation.leeway = 0;
     // These are GENERIC decoders with no expected-audience argument, so a specific
     // `aud` cannot be enforced here. jsonwebtoken's default `validate_aud = true`
     // would then REJECT any token that merely CARRIES an `aud` claim (error
@@ -216,12 +227,6 @@ pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> SkyR
     // Disable aud validation; audience-scoped checks belong to a future
     // expected-audience decoder variant.
     validation.validate_aud = false;
-    // Divergence from Sky (fail-closed): jsonwebtoken's default keeps `exp`
-    // REQUIRED, so an omitted-exp token is rejected here. The Go backend treats
-    // an absent `exp`/`nbf` as non-expiring and ACCEPTS such a token. Rust keeps
-    // the stricter behaviour deliberately — a token with no expiry is the
-    // less-safe case, and auth.rs's verify path likewise never clears required
-    // claims. Documented rather than aligned-down.
     match decode::<JsonValue>(&token, &key, &validation) {
         Ok(data) => match serde_json::to_string(&data.claims) {
             Ok(s) => SkyResult::Ok(s),
@@ -405,5 +410,88 @@ mod tests {
         assert!(matches!(enc, SkyResult::Err(_)));
         let dec: SkyResult<String, String> = jwt_decode_hs256(String::new(), "a.b.c".to_string());
         assert!(matches!(dec, SkyResult::Err(_)));
+    }
+
+    /// Golden (c): token with NO `exp` claim must be ACCEPTED — matching Go's
+    /// behaviour where an absent `exp` means "non-expiring". Guarding against
+    /// a regression where `required_spec_claims` includes "exp" (the
+    /// jsonwebtoken default), which would reject valid non-expiring tokens.
+    #[test]
+    fn test_hs256_no_exp_accepted() {
+        let secret = "no-exp-secret-0123456789abcdef0123".to_string();
+        // claims with only `sub` — no `exp`, no `nbf`.
+        let claims = r#"{"sub":"alice"}"#.to_string();
+        let token: SkyResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
+        let token = match token {
+            SkyResult::Ok(t) => t,
+            SkyResult::Err(e) => panic!("encode: {}", e),
+        };
+        let decoded: SkyResult<String, String> = jwt_decode_hs256(secret, token);
+        assert!(
+            matches!(decoded, SkyResult::Ok(_)),
+            "an HS256 token with no exp claim must be accepted (non-expiring, matching Go)"
+        );
+        if let SkyResult::Ok(s) = decoded {
+            assert!(s.contains("alice"), "decoded claims must include sub:alice");
+        }
+    }
+
+    /// Golden (d): token with `nbf` in the FUTURE must be REJECTED — matching
+    /// Go's behaviour where `nbf` is validated when present with no clock slack.
+    /// Guards `validation.validate_nbf = true` + `leeway = 0`.
+    #[test]
+    fn test_hs256_future_nbf_rejected() {
+        let secret = "nbf-secret-0123456789abcdef0123456".to_string();
+        // nbf 300s in the future, no exp (non-expiring).
+        let claims = format!(r#"{{"sub":"x","nbf":{}}}"#, now_unix() + 300);
+        let token: SkyResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
+        let token = match token {
+            SkyResult::Ok(t) => t,
+            SkyResult::Err(e) => panic!("encode: {}", e),
+        };
+        let decoded: SkyResult<String, String> = jwt_decode_hs256(secret, token);
+        assert!(
+            matches!(decoded, SkyResult::Err(_)),
+            "an HS256 token with nbf 300s in the future must be rejected (no leeway, matching Go)"
+        );
+    }
+
+    /// Golden (c-RS): RS256 counterpart — no-exp token must be ACCEPTED.
+    #[test]
+    fn test_rs256_no_exp_accepted() {
+        let claims = r#"{"sub":"bob"}"#.to_string();
+        let token: SkyResult<String, String> =
+            jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
+        let token = match token {
+            SkyResult::Ok(t) => t,
+            SkyResult::Err(e) => panic!("encode-rs: {}", e),
+        };
+        let decoded: SkyResult<String, String> =
+            jwt_decode_rs256(RS256_PUB_PEM.to_string(), token);
+        assert!(
+            matches!(decoded, SkyResult::Ok(_)),
+            "an RS256 token with no exp claim must be accepted (non-expiring, matching Go)"
+        );
+        if let SkyResult::Ok(s) = decoded {
+            assert!(s.contains("bob"), "decoded claims must include sub:bob");
+        }
+    }
+
+    /// Golden (d-RS): RS256 counterpart — future-nbf token must be REJECTED.
+    #[test]
+    fn test_rs256_future_nbf_rejected() {
+        let claims = format!(r#"{{"sub":"bob","nbf":{}}}"#, now_unix() + 300);
+        let token: SkyResult<String, String> =
+            jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
+        let token = match token {
+            SkyResult::Ok(t) => t,
+            SkyResult::Err(e) => panic!("encode-rs: {}", e),
+        };
+        let decoded: SkyResult<String, String> =
+            jwt_decode_rs256(RS256_PUB_PEM.to_string(), token);
+        assert!(
+            matches!(decoded, SkyResult::Err(_)),
+            "an RS256 token with nbf 300s in the future must be rejected (no leeway, matching Go)"
+        );
     }
 }
