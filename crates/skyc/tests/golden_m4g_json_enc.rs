@@ -13,13 +13,16 @@
 //!   `json.MarshalIndent(val, "", "  ")`.
 //!   (`m4g_json_enc_object_pretty`)
 //!
-//! * `JsonEnc.float 1.5` + `JsonEnc.bool True` + `JsonEnc.null` — scalar
-//!   primitives.  Output: `"1.5 true null"`.
+//! * Float encoding across Go's floatEncoder thresholds — `1.5`, `1e20`,
+//!   `1e-6`, `1.23e17` — plus `bool`/`null`.  Pins the decimal-vs-exponent
+//!   selection and `e±NN` shape against Go, where serde's Ryū default would
+//!   diverge (`1e20` → exponent form, etc.).
 //!   (`m4g_json_enc_float`)
 //!
-//! * `JsonEnc.string "say \"hi\""` — a string whose value contains `"` chars
-//!   that JSON must escape as `\"`.  Pins byte-for-byte agreement between
-//!   `serde_json` and Go's `encoding/json`.
+//! * `JsonEnc.string` over a value carrying `"`, `<`, `>`, `&`, U+2028, and
+//!   U+2029 — the full set Go's `encoding/json` HTML-escapes by default
+//!   (`\"`, `<`, `>`, `&`, `\\u2028`, `\\u2029`).  serde escapes
+//!   only `\"`, so this pins the HTML-escape pass.
 //!   (`m4g_json_enc_escape`)
 //!
 //! Every test is gated on `SKY_E2E=1`; without it the test returns early.  Run:
@@ -87,8 +90,9 @@ fn json_enc_object_pretty() {
 
 // ── float + bool + null scalars ──────────────────────────────────────────────
 
-/// `JsonEnc.float 1.5` → `"1.5"`, `JsonEnc.bool True` → `"true"`,
-/// `JsonEnc.null` → `"null"`.  Output: `"1.5 true null"`.
+/// Floats across Go's floatEncoder thresholds: `1.5`, `1e20`, `1e-6`,
+/// `1.23e17` (decimal form) + `bool`/`null`.  Output:
+/// `"1.5 100000000000000000000 0.000001 123000000000000000 true null"`.
 #[test]
 fn json_enc_float_bool_null() {
     assert_runs_and_matches_oracle("m4g_json_enc_float");
@@ -96,8 +100,9 @@ fn json_enc_float_bool_null() {
 
 // ── string escaping ──────────────────────────────────────────────────────────
 
-/// `JsonEnc.string "say \"hi\""` → `"say \"hi\""`.  Pins `"` → `\"` JSON
-/// escaping parity between `serde_json` and Go's `encoding/json`.
+/// `JsonEnc.string` over `"`, `<`, `>`, `&`, U+2028, U+2029.  Pins Go's
+/// default HTML-escaping (`\"`, `<`, `>`, `&`, `\u2028`,
+/// `\u2029`) against `serde_json`, which escapes only `\"`.
 #[test]
 fn json_enc_string_escape() {
     assert_runs_and_matches_oracle("m4g_json_enc_escape");

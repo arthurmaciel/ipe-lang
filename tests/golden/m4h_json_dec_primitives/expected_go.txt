@@ -1,1 +1,1 @@
-42 hello
+3 3 100 hello
