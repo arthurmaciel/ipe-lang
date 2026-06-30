@@ -195,3 +195,16 @@ Predicates (`Char.isDigit`/`isLower`/`isUpper`/`isAlpha`), `String.split`, and
 are fixed to match the Go reference's observable behaviour exactly (e.g.
 `String.toInt " 42 " == Nothing` — Go's emitted `String_toInt` does not trim,
 which also matches Elm).
+
+## Open questions — resolve in the Elm-conformance phase
+
+The Elm-derived stdlib's design source is Elm (`elm/core`, `elm/json`); the current
+behaviour tracks the Go reference as a bootstrap step. Where the two differ, the
+Elm semantics is the intended spec. To audit + decide later:
+
+- **Json (`Encode`/`Decode`/`Pipeline`)** — audit vs Elm `elm/json`: object key
+  order (Elm preserves insertion order), `Decode.int` on non-integer numbers,
+  JSON float number formatting, decoder error structure, `null`/`oneOf`/`nullable`
+  behaviour.
+- **General** — the Elm-conformance phase audits stdlib *behaviour* against Elm,
+  not only missing-function coverage.
