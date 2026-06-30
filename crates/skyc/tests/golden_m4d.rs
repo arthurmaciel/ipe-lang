@@ -16,8 +16,7 @@
 //! Every test is gated on `SKY_E2E=1`; without it the test returns early. Run:
 //!
 //! ```text
-//! SKY_E2E=1 SKY_RUNTIME_DIR=<path-to-runtime-rust/src/sky_runtime> \
-//!     cargo test golden_m4d
+//! SKY_E2E=1 cargo test golden_m4d
 //! ```
 
 use std::path::{Path, PathBuf};

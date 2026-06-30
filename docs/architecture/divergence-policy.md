@@ -151,8 +151,9 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
 2. Add `tests/golden/<name>/sanctioned.divergence` with a one-line reason,
    prefixed with the chosen tag (`divergence: …` / `sanctioned: …`). An untagged
    reason defaults to `sanctioned: `.
-3. Run `refresh-oracle <name>` (needs `SKY_RUNTIME_DIR` pointed at the Rust
-   runtime). It captures Sky-Rust's output as the expected and writes
+3. Run `refresh-oracle <name>` (the runtime is resolved automatically from the
+   in-repo `runtime/src/sky_runtime`; set `SKY_RUNTIME_DIR` to override). It
+   captures Sky-Rust's output as the expected and writes
    `oracle_divergence = true` + `divergence_reason = <tag> <reason>` — WITHOUT
    requiring Go to fail.
 4. Commit `Main.sky`, `expected_go.txt`, `oracle.meta`, and
