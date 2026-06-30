@@ -1,0 +1,17 @@
+-- | Sky.Core.Io — standard-I/O effect kernels (Layer 3 Sky source, M5a).
+module Sky.Core.Io exposing
+    ( readLine, writeStdout, writeStderr
+    )
+
+
+import Sky.Ffi as Ffi
+
+
+readLine : () -> Task Error String
+readLine = Ffi.kernel "Io_readLine"
+
+writeStdout : String -> Task Error ()
+writeStdout = Ffi.kernel "Io_writeStdout"
+
+writeStderr : String -> Task Error ()
+writeStderr = Ffi.kernel "Io_writeStderr"

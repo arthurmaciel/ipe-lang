@@ -110,7 +110,7 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(req: HttpRequest) -> S
             Err(_) => {
                 return SkyResult::Err(
                     format!("http.stream.open: invalid HTTP method: {}", req.method).into(),
-                )
+                );
             }
         };
         let mut rb = client.request(method, &req.url);

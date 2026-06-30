@@ -2031,7 +2031,10 @@ mod tests {
         let secret = "victim-PII@example.com";
         let insert = format!("INSERT INTO secrets (email) VALUES ('{}')", secret);
         let r1: SkyResult<String, i64> = db_exec(pool.clone(), insert.clone(), Vec::new()).await;
-        assert!(matches!(r1, SkyResult::Ok(_)), "first insert should succeed");
+        assert!(
+            matches!(r1, SkyResult::Ok(_)),
+            "first insert should succeed"
+        );
         let r2: SkyResult<String, i64> = db_exec(pool.clone(), insert, Vec::new()).await;
         match r2 {
             SkyResult::Err(e) => {
@@ -2880,8 +2883,11 @@ mod tests {
         )
         .await;
         assert!(matches!(mk, SkyResult::Ok(_)), "create: {mk:?}");
-        let _: SkyResult<String, i64> =
-            db_exec_raw(db.clone(), "INSERT INTO acct (bal) VALUES (10), (20)".to_string()).await;
+        let _: SkyResult<String, i64> = db_exec_raw(
+            db.clone(),
+            "INSERT INTO acct (bal) VALUES (10), (20)".to_string(),
+        )
+        .await;
 
         // Empty WHERE-column set MUST be refused (would otherwise mass-update
         // every row), NOT silently rewrite the whole table.

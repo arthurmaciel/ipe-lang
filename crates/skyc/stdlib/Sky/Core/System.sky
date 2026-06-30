@@ -1,0 +1,42 @@
+-- | Sky.Core.System — process / environment effect kernels (Layer 3 Sky source, M5a).
+module Sky.Core.System exposing
+    ( args, getenv, getenvOr, getArg, getenvInt, getenvBool
+    , setenv, unsetenv, cwd, loadEnv, exit
+    )
+
+
+import Sky.Ffi as Ffi
+
+
+args : () -> Task Error (List String)
+args = Ffi.kernel "System_args"
+
+getenv : String -> Task Error String
+getenv = Ffi.kernel "System_getenv"
+
+getenvOr : String -> String -> String
+getenvOr = Ffi.kernel "System_getenvOr"
+
+getArg : Int -> Task Error (Maybe String)
+getArg = Ffi.kernel "System_getArg"
+
+getenvInt : String -> Task Error Int
+getenvInt = Ffi.kernel "System_getenvInt"
+
+getenvBool : String -> Task Error Bool
+getenvBool = Ffi.kernel "System_getenvBool"
+
+setenv : String -> String -> Task Error ()
+setenv = Ffi.kernel "System_setenv"
+
+unsetenv : String -> Task Error ()
+unsetenv = Ffi.kernel "System_unsetenv"
+
+cwd : () -> Task Error String
+cwd = Ffi.kernel "System_cwd"
+
+loadEnv : () -> Task Error ()
+loadEnv = Ffi.kernel "System_loadEnv"
+
+exit : Int -> a
+exit = Ffi.kernel "System_exit"

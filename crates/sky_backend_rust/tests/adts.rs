@@ -129,7 +129,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
         name: main,
         type_params: vec![],
         params: vec![],
-        ret: IrType::TaskUnit,
+        ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
             callee: Callee::Kernel(KernelFn::LogPrintln),
             args: vec![Expr::Call {
@@ -274,7 +274,7 @@ fn tree_main_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
         name: main,
         type_params: vec![],
         params: vec![],
-        ret: IrType::TaskUnit,
+        ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
             callee: Callee::Kernel(KernelFn::LogPrintln),
             args: vec![Expr::Call {

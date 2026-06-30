@@ -1,0 +1,10 @@
+module Main exposing (main)
+
+-- Task.onError with a lambda: `e` must be inferred as `Error` (not a free
+-- variable) so the handler compiles without SKY-L0102 ("polymorphic
+-- parameter").  Fixed by pinning the handler-parameter type to the concrete
+-- `Error` type in the kernel_ty dispatch for onError/mapError.
+main =
+    Task.onError
+        (\e -> println "recovered")
+        (Task.fail "an error")

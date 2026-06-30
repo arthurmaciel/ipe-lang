@@ -122,7 +122,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
         name: main,
         type_params: vec![],
         params: vec![],
-        ret: IrType::TaskUnit,
+        ret: IrType::Task(Box::new(IrType::Unit)),
         body: main_body,
     };
 
@@ -256,7 +256,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
         name: main,
         type_params: vec![],
         params: vec![],
-        ret: IrType::TaskUnit,
+        ret: IrType::Task(Box::new(IrType::Unit)),
         body: main_body,
     };
 

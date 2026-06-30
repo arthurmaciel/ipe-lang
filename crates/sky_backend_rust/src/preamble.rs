@@ -106,8 +106,9 @@ mod tests {
 
     #[test]
     fn epilogue_matches_golden_lines_139_to_end() -> DResult<()> {
-        // Lines 139..=end: the `Ffi.kernel` polyfill through `fn main`.
-        let expected: String = GOLDEN.split_inclusive('\n').skip(138).collect();
+        // Lines 257..=end: the `Ffi.kernel` polyfill through `fn main`.
+        // NOTE: line number updated from 139 → 257 after M5a shim additions.
+        let expected: String = GOLDEN.split_inclusive('\n').skip(256).collect();
         assert_eq!(epilogue()?, expected);
         Ok(())
     }

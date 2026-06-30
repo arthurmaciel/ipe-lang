@@ -1,0 +1,17 @@
+-- | Sky.Core.Random — entropy-backed randomness effect kernels (Layer 3 Sky source, M5a).
+module Sky.Core.Random exposing
+    ( int, float, choice
+    )
+
+
+import Sky.Ffi as Ffi
+
+
+int : Int -> Int -> Task Error Int
+int = Ffi.kernel "Random_int"
+
+float : Float -> Float -> Task Error Float
+float = Ffi.kernel "Random_float"
+
+choice : List String -> Task Error String
+choice = Ffi.kernel "Random_choice"

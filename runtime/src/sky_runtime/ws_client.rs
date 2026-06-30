@@ -130,9 +130,7 @@ fn redact_ws_url(url: &str) -> String {
     // later `@` in a path/query is preserved.
     match url.split_once("://") {
         Some((scheme, rest)) => {
-            let authority_end = rest
-                .find(['/', '?', '#'])
-                .unwrap_or(rest.len());
+            let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
             let (authority, tail) = rest.split_at(authority_end);
             match authority.rsplit_once('@') {
                 Some((_userinfo, host)) => format!("{scheme}://{host}{tail}"),
@@ -180,8 +178,11 @@ async fn do_connect<E: From<String> + Send + 'static>(
             Ok(n) => n,
             Err(_) => {
                 return SkyResult::Err(
-                    format!("WebSocket.connect {}: invalid header name {:?}", safe_url, k)
-                        .into(),
+                    format!(
+                        "WebSocket.connect {}: invalid header name {:?}",
+                        safe_url, k
+                    )
+                    .into(),
                 );
             }
         };

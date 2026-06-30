@@ -528,13 +528,13 @@ fn collect_record_shapes(
         IrType::Decoder(inner) => {
             collect_record_shapes(interner, inner, shapes)?;
         }
+        IrType::Task(inner) => collect_record_shapes(interner, inner, shapes)?,
         IrType::Int
         | IrType::Float
         | IrType::Bool
         | IrType::Str
         | IrType::Char
         | IrType::Unit
-        | IrType::TaskUnit
         | IrType::Bytes
         | IrType::Json
         // A generic type variable carries no concrete record shape of its own.
@@ -607,15 +607,16 @@ fn type_reaches_enum(
                 || type_reaches_enum(v, target, enums, visited)
         }
         IrType::Set(a) => type_reaches_enum(a, target, enums, visited),
-        // `Decoder<T>` is heap-allocated (pointer-sized); descend for completeness.
-        IrType::Decoder(inner) => type_reaches_enum(inner, target, enums, visited),
+        // `Decoder<T>` and `Task<A>` are heap-allocated; descend for completeness.
+        IrType::Decoder(inner) | IrType::Task(inner) => {
+            type_reaches_enum(inner, target, enums, visited)
+        }
         IrType::Int
         | IrType::Float
         | IrType::Bool
         | IrType::Str
         | IrType::Char
         | IrType::Unit
-        | IrType::TaskUnit
         | IrType::Bytes
         | IrType::Json
         | IrType::Fun(_, _)
@@ -636,14 +637,13 @@ fn contains_generic(ty: &IrType) -> bool {
         IrType::Result(err, ok) => contains_generic(err) || contains_generic(ok),
         IrType::Dict(k, v) => contains_generic(k) || contains_generic(v),
         IrType::Set(a) => contains_generic(a),
-        IrType::Decoder(inner) => contains_generic(inner),
+        IrType::Decoder(inner) | IrType::Task(inner) => contains_generic(inner),
         IrType::Int
         | IrType::Float
         | IrType::Bool
         | IrType::Str
         | IrType::Char
         | IrType::Unit
-        | IrType::TaskUnit
         | IrType::Bytes
         | IrType::Json => false,
     }
@@ -689,14 +689,13 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
             collect_generics(v, out);
         }
         IrType::Set(a) => collect_generics(a, out),
-        IrType::Decoder(inner) => collect_generics(inner, out),
+        IrType::Decoder(inner) | IrType::Task(inner) => collect_generics(inner, out),
         IrType::Int
         | IrType::Float
         | IrType::Bool
         | IrType::Str
         | IrType::Char
         | IrType::Unit
-        | IrType::TaskUnit
         | IrType::Bytes
         | IrType::Json => {}
     }
@@ -896,6 +895,10 @@ fn match_template(
             IrType::Decoder(ce) => match_template(te, ce, subst),
             _ => Err(mismatch()),
         },
+        IrType::Task(te) => match concrete {
+            IrType::Task(ce) => match_template(te, ce, subst),
+            _ => Err(mismatch()),
+        },
         // A concrete leaf must equal the use-site leaf exactly.
         IrType::Int
         | IrType::Float
@@ -903,7 +906,6 @@ fn match_template(
         | IrType::Str
         | IrType::Char
         | IrType::Unit
-        | IrType::TaskUnit
         | IrType::Bytes
         | IrType::Json => {
             if template == concrete {

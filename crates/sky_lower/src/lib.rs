@@ -219,7 +219,7 @@ mod tests {
             return;
         };
         assert!(main.params.is_empty());
-        assert_eq!(main.ret, IrType::TaskUnit);
+        assert_eq!(main.ret, IrType::Task(Box::new(IrType::Unit)));
 
         // main = println (String.fromInt (update Increment 0))
         assert!(

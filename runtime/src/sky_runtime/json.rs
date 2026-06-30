@@ -1465,9 +1465,19 @@ mod enc_tests {
         let out = json_enc_encode(1_000_000_000, val);
         let sixteen = " ".repeat(16);
         let seventeen = " ".repeat(17);
-        assert!(out.contains(&sixteen), "expected clamped 16-space indent: {out:?}");
-        assert!(!out.contains(&seventeen), "indent exceeded the clamp: {out:?}");
-        assert!(out.len() < 1000, "output unexpectedly large ({} bytes)", out.len());
+        assert!(
+            out.contains(&sixteen),
+            "expected clamped 16-space indent: {out:?}"
+        );
+        assert!(
+            !out.contains(&seventeen),
+            "indent exceeded the clamp: {out:?}"
+        );
+        assert!(
+            out.len() < 1000,
+            "output unexpectedly large ({} bytes)",
+            out.len()
+        );
     }
 }
 
@@ -1477,9 +1487,10 @@ mod optional_tests {
 
     fn build() -> Decoder<String, i64> {
         // next_decoder is the identity continuation: Decoder<.., FnOnce(i64)->i64>.
-        let nd: Decoder<String, Box<dyn FnOnce(i64) -> i64 + Send>> = decode_succeed(Box::new(
-            || Box::new(|x: i64| x) as Box<dyn FnOnce(i64) -> i64 + Send>,
-        ));
+        let nd: Decoder<String, Box<dyn FnOnce(i64) -> i64 + Send>> =
+            decode_succeed(Box::new(|| {
+                Box::new(|x: i64| x) as Box<dyn FnOnce(i64) -> i64 + Send>
+            }));
         decode_pipeline_optional::<String, i64, i64>(
             "age".to_string(),
             json_decode_int(),

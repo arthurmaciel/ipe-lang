@@ -67,7 +67,7 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::Str => "String".to_owned(),
         IrType::Char => "Char".to_owned(),
         IrType::Unit => "()".to_owned(),
-        IrType::TaskUnit => "Task Error ()".to_owned(),
+        IrType::Task(inner) => format!("Task Error {}", ir_type_name(interner, inner)),
         // A generic type variable renders by its source name (e.g. `a`); the
         // Rust generic spelling (`T1`, …) is a backend concern, so the IR view
         // keeps the source-facing name.
@@ -380,6 +380,58 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::JwtDecodeHs256 => "Jwt.decodeHs256",
         KernelFn::JwtEncodeRs256 => "Jwt.encodeRs256",
         KernelFn::JwtDecodeRs256 => "Jwt.decodeRs256",
+        // ── Task combinators (M5a) ────────────────────────────────────────────
+        KernelFn::TaskSucceed => "Task.succeed",
+        KernelFn::TaskFail => "Task.fail",
+        KernelFn::TaskMap => "Task.map",
+        KernelFn::TaskAndThen => "Task.andThen",
+        KernelFn::TaskMapError => "Task.mapError",
+        KernelFn::TaskOnError => "Task.onError",
+        KernelFn::TaskFromResult => "Task.fromResult",
+        KernelFn::TaskAndThenResult => "Task.andThenResult",
+        KernelFn::TaskSequence => "Task.sequence",
+        KernelFn::TaskParallel => "Task.parallel",
+        KernelFn::TaskRun => "Task.run",
+        // ── Io kernels (M5a) ──────────────────────────────────────────────────
+        KernelFn::IoReadLine => "Io.readLine",
+        KernelFn::IoWriteStdout => "Io.writeStdout",
+        KernelFn::IoWriteStderr => "Io.writeStderr",
+        // ── Time kernels (M5a) ────────────────────────────────────────────────
+        KernelFn::TimeNow => "Time.now",
+        KernelFn::TimeSleep => "Time.sleep",
+        KernelFn::TimeUnixMillis => "Time.unixMillis",
+        // ── System kernels (M5a) ──────────────────────────────────────────────
+        KernelFn::SystemArgs => "System.args",
+        KernelFn::SystemGetenv => "System.getenv",
+        KernelFn::SystemGetenvOr => "System.getenvOr",
+        KernelFn::SystemGetArg => "System.getArg",
+        KernelFn::SystemGetenvInt => "System.getenvInt",
+        KernelFn::SystemGetenvBool => "System.getenvBool",
+        KernelFn::SystemSetenv => "System.setenv",
+        KernelFn::SystemUnsetenv => "System.unsetenv",
+        KernelFn::SystemCwd => "System.cwd",
+        KernelFn::SystemLoadEnv => "System.loadEnv",
+        KernelFn::SystemExit => "System.exit",
+        // ── Random kernels (M5a) ──────────────────────────────────────────────
+        KernelFn::RandomInt => "Random.int",
+        KernelFn::RandomFloat => "Random.float",
+        KernelFn::RandomChoice => "Random.choice",
+        // ── File kernels (M5a) ────────────────────────────────────────────────
+        KernelFn::FileReadFile => "File.readFile",
+        KernelFn::FileWriteFile => "File.writeFile",
+        KernelFn::FileExists => "File.exists",
+        KernelFn::FileRemove => "File.remove",
+        KernelFn::FileMkdirAll => "File.mkdirAll",
+        KernelFn::FileReadFileLimit => "File.readFileLimit",
+        KernelFn::FileReadFileBytes => "File.readFileBytes",
+        KernelFn::FileAppend => "File.append",
+        KernelFn::FileReadDir => "File.readDir",
+        KernelFn::FileIsDir => "File.isDir",
+        KernelFn::FileTempFile => "File.tempFile",
+        KernelFn::FileTempDir => "File.tempDir",
+        KernelFn::FileCopy => "File.copy",
+        KernelFn::FileRename => "File.rename",
+        KernelFn::FileDelete => "File.delete",
     }
 }
 
@@ -726,7 +778,21 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
                 ir_type_name(interner, ty)
             ),
         ),
+        Expr::TaskSeq { effect, rest } => {
+            write_task_seq(out, effect, rest, interner, level);
+        }
     }
+}
+
+/// Render a [`Expr::TaskSeq`] node: a header line followed by `effect:` and
+/// `rest:` child sub-trees. Extracted from [`write_expr`] to stay within the
+/// 100-line limit clippy enforces.
+fn write_task_seq(out: &mut String, effect: &Expr, rest: &Expr, interner: &Interner, level: usize) {
+    line(out, level, "TaskSeq");
+    line(out, level + 1, "effect:");
+    write_expr(out, effect, interner, level + 2);
+    line(out, level + 1, "rest:");
+    write_expr(out, rest, interner, level + 2);
 }
 
 /// Render the labelled `field <name>` / value child lines of a record literal /
@@ -856,7 +922,7 @@ mod tests {
             name: main_sym,
             type_params: vec![],
             params: vec![],
-            ret: IrType::TaskUnit,
+            ret: IrType::Task(Box::new(IrType::Unit)),
             body: Expr::Call {
                 callee: Callee::Kernel(KernelFn::LogPrintln),
                 args: vec![Expr::Call {

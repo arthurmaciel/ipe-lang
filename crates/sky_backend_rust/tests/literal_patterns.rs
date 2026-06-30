@@ -123,7 +123,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
         name: zero,
         type_params: vec![],
         params: vec![],
-        ret: IrType::TaskUnit,
+        ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
             callee: Callee::Kernel(KernelFn::LogPrintln),
             args: vec![Expr::Call {
@@ -263,7 +263,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
         name: main,
         type_params: vec![],
         params: vec![],
-        ret: IrType::TaskUnit,
+        ret: IrType::Task(Box::new(IrType::Unit)),
         body: Expr::Call {
             callee: Callee::Kernel(KernelFn::LogPrintln),
             args: vec![Expr::Call {

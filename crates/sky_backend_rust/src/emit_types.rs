@@ -73,7 +73,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Str => "String".to_owned(),
         IrType::Char => "char".to_owned(),
         IrType::Unit => "()".to_owned(),
-        IrType::TaskUnit => "SkyTask<()>".to_owned(),
+        IrType::Task(inner) => format!("SkyTask<{}>", render_type(ctx, inner, generics)?),
         IrType::Enum { name, args } => {
             let base = ctx.enum_name(*name)?.to_owned();
             if args.is_empty() {
@@ -130,15 +130,23 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Record(fields) => ctx.render_record_use(fields, generics)?,
         IrType::Fun(params, ret) => {
             // A first-class function value is a boxed trait object
-            // `Box<dyn Fn(T0, ...) -> R>`. A nullary function type renders as
-            // `Box<dyn Fn() -> R>`. The boxed-closure optimisation (a concrete,
-            // non-boxed generic closure type) is deferred.
+            // `Box<dyn Fn(T0, ...) -> R + Send + 'static>`. The `Send + 'static`
+            // bounds are required so closures can be passed to Task combinators
+            // (`task_map`, `task_and_then`, etc.) whose runtime signatures carry
+            // those bounds. All closures emitted by this backend are `move`
+            // closures that capture only `Send + 'static` values, so this is
+            // always sound. A nullary function type renders as
+            // `Box<dyn Fn() -> R + Send + 'static>`. The boxed-closure
+            // optimisation (a concrete, non-boxed generic closure type) is deferred.
             let mut parts = Vec::with_capacity(params.len());
             for param in params {
                 parts.push(render_type(ctx, param, generics)?);
             }
             let ret = render_type(ctx, ret, generics)?;
-            format!("Box<dyn Fn({}) -> {ret}>", parts.join(", "))
+            format!(
+                "Box<dyn Fn({}) -> {ret} + Send + 'static>",
+                parts.join(", ")
+            )
         }
         // A generic type variable renders as the function's corresponding Rust
         // generic (`T1`, `T2`, …), resolved by position in the quantification

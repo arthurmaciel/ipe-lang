@@ -1,0 +1,68 @@
+-- | Sky.Core.Task — Task combinator surface (Layer 3 Sky source, M5a).
+--
+-- All functions are aliased to the runtime kernel via `Ffi.kernel`. The HM
+-- type schemes below govern how the type-checker treats each combinator
+-- when user code calls `Task.<fn>`. `Error` in the type signatures is the
+-- implicit error channel — always `SkyError = String` at the Rust level.
+module Sky.Core.Task exposing
+    ( succeed, fail
+    , map, andThen
+    , mapError, onError
+    , fromResult, andThenResult
+    , sequence, parallel
+    , run
+    )
+
+
+import Sky.Ffi as Ffi
+
+
+-- ── Construction ─────────────────────────────────────────────────────────────
+
+succeed : a -> Task Error a
+succeed = Ffi.kernel "Task_succeed"
+
+fail : Error -> Task Error a
+fail = Ffi.kernel "Task_fail"
+
+
+-- ── Transformation ───────────────────────────────────────────────────────────
+
+map : (a -> b) -> Task Error a -> Task Error b
+map = Ffi.kernel "Task_map"
+
+andThen : (a -> Task Error b) -> Task Error a -> Task Error b
+andThen = Ffi.kernel "Task_andThen"
+
+
+-- ── Error channel ────────────────────────────────────────────────────────────
+
+mapError : (Error -> Error) -> Task Error a -> Task Error a
+mapError = Ffi.kernel "Task_mapError"
+
+onError : (Error -> Task Error a) -> Task Error a -> Task Error a
+onError = Ffi.kernel "Task_onError"
+
+
+-- ── Result bridges ───────────────────────────────────────────────────────────
+
+fromResult : Result Error a -> Task Error a
+fromResult = Ffi.kernel "Task_fromResult"
+
+andThenResult : (a -> Result Error b) -> Task Error a -> Task Error b
+andThenResult = Ffi.kernel "Task_andThenResult"
+
+
+-- ── Concurrency ──────────────────────────────────────────────────────────────
+
+sequence : List (Task Error a) -> Task Error (List a)
+sequence = Ffi.kernel "Task_sequence"
+
+parallel : List (Task Error a) -> Task Error (List a)
+parallel = Ffi.kernel "Task_parallel"
+
+
+-- ── Execution ────────────────────────────────────────────────────────────────
+
+run : Task Error a -> Result Error a
+run = Ffi.kernel "Task_run"
