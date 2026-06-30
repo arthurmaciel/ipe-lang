@@ -9,6 +9,7 @@
 
 use super::{Decimal, SkyMaybe, SkyResult};
 use rust_decimal::Decimal as RD;
+use rust_decimal::RoundingStrategy;
 use rust_decimal::prelude::ToPrimitive;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -190,7 +191,14 @@ pub fn money_set_rate<E: From<String>>(
     // operation, but a subnormal or denormal Decimal could still produce None —
     // skip the auto-inverse rather than panic.
     if let Some(inv) = RD::from(1).checked_div(rate.0) {
-        map.insert((to, from), inv);
+        // Cap the auto-inverse to 16 decimal places, matching Go shopspring's
+        // DivisionPrecision = 16. Without the cap a non-terminating inverse
+        // (e.g. 1/3) would carry rust_decimal's full mantissa precision and
+        // Money.getRate of the inverse pair would diverge from Go.
+        map.insert(
+            (to, from),
+            inv.round_dp_with_strategy(16, RoundingStrategy::MidpointAwayFromZero),
+        );
     }
     SkyResult::Ok(())
 }

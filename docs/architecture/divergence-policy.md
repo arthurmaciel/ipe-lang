@@ -180,6 +180,25 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   same canonical UUID on this shape (`m5b_uuid_parse`). Recorded as `sanctioned:`
   markers in each golden directory.
 
+## Recorded `sanctioned:` entries (Go succeeds, Sky-Rust is more correct)
+
+- **`Std.Money.allocate` over a NEGATIVE total — residue distributed vs Go's
+  residue-dropping bug (M4g).** Go's `Money.allocate` clamps the residue at zero
+  (`.max(0)`-equivalent), which silently DROPS the remaining minor units when the
+  total is negative — the returned shares then no longer sum back to the input
+  amount. Sky-Rust distributes the residue toward zero by sign (`base - 1` for the
+  first |remainder| slots when the residue is negative, `base + 1` when positive),
+  so the shares sum to the exact input for negative totals as well as positive
+  ones. This is a deliberate correctness improvement (a fair split MUST sum to the
+  input — `runtime/src/sky_runtime/money.rs::money_allocate`, regression
+  `test_allocate_negative_total_shares_sum_to_input`). For positive totals the two
+  implementations are byte-identical; only negative totals diverge. Recorded as
+  `sanctioned: Money.allocate distributes the residue for negative totals; Go drops
+  it (shares no longer sum to the input) — Sky-Rust is deliberately more correct`.
+  Any future `Money.allocate` golden exercising a negative total carries a
+  `sanctioned.divergence` marker with this reason so the golden-diff treats the
+  Sky-Rust output as expected rather than flagging a parity failure.
+
 ## How to add a marker divergence (`divergence:` or `sanctioned:`)
 
 1. Decide the tag. `sanctioned:` — Sky-Rust is genuinely more correct

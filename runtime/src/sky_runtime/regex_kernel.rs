@@ -74,12 +74,42 @@ pub fn regex_replace(pattern: String, replacement: String, s: String) -> String 
     }
 }
 
-/// Sky `split : String -> String -> List String`
+/// Sky `split : String -> String -> List String`.
+///
+/// Mirrors Go's `regexp.Split(s, -1)` (split on every match) rather than
+/// Rust's `Regex::split`. The two diverge on zero-width matches: Go's Split
+/// skips the field a match would produce when that match ends at byte 0
+/// (`if match[1] != 0`), so a leading zero-width match at position 0 does NOT
+/// emit a leading empty string, while interior zero-width matches still split.
+/// Rust's `Regex::split` instead emits a leading empty for the same input.
 pub fn regex_split(pattern: String, s: String) -> Vec<String> {
-    match compiled(&pattern) {
-        Some(re) => re.split(&s).map(|x| x.to_string()).collect(),
-        None => vec![s],
+    let re = match compiled(&pattern) {
+        Some(re) => re,
+        None => return vec![s],
+    };
+    // Go special-cases a non-empty pattern against empty input as one empty
+    // field (`if len(re.expr) > 0 && len(s) == 0 { return []string{""} }`).
+    if !pattern.is_empty() && s.is_empty() {
+        return vec![String::new()];
     }
+    let mut out: Vec<String> = Vec::new();
+    let mut beg: usize = 0;
+    // `end` tracks the START offset of the most recent match, mirroring Go's
+    // `end = match[0]`; the trailing field is suppressed when it reaches len(s).
+    let mut end: usize = 0;
+    for m in re.find_iter(&s) {
+        end = m.start();
+        // Skip the field for a match ending at byte 0 (Go: `if match[1] != 0`)
+        // — drops the leading empty produced by a zero-width match at pos 0.
+        if m.end() != 0 {
+            out.push(s[beg..end].to_string());
+        }
+        beg = m.end();
+    }
+    if end != s.len() {
+        out.push(s[beg..].to_string());
+    }
+    out
 }
 
 #[cfg(test)]

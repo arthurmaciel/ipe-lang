@@ -5,9 +5,14 @@
 //! which uses Go's `regexp` package — RE2 semantics.
 //!
 //! Divergence note: Go's `regexp` and Rust's `regex` crate are both
-//! RE2-family; on the patterns exercised here, behaviour is identical.
+//! RE2-family; on the match / find / findAll / replace patterns exercised
+//! here, behaviour is identical. `split` does NOT come free, though: Rust's
+//! `Regex::split` and Go's `regexp.Split` disagree on zero-width matches at
+//! position 0 (Rust emits a leading empty field, Go drops it). `regex_split`
+//! therefore reimplements Go's `Split` algorithm directly rather than
+//! delegating to `Regex::split` — see `regex_split_zero_width_matches_go`.
 //! Named-group syntax and a handful of Perl-extension flags (lookahead,
-//! lookbehind) are the only known divergence points — none are exercised
+//! lookbehind) are the remaining known divergence points — none are exercised
 //! by the Sky stdlib surface.
 
 use sky_runtime_rust::*;
@@ -118,11 +123,7 @@ fn regex_find_all_golden() {
 fn regex_replace_golden() {
     // Go: Regex_replace(`\d+`, "N", "a1b22c") = "aNbNc"
     assert_eq!(
-        regex_replace(
-            r"\d+".to_string(),
-            "N".to_string(),
-            "a1b22c".to_string()
-        ),
+        regex_replace(r"\d+".to_string(), "N".to_string(), "a1b22c".to_string()),
         "aNbNc",
         r"replace \d+ with N in 'a1b22c' must give 'aNbNc'"
     );
@@ -147,11 +148,7 @@ fn regex_replace_golden() {
     );
     // Invalid pattern → input unchanged (Go: `return s`)
     assert_eq!(
-        regex_replace(
-            r"[unclosed".to_string(),
-            "X".to_string(),
-            "abc".to_string()
-        ),
+        regex_replace(r"[unclosed".to_string(), "X".to_string(), "abc".to_string()),
         "abc"
     );
 }
@@ -188,6 +185,51 @@ fn regex_split_golden() {
     assert_eq!(
         regex_split(r"[unclosed".to_string(), "abc".to_string()),
         vec!["abc".to_string()]
+    );
+}
+
+// ── GOLDEN: Regex split on zero-width / empty-matching patterns ─────────────
+//
+// Go oracle: `re.Split(s, -1)`. Two behaviours combine here. (1) Go's
+// `allMatches` (shared by FindAll and Split) NEVER delivers an empty match that
+// starts where the previous match ended, so for `x*`-style patterns the only
+// matches are the non-empty runs plus a zero-width match at each "gap" not
+// adjacent to a prior match. (2) Go's `Split` skips the field a match would
+// produce when that match ends at byte 0 (`if match[1] != 0`), dropping the
+// leading empty field a position-0 zero-width match would otherwise create.
+//
+// Rust's `regex::Regex::find_iter` applies the SAME adjacent-empty-match
+// suppression, but Rust's `Regex::split` would still emit a leading "" for these
+// inputs. `regex_split` reimplements Go's `Split` over `find_iter`, so each case
+// below yields `["a", "b", "c"]` with NO leading empty — matching Go exactly.
+
+#[test]
+fn regex_split_zero_width_matches_go() {
+    // Go: Split("", "abc") — empty matches at 0,1,2,3; the position-0 field is
+    // dropped → ["a", "b", "c"] (Rust's native Regex::split → ["", "a","b","c"]).
+    assert_eq!(
+        regex_split("".to_string(), "abc".to_string()),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        "empty-pattern split drops the leading zero-width field (Go parity)"
+    );
+    // Go: Split("x*", "axxbxc") — matches (0,0),(1,3),(4,5),(6,6); the empty
+    // matches at the run boundaries are suppressed (adjacent to a prior match).
+    assert_eq!(
+        regex_split(r"x*".to_string(), "axxbxc".to_string()),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        r"x* split must match Go's zero-width handling"
+    );
+    // Go: Split(`\d*`, "a1b22c") — matches (0,0),(1,2),(3,5),(6,6) → ["a","b","c"].
+    assert_eq!(
+        regex_split(r"\d*".to_string(), "a1b22c".to_string()),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        r"\d* split must match Go's zero-width handling"
+    );
+    // Go: Split(`,?`, "a,b,c") — matches (0,0),(1,2),(3,4),(5,5) → ["a","b","c"].
+    assert_eq!(
+        regex_split(r",?".to_string(), "a,b,c".to_string()),
+        vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        r",? split must match Go's zero-width handling"
     );
 }
 

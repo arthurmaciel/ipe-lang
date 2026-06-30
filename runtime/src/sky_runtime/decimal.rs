@@ -151,13 +151,20 @@ pub fn decimal_div<E: From<String>>(a: Decimal, b: Decimal) -> SkyResult<E, Deci
     // reachable from a well-typed `Std.Decimal.div`. Post zero-guard, `None` is
     // overflow → saturate to the signed extreme (sign = sign(a) XOR sign(b)),
     // matching decimal_add/sub/mul.
-    SkyResult::Ok(Decimal(a.0.checked_div(b.0).unwrap_or_else(|| {
+    let quotient = a.0.checked_div(b.0).unwrap_or_else(|| {
         if a.0.is_sign_negative() == b.0.is_sign_negative() {
             RD::MAX
         } else {
             RD::MIN
         }
-    })))
+    });
+    // Cap the quotient to 16 decimal places, matching Go's shopspring/decimal
+    // DivisionPrecision = 16 (its `Div` is `DivRound(…, 16)` with half-away-from-
+    // zero rounding). Exact fractions with ≤16 dp are unaffected; non-terminating
+    // quotients (1/3, 2/3, 1/7, …) round to 16 dp exactly as shopspring does.
+    SkyResult::Ok(Decimal(
+        quotient.round_dp_with_strategy(16, RoundingStrategy::MidpointAwayFromZero),
+    ))
 }
 pub fn decimal_mod<E: From<String>>(a: Decimal, b: Decimal) -> SkyResult<E, Decimal> {
     if b.0.is_zero() {
