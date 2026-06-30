@@ -415,6 +415,27 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::JsonDecPOptional => "decode_pipeline_optional",
         KernelFn::JsonDecPCustom => "decode_pipeline_custom",
         KernelFn::JsonDecPRequiredAt => "decode_pipeline_required_at",
+        // ── Crypto kernels (M5a) ─────────────────────────────────────────────
+        KernelFn::CryptoSha256 => "crypto_sha256",
+        KernelFn::CryptoSha512 => "crypto_sha512",
+        KernelFn::CryptoSha1 => "crypto_sha1",
+        KernelFn::CryptoMd5 => "crypto_md5",
+        KernelFn::CryptoHmacSha256 => "crypto_hmac_sha256",
+        KernelFn::CryptoHmacSha512 => "crypto_hmac_sha512",
+        // Concrete alias pins E=String — avoids type-inference ambiguity when
+        // the Err arm is discarded in generated Sky code.
+        KernelFn::CryptoRsaSha256Sign => "sky_crypto_rsa_sha256_sign",
+        KernelFn::CryptoRsaSha256Verify => "crypto_rsa_sha256_verify",
+        KernelFn::CryptoConstantTimeEqual => "crypto_constant_time_equal",
+        // Concrete aliases pin E=String for all AEAD Result-returning functions.
+        KernelFn::CryptoAesGcmEncrypt => "sky_aes_gcm_encrypt",
+        KernelFn::CryptoAesGcmDecrypt => "sky_aes_gcm_decrypt",
+        KernelFn::CryptoChacha20Encrypt => "sky_chacha20_encrypt",
+        KernelFn::CryptoChacha20Decrypt => "sky_chacha20_decrypt",
+        KernelFn::CryptoAesKeyFromPassword => "crypto_aes_key_from_password",
+        KernelFn::CryptoChachaKeyFromPassword => "crypto_chacha_key_from_password",
+        KernelFn::CryptoRandomBytes => "crypto_random_bytes",
+        KernelFn::CryptoRandomToken => "crypto_random_token",
     }
 }
 

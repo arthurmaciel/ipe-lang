@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+-- constantTimeEqual : constant-time byte comparison.
+-- "abc" == "abc" → True ; "abc" == "abd" → False
+-- Output: "true false"
+main =
+    let
+        a =
+            if Crypto.constantTimeEqual "abc" "abc" then
+                "true"
+
+            else
+                "false"
+
+        b =
+            if Crypto.constantTimeEqual "abc" "abd" then
+                "true"
+
+            else
+                "false"
+    in
+    println (String.join " " [ a, b ])

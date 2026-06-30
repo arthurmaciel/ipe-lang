@@ -1,0 +1,14 @@
+module Main exposing (main)
+
+-- sha256 / sha512 / sha1 / md5 of "abc" — standard known test vectors.
+main =
+    let
+        h256 = Crypto.sha256 "abc"
+
+        h512 = Crypto.sha512 "abc"
+
+        h1 = Crypto.sha1 "abc"
+
+        m = Crypto.md5 "abc"
+    in
+    println (String.join " " [ h256, h512, h1, m ])

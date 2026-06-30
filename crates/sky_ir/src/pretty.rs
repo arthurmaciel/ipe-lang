@@ -353,6 +353,24 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::JsonDecPOptional => "JsonDecP.optional",
         KernelFn::JsonDecPCustom => "JsonDecP.custom",
         KernelFn::JsonDecPRequiredAt => "JsonDecP.requiredAt",
+        // ── Crypto kernels (M5a) ─────────────────────────────────────────────
+        KernelFn::CryptoSha256 => "Crypto.sha256",
+        KernelFn::CryptoSha512 => "Crypto.sha512",
+        KernelFn::CryptoSha1 => "Crypto.sha1",
+        KernelFn::CryptoMd5 => "Crypto.md5",
+        KernelFn::CryptoHmacSha256 => "Crypto.hmacSha256",
+        KernelFn::CryptoHmacSha512 => "Crypto.hmacSha512",
+        KernelFn::CryptoRsaSha256Sign => "Crypto.rsaSha256Sign",
+        KernelFn::CryptoRsaSha256Verify => "Crypto.rsaSha256Verify",
+        KernelFn::CryptoConstantTimeEqual => "Crypto.constantTimeEqual",
+        KernelFn::CryptoAesGcmEncrypt => "Crypto.aesGcmEncrypt",
+        KernelFn::CryptoAesGcmDecrypt => "Crypto.aesGcmDecrypt",
+        KernelFn::CryptoChacha20Encrypt => "Crypto.chacha20Encrypt",
+        KernelFn::CryptoChacha20Decrypt => "Crypto.chacha20Decrypt",
+        KernelFn::CryptoAesKeyFromPassword => "Crypto.aesKeyFromPassword",
+        KernelFn::CryptoChachaKeyFromPassword => "Crypto.chachaKeyFromPassword",
+        KernelFn::CryptoRandomBytes => "Crypto.randomBytes",
+        KernelFn::CryptoRandomToken => "Crypto.randomToken",
     }
 }
 

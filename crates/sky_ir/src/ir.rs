@@ -1023,6 +1023,42 @@ pub enum KernelFn {
     JsonDecPCustom,
     /// `Pipeline.requiredAt : List String -> Decoder a -> Decoder (a -> b) -> Decoder b`.
     JsonDecPRequiredAt,
+
+    // ── Crypto kernels (M5a) ─────────────────────────────────────────────────
+    /// `Crypto.sha256 : String -> String`
+    CryptoSha256,
+    /// `Crypto.sha512 : String -> String`
+    CryptoSha512,
+    /// `Crypto.sha1 : String -> String`
+    CryptoSha1,
+    /// `Crypto.md5 : String -> String`
+    CryptoMd5,
+    /// `Crypto.hmacSha256 : String -> String -> String`
+    CryptoHmacSha256,
+    /// `Crypto.hmacSha512 : String -> String -> String`
+    CryptoHmacSha512,
+    /// `Crypto.rsaSha256Sign : String -> String -> Result Error String`
+    CryptoRsaSha256Sign,
+    /// `Crypto.rsaSha256Verify : String -> String -> String -> Bool`
+    CryptoRsaSha256Verify,
+    /// `Crypto.constantTimeEqual : String -> String -> Bool`
+    CryptoConstantTimeEqual,
+    /// `Crypto.aesGcmEncrypt : String -> String -> Result Error String`
+    CryptoAesGcmEncrypt,
+    /// `Crypto.aesGcmDecrypt : String -> String -> Result Error String`
+    CryptoAesGcmDecrypt,
+    /// `Crypto.chacha20Encrypt : String -> String -> Result Error String`
+    CryptoChacha20Encrypt,
+    /// `Crypto.chacha20Decrypt : String -> String -> Result Error String`
+    CryptoChacha20Decrypt,
+    /// `Crypto.aesKeyFromPassword : String -> String -> String`
+    CryptoAesKeyFromPassword,
+    /// `Crypto.chachaKeyFromPassword : String -> String -> String`
+    CryptoChachaKeyFromPassword,
+    /// `Crypto.randomBytes : Int -> Task Error String`
+    CryptoRandomBytes,
+    /// `Crypto.randomToken : Int -> Task Error String`
+    CryptoRandomToken,
 }
 
 /// Binary operators.

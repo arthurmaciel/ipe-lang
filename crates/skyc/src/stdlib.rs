@@ -45,6 +45,8 @@ const SET: &str = include_str!("../stdlib/Sky/Core/Set.sky");
 /// makes `Bytes` a distinct primitive lowering to `Vec<u8>` (lossless for
 /// non-UTF-8 binary). See `docs/architecture/divergence-policy.md`.
 const BYTES: &str = include_str!("../stdlib/Sky/Core/Bytes.sky");
+/// `Sky.Core.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random (M5a).
+const CRYPTO: &str = include_str!("../stdlib/Sky/Core/Crypto.sky");
 
 /// Every embedded `Sky.Core` module, keyed by its dotted import name.
 ///
@@ -87,6 +89,10 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Sky.Core.Bytes",
         source: BYTES,
+    },
+    StdModule {
+        name: "Sky.Core.Crypto",
+        source: CRYPTO,
     },
 ];
 

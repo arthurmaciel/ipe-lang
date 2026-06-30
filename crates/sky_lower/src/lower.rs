@@ -1888,7 +1888,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MathFloor
                 | KernelFn::MathCeil
                 | KernelFn::MathRound
-                | KernelFn::MathTrunc,
+                | KernelFn::MathTrunc
+                // ── Crypto arity-1 (M5a) ─────────────────────────────────────
+                | KernelFn::CryptoSha256
+                | KernelFn::CryptoSha512
+                | KernelFn::CryptoSha1
+                | KernelFn::CryptoMd5
+                | KernelFn::CryptoRandomBytes
+                | KernelFn::CryptoRandomToken,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -1943,7 +1950,18 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MathHypot
                 | KernelFn::MathAtan2
                 | KernelFn::MathMod
-                | KernelFn::MathRemainder,
+                | KernelFn::MathRemainder
+                // ── Crypto arity-2 (M5a) ─────────────────────────────────────
+                | KernelFn::CryptoHmacSha256
+                | KernelFn::CryptoHmacSha512
+                | KernelFn::CryptoRsaSha256Sign
+                | KernelFn::CryptoConstantTimeEqual
+                | KernelFn::CryptoAesGcmEncrypt
+                | KernelFn::CryptoAesGcmDecrypt
+                | KernelFn::CryptoChacha20Encrypt
+                | KernelFn::CryptoChacha20Decrypt
+                | KernelFn::CryptoAesKeyFromPassword
+                | KernelFn::CryptoChachaKeyFromPassword,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::StringReplace
@@ -1960,7 +1978,9 @@ impl<'a> Lowerer<'a> {
                 // ── JsonDec arity-3 (M4h) ─────────────────────────────────────
                 | KernelFn::JsonDecMap2
                 | KernelFn::JsonDecPRequired
-                | KernelFn::JsonDecPRequiredAt,
+                | KernelFn::JsonDecPRequiredAt
+                // ── Crypto arity-3 (M5a) ─────────────────────────────────────
+                | KernelFn::CryptoRsaSha256Verify,
             ) => Ok(3),
             // ── JsonDec arity-4 (M4h) ─────────────────────────────────────────
             Callee::Kernel(KernelFn::JsonDecMap3 | KernelFn::JsonDecPOptional) => Ok(4),
@@ -2212,6 +2232,40 @@ impl<'a> Lowerer<'a> {
                     ("JsonDecP", "optional") => Ok(Callee::Kernel(KernelFn::JsonDecPOptional)),
                     ("JsonDecP", "custom") => Ok(Callee::Kernel(KernelFn::JsonDecPCustom)),
                     ("JsonDecP", "requiredAt") => Ok(Callee::Kernel(KernelFn::JsonDecPRequiredAt)),
+                    // ── Crypto kernels (M5a) ──────────────────────────────────
+                    ("Crypto", "sha256") => Ok(Callee::Kernel(KernelFn::CryptoSha256)),
+                    ("Crypto", "sha512") => Ok(Callee::Kernel(KernelFn::CryptoSha512)),
+                    ("Crypto", "sha1") => Ok(Callee::Kernel(KernelFn::CryptoSha1)),
+                    ("Crypto", "md5") => Ok(Callee::Kernel(KernelFn::CryptoMd5)),
+                    ("Crypto", "hmacSha256") => Ok(Callee::Kernel(KernelFn::CryptoHmacSha256)),
+                    ("Crypto", "hmacSha512") => Ok(Callee::Kernel(KernelFn::CryptoHmacSha512)),
+                    ("Crypto", "rsaSha256Sign") => Ok(Callee::Kernel(KernelFn::CryptoRsaSha256Sign)),
+                    ("Crypto", "rsaSha256Verify") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoRsaSha256Verify))
+                    }
+                    ("Crypto", "constantTimeEqual") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoConstantTimeEqual))
+                    }
+                    ("Crypto", "aesGcmEncrypt") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoAesGcmEncrypt))
+                    }
+                    ("Crypto", "aesGcmDecrypt") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoAesGcmDecrypt))
+                    }
+                    ("Crypto", "chacha20Encrypt") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoChacha20Encrypt))
+                    }
+                    ("Crypto", "chacha20Decrypt") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoChacha20Decrypt))
+                    }
+                    ("Crypto", "aesKeyFromPassword") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoAesKeyFromPassword))
+                    }
+                    ("Crypto", "chachaKeyFromPassword") => {
+                        Ok(Callee::Kernel(KernelFn::CryptoChachaKeyFromPassword))
+                    }
+                    ("Crypto", "randomBytes") => Ok(Callee::Kernel(KernelFn::CryptoRandomBytes)),
+                    ("Crypto", "randomToken") => Ok(Callee::Kernel(KernelFn::CryptoRandomToken)),
                     // A kernel beyond the wired set (`Time.now`, …).
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),
