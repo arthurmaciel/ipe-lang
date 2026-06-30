@@ -131,6 +131,12 @@ pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> SkyRe
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
     validation.validate_nbf = true;
+    // jsonwebtoken defaults `leeway` to 60s, which would accept a token up to 60s
+    // PAST `exp` (and 60s BEFORE `nbf`). The Go oracle applies no clock skew —
+    // `now >= exp` rejects immediately. Pin leeway to 0 so the Rust verifier does
+    // not accept expired tokens the Go backend rejects (a security primitive must
+    // not diverge in the less-safe direction).
+    validation.leeway = 0;
     // These are GENERIC decoders with no expected-audience argument, so a specific
     // `aud` cannot be enforced here. jsonwebtoken's default `validate_aud = true`
     // would then REJECT any token that merely CARRIES an `aud` claim (error
@@ -138,9 +144,12 @@ pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> SkyRe
     // Disable aud validation; audience-scoped checks belong to a future
     // expected-audience decoder variant.
     validation.validate_aud = false;
-    // Keep `exp` required (jsonwebtoken's default) so an omitted-exp token is
-    // rejected rather than treated as non-expiring — matches Go's exp/nbf check
-    // and aligns with auth.rs's verify path (which never clears required claims).
+    // Divergence from Sky (fail-closed): jsonwebtoken's default keeps `exp`
+    // REQUIRED, so an omitted-exp token is rejected here. The Go backend treats
+    // an absent `exp`/`nbf` as non-expiring and ACCEPTS such a token. Rust keeps
+    // the stricter behaviour deliberately — a token with no expiry is the
+    // less-safe case, and auth.rs's verify path likewise never clears required
+    // claims. Documented rather than aligned-down.
     match decode::<JsonValue>(&token, &key, &validation) {
         Ok(data) => match serde_json::to_string(&data.claims) {
             Ok(s) => SkyResult::Ok(s),
@@ -194,6 +203,12 @@ pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> SkyR
     let mut validation = Validation::new(Algorithm::RS256);
     validation.validate_exp = true;
     validation.validate_nbf = true;
+    // jsonwebtoken defaults `leeway` to 60s, which would accept a token up to 60s
+    // PAST `exp` (and 60s BEFORE `nbf`). The Go oracle applies no clock skew —
+    // `now >= exp` rejects immediately. Pin leeway to 0 so the Rust verifier does
+    // not accept expired tokens the Go backend rejects (a security primitive must
+    // not diverge in the less-safe direction).
+    validation.leeway = 0;
     // These are GENERIC decoders with no expected-audience argument, so a specific
     // `aud` cannot be enforced here. jsonwebtoken's default `validate_aud = true`
     // would then REJECT any token that merely CARRIES an `aud` claim (error
@@ -201,9 +216,12 @@ pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> SkyR
     // Disable aud validation; audience-scoped checks belong to a future
     // expected-audience decoder variant.
     validation.validate_aud = false;
-    // Keep `exp` required (jsonwebtoken's default) so an omitted-exp token is
-    // rejected rather than treated as non-expiring — matches Go's exp/nbf check
-    // and aligns with auth.rs's verify path (which never clears required claims).
+    // Divergence from Sky (fail-closed): jsonwebtoken's default keeps `exp`
+    // REQUIRED, so an omitted-exp token is rejected here. The Go backend treats
+    // an absent `exp`/`nbf` as non-expiring and ACCEPTS such a token. Rust keeps
+    // the stricter behaviour deliberately — a token with no expiry is the
+    // less-safe case, and auth.rs's verify path likewise never clears required
+    // claims. Documented rather than aligned-down.
     match decode::<JsonValue>(&token, &key, &validation) {
         Ok(data) => match serde_json::to_string(&data.claims) {
             Ok(s) => SkyResult::Ok(s),
@@ -274,6 +292,11 @@ mod tests {
     // same key embedded in tests/golden/m5b_jwt_rs256_roundtrip/Main.sky.
     const RS256_PRIV_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDKt5KX9AzdrNIl\nKj9WqLI1vI1E+s6ydOuFtJaX+3eyvByRf++qKeSca9WQhFWih6INNSPyHiI1w570\njeglmwcQe8WXyW15w/c3a/TkYJ6thqyFOBTColjuOv+nUkIyHkOFx4GTtTwjcIQ1\no+sgDy90NrIyjvZhKGxv/BoRsvmcPNcO95MC2lTZrhjIwPpTCDn/jD1DhNmRtcsv\ng0WmoXKGfFm+YYALT49Cs2hU2z8kQrlqo5q8Zzsxa3+wh4yF7W/O5aAoUBKtcYNS\nOvumvh7aBnuHZT45ZvYGCNdTPFX+4E27JWyAycp+4GqfvcbcfcDwjhpkphAhYozi\nZ9zgc+4FAgMBAAECggEAVoIbcXQpD2qCbXDHgdRQ5MS3prG/hoGFxtPHlkkujhxf\ntqnZnYzuLeCIzXjj0I3AFpHQarD4WWhHS8bJRE8RpzOioYFIkjeSJtkPs2wWGyhH\nNDy4A01j1RphYkak0B2BJDR89AtaBCeui/ONUeuZDSeQSSogM1scV3fGqjnt8oFz\nlhaOell+Z/csmbLW+YhJEpUuKmA/V4ehXKn6TvTWCvfYOupVauZeUcwAzMXCtWIx\n6CvEoe5We/0MafIeqwnUSeoAVXvmhx5QtTC2x3rYlSvr3RtGPFTH4wD+cBavFOW8\nzD1u6SC5mDQi0L5Z1tSdV8g8cF2sSyTf3peNXI2DKwKBgQDbfFt9Vg3gwBFJNSRk\nOhi59+KYisxFSEcOj9X+MdrCys8Zm/4XWtpU06rvuM3e8C1+ubK978BdLamZrnQO\n/w2XOzD3WNbX/eGSQci7BGFQBUBP98ABDWctjTHu7Ph3BZZqaj+b4ZWEBNsvrkkw\nfqNE3m5dx+JtbSAgThD1eq5elwKBgQDscQ5qZoXmlUChTpJzqvHm5eEiV+tOS/o8\noxaH2ygPqwAJkWtiFmXLIWUW+dx0hwYEocbKUkBx9HBS0yMDe2aJV5sZwo0fzUV2\nHCwxJ2cVB28bQ1mVETTuSE8Ok/Cb/zxHjlVx4NMDUEmf+KTaWQ2JXysI4yv4Vi2u\npkt0DIpHwwKBgQCABuYHEi8+Lkrm/QyhOhI6SBHxEOVedG6eW+BjSgllHo/3TDrG\nvMQmPuGyu4W6yTaAeSl+CV+X+o63ij9AkB4JXQmO/k8z5m+xtJW2ITPyTV3aR5XE\nB2Fr/LRnveqg4q1+nUNFViy0uXBxO6SNmRD7lxOhuHqngcP/lAnoZwtXOQKBgAuF\n7wfsezYjrASwiZ6thCCWr4Q2+LbWKRnvcNeqLKem09ejiLI9GTTvKbgW8VGUiwyK\nvd96Zr2nBhpjQ9+Vkge7h0mYG7yjCnGZKeYzX2i89gNEIweK0SOTzpaNSzqvE8cA\n/tUP+fi9Xvk26wHhOTGqu7QxLiFqQcuzOxYqzkp1AoGADuFoA0w4zwXsr/6sF1Vx\ne20UCYmRkiiE6CbgicFsMYhaD5w2F5Ss26Zb8f09oaAZw2xwDCNY7LX2OQSTgSuX\nzzBBQrEfmqxPLztxMa0e3qjSBMeo3m0m2Yoen67ie5b53snOT3t704JrE6kP6DxC\nkxJKRSX7IM4caBhDN+Khm2k=\n-----END PRIVATE KEY-----\n";
 
+    /// SPKI public key matching `RS256_PRIV_PEM` — the RS256 decode path verifies
+    /// with a public PEM (same key embedded in
+    /// tests/golden/m5b_jwt_rs256_roundtrip/Main.sky).
+    const RS256_PUB_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyreSl/QM3azSJSo/Vqiy\nNbyNRPrOsnTrhbSWl/t3srwckX/vqinknGvVkIRVooeiDTUj8h4iNcOe9I3oJZsH\nEHvFl8ltecP3N2v05GCerYashTgUwqJY7jr/p1JCMh5DhceBk7U8I3CENaPrIA8v\ndDayMo72YShsb/waEbL5nDzXDveTAtpU2a4YyMD6Uwg5/4w9Q4TZkbXLL4NFpqFy\nhnxZvmGAC0+PQrNoVNs/JEK5aqOavGc7MWt/sIeMhe1vzuWgKFASrXGDUjr7pr4e\n2gZ7h2U+OWb2BgjXUzxV/uBNuyVsgMnKfuBqn73G3H3A8I4aZKYQIWKM4mfc4HPu\nBQIDAQAB\n-----END PUBLIC KEY-----\n";
+
     /// The genuine Go-backend token for the equivalent builder-API program
     /// `Jwt.encode (Jwt.rs256 privKey) (claims |> subject "bob" |> expiresAt …)`
     /// with the key above. Captured from the Go reference compiler. RS256
@@ -326,6 +349,52 @@ mod tests {
         let bad: SkyResult<String, String> =
             jwt_decode_hs256("wrong-secret-0123456789abcdef0123".to_string(), token);
         assert!(matches!(bad, SkyResult::Err(_)));
+    }
+
+    /// Seconds since the Unix epoch, for building boundary-exercising claims.
+    fn now_unix() -> i64 {
+        match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(d) => d.as_secs() as i64,
+            Err(_) => 0,
+        }
+    }
+
+    #[test]
+    fn test_hs256_expired_token_rejected() {
+        // exp 30s in the PAST. With jsonwebtoken's default 60s leeway this would
+        // be ACCEPTED — the strict Go oracle (zero clock skew) rejects it. Guards
+        // `validation.leeway = 0` against silent regression; every other golden
+        // uses a far-future exp and never crosses the boundary.
+        let secret = "expiry-secret-0123456789abcdef0123".to_string();
+        let claims = format!(r#"{{"sub":"x","exp":{}}}"#, now_unix() - 30);
+        let token: SkyResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
+        let token = match token {
+            SkyResult::Ok(t) => t,
+            SkyResult::Err(e) => panic!("encode: {}", e),
+        };
+        let decoded: SkyResult<String, String> = jwt_decode_hs256(secret, token);
+        assert!(
+            matches!(decoded, SkyResult::Err(_)),
+            "an HS256 token expired 30s ago must be rejected (no clock-skew leeway)"
+        );
+    }
+
+    #[test]
+    fn test_rs256_expired_token_rejected() {
+        // exp 30s in the PAST — RS256 counterpart of the HS256 leeway guard.
+        let claims = format!(r#"{{"sub":"bob","exp":{}}}"#, now_unix() - 30);
+        let token: SkyResult<String, String> = jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
+        let token = match token {
+            SkyResult::Ok(t) => t,
+            SkyResult::Err(e) => panic!("encode-rs: {}", e),
+        };
+        // Verify with the matching SPKI public key (the decode path takes a
+        // public PEM). A successful signature check then trips the expiry guard.
+        let decoded: SkyResult<String, String> = jwt_decode_rs256(RS256_PUB_PEM.to_string(), token);
+        assert!(
+            matches!(decoded, SkyResult::Err(_)),
+            "an RS256 token expired 30s ago must be rejected (no clock-skew leeway)"
+        );
     }
 
     #[test]
