@@ -1,0 +1,3 @@
+module Sky exposing (val)
+val : Int
+val = 1

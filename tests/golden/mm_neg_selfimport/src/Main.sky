@@ -1,0 +1,4 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+import Main exposing (main)
+main = Task.succeed ()

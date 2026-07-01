@@ -14,11 +14,12 @@ use crate::code::{
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
     SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0200, SKY_N0001, SKY_N0002, SKY_N0003,
-    SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_P0001, SKY_P0002,
-    SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015, SKY_P0016,
-    SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060,
-    SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011,
-    SKY_T0012, SKY_T0013, SKY_T0014, Severity,
+    SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_N0020, SKY_N0021,
+    SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_P0001, SKY_P0002, SKY_P0003, SKY_P0010,
+    SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015, SKY_P0016, SKY_P0020, SKY_P0021,
+    SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062,
+    SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013,
+    SKY_T0014, Severity,
 };
 use crate::span::Span;
 
@@ -356,6 +357,37 @@ pub enum NameError {
         expected: usize,
         found: usize,
     },
+    /// A local module named in an `import` cannot be found under `source_root`.
+    /// `suggestions` lists close matches by Levenshtein distance. [SKY-N0020]
+    ModuleNotFound {
+        name: Box<str>,
+        suggestions: Box<[Box<str>]>,
+    },
+    /// The import graph for the project contains a cycle; `path` lists the
+    /// module names in cycle order (last element imports the first). [SKY-N0021]
+    ImportCycle { path: Box<[Box<str>]> },
+    /// An `import M exposing (x)` names a member `x` that `M` does not expose.
+    /// `suggestions` lists close matches among `M`'s public exports. [SKY-N0022]
+    NameNotExposed {
+        module: Box<str>,
+        name: Box<str>,
+        suggestions: Box<[Box<str>]>,
+    },
+    /// The `module` declaration at the top of a `.sky` file does not match the
+    /// path I derived from the file's location under `source_root`. [SKY-N0023]
+    ModulePathMismatch {
+        declared: Box<str>,
+        expected: Box<str>,
+    },
+    /// Two `import` statements bring the same unqualified name into scope;
+    /// `modules` lists the origins. [SKY-N0024]
+    AmbiguousImport {
+        name: Box<str>,
+        modules: Box<[Box<str>]>,
+    },
+    /// A local module's name starts with `Sky` or `Std`, which are reserved for
+    /// the standard library. [SKY-N0025]
+    ReservedNamespace { name: Box<str> },
 }
 
 /// Errors raised during type inference / checking.
@@ -739,6 +771,12 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::DuplicateConstructor { .. } => SKY_N0011,
         NameError::DuplicateType { .. } => SKY_N0012,
         NameError::AliasArity { .. } => SKY_N0013,
+        NameError::ModuleNotFound { .. } => SKY_N0020,
+        NameError::ImportCycle { .. } => SKY_N0021,
+        NameError::NameNotExposed { .. } => SKY_N0022,
+        NameError::ModulePathMismatch { .. } => SKY_N0023,
+        NameError::AmbiguousImport { .. } => SKY_N0024,
+        NameError::ReservedNamespace { .. } => SKY_N0025,
     }
 }
 
@@ -845,14 +883,21 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::TypeNotFound { suggestions, .. }
         | NameError::ConstructorNotFound { suggestions, .. }
         | NameError::UnknownModule { suggestions, .. }
-        | NameError::NoSuchMember { suggestions, .. } => did_you_mean(suggestions, span),
+        | NameError::NoSuchMember { suggestions, .. }
+        | NameError::ModuleNotFound { suggestions, .. }
+        | NameError::NameNotExposed { suggestions, .. } => did_you_mean(suggestions, span),
         NameError::DuplicateValue { first, .. }
         | NameError::DuplicateConstructor { first, .. }
         | NameError::DuplicateType { first, .. } => vec![HelpLine::SecondarySpan {
             span: *first,
             role: SpanRole::FirstDefinition,
         }],
-        NameError::Unknown | NameError::AliasArity { .. } => Vec::new(),
+        NameError::Unknown
+        | NameError::AliasArity { .. }
+        | NameError::ImportCycle { .. }
+        | NameError::ModulePathMismatch { .. }
+        | NameError::AmbiguousImport { .. }
+        | NameError::ReservedNamespace { .. } => Vec::new(),
     }
 }
 

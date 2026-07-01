@@ -1021,6 +1021,7 @@ mod tests {
         let main_func = Func {
             id: FuncId::from_raw(0),
             name: main_sym,
+            home: ModPath(vec![]),
             type_params: vec![],
             params: vec![],
             ret: IrType::Task(Box::new(IrType::Unit)),
@@ -1062,6 +1063,7 @@ mod tests {
         let tick_func = Func {
             id: FuncId::from_raw(1),
             name: tick,
+            home: ModPath(vec![]),
             type_params: vec![],
             params: vec![
                 (
@@ -1184,6 +1186,7 @@ program
                 funcs: vec![Func {
                     id: FuncId::from_raw(0),
                     name: f,
+                    home: ModPath(vec![]),
                     type_params: vec![],
                     params: vec![(n, IrType::Int)],
                     ret: IrType::Int,
@@ -1240,6 +1243,7 @@ program
                 funcs: vec![Func {
                     id: FuncId::from_raw(0),
                     name: f,
+                    home: ModPath(vec![]),
                     type_params: vec![],
                     params: vec![(n, IrType::Int)],
                     ret: IrType::Tuple(vec![IrType::Int, IrType::Bool]),
@@ -1298,6 +1302,7 @@ program
                 funcs: vec![Func {
                     id: FuncId::from_raw(0),
                     name: func,
+                    home: ModPath(vec![]),
                     type_params: vec![],
                     params: vec![(param, rec_ty.clone())],
                     ret: rec_ty,
@@ -1342,6 +1347,7 @@ program
                 funcs: vec![Func {
                     id: FuncId::from_raw(0),
                     name: f,
+                    home: ModPath(vec![]),
                     type_params: vec![],
                     params: vec![],
                     ret: IrType::Int,
@@ -1395,6 +1401,7 @@ program
                 funcs: vec![Func {
                     id: FuncId::from_raw(0),
                     name: f,
+                    home: ModPath(vec![]),
                     type_params: vec![],
                     params: vec![(g, IrType::Fun(vec![IrType::Int], Box::new(IrType::Int)))],
                     ret: IrType::Int,
@@ -1440,6 +1447,7 @@ program
                 funcs: vec![Func {
                     id: FuncId::from_raw(0),
                     name: f,
+                    home: ModPath(vec![]),
                     type_params: vec![],
                     params: vec![(i.intern("k")?, IrType::Fun(vec![], Box::new(IrType::Bool)))],
                     ret: IrType::Bool,
@@ -1515,6 +1523,7 @@ program
                 funcs: vec![Func {
                     id: FuncId::from_raw(0),
                     name: unwrap,
+                    home: ModPath(vec![]),
                     type_params: vec![],
                     params: vec![(
                         m,
@@ -1588,6 +1597,7 @@ program
                     Func {
                         id: FuncId::from_raw(0),
                         name: fst_of,
+                        home: ModPath(vec![]),
                         type_params: vec![],
                         params: vec![(
                             w,
@@ -1602,6 +1612,7 @@ program
                     Func {
                         id: FuncId::from_raw(1),
                         name: nop,
+                        home: ModPath(vec![]),
                         type_params: vec![],
                         params: vec![],
                         ret: IrType::Unit,

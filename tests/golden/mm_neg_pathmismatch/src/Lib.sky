@@ -1,0 +1,4 @@
+module WrongName exposing (val)
+import Sky.Core.Prelude exposing (..)
+val : Int
+val = 1

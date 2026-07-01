@@ -55,8 +55,15 @@ use unionfind::{UnionFind, VarId};
 /// maps are `BTreeMap`s so iteration is deterministic.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SolvedTypes {
-    /// Type of each top-level binding, keyed by its name symbol.
-    pub env: BTreeMap<Symbol, Ty>,
+    /// Type of each top-level binding, keyed by `(home_module_path, bare_name)`.
+    ///
+    /// The qualified key ensures that same-named defs from different modules
+    /// (e.g. `Lib.helper` and `Main.helper`) remain distinct after
+    /// `link::link` merges them into a single flat def list.  Consumers that
+    /// need the inferred type for a specific def must supply **both** the home
+    /// path and the bare name; looking up by bare name alone is unsound when
+    /// cross-module defs share a name.
+    pub env: BTreeMap<(Vec<Symbol>, Symbol), Ty>,
     /// Type of each sub-expression source region, keyed by its [`Span`]. Drives
     /// type-directed lowering.
     pub regions: BTreeMap<Span, Ty>,
@@ -504,7 +511,7 @@ mod tests {
         let (Ok(solved), Some(m)) = (solved, m) else {
             return;
         };
-        let Some(wrap) = sym(&i, &m, "wrap") else {
+        let Some(wrap) = def_key(&i, &m, "wrap") else {
             return;
         };
         let Some(ty) = solved.env.get(&wrap) else {
@@ -578,16 +585,14 @@ mod tests {
         );
     }
 
-    fn sym(i: &Interner, m: &canon::Module, name: &str) -> Option<Symbol> {
-        // Resolve a name to its symbol by scanning the def names / unions.
+    /// Return the `SolvedTypes::env` key `(home_path, bare_symbol)` for the
+    /// named def in a module.  `solved.env` is keyed by the qualified
+    /// `(home, name)` pair so same-named defs from different modules never
+    /// collide.
+    fn def_key(i: &Interner, m: &canon::Module, name: &str) -> Option<(Vec<Symbol>, Symbol)> {
         for d in &m.defs {
             if i.resolve(d.name().value) == Some(name) {
-                return Some(d.name().value);
-            }
-        }
-        for u in &m.unions {
-            if i.resolve(u.name) == Some(name) {
-                return Some(u.name);
+                return Some((d.home().to_vec(), d.name().value));
             }
         }
         None
@@ -617,7 +622,7 @@ mod tests {
         assert!(solved.is_ok(), "inference must succeed");
         let Ok(solved) = solved else { return };
 
-        let Some(update) = sym(&i, &m, "update") else {
+        let Some(update) = def_key(&i, &m, "update") else {
             return;
         };
         let Some(ty) = solved.env.get(&update) else {
@@ -771,7 +776,7 @@ mod tests {
         let solved = infer(&m, &mut i);
         assert!(solved.is_ok(), "inference must succeed");
         let Ok(solved) = solved else { return };
-        let Some(main) = sym(&i, &m, "main") else {
+        let Some(main) = def_key(&i, &m, "main") else {
             return;
         };
         let main_ty = solved.env.get(&main);
@@ -889,7 +894,9 @@ mod tests {
         let r = infer(&m, &mut i);
         assert!(r.is_ok(), "well-typed if must infer: {r:?}");
         let Ok(solved) = r else { return };
-        let Some(f) = sym(&i, &m, "f") else { return };
+        let Some(f) = def_key(&i, &m, "f") else {
+            return;
+        };
         let Some(Ty::Fun(arg, ret)) = solved.env.get(&f) else {
             return;
         };
@@ -1204,8 +1211,8 @@ mod tests {
         let src = sky_parse::parse_module(source, &mut i).ok()?;
         let m = sky_canon::canonicalise(&src, &mut i).ok()?;
         let solved = infer(&m, &mut i).ok()?;
-        let sym = sym(&i, &m, which)?;
-        let ty = solved.env.get(&sym)?.clone();
+        let key = def_key(&i, &m, which)?;
+        let ty = solved.env.get(&key)?.clone();
         Some((ty, i))
     }
 
@@ -1646,10 +1653,10 @@ mod tests {
         );
         let Ok(solved) = r else { return };
         // The two consumers settle at their concrete result types.
-        let Some(use_int) = sym(&i, &m, "useInt") else {
+        let Some(use_int) = def_key(&i, &m, "useInt") else {
             return;
         };
-        let Some(use_bool) = sym(&i, &m, "useBool") else {
+        let Some(use_bool) = def_key(&i, &m, "useBool") else {
             return;
         };
         assert_eq!(

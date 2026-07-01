@@ -1,0 +1,4 @@
+module B exposing (vb)
+import A exposing (va)
+vb : Int
+vb = 2

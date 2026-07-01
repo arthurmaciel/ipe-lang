@@ -11,12 +11,51 @@
 
 pub mod ast;
 mod env;
+pub mod link;
 mod resolve;
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use sky_diagnostics::DResult;
-use sky_intern::Interner;
+use sky_intern::{Interner, Symbol};
 
 pub use env::{CtorHome, Env, VarHome};
+
+/// A type alias exported by a module in its raw (unresolved) source form.
+///
+/// Carried in [`ModuleExports`] so importing modules can inject it into their
+/// own alias table and expand it there. Fields mirror the private `AliasDef`
+/// in `resolve.rs`; the public counterpart lets the multi-module driver pass
+/// exports across the boundary without exposing resolver internals.
+#[derive(Clone, Debug)]
+pub struct ExportedAlias {
+    /// Declared type-parameter names, in source order.
+    pub params: Vec<Symbol>,
+    /// The right-hand-side of the `type alias` declaration, kept unresolved.
+    pub body: sky_syntax::TypeAnnotation,
+}
+
+/// The public exports of a canonicalised module: the names and resolved
+/// locations of every value, type, constructor, and alias the module exposes
+/// via its `exposing` list.
+///
+/// Used by [`canonicalise_module`] as the `deps` map entries so importing
+/// modules can inject the right resolved names into their environments.
+#[derive(Clone, Debug, Default)]
+pub struct ModuleExports {
+    /// The module's own path, e.g. `[Lib, Utils]`.
+    pub path: Vec<Symbol>,
+    /// Exported value names (without their resolved `VarHome`; the home is
+    /// always `TopLevel(path)`, reconstructed at injection time).
+    pub values: BTreeSet<Symbol>,
+    /// Exported type names mapped to their home module path. For a type
+    /// `Widget` declared in `Lib.Utils`, this entry is `Widget → [Lib, Utils]`.
+    pub types: BTreeMap<Symbol, Vec<Symbol>>,
+    /// Exported constructors by name.
+    pub ctors: BTreeMap<Symbol, CtorHome>,
+    /// Exported type aliases by name.
+    pub aliases: BTreeMap<Symbol, ExportedAlias>,
+}
 
 /// Canonicalise a parsed module into its name-resolved canonical AST.
 ///
@@ -28,6 +67,33 @@ pub use env::{CtorHome, Env, VarHome};
 /// name.
 pub fn canonicalise(m: &sky_syntax::Module, interner: &mut Interner) -> DResult<ast::Module> {
     resolve::canonicalise(m, interner)
+}
+
+/// Canonicalise a module in a multi-module project context.
+///
+/// Unlike [`canonicalise`], this function:
+/// * validates `m`'s declared module name against `expected_path` — emits
+///   [`sky_diagnostics::NameError::ModulePathMismatch`] when they disagree
+/// * rejects `Sky` / `Std` as the first path segment — emits
+///   [`sky_diagnostics::NameError::ReservedNamespace`]
+/// * resolves each local `import` against `deps`, injecting exports into the
+///   name-resolution environment — emits
+///   [`sky_diagnostics::NameError::ModuleNotFound`] /
+///   [`sky_diagnostics::NameError::NameNotExposed`] /
+///   [`sky_diagnostics::NameError::AmbiguousImport`] on violations
+/// * returns the resolved [`ast::Module`] plus a [`ModuleExports`] summary
+///   derived from the module's own `exposing` list
+///
+/// # Errors
+/// Any of the above [`sky_diagnostics::NameError`] variants, or any error that
+/// [`canonicalise`] can return.
+pub fn canonicalise_module(
+    m: &sky_syntax::Module,
+    expected_path: &[Symbol],
+    deps: &BTreeMap<Vec<Symbol>, ModuleExports>,
+    interner: &mut Interner,
+) -> DResult<(ast::Module, ModuleExports)> {
+    resolve::canonicalise_module(m, expected_path, deps, interner)
 }
 
 #[cfg(test)]

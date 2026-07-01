@@ -367,6 +367,24 @@ fn name_label(msg: &NameError) -> Option<String> {
         } => Some(format!(
             "`{name}` takes {expected} type argument(s), but {found} were given"
         )),
+        NameError::ModuleNotFound { name, .. } => Some(format!("module `{name}` was not found")),
+        NameError::ImportCycle { path } => {
+            let cycle = path.join(" → ");
+            Some(format!("import cycle: {cycle}"))
+        }
+        NameError::NameNotExposed { module, name, .. } => {
+            Some(format!("`{module}` does not expose `{name}`"))
+        }
+        NameError::ModulePathMismatch { declared, expected } => {
+            Some(format!("declared as `{declared}`, expected `{expected}`"))
+        }
+        NameError::AmbiguousImport { name, modules } => {
+            let origins = modules.join(", ");
+            Some(format!("`{name}` is exported by: {origins}"))
+        }
+        NameError::ReservedNamespace { name } => {
+            Some(format!("`{name}` begins with a reserved namespace"))
+        }
         NameError::Unknown => None,
     }
 }

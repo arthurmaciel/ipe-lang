@@ -1,0 +1,4 @@
+module Lib exposing (helper)
+
+helper : Int -> Int
+helper n = n + 1

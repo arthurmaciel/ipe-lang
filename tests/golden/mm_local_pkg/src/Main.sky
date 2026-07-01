@@ -1,0 +1,7 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Lib exposing (greeting, Color(..))
+
+main =
+    println greeting

@@ -37,7 +37,11 @@ struct AliasDef {
 /// `subst`) explicit at each call site.
 struct TypeCtx<'a> {
     env: &'a Env,
-    local_union_names: &'a BTreeSet<Symbol>,
+    /// Maps every type name in scope (local unions + imported types) to its
+    /// home module path. Local types map to `env.home`; imported types map to
+    /// the dep's path. An absent entry means the name is a builtin (empty home)
+    /// or a free type variable — `canonicalise_type` falls through to `Type::Var`.
+    type_home_map: &'a BTreeMap<Symbol, Vec<Symbol>>,
     aliases: &'a BTreeMap<Symbol, AliasDef>,
     interner: &'a Interner,
     /// Span of the enclosing value annotation, used as the location for an
@@ -58,12 +62,170 @@ struct TypeCtx<'a> {
 /// symbol table is exhausted or a name symbol is not interned.
 pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::Module> {
     let home = m.name.value.clone();
+    let mut env = Env::initial(home, interner)?;
+    // type_home_map and extra_aliases both start empty; canonicalise_with_env
+    // populates type_home_map from this module's unions and merges extra_aliases
+    // (empty here) with the module's own aliases.
+    let mut type_home_map: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
+    let extra_aliases: BTreeMap<Symbol, AliasDef> = BTreeMap::new();
+    canonicalise_with_env(m, &mut env, &mut type_home_map, extra_aliases, interner)
+}
+
+/// Canonicalise a module in a multi-module project context.
+///
+/// Called by [`crate::canonicalise_module`].
+///
+/// # Errors
+/// [`NameError::ModulePathMismatch`] — declared module name does not match
+/// `expected_path`.
+/// [`NameError::ReservedNamespace`] — first path segment is `Sky` or `Std`.
+/// [`NameError::ModuleNotFound`] — an `import` names a module absent from
+/// `deps`.
+/// [`NameError::NameNotExposed`] — an unqualified `exposing (name)` imports a
+/// name the dep module does not export.
+/// [`NameError::AmbiguousImport`] — two different dep modules both expose the
+/// same unqualified name.
+/// Any error that [`canonicalise`] can return.
+pub fn canonicalise_module(
+    m: &src::Module,
+    expected_path: &[Symbol],
+    deps: &BTreeMap<Vec<Symbol>, crate::ModuleExports>,
+    interner: &mut Interner,
+) -> DResult<(canon::Module, crate::ModuleExports)> {
+    let home = m.name.value.clone();
+
+    // SKY-N0023: declared module name must match the path the build driver
+    // computed from the file's location.
+    if home.as_slice() != expected_path {
+        let declared = path_to_dot_string(interner, &home);
+        let expected = path_to_dot_string(interner, expected_path);
+        return Err(Diagnostic::Name {
+            span: m.name.span,
+            msg: NameError::ModulePathMismatch { declared, expected },
+        });
+    }
+
+    // SKY-N0025: `Sky` and `Std` are reserved for the compiler's own stdlib.
+    // User modules whose first path segment matches either are rejected here so
+    // they never shadow prelude symbols downstream.
+    let sky_sym = interner.intern("Sky")?;
+    let std_sym = interner.intern("Std")?;
+    if home
+        .first()
+        .copied()
+        .is_some_and(|s| s == sky_sym || s == std_sym)
+    {
+        let name = path_to_dot_string(interner, &home);
+        return Err(Diagnostic::Name {
+            span: m.name.span,
+            msg: NameError::ReservedNamespace { name },
+        });
+    }
+
     let mut env = Env::initial(home.clone(), interner)?;
+    // type_home_map is extended first by dep-imported types, then by this
+    // module's own unions in canonicalise_with_env. Having deps in the map first
+    // means this module can reference imported types in its own type annotations.
+    let mut type_home_map: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
+    // Aliases from dep modules (injected via `import … exposing (..)`).
+    let mut injected_aliases: BTreeMap<Symbol, AliasDef> = BTreeMap::new();
+    // Tracks which names have been brought into unqualified scope and from which
+    // dep module path (for AmbiguousImport detection).
+    let mut unqual_origins: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
 
-    // Collect the local union names first; the type canonicaliser sets a
-    // constructor application's home to this module only for these names.
-    let local_union_names: BTreeSet<Symbol> = m.unions.iter().map(|u| u.value.name.value).collect();
+    // Process each import declaration, injecting the dep module's exports into
+    // the current env.
+    let mut unqual_ctor_origins: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
+    for import in &m.imports {
+        let dep_path = &import.name.value;
+        // SKY-kernel: Sky.* and Std.* are compiler stdlib modules whose
+        // qualifiers are pre-installed by Env::initial via
+        // install_prelude_qualifiers.  They are not in the user `deps` map and
+        // need no injection — attempting a deps.get on them would produce a
+        // spurious SKY-N0020 for every real module that imports Sky.Core.Prelude.
+        if dep_path
+            .first()
+            .copied()
+            .is_some_and(|s| s == sky_sym || s == std_sym)
+        {
+            continue;
+        }
+        // SKY-N0020: dep module must have been discovered + canonicalised before
+        // this module in topological order.
+        let dep = deps.get(dep_path).ok_or_else(|| {
+            let name = path_to_dot_string(interner, dep_path);
+            // Offer did-you-mean by collecting all known dep paths as dot strings.
+            let sugg: Box<[Box<str>]> = deps
+                .keys()
+                .map(|p| path_to_dot_string(interner, p))
+                .collect();
+            Diagnostic::Name {
+                span: import.name.span,
+                msg: NameError::ModuleNotFound {
+                    name,
+                    suggestions: sugg,
+                },
+            }
+        })?;
 
+        inject_dep_exports(
+            import,
+            dep,
+            &mut env,
+            &mut type_home_map,
+            &mut injected_aliases,
+            &mut unqual_origins,
+            &mut unqual_ctor_origins,
+            interner,
+        )?;
+    }
+
+    let canon_mod =
+        canonicalise_with_env(m, &mut env, &mut type_home_map, injected_aliases, interner)?;
+    // Build the export surface from the module's own `exposing (…)` clause.
+    let exports = build_module_exports(&home, m, &env);
+    Ok((canon_mod, exports))
+}
+
+/// Shared resolution body used by both [`canonicalise`] and
+/// [`canonicalise_module`].
+///
+/// Both callers provide a pre-initialised `env` (with builtins already
+/// installed) and an optionally pre-populated `type_home_map` (dep-imported
+/// types) and `extra_aliases` (dep-imported type aliases). This function:
+///
+/// 1. Registers this module's own union types (with duplicate rejection).
+/// 2. Merges `extra_aliases` with this module's own `type alias` declarations.
+/// 3. Canonicalises constructor payload field types (second union pass).
+/// 4. Registers top-level value names (with duplicate rejection).
+/// 5. Canonicalises each value declaration body.
+///
+/// # Errors
+/// Same set as [`canonicalise`].
+fn canonicalise_with_env(
+    m: &src::Module,
+    env: &mut Env,
+    type_home_map: &mut BTreeMap<Symbol, Vec<Symbol>>,
+    extra_aliases: BTreeMap<Symbol, AliasDef>,
+    interner: &mut Interner,
+) -> DResult<canon::Module> {
+    let home = env.home.clone();
+
+    // Add this module's own types to the type-home map. Dep-imported types were
+    // already added by inject_dep_exports before this call; using `entry/or_insert`
+    // means a local type that shadows an import's type is registered as LOCAL.
+    for u in &m.unions {
+        type_home_map
+            .entry(u.value.name.value)
+            .or_insert_with(|| home.clone());
+    }
+
+    // Build the type-home map: every type name in scope mapped to its home
+    // module path. For the single-module path, only this module's own unions are
+    // registered (each maps to this module's home). The multi-module path also
+    // adds imported types via `canonicalise_module`. The map is consulted by
+    // `canonicalise_type` to set the `home` field of a `Type::Con`.
+    //
     // Register unions + their constructors into the environment, rejecting any
     // duplicate type or constructor name (closes the silent last-wins that the
     // bare `insert` used to hide). The canonical `canon::Union` records (with
@@ -84,7 +246,7 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
             });
         }
         seen_types.insert(type_name, type_span);
-        register_union(&u.value, &home, &mut env, &mut seen_ctors, interner)?;
+        register_union(&u.value, &home, env, &mut seen_ctors, interner)?;
     }
 
     // Collect type aliases. Both the non-parametric form (`type alias Count =
@@ -95,7 +257,10 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
     // alias) is a duplicate type name. The aliased bodies are kept as source
     // annotations and expanded in-place at every use site by `canonicalise_type`,
     // so no later stage ever sees an alias.
-    let mut aliases: BTreeMap<Symbol, AliasDef> = BTreeMap::new();
+    //
+    // Start from `extra_aliases` (dep aliases injected by imports); local
+    // definitions are added below and may shadow dep aliases of the same name.
+    let mut aliases: BTreeMap<Symbol, AliasDef> = extra_aliases;
     for a in &m.aliases {
         let alias_name = a.value.name.value;
         let alias_span = a.value.name.span;
@@ -125,8 +290,8 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
     for u in &m.unions {
         unions.push(canonicalise_union(
             &u.value,
-            &env,
-            &local_union_names,
+            env,
+            type_home_map,
             &aliases,
             interner,
         )?);
@@ -156,8 +321,8 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
     for v in &m.values {
         defs.push(canonicalise_value(
             &v.value,
-            &env,
-            &local_union_names,
+            env,
+            type_home_map,
             &aliases,
             interner,
         )?);
@@ -168,6 +333,331 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
         unions,
         defs,
     })
+}
+
+/// Inject a dep module's exports into the resolving module's environment.
+///
+/// Called once per `import` declaration, in source order. Handles:
+///
+/// * Unqualified value/type/ctor injection for `exposing (..)` or an explicit
+///   `exposing (name, Type(..))` list.
+/// * SKY-N0022 (`NameNotExposed`) when the exposing list names a value or type
+///   the dep does not export.
+/// * SKY-N0024 (`AmbiguousImport`) when the same unqualified name was already
+///   injected from a different dep module (applies to both VALUES and
+///   CONSTRUCTORS — previously only values were checked).
+/// * Qualifier registration (`import M as Q` or auto-qualifier = last segment).
+///
+/// # Errors
+/// [`NameError::NameNotExposed`] / [`NameError::AmbiguousImport`]; or
+/// [`Diagnostic::CompilerBug`] on an unresolvable symbol.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // declarative injection table — splitting would obscure flow
+fn inject_dep_exports(
+    import: &src::Import,
+    dep: &crate::ModuleExports,
+    env: &mut Env,
+    type_home_map: &mut BTreeMap<Symbol, Vec<Symbol>>,
+    injected_aliases: &mut BTreeMap<Symbol, AliasDef>,
+    unqual_origins: &mut BTreeMap<Symbol, Vec<Symbol>>,
+    unqual_ctor_origins: &mut BTreeMap<Symbol, Vec<Symbol>>,
+    interner: &Interner,
+) -> DResult<()> {
+    let dep_path = &dep.path;
+
+    match &import.exposing.value {
+        src::Exposing::All => {
+            // Inject all dep values unqualified.
+            for &name in &dep.values {
+                check_and_inject_value(
+                    name,
+                    dep_path,
+                    import.name.span,
+                    env,
+                    unqual_origins,
+                    interner,
+                )?;
+            }
+            // Inject all dep types (union homes) + all ctors.
+            for (&type_name, home) in &dep.types {
+                type_home_map.insert(type_name, home.clone());
+                inject_ctors_for_type(
+                    type_name,
+                    dep,
+                    env,
+                    import.name.span,
+                    unqual_ctor_origins,
+                    interner,
+                )?;
+            }
+            // Inject all dep aliases.
+            for (&alias_name, ea) in &dep.aliases {
+                injected_aliases
+                    .entry(alias_name)
+                    .or_insert_with(|| AliasDef {
+                        params: ea.params.clone(),
+                        body: ea.body.clone(),
+                    });
+            }
+        }
+        src::Exposing::List(items) => {
+            for item in items {
+                match &item.value {
+                    src::Exposed::Value(name) => {
+                        if !dep.values.contains(name) {
+                            let name_s = name_str(interner, *name)?;
+                            let module_s = path_to_dot_string(interner, dep_path);
+                            let sugg = suggestions(*name, dep.values.iter().copied(), interner);
+                            return Err(Diagnostic::Name {
+                                span: item.span,
+                                msg: NameError::NameNotExposed {
+                                    module: module_s,
+                                    name: name_s,
+                                    suggestions: sugg,
+                                },
+                            });
+                        }
+                        check_and_inject_value(
+                            *name,
+                            dep_path,
+                            item.span,
+                            env,
+                            unqual_origins,
+                            interner,
+                        )?;
+                    }
+                    src::Exposed::Type(type_name, privacy) => {
+                        let is_union = dep.types.contains_key(type_name);
+                        let is_alias = dep.aliases.contains_key(type_name);
+                        if !is_union && !is_alias {
+                            let name_s = name_str(interner, *type_name)?;
+                            let module_s = path_to_dot_string(interner, dep_path);
+                            let all_names = dep.types.keys().chain(dep.aliases.keys()).copied();
+                            let sugg = suggestions(*type_name, all_names, interner);
+                            return Err(Diagnostic::Name {
+                                span: item.span,
+                                msg: NameError::NameNotExposed {
+                                    module: module_s,
+                                    name: name_s,
+                                    suggestions: sugg,
+                                },
+                            });
+                        }
+                        if is_union {
+                            if let Some(home) = dep.types.get(type_name) {
+                                type_home_map.insert(*type_name, home.clone());
+                            }
+                            let expose_ctors = !matches!(privacy, src::Privacy::Private);
+                            if expose_ctors {
+                                inject_ctors_for_type(
+                                    *type_name,
+                                    dep,
+                                    env,
+                                    item.span,
+                                    unqual_ctor_origins,
+                                    interner,
+                                )?;
+                            }
+                        }
+                        if is_alias && let Some(ea) = dep.aliases.get(type_name) {
+                            injected_aliases
+                                .entry(*type_name)
+                                .or_insert_with(|| AliasDef {
+                                    params: ea.params.clone(),
+                                    body: ea.body.clone(),
+                                });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Register the module qualifier. Explicit `as Alias` takes priority;
+    // otherwise the last segment of the module path is the default qualifier
+    // (Elm convention: `import Lib.Utils` makes `Utils.foo` available).
+    let qualifier = import
+        .alias
+        .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
+    let qual_map = env.qual_vars.entry(qualifier).or_default();
+    for &v in &dep.values {
+        qual_map.insert(v, VarHome::TopLevel(dep_path.clone()));
+    }
+
+    Ok(())
+}
+
+/// Bring a single unqualified value name from `dep_path` into scope, checking
+/// for ambiguity with a prior import from a different module.
+///
+/// # Errors
+/// [`NameError::AmbiguousImport`] when the name was already exposed unqualified
+/// by a different dep module.
+fn check_and_inject_value(
+    name: Symbol,
+    dep_path: &[Symbol],
+    span: Span,
+    env: &mut Env,
+    unqual_origins: &mut BTreeMap<Symbol, Vec<Symbol>>,
+    interner: &Interner,
+) -> DResult<()> {
+    if let Some(prior_path) = unqual_origins.get(&name) {
+        if prior_path.as_slice() != dep_path {
+            let name_s = name_str(interner, name)?;
+            let prior_s = path_to_dot_string(interner, prior_path);
+            let dep_s = path_to_dot_string(interner, dep_path);
+            return Err(Diagnostic::Name {
+                span,
+                msg: NameError::AmbiguousImport {
+                    name: name_s,
+                    modules: Box::new([prior_s, dep_s]),
+                },
+            });
+        }
+        // Same module exposed again — harmless.
+        return Ok(());
+    }
+    unqual_origins.insert(name, dep_path.to_vec());
+    env.vars.insert(name, VarHome::TopLevel(dep_path.to_vec()));
+    Ok(())
+}
+
+/// Inject all constructors belonging to `type_name` from `dep` into `env`,
+/// applying the same SKY-N0024 ambiguity check that [`check_and_inject_value`]
+/// applies to values.
+///
+/// `unqual_ctor_origins` is the parallel tracking map for constructors: each
+/// constructor name maps to the dep-module path that first exposed it
+/// unqualified.  A second dep exposing the same unqualified constructor name
+/// triggers [`NameError::AmbiguousImport`].
+///
+/// # Errors
+/// [`NameError::AmbiguousImport`] when a constructor name was already exposed
+/// unqualified by a different dep module.
+fn inject_ctors_for_type(
+    type_name: Symbol,
+    dep: &crate::ModuleExports,
+    env: &mut Env,
+    span: sky_diagnostics::Span,
+    unqual_ctor_origins: &mut BTreeMap<Symbol, Vec<Symbol>>,
+    interner: &Interner,
+) -> DResult<()> {
+    let dep_path = &dep.path;
+    for ctor_home in dep.ctors.values() {
+        if ctor_home.type_name == type_name {
+            if let Some(prior_path) = unqual_ctor_origins.get(&ctor_home.name) {
+                if prior_path.as_slice() != dep_path.as_slice() {
+                    // Two different dep modules both expose this constructor
+                    // unqualified — SKY-N0024 (same code as for value ambiguity).
+                    let name_s = name_str(interner, ctor_home.name)?;
+                    let prior_s = path_to_dot_string(interner, prior_path);
+                    let dep_s = path_to_dot_string(interner, dep_path);
+                    return Err(Diagnostic::Name {
+                        span,
+                        msg: NameError::AmbiguousImport {
+                            name: name_s,
+                            modules: Box::new([prior_s, dep_s]),
+                        },
+                    });
+                }
+                // Same module exposed again — harmless, no-op.
+            } else {
+                unqual_ctor_origins.insert(ctor_home.name, dep_path.clone());
+                env.ctors.insert(ctor_home.name, ctor_home.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Build a [`crate::ModuleExports`] from the module's own declarations filtered
+/// by its `exposing (…)` clause.
+///
+/// Only names declared in THIS module are considered as exportable; re-exporting
+/// an imported name is not yet supported (and would require a separate pass after
+/// imports are resolved, which the current design defers to a later milestone).
+fn build_module_exports(home: &[Symbol], m: &src::Module, env: &Env) -> crate::ModuleExports {
+    let mut exports = crate::ModuleExports {
+        path: home.to_owned(),
+        ..crate::ModuleExports::default()
+    };
+
+    // Sets of names defined by THIS module (not imported from deps).
+    let own_values: BTreeSet<Symbol> = m.values.iter().map(|v| v.value.name.value).collect();
+    let own_types: BTreeSet<Symbol> = m.unions.iter().map(|u| u.value.name.value).collect();
+    let own_alias_names: BTreeSet<Symbol> = m.aliases.iter().map(|a| a.value.name.value).collect();
+
+    match &m.exposing.value {
+        src::Exposing::All => {
+            exports.values = own_values;
+            for &type_name in &own_types {
+                exports.types.insert(type_name, home.to_owned());
+                for ctor_home in env.ctors.values() {
+                    if ctor_home.type_name == type_name && ctor_home.home == home {
+                        exports.ctors.insert(ctor_home.name, ctor_home.clone());
+                    }
+                }
+            }
+            for a in &m.aliases {
+                exports.aliases.insert(
+                    a.value.name.value,
+                    crate::ExportedAlias {
+                        params: a.value.vars.iter().map(|v| v.value).collect(),
+                        body: a.value.body.value.clone(),
+                    },
+                );
+            }
+        }
+        src::Exposing::List(items) => {
+            for item in items {
+                match &item.value {
+                    src::Exposed::Value(name) => {
+                        if own_values.contains(name) {
+                            exports.values.insert(*name);
+                        }
+                    }
+                    src::Exposed::Type(type_name, privacy) => {
+                        if own_types.contains(type_name) {
+                            exports.types.insert(*type_name, home.to_owned());
+                            let expose_ctors = !matches!(privacy, src::Privacy::Private);
+                            if expose_ctors {
+                                for ctor_home in env.ctors.values() {
+                                    if ctor_home.type_name == *type_name && ctor_home.home == home {
+                                        exports.ctors.insert(ctor_home.name, ctor_home.clone());
+                                    }
+                                }
+                            }
+                        } else if own_alias_names.contains(type_name) {
+                            for a in &m.aliases {
+                                if a.value.name.value == *type_name {
+                                    exports.aliases.insert(
+                                        *type_name,
+                                        crate::ExportedAlias {
+                                            params: a.value.vars.iter().map(|v| v.value).collect(),
+                                            body: a.value.body.value.clone(),
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    exports
+}
+
+/// Build a dot-joined module path string from interned symbols for use in
+/// diagnostic payloads. Segments that are not backed by the interner are
+/// rendered as `?` (lossy) — this is acceptable because the result is only
+/// used in `Box<str>` diagnostic fields, never as a key.
+fn path_to_dot_string(interner: &Interner, path: &[Symbol]) -> Box<str> {
+    path.iter()
+        .map(|&s| interner.resolve(s).unwrap_or("?"))
+        .collect::<Vec<_>>()
+        .join(".")
+        .into()
 }
 
 /// Register a union's constructors into the environment.
@@ -236,7 +726,7 @@ fn register_union(
 fn canonicalise_union(
     u: &src::Union,
     env: &Env,
-    local_union_names: &BTreeSet<Symbol>,
+    type_home_map: &BTreeMap<Symbol, Vec<Symbol>>,
     aliases: &BTreeMap<Symbol, AliasDef>,
     interner: &Interner,
 ) -> DResult<canon::Union> {
@@ -248,7 +738,7 @@ fn canonicalise_union(
         let arity = c.value.args.len();
         let ctx = TypeCtx {
             env,
-            local_union_names,
+            type_home_map,
             aliases,
             interner,
             ann_span: c.span,
@@ -280,6 +770,7 @@ fn canonicalise_union(
         });
     }
     Ok(canon::Union {
+        home: env.home.clone(),
         name: type_name,
         vars,
         ctors,
@@ -290,7 +781,7 @@ fn canonicalise_union(
 fn canonicalise_value(
     val: &src::Value,
     env: &Env,
-    local_union_names: &BTreeSet<Symbol>,
+    type_home_map: &BTreeMap<Symbol, Vec<Symbol>>,
     aliases: &BTreeMap<Symbol, AliasDef>,
     interner: &mut Interner,
 ) -> DResult<canon::Def> {
@@ -308,6 +799,7 @@ fn canonicalise_value(
 
     match &val.type_annotation {
         None => Ok(canon::Def::Untyped {
+            home: env.home.clone(),
             name: val.name,
             patterns,
             body,
@@ -317,7 +809,7 @@ fn canonicalise_value(
             let mut visited = Vec::new();
             let ctx = TypeCtx {
                 env,
-                local_union_names,
+                type_home_map,
                 aliases,
                 interner,
                 ann_span: ann.span,
@@ -332,6 +824,7 @@ fn canonicalise_value(
             let mut free_vars: Vec<Symbol> = free_vars.into_iter().collect();
             free_vars.sort_by(|a, b| interner.resolve(*a).cmp(&interner.resolve(*b)));
             Ok(canon::Def::Typed {
+                home: env.home.clone(),
                 name: val.name,
                 free_vars,
                 patterns,
@@ -1000,11 +1493,10 @@ fn canonicalise_type(
                 visited.pop();
                 return Ok(expanded);
             }
-            let home = if ctx.local_union_names.contains(&name) {
-                ctx.env.home.clone()
-            } else {
-                Vec::new()
-            };
+            // Types in `type_home_map` are either local unions (home = this
+            // module) or imported types (home = dep module). Builtins and free
+            // type variables are absent from the map → empty home.
+            let home = ctx.type_home_map.get(&name).cloned().unwrap_or_default();
             Ok(canon::Type::Con {
                 home,
                 name,

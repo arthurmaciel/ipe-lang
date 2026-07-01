@@ -29,7 +29,7 @@ fn single_func(res: &DResult<sky_ir::Program>) -> Option<&sky_ir::Func> {
 fn run(
     unions: Vec<canon::Union>,
     defs: Vec<canon::Def>,
-    env: BTreeMap<Symbol, Ty>,
+    env: BTreeMap<(Vec<Symbol>, Symbol), Ty>,
     interner: &mut Interner,
 ) -> DResult<sky_ir::Program> {
     run_with_regions(unions, defs, env, BTreeMap::new(), interner)
@@ -41,7 +41,7 @@ fn run(
 fn run_with_regions(
     unions: Vec<canon::Union>,
     defs: Vec<canon::Def>,
-    env: BTreeMap<Symbol, Ty>,
+    env: BTreeMap<(Vec<Symbol>, Symbol), Ty>,
     regions: BTreeMap<Span, Ty>,
     interner: &mut Interner,
 ) -> DResult<sky_ir::Program> {
@@ -133,6 +133,7 @@ fn untyped_function_with_parameters() -> DResult<()> {
     let name = Located::new(Span::new(10, 11), f);
     let patterns = vec![Located::new(Span::new(12, 13), canon::Pattern_::PVar(x))];
     let def = canon::Def::Untyped {
+        home: vec![],
         name,
         patterns,
         body: int(Span::new(14, 15), 0),
@@ -155,6 +156,7 @@ fn non_variable_parameter_pattern() -> DResult<()> {
     // A `_` parameter: M0 params must be plain names.
     let patterns = vec![Located::new(Span::new(20, 21), canon::Pattern_::PAnything)];
     let def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(18, 19), f),
         free_vars: Vec::new(),
         patterns,
@@ -182,6 +184,7 @@ fn function_type_in_annotation_argument_lowers_to_fun() -> DResult<()> {
     let ty = canon::Type::Lambda(Box::new(arg), Box::new(con_int(&mut i)?));
     let patterns = vec![Located::new(Span::new(30, 31), canon::Pattern_::PVar(x))];
     let def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(28, 29), f),
         free_vars: Vec::new(),
         patterns,
@@ -213,6 +216,7 @@ fn parametric_annotation_lowers_to_generic_func() -> DResult<()> {
     let x = i.intern("x")?;
     // identity : a -> a ; identity x = x
     let def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(40, 48), identity),
         free_vars: vec![a],
         patterns: vec![Located::new(Span::new(49, 50), canon::Pattern_::PVar(x))],
@@ -249,12 +253,13 @@ fn unresolved_type_variable_in_value_position() -> DResult<()> {
     let g = i.intern("g")?;
     // An untyped nullary binding whose inferred type is a bare variable.
     let def = canon::Def::Untyped {
+        home: vec![],
         name: Located::new(Span::new(40, 41), g),
         patterns: Vec::new(),
         body: int(Span::new(44, 45), 0),
     };
     let mut env = BTreeMap::new();
-    env.insert(g, Ty::Var(0));
+    env.insert((vec![], g), Ty::Var(0));
     // No parameters → the binding's name span is blamed.
     assert_unsupported(
         run(Vec::new(), vec![def], env, &mut i),
@@ -278,7 +283,7 @@ fn task_with_non_unit_result() -> DResult<()> {
     let int_name = i.intern("Int")?;
     let mut env = BTreeMap::new();
     env.insert(
-        f,
+        (vec![], f),
         Ty::Con {
             module: Vec::new(),
             name: task,
@@ -290,6 +295,7 @@ fn task_with_non_unit_result() -> DResult<()> {
         },
     );
     let def = canon::Def::Untyped {
+        home: vec![],
         name: Located::new(Span::new(50, 51), f),
         patterns: Vec::new(),
         body: int(Span::new(52, 53), 0),
@@ -322,8 +328,12 @@ fn inferred_function_type_in_value_position_lowers_to_fun() -> DResult<()> {
         args: Vec::new(),
     };
     let mut env = BTreeMap::new();
-    env.insert(f, Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name))));
+    env.insert(
+        (vec![], f),
+        Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name))),
+    );
     let def = canon::Def::Untyped {
+        home: vec![],
         name: Located::new(Span::new(60, 61), f),
         patterns: Vec::new(),
         body: int(Span::new(62, 63), 0),
@@ -367,6 +377,7 @@ fn bare_function_reference_lowers_to_func_value() -> DResult<()> {
         },
     );
     let def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(70, 71), f),
         free_vars: Vec::new(),
         patterns: Vec::new(),
@@ -426,6 +437,7 @@ fn function_value_in_record_field_is_unsupported() -> DResult<()> {
         canon::Expr_::Record(vec![(field, field_value)]),
     );
     let def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(70, 71), f),
         free_vars: Vec::new(),
         patterns: Vec::new(),
@@ -471,6 +483,7 @@ fn function_in_record_field_via_type_variable_is_unsupported() -> DResult<()> {
     let body_span = Span::new(40, 41);
     let body = Located::new(body_span, canon::Expr_::VarLocal(r));
     let def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(36, 37), boxed),
         free_vars: Vec::new(),
         patterns: Vec::new(),
@@ -511,6 +524,7 @@ fn value_callee_lowers_to_apply() -> DResult<()> {
     let arg = int(Span::new(84, 85), 5);
     let body = Located::new(Span::new(82, 90), canon::Expr_::Call(callee_ref, vec![arg]));
     let def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(80, 81), f),
         free_vars: Vec::new(),
         patterns: Vec::new(),
@@ -551,6 +565,7 @@ fn unknown_kernel_call() -> DResult<()> {
         canon::Expr_::Call(callee_ref, Vec::new()),
     );
     let def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(90, 91), f),
         free_vars: Vec::new(),
         patterns: Vec::new(),
@@ -588,6 +603,7 @@ fn unsupported_binary_operator() -> DResult<()> {
         },
     );
     let def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(110, 111), f),
         free_vars: Vec::new(),
         patterns: Vec::new(),
@@ -621,6 +637,7 @@ fn wildcard_only_case_lowers_to_flat_match() -> DResult<()> {
     };
     let body = Located::new(Span::new(120, 132), canon::Expr_::Case(scrut, vec![branch]));
     let def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(118, 119), f),
         free_vars: Vec::new(),
         patterns: Vec::new(),
@@ -649,6 +666,7 @@ fn ctor_then_variable_catch_all_lowers_to_flat_match() -> DResult<()> {
     let dec = i.intern("Decrement")?;
     let ty = con_int(&mut i)?;
     let union = canon::Union {
+        home: Vec::new(),
         name: msg,
         vars: Vec::new(),
         ctors: vec![
@@ -692,6 +710,7 @@ fn ctor_then_variable_catch_all_lowers_to_flat_match() -> DResult<()> {
         canon::Expr_::Case(scrut, vec![arm0, arm1]),
     );
     let def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(138, 139), f),
         free_vars: Vec::new(),
         patterns: Vec::new(),
@@ -727,6 +746,7 @@ fn partial_application_eta_expands_to_a_closure() -> DResult<()> {
         )),
     );
     let add_def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(10, 13), add),
         free_vars: Vec::new(),
         patterns: vec![
@@ -752,6 +772,7 @@ fn partial_application_eta_expands_to_a_closure() -> DResult<()> {
     );
     let caller_ty = canon::Type::Lambda(Box::new(con_int(&mut i)?), Box::new(con_int(&mut i)?));
     let caller_def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(30, 36), caller),
         free_vars: Vec::new(),
         patterns: Vec::new(),
@@ -833,6 +854,7 @@ fn over_application_saturates_via_apply() -> DResult<()> {
     // f : Int -> Int   (one parameter)
     let f_ty = canon::Type::Lambda(Box::new(con_int(&mut i)?), Box::new(con_int(&mut i)?));
     let f_def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(10, 11), f),
         free_vars: Vec::new(),
         patterns: vec![Located::new(Span::new(12, 13), canon::Pattern_::PVar(x))],
@@ -856,6 +878,7 @@ fn over_application_saturates_via_apply() -> DResult<()> {
         ),
     );
     let caller_def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(30, 36), caller),
         free_vars: Vec::new(),
         patterns: Vec::new(),
@@ -943,6 +966,7 @@ fn nested_lambda_body_flattens_into_one_closure() -> DResult<()> {
         ),
     );
     let f_def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(10, 11), f_sym),
         free_vars: Vec::new(),
         patterns: vec![Located::new(
@@ -1049,6 +1073,7 @@ fn partial_application_of_a_first_class_value_fails_closed() -> DResult<()> {
         canon::Expr_::Call(callee_lambda, vec![int(Span::new(52, 53), 2)]),
     );
     let caller_def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(30, 36), caller),
         free_vars: Vec::new(),
         patterns: Vec::new(),
@@ -1111,6 +1136,7 @@ fn over_application_with_partial_surplus_saturation_fails_closed() -> DResult<()
         )),
     );
     let f_def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(10, 11), f),
         free_vars: Vec::new(),
         patterns: vec![Located::new(Span::new(12, 13), canon::Pattern_::PVar(x))],
@@ -1135,6 +1161,7 @@ fn over_application_with_partial_surplus_saturation_fails_closed() -> DResult<()
         ),
     );
     let caller_def = canon::Def::Typed {
+        home: vec![],
         name: Located::new(Span::new(30, 36), caller),
         free_vars: Vec::new(),
         patterns: Vec::new(),

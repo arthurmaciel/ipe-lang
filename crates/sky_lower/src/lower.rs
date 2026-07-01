@@ -471,9 +471,13 @@ pub struct Lowerer<'a> {
     /// Builtin constructor symbols — used by [`run`] to synthesise `SqlValue` /
     /// `SqlField` `EnumDef`s when the program uses any Db kernel.
     builtins: &'a BuiltinCtors,
-    /// Each top-level binding's [`FuncId`], assigned in declaration order so a
-    /// `VarTopLevel` reference can resolve to a [`Callee::Func`].
-    func_ids: BTreeMap<Symbol, FuncId>,
+    /// Each top-level binding's [`FuncId`], keyed by `(home_path, name)` so
+    /// that same-named bindings from different source modules (e.g. `Lib.helper`
+    /// and `Main.helper` both merged into the linked module) each get a distinct
+    /// id. A `VarTopLevel { module, name }` reference resolves by looking up
+    /// `(module.clone(), name)` — the module path it carries is the defining
+    /// module's path, not the merged entry module's path.
+    func_ids: BTreeMap<(Vec<Symbol>, Symbol), FuncId>,
     /// Each union's complete, in-declaration-order constructor set — the *true*
     /// variant set handed to [`Match::new`] (the IR layer cannot self-confirm
     /// this; the lowerer carries the obligation).
@@ -570,7 +574,9 @@ impl<'a> Lowerer<'a> {
         let mut func_ids = BTreeMap::new();
         for (idx, def) in m.defs.iter().enumerate() {
             let id = FuncId::from_raw(u32::try_from(idx).unwrap_or(u32::MAX));
-            func_ids.insert(def.name().value, id);
+            // Key by (home_path, name) so same-named defs from different source
+            // modules get distinct ids after link::link merges them.
+            func_ids.insert((def.home().to_vec(), def.name().value), id);
         }
 
         let mut enum_variants = BTreeMap::new();
@@ -940,7 +946,7 @@ impl<'a> Lowerer<'a> {
         let name = def.name().value;
         let id = *self
             .func_ids
-            .get(&name)
+            .get(&(def.home().to_vec(), name))
             .ok_or_else(|| bug("sky_lower::lower_def", "missing func id"))?;
 
         let sig_span = def.name().span;
@@ -987,6 +993,7 @@ impl<'a> Lowerer<'a> {
                 Ok(Func {
                     id,
                     name,
+                    home: ModPath(def.home().to_vec()),
                     type_params,
                     params,
                     ret,
@@ -1000,14 +1007,16 @@ impl<'a> Lowerer<'a> {
                     // [SKY-L0106, feature: untyped-functions]
                     return Err(unsupported(sig_span, Feature::UntypedFunctions));
                 }
-                let ret_ty =
-                    self.types.env.get(&name).ok_or_else(|| {
-                        bug("sky_lower::lower_def", "no inferred type for binding")
-                    })?;
+                let ret_ty = self
+                    .types
+                    .env
+                    .get(&(def.home().to_vec(), name))
+                    .ok_or_else(|| bug("sky_lower::lower_def", "no inferred type for binding"))?;
                 let ret = self.ir_type_from_ty(ret_ty, sig_span)?;
                 Ok(Func {
                     id,
                     name,
+                    home: ModPath(def.home().to_vec()),
                     type_params: Vec::new(),
                     params: Vec::new(),
                     ret,
@@ -3252,13 +3261,15 @@ impl<'a> Lowerer<'a> {
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),
                 }
             }
-            canon::Expr_::VarTopLevel { name, .. } => {
-                // Every `VarTopLevel` was resolved by name resolution to a
-                // declared top-level binding, all of which are registered in
-                // `func_ids`; a miss is a violated invariant.
+            canon::Expr_::VarTopLevel { module, name } => {
+                // Every `VarTopLevel` carries the defining module's path (set by
+                // name resolution), and func_ids is keyed by (home_path, name)
+                // so same-named defs from different modules are distinct.  A miss
+                // is a violated invariant — the canonicaliser guarantees every
+                // VarTopLevel references a known binding.
                 let id = *self
                     .func_ids
-                    .get(name)
+                    .get(&(module.clone(), *name))
                     .ok_or_else(|| bug("sky_lower::lower_callee", "unknown top-level binding"))?;
                 Ok(Callee::Func(id))
             }

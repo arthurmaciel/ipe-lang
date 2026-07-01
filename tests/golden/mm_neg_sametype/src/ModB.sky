@@ -1,0 +1,2 @@
+module ModB exposing (ColorA)
+type ColorA = RedB | BlueB

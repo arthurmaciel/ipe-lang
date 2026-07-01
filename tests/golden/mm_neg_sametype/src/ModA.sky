@@ -1,0 +1,2 @@
+module ModA exposing (ColorA)
+type ColorA = RedA | BlueA

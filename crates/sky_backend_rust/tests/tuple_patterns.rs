@@ -85,6 +85,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
     let fst_of_fn = Func {
         id: FuncId::from_raw(0),
         name: fst_of,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(
             w,
@@ -101,6 +102,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
     let main_fn = Func {
         id: FuncId::from_raw(1),
         name: main,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
@@ -166,6 +168,7 @@ fn unit_value_and_type_render() -> DResult<()> {
             funcs: vec![Func {
                 id: FuncId::from_raw(0),
                 name: nop,
+                home: ModPath(vec![]),
                 type_params: vec![],
                 params: vec![],
                 ret: IrType::Unit,

@@ -105,6 +105,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
     let f_fn = Func {
         id: FuncId::from_raw(0),
         name: f,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(
             w,
@@ -121,6 +122,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
     let main_fn = Func {
         id: FuncId::from_raw(1),
         name: zero,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
@@ -247,6 +249,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
     let f_fn = Func {
         id: FuncId::from_raw(0),
         name: f,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(
             w,
@@ -263,6 +266,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
     let main_fn = Func {
         id: FuncId::from_raw(1),
         name: main,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),

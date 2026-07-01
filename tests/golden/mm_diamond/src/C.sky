@@ -1,0 +1,7 @@
+module C exposing (fromC)
+
+import Sky.Core.Prelude exposing (..)
+import D exposing (base)
+
+fromC : Int
+fromC = base + 2

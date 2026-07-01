@@ -1,0 +1,8 @@
+module Lib exposing (greeting, Color(..))
+
+import Sky.Core.Prelude exposing (..)
+
+type Color = Red | Blue
+
+greeting : String
+greeting = "hello from Lib"

@@ -1,0 +1,3 @@
+module LibA exposing (thing)
+thing : Int
+thing = 1

@@ -110,6 +110,18 @@ pub const SKY_N0011: Code = Code("SKY-N0011");
 pub const SKY_N0012: Code = Code("SKY-N0012");
 /// type alias applied with the wrong number of arguments
 pub const SKY_N0013: Code = Code("SKY-N0013");
+/// a local module named in an import cannot be found
+pub const SKY_N0020: Code = Code("SKY-N0020");
+/// importing a module creates a cycle
+pub const SKY_N0021: Code = Code("SKY-N0021");
+/// the import names a member the module does not expose
+pub const SKY_N0022: Code = Code("SKY-N0022");
+/// the module declaration does not match the file's path
+pub const SKY_N0023: Code = Code("SKY-N0023");
+/// two imports expose the same name unqualified
+pub const SKY_N0024: Code = Code("SKY-N0024");
+/// a local module claims a reserved namespace
+pub const SKY_N0025: Code = Code("SKY-N0025");
 
 // ---------------------------------------------------------------------------
 // Type (SKY-T####)
@@ -239,6 +251,12 @@ pub fn title(c: Code) -> &'static str {
         SKY_N0011 => "constructor defined more than once",
         SKY_N0012 => "type defined more than once",
         SKY_N0013 => "type alias applied with the wrong number of arguments",
+        SKY_N0020 => "module not found",
+        SKY_N0021 => "import cycle",
+        SKY_N0022 => "name not exposed",
+        SKY_N0023 => "module path mismatch",
+        SKY_N0024 => "ambiguous import",
+        SKY_N0025 => "reserved namespace",
         SKY_T0001 => "type mismatch",
         SKY_T0002 => "infinite type",
         SKY_T0003 => "type inference exceeded its step budget",
@@ -323,6 +341,12 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         SKY_N0011 => Some(include_str!("../explain/SKY-N0011.md")),
         SKY_N0012 => Some(include_str!("../explain/SKY-N0012.md")),
         SKY_N0013 => Some(include_str!("../explain/SKY-N0013.md")),
+        SKY_N0020 => Some(include_str!("../explain/SKY-N0020.md")),
+        SKY_N0021 => Some(include_str!("../explain/SKY-N0021.md")),
+        SKY_N0022 => Some(include_str!("../explain/SKY-N0022.md")),
+        SKY_N0023 => Some(include_str!("../explain/SKY-N0023.md")),
+        SKY_N0024 => Some(include_str!("../explain/SKY-N0024.md")),
+        SKY_N0025 => Some(include_str!("../explain/SKY-N0025.md")),
         SKY_T0001 => Some(include_str!("../explain/SKY-T0001.md")),
         SKY_T0002 => Some(include_str!("../explain/SKY-T0002.md")),
         SKY_T0003 => Some(include_str!("../explain/SKY-T0003.md")),
@@ -374,17 +398,18 @@ mod tests {
         SKY_P0001, SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014,
         SKY_P0015, SKY_P0016, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041,
         SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_N0001, SKY_N0002, SKY_N0003, SKY_N0004,
-        SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_T0001, SKY_T0002, SKY_T0003,
-        SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_L0100, SKY_L0101,
-        SKY_L0102, SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110,
-        SKY_L0111, SKY_L0112, SKY_L0113, SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0200,
-        SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200,
-        SKY_I0201, SKY_I0202, SKY_I0203,
+        SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_N0020, SKY_N0021, SKY_N0022,
+        SKY_N0023, SKY_N0024, SKY_N0025, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010,
+        SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103,
+        SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112,
+        SKY_L0113, SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0200, SKY_I0001, SKY_I0010,
+        SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200, SKY_I0201, SKY_I0202,
+        SKY_I0203,
     ];
 
     #[test]
-    fn taxonomy_has_sixty_seven_codes() {
-        assert_eq!(ALL.len(), 67);
+    fn taxonomy_has_seventy_three_codes() {
+        assert_eq!(ALL.len(), 73);
     }
 
     #[test]
@@ -402,7 +427,7 @@ mod tests {
             assert!(s.starts_with("SKY-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 67);
+        assert_eq!(seen.len(), 73);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.

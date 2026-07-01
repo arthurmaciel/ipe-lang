@@ -92,6 +92,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
     let mk_fn = Func {
         id: FuncId::from_raw(0),
         name: mk,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(arg, IrType::Int)],
         ret: rec.clone(),
@@ -101,6 +102,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
     let bump_fn = Func {
         id: FuncId::from_raw(1),
         name: bump,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(par, rec.clone())],
         ret: rec.clone(),
@@ -113,6 +115,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
     let getx_fn = Func {
         id: FuncId::from_raw(2),
         name: getx,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(par, rec)],
         ret: IrType::Int,
@@ -125,6 +128,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
     let main_fn = Func {
         id: FuncId::from_raw(3),
         name: main,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
@@ -229,6 +233,7 @@ fn synthesises_nested_record_structs() -> DResult<()> {
     let f_fn = Func {
         id: FuncId::from_raw(0),
         name: func,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(par, outer)],
         ret: xy,
@@ -270,6 +275,7 @@ fn literal_with_unknown_shape_fails_fast() -> DResult<()> {
     let f_fn = Func {
         id: FuncId::from_raw(0),
         name: func,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![],
         ret: IrType::Int, // NOT a record type → the literal's shape is uncollected
@@ -308,6 +314,7 @@ fn conflicting_field_set_types_fail_fast() -> DResult<()> {
     let f_fn = Func {
         id: FuncId::from_raw(0),
         name: fsym,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(par, IrType::Record(int_rec))],
         ret: IrType::Int,
@@ -316,6 +323,7 @@ fn conflicting_field_set_types_fail_fast() -> DResult<()> {
     let g_fn = Func {
         id: FuncId::from_raw(1),
         name: gsym,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(qar, IrType::Record(bool_rec))],
         ret: IrType::Bool,

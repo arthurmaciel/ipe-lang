@@ -481,9 +481,19 @@ pub struct Builder<'a> {
     constraints: Vec<Constraint>,
     /// Annotation-derived types of every top-level binding, for cross-binding
     /// references (`main` mentions `update`).
-    top_level: BTreeMap<Symbol, Ty>,
+    ///
+    /// Keyed by `(home_module_path, bare_name)` — not bare `Symbol` alone — so
+    /// same-named defs from different modules (e.g. `Lib.helper` and
+    /// `Main.helper`) never overwrite each other after `link::link` merges them
+    /// into one flat def list.  Every `VarTopLevel { module, name }` reference
+    /// looks up its home module's entry, not an entry that may belong to a
+    /// different module that happens to share the bare name.
+    top_level: BTreeMap<(Vec<Symbol>, Symbol), Ty>,
     /// Body region-var of each untyped top-level binding, read back for `env`.
-    untyped: BTreeMap<Symbol, VarId>,
+    ///
+    /// Keyed by `(home_module_path, bare_name)` for the same reason as
+    /// [`Self::top_level`].
+    untyped: BTreeMap<(Vec<Symbol>, Symbol), VarId>,
     /// Deferred record field-access obligations, resolved after the main solve.
     field_accesses: Vec<FieldAccess>,
     /// Deferred record-update obligations, resolved after the main solve.
@@ -584,8 +594,8 @@ pub struct RecordUpdate {
 pub struct Generated {
     pub regions: BTreeMap<Span, VarId>,
     pub constraints: Vec<Constraint>,
-    pub top_level: BTreeMap<Symbol, Ty>,
-    pub untyped: BTreeMap<Symbol, VarId>,
+    pub top_level: BTreeMap<(Vec<Symbol>, Symbol), Ty>,
+    pub untyped: BTreeMap<(Vec<Symbol>, Symbol), VarId>,
     pub field_accesses: Vec<FieldAccess>,
     pub record_updates: Vec<RecordUpdate>,
     pub typed_rigids: Vec<(Symbol, BTreeMap<Symbol, VarId>)>,
@@ -612,8 +622,8 @@ impl<'a> Builder<'a> {
             builtins,
             regions: BTreeMap::new(),
             constraints: Vec::new(),
-            top_level: BTreeMap::new(),
-            untyped: BTreeMap::new(),
+            top_level: BTreeMap::new(), // (home, name) → Ty
+            untyped: BTreeMap::new(),   // (home, name) → VarId
             field_accesses: Vec::new(),
             record_updates: Vec::new(),
             ctors: BTreeMap::new(),
@@ -638,8 +648,15 @@ impl<'a> Builder<'a> {
         // types carry those same variables, so one shared instantiation map
         // alpha-renames a generic constructor per use site.
         for union in &module.unions {
+            // Use the union's own `home` (its original defining module path)
+            // rather than `module.name`. After `link::link` merges N canonical
+            // modules into one, every union retains its source-module path in
+            // `home`; `module.name` would always be the entry module's name
+            // (e.g. `["Main"]`), causing cross-module constructor result types
+            // (`Main.Color`) to diverge from cross-module type annotations
+            // (`Helper.Color`) and fail unification (SKY-T0001).
             let result = Ty::Con {
-                module: module.name.clone(),
+                module: union.home.clone(),
                 name: union.name,
                 args: union.vars.iter().map(|v| Ty::Var(v.as_raw())).collect(),
             };
@@ -670,14 +687,18 @@ impl<'a> Builder<'a> {
         //   binding is monomorphic at its use sites. Sound, not yet complete;
         //   write an annotation to get full polymorphism.)
         for def in &module.defs {
+            // Key by (home_module_path, bare_name) so same-named defs from
+            // different source modules never overwrite each other after
+            // `link::link` merges them into a single flat def list.
+            let home_key = def.home().to_vec();
             match def {
                 canon::Def::Typed { name, ty, .. } => {
                     let normalized = builder.normalize_annotation_ty(from_canon(ty), name.span)?;
-                    builder.top_level.insert(name.value, normalized);
+                    builder.top_level.insert((home_key, name.value), normalized);
                 }
                 canon::Def::Untyped { name, .. } => {
                     let v = builder.flex()?;
-                    builder.untyped.insert(name.value, v);
+                    builder.untyped.insert((home_key, name.value), v);
                 }
             }
         }
@@ -1026,6 +1047,7 @@ impl<'a> Builder<'a> {
                 body,
                 ty,
                 free_vars,
+                ..
             } => {
                 // Instantiate the WHOLE signature through one shared map so every
                 // occurrence of an annotation variable (`a` in `a -> a`) becomes
@@ -1075,6 +1097,7 @@ impl<'a> Builder<'a> {
                 name,
                 patterns,
                 body,
+                ..
             } => {
                 let mut local = BTreeMap::new();
                 let mut param_vars = Vec::with_capacity(patterns.len());
@@ -1094,7 +1117,9 @@ impl<'a> Builder<'a> {
                 }
                 // Tie the reconstructed type to the shared variable minted in the
                 // registration pass, which every reference resolves to.
-                let Some(shared) = self.untyped.get(&name.value).copied() else {
+                // Use the same (home, name) key that the registration pass used.
+                let shared_key = (def.home().to_vec(), name.value);
+                let Some(shared) = self.untyped.get(&shared_key).copied() else {
                     return Err(Diagnostic::CompilerBug {
                         where_: STAGE,
                         detail: format!(
@@ -1273,15 +1298,35 @@ impl<'a> Builder<'a> {
     /// alpha-renaming map is recorded for the post-solve super-type obligation
     /// check. An untyped binding resolves to its shared monomorphic variable; a
     /// name that is not a binding of this module stays fully flexible.
-    fn constrain_var_top_level(&mut self, name: Symbol, span: Span) -> DResult<VarId> {
-        if let Some(ty) = self.top_level.get(&name).cloned() {
+    ///
+    /// `module` is the **home** module path carried by the `VarTopLevel` node —
+    /// i.e. the path of the module that *declares* the binding, not the module
+    /// that *uses* it.  Using this path as part of the lookup key (see
+    /// [`Builder::top_level`]) ensures that a `Lib.helper` reference resolves to
+    /// `Lib.helper`'s own annotation type even when a same-named `Main.helper`
+    /// exists in the merged def list.
+    fn constrain_var_top_level(
+        &mut self,
+        module: &[Symbol],
+        name: Symbol,
+        span: Span,
+    ) -> DResult<VarId> {
+        let key = (module.to_vec(), name);
+        if let Some(ty) = self.top_level.get(&key).cloned() {
             let (var, vars) = self.instantiate_tracked(&ty)?;
             self.scheme_apps.push(SchemeApp { name, vars, span });
             Ok(var)
-        } else if let Some(v) = self.untyped.get(&name).copied() {
+        } else if let Some(v) = self.untyped.get(&key).copied() {
             Ok(v)
         } else {
-            self.flex()
+            Err(Diagnostic::CompilerBug {
+                where_: "sky_types::constrain_var_top_level",
+                detail: format!(
+                    "unknown top-level binding (symbol {}); \
+                     post-link every name must be in top_level or untyped",
+                    name.as_raw()
+                ),
+            })
         }
     }
 
@@ -1352,7 +1397,9 @@ impl<'a> Builder<'a> {
                     });
                 }
             },
-            canon::Expr_::VarTopLevel { name, .. } => self.constrain_var_top_level(*name, span)?,
+            canon::Expr_::VarTopLevel { module, name } => {
+                self.constrain_var_top_level(module, *name, span)?
+            }
             canon::Expr_::VarKernel { module, name } => {
                 self.constrain_var_kernel(*module, *name, span)?
             }

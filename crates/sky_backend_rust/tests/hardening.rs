@@ -8,13 +8,13 @@
 //!   overflow on a deeply nested expression,
 //! * the checked ident resolver (SKY-I0201) refusing to emit an empty Rust
 //!   identifier,
-//! * the cross-module type-name collision guard (SKY-I0202).
+//! * the cross-module type-name collision guard (SKY-N0012, formerly SKY-I0202).
 //!
 //! The golden byte-equality contract itself lives in `golden.rs`.
 
 use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
-use sky_diagnostics::{DResult, Diagnostic, SKY_I0201, SKY_I0202, SKY_L0200};
+use sky_diagnostics::{DResult, Diagnostic, SKY_I0201, SKY_L0200, SKY_N0012};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{
     BinOp, EnumDef, Expr, Func, FuncId, IrType, ModPath, Module, Program, TypeDef, Variant,
@@ -72,6 +72,7 @@ fn reserved_names_are_mangled_in_emitted_output() -> DResult<()> {
     let render_fn = Func {
         id: FuncId::from_raw(0),
         name: func,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(param, IrType::Int)],
         ret: IrType::Int,
@@ -117,6 +118,7 @@ fn deeply_nested_expr_fails_fast_not_stack_overflow() -> DResult<()> {
     let deep_fn = Func {
         id: FuncId::from_raw(0),
         name: func,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![],
         ret: IrType::Int,
@@ -156,6 +158,7 @@ fn nesting_at_the_bound_still_emits() -> DResult<()> {
     let ok_fn = Func {
         id: FuncId::from_raw(0),
         name: func,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![],
         ret: IrType::Int,
@@ -181,6 +184,7 @@ fn empty_intended_symbol_is_rejected() -> DResult<()> {
     let f = Func {
         id: FuncId::from_raw(0),
         name: func,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(empty, IrType::Int)],
         ret: IrType::Int,
@@ -243,7 +247,9 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
     let res = RustBackend::new(&interner).emit(&prog);
     assert!(res.is_err(), "type-name collision must error, got {res:?}");
     if let Err(err) = res {
-        assert_eq!(err.code(), SKY_I0202, "wrong code for type-name collision");
+        // Pre-Defect-2-fix: SKY-I0202 (CompilerBug). Post-fix: clean SKY-N0012
+        // (NameError::DuplicateType) so the user sees a structured error not an ICE.
+        assert_eq!(err.code(), SKY_N0012, "wrong code for type-name collision");
     }
     Ok(())
 }
@@ -299,6 +305,7 @@ fn let_if_and_extended_binops_emit_total_rust() -> DResult<()> {
     let f_fn = Func {
         id: FuncId::from_raw(0),
         name: f,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(n, IrType::Int)],
         ret: IrType::Int,
@@ -328,6 +335,7 @@ fn tuple_type_and_expr_emit_as_rust_tuples() -> DResult<()> {
     let f_fn = Func {
         id: FuncId::from_raw(0),
         name: f,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(n, IrType::Int)],
         ret: IrType::Tuple(vec![IrType::Int, IrType::Int]),
