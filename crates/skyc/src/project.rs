@@ -98,8 +98,12 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         source: e,
     })?;
 
-    let mut in_project = false;
+    // `sky.toml` schema: `name` may sit at the top level (Sky's own examples) or
+    // under `[project]`; the source root comes from `[source] root = "…"`,
+    // defaulting to `src`. `section` is the empty string at the top level.
+    let mut section = "";
     let mut name: Option<String> = None;
+    let mut src_rel: Option<String> = None;
 
     for raw_line in text.lines() {
         let line = raw_line.trim();
@@ -107,25 +111,36 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
             continue;
         }
         if line.starts_with('[') {
-            in_project = line == "[project]";
+            section = if line == "[project]" {
+                "[project]"
+            } else if line == "[source]" {
+                "[source]"
+            } else {
+                "other"
+            };
             continue;
         }
-        if in_project && let Some(val) = line.strip_prefix("name") {
-            let val = val.trim();
-            if let Some(val) = val.strip_prefix('=') {
-                let val = val.trim().trim_matches('"');
-                name = Some(val.to_owned());
-            }
+        let Some((key, val)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let val = val.trim().trim_matches('"');
+        match (section, key) {
+            ("" | "[project]", "name") => name = Some(val.to_owned()),
+            ("[source]", "root") => src_rel = Some(val.to_owned()),
+            _ => {}
         }
     }
 
     let name = name.ok_or(CliError::Usage(
-        "sky.toml: missing `[project] name = \"…\"` entry",
+        "sky.toml: missing a `name = \"…\"` entry",
     ))?;
 
-    let src_root = root.join("src");
+    let src_root = root.join(src_rel.as_deref().unwrap_or("src"));
     if !src_root.is_dir() {
-        return Err(CliError::Usage("sky.toml: `src/` directory does not exist"));
+        return Err(CliError::Usage(
+            "sky.toml: the source root directory does not exist",
+        ));
     }
 
     Ok(ProjectManifest {
