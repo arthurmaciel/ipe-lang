@@ -927,6 +927,107 @@ fn emit_tea_call(
     }
 }
 
+/// Handle a `Sky.Http.Server` / `Middleware` / `RateLimit` kernel call.
+///
+/// Returns `Ok(None)` for all wired server kernels (they all use the standard
+/// N-arg call path — no boxing or special argument transformation needed).
+/// Returns a hard [`Diagnostic::CompilerBug`] for any `is_server()` variant
+/// not listed here, so a future addition that forgets this function fails at
+/// compile time.
+fn emit_server_call(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    let Callee::Kernel(k) = callee else {
+        return Ok(None);
+    };
+    if !k.is_server() {
+        return Ok(None);
+    }
+    match k {
+        // ── Request accessor kernels that take `ServerRequest` by value ───────
+        //
+        // `ServerRequest: Clone` (see `runtime/src/sky_runtime/server.rs`).
+        // When a handler calls more than one accessor on the same `req` binding,
+        // the first call would move `req` and subsequent calls would fail with
+        // E0382 "use of moved value". Emitting `req.clone()` for the request
+        // argument keeps the binding alive across all reads — identical pattern
+        // to `DictGet` (see the DictGet arm below `emit_server_call`).
+        //
+        // Server.body   : Request -> String   — req is the only arg (index 0)
+        // Server.path   : Request -> String   — req is the only arg (index 0)
+        // Server.method : Request -> String   — req is the only arg (index 0)
+        KernelFn::ServerBody | KernelFn::ServerPath | KernelFn::ServerMethod => {
+            let [req_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_server_call",
+                    detail: format!("{k:?} requires exactly 1 argument, got {}", args.len()),
+                });
+            };
+            let fn_name = kernel_name(*k);
+            let req_s = emit_expr_at(ctx, req_e, indent, child, generics)?;
+            Ok(Some(format!("{fn_name}({req_s}.clone())")))
+        }
+
+        // Server.param      : String -> Request -> Maybe String — req is arg 1
+        // Server.queryParam : String -> Request -> Maybe String — req is arg 1
+        // Server.header     : String -> Request -> Maybe String — req is arg 1
+        // Server.getCookie  : String -> Request -> Maybe String — req is arg 1
+        KernelFn::ServerParam
+        | KernelFn::ServerQueryParam
+        | KernelFn::ServerHeader
+        | KernelFn::ServerGetCookie => {
+            let [name_e, req_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_server_call",
+                    detail: format!("{k:?} requires exactly 2 arguments, got {}", args.len()),
+                });
+            };
+            let fn_name = kernel_name(*k);
+            let name_s = emit_expr_at(ctx, name_e, indent, child, generics)?;
+            let req_s = emit_expr_at(ctx, req_e, indent, child, generics)?;
+            Ok(Some(format!("{fn_name}({name_s}, {req_s}.clone())")))
+        }
+
+        // All remaining server kernels use the standard N-arg call path — no
+        // special boxing or argument projection is needed.
+        KernelFn::ServerGet
+        | KernelFn::ServerPost
+        | KernelFn::ServerPut
+        | KernelFn::ServerDelete
+        | KernelFn::ServerAny
+        | KernelFn::ServerApi
+        | KernelFn::ServerStatic
+        | KernelFn::ServerListen
+        | KernelFn::ServerText
+        | KernelFn::ServerJson
+        | KernelFn::ServerHtml
+        | KernelFn::ServerWithStatus
+        | KernelFn::ServerWithHeader
+        | KernelFn::ServerRedirect
+        | KernelFn::ServerCookieNew
+        | KernelFn::ServerWithCookie
+        | KernelFn::MiddlewareWithCors
+        | KernelFn::MiddlewareWithLogging
+        | KernelFn::MiddlewareWithBasicAuth
+        | KernelFn::MiddlewareWithRateLimit
+        | KernelFn::RateLimitAllow => Ok(None),
+        // Any is_server() variant not listed above is a gap — hard error so
+        // the Rust compiler's exhaustiveness check catches it at compile time.
+        _ => Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_server_call",
+            detail: format!(
+                "server kernel {k:?} is_server() but has no emit arm — \
+                 add it to emit_server_call"
+            ),
+        }),
+    }
+}
+
 /// Emit an expression. `indent` is the indentation level (in 4-space units) of
 /// the line the expression *starts* on; it is consumed only by the multi-line
 /// `match` form. All other M0 expressions render inline (no leading whitespace,
@@ -1140,6 +1241,9 @@ fn emit_expr_at(
                 return Ok(result);
             }
             if let Some(result) = emit_tea_call(ctx, callee, args, indent, child, generics)? {
+                return Ok(result);
+            }
+            if let Some(result) = emit_server_call(ctx, callee, args, indent, child, generics)? {
                 return Ok(result);
             }
             // Dict.get borrows semantics: the runtime takes the HashMap by

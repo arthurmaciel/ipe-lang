@@ -128,6 +128,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
             entry: Some(FuncId::from_raw(1)),
             records: vec![],
             uses_tea: false,
+            uses_server: false,
         }],
     })
 }
@@ -173,6 +174,7 @@ fn unit_value_and_type_render() -> DResult<()> {
             entry: None,
             records: vec![],
             uses_tea: false,
+            uses_server: false,
         }],
     };
     let src = emit(&i, &prog)?;

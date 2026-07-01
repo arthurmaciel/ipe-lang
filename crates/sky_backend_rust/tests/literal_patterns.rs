@@ -148,6 +148,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
             entry: Some(FuncId::from_raw(1)),
             records: vec![],
             uses_tea: false,
+            uses_server: false,
         }],
     })
 }
@@ -290,6 +291,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
                 entry: Some(FuncId::from_raw(1)),
                 records: vec![],
                 uses_tea: false,
+                uses_server: false,
             }],
         },
         x,

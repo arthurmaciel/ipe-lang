@@ -132,6 +132,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
             entry: Some(main_id),
             records: vec![],
             uses_tea: false,
+            uses_server: false,
         }],
     })
 }

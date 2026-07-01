@@ -154,6 +154,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
             entry: Some(FuncId::from_raw(1)),
             records: vec![],
             uses_tea: false,
+            uses_server: false,
         }],
     })
 }
@@ -303,6 +304,7 @@ fn tree_program(interner: &mut Interner) -> DResult<Program> {
             entry: Some(FuncId::from_raw(1)),
             records: vec![],
             uses_tea: false,
+            uses_server: false,
         }],
     })
 }
@@ -427,6 +429,7 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
             entry: None,
             records: vec![],
             uses_tea: false,
+            uses_server: false,
         }],
     };
     let out = emit(&interner, &prog)?;

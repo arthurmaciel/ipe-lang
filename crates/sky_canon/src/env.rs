@@ -578,6 +578,42 @@ impl Env {
                     "fail", "map2", "map3", "map4", "required", "optional",
                 ],
             ),
+            // M6: Sky.Http.Server kernels.
+            (
+                "Server",
+                &[
+                    "get",
+                    "post",
+                    "put",
+                    "delete",
+                    "any",
+                    "api",
+                    "static",
+                    "listen",
+                    "text",
+                    "json",
+                    "html",
+                    "withStatus",
+                    "withHeader",
+                    "redirect",
+                    "param",
+                    "queryParam",
+                    "header",
+                    "getCookie",
+                    "body",
+                    "path",
+                    "method",
+                    "cookie",
+                    "withCookie",
+                ],
+            ),
+            // M6: Sky.Http.Middleware kernels.
+            (
+                "Middleware",
+                &["withCors", "withLogging", "withBasicAuth", "withRateLimit"],
+            ),
+            // M6: Sky.Http.RateLimit kernels.
+            ("RateLimit", &["allow"]),
         ];
 
         for (qual, funcs) in QUALIFIERS {

@@ -235,6 +235,11 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::Decoder(_)
         // `Db` is an opaque connection pool handle, not a function type.
         | IrType::Db
+        // M6 opaque server types are opaque handles, not function types.
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
         | IrType::Generic(_) => false,
         IrType::Enum { args, .. } => args.iter().any(ir_contains_fun),
         IrType::Maybe(elem) | IrType::List(elem) => ir_contains_fun(elem),
@@ -373,6 +378,76 @@ fn expr_uses_tea_kernel(expr: &Expr) -> bool {
 /// Delegates to [`KernelFn::is_tea`].
 const fn kernel_is_tea(k: KernelFn) -> bool {
     k.is_tea()
+}
+
+// ── M6: Sky.Http.Server kernel presence detection ────────────────────────────
+
+/// Return `true` when `expr` (or any of its sub-expressions, recursively)
+/// contains a call whose callee is one of the `Sky.Http.Server` kernel
+/// variants introduced in M6.
+///
+/// Used by [`Lowerer::run`] to decide whether the emitted project needs the
+/// `server` feature in its `Cargo.toml` and the server module appended to
+/// `sky_runtime/mod.rs`.
+fn expr_uses_server_kernel(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, args } => {
+            let callee_is_server = matches!(callee, Callee::Kernel(k) if kernel_is_server(*k));
+            callee_is_server || args.iter().any(expr_uses_server_kernel)
+        }
+        Expr::FuncValue { callee, .. } => {
+            matches!(callee, Callee::Kernel(k) if kernel_is_server(*k))
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            expr_uses_server_kernel(value) || expr_uses_server_kernel(body)
+        }
+        Expr::Lambda { body, .. } => expr_uses_server_kernel(body),
+        Expr::If { cond, then_, else_ } => {
+            expr_uses_server_kernel(cond)
+                || expr_uses_server_kernel(then_)
+                || expr_uses_server_kernel(else_)
+        }
+        Expr::Match(m) => {
+            expr_uses_server_kernel(m.scrutinee())
+                || m.arms()
+                    .iter()
+                    .any(|arm| expr_uses_server_kernel(&arm.body))
+        }
+        Expr::Tuple(elems) => elems.iter().any(expr_uses_server_kernel),
+        Expr::List { items, .. } => items.iter().any(expr_uses_server_kernel),
+        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_server_kernel(v)),
+        Expr::Access { record, .. } => expr_uses_server_kernel(record),
+        Expr::Update { record, fields } => {
+            expr_uses_server_kernel(record)
+                || fields.iter().any(|(_, v)| expr_uses_server_kernel(v))
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_uses_server_kernel(lhs) || expr_uses_server_kernel(rhs)
+        }
+        Expr::Ctor { args, .. } => args.iter().any(expr_uses_server_kernel),
+        Expr::Cons { head, tail } => expr_uses_server_kernel(head) || expr_uses_server_kernel(tail),
+        Expr::Apply { func, args } => {
+            expr_uses_server_kernel(func) || args.iter().any(expr_uses_server_kernel)
+        }
+        Expr::TaskSeq { effect, rest } => {
+            expr_uses_server_kernel(effect) || expr_uses_server_kernel(rest)
+        }
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_) => false,
+    }
+}
+
+/// Return `true` when `k` is one of the Sky.Http.Server kernel variants
+/// introduced in M6.
+///
+/// Delegates to [`KernelFn::is_server`].
+const fn kernel_is_server(k: KernelFn) -> bool {
+    k.is_server()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -623,6 +698,12 @@ impl<'a> Lowerer<'a> {
         // add `SkyCmd<M>` / `SkySub<M>` type aliases.
         let uses_tea = funcs.iter().any(|f| expr_uses_tea_kernel(&f.body));
 
+        // M6: detect whether any Sky.Http.Server kernel call is present. The
+        // backend uses this flag to inject the `server` feature in Cargo.toml
+        // and append `pub mod server; pub use server::*; pub mod server_stream;
+        // pub use server_stream::*;` to mod.rs.
+        let uses_server = funcs.iter().any(|f| expr_uses_server_kernel(&f.body));
+
         let module = Module {
             name: ModPath(self.m.name.clone()),
             types: types_ir,
@@ -630,6 +711,7 @@ impl<'a> Lowerer<'a> {
             entry,
             records,
             uses_tea,
+            uses_server,
         };
         Ok(Program {
             modules: vec![module],
@@ -1527,6 +1609,14 @@ impl<'a> Lowerer<'a> {
                     name: *name,
                     args: Vec::new(),
                 }),
+                // M6 opaque server types — map directly to their dedicated
+                // `IrType` variants so the backend emits the runtime names
+                // (`ServerRequest`, `ServerResponse`, `ServerRoute`,
+                // `ServerCookie`) without synthesising record structs.
+                "Request" => Ok(IrType::ServerRequest),
+                "Response" => Ok(IrType::ServerResponse),
+                "Route" => Ok(IrType::ServerRoute),
+                "Cookie" => Ok(IrType::ServerCookie),
                 _ if self.enum_variants.contains_key(name) => {
                     // A use-site enum type carries its solved type arguments, so
                     // `Opt Int` → `Enum { Opt, [Int] }` (rendered `MainOpt<i64>`).
@@ -2462,7 +2552,19 @@ impl<'a> Lowerer<'a> {
                 // `Cmd.batch : List (Cmd msg) -> Cmd msg`
                 | KernelFn::CmdBatch
                 // `Sub.batch : List (Sub msg) -> Sub msg`
-                | KernelFn::SubBatch,
+                | KernelFn::SubBatch
+                // ── Server arity-1 (M6) ───────────────────────────────────────
+                // `Server.text / json / html / redirect : String -> Response`
+                | KernelFn::ServerText
+                | KernelFn::ServerJson
+                | KernelFn::ServerHtml
+                | KernelFn::ServerRedirect
+                // `Server.body / path / method : Request -> String`
+                | KernelFn::ServerBody
+                | KernelFn::ServerPath
+                | KernelFn::ServerMethod
+                // `Middleware.withLogging : Handler -> Handler`
+                | KernelFn::MiddlewareWithLogging,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -2595,7 +2697,32 @@ impl<'a> Lowerer<'a> {
                 // `PubSub.publish : String -> a -> Task Error ()`
                 | KernelFn::PubSubPublish
                 // `PubSub.publishNoEcho : String -> a -> Task Error ()`
-                | KernelFn::PubSubPublishNoEcho,
+                | KernelFn::PubSubPublishNoEcho
+                // ── Server arity-2 (M6) ───────────────────────────────────────
+                // `Server.get/post/put/delete/any/api : String -> Handler -> Route`
+                | KernelFn::ServerGet
+                | KernelFn::ServerPost
+                | KernelFn::ServerPut
+                | KernelFn::ServerDelete
+                | KernelFn::ServerAny
+                | KernelFn::ServerApi
+                // `Server.static : String -> String -> Route`
+                | KernelFn::ServerStatic
+                // `Server.listen : Int -> List Route -> Task Error ()`
+                | KernelFn::ServerListen
+                // `Server.withStatus : Int -> Response -> Response`
+                | KernelFn::ServerWithStatus
+                // `Server.param/queryParam/header/getCookie : String -> Request -> Maybe String`
+                | KernelFn::ServerParam
+                | KernelFn::ServerQueryParam
+                | KernelFn::ServerHeader
+                | KernelFn::ServerGetCookie
+                // `Server.cookie : String -> String -> Cookie`
+                | KernelFn::ServerCookieNew
+                // `Server.withCookie : Cookie -> Response -> Response`
+                | KernelFn::ServerWithCookie
+                // `Middleware.withCors : List String -> Handler -> Handler`
+                | KernelFn::MiddlewareWithCors,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::StringReplace
@@ -2637,7 +2764,12 @@ impl<'a> Lowerer<'a> {
                 // `map2 : (a -> b -> c) -> Decoder a -> Decoder b -> Decoder c`
                 | KernelFn::DbDecMap2
                 // `required : String -> Decoder a -> Decoder (a -> b) -> Decoder b`
-                | KernelFn::DbDecRequired,
+                | KernelFn::DbDecRequired
+                // ── Server arity-3 (M6) ───────────────────────────────────────
+                // `Server.withHeader : String -> String -> Response -> Response`
+                | KernelFn::ServerWithHeader
+                // `Middleware.withBasicAuth : String -> String -> Handler -> Handler`
+                | KernelFn::MiddlewareWithBasicAuth,
             ) => Ok(3),
             // ── JsonDec arity-4 (M4h) ─────────────────────────────────────────
             Callee::Kernel(
@@ -2661,7 +2793,12 @@ impl<'a> Lowerer<'a> {
                 // `map3 : (a->b->c->d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d`
                 | KernelFn::DbDecMap3
                 // `optional : String -> Decoder a -> a -> Decoder (a->b) -> Decoder b`
-                | KernelFn::DbDecOptional,
+                | KernelFn::DbDecOptional
+                // ── Server arity-4 (M6) ───────────────────────────────────────
+                // `Middleware.withRateLimit : String -> Int -> Int -> Handler -> Handler`
+                | KernelFn::MiddlewareWithRateLimit
+                // `RateLimit.allow : String -> String -> Int -> Int -> Bool`
+                | KernelFn::RateLimitAllow,
             ) => Ok(4),
             // ── JsonDec arity-5 (M4h) ─────────────────────────────────────────
             Callee::Kernel(
@@ -3075,6 +3212,41 @@ impl<'a> Lowerer<'a> {
                     ("Sub", "batch") => Ok(Callee::Kernel(KernelFn::SubBatch)),
                     ("Sub", "every") => Ok(Callee::Kernel(KernelFn::SubEvery)),
                     ("Time", "every") => Ok(Callee::Kernel(KernelFn::TimeEvery)),
+                    // ── Sky.Http.Server kernels (M6) ─────────────────────────────
+                    ("Server", "get") => Ok(Callee::Kernel(KernelFn::ServerGet)),
+                    ("Server", "post") => Ok(Callee::Kernel(KernelFn::ServerPost)),
+                    ("Server", "put") => Ok(Callee::Kernel(KernelFn::ServerPut)),
+                    ("Server", "delete") => Ok(Callee::Kernel(KernelFn::ServerDelete)),
+                    ("Server", "any") => Ok(Callee::Kernel(KernelFn::ServerAny)),
+                    ("Server", "api") => Ok(Callee::Kernel(KernelFn::ServerApi)),
+                    ("Server", "static") => Ok(Callee::Kernel(KernelFn::ServerStatic)),
+                    ("Server", "listen") => Ok(Callee::Kernel(KernelFn::ServerListen)),
+                    ("Server", "text") => Ok(Callee::Kernel(KernelFn::ServerText)),
+                    ("Server", "json") => Ok(Callee::Kernel(KernelFn::ServerJson)),
+                    ("Server", "html") => Ok(Callee::Kernel(KernelFn::ServerHtml)),
+                    ("Server", "withStatus") => Ok(Callee::Kernel(KernelFn::ServerWithStatus)),
+                    ("Server", "withHeader") => Ok(Callee::Kernel(KernelFn::ServerWithHeader)),
+                    ("Server", "redirect") => Ok(Callee::Kernel(KernelFn::ServerRedirect)),
+                    ("Server", "param") => Ok(Callee::Kernel(KernelFn::ServerParam)),
+                    ("Server", "queryParam") => Ok(Callee::Kernel(KernelFn::ServerQueryParam)),
+                    ("Server", "header") => Ok(Callee::Kernel(KernelFn::ServerHeader)),
+                    ("Server", "getCookie") => Ok(Callee::Kernel(KernelFn::ServerGetCookie)),
+                    ("Server", "body") => Ok(Callee::Kernel(KernelFn::ServerBody)),
+                    ("Server", "path") => Ok(Callee::Kernel(KernelFn::ServerPath)),
+                    ("Server", "method") => Ok(Callee::Kernel(KernelFn::ServerMethod)),
+                    ("Server", "cookie") => Ok(Callee::Kernel(KernelFn::ServerCookieNew)),
+                    ("Server", "withCookie") => Ok(Callee::Kernel(KernelFn::ServerWithCookie)),
+                    ("Middleware", "withCors") => Ok(Callee::Kernel(KernelFn::MiddlewareWithCors)),
+                    ("Middleware", "withLogging") => {
+                        Ok(Callee::Kernel(KernelFn::MiddlewareWithLogging))
+                    }
+                    ("Middleware", "withBasicAuth") => {
+                        Ok(Callee::Kernel(KernelFn::MiddlewareWithBasicAuth))
+                    }
+                    ("Middleware", "withRateLimit") => {
+                        Ok(Callee::Kernel(KernelFn::MiddlewareWithRateLimit))
+                    }
+                    ("RateLimit", "allow") => Ok(Callee::Kernel(KernelFn::RateLimitAllow)),
                     // A kernel beyond the wired set.
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),

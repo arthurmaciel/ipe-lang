@@ -135,6 +135,15 @@ struct Builtins {
     /// `"Sub"` — the opaque subscription type constructor `Sub msg`.
     /// Represented in the IR as `IrType::Sub(Box<IrType>)`.
     sub: Symbol,
+    // ── Sky.Http.Server opaque type constructor symbols (M6) ──────────────────
+    /// `"Request"` — the opaque server request type.
+    server_request: Symbol,
+    /// `"Response"` — the opaque server response type.
+    server_response: Symbol,
+    /// `"Route"` — the opaque server route type.
+    server_route: Symbol,
+    /// `"Cookie"` — the opaque server cookie type.
+    server_cookie: Symbol,
 }
 
 impl Builtins {
@@ -189,6 +198,11 @@ impl Builtins {
             // TEA Cmd / Sub type constructors (M5c).
             cmd: interner.intern("Cmd")?,
             sub: interner.intern("Sub")?,
+            // Sky.Http.Server opaque types (M6).
+            server_request: interner.intern("Request")?,
+            server_response: interner.intern("Response")?,
+            server_route: interner.intern("Route")?,
+            server_cookie: interner.intern("Cookie")?,
         })
     }
 
@@ -3217,6 +3231,256 @@ impl<'a> Builder<'a> {
                 };
                 fun(int, fun(var(0), sub(var(0))))
             }
+
+            // ── M6: Sky.Http.Server kernels ─────────────────────────────────
+            //
+            // Opaque con helpers — identical to `db` and `cmd` patterns above.
+            // `Request` / `Response` / `Route` / `Cookie` are all Ty::Con with
+            // an empty module path, matching how the lowerer looks them up.
+
+            // Server.get  : String -> (Request -> Task Error Response) -> Route
+            // Server.post : String -> (Request -> Task Error Response) -> Route
+            // Server.put  : String -> (Request -> Task Error Response) -> Route
+            // Server.delete : String -> (Request -> Task Error Response) -> Route
+            // Server.any  : String -> (Request -> Task Error Response) -> Route
+            // Server.api  : String -> (Request -> Task Error Response) -> Route
+            (Some("Server"), Some("get" | "post" | "put" | "delete" | "any" | "api")) => {
+                let req = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_request,
+                    args: Vec::new(),
+                };
+                let resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_response,
+                    args: Vec::new(),
+                };
+                let route = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_route,
+                    args: Vec::new(),
+                };
+                let error_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.error,
+                    args: Vec::new(),
+                };
+                let task_resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![resp],
+                };
+                // error channel: Task has one type param (the ok type) — the
+                // error channel is conceptually Error but erased at the Ty level.
+                let _ = error_ty; // unused — task takes 1 arg in Sky-Rust Ty
+                fun(string, fun(fun(req, task_resp), route))
+            }
+
+            // Server.static : String -> String -> Route
+            (Some("Server"), Some("static")) => {
+                let route = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_route,
+                    args: Vec::new(),
+                };
+                fun(string.clone(), fun(string, route))
+            }
+
+            // Server.listen : Int -> List Route -> Task Error ()
+            (Some("Server"), Some("listen")) => {
+                let route = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_route,
+                    args: Vec::new(),
+                };
+                let task_unit_here = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![Ty::Unit],
+                };
+                fun(int, fun(list(route), task_unit_here))
+            }
+
+            // Server.text     : String -> Response
+            // Server.json     : String -> Response
+            // Server.html     : String -> Response
+            // Server.redirect : String -> Response
+            (Some("Server"), Some("text" | "json" | "html" | "redirect")) => {
+                let resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_response,
+                    args: Vec::new(),
+                };
+                fun(string, resp)
+            }
+
+            // Server.withStatus : Int -> Response -> Response
+            (Some("Server"), Some("withStatus")) => {
+                let resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_response,
+                    args: Vec::new(),
+                };
+                fun(int, fun(resp.clone(), resp))
+            }
+
+            // Server.withHeader : String -> String -> Response -> Response
+            (Some("Server"), Some("withHeader")) => {
+                let resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_response,
+                    args: Vec::new(),
+                };
+                fun(string.clone(), fun(string, fun(resp.clone(), resp)))
+            }
+
+            // Server.param       : String -> Request -> Maybe String
+            // Server.queryParam  : String -> Request -> Maybe String
+            // Server.header      : String -> Request -> Maybe String
+            // Server.getCookie   : String -> Request -> Maybe String
+            (Some("Server"), Some("param" | "queryParam" | "header" | "getCookie")) => {
+                let req = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_request,
+                    args: Vec::new(),
+                };
+                let string2 = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.string,
+                    args: Vec::new(),
+                };
+                fun(string, fun(req, maybe(string2)))
+            }
+
+            // Server.body   : Request -> String
+            // Server.path   : Request -> String
+            // Server.method : Request -> String
+            (Some("Server"), Some("body" | "path" | "method")) => {
+                let req = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_request,
+                    args: Vec::new(),
+                };
+                fun(req, string)
+            }
+
+            // Server.cookie : String -> String -> Cookie
+            (Some("Server"), Some("cookie")) => {
+                let cookie = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_cookie,
+                    args: Vec::new(),
+                };
+                fun(string.clone(), fun(string, cookie))
+            }
+
+            // Server.withCookie : Cookie -> Response -> Response
+            (Some("Server"), Some("withCookie")) => {
+                let cookie = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_cookie,
+                    args: Vec::new(),
+                };
+                let resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_response,
+                    args: Vec::new(),
+                };
+                fun(cookie, fun(resp.clone(), resp))
+            }
+
+            // Middleware.withCors : List String -> (Request -> Task Error Response) -> (Request -> Task Error Response)
+            (Some("Middleware"), Some("withCors")) => {
+                let req = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_request,
+                    args: Vec::new(),
+                };
+                let resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_response,
+                    args: Vec::new(),
+                };
+                let task_resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![resp],
+                };
+                let handler = fun(req, task_resp);
+                fun(list(string), fun(handler.clone(), handler))
+            }
+
+            // Middleware.withLogging : (Request -> Task Error Response) -> (Request -> Task Error Response)
+            (Some("Middleware"), Some("withLogging")) => {
+                let req = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_request,
+                    args: Vec::new(),
+                };
+                let resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_response,
+                    args: Vec::new(),
+                };
+                let task_resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![resp],
+                };
+                let handler = fun(req, task_resp);
+                fun(handler.clone(), handler)
+            }
+
+            // Middleware.withBasicAuth : String -> String -> (Request -> Task Error Response) -> (Request -> Task Error Response)
+            (Some("Middleware"), Some("withBasicAuth")) => {
+                let req = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_request,
+                    args: Vec::new(),
+                };
+                let resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_response,
+                    args: Vec::new(),
+                };
+                let task_resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![resp],
+                };
+                let handler = fun(req, task_resp);
+                fun(string.clone(), fun(string, fun(handler.clone(), handler)))
+            }
+
+            // Middleware.withRateLimit : String -> Int -> Int -> (Request -> Task Error Response) -> (Request -> Task Error Response)
+            (Some("Middleware"), Some("withRateLimit")) => {
+                let req = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_request,
+                    args: Vec::new(),
+                };
+                let resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.server_response,
+                    args: Vec::new(),
+                };
+                let task_resp = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![resp],
+                };
+                let handler = fun(req, task_resp);
+                fun(
+                    string,
+                    fun(int.clone(), fun(int, fun(handler.clone(), handler))),
+                )
+            }
+
+            // RateLimit.allow : String -> String -> Int -> Int -> Bool
+            (Some("RateLimit"), Some("allow")) => fun(
+                string.clone(),
+                fun(string, fun(int.clone(), fun(int, bool_ty))),
+            ),
 
             // Unknown kernel: a single flexible variable. The raw id is chosen
             // to be distinct from any real interned symbol's typical range; it

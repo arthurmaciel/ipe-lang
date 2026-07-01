@@ -109,6 +109,11 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::Db => "Db".to_owned(),
         IrType::Cmd(inner) => format!("Cmd {}", ir_type_name(interner, inner)),
         IrType::Sub(inner) => format!("Sub {}", ir_type_name(interner, inner)),
+        // M6 opaque server types — source-facing names match Sky stdlib.
+        IrType::ServerRequest => "Request".to_owned(),
+        IrType::ServerResponse => "Response".to_owned(),
+        IrType::ServerRoute => "Route".to_owned(),
+        IrType::ServerCookie => "Cookie".to_owned(),
         IrType::Tuple(elems) => {
             let inner = elems
                 .iter()
@@ -499,6 +504,35 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SubSubscribeTopic => "Sub.subscribeTopic",
         KernelFn::PubSubPublish => "PubSub.publish",
         KernelFn::PubSubPublishNoEcho => "PubSub.publishNoEcho",
+        // M6: Sky.Http.Server kernels
+        KernelFn::ServerGet => "Server.get",
+        KernelFn::ServerPost => "Server.post",
+        KernelFn::ServerPut => "Server.put",
+        KernelFn::ServerDelete => "Server.delete",
+        KernelFn::ServerAny => "Server.any",
+        KernelFn::ServerApi => "Server.api",
+        KernelFn::ServerStatic => "Server.static",
+        KernelFn::ServerListen => "Server.listen",
+        KernelFn::ServerText => "Server.text",
+        KernelFn::ServerJson => "Server.json",
+        KernelFn::ServerHtml => "Server.html",
+        KernelFn::ServerWithStatus => "Server.withStatus",
+        KernelFn::ServerWithHeader => "Server.withHeader",
+        KernelFn::ServerRedirect => "Server.redirect",
+        KernelFn::ServerParam => "Server.param",
+        KernelFn::ServerQueryParam => "Server.queryParam",
+        KernelFn::ServerHeader => "Server.header",
+        KernelFn::ServerGetCookie => "Server.getCookie",
+        KernelFn::ServerBody => "Server.body",
+        KernelFn::ServerPath => "Server.path",
+        KernelFn::ServerMethod => "Server.method",
+        KernelFn::ServerCookieNew => "Server.cookie",
+        KernelFn::ServerWithCookie => "Server.withCookie",
+        KernelFn::MiddlewareWithCors => "Middleware.withCors",
+        KernelFn::MiddlewareWithLogging => "Middleware.withLogging",
+        KernelFn::MiddlewareWithBasicAuth => "Middleware.withBasicAuth",
+        KernelFn::MiddlewareWithRateLimit => "Middleware.withRateLimit",
+        KernelFn::RateLimitAllow => "RateLimit.allow",
     }
 }
 
@@ -1064,6 +1098,7 @@ mod tests {
                 entry: Some(FuncId::from_raw(0)),
                 records: vec![],
                 uses_tea: false,
+                uses_server: false,
             }],
         })
     }
@@ -1157,6 +1192,7 @@ program
                 entry: None,
                 records: vec![],
                 uses_tea: false,
+                uses_server: false,
             }],
         };
 
@@ -1212,6 +1248,7 @@ program
                 entry: None,
                 records: vec![],
                 uses_tea: false,
+                uses_server: false,
             }],
         };
 
@@ -1269,6 +1306,7 @@ program
                 entry: None,
                 records: vec![],
                 uses_tea: false,
+                uses_server: false,
             }],
         };
 
@@ -1312,6 +1350,7 @@ program
                 entry: None,
                 records: vec![],
                 uses_tea: false,
+                uses_server: false,
             }],
         };
 
@@ -1364,6 +1403,7 @@ program
                 entry: None,
                 records: vec![],
                 uses_tea: false,
+                uses_server: false,
             }],
         };
 
@@ -1408,6 +1448,7 @@ program
                 entry: None,
                 records: vec![],
                 uses_tea: false,
+                uses_server: false,
             }],
         };
 
@@ -1488,6 +1529,7 @@ program
                 entry: None,
                 records: vec![],
                 uses_tea: false,
+                uses_server: false,
             }],
         };
 
@@ -1569,6 +1611,7 @@ program
                 entry: None,
                 records: vec![],
                 uses_tea: false,
+                uses_server: false,
             }],
         };
 
@@ -1601,6 +1644,7 @@ program
                 entry: None,
                 records: vec![],
                 uses_tea: false,
+                uses_server: false,
             }],
         };
         let rendered = pretty(&program, &i);
