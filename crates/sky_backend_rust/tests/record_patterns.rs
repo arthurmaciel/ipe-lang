@@ -99,6 +99,7 @@ fn getx_program(interner: &mut Interner) -> DResult<Program> {
     let getx_fn = Func {
         id: FuncId::from_raw(0),
         name: getx,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(par, rec)],
         ret: IrType::Int,
@@ -112,6 +113,7 @@ fn getx_program(interner: &mut Interner) -> DResult<Program> {
     let main_fn = Func {
         id: FuncId::from_raw(1),
         name: main,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
@@ -176,6 +178,7 @@ fn nested_tuple_in_record_field_renders_recursively() -> DResult<()> {
     let sx_fn = Func {
         id: FuncId::from_raw(0),
         name: sx,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(par, p_rec)],
         ret: IrType::Int,
@@ -217,6 +220,7 @@ fn record_pattern_with_unknown_shape_fails_fast() -> DResult<()> {
     let f_fn = Func {
         id: FuncId::from_raw(0),
         name: func,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(par, IrType::Int)],
         ret: IrType::Int,

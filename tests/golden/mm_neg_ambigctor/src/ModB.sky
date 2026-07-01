@@ -1,0 +1,2 @@
+module ModB exposing (Shape(..))
+type Shape = Red | Circle

@@ -71,6 +71,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
     let update_fn = Func {
         id: update_id,
         name: update,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![
             (
@@ -89,6 +90,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
     let main_fn = Func {
         id: main_id,
         name: main,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),

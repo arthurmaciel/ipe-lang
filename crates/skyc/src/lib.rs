@@ -15,8 +15,10 @@
 //!
 //! Errors are typed ([`CliError`]); no operation panics or unwraps.
 
+pub mod project;
 pub mod stdlib;
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::io::Write;
@@ -65,6 +67,12 @@ const ALL_CODES: &[Code] = &[
     sky_diagnostics::SKY_N0011,
     sky_diagnostics::SKY_N0012,
     sky_diagnostics::SKY_N0013,
+    sky_diagnostics::SKY_N0020,
+    sky_diagnostics::SKY_N0021,
+    sky_diagnostics::SKY_N0022,
+    sky_diagnostics::SKY_N0023,
+    sky_diagnostics::SKY_N0024,
+    sky_diagnostics::SKY_N0025,
     sky_diagnostics::SKY_T0001,
     sky_diagnostics::SKY_T0002,
     sky_diagnostics::SKY_T0003,
@@ -217,6 +225,154 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
     Ok(())
 }
 
+/// Build a multi-module Sky project rooted at `manifest_path` (`sky.toml`) into
+/// a Rust Cargo project under `out_dir`, vendoring the runtime from `runtime_dir`.
+///
+/// The build pipeline:
+/// 1. Parse `sky.toml` to locate the source root.
+/// 2. Discover every `*.sky` file under `src/`.
+/// 3. Scan each file for `import` lines to build the import graph.
+/// 4. Topological sort — fail closed on a cycle (SKY-N0021).
+/// 5. Canonicalise each module in dep-first order (SKY-N0020 / N0022 / N0023 /
+///    N0024 / N0025 gate).
+/// 6. Link (merge) all canonical modules into one.
+/// 7. Infer → lower → emit as a single-module program (byte-identical to the
+///    single-file pipeline on the entry module).
+///
+/// # Errors
+/// [`CliError::Io`] on any filesystem failure.
+/// [`CliError::Pipeline`] carrying the first compiler diagnostic.
+pub fn build_project(
+    manifest_path: &Path,
+    out_dir: &Path,
+    runtime_dir: &Path,
+) -> Result<(), CliError> {
+    let manifest = project::parse_manifest(manifest_path)?;
+    let discovered = project::discover_modules(&manifest.src_root)?;
+
+    // For each module, read its source and extract imports.
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    for m in &discovered {
+        let src = fs::read_to_string(&m.path).map_err(|e| CliError::Io {
+            path: m.path.clone(),
+            source: e,
+        })?;
+        sources.insert(m.module_path.clone(), (m.path.clone(), src));
+    }
+
+    let entry_path = vec!["Main".to_owned()];
+
+    // Build the import graph, then topologically sort.
+    let topo = project::topological_order(&discovered, &entry_path, |mod_path| {
+        sources
+            .get(mod_path)
+            .map(|(_, src)| project::extract_imports_from_source(src))
+            .unwrap_or_default()
+    })
+    .map_err(|cycle| {
+        // Build a SKY-N0021 diagnostic. We use Span::DUMMY because the cycle
+        // spans multiple files; the rendered message carries the cycle path.
+        let path: Box<[Box<str>]> = cycle.path.into_iter().map(String::into_boxed_str).collect();
+        let diag = sky_diagnostics::Diagnostic::Name {
+            span: sky_diagnostics::Span::DUMMY,
+            msg: sky_diagnostics::NameError::ImportCycle { path },
+        };
+        // Use the manifest path as the "file" for rendering.
+        CliError::Pipeline {
+            file: manifest_path.to_path_buf(),
+            src: String::new(),
+            diag,
+        }
+    })?;
+
+    // Canonicalise each module in dep-first order.
+    let mut interner = sky_intern::Interner::new();
+    let mut dep_exports: BTreeMap<Vec<sky_intern::Symbol>, sky_canon::ModuleExports> =
+        BTreeMap::new();
+
+    let mut canon_modules: Vec<sky_canon::ast::Module> = Vec::new();
+    let mut entry_name: Vec<sky_intern::Symbol> = Vec::new();
+
+    for m in &topo {
+        let Some((path, src)) = sources.get(&m.module_path) else {
+            // Every module in `topo` was discovered from the filesystem, so a
+            // missing source entry here is a compiler-internal invariant violation.
+            return Err(CliError::Usage(
+                "internal: module in topo order not in source map",
+            ));
+        };
+
+        let pipeline_err = |diag: sky_diagnostics::Diagnostic| CliError::Pipeline {
+            file: path.clone(),
+            src: src.clone(),
+            diag,
+        };
+
+        let parsed = sky_parse::parse_module(src, &mut interner).map_err(&pipeline_err)?;
+
+        // Build the expected interned path from the discovered module_path.
+        let expected_path: Vec<sky_intern::Symbol> = m
+            .module_path
+            .iter()
+            .map(|s| interner.intern(s))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(&pipeline_err)?;
+
+        let (canon_mod, exports) =
+            sky_canon::canonicalise_module(&parsed, &expected_path, &dep_exports, &mut interner)
+                .map_err(&pipeline_err)?;
+
+        if m.module_path == entry_path {
+            entry_name.clone_from(&expected_path);
+        }
+
+        dep_exports.insert(expected_path, exports);
+        canon_modules.push(canon_mod);
+    }
+
+    // Link all canon modules into one.
+    let linked = sky_canon::link::link(entry_name, canon_modules);
+
+    // Run infer → lower → emit on the linked module.
+    // We use the entry file as the blame location for any post-link error.
+    let entry_src_path = sources
+        .get(&entry_path)
+        .map_or_else(|| manifest.src_root.join("Main.sky"), |(p, _)| p.clone());
+    let entry_src = sources
+        .get(&entry_path)
+        .map(|(_, s)| s.clone())
+        .unwrap_or_default();
+
+    let pipeline_err = |diag: sky_diagnostics::Diagnostic| CliError::Pipeline {
+        file: entry_src_path.clone(),
+        src: entry_src.clone(),
+        diag,
+    };
+
+    let types = sky_types::infer(&linked, &mut interner).map_err(&pipeline_err)?;
+    let program = sky_lower::lower(&linked, &types, &mut interner).map_err(&pipeline_err)?;
+    let emitted = sky_backend_rust::RustBackend::new(&interner)
+        .emit(&program)
+        .map_err(&pipeline_err)?;
+
+    let src_dir = out_dir.join("src");
+    fs::create_dir_all(&src_dir).map_err(|e| io_err(&src_dir, e))?;
+    copy_dir(runtime_dir, &src_dir.join("sky_runtime"))?;
+
+    let cargo_path = out_dir.join("Cargo.toml");
+    fs::write(&cargo_path, &emitted.cargo_toml).map_err(|e| io_err(&cargo_path, e))?;
+
+    for (rel, contents) in &emitted.files {
+        let p = out_dir.join(rel.as_str());
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
+        }
+        fs::write(&p, contents).map_err(|e| io_err(&p, e))?;
+    }
+
+    Ok(())
+}
+
 /// Locate the Sky runtime module tree (`runtime/src/sky_runtime/`).
 ///
 /// Resolution order:
@@ -264,7 +420,7 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
 
 /// The top-level usage hint, listing every subcommand and flag.
 const USAGE: &str = "usage:\n  \
-     skyc build <entry.sky> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
+     skyc build <entry.sky|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
      skyc explain [<CODE>]\n  \
      skyc fix <entry.sky> [--yes]";
 
@@ -318,7 +474,28 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
         Some(r) => PathBuf::from(r),
         None => resolve_runtime()?,
     };
-    build(&entry_path, &out_dir, &runtime_dir)
+
+    // Multi-module project: if the entry is a directory or a `sky.toml` file,
+    // route to `build_project`. Single-file: route to `build`.
+    let manifest = if entry_path.is_dir() {
+        let candidate = entry_path.join("sky.toml");
+        if candidate.is_file() {
+            Some(candidate)
+        } else {
+            return Err(CliError::Usage(
+                "directory supplied but no sky.toml found inside it",
+            ));
+        }
+    } else if entry_path.extension().and_then(|e| e.to_str()) == Some("toml") {
+        Some(entry_path.clone())
+    } else {
+        None
+    };
+
+    manifest.map_or_else(
+        || build(&entry_path, &out_dir, &runtime_dir),
+        |m| build_project(&m, &out_dir, &runtime_dir),
+    )
 }
 
 /// `skyc explain [<CODE>]`. No argument prints the one-line index of every code
@@ -806,7 +983,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 61, "taxonomy is 61 codes");
+        assert_eq!(ALL_CODES.len(), 67, "taxonomy is 67 codes");
         assert!(
             index.contains("SKY-T0001  type mismatch"),
             "index pairs code with title"

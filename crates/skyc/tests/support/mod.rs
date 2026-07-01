@@ -28,6 +28,11 @@
 use std::path::Path;
 
 /// Outcome of building and running an emitted Sky project.
+// Fields are only accessed from E2E test functions (`build_and_run_emitted`
+// callers), which are absent from test binaries that skip the E2E suite (e.g.
+// `golden_mm`).  `build_and_run_emitted` itself carries its own allow;
+// the struct-level allow keeps the field warnings silent in those binaries.
+#[allow(dead_code)]
 pub struct RunOutcome {
     /// The program's standard output, decoded lossily from UTF-8.
     pub stdout: String,

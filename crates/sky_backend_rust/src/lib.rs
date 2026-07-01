@@ -24,7 +24,7 @@ mod project;
 use std::collections::{BTreeMap, BTreeSet};
 
 use sky_backend::{Backend, EmittedProject};
-use sky_diagnostics::{DResult, Diagnostic};
+use sky_diagnostics::{DResult, Diagnostic, NameError, Span};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{FuncId, IrType, Program, TypeDef};
 
@@ -193,16 +193,16 @@ impl<'a> EmitCtx<'a> {
                 // here means the lowerer admitted a cross-module collision the
                 // backend cannot disambiguate from a bare `Symbol`, so fail fast
                 // (SKY-I0202) rather than emit code referencing the wrong type.
-                if let Some(prev) = enum_names.insert(def.name, rust_name.clone()) {
-                    return Err(Diagnostic::CompilerBug {
-                        where_: "backend.type_name_collision",
-                        detail: format!(
-                            "type symbol {} maps to two Rust names ({prev} and {rust_name}); \
-                             cross-module same-named types are indistinguishable by bare symbol",
-                            def.name.as_raw()
-                        ),
+                if enum_names.contains_key(&def.name) {
+                    return Err(Diagnostic::Name {
+                        span: Span::DUMMY,
+                        msg: NameError::DuplicateType {
+                            name: rust_name.into_boxed_str(),
+                            first: Span::DUMMY,
+                        },
                     });
                 }
+                enum_names.insert(def.name, rust_name.clone());
                 let mut all_fields = Vec::with_capacity(def.variants.len());
                 for variant in &def.variants {
                     variant_fields.insert((def.name, variant.name), variant.fields.clone());
@@ -211,9 +211,25 @@ impl<'a> EmitCtx<'a> {
                 enum_variants.insert(def.name, all_fields);
             }
             for func in &module.funcs {
+                // Use the function's own home module path for naming so that two
+                // functions with the same bare name from different source modules
+                // emit distinct Rust names (e.g. `lib_helper` vs `main_helper`).
+                // When `func.home` is empty (IR built directly in backend unit
+                // tests, not through the full pipeline), fall back to the
+                // containing merged module's path — the pre-Defect-2 behaviour —
+                // which is always correct for single-module programs.
+                let effective_home: &[_] = if func.home.0.is_empty() {
+                    &module.name.0
+                } else {
+                    &func.home.0
+                };
+                let func_segs = effective_home
+                    .iter()
+                    .map(|s| resolve_sym(interner, *s))
+                    .collect::<DResult<Vec<&str>>>()?;
                 func_names.insert(
                     func.id,
-                    naming::module_value(&segs, resolve_sym(interner, func.name)?),
+                    naming::module_value(&func_segs, resolve_sym(interner, func.name)?),
                 );
             }
         }

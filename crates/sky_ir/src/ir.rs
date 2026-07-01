@@ -309,6 +309,14 @@ impl BoundSet {
 pub struct Func {
     pub id: FuncId,
     pub name: Symbol,
+    /// The defining module's path. After `link::link` merges several modules
+    /// into one this field retains the original source module path, so the
+    /// backend can prefix the emitted Rust function name with the correct
+    /// module segment (e.g. `lib_helper` for `home = ModPath(["Lib"])`,
+    /// `main_helper` for `home = ModPath(["Main"])`) instead of always using
+    /// the merged entry module's name — preventing same-named functions from
+    /// different source modules from colliding with Rust E0428.
+    pub home: ModPath,
     /// The type variables this function quantifies, in quantification order,
     /// each paired with its [`BoundSet`] (M2a / M2d). A type variable is a Sky
     /// type-variable [`Symbol`] that appears as an [`IrType::Generic`] in the
@@ -2529,6 +2537,7 @@ mod tests {
         let func = Func {
             id: FuncId::from_raw(0),
             name: id,
+            home: ModPath(vec![]),
             type_params: vec![(a, BoundSet::UNBOUNDED)],
             params: vec![(x, IrType::Generic(a))],
             ret: IrType::Generic(a),
@@ -2543,6 +2552,7 @@ mod tests {
         let two = Func {
             id: FuncId::from_raw(1),
             name: id,
+            home: ModPath(vec![]),
             type_params: vec![(a, BoundSet::UNBOUNDED), (b, BoundSet::UNBOUNDED)],
             params: vec![(x, IrType::Generic(a))],
             ret: IrType::Generic(b),
@@ -2562,6 +2572,7 @@ mod tests {
         let double = Func {
             id: FuncId::from_raw(2),
             name: id,
+            home: ModPath(vec![]),
             type_params: vec![(a, bounds)],
             params: vec![(x, IrType::Generic(a))],
             ret: IrType::Generic(a),
@@ -2581,6 +2592,7 @@ mod tests {
         let func = Func {
             id: FuncId::from_raw(0),
             name: main_sym,
+            home: ModPath(vec![]),
             type_params: vec![],
             params: vec![],
             ret: IrType::Task(Box::new(IrType::Unit)),

@@ -1,0 +1,5 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+import ModA exposing (Color(..))
+import ModB exposing (Shape(..))
+main = Task.succeed ()

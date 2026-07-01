@@ -69,6 +69,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
     let identity_fn = Func {
         id: identity_id,
         name: identity,
+        home: ModPath(vec![]),
         type_params: vec![(a, BoundSet::UNBOUNDED)],
         params: vec![(x, IrType::Generic(a))],
         ret: IrType::Generic(a),
@@ -120,6 +121,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
     let main_fn = Func {
         id: main_id,
         name: main,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
@@ -208,6 +210,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
     let double_fn = Func {
         id: double_id,
         name: double,
+        home: ModPath(vec![]),
         type_params: vec![(a, num_bounds)],
         params: vec![(x, IrType::Generic(a))],
         ret: IrType::Generic(a),
@@ -223,6 +226,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
     let max_fn = Func {
         id: max_id,
         name: max,
+        home: ModPath(vec![]),
         type_params: vec![(a, ord_bounds)],
         params: vec![(p, IrType::Generic(a)), (q, IrType::Generic(a))],
         ret: IrType::Generic(a),
@@ -256,6 +260,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
     let main_fn = Func {
         id: main_id,
         name: main,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),

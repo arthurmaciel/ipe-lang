@@ -1,0 +1,3 @@
+module LibB exposing (thing)
+thing : Int
+thing = 2

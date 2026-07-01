@@ -1,0 +1,3 @@
+module ModB exposing (greet)
+greet : String
+greet = "hello from B"

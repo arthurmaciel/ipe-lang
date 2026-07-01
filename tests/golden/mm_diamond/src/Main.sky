@@ -1,0 +1,8 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import B exposing (fromB)
+import C exposing (fromC)
+
+main =
+    println (String.fromInt (fromB + fromC))

@@ -28,6 +28,15 @@ pub struct Module {
 /// A resolved union type and its constructors.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Union {
+    /// The module that defines this union type. For a single-file compilation
+    /// this equals `Module::name`; after `link::link` merges several modules
+    /// into one, every union retains the path of its *original* source module
+    /// here. The type-checker uses this to build the correct [`Ty::Con`] result
+    /// type for each constructor, ensuring that a cross-module annotation
+    /// `Color -> String` (home = `["Helper"]`) unifies with the constructor
+    /// scheme for `Red : Color` (also home = `["Helper"]`), not with the merged
+    /// module's synthetic name.
+    pub home: Vec<Symbol>,
     pub name: Symbol,
     /// The type variables this union quantifies, in declaration order
     /// (`a` in `type Maybe a = …`). Empty for a monomorphic union. The order is
@@ -63,6 +72,14 @@ pub struct Ctor {
 pub enum Def {
     /// A binding with no type annotation.
     Untyped {
+        /// The module that declares this binding. For a single-file compilation
+        /// this equals `Module::name`; after `link::link` merges several modules
+        /// into one every def retains the path of its *original* source module
+        /// here. The lowerer uses this to key `func_ids` and the backend uses it
+        /// to prefix emitted Rust function names, preventing same-named defs from
+        /// different modules from colliding (e.g. `Lib.helper` + `Main.helper`
+        /// both compile cleanly to `lib_helper` + `main_helper`).
+        home: Vec<Symbol>,
         name: Located<Symbol>,
         patterns: Vec<Pattern>,
         body: Expr,
@@ -70,6 +87,8 @@ pub enum Def {
     /// A binding with an annotation, carrying its free type variables and the
     /// canonicalised annotation type.
     Typed {
+        /// See [`Self::Untyped::home`].
+        home: Vec<Symbol>,
         name: Located<Symbol>,
         free_vars: Vec<Symbol>,
         patterns: Vec<Pattern>,
@@ -84,6 +103,14 @@ impl Def {
     pub const fn name(&self) -> Located<Symbol> {
         match self {
             Self::Untyped { name, .. } | Self::Typed { name, .. } => *name,
+        }
+    }
+
+    /// The defining module's path, regardless of typed/untyped shape.
+    #[must_use]
+    pub fn home(&self) -> &[Symbol] {
+        match self {
+            Self::Untyped { home, .. } | Self::Typed { home, .. } => home,
         }
     }
 }

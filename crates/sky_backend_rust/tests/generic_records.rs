@@ -89,6 +89,7 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
     let wrap_fn = Func {
         id: FuncId::from_raw(0),
         name: wrap,
+        home: ModPath(vec![]),
         type_params: vec![(a, BoundSet::UNBOUNDED)],
         params: vec![(x, IrType::Generic(a))],
         ret: value_record(value, IrType::Generic(a)),
@@ -98,6 +99,7 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
     let unwrap_fn = Func {
         id: FuncId::from_raw(1),
         name: unwrap,
+        home: ModPath(vec![]),
         type_params: vec![(b, BoundSet::UNBOUNDED)],
         params: vec![(r, value_record(value, IrType::Generic(b)))],
         ret: IrType::Generic(b),
@@ -110,6 +112,7 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
     let main_fn = Func {
         id: FuncId::from_raw(2),
         name: main,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![],
         ret: IrType::Task(Box::new(IrType::Unit)),
@@ -201,6 +204,7 @@ fn merges_generic_and_concrete_field_set() -> DResult<()> {
     let wrap_fn = Func {
         id: FuncId::from_raw(0),
         name: wrap,
+        home: ModPath(vec![]),
         type_params: vec![(a, BoundSet::UNBOUNDED)],
         params: vec![(x, IrType::Generic(a))],
         ret: value_record(value, IrType::Generic(a)),
@@ -210,6 +214,7 @@ fn merges_generic_and_concrete_field_set() -> DResult<()> {
     let mk_box_fn = Func {
         id: FuncId::from_raw(1),
         name: mk_box,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(n, IrType::Int)],
         ret: value_record(value, IrType::Int),
@@ -259,6 +264,7 @@ fn two_type_parameter_record() -> DResult<()> {
     let pair_fn = Func {
         id: FuncId::from_raw(0),
         name: pair,
+        home: ModPath(vec![]),
         type_params: vec![(a, BoundSet::UNBOUNDED), (b, BoundSet::UNBOUNDED)],
         params: vec![(x, IrType::Generic(a)), (y, IrType::Generic(b))],
         ret: rec,
@@ -298,6 +304,7 @@ fn monomorphic_record_stays_byte_identical() -> DResult<()> {
     let mk_box_fn = Func {
         id: FuncId::from_raw(0),
         name: mk_box,
+        home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(n, IrType::Int)],
         ret: value_record(value, IrType::Int),
