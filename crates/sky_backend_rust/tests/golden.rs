@@ -26,6 +26,7 @@ const GOLDEN_CARGO: &str = include_str!("../../../tests/golden/m0/Cargo.toml");
 ///         Decrement -> count - 1
 /// main = println (String.fromInt (update Increment 0))
 /// ```
+#[allow(clippy::too_many_lines)]
 fn build_m0(interner: &mut Interner) -> DResult<Program> {
     let main_mod = interner.intern("Main")?;
     let msg_ty = interner.intern("Msg")?;
@@ -130,6 +131,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
             funcs: vec![update_fn, main_fn],
             entry: Some(main_id),
             records: vec![],
+            uses_tea: false,
         }],
     })
 }

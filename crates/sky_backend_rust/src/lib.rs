@@ -116,6 +116,18 @@ pub(crate) struct EmitCtx<'a> {
     ///   user type declarations, so the Db call sites can project Sky ADT
     ///   values to the runtime's `SqlParam`.
     pub(crate) uses_db: bool,
+    /// `true` when the program uses at least one TEA (`Cmd` / `Sub` /
+    /// `Time.every`) kernel introduced in M5c. When set,
+    /// [`crate::project::emit_program`]:
+    ///
+    /// * appends `pub mod tea; pub use tea::*;` to the emitted
+    ///   `sky_runtime/mod.rs`, making `cmd_none` / `sub_every` / … available;
+    /// * adds `pub type SkyCmd<M> = sky_runtime::tea::SkyCmd<M>;` and
+    ///   `pub type SkySub<M> = sky_runtime::tea::SkySub<M>;` to `main.rs`.
+    ///
+    /// `tea.rs` is ungated (no `live` cargo feature needed for M5c); the only
+    /// dependency is `tokio`, which is already in the default feature set.
+    pub(crate) uses_tea: bool,
     /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlvalue_rust_name: Option<String>,
@@ -293,9 +305,14 @@ impl<'a> EmitCtx<'a> {
             None
         };
 
+        // M5c: detect whether any TEA kernel is used, from the flag the lowerer
+        // set on the module.
+        let uses_tea = program.modules.iter().any(|m| m.uses_tea);
+
         Ok(Self {
             interner,
             uses_db,
+            uses_tea,
             sqlvalue_rust_name,
             sqlfield_rust_name,
             enum_names,
@@ -590,12 +607,14 @@ fn collect_record_shapes(
         IrType::Set(a) => {
             collect_record_shapes(interner, a, shapes)?;
         }
-        // `Decoder<T>` is an opaque type alias; descend into its inner type for
-        // any nested record shape (e.g. `Decoder { name : String, age : Int }`).
-        IrType::Decoder(inner) => {
+        // `Decoder<T>`, `SkyTask<E,A>`, `SkyCmd<M>`, `SkySub<M>` are opaque
+        // aliases; descend into the inner type for any nested record shape.
+        IrType::Decoder(inner)
+        | IrType::Task(inner)
+        | IrType::Cmd(inner)
+        | IrType::Sub(inner) => {
             collect_record_shapes(interner, inner, shapes)?;
         }
-        IrType::Task(inner) => collect_record_shapes(interner, inner, shapes)?,
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -676,8 +695,9 @@ fn type_reaches_enum(
                 || type_reaches_enum(v, target, enums, visited)
         }
         IrType::Set(a) => type_reaches_enum(a, target, enums, visited),
-        // `Decoder<T>` and `Task<A>` are heap-allocated; descend for completeness.
-        IrType::Decoder(inner) | IrType::Task(inner) => {
+        // `Decoder<T>` / `Task<A>` / `SkyCmd<M>` / `SkySub<M>` are all heap-
+        // allocated; descend into their inner types for completeness.
+        IrType::Decoder(inner) | IrType::Task(inner) | IrType::Cmd(inner) | IrType::Sub(inner) => {
             type_reaches_enum(inner, target, enums, visited)
         }
         IrType::Int
@@ -709,7 +729,9 @@ fn contains_generic(ty: &IrType) -> bool {
         IrType::Result(err, ok) => contains_generic(err) || contains_generic(ok),
         IrType::Dict(k, v) => contains_generic(k) || contains_generic(v),
         IrType::Set(a) => contains_generic(a),
-        IrType::Decoder(inner) | IrType::Task(inner) => contains_generic(inner),
+        IrType::Decoder(inner) | IrType::Task(inner) | IrType::Cmd(inner) | IrType::Sub(inner) => {
+            contains_generic(inner)
+        }
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -763,7 +785,9 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
             collect_generics(v, out);
         }
         IrType::Set(a) => collect_generics(a, out),
-        IrType::Decoder(inner) | IrType::Task(inner) => collect_generics(inner, out),
+        IrType::Decoder(inner) | IrType::Task(inner) | IrType::Cmd(inner) | IrType::Sub(inner) => {
+            collect_generics(inner, out);
+        }
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -852,6 +876,18 @@ fn skeleton_ty(ty: &IrType, idx: &mut BTreeMap<Symbol, usize>, out: &mut String)
         IrType::Set(a) => {
             out.push_str("Set<");
             skeleton_ty(a, idx, out);
+            out.push('>');
+        }
+        // `SkyCmd<M>` / `SkySub<M>` carry a message type parameter; recurse so
+        // `SkyCmd<G0>` and `SkyCmd<G1>` (alpha-equivalent) get the same key.
+        IrType::Cmd(inner) => {
+            out.push_str("Cmd<");
+            skeleton_ty(inner, idx, out);
+            out.push('>');
+        }
+        IrType::Sub(inner) => {
+            out.push_str("Sub<");
+            skeleton_ty(inner, idx, out);
             out.push('>');
         }
         // Scalar / leaf types (Int / Bool / …): their `Debug` form is a stable,
@@ -973,6 +1009,14 @@ fn match_template(
         },
         IrType::Task(te) => match concrete {
             IrType::Task(ce) => match_template(te, ce, subst),
+            _ => Err(mismatch()),
+        },
+        IrType::Cmd(te) => match concrete {
+            IrType::Cmd(ce) => match_template(te, ce, subst),
+            _ => Err(mismatch()),
+        },
+        IrType::Sub(te) => match concrete {
+            IrType::Sub(ce) => match_template(te, ce, subst),
             _ => Err(mismatch()),
         },
         // A concrete leaf must equal the use-site leaf exactly.

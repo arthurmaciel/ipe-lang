@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+-- M5c: Cmd.none / Cmd.batch construct-only gate.
+-- Constructs Cmd values and discards them; confirms that Cmd.none infers
+-- its msg type from a sibling Cmd.perform in the same batch.
+
+main =
+    let
+        c = Cmd.perform (Task.succeed 1) (\r -> 0)
+        _ = Cmd.batch [c, Cmd.none]
+    in
+    println "ok"

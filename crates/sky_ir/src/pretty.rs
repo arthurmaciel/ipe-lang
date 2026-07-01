@@ -107,6 +107,8 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::Json => "Json".to_owned(),
         IrType::Decoder(inner) => format!("Decoder {}", ir_type_name(interner, inner)),
         IrType::Db => "Db".to_owned(),
+        IrType::Cmd(inner) => format!("Cmd {}", ir_type_name(interner, inner)),
+        IrType::Sub(inner) => format!("Sub {}", ir_type_name(interner, inner)),
         IrType::Tuple(elems) => {
             let inner = elems
                 .iter()
@@ -483,6 +485,20 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::DbDecMap4 => "Db.Decode.map4",
         KernelFn::DbDecRequired => "Db.Decode.required",
         KernelFn::DbDecOptional => "Db.Decode.optional",
+        // M5c: TEA Cmd / Sub / Time.every (wired)
+        KernelFn::CmdNone => "Cmd.none",
+        KernelFn::CmdBatch => "Cmd.batch",
+        KernelFn::CmdPerform => "Cmd.perform",
+        KernelFn::SubNone => "Sub.none",
+        KernelFn::SubBatch => "Sub.batch",
+        KernelFn::SubEvery => "Sub.every",
+        KernelFn::TimeEvery => "Time.every",
+        // M6 reserved
+        KernelFn::CmdPublish => "Cmd.publish",
+        KernelFn::CmdPublishNoEcho => "Cmd.publishNoEcho",
+        KernelFn::SubSubscribeTopic => "Sub.subscribeTopic",
+        KernelFn::PubSubPublish => "PubSub.publish",
+        KernelFn::PubSubPublishNoEcho => "PubSub.publishNoEcho",
     }
 }
 
@@ -1047,6 +1063,7 @@ mod tests {
                 funcs: vec![main_func, tick_func],
                 entry: Some(FuncId::from_raw(0)),
                 records: vec![],
+                uses_tea: false,
             }],
         })
     }
@@ -1139,6 +1156,7 @@ program
                 }],
                 entry: None,
                 records: vec![],
+                uses_tea: false,
             }],
         };
 
@@ -1193,6 +1211,7 @@ program
                 }],
                 entry: None,
                 records: vec![],
+                uses_tea: false,
             }],
         };
 
@@ -1249,6 +1268,7 @@ program
                 }],
                 entry: None,
                 records: vec![],
+                uses_tea: false,
             }],
         };
 
@@ -1291,6 +1311,7 @@ program
                 }],
                 entry: None,
                 records: vec![],
+                uses_tea: false,
             }],
         };
 
@@ -1342,6 +1363,7 @@ program
                 }],
                 entry: None,
                 records: vec![],
+                uses_tea: false,
             }],
         };
 
@@ -1385,6 +1407,7 @@ program
                 }],
                 entry: None,
                 records: vec![],
+                uses_tea: false,
             }],
         };
 
@@ -1464,6 +1487,7 @@ program
                 }],
                 entry: None,
                 records: vec![],
+                uses_tea: false,
             }],
         };
 
@@ -1544,6 +1568,7 @@ program
                 ],
                 entry: None,
                 records: vec![],
+                uses_tea: false,
             }],
         };
 
@@ -1575,6 +1600,7 @@ program
                 funcs: vec![],
                 entry: None,
                 records: vec![],
+                uses_tea: false,
             }],
         };
         let rendered = pretty(&program, &i);

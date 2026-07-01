@@ -562,6 +562,21 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::DbDecMap4 => "db_decode_map4",
         KernelFn::DbDecRequired => "db_decode_required",
         KernelFn::DbDecOptional => "db_decode_optional",
+        // ── M5c: TEA Cmd / Sub / Time kernels (wired) ────────────────────────
+        KernelFn::CmdNone => "cmd_none",
+        KernelFn::CmdBatch => "cmd_batch",
+        KernelFn::CmdPerform => "cmd_perform",
+        KernelFn::SubNone => "sub_none",
+        KernelFn::SubBatch => "sub_batch",
+        KernelFn::SubEvery => "sub_every",
+        KernelFn::TimeEvery => "time_every",
+        // ── M6 reserved TEA kernels (NOT emittable; emit path returns CompilerBug) ──
+        // kernel_name is still required for any exhaustive match on KernelFn.
+        KernelFn::CmdPublish => "cmd_publish",
+        KernelFn::CmdPublishNoEcho => "cmd_publish_no_echo",
+        KernelFn::SubSubscribeTopic => "sub_subscribe_topic",
+        KernelFn::PubSubPublish => "pubsub_publish",
+        KernelFn::PubSubPublishNoEcho => "pubsub_publish_no_echo",
     }
 }
 

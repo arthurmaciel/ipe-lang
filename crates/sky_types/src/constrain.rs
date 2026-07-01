@@ -128,6 +128,13 @@ struct Builtins {
     /// `"Decoder"` — the opaque decoder type constructor shared by `Sky.Core.Json.Decode`
     /// and `Std.Db.Decode`. Represented in the IR as `IrType::Decoder(Box<IrType>)`.
     decoder: Symbol,
+    // ── TEA Cmd / Sub type constructor symbols (M5c) ─────────────────────────
+    /// `"Cmd"` — the opaque command type constructor `Cmd msg`.
+    /// Represented in the IR as `IrType::Cmd(Box<IrType>)`.
+    cmd: Symbol,
+    /// `"Sub"` — the opaque subscription type constructor `Sub msg`.
+    /// Represented in the IR as `IrType::Sub(Box<IrType>)`.
+    sub: Symbol,
 }
 
 impl Builtins {
@@ -179,6 +186,9 @@ impl Builtins {
             set_field: interner.intern("SetField")?,
             omit_field: interner.intern("OmitField")?,
             decoder: interner.intern("Decoder")?,
+            // TEA Cmd / Sub type constructors (M5c).
+            cmd: interner.intern("Cmd")?,
+            sub: interner.intern("Sub")?,
         })
     }
 
@@ -3121,6 +3131,92 @@ impl<'a> Builder<'a> {
                     fun(var(0), fun(dec(fun(var(0), var(1))), dec(var(1)))),
                 ),
             ),
+
+            // ── M5c: TEA Cmd / Sub / Time.every kernels ──────────────────────
+            //
+            // `cmd(m)` / `sub(m)` are opaque one-parameter type constructors
+            // lowered to `IrType::Cmd` / `IrType::Sub` in `sky_lower`.
+            //
+            // Cmd.none : Cmd msg
+            (Some("Cmd"), Some("none")) => Ty::Con {
+                module: Vec::new(),
+                name: self.builtins.cmd,
+                args: vec![var(0)],
+            },
+
+            // Cmd.batch : List (Cmd msg) -> Cmd msg
+            (Some("Cmd"), Some("batch")) => {
+                let cmd = |m: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.cmd,
+                    args: vec![m],
+                };
+                fun(list(cmd(var(0))), cmd(var(0)))
+            }
+
+            // Cmd.perform : Task Error a -> (Result Error a -> msg) -> Cmd msg
+            //
+            // The error channel is pinned to `Error` (the concrete Sky runtime
+            // error type), not a free variable, matching the Sky stdlib sig.
+            (Some("Cmd"), Some("perform")) => {
+                let error_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.error,
+                    args: Vec::new(),
+                };
+                let task_a = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                let cmd = |m: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.cmd,
+                    args: vec![m],
+                };
+                // Task Error a -> (Result Error a -> msg) -> Cmd msg
+                fun(
+                    task_a,
+                    fun(fun(result(error_ty, var(0)), var(1)), cmd(var(1))),
+                )
+            }
+
+            // Sub.none : Sub msg
+            (Some("Sub"), Some("none")) => Ty::Con {
+                module: Vec::new(),
+                name: self.builtins.sub,
+                args: vec![var(0)],
+            },
+
+            // Sub.batch : List (Sub msg) -> Sub msg
+            (Some("Sub"), Some("batch")) => {
+                let sub = |m: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.sub,
+                    args: vec![m],
+                };
+                fun(list(sub(var(0))), sub(var(0)))
+            }
+
+            // Sub.every : Int -> msg -> Sub msg
+            (Some("Sub"), Some("every")) => {
+                let sub = |m: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.sub,
+                    args: vec![m],
+                };
+                fun(int, fun(var(0), sub(var(0))))
+            }
+
+            // Time.every : Int -> msg -> Sub msg   (alias for Sub.every)
+            (Some("Time"), Some("every")) => {
+                let sub = |m: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.sub,
+                    args: vec![m],
+                };
+                fun(int, fun(var(0), sub(var(0))))
+            }
 
             // Unknown kernel: a single flexible variable. The raw id is chosen
             // to be distinct from any real interned symbol's typical range; it

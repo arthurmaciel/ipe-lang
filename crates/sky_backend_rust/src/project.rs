@@ -53,6 +53,22 @@ const RUNTIME_CONFIG_RS: &str = include_str!("../../../tests/golden/m0/sky_runti
 /// module namespace so the generated `main.rs` can call the db functions.
 const RUNTIME_MOD_RS_DB_APPEND: &str = "pub mod db;\npub use db::*;\npub mod telemetry_spill;\n";
 
+// ── M5c: TEA Cmd / Sub ─────────────────────────────────────────────────────
+
+/// Lines appended to `sky_runtime/mod.rs` when the program uses TEA kernels
+/// (`Cmd.none / batch / perform`, `Sub.none / batch / every`, `Time.every`).
+///
+/// `tea.rs` lives in the runtime source tree (ungated — no cargo feature needed
+/// for M5c); this addition makes `cmd_none` / `sub_every` / … available in the
+/// emitted `main.rs` namespace via `pub use sky_runtime::*`.
+const RUNTIME_MOD_RS_TEA_APPEND: &str = "pub mod tea;\npub use tea::*;\n";
+
+/// The `SkyCmd<M>` and `SkySub<M>` project-level type aliases emitted when the
+/// program uses TEA kernels. Placed immediately after `runtime_bindings()` (the
+/// block that also contains `SkyTask<A>` and `Decoder<T>`).
+const TEA_TYPE_ALIASES: &str = "pub type SkyCmd<M> = sky_runtime::tea::SkyCmd<M>;\n\
+     pub type SkySub<M> = sky_runtime::tea::SkySub<M>;\n";
+
 /// The `sky_runtime/config.rs` emitted for db-enabled programs. Replaces the
 /// no-op M0 stub with the `SQLite` type aliases + helper fns the `db.rs` module
 /// requires. Mirrors `runtime/src/sky_runtime/config.rs` verbatim, keeping the
@@ -127,8 +143,14 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 
     out.push('\n');
 
-    // Fixed kernel-wrapper prelude.
+    // Fixed kernel-wrapper prelude (SkyError, SkyTask<A>, Decoder<T>, wrappers).
     out.push_str(runtime_bindings()?);
+
+    // M5c: when the program uses TEA kernels, add the SkyCmd<M> / SkySub<M>
+    // type aliases immediately after the other top-level type aliases.
+    if ctx.uses_tea {
+        out.push_str(TEA_TYPE_ALIASES);
+    }
     out.push('\n');
 
     // User functions, emitted from the IR.
@@ -151,18 +173,24 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     //   • `config.rs` — the M0 stub for non-db; the full db-type-alias file
     //     for db programs (provides `DbPool`, `DbRow`, `SKY_DB_URL`, …).
     //   • `Cargo.toml` — adds `db` to default features + `sqlx` dep for db.
-    let (cargo_toml, runtime_mod_rs, runtime_config_rs) = if ctx.uses_db {
-        (
-            db_cargo_toml()?,
-            format!("{RUNTIME_MOD_RS}{RUNTIME_MOD_RS_DB_APPEND}"),
-            RUNTIME_CONFIG_RS_DB.to_owned(),
-        )
+    // Build the manifest + runtime module selection based on which kernel groups
+    // are used. Db and TEA are independent features; a program may use both.
+    let (cargo_toml, runtime_config_rs) = if ctx.uses_db {
+        (db_cargo_toml()?, RUNTIME_CONFIG_RS_DB.to_owned())
     } else {
-        (
-            CARGO_TOML.to_owned(),
-            RUNTIME_MOD_RS.to_owned(),
-            RUNTIME_CONFIG_RS.to_owned(),
-        )
+        (CARGO_TOML.to_owned(), RUNTIME_CONFIG_RS.to_owned())
+    };
+    // mod.rs starts from the M0 default and gains extra `pub mod` lines for
+    // each kernel group the program uses.
+    let runtime_mod_rs = {
+        let mut mod_rs = RUNTIME_MOD_RS.to_owned();
+        if ctx.uses_db {
+            mod_rs.push_str(RUNTIME_MOD_RS_DB_APPEND);
+        }
+        if ctx.uses_tea {
+            mod_rs.push_str(RUNTIME_MOD_RS_TEA_APPEND);
+        }
+        mod_rs
     };
 
     let mut files = BTreeMap::new();

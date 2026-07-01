@@ -806,6 +806,127 @@ fn emit_db_call(
     }
 }
 
+/// Handle TEA (`Cmd` / `Sub` / `Time.every`) kernel calls that require custom
+/// argument wiring.
+///
+/// Returns `Some(emitted)` for:
+///
+/// * **`CmdNone` / `SubNone`** — zero-arg constructors; the runtime functions
+///   take no arguments, so we emit `cmd_none()` / `sub_none()` rather than
+///   going through the default N-arg path.
+///
+/// * **`CmdBatch` / `SubBatch`** — `List (Cmd msg) -> Cmd msg`; the list
+///   argument is passed directly to the runtime (its `IrType::List` renders as
+///   a Rust `Vec`), so we emit `cmd_batch(<list_expr>)` /
+///   `sub_batch(<list_expr>)`.  (A previous version of this doc stated that the
+///   argument was materialised via `vec_from_sky_list`; that was never the
+///   actual code path — the emitted list expression already has `Vec` type.)
+///
+/// * **`CmdPerform`** — `Task Error a -> (Result Error a -> msg) -> Cmd msg`;
+///   the callback must be boxed as a `Box<dyn Fn(SkyResult<A>) -> M + Send + 'static>`.
+///   Emits `cmd_perform(<task>, Box::new(<f>))`.
+///
+/// * **`SubEvery` / `TimeEvery`** — `Int -> msg -> Sub msg`; these pass
+///   through the standard N-arg path (no custom boxing needed), returning
+///   `Ok(None)` so the standard emitter handles them.
+///
+/// Returns `Err(CompilerBug)` for any `k.is_tea()` variant that is:
+///
+/// * **M6-reserved** (`CmdPublish`, `CmdPublishNoEcho`, `SubSubscribeTopic`,
+///   `PubSubPublish`, `PubSubPublishNoEcho`) — guard fires if a program
+///   somehow reaches one (e.g. if `lower_callee` mis-routes it); not
+///   user-reachable from M5c input.
+///
+/// Returns `Ok(None)` for non-TEA callees so the standard path handles them.
+#[allow(clippy::match_same_arms)]
+fn emit_tea_call(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    let Callee::Kernel(k) = callee else {
+        return Ok(None);
+    };
+    if !k.is_tea() {
+        return Ok(None);
+    }
+
+    macro_rules! arg {
+        ($idx:expr, $name:literal) => {
+            args.get($idx).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_tea_call",
+                detail: format!("TEA kernel {:?} missing arg[{}] ({})", k, $idx, $name),
+            })
+        };
+    }
+
+    match k {
+        // ── Arity-0: nullary TEA constructors ──────────────────────────────────
+        // `Cmd.none : Cmd msg`  →  `cmd_none()`
+        KernelFn::CmdNone => Ok(Some("cmd_none()".to_owned())),
+        // `Sub.none : Sub msg`  →  `sub_none()`
+        KernelFn::SubNone => Ok(Some("sub_none()".to_owned())),
+        // ── Arity-1: list-of-cmds / list-of-subs ────────────────────────────────
+        // `Cmd.batch : List (Cmd msg) -> Cmd msg`
+        KernelFn::CmdBatch => {
+            let list_e = arg!(0, "list")?;
+            let list_s = emit_expr_at(ctx, list_e, indent, child, generics)?;
+            Ok(Some(format!("cmd_batch({list_s})")))
+        }
+        // `Sub.batch : List (Sub msg) -> Sub msg`
+        KernelFn::SubBatch => {
+            let list_e = arg!(0, "list")?;
+            let list_s = emit_expr_at(ctx, list_e, indent, child, generics)?;
+            Ok(Some(format!("sub_batch({list_s})")))
+        }
+        // ── Arity-2: Cmd.perform (requires boxing the callback) ─────────────────
+        // `Cmd.perform : Task Error a -> (Result Error a -> msg) -> Cmd msg`
+        // Emits: `cmd_perform(<task>, <f>)`
+        // The runtime's `cmd_perform` signature already boxes the callback,
+        // so we can pass the emitted closure expression directly.
+        KernelFn::CmdPerform => {
+            let task_e = arg!(0, "task")?;
+            let f_e = arg!(1, "to_msg")?;
+            let task_s = emit_expr_at(ctx, task_e, indent, child, generics)?;
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            Ok(Some(format!("cmd_perform({task_s}, {f_s})")))
+        }
+        // ── Arity-2: tick subscriptions — standard path ──────────────────────────
+        // `Sub.every : Int -> msg -> Sub msg` and
+        // `Time.every : Int -> msg -> Sub msg`
+        // Both pass through the default N-arg emitter (no boxing needed).
+        KernelFn::SubEvery | KernelFn::TimeEvery => Ok(None),
+        // ── M6 reserved: NOT emittable yet ───────────────────────────────────────
+        // If a program somehow reaches one of these kernels through lower_callee
+        // routing, that is a compiler invariant violation — hard error.
+        KernelFn::CmdPublish
+        | KernelFn::CmdPublishNoEcho
+        | KernelFn::SubSubscribeTopic
+        | KernelFn::PubSubPublish
+        | KernelFn::PubSubPublishNoEcho => Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_tea_call",
+            detail: format!(
+                "M6-reserved TEA kernel {k:?} reached emit in M5c — \
+                 this callee must not be routed by lower_callee yet"
+            ),
+        }),
+        // Any other `k.is_tea()` variant not listed above is a new wired variant
+        // that needs an explicit arm.  The `is_tea()` guard at the top of this
+        // function means this arm is a hard compile-time-visible gap rather than
+        // a silent `Ok(None)` pass-through.
+        _ => Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_tea_call",
+            detail: format!(
+                "TEA kernel {k:?} is_tea() but has no emit arm — \
+                 add it to emit_tea_call"
+            ),
+        }),
+    }
+}
+
 /// Emit an expression. `indent` is the indentation level (in 4-space units) of
 /// the line the expression *starts* on; it is consumed only by the multi-line
 /// `match` form. All other M0 expressions render inline (no leading whitespace,
@@ -1016,6 +1137,9 @@ fn emit_expr_at(
             // `Vec<SqlParam>` / `Vec<(String, Option<SqlParam>)>` at the call
             // site via the generated `into_sql_param` / `into_field_param` methods.
             if let Some(result) = emit_db_call(ctx, callee, args, indent, child, generics)? {
+                return Ok(result);
+            }
+            if let Some(result) = emit_tea_call(ctx, callee, args, indent, child, generics)? {
                 return Ok(result);
             }
             // Dict.get borrows semantics: the runtime takes the HashMap by
