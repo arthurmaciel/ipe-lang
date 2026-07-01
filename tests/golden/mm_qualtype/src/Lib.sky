@@ -1,0 +1,12 @@
+module Lib exposing (Box(..), unbox)
+
+import Sky.Core.Prelude exposing (..)
+
+type Box a
+    = Box a
+
+unbox : Box a -> a
+unbox b =
+    case b of
+        Box a ->
+            a

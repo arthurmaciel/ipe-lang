@@ -1453,15 +1453,31 @@ fn canonicalise_type(
             }
             Ok(canon::Type::Record(can_fields))
         }
-        src::TypeAnnotation::TType(_, segments, args) => {
+        src::TypeAnnotation::TType(qualifier, segments, args) => {
             let name = segments.last().copied().unwrap_or_else(|| {
-                // An unnamed type cannot occur in the M0 grammar; fall back to
+                // An unnamed type cannot occur in the grammar; fall back to
                 // the home module's name so the node is still well-formed.
                 ctx.env.home.last().copied().unwrap_or_else(name_zero)
             });
-            // The M1 grammar rejects qualified types in annotations, so every
-            // `TType` here is unqualified — the qualifier is always empty. The
-            // type arguments are canonicalised under the current substitution
+            // Tier-1 qualified-type validation: when the parser produced a
+            // non-empty qualifier (e.g. `JsonDec.Decoder`), verify it names a
+            // known module qualifier in `env.qual_vars`. Tier-2 (resolving the
+            // actual type name via a `qual_types` map) is a follow-up once the
+            // multi-module import layer builds that map; for now, a valid
+            // qualifier is sufficient to accept the annotation and look the type
+            // up in `type_home_map` as usual.
+            let qualifier_str = ctx.interner.resolve(*qualifier).unwrap_or("");
+            if !qualifier_str.is_empty() && !ctx.env.qual_vars.contains_key(qualifier) {
+                let sugg = suggestions(*qualifier, ctx.env.qual_vars.keys().copied(), ctx.interner);
+                return Err(Diagnostic::Name {
+                    span: ctx.ann_span,
+                    msg: NameError::UnknownModule {
+                        qualifier: qualifier_str.into(),
+                        suggestions: sugg,
+                    },
+                });
+            }
+            // Type arguments are canonicalised under the current substitution
             // (they appear at the use site) regardless of whether `name` is an
             // alias or an ordinary constructor.
             let mut can_args = Vec::with_capacity(args.len());

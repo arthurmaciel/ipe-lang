@@ -132,9 +132,7 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         }
     }
 
-    let name = name.ok_or(CliError::Usage(
-        "sky.toml: missing a `name = \"…\"` entry",
-    ))?;
+    let name = name.ok_or(CliError::Usage("sky.toml: missing a `name = \"…\"` entry"))?;
 
     let src_root = root.join(src_rel.as_deref().unwrap_or("src"));
     if !src_root.is_dir() {
