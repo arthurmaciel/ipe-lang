@@ -341,6 +341,52 @@ mod tests {
     }
 
     #[test]
+    fn pipe_operators_lex_as_single_tokens() {
+        use lexer::{Tok, lex};
+        let kinds = |src: &str| -> Vec<Tok> {
+            lex(src).map_or_else(
+                |_| Vec::new(),
+                |toks| toks.into_iter().map(|t| t.kind).collect(),
+            )
+        };
+        // `|>` is a single PipeGt token (forward pipe), not Pipe + Gt.
+        assert_eq!(kinds("|>"), vec![Tok::PipeGt]);
+        // `<|` is a single LtPipe token (backward pipe), not Lt + Pipe.
+        assert_eq!(kinds("<|"), vec![Tok::LtPipe]);
+        // Maximal munch non-regression: `||` remains PipePipe, not two Pipes or
+        // a PipeGt/PipePipe confusion.
+        assert_eq!(kinds("||"), vec![Tok::PipePipe]);
+        // `<=` remains Le (not LtPipe then Equals).
+        assert_eq!(kinds("<="), vec![Tok::Le]);
+        // A lone `|` remains Pipe.
+        assert_eq!(kinds("|"), vec![Tok::Pipe]);
+        // A lone `<` remains Lt.
+        assert_eq!(kinds("<"), vec![Tok::Lt]);
+        // `|> x` in context.
+        assert_eq!(kinds("|> x"), vec![Tok::PipeGt, Tok::Ident("x".to_owned())]);
+        // `<| x` in context.
+        assert_eq!(kinds("<| x"), vec![Tok::LtPipe, Tok::Ident("x".to_owned())]);
+        // `|||` is PipePipe + lone Pipe (maximal munch takes exactly two `|`).
+        assert_eq!(kinds("|||"), vec![Tok::PipePipe, Tok::Pipe]);
+        // `|>>` is PipeGt + lone Gt (maximal munch on `|>`, then `>` is bare).
+        assert_eq!(kinds("|>>"), vec![Tok::PipeGt, Tok::Gt]);
+    }
+
+    #[test]
+    fn pipe_operator_parses_in_expression() {
+        // Both pipe operators must parse in a flat Binops chain.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f x =\n    x |> String.fromInt\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "`|>` must parse: {m:?}");
+
+        let mut i2 = Interner::new();
+        let src2 = format!("{HDR}f x =\n    String.fromInt <| x\n");
+        let m2 = parse_module(&src2, &mut i2);
+        assert!(m2.is_ok(), "`<|` must parse: {m2:?}");
+    }
+
+    #[test]
     fn plus_plus_lexes_as_one_append_token() {
         use lexer::{Tok, lex};
         let kinds = |src: &str| -> Vec<Tok> {
@@ -1405,5 +1451,41 @@ mod tests {
             result.is_err(),
             "`(- 5)` (space after `-`) must NOT parse as a negative literal"
         );
+    }
+
+    // ── Pipe-operator lexer maximal-munch tests ───────────────────────────────
+
+    /// `|>` lexes as a single `PipeGt` token (maximal munch), not as
+    /// `Pipe` then `Gt`. `||` still lexes as `PipePipe` (non-regression).
+    #[test]
+    fn pipe_forward_lexes_as_single_token() {
+        use crate::lexer::{Tok, lex};
+        let tokens = lex("|>").expect("|> must lex");
+        assert_eq!(tokens.len(), 1, "|> must produce exactly one token");
+        let tok = tokens.first().expect("|> token vec must be non-empty");
+        assert_eq!(tok.kind, Tok::PipeGt, "|> must lex as PipeGt, not Pipe+Gt");
+
+        // Non-regression: `||` stays PipePipe.
+        let or_tokens = lex("||").expect("|| must lex");
+        assert_eq!(or_tokens.len(), 1, "|| must produce exactly one token");
+        let or_tok = or_tokens.first().expect("|| token vec must be non-empty");
+        assert_eq!(or_tok.kind, Tok::PipePipe, "|| must lex as PipePipe");
+    }
+
+    /// `<|` lexes as a single `LtPipe` token (maximal munch), not as
+    /// `Lt` then `Pipe`. `<=` still lexes as `Le` (non-regression).
+    #[test]
+    fn pipe_backward_lexes_as_single_token() {
+        use crate::lexer::{Tok, lex};
+        let tokens = lex("<|").expect("<| must lex");
+        assert_eq!(tokens.len(), 1, "<| must produce exactly one token");
+        let tok = tokens.first().expect("<| token vec must be non-empty");
+        assert_eq!(tok.kind, Tok::LtPipe, "<| must lex as LtPipe, not Lt+Pipe");
+
+        // Non-regression: `<=` stays Le.
+        let le_tokens = lex("<=").expect("<= must lex");
+        assert_eq!(le_tokens.len(), 1, "<= must produce exactly one token");
+        let le_tok = le_tokens.first().expect("<= token vec must be non-empty");
+        assert_eq!(le_tok.kind, Tok::Le, "<= must lex as Le");
     }
 }

@@ -1,0 +1,11 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Forward pipe chain: `|>` left-associative at precedence 0.
+-- [1,2,3] |> List.map (+1) |> List.length == 3
+main =
+    [1, 2, 3]
+        |> List.map (\x -> x + 1)
+        |> List.length
+        |> String.fromInt
+        |> println

@@ -628,6 +628,8 @@ const fn token_kind_str(t: TokenKind) -> &'static str {
         TokenKind::Ge => "`>=`",
         TokenKind::AmpAmp => "`&&`",
         TokenKind::PipePipe => "`||`",
+        TokenKind::PipeGt => "`|>`",
+        TokenKind::LtPipe => "`<|`",
         TokenKind::Ident => "an identifier",
         TokenKind::Int => "a number",
         TokenKind::Float => "a floating-point number",
