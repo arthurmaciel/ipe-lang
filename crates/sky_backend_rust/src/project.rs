@@ -44,6 +44,23 @@ const RUNTIME_MOD_RS: &str = include_str!("../../../tests/golden/m0/sky_runtime/
 /// The generated `sky_runtime/config.rs` (DB/config bindings — empty for M0).
 const RUNTIME_CONFIG_RS: &str = include_str!("../../../tests/golden/m0/sky_runtime/config.rs");
 
+// ── M5b-db: db-enabled manifest fragments ──────────────────────────────────
+
+/// Lines appended to `sky_runtime/mod.rs` when the program uses Db kernels.
+///
+/// The full runtime source tree is copied into the emitted project by the
+/// driver; this addition wires `db.rs` (which lives in that tree) into the
+/// module namespace so the generated `main.rs` can call the db functions.
+const RUNTIME_MOD_RS_DB_APPEND: &str = "pub mod db;\npub use db::*;\npub mod telemetry_spill;\n";
+
+/// The `sky_runtime/config.rs` emitted for db-enabled programs. Replaces the
+/// no-op M0 stub with the `SQLite` type aliases + helper fns the `db.rs` module
+/// requires. Mirrors `runtime/src/sky_runtime/config.rs` verbatim, keeping the
+/// `#[cfg(feature = "db")]` / `#[cfg(not(feature = "db"))]` guards so a
+/// non-db build (hypothetically possible via feature flag override) degrades
+/// gracefully rather than failing with undefined types.
+const RUNTIME_CONFIG_RS_DB: &str = include_str!("../../../runtime/src/sky_runtime/config.rs");
+
 /// The `Diagnostic::CompilerBug` raised when a golden anchor is absent — a
 /// drifted-golden invariant violation, surfaced (SKY-I0203) instead of a silent
 /// empty slice.
@@ -97,6 +114,17 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     for rec in ctx.record_structs() {
         out.push_str(&emit_record_struct(ctx, rec)?);
     }
+
+    // M5b-db: boundary-projection impl blocks.  When the program uses Db
+    // kernels, the lowerer injected synthetic `SqlValue` / `SqlField` enums.
+    // The Db call sites need to project Sky ADT values to the runtime's
+    // concrete `SqlParam` / `Option<SqlParam>`.  These impls are emitted
+    // immediately after the user types (and their record-struct companions) so
+    // they are visible to every subsequent function body.
+    if ctx.uses_db {
+        out.push_str(&emit_db_projection_impls(ctx)?);
+    }
+
     out.push('\n');
 
     // Fixed kernel-wrapper prelude.
@@ -113,18 +141,139 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 
     out.push_str(&epilogue()?);
 
+    // ── Manifest + runtime module files ──────────────────────────────────────
+    // The driver (skyc) first copies the full runtime source tree into
+    // `<out>/src/sky_runtime/`, then writes the emitted files over the top.
+    // So we only need to emit the files that differ from the raw source tree:
+    //
+    //   • `mod.rs` — trimmed to the kernel set the program uses (non-db path
+    //     keeps the M0 default; db path appends `pub mod db; pub use db::*;`).
+    //   • `config.rs` — the M0 stub for non-db; the full db-type-alias file
+    //     for db programs (provides `DbPool`, `DbRow`, `SKY_DB_URL`, …).
+    //   • `Cargo.toml` — adds `db` to default features + `sqlx` dep for db.
+    let (cargo_toml, runtime_mod_rs, runtime_config_rs) = if ctx.uses_db {
+        (
+            db_cargo_toml()?,
+            format!("{RUNTIME_MOD_RS}{RUNTIME_MOD_RS_DB_APPEND}"),
+            RUNTIME_CONFIG_RS_DB.to_owned(),
+        )
+    } else {
+        (
+            CARGO_TOML.to_owned(),
+            RUNTIME_MOD_RS.to_owned(),
+            RUNTIME_CONFIG_RS.to_owned(),
+        )
+    };
+
     let mut files = BTreeMap::new();
     files.insert(RelPath::new("src/main.rs")?, out);
-    files.insert(
-        RelPath::new("src/sky_runtime/mod.rs")?,
-        RUNTIME_MOD_RS.to_owned(),
-    );
+    files.insert(RelPath::new("src/sky_runtime/mod.rs")?, runtime_mod_rs);
     files.insert(
         RelPath::new("src/sky_runtime/config.rs")?,
-        RUNTIME_CONFIG_RS.to_owned(),
+        runtime_config_rs,
     );
-    Ok(EmittedProject {
-        files,
-        cargo_toml: CARGO_TOML.to_owned(),
-    })
+    Ok(EmittedProject { files, cargo_toml })
+}
+
+/// Build the db-enabled `Cargo.toml` from the base M0 manifest by:
+///
+/// 1. Adding `"db"` to the `default` feature list.
+/// 2. Appending the `sqlx` dependency line.
+///
+/// String surgery rather than a second static file: the manifest content is
+/// small and the two edits are unambiguous anchors.
+fn db_cargo_toml() -> DResult<String> {
+    const DEFAULT_LINE: &str = r#"default = ["tokio", "crypto", "json"]"#;
+    const DEFAULT_LINE_DB: &str = r#"default = ["tokio", "crypto", "json", "db"]"#;
+    // The sqlx line is appended right before the dev/release profile sections.
+    // Anchoring on `[profile.dev]` is stable (always present in the template).
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    const SQLX_LINE: &str =
+        "sqlx = { version = \"0.8\", features = [\"runtime-tokio-rustls\", \"sqlite\"] }\n\n";
+
+    let step1 = CARGO_TOML.replacen(DEFAULT_LINE, DEFAULT_LINE_DB, 1);
+    if step1 == CARGO_TOML {
+        return Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::db_cargo_toml",
+            detail: format!("Cargo.toml anchor {DEFAULT_LINE:?} not found — golden drifted"),
+        });
+    }
+    let anchor_pos = step1
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::db_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(step1.len() + SQLX_LINE.len());
+    result.push_str(step1.get(..anchor_pos).unwrap_or(""));
+    result.push_str(SQLX_LINE);
+    result.push_str(step1.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Emit the `into_sql_param` impl for `SqlValue` and `into_field_param` impl
+/// for `SqlField`.
+///
+/// These are fixed-shape impls — the variant names are always the same Sky
+/// names (`SqlString`, `SqlInt`, …) and the mapping to `sky_runtime::db::SqlParam`
+/// variants is 1-to-1.  Only the enum's Rust *type name* (e.g. `MainSqlValue`)
+/// varies per program (depends on the module name prefix).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] when `ctx.uses_db` is `true` but the
+/// Rust names were not computed — an internal invariant violation (the detection
+/// in `EmitCtx::build` and the injection in `Lowerer::run` must agree).
+fn emit_db_projection_impls(ctx: &EmitCtx) -> DResult<String> {
+    let sv = ctx
+        .sqlvalue_rust_name
+        .as_deref()
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::emit_db_projection_impls",
+            detail: "uses_db is true but sqlvalue_rust_name is None — \
+                 SqlValue was not injected into enum_names"
+                .to_owned(),
+        })?;
+    let sf = ctx
+        .sqlfield_rust_name
+        .as_deref()
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::emit_db_projection_impls",
+            detail: "uses_db is true but sqlfield_rust_name is None — \
+                 SqlField was not injected into enum_names"
+                .to_owned(),
+        })?;
+
+    // `SqlTime` stores a Unix-millisecond timestamp as `i64` — maps to
+    // `SqlParam::Int`.  `SqlDecimal` and `SqlMoney` carry lossless string
+    // representations (decimal digits for Decimal, "ISO_CODE AMOUNT" for
+    // Money) — both map to `SqlParam::Text`.  `SqlNull` carries a SqlValue
+    // type-witness that is discarded here; the runtime sees just `SqlParam::Null`.
+    Ok(format!(
+        "\
+impl {sv} {{
+    pub fn into_sql_param(self) -> sky_runtime::db::SqlParam {{
+        match self {{
+            Self::SqlString(v) => sky_runtime::db::SqlParam::Text(v),
+            Self::SqlInt(v) => sky_runtime::db::SqlParam::Int(v),
+            Self::SqlFloat(v) => sky_runtime::db::SqlParam::Float(v),
+            Self::SqlBool(v) => sky_runtime::db::SqlParam::Bool(v),
+            Self::SqlBytes(v) => sky_runtime::db::SqlParam::Bytes(v),
+            Self::SqlTime(v) => sky_runtime::db::SqlParam::Int(v),
+            Self::SqlDecimal(v) => sky_runtime::db::SqlParam::Text(v),
+            Self::SqlMoney(v) => sky_runtime::db::SqlParam::Text(v),
+            Self::SqlNull(_) => sky_runtime::db::SqlParam::Null,
+        }}
+    }}
+}}
+impl {sf} {{
+    pub fn into_field_param(self) -> Option<sky_runtime::db::SqlParam> {{
+        match self {{
+            Self::SetField(v) => Some(v.into_sql_param()),
+            Self::OmitField => None,
+        }}
+    }}
+}}
+"
+    ))
 }

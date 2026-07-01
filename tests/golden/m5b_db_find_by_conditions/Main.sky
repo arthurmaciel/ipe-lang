@@ -1,0 +1,47 @@
+module Main exposing (main)
+
+-- M5b-db golden: Db.findByConditions with a Dict String String conditions map.
+-- Inserts two rows then queries with {"name": "apple"} — only the apple row
+-- should be returned.  Proves Dict String String (not List (String, SqlValue))
+-- is the correct arg type and that the DbFindByConditions emit arm works.
+--
+-- Uses sqlite::memory: inside withTransaction so all ops share one connection.
+
+main =
+    Task.andThen
+        (\conn ->
+            Db.withTransaction conn
+                (\txconn ->
+                    let
+                        _ =
+                            Db.execRaw txconn
+                                "CREATE TABLE items (name TEXT NOT NULL, score INTEGER NOT NULL)"
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO items (name, score) VALUES (?, ?)"
+                                [ SqlString "apple", SqlInt 5 ]
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO items (name, score) VALUES (?, ?)"
+                                [ SqlString "banana", SqlInt 3 ]
+                    in
+                    Task.andThen
+                        (\rows ->
+                            let
+                                row =
+                                    Maybe.withDefault Dict.empty (List.head rows)
+
+                                name =
+                                    Db.getString "name" row
+
+                                score =
+                                    Db.getInt "score" row
+                            in
+                            println (name ++ ":" ++ String.fromInt score)
+                        )
+                        (Db.findByConditions txconn "items" (Dict.fromList [ ( "name", "apple" ) ]))
+                )
+        )
+        (Db.open "sqlite" "sqlite::memory:")

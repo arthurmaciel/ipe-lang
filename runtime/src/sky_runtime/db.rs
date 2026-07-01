@@ -812,15 +812,15 @@ impl SkyRow for super::LiveReq {
     }
 }
 
-pub fn db_get_field<R: SkyRow>(field: String, row: R) -> String {
+pub fn db_get_field<R: SkyRow>(field: String, row: &R) -> String {
     row.sky_get(&field)
 }
 
-pub fn db_get_string<R: SkyRow>(field: String, row: R) -> String {
+pub fn db_get_string<R: SkyRow>(field: String, row: &R) -> String {
     row.sky_get(&field)
 }
 
-pub fn db_get_int<R: SkyRow>(field: String, row: R) -> i64 {
+pub fn db_get_int<R: SkyRow>(field: String, row: &R) -> i64 {
     // Align with db_decode_int / Go: accept "42" or a decimal string like
     // "3.0" (truncate to 3) before defaulting to 0.
     let s = row.sky_get(&field);
@@ -1022,8 +1022,8 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
             let rec_name = name.clone();
             let rec_sum = sum.clone();
             let applied_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-            // db_with_transaction takes an `Fn` (may be invoked more than once),
-            // so the captured owned values are cloned per-invocation inside.
+            // db_with_transaction takes `FnOnce` (called exactly once), but
+            // clones inside ensure the outer loop can re-bind on each iteration.
             // db_exec/db_exec_raw now return rows-affected (i64), so the tx body's
             // tail yields i64 — bind/turbofish accordingly; the count is unused
             // (migrate cares about success, not row counts).
@@ -1083,7 +1083,7 @@ pub fn db_close<E: Send + From<String> + 'static>(db: Db) -> SkyTask<E, ()> {
 
 /// `getBool : String -> Dict String String -> Bool` — parses common
 /// truthy values (`"1"`, `"true"`, `"TRUE"`, `"t"`, `"T"`).
-pub fn db_get_bool<R: SkyRow>(field: String, row: R) -> bool {
+pub fn db_get_bool<R: SkyRow>(field: String, row: &R) -> bool {
     matches!(
         row.sky_get(&field).as_str(),
         "1" | "true" | "TRUE" | "t" | "T"
@@ -1559,7 +1559,7 @@ pub fn db_get_by_id_decode<E: Send + From<String> + 'static, A: Send + 'static>(
 /// simplest correct behaviour and never deadlocks.
 pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
     conn: Db,
-    body: impl Fn(Db) -> SkyTask<E, A> + Send + 'static,
+    body: impl FnOnce(Db) -> SkyTask<E, A> + Send + 'static,
 ) -> SkyTask<E, A> {
     Box::pin(async move {
         // Nested: already inside a transaction on this task → flatten onto the
@@ -1958,12 +1958,12 @@ mod tests {
         m.insert("text".into(), "ping".into());
         m.insert("count".into(), "42".into());
         m.insert("flag".into(), "true".into());
-        assert_eq!(db_get_string("text".into(), m.clone()), "ping");
-        assert_eq!(db_get_string("missing".into(), m.clone()), "");
-        assert_eq!(db_get_int("count".into(), m.clone()), 42);
-        assert_eq!(db_get_int("missing".into(), m.clone()), 0);
-        assert!(db_get_bool("flag".into(), m.clone()));
-        assert!(!db_get_bool("missing".into(), m));
+        assert_eq!(db_get_string("text".into(), &m), "ping");
+        assert_eq!(db_get_string("missing".into(), &m), "");
+        assert_eq!(db_get_int("count".into(), &m), 42);
+        assert_eq!(db_get_int("missing".into(), &m), 0);
+        assert!(db_get_bool("flag".into(), &m));
+        assert!(!db_get_bool("missing".into(), &m));
     }
 
     // #52 Part 1: `Db.getString "path" req` on an `init` handler's typed
@@ -1984,12 +1984,12 @@ mod tests {
             headers: HashMap::new(),
             cookies,
         };
-        assert_eq!(db_get_string("path".into(), req.clone()), "/chat/general");
-        assert_eq!(db_get_string("method".into(), req.clone()), "GET");
-        assert_eq!(db_get_string("query".into(), req.clone()), "x=1");
-        assert_eq!(db_get_string("slug".into(), req.clone()), "general"); // params
-        assert_eq!(db_get_string("sky_sid".into(), req.clone()), "abc"); // cookies
-        assert_eq!(db_get_string("nope".into(), req), ""); // absent -> total ""
+        assert_eq!(db_get_string("path".into(), &req), "/chat/general");
+        assert_eq!(db_get_string("method".into(), &req), "GET");
+        assert_eq!(db_get_string("query".into(), &req), "x=1");
+        assert_eq!(db_get_string("slug".into(), &req), "general"); // params
+        assert_eq!(db_get_string("sky_sid".into(), &req), "abc"); // cookies
+        assert_eq!(db_get_string("nope".into(), &req), ""); // absent -> total ""
     }
 
     async fn fresh_db() -> Db {
@@ -2551,11 +2551,11 @@ mod tests {
         r.insert("b".to_string(), "0".to_string());
         r.insert("c".to_string(), "true".to_string());
         r.insert("d".to_string(), "false".to_string());
-        assert!(db_get_bool("a".into(), r.clone()));
-        assert!(!db_get_bool("b".into(), r.clone()));
-        assert!(db_get_bool("c".into(), r.clone()));
-        assert!(!db_get_bool("d".into(), r.clone()));
-        assert!(!db_get_bool("missing".into(), r));
+        assert!(db_get_bool("a".into(), &r));
+        assert!(!db_get_bool("b".into(), &r));
+        assert!(db_get_bool("c".into(), &r));
+        assert!(!db_get_bool("d".into(), &r));
+        assert!(!db_get_bool("missing".into(), &r));
     }
 
     #[tokio::test]

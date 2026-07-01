@@ -1,0 +1,48 @@
+module Main exposing (main)
+
+-- M5b-db golden: Db.unsafeFindWhere with BOUND args (List String).
+-- Inserts two rows then queries WHERE qty > ? with args = ["9"] so only the
+-- high-qty row matches.  Proves the parameterised-binding channel is used
+-- (NOT string interpolation into the WHERE clause — the sole sanctioned path).
+--
+-- Uses sqlite::memory: inside withTransaction so all ops share one connection.
+
+main =
+    Task.andThen
+        (\conn ->
+            Db.withTransaction conn
+                (\txconn ->
+                    let
+                        _ =
+                            Db.execRaw txconn
+                                "CREATE TABLE products (name TEXT NOT NULL, qty INTEGER NOT NULL)"
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO products (name, qty) VALUES (?, ?)"
+                                [ SqlString "widget", SqlInt 10 ]
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO products (name, qty) VALUES (?, ?)"
+                                [ SqlString "gadget", SqlInt 7 ]
+                    in
+                    Task.andThen
+                        (\rows ->
+                            let
+                                row =
+                                    Maybe.withDefault Dict.empty (List.head rows)
+
+                                name =
+                                    Db.getString "name" row
+
+                                qty =
+                                    Db.getInt "qty" row
+                            in
+                            println (name ++ ":" ++ String.fromInt qty)
+                        )
+                        -- args bound via ? — proves the parameterised channel, not interpolation
+                        (Db.unsafeFindWhere txconn "products" "qty > ?" [ "9" ])
+                )
+        )
+        (Db.open "sqlite" "sqlite::memory:")

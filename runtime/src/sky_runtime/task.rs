@@ -81,8 +81,8 @@ where
 }
 
 pub fn task_and_then<E, A, B>(
-    f: impl FnOnce(A) -> SkyTask<E, B> + Send + 'static,
     task: SkyTask<E, A>,
+    f: impl FnOnce(A) -> SkyTask<E, B> + Send + 'static,
 ) -> SkyTask<E, B>
 where
     E: Send + 'static,

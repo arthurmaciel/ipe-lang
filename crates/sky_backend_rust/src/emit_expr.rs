@@ -106,6 +106,12 @@ const fn kernel_swaps_first_two(k: sky_ir::KernelFn) -> bool {
             // `JsonDec.andThen f decoder` — Sky passes fn first; Rust runtime
             // `decode_and_then(decoder, f)` expects decoder first.
             | KernelFn::JsonDecAndThen
+            // `Task.andThen f task` — Sky passes continuation first; Rust runtime
+            // `task_and_then(task, f)` expects effect first so Rust evaluates the
+            // effect expression BEFORE the continuation closure captures shared Db
+            // pool values, preventing E0507 / E0382 move conflicts at connect-use
+            // sites (see `Expr::TaskSeq` below for the auto-force counterpart).
+            | KernelFn::TaskAndThen
     )
 }
 
@@ -423,6 +429,383 @@ fn emit_http_builder_call(
     }
 }
 
+/// Handle Db kernel calls that require `SqlValue` / `SqlField` boundary
+/// projection.
+///
+/// The Sky surface for parameterised Db calls (`Db.exec`, `Db.query`,
+/// `Db.queryDecode`, `Db.insertFields`, `Db.updateFields`,
+/// `Db.insertFieldsReturning`) passes a `List SqlValue` or
+/// `List (String, SqlField)` as a plain Sky argument. The runtime's typed-param
+/// functions (`db_exec_params`, `db_query_params`, …) expect `Vec<SqlParam>` /
+/// `Vec<(String, Option<SqlParam>)>`. The projection is emitted INLINE at the
+/// call site — the Sky list is converted with a short `.into_iter().map(…)`
+/// chain so the compiler never needs separate IR types for the two.
+///
+/// Kernels that accept only `Db` / `String` / `Int` / plain Dict arguments (no
+/// `SqlValue` / `SqlField` in the parameter list) return `None` here and fall
+/// through to the standard `name(args)` path.
+///
+/// Factored out of `emit_expr_at` to keep that function's stack frame small
+/// (same rationale as `emit_http_call`).
+#[inline(never)]
+#[allow(clippy::too_many_lines)]
+// linear dispatch over many projection cases
+// The match below lists standard-path Db kernels explicitly (same Ok(None) body
+// as the wildcard) so that any future param-taking Db kernel added to `KernelFn`
+// that NEEDS a custom arm causes a *compile error* here — not a silent
+// exit-0-then-cargo-fail when `_ => Ok(None)` swallows it.
+// `match_same_arms` fires because both the list and `_` return `Ok(None)`; the
+// documentation value justifies the suppression.
+#[allow(clippy::match_same_arms)]
+fn emit_db_call(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    // Fast path: not a Db kernel at all.
+    let Callee::Kernel(k) = callee else {
+        return Ok(None);
+    };
+
+    // Helper: emit a single arg by index, returning a CompilerBug on miss.
+    macro_rules! arg {
+        ($idx:expr, $name:literal) => {
+            args.get($idx).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_db_call",
+                detail: format!("Db kernel {:?} missing arg[{}] ({})", k, $idx, $name),
+            })
+        };
+    }
+
+    // Projection snippets.
+    // `project_params(s)` — `List SqlValue` → `Vec<SqlParam>`
+    let project_params = |s: &str| {
+        format!(
+            "({s}).into_iter().map(|__p| __p.into_sql_param())\
+             .collect::<Vec<_>>()"
+        )
+    };
+    // `project_fields(s)` — `List (String, SqlField)` → `Vec<(String, Option<SqlParam>)>`
+    let project_fields = |s: &str| {
+        format!(
+            "({s}).into_iter().map(|(__k, __v)| (__k, __v.into_field_param()))\
+             .collect::<Vec<_>>()"
+        )
+    };
+    // `project_where(s)` — `List (String, SqlValue)` → `Vec<(String, SqlParam)>`
+    let project_where = |s: &str| {
+        format!(
+            "({s}).into_iter().map(|(__k, __v)| (__k, __v.into_sql_param()))\
+             .collect::<Vec<_>>()"
+        )
+    };
+
+    match k {
+        // ── DbExecRaw: (conn, sql) — DDL / no-param statements ──────────────
+        //
+        // The connection is cloned here (and in every other task-returning Db
+        // kernel below) because the emitter wraps sequential Db calls in nested
+        // `task_and_then(effect, move |_| { … })` continuations.  Rust evaluates
+        // function arguments left-to-right: the EFFECT is built first (arg 0),
+        // which would MOVE the `conn` binding, leaving the continuation closure
+        // unable to capture it.  Cloning at each call site is the idiomatic fix
+        // for `Arc`-backed handles; the `Db` type wraps an `Arc<Pool<…>>` so
+        // cloning is cheap (pointer increment only).
+        KernelFn::DbExecRaw => {
+            let conn_e = arg!(0, "conn")?;
+            let sql_e = arg!(1, "sql")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let sql_s = emit_expr_at(ctx, sql_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!("{fn_name}({conn_s}.clone(), {sql_s})")))
+        }
+        // ── DbExec / DbQuery: (conn, sql, List SqlValue) ────────────────────
+        KernelFn::DbExec | KernelFn::DbQuery => {
+            let conn_e = arg!(0, "conn")?;
+            let sql_e = arg!(1, "sql")?;
+            let params_e = arg!(2, "params")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let sql_s = emit_expr_at(ctx, sql_e, indent, child, generics)?;
+            let params_s = emit_expr_at(ctx, params_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {sql_s}, {})",
+                project_params(&params_s)
+            )))
+        }
+        // ── DbQueryDecode: (conn, sql, List SqlValue, decoder) ──────────────
+        KernelFn::DbQueryDecode => {
+            let conn_e = arg!(0, "conn")?;
+            let sql_e = arg!(1, "sql")?;
+            let params_e = arg!(2, "params")?;
+            let dec_e = arg!(3, "decoder")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let sql_s = emit_expr_at(ctx, sql_e, indent, child, generics)?;
+            let params_s = emit_expr_at(ctx, params_e, indent, child, generics)?;
+            let dec_s = emit_expr_at(ctx, dec_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {sql_s}, {}, {dec_s})",
+                project_params(&params_s)
+            )))
+        }
+        // ── DbInsertFields: (conn, table, List (String, SqlField)) ───────────
+        KernelFn::DbInsertFields => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let fields_e = arg!(2, "fields")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let fields_s = emit_expr_at(ctx, fields_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, {})",
+                project_fields(&fields_s)
+            )))
+        }
+        // ── DbUpdateFields: (conn, table, List (String,SqlValue), List (String,SqlField)) ─
+        KernelFn::DbUpdateFields => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let where_e = arg!(2, "where_cols")?;
+            let set_e = arg!(3, "set_fields")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let where_s = emit_expr_at(ctx, where_e, indent, child, generics)?;
+            let set_s = emit_expr_at(ctx, set_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, {}, {})",
+                project_where(&where_s),
+                project_fields(&set_s)
+            )))
+        }
+        // ── DbInsertFieldsReturning: (conn, table, List (String, SqlField), projection, decoder) ─
+        KernelFn::DbInsertFieldsReturning => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let fields_e = arg!(2, "fields")?;
+            let proj_e = arg!(3, "projection")?;
+            let dec_e = arg!(4, "decoder")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let fields_s = emit_expr_at(ctx, fields_e, indent, child, generics)?;
+            let proj_s = emit_expr_at(ctx, proj_e, indent, child, generics)?;
+            let dec_s = emit_expr_at(ctx, dec_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, {}, {proj_s}, {dec_s})",
+                project_fields(&fields_s)
+            )))
+        }
+        // ── DbInsertRow: (conn, table, row: List (String, String)) ─────────────
+        // The runtime function takes `row: HashMap<String, String>` while the
+        // Sky type is `List (String, String)` (Vec<(String, String)> in Rust).
+        // Emit `.into_iter().collect()` to convert at the call site.
+        KernelFn::DbInsertRow => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let row_e = arg!(2, "row")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let row_s = emit_expr_at(ctx, row_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, ({row_s}).into_iter().collect::<HashMap<String, String>>())"
+            )))
+        }
+        // ── DbUpdateById: (conn, table, id, row: List (String, String)) ────────
+        // Same HashMap conversion needed.
+        KernelFn::DbUpdateById => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let id_e = arg!(2, "id")?;
+            let row_e = arg!(3, "row")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let id_s = emit_expr_at(ctx, id_e, indent, child, generics)?;
+            let row_s = emit_expr_at(ctx, row_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, {id_s}, ({row_s}).into_iter().collect::<HashMap<String, String>>())"
+            )))
+        }
+        // ── DbWithTransaction: (conn, body: Db -> Task e a) → Task e a ────────
+        // Clone ensures the pool handle remains usable for any Db calls that
+        // follow the `withTransaction` in the same continuation chain.  The body
+        // closure itself receives its own pool copy through the task-local routing
+        // (see `db_with_transaction` in the runtime), so the clone never causes an
+        // extra SQLite connection.
+        KernelFn::DbWithTransaction => {
+            let conn_e = arg!(0, "conn")?;
+            let body_e = arg!(1, "body")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let body_s = emit_expr_at(ctx, body_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!("{fn_name}({conn_s}.clone(), {body_s})")))
+        }
+        // ── DbMigrate: (conn, List (String, String)) → Task e (List String) ──
+        // `List (String, String)` lowers to `Vec<(String, String)>` — no
+        // conversion needed; the runtime `db_migrate_apply` takes exactly that.
+        KernelFn::DbMigrate => {
+            let conn_e = arg!(0, "conn")?;
+            let migrations_e = arg!(1, "migrations")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let migrations_s = emit_expr_at(ctx, migrations_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!("{fn_name}({conn_s}.clone(), {migrations_s})")))
+        }
+        // ── DbGetById: (conn, table, id) ────────────────────────────────────
+        // Conn must be cloned so subsequent Db calls in the same continuation
+        // chain can still capture it (Pool<Sqlite> is not Copy).
+        KernelFn::DbGetById => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let id_e = arg!(2, "id")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let id_s = emit_expr_at(ctx, id_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, {id_s})"
+            )))
+        }
+        // ── DbDeleteById: (conn, table, id) ─────────────────────────────────
+        KernelFn::DbDeleteById => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let id_e = arg!(2, "id")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let id_s = emit_expr_at(ctx, id_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, {id_s})"
+            )))
+        }
+        // ── DbFindOneByField: (conn, table, field, value) ────────────────────
+        KernelFn::DbFindOneByField => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let field_e = arg!(2, "field")?;
+            let value_e = arg!(3, "value")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let field_s = emit_expr_at(ctx, field_e, indent, child, generics)?;
+            let value_s = emit_expr_at(ctx, value_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, {field_s}, {value_s})"
+            )))
+        }
+        // ── DbFindManyByField: (conn, table, field, value) ───────────────────
+        KernelFn::DbFindManyByField => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let field_e = arg!(2, "field")?;
+            let value_e = arg!(3, "value")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let field_s = emit_expr_at(ctx, field_e, indent, child, generics)?;
+            let value_s = emit_expr_at(ctx, value_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, {field_s}, {value_s})"
+            )))
+        }
+        // ── DbGet*: (field, row) — row is passed by reference so the same row
+        // binding can be used in multiple consecutive accessor calls within a
+        // single expression (e.g. inside a `list_map_consume` lambda that reads
+        // several columns). The runtime functions take `row: &R where R: SkyRow`.
+        KernelFn::DbGetString | KernelFn::DbGetInt | KernelFn::DbGetBool | KernelFn::DbGetField => {
+            let field_e = arg!(0, "field")?;
+            let row_e = arg!(1, "row")?;
+            let field_s = emit_expr_at(ctx, field_e, indent, child, generics)?;
+            let row_s = emit_expr_at(ctx, row_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!("{fn_name}({field_s}, &({row_s}))")))
+        }
+        // ── DbFindByConditions: (conn, table, conditions: Dict String String) ──
+        //
+        // The runtime `db_find_by_conditions` takes `HashMap<String, String>` —
+        // identical to the IR's `Dict String String` representation — so no
+        // conversion is needed beyond passing the value through.
+        KernelFn::DbFindByConditions => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let conditions_e = arg!(2, "conditions")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let conditions_s = emit_expr_at(ctx, conditions_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, {conditions_s})"
+            )))
+        }
+        // ── DbUnsafeFindWhere: (conn, table, where_clause, args: List String) ──
+        //
+        // The runtime `db_unsafe_find_where` takes `Vec<String>` for the `args`
+        // parameter — the parameterized-binding channel that keeps this raw-SQL
+        // path injection-safe.  The Sky `List String` IR type emits as a `Vec<_>`
+        // that the runtime accepts directly.
+        KernelFn::DbUnsafeFindWhere => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let where_e = arg!(2, "where_clause")?;
+            let args_e = arg!(3, "args")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let where_s = emit_expr_at(ctx, where_e, indent, child, generics)?;
+            let args_s = emit_expr_at(ctx, args_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, {where_s}, {args_s})"
+            )))
+        }
+        // ── Standard-path Db kernels ────────────────────────────────────────────
+        //
+        // The kernels below route through `emit_call`'s standard path — their
+        // argument types emit correctly without special-case projection.  List
+        // them explicitly so any future param-taking Db kernel that needs a custom
+        // arm is a compile error here, not a silent exit-0-then-cargo-fail.
+        KernelFn::DbConnect
+        | KernelFn::DbOpen
+        | KernelFn::DbClose
+        | KernelFn::DbDecString
+        | KernelFn::DbDecInt
+        | KernelFn::DbDecFloat
+        | KernelFn::DbDecBool
+        | KernelFn::DbDecNullable
+        | KernelFn::DbDecMap
+        | KernelFn::DbDecAndThen
+        | KernelFn::DbDecSucceed
+        | KernelFn::DbDecFail
+        | KernelFn::DbDecMap2
+        | KernelFn::DbDecMap3
+        | KernelFn::DbDecMap4
+        | KernelFn::DbDecRequired
+        | KernelFn::DbDecOptional => Ok(None),
+        // A Db kernel that reached this arm is a compiler bug: either add a
+        // custom projection arm above, or add it to the standard-path list.
+        // This arm is unreachable for any KernelFn variant listed above, so
+        // its only way to fire is a newly-added Db* variant that was not wired
+        // into either list — making the miss a compile-time-hard error rather
+        // than a silent exit-0-then-cargo-fail.
+        _ if k.is_db() => Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_db_call",
+            detail: format!(
+                "unprojected Db kernel {k:?}: add a custom projection arm \
+                 or a standard-path entry to emit_db_call"
+            ),
+        }),
+        // Non-Db kernel: let the standard call path handle it.
+        _ => Ok(None),
+    }
+}
+
 /// Emit an expression. `indent` is the indentation level (in 4-space units) of
 /// the line the expression *starts* on; it is consumed only by the multi-line
 /// `match` form. All other M0 expressions render inline (no leading whitespace,
@@ -627,6 +1010,14 @@ fn emit_expr_at(
             {
                 return Ok(result);
             }
+            // Db projection kernels: DbExec / DbQuery / DbQueryDecode /
+            // DbInsertFields / DbUpdateFields / DbInsertFieldsReturning need
+            // `List SqlValue` / `List (String, SqlField)` projected to
+            // `Vec<SqlParam>` / `Vec<(String, Option<SqlParam>)>` at the call
+            // site via the generated `into_sql_param` / `into_field_param` methods.
+            if let Some(result) = emit_db_call(ctx, callee, args, indent, child, generics)? {
+                return Ok(result);
+            }
             // Dict.get borrows semantics: the runtime takes the HashMap by
             // value, but Sky dicts are persistent — the same dict binding may
             // be passed to multiple Dict.get calls in one let-chain (e.g.
@@ -695,8 +1086,19 @@ fn emit_expr_at(
         Expr::FuncValue { callee, ty } => emit_func_value(ctx, callee, ty, generics),
         Expr::Match(m) => emit_match(ctx, m, indent, depth, generics),
         // F1 (auto-force): a discarded Task binding becomes
-        //   task_and_then(Box::new(move |_| { <rest> }), <effect>)
+        //   task_and_then(<effect>, Box::new(move |_| { <rest> }))
         // so the future is properly awaited rather than silently dropped.
+        //
+        // ARGUMENT ORDER: the runtime `task_and_then(task, f)` takes the effect
+        // FIRST and the continuation SECOND. Rust evaluates function arguments
+        // left-to-right, so the effect expression is evaluated before the
+        // continuation closure is constructed. This matters when the same `Db`
+        // pool handle is used in both the effect (e.g. `db_exec_raw(conn, ...)`)
+        // and the continuation (`move |_| { ... conn ... }`): placing the effect
+        // first lets the continuation capture the pool handle by move without a
+        // double-move error, provided that Db kernels emit `conn.clone()` for the
+        // pool argument (see `emit_db_call`).
+        //
         // The closure parameter type and return type are inferred by Rust from
         // the task_and_then signature — `effect_s: SkyTask<A>` pins A (the
         // discarded type) and `rest_s: SkyTask<B>` pins B (the result type),
@@ -707,7 +1109,7 @@ fn emit_expr_at(
             let effect_s = emit_expr_at(ctx, effect, indent, child, generics)?;
             let rest_s = emit_expr_at(ctx, rest, indent, child, generics)?;
             Ok(format!(
-                "task_and_then(Box::new(move |_| {{ {rest_s} }}), {effect_s})"
+                "task_and_then({effect_s}, Box::new(move |_| {{ {rest_s} }}))"
             ))
         }
     }

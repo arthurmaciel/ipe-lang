@@ -102,6 +102,26 @@ pub(crate) struct RecordStruct {
 /// naming rules. Built once per [`RustBackend::emit`].
 pub(crate) struct EmitCtx<'a> {
     interner: &'a Interner,
+    /// `true` when the lowerer injected synthetic `SqlValue` / `SqlField`
+    /// `EnumDef`s — i.e. the program uses at least one Db kernel. When set,
+    /// [`crate::project::emit_program`]:
+    ///
+    /// * emits a db-enabled `Cargo.toml` (adds `db` to default features +
+    ///   adds the `sqlx` dependency);
+    /// * emits a db-enabled `sky_runtime/mod.rs` (adds `pub mod db; pub use
+    ///   db::*;`);
+    /// * emits a db-enabled `sky_runtime/config.rs` (full DbPool/DbRow/…
+    ///   aliases gated on `#[cfg(feature = "db")]`);
+    /// * appends `into_sql_param` / `into_field_param` impl blocks after the
+    ///   user type declarations, so the Db call sites can project Sky ADT
+    ///   values to the runtime's `SqlParam`.
+    pub(crate) uses_db: bool,
+    /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
+    /// `None` when `uses_db` is `false`.
+    pub(crate) sqlvalue_rust_name: Option<String>,
+    /// The Rust type name for the emitted `SqlField` enum (e.g. `MainSqlField`).
+    /// `None` when `uses_db` is `false`.
+    pub(crate) sqlfield_rust_name: Option<String>,
     /// Enum type symbol → Rust type name (e.g. `Msg` → `MainMsg`).
     enum_names: BTreeMap<Symbol, String>,
     /// `(enum type symbol, variant symbol)` → that variant's declared payload
@@ -128,6 +148,7 @@ pub(crate) struct EmitCtx<'a> {
 }
 
 impl<'a> EmitCtx<'a> {
+    #[allow(clippy::too_many_lines)]
     fn build(interner: &'a Interner, program: &Program) -> DResult<Self> {
         let mut enum_names = BTreeMap::new();
         let mut variant_fields: BTreeMap<(Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
@@ -229,8 +250,54 @@ impl<'a> EmitCtx<'a> {
             });
         }
 
+        // M5b-db: detect whether the lowerer injected SqlValue / SqlField.
+        // The lowerer injects them iff any Db kernel is used. Detecting here
+        // (rather than re-scanning Func bodies) avoids a duplicate walk and
+        // keeps the "what's in the type list?" answer canonical.
+        let uses_db = program.modules.iter().any(|m| {
+            m.types.iter().any(|td| {
+                let TypeDef::Enum(def) = td;
+                interner.resolve(def.name) == Some("SqlValue")
+            })
+        });
+        let sqlvalue_rust_name = if uses_db {
+            // The SqlValue enum was injected into the same module as the rest of the
+            // program (the lowerer always uses one module), so its Rust name is in
+            // `enum_names` under the "SqlValue" symbol.  Look it up by scanning the
+            // names map for the entry whose interner resolution is "SqlValue".
+            program.modules.iter().find_map(|m| {
+                m.types.iter().find_map(|td| {
+                    let TypeDef::Enum(def) = td;
+                    if interner.resolve(def.name) == Some("SqlValue") {
+                        enum_names.get(&def.name).cloned()
+                    } else {
+                        None
+                    }
+                })
+            })
+        } else {
+            None
+        };
+        let sqlfield_rust_name = if uses_db {
+            program.modules.iter().find_map(|m| {
+                m.types.iter().find_map(|td| {
+                    let TypeDef::Enum(def) = td;
+                    if interner.resolve(def.name) == Some("SqlField") {
+                        enum_names.get(&def.name).cloned()
+                    } else {
+                        None
+                    }
+                })
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             interner,
+            uses_db,
+            sqlvalue_rust_name,
+            sqlfield_rust_name,
             enum_names,
             variant_fields,
             enum_variants,
@@ -537,6 +604,8 @@ fn collect_record_shapes(
         | IrType::Unit
         | IrType::Bytes
         | IrType::Json
+        // The opaque Db connection pool handle carries no record shape.
+        | IrType::Db
         // A generic type variable carries no concrete record shape of its own.
         | IrType::Generic(_) => {}
     }
@@ -619,6 +688,9 @@ fn type_reaches_enum(
         | IrType::Unit
         | IrType::Bytes
         | IrType::Json
+        // `Db` is a pointer-sized opaque handle (connection pool Arc); it cannot
+        // participate in an infinite-size cycle.
+        | IrType::Db
         | IrType::Fun(_, _)
         | IrType::Generic(_) => false,
     }
@@ -645,7 +717,9 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::Char
         | IrType::Unit
         | IrType::Bytes
-        | IrType::Json => false,
+        | IrType::Json
+        // `Db` is an opaque monomorphic handle — no generic parameters.
+        | IrType::Db => false,
     }
 }
 
@@ -697,7 +771,9 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::Char
         | IrType::Unit
         | IrType::Bytes
-        | IrType::Json => {}
+        | IrType::Json
+        // `Db` is monomorphic — no generic parameters to collect.
+        | IrType::Db => {}
     }
 }
 
@@ -907,7 +983,10 @@ fn match_template(
         | IrType::Char
         | IrType::Unit
         | IrType::Bytes
-        | IrType::Json => {
+        | IrType::Json
+        // `Db` is a monomorphic opaque handle; its template and concrete forms
+        // must be identical (both `IrType::Db`).
+        | IrType::Db => {
             if template == concrete {
                 Ok(())
             } else {

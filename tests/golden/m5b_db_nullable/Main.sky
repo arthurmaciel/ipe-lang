@@ -1,0 +1,53 @@
+module Main exposing (main)
+
+-- M5b-db golden: Db.Decode.nullable — distinguishes SQL NULL from non-null rows.
+-- Exercises the IrType::Decoder(Maybe T) type fixed in constrain.rs (M5b-db).
+-- Two rows: id=1 has label="alpha"; id=2 has label=NULL (omitted in INSERT).
+-- Decoder: nullable(string "label") → Maybe String.
+-- Output: "just:alpha,nothing"
+
+main =
+    Task.andThen
+        (\conn ->
+            Db.withTransaction conn
+                (\txconn ->
+                    let
+                        _ =
+                            Db.execRaw txconn
+                                "CREATE TABLE tags (id INTEGER, label TEXT)"
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO tags VALUES (?, ?)"
+                                [ SqlInt 1, SqlString "alpha" ]
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO tags (id) VALUES (?)"
+                                [ SqlInt 2 ]
+                    in
+                    Task.andThen
+                        (\results ->
+                            println
+                                (String.join ","
+                                    (List.map
+                                        (\m ->
+                                            case m of
+                                                Just s ->
+                                                    "just:" ++ s
+
+                                                Nothing ->
+                                                    "nothing"
+                                        )
+                                        results
+                                    )
+                                )
+                        )
+                        (Db.queryDecode txconn
+                            "SELECT label FROM tags ORDER BY id"
+                            []
+                            (Db.Decode.nullable (Db.Decode.string "label"))
+                        )
+                )
+        )
+        (Db.open "sqlite" "sqlite::memory:")

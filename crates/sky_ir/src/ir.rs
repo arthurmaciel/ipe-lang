@@ -437,6 +437,14 @@ pub enum IrType {
     /// `Decoder<T>` using the emitted project's preamble type alias:
     /// `pub type Decoder<T> = sky_runtime::json::Decoder<SkyError, T>`.
     Decoder(Box<Self>),
+    /// The `Db` connection pool type — an opaque handle to an open database
+    /// connection pool (`Std.Db`).
+    ///
+    /// Introduced in M5b-db.  Renders as `Db` via the runtime re-export
+    /// `pub use sky_runtime::Db;` in the emitted crate preamble.  The type is
+    /// zero-argument (no type parameters) and value-cloneable (the pool is
+    /// reference-counted internally).
+    Db,
 }
 
 /// An expression in the typed IR.
@@ -1254,6 +1262,170 @@ pub enum KernelFn {
     /// PREPENDS `(key, value)` to the request's `headers` list — latest-added
     /// appears first (cons-prepend), matching the Go reference implementation.
     HttpWithHeader,
+
+    // ── Db kernels (M5b-db) ──────────────────────────────────────────────────
+    /// `Db.connect : () -> Task Error Db` — connect via `SKY_DB_URL`. Arity 1.
+    DbConnect,
+    /// `Db.open : String -> String -> Task Error Db` — `open driver path`. Arity 2.
+    DbOpen,
+    /// `Db.close : Db -> Task Error ()` — return pool to registry. Arity 1.
+    DbClose,
+    /// `Db.execRaw : Db -> String -> Task Error Int` — execute SQL, no params. Arity 2.
+    DbExecRaw,
+    /// `Db.exec : Db -> String -> List SqlValue -> Task Error Int` — parameterised exec. Arity 3.
+    ///
+    /// The `List SqlValue` arg is projected to `Vec<SqlParam>` via the generated
+    /// `StdDbSqlValue::into_sql_param()` at the call site before reaching the
+    /// runtime's `db_exec_params`.
+    DbExec,
+    /// `Db.query : Db -> String -> List SqlValue -> Task Error (List (Dict String String))`. Arity 3.
+    ///
+    /// Same `List SqlValue` → `Vec<SqlParam>` projection as [`KernelFn::DbExec`].
+    DbQuery,
+    /// `Db.queryDecode : Db -> String -> List SqlValue -> Decoder a -> Task Error (List a)`. Arity 4.
+    ///
+    /// Routes through `db_query_decode_params`.  The `List SqlValue` arg is
+    /// projected to `Vec<SqlParam>`; the decoder is passed through as-is.
+    DbQueryDecode,
+    /// `Db.getString : String -> Dict String String -> String` — pure row accessor. Arity 2.
+    DbGetString,
+    /// `Db.getInt : String -> Dict String String -> Int` — pure row accessor. Arity 2.
+    DbGetInt,
+    /// `Db.getBool : String -> Dict String String -> Bool` — pure row accessor. Arity 2.
+    DbGetBool,
+    /// `Db.getField : String -> Dict String String -> String` — pure row accessor; returns `""` when absent. Arity 2.
+    DbGetField,
+    /// `Db.insertRow : Db -> String -> List (String, String) -> Task Error Int`. Arity 3.
+    DbInsertRow,
+    /// `Db.getById : Db -> String -> String -> Task Error (Maybe (Dict String String))`. Arity 3.
+    DbGetById,
+    /// `Db.updateById : Db -> String -> String -> List (String, String) -> Task Error Int`. Arity 4.
+    DbUpdateById,
+    /// `Db.deleteById : Db -> String -> String -> Task Error Int`. Arity 3.
+    DbDeleteById,
+    /// `Db.findOneByField : Db -> String -> String -> String -> Task Error (Maybe (Dict String String))`. Arity 4.
+    DbFindOneByField,
+    /// `Db.findManyByField : Db -> String -> String -> String -> Task Error (List (Dict String String))`. Arity 4.
+    DbFindManyByField,
+    /// `Db.findByConditions : Db -> String -> Dict String String -> Task Error (List (Dict String String))`. Arity 3.
+    ///
+    /// The `Dict String String` arg maps column names to equality values for AND-joined
+    /// WHERE conditions. The runtime receives it as `HashMap<String, String>`.
+    DbFindByConditions,
+    /// `Db.unsafeFindWhere : Db -> String -> String -> List String -> Task Error (List (Dict String String))`. Arity 4.
+    ///
+    /// The `List String` arg provides parameterized SQL bindings (`?` placeholders)
+    /// for the WHERE clause — the sole sanctioned raw-SQL path. Callers MUST pass
+    /// all dynamic values through this parameter, never via string interpolation.
+    DbUnsafeFindWhere,
+    /// `Db.insertFields : Db -> String -> List (String, SqlField) -> Task Error Int`. Arity 3.
+    ///
+    /// The `List (String, SqlField)` arg is projected to `Vec<(String, Option<SqlParam>)>`
+    /// via `StdDbSqlField::into_field_param()` at the call site.
+    DbInsertFields,
+    /// `Db.updateFields : Db -> String -> List (String, SqlValue) -> List (String, SqlField) -> Task Error Int`. Arity 4.
+    DbUpdateFields,
+    /// `Db.insertFieldsReturning : Db -> String -> List (String, SqlField) -> String -> Decoder a -> Task Error (List a)`. Arity 5.
+    DbInsertFieldsReturning,
+    /// `Db.withTransaction : Db -> (Db -> Task Error a) -> Task Error a`. Arity 2.
+    DbWithTransaction,
+    /// `Db.migrate : Db -> List (String, String) -> Task Error (List String)`. Arity 2.
+    DbMigrate,
+
+    // ── Db.Decode kernels (M5b-db) ───────────────────────────────────────────
+    /// `Db.Decode.string : String -> Decoder String` — column string decoder. Arity 1.
+    DbDecString,
+    /// `Db.Decode.int : String -> Decoder Int` — column integer decoder. Arity 1.
+    DbDecInt,
+    /// `Db.Decode.float : String -> Decoder Float` — column float decoder. Arity 1.
+    DbDecFloat,
+    /// `Db.Decode.bool : String -> Decoder Bool` — column boolean decoder. Arity 1.
+    DbDecBool,
+    /// `Db.Decode.nullable : Decoder a -> Decoder (Maybe a)` — nullable wrapper. Arity 1.
+    ///
+    /// v0.16.24 breaking change: no leading column-name arg; inner decoder's
+    /// column set is used for NULL detection.
+    DbDecNullable,
+    /// `Db.Decode.map : (a -> b) -> Decoder a -> Decoder b`. Arity 2.
+    DbDecMap,
+    /// `Db.Decode.andThen : (a -> Decoder b) -> Decoder a -> Decoder b`. Arity 2.
+    DbDecAndThen,
+    /// `Db.Decode.succeed : a -> Decoder a` — decoder that always succeeds. Arity 1.
+    DbDecSucceed,
+    /// `Db.Decode.fail : String -> Decoder a` — decoder that always fails. Arity 1.
+    DbDecFail,
+    /// `Db.Decode.map2 : (a -> b -> c) -> Decoder a -> Decoder b -> Decoder c`. Arity 3.
+    DbDecMap2,
+    /// `Db.Decode.map3 : (a -> b -> c -> d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d`. Arity 4.
+    DbDecMap3,
+    /// `Db.Decode.map4 : (a -> b -> c -> d -> e) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e`. Arity 5.
+    DbDecMap4,
+    /// `Db.Decode.required : String -> Decoder a -> Decoder (a -> b) -> Decoder b`. Arity 3.
+    DbDecRequired,
+    /// `Db.Decode.optional : String -> Decoder a -> a -> Decoder (a -> b) -> Decoder b`. Arity 4.
+    DbDecOptional,
+}
+
+impl KernelFn {
+    /// Return `true` when this variant is one of the `Db*` kernel variants
+    /// (including `DbDec*`).
+    ///
+    /// This is the single authoritative list — `sky_lower` and
+    /// `sky_backend_rust` both import it rather than maintaining independent
+    /// copies.
+    ///
+    /// # Exhaustiveness note
+    ///
+    /// `matches!` expands to a `match` with an implicit `_ => false` arm, so
+    /// adding a new `KernelFn::Db*` variant does NOT automatically yield a
+    /// compiler warning here.  Callers that need to detect an unlisted Db
+    /// variant (e.g. `emit_db_call`'s hardening guard) MUST use this as a
+    /// *guard* inside their own exhaustive `match`, so the Rust compiler's
+    /// exhaustiveness checker can flag the gap at compile time.
+    #[must_use]
+    pub const fn is_db(self) -> bool {
+        matches!(
+            self,
+            Self::DbConnect
+                | Self::DbOpen
+                | Self::DbClose
+                | Self::DbExecRaw
+                | Self::DbExec
+                | Self::DbQuery
+                | Self::DbQueryDecode
+                | Self::DbGetString
+                | Self::DbGetInt
+                | Self::DbGetBool
+                | Self::DbGetField
+                | Self::DbInsertRow
+                | Self::DbGetById
+                | Self::DbUpdateById
+                | Self::DbDeleteById
+                | Self::DbFindOneByField
+                | Self::DbFindManyByField
+                | Self::DbFindByConditions
+                | Self::DbUnsafeFindWhere
+                | Self::DbInsertFields
+                | Self::DbUpdateFields
+                | Self::DbInsertFieldsReturning
+                | Self::DbWithTransaction
+                | Self::DbMigrate
+                | Self::DbDecString
+                | Self::DbDecInt
+                | Self::DbDecFloat
+                | Self::DbDecBool
+                | Self::DbDecNullable
+                | Self::DbDecMap
+                | Self::DbDecAndThen
+                | Self::DbDecSucceed
+                | Self::DbDecFail
+                | Self::DbDecMap2
+                | Self::DbDecMap3
+                | Self::DbDecMap4
+                | Self::DbDecRequired
+                | Self::DbDecOptional
+        )
+    }
 }
 
 /// Binary operators.

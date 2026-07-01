@@ -1,0 +1,62 @@
+module Main exposing (main)
+
+-- M5b-db golden: withTransaction COMMIT path and ROLLBACK-on-error path.
+-- Uses a file-backed SQLite DB (/tmp/sky_txn_golden.db) so all pool connections
+-- share the same persisted database — independent sequential transactions can
+-- therefore observe each other's commits and non-committed rollbacks.
+-- CREATE TABLE IF NOT EXISTS + DELETE FROM ensures idempotent test runs.
+
+main =
+    Task.andThen
+        (\conn ->
+            let
+                _ =
+                    Db.execRaw conn
+                        "CREATE TABLE IF NOT EXISTS log (msg TEXT)"
+
+                _ =
+                    Db.execRaw conn "DELETE FROM log"
+            in
+            -- Transaction 1: INSERT "hello" + succeed → COMMIT → durable.
+            Task.andThen
+                (\r1 ->
+                    -- Transaction 2: INSERT "world" + fail → ROLLBACK → discarded.
+                    Task.andThen
+                        (\r2 ->
+                            -- SELECT on pool: file-backed shared DB shows only "hello".
+                            Task.andThen
+                                (\rows ->
+                                    println
+                                        (String.join ","
+                                            (List.map (\r -> Db.getString "msg" r) rows)
+                                        )
+                                )
+                                (Db.query conn
+                                    "SELECT msg FROM log ORDER BY msg"
+                                    []
+                                )
+                        )
+                        (Task.onError
+                            (\err -> Task.succeed ())
+                            (Db.withTransaction conn
+                                (\tx ->
+                                    let
+                                        _ =
+                                            Db.exec tx
+                                                "INSERT INTO log VALUES (?)"
+                                                [ SqlString "world" ]
+                                    in
+                                    Task.fail "rollback-test"
+                                )
+                            )
+                        )
+                )
+                (Db.withTransaction conn
+                    (\tx ->
+                        Db.exec tx
+                            "INSERT INTO log VALUES (?)"
+                            [ SqlString "hello" ]
+                    )
+                )
+        )
+        (Db.open "sqlite" "/tmp/sky_txn_golden.db")

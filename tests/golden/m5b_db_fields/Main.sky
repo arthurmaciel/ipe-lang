@@ -1,0 +1,66 @@
+module Main exposing (main)
+
+-- M5b-db golden: Db.insertFields with SetField/OmitField + Db.updateFields.
+-- OmitField columns are excluded from generated SQL; the DB applies DEFAULT.
+-- Verifies: initial insert omits "notes" → gets DEFAULT 'none'; updateFields
+-- omits "notes" again → notes stays 'none' while name changes to 'gadget'.
+
+main =
+    Task.andThen
+        (\conn ->
+            Db.withTransaction conn
+                (\txconn ->
+                    let
+                        _ =
+                            Db.execRaw txconn
+                                "CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT, notes TEXT DEFAULT 'none')"
+
+                        _ =
+                            Db.insertFields txconn
+                                "items"
+                                [ ( "id", SetField (SqlString "1") )
+                                , ( "name", SetField (SqlString "widget") )
+                                , ( "notes", OmitField )
+                                ]
+                    in
+                    Task.andThen
+                        (\before ->
+                            let
+                                _ =
+                                    Db.updateFields txconn
+                                        "items"
+                                        [ ( "id", SqlString "1" ) ]
+                                        [ ( "name", SetField (SqlString "gadget") )
+                                        , ( "notes", OmitField )
+                                        ]
+                            in
+                            Task.andThen
+                                (\after ->
+                                    println
+                                        (String.join
+                                            ","
+                                            (List.map
+                                                (\r -> Db.getString "name" r ++ "/" ++ Db.getString "notes" r)
+                                                before
+                                            )
+                                            ++ "\n"
+                                            ++ String.join
+                                                ","
+                                                (List.map
+                                                    (\r -> Db.getString "name" r ++ "/" ++ Db.getString "notes" r)
+                                                    after
+                                                )
+                                        )
+                                )
+                                (Db.query txconn
+                                    "SELECT name, notes FROM items ORDER BY id"
+                                    []
+                                )
+                        )
+                        (Db.query txconn
+                            "SELECT name, notes FROM items ORDER BY id"
+                            []
+                        )
+                )
+        )
+        (Db.open "sqlite" "sqlite::memory:")

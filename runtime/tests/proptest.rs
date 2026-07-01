@@ -97,7 +97,7 @@ mod task_tests {
     #[test]
     fn task_and_then_ok() {
         let f = |x: i64| mk_task(x * 2);
-        assert_eq!(run(task_and_then(f, mk_task(21))), SkyResult::Ok(42));
+        assert_eq!(run(task_and_then(mk_task(21), f)), SkyResult::Ok(42));
     }
 
     #[test]
