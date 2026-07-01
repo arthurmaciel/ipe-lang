@@ -491,9 +491,10 @@ mod tests {
     fn expected_type_is_p0041() {
         // A token that cannot begin a type.
         assert_eq!(err_code(&format!("{HDR}x : =\nx = 5")), "SKY-P0041");
-        // SHOULD-FIX: a dotted upper-ident (qualified type) is rejected, not
-        // collapsed into a non-reference AST.
-        assert_eq!(err_code(&format!("{HDR}x : Foo.Bar\nx = 5")), "SKY-P0041");
+        // A dotted uppercase type now PARSES (qualified type support):
+        // `Foo.Bar` becomes TType("Foo", ["Bar"], []) — canonicalisation (not
+        // the parser) is responsible for validating that `Foo` is a known module.
+        assert_eq!(err_code(&format!("{HDR}x : Foo.Bar\nx = 5")), "OK");
     }
 
     #[test]
@@ -708,10 +709,10 @@ mod tests {
             err_code(&format!("{HDR}v =\n    let x 2 in x\n")),
             "SKY-P0061"
         );
-        // A function-style binding (`let f x = …`) is unsupported: the parameter
-        // sits where `=` was expected, the clean rejection.
+        // Parameters present but `=` never arrives (`in` is not a binder atom):
+        // MissingEquals, not a silent swallow.
         assert_eq!(
-            err_code(&format!("{HDR}v =\n    let f x = x in f\n")),
+            err_code(&format!("{HDR}v =\n    let f x in f\n")),
             "SKY-P0061"
         );
         // Missing `in` after the bindings.
@@ -1487,5 +1488,134 @@ mod tests {
         assert_eq!(le_tokens.len(), 1, "<= must produce exactly one token");
         let le_tok = le_tokens.first().expect("<= token vec must be non-empty");
         assert_eq!(le_tok.kind, Tok::Le, "<= must lex as Le");
+    }
+
+    // ── GAP 4: block comments ─────────────────────────────────────────────────
+
+    /// A well-formed block comment is invisible to the parser.
+    #[test]
+    fn block_comment_is_skipped() {
+        assert_eq!(err_code(&format!("{HDR}main = {{- ignored -}} 1")), "OK");
+    }
+
+    /// A block comment can nest: `{- {- inner -} outer -}`.
+    #[test]
+    fn nested_block_comment_is_skipped() {
+        assert_eq!(
+            err_code(&format!("{HDR}main = {{- {{- nested -}} -}} 1")),
+            "OK"
+        );
+    }
+
+    /// An unterminated block comment is SKY-P0017.
+    #[test]
+    fn unterminated_block_comment_is_p0017() {
+        assert_eq!(
+            err_code(&format!("{HDR}main = {{- never closed")),
+            "SKY-P0017"
+        );
+    }
+
+    /// A block comment between top-level bindings is whitespace to the parser.
+    #[test]
+    fn block_comment_between_definitions_is_skipped() {
+        let src = format!("{HDR}a = 1\n{{- between defs -}}\nb = 2\n");
+        assert_eq!(err_code(&src), "OK");
+    }
+
+    // ── GAP 2: integer-division operator `//` ────────────────────────────────
+
+    /// `//` lexes as a single `SlashSlash` token (maximal munch).
+    #[test]
+    fn int_div_lexes_as_single_token() {
+        use crate::lexer::{Tok, lex};
+        let tokens = lex("//").expect("// must lex");
+        assert_eq!(tokens.len(), 1, "// must produce exactly one token");
+        let tok = tokens.first().expect("// token vec must be non-empty");
+        assert_eq!(tok.kind, Tok::SlashSlash, "// must lex as SlashSlash");
+
+        // Non-regression: `/=` stays SlashEq, `/` stays Slash.
+        let ne_tokens = lex("/=").expect("/= must lex");
+        assert_eq!(ne_tokens.len(), 1);
+        assert_eq!(ne_tokens.first().map(|t| &t.kind), Some(&Tok::SlashEq));
+
+        let div_tokens = lex("/").expect("/ must lex");
+        assert_eq!(div_tokens.len(), 1);
+        assert_eq!(div_tokens.first().map(|t| &t.kind), Some(&Tok::Slash));
+    }
+
+    /// `a // b` parses as a Binops chain with the `//` operator.
+    #[test]
+    fn int_div_parses_as_binop() {
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv = 10 // 3\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "10 // 3 must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|v| matches!(&v.body.value, Expr_::Binops(ops, _)
+                if ops.iter().any(|(_, op)| i.resolve(op.value) == Some("//")))),
+            "body must be a Binops with operator `//`"
+        );
+    }
+
+    // ── GAP 3: let-bound functions ────────────────────────────────────────────
+
+    /// `let f x = body in f` desugars to a Lambda inside the let binding.
+    #[test]
+    fn let_fn_desugars_to_lambda() {
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    let f x = x in f 1\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "let f x = x must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|v| matches!(&v.body.value, Expr_::Let(bindings, _)
+            if bindings.first().is_some_and(|b|
+                matches!(&b.pat.value, Pattern_::PVar(_))
+                && matches!(&b.body.value, Expr_::Lambda(params, _) if params.len() == 1)
+            ))),
+            "let binding body must be a Lambda with one param"
+        );
+    }
+
+    /// `let f x y = body in f` desugars to a multi-parameter Lambda.
+    #[test]
+    fn let_fn_two_params_desugars_to_lambda() {
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    let add x y = x in add 1 2\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "let add x y = x must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|v| matches!(&v.body.value, Expr_::Let(bindings, _)
+            if bindings.first().is_some_and(|b|
+                matches!(&b.body.value, Expr_::Lambda(params, _) if params.len() == 2)
+            ))),
+            "let binding body must be a Lambda with two params"
+        );
+    }
+
+    // ── GAP 1: qualified type names ────────────────────────────────────────────
+
+    /// A qualified type annotation `Module.Type` parses successfully.
+    #[test]
+    fn qualified_type_in_annotation_parses() {
+        assert_eq!(
+            err_code(&format!("{HDR}x : String.String\nx = \"hi\"")),
+            "OK"
+        );
+    }
+
+    /// A deeply qualified type `Db.Decode.Decoder` parses (qualifier is "Db.Decode").
+    #[test]
+    fn deeply_qualified_type_in_annotation_parses() {
+        assert_eq!(
+            err_code(&format!("{HDR}x : Db.Decode.Decoder\nx = 0")),
+            "OK"
+        );
     }
 }

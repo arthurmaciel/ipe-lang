@@ -1,0 +1,14 @@
+module Main exposing (main)
+
+-- m2lex parser gate: `//` integer division. Truncates toward zero (Go + Elm
+-- parity), so `-7 // 2` is `-3`, not the `-4` a floor-division would give.
+
+main =
+    let
+        pos =
+            20 // 2
+
+        neg =
+            (-7) // 2
+    in
+    println (String.fromInt pos ++ " " ++ String.fromInt neg)

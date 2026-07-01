@@ -71,6 +71,9 @@ pub enum Tok {
     Star,
     Slash,
     SlashEq,
+    /// The integer-division operator `//`. Lexed as ONE token (maximal munch of
+    /// `/`), never as two adjacent [`Tok::Slash`].
+    SlashSlash,
     EqEq,
     Lt,
     Gt,
@@ -174,11 +177,17 @@ impl Lexer {
         }
     }
 
-    /// Skip whitespace and line comments (`-- … <newline>`).
-    fn skip_trivia(&mut self) {
+    /// Skip whitespace, line comments (`-- … <newline>`), and block comments
+    /// (`{- … -}`, nestable). Returns `Ok(())` on success; returns
+    /// [`ParseError::UnterminatedBlockComment`] when a `{-` opener has no
+    /// matching `-}` before end of input.
+    fn skip_trivia(&mut self) -> DResult<()> {
         loop {
             match self.peek() {
                 Some(c) if c == ' ' || c == '\t' || c == '\r' || c == '\n' => self.advance(),
+                // Line comment: `-- … \n`. Consume everything up to (but not
+                // including) the newline, then loop so the newline itself is
+                // consumed as whitespace on the next iteration.
                 Some('-') if self.peek2() == Some('-') => {
                     while let Some(c) = self.peek() {
                         if c == '\n' {
@@ -187,9 +196,42 @@ impl Lexer {
                         self.advance();
                     }
                 }
+                // Block comment: `{- … -}`, nestable. A `{-` inside a comment
+                // increments the depth; a `-}` decrements it; depth 0 ends.
+                Some('{') if self.peek2() == Some('-') => {
+                    let lo = self.offset();
+                    self.advance(); // consume `{`
+                    self.advance(); // consume `-`
+                    let mut depth: u32 = 1;
+                    loop {
+                        match self.peek() {
+                            None => {
+                                return Err(Diagnostic::Parse {
+                                    span: Span::new(lo, self.offset()),
+                                    msg: ParseError::UnterminatedBlockComment,
+                                });
+                            }
+                            Some('{') if self.peek2() == Some('-') => {
+                                self.advance();
+                                self.advance();
+                                depth = depth.saturating_add(1);
+                            }
+                            Some('-') if self.peek2() == Some('}') => {
+                                self.advance();
+                                self.advance();
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            Some(_) => self.advance(),
+                        }
+                    }
+                }
                 _ => break,
             }
         }
+        Ok(())
     }
 }
 
@@ -230,7 +272,7 @@ pub fn lex(src: &str) -> DResult<Vec<Token>> {
     let mut lx = Lexer::new(src);
     let mut out = Vec::new();
     loop {
-        lx.skip_trivia();
+        lx.skip_trivia()?;
         let Some(c) = lx.peek() else { break };
         let line = lx.line;
         let col = lx.col;
@@ -568,7 +610,22 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
             }
         }
         '-' => one_or_two(lx, '>', Tok::Arrow, Tok::Minus),
-        '/' => one_or_two(lx, '=', Tok::SlashEq, Tok::Slash),
+        // `/` has three forms: `//` (integer division), `/=` (not-equal), bare `/` (division).
+        // Maximal-munch: consume the first `/` then peek the next char.
+        '/' => {
+            lx.advance();
+            match lx.peek() {
+                Some('/') => {
+                    lx.advance();
+                    Tok::SlashSlash
+                }
+                Some('=') => {
+                    lx.advance();
+                    Tok::SlashEq
+                }
+                _ => Tok::Slash,
+            }
+        }
         // `<` has three forms: `<=`, `<|`, and bare `<`.
         '<' => {
             lx.advance();

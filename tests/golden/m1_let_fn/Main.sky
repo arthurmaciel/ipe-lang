@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+-- m1 parser gate: a let-bound *function* (a let binding with parameters, as
+-- opposed to a plain value). `inc` closes over nothing and is applied inside
+-- the `in` body.
+
+main =
+    let
+        inc n =
+            n + 1
+    in
+    println (String.fromInt (inc 29))

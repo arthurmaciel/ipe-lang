@@ -330,6 +330,9 @@ fn parse_label(msg: &ParseError) -> Option<String> {
         }
         ParseError::UnterminatedString => Some("this string is never closed".to_string()),
         ParseError::MalformedChar => Some("this character literal is malformed".to_string()),
+        ParseError::UnterminatedBlockComment => {
+            Some("this block comment is never closed".to_string())
+        }
         ParseError::MalformedModuleHeader(defect) => Some(header_defect_str(*defect).to_string()),
         ParseError::MalformedExposingList(defect) => Some(exposing_defect_str(*defect).to_string()),
         ParseError::MissingEquals { binding } => Some(format!("`{binding}` needs an `=` here")),
@@ -639,6 +642,7 @@ const fn token_kind_str(t: TokenKind) -> &'static str {
         TokenKind::Star => "`*`",
         TokenKind::Slash => "`/`",
         TokenKind::SlashEq => "`/=`",
+        TokenKind::SlashSlash => "`//`",
         TokenKind::EqEq => "`==`",
         TokenKind::Lt => "`<`",
         TokenKind::Gt => "`>`",

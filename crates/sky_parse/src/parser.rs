@@ -103,6 +103,7 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Star => TokenKind::Star,
         Tok::Slash => TokenKind::Slash,
         Tok::SlashEq => TokenKind::SlashEq,
+        Tok::SlashSlash => TokenKind::SlashSlash,
         Tok::EqEq => TokenKind::EqEq,
         Tok::Lt => TokenKind::Lt,
         Tok::Gt => TokenKind::Gt,
@@ -884,13 +885,20 @@ impl<'a> Parser<'a> {
             Tok::Ident(text) => {
                 let first_upper = text.chars().next().is_some_and(|c| c.is_ascii_uppercase());
                 if first_upper {
-                    // M0 does not model qualified types (`Module.Type`). Reject a
-                    // dotted upper-case name rather than build a non-reference AST.
+                    // A dotted uppercase name is a qualified type: split on `.` so
+                    // the last segment is the type name and the rest is the module
+                    // qualifier. E.g. `JsonDec.Decoder` → qualifier="JsonDec",
+                    // name="Decoder". An unqualified name has an empty qualifier.
                     if text.contains('.') {
-                        return Err(Diagnostic::Parse {
-                            span: tok.span,
-                            msg: ParseError::ExpectedType,
-                        });
+                        let dot = text.rfind('.').unwrap_or(0);
+                        let qualifier = &text[..dot];
+                        let name = &text[dot + 1..];
+                        let q = self.interner.intern(qualifier)?;
+                        let seg = self.interner.intern(name)?;
+                        return Ok(Located::new(
+                            tok.span,
+                            TypeAnnotation::TType(q, vec![seg], Vec::new()),
+                        ));
                     }
                     let empty = self.interner.intern("")?;
                     let seg = self.interner.intern(text)?;
@@ -1046,6 +1054,7 @@ impl<'a> Parser<'a> {
             Tok::Star => "*",
             Tok::Slash => "/",
             Tok::SlashEq => "/=",
+            Tok::SlashSlash => "//",
             Tok::EqEq => "==",
             Tok::Lt => "<",
             Tok::Gt => ">",
@@ -1793,9 +1802,25 @@ impl<'a> Parser<'a> {
             Located::new(name_tok.span, Pattern_::PVar(name_sym))
         };
 
-        // `=` after the binder. A parameter here (`let f x = …`) lands as a
-        // non-`=` token, producing the clean MissingEquals rejection — M1 has no
-        // function bindings in `let`.
+        // Function-parameter sugar: `let f x y = body` desugars to
+        // `let f = \x y -> body`. Parameters are collected only when the binder
+        // is a simple `PVar` name (destructure binders like `{ x }` already
+        // consumed their `=` in `parse_pattern`).
+        //
+        // We collect binder atoms as long as the next token can begin one AND
+        // it is not `=`. A literal start (Int, Str, …) is not a binder atom, so
+        // it falls through to the `MissingEquals` error below — exactly the
+        // right behaviour for malformed input like `let x 2 in x`.
+        let mut params: Vec<Pattern> = Vec::new();
+        if matches!(pat.value, Pattern_::PVar(_)) {
+            while self.peek_is_binder_atom_start()
+                && !matches!(self.peek_kind(), Some(&Tok::Equals))
+            {
+                params.push(self.parse_pattern_atom(depth + 1)?);
+            }
+        }
+
+        // `=` after the binder (and any collected parameters).
         match self.peek() {
             Some(t) if t.kind == Tok::Equals => {
                 self.bump(Construct::Let)?;
@@ -1809,7 +1834,17 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let body = self.parse_expr(binding_col, depth + 1)?;
+        let rhs = self.parse_expr(binding_col, depth + 1)?;
+        // If we collected parameters, wrap the body in a Lambda so the let
+        // binding holds the desugared function value. The lambda span runs from
+        // the first parameter to the end of the body.
+        let body = if params.is_empty() {
+            rhs
+        } else {
+            let first_param_span = params.first().map_or(rhs.span, |p| p.span);
+            let span = Self::span_merge(first_param_span, rhs.span);
+            Located::new(span, Expr_::Lambda(params, Box::new(rhs)))
+        };
         Ok(LetBinding { pat, body })
     }
 

@@ -16,10 +16,10 @@ use crate::code::{
     SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0200, SKY_N0001, SKY_N0002, SKY_N0003,
     SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_N0020, SKY_N0021,
     SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_P0001, SKY_P0002, SKY_P0003, SKY_P0010,
-    SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015, SKY_P0016, SKY_P0020, SKY_P0021,
-    SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062,
-    SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013,
-    SKY_T0014, Severity,
+    SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015, SKY_P0016, SKY_P0017, SKY_P0020,
+    SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061,
+    SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012,
+    SKY_T0013, SKY_T0014, Severity,
 };
 use crate::span::Span;
 
@@ -71,6 +71,8 @@ pub enum TokenKind {
     Star,
     Slash,
     SlashEq,
+    /// `//` — the integer-division operator.
+    SlashSlash,
     EqEq,
     Lt,
     Gt,
@@ -202,9 +204,9 @@ pub enum LetDefect {
     NoBindings,
     /// A binding name is not a lowercase identifier.
     BindingNameNotLower,
-    /// A binding name is not followed by `=` (also catches the unsupported
-    /// function-binding form `let f x = …`, where a parameter sits where `=`
-    /// was expected).
+    /// A binding name is not followed by `=` or any binder-atom-start token.
+    /// This covers e.g. `let x 2 in x`, where a literal sits where `=` was
+    /// expected (function parameters `let f x = …` are desugared, not rejected).
     MissingEquals,
     /// The `in` keyword is missing after the bindings.
     MissingIn,
@@ -290,6 +292,10 @@ pub enum ParseError {
     /// A character literal `'…` that is malformed — unterminated, empty (`''`),
     /// or carrying more than one character before the closing `'`. [SKY-P0015]
     MalformedChar,
+    /// A block comment `{- … ` whose closing `-}` is missing before end of
+    /// input. Nesting is supported (`{- {- -} -}`), so the scanner counts
+    /// depth; depth > 0 at EOF triggers this error. [SKY-P0017]
+    UnterminatedBlockComment,
     /// The module header is malformed. [SKY-P0020]
     MalformedModuleHeader(HeaderDefect),
     /// The `exposing (...)` list is malformed. [SKY-P0021]
@@ -747,6 +753,7 @@ const fn parse_code(msg: &ParseError) -> Code {
         ParseError::FloatLiteralOutOfRange => SKY_P0016,
         ParseError::UnterminatedString => SKY_P0014,
         ParseError::MalformedChar => SKY_P0015,
+        ParseError::UnterminatedBlockComment => SKY_P0017,
         ParseError::MalformedModuleHeader(_) => SKY_P0020,
         ParseError::MalformedExposingList(_) => SKY_P0021,
         ParseError::MissingEquals { .. } => SKY_P0030,
@@ -868,6 +875,7 @@ fn parse_help(msg: &ParseError) -> Vec<HelpLine> {
         | ParseError::UnknownChar(_)
         | ParseError::UnterminatedString
         | ParseError::MalformedChar
+        | ParseError::UnterminatedBlockComment
         | ParseError::MalformedExposingList(_)
         | ParseError::MissingEquals { .. }
         | ParseError::TypeArgsOnNonConstructor

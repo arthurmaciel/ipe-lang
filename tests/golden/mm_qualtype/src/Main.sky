@@ -1,0 +1,13 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Lib exposing (Box(..), unbox)
+
+-- The annotation names the type with its module qualifier: `Lib.Box Int`.
+-- Exercises qualified-type-name resolution in a signature across modules.
+answer : Lib.Box Int
+answer =
+    Box 42
+
+main =
+    println (String.fromInt (unbox answer))
