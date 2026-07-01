@@ -63,6 +63,17 @@ const RUNTIME_MOD_RS_DB_APPEND: &str = "pub mod db;\npub use db::*;\npub mod tel
 /// emitted `main.rs` namespace via `pub use sky_runtime::*`.
 const RUNTIME_MOD_RS_TEA_APPEND: &str = "pub mod tea;\npub use tea::*;\n";
 
+// ── M6: Sky.Http.Server ──────────────────────────────────────────────────────
+
+/// Lines appended to `sky_runtime/mod.rs` when the program uses
+/// Sky.Http.Server kernels.
+///
+/// Both `server.rs` and `server_stream.rs` are gated by the `server` Cargo
+/// feature in the runtime source; the generated Cargo.toml's default features
+/// include `"server"` when these lines are appended.
+const RUNTIME_MOD_RS_SERVER_APPEND: &str =
+    "pub mod server;\npub use server::*;\npub mod server_stream;\npub use server_stream::*;\n";
+
 /// The `SkyCmd<M>` and `SkySub<M>` project-level type aliases emitted when the
 /// program uses TEA kernels. Placed immediately after `runtime_bindings()` (the
 /// block that also contains `SkyTask<A>` and `Decoder<T>`).
@@ -174,11 +185,19 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     //     for db programs (provides `DbPool`, `DbRow`, `SKY_DB_URL`, …).
     //   • `Cargo.toml` — adds `db` to default features + `sqlx` dep for db.
     // Build the manifest + runtime module selection based on which kernel groups
-    // are used. Db and TEA are independent features; a program may use both.
+    // are used. Db, TEA, and Server are independent features; a program may use
+    // any combination. The order: db first, then server; both modify the same
+    // base manifest so we chain the transformations.
     let (cargo_toml, runtime_config_rs) = if ctx.uses_db {
         (db_cargo_toml()?, RUNTIME_CONFIG_RS_DB.to_owned())
     } else {
         (CARGO_TOML.to_owned(), RUNTIME_CONFIG_RS.to_owned())
+    };
+    // Apply server manifest extension on top of whichever base was chosen above.
+    let cargo_toml = if ctx.uses_server {
+        server_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
     };
     // mod.rs starts from the M0 default and gains extra `pub mod` lines for
     // each kernel group the program uses.
@@ -189,6 +208,9 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         }
         if ctx.uses_tea {
             mod_rs.push_str(RUNTIME_MOD_RS_TEA_APPEND);
+        }
+        if ctx.uses_server {
+            mod_rs.push_str(RUNTIME_MOD_RS_SERVER_APPEND);
         }
         mod_rs
     };
@@ -236,6 +258,101 @@ fn db_cargo_toml() -> DResult<String> {
     result.push_str(step1.get(..anchor_pos).unwrap_or(""));
     result.push_str(SQLX_LINE);
     result.push_str(step1.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the server-enabled `Cargo.toml` from the given base manifest by:
+///
+/// 1. Adding `"server"` to the `default` feature list.
+/// 2. Extending the `tokio` dependency line with the `"net"` and `"sync"`
+///    features (required by `server.rs`'s `TcpListener` and `mpsc` usage).
+/// 3. Appending `axum` and `tower-http` dependency lines before `[profile.dev]`.
+///
+/// Takes the current manifest string so it can be composed with
+/// [`db_cargo_toml`] when a program uses both Db and Server kernels.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if any anchor string is absent —
+/// a golden-drift invariant violation.
+fn server_cargo_toml(base: &str) -> DResult<String> {
+    // All anchor consts up front — items_after_statements lint requires items
+    // to precede any `let` statement in the same scope.
+    const DEFAULT_PREFIX: &str = "default = [";
+    const DB_FEATURE: &str = "db = []";
+    const DB_SERVER_FEATURE: &str = "db = []\nserver = []";
+    const TOKIO_TIME: &str =
+        r#"tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }"#;
+    const TOKIO_NET_SYNC: &str = r#"tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "net", "sync"] }"#;
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    const SERVER_DEPS: &str = "axum = { version = \"0.7\", features = [\"ws\"] }\n\
+         tower-http = { version = \"0.5\", features = [\"fs\", \"catch-panic\"] }\n\n";
+
+    // Step 1a — insert `"server"` as the LAST element of the `default = [...]`
+    // feature list, immediately before its closing `]`.
+    //
+    // This generic anchor handles every composition:
+    //   non-db:  `default = ["tokio", "crypto", "json"]`
+    //            → `default = ["tokio", "crypto", "json", "server"]`
+    //   db:      `default = ["tokio", "crypto", "json", "db"]`
+    //            → `default = ["tokio", "crypto", "json", "db", "server"]`
+    //   any future feature:  likewise, without needing a new anchor string.
+    //
+    // Fail-closed: if the prefix or the closing `]` is absent the manifest
+    // has drifted from the golden and we surface a CompilerBug rather than
+    // silently emitting an invalid manifest.
+    let pfx = base
+        .find(DEFAULT_PREFIX)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::server_cargo_toml",
+            detail: format!("Cargo.toml anchor {DEFAULT_PREFIX:?} not found — golden drifted"),
+        })?;
+    let search_from = pfx + DEFAULT_PREFIX.len();
+    let rel = base
+        .get(search_from..)
+        .and_then(|s| s.find(']'))
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::server_cargo_toml",
+            detail: "default feature list has no closing ']' — golden drifted".to_owned(),
+        })?;
+    let close = search_from + rel;
+    let mut step1a = String::with_capacity(base.len() + 12);
+    step1a.push_str(base.get(..close).unwrap_or(""));
+    step1a.push_str(r#", "server""#);
+    step1a.push_str(base.get(close..).unwrap_or(""));
+
+    // Step 1b — define the `server = []` feature flag so that "server" in
+    // `default = [...]` refers to a declared feature rather than an undeclared
+    // name (Cargo rejects an undeclared feature reference with E0015).
+    // Anchor on the `db = []` line which is always present in the base manifest.
+    let step1 = step1a.replacen(DB_FEATURE, DB_SERVER_FEATURE, 1);
+    if step1 == step1a {
+        return Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::server_cargo_toml",
+            detail: format!("Cargo.toml anchor {DB_FEATURE:?} not found — golden drifted"),
+        });
+    }
+
+    // Step 2 — extend the tokio dependency line with "net" and "sync".
+    let step2 = step1.replacen(TOKIO_TIME, TOKIO_NET_SYNC, 1);
+    if step2 == step1 {
+        return Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::server_cargo_toml",
+            detail: format!("Cargo.toml anchor {TOKIO_TIME:?} not found — golden drifted"),
+        });
+    }
+
+    // Step 3 — append axum + tower-http before `[profile.dev]`.
+    let anchor_pos = step2
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::server_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(step2.len() + SERVER_DEPS.len());
+    result.push_str(step2.get(..anchor_pos).unwrap_or(""));
+    result.push_str(SERVER_DEPS);
+    result.push_str(step2.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }
 
@@ -304,4 +421,84 @@ impl {sf} {{
 }}
 "
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CARGO_TOML, db_cargo_toml, server_cargo_toml};
+
+    /// Helper: extract the `default = [...]` line from a manifest string.
+    fn default_line(manifest: &str) -> &str {
+        manifest
+            .lines()
+            .find(|l| l.starts_with("default = ["))
+            .expect("manifest must contain a default = [...] line")
+    }
+
+    /// `server_cargo_toml` on the NON-db base manifest inserts "server" and does
+    /// not insert "db" into the default list.
+    #[test]
+    fn server_toml_non_db_inserts_server() {
+        let out = server_cargo_toml(CARGO_TOML).expect("server_cargo_toml must succeed");
+        let def = default_line(&out);
+        assert!(
+            def.contains(r#""server""#),
+            r#"default line must contain "server": {def}"#
+        );
+        assert!(
+            !def.contains(r#""db""#),
+            r#"non-db: default line must NOT contain "db": {def}"#
+        );
+        // Feature declaration must be present.
+        assert!(
+            out.contains("server = []"),
+            "manifest must declare the server feature: {out}"
+        );
+        // tokio net + sync features must be added.
+        assert!(
+            out.contains(r#""net""#) && out.contains(r#""sync""#),
+            "tokio must gain net + sync features: {out}"
+        );
+        // axum + tower-http deps must be present.
+        assert!(out.contains("axum"), "axum dep must be present: {out}");
+        assert!(
+            out.contains("tower-http"),
+            "tower-http dep must be present: {out}"
+        );
+    }
+
+    /// `server_cargo_toml` on the DB-enabled manifest inserts "server" ALONGSIDE
+    /// "db" — all of "tokio", "crypto", "json", "db", "server" are present in
+    /// the default list, and neither overwrites the other.
+    #[test]
+    fn server_toml_db_compose_inserts_both() {
+        let db_base = db_cargo_toml().expect("db_cargo_toml must succeed");
+        let out = server_cargo_toml(&db_base).expect("server_cargo_toml on db base must succeed");
+        let def = default_line(&out);
+        for feat in &[
+            r#""tokio""#,
+            r#""crypto""#,
+            r#""json""#,
+            r#""db""#,
+            r#""server""#,
+        ] {
+            assert!(
+                def.contains(feat),
+                "default line must contain {feat}: {def}"
+            );
+        }
+        // Both feature declarations must be present.
+        assert!(
+            out.contains("db = []"),
+            "manifest must declare the db feature: {out}"
+        );
+        assert!(
+            out.contains("server = []"),
+            "manifest must declare the server feature: {out}"
+        );
+        // sqlx dep (from db_cargo_toml) plus axum dep (from server_cargo_toml)
+        // must both be present.
+        assert!(out.contains("sqlx"), "sqlx dep must be present: {out}");
+        assert!(out.contains("axum"), "axum dep must be present: {out}");
+    }
 }

@@ -6,10 +6,17 @@
 //! stay Send+Sync+'static for axum. server_listen builds an axum Router and
 //! serves via tokio.
 //!
-//! Records map to these structs via runtimeOpaqueTypes (like Csv's CsvDoc), so
-//! the generated `SkyHttpServerRequest`/`Response` are `pub use` aliases and Sky
-//! field access resolves onto the pub fields. `Route`/`Cookie` are opaque Sky
-//! ADTs mapped the same way.
+//! `Request` and `Response` are OPAQUE `Ty::Con` types in the compiler IR
+//! (`sky_ir::IrType::ServerRequest` / `ServerResponse`). Sky code cannot
+//! construct or mutate them directly — it reads a request via ACCESSOR KERNELS
+//! (`Server.body` / `Server.path` / `Server.method` / `Server.header` /
+//! `Server.queryParam` / `Server.getCookie` / `Server.param`) and builds a
+//! response via typed builder kernels (`Server.text` / `Server.json` /
+//! `Server.html` / `Server.withStatus` / `Server.withHeader` /
+//! `Server.redirect` / `Server.withCookie`). The `pub` fields on
+//! `ServerRequest` / `ServerResponse` below exist solely so the accessor
+//! functions in this file can read them — they are NOT part of the Sky API.
+//! `Route`/`Cookie` are opaque Sky ADTs mapped the same way.
 
 use super::*;
 use std::collections::HashMap;
@@ -17,9 +24,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-/// Sky.Http.Server.Request — field names/types match the Sky record alias.
-// camelCase is required: Sky field access (`req.remoteAddr`) resolves onto
-// these pub fields, so they must mirror the Sky record's names verbatim.
+/// Sky.Http.Server.Request — opaque parsed request handle.
+// camelCase field names are required because accessor kernels (server_body,
+// server_path, server_method, …) read these fields directly by name. These
+// fields are NOT part of the Sky API — Sky code always goes through a kernel.
+// `build_request` populates every field exactly once at the axum boundary.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct ServerRequest {
@@ -33,9 +42,10 @@ pub struct ServerRequest {
     pub remoteAddr: String,
 }
 
-/// Sky.Http.Server.Response.
-// camelCase is required: Sky field access (`resp.contentType`) resolves onto
-// these pub fields, so they must mirror the Sky record's names verbatim.
+/// Sky.Http.Server.Response — opaque response handle built by accessor kernels.
+// camelCase field names are required because builder/emit kernels (server_text,
+// server_with_status, to_axum_response, …) write/read these fields directly.
+// These fields are NOT part of the Sky API — Sky code always uses builder kernels.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct ServerResponse {
@@ -296,6 +306,20 @@ pub fn server_get_cookie(name: String, req: ServerRequest) -> SkyMaybe<String> {
         Some(v) => SkyMaybe::Just(v.clone()),
         None => SkyMaybe::Nothing,
     }
+}
+
+// These three are total (every well-formed request has a body, path, and
+// method — they are populated unconditionally by `build_request`), so they
+// return plain `String`, NOT `SkyMaybe<String>`. Go parity: Go's analogous
+// accessors return the raw parsed string values with no Maybe wrapper.
+pub fn server_body(req: ServerRequest) -> String {
+    req.body
+}
+pub fn server_path(req: ServerRequest) -> String {
+    req.path
+}
+pub fn server_method(req: ServerRequest) -> String {
+    req.method
 }
 
 // ─── cookies ──────────────────────────────────────────────────────────────

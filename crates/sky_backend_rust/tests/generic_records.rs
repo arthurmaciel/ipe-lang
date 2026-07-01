@@ -47,6 +47,7 @@ fn program(name: Symbol, funcs: Vec<Func>, records: Vec<IrType>, entry: Option<F
             entry,
             records,
             uses_tea: false,
+            uses_server: false,
         }],
     }
 }

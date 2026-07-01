@@ -129,6 +129,11 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `pub type SkySub<M> = sky_runtime::tea::SkySub<M>`.
         IrType::Cmd(inner) => format!("SkyCmd<{}>", render_type(ctx, inner, generics)?),
         IrType::Sub(inner) => format!("SkySub<{}>", render_type(ctx, inner, generics)?),
+        // M6 opaque server types — render to their sky_runtime names directly.
+        IrType::ServerRequest => "ServerRequest".to_owned(),
+        IrType::ServerResponse => "ServerResponse".to_owned(),
+        IrType::ServerRoute => "ServerRoute".to_owned(),
+        IrType::ServerCookie => "ServerCookie".to_owned(),
         IrType::Tuple(elems) => {
             let mut parts = Vec::with_capacity(elems.len());
             for elem in elems {
@@ -137,6 +142,16 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             format!("({})", parts.join(", "))
         }
         IrType::Record(fields) => ctx.render_record_use(fields, generics)?,
+        // M6 Handler-arrow special case: `Request -> Task Error Response` must
+        // render as `ServerHandler<SkyError>` (an Arc<dyn Fn> alias defined in
+        // the runtime), not as a generic `Box<dyn Fn + Send + 'static>`.  This
+        // arm MUST appear before the generic `Fun` arm so it takes priority.
+        IrType::Fun(params, ret)
+            if matches!(params.as_slice(), [IrType::ServerRequest])
+                && matches!(ret.as_ref(), IrType::Task(inner) if matches!(inner.as_ref(), IrType::ServerResponse)) =>
+        {
+            "ServerHandler<SkyError>".to_owned()
+        }
         IrType::Fun(params, ret) => {
             // A first-class function value is a boxed trait object
             // `Box<dyn Fn(T0, ...) -> R + Send + 'static>`. The `Send + 'static`

@@ -128,6 +128,15 @@ pub(crate) struct EmitCtx<'a> {
     /// `tea.rs` is ungated (no `live` cargo feature needed for M5c); the only
     /// dependency is `tokio`, which is already in the default feature set.
     pub(crate) uses_tea: bool,
+    /// `true` when the program uses at least one Sky.Http.Server kernel.
+    /// When set, [`crate::project::emit_program`]:
+    ///
+    /// * adds `"server"` to the default features of the emitted `Cargo.toml`
+    ///   and appends `axum` + `tower-http` dependencies;
+    /// * extends the `tokio` dependency with `"net"` and `"sync"` features;
+    /// * appends `pub mod server; pub use server::*; pub mod server_stream;
+    ///   pub use server_stream::*;` to the emitted `sky_runtime/mod.rs`.
+    pub(crate) uses_server: bool,
     /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlvalue_rust_name: Option<String>,
@@ -309,10 +318,14 @@ impl<'a> EmitCtx<'a> {
         // set on the module.
         let uses_tea = program.modules.iter().any(|m| m.uses_tea);
 
+        // M6: detect whether any Sky.Http.Server kernel is used.
+        let uses_server = program.modules.iter().any(|m| m.uses_server);
+
         Ok(Self {
             interner,
             uses_db,
             uses_tea,
+            uses_server,
             sqlvalue_rust_name,
             sqlfield_rust_name,
             enum_names,
@@ -625,6 +638,11 @@ fn collect_record_shapes(
         | IrType::Json
         // The opaque Db connection pool handle carries no record shape.
         | IrType::Db
+        // M6 opaque server types carry no record shapes of their own.
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
         // A generic type variable carries no concrete record shape of its own.
         | IrType::Generic(_) => {}
     }
@@ -711,6 +729,12 @@ fn type_reaches_enum(
         // `Db` is a pointer-sized opaque handle (connection pool Arc); it cannot
         // participate in an infinite-size cycle.
         | IrType::Db
+        // M6 opaque server types are pointer-sized — they cannot be part of an
+        // infinite-size cycle.
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
         | IrType::Fun(_, _)
         | IrType::Generic(_) => false,
     }
@@ -741,7 +765,12 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::Bytes
         | IrType::Json
         // `Db` is an opaque monomorphic handle — no generic parameters.
-        | IrType::Db => false,
+        | IrType::Db
+        // M6 opaque server types are monomorphic — no generic parameters.
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie => false,
     }
 }
 
@@ -797,7 +826,12 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::Bytes
         | IrType::Json
         // `Db` is monomorphic — no generic parameters to collect.
-        | IrType::Db => {}
+        | IrType::Db
+        // M6 opaque server types are monomorphic.
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie => {}
     }
 }
 
@@ -1030,7 +1064,12 @@ fn match_template(
         | IrType::Json
         // `Db` is a monomorphic opaque handle; its template and concrete forms
         // must be identical (both `IrType::Db`).
-        | IrType::Db => {
+        | IrType::Db
+        // M6 opaque server types are monomorphic leaf types.
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie => {
             if template == concrete {
                 Ok(())
             } else {

@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+-- Exercises all seven request-accessor kernels that take ServerRequest by value:
+-- Server.body / Server.path / Server.method (Request -> String) and
+-- Server.param / Server.queryParam / Server.header / Server.getCookie
+-- (String -> Request -> Maybe String).
+--
+-- A handler that calls multiple accessor kernels on the same `req` binding
+-- requires the emitter to insert `.clone()` on each call so the first call
+-- does not move the binding and prevent subsequent calls (E0382).
+--
+-- This is a compile-only golden: the Sky program is syntactically and
+-- type-correctly a Sky.Http.Server app and is used purely to pin that the
+-- emitted Rust code contains `server_body(req.clone())` etc.
+
+import Sky.Http.Server as Server
+
+main =
+    let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "SKY_SERVER_PORT" "8080"))
+    in
+    Server.listen port
+        [ Server.post "/introspect/:tag" (\req ->
+            Task.succeed (Server.text
+                (Server.body req
+                 ++ "|" ++ Server.path req
+                 ++ "|" ++ Server.method req
+                 ++ "|" ++ Maybe.withDefault "?" (Server.header "x-probe" req)
+                 ++ "|" ++ Maybe.withDefault "?" (Server.queryParam "q" req)
+                 ++ "|" ++ Maybe.withDefault "?" (Server.param "tag" req)
+                 ++ "|" ++ Maybe.withDefault "?" (Server.getCookie "session" req))))
+        ]

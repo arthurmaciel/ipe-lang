@@ -64,6 +64,17 @@ pub struct Module {
     /// whether to append `pub mod tea; pub use tea::*;` to the emitted
     /// `sky_runtime/mod.rs` and to add `SkyCmd` / `SkySub` type aliases.
     pub uses_tea: bool,
+    /// `true` when the lowerer detected at least one Sky.Http.Server kernel call
+    /// (`Server.get/post/put/delete/any/api/static/listen`, response builders,
+    /// extractors, cookie helpers, middleware, `RateLimit.allow`) in the module's
+    /// function bodies.
+    ///
+    /// Set by `sky_lower::lower::Lowerer::run` when any call site resolves to a
+    /// `KernelFn::is_server()` variant.  The backend reads this flag to decide
+    /// whether to inject the `server` feature in the emitted `Cargo.toml` and to
+    /// append `pub mod server; pub use server::*; pub mod server_stream; pub use
+    /// server_stream::*;` to the emitted `sky_runtime/mod.rs`.
+    pub uses_server: bool,
 }
 
 /// A user-declared type. The IR models user types as enums (Sky's `type`
@@ -468,6 +479,24 @@ pub enum IrType {
     /// `pub type SkySub<M> = sky_runtime::tea::SkySub<M>`.
     /// The inner type is the message type `M`.
     Sub(Box<Self>),
+    // ── M6: Sky.Http.Server opaque types ────────────────────────────────────
+    /// `Request` — opaque HTTP server request.  Renders as `ServerRequest`.
+    ///
+    /// Corresponds to `sky_runtime::server::ServerRequest`.  Never synthesised
+    /// as a record struct; always treated as an opaque handle.
+    ServerRequest,
+    /// `Response` — opaque HTTP server response.  Renders as `ServerResponse`.
+    ///
+    /// Corresponds to `sky_runtime::server::ServerResponse`.
+    ServerResponse,
+    /// `Route` — opaque server route descriptor.  Renders as `ServerRoute`.
+    ///
+    /// Corresponds to `sky_runtime::server::ServerRoute`.
+    ServerRoute,
+    /// `Cookie` — opaque server cookie descriptor.  Renders as `ServerCookie`.
+    ///
+    /// Corresponds to `sky_runtime::server::ServerCookie`.
+    ServerCookie,
 }
 
 /// An expression in the typed IR.
@@ -1432,6 +1461,64 @@ pub enum KernelFn {
     PubSubPublish,
     /// `PubSub.publishNoEcho : String -> a -> Task Error ()` — reserved for M6.  Do not emit.
     PubSubPublishNoEcho,
+
+    // ── M6: Sky.Http.Server kernels ─────────────────────────────────────────
+    /// `Server.get : String -> (Request -> Task Error Response) -> Route`
+    ServerGet,
+    /// `Server.post : String -> (Request -> Task Error Response) -> Route`
+    ServerPost,
+    /// `Server.put : String -> (Request -> Task Error Response) -> Route`
+    ServerPut,
+    /// `Server.delete : String -> (Request -> Task Error Response) -> Route`
+    ServerDelete,
+    /// `Server.any : String -> (Request -> Task Error Response) -> Route`
+    ServerAny,
+    /// `Server.api : String -> (Request -> Task Error Response) -> Route`
+    ServerApi,
+    /// `Server.static : String -> String -> Route` (path, directory)
+    ServerStatic,
+    /// `Server.listen : Int -> List Route -> Task Error ()`
+    ServerListen,
+    /// `Server.text : String -> Response`
+    ServerText,
+    /// `Server.json : String -> Response`
+    ServerJson,
+    /// `Server.html : String -> Response`
+    ServerHtml,
+    /// `Server.withStatus : Int -> Response -> Response`
+    ServerWithStatus,
+    /// `Server.withHeader : String -> String -> Response -> Response`
+    ServerWithHeader,
+    /// `Server.redirect : String -> Response`
+    ServerRedirect,
+    /// `Server.param : String -> Request -> Maybe String`
+    ServerParam,
+    /// `Server.queryParam : String -> Request -> Maybe String`
+    ServerQueryParam,
+    /// `Server.header : String -> Request -> Maybe String`
+    ServerHeader,
+    /// `Server.getCookie : String -> Request -> Maybe String`
+    ServerGetCookie,
+    /// `Server.body : Request -> String`
+    ServerBody,
+    /// `Server.path : Request -> String`
+    ServerPath,
+    /// `Server.method : Request -> String`
+    ServerMethod,
+    /// `Server.cookie : String -> String -> Cookie`
+    ServerCookieNew,
+    /// `Server.withCookie : Cookie -> Response -> Response`
+    ServerWithCookie,
+    /// `Middleware.withCors : List String -> (Request -> Task Error Response) -> (Request -> Task Error Response)`
+    MiddlewareWithCors,
+    /// `Middleware.withLogging : (Request -> Task Error Response) -> (Request -> Task Error Response)`
+    MiddlewareWithLogging,
+    /// `Middleware.withBasicAuth : String -> String -> (Request -> Task Error Response) -> (Request -> Task Error Response)`
+    MiddlewareWithBasicAuth,
+    /// `Middleware.withRateLimit : String -> Int -> Int -> (Request -> Task Error Response) -> (Request -> Task Error Response)`
+    MiddlewareWithRateLimit,
+    /// `RateLimit.allow : String -> String -> Int -> Int -> Bool`
+    RateLimitAllow,
 }
 
 impl KernelFn {
@@ -1523,6 +1610,52 @@ impl KernelFn {
                 | Self::SubSubscribeTopic
                 | Self::PubSubPublish
                 | Self::PubSubPublishNoEcho
+        )
+    }
+
+    /// Return `true` when this variant is one of the `Sky.Http.Server` kernel
+    /// variants introduced in M6.
+    ///
+    /// Used by `sky_lower` and `sky_backend_rust` to detect server-kernel call
+    /// sites and to guard the `emit_server_call` hardening path.
+    ///
+    /// # Exhaustiveness note
+    ///
+    /// `matches!` carries an implicit `_ => false` arm.  `emit_server_call`
+    /// uses this as a *guard* inside its own exhaustive `match` so the compiler
+    /// flags any missing variant at compile time.
+    #[must_use]
+    pub const fn is_server(self) -> bool {
+        matches!(
+            self,
+            Self::ServerGet
+                | Self::ServerPost
+                | Self::ServerPut
+                | Self::ServerDelete
+                | Self::ServerAny
+                | Self::ServerApi
+                | Self::ServerStatic
+                | Self::ServerListen
+                | Self::ServerText
+                | Self::ServerJson
+                | Self::ServerHtml
+                | Self::ServerWithStatus
+                | Self::ServerWithHeader
+                | Self::ServerRedirect
+                | Self::ServerParam
+                | Self::ServerQueryParam
+                | Self::ServerHeader
+                | Self::ServerGetCookie
+                | Self::ServerBody
+                | Self::ServerPath
+                | Self::ServerMethod
+                | Self::ServerCookieNew
+                | Self::ServerWithCookie
+                | Self::MiddlewareWithCors
+                | Self::MiddlewareWithLogging
+                | Self::MiddlewareWithBasicAuth
+                | Self::MiddlewareWithRateLimit
+                | Self::RateLimitAllow
         )
     }
 }
@@ -2480,6 +2613,7 @@ mod tests {
                 entry: Some(FuncId::from_raw(0)),
                 records: vec![],
                 uses_tea: false,
+                uses_server: false,
             }],
         };
         let clone = program.clone();

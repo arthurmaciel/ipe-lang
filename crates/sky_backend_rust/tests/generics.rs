@@ -134,6 +134,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
             entry: Some(main_id),
             records: vec![],
             uses_tea: false,
+            uses_server: false,
         }],
     })
 }
@@ -269,6 +270,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
             entry: Some(main_id),
             records: vec![],
             uses_tea: false,
+            uses_server: false,
         }],
     })
 }
