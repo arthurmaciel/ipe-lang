@@ -12,6 +12,9 @@
 #   --e2e     also run the golden E2E (SKY_E2E=1) — sky-rust only; runs BOUNDED
 #             (nested cargo builds are CPU/mem/disk heavy)
 #   --parity  also run ./scripts/parity-sweep.sh if present (Go-vs-Rust) — sky-rust only
+#   --fmt-fix APPLY `cargo fmt --all` instead of `--check` — for the dev/agent loop
+#             so formatting is fixed mechanically, never a gate failure a fix agent
+#             must burn tokens on. CI omits it (keeps --check to enforce formatting).
 #   --all     --miri --e2e --parity
 #
 # Test runner: uses `cargo nextest run` (global cross-binary parallel pool) when
@@ -23,12 +26,13 @@ set -uo pipefail
 
 WS="${PWD}"
 case "${1:-}" in ""|-*) : ;; *) WS="$1"; shift ;; esac
-RUN_MIRI=0; RUN_E2E=0; RUN_PARITY=0
+RUN_MIRI=0; RUN_E2E=0; RUN_PARITY=0; FMT_FIX=0
 for a in "$@"; do
   case "$a" in
     --miri) RUN_MIRI=1 ;;
     --e2e) RUN_E2E=1 ;;
     --parity) RUN_PARITY=1 ;;
+    --fmt-fix) FMT_FIX=1 ;;
     --all) RUN_MIRI=1; RUN_E2E=1; RUN_PARITY=1 ;;
     *) echo "mechcheck: unknown flag '$a'"; exit 2 ;;
   esac
@@ -68,7 +72,14 @@ step() {
 }
 
 echo "mechcheck: $WS  (nextest=$HAS_NEXTEST, ${free_gb}G free)"
-step fmt    cargo fmt --all -- --check
+# Formatting is mechanical + idempotent: with --fmt-fix (dev/agent loop) APPLY it
+# so it never becomes a gate failure a fix agent must waste tokens on; the default
+# (--check, for CI) enforces that contributors formatted.
+if [ "$FMT_FIX" = 1 ]; then
+  step fmt cargo fmt --all
+else
+  step fmt cargo fmt --all -- --check
+fi
 step build  cargo build --workspace --all-targets
 step clippy cargo clippy --all-targets -- -D warnings
 
