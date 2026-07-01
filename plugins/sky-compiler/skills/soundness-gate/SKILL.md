@@ -22,13 +22,17 @@ for the irreducible soundness reasoning tools cannot do. Run it on every change.
 ## The process (run in order)
 
 1. **Mechanical gate — cheap (Haiku), fail-fast.** Run the script:
-   `plugins/sky-compiler/scripts/mechcheck.sh [WORKSPACE] [--miri] [--e2e] [--parity] [--all]`
+   `plugins/sky-compiler/scripts/mechcheck.sh [WORKSPACE] [--fmt-fix] [--miri] [--e2e] [--parity] [--all]`
    - Works in any cargo workspace: `sky-rust` (compiler + backend) and `runtime-rust`.
    - It stops at the first failing check and prints the check + its log path
      (`$TMPDIR/mechcheck/<step>.log`). Exit 0 = all green.
-   - For a sky-rust change use `--e2e --parity` (and `--miri` on
-     mutation/recursion crates); for runtime-rust, the cargo gates (+`--miri`)
-     suffice (no E2E/parity there).
+   - For a sky-rust change use `--fmt-fix --e2e --parity` (and `--miri` on
+     mutation/recursion crates); for runtime-rust, `--fmt-fix` + the cargo gates
+     (+`--miri`) suffice (no E2E/parity there).
+   - **Always pass `--fmt-fix` in the dev/agent loop**: it APPLIES `cargo fmt`
+     instead of `--check`, so formatting is fixed mechanically and never becomes
+     a gate failure a Sonnet fix agent wastes tokens re-formatting. CI omits it
+     (keeps `--check` to enforce that contributors formatted).
 2. **On mechanical FAIL → fix fast (Sonnet), loop.** Dispatch a Sonnet fix agent
    against the printed failing log, apply the minimal fix, re-run mechcheck. No
    expensive model touches it until mechcheck is ALL GREEN. (Fail-fast, fix-fast.)
