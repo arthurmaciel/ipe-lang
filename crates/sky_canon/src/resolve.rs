@@ -721,6 +721,11 @@ const fn op_precedence(op: &str) -> (i32, Assoc) {
         b"==" | b"/=" | b"<" | b">" | b"<=" | b">=" => (4, Assoc::None),
         b"&&" => (3, Assoc::Right),
         b"||" => (2, Assoc::Right),
+        // Elm-exact pipe precedence: loosest operators (prec 0).
+        // `|>` is left-associative:  `x |> f |> g` = `(x |> f) |> g`.
+        // `<|` is right-associative: `f <| g <| x` = `f <| (g <| x)`.
+        b"|>" => (0, Assoc::Left),
+        b"<|" => (0, Assoc::Right),
         _ => (9, Assoc::Left),
     }
 }
@@ -830,6 +835,24 @@ fn combine_binop(
         return Ok(Located::new(
             span,
             canon::Expr_::Cons(Box::new(lhs), Box::new(rhs)),
+        ));
+    }
+    // Pipe operators desugar to function application — no new AST node needed.
+    // `x |> f`  ≡  `f x`  ⇒  Call(rhs, [lhs])
+    // `f <| x`  ≡  `f x`  ⇒  Call(lhs, [rhs])
+    // Correct in a curried language: `(g a) x ≡ g a x`, so a chain
+    // `[1,2,3] |> List.map inc` becomes Call(Call(List.map,[inc]),[[1,2,3]]),
+    // a shape already handled by the existing Call lowering path.
+    if interner.resolve(op.value) == Some("|>") {
+        return Ok(Located::new(
+            span,
+            canon::Expr_::Call(Box::new(rhs), vec![lhs]),
+        ));
+    }
+    if interner.resolve(op.value) == Some("<|") {
+        return Ok(Located::new(
+            span,
+            canon::Expr_::Call(Box::new(lhs), vec![rhs]),
         ));
     }
     let func = resolve_op_func(op.value, interner)?;

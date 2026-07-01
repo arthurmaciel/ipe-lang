@@ -1,0 +1,7 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- `++` (prec 5) binds tighter than `|>` (prec 0).
+-- `"a" ++ "b" |> String.toUpper` = `("a" ++ "b") |> String.toUpper` = "AB".
+main =
+    "a" ++ "b" |> String.toUpper |> println

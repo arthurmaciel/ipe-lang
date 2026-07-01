@@ -1,0 +1,7 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Precedence: `+` (prec 6) binds tighter than `|>` (prec 0).
+-- `2 + 3 |> String.fromInt` groups as `(2+3) |> String.fromInt` = "5".
+main =
+    2 + 3 |> String.fromInt |> println

@@ -1,0 +1,14 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Multiline leading-operator pipeline inside a let binding.
+-- Tests that layout continuation works with `|>` on continuation lines.
+main =
+    let
+        result =
+            [1, 2, 3]
+                |> List.map (\x -> x + 1)
+                |> List.length
+                |> String.fromInt
+    in
+    println result

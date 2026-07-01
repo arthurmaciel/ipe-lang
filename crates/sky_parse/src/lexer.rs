@@ -78,6 +78,12 @@ pub enum Tok {
     Ge,
     AmpAmp,
     PipePipe,
+    /// The forward-pipe operator `|>`. Lexed as ONE token (maximal munch of
+    /// `|`), so `|>` never reaches the parser as `Pipe` then `Gt`.
+    PipeGt,
+    /// The backward-pipe operator `<|`. Lexed as ONE token (maximal munch of
+    /// `<`), so `<|` never reaches the parser as `Lt` then `Pipe`.
+    LtPipe,
     // Literals / names.
     /// A (possibly dotted) identifier, e.g. `count`, `Msg`, `String.fromInt`.
     Ident(String),
@@ -546,10 +552,38 @@ fn lex_symbol(lx: &mut Lexer, c: char, lo: u32) -> DResult<Tok> {
         '+' => one_or_two(lx, '+', Tok::PlusPlus, Tok::Plus),
         '*' => one_char(lx, Tok::Star),
         '=' => one_or_two(lx, '=', Tok::EqEq, Tok::Equals),
-        '|' => one_or_two(lx, '|', Tok::PipePipe, Tok::Pipe),
+        // `|` has three forms: `||`, `|>`, and bare `|`.
+        '|' => {
+            lx.advance();
+            match lx.peek() {
+                Some('|') => {
+                    lx.advance();
+                    Tok::PipePipe
+                }
+                Some('>') => {
+                    lx.advance();
+                    Tok::PipeGt
+                }
+                _ => Tok::Pipe,
+            }
+        }
         '-' => one_or_two(lx, '>', Tok::Arrow, Tok::Minus),
         '/' => one_or_two(lx, '=', Tok::SlashEq, Tok::Slash),
-        '<' => one_or_two(lx, '=', Tok::Le, Tok::Lt),
+        // `<` has three forms: `<=`, `<|`, and bare `<`.
+        '<' => {
+            lx.advance();
+            match lx.peek() {
+                Some('=') => {
+                    lx.advance();
+                    Tok::Le
+                }
+                Some('|') => {
+                    lx.advance();
+                    Tok::LtPipe
+                }
+                _ => Tok::Lt,
+            }
+        }
         '>' => one_or_two(lx, '=', Tok::Ge, Tok::Gt),
         // `&` and `.` are valid ONLY as their two-char forms (`&&`, `..`);
         // a lone first char is a typed lex error rather than a token.

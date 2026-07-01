@@ -77,6 +77,10 @@ pub enum TokenKind {
     Ge,
     AmpAmp,
     PipePipe,
+    /// The forward-pipe operator `|>`.
+    PipeGt,
+    /// The backward-pipe operator `<|`.
+    LtPipe,
     Ident,
     Int,
     /// A floating-point literal `1.5`, `3.0`, `1.5e3`.

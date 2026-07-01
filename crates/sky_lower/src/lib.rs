@@ -46,13 +46,23 @@ pub fn lower(
 ) -> DResult<sky_ir::Program> {
     // Eta-expansion of a partial application needs fresh parameter symbols that
     // cannot capture any name free in the supplied arguments. Mint a pool up
-    // front — sized to the widest function arity in the module, the most params
-    // any single eta-lambda can introduce — through the one `&mut Interner` the
-    // entry point owns, so the lowering walk itself stays over a shared `&`.
-    // Each eta-lambda is its own closure scope, so the pool is reused across
-    // sites without collision; `fresh_symbols` guarantees the names dodge every
-    // user identifier (all interned by now) and each other.
-    let eta_params = interner.fresh_symbols("eta_", lower::max_def_arity(m))?;
+    // front through the one `&mut Interner` the entry point owns, so the
+    // lowering walk itself stays over a shared `&`. Each eta-lambda is its own
+    // closure scope, so the pool is reused across sites without collision;
+    // `fresh_symbols` guarantees the names dodge every user identifier (all
+    // interned by now) and each other.
+    //
+    // Sizing: the most params ANY single eta-lambda introduces is the widest
+    // partial-application gap = `callee_arity - args_supplied`. The callee may
+    // be a KERNEL or CONSTRUCTOR (e.g. `List.map f` — arity-2 kernel, 1 arg,
+    // gap 1), not just a local def — so `max_def_arity` alone under-sizes the
+    // pool (it is 0 for a `main`-only program, yet `[1,2,3] |> List.map f`
+    // needs an eta param). Cover the widest callable arity; no stdlib function
+    // exceeds this ceiling, and `eta_expand_partial` fails closed (CompilerBug)
+    // if a gap ever did — never silently, never unsound.
+    const MAX_CALLEE_ARITY: usize = 16;
+    let eta_params =
+        interner.fresh_symbols("eta_", lower::max_def_arity(m).max(MAX_CALLEE_ARITY))?;
     // A tuple-destructuring function parameter has no single name; the lowerer
     // gives each parameter position a synthetic binder from this pool and
     // prepends a `Destructure` to the body. One per parameter position, sized to
