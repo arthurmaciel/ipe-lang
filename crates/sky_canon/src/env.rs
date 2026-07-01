@@ -460,8 +460,8 @@ impl Env {
             ),
             // `Sky.Core.Io` — I/O effects (M5a).
             ("Io", &["readLine", "writeStdout", "writeStderr"]),
-            // `Sky.Core.Time` — time effects (M5a).
-            ("Time", &["now", "sleep", "unixMillis"]),
+            // `Sky.Core.Time` — time effects (M5a) + M5c TEA tick subscription.
+            ("Time", &["now", "sleep", "unixMillis", "every"]),
             // `Sky.Core.System` — system effects (M5a).
             (
                 "System",
@@ -526,6 +526,12 @@ impl Env {
                     "parseQuery",
                 ],
             ),
+            // ── M5c: TEA Cmd / Sub kernels ──────────────────────────────────────
+            // Construct-only in M5c; the TEA dispatch loop lands in M6.
+            // `Cmd.publish*` / `Sub.subscribeTopic` / `PubSub.*` are NOT listed
+            // here — they will get their own qualifier entries in M6.
+            ("Cmd", &["none", "batch", "perform"]),
+            ("Sub", &["none", "batch", "every"]),
             // ── Db kernels (M5b-db) ─────────────────────────────────────────────
             // `Std.Db` — database connection + query surface.
             // All effect-returning kernels (Task Error …) and pure helpers

@@ -55,6 +55,7 @@ fn program(name: Symbol, funcs: Vec<Func>, entry: Option<FuncId>) -> Program {
             funcs,
             entry,
             records: vec![],
+            uses_tea: false,
         }],
     }
 }

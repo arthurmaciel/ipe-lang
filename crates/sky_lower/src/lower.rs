@@ -220,7 +220,9 @@ fn collect_type_vars(t: &canon::Type, out: &mut BTreeSet<Symbol>) {
 fn ir_contains_fun(ty: &IrType) -> bool {
     match ty {
         IrType::Fun(_, _) => true,
-        IrType::Task(inner) => ir_contains_fun(inner),
+        // `SkyTask<E,A>`, `SkyCmd<M>`, `SkySub<M>` are opaque runtime types; the
+        // inner type parameter might itself embed a function, so recurse.
+        IrType::Task(inner) | IrType::Cmd(inner) | IrType::Sub(inner) => ir_contains_fun(inner),
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -309,6 +311,68 @@ fn expr_uses_db_kernel(expr: &Expr) -> bool {
 /// result as a guard inside their own exhaustive `match`.
 const fn kernel_is_db(k: KernelFn) -> bool {
     k.is_db()
+}
+
+// ── M5c: TEA kernel presence detection ───────────────────────────────────────
+
+/// Return `true` when `expr` (or any of its sub-expressions, recursively)
+/// contains a call whose callee is one of the TEA (`Cmd*` / `Sub*` /
+/// `TimeEvery`) kernel variants introduced in M5c.
+///
+/// Used by [`Lowerer::run`] to decide whether the emitted project needs
+/// `pub mod tea; pub use tea::*;` appended to `sky_runtime/mod.rs`.
+fn expr_uses_tea_kernel(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, args } => {
+            let callee_is_tea = matches!(callee, Callee::Kernel(k) if kernel_is_tea(*k));
+            callee_is_tea || args.iter().any(expr_uses_tea_kernel)
+        }
+        Expr::FuncValue { callee, .. } => {
+            matches!(callee, Callee::Kernel(k) if kernel_is_tea(*k))
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            expr_uses_tea_kernel(value) || expr_uses_tea_kernel(body)
+        }
+        Expr::Lambda { body, .. } => expr_uses_tea_kernel(body),
+        Expr::If { cond, then_, else_ } => {
+            expr_uses_tea_kernel(cond) || expr_uses_tea_kernel(then_) || expr_uses_tea_kernel(else_)
+        }
+        Expr::Match(m) => {
+            expr_uses_tea_kernel(m.scrutinee())
+                || m.arms().iter().any(|arm| expr_uses_tea_kernel(&arm.body))
+        }
+        Expr::Tuple(elems) => elems.iter().any(expr_uses_tea_kernel),
+        Expr::List { items, .. } => items.iter().any(expr_uses_tea_kernel),
+        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_tea_kernel(v)),
+        Expr::Access { record, .. } => expr_uses_tea_kernel(record),
+        Expr::Update { record, fields } => {
+            expr_uses_tea_kernel(record) || fields.iter().any(|(_, v)| expr_uses_tea_kernel(v))
+        }
+        Expr::BinOp { lhs, rhs, .. } => expr_uses_tea_kernel(lhs) || expr_uses_tea_kernel(rhs),
+        Expr::Ctor { args, .. } => args.iter().any(expr_uses_tea_kernel),
+        Expr::Cons { head, tail } => expr_uses_tea_kernel(head) || expr_uses_tea_kernel(tail),
+        Expr::Apply { func, args } => {
+            expr_uses_tea_kernel(func) || args.iter().any(expr_uses_tea_kernel)
+        }
+        Expr::TaskSeq { effect, rest } => {
+            expr_uses_tea_kernel(effect) || expr_uses_tea_kernel(rest)
+        }
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_) => false,
+    }
+}
+
+/// Return `true` when `k` is one of the TEA kernel variants introduced in M5c
+/// (including M6-reserved variants).
+///
+/// Delegates to [`KernelFn::is_tea`].
+const fn kernel_is_tea(k: KernelFn) -> bool {
+    k.is_tea()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -554,12 +618,18 @@ impl<'a> Lowerer<'a> {
 
         let records = self.collect_record_types()?;
 
+        // M5c: detect whether any TEA kernel call is present. The backend uses
+        // this flag to append `pub mod tea; pub use tea::*;` to mod.rs and to
+        // add `SkyCmd<M>` / `SkySub<M>` type aliases.
+        let uses_tea = funcs.iter().any(|f| expr_uses_tea_kernel(&f.body));
+
         let module = Module {
             name: ModPath(self.m.name.clone()),
             types: types_ir,
             funcs,
             entry,
             records,
+            uses_tea,
         };
         Ok(Program {
             modules: vec![module],
@@ -1082,6 +1152,49 @@ impl<'a> Lowerer<'a> {
                         args.len()
                     ),
                 )),
+                // `Decoder a` — the opaque JSON decoder type introduced by M4h.
+                // Canonical annotations use it directly; maps to `IrType::Decoder`.
+                "Decoder" if args.len() == 1 => {
+                    let inner = self.ir_type_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_canon",
+                                "Decoder applied without its element type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Decoder(Box::new(inner)))
+                }
+                // `Db` — opaque connection pool handle introduced by M5b-db.
+                "Db" => Ok(IrType::Db),
+                // `Cmd msg` / `Sub msg` — TEA command and subscription types
+                // introduced in M5c.  Users may write annotations like
+                // `myCmd : Cmd Int`.
+                "Cmd" if args.len() == 1 => {
+                    let inner = self.ir_type_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_canon",
+                                "Cmd applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Cmd(Box::new(inner)))
+                }
+                "Sub" if args.len() == 1 => {
+                    let inner = self.ir_type_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_canon",
+                                "Sub applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Sub(Box::new(inner)))
+                }
                 _ if self.enum_variants.contains_key(name) => {
                     let mut ir_args = Vec::with_capacity(args.len());
                     for a in args {
@@ -1378,6 +1491,34 @@ impl<'a> Lowerer<'a> {
                 // `Db` — the opaque connection pool handle introduced by M5b-db.
                 // Zero type arguments; maps to `sky_runtime::Db`.
                 "Db" => Ok(IrType::Db),
+                // `Cmd msg` / `Sub msg` — the TEA command and subscription types
+                // introduced in M5c.  Each carries exactly one type argument (the
+                // message type `M`).  Maps to `sky_runtime::tea::SkyCmd<M>` /
+                // `sky_runtime::tea::SkySub<M>`, aliased in the emitted preamble.
+                "Cmd" if args.len() == 1 => {
+                    let inner = self.ir_type_from_ty(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_ty",
+                                "Cmd applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Cmd(Box::new(inner)))
+                }
+                "Sub" if args.len() == 1 => {
+                    let inner = self.ir_type_from_ty(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_ty",
+                                "Sub applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Sub(Box::new(inner)))
+                }
                 // `SqlValue` / `SqlField` — the builtin-injected ADT enums for
                 // typed SQL parameters (M5b-db). Resolved as `IrType::Enum` so the
                 // backend emits the generated `StdDbSqlValue` / `StdDbSqlField`
@@ -1684,6 +1825,32 @@ impl<'a> Lowerer<'a> {
                 // infers the concrete return type from the Rust function's
                 // own declared signature.
                 if matches!(&callee, Callee::Kernel(_)) && self.callee_arity(&callee)? == 0 {
+                    // ── M5c TEA gate: `Cmd.none` / `Sub.none` carry an opaque
+                    // `msg` type-parameter (`SkyCmd<M>` / `SkySub<M>`).  When the
+                    // HM solver leaves `msg` as a free `Ty::Var` — the common
+                    // shape in M5c since there is no update loop to anchor `msg`
+                    // via a user `Msg` ADT — the emitted `cmd_none()` / `sub_none()`
+                    // has an uninferrable `SkyCmd<_>` type that `cargo build`
+                    // rejects with E0282.  Call `ir_type_from_ty` on the region
+                    // type here; it naturally raises `Feature::Polymorphism`
+                    // (SKY-L0102) when the `msg` argument is still a free var,
+                    // failing closed at `skyc` rather than emitting invalid Rust.
+                    // An anchored `msg` (inferred from a sibling `Cmd`/`Sub` in
+                    // the same batch) succeeds and falls through to the standard
+                    // arity-0 emit; Rust infers the concrete type from context.
+                    //
+                    // All other arity-0 kernels (e.g. `JsonEnc.null` whose return
+                    // type is `Value = any = Ty::Var`) MUST keep the bypass: their
+                    // `Ty::Var` is intentional (the JSON `any` slot), and calling
+                    // `ir_type_from_ty` would raise a spurious `Polymorphism` error.
+                    if matches!(
+                        &callee,
+                        Callee::Kernel(KernelFn::CmdNone | KernelFn::SubNone)
+                    ) && let Some(ty) = self.types.regions.get(&e.span)
+                    {
+                        // Return value discarded — only the error path matters.
+                        let _ = self.ir_type_from_ty(ty, e.span)?;
+                    }
                     return Ok(Expr::Call {
                         callee,
                         args: Vec::new(),
@@ -2110,7 +2277,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JsonDecBool
                 // ── Uuid arity-0 (M5b) ────────────────────────────────────────
                 | KernelFn::UuidV4
-                | KernelFn::UuidV7,
+                | KernelFn::UuidV7
+                // ── TEA arity-0 (M5c) ─────────────────────────────────────────
+                // `Cmd.none : Cmd msg`
+                | KernelFn::CmdNone
+                // `Sub.none : Sub msg`
+                | KernelFn::SubNone,
             ) => Ok(0),
             Callee::Kernel(
                 KernelFn::StringFromInt
@@ -2285,7 +2457,12 @@ impl<'a> Lowerer<'a> {
                 // `succeed : a -> Decoder a`
                 | KernelFn::DbDecSucceed
                 // `fail : String -> Decoder a`
-                | KernelFn::DbDecFail,
+                | KernelFn::DbDecFail
+                // ── TEA arity-1 (M5c) ─────────────────────────────────────────
+                // `Cmd.batch : List (Cmd msg) -> Cmd msg`
+                | KernelFn::CmdBatch
+                // `Sub.batch : List (Sub msg) -> Sub msg`
+                | KernelFn::SubBatch,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -2400,7 +2577,25 @@ impl<'a> Lowerer<'a> {
                 // `map : (a -> b) -> Decoder a -> Decoder b`
                 | KernelFn::DbDecMap
                 // `andThen : (a -> Decoder b) -> Decoder a -> Decoder b`
-                | KernelFn::DbDecAndThen,
+                | KernelFn::DbDecAndThen
+                // ── TEA arity-2 (M5c wired) ───────────────────────────────────
+                // `Cmd.perform : Task Error a -> (Result Error a -> msg) -> Cmd msg`
+                | KernelFn::CmdPerform
+                // `Sub.every : Int -> msg -> Sub msg`
+                | KernelFn::SubEvery
+                // `Time.every : Int -> msg -> Sub msg`  (alias)
+                | KernelFn::TimeEvery
+                // ── TEA arity-2 (M6 reserved — not emitted yet) ───────────────
+                // `Cmd.publish : String -> a -> Cmd msg`
+                | KernelFn::CmdPublish
+                // `Cmd.publishNoEcho : String -> a -> Cmd msg`
+                | KernelFn::CmdPublishNoEcho
+                // `Sub.subscribeTopic : String -> (a -> msg) -> Sub msg`
+                | KernelFn::SubSubscribeTopic
+                // `PubSub.publish : String -> a -> Task Error ()`
+                | KernelFn::PubSubPublish
+                // `PubSub.publishNoEcho : String -> a -> Task Error ()`
+                | KernelFn::PubSubPublishNoEcho,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::StringReplace
@@ -2872,6 +3067,14 @@ impl<'a> Lowerer<'a> {
                     ("Db.Decode", "map4") => Ok(Callee::Kernel(KernelFn::DbDecMap4)),
                     ("Db.Decode", "required") => Ok(Callee::Kernel(KernelFn::DbDecRequired)),
                     ("Db.Decode", "optional") => Ok(Callee::Kernel(KernelFn::DbDecOptional)),
+                    // ── TEA Cmd / Sub / Time kernels (M5c) ───────────────────────
+                    ("Cmd", "none") => Ok(Callee::Kernel(KernelFn::CmdNone)),
+                    ("Cmd", "batch") => Ok(Callee::Kernel(KernelFn::CmdBatch)),
+                    ("Cmd", "perform") => Ok(Callee::Kernel(KernelFn::CmdPerform)),
+                    ("Sub", "none") => Ok(Callee::Kernel(KernelFn::SubNone)),
+                    ("Sub", "batch") => Ok(Callee::Kernel(KernelFn::SubBatch)),
+                    ("Sub", "every") => Ok(Callee::Kernel(KernelFn::SubEvery)),
+                    ("Time", "every") => Ok(Callee::Kernel(KernelFn::TimeEvery)),
                     // A kernel beyond the wired set.
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),

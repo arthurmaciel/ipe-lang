@@ -30,6 +30,7 @@ fn program(name: Symbol, types: Vec<TypeDef>, funcs: Vec<Func>) -> Program {
             funcs,
             entry: None,
             records: vec![],
+            uses_tea: false,
         }],
     }
 }
@@ -223,6 +224,7 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
                 funcs: vec![],
                 entry: None,
                 records: vec![],
+                uses_tea: false,
             },
             Module {
                 name: ModPath(vec![other_mod]),
@@ -230,6 +232,7 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
                 funcs: vec![],
                 entry: None,
                 records: vec![],
+                uses_tea: false,
             },
         ],
     };

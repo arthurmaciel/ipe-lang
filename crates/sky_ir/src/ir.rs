@@ -55,6 +55,15 @@ pub struct Module {
     /// otherwise appear in a signature. Non-record entries are ignored by the
     /// backend, so the field stays robust to a stray shape.
     pub records: Vec<IrType>,
+    /// `true` when the lowerer detected at least one TEA kernel call
+    /// (`Cmd.none / batch / perform`, `Sub.none / batch / every`, `Time.every`)
+    /// in the module's function bodies.
+    ///
+    /// Set by `sky_lower::lower::Lowerer::run` when any call site resolves to a
+    /// `KernelFn::is_tea()` variant.  The backend reads this flag to decide
+    /// whether to append `pub mod tea; pub use tea::*;` to the emitted
+    /// `sky_runtime/mod.rs` and to add `SkyCmd` / `SkySub` type aliases.
+    pub uses_tea: bool,
 }
 
 /// A user-declared type. The IR models user types as enums (Sky's `type`
@@ -445,6 +454,20 @@ pub enum IrType {
     /// zero-argument (no type parameters) and value-cloneable (the pool is
     /// reference-counted internally).
     Db,
+    /// A `Cmd msg` value — an opaque command produced by the `update` function
+    /// and passed back to the TEA runtime.
+    ///
+    /// Introduced in M5c.  Renders as `SkyCmd<T>` via the project-level alias
+    /// `pub type SkyCmd<M> = sky_runtime::tea::SkyCmd<M>`.
+    /// The inner type is the message type `M`.
+    Cmd(Box<Self>),
+    /// A `Sub msg` value — an opaque subscription descriptor returned by
+    /// the `subscriptions` function.
+    ///
+    /// Introduced in M5c.  Renders as `SkySub<T>` via the project-level alias
+    /// `pub type SkySub<M> = sky_runtime::tea::SkySub<M>`.
+    /// The inner type is the message type `M`.
+    Sub(Box<Self>),
 }
 
 /// An expression in the typed IR.
@@ -1364,6 +1387,51 @@ pub enum KernelFn {
     DbDecRequired,
     /// `Db.Decode.optional : String -> Decoder a -> a -> Decoder (a -> b) -> Decoder b`. Arity 4.
     DbDecOptional,
+
+    // ── M5c: TEA Cmd / Sub / Time.every ────────────────────────────────────
+    //
+    // These are CONSTRUCT-ONLY in M5c — they create opaque `SkyCmd<M>` /
+    // `SkySub<M>` values; the TEA dispatch loop lands in M6.
+    // All live in the ungated `runtime/src/sky_runtime/tea.rs` (no `live`
+    // feature required for construction).
+    /// `Cmd.none : Cmd msg` — the no-op command.  Arity 0.
+    CmdNone,
+    /// `Cmd.batch : List (Cmd msg) -> Cmd msg` — sequence multiple commands.  Arity 1.
+    CmdBatch,
+    /// `Cmd.perform : Task Error a -> (Result Error a -> msg) -> Cmd msg` — lift a
+    /// task into a command.  Arity 2.
+    CmdPerform,
+    /// `Sub.none : Sub msg` — the empty subscription.  Arity 0.
+    SubNone,
+    /// `Sub.batch : List (Sub msg) -> Sub msg` — combine subscriptions.  Arity 1.
+    SubBatch,
+    /// `Sub.every : Int -> msg -> Sub msg` — tick subscription (ms interval).  Arity 2.
+    SubEvery,
+    /// `Time.every : Int -> msg -> Sub msg` — alias for `Sub.every`.  Arity 2.
+    TimeEvery,
+
+    // ── M6 reserved: live-feature-gated TEA kernels ─────────────────────────
+    //
+    // These variants are declared here so that the exhaustiveness checker can
+    // flag any `match k` that omits them, but they are NOT wired in M5c.
+    // Attempting to emit them returns a hard `CompilerBug` error.
+    //
+    // `Cmd.publish` / `Cmd.publishNoEcho` push a topic message back into the
+    // TEA broker from inside `update`; wiring requires the broker handle
+    // (available in M6 via `live/pubsub.rs`).
+    //
+    // `Sub.subscribeTopic` / `PubSub.publish` / `PubSub.publishNoEcho`
+    // similarly depend on the running broker; deferred to M6.
+    /// `Cmd.publish : String -> a -> Cmd msg` — reserved for M6.  Do not emit.
+    CmdPublish,
+    /// `Cmd.publishNoEcho : String -> a -> Cmd msg` — reserved for M6.  Do not emit.
+    CmdPublishNoEcho,
+    /// `Sub.subscribeTopic : String -> (a -> msg) -> Sub msg` — reserved for M6.  Do not emit.
+    SubSubscribeTopic,
+    /// `PubSub.publish : String -> a -> Task Error ()` — reserved for M6.  Do not emit.
+    PubSubPublish,
+    /// `PubSub.publishNoEcho : String -> a -> Task Error ()` — reserved for M6.  Do not emit.
+    PubSubPublishNoEcho,
 }
 
 impl KernelFn {
@@ -1424,6 +1492,37 @@ impl KernelFn {
                 | Self::DbDecMap4
                 | Self::DbDecRequired
                 | Self::DbDecOptional
+        )
+    }
+
+    /// Return `true` when this variant is one of the TEA (`Cmd` / `Sub` /
+    /// `Time.every`) kernel variants introduced in M5c, **including** the M6
+    /// reserved variants that must not be emitted yet.
+    ///
+    /// Used by `sky_lower` and `sky_backend_rust` to detect tea-kernel call
+    /// sites and to guard the `emit_tea_call` hardening path.
+    ///
+    /// # Exhaustiveness note
+    ///
+    /// Same caveat as [`Self::is_db`]: `matches!` carries an implicit
+    /// `_ => false` arm.  `emit_tea_call` uses this as a *guard* inside its
+    /// own exhaustive `match` so the compiler flags any missing variant.
+    #[must_use]
+    pub const fn is_tea(self) -> bool {
+        matches!(
+            self,
+            Self::CmdNone
+                | Self::CmdBatch
+                | Self::CmdPerform
+                | Self::SubNone
+                | Self::SubBatch
+                | Self::SubEvery
+                | Self::TimeEvery
+                | Self::CmdPublish
+                | Self::CmdPublishNoEcho
+                | Self::SubSubscribeTopic
+                | Self::PubSubPublish
+                | Self::PubSubPublishNoEcho
         )
     }
 }
@@ -2380,6 +2479,7 @@ mod tests {
                 funcs: vec![func],
                 entry: Some(FuncId::from_raw(0)),
                 records: vec![],
+                uses_tea: false,
             }],
         };
         let clone = program.clone();

@@ -1,0 +1,6 @@
+# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
+main_sky_sha256 = 1057ac3afae7518e1b539092ae81df7b23a02eb95f1302e03287bcedc11aed80
+go_sky_version = sky dev
+exit_code = 0
+oracle_divergence = true
+divergence_reason = sanctioned: Cmd/Sub construct-only — the Go backend has no equivalent TEA constructors; this golden records Sky-Rust's output as the authoritative reference

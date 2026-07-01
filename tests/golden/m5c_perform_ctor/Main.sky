@@ -1,0 +1,11 @@
+module Main exposing (main)
+
+-- M5c: Cmd.perform construct-only gate.
+-- Constructs a Cmd.perform value and discards it; confirms type+emit+link
+-- soundness for the TEA wiring without a dispatch loop.
+
+main =
+    let
+        _ = Cmd.perform (Task.succeed 1) (\r -> 0)
+    in
+    println "ok"

@@ -123,6 +123,12 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `Db` is the opaque database connection pool type, re-exported from the
         // runtime as `pub use sky_runtime::Db;` in the emitted crate preamble.
         IrType::Db => "Db".to_owned(),
+        // `SkyCmd<M>` / `SkySub<M>` are the opaque TEA command and subscription
+        // types, aliased in the emitted project's preamble as
+        // `pub type SkyCmd<M> = sky_runtime::tea::SkyCmd<M>` and
+        // `pub type SkySub<M> = sky_runtime::tea::SkySub<M>`.
+        IrType::Cmd(inner) => format!("SkyCmd<{}>", render_type(ctx, inner, generics)?),
+        IrType::Sub(inner) => format!("SkySub<{}>", render_type(ctx, inner, generics)?),
         IrType::Tuple(elems) => {
             let mut parts = Vec::with_capacity(elems.len());
             for elem in elems {

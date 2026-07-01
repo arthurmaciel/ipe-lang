@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+-- M5c: Sub.none / Sub.batch / Sub.every construct-only gate.
+-- Constructs Sub values and discards them; confirms that Sub.none infers its
+-- msg type from a sibling Sub.every in the same batch.
+
+main =
+    let
+        _ = Sub.every 1000 0
+        _ = Sub.batch [Sub.none, Sub.every 500 1]
+    in
+    println "ok"
