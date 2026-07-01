@@ -77,6 +77,9 @@ impl Env {
         let maybe = interner.intern("Maybe")?;
         let result = interner.intern("Result")?;
         let bool_ = interner.intern("Bool")?;
+        // Db ADTs (M5b-db).
+        let sqlvalue = interner.intern("SqlValue")?;
+        let sqlfield = interner.intern("SqlField")?;
         // (constructor name, owning built-in type, index within the type, arity).
         for (name, type_name, index, arity) in [
             ("True", bool_, 0, 0),
@@ -85,6 +88,21 @@ impl Env {
             ("Nothing", maybe, 1, 0),
             ("Ok", result, 0, 1),
             ("Err", result, 1, 1),
+            // ── SqlValue variants (M5b-db) ────────────────────────────────────
+            // Index order matches the `StdDbSqlValue` enum emitted by the backend
+            // and the `into_sql_param()` dispatch in the runtime; DO NOT reorder.
+            ("SqlString", sqlvalue, 0, 1),
+            ("SqlInt", sqlvalue, 1, 1),
+            ("SqlFloat", sqlvalue, 2, 1),
+            ("SqlBool", sqlvalue, 3, 1),
+            ("SqlBytes", sqlvalue, 4, 1),
+            ("SqlTime", sqlvalue, 5, 1),    // millis: i64
+            ("SqlDecimal", sqlvalue, 6, 1), // lossless TEXT decimal representation
+            ("SqlMoney", sqlvalue, 7, 1),   // "ISO_CODE AMOUNT" format (TEXT)
+            ("SqlNull", sqlvalue, 8, 1),    // type-witness inner value → Null
+            // ── SqlField variants (M5b-db) ────────────────────────────────────
+            ("SetField", sqlfield, 0, 1), // SetField : SqlValue -> SqlField
+            ("OmitField", sqlfield, 1, 0), // OmitField : SqlField (nullary)
         ] {
             let name = interner.intern(name)?;
             self.ctors.insert(
@@ -506,6 +524,52 @@ impl Env {
                     "withTimeout",
                     "withBody",
                     "parseQuery",
+                ],
+            ),
+            // ── Db kernels (M5b-db) ─────────────────────────────────────────────
+            // `Std.Db` — database connection + query surface.
+            // All effect-returning kernels (Task Error …) and pure helpers
+            // (`getString`, `getInt`, `getBool`, `getField`) are registered here.
+            // `SqlValue` / `SqlField` ADT constructors are handled by
+            // `install_builtin_ctors` above; they are unqualified.
+            (
+                "Db",
+                &[
+                    "connect",
+                    "open",
+                    "close",
+                    "execRaw",
+                    "exec",
+                    "query",
+                    "queryDecode",
+                    "getString",
+                    "getInt",
+                    "getBool",
+                    "getField",
+                    "insertRow",
+                    "getById",
+                    "updateById",
+                    "deleteById",
+                    "findOneByField",
+                    "findManyByField",
+                    "findByConditions",
+                    "unsafeFindWhere",
+                    "insertFields",
+                    "updateFields",
+                    "insertFieldsReturning",
+                    "withTransaction",
+                    "migrate",
+                ],
+            ),
+            // `Std.Db.Decode` — row decoder combinators (M5b-db).
+            // The qualifier string contains a dot ("Db.Decode") which the parser
+            // produces correctly for the 3-segment path `Db.Decode.string` — see
+            // sky_parse::parser::ident_expr (qualifier = init.join(".")).
+            (
+                "Db.Decode",
+                &[
+                    "string", "int", "float", "bool", "nullable", "map", "andThen", "succeed",
+                    "fail", "map2", "map3", "map4", "required", "optional",
                 ],
             ),
         ];

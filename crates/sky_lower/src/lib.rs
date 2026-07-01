@@ -62,6 +62,11 @@ pub fn lower(
     // built-ins (no `type` declaration), so the lowerer needs their symbols to
     // seed the variant-set / arity tables it would otherwise read from
     // `module.unions`. Mint them here through the owned `&mut Interner`.
+    //
+    // `SqlValue` / `SqlField` are M5b-db Prelude built-ins following the same
+    // pattern: they appear in typed Sky code as if user-declared, but have no
+    // `type` declaration in any Sky source file — the compiler synthesises their
+    // `EnumDef`s at lowering time when a Db kernel call is detected.
     let builtins = lower::BuiltinCtors {
         maybe: interner.intern("Maybe")?,
         result: interner.intern("Result")?,
@@ -69,6 +74,21 @@ pub fn lower(
         nothing: interner.intern("Nothing")?,
         ok: interner.intern("Ok")?,
         err: interner.intern("Err")?,
+        // ── SqlValue ──────────────────────────────────────────────────────────
+        sqlvalue: interner.intern("SqlValue")?,
+        sql_string: interner.intern("SqlString")?,
+        sql_int: interner.intern("SqlInt")?,
+        sql_float: interner.intern("SqlFloat")?,
+        sql_bool: interner.intern("SqlBool")?,
+        sql_bytes: interner.intern("SqlBytes")?,
+        sql_time: interner.intern("SqlTime")?,
+        sql_decimal: interner.intern("SqlDecimal")?,
+        sql_money: interner.intern("SqlMoney")?,
+        sql_null: interner.intern("SqlNull")?,
+        // ── SqlField ──────────────────────────────────────────────────────────
+        sqlfield: interner.intern("SqlField")?,
+        set_field: interner.intern("SetField")?,
+        omit_field: interner.intern("OmitField")?,
     };
     lower::Lowerer::new(m, types, &*interner, eta_params, param_binders, &builtins).run()
 }

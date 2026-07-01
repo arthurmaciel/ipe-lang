@@ -1,0 +1,74 @@
+module Main exposing (main)
+
+-- M5b-db golden: insertRow → getById → updateById → deleteById CRUD cycle.
+-- Exercises the Vec<(String,String)>→HashMap<String,String> conversion emitted
+-- by emit_db_call for DbInsertRow and DbUpdateById (M5b-db fix).
+
+main =
+    Task.andThen
+        (\conn ->
+            Db.withTransaction conn
+                (\txconn ->
+                    let
+                        _ =
+                            Db.execRaw txconn
+                                "CREATE TABLE fruits (id TEXT PRIMARY KEY, name TEXT, qty TEXT)"
+
+                        _ =
+                            Db.insertRow txconn
+                                "fruits"
+                                [ ( "id", "1" ), ( "name", "apple" ), ( "qty", "5" ) ]
+                    in
+                    Task.andThen
+                        (\before ->
+                            let
+                                _ =
+                                    Db.updateById txconn "fruits" "1" [ ( "qty", "10" ) ]
+                            in
+                            Task.andThen
+                                (\after ->
+                                    let
+                                        _ =
+                                            Db.deleteById txconn "fruits" "1"
+                                    in
+                                    Task.andThen
+                                        (\gone ->
+                                            let
+                                                r1 =
+                                                    case before of
+                                                        Just row ->
+                                                            Db.getString "name" row
+                                                                ++ "/"
+                                                                ++ Db.getString "qty" row
+
+                                                        Nothing ->
+                                                            "missing"
+
+                                                r2 =
+                                                    case after of
+                                                        Just row ->
+                                                            Db.getString "name" row
+                                                                ++ "/"
+                                                                ++ Db.getString "qty" row
+
+                                                        Nothing ->
+                                                            "missing"
+
+                                                r3 =
+                                                    case gone of
+                                                        Just _ ->
+                                                            "still-exists"
+
+                                                        Nothing ->
+                                                            "deleted"
+                                            in
+                                            println (r1 ++ "\n" ++ r2 ++ "\n" ++ r3)
+                                        )
+                                        (Db.getById txconn "fruits" "1")
+                                )
+                                (Db.getById txconn "fruits" "1")
+                        )
+                        (Db.getById txconn "fruits" "1")
+                )
+        )
+        (Db.open "sqlite" "sqlite::memory:")

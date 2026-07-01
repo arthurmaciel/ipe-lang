@@ -1,0 +1,49 @@
+module Main exposing (main)
+
+-- M5b-db golden: SqlValue-parameterized Db.exec + Db.query on in-memory SQLite.
+-- Db.withTransaction pins all DDL + DML + SELECT to ONE pool connection so the
+-- sqlite::memory: database is visible to every operation (each connection in the
+-- 16-connection pool is a separate in-memory DB; the transaction task-local
+-- routes all ops through the single acquired connection).
+
+main =
+    Task.andThen
+        (\conn ->
+            Db.withTransaction conn
+                (\txconn ->
+                    let
+                        _ =
+                            Db.execRaw txconn
+                                "CREATE TABLE items (name TEXT, qty INTEGER)"
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO items (name, qty) VALUES (?, ?)"
+                                [ SqlString "apple", SqlInt 5 ]
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO items (name, qty) VALUES (?, ?)"
+                                [ SqlString "banana", SqlInt 3 ]
+                    in
+                    Task.andThen
+                        (\rows ->
+                            println
+                                (String.join "\n"
+                                    (List.map
+                                        (\row ->
+                                            Db.getString "name" row
+                                                ++ ":"
+                                                ++ String.fromInt (Db.getInt "qty" row)
+                                        )
+                                        rows
+                                    )
+                                )
+                        )
+                        (Db.query txconn
+                            "SELECT name, qty FROM items ORDER BY name"
+                            []
+                        )
+                )
+        )
+        (Db.open "sqlite" "sqlite::memory:")

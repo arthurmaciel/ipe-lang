@@ -102,6 +102,32 @@ struct Builtins {
     http_f_follow_redirects: Symbol,
     /// `"maxRedirects"` — `HttpRequest` only (camelCase Sky field name).
     http_f_max_redirects: Symbol,
+    // ── Db type symbols (M5b-db) ─────────────────────────────────────────────
+    /// `"Db"` — the opaque database connection pool type constructor.
+    db: Symbol,
+    /// `"SqlValue"` — the sum type for typed SQL parameter values.
+    sqlvalue: Symbol,
+    /// `"SqlField"` — the sum type for PATCH-style field-set / field-omit SQL params.
+    sqlfield: Symbol,
+    // ── SqlValue constructor name symbols ─────────────────────────────────────
+    sql_string: Symbol,
+    sql_int: Symbol,
+    sql_float: Symbol,
+    sql_bool: Symbol,
+    sql_bytes: Symbol,
+    sql_time: Symbol,
+    /// `"SqlDecimal"` — wraps a `String` decimal representation (lossless TEXT).
+    sql_decimal: Symbol,
+    /// `"SqlMoney"` — wraps a `String` in `"ISO_CODE AMOUNT"` format (TEXT).
+    sql_money: Symbol,
+    sql_null: Symbol,
+    // ── SqlField constructor name symbols ─────────────────────────────────────
+    set_field: Symbol,
+    omit_field: Symbol,
+    // ── Shared row-decoder type (M5b-db + M4h JSON) ───────────────────────────
+    /// `"Decoder"` — the opaque decoder type constructor shared by `Sky.Core.Json.Decode`
+    /// and `Std.Db.Decode`. Represented in the IR as `IrType::Decoder(Box<IrType>)`.
+    decoder: Symbol,
 }
 
 impl Builtins {
@@ -137,6 +163,22 @@ impl Builtins {
             http_f_timeout: interner.intern("timeout")?,
             http_f_follow_redirects: interner.intern("followRedirects")?,
             http_f_max_redirects: interner.intern("maxRedirects")?,
+            // Db symbols (M5b-db).
+            db: interner.intern("Db")?,
+            sqlvalue: interner.intern("SqlValue")?,
+            sqlfield: interner.intern("SqlField")?,
+            sql_string: interner.intern("SqlString")?,
+            sql_int: interner.intern("SqlInt")?,
+            sql_float: interner.intern("SqlFloat")?,
+            sql_bool: interner.intern("SqlBool")?,
+            sql_bytes: interner.intern("SqlBytes")?,
+            sql_time: interner.intern("SqlTime")?,
+            sql_decimal: interner.intern("SqlDecimal")?,
+            sql_money: interner.intern("SqlMoney")?,
+            sql_null: interner.intern("SqlNull")?,
+            set_field: interner.intern("SetField")?,
+            omit_field: interner.intern("OmitField")?,
+            decoder: interner.intern("Decoder")?,
         })
     }
 
@@ -149,6 +191,7 @@ impl Builtins {
     /// site exactly like a user constructor's scheme. The built-in `Con`s carry
     /// an empty module path, matching how `from_canon` renders the builtin type
     /// names (`Int` / `Bool` / …) and how the lowerer recognises them by name.
+    #[allow(clippy::too_many_lines)]
     fn ctor_schemes(&self) -> Vec<(Symbol, CtorScheme)> {
         let bool_ty = Ty::Con {
             module: Vec::new(),
@@ -164,6 +207,42 @@ impl Builtins {
             module: Vec::new(),
             name: self.result,
             args: vec![Ty::Var(self.tv_e.as_raw()), Ty::Var(self.tv_a.as_raw())],
+        };
+        // Monomorphic SqlValue / SqlField types (no type parameters).
+        let sqlvalue_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.sqlvalue,
+            args: Vec::new(),
+        };
+        let sqlfield_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.sqlfield,
+            args: Vec::new(),
+        };
+        let int_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.int,
+            args: Vec::new(),
+        };
+        let float_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.float,
+            args: Vec::new(),
+        };
+        let string_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.string,
+            args: Vec::new(),
+        };
+        let bool_ty_plain = Ty::Con {
+            module: Vec::new(),
+            name: self.bool,
+            args: Vec::new(),
+        };
+        let bytes_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.bytes,
+            args: Vec::new(),
         };
         vec![
             (
@@ -206,6 +285,98 @@ impl Builtins {
                 CtorScheme {
                     arg_tys: vec![Ty::Var(self.tv_e.as_raw())],
                     result: result_ty,
+                },
+            ),
+            // ── SqlValue constructors (M5b-db) ─────────────────────────────────
+            // Each maps its payload type → SqlValue.
+            (
+                self.sql_string,
+                CtorScheme {
+                    arg_tys: vec![string_ty.clone()],
+                    result: sqlvalue_ty.clone(),
+                },
+            ),
+            (
+                self.sql_int,
+                CtorScheme {
+                    arg_tys: vec![int_ty.clone()],
+                    result: sqlvalue_ty.clone(),
+                },
+            ),
+            (
+                self.sql_float,
+                CtorScheme {
+                    arg_tys: vec![float_ty],
+                    result: sqlvalue_ty.clone(),
+                },
+            ),
+            (
+                self.sql_bool,
+                CtorScheme {
+                    arg_tys: vec![bool_ty_plain],
+                    result: sqlvalue_ty.clone(),
+                },
+            ),
+            (
+                self.sql_bytes,
+                CtorScheme {
+                    arg_tys: vec![bytes_ty],
+                    result: sqlvalue_ty.clone(),
+                },
+            ),
+            // SqlTime wraps a Unix-millisecond Int timestamp.
+            (
+                self.sql_time,
+                CtorScheme {
+                    arg_tys: vec![int_ty],
+                    result: sqlvalue_ty.clone(),
+                },
+            ),
+            // SqlDecimal wraps a String decimal representation (lossless TEXT
+            // serialisation matching Go's shopspring.Decimal.String()).
+            // Minimal wiring: Sky users write `SqlDecimal "1234.56"` rather than
+            // a native Decimal value (native Decimal IrType deferred to M6).
+            (
+                self.sql_decimal,
+                CtorScheme {
+                    arg_tys: vec![string_ty.clone()],
+                    result: sqlvalue_ty.clone(),
+                },
+            ),
+            // SqlMoney wraps a String in "ISO_CODE AMOUNT" format (TEXT).
+            // Minimal wiring matching Go's sqlMoneyToString / db_decode_money.
+            // Sky users write `SqlMoney "USD 1234.56"`.
+            (
+                self.sql_money,
+                CtorScheme {
+                    arg_tys: vec![string_ty],
+                    result: sqlvalue_ty.clone(),
+                },
+            ),
+            // SqlNull wraps another SqlValue as a type-level witness; the inner
+            // value is discarded by `into_sql_param()` → SqlParam::Null.
+            (
+                self.sql_null,
+                CtorScheme {
+                    arg_tys: vec![sqlvalue_ty.clone()],
+                    result: sqlvalue_ty.clone(),
+                },
+            ),
+            // ── SqlField constructors (M5b-db) ─────────────────────────────────
+            // SetField : SqlValue -> SqlField — wraps a typed parameter value.
+            (
+                self.set_field,
+                CtorScheme {
+                    arg_tys: vec![sqlvalue_ty],
+                    result: sqlfield_ty.clone(),
+                },
+            ),
+            // OmitField : SqlField — nullary; column is omitted from generated SQL.
+            (
+                self.omit_field,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: sqlfield_ty,
                 },
             ),
         ]
@@ -1621,6 +1792,13 @@ impl<'a> Builder<'a> {
             args: Vec::new(),
         };
         let tuple2 = |a: Ty, b: Ty| Ty::Tuple(vec![a, b]);
+        // `dec(inner)` — `Decoder inner` — the opaque row-decoder type shared by
+        // JSON decode and Db.Decode. Lowered to `IrType::Decoder(Box<IrType>)`.
+        let dec = |inner: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.decoder,
+            args: vec![inner],
+        };
         match (self.interner.resolve(module), self.interner.resolve(name)) {
             (Some("String"), Some("fromInt")) => Ty::Fun(Box::new(int), Box::new(string)),
             (Some("String"), Some("fromFloat")) => Ty::Fun(Box::new(float), Box::new(string)),
@@ -2309,6 +2487,640 @@ impl<'a> Builder<'a> {
                     fun(string, fun(http_request_a, http_request_b)),
                 )
             }
+
+            // ── Db kernels (M5b-db) ─────────────────────────────────────────────
+            // Helper type constructors for this section.
+            //
+            // `db_ty` : the opaque Db connection pool handle.
+            // `sv_ty` : `SqlValue` — the typed SQL parameter sum.
+            // `sf_ty` : `SqlField` — the PATCH-parameter sum (SetField / OmitField).
+            // `row_ty`: `Dict String String` — an untyped query result row.
+            // `decoder_ty(a)` : `Decoder a` — reuses the shared runtime Decoder type.
+            //
+            // Raw type-variable ids in this section are local to each arm (they are
+            // only used within that arm's `fun(…)` chain, then discarded). A
+            // distinct set of ids per arm avoids accidental sharing between different
+            // kernel schemes during `instantiate`.
+
+            // Db.connect : () -> Task Error Db
+            (Some("Db"), Some("connect")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                fun(
+                    Ty::Unit,
+                    Ty::Con {
+                        module: Vec::new(),
+                        name: self.builtins.task,
+                        args: vec![db_ty],
+                    },
+                )
+            }
+
+            // Db.open : String -> String -> Task Error Db
+            (Some("Db"), Some("open")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                fun(
+                    string.clone(),
+                    fun(
+                        string,
+                        Ty::Con {
+                            module: Vec::new(),
+                            name: self.builtins.task,
+                            args: vec![db_ty],
+                        },
+                    ),
+                )
+            }
+
+            // Db.close : Db -> Task Error ()
+            (Some("Db"), Some("close")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                fun(db_ty, task_unit)
+            }
+
+            // Db.execRaw : Db -> String -> Task Error Int
+            (Some("Db"), Some("execRaw")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                fun(
+                    db_ty,
+                    fun(
+                        string,
+                        Ty::Con {
+                            module: Vec::new(),
+                            name: self.builtins.task,
+                            args: vec![int],
+                        },
+                    ),
+                )
+            }
+
+            // Db.exec : Db -> String -> List SqlValue -> Task Error Int
+            (Some("Db"), Some("exec")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                let sv_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.sqlvalue,
+                    args: Vec::new(),
+                };
+                fun(
+                    db_ty,
+                    fun(
+                        string,
+                        fun(
+                            list(sv_ty),
+                            Ty::Con {
+                                module: Vec::new(),
+                                name: self.builtins.task,
+                                args: vec![int],
+                            },
+                        ),
+                    ),
+                )
+            }
+
+            // Db.query : Db -> String -> List SqlValue -> Task Error (List (Dict String String))
+            (Some("Db"), Some("query")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                let sv_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.sqlvalue,
+                    args: Vec::new(),
+                };
+                let row_ty = dict(string.clone(), string.clone());
+                fun(
+                    db_ty,
+                    fun(
+                        string,
+                        fun(
+                            list(sv_ty),
+                            Ty::Con {
+                                module: Vec::new(),
+                                name: self.builtins.task,
+                                args: vec![list(row_ty)],
+                            },
+                        ),
+                    ),
+                )
+            }
+
+            // Db.queryDecode : Db -> String -> List SqlValue -> Decoder a -> Task Error (List a)
+            //
+            // `var(0)` is the element type `a`.  `dec(var(0))` is `Decoder a`.
+            // The solver unifies `Decoder a` with whatever Db.Decode.* expression is
+            // passed, binding `a` to the concrete column type (e.g. String, Int).
+            // The result `Task (List a)` then carries the same concrete element type —
+            // no raw `var(0)` leaks into the caller's inferred type.
+            (Some("Db"), Some("queryDecode")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                let sv_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.sqlvalue,
+                    args: Vec::new(),
+                };
+                fun(
+                    db_ty,
+                    fun(
+                        string,
+                        fun(
+                            list(sv_ty),
+                            fun(
+                                dec(var(0)),
+                                Ty::Con {
+                                    module: Vec::new(),
+                                    name: self.builtins.task,
+                                    args: vec![list(var(0))],
+                                },
+                            ),
+                        ),
+                    ),
+                )
+            }
+
+            // Db.getString / Db.getField : String -> Dict String String -> String  (pure)
+            // Both return `String` (empty string for absent columns), NOT `Maybe
+            // String`.  The `Maybe` variant is deprecated; plain-String accessor is
+            // the Go-parity surface.
+            (Some("Db"), Some("getString" | "getField")) => fun(
+                string.clone(),
+                fun(dict(string.clone(), string.clone()), string),
+            ),
+
+            // Db.getInt : String -> Dict String String -> Int  (pure)
+            (Some("Db"), Some("getInt")) => {
+                fun(string.clone(), fun(dict(string.clone(), string), int))
+            }
+
+            // Db.getBool : String -> Dict String String -> Bool  (pure)
+            (Some("Db"), Some("getBool")) => {
+                fun(string.clone(), fun(dict(string.clone(), string), bool_ty))
+            }
+
+            // Db.insertRow : Db -> String -> List (String, String) -> Task Error Int
+            (Some("Db"), Some("insertRow")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                fun(
+                    db_ty,
+                    fun(
+                        string.clone(),
+                        fun(
+                            list(tuple2(string.clone(), string)),
+                            Ty::Con {
+                                module: Vec::new(),
+                                name: self.builtins.task,
+                                args: vec![int],
+                            },
+                        ),
+                    ),
+                )
+            }
+
+            // Db.getById : Db -> String -> String -> Task Error (Maybe (Dict String String))
+            (Some("Db"), Some("getById")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                let row_ty = dict(string.clone(), string.clone());
+                fun(
+                    db_ty,
+                    fun(
+                        string.clone(),
+                        fun(
+                            string,
+                            Ty::Con {
+                                module: Vec::new(),
+                                name: self.builtins.task,
+                                args: vec![maybe(row_ty)],
+                            },
+                        ),
+                    ),
+                )
+            }
+
+            // Db.updateById : Db -> String -> String -> List (String, String) -> Task Error Int
+            (Some("Db"), Some("updateById")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                fun(
+                    db_ty,
+                    fun(
+                        string.clone(),
+                        fun(
+                            string.clone(),
+                            fun(
+                                list(tuple2(string.clone(), string)),
+                                Ty::Con {
+                                    module: Vec::new(),
+                                    name: self.builtins.task,
+                                    args: vec![int],
+                                },
+                            ),
+                        ),
+                    ),
+                )
+            }
+
+            // Db.deleteById : Db -> String -> String -> Task Error Int
+            (Some("Db"), Some("deleteById")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                fun(
+                    db_ty,
+                    fun(
+                        string.clone(),
+                        fun(
+                            string,
+                            Ty::Con {
+                                module: Vec::new(),
+                                name: self.builtins.task,
+                                args: vec![int],
+                            },
+                        ),
+                    ),
+                )
+            }
+
+            // Db.findOneByField : Db -> String -> String -> String -> Task Error (Maybe (Dict String String))
+            (Some("Db"), Some("findOneByField")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                let row_ty = dict(string.clone(), string.clone());
+                fun(
+                    db_ty,
+                    fun(
+                        string.clone(),
+                        fun(
+                            string.clone(),
+                            fun(
+                                string,
+                                Ty::Con {
+                                    module: Vec::new(),
+                                    name: self.builtins.task,
+                                    args: vec![maybe(row_ty)],
+                                },
+                            ),
+                        ),
+                    ),
+                )
+            }
+
+            // Db.findManyByField : Db -> String -> String -> String -> Task Error (List (Dict String String))
+            (Some("Db"), Some("findManyByField")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                let row_ty = dict(string.clone(), string.clone());
+                fun(
+                    db_ty,
+                    fun(
+                        string.clone(),
+                        fun(
+                            string.clone(),
+                            fun(
+                                string,
+                                Ty::Con {
+                                    module: Vec::new(),
+                                    name: self.builtins.task,
+                                    args: vec![list(row_ty)],
+                                },
+                            ),
+                        ),
+                    ),
+                )
+            }
+
+            // Db.findByConditions : Db -> String -> Dict String String -> Task Error (List (Dict String String))
+            //
+            // The runtime `db_find_by_conditions` takes `HashMap<String, String>` —
+            // a `Dict String String` in Sky — for AND-joined equality conditions.
+            // An earlier version incorrectly typed this as `List (String, SqlValue)`;
+            // the corrected type matches the runtime signature and the CLAUDE.md spec.
+            (Some("Db"), Some("findByConditions")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                let row_ty = dict(string.clone(), string.clone());
+                let conditions_ty = dict(string.clone(), string.clone());
+                fun(
+                    db_ty,
+                    fun(
+                        string,
+                        fun(
+                            conditions_ty,
+                            Ty::Con {
+                                module: Vec::new(),
+                                name: self.builtins.task,
+                                args: vec![list(row_ty)],
+                            },
+                        ),
+                    ),
+                )
+            }
+
+            // Db.unsafeFindWhere : Db -> String -> String -> List String -> Task Error (List (Dict String String))
+            //
+            // The runtime `db_unsafe_find_where` takes 4 parameters:
+            //   conn: Db, table: String, where_clause: String, args: Vec<String>
+            // The `args` parameter is the parameterized-binding channel — it is
+            // essential for SQL injection safety on this sole sanctioned raw-SQL path.
+            // An earlier version was missing this 4th parameter, which would have
+            // forced callers to string-interpolate values into where_clause.
+            (Some("Db"), Some("unsafeFindWhere")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                let row_ty = dict(string.clone(), string.clone());
+                fun(
+                    db_ty,
+                    fun(
+                        string.clone(), // table
+                        fun(
+                            string.clone(), // where_clause
+                            fun(
+                                list(string), // args: List String
+                                Ty::Con {
+                                    module: Vec::new(),
+                                    name: self.builtins.task,
+                                    args: vec![list(row_ty)],
+                                },
+                            ),
+                        ),
+                    ),
+                )
+            }
+
+            // Db.insertFields : Db -> String -> List (String, SqlField) -> Task Error Int
+            (Some("Db"), Some("insertFields")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                let sf_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.sqlfield,
+                    args: Vec::new(),
+                };
+                fun(
+                    db_ty,
+                    fun(
+                        string.clone(),
+                        fun(
+                            list(tuple2(string, sf_ty)),
+                            Ty::Con {
+                                module: Vec::new(),
+                                name: self.builtins.task,
+                                args: vec![int],
+                            },
+                        ),
+                    ),
+                )
+            }
+
+            // Db.updateFields : Db -> String -> List (String, SqlValue) -> List (String, SqlField) -> Task Error Int
+            (Some("Db"), Some("updateFields")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                let sqlvalue_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.sqlvalue,
+                    args: Vec::new(),
+                };
+                let sqlfield_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.sqlfield,
+                    args: Vec::new(),
+                };
+                fun(
+                    db_ty,
+                    fun(
+                        string.clone(),
+                        fun(
+                            list(tuple2(string.clone(), sqlvalue_ty)),
+                            fun(
+                                list(tuple2(string, sqlfield_ty)),
+                                Ty::Con {
+                                    module: Vec::new(),
+                                    name: self.builtins.task,
+                                    args: vec![int],
+                                },
+                            ),
+                        ),
+                    ),
+                )
+            }
+
+            // Db.insertFieldsReturning : Db -> String -> List (String, SqlField) -> String -> Decoder a -> Task Error (List a)
+            //
+            // Same `dec(var(0))` / `list(var(0))` linkage as `queryDecode`.
+            (Some("Db"), Some("insertFieldsReturning")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                let sf_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.sqlfield,
+                    args: Vec::new(),
+                };
+                fun(
+                    db_ty,
+                    fun(
+                        string.clone(),
+                        fun(
+                            list(tuple2(string.clone(), sf_ty)),
+                            fun(
+                                string,
+                                fun(
+                                    dec(var(0)),
+                                    Ty::Con {
+                                        module: Vec::new(),
+                                        name: self.builtins.task,
+                                        args: vec![list(var(0))],
+                                    },
+                                ),
+                            ),
+                        ),
+                    ),
+                )
+            }
+
+            // Db.withTransaction : Db -> (Db -> Task Error a) -> Task Error a
+            (Some("Db"), Some("withTransaction")) => {
+                let db_ty_a = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                let db_ty_b = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                // body : Db -> Task Error a  where a = var(0)
+                let task_a = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.task,
+                    args: vec![var(0)],
+                };
+                let body_ty = fun(db_ty_b, task_a.clone());
+                fun(db_ty_a, fun(body_ty, task_a))
+            }
+
+            // Db.migrate : Db -> List (String, String) -> Task Error (List String)
+            (Some("Db"), Some("migrate")) => {
+                let db_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.db,
+                    args: Vec::new(),
+                };
+                // `string` appears 3 times: name-arg, version-arg, result-list-elem.
+                // Clone the first two uses, leave the last as a move.
+                fun(
+                    db_ty,
+                    fun(
+                        list(tuple2(string.clone(), string.clone())),
+                        Ty::Con {
+                            module: Vec::new(),
+                            name: self.builtins.task,
+                            args: vec![list(string)],
+                        },
+                    ),
+                )
+            }
+
+            // ── Db.Decode kernels (M5b-db) ───────────────────────────────────────
+            // All use the shared `Decoder<E, T>` type (same runtime type as JsonDec).
+            // `dec(T)` = `Ty::Con { name: "Decoder", args: [T] }`, which lower.rs maps
+            // to `IrType::Decoder(Box<IrType>)` via the `"Decoder" if args.len() == 1`
+            // branch in `ir_type_from_ty`.
+            //
+            // Using proper `dec(T)` types instead of bare `var(0)` prevents unsound
+            // programs like `let n : Int = Db.Decode.int "c"` (a `Decoder Int` cannot
+            // unify with `Int`, so the type error is correctly reported).
+
+            // Db.Decode.string : String -> Decoder String
+            (Some("Db.Decode"), Some("string")) => fun(string.clone(), dec(string)),
+
+            // Db.Decode.int : String -> Decoder Int
+            (Some("Db.Decode"), Some("int")) => fun(string, dec(int)),
+
+            // Db.Decode.float : String -> Decoder Float
+            (Some("Db.Decode"), Some("float")) => fun(string, dec(float)),
+
+            // Db.Decode.bool : String -> Decoder Bool
+            (Some("Db.Decode"), Some("bool")) => fun(string, dec(bool_ty)),
+
+            // Db.Decode.fail : String -> Decoder a  (always-fail decoder, polymorphic)
+            (Some("Db.Decode"), Some("fail")) => fun(string, dec(var(0))),
+
+            // Db.Decode.nullable : Decoder a -> Decoder (Maybe a)
+            (Some("Db.Decode"), Some("nullable")) => fun(dec(var(0)), dec(maybe(var(0)))),
+
+            // Db.Decode.map : (a -> b) -> Decoder a -> Decoder b
+            (Some("Db.Decode"), Some("map")) => {
+                fun(fun(var(0), var(1)), fun(dec(var(0)), dec(var(1))))
+            }
+
+            // Db.Decode.andThen : (a -> Decoder b) -> Decoder a -> Decoder b
+            (Some("Db.Decode"), Some("andThen")) => {
+                fun(fun(var(0), dec(var(1))), fun(dec(var(0)), dec(var(1))))
+            }
+
+            // Db.Decode.succeed : a -> Decoder a
+            (Some("Db.Decode"), Some("succeed")) => fun(var(0), dec(var(0))),
+
+            // Db.Decode.map2 : (a -> b -> c) -> Decoder a -> Decoder b -> Decoder c
+            (Some("Db.Decode"), Some("map2")) => fun(
+                fun(var(0), fun(var(1), var(2))),
+                fun(dec(var(0)), fun(dec(var(1)), dec(var(2)))),
+            ),
+
+            // Db.Decode.map3 : (a -> b -> c -> d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d
+            (Some("Db.Decode"), Some("map3")) => fun(
+                fun(var(0), fun(var(1), fun(var(2), var(3)))),
+                fun(dec(var(0)), fun(dec(var(1)), fun(dec(var(2)), dec(var(3))))),
+            ),
+
+            // Db.Decode.map4 : (a->b->c->d->e) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e
+            (Some("Db.Decode"), Some("map4")) => fun(
+                fun(var(0), fun(var(1), fun(var(2), fun(var(3), var(4))))),
+                fun(
+                    dec(var(0)),
+                    fun(dec(var(1)), fun(dec(var(2)), fun(dec(var(3)), dec(var(4))))),
+                ),
+            ),
+
+            // Db.Decode.required : String -> Decoder a -> Decoder (a -> b) -> Decoder b
+            //
+            // `var(0)` = field type a; `var(1)` = accumulated record type b.
+            // The accumulator decoder `Decoder (a -> b)` has inner type `Fun([a], b)`.
+            (Some("Db.Decode"), Some("required")) => fun(
+                string,
+                fun(dec(var(0)), fun(dec(fun(var(0), var(1))), dec(var(1)))),
+            ),
+
+            // Db.Decode.optional : String -> Decoder a -> a -> Decoder (a -> b) -> Decoder b
+            //
+            // Same structure as `required` with an extra `a` default-value argument.
+            (Some("Db.Decode"), Some("optional")) => fun(
+                string,
+                fun(
+                    dec(var(0)),
+                    fun(var(0), fun(dec(fun(var(0), var(1))), dec(var(1)))),
+                ),
+            ),
 
             // Unknown kernel: a single flexible variable. The raw id is chosen
             // to be distinct from any real interned symbol's typical range; it

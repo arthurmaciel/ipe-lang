@@ -1,0 +1,36 @@
+module Main exposing (main)
+
+-- M5b-db golden: Db.queryDecode with Db.Decode.string — typed row decoder path.
+-- Exercises IrType::Decoder(String) introduced in constrain.rs for the M5b-db fix.
+-- Uses withTransaction to pin all ops to one in-memory connection.
+
+main =
+    Task.andThen
+        (\conn ->
+            Db.withTransaction conn
+                (\txconn ->
+                    let
+                        _ =
+                            Db.execRaw txconn
+                                "CREATE TABLE names (n TEXT)"
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO names VALUES (?)"
+                                [ SqlString "alice" ]
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO names VALUES (?)"
+                                [ SqlString "bob" ]
+                    in
+                    Task.andThen
+                        (\names -> println (String.join "," names))
+                        (Db.queryDecode txconn
+                            "SELECT n FROM names ORDER BY n"
+                            []
+                            (Db.Decode.string "n")
+                        )
+                )
+        )
+        (Db.open "sqlite" "sqlite::memory:")

@@ -120,6 +120,9 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Decoder(inner) => {
             format!("Decoder<{}>", render_type(ctx, inner, generics)?)
         }
+        // `Db` is the opaque database connection pool type, re-exported from the
+        // runtime as `pub use sky_runtime::Db;` in the emitted crate preamble.
+        IrType::Db => "Db".to_owned(),
         IrType::Tuple(elems) => {
             let mut parts = Vec::with_capacity(elems.len());
             for elem in elems {

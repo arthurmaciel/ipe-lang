@@ -117,10 +117,10 @@ pub fn task_map<A: Send + 'static, B: Send + 'static>(
     sky_runtime::task::task_map(f, t)
 }
 pub fn task_and_then<A: Send + 'static, B: Send + 'static>(
-    f: Box<dyn Fn(A) -> SkyTask<B> + Send + 'static>,
     t: SkyTask<A>,
+    f: Box<dyn FnOnce(A) -> SkyTask<B> + Send + 'static>,
 ) -> SkyTask<B> {
-    sky_runtime::task::task_and_then(f, t)
+    sky_runtime::task::task_and_then(t, f)
 }
 pub fn task_map_error<A: Send + 'static>(
     f: Box<dyn Fn(SkyError) -> SkyError + Send + 'static>,

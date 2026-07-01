@@ -231,6 +231,8 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::Json
         // `Decoder<T>` is an opaque struct, not a function type.
         | IrType::Decoder(_)
+        // `Db` is an opaque connection pool handle, not a function type.
+        | IrType::Db
         | IrType::Generic(_) => false,
         IrType::Enum { args, .. } => args.iter().any(ir_contains_fun),
         IrType::Maybe(elem) | IrType::List(elem) => ir_contains_fun(elem),
@@ -241,6 +243,75 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         IrType::Record(fields) => fields.values().any(ir_contains_fun),
     }
 }
+
+// ── M5b-db: Db-kernel presence detection ─────────────────────────────────────
+
+/// Return `true` when `expr` (or any of its sub-expressions, recursively)
+/// contains a call whose callee is one of the `Db*` kernel variants.
+///
+/// Used by [`Lowerer::run`] to decide whether the synthetic `SqlValue` /
+/// `SqlField` `EnumDef`s must be injected into the module's type list.
+fn expr_uses_db_kernel(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, args } => {
+            let callee_is_db = matches!(callee, Callee::Kernel(k) if kernel_is_db(*k));
+            callee_is_db || args.iter().any(expr_uses_db_kernel)
+        }
+        // FuncValue reifies a callee as a first-class value (not a direct call),
+        // but if that callee is a Db kernel it still implies Db usage.
+        Expr::FuncValue { callee, .. } => {
+            matches!(callee, Callee::Kernel(k) if kernel_is_db(*k))
+        }
+        Expr::Apply { func, args } => {
+            expr_uses_db_kernel(func) || args.iter().any(expr_uses_db_kernel)
+        }
+        Expr::Let { value, body, .. } => expr_uses_db_kernel(value) || expr_uses_db_kernel(body),
+        Expr::Destructure { value, body, .. } => {
+            expr_uses_db_kernel(value) || expr_uses_db_kernel(body)
+        }
+        Expr::If { cond, then_, else_ } => {
+            expr_uses_db_kernel(cond) || expr_uses_db_kernel(then_) || expr_uses_db_kernel(else_)
+        }
+        Expr::Match(m) => {
+            expr_uses_db_kernel(m.scrutinee())
+                || m.arms().iter().any(|arm| expr_uses_db_kernel(&arm.body))
+        }
+        Expr::Lambda { body, .. } => expr_uses_db_kernel(body),
+        Expr::Cons { head, tail } => expr_uses_db_kernel(head) || expr_uses_db_kernel(tail),
+        Expr::Tuple(elems) => elems.iter().any(expr_uses_db_kernel),
+        Expr::List { items, .. } => items.iter().any(expr_uses_db_kernel),
+        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_db_kernel(v)),
+        Expr::Access { record, .. } => expr_uses_db_kernel(record),
+        Expr::Update { record, fields } => {
+            expr_uses_db_kernel(record) || fields.iter().any(|(_, v)| expr_uses_db_kernel(v))
+        }
+        Expr::BinOp { lhs, rhs, .. } => expr_uses_db_kernel(lhs) || expr_uses_db_kernel(rhs),
+        Expr::TaskSeq { effect, rest } => expr_uses_db_kernel(effect) || expr_uses_db_kernel(rest),
+        Expr::Ctor { args, .. } => args.iter().any(expr_uses_db_kernel),
+        // Leaf expressions that cannot contain a kernel call.
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_) => false,
+    }
+}
+
+/// Return `true` when `k` is one of the `Db*` kernel variants (including
+/// `DbDec*`).
+///
+/// Delegates to [`KernelFn::is_db`], the single authoritative list maintained
+/// in `sky_ir`.  Note that `matches!` always has an implicit `_ => false` arm,
+/// so this function does NOT cause a compiler warning if a new `Db*` variant is
+/// added without being listed — callers that need that guarantee should use the
+/// result as a guard inside their own exhaustive `match`.
+const fn kernel_is_db(k: KernelFn) -> bool {
+    k.is_db()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Build a [`Diagnostic::Lower`] for a feature the M0 lowerer does not model
 /// yet, carrying the offending node's source `span`. This is the
@@ -258,6 +329,9 @@ pub struct Lowerer<'a> {
     m: &'a canon::Module,
     types: &'a SolvedTypes,
     interner: &'a Interner,
+    /// Builtin constructor symbols — used by [`run`] to synthesise `SqlValue` /
+    /// `SqlField` `EnumDef`s when the program uses any Db kernel.
+    builtins: &'a BuiltinCtors,
     /// Each top-level binding's [`FuncId`], assigned in declaration order so a
     /// `VarTopLevel` reference can resolve to a [`Callee::Func`].
     func_ids: BTreeMap<Symbol, FuncId>,
@@ -301,6 +375,12 @@ pub struct Lowerer<'a> {
 /// prove a `Maybe` / `Result` `case` exhaustive) and `ctor_arity` (the field
 /// count a saturated `Just x` / `Ok x` passes) for them, exactly as it does for a
 /// user enum.
+///
+/// Also carries the `SqlValue` / `SqlField` ADT symbols (M5b-db). These are not
+/// user declarations either — they are synthesised by the lowerer into
+/// `module.types` when any Db kernel call is detected, so the backend can emit
+/// the concrete Rust enum and its `into_sql_param()` / `into_field_param()`
+/// boundary conversions.
 pub struct BuiltinCtors {
     pub maybe: Symbol,
     pub result: Symbol,
@@ -308,6 +388,20 @@ pub struct BuiltinCtors {
     pub nothing: Symbol,
     pub ok: Symbol,
     pub err: Symbol,
+    // ── SqlValue / SqlField (M5b-db) ─────────────────────────────────────────
+    pub sqlvalue: Symbol,
+    pub sqlfield: Symbol,
+    pub sql_string: Symbol,
+    pub sql_int: Symbol,
+    pub sql_float: Symbol,
+    pub sql_bool: Symbol,
+    pub sql_bytes: Symbol,
+    pub sql_time: Symbol,
+    pub sql_decimal: Symbol,
+    pub sql_money: Symbol,
+    pub sql_null: Symbol,
+    pub set_field: Symbol,
+    pub omit_field: Symbol,
 }
 
 /// The widest parameter-pattern count across the module's top-level bindings —
@@ -332,7 +426,7 @@ impl<'a> Lowerer<'a> {
         interner: &'a Interner,
         eta_params: Vec<Symbol>,
         param_binders: Vec<Symbol>,
-        builtins: &BuiltinCtors,
+        builtins: &'a BuiltinCtors,
     ) -> Self {
         let mut func_ids = BTreeMap::new();
         for (idx, def) in m.defs.iter().enumerate() {
@@ -359,10 +453,46 @@ impl<'a> Lowerer<'a> {
         ctor_arity.insert(builtins.ok, 1);
         ctor_arity.insert(builtins.err, 1);
 
+        // Seed `SqlValue` / `SqlField` variant sets + arities (M5b-db).
+        // These are Prelude built-ins (like Maybe/Result) — no user `type`
+        // declaration; the symbols must be present here so any `case v of
+        // SqlString s -> … ; SqlInt i -> …` pattern is exhaustively validated and
+        // constructor applications (e.g. `SqlInt 42`) lower as saturated.
+        enum_variants.insert(
+            builtins.sqlvalue,
+            vec![
+                builtins.sql_string,
+                builtins.sql_int,
+                builtins.sql_float,
+                builtins.sql_bool,
+                builtins.sql_bytes,
+                builtins.sql_time,
+                builtins.sql_decimal,
+                builtins.sql_money,
+                builtins.sql_null,
+            ],
+        );
+        enum_variants.insert(
+            builtins.sqlfield,
+            vec![builtins.set_field, builtins.omit_field],
+        );
+        ctor_arity.insert(builtins.sql_string, 1);
+        ctor_arity.insert(builtins.sql_int, 1);
+        ctor_arity.insert(builtins.sql_float, 1);
+        ctor_arity.insert(builtins.sql_bool, 1);
+        ctor_arity.insert(builtins.sql_bytes, 1);
+        ctor_arity.insert(builtins.sql_time, 1);
+        ctor_arity.insert(builtins.sql_decimal, 1); // SqlDecimal(String)
+        ctor_arity.insert(builtins.sql_money, 1); // SqlMoney(String) — "ISO_CODE AMOUNT"
+        ctor_arity.insert(builtins.sql_null, 1); // SqlNull(SqlValue)
+        ctor_arity.insert(builtins.set_field, 1); // SetField(SqlValue)
+        ctor_arity.insert(builtins.omit_field, 0);
+
         Self {
             m,
             types,
             interner,
+            builtins,
             func_ids,
             enum_variants,
             ctor_arity,
@@ -401,6 +531,27 @@ impl<'a> Lowerer<'a> {
             funcs.push(func);
         }
 
+        // M5b-db: when any Db kernel call is present, inject the synthetic
+        // `SqlValue` and `SqlField` `EnumDef`s into `module.types`.  They are
+        // Prelude built-ins — not user `type` declarations — but the backend
+        // needs real `EnumDef`s in the module to:
+        //
+        //   1. emit the Rust enum (so the generated code can construct
+        //      `MainSqlValue::SqlInt(42)`);
+        //   2. register them in `enum_names` + `variant_fields` inside
+        //      `EmitCtx::build`, so `enum_name(sqlvalue_sym)` and
+        //      `variant_fields(sqlvalue_sym, sql_int_sym)` resolve;
+        //   3. detect db usage in `project::emit_program` so it can emit the
+        //      db-enabled Cargo.toml, mod.rs, and the `into_sql_param` /
+        //      `into_field_param` impl blocks.
+        //
+        // The injection is skipped when no Db kernel is used — a program with
+        // no `import Std.Db` is not affected.
+        if funcs.iter().any(|f| expr_uses_db_kernel(&f.body)) {
+            types_ir.push(TypeDef::Enum(self.synthetic_sqlvalue_enum()));
+            types_ir.push(TypeDef::Enum(self.synthetic_sqlfield_enum()));
+        }
+
         let records = self.collect_record_types()?;
 
         let module = Module {
@@ -413,6 +564,108 @@ impl<'a> Lowerer<'a> {
         Ok(Program {
             modules: vec![module],
         })
+    }
+
+    /// Synthesise the built-in `SqlValue` ADT as an [`EnumDef`].
+    ///
+    /// ```text
+    /// type SqlValue
+    ///     = SqlString String
+    ///     | SqlInt Int
+    ///     | SqlFloat Float
+    ///     | SqlBool Bool
+    ///     | SqlBytes Bytes
+    ///     | SqlTime Int          -- Unix-millisecond timestamp
+    ///     | SqlNull SqlValue     -- self-referential witness; backend boxes it
+    /// ```
+    ///
+    /// Non-generic (no type parameters); the self-referential `SqlNull(SqlValue)`
+    /// field is detected as cyclic by `EmitCtx::is_cyclic_self_field` and boxed
+    /// at emission, exactly as user-defined recursive enums are.
+    fn synthetic_sqlvalue_enum(&self) -> EnumDef {
+        let b = self.builtins;
+        let sv = IrType::Enum {
+            name: b.sqlvalue,
+            args: Vec::new(),
+        };
+        EnumDef {
+            name: b.sqlvalue,
+            type_params: Vec::new(),
+            variants: vec![
+                Variant {
+                    name: b.sql_string,
+                    fields: vec![IrType::Str],
+                },
+                Variant {
+                    name: b.sql_int,
+                    fields: vec![IrType::Int],
+                },
+                Variant {
+                    name: b.sql_float,
+                    fields: vec![IrType::Float],
+                },
+                Variant {
+                    name: b.sql_bool,
+                    fields: vec![IrType::Bool],
+                },
+                Variant {
+                    name: b.sql_bytes,
+                    fields: vec![IrType::Bytes],
+                },
+                Variant {
+                    name: b.sql_time,
+                    fields: vec![IrType::Int],
+                },
+                // SqlDecimal and SqlMoney carry their value as a lossless String
+                // representation — decimal digits for SqlDecimal,
+                // "ISO_CODE AMOUNT" for SqlMoney.  Using IrType::Str is the
+                // minimal wiring until a native IrType::Decimal is added.
+                Variant {
+                    name: b.sql_decimal,
+                    fields: vec![IrType::Str],
+                },
+                Variant {
+                    name: b.sql_money,
+                    fields: vec![IrType::Str],
+                },
+                // SqlNull wraps a SqlValue (type witness, discarded by
+                // `into_sql_param`).  The self-edge makes the enum recursive;
+                // the backend boxes this field automatically.
+                Variant {
+                    name: b.sql_null,
+                    fields: vec![sv],
+                },
+            ],
+        }
+    }
+
+    /// Synthesise the built-in `SqlField` ADT as an [`EnumDef`].
+    ///
+    /// ```text
+    /// type SqlField
+    ///     = SetField SqlValue   -- SET this column to the given param value
+    ///     | OmitField           -- omit this column from the generated SQL
+    /// ```
+    fn synthetic_sqlfield_enum(&self) -> EnumDef {
+        let b = self.builtins;
+        let sv = IrType::Enum {
+            name: b.sqlvalue,
+            args: Vec::new(),
+        };
+        EnumDef {
+            name: b.sqlfield,
+            type_params: Vec::new(),
+            variants: vec![
+                Variant {
+                    name: b.set_field,
+                    fields: vec![sv],
+                },
+                Variant {
+                    name: b.omit_field,
+                    fields: Vec::new(),
+                },
+            ],
+        }
     }
 
     /// Lower a union declaration into the IR enum: its quantified type variables
@@ -1122,6 +1375,17 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::Decoder(Box::new(inner)))
                 }
+                // `Db` — the opaque connection pool handle introduced by M5b-db.
+                // Zero type arguments; maps to `sky_runtime::Db`.
+                "Db" => Ok(IrType::Db),
+                // `SqlValue` / `SqlField` — the builtin-injected ADT enums for
+                // typed SQL parameters (M5b-db). Resolved as `IrType::Enum` so the
+                // backend emits the generated `StdDbSqlValue` / `StdDbSqlField`
+                // Rust enum name at use sites.
+                "SqlValue" | "SqlField" => Ok(IrType::Enum {
+                    name: *name,
+                    args: Vec::new(),
+                }),
                 _ if self.enum_variants.contains_key(name) => {
                     // A use-site enum type carries its solved type arguments, so
                     // `Opt Int` → `Enum { Opt, [Int] }` (rendered `MainOpt<i64>`).
@@ -2004,7 +2268,24 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HttpGet
                 | KernelFn::HttpRequest
                 | KernelFn::HttpParseQuery
-                | KernelFn::HttpDefaultRequest,
+                | KernelFn::HttpDefaultRequest
+                // ── Db arity-1 (M5b-db) ───────────────────────────────────────
+                // `DbConnect : () -> Task Error Db` — takes unit
+                | KernelFn::DbConnect
+                // `DbClose : Db -> Task Error ()` — takes the pool handle
+                | KernelFn::DbClose
+                // ── Db.Decode arity-1 (M5b-db) ────────────────────────────────
+                // Primitive column decoders: `String -> Decoder T`
+                | KernelFn::DbDecString
+                | KernelFn::DbDecInt
+                | KernelFn::DbDecFloat
+                | KernelFn::DbDecBool
+                // `nullable : Decoder a -> Decoder (Maybe a)`
+                | KernelFn::DbDecNullable
+                // `succeed : a -> Decoder a`
+                | KernelFn::DbDecSucceed
+                // `fail : String -> Decoder a`
+                | KernelFn::DbDecFail,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -2100,7 +2381,26 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HttpPost
                 | KernelFn::HttpWithMethod
                 | KernelFn::HttpWithTimeout
-                | KernelFn::HttpWithBody,
+                | KernelFn::HttpWithBody
+                // ── Db arity-2 (M5b-db) ───────────────────────────────────────
+                // `DbOpen : String -> String -> Task Error Db`
+                | KernelFn::DbOpen
+                // `DbExecRaw : Db -> String -> Task Error Int`
+                | KernelFn::DbExecRaw
+                // pure row helpers: `String -> Dict String String -> T`
+                | KernelFn::DbGetString
+                | KernelFn::DbGetInt
+                | KernelFn::DbGetBool
+                | KernelFn::DbGetField
+                // `DbWithTransaction : Db -> (Db -> Task Error a) -> Task Error a`
+                | KernelFn::DbWithTransaction
+                // `DbMigrate : Db -> List (String, String) -> Task Error (List String)`
+                | KernelFn::DbMigrate
+                // ── Db.Decode arity-2 (M5b-db) ────────────────────────────────
+                // `map : (a -> b) -> Decoder a -> Decoder b`
+                | KernelFn::DbDecMap
+                // `andThen : (a -> Decoder b) -> Decoder a -> Decoder b`
+                | KernelFn::DbDecAndThen,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::StringReplace
@@ -2122,12 +2422,61 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CryptoRsaSha256Verify
                 // ── Http arity-3 (M5b) ───────────────────────────────────────
                 // `HttpWithHeader` : String -> String -> HttpRequest -> HttpRequest
-                | KernelFn::HttpWithHeader,
+                | KernelFn::HttpWithHeader
+                // ── Db arity-3 (M5b-db) ───────────────────────────────────────
+                // `DbExec : Db -> String -> List SqlValue -> Task Error Int`
+                | KernelFn::DbExec
+                // `DbQuery : Db -> String -> List SqlValue -> Task Error (List Row)`
+                | KernelFn::DbQuery
+                // `DbInsertRow : Db -> String -> List (String, String) -> Task Error Int`
+                | KernelFn::DbInsertRow
+                // `DbGetById : Db -> String -> String -> Task Error (Maybe Row)`
+                | KernelFn::DbGetById
+                // `DbDeleteById : Db -> String -> String -> Task Error Int`
+                | KernelFn::DbDeleteById
+                // `DbFindByConditions : Db -> String -> Dict String String -> Task Error (List Row)`. Arity 3.
+                | KernelFn::DbFindByConditions
+                // `DbInsertFields : Db -> String -> List (String, SqlField) -> Task Error Int`
+                | KernelFn::DbInsertFields
+                // ── Db.Decode arity-3 (M5b-db) ────────────────────────────────
+                // `map2 : (a -> b -> c) -> Decoder a -> Decoder b -> Decoder c`
+                | KernelFn::DbDecMap2
+                // `required : String -> Decoder a -> Decoder (a -> b) -> Decoder b`
+                | KernelFn::DbDecRequired,
             ) => Ok(3),
             // ── JsonDec arity-4 (M4h) ─────────────────────────────────────────
-            Callee::Kernel(KernelFn::JsonDecMap3 | KernelFn::JsonDecPOptional) => Ok(4),
+            Callee::Kernel(
+                KernelFn::JsonDecMap3
+                | KernelFn::JsonDecPOptional
+                // ── Db arity-4 (M5b-db) ───────────────────────────────────────
+                // `DbQueryDecode : Db -> String -> List SqlValue -> Decoder a -> Task Error (List a)`
+                | KernelFn::DbQueryDecode
+                // `DbUpdateById : Db -> String -> String -> List (String, String) -> Task Error Int`
+                | KernelFn::DbUpdateById
+                // `DbFindOneByField : Db -> String -> String -> String -> Task Error (Maybe Row)`
+                | KernelFn::DbFindOneByField
+                // `DbFindManyByField : Db -> String -> String -> String -> Task Error (List Row)`
+                | KernelFn::DbFindManyByField
+                // `DbUnsafeFindWhere : Db -> String -> String -> List String -> Task Error (List Row)`. Arity 4.
+                // The List String provides parameterized SQL bindings (? placeholders) — injection-safe.
+                | KernelFn::DbUnsafeFindWhere
+                // `DbUpdateFields : Db -> String -> List (String, SqlValue) -> List (String, SqlField) -> Task Error Int`
+                | KernelFn::DbUpdateFields
+                // ── Db.Decode arity-4 (M5b-db) ────────────────────────────────
+                // `map3 : (a->b->c->d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d`
+                | KernelFn::DbDecMap3
+                // `optional : String -> Decoder a -> a -> Decoder (a->b) -> Decoder b`
+                | KernelFn::DbDecOptional,
+            ) => Ok(4),
             // ── JsonDec arity-5 (M4h) ─────────────────────────────────────────
-            Callee::Kernel(KernelFn::JsonDecMap4) => Ok(5),
+            Callee::Kernel(
+                KernelFn::JsonDecMap4
+                // ── Db arity-5 (M5b-db) ───────────────────────────────────────
+                // `DbInsertFieldsReturning : Db -> String -> List (String, SqlField) -> String -> Decoder a -> Task Error (List a)`
+                | KernelFn::DbInsertFieldsReturning
+                // `map4 : (a->b->c->d->e) -> Da -> Db -> Dc -> Dd -> De`
+                | KernelFn::DbDecMap4,
+            ) => Ok(5),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -2481,6 +2830,48 @@ impl<'a> Lowerer<'a> {
                     ("Http", "withTimeout") => Ok(Callee::Kernel(KernelFn::HttpWithTimeout)),
                     ("Http", "withBody") => Ok(Callee::Kernel(KernelFn::HttpWithBody)),
                     ("Http", "withHeader") => Ok(Callee::Kernel(KernelFn::HttpWithHeader)),
+                    // ── Db kernels (M5b-db) ──────────────────────────────────
+                    ("Db", "connect") => Ok(Callee::Kernel(KernelFn::DbConnect)),
+                    ("Db", "open") => Ok(Callee::Kernel(KernelFn::DbOpen)),
+                    ("Db", "close") => Ok(Callee::Kernel(KernelFn::DbClose)),
+                    ("Db", "execRaw") => Ok(Callee::Kernel(KernelFn::DbExecRaw)),
+                    ("Db", "exec") => Ok(Callee::Kernel(KernelFn::DbExec)),
+                    ("Db", "query") => Ok(Callee::Kernel(KernelFn::DbQuery)),
+                    ("Db", "queryDecode") => Ok(Callee::Kernel(KernelFn::DbQueryDecode)),
+                    ("Db", "getString") => Ok(Callee::Kernel(KernelFn::DbGetString)),
+                    ("Db", "getInt") => Ok(Callee::Kernel(KernelFn::DbGetInt)),
+                    ("Db", "getBool") => Ok(Callee::Kernel(KernelFn::DbGetBool)),
+                    ("Db", "getField") => Ok(Callee::Kernel(KernelFn::DbGetField)),
+                    ("Db", "insertRow") => Ok(Callee::Kernel(KernelFn::DbInsertRow)),
+                    ("Db", "getById") => Ok(Callee::Kernel(KernelFn::DbGetById)),
+                    ("Db", "updateById") => Ok(Callee::Kernel(KernelFn::DbUpdateById)),
+                    ("Db", "deleteById") => Ok(Callee::Kernel(KernelFn::DbDeleteById)),
+                    ("Db", "findOneByField") => Ok(Callee::Kernel(KernelFn::DbFindOneByField)),
+                    ("Db", "findManyByField") => Ok(Callee::Kernel(KernelFn::DbFindManyByField)),
+                    ("Db", "findByConditions") => Ok(Callee::Kernel(KernelFn::DbFindByConditions)),
+                    ("Db", "unsafeFindWhere") => Ok(Callee::Kernel(KernelFn::DbUnsafeFindWhere)),
+                    ("Db", "insertFields") => Ok(Callee::Kernel(KernelFn::DbInsertFields)),
+                    ("Db", "updateFields") => Ok(Callee::Kernel(KernelFn::DbUpdateFields)),
+                    ("Db", "insertFieldsReturning") => {
+                        Ok(Callee::Kernel(KernelFn::DbInsertFieldsReturning))
+                    }
+                    ("Db", "withTransaction") => Ok(Callee::Kernel(KernelFn::DbWithTransaction)),
+                    ("Db", "migrate") => Ok(Callee::Kernel(KernelFn::DbMigrate)),
+                    // ── Db.Decode kernels (M5b-db) ────────────────────────────
+                    ("Db.Decode", "string") => Ok(Callee::Kernel(KernelFn::DbDecString)),
+                    ("Db.Decode", "int") => Ok(Callee::Kernel(KernelFn::DbDecInt)),
+                    ("Db.Decode", "float") => Ok(Callee::Kernel(KernelFn::DbDecFloat)),
+                    ("Db.Decode", "bool") => Ok(Callee::Kernel(KernelFn::DbDecBool)),
+                    ("Db.Decode", "nullable") => Ok(Callee::Kernel(KernelFn::DbDecNullable)),
+                    ("Db.Decode", "map") => Ok(Callee::Kernel(KernelFn::DbDecMap)),
+                    ("Db.Decode", "andThen") => Ok(Callee::Kernel(KernelFn::DbDecAndThen)),
+                    ("Db.Decode", "succeed") => Ok(Callee::Kernel(KernelFn::DbDecSucceed)),
+                    ("Db.Decode", "fail") => Ok(Callee::Kernel(KernelFn::DbDecFail)),
+                    ("Db.Decode", "map2") => Ok(Callee::Kernel(KernelFn::DbDecMap2)),
+                    ("Db.Decode", "map3") => Ok(Callee::Kernel(KernelFn::DbDecMap3)),
+                    ("Db.Decode", "map4") => Ok(Callee::Kernel(KernelFn::DbDecMap4)),
+                    ("Db.Decode", "required") => Ok(Callee::Kernel(KernelFn::DbDecRequired)),
+                    ("Db.Decode", "optional") => Ok(Callee::Kernel(KernelFn::DbDecOptional)),
                     // A kernel beyond the wired set.
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),
