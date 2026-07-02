@@ -372,6 +372,7 @@ fn bare_function_reference_lowers_to_func_value() -> DResult<()> {
     let body = Located::new(
         body_span,
         canon::Expr_::VarKernel {
+            id: None,
             module,
             name: fname,
         },
@@ -428,6 +429,7 @@ fn function_value_in_record_field_is_unsupported() -> DResult<()> {
     let field_value = Located::new(
         field_span,
         canon::Expr_::VarKernel {
+            id: None,
             module,
             name: fname,
         },
@@ -556,6 +558,7 @@ fn unknown_kernel_call() -> DResult<()> {
     let callee_ref = Box::new(Located::new(
         Span::new(92, 100),
         canon::Expr_::VarKernel {
+            id: None,
             module,
             name: fname,
         },

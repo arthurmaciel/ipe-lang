@@ -296,7 +296,15 @@ mod tests {
             matches!(outer, Some((Expr_::VarKernel { .. }, _))),
             "main body is a call to a kernel"
         );
-        let Some((Expr_::VarKernel { module, name }, outer_args)) = outer else {
+        let Some((
+            Expr_::VarKernel {
+                id: _,
+                module,
+                name,
+            },
+            outer_args,
+        )) = outer
+        else {
             return;
         };
         assert_eq!(i.resolve(*module), Some("Log"));
@@ -312,7 +320,15 @@ mod tests {
             matches!(mid, Some((Expr_::VarKernel { .. }, _))),
             "arg is a call to a kernel"
         );
-        let Some((Expr_::VarKernel { module, name }, mid_args)) = mid else {
+        let Some((
+            Expr_::VarKernel {
+                id: _,
+                module,
+                name,
+            },
+            mid_args,
+        )) = mid
+        else {
             return;
         };
         assert_eq!(i.resolve(*module), Some("String"));
@@ -1337,6 +1353,7 @@ mod tests {
     /// entirely (e.g. `"Log"`, `"PubSub"`) are skipped automatically.
     #[test]
     fn canon_equals_registry() {
+        use crate::env::VarHome;
         use sky_intern::Interner;
         use sky_kernels::StdlibKernel;
 
@@ -1388,6 +1405,81 @@ mod tests {
                  the Phase-A registry-population loop in install_prelude_qualifiers \
                  must have skipped it",
             );
+        }
+
+        // ── G1 reverse check (Phase B): canon → registry ─────────────────────
+        // For every qual_vars entry that carries id = Some(actual_sk) (i.e.
+        // was resolved against stdlib_index at parse time), verify that the
+        // stored id EXACTLY MATCHES stdlib_index[(qual, name)].
+        //
+        // SCOPE — propagation wiring only: verifies that
+        // install_prelude_qualifiers stored the id it read from stdlib_index,
+        // not some transposed or stale copy.  It does NOT verify injectivity
+        // of decl() (covered by sky_kernels::tests::no_colliding_qualifier_name_pairs)
+        // and does NOT verify decl-equiv-legacy equivalence (covered by
+        // sky_lower::tests::decl_equiv_legacy_match).
+        //
+        // Excluded qualifier namespaces (sanctioned aliases — their members
+        // share ids with the canonical qualifier but have DIFFERENT qual_syms,
+        // so stdlib_index keys differ; the forward check already covers the
+        // canonical side):
+        //   Basics, Attr, Event                    — non-module prelude names
+        //   Std.Html, Std.Ui, Std.Html.Attributes,
+        //   Std.Html.Events, Std.Live, Std.Tui, Std.Webview  — Std.* aliases
+        //   Sky.Html, Sky.Ui, Sky.Live, Sky.Tui    — Sky.* aliases
+        //
+        // Note: QUALIFIER_ALIASES clone their members INCLUDING the id, so the
+        // alias entries are correct by construction.  The exclusion exists only
+        // because stdlib_index is keyed by (canonical_qual, name) so a lookup
+        // for (alias_qual, name) would return None — giving a false failure.
+        let excluded_quals: std::collections::BTreeSet<&str> = [
+            "Basics",
+            "Attr",
+            "Event",
+            "Std.Html",
+            "Std.Ui",
+            "Std.Html.Attributes",
+            "Std.Html.Events",
+            "Std.Live",
+            "Std.Tui",
+            "Std.Webview",
+            "Sky.Html",
+            "Sky.Ui",
+            "Sky.Live",
+            "Sky.Tui",
+        ]
+        .into_iter()
+        .collect();
+
+        for (qual_sym, members) in &env.qual_vars {
+            let qual_str = interner.resolve(*qual_sym).unwrap_or("<unknown>");
+            if excluded_quals.contains(qual_str) {
+                continue;
+            }
+            for (name_sym, home) in members {
+                if let VarHome::Kernel(Some(actual_sk), m, f) = home {
+                    // This entry carries a pre-resolved id — verify it against
+                    // stdlib_index using the CANONICAL (module, name) stored in
+                    // VarHome, not the qual_vars KEY.
+                    //
+                    // For plain entries: m == qual_sym, f == name_sym.
+                    // For FUNC_ALIASES: name_sym is the ALIAS (e.g. "htmlRender")
+                    // while f is the CANONICAL name (e.g. "render").  stdlib_index
+                    // is keyed by (qual_sym, canonical_name), so using (m, f) is
+                    // always correct for both.
+                    let expected = env.stdlib_index.get(&(*m, *f));
+                    let name_str = interner.resolve(*name_sym).unwrap_or("<unknown>");
+                    let canon_str = interner.resolve(*f).unwrap_or("<unknown>");
+                    assert_eq!(
+                        Some(actual_sk),
+                        expected,
+                        "G1 reverse: VarHome::Kernel in qual_vars[{qual_str:?}][{name_str:?}] \
+                         (canonical fn={canon_str:?}) has id={actual_sk:?} but \
+                         stdlib_index has {expected:?}; \
+                         install_prelude_qualifiers propagation is incorrect",
+                    );
+                }
+            }
         }
     }
 }

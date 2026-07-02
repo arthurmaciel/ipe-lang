@@ -17,6 +17,7 @@
 //! canonicaliser, retiring the parallel `(Symbol, Symbol)` table.
 
 #![allow(clippy::module_name_repetitions)] // KernelId / KernelClass / FfiKernelId all contain "Kernel"
+#![forbid(unsafe_code)]
 
 /// Classification of a kernel variant by which compiler / runtime subsystem
 /// owns its emission.
@@ -1805,4 +1806,62 @@ pub enum KernelId {
     Stdlib(StdlibKernel),
     /// A user-provided FFI binding (Phase A stub).
     Ffi(FfiKernelId),
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::StdlibKernel;
+
+    /// Verifies that no two non-internal variants in [`StdlibKernel::ALL`] share
+    /// the same `(qualifier, name)` pair.
+    ///
+    /// A collision in `decl()` would let `stdlib_index`'s silent last-wins insert
+    /// silently alias one variant onto another, making `id = Some(k)` ambiguous:
+    /// the variant stored in the index would not necessarily be the one `decl()`
+    /// names, and the Phase B fast path would fire with the wrong variant.
+    ///
+    /// MECHANICAL: built from `ALL` + `decl()` only — no read of `stdlib_index`
+    /// or any runtime state.  Fails deterministically on any transposition in
+    /// `decl()` that creates a duplicate `(qualifier, name)` pair, regardless of
+    /// whether the compiler is ever invoked.
+    #[test]
+    fn no_colliding_qualifier_name_pairs() {
+        let mut seen: HashMap<(&'static str, &'static str), StdlibKernel> = HashMap::new();
+        let mut non_internal_count: usize = 0;
+
+        for &sk in StdlibKernel::ALL {
+            let decl = sk.decl();
+            // Skip internal-only entries (qualifier starts with '_', e.g.
+            // ResultOkDefault whose qualifier is "_internal_").  These are never
+            // inserted into stdlib_index and need not be injective with respect
+            // to the public namespace.
+            if decl.qualifier.starts_with('_') {
+                continue;
+            }
+            non_internal_count += 1;
+            let prior = seen.insert((decl.qualifier, decl.name), sk);
+            assert!(
+                prior.is_none(),
+                "COLLISION in StdlibKernel::decl(): \
+                 StdlibKernel::{sk:?} and StdlibKernel::{prior:?} \
+                 both declare (qualifier={:?}, name={:?}). \
+                 decl() must be injective over non-internal ALL variants; \
+                 stdlib_index's last-wins insert would silently drop one.",
+                decl.qualifier, decl.name,
+            );
+        }
+
+        // Sanity: the HashMap length must equal the non-internal variant count.
+        assert_eq!(
+            seen.len(),
+            non_internal_count,
+            "HashMap len ({}) != non-internal variant count ({}); loop accounting broken",
+            seen.len(),
+            non_internal_count,
+        );
+    }
 }

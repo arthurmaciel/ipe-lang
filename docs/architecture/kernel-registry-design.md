@@ -266,3 +266,109 @@ And it **is** the M4 registry the FFI consumer port blocks on: `KernelEntry` / `
 3. **The six no-stdlib-module holed families** — `Encoding`, `JsonEnc`, `JsonDec`, `JsonDecP`, `Jwt`, `Uuid` (42 kernels): no import escape hatch, holed under all user actions → highest-value first schemes.
 4. Remaining holed families (the other eight of the 14), each closing its slice of the ~231 exit-0-then-cargo-fail holes as it lands.
 5. App-entry families (`LiveApp` / `TuiApp` / `TuiProgram` / `WebviewApp`) — already hand-schemed in lockstep, structurally unlike the scalar families; migrate last, as the closed-record-cfg proving ground that the registry formalises the lockstep they currently maintain by hand.
+
+---
+
+## Phase C re-review (post-B, 2026-07-02)
+
+Re-validation of the Phase C section against the codebase after Phase A/B
+landed. **Verdict: GO WITH ADJUSTMENTS.** The mechanism is sound and the
+parsed id is available at the constrain site; five concrete entry conditions
+tighten the impl. Refreshed anchors and the adjustments follow.
+
+### Refreshed anchors (drift from the pre-A citations)
+
+| Spec citation | Current anchor | Note |
+|---|---|---|
+| `constrain.rs:4069 _ => Ty::Var(u32::MAX)` (lines 13, 33) | `constrain.rs:4076` | moved +7 |
+| `kernel_ty` at `constrain.rs:1881` (line 33) | `constrain.rs:1888` (`:1881` is now the close of the prior fn) | header moved |
+| VarKernel constrain arm | `constrain.rs:1483` (destructures `id: _`); scheme entry `constrain_var_kernel` at `:1435` | new post-B site |
+| `KernelFn` closed enum in `sky_ir` (`ir.rs:822`), "~394 variants" (lines 12, 39) | `StdlibKernel` now lives in leaf `sky_kernels` (`lib.rs`), **424** variants; `KernelFn` is an alias | Phase A relocated the enum + count |
+| "the ~377-arm `&str` table is **deleted**" from `lower.rs` (line 133) / Q2 | still present as the **id=None** legacy arm (`lower.rs:4050–4065`, tail `SKY-L0108` at `:4065`); dual-backed, not deleted | Q2 describes the Phase D/E end-state, not post-B reality |
+| canon `QUALIFIERS` hand-block replaced (line 125) | `stdlib_index` built from `ALL` in `env.rs:1012+`; install fast-path at `env.rs:192` | landed as specified |
+
+The `~231 holes / 14 families / ~173 arms` figures are pre-A estimates and
+were not re-counted; treat as approximate.
+
+### Adjustments (tightened Phase C entry conditions)
+
+1. **Build-graph prerequisite — add the `sky_types → sky_kernels` edge FIRST.**
+   `sky_types/Cargo.toml` deps are `sky_intern, sky_diagnostics, sky_canon,
+   sky_parse` — **no `sky_kernels`**. The canon node already carries
+   `id: Option<StdlibKernel>` (`sky_canon/src/ast.rs:138`) and the constrain
+   arm already binds it (`id: _`, `constrain.rs:1484`), so threading is
+   additive — but to *name* `StdlibKernel` (declare `stdlib_scheme(k:
+   StdlibKernel)`, match `Some(k)`) `sky_types` must gain
+   `sky_kernels = { path = "../sky_kernels" }`. `sky_kernels` is a leaf
+   (`sky_intern` + `sky_diagnostics` only) → clean down-edge, no cycle. The
+   spec's edge table (Q1) anticipated this; Phase A/B added it to `sky_canon`
+   only.
+
+2. **Fail-close belongs in `constrain_var_kernel`, not in `kernel_ty`.**
+   `kernel_ty` returns bare `Ty` (`:1888`); its `_ => Ty::Var(u32::MAX)`
+   (`:4076`) cannot raise a diagnostic. `constrain_var_kernel` returns
+   `DResult<VarId>` (`:1435`). Phase C must make `kernel_ty` (or its
+   successor) return `Option<Ty>` and surface the miss in
+   `constrain_var_kernel` as `Err(unsupported(span, Feature::Kernels))` —
+   byte-for-shape with lower's `SKY-L0108` (`lower.rs:4065`). Recommend the
+   Phase C signature `stdlib_scheme(StdlibKernel) -> Option<Ty>` (None =
+   not-yet-migrated) so the dual-lookup is `id.and_then(stdlib_scheme)
+   .or_else(|| legacy_kernel_ty(module, name))` and Phase E's seal is the
+   single fact "stdlib_scheme is now total (never None)".
+
+3. **Family order: String first is correct and safest; Math carries a hidden
+   obligation.** The min/max ordering obligation and the Dict/Set
+   `key_obligation` are attached in `constrain_var_kernel`
+   (`:1436–1442`, `:1443–1451`) — **outside `kernel_ty`**. Migrating a
+   family's scheme into `stdlib_scheme` does **not** carry these bounds; if
+   Math lands without re-encoding the min/max `Ord` super-var into
+   `stdlib_scheme(MathMin/MathMax)` (or retaining the pre-check), it reopens
+   the bare-unbounded-min/max gate (records / functions accepted, then
+   `cargo` E0277). `String` and `List` have no obligation pre-check → clean.
+   **Recommended first cut: String → List → Math**, with Math's obligation
+   encoded deliberately and pinned by the `Math.min f g` / `Math.min recA
+   recB` rejection probes. Dict/Set (same class) stay behind Math until the
+   `Hash + Eq + Ord` bound is proven in-scheme.
+
+4. **Add a scheme-parity tripwire alongside the burndown.** The forward
+   `canon_equals_registry` (`sky_canon/src/lib.rs:1355`) and the reverse
+   id-match check (`:1410`) pin canon↔registry identity, and they stay
+   meaningful as schemes migrate because they touch identity, not schemes.
+   They do **not** guard the relocation of `Ty`. Phase C must add, per
+   migrated kernel, `stdlib_scheme(k) ≡ kernel_ty(decl(k).qualifier,
+   decl(k).name)` (structural `Ty` equality) — the Go-parity proof that the
+   move was byte-faithful — plus the spec's monotone-decreasing legacy-tail
+   burndown (Q5). Together these keep the dual state honest: every kernel is
+   registry-backed **or** legacy-backed, never mis-typed, never neither.
+
+5. **G1 makes the delegation key provably unambiguous — in three parts.**
+   - **Injectivity** (`decl()` maps no two variants to the same `(qual,name)`)
+     is delivered by `sky_kernels::tests::no_colliding_qualifier_name_pairs`.
+     A collision would make `stdlib_index`'s last-wins insert silently alias
+     one variant onto another, breaking the `id = Some(k)` uniqueness
+     guarantee.
+   - **Decl-equiv-legacy equivalence** (`decl(k).(qualifier,name)` matches
+     the legacy string-match arm for every wired kernel) is delivered by
+     `sky_lower::tests::decl_equiv_legacy_match`.  That test forces `id = None`
+     so the legacy path runs; a wrong or missing arm causes the assert to fail.
+   - **Propagation wiring** (the G1 reverse check in `canon_equals_registry`)
+     verifies only that `install_prelude_qualifiers` stored the id it read from
+     `stdlib_index`, not that `decl()` is injective or that the legacy arm is
+     correct.
+   Together the three gates make `id = Some(k)` unambiguous and
+   `decl(k).(qualifier,name)` provably equal to the node's `(module,name)` —
+   the property Phase E needs to drop `module`/`name` from the `VarKernel`
+   node entirely and delegate purely by `decl(k)`.
+
+### Soundness of the incremental dual state — confirmed
+
+The split is sound because the constrain arm mirrors lower's dual-backing
+exactly: `id = Some(k)` → `stdlib_scheme(k)` then legacy; `id = None` (FFI
+`Rust.*` and any name absent from `stdlib_index`) → legacy `(module,name)`.
+No family is silently mis-typed: a migrated family is total in
+`stdlib_scheme`; an un-migrated one is untouched legacy; a miss on both is
+loud (`SKY-L0108`-shaped) rather than the current silent `Ty::Var(u32::MAX)`
+exit-0-then-cargo-fail. The one edge the original prose under-specified is
+the **un-migrated `Some`** case — it must fall to legacy just like `None`,
+which the `Option<Ty>`-returning `stdlib_scheme` (adjustment 2) makes
+structural rather than a second conditional.

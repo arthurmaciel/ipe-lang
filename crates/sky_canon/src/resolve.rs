@@ -1128,7 +1128,8 @@ fn resolve_var(name: Symbol, span: Span, env: &Env, interner: &Interner) -> DRes
             module: module.clone(),
             name,
         }),
-        Some(VarHome::Kernel(m, f)) => Ok(canon::Expr_::VarKernel {
+        Some(VarHome::Kernel(id, m, f)) => Ok(canon::Expr_::VarKernel {
+            id: *id,
             module: *m,
             name: *f,
         }),
@@ -1171,7 +1172,8 @@ fn resolve_qual_var(
         });
     };
     match members.get(&name) {
-        Some(VarHome::Kernel(m, f)) => Ok(canon::Expr_::VarKernel {
+        Some(VarHome::Kernel(id, m, f)) => Ok(canon::Expr_::VarKernel {
+            id: *id,
             module: *m,
             name: *f,
         }),
