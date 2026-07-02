@@ -18,7 +18,7 @@ or stdlib code was touched.
 | `runtime-rust/scripts/lib/equiv_tui_grid.py` | `scripts/lib/equiv_tui_grid.py` | **verbatim** (backend-agnostic) |
 | `runtime-rust/scripts/equiv-classification.tsv` | `scripts/equiv-classification.tsv` | **verbatim** (overrides-only manifest) |
 | `plugins/sky-rust-backend/skills/examples-sweep/SKILL.md` | `plugins/sky-compiler/skills/examples-sweep/SKILL.md` | rewrote paths + skyc invocation + phased-parity section |
-| `.github/workflows/examples-sweep.yml` | `.github/workflows/examples-sweep.yml` | ubuntu+macOS matrix; cargo-build skyc; BUILD+RUN sweep; artifact + summary; phase-2 EQUIV stub commented |
+| `.github/workflows/examples-sweep.yml` | `.github/workflows/examples-sweep.yml` | ubuntu+macOS matrix; cargo-build skyc; BUILD+RUN sweep; artifact + summary; phase-2 EQUIV stub commented. **Windows is now in-scope** — the original "add when skyc matures" deferral is retired; see `docs/architecture/windows-ci-support.md` for the full `windows-latest` design (Git-Bash reuse, webview RUN via WebView2/no-xvfb, tui SKIP, `.exe` handle-lock reap, CRLF normalization, per-OS informational-first gating). |
 
 ## Key adaptation — `skyc`, not the Haskell `sky`
 
