@@ -87,6 +87,24 @@ const RUNTIME_MOD_RS_SERVER_APPEND: &str =
 /// `sky_runtime::ui::element::Attribute` path instead.
 const RUNTIME_MOD_RS_UI_APPEND: &str = "pub mod html;\npub use html::*;\npub mod ui;\n";
 
+// ── Phase-1c: Std.Tui / Sky.Tui ─────────────────────────────────────────────
+
+/// Lines appended to `sky_runtime/mod.rs` when the program uses Std.Tui /
+/// Sky.Tui app-entry kernels.
+///
+/// Both `tui/app.rs` and `tui/layout.rs` (and their dependencies `cell.rs`,
+/// `diff.rs`, `focus.rs`, `key.rs`) are gated by the `tui` Cargo feature in the
+/// runtime source.  This addition wires `tui::tui_app` and `tui::tui_app_ui`
+/// into the module namespace so the generated `main.rs` can call them via
+/// `sky_runtime::tui::tui_app_ui`.
+///
+/// The `ui` module must also be loaded (tui/layout.rs imports `super::ui::Element`)
+/// — but `uses_ui` is set whenever `uses_tui` is set (a Tui app always references
+/// Std.Ui Element/attribute kernels), so `RUNTIME_MOD_RS_UI_APPEND` is already
+/// appended by the time this addition fires.
+const RUNTIME_MOD_RS_TUI_APPEND: &str = "#[cfg(feature = \"tui\")]\npub mod tui;\n\
+     #[cfg(feature = \"tui\")]\npub use tui::{tui_app, tui_app_ui};\n";
+
 // ── Phase-1b: Std.Live / Sky.Live ───────────────────────────────────────────
 
 /// Lines appended to `sky_runtime/mod.rs` when the program uses Std.Live /
@@ -241,6 +259,15 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     } else {
         cargo_toml
     };
+    // Phase-1c: when the program uses Tui, add "tui" to the default features
+    // and inject the crossterm + unicode-width deps required by the tui runtime.
+    // The base manifest declares `tui = []` as a non-default feature; we promote
+    // it and add the deps so the compiled binary includes the `tui` module.
+    let cargo_toml = if ctx.uses_tui {
+        tui_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
     // mod.rs starts from the M0 default and gains extra `pub mod` lines for
     // each kernel group the program uses.
     let runtime_mod_rs = {
@@ -261,6 +288,10 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // Phase-1b: Std.Live / Sky.Live app-entry kernels.
         if ctx.uses_live {
             mod_rs.push_str(RUNTIME_MOD_RS_LIVE_APPEND);
+        }
+        // Phase-1c: Std.Tui / Sky.Tui app-entry kernels.
+        if ctx.uses_tui {
+            mod_rs.push_str(RUNTIME_MOD_RS_TUI_APPEND);
         }
         mod_rs
     };
@@ -492,6 +523,103 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
     result.push_str(step1.get(..anchor_pos).unwrap_or(""));
     result.push_str(LIVE_DEPS);
     result.push_str(step1.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the tui-enabled `Cargo.toml` from the given base manifest by:
+///
+/// 1. Adding `"tui"` to the `default` feature list.
+/// 2. Adding `"sync"` to the `tokio` dependency's feature list (`tui/app.rs`
+///    uses `tokio::sync::mpsc::unbounded_channel`).
+/// 3. Appending `crossterm` and `unicode-width` dependencies before
+///    `[profile.dev]`.  These two crates are the compile-time gates on the
+///    runtime's `tui` feature; the emitted project vendors the runtime source
+///    directly, so they MUST appear as explicit `[dependencies]` entries.
+///
+/// Called AFTER any server/live manifest extension so it composes on top of an
+/// already-modified manifest.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if any anchor string is absent — a
+/// golden-drift invariant violation (fail-loud, never a silent no-op that
+/// ships a broken manifest).
+fn tui_cargo_toml(base: &str) -> DResult<String> {
+    // All anchor consts must precede the first `let` statement.
+    const DEFAULT_PREFIX: &str = "default = [";
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    const TUI_DEPS: &str = "crossterm = \"0.28\"\nunicode-width = \"0.1\"\n\n";
+    // The tui runtime uses `tokio::sync::mpsc`; add `"sync"` when it is not
+    // yet present.  The base golden has only `"time"` in the tokio feature list;
+    // server_cargo_toml adds `"net", "sync"`; live_cargo_toml extends to include
+    // `"signal", "process"`.  We gate on the SMALLEST known form that lacks
+    // `"sync"` and replace it with the tui-extended form.  If `"sync"` is
+    // already present (because server_cargo_toml ran first) the replacen is a
+    // no-op and we do NOT error — `"sync"` is idempotent to add.
+    //
+    // Three anchors: non-server base, server-only (no live), live (superset).
+    // We check for the presence of `"sync"` and insert it only if absent.
+    const TOKIO_TIME_ONLY: &str =
+        r#"tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }"#;
+    const TOKIO_TIME_SYNC: &str = r#"tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }"#;
+
+    // Step 1 — promote the `tui` feature (generic closing-`]` anchor, same
+    // strategy as server_cargo_toml / live_cargo_toml).
+    let pfx = base
+        .find(DEFAULT_PREFIX)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::tui_cargo_toml",
+            detail: format!("Cargo.toml anchor {DEFAULT_PREFIX:?} not found — golden drifted"),
+        })?;
+    let search_from = pfx + DEFAULT_PREFIX.len();
+    let rel = base
+        .get(search_from..)
+        .and_then(|s| s.find(']'))
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::tui_cargo_toml",
+            detail: "default feature list has no closing ']' — golden drifted".to_owned(),
+        })?;
+    let close = search_from + rel;
+    let mut step1 = String::with_capacity(base.len() + 64);
+    step1.push_str(base.get(..close).unwrap_or(""));
+    step1.push_str(r#", "tui""#);
+    step1.push_str(base.get(close..).unwrap_or(""));
+
+    // Step 2 — add `"sync"` to tokio if not already present.
+    // If the manifest already has `"sync"` (from server_cargo_toml or
+    // live_cargo_toml) the `contains` check short-circuits and no change is
+    // made.  Only when the base tokio line lacks `"sync"` do we replace the
+    // known-anchor form (non-server base) with the sync-extended form.
+    let step2 = if step1.contains(r#""sync""#) {
+        // `"sync"` already present — idempotent, no change needed.
+        step1
+    } else {
+        // The only tokio line that can lack `"sync"` on a valid manifest is
+        // the non-server, non-live base form.  Fail-loud if the anchor drifted.
+        let replaced = step1.replacen(TOKIO_TIME_ONLY, TOKIO_TIME_SYNC, 1);
+        if replaced == step1 {
+            return Err(Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::project::tui_cargo_toml",
+                detail: format!(
+                    "tokio anchor {TOKIO_TIME_ONLY:?} not found and no \"sync\" present — \
+                     golden drifted; tui runtime requires tokio sync"
+                ),
+            });
+        }
+        replaced
+    };
+
+    // Step 3 — append crossterm + unicode-width before `[profile.dev]`.
+    let anchor_pos = step2
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::tui_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(step2.len() + TUI_DEPS.len());
+    result.push_str(step2.get(..anchor_pos).unwrap_or(""));
+    result.push_str(TUI_DEPS);
+    result.push_str(step2.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }
 

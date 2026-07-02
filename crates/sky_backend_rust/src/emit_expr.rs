@@ -2035,13 +2035,25 @@ fn emit_ui_call(
             Ok(Some(s))
         }
 
-        // ── App-entry stubs (Phase 0 — still stubs until Phase 2) ─────────────
-        KernelFn::TuiProgram | KernelFn::TuiApp | KernelFn::WebviewApp => {
-            Err(Diagnostic::CompilerBug {
-                where_: "sky_backend_rust::emit_ui_call",
-                detail: format!("kernel {k:?} is a Phase-0 stub — wired in Phase 2"),
-            })
+        // ── Tui app-entry kernels (Phase-1c — fully wired) ───────────────────
+        // Delegate to `emit_tui::emit_tui_call`; it returns `Some(s)` for the
+        // two Tui variants and `None` for anything else.  A `None` here is an
+        // internal error (the `k.is_tui()` guard already filtered), so promote
+        // it to a `CompilerBug`.
+        KernelFn::TuiProgram | KernelFn::TuiApp => {
+            let s = crate::emit_tui::emit_tui_call(ctx, callee, args, indent, child, generics)?
+                .ok_or_else(|| Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call",
+                    detail: format!("emit_tui returned None for Tui kernel {k:?} — missing arm"),
+                })?;
+            Ok(Some(s))
         }
+
+        // ── App-entry stub (Phase 0 — Webview still deferred) ─────────────────
+        KernelFn::WebviewApp => Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_ui_call",
+            detail: format!("kernel {k:?} is a Phase-0 stub — wired in Phase 2"),
+        }),
 
         // Any is_ui/live/tui/webview() variant not listed is a gap — hard error.
         _ => Err(Diagnostic::CompilerBug {
