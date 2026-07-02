@@ -259,3 +259,75 @@ locale-correct case mapping.
 
 *Rationale:* these complete the standard library's data-structure and
 text-handling surfaces for correctness across the full input domain.
+
+---
+
+## E. Designed compilation targets (specs approved; priority to be set)
+
+Each has a complete, security-reviewed design spec; sequencing against
+sections A–D is a product decision.
+
+### E.1 — WASM / browser target
+
+Compile ipê programs to WebAssembly so apps run client-side in the
+browser (TEA in the browser, reusing the ported VNode/diff to drive the
+real DOM), and support an online playground. The design fixes the
+public-bundle secret boundary at compile time (server-only effects are
+unrepresentable under `--target wasm`; a distinct `HydrationState` type
+gates what may enter the SSR hydration island) and preserves the
+no-eval / strict-CSP posture. Spec:
+[`wasm-target.md`](architecture/wasm-target.md).
+
+*Rationale:* client-side execution is what a real online experience
+requires; the capability matrix records exactly what does and does not
+cross to the browser.
+
+### E.2 — Static compilation (portable single binaries)
+
+Produce fully-static, portable binaries — musl on Linux, static-CRT on
+Windows, with an honest macOS limitation — with a pure-Rust **`dlmalloc`
+default allocator** (clears the musl-malloc throughput cliff without a C
+dependency, per the security-first order); mimalloc is an explicit,
+notice-emitting opt-in. Spec:
+[`static-compilation.md`](architecture/static-compilation.md).
+
+*Rationale:* single-binary distribution is the baseline for deployment;
+the allocator choice is set by the principle order (security over the
+concurrent-throughput headroom a C allocator would add).
+
+### E.3 — Language server (LSP)
+
+A salsa-backed, editor-agnostic language server: diagnostics, hover,
+go-to-definition, completion, semantic tokens, formatting, and rename —
+reusing the compiler's single type-checker (no divergent analyzer). Its
+headline feature is **TEA scaffolding** — snippets, code actions ("add
+`Msg` variant + matching `update` arm", "convert `main = Task.run` to a
+worker"), and lints/hints — delivered over standard LSP so it works in
+most editors. Every generated edit passes a `VerifiedEdit` gate that
+re-checks the whole edit blast radius, so a scaffold can never break the
+build. Spec: [`ipe-lsp.md`](architecture/ipe-lsp.md).
+
+*Rationale:* the editor experience is where TEA's ergonomics are taught;
+making scaffolds correct by construction keeps that experience
+trustworthy.
+
+### E.4 — TEA everywhere (opt-in worker shape)
+
+Make The Elm Architecture an opt-in program shape for every backend —
+including a headless `Std.Worker.program` (init / update / subscriptions,
+no view) for CLI and long-running processes, modelled on Elm's
+`Platform.worker`. Least-intrusive: existing entries (`main = Task.run`,
+`Live.app`, `Server.listen`) are byte-unchanged; TEA is strictly
+additive and reuses the ported TEA runtime. The headless loop terminates
+soundly by tracking live source-task liveness (a signal-only daemon
+stays alive for SIGTERM; a quiescent worker exits cleanly). Spec:
+[`tea-everywhere.md`](architecture/tea-everywhere.md).
+
+*Implementation invariants (from the design review, to enforce at build
+time):* sequence the counter Acquire-loads before `try_recv`; `select!`
+over mailbox-recv and a quit-notify so a full-mailbox daemon still
+observes SIGTERM; abort (not await) source tasks during the quit-drain.
+
+*Rationale:* TEA is the defining strength of the Elm family; extending
+it uniformly to CLI/worker programs — without forcing it where routes
+are the better model — makes that strength available everywhere.
