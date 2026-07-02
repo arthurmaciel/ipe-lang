@@ -16,6 +16,7 @@
 //! with. The [`sky_backend::Backend`] trait stays string-free.
 
 mod emit_expr;
+mod emit_live;
 mod emit_types;
 mod naming;
 mod preamble;
@@ -144,8 +145,8 @@ pub(crate) struct EmitCtx<'a> {
     pub(crate) uses_ui: bool,
     /// `true` when the program uses at least one `Std.Live` / `Sky.Live`
     /// app-entry kernel.  When set, the emitted project gains the `"live"`
-    /// Cargo feature.
-    #[allow(dead_code)] // Phase 0: field reserved for Phase 1 Cargo feature gating
+    /// Cargo feature, serde derives on all emitted types, and
+    /// `sky_runtime::live` wired into the runtime module set.
     pub(crate) uses_live: bool,
     /// `true` when the program uses at least one `Std.Tui` / `Sky.Tui`
     /// app-entry kernel.  When set, the emitted project gains the `"tui"`

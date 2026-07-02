@@ -87,6 +87,22 @@ const RUNTIME_MOD_RS_SERVER_APPEND: &str =
 /// `sky_runtime::ui::element::Attribute` path instead.
 const RUNTIME_MOD_RS_UI_APPEND: &str = "pub mod html;\npub use html::*;\npub mod ui;\n";
 
+// ── Phase-1b: Std.Live / Sky.Live ───────────────────────────────────────────
+
+/// Lines appended to `sky_runtime/mod.rs` when the program uses Std.Live /
+/// Sky.Live app-entry kernels.
+///
+/// `live/mod.rs` is gated by the `live` Cargo feature in the runtime source;
+/// this addition wires the `live` module (and its public re-exports `live_app`,
+/// `live_app_routed`, `live_render_static`, `live::route::Route`) into the
+/// module namespace so the generated `main.rs` can call them.
+///
+/// The `route` sub-module is referenced by path (`sky_runtime::live::route::Route`)
+/// not via `pub use live::*;` (to avoid surfacing the internal `store` / `req`
+/// internals in the top-level namespace).
+const RUNTIME_MOD_RS_LIVE_APPEND: &str = "#[cfg(feature = \"live\")]\npub mod live;\n\
+     #[cfg(feature = \"live\")]\npub use live::{live_app, live_app_routed, live_render_static};\n";
+
 /// The `SkyCmd<M>` and `SkySub<M>` project-level type aliases emitted when the
 /// program uses TEA kernels. Placed immediately after `runtime_bindings()` (the
 /// block that also contains `SkyTask<A>` and `Decoder<T>`).
@@ -207,8 +223,21 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         (CARGO_TOML.to_owned(), RUNTIME_CONFIG_RS.to_owned())
     };
     // Apply server manifest extension on top of whichever base was chosen above.
-    let cargo_toml = if ctx.uses_server {
+    // Phase-1b: Live also needs axum + tower-http (the live runtime uses axum
+    // internally).  Apply server_cargo_toml for both `uses_server` and
+    // `uses_live` (the function is idempotent when both flags are set because
+    // `server = []` is only inserted once via `replacen`).
+    let cargo_toml = if ctx.uses_server || ctx.uses_live {
         server_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
+    // Phase-1b: when the program uses Live, add "live" to the default features.
+    // The base manifest already declares `live = []` as a non-default feature;
+    // we just need to promote it to the `default` list so the compiled binary
+    // includes the `live` module.
+    let cargo_toml = if ctx.uses_live {
+        live_cargo_toml(&cargo_toml)?
     } else {
         cargo_toml
     };
@@ -228,6 +257,10 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // M7: Std.Ui / Std.Html render kernels.
         if ctx.uses_ui {
             mod_rs.push_str(RUNTIME_MOD_RS_UI_APPEND);
+        }
+        // Phase-1b: Std.Live / Sky.Live app-entry kernels.
+        if ctx.uses_live {
+            mod_rs.push_str(RUNTIME_MOD_RS_LIVE_APPEND);
         }
         mod_rs
     };
@@ -370,6 +403,95 @@ fn server_cargo_toml(base: &str) -> DResult<String> {
     result.push_str(step2.get(..anchor_pos).unwrap_or(""));
     result.push_str(SERVER_DEPS);
     result.push_str(step2.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the live-enabled `Cargo.toml` from the given base manifest by:
+///
+/// 1. Adding `"live"` to the `default` feature list.
+/// 2. Inserting `async-trait` and `serde_urlencoded` as explicit dependencies
+///    before the `[profile.dev]` section.
+///
+/// These two crates are required because the runtime's `live` feature enables
+/// code that imports them (`async-trait` in `live/store.rs` and
+/// `serde_urlencoded` in `live/form.rs`).  The emitted project vendors the
+/// runtime source directly, so these must appear as explicit `[dependencies]`
+/// in the emitted manifest.
+///
+/// The base manifest already declares `live = []` as a non-default feature
+/// (present in the M0 golden's `[features]` section).  This function promotes
+/// it by inserting `"live"` immediately before the closing `]` of the
+/// `default = [...]` line — the same generic anchor used by `server_cargo_toml`.
+///
+/// Called AFTER `server_cargo_toml` when both flags are set, so it is composed
+/// on top of a manifest that may already contain `"server"` in `default`.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if any anchor is absent — a
+/// golden-drift invariant violation.
+fn live_cargo_toml(base: &str) -> DResult<String> {
+    // All consts must precede the first `let` — `items_after_statements` (pedantic).
+    const DEFAULT_PREFIX: &str = "default = [";
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    // `async-trait` and `serde_urlencoded` are pulled by the runtime's `live`
+    // feature gate; the emitted project vendors the runtime source directly, so
+    // they must appear as explicit `[dependencies]` entries.
+    // `libc` is pulled by the runtime's `live` console-proxy (`libc::prctl`).
+    const LIVE_DEPS: &str = "async-trait = \"0.1\"\nserde_urlencoded = \"0.7\"\nlibc = \"0.2\"\n\n";
+    // The `live` runtime mainline uses `tokio::signal` + `tokio::process`; the base
+    // golden emits `net`+`sync` for the HTTP server, so add the two missing features.
+    const TOKIO_NET_SYNC_FEATURES: &str = "\"time\", \"net\", \"sync\"]";
+    const TOKIO_LIVE_FEATURES: &str = "\"time\", \"net\", \"sync\", \"signal\", \"process\"]";
+
+    // Step 1 — promote the `live` feature.
+    let pfx = base
+        .find(DEFAULT_PREFIX)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::live_cargo_toml",
+            detail: format!("Cargo.toml anchor {DEFAULT_PREFIX:?} not found — golden drifted"),
+        })?;
+    let search_from = pfx + DEFAULT_PREFIX.len();
+    let rel = base
+        .get(search_from..)
+        .and_then(|s| s.find(']'))
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::live_cargo_toml",
+            detail: "default feature list has no closing ']' — golden drifted".to_owned(),
+        })?;
+    let close = search_from + rel;
+    let mut step1 = String::with_capacity(base.len() + 64);
+    step1.push_str(base.get(..close).unwrap_or(""));
+    step1.push_str(r#", "live""#);
+    step1.push_str(base.get(close..).unwrap_or(""));
+
+    // Step 1b — add the tokio `signal` + `process` features the live runtime needs.
+    // Fail loud (like the sibling anchors) if the anchor drifted — a silent no-op
+    // here would ship a manifest without `signal`/`process` and cargo-fail on the
+    // live runtime's `tokio::signal` usage (a fresh exit-0-then-cargo-fail).
+    let step1_tokio = step1.replace(TOKIO_NET_SYNC_FEATURES, TOKIO_LIVE_FEATURES);
+    if step1_tokio == step1 {
+        return Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::live_cargo_toml",
+            detail: format!(
+                "tokio features anchor {TOKIO_NET_SYNC_FEATURES:?} not found — golden drifted; \
+                 the live runtime requires the tokio signal + process features"
+            ),
+        });
+    }
+    let step1 = step1_tokio;
+
+    // Step 2 — inject live-specific deps before `[profile.dev]`.
+    let anchor_pos = step1
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::live_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(step1.len() + LIVE_DEPS.len());
+    result.push_str(step1.get(..anchor_pos).unwrap_or(""));
+    result.push_str(LIVE_DEPS);
+    result.push_str(step1.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }
 

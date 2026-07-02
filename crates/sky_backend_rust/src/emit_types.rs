@@ -335,8 +335,16 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
         )
     };
 
+    // When the program uses Std.Live, model types must implement serde traits
+    // so the session store can serialise/deserialise them. The live runtime
+    // requires `Model: serde::Serialize + serde::de::DeserializeOwned`.
+    let serde_derives = if ctx.uses_live {
+        ", serde::Serialize, serde::Deserialize"
+    } else {
+        ""
+    };
     Ok(format!(
-        "#[derive(Clone, Debug, PartialEq)]
+        "#[derive(Clone, Debug, PartialEq{serde_derives})]
 pub enum {name}{decl_clause} {{
 {variants}
 }}
@@ -439,8 +447,15 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
         format!("format!(\"{fmt}\", {})", show_args.join(", "))
     };
 
+    // Matching the enum path: record structs also need serde when uses_live,
+    // since a record used as the Model type must be Serialize + Deserialize.
+    let serde_derives = if ctx.uses_live {
+        ", serde::Serialize, serde::Deserialize"
+    } else {
+        ""
+    };
     Ok(format!(
-        "#[derive(Clone, Debug, PartialEq)]
+        "#[derive(Clone, Debug, PartialEq{serde_derives})]
 pub struct {name}{decl_clause} {{
 {fields_block}
 }}

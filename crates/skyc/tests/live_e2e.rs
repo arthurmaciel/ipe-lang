@@ -1,0 +1,558 @@
+//! Honest end-to-end tests for `Std.Live` / `Sky.Live` — `Live.app`, `Ui.layout`,
+//! `Ui.column`, `Ui.el`, `Ui.onClick`, `Ui.text`, and `String.fromInt`.
+//!
+//! All tests are gated on `SKY_E2E=1`.  Without it they return early so the
+//! default `cargo test` stays fast.
+//!
+//! ## Architecture
+//!
+//! 1. A minimal Sky.Live counter program is written to a temp dir.
+//! 2. `skyc::build` compiles it (parse → canon → types → lower → emit Rust).
+//! 3. `oracle::build_rust_binary` runs `cargo build` on the emitted project —
+//!    the shared Cargo target (`~/.cargo/config.toml`) lets axum/tokio/serde
+//!    compile once and be reused.
+//! 4. An ephemeral TCP port is reserved via `TcpListener::bind("0")` → drop.
+//! 5. The binary is spawned with `SKY_LIVE_PORT=<port>` and `SKY_CSRF=off`.
+//!    `SKY_CSRF=off` disables the double-submit cookie check so test GETs
+//!    exercise the full page render without cookie plumbing.
+//! 6. Readiness: reads the child's stderr until `[sky.live] listening on`.
+//! 7. `GET /` is sent via raw `TcpStream`; the response body must contain
+//!    the initial counter value rendered as `>0<`, proving the full Live
+//!    pipeline ran:
+//!    `live_app → init → view → render_page → HTML served`.
+//!
+//! Run:
+//!
+//! ```text
+//! SKY_E2E=1 cargo test live_e2e
+//! ```
+
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// Shared error type for E2E helpers.
+type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+// ── Sky program ───────────────────────────────────────────────────────────────
+
+/// A minimal Sky.Live counter app.
+///
+/// Kernels exercised:
+/// - `Live.app`     — Phase-1b B1/B2 fix: constrain scheme + serde derives
+/// - `Ui.layout`    — converts Element tree to HTML
+/// - `Ui.column`    — vertical layout (wired in M7 Phase 0)
+/// - `Ui.el`        — generic element container with onClick attribute
+/// - `Ui.onClick`   — binds a click event to a Msg
+/// - `Ui.text`      — text leaf node
+/// - `String.fromInt` — displays the counter value
+/// - `Cmd.none` / `Sub.none` — baseline TEA primitives
+///
+/// The rendered initial page will contain the text `>0<` (the counter starts at
+/// zero, rendered inside a text element).  No `Ui.button` is used because that
+/// function is not a raw kernel — it is defined in sky-stdlib as a Sky function
+/// and is therefore outside Phase-1b scope.
+const SKY_LIVE_COUNTER: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg = Increment | Decrement
+
+type alias Model = { count : Int }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+        Decrement ->
+            ( { model | count = model.count - 1 }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (Ui.column []
+            [ Ui.el [ Ui.onClick Increment ] (Ui.text "+")
+            , Ui.text (String.fromInt model.count)
+            , Ui.el [ Ui.onClick Decrement ] (Ui.text "-")
+            ])
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        }
+"#;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Compile a Sky program string, build the emitted Rust project, and return
+/// the path to the compiled binary.
+///
+/// # Errors
+///
+/// Returns an error on any pipeline or Cargo build failure.
+fn compile_and_build(test_name: &str, sky_source: &str) -> Result<PathBuf, BoxError> {
+    let sky_dir = std::env::temp_dir().join(format!("live_e2e_{test_name}_sky"));
+    let _ = std::fs::remove_dir_all(&sky_dir);
+    std::fs::create_dir_all(&sky_dir).map_err(|e| -> BoxError {
+        format!("{test_name}: cannot create sky source dir: {e}").into()
+    })?;
+
+    let entry = sky_dir.join("Main.sky");
+    std::fs::write(&entry, sky_source)
+        .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.sky: {e}").into() })?;
+
+    let out_dir = std::env::temp_dir().join(format!("live_e2e_{test_name}_emitted"));
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let runtime = skyc::resolve_runtime()
+        .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
+
+    skyc::build(&entry, &out_dir, &runtime)
+        .map_err(|e| -> BoxError { format!("{test_name}: skyc build failed: {e}").into() })?;
+
+    let exe = oracle::build_rust_binary(test_name, &out_dir)
+        .map_err(|e| -> BoxError { format!("{test_name}: cargo build failed: {e}").into() })?;
+
+    Ok(PathBuf::from(exe))
+}
+
+/// Reserve an ephemeral loopback port by binding then immediately dropping a
+/// `TcpListener`.  The OS assigns port 0 → an unused port.
+///
+/// There is a small TOCTOU window between the drop and the Sky server binding
+/// the same port; in practice the window is negligible on a loopback test.
+///
+/// # Errors
+///
+/// Returns an error if the OS refuses to bind.
+fn pick_ephemeral_port() -> Result<u16, BoxError> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| -> BoxError { format!("cannot bind ephemeral port: {e}").into() })?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| -> BoxError { format!("cannot read ephemeral port: {e}").into() })?
+        .port();
+    // Drop `listener` here — releases the port for the Sky Live server.
+    Ok(port)
+}
+
+/// RAII guard: kills the wrapped child process on `Drop`.
+struct ProcessGuard(Child);
+
+impl Drop for ProcessGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Spawn the Sky Live binary and wait until it signals readiness via
+/// `[sky.live] listening on` on stderr.
+///
+/// # Errors
+///
+/// Returns an error if the binary cannot be spawned or the ready signal does
+/// not appear within 10 s.
+fn spawn_and_wait_ready(
+    test_name: &str,
+    exe: &std::path::Path,
+    port: u16,
+) -> Result<ProcessGuard, BoxError> {
+    let mut child = Command::new(exe)
+        // Sky.Live reads its port from SKY_LIVE_PORT (default 8000).
+        .env("SKY_LIVE_PORT", port.to_string())
+        // Disable the double-submit CSRF check so raw TcpStream GETs work.
+        .env("SKY_CSRF", "off")
+        // Disable the dev console proxy. The console child binary is pre-built
+        // and cached on this machine; without this gate it is spawned on its
+        // own ephemeral port and emits its own `[sky.live] listening on`
+        // to the inherited stderr pipe before the parent app has bound its
+        // port. The test sees that line, declares the server ready, and then
+        // immediately tries to connect to the parent's port — which is not
+        // bound yet — getting ECONNREFUSED. Setting SKY_CONSOLE_EMBED=off
+        // makes gate_allows() return false so no child is spawned and the
+        // only `[sky.live] listening on` line in the stderr pipe is the
+        // parent's own (emitted AFTER the TCP listener is bound).
+        .env("SKY_CONSOLE_EMBED", "off")
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .map_err(|e| -> BoxError {
+            format!("{test_name}: cannot spawn Live binary: {e}").into()
+        })?;
+
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| -> BoxError { format!("{test_name}: child stderr pipe was None").into() })?;
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut reader = BufReader::new(stderr);
+    let mut line = String::new();
+
+    loop {
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(
+                format!("{test_name}: Sky Live did not signal readiness within 10 s").into(),
+            );
+        }
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => {
+                let _ = child.wait();
+                return Err(format!(
+                    "{test_name}: Sky Live process exited before signalling ready"
+                )
+                .into());
+            }
+            Ok(_) => {
+                // The live runtime emits: `[sky.live] listening on http://0.0.0.0:<port>`
+                if line.contains("[sky.live] listening on") {
+                    return Ok(ProcessGuard(child));
+                }
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{test_name}: error reading child stderr: {e}").into());
+            }
+        }
+    }
+}
+
+/// Send a raw HTTP/1.1 request and return the split `(raw_headers, body)`.
+///
+/// `extra_headers` is a slice of `(name, value)` pairs added after the
+/// standard `Host` and `Connection` headers.  For POST requests `body` is
+/// the bytes to send; pass `None` for GET.  The helper automatically adds a
+/// `Content-Length` header when `body` is `Some`.
+///
+/// Reads up to 64 KiB (sufficient for a full HTML page from the counter app).
+///
+/// # Errors
+///
+/// Returns an error if the stream write or read fails.
+fn http_send(
+    test_name: &str,
+    addr: &str,
+    method: &str,
+    path: &str,
+    extra_headers: &[(&str, &str)],
+    body: Option<&[u8]>,
+) -> Result<(String, String), BoxError> {
+    let mut stream = TcpStream::connect(addr).map_err(|e| -> BoxError {
+        format!("{test_name}: cannot connect to Sky Live server: {e}").into()
+    })?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|e| -> BoxError { format!("{test_name}: set_read_timeout failed: {e}").into() })?;
+
+    let mut request =
+        format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n");
+    for (k, v) in extra_headers {
+        request.push_str(k);
+        request.push_str(": ");
+        request.push_str(v);
+        request.push_str("\r\n");
+    }
+    if let Some(b) = body {
+        request.push_str("Content-Length: ");
+        request.push_str(&b.len().to_string());
+        request.push_str("\r\n");
+    }
+    request.push_str("\r\n");
+
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| -> BoxError { format!("{test_name}: write headers failed: {e}").into() })?;
+    if let Some(b) = body {
+        stream
+            .write_all(b)
+            .map_err(|e| -> BoxError { format!("{test_name}: write body failed: {e}").into() })?;
+    }
+
+    let mut buf = Vec::with_capacity(65536);
+    stream
+        .read_to_end(&mut buf)
+        .map_err(|e| -> BoxError { format!("{test_name}: read failed: {e}").into() })?;
+
+    let response = String::from_utf8_lossy(&buf).into_owned();
+    match response.find("\r\n\r\n") {
+        Some(idx) => Ok((response[..idx].to_owned(), response[idx + 4..].to_owned())),
+        None => Ok((response, String::new())),
+    }
+}
+
+/// Convenience wrapper: `GET <path>` with no extra headers; returns the body.
+fn http_get(test_name: &str, addr: &str, path: &str) -> Result<String, BoxError> {
+    let (_, body) = http_send(test_name, addr, "GET", path, &[], None)?;
+    Ok(body)
+}
+
+/// Extract the value of a named cookie from raw HTTP response headers.
+///
+/// Searches each `Set-Cookie:` line for `<name>=<value>` (header name
+/// matched case-insensitively).
+///
+/// Returns `None` when no matching `Set-Cookie` line is present.
+fn extract_cookie(raw_headers: &str, name: &str) -> Option<String> {
+    for line in raw_headers.lines() {
+        if !line.to_ascii_lowercase().starts_with("set-cookie:") {
+            continue;
+        }
+        let value_part = line["set-cookie:".len()..].trim();
+        // Cookie string: `NAME=VALUE; attr=…`
+        let prefix = format!("{name}=");
+        if value_part
+            .to_ascii_lowercase()
+            .starts_with(&prefix.to_ascii_lowercase())
+        {
+            let after = &value_part[prefix.len()..];
+            let end = after.find(';').unwrap_or(after.len());
+            return Some(after[..end].trim().to_string());
+        }
+    }
+    None
+}
+
+/// Extract the `data-sky-hid` attribute value from the nearest element that
+/// directly contains the given text node.
+///
+/// Searches backwards from `>TEXT<` for `data-sky-hid="…"` within the
+/// element's opening tag — the runtime emits this attribute on every element
+/// that carries at least one event handler, keyed to the handler-index lookup.
+///
+/// Returns `None` when no match is found (e.g. the element does not carry a
+/// click handler, or the text does not appear in the page).
+fn extract_hid_near_text(html: &str, text: &str) -> Option<String> {
+    let marker = format!(">{text}<");
+    let text_pos = html.find(&marker)?;
+    // Everything before the `>` that closes the element's start tag.
+    let before = &html[..text_pos];
+    let attr_prefix = "data-sky-hid=\"";
+    // `rfind`: take the NEAREST (last) occurrence — the direct parent's id,
+    // not an ancestor's.
+    let hid_pos = before.rfind(attr_prefix)?;
+    let after = &before[hid_pos + attr_prefix.len()..];
+    let end = after.find('"')?;
+    Some(after[..end].to_string())
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+/// `GET /` on a Sky.Live counter app returns an HTML page containing the
+/// initial counter value rendered as the text node `>0<`.
+///
+/// This test proves the FULL Phase-1b pipeline end-to-end:
+///
+/// ```text
+/// Sky source
+///   → skyc (parse → canon → types → lower → emit Rust with "live" feature)
+///   → cargo build
+///   → sky_runtime::live::live_app(init, update, view, subs, …)
+///   → init(LiveReq) → (Model{count:0}, Cmd::None)
+///   → view(model)   → Html tree with text node "0"
+///   → render_page   → full HTML document
+///   → axum HTTP response
+///   → test asserts ">0<" appears in the body
+/// ```
+///
+/// The assertion uses `>0<` rather than the bare character `'0'` to avoid
+/// false positives from CSS values, sky-ids, or other numeric occurrences in
+/// the generated page markup.
+///
+/// The `live` Cargo feature is injected by `emit_program` when `uses_live` is
+/// set (B1 + B2 fix for the Phase-1b blockers).  Without the Phase-1b fixes
+/// the build would fail with `exit 0 then cargo fail` (constraint scheme
+/// missing) or `cargo build error` (serde derives absent).
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, or HTTP error as a test error.
+#[test]
+fn live_get_root_contains_initial_count() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let test_name = "live_get_root";
+    let exe = compile_and_build(test_name, SKY_LIVE_COUNTER)?;
+    let port = pick_ephemeral_port()?;
+    let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
+
+    let addr = format!("127.0.0.1:{port}");
+    let body = http_get(test_name, &addr, "/")?;
+
+    // The rendered page wraps every text node in an element with a sky-id.
+    // The counter is `Ui.text (String.fromInt 0)` → renders text "0" inside
+    // an element.  We assert the `>0<` sequence to distinguish the counter
+    // text node from other numeric occurrences in page markup (sky-ids, CSS
+    // values, etc.).
+    assert!(
+        body.contains(">0<"),
+        "live_get_root: initial counter (>0<) not found in GET / body\n\
+         --- first 2000 bytes ---\n{}",
+        &body[..body.len().min(2000)]
+    );
+    // Sanity: must be an HTML document, not an error message.
+    assert!(
+        body.contains("<!DOCTYPE html>") || body.contains("<html"),
+        "live_get_root: response does not look like HTML\n\
+         --- first 500 bytes ---\n{}",
+        &body[..body.len().min(500)]
+    );
+    Ok(())
+}
+
+/// Compile-only: the Sky.Live counter emits a Cargo project with the `"live"`
+/// feature in the default feature list.
+///
+/// This is a BUILD-ONLY test — it does not spawn the binary.  A successful
+/// `cargo build` is the assertion.  This specifically regression-tests the
+/// Phase-1b B2 fix: if `serde::Serialize / Deserialize` derives are absent on
+/// the `Msg` enum and `Model` struct, `cargo build` will fail with a trait-
+/// bound error from `sky_runtime::live::live_app`.
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn live_counter_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    // compile_and_build already does skyc + cargo build; success is the proof.
+    let _exe = compile_and_build("live_build_only", SKY_LIVE_COUNTER)?;
+    Ok(())
+}
+
+/// A click on the `+` element increments the counter: `GET /` → extract
+/// session cookie + sky-id of the `+` element → `POST /_sky/event` (click) →
+/// wait for the async model update → `GET /` with session cookie → body
+/// contains `>1<`.
+///
+/// ## Wire protocol exercised
+///
+/// 1. `GET /` → axum sets `sky_sid=<sid>` in `Set-Cookie`.  The initial model
+///    (`count = 0`) is rendered with `>0<`.
+/// 2. The rendered HTML carries `data-sky-hid="<sky-id>"` on every element
+///    that has event handlers.  The `Ui.el [ Ui.onClick Increment ]` element
+///    (containing `+`) is found by searching backwards from `>+<` for the
+///    nearest `data-sky-hid`.
+/// 3. `POST /_sky/event` with body
+///    `{"id":"<sky-id>","msg":"click","args":[],"sessionId":""}` and
+///    `Cookie: sky_sid=<sid>`.  The runtime authenticates via the COOKIE only;
+///    the body's `sessionId` is ignored per the security policy.
+/// 4. The event is enqueued via `try_send` and processed asynchronously by
+///    `drive_session`.  A 200 ms sleep after the POST gives the driver time to
+///    commit the model update.
+/// 5. A second `GET /` with `Cookie: sky_sid=<sid>` re-renders the live
+///    session (store hit → re-view with current model) → the body must contain
+///    `>1<`.
+///
+/// This test is the definitive proof that the full TEA loop works:
+/// `init → view → event → update → re-view` over the HTTP/1.1 wire.
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, HTTP, or assertion error.
+#[test]
+fn live_onclick_increments_counter() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let test_name = "live_onclick";
+    let exe = compile_and_build(test_name, SKY_LIVE_COUNTER)?;
+    let port = pick_ephemeral_port()?;
+    let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
+    let addr = format!("127.0.0.1:{port}");
+
+    // ── Step 1: GET / — initial page, extract session cookie + sky-id ─────────
+    let (raw_headers, body) = http_send(test_name, &addr, "GET", "/", &[], None)?;
+
+    let sid = extract_cookie(&raw_headers, "sky_sid").ok_or_else(|| -> BoxError {
+        format!(
+            "{test_name}: no sky_sid cookie in GET / response\n\
+             --- raw headers ---\n{raw_headers}"
+        )
+        .into()
+    })?;
+
+    let hid = extract_hid_near_text(&body, "+").ok_or_else(|| -> BoxError {
+        format!(
+            "{test_name}: could not find data-sky-hid near '>+<' in GET / body\n\
+             --- first 2000 bytes ---\n{}",
+            &body[..body.len().min(2000)]
+        )
+        .into()
+    })?;
+
+    // ── Step 2: POST /_sky/event — Increment click ───────────────────────────
+    //
+    // `msg` carries the event name (the runtime prefers `event`, then `msg`,
+    // then defaults to "click").  `sessionId` is retained in the body for
+    // wire-compat but ignored by the server; auth is via the Cookie header.
+    let event_body = format!(r#"{{"id":"{hid}","msg":"click","args":[],"sessionId":""}}"#);
+    let cookie_header = format!("sky_sid={sid}");
+    let (_, post_body) = http_send(
+        test_name,
+        &addr,
+        "POST",
+        "/_sky/event",
+        &[
+            ("Content-Type", "application/json"),
+            ("Cookie", &cookie_header),
+        ],
+        Some(event_body.as_bytes()),
+    )?;
+
+    assert!(
+        post_body.contains("patches"),
+        "{test_name}: POST /_sky/event did not return a patches ACK\nbody: {post_body}"
+    );
+
+    // ── Step 3: wait for async model update ─────────────────────────────────
+    //
+    // `event_handler` uses `try_send` (non-blocking) — the actual model update
+    // happens in the `drive_session` task.  200 ms is sufficient for the
+    // in-process channel round-trip on any reasonable test host.
+    std::thread::sleep(Duration::from_millis(200));
+
+    // ── Step 4: GET / with session cookie — should show count = 1 ───────────
+    let (_, body2) = http_send(
+        test_name,
+        &addr,
+        "GET",
+        "/",
+        &[("Cookie", &cookie_header)],
+        None,
+    )?;
+
+    assert!(
+        body2.contains(">1<"),
+        "{test_name}: counter not incremented to 1 after Increment click\n\
+         --- first 2000 bytes of second GET / ---\n{}",
+        &body2[..body2.len().min(2000)]
+    );
+
+    Ok(())
+}
