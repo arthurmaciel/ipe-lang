@@ -18,8 +18,14 @@ pub enum VarHome {
     Local,
     /// A top-level binding of the named module.
     TopLevel(Vec<Symbol>),
-    /// A stdlib kernel function: kernel module, function name.
-    Kernel(Symbol, Symbol),
+    /// A stdlib kernel function.
+    ///
+    /// `id` is `Some` when the kernel was resolved against `stdlib_index` at
+    /// parse time (Phase B fast path in `lower_callee`); `None` for entries
+    /// present in `qual_vars` but not yet wired into the registry (legacy
+    /// string-match fallback in `lower_callee`).  `module` and `name` are
+    /// always present for diagnostics and the legacy path.
+    Kernel(Option<StdlibKernel>, Symbol, Symbol),
 }
 
 /// Where a constructor resolves to.
@@ -66,9 +72,11 @@ impl Env {
             home,
             ..Self::default()
         };
-        env.install_builtin_vars(interner)?;
-        env.install_builtin_ctors(interner)?;
+        // Phase B: install_prelude_qualifiers MUST run first — it populates
+        // stdlib_index, which install_builtin_vars consults for the fast-path id.
         env.install_prelude_qualifiers(interner)?;
+        env.install_builtin_ctors(interner)?;
+        env.install_builtin_vars(interner)?;
         Ok(env)
     }
 
@@ -161,6 +169,9 @@ impl Env {
 
     /// Built-in unqualified variables (from the Prelude). M0 subset of
     /// `Environment.builtinVars`.
+    ///
+    /// Must run AFTER `install_prelude_qualifiers` so `stdlib_index` is
+    /// populated and the Phase-B id fast-path can be threaded in.
     fn install_builtin_vars(&mut self, interner: &mut Interner) -> DResult<()> {
         let basics = interner.intern("Basics")?;
         let log = interner.intern("Log")?;
@@ -177,8 +188,9 @@ impl Env {
             ("println", log, "println"),
         ] {
             let key = interner.intern(name)?;
-            let func = interner.intern(func)?;
-            self.vars.insert(key, VarHome::Kernel(module, func));
+            let func_sym = interner.intern(func)?;
+            let id = self.stdlib_index.get(&(module, func_sym)).copied();
+            self.vars.insert(key, VarHome::Kernel(id, module, func_sym));
         }
         Ok(())
     }
@@ -997,12 +1009,29 @@ impl Env {
             ("Sky.Tui", "Tui"),
         ];
 
+        // ── Phase-B: build stdlib_index FIRST so all VarHome::Kernel(id, ..)
+        // insertions below can look up the pre-resolved id.
+        // Derived from StdlibKernel::ALL + decl() — anti-drift by construction.
+        // Skip internal-only qualifiers (e.g. "_internal_").
+        for sk in StdlibKernel::ALL {
+            let decl = sk.decl();
+            if decl.qualifier.starts_with('_') {
+                continue; // e.g. "_internal_" — skip
+            }
+            let qual_sym = interner.intern(decl.qualifier)?;
+            let name_sym = interner.intern(decl.name)?;
+            self.stdlib_index.insert((qual_sym, name_sym), *sk);
+        }
+
         for (qual, funcs) in QUALIFIERS {
             let qual_sym = interner.intern(qual)?;
             let mut module = BTreeMap::new();
             for func in *funcs {
                 let func_sym = interner.intern(func)?;
-                module.insert(func_sym, VarHome::Kernel(qual_sym, func_sym));
+                // Phase B: thread the pre-resolved id into VarHome so
+                // lower_callee can use the fast path for registered kernels.
+                let id = self.stdlib_index.get(&(qual_sym, func_sym)).copied();
+                module.insert(func_sym, VarHome::Kernel(id, qual_sym, func_sym));
             }
             self.qual_vars.entry(qual_sym).or_default().extend(module);
         }
@@ -1013,7 +1042,9 @@ impl Env {
             let canonical_sym = interner.intern(canonical)?;
             // VarHome stores the CANONICAL module + fn symbols so lower.rs
             // match arms (`("Html", "render")`) work without any changes.
-            let home = VarHome::Kernel(qual_sym, canonical_sym);
+            // The id is resolved against the CANONICAL (qual, name) key.
+            let id = self.stdlib_index.get(&(qual_sym, canonical_sym)).copied();
+            let home = VarHome::Kernel(id, qual_sym, canonical_sym);
             self.qual_vars
                 .entry(qual_sym)
                 .or_default()
@@ -1031,24 +1062,6 @@ impl Env {
                     .or_default()
                     .extend(canonical_members);
             }
-        }
-
-        // ── Phase-A: parse-once registry index ───────────────────────────────
-        // Derived from the SAME StdlibKernel::ALL + decl() source as the
-        // StdlibKernel enum itself — anti-drift by construction.
-        // Skip internal-only qualifiers (e.g. "_internal_") and the unqualified
-        // Log/Cmd/Sub variants whose qualifiers are absent from qual_vars
-        // (installed via install_builtin_vars or not yet wired); the tripwire
-        // test checks only the registry→canon direction so those omissions are
-        // safe for Phase A.
-        for sk in StdlibKernel::ALL {
-            let decl = sk.decl();
-            if decl.qualifier.starts_with('_') {
-                continue; // e.g. "_internal_" — skip
-            }
-            let qual_sym = interner.intern(decl.qualifier)?;
-            let name_sym = interner.intern(decl.name)?;
-            self.stdlib_index.insert((qual_sym, name_sym), *sk);
         }
 
         Ok(())

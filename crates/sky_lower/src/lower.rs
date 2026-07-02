@@ -3537,7 +3537,14 @@ impl<'a> Lowerer<'a> {
     #[allow(clippy::too_many_lines)] // declarative kernel-name dispatch table
     fn lower_callee(&self, callee: &canon::Expr) -> DResult<Callee> {
         match &callee.value {
-            canon::Expr_::VarKernel { module, name } => {
+            canon::Expr_::VarKernel { id, module, name } => {
+                // Phase B fast path: use the pre-resolved id when available.
+                // This avoids the ~400-arm string-match dispatch for every
+                // registered kernel.  Unregistered entries (id = None) fall
+                // through to the legacy string-match below.
+                if let Some(sk) = id {
+                    return Ok(Callee::Kernel(*sk));
+                }
                 match (self.resolve(*module)?, self.resolve(*name)?) {
                     ("Log", "println") => Ok(Callee::Kernel(KernelFn::LogPrintln)),
                     // ── String kernels ─────────────────────────────────────
@@ -4582,5 +4589,205 @@ impl<'a> Lowerer<'a> {
                     || rest.as_deref().is_some_and(Self::pat_binds_value)
             }
         }
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use sky_canon::ast as canon;
+    use sky_diagnostics::{Located, Span};
+    use sky_intern::Interner;
+    use sky_ir::{Callee, KernelFn};
+    use sky_types::SolvedTypes;
+
+    use super::{BuiltinCtors, Lowerer};
+
+    // ── Registry-only allowlist ──────────────────────────────────────────────
+    //
+    // These variants appear in `KernelFn::ALL` (and are therefore present in
+    // `stdlib_index`) but have NO legacy arm in `lower_callee`.  Passing them
+    // with `id = None` hits the SKY-L0108 fallthrough → `Err(Diagnostic::Lower)`;
+    // they cannot be covered by the decl-equiv-legacy test.
+    //
+    // EMITTABILITY VERDICT (sky_backend_rust/src/emit_expr.rs, `emit_tea_call`):
+    //
+    //   KernelFn::PubSubPublish       → Err(Diagnostic::CompilerBug)  [NOT emittable]
+    //   KernelFn::PubSubPublishNoEcho → Err(Diagnostic::CompilerBug)  [NOT emittable]
+    //
+    // LOUD FINDING: PubSubPublish and PubSubPublishNoEcho are in ALL (and hence
+    // in stdlib_index) but the qualifier "PubSub" is absent from QUALIFIERS in
+    // env.rs, so no VarKernel node with module="PubSub" can be produced from
+    // user programs.  The Phase B fast path (id = Some) CANNOT fire for them
+    // in practice.  If it somehow did fire, the backend returns Err(CompilerBug)
+    // — a loud failure, not silent exit-0.  Both are M6-reserved TEA primitives
+    // awaiting a dedicated lowering + emission path before they are safe to move
+    // to the covered set.
+    const REGISTRY_ONLY_ALLOWLIST: &[KernelFn] =
+        &[KernelFn::PubSubPublish, KernelFn::PubSubPublishNoEcho];
+
+    /// Verifies that for every non-excluded variant in `KernelFn::ALL`, the
+    /// legacy string-match arm in `lower_callee` returns `Callee::Kernel(sk)`
+    /// when called with `id = None` (i.e. the Phase B fast path disabled).
+    ///
+    /// Forcing `id = None` makes the test NON-VACUOUS:
+    ///
+    /// * A transposed `decl()` (e.g. `HtmlRender` declares `("Html", "foo")`
+    ///   instead of `("Html", "render")`) produces the wrong lookup key →
+    ///   either the arm doesn't match (SKY-L0108 Err) or the wrong variant
+    ///   returns (`assert_eq` fails).
+    ///
+    /// * A wrong legacy arm (e.g. `("Html", "render") => Callee::Kernel(Other)`)
+    ///   returns the wrong `Callee::Kernel` variant → `assert_eq` fails.
+    ///
+    /// MECHANICAL: test keys come from `KernelFn::decl()` on the same variant,
+    /// so any mismatch between `decl()` and the legacy match arm is caught
+    /// automatically, with no manual list to maintain.
+    #[test]
+    #[allow(clippy::too_many_lines)] // exhaustive per-variant setup + loop
+    fn decl_equiv_legacy_match() {
+        // ── Build a minimal Lowerer ──────────────────────────────────────────
+        //
+        // `lower_callee` uses only `self.interner` (via `self.resolve()`).
+        // All other Lowerer fields are irrelevant for this test.
+        //
+        // Lifetime constraint: `Lowerer::new` takes `&Interner` (immutable),
+        // but `Interner::intern` requires `&mut Interner`.  Pre-intern every
+        // needed string BEFORE creating the Lowerer, then take the immutable
+        // borrow.
+
+        let mut interner = Interner::new();
+
+        // BuiltinCtor names (required by Lowerer::new to seed enum_variants).
+        let maybe = interner.intern("Maybe").unwrap();
+        let result = interner.intern("Result").unwrap();
+        let just = interner.intern("Just").unwrap();
+        let nothing = interner.intern("Nothing").unwrap();
+        let ok = interner.intern("Ok").unwrap();
+        let err = interner.intern("Err").unwrap();
+        let sqlvalue = interner.intern("SqlValue").unwrap();
+        let sqlfield = interner.intern("SqlField").unwrap();
+        let sql_string = interner.intern("SqlString").unwrap();
+        let sql_int = interner.intern("SqlInt").unwrap();
+        let sql_float = interner.intern("SqlFloat").unwrap();
+        let sql_bool = interner.intern("SqlBool").unwrap();
+        let sql_bytes = interner.intern("SqlBytes").unwrap();
+        let sql_time = interner.intern("SqlTime").unwrap();
+        let sql_decimal = interner.intern("SqlDecimal").unwrap();
+        let sql_money = interner.intern("SqlMoney").unwrap();
+        let sql_null = interner.intern("SqlNull").unwrap();
+        let set_field = interner.intern("SetField").unwrap();
+        let omit_field = interner.intern("OmitField").unwrap();
+
+        // Pre-intern all kernel (qualifier, name) strings in ALL order.
+        // Must happen before Lowerer borrows interner immutably.
+        let kern_syms: Vec<(sky_intern::Symbol, sky_intern::Symbol)> = KernelFn::ALL
+            .iter()
+            .map(|sk| {
+                let d = sk.decl();
+                let q = interner.intern(d.qualifier).unwrap();
+                let n = interner.intern(d.name).unwrap();
+                (q, n)
+            })
+            .collect();
+
+        let builtins = BuiltinCtors {
+            maybe,
+            result,
+            just,
+            nothing,
+            ok,
+            err,
+            sqlvalue,
+            sqlfield,
+            sql_string,
+            sql_int,
+            sql_float,
+            sql_bool,
+            sql_bytes,
+            sql_time,
+            sql_decimal,
+            sql_money,
+            sql_null,
+            set_field,
+            omit_field,
+        };
+        let module = canon::Module {
+            name: vec![],
+            unions: vec![],
+            defs: vec![],
+        };
+        let types = SolvedTypes {
+            env: BTreeMap::new(),
+            regions: BTreeMap::new(),
+            bounds: BTreeMap::new(),
+        };
+
+        // Immutable borrow of interner starts here — no more intern() calls.
+        let lowerer = Lowerer::new(&module, &types, &interner, vec![], vec![], &builtins);
+
+        // ── Test loop ────────────────────────────────────────────────────────
+        let mut covered: usize = 0;
+        let mut skipped_internal: usize = 0;
+        let allowlisted: usize = REGISTRY_ONLY_ALLOWLIST.len();
+
+        // Iterate `ALL` and its pre-interned (qualifier, name) symbols in
+        // lockstep via `zip` — no raw indexing (the project bans
+        // `clippy::indexing_slicing`, including in the gate itself).
+        for (&sk, &(qual_sym, name_sym)) in KernelFn::ALL.iter().zip(kern_syms.iter()) {
+            let decl = sk.decl();
+
+            // Skip internal variants (qualifier starts with '_').
+            if decl.qualifier.starts_with('_') {
+                skipped_internal += 1;
+                continue;
+            }
+
+            // Skip registry-only variants — they have no legacy arm.
+            if REGISTRY_ONLY_ALLOWLIST.contains(&sk) {
+                continue;
+            }
+
+            // Force the legacy path by setting id = None.
+            let node = Located::new(
+                Span::DUMMY,
+                canon::Expr_::VarKernel {
+                    id: None,
+                    module: qual_sym,
+                    name: name_sym,
+                },
+            );
+
+            // A single `assert_eq!` on the `Result` (via `.ok()`) catches BOTH
+            // failure modes without `panic!`/`unwrap`:
+            //   * Err (missing legacy arm / transposed decl) → `None` != `Some(..)`
+            //   * wrong variant returned                     → `Some(other)` != `Some(sk)`
+            let got = lowerer.lower_callee(&node).ok();
+            assert_eq!(
+                got,
+                Some(Callee::Kernel(sk)),
+                "lower_callee(id=None, qualifier={:?}, name={:?}) returned {got:?}; \
+                 expected Some(Callee::Kernel(KernelFn::{sk:?})). Either the legacy \
+                 arm is missing / maps to the wrong variant, or decl() returned the \
+                 wrong canonical (qualifier, name) for this variant.",
+                decl.qualifier,
+                decl.name,
+            );
+
+            covered += 1;
+        }
+
+        // Sanity: every variant must be accounted for.
+        let total = KernelFn::ALL.len();
+        assert_eq!(
+            covered + allowlisted + skipped_internal,
+            total,
+            "variant accounting mismatch: \
+             covered={covered} + allowlisted={allowlisted} + \
+             skipped_internal={skipped_internal} != total={total}",
+        );
     }
 }

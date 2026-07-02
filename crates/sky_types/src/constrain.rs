@@ -1480,7 +1480,14 @@ impl<'a> Builder<'a> {
             canon::Expr_::VarTopLevel { module, name } => {
                 self.constrain_var_top_level(module, *name, span)?
             }
-            canon::Expr_::VarKernel { module, name } => {
+            canon::Expr_::VarKernel {
+                id: _,
+                module,
+                name,
+            } => {
+                // Phase B: `id` carries the pre-resolved StdlibKernel but the
+                // constraint engine still operates via the symbol-based
+                // kernel-scheme table; propagate id in a later phase.
                 self.constrain_var_kernel(*module, *name, span)?
             }
             canon::Expr_::VarCtor {

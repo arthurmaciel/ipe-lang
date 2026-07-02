@@ -12,6 +12,7 @@
 
 use sky_diagnostics::{Located, Span};
 use sky_intern::Symbol;
+use sky_kernels::StdlibKernel;
 
 /// A name-resolved module (M0 subset).
 //
@@ -127,9 +128,17 @@ pub enum Expr_ {
     VarLocal(Symbol),
     /// A top-level binding of a named module.
     VarTopLevel { module: Vec<Symbol>, name: Symbol },
-    /// A stdlib kernel function. `module` is the kernel module string (e.g.
-    /// `Log`, `Basics`, `String`), `name` the function (e.g. `println`).
-    VarKernel { module: Symbol, name: Symbol },
+    /// A stdlib kernel function.  `id` carries the pre-resolved
+    /// [`StdlibKernel`] variant when the kernel was registered in Phase A's
+    /// `stdlib_index`; `None` for entries not yet wired (legacy fallback path
+    /// in `lower_callee`).  `module` and `name` are retained for diagnostics,
+    /// the type-constraint kernel-scheme lookup, and the legacy string-match
+    /// fallback.
+    VarKernel {
+        id: Option<StdlibKernel>,
+        module: Symbol,
+        name: Symbol,
+    },
     /// A data constructor used as a value.
     VarCtor {
         home: Vec<Symbol>,
