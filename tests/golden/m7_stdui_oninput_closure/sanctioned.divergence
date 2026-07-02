@@ -1,0 +1,1 @@
+divergence: Go oracle (sky dev) does not expose `Html.htmlRender` so it exits 1 on this source. Rust backend compiles, builds, and runs correctly. Skyc output is cached as the reference.

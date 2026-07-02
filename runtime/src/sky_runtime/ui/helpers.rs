@@ -368,3 +368,91 @@ pub fn html_input_<M>(attrs: Vec<crate::sky_runtime::html::Attribute<M>>) -> Htm
 pub fn html_img_<M>(attrs: Vec<crate::sky_runtime::html::Attribute<M>>) -> Html<M> {
     Html::HElement("img".to_owned(), attrs, vec![])
 }
+
+// ── Phase-1a: Event-attribute builders ───────────────────────────────────────
+//
+// These back the `UiOnClick`, `UiOnFocus`, … KernelFn variants.  They return
+// `element::Attribute<M>` (same as all other Ui attribute builders) with the
+// `AttrEvent` variant wrapping an `html::Attribute::EventAttr(Event::…)`.
+//
+// The two `Attribute` types are:
+//   • `html::Attribute<M>` — raw HTML attribute (event, class, data-*, …)
+//   • `element::Attribute<M>` — typed Std.Ui attribute; `AttrEvent` carries
+//     an `html::Attribute` for event dispatch.
+//
+// Plain-message events (`OnMsg`) take the typed message value directly.
+// String-carrying events (`OnString`) take an `Arc<dyn Fn(String)->M+…>`
+// so the runtime can call the function from a send-safe dispatcher.
+// Callers emit: `Arc::new(move |_x| (f)(_x))`.
+
+use crate::sky_runtime::html::{Attribute as HtmlAttribute, Event};
+
+/// `Ui.onClick : msg -> Attribute msg`
+pub fn ui_on_click_<M>(msg: M) -> Attribute<M> {
+    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnMsg("click".into(), msg)))
+}
+
+/// `Ui.onFocus : msg -> Attribute msg`
+pub fn ui_on_focus_<M>(msg: M) -> Attribute<M> {
+    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnMsg("focus".into(), msg)))
+}
+
+/// `Ui.onBlur : msg -> Attribute msg`
+pub fn ui_on_blur_<M>(msg: M) -> Attribute<M> {
+    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnMsg("blur".into(), msg)))
+}
+
+/// `Ui.onMouseOver : msg -> Attribute msg`
+pub fn ui_on_mouse_over_<M>(msg: M) -> Attribute<M> {
+    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnMsg(
+        "mouseover".into(),
+        msg,
+    )))
+}
+
+/// `Ui.onMouseOut : msg -> Attribute msg`
+pub fn ui_on_mouse_out_<M>(msg: M) -> Attribute<M> {
+    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnMsg(
+        "mouseout".into(),
+        msg,
+    )))
+}
+
+/// `Ui.onInput : (String -> msg) -> Attribute msg`
+///
+/// The callback is Arc-wrapped so the runtime can dispatch it from a
+/// send-safe context.  Callers emit `std::sync::Arc::new(move |_x| (f)(_x))`
+/// where `f` is the emitted Sky function expression (T6 trap).
+pub fn ui_on_input_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) -> Attribute<M> {
+    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnString("input".into(), f)))
+}
+
+/// `Ui.onChange : (String -> msg) -> Attribute msg`
+pub fn ui_on_change_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) -> Attribute<M> {
+    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnString(
+        "change".into(),
+        f,
+    )))
+}
+
+/// `Ui.onKeyDown : (String -> msg) -> Attribute msg`
+pub fn ui_on_key_down_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) -> Attribute<M> {
+    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnString(
+        "keydown".into(),
+        f,
+    )))
+}
+
+/// `Ui.onKeyUp : (String -> msg) -> Attribute msg`
+pub fn ui_on_key_up_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) -> Attribute<M> {
+    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnString("keyup".into(), f)))
+}
+
+/// `Event.onBool : (Bool -> msg) -> Attribute msg`
+///
+/// Wires a boolean-carrying event (typically `change` on a checkbox) so that
+/// the Sky callback receives the DOM `checked` value as a Rust `bool`.
+/// The `f` argument is arc-wrapped at the call site by the emitter (T6 trap).
+pub fn ui_on_bool_<M>(f: std::sync::Arc<dyn Fn(bool) -> M + Send + Sync>) -> Attribute<M> {
+    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnBool("change".into(), f)))
+}

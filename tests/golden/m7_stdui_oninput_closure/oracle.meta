@@ -1,0 +1,6 @@
+# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
+main_sky_sha256 = 47bd14a481742a35b9127759823864263182b00c36c7093c1be053d971dae569
+go_sky_version = sky dev
+exit_code = 0
+oracle_divergence = true
+divergence_reason = divergence: Go oracle (sky dev) does not expose `Html.htmlRender` so it exits 1 on this source. Rust backend compiles, builds, and runs correctly. Skyc output is cached as the reference.

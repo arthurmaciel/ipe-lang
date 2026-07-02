@@ -1,7 +1,6 @@
-//! M7 `Ui.layout` turbofish Phase-0 gate —
-//! `Ui.layout` inside a function annotated `Msg -> Html Msg` must emit
-//! `ui_layout::<MainMsg>(...)` (the enclosing return type's message parameter),
-//! NOT the hardcoded `ui_layout::<()>(...)` (BLOCKER-1 fix).
+//! M7 Std.Ui type-annotation smoke test —
+//! `Ui.layout` inside a function annotated `Msg -> Html Msg` must produce
+//! well-typed emitted Rust (no `E0308` from cargo).
 //!
 //! The golden compiles `tests/golden/m7_stdui_msg/Main.sky` through `skyc`,
 //! builds the emitted Rust project with the shared cargo target, runs the
@@ -21,14 +20,12 @@
 //!
 //! * `ir_type_from_canon` handles `Html Msg` in type annotations, producing
 //!   `IrType::Ui { ctor: UiCtor::Html, msg: IrType::Enum { Msg, [] } }`.
-//! * `emit_func` extracts the enclosing return type's `msg` parameter and
-//!   threads it into `GenericScope` via `with_ui_msg`.
-//! * `KernelFn::UiLayout` arm uses `generics.enclosing_ui_msg()` rather than
-//!   the hardcoded `"()"` — emitting `ui_layout::<MainMsg>(…)`.
-//! * The rendered HTML is correct (BLOCKER-1 is a soundness fix, not just a
-//!   type-level change: the wrong monomorphisation previously silently produced
-//!   a `fn(()) -> Html<()>` that type-checked only because `msg` was
-//!   unconstrained in the no-event smoke test).
+//! * `KernelFn::UiLayout` emits `sky_runtime::ui::render::ui_layout(attrs_s, elem_s)`
+//!   with no turbofish — Rust infers `M = MainMsg` bottom-up from the concrete
+//!   element tree.  (The old `with_ui_msg` / `enclosing_ui_msg()` mechanism
+//!   was removed; M-propagation is now purely bottom-up from event payloads.)
+//! * The rendered HTML is correct (the annotation ensures the no-event case
+//!   still produces a valid monomorphisation).
 //!
 //! Run:
 //!

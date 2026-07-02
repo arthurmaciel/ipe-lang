@@ -1109,15 +1109,13 @@ fn emit_ui_call(
             };
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
             let elem_s = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            // Drive `M` from the enclosing function's return type (set in
-            // `emit_func` via `GenericScope::with_ui_msg`).  Fallback to `()`
-            // for CLI programs / non-UI-returning functions — correct for the
-            // Phase-0 golden (`sky_main`) and required to avoid E0282 when the
-            // empty attrs list emits bare `Vec::new()` (IrType::Json path in
-            // `emit_list`, which Rust cannot infer without a concrete `M`).
-            let m = generics.enclosing_ui_msg().unwrap_or("()");
+            // Phase-1a: M is now inferred bottom-up from the concrete element /
+            // attrs types that the region-type–sourced emit propagates.  No
+            // turbofish required; Rust unifies M from the element argument or from
+            // the enclosing function's return type annotation — both supply a
+            // concrete `Msg` type.  The old `enclosing_ui_msg` mechanism is gone.
             Ok(Some(format!(
-                "sky_runtime::ui::render::ui_layout::<{m}>({attrs_s}, {elem_s})"
+                "sky_runtime::ui::render::ui_layout({attrs_s}, {elem_s})"
             )))
         }
 
@@ -1172,11 +1170,9 @@ fn emit_ui_call(
             let wrapper_s = emit_expr_at(ctx, wrapper_e, indent, child, generics)?;
             let root_s = emit_expr_at(ctx, root_e, indent, child, generics)?;
             let elem_s = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            // Same msg-source policy as UiLayout: enclosing function's return type
-            // drives M; fallback to `()` for non-UI-returning callers.
-            let m = generics.enclosing_ui_msg().unwrap_or("()");
+            // Phase-1a: same bottom-up M inference as UiLayout — no turbofish.
             Ok(Some(format!(
-                "sky_runtime::ui::render::ui_layout_with_vecs::<{m}>({wrapper_s}, {root_s}, {elem_s})"
+                "sky_runtime::ui::render::ui_layout_with_vecs({wrapper_s}, {root_s}, {elem_s})"
             )))
         }
 
@@ -1867,6 +1863,161 @@ fn emit_ui_call(
             )))
         }
 
+        // ── Phase-1a: Event-attribute builders ───────────────────────────────────
+        //
+        // Plain-message events (onClick/onFocus/onBlur/onMouseOver/onMouseOut):
+        //   Ui.onClick : msg -> Attribute msg
+        //   emit: sky_runtime::ui::helpers::ui_on_click_(msg_expr)
+        //
+        // String-carrying events (onInput/onChange/onKeyDown/onKeyUp) — T6 trap:
+        //   The Sky fn arg is an emitted Rust fn-value (closure or fn-ptr).
+        //   The runtime requires `Arc<dyn Fn(String)->M+Send+Sync>`.
+        //   We emit: ui_on_input_(std::sync::Arc::new(move |_x| (f)(_x)))
+        //   This is sound: the Arc captures `f` by move; `f` is always 'static
+        //   since emitted Sky fns carry no borrow-lifetime context.
+
+        // `Ui.onClick / Event.onClick : msg -> Attribute msg`
+        KernelFn::UiOnClick => {
+            let [msg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnClick",
+                    detail: format!("Ui.onClick requires 1 argument, got {}", args.len()),
+                });
+            };
+            let msg_s = emit_expr_at(ctx, msg_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_click_({msg_s})"
+            )))
+        }
+
+        // `Ui.onFocus : msg -> Attribute msg`
+        KernelFn::UiOnFocus => {
+            let [msg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnFocus",
+                    detail: format!("Ui.onFocus requires 1 argument, got {}", args.len()),
+                });
+            };
+            let msg_s = emit_expr_at(ctx, msg_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_focus_({msg_s})"
+            )))
+        }
+
+        // `Ui.onBlur : msg -> Attribute msg`
+        KernelFn::UiOnBlur => {
+            let [msg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnBlur",
+                    detail: format!("Ui.onBlur requires 1 argument, got {}", args.len()),
+                });
+            };
+            let msg_s = emit_expr_at(ctx, msg_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_blur_({msg_s})"
+            )))
+        }
+
+        // `Ui.onMouseOver : msg -> Attribute msg`
+        KernelFn::UiOnMouseOver => {
+            let [msg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnMouseOver",
+                    detail: format!("Ui.onMouseOver requires 1 argument, got {}", args.len()),
+                });
+            };
+            let msg_s = emit_expr_at(ctx, msg_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_mouse_over_({msg_s})"
+            )))
+        }
+
+        // `Ui.onMouseOut : msg -> Attribute msg`
+        KernelFn::UiOnMouseOut => {
+            let [msg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnMouseOut",
+                    detail: format!("Ui.onMouseOut requires 1 argument, got {}", args.len()),
+                });
+            };
+            let msg_s = emit_expr_at(ctx, msg_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_mouse_out_({msg_s})"
+            )))
+        }
+
+        // `Ui.onInput : (String -> msg) -> Attribute msg`  (T6: Arc-wrap the fn)
+        KernelFn::UiOnInput => {
+            let [f_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnInput",
+                    detail: format!("Ui.onInput requires 1 argument, got {}", args.len()),
+                });
+            };
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            // Arc-wrap: the runtime needs Arc<dyn Fn(String)->M+Send+Sync>.
+            // `f` is a 'static emitted Sky fn; `move` captures it by value.
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_input_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
+            )))
+        }
+
+        // `Ui.onChange : (String -> msg) -> Attribute msg`  (T6: Arc-wrap)
+        KernelFn::UiOnChange => {
+            let [f_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnChange",
+                    detail: format!("Ui.onChange requires 1 argument, got {}", args.len()),
+                });
+            };
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_change_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
+            )))
+        }
+
+        // `Ui.onKeyDown : (String -> msg) -> Attribute msg`  (T6: Arc-wrap)
+        KernelFn::UiOnKeyDown => {
+            let [f_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnKeyDown",
+                    detail: format!("Ui.onKeyDown requires 1 argument, got {}", args.len()),
+                });
+            };
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_key_down_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
+            )))
+        }
+
+        // `Ui.onKeyUp : (String -> msg) -> Attribute msg`  (T6: Arc-wrap)
+        KernelFn::UiOnKeyUp => {
+            let [f_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnKeyUp",
+                    detail: format!("Ui.onKeyUp requires 1 argument, got {}", args.len()),
+                });
+            };
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_key_up_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
+            )))
+        }
+
+        // `Event.onBool : (Bool -> msg) -> Attribute msg`  (T6: Arc-wrap, bool arg)
+        KernelFn::UiOnBool => {
+            let [f_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnBool",
+                    detail: format!("Event.onBool requires 1 argument, got {}", args.len()),
+                });
+            };
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_bool_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
+            )))
+        }
+
         // ── App-entry stubs (Phase 0 — CompilerBug until Phase 1 wires them) ──
         KernelFn::LiveApp
         | KernelFn::LiveAppRouted
@@ -2241,6 +2392,31 @@ fn emit_list(
     let mut parts = Vec::with_capacity(items.len());
     for item in items {
         parts.push(emit_expr_at(ctx, item, indent, child, generics)?);
+    }
+    // Non-empty lists whose element type is a parametric Ui type (`Attribute<M>`
+    // / `Element<M>` / `Html<M>` / …) need an explicit type annotation on the
+    // emitted Rust `Vec` so that the `M` type parameter can be inferred by the
+    // Rust compiler.  Without this, callers like `Ui.layoutWith` whose attrs
+    // lists are always non-empty (no empty-list turbofish to anchor M) produce
+    // E0283 because every helper (`ui_padding_`, `ui_spacing_`, …) is itself
+    // generic in M and no concrete M appears elsewhere in the expression.
+    //
+    // The annotation wraps the vec in a typed `let` block:
+    //   `{ let __sky_m: Vec<Attribute<()>> = vec![ui_padding_(12)]; __sky_m }`
+    // The variable name `__sky_m` is scoped to the anonymous block and cannot
+    // shadow user-visible bindings.  The block is a Rust expression, valid in
+    // every argument position.
+    //
+    // This path is skipped for `IrType::Json` (the elem type is unresolved)
+    // because annotating with `Vec<JsonVal>` would CONFLICT with callers that
+    // expect `Vec<Attribute<M>>` — the same reason empty Json lists emit bare
+    // `Vec::new()` rather than a typed form.
+    if matches!(elem, IrType::Ui { .. }) {
+        let ty = render_type(ctx, elem, generics)?;
+        return Ok(format!(
+            "{{ let __sky_m: Vec<{ty}> = vec![{}]; __sky_m }}",
+            parts.join(", ")
+        ));
     }
     Ok(format!("vec![{}]", parts.join(", ")))
 }
@@ -3005,18 +3181,9 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     }
     let ret = render_type(ctx, &func.ret, generics)?;
 
-    // Extract the enclosing function's UI message type so UiLayout /
-    // UiLayoutWith arms can fill `M` from the return-type annotation rather
-    // than hardcoding `()`.  Rendered in THIS function's own generic scope so
-    // a polymorphic view (`view : Cfg msg -> Html msg`) produces `T1`.
-    // `ui_msg_string` lives for the full `emit_func` body, so the borrow
-    // `ui_msg_string.as_deref()` remains valid throughout.
-    let ui_msg_string: Option<String> = match &func.ret {
-        IrType::Ui { msg, .. } => Some(render_type(ctx, msg, generics)?),
-        _ => None,
-    };
-    let generics = generics.with_ui_msg(ui_msg_string.as_deref());
-
+    // Phase-1a: M is inferred bottom-up from concrete element/attrs types
+    // propagated by the region-type–sourced lowerer.  The old ui_msg_string /
+    // with_ui_msg mechanism is removed; `generics` is used directly.
     let body = emit_expr(ctx, &func.body, 1, generics)?;
     Ok(format!(
         "pub fn {name}{generic_clause}({}) -> {ret} {{\n    {body}\n}}\n",

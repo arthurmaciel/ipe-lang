@@ -1,0 +1,27 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+
+
+-- Phase-1a regression lock (#4): closure-shaped onInput handler.
+-- The emitter must Arc-wrap the lambda so the resulting Attribute<Msg>
+-- carries Arc<dyn Fn(String) -> Msg + Send + Sync + 'static>.
+-- oracle_divergence = true: Go oracle does not expose Html.htmlRender.
+
+
+type Msg
+    = SetText String
+
+
+staticHtml : String
+staticHtml =
+    Html.htmlRender
+        (Ui.layout []
+            (Ui.el
+                [ Ui.onInput (\s -> SetText s) ]
+                (Ui.text "input here")))
+
+
+main =
+    println staticHtml

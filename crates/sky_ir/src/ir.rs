@@ -1824,6 +1824,42 @@ pub enum KernelFn {
     HtmlInput,
     /// `Html.img : List HtmlAttr -> Html msg` (arity 1) — void element.
     HtmlImg,
+    // ── M7: Std.Ui / Std.Html event-attribute builders ───────────────────────
+    // Event handlers that carry a plain `msg` value (no closure needed):
+    // Attribute<msg>.
+    //
+    // Emission: `sky_runtime::ui::element::Attribute::EventAttr(
+    //               sky_runtime::html::Event::OnMsg("<name>".to_string(), <msg>))`
+    /// `Ui.onClick : msg -> Attribute msg` (arity 1).
+    UiOnClick,
+    /// `Ui.onFocus : msg -> Attribute msg` (arity 1).
+    UiOnFocus,
+    /// `Ui.onBlur : msg -> Attribute msg` (arity 1).
+    UiOnBlur,
+    /// `Ui.onMouseOver : msg -> Attribute msg` (arity 1).
+    UiOnMouseOver,
+    /// `Ui.onMouseOut : msg -> Attribute msg` (arity 1).
+    UiOnMouseOut,
+    // Event handlers that carry a `String -> msg` closure:
+    //
+    // Emission: `sky_runtime::ui::element::Attribute::EventAttr(
+    //               sky_runtime::html::Event::OnString("<name>".to_string(),
+    //                   std::sync::Arc::new(move |x| (<f>)(x))))`
+    /// `Ui.onInput : (String -> msg) -> Attribute msg` (arity 1).
+    UiOnInput,
+    /// `Ui.onChange : (String -> msg) -> Attribute msg` (arity 1).
+    UiOnChange,
+    /// `Ui.onKeyDown : (String -> msg) -> Attribute msg` (arity 1).
+    UiOnKeyDown,
+    /// `Ui.onKeyUp : (String -> msg) -> Attribute msg` (arity 1).
+    UiOnKeyUp,
+    // Event handlers that carry a `Bool -> msg` closure:
+    //
+    // Emission: `sky_runtime::ui::element::Attribute::EventAttr(
+    //               sky_runtime::html::Event::OnBool("<name>".to_string(),
+    //                   std::sync::Arc::new(move |x| (<f>)(x))))`
+    /// `Event.onBool : (Bool -> msg) -> Attribute msg` (arity 1).
+    UiOnBool,
 }
 
 impl KernelFn {
@@ -2048,6 +2084,17 @@ impl KernelFn {
                 | Self::HtmlP
                 | Self::HtmlInput
                 | Self::HtmlImg
+                // Event-attribute builders (M7 Phase-1a)
+                | Self::UiOnClick
+                | Self::UiOnFocus
+                | Self::UiOnBlur
+                | Self::UiOnMouseOver
+                | Self::UiOnMouseOut
+                | Self::UiOnInput
+                | Self::UiOnChange
+                | Self::UiOnKeyDown
+                | Self::UiOnKeyUp
+                | Self::UiOnBool
         )
     }
 
