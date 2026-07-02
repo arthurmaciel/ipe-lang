@@ -39,21 +39,42 @@ pub fn math_abs(x: i64) -> i64 {
     x.checked_abs().unwrap_or(i64::MAX)
 }
 
-/// Integer division for Sky's `//` operator, TOTAL by construction (no-panic
-/// thesis). Bare `a / b` on `i64` panics on `b == 0` AND on `i64::MIN / -1`
-/// (overflow) — both Sky-reachable from a well-typed program. Divisor `0` → `0`
-/// (matches Elm's `5 // 0 == 0`); `wrapping_div` makes the `MIN / -1` corner
-/// return `i64::MIN` instead of aborting. For every ordinary divisor the result
-/// is identical to `a / b`, so normal programs are byte-unchanged.
+/// Integer division for Sky's `//` operator.
+///
+/// Parity target: Sky-Go `rt.IntDiv` (`runtime-go/rt/rt.go`).
+///
+/// Two cases the bare Rust `a / b` cannot handle on `i64`:
+///
+/// 1. `b == 0` — Rust panics "attempt to divide by zero"; Sky-Go also panics
+///    (`panic("rt.IntDiv: integer division by zero")`), classified as
+///    `DivisionByZero` by the top-level recover and exits 101. We reproduce
+///    the **panic** deliberately (not a silent 0): a `panic!` here carries the
+///    standard "attempt to divide by zero" message so the process's panic
+///    handler classifies it identically (`exit 101, empty stdout`), matching
+///    the `intdiv_by_zero_aborts_exit_101` golden.
+///
+///    NOTE: Elm's `5 // 0 == 0` (returns 0) is a different design choice and
+///    is **not** this port's target. Diverging from Sky-Go to Elm-0 requires
+///    an explicit `sanctioned.divergence` marker — never an implementer's call.
+///
+/// 2. `i64::MIN / -1` — Rust panics "attempt to divide with overflow" even
+///    when `overflow-checks = false`, because this is an unconditional hardware
+///    trap on x86-64. Sky-Go uses two's-complement Go integer arithmetic and
+///    returns `i64::MIN` (wraps silently). `wrapping_div` reproduces that.
+///
+/// For every other `(a, b)` pair the result is identical to `a / b` (truncate
+/// toward zero — Go spec, Elm spec, Rust `wrapping_div` all agree).
+//
+// `clippy::panic` is suppressed here deliberately: this panic IS the
+// DivisionByZero abort that Sky-Go models. The lint exists to prevent
+// accidental panics; this is a classified, tested, intentional one. The
+// `intdiv_by_zero_aborts_exit_101` golden verifies exit 101 / empty stdout.
+#[allow(clippy::panic)]
 pub fn sky_int_div(a: i64, b: i64) -> i64 {
-    if b == 0 { 0 } else { a.wrapping_div(b) }
-}
-
-/// Integer remainder for Sky's `%` operator, TOTAL by construction. `% 0` → `0`
-/// (no panic); `wrapping_rem` covers the `i64::MIN % -1` corner. Identical to
-/// `a % b` for every non-zero divisor.
-pub fn sky_int_rem(a: i64, b: i64) -> i64 {
-    if b == 0 { 0 } else { a.wrapping_rem(b) }
+    if b == 0 {
+        panic!("attempt to divide by zero");
+    }
+    a.wrapping_div(b)
 }
 
 // CONTRACT (documented deliberately — audit 2026-06-19): `min`/`max` use a real

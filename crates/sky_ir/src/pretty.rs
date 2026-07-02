@@ -194,6 +194,7 @@ const fn binop_token(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::And => "&&",
         BinOp::Or => "||",
+        BinOp::IntDiv => "//",
         BinOp::Append => "++",
     }
 }

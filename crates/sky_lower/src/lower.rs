@@ -4083,10 +4083,15 @@ impl<'a> Lowerer<'a> {
             "add" => Ok(BinOp::Add),
             "sub" => Ok(BinOp::Sub),
             "mul" => Ok(BinOp::Mul),
-            // `/` (`fdiv`) and `//` (`idiv`) both lower to the IR's `Div`; the
-            // operand types (Float vs Int) settled by inference pick the Rust
-            // semantics, matching the Go backend.
-            "fdiv" | "idiv" => Ok(BinOp::Div),
+            // `/` is float-only (fdiv) — raw Rust `/` on `f64` is total
+            // (x/0.0 = ±∞, never panics), so BinOp::Div stays.
+            "fdiv" => Ok(BinOp::Div),
+            // `//` is integer-only (idiv). Raw Rust `/` on i64 panics on
+            // b==0 (DivisionByZero) AND on i64::MIN/-1 (signed overflow).
+            // BinOp::IntDiv routes through the total helper
+            // `sky_runtime::math::sky_int_div`, making the panicking i64-/
+            // unrepresentable in the IR.
+            "idiv" => Ok(BinOp::IntDiv),
             "eq" => Ok(BinOp::Eq),
             "neq" => Ok(BinOp::Neq),
             "lt" => Ok(BinOp::Lt),

@@ -2149,6 +2149,12 @@ pub enum BinOp {
     Ge,
     And,
     Or,
+    /// Integer division `//`. Has no sound Rust infix form: raw `/` on `i64`
+    /// panics on `b == 0` (divide by zero) **and** on `i64::MIN / -1`
+    /// (signed overflow); `//` is a Rust line comment, so it cannot be
+    /// emitted literally. The backend routes this variant through the total
+    /// helper `sky_runtime::math::sky_int_div(l, r)`, never via `op_str`.
+    IntDiv,
     /// String append `++`. Unlike the infix arithmetic/comparison operators,
     /// this has no single Rust infix form for two `String`s, so the backend
     /// emits it as a `format!` concatenation rather than via `op_str`.
@@ -3153,6 +3159,7 @@ mod tests {
             BinOp::Sub,
             BinOp::Mul,
             BinOp::Div,
+            BinOp::IntDiv,
             BinOp::Eq,
             BinOp::Neq,
             BinOp::Lt,
@@ -3161,6 +3168,7 @@ mod tests {
             BinOp::Ge,
             BinOp::And,
             BinOp::Or,
+            BinOp::Append,
         ];
         let distinct: BTreeSet<_> = all.iter().map(|op| format!("{op:?}")).collect();
         assert_eq!(distinct.len(), all.len());
