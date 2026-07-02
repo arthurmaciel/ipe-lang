@@ -1,0 +1,14 @@
+[package]
+name = "sky_kernels"
+edition.workspace = true
+version.workspace = true
+
+# ── DAG constraint ──────────────────────────────────────────────────────────
+# `sky_kernels` is a LEAF crate.  Only `sky_intern` and `sky_diagnostics` are
+# permitted as dependencies.  NO dependency on `sky_ir`, `sky_types`, or
+# `sky_backend_rust` is ever allowed — those crates import `sky_kernels`, and
+# a reverse edge would create a cycle.
+[dependencies]
+
+[lints]
+workspace = true

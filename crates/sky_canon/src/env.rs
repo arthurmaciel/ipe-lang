@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 
 use sky_diagnostics::DResult;
 use sky_intern::{Interner, Symbol};
+use sky_kernels::StdlibKernel;
 
 /// Where a (possibly qualified) variable resolves to.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -42,6 +43,14 @@ pub struct Env {
     pub ctors: BTreeMap<Symbol, CtorHome>,
     /// Qualified variable bindings: qualifier → (name → home).
     pub qual_vars: BTreeMap<Symbol, BTreeMap<Symbol, VarHome>>,
+    /// **Phase-A parse-once registry index.**  Maps `(qualifier_sym, name_sym)`
+    /// to the typed [`StdlibKernel`] variant, built anti-drift from
+    /// [`StdlibKernel::ALL`] in `install_prelude_qualifiers`.
+    ///
+    /// Phase B will thread this through `VarHome::Kernel`; Phase A exposes it
+    /// here so the `canon_equals_registry` tripwire test can validate parity
+    /// with `qual_vars` without touching any downstream path.
+    pub stdlib_index: BTreeMap<(Symbol, Symbol), StdlibKernel>,
 }
 
 impl Env {
@@ -671,6 +680,7 @@ impl Env {
                     "onMouseOut",
                     "onKeyDown",
                     "onKeyUp",
+                    "onBool",
                     "onFile",
                     "htmlAttribute",
                     "mediaQuery",
@@ -1021,6 +1031,24 @@ impl Env {
                     .or_default()
                     .extend(canonical_members);
             }
+        }
+
+        // ── Phase-A: parse-once registry index ───────────────────────────────
+        // Derived from the SAME StdlibKernel::ALL + decl() source as the
+        // StdlibKernel enum itself — anti-drift by construction.
+        // Skip internal-only qualifiers (e.g. "_internal_") and the unqualified
+        // Log/Cmd/Sub variants whose qualifiers are absent from qual_vars
+        // (installed via install_builtin_vars or not yet wired); the tripwire
+        // test checks only the registry→canon direction so those omissions are
+        // safe for Phase A.
+        for sk in StdlibKernel::ALL {
+            let decl = sk.decl();
+            if decl.qualifier.starts_with('_') {
+                continue; // e.g. "_internal_" — skip
+            }
+            let qual_sym = interner.intern(decl.qualifier)?;
+            let name_sym = interner.intern(decl.name)?;
+            self.stdlib_index.insert((qual_sym, name_sym), *sk);
         }
 
         Ok(())
