@@ -1,0 +1,221 @@
+//! Emission for `Std.Webview` / `Sky.Webview` app-entry kernel (Phase-1d).
+//!
+//! Wires one Webview kernel:
+//!
+//! * [`KernelFn::WebviewApp`] — `Webview.app cfg` →
+//!   `sky_runtime::webview::webview_app(init, update, view, subs, window_cfg)`.
+//!   5-field closed cfg: init / update / view / subscriptions / window,
+//!   where `window = { title : String, size : (Int, Int) }`.
+//!
+//! # Correctness constraints (MAKE INVALID STATES UNREPRESENTABLE)
+//!
+//! * All five required cfg fields are looked up fail-closed (missing field →
+//!   [`Diagnostic::CompilerBug`], not silent drop).
+//! * **G4**: `window` MUST be an inline `Expr::Record` AND `size` within it MUST
+//!   be an inline 2-element `Expr::Tuple`. Any non-literal shape is rejected
+//!   fail-closed at the emit site (defence-in-depth; the constrain scheme already
+//!   enforces the shape structurally).
+//! * Function fields (init/update/view/subscriptions) are emitted via
+//!   `emit_webview_fn` (raw function name for `FuncValue`, fallback to
+//!   `emit_expr_at`). A named `fn` item satisfies `Send + Sync + 'static` via
+//!   the blanket impl; `Box<dyn Fn>` does not without explicit bound annotation.
+//! * **G3**: The `fn main` entry MUST use `block_on_current_thread(sky_main())`
+//!   when `uses_webview` is set. This switch is performed in `project.rs`
+//!   (`emit_program`) via an anchor-asserted `replacen-once` that aborts with
+//!   `CompilerBug` on zero-match — ensuring a well-typed Webview app never
+//!   silently runs the event loop off the main thread (a hard tao/Cocoa
+//!   `NSApplication` requirement on macOS).
+
+use sky_diagnostics::{DResult, Diagnostic};
+use sky_ir::{Callee, Expr, KernelFn};
+
+use crate::EmitCtx;
+use crate::emit_expr::{callee_name, emit_expr_at};
+use crate::emit_types::GenericScope;
+
+/// Dispatch a `Std.Webview` / `Sky.Webview` kernel call.
+///
+/// Returns `Some(emitted)` for `WebviewApp`; `None` for any other variant
+/// (defensive — the caller already guards on `k.is_webview()`).
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub fn emit_webview_call(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    let Callee::Kernel(k) = callee else {
+        return Ok(None);
+    };
+
+    match k {
+        // ── Webview.app { init, update, view, subscriptions, window } ──────
+        //
+        // view : Model -> Html Msg   (view wraps Ui.layout [] element → Html)
+        // window : { title : String, size : (Int, Int) }
+        // Runtime entry: `sky_runtime::webview::webview_app(init, update, view, subs, window)`
+        KernelFn::WebviewApp => {
+            let [cfg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_webview_call::WebviewApp",
+                    detail: format!("Webview.app requires 1 argument, got {}", args.len()),
+                });
+            };
+            let Expr::Record(fields) = cfg_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_webview_call::WebviewApp",
+                    detail: "Webview.app cfg must be an inline record literal; \
+                             non-literal cfg is not supported in Phase-1d"
+                        .into(),
+                });
+            };
+            emit_webview_app_inner(ctx, fields, indent, child, generics)
+        }
+
+        // Any non-Webview kernel variant: let the standard path handle it.
+        _ => Ok(None),
+    }
+}
+
+// ── Internal ──────────────────────────────────────────────────────────────────
+
+/// Emit `sky_runtime::webview::webview_app(init, update, view, subs, window)`.
+///
+/// **G4 gate — fail-closed on two levels:**
+/// 1. `window` MUST be an inline `Expr::Record` literal.
+/// 2. `size` within the window record MUST be an inline 2-element `Expr::Tuple`
+///    literal `(w, h)`.
+///
+/// `title` may be any String-typed expression (variable, literal, concatenation).
+/// Both checks emit [`Diagnostic::CompilerBug`] on failure — they are structural
+/// invariants enforced by the constrain scheme, so a violation is a compiler bug.
+///
+/// # Function-field emission
+///
+/// Same discipline as `emit_live_app_inner` / `emit_tui_inner`: named `fn` items
+/// are emitted via `emit_webview_fn` (raw identifier) to satisfy
+/// `Send + Sync + 'static` via the blanket impl. A `Box<dyn Fn>` does not carry
+/// these bounds without explicit annotation.
+fn emit_webview_app_inner(
+    ctx: &EmitCtx,
+    fields: &[(sky_intern::Symbol, Expr)],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    // All five fields are required — fail-closed on any miss (compiler bug, not
+    // user error: the constrain scheme enforces the 5-field shape upstream).
+    let init_e = lookup_field(ctx, fields, "init")?;
+    let update_e = lookup_field(ctx, fields, "update")?;
+    let view_e = lookup_field(ctx, fields, "view")?;
+    let subs_e = lookup_field(ctx, fields, "subscriptions")?;
+    let window_e = lookup_field(ctx, fields, "window")?;
+
+    // ── G4 gate 1: `window` must be an inline record literal ─────────────────
+    let Expr::Record(win_fields) = window_e else {
+        return Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_webview_app_inner::G4_window",
+            detail: "Webview.app `window` field must be an inline record literal \
+                     `{ title = ..., size = (..., ...) }` in Phase-1d; \
+                     a let-bound WindowCfg variable is not supported yet"
+                .into(),
+        });
+    };
+
+    let title_e = lookup_field(ctx, win_fields, "title")?;
+    let size_e = lookup_field(ctx, win_fields, "size")?;
+
+    // ── G4 gate 2: `size` must be an inline 2-element tuple literal ──────────
+    let Expr::Tuple(size_elems) = size_e else {
+        return Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_webview_app_inner::G4_size",
+            detail: "Webview.app `window.size` must be an inline 2-tuple literal `(w, h)` \
+                     in Phase-1d; a let-bound size variable is not supported yet"
+                .into(),
+        });
+    };
+    let [w_e, h_e] = size_elems.as_slice() else {
+        return Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_webview_app_inner::G4_size_arity",
+            detail: format!(
+                "Webview.app `window.size` must be a 2-tuple `(Int, Int)` (width, height), \
+                 but got a {}-element tuple",
+                size_elems.len()
+            ),
+        });
+    };
+
+    let init_s = emit_webview_fn(ctx, init_e, indent, child, generics)?;
+    let update_s = emit_webview_fn(ctx, update_e, indent, child, generics)?;
+    let view_s = emit_webview_fn(ctx, view_e, indent, child, generics)?;
+    let subs_s = emit_webview_fn(ctx, subs_e, indent, child, generics)?;
+    // `title` may be any String-typed expression.
+    let title_s = emit_expr_at(ctx, title_e, indent, child, generics)?;
+    // `size` tuple elements: (w, h) — both Int-typed.
+    let w_s = emit_expr_at(ctx, w_e, indent, child, generics)?;
+    let h_s = emit_expr_at(ctx, h_e, indent, child, generics)?;
+
+    Ok(Some(format!(
+        "sky_runtime::webview::webview_app(\
+         {init_s}, \
+         {update_s}, \
+         {view_s}, \
+         {subs_s}, \
+         sky_runtime::webview::WebviewWindowCfg {{ title: {title_s}, size: ({w_s}, {h_s}) }}\
+         )"
+    )))
+}
+
+/// Emit a cfg-field expression for a Webview app-entry kernel.
+///
+/// Mirrors `emit_live_fn` (`emit_live.rs`) and `emit_tui_fn` (`emit_tui.rs`)
+/// exactly: for a named function reference ([`Expr::FuncValue`]), emits the raw
+/// callee name (e.g. `Main_init`) rather than a boxed closure. A named function
+/// item satisfies `Fn(…) + Send + Sync + 'static` via the compiler's blanket impl.
+///
+/// For any other expression (lambda, local variable, etc.) falls back to the
+/// general [`emit_expr_at`] emitter.
+fn emit_webview_fn(
+    ctx: &EmitCtx,
+    e: &Expr,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<String> {
+    if let Expr::FuncValue { callee, .. } = e {
+        // Raw function-item reference: satisfies Send + Sync + 'static implicitly.
+        return callee_name(ctx, callee);
+    }
+    emit_expr_at(ctx, e, indent, child, generics)
+}
+
+/// Find a record field by its Sky source name in an IR field list.
+///
+/// Fail-closed: a missing required field surfaces a [`Diagnostic::CompilerBug`]
+/// rather than silently emitting wrong code (MAKE INVALID STATES UNREPRESENTABLE).
+fn lookup_field<'f>(
+    ctx: &EmitCtx,
+    fields: &'f [(sky_intern::Symbol, Expr)],
+    name: &str,
+) -> DResult<&'f Expr> {
+    for (sym, expr) in fields {
+        if ctx.resolve_ident(*sym)? == name {
+            return Ok(expr);
+        }
+    }
+    Err(Diagnostic::CompilerBug {
+        where_: "sky_backend_rust::emit_webview_call",
+        detail: format!(
+            "required Webview cfg field `{name}` not found; \
+             available fields: [{}]",
+            fields
+                .iter()
+                .filter_map(|(s, _)| ctx.resolve_ident(*s).ok())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    })
+}

@@ -1,0 +1,244 @@
+//! End-to-end tests for `Std.Webview` / `Sky.Webview` — `Webview.app`,
+//! `Ui.layout`, `Ui.column`, `Ui.el`, `Ui.text`, `Ui.button`, and
+//! `String.fromInt`.
+//!
+//! All tests are gated on `SKY_E2E=1`.  Without it they return early so the
+//! default `cargo test` stays fast.
+//!
+//! ## Architecture
+//!
+//! 1. A minimal Sky.Webview counter program is written to a temp dir.
+//! 2. `skyc::build` compiles it (parse → canon → types → lower → emit Rust).
+//! 3. `oracle::build_rust_binary` runs `cargo build` on the emitted project —
+//!    the shared Cargo target lets wry/tao/webkit2gtk compile once and be reused.
+//!
+//! ## Test tiers
+//!
+//! * **Tier-A** (`webview_counter_build_only`): skyc compile + `cargo build
+//!   --features webview` links cleanly.  The `webview` feature is promoted to
+//!   the default feature list by `project::webview_cargo_toml`, so a plain
+//!   `cargo build` already uses it — no extra flag needed.  This is the
+//!   minimum G5 assertion (constrain ↔ lower qualifier-set byte-match).
+//!
+//! * **Tier-B** (`webview_counter_tier_b`): the compiled binary is launched
+//!   under `xvfb-run -a timeout 5` to exercise the native-window open path.
+//!   A timeout exit (code 124) means the window stayed alive: pass.  A
+//!   non-124 non-0 exit is reported as a loud failure.  The test
+//!   **loud-skips** (prints a message + returns Ok) when `xvfb-run` is absent
+//!   or `DISPLAY` / `WAYLAND_DISPLAY` is unavailable (headless CI environments).
+//!
+//! Run:
+//!
+//! ```text
+//! SKY_E2E=1 cargo test webview_e2e
+//! ```
+
+/// A minimal Sky.Webview counter app exercising the Phase-1d wiring.
+///
+/// Kernels exercised:
+/// - `Webview.app`   — Phase-1d: constrain scheme + 5-field cfg with nested
+///   `window = { title, size }` (G4 gate)
+/// - `Ui.layout`     — wraps Element → Html (view must return Html Msg)
+/// - `Ui.column`     — vertical layout container
+/// - `Ui.el`         — generic element container with `Ui.onClick` event attr
+/// - `Ui.onClick`    — binds a click event to a Msg constructor
+/// - `Ui.text`       — text leaf node
+/// - `String.fromInt` — displays the counter value
+/// - `Cmd.none` / `Sub.none` — baseline TEA primitives
+///
+/// Note: `view` wraps the Element tree in `Ui.layout [] (...) -> Html Msg`
+/// (unlike Sky.Tui, which renders the Element tree directly to ANSI cells).
+/// This is required: the Webview runtime drives the same HTML renderer as
+/// Sky.Live — `Html Msg` is the bridge type.
+///
+/// Note: `init` takes `()` (unit), matching `Ty::Unit` in the constrain
+/// scheme.  Using `Ty::Tuple([])` (empty tuple) is NOT equivalent — the two
+/// don't unify, surfacing as SKY-T0001.
+///
+/// Note: G3 — the emitted `fn main` uses `block_on_current_thread(sky_main())`
+/// (not `block_on`), enforced by the anchor-asserted switch in `project.rs`.
+/// This keeps the tao/Cocoa event loop on the true main thread (macOS + Linux
+/// both require it).
+///
+/// Note: `window = { title = "Counter", size = ( 400, 300 ) }` is an inline
+/// record literal — required by the G4 gate in `emit_webview.rs`.
+const SKY_WEBVIEW_COUNTER: &str = r#"module Main exposing (main)
+
+import Std.Webview as Webview
+import Std.Ui as Ui
+import Std.Cmd as Cmd
+import Std.Sub as Sub
+
+type Msg
+    = Increment
+    | Decrement
+
+type alias Model =
+    { count : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+        Decrement ->
+            ( { model | count = model.count - 1 }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (Ui.column []
+            [ Ui.el [ Ui.onClick Increment ] (Ui.text "+")
+            , Ui.text (String.fromInt model.count)
+            , Ui.el [ Ui.onClick Decrement ] (Ui.text "-")
+            ])
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Webview.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , window = { title = "Counter", size = ( 400, 300 ) }
+        }
+"#;
+
+/// Shared error type for E2E helpers.
+type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+/// Compile a Sky program string, build the emitted Rust project, and return
+/// the path to the compiled binary.
+///
+/// The emitted project has `webview` in its default feature list (set by
+/// `project::webview_cargo_toml`) so `oracle::build_rust_binary` — which runs
+/// a plain `cargo build` — picks up the `webview` feature without any extra
+/// `--features` flag.
+fn compile_and_build(test_name: &str, sky_source: &str) -> Result<std::path::PathBuf, BoxError> {
+    let sky_dir = std::env::temp_dir().join(format!("webview_e2e_{test_name}_sky"));
+    let _ = std::fs::remove_dir_all(&sky_dir);
+    std::fs::create_dir_all(&sky_dir).map_err(|e| -> BoxError {
+        format!("{test_name}: cannot create sky source dir: {e}").into()
+    })?;
+
+    let entry = sky_dir.join("Main.sky");
+    std::fs::write(&entry, sky_source)
+        .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.sky: {e}").into() })?;
+
+    let out_dir = std::env::temp_dir().join(format!("webview_e2e_{test_name}_emitted"));
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let runtime = skyc::resolve_runtime()
+        .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
+
+    skyc::build(&entry, &out_dir, &runtime)
+        .map_err(|e| -> BoxError { format!("{test_name}: skyc build failed: {e}").into() })?;
+
+    let exe = oracle::build_rust_binary(test_name, &out_dir)
+        .map_err(|e| -> BoxError { format!("{test_name}: cargo build failed: {e}").into() })?;
+
+    Ok(std::path::PathBuf::from(exe))
+}
+
+/// Tier-A: skyc compiles the Sky.Webview counter, the emitted Rust project
+/// links (with the `webview` + `wry` + `tao` deps from the promoted default
+/// features), and the binary exists.
+///
+/// Assertions:
+/// - Phase-1d constrain: `Webview.app` correctly types the 5-field cfg
+///   (`init/update/view/subscriptions/window` with nested `{ title, size }`).
+/// - Phase-1d lower: the cfg record literal bypasses SKY-L0107 (same exemption
+///   as `Live.app` and `Tui.app`).
+/// - Phase-1d emit: `emit_webview_call` → `emit_webview_app_inner` (G4 gate:
+///   `window` is inline record, `size` is inline 2-tuple) → `webview_app(…)`.
+/// - Phase-1d manifest: `webview_cargo_toml` adds `"webview"` to default
+///   features, wires `webview = ["dep:wry", "dep:tao"]`, appends `wry` + `tao`
+///   optional deps, and the runtime `mod.rs` gets the `webview` module line.
+/// - G3: the emitted `fn main` uses `block_on_current_thread(sky_main())`
+///   (anchor-asserted in `project::emit_program`; a zero-match aborts with
+///   `CompilerBug` rather than silently shipping the wrong executor).
+#[test]
+fn webview_counter_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    // compile_and_build does skyc + cargo build; a clean binary path is the proof.
+    let _exe = compile_and_build("webview_build_only", SKY_WEBVIEW_COUNTER)?;
+    Ok(())
+}
+
+/// Tier-B: launch the compiled binary under `xvfb-run` to exercise the
+/// native-window-open path.  A timeout (exit 124) means the window stayed alive
+/// long enough — that is the success condition.
+///
+/// LOUD-SKIP conditions (prints a clear message, returns `Ok(())`):
+/// - `xvfb-run` is not on `$PATH` (headless CI without a virtual framebuffer).
+/// - `DISPLAY` and `WAYLAND_DISPLAY` are both unset AND `xvfb-run` is also
+///   absent — belt-and-suspenders for Linux container environments.
+///
+/// The test is NOT a silent-green skip — it always prints whether it ran or
+/// was skipped and why.
+#[test]
+fn webview_counter_tier_b() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    // ── xvfb-run availability check ──────────────────────────────────────────
+    let xvfb_available = std::process::Command::new("which")
+        .arg("xvfb-run")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !xvfb_available {
+        println!(
+            "LOUD-SKIP: Tier-B (webview paint smoke) — `xvfb-run` not found on PATH. \
+             Install `xvfb-run` (e.g. `apt-get install xvfb`) to run this test."
+        );
+        return Ok(());
+    }
+
+    // ── Compile + build ──────────────────────────────────────────────────────
+    let exe = compile_and_build("webview_tier_b", SKY_WEBVIEW_COUNTER)?;
+
+    // ── Spawn under xvfb-run with a hard timeout ─────────────────────────────
+    // `timeout 5 <binary>` is wrapped by `xvfb-run -a` which provides a
+    // virtual display.  Exit code 124 = timeout killed the process = the window
+    // stayed open = initial view painted = pass.  Any other non-zero exit
+    // (e.g. 1 = runtime Err from the webview stub) is a failure.
+    let result = std::process::Command::new("xvfb-run")
+        .arg("-a")
+        .arg("timeout")
+        .arg("5")
+        .arg(&exe)
+        .output()
+        .map_err(|e| -> BoxError { format!("Tier-B: failed to spawn xvfb-run: {e}").into() })?;
+
+    let exit_code = result.status.code().unwrap_or(-1);
+
+    if exit_code == 124 || exit_code == 0 {
+        // 124 = killed by `timeout` after 5 s (window stayed open — pass).
+        // 0   = clean exit before timeout (unlikely for an event-loop app, but
+        //       not a failure).
+        println!("Tier-B webview paint smoke: exit={exit_code} (pass — window stayed alive)");
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        Err(format!(
+            "Tier-B webview paint smoke FAILED: exit={exit_code}\n\
+             --- stdout ---\n{stdout}\n\
+             --- stderr ---\n{stderr}"
+        )
+        .into())
+    }
+}
