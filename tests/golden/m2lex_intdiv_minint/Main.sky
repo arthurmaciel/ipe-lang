@@ -1,0 +1,20 @@
+module Main exposing (main)
+
+-- m2lex golden: integer division at the i64::MIN // -1 corner.
+--
+-- Genuine F6 regression: raw Rust `/` on i64 panics here ("attempt to divide
+-- with overflow") even when overflow-checks are off — it is an unconditional
+-- x86-64 hardware trap. Sky-Go rt.IntDiv uses two's-complement Go integer
+-- arithmetic and returns i64::MIN (wraps silently). The fix (BinOp::IntDiv
+-- → sky_runtime::math::sky_int_div with wrapping_div) must reproduce this.
+--
+-- Construct i64::MIN as (-9223372036854775807 - 1) because the positive
+-- magnitude 9223372036854775808 overflows i64 as a literal (Active Limitation
+-- #4: negative literal arguments need parens).
+
+minInt : Int
+minInt =
+    (-9223372036854775807) - 1
+
+main =
+    println (String.fromInt (minInt // (-1)))

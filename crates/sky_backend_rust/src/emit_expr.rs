@@ -31,9 +31,18 @@ fn indent_of(level: usize) -> String {
     "    ".repeat(level)
 }
 
-/// The Rust spelling of a binary operator. Every Sky M1-core operator maps to
-/// the identically-spelled Rust operator except `/=` (Sky inequality), which is
-/// Rust's `!=`.
+/// The Rust spelling of a binary operator for use in infix emission.
+///
+/// Every Sky M1-core arithmetic/comparison/boolean operator maps to the
+/// identically-spelled Rust operator except `/=` (Sky inequality → Rust `!=`).
+///
+/// `IntDiv` and `Append` are listed here only to keep the match exhaustive
+/// (a compiler requirement when a new `BinOp` variant is added); they MUST
+/// NOT reach the infix branch:
+/// - `BinOp::IntDiv` emits as a helper call, never as infix — `//` is a Rust
+///   line comment, so reaching this arm is a codegen bug, caught at compile time
+///   by the exhaustive `match op` in `Expr::BinOp`.
+/// - `BinOp::Append` emits as `format!`, similarly intercepted before this arm.
 const fn op_str(op: BinOp) -> &'static str {
     match op {
         BinOp::Add => "+",
@@ -48,8 +57,15 @@ const fn op_str(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::And => "&&",
         BinOp::Or => "||",
-        // `Append` has no infix Rust form; the `BinOp` arm special-cases it to a
-        // `format!` before reaching here. The `++` token keeps the match total.
+        // `IntDiv` is routed through sky_runtime::math::sky_int_div in the
+        // Expr::BinOp handler — it must never reach the infix `op_str` path.
+        // `//` here is a Rust line comment, making silent corruption impossible:
+        // any accidental infix emit would comment out the rest of the expression.
+        // Listed for exhaustiveness so adding a future BinOp variant is a
+        // compile error here, not a silent gap.
+        BinOp::IntDiv => "//",
+        // `Append` has no infix Rust form; the `BinOp` arm routes it to
+        // `format!` before reaching here. Listed for exhaustiveness.
         BinOp::Append => "++",
     }
 }
@@ -2205,15 +2221,33 @@ pub fn emit_expr_at(
         Expr::BinOp { op, lhs, rhs } => {
             let l = emit_expr_at(ctx, lhs, indent, child, generics)?;
             let r = emit_expr_at(ctx, rhs, indent, child, generics)?;
-            // `++` (string append) has no Rust infix form for two owned
-            // `String`s, so it renders as a `format!` concatenation, which
-            // borrows both operands via `Display` and yields a fresh `String` —
-            // no ownership or clone obligation on either side. Every other
-            // operator renders infix via `op_str`.
-            if matches!(op, BinOp::Append) {
-                Ok(format!("format!(\"{{}}{{}}\", {l}, {r})"))
-            } else {
-                Ok(format!("({} {} {})", l, op_str(*op), r))
+            // Exhaustive match — no wildcard. Adding a new `BinOp` variant
+            // without wiring it here is a compile error, not a silent gap.
+            match op {
+                // `++` (string append) has no Rust infix form for two owned
+                // `String`s; `format!` borrows both via `Display` and yields a
+                // fresh `String` — no ownership or clone obligation.
+                BinOp::Append => Ok(format!("format!(\"{{}}{{}}\", {l}, {r})")),
+                // `//` (integer division). Raw Rust `/` on `i64` panics on
+                // `b == 0` AND on `i64::MIN / -1`; `//` is itself a Rust line
+                // comment, so raw infix emit is doubly unsound. Route through
+                // the total helper that matches Sky-Go `rt.IntDiv` semantics:
+                // b==0 → panic("attempt to divide by zero") (abort, exit 101);
+                // i64::MIN / -1 → i64::MIN (wrapping, no abort).
+                BinOp::IntDiv => Ok(format!("sky_runtime::math::sky_int_div({l}, {r})")),
+                // Every remaining operator has a sound Rust infix form.
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::Eq
+                | BinOp::Neq
+                | BinOp::Lt
+                | BinOp::Gt
+                | BinOp::Le
+                | BinOp::Ge
+                | BinOp::And
+                | BinOp::Or => Ok(format!("({} {} {})", l, op_str(*op), r)),
             }
         }
         Expr::Let { name, value, body } => {
