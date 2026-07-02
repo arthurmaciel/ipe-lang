@@ -6,6 +6,7 @@ version.workspace = true
 [dependencies]
 sky_intern = { path = "../sky_intern" }
 sky_diagnostics = { path = "../sky_diagnostics" }
+sky_kernels = { path = "../sky_kernels" }
 
 [lints]
 workspace = true

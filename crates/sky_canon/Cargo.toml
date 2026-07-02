@@ -7,6 +7,7 @@ version.workspace = true
 sky_intern = { path = "../sky_intern" }
 sky_diagnostics = { path = "../sky_diagnostics" }
 sky_syntax = { path = "../sky_syntax" }
+sky_kernels = { path = "../sky_kernels" }
 
 [dev-dependencies]
 sky_parse = { path = "../sky_parse" }

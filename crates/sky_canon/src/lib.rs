@@ -1322,4 +1322,72 @@ mod tests {
             "expected DuplicateType, got {err:?}"
         );
     }
+
+    /// **Phase-A tripwire: registry → canon parity.**
+    ///
+    /// For every [`sky_kernels::StdlibKernel`] variant in `ALL`, if the
+    /// variant's declared qualifier IS present in `Env.qual_vars`, then the
+    /// variant's declared name must ALSO be present in that qualifier's member
+    /// map.  A failure here means `QUALIFIERS` in `env.rs` diverged from
+    /// `StdlibKernel::ALL + decl()` — the anti-drift invariant is broken.
+    ///
+    /// The check is intentionally one-directional (registry → canon): names
+    /// present in `QUALIFIERS` but absent from the registry (e.g. `Basics.*`
+    /// helper aliases) are NOT an error.  Qualifiers absent from `qual_vars`
+    /// entirely (e.g. `"Log"`, `"PubSub"`) are skipped automatically.
+    #[test]
+    fn canon_equals_registry() {
+        use sky_intern::Interner;
+        use sky_kernels::StdlibKernel;
+
+        let mut interner = Interner::new();
+        let env = Env::initial(vec![], &mut interner)
+            .expect("Env::initial must not fail in the tripwire test");
+
+        for sk in StdlibKernel::ALL {
+            let decl = sk.decl();
+
+            // Skip internal-only qualifiers (e.g. "_internal_").
+            if decl.qualifier.starts_with('_') {
+                continue;
+            }
+
+            // Intern qualifier + name.  If they were already interned by
+            // install_prelude_qualifiers we get the same symbol; if not, the
+            // fresh symbol will simply not appear in qual_vars (correct skip).
+            // `Interner::intern` is infallible in practice (OOM only).
+            let qual_sym = interner
+                .intern(decl.qualifier)
+                .expect("tripwire: intern qualifier OOM");
+            let name_sym = interner
+                .intern(decl.name)
+                .expect("tripwire: intern name OOM");
+
+            // If the qualifier is not in qual_vars at all (e.g. "Log" is only
+            // in `vars`, not `qual_vars`; "PubSub" is not yet wired), skip.
+            let Some(members) = env.qual_vars.get(&qual_sym) else {
+                continue;
+            };
+
+            // The qualifier IS registered — so the name must also be present.
+            assert!(
+                members.contains_key(&name_sym),
+                "StdlibKernel::{sk:?} declares ({:?}, {:?}) but {:?} is missing \
+                 from env.qual_vars[{:?}]; update QUALIFIERS in env.rs to match \
+                 StdlibKernel::decl()",
+                decl.qualifier,
+                decl.name,
+                decl.name,
+                decl.qualifier,
+            );
+
+            // Also verify the stdlib_index was populated for this entry.
+            assert!(
+                env.stdlib_index.contains_key(&(qual_sym, name_sym)),
+                "StdlibKernel::{sk:?} is in qual_vars but missing from stdlib_index; \
+                 the Phase-A registry-population loop in install_prelude_qualifiers \
+                 must have skipped it",
+            );
+        }
+    }
 }
