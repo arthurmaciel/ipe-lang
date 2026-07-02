@@ -1,0 +1,1 @@
+divergence: Rust backend emits compact inline CSS with no <style> reset block; Go backend emits a different HTML skeleton with a separate CSS reset tag and trailing spaces. Both produce semantically correct Flexbox layouts. The render format divergence is accepted for Phase 0 — the Go backend is a separate renderer; strict byte-parity for HTML output is a Phase 1+ goal.

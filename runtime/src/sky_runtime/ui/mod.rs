@@ -6,3 +6,10 @@
 
 pub mod element;
 pub use element::*;
+
+pub mod render;
+
+/// Kernel-dispatch helpers — called directly by skyc-emitted code.  Each
+/// function corresponds to a `KernelFn` variant in `sky_ir` and is named
+/// with the `naming.rs` trailing-underscore convention.
+pub mod helpers;

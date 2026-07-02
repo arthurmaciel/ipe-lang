@@ -137,6 +137,10 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
             records: vec![],
             uses_tea: false,
             uses_server: false,
+            uses_ui: false,
+            uses_live: false,
+            uses_tui: false,
+            uses_webview: false,
         }],
     })
 }
@@ -276,6 +280,10 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
             records: vec![],
             uses_tea: false,
             uses_server: false,
+            uses_ui: false,
+            uses_live: false,
+            uses_tui: false,
+            uses_webview: false,
         }],
     })
 }

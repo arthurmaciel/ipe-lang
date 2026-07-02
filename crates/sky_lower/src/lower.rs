@@ -21,7 +21,7 @@ use sky_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{
     Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
-    Module, Pat, Program, TypeDef, Variant,
+    Module, Pat, Program, TypeDef, UiCtor, Variant,
 };
 use sky_types::{SolvedTypes, Ty, TyBounds};
 
@@ -240,7 +240,12 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
-        | IrType::Generic(_) => false,
+        | IrType::Generic(_)
+        // M7: nullary plain types (`Length`, `Color`, etc.) trivially contain no
+        // functions.  `LiveReq` / `LiveRoute` are opaque handles with no `Fn` fields.
+        | IrType::UiPlain(_)
+        | IrType::LiveReq
+        | IrType::LiveRoute => false,
         IrType::Enum { args, .. } => args.iter().any(ir_contains_fun),
         IrType::Maybe(elem) | IrType::List(elem) => ir_contains_fun(elem),
         IrType::Result(err, ok) => ir_contains_fun(err) || ir_contains_fun(ok),
@@ -248,6 +253,8 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         IrType::Set(a) => ir_contains_fun(a),
         IrType::Tuple(elems) => elems.iter().any(ir_contains_fun),
         IrType::Record(fields) => fields.values().any(ir_contains_fun),
+        // M7: `Element<M>` / `Html<M>` carry a msg type parameter — recurse.
+        IrType::Ui { msg, .. } => ir_contains_fun(msg),
     }
 }
 
@@ -448,6 +455,201 @@ fn expr_uses_server_kernel(expr: &Expr) -> bool {
 /// Delegates to [`KernelFn::is_server`].
 const fn kernel_is_server(k: KernelFn) -> bool {
     k.is_server()
+}
+
+// ── M7: Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview detection ───────
+
+/// Return `true` when `expr` (or any sub-expression) contains a call to a
+/// Std.Ui / Std.Html render kernel introduced in M7.
+fn expr_uses_ui_kernel(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, args } => {
+            let is_ui = matches!(callee, Callee::Kernel(k) if k.is_ui());
+            is_ui || args.iter().any(expr_uses_ui_kernel)
+        }
+        Expr::FuncValue { callee, .. } => matches!(callee, Callee::Kernel(k) if k.is_ui()),
+        Expr::Apply { func, args } => {
+            expr_uses_ui_kernel(func) || args.iter().any(expr_uses_ui_kernel)
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            expr_uses_ui_kernel(value) || expr_uses_ui_kernel(body)
+        }
+        Expr::Lambda { body, .. } => expr_uses_ui_kernel(body),
+        Expr::If { cond, then_, else_ } => {
+            expr_uses_ui_kernel(cond) || expr_uses_ui_kernel(then_) || expr_uses_ui_kernel(else_)
+        }
+        Expr::Match(m) => {
+            expr_uses_ui_kernel(m.scrutinee())
+                || m.arms().iter().any(|arm| expr_uses_ui_kernel(&arm.body))
+        }
+        Expr::Tuple(elems) => elems.iter().any(expr_uses_ui_kernel),
+        Expr::List { items, .. } => items.iter().any(expr_uses_ui_kernel),
+        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_ui_kernel(v)),
+        Expr::Access { record, .. } => expr_uses_ui_kernel(record),
+        Expr::Update { record, fields } => {
+            expr_uses_ui_kernel(record) || fields.iter().any(|(_, v)| expr_uses_ui_kernel(v))
+        }
+        Expr::BinOp { lhs, rhs, .. } => expr_uses_ui_kernel(lhs) || expr_uses_ui_kernel(rhs),
+        Expr::Ctor { args, .. } => args.iter().any(expr_uses_ui_kernel),
+        Expr::Cons { head, tail } => expr_uses_ui_kernel(head) || expr_uses_ui_kernel(tail),
+        Expr::TaskSeq { effect, rest } => expr_uses_ui_kernel(effect) || expr_uses_ui_kernel(rest),
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_) => false,
+    }
+}
+
+/// Return `true` when `expr` (or any sub-expression) contains a call to a
+/// Std.Live / Sky.Live app-entry kernel introduced in M7.
+fn expr_uses_live_kernel(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, args } => {
+            let is_live = matches!(callee, Callee::Kernel(k) if k.is_live());
+            is_live || args.iter().any(expr_uses_live_kernel)
+        }
+        Expr::FuncValue { callee, .. } => matches!(callee, Callee::Kernel(k) if k.is_live()),
+        Expr::Apply { func, args } => {
+            expr_uses_live_kernel(func) || args.iter().any(expr_uses_live_kernel)
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            expr_uses_live_kernel(value) || expr_uses_live_kernel(body)
+        }
+        Expr::Lambda { body, .. } => expr_uses_live_kernel(body),
+        Expr::If { cond, then_, else_ } => {
+            expr_uses_live_kernel(cond)
+                || expr_uses_live_kernel(then_)
+                || expr_uses_live_kernel(else_)
+        }
+        Expr::Match(m) => {
+            expr_uses_live_kernel(m.scrutinee())
+                || m.arms().iter().any(|arm| expr_uses_live_kernel(&arm.body))
+        }
+        Expr::Tuple(elems) => elems.iter().any(expr_uses_live_kernel),
+        Expr::List { items, .. } => items.iter().any(expr_uses_live_kernel),
+        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_live_kernel(v)),
+        Expr::Access { record, .. } => expr_uses_live_kernel(record),
+        Expr::Update { record, fields } => {
+            expr_uses_live_kernel(record) || fields.iter().any(|(_, v)| expr_uses_live_kernel(v))
+        }
+        Expr::BinOp { lhs, rhs, .. } => expr_uses_live_kernel(lhs) || expr_uses_live_kernel(rhs),
+        Expr::Ctor { args, .. } => args.iter().any(expr_uses_live_kernel),
+        Expr::Cons { head, tail } => expr_uses_live_kernel(head) || expr_uses_live_kernel(tail),
+        Expr::TaskSeq { effect, rest } => {
+            expr_uses_live_kernel(effect) || expr_uses_live_kernel(rest)
+        }
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_) => false,
+    }
+}
+
+/// Return `true` when `expr` (or any sub-expression) contains a call to a
+/// Std.Tui / Sky.Tui app-entry kernel introduced in M7.
+fn expr_uses_tui_kernel(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, args } => {
+            let is_tui = matches!(callee, Callee::Kernel(k) if k.is_tui());
+            is_tui || args.iter().any(expr_uses_tui_kernel)
+        }
+        Expr::FuncValue { callee, .. } => matches!(callee, Callee::Kernel(k) if k.is_tui()),
+        Expr::Apply { func, args } => {
+            expr_uses_tui_kernel(func) || args.iter().any(expr_uses_tui_kernel)
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            expr_uses_tui_kernel(value) || expr_uses_tui_kernel(body)
+        }
+        Expr::Lambda { body, .. } => expr_uses_tui_kernel(body),
+        Expr::If { cond, then_, else_ } => {
+            expr_uses_tui_kernel(cond) || expr_uses_tui_kernel(then_) || expr_uses_tui_kernel(else_)
+        }
+        Expr::Match(m) => {
+            expr_uses_tui_kernel(m.scrutinee())
+                || m.arms().iter().any(|arm| expr_uses_tui_kernel(&arm.body))
+        }
+        Expr::Tuple(elems) => elems.iter().any(expr_uses_tui_kernel),
+        Expr::List { items, .. } => items.iter().any(expr_uses_tui_kernel),
+        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_tui_kernel(v)),
+        Expr::Access { record, .. } => expr_uses_tui_kernel(record),
+        Expr::Update { record, fields } => {
+            expr_uses_tui_kernel(record) || fields.iter().any(|(_, v)| expr_uses_tui_kernel(v))
+        }
+        Expr::BinOp { lhs, rhs, .. } => expr_uses_tui_kernel(lhs) || expr_uses_tui_kernel(rhs),
+        Expr::Ctor { args, .. } => args.iter().any(expr_uses_tui_kernel),
+        Expr::Cons { head, tail } => expr_uses_tui_kernel(head) || expr_uses_tui_kernel(tail),
+        Expr::TaskSeq { effect, rest } => {
+            expr_uses_tui_kernel(effect) || expr_uses_tui_kernel(rest)
+        }
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_) => false,
+    }
+}
+
+/// Return `true` when `expr` (or any sub-expression) contains a call to a
+/// Std.Webview / Sky.Webview app-entry kernel introduced in M7.
+fn expr_uses_webview_kernel(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, args } => {
+            let is_webview = matches!(callee, Callee::Kernel(k) if k.is_webview());
+            is_webview || args.iter().any(expr_uses_webview_kernel)
+        }
+        Expr::FuncValue { callee, .. } => matches!(callee, Callee::Kernel(k) if k.is_webview()),
+        Expr::Apply { func, args } => {
+            expr_uses_webview_kernel(func) || args.iter().any(expr_uses_webview_kernel)
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            expr_uses_webview_kernel(value) || expr_uses_webview_kernel(body)
+        }
+        Expr::Lambda { body, .. } => expr_uses_webview_kernel(body),
+        Expr::If { cond, then_, else_ } => {
+            expr_uses_webview_kernel(cond)
+                || expr_uses_webview_kernel(then_)
+                || expr_uses_webview_kernel(else_)
+        }
+        Expr::Match(m) => {
+            expr_uses_webview_kernel(m.scrutinee())
+                || m.arms()
+                    .iter()
+                    .any(|arm| expr_uses_webview_kernel(&arm.body))
+        }
+        Expr::Tuple(elems) => elems.iter().any(expr_uses_webview_kernel),
+        Expr::List { items, .. } => items.iter().any(expr_uses_webview_kernel),
+        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_webview_kernel(v)),
+        Expr::Access { record, .. } => expr_uses_webview_kernel(record),
+        Expr::Update { record, fields } => {
+            expr_uses_webview_kernel(record)
+                || fields.iter().any(|(_, v)| expr_uses_webview_kernel(v))
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_uses_webview_kernel(lhs) || expr_uses_webview_kernel(rhs)
+        }
+        Expr::Ctor { args, .. } => args.iter().any(expr_uses_webview_kernel),
+        Expr::Cons { head, tail } => {
+            expr_uses_webview_kernel(head) || expr_uses_webview_kernel(tail)
+        }
+        Expr::TaskSeq { effect, rest } => {
+            expr_uses_webview_kernel(effect) || expr_uses_webview_kernel(rest)
+        }
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_) => false,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -660,6 +862,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Run the pass, producing the single-module program.
+    #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally similar
     pub fn run(self) -> DResult<Program> {
         let mut types_ir: Vec<TypeDef> = Vec::with_capacity(self.m.unions.len());
         for u in &self.m.unions {
@@ -710,6 +913,14 @@ impl<'a> Lowerer<'a> {
         // pub use server_stream::*;` to mod.rs.
         let uses_server = funcs.iter().any(|f| expr_uses_server_kernel(&f.body));
 
+        // M7: detect Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview usage.
+        let (uses_ui, uses_live, uses_tui, uses_webview) = (
+            funcs.iter().any(|f| expr_uses_ui_kernel(&f.body)),
+            funcs.iter().any(|f| expr_uses_live_kernel(&f.body)),
+            funcs.iter().any(|f| expr_uses_tui_kernel(&f.body)),
+            funcs.iter().any(|f| expr_uses_webview_kernel(&f.body)),
+        );
+
         let module = Module {
             name: ModPath(self.m.name.clone()),
             types: types_ir,
@@ -718,6 +929,10 @@ impl<'a> Lowerer<'a> {
             records,
             uses_tea,
             uses_server,
+            uses_ui,
+            uses_live,
+            uses_tui,
+            uses_webview,
         };
         Ok(Program {
             modules: vec![module],
@@ -1285,6 +1500,46 @@ impl<'a> Lowerer<'a> {
                         generics,
                     )?;
                     Ok(IrType::Sub(Box::new(inner)))
+                }
+                // ── M7: Std.Ui / Std.Html parametric type constructors ────────────
+                // These are kernel types that carry a message type parameter `msg`.
+                // They appear in user annotations like `staticView : Msg -> Html Msg`
+                // and are lowered to `IrType::Ui { ctor, msg }` so the backend can
+                // emit the correct Rust generic spelling (`Html<Msg>`, `Element<M>`,
+                // etc.) and so BLOCKER-1's `emit_func` can extract the enclosing
+                // function's `msg` type for the `ui_layout::<M>` turbofish.
+                //
+                // `Html msg` — the rendered HTML tree type from `Std.Html`.
+                "Html" if args.len() == 1 => {
+                    let msg = self.ir_type_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_canon",
+                                "Html applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::Html,
+                        msg: Box::new(msg),
+                    })
+                }
+                // `Element msg` — a Std.Ui layout element.
+                "Element" if args.len() == 1 => {
+                    let msg = self.ir_type_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_canon",
+                                "Element applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::Element,
+                        msg: Box::new(msg),
+                    })
                 }
                 _ if self.enum_variants.contains_key(name) => {
                     let mut ir_args = Vec::with_capacity(args.len());
@@ -2351,6 +2606,7 @@ impl<'a> Lowerer<'a> {
     /// nullary constant has arity 0). The [`FuncId`] was assigned from the
     /// definitions in declaration order, so the same-index lookup is exact.
     #[allow(clippy::too_many_lines)] // declarative kernel-arity table — each variant listed explicitly for safety
+    #[allow(clippy::match_same_arms)] // UI arity blocks are separate for documentation clarity
     fn callee_arity(&self, callee: &Callee) -> DResult<usize> {
         match callee {
             // Arity is fixed per kernel. Each variant is listed explicitly so a
@@ -2818,6 +3074,173 @@ impl<'a> Lowerer<'a> {
                 // `map4 : (a->b->c->d->e) -> Da -> Db -> Dc -> Dd -> De`
                 | KernelFn::DbDecMap4,
             ) => Ok(5),
+            // ── M7: Std.Ui / Std.Html render kernels ─────────────────────────
+            // Arity 0: nullary constants — no arguments.
+            Callee::Kernel(
+                // `Ui.none : Element msg`
+                KernelFn::UiNone
+                // `Ui.fill : Length`
+                | KernelFn::UiFill
+                // `Ui.content : Length`
+                | KernelFn::UiContent
+                // `Ui.shrink : Length`
+                | KernelFn::UiShrink
+                // `Ui.white : Color`
+                | KernelFn::UiWhite
+                // `Ui.black : Color`
+                | KernelFn::UiBlack
+                // `Ui.transparent : Color`
+                | KernelFn::UiTransparent
+                // `Ui.centerX : Attribute msg`
+                | KernelFn::UiCenterX
+                // `Ui.centerY : Attribute msg`
+                | KernelFn::UiCenterY
+                // `Ui.alignLeft : Attribute msg`
+                | KernelFn::UiAlignLeft
+                // `Ui.alignRight : Attribute msg`
+                | KernelFn::UiAlignRight
+                // `Ui.alignTop : Attribute msg`
+                | KernelFn::UiAlignTop
+                // `Ui.alignBottom : Attribute msg`
+                | KernelFn::UiAlignBottom
+                // `Ui.pointer : Attribute msg`
+                | KernelFn::UiPointer
+                // `Ui.clip : Attribute msg`
+                | KernelFn::UiClip
+                // `Ui.scrollbars : Attribute msg`
+                | KernelFn::UiScrollbars
+                // `Font.bold : Attribute msg`
+                | KernelFn::FontBold
+                // `Font.italic : Attribute msg`
+                | KernelFn::FontItalic,
+            ) => Ok(0),
+            // Arity 1: single-argument pure serialisation / escape helpers.
+            Callee::Kernel(
+                // `Html.render : Html msg -> String`
+                KernelFn::HtmlRender
+                // `Html.escapeText : String -> String`
+                | KernelFn::HtmlEscapeText
+                // `Html.escapeAttr : String -> String`
+                | KernelFn::HtmlEscapeAttr
+                // `Html.attrToString : Attribute msg -> String`
+                | KernelFn::HtmlAttrToString
+                // ── M7: Ui element builders — arity 1 ────────────────────────
+                // `Ui.text : String -> Element msg`
+                | KernelFn::UiText
+                // `Ui.html : Html msg -> Element msg`
+                | KernelFn::UiHtml
+                // ── M7: Ui attribute builders — arity 1 ──────────────────────
+                // `Ui.spacing : Int -> Attribute msg`
+                | KernelFn::UiSpacing
+                // `Ui.padding : Int -> Attribute msg`
+                | KernelFn::UiPadding
+                // `Ui.width : Length -> Attribute msg`
+                | KernelFn::UiWidth
+                // `Ui.height : Length -> Attribute msg`
+                | KernelFn::UiHeight
+                // `Ui.gridColumns : Int -> Attribute msg`
+                | KernelFn::UiGridColumns
+                // ── M7: Ui Length builders — arity 1 ─────────────────────────
+                // `Ui.px : Int -> Length`
+                | KernelFn::UiPx
+                // `Ui.fillPortion : Int -> Length`
+                | KernelFn::UiFillPortion
+                // `Ui.vh : Int -> Length`
+                | KernelFn::UiVh
+                // `Ui.vw : Int -> Length`
+                | KernelFn::UiVw
+                // ── M7: Background — arity 1 ─────────────────────────────────
+                // `Background.color : Color -> Attribute msg`
+                | KernelFn::BackgroundColor
+                // `Background.image : String -> Attribute msg`
+                | KernelFn::BackgroundImage
+                // ── M7: Border — arity 1 ─────────────────────────────────────
+                // `Border.width : Int -> Attribute msg`
+                | KernelFn::BorderWidth
+                // `Border.rounded : Int -> Attribute msg`
+                | KernelFn::BorderRounded
+                // `Border.color : Color -> Attribute msg`
+                | KernelFn::BorderColor
+                // ── M7: Font — arity 1 ───────────────────────────────────────
+                // `Font.size : Int -> Attribute msg`
+                | KernelFn::FontSize
+                // `Font.color : Color -> Attribute msg`
+                | KernelFn::FontColor
+                // `Font.family : List String -> Attribute msg`
+                | KernelFn::FontFamily
+                // ── M7: Html element builders — arity 1 ──────────────────────
+                // `Html.text : String -> Html msg`
+                | KernelFn::HtmlTextNode
+                // `Html.raw : String -> Html msg`
+                | KernelFn::HtmlRawNode
+                // `Html.input : List (Attribute msg) -> Html msg` (void element)
+                | KernelFn::HtmlInput
+                // `Html.img : List (Attribute msg) -> Html msg` (void element)
+                | KernelFn::HtmlImg
+                // ── M7: app-entry stubs — arity 1 ────────────────────────────
+                // `Live.app : LiveAppCfg model msg -> Task Error ()`
+                | KernelFn::LiveApp
+                // `Live.appRouted : LiveAppCfg model msg -> Task Error ()`
+                | KernelFn::LiveAppRouted
+                // `Tui.program : TuiCfg model msg -> Task Error ()`
+                | KernelFn::TuiProgram
+                // `Tui.app : TuiCfg model msg -> Task Error ()`
+                | KernelFn::TuiApp
+                // `Webview.app : WebviewCfg model msg -> Task Error ()`
+                | KernelFn::WebviewApp,
+            ) => Ok(1),
+            // Arity 2: `Ui.layout attrs elem`, `Ui.layoutWith cfg elem`,
+            //          `Live.route path ctor`, `Live.renderStatic cfg path`.
+            Callee::Kernel(
+                // `Ui.layout : List (Attribute msg) -> Element msg -> Html msg`
+                KernelFn::UiLayout
+                // `Ui.layoutWith : { wrapperAttrs, rootAttrs } -> Element msg -> Html msg`
+                | KernelFn::UiLayoutWith
+                // ── M7: Ui element builders — arity 2 ────────────────────────
+                // `Ui.el : List (Attribute msg) -> Element msg -> Element msg`
+                | KernelFn::UiEl
+                // `Ui.row : List (Attribute msg) -> List (Element msg) -> Element msg`
+                | KernelFn::UiRow
+                // `Ui.column : List (Attribute msg) -> List (Element msg) -> Element msg`
+                | KernelFn::UiColumn
+                // `Ui.wrappedRow : List (Attribute msg) -> List (Element msg) -> Element msg`
+                | KernelFn::UiWrappedRow
+                // `Ui.grid : List (Attribute msg) -> List (Element msg) -> Element msg`
+                | KernelFn::UiGrid
+                // `Ui.paddingXY : Int -> Int -> Attribute msg`
+                | KernelFn::UiPaddingXY
+                // `Ui.minimum : Int -> Length -> Length`
+                | KernelFn::UiMinimum
+                // `Ui.maximum : Int -> Length -> Length`
+                | KernelFn::UiMaximum
+                // ── M7: Html element builders — arity 2 ──────────────────────
+                // `Html.div : List (Attribute msg) -> List (Html msg) -> Html msg`
+                | KernelFn::HtmlDiv
+                // `Html.span : List (Attribute msg) -> List (Html msg) -> Html msg`
+                | KernelFn::HtmlSpan
+                // `Html.a : List (Attribute msg) -> List (Html msg) -> Html msg`
+                | KernelFn::HtmlA
+                // `Html.button : List (Attribute msg) -> List (Html msg) -> Html msg`
+                | KernelFn::HtmlButton
+                // `Html.p : List (Attribute msg) -> List (Html msg) -> Html msg`
+                | KernelFn::HtmlP
+                // `Live.route : String -> (List String -> Page) -> LiveRoute`
+                | KernelFn::LiveRoute
+                // `Live.renderStatic : LiveAppCfg model msg -> String -> Task Error String`
+                | KernelFn::LiveRenderStatic,
+            ) => Ok(2),
+            // Arity 3: `Ui.rgb r g b`, `Html.node tag attrs children`.
+            Callee::Kernel(
+                // `Ui.rgb : Int -> Int -> Int -> Color`
+                KernelFn::UiRgb
+                // `Html.node : String -> List (Attribute msg) -> List (Html msg) -> Html msg`
+                | KernelFn::HtmlNode,
+            ) => Ok(3),
+            // Arity 4: `Ui.rgba r g b a`.
+            Callee::Kernel(
+                // `Ui.rgba : Int -> Int -> Int -> Float -> Color`
+                KernelFn::UiRgba,
+            ) => Ok(4),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -3256,6 +3679,112 @@ impl<'a> Lowerer<'a> {
                         Ok(Callee::Kernel(KernelFn::MiddlewareWithRateLimit))
                     }
                     ("RateLimit", "allow") => Ok(Callee::Kernel(KernelFn::RateLimitAllow)),
+                    // ── M7: Std.Ui / Std.Html render kernels ─────────────────
+                    ("Ui", "layout") => Ok(Callee::Kernel(KernelFn::UiLayout)),
+                    ("Ui", "layoutWith") => Ok(Callee::Kernel(KernelFn::UiLayoutWith)),
+                    ("Html", "render" | "toString") => Ok(Callee::Kernel(KernelFn::HtmlRender)),
+                    ("Html", "escapeHtml" | "escapeText") => {
+                        Ok(Callee::Kernel(KernelFn::HtmlEscapeText))
+                    }
+                    ("Html", "escapeAttr") => Ok(Callee::Kernel(KernelFn::HtmlEscapeAttr)),
+                    ("Html", "attrToString") => Ok(Callee::Kernel(KernelFn::HtmlAttrToString)),
+                    // ── M7: Std.Ui element builders ───────────────────────────
+                    ("Ui", "none") => Ok(Callee::Kernel(KernelFn::UiNone)),
+                    ("Ui", "text") => Ok(Callee::Kernel(KernelFn::UiText)),
+                    ("Ui", "html") => Ok(Callee::Kernel(KernelFn::UiHtml)),
+                    ("Ui", "el") => Ok(Callee::Kernel(KernelFn::UiEl)),
+                    ("Ui", "row") => Ok(Callee::Kernel(KernelFn::UiRow)),
+                    ("Ui", "column") => Ok(Callee::Kernel(KernelFn::UiColumn)),
+                    ("Ui", "wrappedRow") => Ok(Callee::Kernel(KernelFn::UiWrappedRow)),
+                    ("Ui", "grid") => Ok(Callee::Kernel(KernelFn::UiGrid)),
+                    // ── M7: Std.Ui attribute builders ─────────────────────────
+                    ("Ui", "spacing") => Ok(Callee::Kernel(KernelFn::UiSpacing)),
+                    ("Ui", "padding") => Ok(Callee::Kernel(KernelFn::UiPadding)),
+                    ("Ui", "paddingXY") => Ok(Callee::Kernel(KernelFn::UiPaddingXY)),
+                    ("Ui", "width") => Ok(Callee::Kernel(KernelFn::UiWidth)),
+                    ("Ui", "height") => Ok(Callee::Kernel(KernelFn::UiHeight)),
+                    ("Ui", "centerX") => Ok(Callee::Kernel(KernelFn::UiCenterX)),
+                    ("Ui", "centerY") => Ok(Callee::Kernel(KernelFn::UiCenterY)),
+                    ("Ui", "alignLeft") => Ok(Callee::Kernel(KernelFn::UiAlignLeft)),
+                    ("Ui", "alignRight") => Ok(Callee::Kernel(KernelFn::UiAlignRight)),
+                    ("Ui", "alignTop") => Ok(Callee::Kernel(KernelFn::UiAlignTop)),
+                    ("Ui", "alignBottom") => Ok(Callee::Kernel(KernelFn::UiAlignBottom)),
+                    ("Ui", "pointer") => Ok(Callee::Kernel(KernelFn::UiPointer)),
+                    ("Ui", "clip" | "clipX" | "clipY") => Ok(Callee::Kernel(KernelFn::UiClip)),
+                    ("Ui", "scrollbars" | "scrollbarX" | "scrollbarY") => {
+                        Ok(Callee::Kernel(KernelFn::UiScrollbars))
+                    }
+                    ("Ui", "gridColumns") => Ok(Callee::Kernel(KernelFn::UiGridColumns)),
+                    // ── M7: Std.Ui Length builders ────────────────────────────
+                    ("Ui", "px") => Ok(Callee::Kernel(KernelFn::UiPx)),
+                    ("Ui", "fill") => Ok(Callee::Kernel(KernelFn::UiFill)),
+                    ("Ui", "content") => Ok(Callee::Kernel(KernelFn::UiContent)),
+                    ("Ui", "shrink") => Ok(Callee::Kernel(KernelFn::UiShrink)),
+                    ("Ui", "fillPortion") => Ok(Callee::Kernel(KernelFn::UiFillPortion)),
+                    ("Ui", "vh") => Ok(Callee::Kernel(KernelFn::UiVh)),
+                    ("Ui", "vw") => Ok(Callee::Kernel(KernelFn::UiVw)),
+                    ("Ui", "minimum") => Ok(Callee::Kernel(KernelFn::UiMinimum)),
+                    ("Ui", "maximum") => Ok(Callee::Kernel(KernelFn::UiMaximum)),
+                    // ── M7: Std.Ui Color builders ─────────────────────────────
+                    ("Ui", "rgb") => Ok(Callee::Kernel(KernelFn::UiRgb)),
+                    ("Ui", "rgba") => Ok(Callee::Kernel(KernelFn::UiRgba)),
+                    ("Ui", "white") => Ok(Callee::Kernel(KernelFn::UiWhite)),
+                    ("Ui", "black") => Ok(Callee::Kernel(KernelFn::UiBlack)),
+                    ("Ui", "transparent") => Ok(Callee::Kernel(KernelFn::UiTransparent)),
+                    // ── M7: Background sub-module ─────────────────────────────
+                    ("Background", "color") => Ok(Callee::Kernel(KernelFn::BackgroundColor)),
+                    ("Background", "image") => Ok(Callee::Kernel(KernelFn::BackgroundImage)),
+                    // ── M7: Border sub-module ─────────────────────────────────
+                    ("Border", "width") => Ok(Callee::Kernel(KernelFn::BorderWidth)),
+                    ("Border", "rounded") => Ok(Callee::Kernel(KernelFn::BorderRounded)),
+                    ("Border", "color") => Ok(Callee::Kernel(KernelFn::BorderColor)),
+                    // ── M7: Font sub-module ───────────────────────────────────
+                    ("Font", "size") => Ok(Callee::Kernel(KernelFn::FontSize)),
+                    ("Font", "color") => Ok(Callee::Kernel(KernelFn::FontColor)),
+                    ("Font", "family") => Ok(Callee::Kernel(KernelFn::FontFamily)),
+                    ("Font", "bold") => Ok(Callee::Kernel(KernelFn::FontBold)),
+                    ("Font", "italic") => Ok(Callee::Kernel(KernelFn::FontItalic)),
+                    // ── M7: Html element builders ─────────────────────────────
+                    ("Html", "text") => Ok(Callee::Kernel(KernelFn::HtmlTextNode)),
+                    ("Html", "raw") => Ok(Callee::Kernel(KernelFn::HtmlRawNode)),
+                    (
+                        "Html",
+                        "node" | "voidNode" | "doctype" | "styleNode" | "titleNode" | "htmlNode"
+                        | "headNode" | "title",
+                    ) => Ok(Callee::Kernel(KernelFn::HtmlNode)),
+                    ("Html", "div" | "headerNode" | "header") => {
+                        Ok(Callee::Kernel(KernelFn::HtmlDiv))
+                    }
+                    ("Html", "span") => Ok(Callee::Kernel(KernelFn::HtmlSpan)),
+                    ("Html", "a" | "link" | "linkNode") => Ok(Callee::Kernel(KernelFn::HtmlA)),
+                    ("Html", "button") => Ok(Callee::Kernel(KernelFn::HtmlButton)),
+                    (
+                        "Html",
+                        "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "pre" | "code" | "codeNode"
+                        | "strong" | "em" | "small" | "nav" | "section" | "article" | "footer"
+                        | "footerNode" | "main" | "mainNode" | "aside" | "ul" | "ol" | "li"
+                        | "table" | "thead" | "tbody" | "tfoot" | "tr" | "th" | "td" | "textarea"
+                        | "select" | "option" | "label" | "form" | "fieldset" | "legend"
+                        | "blockquote" | "figure" | "figcaption" | "details" | "summary" | "dialog"
+                        | "video" | "audio" | "canvas" | "iframe" | "progress" | "meter" | "script"
+                        | "body",
+                    ) => Ok(Callee::Kernel(KernelFn::HtmlP)),
+                    ("Html", "input") => Ok(Callee::Kernel(KernelFn::HtmlInput)),
+                    (
+                        "Html",
+                        "img" | "br" | "hr" | "meta" | "area" | "base" | "col" | "embed" | "source"
+                        | "track" | "wbr",
+                    ) => Ok(Callee::Kernel(KernelFn::HtmlImg)),
+                    // ── M7: Std.Live / Sky.Live app-entry kernels ─────────────
+                    ("Live", "app") => Ok(Callee::Kernel(KernelFn::LiveApp)),
+                    ("Live", "appRouted") => Ok(Callee::Kernel(KernelFn::LiveAppRouted)),
+                    ("Live", "route") => Ok(Callee::Kernel(KernelFn::LiveRoute)),
+                    ("Live", "renderStatic") => Ok(Callee::Kernel(KernelFn::LiveRenderStatic)),
+                    // ── M7: Std.Tui / Sky.Tui app-entry kernels ──────────────
+                    ("Tui", "program") => Ok(Callee::Kernel(KernelFn::TuiProgram)),
+                    ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TuiApp)),
+                    // ── M7: Std.Webview / Sky.Webview app-entry kernel ────────
+                    ("Webview", "app") => Ok(Callee::Kernel(KernelFn::WebviewApp)),
                     // A kernel beyond the wired set.
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),

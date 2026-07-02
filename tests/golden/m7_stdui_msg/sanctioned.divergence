@@ -1,0 +1,1 @@
+divergence: Rust backend emits compact inline CSS with no <style> reset block; Go backend emits a different HTML skeleton. Both are semantically correct Flexbox layouts.

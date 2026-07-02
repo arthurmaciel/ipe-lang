@@ -1028,6 +1028,867 @@ fn emit_server_call(
     }
 }
 
+/// Find a record field by its Sky source name in an IR field list.
+///
+/// Searches `fields` linearly for the entry whose interned symbol resolves to
+/// `name`.  Returns a reference to the field's value expression on success.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] when no field with the requested name
+/// is present in the list.  Fail-closed — never silently drops a missing
+/// required field (MAKE INVALID STATES UNREPRESENTABLE principle).
+fn lookup_field<'f>(
+    ctx: &EmitCtx,
+    fields: &'f [(Symbol, Expr)],
+    name: &str,
+    where_: &'static str,
+) -> DResult<&'f Expr> {
+    for (sym, expr) in fields {
+        if ctx.resolve_ident(*sym)? == name {
+            return Ok(expr);
+        }
+    }
+    Err(Diagnostic::CompilerBug {
+        where_,
+        detail: format!(
+            "required field `{name}` not found in Ui.layoutWith cfg record literal; \
+             available fields: [{}]",
+            fields
+                .iter()
+                .filter_map(|(s, _)| ctx.resolve_ident(*s).ok())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    })
+}
+
+/// Handle `Std.Ui` / `Std.Html` kernel calls.
+///
+/// Phase 0 scope:
+/// * The SIX render kernels (`UiLayout`, `UiLayoutWith`, `HtmlRender`,
+///   `HtmlEscapeText`, `HtmlEscapeAttr`, `HtmlAttrToString`) are **fully
+///   wired** here — they emit calls to `sky_runtime::ui::render::*` and
+///   `sky_runtime::html::*`.
+/// * The app-entry stubs (`LiveApp`, `LiveAppRouted`, `LiveRoute`,
+///   `LiveRenderStatic`, `TuiProgram`, `TuiApp`, `WebviewApp`) return a
+///   `CompilerBug` error.  Phase 1 will wire their bodies.
+///
+/// Returns `None` for any kernel that is not a Ui / Live / Tui / Webview
+/// variant, letting the standard call path handle it.
+#[allow(clippy::too_many_lines)] // declarative UI kernel dispatch — must list every variant explicitly
+#[allow(clippy::many_single_char_names)] // r/g/b/a/k are conventional names for colour channels and kernel var
+#[inline(never)]
+fn emit_ui_call(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    let Callee::Kernel(k) = callee else {
+        return Ok(None);
+    };
+    // Only handle M7 kernels.
+    if !k.is_ui() && !k.is_live() && !k.is_tui() && !k.is_webview() {
+        return Ok(None);
+    }
+    match k {
+        // ── Std.Ui / Std.Html render kernels (Phase 0 — fully wired) ─────────
+
+        // `Ui.layout : List (Attribute msg) -> Element msg -> Html msg`
+        //
+        // Emits: `sky_runtime::ui::render::ui_layout(attrs, elem)`
+        KernelFn::UiLayout => {
+            let [attrs_e, elem_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiLayout",
+                    detail: format!("Ui.layout requires exactly 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let elem_s = emit_expr_at(ctx, elem_e, indent, child, generics)?;
+            // Drive `M` from the enclosing function's return type (set in
+            // `emit_func` via `GenericScope::with_ui_msg`).  Fallback to `()`
+            // for CLI programs / non-UI-returning functions — correct for the
+            // Phase-0 golden (`sky_main`) and required to avoid E0282 when the
+            // empty attrs list emits bare `Vec::new()` (IrType::Json path in
+            // `emit_list`, which Rust cannot infer without a concrete `M`).
+            let m = generics.enclosing_ui_msg().unwrap_or("()");
+            Ok(Some(format!(
+                "sky_runtime::ui::render::ui_layout::<{m}>({attrs_s}, {elem_s})"
+            )))
+        }
+
+        // `Ui.layoutWith : { wrapperAttrs : ..., rootAttrs : ... } -> Element msg -> Html msg`
+        //
+        // Emits: `sky_runtime::ui::render::ui_layout_with_vecs::<M>(wrapper, root, elem)`
+        //
+        // DESIGN: the runtime's generic `ui_layout_with<M, C>` stub was the
+        // silent-drop path (`_cfg` ignored, falls back to `ui_layout(vec![], …)`).
+        // That path is deleted (MAKE INVALID STATES UNREPRESENTABLE).
+        //
+        // We delegate at the emit site instead: extract `wrapperAttrs` and
+        // `rootAttrs` directly from the IR record literal and pass them as
+        // `Vec<Attribute<M>>` to `ui_layout_with_vecs`, bypassing the unsynthesised
+        // record struct that would trigger SKY-I0001 if materialised (T3 trap).
+        //
+        // Non-literal cfg (e.g. `let cfg = { … } in Ui.layoutWith cfg elem`) is
+        // rejected fail-closed with `CompilerBug`; it is Phase-1 deferred work.
+        KernelFn::UiLayoutWith => {
+            let [cfg_e, elem_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiLayoutWith",
+                    detail: format!(
+                        "Ui.layoutWith requires exactly 2 arguments, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            // Extract fields from the IR literal rather than materialising a
+            // synthesised Rust struct (which would ICE with SKY-I0001 because
+            // no struct for the {wrapperAttrs, rootAttrs} shape is registered).
+            let Expr::Record(fields) = cfg_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiLayoutWith",
+                    detail: "Ui.layoutWith cfg must be an inline record literal \
+                             in Phase 0; non-literal cfg is deferred to Phase 1"
+                        .into(),
+                });
+            };
+            let wrapper_e = lookup_field(
+                ctx,
+                fields,
+                "wrapperAttrs",
+                "sky_backend_rust::emit_ui_call::UiLayoutWith::wrapperAttrs",
+            )?;
+            let root_e = lookup_field(
+                ctx,
+                fields,
+                "rootAttrs",
+                "sky_backend_rust::emit_ui_call::UiLayoutWith::rootAttrs",
+            )?;
+            let wrapper_s = emit_expr_at(ctx, wrapper_e, indent, child, generics)?;
+            let root_s = emit_expr_at(ctx, root_e, indent, child, generics)?;
+            let elem_s = emit_expr_at(ctx, elem_e, indent, child, generics)?;
+            // Same msg-source policy as UiLayout: enclosing function's return type
+            // drives M; fallback to `()` for non-UI-returning callers.
+            let m = generics.enclosing_ui_msg().unwrap_or("()");
+            Ok(Some(format!(
+                "sky_runtime::ui::render::ui_layout_with_vecs::<{m}>({wrapper_s}, {root_s}, {elem_s})"
+            )))
+        }
+
+        // `Html.render : Html msg -> String`
+        //
+        // Emits: `sky_runtime::html::render_html(&html)`
+        KernelFn::HtmlRender => {
+            let [html_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlRender",
+                    detail: format!(
+                        "Html.render requires exactly 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let html_s = emit_expr_at(ctx, html_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::html::render_html(&{html_s})")))
+        }
+
+        // `Html.escapeText : String -> String`
+        //
+        // Emits: `sky_runtime::html::html_escape_text_(s)` (takes owned String).
+        KernelFn::HtmlEscapeText => {
+            let [s_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlEscapeText",
+                    detail: format!(
+                        "Html.escapeText requires exactly 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let s_s = emit_expr_at(ctx, s_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::html::html_escape_text_({s_s})")))
+        }
+
+        // `Html.escapeAttr : String -> String`
+        //
+        // Emits: `sky_runtime::html::html_escape_attr_(s)` (takes owned String).
+        KernelFn::HtmlEscapeAttr => {
+            let [s_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlEscapeAttr",
+                    detail: format!(
+                        "Html.escapeAttr requires exactly 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let s_s = emit_expr_at(ctx, s_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::html::html_escape_attr_({s_s})")))
+        }
+
+        // `Html.attrToString : Html.Attribute msg -> String`
+        //
+        // Emits: `sky_runtime::html::html_attr_to_string_(attr)` (takes owned Attribute<M>).
+        KernelFn::HtmlAttrToString => {
+            let [attr_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlAttrToString",
+                    detail: format!(
+                        "Html.attrToString requires exactly 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let attr_s = emit_expr_at(ctx, attr_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::html::html_attr_to_string_({attr_s})"
+            )))
+        }
+
+        // ── Std.Ui element builders ───────────────────────────────────────────
+
+        // `Ui.none : Element msg`
+        KernelFn::UiNone => Ok(Some("sky_runtime::ui::helpers::ui_none_()".to_owned())),
+
+        // `Ui.text : String -> Element msg`
+        KernelFn::UiText => {
+            let [s_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiText",
+                    detail: format!("Ui.text requires 1 argument, got {}", args.len()),
+                });
+            };
+            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_text_({s})")))
+        }
+
+        // `Ui.html : Html msg -> Element msg`
+        KernelFn::UiHtml => {
+            let [h_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiHtml",
+                    detail: format!("Ui.html requires 1 argument, got {}", args.len()),
+                });
+            };
+            let h = emit_expr_at(ctx, h_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_html_({h})")))
+        }
+
+        // `Ui.el : List (Attribute msg) -> Element msg -> Element msg`
+        KernelFn::UiEl => {
+            let [attrs_e, child_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiEl",
+                    detail: format!("Ui.el requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let ch = emit_expr_at(ctx, child_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_el_({attrs}, {ch})"
+            )))
+        }
+
+        // `Ui.row : List (Attribute msg) -> List (Element msg) -> Element msg`
+        KernelFn::UiRow => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiRow",
+                    detail: format!("Ui.row requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_row_({attrs}, {children})"
+            )))
+        }
+
+        // `Ui.column : List (Attribute msg) -> List (Element msg) -> Element msg`
+        KernelFn::UiColumn => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiColumn",
+                    detail: format!("Ui.column requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_column_({attrs}, {children})"
+            )))
+        }
+
+        // `Ui.wrappedRow : List (Attribute msg) -> List (Element msg) -> Element msg`
+        KernelFn::UiWrappedRow => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiWrappedRow",
+                    detail: format!("Ui.wrappedRow requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_wrapped_row_({attrs}, {children})"
+            )))
+        }
+
+        // `Ui.grid : List (Attribute msg) -> List (Element msg) -> Element msg`
+        KernelFn::UiGrid => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiGrid",
+                    detail: format!("Ui.grid requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_grid_({attrs}, {children})"
+            )))
+        }
+
+        // ── Std.Ui attribute builders ─────────────────────────────────────────
+
+        // `Ui.spacing : Int -> Attribute msg`
+        KernelFn::UiSpacing => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiSpacing",
+                    detail: format!("Ui.spacing requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_spacing_({n})")))
+        }
+
+        // `Ui.padding : Int -> Attribute msg`
+        KernelFn::UiPadding => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiPadding",
+                    detail: format!("Ui.padding requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_padding_({n})")))
+        }
+
+        // `Ui.paddingXY : Int -> Int -> Attribute msg`
+        KernelFn::UiPaddingXY => {
+            let [x_e, y_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiPaddingXY",
+                    detail: format!("Ui.paddingXY requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let x = emit_expr_at(ctx, x_e, indent, child, generics)?;
+            let y = emit_expr_at(ctx, y_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_padding_xy_({x}, {y})"
+            )))
+        }
+
+        // `Ui.width : Length -> Attribute msg`
+        KernelFn::UiWidth => {
+            let [l_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiWidth",
+                    detail: format!("Ui.width requires 1 argument, got {}", args.len()),
+                });
+            };
+            let l = emit_expr_at(ctx, l_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_width_({l})")))
+        }
+
+        // `Ui.height : Length -> Attribute msg`
+        KernelFn::UiHeight => {
+            let [l_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiHeight",
+                    detail: format!("Ui.height requires 1 argument, got {}", args.len()),
+                });
+            };
+            let l = emit_expr_at(ctx, l_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_height_({l})")))
+        }
+
+        // `Ui.centerX : Attribute msg` (arity 0)
+        KernelFn::UiCenterX => Ok(Some("sky_runtime::ui::helpers::ui_center_x_()".to_owned())),
+        // `Ui.centerY : Attribute msg` (arity 0)
+        KernelFn::UiCenterY => Ok(Some("sky_runtime::ui::helpers::ui_center_y_()".to_owned())),
+        // `Ui.alignLeft : Attribute msg` (arity 0)
+        KernelFn::UiAlignLeft => Ok(Some(
+            "sky_runtime::ui::helpers::ui_align_left_()".to_owned(),
+        )),
+        // `Ui.alignRight : Attribute msg` (arity 0)
+        KernelFn::UiAlignRight => Ok(Some(
+            "sky_runtime::ui::helpers::ui_align_right_()".to_owned(),
+        )),
+        // `Ui.alignTop : Attribute msg` (arity 0)
+        KernelFn::UiAlignTop => Ok(Some("sky_runtime::ui::helpers::ui_align_top_()".to_owned())),
+        // `Ui.alignBottom : Attribute msg` (arity 0)
+        KernelFn::UiAlignBottom => Ok(Some(
+            "sky_runtime::ui::helpers::ui_align_bottom_()".to_owned(),
+        )),
+        // `Ui.pointer : Attribute msg` (arity 0)
+        KernelFn::UiPointer => Ok(Some("sky_runtime::ui::helpers::ui_pointer_()".to_owned())),
+        // `Ui.clip : Attribute msg` (arity 0)
+        KernelFn::UiClip => Ok(Some("sky_runtime::ui::helpers::ui_clip_()".to_owned())),
+        // `Ui.scrollbars : Attribute msg` (arity 0)
+        KernelFn::UiScrollbars => Ok(Some(
+            "sky_runtime::ui::helpers::ui_scrollbars_()".to_owned(),
+        )),
+
+        // `Ui.gridColumns : Int -> Attribute msg`
+        KernelFn::UiGridColumns => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiGridColumns",
+                    detail: format!("Ui.gridColumns requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_grid_columns_({n})"
+            )))
+        }
+
+        // ── Std.Ui Length builders ────────────────────────────────────────────
+
+        // `Ui.px : Int -> Length`
+        KernelFn::UiPx => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiPx",
+                    detail: format!("Ui.px requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_px_({n})")))
+        }
+
+        // `Ui.fill : Length` (arity 0)
+        KernelFn::UiFill => Ok(Some("sky_runtime::ui::helpers::ui_fill_()".to_owned())),
+        // `Ui.content : Length` (arity 0)
+        KernelFn::UiContent => Ok(Some("sky_runtime::ui::helpers::ui_content_()".to_owned())),
+        // `Ui.shrink : Length` (arity 0)
+        KernelFn::UiShrink => Ok(Some("sky_runtime::ui::helpers::ui_shrink_()".to_owned())),
+
+        // `Ui.fillPortion : Int -> Length`
+        KernelFn::UiFillPortion => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiFillPortion",
+                    detail: format!("Ui.fillPortion requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_fill_portion_({n})"
+            )))
+        }
+
+        // `Ui.vh : Int -> Length`
+        KernelFn::UiVh => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiVh",
+                    detail: format!("Ui.vh requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_vh_({n})")))
+        }
+
+        // `Ui.vw : Int -> Length`
+        KernelFn::UiVw => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiVw",
+                    detail: format!("Ui.vw requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_vw_({n})")))
+        }
+
+        // `Ui.minimum : Int -> Length -> Length`
+        KernelFn::UiMinimum => {
+            let [n_e, l_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiMinimum",
+                    detail: format!("Ui.minimum requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            let l = emit_expr_at(ctx, l_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_minimum_({n}, {l})"
+            )))
+        }
+
+        // `Ui.maximum : Int -> Length -> Length`
+        KernelFn::UiMaximum => {
+            let [n_e, l_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiMaximum",
+                    detail: format!("Ui.maximum requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            let l = emit_expr_at(ctx, l_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_maximum_({n}, {l})"
+            )))
+        }
+
+        // ── Std.Ui Color builders ─────────────────────────────────────────────
+
+        // `Ui.rgb : Int -> Int -> Int -> Color`
+        KernelFn::UiRgb => {
+            let [r_e, g_e, b_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiRgb",
+                    detail: format!("Ui.rgb requires 3 arguments, got {}", args.len()),
+                });
+            };
+            let r = emit_expr_at(ctx, r_e, indent, child, generics)?;
+            let g = emit_expr_at(ctx, g_e, indent, child, generics)?;
+            let b = emit_expr_at(ctx, b_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_rgb_({r}, {g}, {b})"
+            )))
+        }
+
+        // `Ui.rgba : Int -> Int -> Int -> Float -> Color`
+        KernelFn::UiRgba => {
+            let [r_e, g_e, b_e, a_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiRgba",
+                    detail: format!("Ui.rgba requires 4 arguments, got {}", args.len()),
+                });
+            };
+            let r = emit_expr_at(ctx, r_e, indent, child, generics)?;
+            let g = emit_expr_at(ctx, g_e, indent, child, generics)?;
+            let b = emit_expr_at(ctx, b_e, indent, child, generics)?;
+            let a = emit_expr_at(ctx, a_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_rgba_({r}, {g}, {b}, {a})"
+            )))
+        }
+
+        // `Ui.white : Color` (arity 0)
+        KernelFn::UiWhite => Ok(Some("sky_runtime::ui::helpers::ui_white_()".to_owned())),
+        // `Ui.black : Color` (arity 0)
+        KernelFn::UiBlack => Ok(Some("sky_runtime::ui::helpers::ui_black_()".to_owned())),
+        // `Ui.transparent : Color` (arity 0)
+        KernelFn::UiTransparent => Ok(Some(
+            "sky_runtime::ui::helpers::ui_transparent_()".to_owned(),
+        )),
+
+        // ── Background sub-module ─────────────────────────────────────────────
+
+        // `Background.color : Color -> Attribute msg`
+        KernelFn::BackgroundColor => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BackgroundColor",
+                    detail: format!("Background.color requires 1 argument, got {}", args.len()),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_background_color_({c})"
+            )))
+        }
+
+        // `Background.image : String -> Attribute msg`
+        KernelFn::BackgroundImage => {
+            let [s_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BackgroundImage",
+                    detail: format!("Background.image requires 1 argument, got {}", args.len()),
+                });
+            };
+            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_background_image_({s})"
+            )))
+        }
+
+        // ── Border sub-module ─────────────────────────────────────────────────
+
+        // `Border.width : Int -> Attribute msg`
+        KernelFn::BorderWidth => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BorderWidth",
+                    detail: format!("Border.width requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_border_width_({n})"
+            )))
+        }
+
+        // `Border.rounded : Int -> Attribute msg`
+        KernelFn::BorderRounded => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BorderRounded",
+                    detail: format!("Border.rounded requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_border_rounded_({n})"
+            )))
+        }
+
+        // `Border.color : Color -> Attribute msg`
+        KernelFn::BorderColor => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BorderColor",
+                    detail: format!("Border.color requires 1 argument, got {}", args.len()),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_border_color_({c})"
+            )))
+        }
+
+        // ── Font sub-module ───────────────────────────────────────────────────
+
+        // `Font.size : Int -> Attribute msg`
+        KernelFn::FontSize => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::FontSize",
+                    detail: format!("Font.size requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_font_size_({n})"
+            )))
+        }
+
+        // `Font.color : Color -> Attribute msg`
+        KernelFn::FontColor => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::FontColor",
+                    detail: format!("Font.color requires 1 argument, got {}", args.len()),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_font_color_({c})"
+            )))
+        }
+
+        // `Font.family : List String -> Attribute msg`
+        KernelFn::FontFamily => {
+            let [l_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::FontFamily",
+                    detail: format!("Font.family requires 1 argument, got {}", args.len()),
+                });
+            };
+            let l = emit_expr_at(ctx, l_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_font_family_({l})"
+            )))
+        }
+
+        // `Font.bold : Attribute msg` (arity 0)
+        KernelFn::FontBold => Ok(Some("sky_runtime::ui::helpers::ui_font_bold_()".to_owned())),
+        // `Font.italic : Attribute msg` (arity 0)
+        KernelFn::FontItalic => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_italic_()".to_owned(),
+        )),
+
+        // ── Std.Html element builders ─────────────────────────────────────────
+
+        // `Html.text : String -> Html msg`
+        KernelFn::HtmlTextNode => {
+            let [s_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlTextNode",
+                    detail: format!("Html.text requires 1 argument, got {}", args.len()),
+                });
+            };
+            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_text_node_({s})"
+            )))
+        }
+
+        // `Html.raw : String -> Html msg`
+        KernelFn::HtmlRawNode => {
+            let [s_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlRawNode",
+                    detail: format!("Html.raw requires 1 argument, got {}", args.len()),
+                });
+            };
+            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_raw_node_({s})"
+            )))
+        }
+
+        // `Html.node : String -> List Attr -> List Html -> Html msg`
+        KernelFn::HtmlNode => {
+            let [tag_e, attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlNode",
+                    detail: format!("Html.node requires 3 arguments, got {}", args.len()),
+                });
+            };
+            let tag = emit_expr_at(ctx, tag_e, indent, child, generics)?;
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_node_({tag}, {attrs}, {children})"
+            )))
+        }
+
+        // `Html.div : List Attr -> List Html -> Html msg`
+        KernelFn::HtmlDiv => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlDiv",
+                    detail: format!("Html.div requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_div_({attrs}, {children})"
+            )))
+        }
+
+        // `Html.span : List Attr -> List Html -> Html msg`
+        KernelFn::HtmlSpan => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlSpan",
+                    detail: format!("Html.span requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_span_({attrs}, {children})"
+            )))
+        }
+
+        // `Html.a : List Attr -> List Html -> Html msg`
+        KernelFn::HtmlA => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlA",
+                    detail: format!("Html.a requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_a_({attrs}, {children})"
+            )))
+        }
+
+        // `Html.button : List Attr -> List Html -> Html msg`
+        KernelFn::HtmlButton => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlButton",
+                    detail: format!("Html.button requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_button_({attrs}, {children})"
+            )))
+        }
+
+        // `Html.p (and other block elements) : List Attr -> List Html -> Html msg`
+        KernelFn::HtmlP => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlP",
+                    detail: format!("Html.p/block requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_p_({attrs}, {children})"
+            )))
+        }
+
+        // `Html.input : List Attr -> Html msg` (void element)
+        KernelFn::HtmlInput => {
+            let [attrs_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlInput",
+                    detail: format!("Html.input requires 1 argument, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_input_({attrs})"
+            )))
+        }
+
+        // `Html.img : List Attr -> Html msg` (void element)
+        KernelFn::HtmlImg => {
+            let [attrs_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlImg",
+                    detail: format!("Html.img requires 1 argument, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_img_({attrs})"
+            )))
+        }
+
+        // ── App-entry stubs (Phase 0 — CompilerBug until Phase 1 wires them) ──
+        KernelFn::LiveApp
+        | KernelFn::LiveAppRouted
+        | KernelFn::LiveRoute
+        | KernelFn::LiveRenderStatic
+        | KernelFn::TuiProgram
+        | KernelFn::TuiApp
+        | KernelFn::WebviewApp => Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_ui_call",
+            detail: format!("kernel {k:?} is a Phase-0 stub — wired in Phase 1"),
+        }),
+
+        // Any is_ui/live/tui/webview() variant not listed is a gap — hard error.
+        _ => Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_ui_call",
+            detail: format!(
+                "UI/Live/Tui/Webview kernel {k:?} has no emit arm — add it to emit_ui_call"
+            ),
+        }),
+    }
+}
+
 /// Emit an expression. `indent` is the indentation level (in 4-space units) of
 /// the line the expression *starts* on; it is consumed only by the multi-line
 /// `match` form. All other M0 expressions render inline (no leading whitespace,
@@ -1246,6 +2107,10 @@ fn emit_expr_at(
             if let Some(result) = emit_server_call(ctx, callee, args, indent, child, generics)? {
                 return Ok(result);
             }
+            // M7: Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview kernels.
+            if let Some(result) = emit_ui_call(ctx, callee, args, indent, child, generics)? {
+                return Ok(result);
+            }
             // Dict.get borrows semantics: the runtime takes the HashMap by
             // value, but Sky dicts are persistent — the same dict binding may
             // be passed to multiple Dict.get calls in one let-chain (e.g.
@@ -1359,6 +2224,17 @@ fn emit_list(
 ) -> DResult<String> {
     let child = depth + 1;
     if items.is_empty() {
+        // For `IrType::Json` (unresolved / wildcard `Value = any`) the type
+        // annotation `Vec::<JsonVal>::new()` CONFLICTS with callers that expect
+        // `Vec<Attribute<M>>` / `Vec<Element<M>>` etc. — Rust's type checker
+        // rejects the explicit annotation even though it would accept an
+        // unannotated `Vec::new()` via inference.  Emit the bare form and let
+        // Rust infer the element type from the surrounding call's expected type.
+        // All other element types are precise enough that an explicit annotation
+        // resolves ambiguity without breaking callers.
+        if matches!(elem, IrType::Json) {
+            return Ok("Vec::new()".to_owned());
+        }
         let ty = render_type(ctx, elem, generics)?;
         return Ok(format!("Vec::<{ty}>::new()"));
     }
@@ -2128,6 +3004,19 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
         ));
     }
     let ret = render_type(ctx, &func.ret, generics)?;
+
+    // Extract the enclosing function's UI message type so UiLayout /
+    // UiLayoutWith arms can fill `M` from the return-type annotation rather
+    // than hardcoding `()`.  Rendered in THIS function's own generic scope so
+    // a polymorphic view (`view : Cfg msg -> Html msg`) produces `T1`.
+    // `ui_msg_string` lives for the full `emit_func` body, so the borrow
+    // `ui_msg_string.as_deref()` remains valid throughout.
+    let ui_msg_string: Option<String> = match &func.ret {
+        IrType::Ui { msg, .. } => Some(render_type(ctx, msg, generics)?),
+        _ => None,
+    };
+    let generics = generics.with_ui_msg(ui_msg_string.as_deref());
+
     let body = emit_expr(ctx, &func.body, 1, generics)?;
     Ok(format!(
         "pub fn {name}{generic_clause}({}) -> {ret} {{\n    {body}\n}}\n",

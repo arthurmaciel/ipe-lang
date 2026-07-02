@@ -14,7 +14,7 @@ use sky_intern::{Interner, Symbol};
 
 use crate::ir::{
     Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, IrType, KernelFn, Match, ModPath, Module,
-    Pat, Program, TypeDef, Variant,
+    Pat, Program, TypeDef, UiCtor, UiPlain, Variant,
 };
 
 /// Render `program` as a readable indented tree, resolving every [`Symbol`]
@@ -59,6 +59,7 @@ fn mod_path_name(interner: &Interner, path: &ModPath) -> String {
 }
 
 /// Render an [`IrType`] as its source-facing name.
+#[allow(clippy::too_many_lines)]
 fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
     match ty {
         IrType::Int => "Int".to_owned(),
@@ -114,6 +115,29 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::ServerResponse => "Response".to_owned(),
         IrType::ServerRoute => "Route".to_owned(),
         IrType::ServerCookie => "Cookie".to_owned(),
+        // M7 Std.Ui / Std.Html parametric types.
+        IrType::Ui { ctor, msg } => {
+            let ctor_name = match ctor {
+                UiCtor::Html => "Html",
+                UiCtor::Element => "Element",
+                UiCtor::UiAttribute => "Ui.Attribute",
+                UiCtor::HtmlAttribute => "Html.Attribute",
+                UiCtor::HtmlEvent => "Html.Event",
+            };
+            format!("{} {}", ctor_name, ir_type_name(interner, msg))
+        }
+        IrType::UiPlain(plain) => match plain {
+            UiPlain::Length => "Length".to_owned(),
+            UiPlain::Color => "Color".to_owned(),
+            UiPlain::HAlign => "HAlign".to_owned(),
+            UiPlain::VAlign => "VAlign".to_owned(),
+            UiPlain::Location => "Location".to_owned(),
+            UiPlain::PseudoClass => "PseudoClass".to_owned(),
+            UiPlain::Description => "Description".to_owned(),
+            UiPlain::LayoutContext => "LayoutContext".to_owned(),
+        },
+        IrType::LiveReq => "LiveReq".to_owned(),
+        IrType::LiveRoute => "LiveRoute".to_owned(),
         IrType::Tuple(elems) => {
             let inner = elems
                 .iter()
@@ -533,6 +557,86 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::MiddlewareWithBasicAuth => "Middleware.withBasicAuth",
         KernelFn::MiddlewareWithRateLimit => "Middleware.withRateLimit",
         KernelFn::RateLimitAllow => "RateLimit.allow",
+        // ── M7: Std.Ui / Std.Html render kernels ─────────────────────────────
+        KernelFn::UiLayout => "Ui.layout",
+        KernelFn::UiLayoutWith => "Ui.layoutWith",
+        KernelFn::HtmlRender => "Html.render",
+        KernelFn::HtmlEscapeText => "Html.escapeText",
+        KernelFn::HtmlEscapeAttr => "Html.escapeAttr",
+        KernelFn::HtmlAttrToString => "Html.attrToString",
+        // ── M7: Std.Live app-entry kernels ───────────────────────────────────
+        KernelFn::LiveApp => "Live.app",
+        KernelFn::LiveAppRouted => "Live.appRouted",
+        KernelFn::LiveRoute => "Live.route",
+        KernelFn::LiveRenderStatic => "Live.renderStatic",
+        // ── M7: Std.Tui app-entry kernels ────────────────────────────────────
+        KernelFn::TuiProgram => "Tui.program",
+        KernelFn::TuiApp => "Tui.app",
+        // ── M7: Std.Webview app-entry kernel ─────────────────────────────────
+        KernelFn::WebviewApp => "Webview.app",
+        // ── M7: Std.Ui element builders ──────────────────────────────────────
+        KernelFn::UiNone => "Ui.none",
+        KernelFn::UiText => "Ui.text",
+        KernelFn::UiHtml => "Ui.html",
+        KernelFn::UiEl => "Ui.el",
+        KernelFn::UiRow => "Ui.row",
+        KernelFn::UiColumn => "Ui.column",
+        KernelFn::UiWrappedRow => "Ui.wrappedRow",
+        KernelFn::UiGrid => "Ui.grid",
+        // ── M7: Std.Ui attribute builders ────────────────────────────────────
+        KernelFn::UiSpacing => "Ui.spacing",
+        KernelFn::UiPadding => "Ui.padding",
+        KernelFn::UiPaddingXY => "Ui.paddingXY",
+        KernelFn::UiWidth => "Ui.width",
+        KernelFn::UiHeight => "Ui.height",
+        KernelFn::UiCenterX => "Ui.centerX",
+        KernelFn::UiCenterY => "Ui.centerY",
+        KernelFn::UiAlignLeft => "Ui.alignLeft",
+        KernelFn::UiAlignRight => "Ui.alignRight",
+        KernelFn::UiAlignTop => "Ui.alignTop",
+        KernelFn::UiAlignBottom => "Ui.alignBottom",
+        KernelFn::UiPointer => "Ui.pointer",
+        KernelFn::UiClip => "Ui.clip",
+        KernelFn::UiScrollbars => "Ui.scrollbars",
+        KernelFn::UiGridColumns => "Ui.gridColumns",
+        // ── M7: Std.Ui Length builders ───────────────────────────────────────
+        KernelFn::UiPx => "Ui.px",
+        KernelFn::UiFill => "Ui.fill",
+        KernelFn::UiContent => "Ui.content",
+        KernelFn::UiShrink => "Ui.shrink",
+        KernelFn::UiFillPortion => "Ui.fillPortion",
+        KernelFn::UiVh => "Ui.vh",
+        KernelFn::UiVw => "Ui.vw",
+        KernelFn::UiMinimum => "Ui.minimum",
+        KernelFn::UiMaximum => "Ui.maximum",
+        // ── M7: Std.Ui Color builders ────────────────────────────────────────
+        KernelFn::UiRgb => "Ui.rgb",
+        KernelFn::UiRgba => "Ui.rgba",
+        KernelFn::UiWhite => "Ui.white",
+        KernelFn::UiBlack => "Ui.black",
+        KernelFn::UiTransparent => "Ui.transparent",
+        // ── M7: Background / Border / Font sub-modules ───────────────────────
+        KernelFn::BackgroundColor => "Background.color",
+        KernelFn::BackgroundImage => "Background.image",
+        KernelFn::BorderWidth => "Border.width",
+        KernelFn::BorderRounded => "Border.rounded",
+        KernelFn::BorderColor => "Border.color",
+        KernelFn::FontSize => "Font.size",
+        KernelFn::FontColor => "Font.color",
+        KernelFn::FontFamily => "Font.family",
+        KernelFn::FontBold => "Font.bold",
+        KernelFn::FontItalic => "Font.italic",
+        // ── M7: Html element builders ────────────────────────────────────────
+        KernelFn::HtmlTextNode => "Html.text",
+        KernelFn::HtmlRawNode => "Html.raw",
+        KernelFn::HtmlNode => "Html.node",
+        KernelFn::HtmlDiv => "Html.div",
+        KernelFn::HtmlSpan => "Html.span",
+        KernelFn::HtmlA => "Html.a",
+        KernelFn::HtmlButton => "Html.button",
+        KernelFn::HtmlP => "Html.p",
+        KernelFn::HtmlInput => "Html.input",
+        KernelFn::HtmlImg => "Html.img",
     }
 }
 
@@ -1101,6 +1205,10 @@ mod tests {
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
             }],
         })
     }
@@ -1196,6 +1304,10 @@ program
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
             }],
         };
 
@@ -1253,6 +1365,10 @@ program
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
             }],
         };
 
@@ -1312,6 +1428,10 @@ program
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
             }],
         };
 
@@ -1357,6 +1477,10 @@ program
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
             }],
         };
 
@@ -1411,6 +1535,10 @@ program
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
             }],
         };
 
@@ -1457,6 +1585,10 @@ program
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
             }],
         };
 
@@ -1539,6 +1671,10 @@ program
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
             }],
         };
 
@@ -1623,6 +1759,10 @@ program
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
             }],
         };
 
@@ -1656,6 +1796,10 @@ program
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
             }],
         };
         let rendered = pretty(&program, &i);

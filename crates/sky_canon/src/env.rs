@@ -614,6 +614,377 @@ impl Env {
             ),
             // M6: Sky.Http.RateLimit kernels.
             ("RateLimit", &["allow"]),
+            // ── M7: Std.Ui — element / attribute / color / layout builders ──────
+            // `layout` and `layoutWith` are render kernels; the rest are element /
+            // attribute / length / color value builders wired as kernel helpers.
+            // All names below resolve as `VarHome::Kernel("Ui", name)` so that
+            // qualified references like `Ui.column [...]` succeed in the canon phase.
+            (
+                "Ui",
+                &[
+                    // ── render kernels ────────────────────────────────────────
+                    "layout",
+                    "layoutWith",
+                    // ── element builders ─────────────────────────────────────
+                    "none",
+                    "text",
+                    "el",
+                    "row",
+                    "column",
+                    "wrappedRow",
+                    "grid",
+                    "html",
+                    // ── attribute builders ───────────────────────────────────
+                    "spacing",
+                    "padding",
+                    "paddingXY",
+                    "paddingEach",
+                    "width",
+                    "height",
+                    "centerX",
+                    "centerY",
+                    "alignLeft",
+                    "alignRight",
+                    "alignTop",
+                    "alignBottom",
+                    "pointer",
+                    "clip",
+                    "clipX",
+                    "clipY",
+                    "scrollbars",
+                    "scrollbarX",
+                    "scrollbarY",
+                    "gridColumns",
+                    "above",
+                    "below",
+                    "onLeft",
+                    "onRight",
+                    "inFront",
+                    "behind",
+                    "onClick",
+                    "onSubmit",
+                    "onInput",
+                    "onChange",
+                    "onFocus",
+                    "onBlur",
+                    "onMouseOver",
+                    "onMouseOut",
+                    "onKeyDown",
+                    "onKeyUp",
+                    "onFile",
+                    "htmlAttribute",
+                    "mediaQuery",
+                    "breakpoint",
+                    "aspectRatio",
+                    "aspectRatioWH",
+                    "square",
+                    "widescreen",
+                    "onPseudo",
+                    "hover",
+                    "focus",
+                    "focusVisible",
+                    "active",
+                    "disabled",
+                    "mobile",
+                    "tablet",
+                    "desktop",
+                    "darkMode",
+                    "lightMode",
+                    "reducedMotion",
+                    // ── Length builders ─────────────────────────────────────
+                    "px",
+                    "fill",
+                    "fillPortion",
+                    "content",
+                    "shrink",
+                    "minimum",
+                    "maximum",
+                    "vh",
+                    "vw",
+                    // ── Color builders ──────────────────────────────────────
+                    "rgb",
+                    "rgba",
+                    "white",
+                    "black",
+                    "transparent",
+                    // ── Other ────────────────────────────────────────────────
+                    "paragraph",
+                    "textColumn",
+                    "image",
+                    "link",
+                    "button",
+                    "input",
+                    "form",
+                ],
+            ),
+            // ── M7: Std.Ui.Background sub-module ─────────────────────────────────
+            (
+                "Background",
+                &[
+                    "color",
+                    "image",
+                    "hoverColor",
+                    "focusColor",
+                    "activeColor",
+                    "disabledColor",
+                    "linearGradient",
+                ],
+            ),
+            // ── M7: Std.Ui.Border sub-module ─────────────────────────────────────
+            (
+                "Border",
+                &[
+                    "width",
+                    "widthEach",
+                    "color",
+                    "rounded",
+                    "solid",
+                    "dashed",
+                    "dotted",
+                    "shadow",
+                    "glow",
+                    "innerShadow",
+                    "hoverColor",
+                    "focusColor",
+                    "activeColor",
+                    "hoverWidth",
+                    "hoverRounded",
+                ],
+            ),
+            // ── M7: Std.Ui.Font sub-module ───────────────────────────────────────
+            (
+                "Font",
+                &[
+                    "color",
+                    "family",
+                    "size",
+                    "weight",
+                    "bold",
+                    "semiBold",
+                    "regular",
+                    "light",
+                    "extraBold",
+                    "black",
+                    "italic",
+                    "underline",
+                    "noDecoration",
+                    "letterSpacing",
+                    "wordSpacing",
+                    "alignLeft",
+                    "alignRight",
+                    "center",
+                    "justify",
+                    "sansSerif",
+                    "serif",
+                    "monospace",
+                    "hoverColor",
+                    "focusColor",
+                    "activeColor",
+                    "disabledColor",
+                    "hoverSize",
+                ],
+            ),
+            // ── M7: Std.Html — typed HTML element / text surface ─────────────────
+            // `render` / `escapeHtml` / `escapeAttr` / `attrToString` are render
+            // kernels; all element-builder names create `Html msg` values.
+            (
+                "Html",
+                &[
+                    // render kernels
+                    "render",
+                    "toString",
+                    "escapeHtml",
+                    "escapeAttr",
+                    "attrToString",
+                    // text / raw nodes
+                    "text",
+                    "raw",
+                    // generic builder
+                    "node",
+                    "voidNode",
+                    "doctype",
+                    "styleNode",
+                    "titleNode",
+                    // common containers
+                    "div",
+                    "span",
+                    "p",
+                    "a",
+                    "button",
+                    "form",
+                    "label",
+                    "nav",
+                    "section",
+                    "article",
+                    "header",
+                    "footer",
+                    "main",
+                    "aside",
+                    "ul",
+                    "ol",
+                    "li",
+                    "table",
+                    "thead",
+                    "tbody",
+                    "tfoot",
+                    "tr",
+                    "th",
+                    "td",
+                    "textarea",
+                    "select",
+                    "option",
+                    "pre",
+                    "code",
+                    "strong",
+                    "em",
+                    "small",
+                    "fieldset",
+                    "legend",
+                    "blockquote",
+                    "figure",
+                    "figcaption",
+                    "details",
+                    "summary",
+                    "dialog",
+                    "video",
+                    "audio",
+                    "canvas",
+                    "iframe",
+                    "progress",
+                    "meter",
+                    "script",
+                    // headings
+                    "h1",
+                    "h2",
+                    "h3",
+                    "h4",
+                    "h5",
+                    "h6",
+                    // void elements
+                    "img",
+                    "input",
+                    "br",
+                    "hr",
+                    "meta",
+                    "link",
+                    "area",
+                    "base",
+                    "col",
+                    "embed",
+                    "source",
+                    "track",
+                    "wbr",
+                    // document elements
+                    "body",
+                    "htmlNode",
+                    "headNode",
+                    "title",
+                    // legacy compat aliases
+                    "headerNode",
+                    "codeNode",
+                    "mainNode",
+                    "footerNode",
+                    "linkNode",
+                ],
+            ),
+            // ── M7: Std.Html.Attributes alias ────────────────────────────────────
+            (
+                "Attr",
+                &[
+                    "attribute",
+                    "boolAttribute",
+                    "style",
+                    "class",
+                    "id",
+                    "type_",
+                    "name",
+                    "value",
+                    "placeholder",
+                    "href",
+                    "src",
+                    "alt",
+                    "for_",
+                    "checked",
+                    "disabled",
+                    "readonly",
+                    "required",
+                    "multiple",
+                    "selected",
+                    "autofocus",
+                    "tabindex",
+                    "noAttr",
+                ],
+            ),
+            // ── M7: Std.Html.Events alias ─────────────────────────────────────────
+            (
+                "Event",
+                &[
+                    "onClick",
+                    "onInput",
+                    "onChange",
+                    "onSubmit",
+                    "onFocus",
+                    "onBlur",
+                    "onMouseOver",
+                    "onMouseOut",
+                    "onKeyDown",
+                    "onKeyUp",
+                    "onBool",
+                    "onMsg",
+                ],
+            ),
+            // ── M7: Sky.Live / Std.Live app-entry kernels ────────────────────────
+            ("Live", &["app", "appRouted", "route", "renderStatic"]),
+            // ── M7: Sky.Tui / Std.Tui app-entry kernels ──────────────────────────
+            ("Tui", &["app", "program"]),
+            // ── M7: Sky.Webview / Std.Webview app-entry kernel ───────────────────
+            ("Webview", &["app"]),
+        ];
+
+        // ── M7: Per-qualifier function name aliases ───────────────────────────
+        // Maps a Sky-source alias name (e.g. `htmlRender`) to its canonical
+        // kernel function name (e.g. `render`) within a qualifier module, so
+        // `Html.htmlRender` and `Std.Html.htmlRender` both produce
+        // `VarKernel { module: html_sym, name: render_sym }` — which lower.rs
+        // matches under the same `("Html", "render")` arm.
+        //
+        // Declared here (before the first `for` statement) to satisfy
+        // `clippy::items_after_statements`.
+        //
+        // MUST be processed BEFORE QUALIFIER_ALIASES (installed below) so that
+        // alias entries are included in any qual-to-qual copy.
+        const FUNC_ALIASES: &[(&str, &str, &str)] = &[
+            // ("qualifier", "alias_name", "canonical_kernel_name")
+            ("Html", "htmlRender", "render"),
+            ("Html", "htmlEscapeText", "escapeHtml"),
+            ("Html", "htmlEscapeAttr", "escapeAttr"),
+            ("Html", "htmlAttrToString", "attrToString"),
+        ];
+
+        // ── M7: Qualifier module aliases (Std.X / Sky.X → short canonical) ───
+        // Clones every entry from the canonical qualifier's member map into the
+        // alias qualifier key. Because each entry already holds
+        // `VarHome::Kernel(canonical_sym, fn_sym)` (NOT the alias key's symbol),
+        // `resolve_qual_var` in `resolve.rs` produces a `VarKernel` whose
+        // `module` field is always the canonical short name ("Html", "Ui", …).
+        // lower.rs match arms therefore work unmodified.
+        //
+        // Declared here (before the first `for` statement) to satisfy
+        // `clippy::items_after_statements`.
+        const QUALIFIER_ALIASES: &[(&str, &str)] = &[
+            // (alias_qualifier, canonical_qualifier)
+            ("Std.Html", "Html"),
+            ("Std.Ui", "Ui"),
+            ("Std.Html.Attributes", "Attr"),
+            ("Std.Html.Events", "Event"),
+            ("Std.Live", "Live"),
+            ("Std.Tui", "Tui"),
+            ("Std.Webview", "Webview"),
+            // Sky.* forms for consistency with other kernel module conventions.
+            ("Sky.Html", "Html"),
+            ("Sky.Ui", "Ui"),
+            ("Sky.Live", "Live"),
+            ("Sky.Tui", "Tui"),
         ];
 
         for (qual, funcs) in QUALIFIERS {
@@ -625,6 +996,33 @@ impl Env {
             }
             self.qual_vars.entry(qual_sym).or_default().extend(module);
         }
+
+        for (qual, alias, canonical) in FUNC_ALIASES {
+            let qual_sym = interner.intern(qual)?;
+            let alias_sym = interner.intern(alias)?;
+            let canonical_sym = interner.intern(canonical)?;
+            // VarHome stores the CANONICAL module + fn symbols so lower.rs
+            // match arms (`("Html", "render")`) work without any changes.
+            let home = VarHome::Kernel(qual_sym, canonical_sym);
+            self.qual_vars
+                .entry(qual_sym)
+                .or_default()
+                .insert(alias_sym, home);
+        }
+
+        for (alias, canonical) in QUALIFIER_ALIASES {
+            let alias_sym = interner.intern(alias)?;
+            let canonical_sym = interner.intern(canonical)?;
+            // `.cloned()` releases the shared borrow before the mutable
+            // `entry(alias_sym)` borrow — required by the borrow checker.
+            if let Some(canonical_members) = self.qual_vars.get(&canonical_sym).cloned() {
+                self.qual_vars
+                    .entry(alias_sym)
+                    .or_default()
+                    .extend(canonical_members);
+            }
+        }
+
         Ok(())
     }
 }

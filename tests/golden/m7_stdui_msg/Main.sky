@@ -1,0 +1,25 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+import Std.Ui.Font as Font
+
+
+-- Phase-0 Std.Ui regression: `Ui.layout` turbofish must use the enclosing
+-- function's return type `Html Msg` rather than the hardcoded `()`.
+-- Verifies that `main_static_view` emits `ui_layout::<MainMsg>(...)`,
+-- not `ui_layout::<()>(...)`, and that the HTML renders correctly.
+-- oracle_divergence = true: Rust backend emits compact inline CSS.
+
+
+type Msg
+    = Tick
+
+
+staticView : Msg -> Html Msg
+staticView msg =
+    Ui.layout [] (Ui.el [ Font.bold ] (Ui.text "typed"))
+
+
+main =
+    println (Html.htmlRender (staticView Tick))

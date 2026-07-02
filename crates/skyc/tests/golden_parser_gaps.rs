@@ -134,7 +134,10 @@ fn qualtype_project_builds_and_prints_42() {
     let outcome = support::build_and_run_emitted(name, &out);
     // Go-verified reference: `unbox (Box 42)` prints `42`. Multi-module goldens
     // store source under `src/`, so the single-file oracle cache does not apply.
-    assert_eq!(outcome.stdout, "42\n", "qualified `Lib.Box Int` must yield 42");
+    assert_eq!(
+        outcome.stdout, "42\n",
+        "qualified `Lib.Box Int` must yield 42"
+    );
     assert_eq!(outcome.exit_code, Some(0), "clean exit");
 }
 

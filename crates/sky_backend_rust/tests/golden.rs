@@ -135,6 +135,10 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
             records: vec![],
             uses_tea: false,
             uses_server: false,
+            uses_ui: false,
+            uses_live: false,
+            uses_tui: false,
+            uses_webview: false,
         }],
     })
 }
