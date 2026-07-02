@@ -176,14 +176,18 @@ run concurrently with the generator port's design milestones.
 
 ### B0.2 Fail-closed the internal parse paths (risk #3 — DoS on malformed JSON)
 The inspector currently carries **42 `unwrap()` lines (45 occurrences), 57 `expect(...)`, 31 `panic!`**
-(verified) and *does not enforce* the `unwrap_used`/`expect_used`/`panic` clippy
-lints (these are default-off restriction lints; the crate has no `[lints]` table
-enabling them, so they are simply never on — not actively suppressed). rustdoc
-JSON is attacker-influenced (a malicious crate shapes its
-own doc output). A panic here is a DoS and violates the "no partial/guessed
-bindings" rule. Required:
-- Re-enable `clippy::unwrap_used`, `expect_used`, `panic` as **deny** on the
-  crate; drive the count to zero on every path that touches decoded rustdoc JSON.
+(verified). Its `Cargo.toml` **already carries a `[lints.clippy]` block that
+deliberately sets `unwrap_used` / `expect_used` / `panic = "allow"`, with a
+justifying comment** (`tools/sky-ffi-inspect-rs/Cargo.toml:12-19`). So B0.2 is a
+**REVERSAL of that deliberate decision** — flip those three to **deny** — not an
+additive tightening on a clean slate; it exposes the ~130 call sites the `allow`
+was chosen to avoid churning. rustdoc JSON is attacker-influenced (a malicious
+crate shapes its own doc output). A panic here is a DoS and violates the "no
+partial/guessed bindings" rule. Required:
+- **Flip `clippy::unwrap_used`, `expect_used`, `panic` from `"allow"` to
+  `"deny"`** on the crate (reverse the prior decision; record why the original
+  `allow` no longer holds); drive the count to zero on every path that touches
+  decoded rustdoc JSON.
 - On any internal parse failure, **return an error-`PkgInfo`** (the
   `errors: Vec<String>` field already exists, `main.rs:451`) and exit non-zero —
   never abort. The generator side already treats a non-empty `errors` /
@@ -322,11 +326,12 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
   (897), and the `SKY-F4400`-family diagnostics (`mkClosedSetError:184`,
   `mkTraitBoundError:200`, `mkUnmodellableBoundError:227`, `mkUnmodellableFnError`).
 - **MODELLABLE_5 drift fence (explicit deliverable).** The inspector's
-  `MODELLABLE_5 = {Hash, Eq, Ord, Clone, Default}` (`main.rs:406`) is the exact set
-  of trait bounds the parametric-stub monomorphiser can model. The Haskell
-  `modellableTrait` must agree. Port **both** sides and add the two-way fence test
-  (mirror inspector `main.rs:12097` which asserts `MODELLABLE_5` is EXACTLY the
-  modellable subset and `MARKER_TRAITS.len() > MODELLABLE_5.len()`): if either
+  `MODELLABLE_5 = {Hash, Eq, Ord, Clone, Default}` (`main.rs:411`; doc comment
+  `:409`) is the exact set of trait bounds the parametric-stub monomorphiser can
+  model. The Haskell `modellableTrait` must agree. Port **both** sides and add
+  the two-way fence test (mirror inspector `main.rs:12962-12971` which asserts
+  `MODELLABLE_5` is EXACTLY the modellable subset and
+  `MARKER_TRAITS.len() > MODELLABLE_5.len()`): if either
   side's set changes without the other, the fence fails. A bound outside the set ⇒
   **over-drop** (sound), never guess.
 - **Demand-driven monomorphisation:** the type-directed lowering already threads

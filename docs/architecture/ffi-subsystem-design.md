@@ -73,11 +73,12 @@ depends on. Ports `validateCall`/`parseCall` (`sky/…/Rust/FfiCall.hs:756-820`)
 
 ### R0.2 — M4 must be an OPEN, `KernelId`-indexed registry; the exhaustive `match KernelFn` sites get a total FFI default
 
-Today kernels are a closed 394-variant enum (`crates/sky_ir/src/ir.rs:822`,
+Today kernels are a closed 404-variant enum (`crates/sky_ir/src/ir.rs:822`→`:1863`,
 `Callee` at `:804`) matched exhaustively by `kernel_is_db`/`_is_tea`/`_is_server`
 (`crates/sky_lower/src/lower.rs:324,386,456`), `kernel_native_ir_type`
-(`:1995`), and zero-arity classification (`:2616-2631`). An FFI binding is
-data-driven and cannot be an enum variant.
+(`:2128`), plus arity handling now scattered across lower (`ctor_arity`/
+`max_def_arity` `:687-755`, `ir_type_from_ty` `:1746`, `native_ir_type`
+`:2128`). An FFI binding is data-driven and cannot be an enum variant.
 
 **Resolution (hard M4 acceptance criterion).** M4 ships an *open* registry
 indexed by an opaque `KernelId`, not a widened closed enum. A call lowers to
@@ -302,23 +303,33 @@ sentinel + DCE key mutually consistent by construction rather than by test.
 
 ### D5 — kernel-registry integration + `.ipei` HM seeding (BLOCKS on M4, consumer side only)
 
-**Decision.** One `KernelEntry { id: KernelId, sky_signature: Scheme, origin:
-Origin, emit: PerBackendEmit, fallibility: Fallibility }` shared by stdlib and
-FFI; `Origin { Stdlib | Ffi { crate: CrateRef, version } }` is a sum type. FFI
-and stdlib kernels share `KernelId` space and take the **same** canon /
-name-resolution / lowering path — the only difference is `origin`, the
-signature source (`.ipei` vs the hand-seeded canon arms
-`crates/sky_canon/src/env.rs:186-268`), and `emit`. FFI kernels thus inherit
-every stdlib soundness property (no `any`, no downstream re-coercion) for free.
+**Decision.** The **shared thing is the `KernelId`, not a shared `KernelEntry`
+struct.** The registry design (kernel-registry-design.md Q1/Q4) proved a single
+`KernelEntry` struct **cannot** live in the leaf crate without a dependency
+cycle: stdlib is realized instead as N exhaustive `match KernelId → Scheme`
+projections in the type-owning crates, so the literal `KernelEntry { id:
+KernelId, sky_signature: Scheme, origin: Origin, emit, fallibility }` struct
+**survives only for the FFI tier**, living in `sky_types` and seeded from `.ipei`
+as an `FfiRegistry`. Both tiers share `KernelId` space and take the **same**
+canon / name-resolution / lowering path; the only difference is `origin`
+(`Origin { Stdlib | Ffi { crate: CrateRef, version } }`), the signature source
+(`.ipei` decode vs the stdlib exhaustive-projection arms), and `emit`. FFI
+kernels thus inherit every stdlib soundness property (no `any`, no downstream
+re-coercion) for free.
 
 **HM seeding.** The type-env builder loads every `.ipei` in the cache and
 registers `(Rust.<Crate>.<name> → KernelId, Scheme)` with `origin = Ffi`. This
 is the *consumer-side* single parse point: after this load a foreign value is a
 fully-typed ipê value; opaque types are `Ty::Con` unifying nominally.
-`resolve.rs` (`crates/sky_canon/src/resolve.rs:141,986`) treats a `Rust.*`
-qualifier as an FFI-kernel module when the `.ipei` declares it, else an
-unknown-qualifier error. `kernel.json` is consulted at lowering (not typing) to
-resolve the `KernelId`.
+Post-registry-migration the stdlib resolution seam **moves from `env.rs`
+`QUALIFIERS` (`crates/sky_canon/src/env.rs:182`) to `sky_kernels::resolve`**
+(kernel-registry-design.md Q2), so the FFI `Rust.*` → `Ffi(fid)` path targets
+`sky_kernels::resolve(qual, name)` returning `KernelId::Ffi(fid)` when a loaded
+`.ipei` declares the `Rust.*` qualifier, else an unknown-qualifier error (the
+`VarHome::Kernel` → `canon::Expr_::VarKernel` production is at
+`crates/sky_canon/src/resolve.rs:1131`; `:986` is a lambda-capture comment, not
+the seam). `kernel.json` is consulted at lowering (not typing) to resolve the
+`KernelId`.
 
 **Blocking boundary (LOCKED, per R3).** The *generator* (M-A..M-E: decode →
 gates → three artifacts) is a pure function from inspector JSON to files and has
@@ -326,6 +337,20 @@ gates → three artifacts) is a pure function from inspector JSON to files and h
 byte-diff of emitted artifacts) is reachable *before M4 exists*. Only the
 *consumer wiring* (`.ipei` seeding + `KernelId` lowering resolution) blocks on
 M4. So M-A..M-E proceed in parallel with M4; only the build-and-run rung waits.
+
+**M-D acceptance gate — `.ipei → Ty` ≡ stdlib hand-`match` structural identity
+(net-new, tied to task #42).** Before the **first `Ffi` entry lands**, verify
+that `.ipei → Ty` decoding produces a **structurally-identical `Ty`** to the
+stdlib exhaustive-projection scheme for the **same logical signature** — e.g. an
+FFI `fun(int, string)` must type-check *identically* to stdlib `String.fromInt`.
+This is load-bearing because the stdlib and FFI schemes are built by **two
+independent `Ty`-constructors** (the hand-`match` projection vs the `.ipei`
+decoder) that agree only **by test, not by construction**. This is the registry
+design's **OPEN DECISION 1** (kernel-registry-design.md §OPEN DECISIONS, `:249-252`),
+imported here as a **gating check**: if the two paths show any structural
+divergence for the same logical signature, promote to a shared descriptor;
+otherwise keep the hand-`match`. Revisit before the first `Ffi` entry — this is
+an M-D acceptance criterion, not a deferred nicety.
 
 **Rationale.** One registry means FFI call sites type-check, resolve, and lower
 through the exact stdlib code; splitting the blocking boundary keeps the
