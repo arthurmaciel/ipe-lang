@@ -1,0 +1,36 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+import Std.Html.Events as Event
+
+
+-- Phase-1a round-2 NEGATIVE sentinel (issue #45):
+-- `Event.onInput` expects `(String -> msg) -> Attribute msg`.
+-- Passing a `Bool -> msg` closure is a type mismatch that skyc MUST
+-- reject with SKY-T0001 — never exit 0 and defer the error to cargo.
+--
+-- Pre-fix: constrain.rs only handled `Some("Ui")` for the String-payload
+-- event arm; `Event.onInput` fell to `Ty::Var(u32::MAX)` (flexible
+-- fallback), skyc exited 0, and cargo emitted E0308.
+--
+-- Post-fix: the arm covers `Some("Ui" | "Event")`, so the Bool handler
+-- unifies with the expected `String -> msg` and produces SKY-T0001.
+
+
+type Msg
+    = SetChecked Bool
+
+
+-- Bool handler on a String event — ill-typed, must be rejected.
+staticHtml : String
+staticHtml =
+    Html.htmlRender
+        (Ui.layout []
+            (Ui.el
+                [ Event.onInput (\b -> SetChecked b) ]
+                (Ui.text "x")))
+
+
+main =
+    println staticHtml

@@ -144,6 +144,29 @@ struct Builtins {
     server_route: Symbol,
     /// `"Cookie"` — the opaque server cookie type.
     server_cookie: Symbol,
+    // ── M7: Std.Ui / Std.Html parametric type constructor symbols ─────────────
+    /// `"Attribute"` — Std.Ui attribute type constructor `Attribute msg`.
+    ///
+    /// Used to build Ui kernel type schemes so the HM solver constrains
+    /// `List (Attribute msg)` arguments (e.g. `layout [] child`) to a concrete
+    /// element type rather than leaving them as free variables.  Without these
+    /// entries the empty-attrs list `[]` keeps `List (Ty::Var)` as its region
+    /// type, `list_elem_ir` returns `IrType::Json`, and `emit_list` emits the
+    /// bare `Vec::new()` that Rust rejects with E0283 when M cannot be inferred
+    /// from elsewhere in the expression.
+    attribute: Symbol,
+    /// `"Element"` — Std.Ui element type constructor `Element msg`.
+    element: Symbol,
+    /// `"Html"` — Html type constructor `Html msg` (shared by Std.Html and
+    /// Std.Ui render entry points).
+    html_con: Symbol,
+    /// `"wrapperAttrs"` — field name in the `Ui.layoutWith` config record.
+    /// Pre-interned because `kernel_ty` builds a `Ty::Record` for the first
+    /// argument of `Ui.layoutWith : { wrapperAttrs, rootAttrs } -> ...` and
+    /// needs the key as a `Symbol`.
+    lw_wrapper_attrs: Symbol,
+    /// `"rootAttrs"` — the second field in the `Ui.layoutWith` config record.
+    lw_root_attrs: Symbol,
 }
 
 impl Builtins {
@@ -203,6 +226,12 @@ impl Builtins {
             server_response: interner.intern("Response")?,
             server_route: interner.intern("Route")?,
             server_cookie: interner.intern("Cookie")?,
+            // M7: Std.Ui / Std.Html parametric type constructor symbols.
+            attribute: interner.intern("Attribute")?,
+            element: interner.intern("Element")?,
+            html_con: interner.intern("Html")?,
+            lw_wrapper_attrs: interner.intern("wrapperAttrs")?,
+            lw_root_attrs: interner.intern("rootAttrs")?,
         })
     }
 
@@ -3528,6 +3557,195 @@ impl<'a> Builder<'a> {
                 string.clone(),
                 fun(string, fun(int.clone(), fun(int, bool_ty))),
             ),
+
+            // ── M7: Std.Ui layout / element / event kernel types ──────────────────
+            //
+            // These schemes give the HM solver correct knowledge of the core Std.Ui
+            // kernel function types.  Without them the solver treats every Ui kernel
+            // as `Ty::Var(u32::MAX)` (a single flexible variable), so:
+            //
+            // 1. An empty attrs list `[]` passed to `Ui.layout` / `Ui.el` / etc.
+            //    keeps its element type as a bare `Ty::Var` (never constrained to
+            //    `Attribute msg`).  `list_elem_ir` then returns `IrType::Json`, and
+            //    `emit_list` emits the annotation-free `Vec::new()` — which Rust
+            //    rejects with E0283 when M cannot be inferred from any other
+            //    position in the expression.
+            //
+            // 2. Event kernels like `Ui.onClick : msg -> Attribute msg` would not
+            //    propagate their concrete `M` type (e.g. `MainMsg`) back through
+            //    `Ui.el`'s scheme to the enclosing `Ui.layout`'s shared `tv`
+            //    variable.  Without this propagation the outer `[]` would be
+            //    annotated as `Vec::<Attribute<()>>::new()` even when the real
+            //    M is `MainMsg`, causing a Rust E0308.
+            //
+            // Design notes:
+            // • `var(0)` is the shared `msg` type variable within each arm.
+            //   `instantiate` mints one fresh flexible unification variable per
+            //   distinct raw id within a single arm, sharing it across every
+            //   occurrence — so `var(0)` in `Attr(var(0))` and `Elem(var(0))`
+            //   refers to the SAME fresh variable.
+            // • `Con.module` is `Vec::new()` (empty) for all Ui type constructors
+            //   here.  The T2 disambiguation in `ir_type_from_ty` only looks for
+            //   "Html" in the module path to choose `HtmlAttribute` vs
+            //   `UiAttribute`; an empty module path → `UiAttribute`, which is
+            //   the correct choice for `Std.Ui.Attribute`.
+            // • These arms cover ONLY the kernels tested by the M7 golden suite.
+            //   Add further arms as new Std.Ui tests arrive.
+
+            // ── Layout entry points ───────────────────────────────────────────
+            // layout : List (Attribute msg) -> Element msg -> Html msg
+            (Some("Ui"), Some("layout")) => {
+                let attr = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.attribute,
+                    args: vec![msg],
+                };
+                let elem_t = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.element,
+                    args: vec![msg],
+                };
+                let html_t = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.html_con,
+                    args: vec![msg],
+                };
+                fun(list(attr(var(0))), fun(elem_t(var(0)), html_t(var(0))))
+            }
+
+            // layoutWith :
+            //   { wrapperAttrs : List (Attribute msg), rootAttrs : List (Attribute msg) }
+            //   -> Element msg
+            //   -> Html msg
+            //
+            // The record type for the first argument is built inline with
+            // `Ty::Record(BTreeMap)`, keyed by the pre-interned field-name
+            // symbols `lw_wrapper_attrs` and `lw_root_attrs`.  The shared
+            // `var(0)` links both field types and the Element / Html results
+            // to the same `msg` unification variable, so a concrete M in any
+            // field (e.g. an event in `rootAttrs`) propagates to the rest.
+            //
+            // Design note: the `Ty::Record` here is an EXPECTED TYPE for the
+            // first arg, not a synthesised struct.  The solver unifies the
+            // call-site record literal's field types against `List(Attr tv)`,
+            // giving `list_elem_ir` a concrete `List(Attribute tv)` to work
+            // with.  `ir_type_from_ty_ui_msg(tv)` then returns `IrType::Unit`
+            // when `tv` is a free variable (message-free render) and the
+            // concrete user enum type when an event kernel pins `tv`.  The
+            // lowerer's `emit_list` change for non-empty Ui-typed lists then
+            // wraps the Rust `vec![...]` in a typed let so that Rust can infer
+            // M even when no explicit turbofish appears on `ui_layout_with_vecs`.
+            (Some("Ui"), Some("layoutWith")) => {
+                let attr = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.attribute,
+                    args: vec![msg],
+                };
+                let elem_t = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.element,
+                    args: vec![msg],
+                };
+                let html_t = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.html_con,
+                    args: vec![msg],
+                };
+                let cfg_rec = Ty::Record({
+                    let mut m = std::collections::BTreeMap::new();
+                    m.insert(self.builtins.lw_wrapper_attrs, list(attr(var(0))));
+                    m.insert(self.builtins.lw_root_attrs, list(attr(var(0))));
+                    m
+                });
+                fun(cfg_rec, fun(elem_t(var(0)), html_t(var(0))))
+            }
+
+            // ── Element builders ──────────────────────────────────────────────
+            // el : List (Attribute msg) -> Element msg -> Element msg
+            (Some("Ui"), Some("el")) => {
+                let attr = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.attribute,
+                    args: vec![msg],
+                };
+                let elem_t = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.element,
+                    args: vec![msg],
+                };
+                fun(list(attr(var(0))), fun(elem_t(var(0)), elem_t(var(0))))
+            }
+
+            // column / row / wrappedRow / grid / paragraph / textColumn :
+            //   List (Attribute msg) -> List (Element msg) -> Element msg
+            (
+                Some("Ui"),
+                Some("column" | "row" | "wrappedRow" | "grid" | "paragraph" | "textColumn"),
+            ) => {
+                let attr = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.attribute,
+                    args: vec![msg],
+                };
+                let elem_t = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.element,
+                    args: vec![msg],
+                };
+                fun(
+                    list(attr(var(0))),
+                    fun(list(elem_t(var(0))), elem_t(var(0))),
+                )
+            }
+
+            // ── Event kernels (all return `Attribute msg`) ────────────────────
+            // Both "Ui" and "Event" qualifiers are covered here, mirroring
+            // lower.rs's `("Ui" | "Event", ...)` arms exactly (Phase-1a round 2).
+            // "Ui" = canonical qualifier for `import Std.Ui as Ui`.
+            // "Event" = canonical qualifier for `import Std.Html.Events as Event`
+            //   (env.rs L979 alias table: `("Std.Html.Events", "Event")`).
+            //
+            // onClick / onFocus / onBlur / onMouseOver / onMouseOut / onMsg :
+            //   msg -> Attribute msg
+            (
+                Some("Ui" | "Event"),
+                Some("onClick" | "onFocus" | "onBlur" | "onMouseOver" | "onMouseOut" | "onMsg"),
+            ) => {
+                let attr = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.attribute,
+                    args: vec![msg],
+                };
+                fun(var(0), attr(var(0)))
+            }
+
+            // onInput / onChange / onKeyDown / onKeyUp / onKeyPress :
+            //   (String -> msg) -> Attribute msg
+            // (B3: merged from two arms to eliminate redundant_clone; round 2:
+            //  widened to cover "Event" qualifier so `Event.onInput` with a
+            //  wrong-typed handler is rejected by skyc, not deferred to cargo.)
+            (
+                Some("Ui" | "Event"),
+                Some("onInput" | "onChange" | "onKeyDown" | "onKeyUp" | "onKeyPress"),
+            ) => {
+                let attr = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.attribute,
+                    args: vec![msg],
+                };
+                fun(fun(string, var(0)), attr(var(0)))
+            }
+
+            // onBool : (Bool -> msg) -> Attribute msg
+            // (B1: Bool-carrying events; round 2: widened to "Ui" | "Event".)
+            (Some("Ui" | "Event"), Some("onBool")) => {
+                let attr = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.attribute,
+                    args: vec![msg],
+                };
+                fun(fun(bool_ty, var(0)), attr(var(0)))
+            }
 
             // Unknown kernel: a single flexible variable. The raw id is chosen
             // to be distinct from any real interned symbol's typical range; it

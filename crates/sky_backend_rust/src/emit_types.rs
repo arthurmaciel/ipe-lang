@@ -22,48 +22,22 @@ use crate::{EmitCtx, RecordStruct};
 /// monomorphic functions and for program-level emission (enums, record structs),
 /// where no generic is in scope.
 ///
-/// `enclosing_ui_msg` carries the pre-rendered Rust spelling of the enclosing
-/// function's `msg` type parameter for `Html<M>` / `Element<M>`, used by
-/// `UiLayout` / `UiLayoutWith` emit arms so they can fill the `M` turbofish
-/// from the return-type annotation rather than hardcoding `()`.  `None` when
-/// the enclosing function is not a UI renderer.
+/// Phase-1a: the `enclosing_ui_msg` field and `with_ui_msg`/`enclosing_ui_msg()`
+/// methods that used to thread the enclosing function's `Html<M>` return type down
+/// to `UiLayout`/`UiLayoutWith` have been removed.  M is now inferred bottom-up
+/// from the concrete element/attrs types sourced from `SolvedTypes.regions`.
 ///
 /// The type is [`Copy`], so it is threaded by value through the emitters.
 #[derive(Clone, Copy)]
 pub struct GenericScope<'a> {
     params: &'a [Symbol],
-    enclosing_ui_msg: Option<&'a str>,
 }
 
 impl<'a> GenericScope<'a> {
     /// A scope quantifying `params`, in order (`params[i]` → `T{i+1}`).
-    /// `enclosing_ui_msg` defaults to `None` — correct for program-level /
-    /// non-UI-returning function emission.
     #[must_use]
     pub const fn new(params: &'a [Symbol]) -> Self {
-        Self {
-            params,
-            enclosing_ui_msg: None,
-        }
-    }
-
-    /// Return a copy of this scope with the given pre-rendered UI message type
-    /// installed.  Called in [`crate::emit_expr::emit_func`] to thread the
-    /// enclosing function's `Html M` return type down into UI-layout emitters.
-    #[must_use]
-    pub const fn with_ui_msg(self, m: Option<&'a str>) -> Self {
-        Self {
-            enclosing_ui_msg: m,
-            ..self
-        }
-    }
-
-    /// The pre-rendered Rust spelling of the enclosing function's `msg` type
-    /// for `Html<M>` / `Element<M>`, or `None` when the enclosing function
-    /// does not return a UI type.
-    #[must_use]
-    pub const fn enclosing_ui_msg(&self) -> Option<&str> {
-        self.enclosing_ui_msg
+        Self { params }
     }
 
     /// The deterministic Rust generic name for `sym` (`T1`, `T2`, … by position).
