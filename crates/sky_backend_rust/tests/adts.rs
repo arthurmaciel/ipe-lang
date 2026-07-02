@@ -157,6 +157,10 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
             records: vec![],
             uses_tea: false,
             uses_server: false,
+            uses_ui: false,
+            uses_live: false,
+            uses_tui: false,
+            uses_webview: false,
         }],
     })
 }
@@ -309,6 +313,10 @@ fn tree_program(interner: &mut Interner) -> DResult<Program> {
             records: vec![],
             uses_tea: false,
             uses_server: false,
+            uses_ui: false,
+            uses_live: false,
+            uses_tui: false,
+            uses_webview: false,
         }],
     })
 }
@@ -435,6 +443,10 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
             records: vec![],
             uses_tea: false,
             uses_server: false,
+            uses_ui: false,
+            uses_live: false,
+            uses_tui: false,
+            uses_webview: false,
         }],
     };
     let out = emit(&interner, &prog)?;

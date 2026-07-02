@@ -100,6 +100,7 @@ pub(crate) struct RecordStruct {
 /// Shared emission context: the interner plus the precomputed Sky → Rust name
 /// maps so each emit site is a `O(log n)` lookup rather than recomputing the
 /// naming rules. Built once per [`RustBackend::emit`].
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct EmitCtx<'a> {
     interner: &'a Interner,
     /// `true` when the lowerer injected synthetic `SqlValue` / `SqlField`
@@ -137,6 +138,25 @@ pub(crate) struct EmitCtx<'a> {
     /// * appends `pub mod server; pub use server::*; pub mod server_stream;
     ///   pub use server_stream::*;` to the emitted `sky_runtime/mod.rs`.
     pub(crate) uses_server: bool,
+    /// `true` when the program uses at least one `Std.Ui` / `Std.Html` kernel.
+    /// When set, [`crate::project::emit_program`] appends
+    /// `pub mod ui;` to the emitted `sky_runtime/mod.rs`.
+    pub(crate) uses_ui: bool,
+    /// `true` when the program uses at least one `Std.Live` / `Sky.Live`
+    /// app-entry kernel.  When set, the emitted project gains the `"live"`
+    /// Cargo feature.
+    #[allow(dead_code)] // Phase 0: field reserved for Phase 1 Cargo feature gating
+    pub(crate) uses_live: bool,
+    /// `true` when the program uses at least one `Std.Tui` / `Sky.Tui`
+    /// app-entry kernel.  When set, the emitted project gains the `"tui"`
+    /// Cargo feature.
+    #[allow(dead_code)] // Phase 0: field reserved for Phase 1 Cargo feature gating
+    pub(crate) uses_tui: bool,
+    /// `true` when the program uses at least one `Std.Webview` app-entry kernel.
+    /// When set, the emitted project gains the `"webview"` Cargo feature
+    /// (which transitively pulls `"live"`).
+    #[allow(dead_code)] // Phase 0: field reserved for Phase 1 Cargo feature gating
+    pub(crate) uses_webview: bool,
     /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlvalue_rust_name: Option<String>,
@@ -170,6 +190,7 @@ pub(crate) struct EmitCtx<'a> {
 
 impl<'a> EmitCtx<'a> {
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally similar
     fn build(interner: &'a Interner, program: &Program) -> DResult<Self> {
         let mut enum_names = BTreeMap::new();
         let mut variant_fields: BTreeMap<(Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
@@ -337,11 +358,23 @@ impl<'a> EmitCtx<'a> {
         // M6: detect whether any Sky.Http.Server kernel is used.
         let uses_server = program.modules.iter().any(|m| m.uses_server);
 
+        // M7: detect Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview usage.
+        let (uses_ui, uses_live, uses_tui, uses_webview) = (
+            program.modules.iter().any(|m| m.uses_ui),
+            program.modules.iter().any(|m| m.uses_live),
+            program.modules.iter().any(|m| m.uses_tui),
+            program.modules.iter().any(|m| m.uses_webview),
+        );
+
         Ok(Self {
             interner,
             uses_db,
             uses_tea,
             uses_server,
+            uses_ui,
+            uses_live,
+            uses_tui,
+            uses_webview,
             sqlvalue_rust_name,
             sqlfield_rust_name,
             enum_names,
@@ -660,7 +693,17 @@ fn collect_record_shapes(
         | IrType::ServerRoute
         | IrType::ServerCookie
         // A generic type variable carries no concrete record shape of its own.
-        | IrType::Generic(_) => {}
+        | IrType::Generic(_)
+        // M7: nullary plain types (`Length`, `Color`, …) and opaque live handles
+        // carry no record shapes of their own.
+        | IrType::UiPlain(_)
+        | IrType::LiveReq
+        | IrType::LiveRoute => {}
+        // M7: `Ui { ctor, msg }` is a msg-parametric wrapper — descend into
+        // `msg` in case it carries a nested record (e.g. `Element { x : Int }`).
+        IrType::Ui { msg, .. } => {
+            collect_record_shapes(interner, msg, shapes)?;
+        }
     }
     Ok(())
 }
@@ -752,7 +795,14 @@ fn type_reaches_enum(
         | IrType::ServerRoute
         | IrType::ServerCookie
         | IrType::Fun(_, _)
-        | IrType::Generic(_) => false,
+        | IrType::Generic(_)
+        // M7: nullary plain types and opaque live handles are pointer-sized —
+        // they cannot form an infinite-size cycle.
+        | IrType::UiPlain(_)
+        | IrType::LiveReq
+        | IrType::LiveRoute => false,
+        // M7: `Ui { ctor, msg }` — descend into `msg`.
+        IrType::Ui { msg, .. } => type_reaches_enum(msg, target, enums, visited),
     }
 }
 
@@ -786,7 +836,14 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
-        | IrType::ServerCookie => false,
+        | IrType::ServerCookie
+        // M7: nullary plain types and opaque live handles are monomorphic.
+        | IrType::UiPlain(_)
+        | IrType::LiveReq
+        | IrType::LiveRoute => false,
+        // M7: `Ui { ctor, msg }` is parametric on `msg`; check if `msg` carries
+        // a generic.
+        IrType::Ui { msg, .. } => contains_generic(msg),
     }
 }
 
@@ -847,7 +904,13 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
-        | IrType::ServerCookie => {}
+        | IrType::ServerCookie
+        // M7: nullary plain types and opaque live handles contribute no generics.
+        | IrType::UiPlain(_)
+        | IrType::LiveReq
+        | IrType::LiveRoute => {}
+        // M7: `Ui { ctor, msg }` may carry generic parameters through `msg`.
+        IrType::Ui { msg, .. } => collect_generics(msg, out),
     }
 }
 
@@ -1085,13 +1148,24 @@ fn match_template(
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
-        | IrType::ServerCookie => {
+        | IrType::ServerCookie
+        // M7: nullary plain types (`Length`, `Color`, …) and opaque live handles
+        // are monomorphic — must equal exactly.
+        | IrType::UiPlain(_)
+        | IrType::LiveReq
+        | IrType::LiveRoute => {
             if template == concrete {
                 Ok(())
             } else {
                 Err(mismatch())
             }
         }
+        // M7: `Ui { ctor, msg }` is parametric on `msg`; match the ctor tag
+        // then recurse into the msg argument.
+        IrType::Ui { ctor: tc, msg: tm } => match concrete {
+            IrType::Ui { ctor: cc, msg: cm } if tc == cc => match_template(tm, cm, subst),
+            _ => Err(mismatch()),
+        },
     }
 }
 

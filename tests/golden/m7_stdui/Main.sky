@@ -1,0 +1,23 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+import Std.Ui.Background as Background
+import Std.Ui.Font as Font
+
+
+-- Phase-0 Std.Ui smoke test: layout / column / el / text + a Background and Font
+-- attribute, rendered through Std.Html.htmlRender.
+-- oracle_divergence = true: the Rust backend emits compact inline CSS (no <style>
+-- reset tag, no trailing spaces), whereas the Go backend emits a different HTML
+-- skeleton with a separate <style> reset block. Both are semantically correct.
+
+
+main =
+    println
+        (Html.htmlRender
+            (Ui.layout []
+                (Ui.column [ Ui.spacing 8 ]
+                    [ Ui.el [ Font.bold ] (Ui.text "hello")
+                    , Ui.el [ Background.color (Ui.rgb 255 0 0) ] (Ui.text "world")
+                    ])))

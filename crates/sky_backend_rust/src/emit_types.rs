@@ -7,7 +7,7 @@
 
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::Symbol;
-use sky_ir::{EnumDef, IrType};
+use sky_ir::{EnumDef, IrType, UiCtor, UiPlain};
 
 use crate::naming::mangle_reserved;
 use crate::{EmitCtx, RecordStruct};
@@ -22,17 +22,48 @@ use crate::{EmitCtx, RecordStruct};
 /// monomorphic functions and for program-level emission (enums, record structs),
 /// where no generic is in scope.
 ///
+/// `enclosing_ui_msg` carries the pre-rendered Rust spelling of the enclosing
+/// function's `msg` type parameter for `Html<M>` / `Element<M>`, used by
+/// `UiLayout` / `UiLayoutWith` emit arms so they can fill the `M` turbofish
+/// from the return-type annotation rather than hardcoding `()`.  `None` when
+/// the enclosing function is not a UI renderer.
+///
 /// The type is [`Copy`], so it is threaded by value through the emitters.
 #[derive(Clone, Copy)]
 pub struct GenericScope<'a> {
     params: &'a [Symbol],
+    enclosing_ui_msg: Option<&'a str>,
 }
 
 impl<'a> GenericScope<'a> {
     /// A scope quantifying `params`, in order (`params[i]` → `T{i+1}`).
+    /// `enclosing_ui_msg` defaults to `None` — correct for program-level /
+    /// non-UI-returning function emission.
     #[must_use]
     pub const fn new(params: &'a [Symbol]) -> Self {
-        Self { params }
+        Self {
+            params,
+            enclosing_ui_msg: None,
+        }
+    }
+
+    /// Return a copy of this scope with the given pre-rendered UI message type
+    /// installed.  Called in [`crate::emit_expr::emit_func`] to thread the
+    /// enclosing function's `Html M` return type down into UI-layout emitters.
+    #[must_use]
+    pub const fn with_ui_msg(self, m: Option<&'a str>) -> Self {
+        Self {
+            enclosing_ui_msg: m,
+            ..self
+        }
+    }
+
+    /// The pre-rendered Rust spelling of the enclosing function's `msg` type
+    /// for `Html<M>` / `Element<M>`, or `None` when the enclosing function
+    /// does not return a UI type.
+    #[must_use]
+    pub const fn enclosing_ui_msg(&self) -> Option<&str> {
+        self.enclosing_ui_msg
     }
 
     /// The deterministic Rust generic name for `sym` (`T1`, `T2`, … by position).
@@ -134,6 +165,32 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::ServerResponse => "ServerResponse".to_owned(),
         IrType::ServerRoute => "ServerRoute".to_owned(),
         IrType::ServerCookie => "ServerCookie".to_owned(),
+        // M7 Std.Ui / Std.Html parametric types.  Use fully-qualified Rust paths
+        // (T2 soundness: `Attribute` exists in BOTH Std.Ui and Std.Html namespaces;
+        // qualified paths keep them unambiguous and prevent glob-import shadowing).
+        IrType::Ui { ctor, msg } => {
+            let m = render_type(ctx, msg, generics)?;
+            match ctor {
+                UiCtor::Html => format!("sky_runtime::html::Html<{m}>"),
+                UiCtor::Element => format!("sky_runtime::ui::element::Element<{m}>"),
+                UiCtor::UiAttribute => format!("sky_runtime::ui::element::Attribute<{m}>"),
+                UiCtor::HtmlAttribute => format!("sky_runtime::html::Attribute<{m}>"),
+                UiCtor::HtmlEvent => format!("sky_runtime::html::Event<{m}>"),
+            }
+        }
+        IrType::UiPlain(plain) => match plain {
+            UiPlain::Length => "sky_runtime::ui::element::Length".to_owned(),
+            UiPlain::Color => "sky_runtime::ui::element::Color".to_owned(),
+            UiPlain::HAlign => "sky_runtime::ui::element::HAlign".to_owned(),
+            UiPlain::VAlign => "sky_runtime::ui::element::VAlign".to_owned(),
+            UiPlain::Location => "sky_runtime::ui::element::Location".to_owned(),
+            UiPlain::PseudoClass => "sky_runtime::ui::element::PseudoClass".to_owned(),
+            UiPlain::Description => "sky_runtime::ui::element::Description".to_owned(),
+            UiPlain::LayoutContext => "sky_runtime::ui::element::LayoutContext".to_owned(),
+        },
+        // M7 Live types — render to qualified runtime paths.
+        IrType::LiveReq => "sky_runtime::live::LiveReq".to_owned(),
+        IrType::LiveRoute => "sky_runtime::live::route::Route".to_owned(),
         IrType::Tuple(elems) => {
             let mut parts = Vec::with_capacity(elems.len());
             for elem in elems {

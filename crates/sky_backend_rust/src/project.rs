@@ -74,6 +74,19 @@ const RUNTIME_MOD_RS_TEA_APPEND: &str = "pub mod tea;\npub use tea::*;\n";
 const RUNTIME_MOD_RS_SERVER_APPEND: &str =
     "pub mod server;\npub use server::*;\npub mod server_stream;\npub use server_stream::*;\n";
 
+// ── M7: Std.Ui / Std.Html ───────────────────────────────────────────────────
+
+/// Lines appended to `sky_runtime/mod.rs` when the program uses Std.Ui /
+/// Std.Html render kernels.
+///
+/// `html.rs` and `ui/mod.rs` are in the runtime source tree; this addition
+/// wires both into the module namespace. `html` is always paired with `ui`
+/// because the `ui::element` and `ui::render` modules import from `html`.
+/// Note: intentionally NOT `pub use ui::*;` because `ui::Attribute` collides
+/// with `html::Attribute` (T2 soundness trap) — callers use the fully-qualified
+/// `sky_runtime::ui::element::Attribute` path instead.
+const RUNTIME_MOD_RS_UI_APPEND: &str = "pub mod html;\npub use html::*;\npub mod ui;\n";
+
 /// The `SkyCmd<M>` and `SkySub<M>` project-level type aliases emitted when the
 /// program uses TEA kernels. Placed immediately after `runtime_bindings()` (the
 /// block that also contains `SkyTask<A>` and `Decoder<T>`).
@@ -211,6 +224,10 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         }
         if ctx.uses_server {
             mod_rs.push_str(RUNTIME_MOD_RS_SERVER_APPEND);
+        }
+        // M7: Std.Ui / Std.Html render kernels.
+        if ctx.uses_ui {
+            mod_rs.push_str(RUNTIME_MOD_RS_UI_APPEND);
         }
         mod_rs
     };

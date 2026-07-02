@@ -1,0 +1,21 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+import Std.Ui.Font as Font
+
+
+-- Phase-0 Std.Ui smoke test: Ui.layoutWith with inline cfg literal.
+-- Verifies that wrapperAttrs (Ui.padding 12) and rootAttrs (Ui.spacing 6)
+-- are honored in the rendered HTML — i.e. that the emit-site field-extraction
+-- properly wires ui_layout_with_vecs and does NOT silently drop the cfg.
+-- oracle_divergence = true: Rust backend emits compact inline CSS.
+
+
+main =
+    println
+        (Html.htmlRender
+            (Ui.layoutWith
+                { wrapperAttrs = [ Ui.padding 12 ]
+                , rootAttrs = [ Ui.spacing 6 ] }
+                (Ui.el [ Font.bold ] (Ui.text "lw"))))

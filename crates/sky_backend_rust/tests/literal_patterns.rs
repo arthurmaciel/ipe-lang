@@ -151,6 +151,10 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
             records: vec![],
             uses_tea: false,
             uses_server: false,
+            uses_ui: false,
+            uses_live: false,
+            uses_tui: false,
+            uses_webview: false,
         }],
     })
 }
@@ -296,6 +300,10 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
             }],
         },
         x,

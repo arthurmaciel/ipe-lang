@@ -43,6 +43,7 @@ pub struct Program {
 // `Eq` is not derived: `funcs` hold [`Expr`] bodies that may carry a float
 // literal (only `PartialEq`).
 #[derive(Clone, PartialEq, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Module {
     pub name: ModPath,
     pub types: Vec<TypeDef>,
@@ -75,6 +76,34 @@ pub struct Module {
     /// append `pub mod server; pub use server::*; pub mod server_stream; pub use
     /// server_stream::*;` to the emitted `sky_runtime/mod.rs`.
     pub uses_server: bool,
+    /// `true` when the lowerer detected at least one `Std.Ui` / `Std.Html`
+    /// kernel call (`Ui.layout`, `Ui.layoutWith`, `Html.render`, etc.) in the
+    /// module's function bodies.
+    ///
+    /// Set by `sky_lower` when any call site resolves to a
+    /// `KernelFn::is_ui()` variant.  The backend reads this flag to decide
+    /// whether to add `pub mod ui;` to the emitted `sky_runtime/mod.rs`.
+    pub uses_ui: bool,
+    /// `true` when the lowerer detected at least one `Std.Live` / `Sky.Live`
+    /// kernel call (`Live.app`, `Live.appRouted`, `Live.route`, etc.) in the
+    /// module's function bodies.
+    ///
+    /// Set by `sky_lower` when any call site resolves to a
+    /// `KernelFn::is_live()` variant.
+    pub uses_live: bool,
+    /// `true` when the lowerer detected at least one `Std.Tui` / `Sky.Tui`
+    /// kernel call (`Tui.app`, `Tui.program`) in the module's function bodies.
+    ///
+    /// Set by `sky_lower` when any call site resolves to a
+    /// `KernelFn::is_tui()` variant.
+    pub uses_tui: bool,
+    /// `true` when the lowerer detected at least one `Std.Webview`
+    /// kernel call (`Webview.app`) in the module's function bodies.
+    ///
+    /// Set by `sky_lower` when any call site resolves to a
+    /// `KernelFn::is_webview()` variant.  Implies `uses_live` for the
+    /// runtime dependency chain (webview pulls live transitively).
+    pub uses_webview: bool,
 }
 
 /// A user-declared type. The IR models user types as enums (Sky's `type`
@@ -505,6 +534,87 @@ pub enum IrType {
     ///
     /// Corresponds to `sky_runtime::server::ServerCookie`.
     ServerCookie,
+    // ── M7: Std.Ui / Std.Html parametric types ──────────────────────────────
+    /// A parametric `Std.Ui` or `Std.Html` type — one that carries a message type
+    /// parameter `msg`.  The `ctor` field identifies which of the five
+    /// message-parametric types this is; `msg` is the message type.
+    ///
+    /// | ctor                     | Rust type                                    |
+    /// |--------------------------|----------------------------------------------|
+    /// | `UiCtor::Html`           | `sky_runtime::html::Html<M>`                 |
+    /// | `UiCtor::Element`        | `sky_runtime::ui::element::Element<M>`       |
+    /// | `UiCtor::UiAttribute`    | `sky_runtime::ui::element::Attribute<M>`     |
+    /// | `UiCtor::HtmlAttribute`  | `sky_runtime::html::Attribute<M>`            |
+    /// | `UiCtor::HtmlEvent`      | `sky_runtime::html::Event<M>`                |
+    Ui {
+        ctor: UiCtor,
+        msg: Box<Self>,
+    },
+    /// A nullary (non-parametric) `Std.Ui` type.  These are closed value types
+    /// that carry no message type parameter.
+    ///
+    /// | plain             | Rust type                                         |
+    /// |-------------------|---------------------------------------------------|
+    /// | `Length`          | `sky_runtime::ui::element::Length`                |
+    /// | `Color`           | `sky_runtime::ui::element::Color`                 |
+    /// | `HAlign`          | `sky_runtime::ui::element::HAlign`                |
+    /// | `VAlign`          | `sky_runtime::ui::element::VAlign`                |
+    /// | `Location`        | `sky_runtime::ui::element::Location`              |
+    /// | `PseudoClass`     | `sky_runtime::ui::element::PseudoClass`           |
+    /// | `Description`     | `sky_runtime::ui::element::Description`           |
+    /// | `LayoutContext`   | `sky_runtime::ui::element::LayoutContext`          |
+    UiPlain(UiPlain),
+    /// `LiveReq` — opaque request type threaded through `Live.app`'s `init`
+    /// callback.  Rendered as `sky_runtime::live::LiveReq`.
+    LiveReq,
+    /// `LiveRoute` — opaque route descriptor returned by `Live.route`.
+    /// Rendered as `sky_runtime::live::route::Route`.
+    LiveRoute,
+}
+
+/// Tag enum for the five message-parametric `Std.Ui` / `Std.Html` types.
+///
+/// Used inside [`IrType::Ui`] to select the correct Rust path at emission time.
+/// The set is closed (five variants) and intentionally small to keep the pattern
+/// match exhaustive without a catch-all.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UiCtor {
+    /// `Html msg` — a rendered HTML tree (`sky_runtime::html::Html<M>`).
+    Html,
+    /// `Element msg` — a Std.Ui layout element (`sky_runtime::ui::element::Element<M>`).
+    Element,
+    /// `Attribute msg` from `Std.Ui` — a layout attribute (`sky_runtime::ui::element::Attribute<M>`).
+    UiAttribute,
+    /// `Attribute msg` from `Std.Html` / `Std.Html.Attributes` —
+    /// an HTML attribute (`sky_runtime::html::Attribute<M>`).
+    HtmlAttribute,
+    /// `Event msg` from `Std.Html.Events` —
+    /// an HTML event handler (`sky_runtime::html::Event<M>`).
+    HtmlEvent,
+}
+
+/// Tag enum for the nullary (non-message-parametric) `Std.Ui` types.
+///
+/// Used inside [`IrType::UiPlain`] to select the correct Rust path at emission
+/// time.  The set is closed (eight variants).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UiPlain {
+    /// `Length` — `sky_runtime::ui::element::Length`.
+    Length,
+    /// `Color` — `sky_runtime::ui::element::Color`.
+    Color,
+    /// `HAlign` — `sky_runtime::ui::element::HAlign`.
+    HAlign,
+    /// `VAlign` — `sky_runtime::ui::element::VAlign`.
+    VAlign,
+    /// `Location` — `sky_runtime::ui::element::Location`.
+    Location,
+    /// `PseudoClass` — `sky_runtime::ui::element::PseudoClass`.
+    PseudoClass,
+    /// `Description` — `sky_runtime::ui::element::Description`.
+    Description,
+    /// `LayoutContext` — `sky_runtime::ui::element::LayoutContext`.
+    LayoutContext,
 }
 
 /// An expression in the typed IR.
@@ -1527,6 +1637,193 @@ pub enum KernelFn {
     MiddlewareWithRateLimit,
     /// `RateLimit.allow : String -> String -> Int -> Int -> Bool`
     RateLimitAllow,
+    // ── M7: Std.Ui / Std.Html render kernels (Phase 0 — FULLY WIRED) ─────────
+    /// `Ui.layout : List (Attribute msg) -> Element msg -> Html msg`
+    ///
+    /// Converts a `Std.Ui` element tree to a rendered `Html` value, applying the
+    /// given list of root attributes.  Wired in Phase 0.
+    UiLayout,
+    /// `Ui.layoutWith : { wrapperAttrs : List (Attribute msg), rootAttrs : List (Attribute msg) } -> Element msg -> Html msg`
+    ///
+    /// Variant of `UiLayout` that applies attributes to both the wrapper and root
+    /// elements.  Wired in Phase 0.
+    UiLayoutWith,
+    /// `Html.render : Html msg -> String`
+    ///
+    /// Serialises a `Html` tree to an HTML string.  Wired in Phase 0.
+    HtmlRender,
+    /// `Html.escapeText : String -> String`
+    ///
+    /// Escapes HTML special characters in a text string.  Wired in Phase 0.
+    HtmlEscapeText,
+    /// `Html.escapeAttr : String -> String`
+    ///
+    /// Escapes HTML special characters in an attribute value.  Wired in Phase 0.
+    HtmlEscapeAttr,
+    /// `Html.attrToString : Html.Attribute msg -> String`
+    ///
+    /// Serialises a single HTML attribute to its `key="value"` string form.
+    /// Wired in Phase 0.
+    HtmlAttrToString,
+    // ── M7: Std.Live / Sky.Live app-entry kernels (Phase 0 — STUBS) ──────────
+    /// `Live.app : LiveAppCfg model msg -> Task Error ()`
+    ///
+    /// Registered but not yet emitted.  `emit_expr` returns `CompilerBug` until
+    /// Phase 1 wires the full body.
+    LiveApp,
+    /// `Live.appRouted : LiveAppCfg model msg -> Task Error ()`
+    ///
+    /// Routed variant of `LiveApp`.  Stub until Phase 1.
+    LiveAppRouted,
+    /// `Live.route : String -> (List String -> Page) -> LiveRoute`
+    ///
+    /// Constructs a single route descriptor.  Stub until Phase 1.
+    LiveRoute,
+    /// `Live.renderStatic : LiveAppCfg model msg -> String -> Task Error String`
+    ///
+    /// Renders the app's initial HTML statically (for SSR / pre-render).  Stub
+    /// until Phase 1.
+    LiveRenderStatic,
+    // ── M7: Std.Tui / Sky.Tui app-entry kernels (Phase 0 — STUBS) ───────────
+    /// `Tui.program : TuiCfg model msg -> Task Error ()`
+    ///
+    /// Headless TEA loop over a `crossterm`-backed ANSI canvas.  Stub until
+    /// Phase 1.
+    TuiProgram,
+    /// `Tui.app : TuiCfg model msg -> Task Error ()`
+    ///
+    /// Alias of `TuiProgram` used in the Std.Tui surface (`Tui.app`).  Stub
+    /// until Phase 1.
+    TuiApp,
+    // ── M7: Std.Webview / Sky.Webview app-entry kernel (Phase 0 — STUB) ─────
+    /// `Webview.app : WebviewCfg model msg -> Task Error ()`
+    ///
+    /// Native desktop window via the system webview (`WKWebView` / `WebView2` /
+    /// `WebKitGTK`).  Requires the `webview` Cargo feature (which pulls `wry` +
+    /// `tao` + `live` transitively).  Stub until Phase 1.
+    WebviewApp,
+    // ── M7: Std.Ui element builders (Phase 0 — wired as runtime helpers) ─────
+    /// `Ui.none : Element msg` (arity 0) — empty element.
+    UiNone,
+    /// `Ui.text : String -> Element msg` (arity 1) — text node.
+    UiText,
+    /// `Ui.html : Html msg -> Element msg` (arity 1) — embeds raw HTML.
+    UiHtml,
+    /// `Ui.el : List (Attribute msg) -> Element msg -> Element msg` (arity 2).
+    UiEl,
+    /// `Ui.row : List (Attribute msg) -> List (Element msg) -> Element msg` (arity 2).
+    UiRow,
+    /// `Ui.column : List (Attribute msg) -> List (Element msg) -> Element msg` (arity 2).
+    UiColumn,
+    /// `Ui.wrappedRow : List (Attribute msg) -> List (Element msg) -> Element msg` (arity 2).
+    UiWrappedRow,
+    /// `Ui.grid : List (Attribute msg) -> List (Element msg) -> Element msg` (arity 2).
+    UiGrid,
+    // ── M7: Std.Ui attribute builders ────────────────────────────────────────
+    /// `Ui.spacing : Int -> Attribute msg` (arity 1).
+    UiSpacing,
+    /// `Ui.padding : Int -> Attribute msg` (arity 1).
+    UiPadding,
+    /// `Ui.paddingXY : Int -> Int -> Attribute msg` (arity 2).
+    UiPaddingXY,
+    /// `Ui.width : Length -> Attribute msg` (arity 1).
+    UiWidth,
+    /// `Ui.height : Length -> Attribute msg` (arity 1).
+    UiHeight,
+    /// `Ui.centerX : Attribute msg` (arity 0).
+    UiCenterX,
+    /// `Ui.centerY : Attribute msg` (arity 0).
+    UiCenterY,
+    /// `Ui.alignLeft : Attribute msg` (arity 0).
+    UiAlignLeft,
+    /// `Ui.alignRight : Attribute msg` (arity 0).
+    UiAlignRight,
+    /// `Ui.alignTop : Attribute msg` (arity 0).
+    UiAlignTop,
+    /// `Ui.alignBottom : Attribute msg` (arity 0).
+    UiAlignBottom,
+    /// `Ui.pointer : Attribute msg` (arity 0).
+    UiPointer,
+    /// `Ui.clip : Attribute msg` (arity 0).
+    UiClip,
+    /// `Ui.scrollbars : Attribute msg` (arity 0).
+    UiScrollbars,
+    /// `Ui.gridColumns : Int -> Attribute msg` (arity 1).
+    UiGridColumns,
+    // ── M7: Std.Ui Length builders ───────────────────────────────────────────
+    /// `Ui.px : Int -> Length` (arity 1).
+    UiPx,
+    /// `Ui.fill : Length` (arity 0).
+    UiFill,
+    /// `Ui.content : Length` (arity 0).
+    UiContent,
+    /// `Ui.shrink : Length` (arity 0).
+    UiShrink,
+    /// `Ui.fillPortion : Int -> Length` (arity 1).
+    UiFillPortion,
+    /// `Ui.vh : Int -> Length` (arity 1).
+    UiVh,
+    /// `Ui.vw : Int -> Length` (arity 1).
+    UiVw,
+    /// `Ui.minimum : Int -> Length -> Length` (arity 2).
+    UiMinimum,
+    /// `Ui.maximum : Int -> Length -> Length` (arity 2).
+    UiMaximum,
+    // ── M7: Std.Ui Color builders ────────────────────────────────────────────
+    /// `Ui.rgb : Int -> Int -> Int -> Color` (arity 3).
+    UiRgb,
+    /// `Ui.rgba : Int -> Int -> Int -> Float -> Color` (arity 4).
+    UiRgba,
+    /// `Ui.white : Color` (arity 0).
+    UiWhite,
+    /// `Ui.black : Color` (arity 0).
+    UiBlack,
+    /// `Ui.transparent : Color` (arity 0).
+    UiTransparent,
+    // ── M7: Background sub-module ────────────────────────────────────────────
+    /// `Background.color : Color -> Attribute msg` (arity 1).
+    BackgroundColor,
+    /// `Background.image : String -> Attribute msg` (arity 1).
+    BackgroundImage,
+    // ── M7: Border sub-module ────────────────────────────────────────────────
+    /// `Border.width : Int -> Attribute msg` (arity 1).
+    BorderWidth,
+    /// `Border.rounded : Int -> Attribute msg` (arity 1).
+    BorderRounded,
+    /// `Border.color : Color -> Attribute msg` (arity 1).
+    BorderColor,
+    // ── M7: Font sub-module ──────────────────────────────────────────────────
+    /// `Font.size : Int -> Attribute msg` (arity 1).
+    FontSize,
+    /// `Font.color : Color -> Attribute msg` (arity 1).
+    FontColor,
+    /// `Font.family : String -> Attribute msg` (arity 1).
+    FontFamily,
+    /// `Font.bold : Attribute msg` (arity 0).
+    FontBold,
+    /// `Font.italic : Attribute msg` (arity 0).
+    FontItalic,
+    // ── M7: Html element builders ────────────────────────────────────────────
+    /// `Html.text : String -> Html msg` (arity 1) — text node.
+    HtmlTextNode,
+    /// `Html.raw : String -> Html msg` (arity 1) — raw HTML.
+    HtmlRawNode,
+    /// `Html.node : String -> List HtmlAttr -> List Html -> Html msg` (arity 3).
+    HtmlNode,
+    /// `Html.div : List HtmlAttr -> List Html -> Html msg` (arity 2).
+    HtmlDiv,
+    /// `Html.span : List HtmlAttr -> List Html -> Html msg` (arity 2).
+    HtmlSpan,
+    /// `Html.a : List HtmlAttr -> List Html -> Html msg` (arity 2).
+    HtmlA,
+    /// `Html.button : List HtmlAttr -> List Html -> Html msg` (arity 2).
+    HtmlButton,
+    /// `Html.p : List HtmlAttr -> List Html -> Html msg` (arity 2).
+    HtmlP,
+    /// `Html.input : List HtmlAttr -> Html msg` (arity 1) — void element.
+    HtmlInput,
+    /// `Html.img : List HtmlAttr -> Html msg` (arity 1) — void element.
+    HtmlImg,
 }
 
 impl KernelFn {
@@ -1665,6 +1962,123 @@ impl KernelFn {
                 | Self::MiddlewareWithRateLimit
                 | Self::RateLimitAllow
         )
+    }
+
+    /// Return `true` when this variant is one of the `Std.Ui` / `Std.Html`
+    /// render kernel variants introduced in M7.
+    ///
+    /// Used by `sky_lower` and `sky_backend_rust` to detect Ui-kernel call
+    /// sites and to guard the `emit_ui_call` hardening path.
+    ///
+    /// # Exhaustiveness note
+    ///
+    /// `matches!` carries an implicit `_ => false` arm.  `emit_ui_call`
+    /// must use this as a *guard* inside its own exhaustive `match`.
+    #[must_use]
+    pub const fn is_ui(self) -> bool {
+        matches!(
+            self,
+            // Render kernels
+            Self::UiLayout
+                | Self::UiLayoutWith
+                | Self::HtmlRender
+                | Self::HtmlEscapeText
+                | Self::HtmlEscapeAttr
+                | Self::HtmlAttrToString
+                // Element builders
+                | Self::UiNone
+                | Self::UiText
+                | Self::UiHtml
+                | Self::UiEl
+                | Self::UiRow
+                | Self::UiColumn
+                | Self::UiWrappedRow
+                | Self::UiGrid
+                // Attribute builders
+                | Self::UiSpacing
+                | Self::UiPadding
+                | Self::UiPaddingXY
+                | Self::UiWidth
+                | Self::UiHeight
+                | Self::UiCenterX
+                | Self::UiCenterY
+                | Self::UiAlignLeft
+                | Self::UiAlignRight
+                | Self::UiAlignTop
+                | Self::UiAlignBottom
+                | Self::UiPointer
+                | Self::UiClip
+                | Self::UiScrollbars
+                | Self::UiGridColumns
+                // Length builders
+                | Self::UiPx
+                | Self::UiFill
+                | Self::UiContent
+                | Self::UiShrink
+                | Self::UiFillPortion
+                | Self::UiVh
+                | Self::UiVw
+                | Self::UiMinimum
+                | Self::UiMaximum
+                // Color builders
+                | Self::UiRgb
+                | Self::UiRgba
+                | Self::UiWhite
+                | Self::UiBlack
+                | Self::UiTransparent
+                // Background / Border / Font sub-modules
+                | Self::BackgroundColor
+                | Self::BackgroundImage
+                | Self::BorderWidth
+                | Self::BorderRounded
+                | Self::BorderColor
+                | Self::FontSize
+                | Self::FontColor
+                | Self::FontFamily
+                | Self::FontBold
+                | Self::FontItalic
+                // Html element builders
+                | Self::HtmlTextNode
+                | Self::HtmlRawNode
+                | Self::HtmlNode
+                | Self::HtmlDiv
+                | Self::HtmlSpan
+                | Self::HtmlA
+                | Self::HtmlButton
+                | Self::HtmlP
+                | Self::HtmlInput
+                | Self::HtmlImg
+        )
+    }
+
+    /// Return `true` when this variant is one of the `Std.Live` / `Sky.Live`
+    /// app-entry kernel variants introduced in M7.
+    ///
+    /// # Exhaustiveness note
+    ///
+    /// `matches!` carries an implicit `_ => false` arm.  Any emit guard must
+    /// wrap this in an exhaustive `match` on `KernelFn` so the compiler flags
+    /// missing variants.
+    #[must_use]
+    pub const fn is_live(self) -> bool {
+        matches!(
+            self,
+            Self::LiveApp | Self::LiveAppRouted | Self::LiveRoute | Self::LiveRenderStatic
+        )
+    }
+
+    /// Return `true` when this variant is one of the `Std.Tui` / `Sky.Tui`
+    /// app-entry kernel variants introduced in M7.
+    #[must_use]
+    pub const fn is_tui(self) -> bool {
+        matches!(self, Self::TuiProgram | Self::TuiApp)
+    }
+
+    /// Return `true` when this variant is the `Std.Webview` / `Sky.Webview`
+    /// app-entry kernel variant introduced in M7.
+    #[must_use]
+    pub const fn is_webview(self) -> bool {
+        matches!(self, Self::WebviewApp)
     }
 }
 
@@ -2626,6 +3040,10 @@ mod tests {
                 records: vec![],
                 uses_tea: false,
                 uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
             }],
         };
         let clone = program.clone();
