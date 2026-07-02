@@ -93,21 +93,32 @@ panel could not close from first principles). Offer the next step:
 Run the panel deterministically with the `Workflow` tool (per
 `memory: backend-wiring-protocol`). Skeleton:
 
+**Every panel agent — asker, reasoners, cross-critique, synthesis, AND review —
+runs as `agentType: 'security-soundness-guardian'`.** The design is authored by
+guardians end-to-end, not merely reviewed by one at the end: the two fundamental
+rules and the principle order are the guardian's native lens, so having them
+*design* under it (not just critique afterwards) pre-empts the soundness edges
+that would otherwise surface as review NO-GOs. The design still carries the 6
+principles + 2 rules verbatim in every brief.
+
 ```
-phase('Ask')      const questions = await agent(ASKER_BRIEF, {schema: Q_SCHEMA})
+const G = { agentType: 'security-soundness-guardian', effort: 'high' }
+phase('Ask')      const questions = await agent(ASKER_BRIEF, {...G, schema: Q_SCHEMA})
 phase('Reason')   const designs = await parallel(range(N).map(i => () =>
-                    agent(reasonerBrief(i, questions), {schema: DESIGN_SCHEMA})))   // INDEPENDENT
+                    agent(reasonerBrief(i, questions), {...G, schema: DESIGN_SCHEMA})))  // INDEPENDENT
 phase('Critique') const recon = await parallel(designs.map((d,i) => () =>
-                    agent(critiqueBrief(i, designs), {schema: RECON_SCHEMA})))       // orchestrator = bus
-phase('Synthesize') const spec = await agent(synthBrief(questions, designs, recon)) // writes the doc
-phase('Review')   const verdict = await agent(reviewBrief(spec), {agentType:'security-soundness-guardian'})
+                    agent(critiqueBrief(i, designs), {...G, schema: RECON_SCHEMA})))      // orchestrator = bus
+phase('Synthesize') const spec = await agent(synthBrief(questions, designs, recon), G)   // writes the doc
+phase('Review')   const verdict = await agent(reviewBrief(spec), G)                        // fresh adversarial pass
 return { spec, verdict }
 ```
 
 Reasoners run under `parallel()` (independent, barrier). The asker precedes them;
 the cross-critique is a second `parallel()` fed the collected designs; synthesis
-+ review are single agents. Guardian bookends: only the review spends guardian
-tokens (design reasoning can be a capable general model). No executor phase — if
++ review are single agents. The review is still a *fresh, independent* guardian
+pass over the finished spec (not the same context as the synthesiser) — a
+guardian designing and a guardian adversarially reviewing its own panel's output
+are different roles even at the same agent type. No executor phase — if
 building follows, hand off to `autonomous-swarm`.
 
 ## Non-negotiables
@@ -123,4 +134,4 @@ building follows, hand off to `autonomous-swarm`.
 | Reasoner count | 3 for hard architecture (+ cross-critique); 2 for moderate; past 3 = diminishing returns |
 | Asker depth | Exhaustive + cited; the §0 blocking-contradictions group is the highest-value output |
 | Review effort | High — this is the soundness gate on the design before any build is authorised |
-| Model | Reasoners: a capable general model. Review: security-soundness-guardian. |
+| Agent type | Every phase — asker, reasoners, cross-critique, synthesis, review — runs as `security-soundness-guardian`. The guardian *authors* the design, not just reviews it. |
