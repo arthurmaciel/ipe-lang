@@ -194,6 +194,15 @@ struct Builtins {
     /// Flat `String -> String -> Msg` — byte-matches the runtime bound
     /// `FOnKey: Fn(String, String) -> Msg`.
     tui_f_on_key: Symbol,
+    // ── Webview cfg record field name symbols (Phase-1d) ─────────────────────────
+    /// `"window"` — the window field of the `Webview.app` config record.
+    /// Typed as a closed record `{ title : String, size : (Int, Int) }`.
+    webview_f_window: Symbol,
+    /// `"title"` — the title field inside the Webview window config record.
+    webview_f_title: Symbol,
+    /// `"size"` — the size field inside the Webview window config record.
+    /// Typed as `(Int, Int)` — width × height in logical pixels.
+    webview_f_size: Symbol,
 }
 
 impl Builtins {
@@ -270,6 +279,10 @@ impl Builtins {
             live_f_not_found: interner.intern("notFound")?,
             // Phase-1c: Tui cfg field names.
             tui_f_on_key: interner.intern("onKey")?,
+            // Phase-1d: Webview cfg field names.
+            webview_f_window: interner.intern("window")?,
+            webview_f_title: interner.intern("title")?,
+            webview_f_size: interner.intern("size")?,
         })
     }
 
@@ -3972,6 +3985,78 @@ impl<'a> Builder<'a> {
                     m.insert(self.builtins.live_f_view, view_ty);
                     m.insert(self.builtins.live_f_subscriptions, subs_ty);
                     m.insert(self.builtins.tui_f_on_key, on_key_ty);
+                    m
+                });
+                fun(cfg_rec, task_unit)
+            }
+
+            // ── Std.Webview / Sky.Webview app-entry kernel (Phase-1d) ────────────
+            //
+            // `Webview.app` has a 5-field closed cfg-record scheme.  The qualifier
+            // set here MUST equal the lower resolved set
+            // (lower.rs: `("Webview","app")→WebviewApp`)
+            // — any mismatch reopens the exit-0-then-cargo-fail class.
+            //
+            // var(0) = Model
+            // var(1) = Msg
+            //
+            // init         : () -> (Model, Cmd Msg)
+            //   Note: Webview init takes `()` (unit), same as Tui — NOT `LiveReq`.
+            // update       : Msg -> Model -> (Model, Cmd Msg)
+            // view         : Model -> Html Msg
+            //   Uses `html_con` (view must return `Html Msg` via `Ui.layout`),
+            //   same as Live.app — the Webview runtime drives the same HTML renderer.
+            // subscriptions: Model -> Sub Msg
+            // window       : { title : String, size : (Int, Int) }
+            //   Closed nested record — mirrors `WebviewWindowCfg { title, size }`.
+            //   The `size` field is `Ty::Tuple([Int, Int])` (width × height).
+            //
+            // SOUNDNESS NOTE: `init` uses `Ty::Unit` (not empty `Ty::Tuple`).
+            // An empty tuple `Ty::Tuple([])` prints as `()` but does NOT unify
+            // with `Ty::Unit` — that would surface as SKY-T0001.
+            (Some("Webview"), Some("app")) => {
+                let cmd = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.cmd,
+                    args: vec![msg],
+                };
+                let sub = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.sub,
+                    args: vec![msg],
+                };
+                let html = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.html_con,
+                    args: vec![msg],
+                };
+                // `()` in Sky is `Ty::Unit`, not an empty tuple (see the
+                // `Tui.app` arm above for the full rationale).
+                let unit_ty = Ty::Unit;
+                // (Model, Cmd Msg)
+                let tup = tuple2(var(0), cmd(var(1)));
+                // init : () -> (Model, Cmd Msg)
+                let init_ty = fun(unit_ty, tup.clone());
+                // update : Msg -> Model -> (Model, Cmd Msg)
+                let update_ty = fun(var(1), fun(var(0), tup));
+                // view : Model -> Html Msg  (Webview reuses the Live HTML renderer)
+                let view_ty = fun(var(0), html(var(1)));
+                // subscriptions : Model -> Sub Msg
+                let subs_ty = fun(var(0), sub(var(1)));
+                // window : { title : String, size : (Int, Int) }
+                let window_ty = Ty::Record({
+                    let mut m = std::collections::BTreeMap::new();
+                    m.insert(self.builtins.webview_f_title, string);
+                    m.insert(self.builtins.webview_f_size, tuple2(int.clone(), int));
+                    m
+                });
+                let cfg_rec = Ty::Record({
+                    let mut m = std::collections::BTreeMap::new();
+                    m.insert(self.builtins.live_f_init, init_ty);
+                    m.insert(self.builtins.live_f_update, update_ty);
+                    m.insert(self.builtins.live_f_view, view_ty);
+                    m.insert(self.builtins.live_f_subscriptions, subs_ty);
+                    m.insert(self.builtins.webview_f_window, window_ty);
                     m
                 });
                 fun(cfg_rec, task_unit)

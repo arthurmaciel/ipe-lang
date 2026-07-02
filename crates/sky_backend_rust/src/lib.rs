@@ -19,6 +19,7 @@ mod emit_expr;
 mod emit_live;
 mod emit_tui;
 mod emit_types;
+mod emit_webview;
 mod naming;
 mod preamble;
 mod project;
@@ -155,8 +156,8 @@ pub(crate) struct EmitCtx<'a> {
     pub(crate) uses_tui: bool,
     /// `true` when the program uses at least one `Std.Webview` app-entry kernel.
     /// When set, the emitted project gains the `"webview"` Cargo feature
-    /// (which transitively pulls `"live"`).
-    #[allow(dead_code)] // Phase 0: field reserved for Phase 1 Cargo feature gating
+    /// (which transitively pulls `"live"`) and the main entry is switched to
+    /// `block_on_current_thread` (G3: tao/Cocoa requires the process main thread).
     pub(crate) uses_webview: bool,
     /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
     /// `None` when `uses_db` is `false`.

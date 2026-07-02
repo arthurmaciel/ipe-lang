@@ -2563,14 +2563,20 @@ impl<'a> Lowerer<'a> {
                         });
                     }
                 }
-                // ── Tui.app / Tui.program cfg literal (L0107 exemption, Phase-1c) ──
+                // ── Tui.app / Tui.program / Webview.app cfg literal (L0107 exemption) ──
                 //
                 // Same pattern as `Live.app`: intercept the single cfg-record arg
                 // BEFORE the uniform `lower_expr` path so function-typed fields
                 // (init/update/view/subscriptions/onKey) do not trip SKY-L0107.
+                // Phase-1c: TuiApp / TuiProgram.
+                // Phase-1d: WebviewApp — the extra `window` field is a plain record
+                //   value (no functions), so it lowers through `lower_expr` normally;
+                //   `lower_app_cfg_record` handles it uniformly with the fn fields.
                 // A non-literal cfg (let-bound, piped, etc.) still goes through
                 // `lower_expr` → `reject_function_through_type_var` — fail-closed.
-                Callee::Kernel(KernelFn::TuiApp | KernelFn::TuiProgram) if args.len() == 1 => {
+                Callee::Kernel(KernelFn::TuiApp | KernelFn::TuiProgram | KernelFn::WebviewApp)
+                    if args.len() == 1 =>
+                {
                     if let Some(arg0) = args.first() {
                         let lowered_cfg = match &arg0.value {
                             canon::Expr_::Record(fields) => self.lower_app_cfg_record(fields)?,
