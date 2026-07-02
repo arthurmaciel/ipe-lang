@@ -13,13 +13,13 @@ use crate::code::{
     Code, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200,
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
-    SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0200, SKY_N0001, SKY_N0002, SKY_N0003,
-    SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_N0020, SKY_N0021,
-    SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_P0001, SKY_P0002, SKY_P0003, SKY_P0010,
-    SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015, SKY_P0016, SKY_P0017, SKY_P0020,
-    SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061,
-    SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012,
-    SKY_T0013, SKY_T0014, Severity,
+    SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118, SKY_L0200, SKY_N0001, SKY_N0002,
+    SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_N0020,
+    SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_P0001, SKY_P0002, SKY_P0003,
+    SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015, SKY_P0016, SKY_P0017,
+    SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060,
+    SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011,
+    SKY_T0012, SKY_T0013, SKY_T0014, Severity,
 };
 use crate::span::Span;
 
@@ -537,6 +537,11 @@ pub enum Feature {
     /// `cargo` rejects. Divergence from Sky, rationale: Rust backend capability.
     /// [SKY-L0117]
     FloatKeyedCollection,
+    /// `Live.appRouted` (the URL-routing variant of the `Sky.Live` entry point)
+    /// is not yet wired on the Rust backend. Use the non-routed `Live.app` with
+    /// `init`/`update`/`view`/`subscriptions` until routing support lands.
+    /// [SKY-L0118]
+    RoutedLiveApp,
 }
 
 /// Errors raised during lowering: "not supported yet" — distinct from
@@ -827,6 +832,7 @@ const fn feature_code(f: Feature) -> Code {
         Feature::TuplePatternMatch => SKY_L0115,
         Feature::NestedCtorDiscrimination => SKY_L0116,
         Feature::FloatKeyedCollection => SKY_L0117,
+        Feature::RoutedLiveApp => SKY_L0118,
     }
 }
 

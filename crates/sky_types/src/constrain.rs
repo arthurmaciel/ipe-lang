@@ -167,6 +167,28 @@ struct Builtins {
     lw_wrapper_attrs: Symbol,
     /// `"rootAttrs"` — the second field in the `Ui.layoutWith` config record.
     lw_root_attrs: Symbol,
+    // ── Std.Live / Sky.Live opaque type constructor symbols (Phase-1b) ─────────
+    /// `"LiveReq"` — opaque request threaded through `Live.app`'s `init`.
+    live_req: Symbol,
+    /// `"LiveRoute"` — opaque route descriptor returned by `Live.route`.
+    live_route_con: Symbol,
+    // ── Live cfg record field name symbols ───────────────────────────────────────
+    /// `"init"` — the init field of the `Live.app` config record.
+    live_f_init: Symbol,
+    /// `"update"` — the update field of the `Live.app` config record.
+    live_f_update: Symbol,
+    /// `"view"` — the view field of the `Live.app` config record.
+    live_f_view: Symbol,
+    /// `"subscriptions"` — the subscriptions field of the `Live.app` config record.
+    live_f_subscriptions: Symbol,
+    /// `"routes"` — the routes field of the `Live.appRouted` config record.
+    /// Reserved for a future split scheme between `app` and `appRouted`.
+    #[allow(dead_code)]
+    live_f_routes: Symbol,
+    /// `"notFound"` — the notFound field of the `Live.appRouted` config record.
+    /// Reserved for a future split scheme between `app` and `appRouted`.
+    #[allow(dead_code)]
+    live_f_not_found: Symbol,
 }
 
 impl Builtins {
@@ -232,6 +254,15 @@ impl Builtins {
             html_con: interner.intern("Html")?,
             lw_wrapper_attrs: interner.intern("wrapperAttrs")?,
             lw_root_attrs: interner.intern("rootAttrs")?,
+            // Phase-1b: Std.Live / Sky.Live opaque types + cfg field names.
+            live_req: interner.intern("LiveReq")?,
+            live_route_con: interner.intern("LiveRoute")?,
+            live_f_init: interner.intern("init")?,
+            live_f_update: interner.intern("update")?,
+            live_f_view: interner.intern("view")?,
+            live_f_subscriptions: interner.intern("subscriptions")?,
+            live_f_routes: interner.intern("routes")?,
+            live_f_not_found: interner.intern("notFound")?,
         })
     }
 
@@ -3745,6 +3776,92 @@ impl<'a> Builder<'a> {
                     args: vec![msg],
                 };
                 fun(fun(bool_ty, var(0)), attr(var(0)))
+            }
+
+            // ── Std.Live / Sky.Live app-entry kernels (Phase-1b) ─────────────
+            //
+            // `Live.app` and `Live.appRouted` share the same core cfg-record
+            // scheme; the routed variant just adds `routes` and `notFound`
+            // fields.  The solver constrains `init/update/view/subscriptions`
+            // to their concrete user-function types via the shared `var(0)`
+            // (Model) and `var(1)` (Msg) across all four fields.
+            //
+            // var(0) = Model
+            // var(1) = Msg
+            //
+            // init         : LiveReq -> (Model, Cmd Msg)
+            // update       : Msg -> Model -> (Model, Cmd Msg)
+            // view         : Model -> Html Msg
+            // subscriptions: Model -> Sub Msg
+            //
+            // `Live.appRouted` is gated at lower (SKY-L0118); only `Live.app`
+            // is constrained here.  The qualifier set must equal the lower
+            // resolved set (no exit-0-then-cargo-fail).
+            (Some("Live"), Some("app")) => {
+                let live_req_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.live_req,
+                    args: Vec::new(),
+                };
+                let cmd = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.cmd,
+                    args: vec![msg],
+                };
+                let sub = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.sub,
+                    args: vec![msg],
+                };
+                let html = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.html_con,
+                    args: vec![msg],
+                };
+                // (Model, Cmd Msg)
+                let init_ret = tuple2(var(0), cmd(var(1)));
+                // init : LiveReq -> (Model, Cmd Msg)
+                let init_ty = fun(live_req_ty, init_ret.clone());
+                // update : Msg -> Model -> (Model, Cmd Msg)
+                let update_ty = fun(var(1), fun(var(0), init_ret));
+                // view : Model -> Html Msg
+                let view_ty = fun(var(0), html(var(1)));
+                // subscriptions : Model -> Sub Msg
+                let subs_ty = fun(var(0), sub(var(1)));
+                let cfg_rec = Ty::Record({
+                    let mut m = std::collections::BTreeMap::new();
+                    m.insert(self.builtins.live_f_init, init_ty);
+                    m.insert(self.builtins.live_f_update, update_ty);
+                    m.insert(self.builtins.live_f_view, view_ty);
+                    m.insert(self.builtins.live_f_subscriptions, subs_ty);
+                    m
+                });
+                fun(cfg_rec, task_unit)
+            }
+
+            // `Live.route : String -> (List String -> Page) -> LiveRoute`
+            // var(0) = Page
+            (Some("Live"), Some("route")) => {
+                let live_route_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.live_route_con,
+                    args: Vec::new(),
+                };
+                // (List String -> Page) — the builder function
+                let builder_ty = fun(list(string.clone()), var(0));
+                fun(string, fun(builder_ty, live_route_ty))
+            }
+
+            // `Live.renderStatic : (Model -> Html Msg) -> Model -> Task Error ()`
+            // var(0) = Model, var(1) = Msg
+            (Some("Live"), Some("renderStatic")) => {
+                let html = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.html_con,
+                    args: vec![msg],
+                };
+                let view_ty = fun(var(0), html(var(1)));
+                fun(view_ty, fun(var(0), task_unit))
             }
 
             // Unknown kernel: a single flexible variable. The raw id is chosen
