@@ -2543,6 +2543,7 @@ impl<'a> Lowerer<'a> {
         if let canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } = &callee.value {
             let peek = self.lower_callee(callee)?;
             match &peek {
+                // ── Live.app cfg literal (L0107 exemption, Phase-1b) ────────────
                 Callee::Kernel(KernelFn::LiveApp) if args.len() == 1 => {
                     // `args.len() == 1` is the match guard above; `first()` is
                     // always `Some` here.  Using `first()` instead of `args[0]`
@@ -2554,6 +2555,25 @@ impl<'a> Lowerer<'a> {
                             // Non-literal (let-bound var, pipe result, etc.):
                             // `lower_expr` applies `reject_function_through_type_var`
                             // which is correctly fail-closed for function-embedding types.
+                            _ => self.lower_expr(arg0)?,
+                        };
+                        return Ok(Expr::Call {
+                            callee: peek,
+                            args: vec![lowered_cfg],
+                        });
+                    }
+                }
+                // ── Tui.app / Tui.program cfg literal (L0107 exemption, Phase-1c) ──
+                //
+                // Same pattern as `Live.app`: intercept the single cfg-record arg
+                // BEFORE the uniform `lower_expr` path so function-typed fields
+                // (init/update/view/subscriptions/onKey) do not trip SKY-L0107.
+                // A non-literal cfg (let-bound, piped, etc.) still goes through
+                // `lower_expr` → `reject_function_through_type_var` — fail-closed.
+                Callee::Kernel(KernelFn::TuiApp | KernelFn::TuiProgram) if args.len() == 1 => {
+                    if let Some(arg0) = args.first() {
+                        let lowered_cfg = match &arg0.value {
+                            canon::Expr_::Record(fields) => self.lower_app_cfg_record(fields)?,
                             _ => self.lower_expr(arg0)?,
                         };
                         return Ok(Expr::Call {

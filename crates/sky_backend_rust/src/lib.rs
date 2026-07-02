@@ -17,6 +17,7 @@
 
 mod emit_expr;
 mod emit_live;
+mod emit_tui;
 mod emit_types;
 mod naming;
 mod preamble;
@@ -150,8 +151,7 @@ pub(crate) struct EmitCtx<'a> {
     pub(crate) uses_live: bool,
     /// `true` when the program uses at least one `Std.Tui` / `Sky.Tui`
     /// app-entry kernel.  When set, the emitted project gains the `"tui"`
-    /// Cargo feature.
-    #[allow(dead_code)] // Phase 0: field reserved for Phase 1 Cargo feature gating
+    /// Cargo feature and the tui module is wired into `sky_runtime/mod.rs`.
     pub(crate) uses_tui: bool,
     /// `true` when the program uses at least one `Std.Webview` app-entry kernel.
     /// When set, the emitted project gains the `"webview"` Cargo feature
