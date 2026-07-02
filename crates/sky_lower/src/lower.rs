@@ -1133,7 +1133,15 @@ impl<'a> Lowerer<'a> {
                 // record reaches the backend through a signature.
                 if !ty_contains_var(ty) {
                     let ir = self.ir_type_from_ty(ty, Span::DUMMY)?;
-                    if !out.contains(&ir) {
+                    // G-b gate: skip records whose IR carries a function type.
+                    // The `Live.app` cfg record has function-typed fields
+                    // (init/update/view/subscriptions); emitting a Rust struct
+                    // for it would need `Box<dyn Fn>` fields, which cannot
+                    // derive `Clone`/`Debug`/`PartialEq`.  The cfg record is
+                    // consumed structurally by `emit_live_app_inner` (never
+                    // materialised as a runtime value), so its IR struct is
+                    // not needed.
+                    if !ir_contains_fun(&ir) && !out.contains(&ir) {
                         out.push(ir);
                     }
                 }
@@ -2484,6 +2492,35 @@ impl<'a> Lowerer<'a> {
         )
     }
 
+    /// Lower the `Live.app` cfg record literal, intentionally omitting the
+    /// per-field [`Self::reject_function_valued_field`] gate (the L0107 exemption).
+    ///
+    /// Only a *direct* record literal in the single-argument position of a
+    /// `KernelFn::LiveApp` call reaches here — the callee-peeked intercept in
+    /// [`Self::lower_call`] enforces the exemption boundary.  A non-literal cfg
+    /// (let-bound, piped, etc.) still goes through `lower_expr`, which fires
+    /// [`Self::reject_function_through_type_var`] for function-embedding types —
+    /// correct fail-closed behaviour.
+    ///
+    /// `lower_expr` IS called on each field *value*: it applies
+    /// `reject_function_through_type_var`, which is correctly fail-closed for
+    /// models that have function-typed fields (a `Model { fn : Int -> Int }`
+    /// cannot be derived; the embedded function in the model's region type is
+    /// detected and rejected before it would produce broken emit output).
+    fn lower_app_cfg_record(&self, fields: &[(Symbol, canon::Expr)]) -> DResult<Expr> {
+        let mut lowered: Vec<(Symbol, Expr)> = Vec::with_capacity(fields.len());
+        for (name, value) in fields {
+            // Omit `reject_function_valued_field` — the L0107 exemption.
+            lowered.push((*name, self.lower_expr(value)?));
+        }
+        lowered.sort_by(|a, b| {
+            self.resolve(a.0)
+                .unwrap_or("")
+                .cmp(self.resolve(b.0).unwrap_or(""))
+        });
+        Ok(Expr::Record(lowered))
+    }
+
     fn lower_call(
         &self,
         callee: &canon::Expr,
@@ -2493,6 +2530,47 @@ impl<'a> Lowerer<'a> {
         // A Set / Dict produced by inference (no annotation driving an
         // `ir_type_from_ty` conversion) is gated here on its own region type.
         self.reject_float_keyed_collection(call_span)?;
+
+        // ── Phase-1b: App-entry intercept ──────────────────────────────────
+        // Intercept `Live.app` / `Live.appRouted` BEFORE the uniform arg
+        // lowering below.  The `Live.app` cfg record carries function-typed
+        // fields (`init`/`update`/`view`/`subscriptions`) that would trip
+        // SKY-L0107 in the `Record` arm of `lower_expr`.
+        //
+        // `lower_callee` is a pure symbol-table lookup (no side effects); the
+        // `VarKernel | VarTopLevel` arm re-calls it below for all other
+        // callees — that second call is safe and deliberate (minimal diff).
+        if let canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } = &callee.value {
+            let peek = self.lower_callee(callee)?;
+            match &peek {
+                Callee::Kernel(KernelFn::LiveApp) if args.len() == 1 => {
+                    // `args.len() == 1` is the match guard above; `first()` is
+                    // always `Some` here.  Using `first()` instead of `args[0]`
+                    // keeps `clippy::indexing_slicing` clean.
+                    if let Some(arg0) = args.first() {
+                        let lowered_cfg = match &arg0.value {
+                            // Direct cfg literal: lower without the L0107 gate.
+                            canon::Expr_::Record(fields) => self.lower_app_cfg_record(fields)?,
+                            // Non-literal (let-bound var, pipe result, etc.):
+                            // `lower_expr` applies `reject_function_through_type_var`
+                            // which is correctly fail-closed for function-embedding types.
+                            _ => self.lower_expr(arg0)?,
+                        };
+                        return Ok(Expr::Call {
+                            callee: peek,
+                            args: vec![lowered_cfg],
+                        });
+                    }
+                }
+                Callee::Kernel(KernelFn::LiveAppRouted) => {
+                    return Err(unsupported(call_span, Feature::RoutedLiveApp));
+                }
+                _ => {}
+            }
+            // Any other callee: fall through to the uniform path below.
+            // `lower_callee` will be called again in the match arm — pure, safe.
+        }
+
         let lowered_args = args
             .iter()
             .map(|a| self.lower_expr(a))

@@ -85,7 +85,7 @@ fn float_literal(f: f64) -> String {
 }
 
 /// The Rust name of a call target.
-fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
+pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
     match callee {
         Callee::Func(id) => Ok(ctx.func_name(*id)?.to_owned()),
         Callee::Kernel(k) => Ok(kernel_name(*k).to_owned()),
@@ -2018,17 +2018,30 @@ fn emit_ui_call(
             )))
         }
 
-        // ── App-entry stubs (Phase 0 — CompilerBug until Phase 1 wires them) ──
+        // ── Live app-entry kernels (Phase 1b — fully wired) ───────────────────
+        // Delegate to `emit_live::emit_live_call`; it returns `Some(s)` for the
+        // four Live variants and `None` for anything else (the `_ => None` arm).
+        // A `None` here is an internal error (the `is_live()` guard above already
+        // filtered to Live variants), so promote it to a `CompilerBug`.
         KernelFn::LiveApp
         | KernelFn::LiveAppRouted
         | KernelFn::LiveRoute
-        | KernelFn::LiveRenderStatic
-        | KernelFn::TuiProgram
-        | KernelFn::TuiApp
-        | KernelFn::WebviewApp => Err(Diagnostic::CompilerBug {
-            where_: "sky_backend_rust::emit_ui_call",
-            detail: format!("kernel {k:?} is a Phase-0 stub — wired in Phase 1"),
-        }),
+        | KernelFn::LiveRenderStatic => {
+            let s = crate::emit_live::emit_live_call(ctx, callee, args, indent, child, generics)?
+                .ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_ui_call",
+                detail: format!("emit_live returned None for Live kernel {k:?} — missing arm"),
+            })?;
+            Ok(Some(s))
+        }
+
+        // ── App-entry stubs (Phase 0 — still stubs until Phase 2) ─────────────
+        KernelFn::TuiProgram | KernelFn::TuiApp | KernelFn::WebviewApp => {
+            Err(Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_ui_call",
+                detail: format!("kernel {k:?} is a Phase-0 stub — wired in Phase 2"),
+            })
+        }
 
         // Any is_ui/live/tui/webview() variant not listed is a gap — hard error.
         _ => Err(Diagnostic::CompilerBug {
@@ -2128,8 +2141,11 @@ fn emit_json_decoder_call(
 /// Depth-tracked recursion behind [`emit_expr`]. `depth` is the IR-nesting level
 /// of `expr` (0 at the function body); it gates the bounded-emit guard and is
 /// independent of `indent` (the textual indentation of `match` arms).
+///
+/// `pub(crate)` so that `emit_live` can call it directly (Live kernel bodies
+/// emit sub-expressions at the same depth level as their enclosing expression).
 #[allow(clippy::too_many_lines)]
-fn emit_expr_at(
+pub fn emit_expr_at(
     ctx: &EmitCtx,
     expr: &Expr,
     indent: usize,
