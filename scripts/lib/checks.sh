@@ -1,0 +1,355 @@
+# shellcheck shell=bash
+# scripts/lib/checks.sh — SINGLE SOURCE OF TRUTH for the per-shape "exercise an
+# already-built binary" logic. SOURCE this (never execute it):
+#   source "$(dirname "$0")/lib/checks.sh"
+#
+# PORTED from ../sky/runtime-rust/scripts/lib/checks.sh. The exercise_* contract
+# is backend-agnostic (it drives a built binary and asks "did it work?"), so it
+# ports almost unchanged. ADAPTATIONS for this repo:
+#   • night_guard is OPT-IN (SKY_SWEEP_NIGHT_GATE=1) so it NEVER blocks GitHub CI.
+#   • the browser driver / scenarios paths point at this repo's scripts/ (absent
+#     for now → WEB_OK=0 → exercise_live degrades to a server boot check, which
+#     is exactly the BUILD+RUN phase-1 behaviour we want).
+#   • resolve_bin looks under sky-out/rust/target and the shared CARGO_TARGET_DIR
+#     for skyc's emitted `sky-app` binary.
+#
+# Depends on lib/env.sh being sourced first (CARGO_TARGET_DIR, PATH, REPO). It is
+# idempotent and side-effect-light at source time (exports + a browser-stack probe).
+
+# ── Shared exercise env ─────────────────────────────────────────────────────
+# Server/live examples that use Std.Auth refuse to boot without a >=32-byte
+# secret (CORRECT production behaviour). Provide a test secret so those apps boot;
+# honoured only if the caller hasn't set their own.
+export SKY_AUTH_TOKEN_SECRET="${SKY_AUTH_TOKEN_SECRET:-sky-run-sweep-test-secret-0123456789-abcdef}"
+
+# ── Panic detection (shared) ────────────────────────────────────────────────
+# A Rust panic / abort string in a binary's output = a soundness failure (the
+# whole reason the Rust backend exists). Go panics surface the same way, so the
+# pattern catches both backends' aborts.
+PANIC_RE="panicked|CompilerBug|RUST_BACKTRACE|index out of bounds|unwrap\(\) on|called .Result::unwrap|goroutine [0-9]+ \[|runtime error:"
+
+# ── Host OS detection (shared) ───────────────────────────────────────────────
+case "${OSTYPE:-}" in
+  linux*)            SKY_HOST_OS=linux   ;;
+  darwin*)           SKY_HOST_OS=macos   ;;
+  msys*|cygwin*|win*) SKY_HOST_OS=windows ;;
+  *)
+    case "$(uname -s 2>/dev/null)" in
+      Linux)                       SKY_HOST_OS=linux   ;;
+      Darwin)                      SKY_HOST_OS=macos   ;;
+      MINGW*|MSYS*|CYGWIN*|Windows_NT) SKY_HOST_OS=windows ;;
+      *)                           SKY_HOST_OS=linux   ;;
+    esac
+    ;;
+esac
+export SKY_HOST_OS
+
+# ── EXERCISE_SKIP_RC: the rc an exercise_* returns when this HOST can't run the
+# shape at all (no pty / no display) — distinct from 0 (pass) and 1 (fail).
+EXERCISE_SKIP_RC=125
+
+# ── night_guard <sweep-name>: OPT-IN local deferral window ───────────────────
+# PORT NOTE: upstream night-gated this heavy sweep to 22:00–08:00 America/Sao_Paulo
+# on a slim shared box AND that gate blocked nothing on CI (CI set SKY_SWEEP_FORCE).
+# Here it is OFF BY DEFAULT so it can NEVER block GitHub CI. Set
+# SKY_SWEEP_NIGHT_GATE=1 to re-enable the local low-load window; SKY_SWEEP_FORCE=1
+# still overrides it. When enabled + outside the window + not forced → exit 2.
+night_guard() {
+  local sweep="${1:-sweep}" hour
+  [ "${SKY_SWEEP_NIGHT_GATE:-0}" = 1 ] || return 0   # gate disabled → no-op (default)
+  [ -n "${SKY_SWEEP_FORCE:-}" ] && return 0
+  hour="$(TZ=America/Sao_Paulo date +%H 2>/dev/null)"
+  hour="$((10#${hour:-12}))"
+  if [ "$hour" -ge 22 ] || [ "$hour" -lt 8 ]; then return 0; fi
+  echo "deferred: $sweep runs 22:00–08:00 America/Sao_Paulo (SKY_SWEEP_NIGHT_GATE=1); set SKY_SWEEP_FORCE=1 to override" >&2
+  exit 2
+}
+
+# ── http_responds <code>: any real HTTP status (100-599) = serving ──────────
+http_responds() { case "$1" in [1-5][0-9][0-9]) return 0;; *) return 1;; esac; }
+
+# ── free_port: an ephemeral free TCP port. FAIL-CLOSED (no fixed fallback) ───
+free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()' 2>/dev/null; }
+
+# ── reap: kill stray app / driver / Xvfb processes between examples ──────────
+reap() {
+  command -v pkill >/dev/null 2>&1 || return 0
+  for p in sky-app app; do pkill -x "$p" 2>/dev/null; done
+  pkill -f "examples/.*/sky-out/" 2>/dev/null; pkill -f web-verify.mjs 2>/dev/null
+  pkill -x Xvfb 2>/dev/null
+}
+
+# ── Browser-round-trip stack probe (shared) ─────────────────────────────────
+# If any piece is absent, WEB_OK=0 and exercise_live degrades to a server boot
+# check. ADAPTED paths: this repo's scripts/ (the driver/scenarios are not yet
+# ported — phase 1 is BUILD+RUN, so the boot-check degrade is intended).
+NODE_BIN="$(for _nb in "$HOME"/.nvm/versions/node/*/bin; do [ -d "$_nb" ] && printf '%s\n' "$_nb"; done | sort -V | tail -1)"
+export PATH="${NODE_BIN:+$NODE_BIN:}$PATH"
+export SKY_CHROMIUM="${SKY_CHROMIUM:-/usr/bin/chromium}"
+DRIVER="${DRIVER:-$REPO/scripts/web-verify.mjs}"
+SCENARIOS="${SCENARIOS:-$REPO/scripts/verify-scenarios.mjs}"
+WEB_OK=1
+command -v node >/dev/null 2>&1          || WEB_OK=0
+[ -x "$SKY_CHROMIUM" ]                    || WEB_OK=0
+[ -f "$DRIVER" ]                          || WEB_OK=0
+[ -d "$REPO/node_modules/playwright" ]    || WEB_OK=0
+
+# ── scenario_for <example-name>: the browser scenario key for an example ────
+scenario_for() {
+  local ex="$1" key
+  key="$(echo "$ex" | sed -E 's/^[0-9]+-//')"
+  if [ -f "$SCENARIOS" ] && rg -q "async '?${key}'?\(" "$SCENARIOS" 2>/dev/null; then
+    echo "$key"
+  else
+    echo smoke
+  fi
+}
+
+# ── resolve_bin <example-dir>: the freshest Rust binary skyc just built ──────
+# skyc emits a Cargo project whose package/binary is `sky-app` (crates/skyc emits
+# a fixed `sky-app` bin). Because ~/.cargo/config.toml pins a shared target-dir,
+# each example's `cargo build` writes $CARGO_TARGET_DIR/{debug,release}/sky-app;
+# the sweep builds+runs one example at a time (rm -rf between), so overwrite is
+# fine. Probe the shared target first, then the per-example target. The sky.toml
+# `name` is tried too (harmless first probe; skyc names the bin sky-app regardless).
+resolve_bin() {
+  local d="$1" name b
+  name="$(rg -No '^name\s*=\s*"([^"]+)"' -r '$1' "$d/sky.toml" 2>/dev/null | head -1)"
+  for b in \
+    "$CARGO_TARGET_DIR/debug/sky-app" \
+    "$CARGO_TARGET_DIR/release/sky-app" \
+    "$CARGO_TARGET_DIR/debug/$name" \
+    "$d/sky-out/rust/target/debug/sky-app" \
+    "$d/sky-out/rust/target/debug/$name"; do
+    [ -n "$b" ] && [ -x "$b" ] && [ ! -d "$b" ] && { echo "$b"; return 0; }
+  done
+  b="$(find "$CARGO_TARGET_DIR/debug" "$d/sky-out/rust/target/debug" -maxdepth 1 -type f -executable 2>/dev/null \
+        | xargs -r ls -t 2>/dev/null | head -1)"
+  [ -n "$b" ] && { echo "$b"; return 0; }
+  return 1
+}
+
+# ── browser_drivable <example-dir>: can web-verify.mjs locate this example? ──
+browser_drivable() { case "$1" in examples/rust/*) return 1;; *) return 0;; esac; }
+
+# _abs_bin <path> -> absolute path (passthrough if already absolute).
+_abs_bin() { case "$1" in /*) printf '%s\n' "$1";; *) printf '%s/%s\n' "$(cd "$(dirname "$1")" 2>/dev/null && pwd)" "$(basename "$1")";; esac; }
+
+# ════════════════════════════════════════════════════════════════════════════
+# exercise_* — drive an already-built binary per shape. 0=pass / 1=fail /
+# EXERCISE_SKIP_RC=skip. Each writes the binary's stdout+stderr to <logfile> and
+# runs from a fresh TMPDIR scratch cwd (so cwd-relative state never leaks into
+# the repo root).
+# ════════════════════════════════════════════════════════════════════════════
+
+# exercise_cli <bin> <logfile> [timeout]
+exercise_cli() {
+  local bin="$1" log="$2" tmo="${3:-25}" rc tries=0 abin run_dir
+  abin="$bin"; case "$bin" in /*) ;; *) abin="$(cd "$(dirname "$bin")" 2>/dev/null && pwd)/$(basename "$bin")";; esac
+  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-cli.XXXXXX")"
+  while :; do
+    ( cd "$run_dir" && exec timeout "$tmo" "$abin" ) >"$log" 2>&1 </dev/null; rc=$?
+    { [ "$rc" = 126 ] || grep -qiE 'text file busy|texto ocupada|ETXTBSY' "$log" 2>/dev/null; } || break
+    tries=$((tries+1)); [ "$tries" -ge 10 ] && break; sync; sleep 0.4
+  done
+  rm -rf "$run_dir" 2>/dev/null
+  if   [ "$rc" = 124 ]; then return 1
+  elif grep -qiE "$PANIC_RE" "$log"; then return 1
+  fi
+  return 0
+}
+
+# exercise_server <bin> <port> <logfile>
+exercise_server() {
+  local bin="$1" port="$2" log="$3" pid i code lp code2 ok="" run_dir abin
+  abin="$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")"
+  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-serve.XXXXXX")"
+  ( cd "$run_dir" && exec env SKY_LIVE_PORT="$port" PORT="$port" "$abin" ) >"$log" 2>&1 </dev/null &
+  pid=$!
+  for i in $(seq 1 30); do
+    kill -0 "$pid" 2>/dev/null || break
+    code="$(curl -s -o /dev/null -m 1 -w '%{http_code}' "http://127.0.0.1:$port/" 2>/dev/null || true)"
+    http_responds "$code" && { ok=1; break; }
+    lp="$(grep -iE "listening on" "$log" | grep -oE ":[0-9]+" | tail -1 | tr -d ':')"
+    if [ -n "$lp" ] && [ "$lp" != "$port" ]; then
+      code2="$(curl -s -o /dev/null -m 1 -w '%{http_code}' "http://127.0.0.1:$lp/" 2>/dev/null || true)"
+      http_responds "$code2" && { ok=1; break; }
+    fi
+    sleep 0.5
+  done
+  kill -TERM "$pid" 2>/dev/null; sleep 0.5; kill -KILL "$pid" 2>/dev/null
+  rm -rf "$run_dir" 2>/dev/null
+  if grep -qiE "$PANIC_RE" "$log"; then return 1; fi
+  [ -n "$ok" ] && return 0
+  if [ "${SKY_HOST_OS:-}" = macos ] && grep -qiE "listening on" "$log"; then
+    return "$EXERCISE_SKIP_RC"
+  fi
+  return 1
+}
+
+# exercise_live <bin> <example-name> <port> <scenario> <logfile>
+exercise_live() {
+  local bin="$1" ex="$2" port="$3" scen="$4" log="$5" abin
+  abin="$bin"; case "$bin" in /*) ;; *) abin="$(cd "$(dirname "$bin")" 2>/dev/null && pwd)/$(basename "$bin")";; esac
+  if [ "$WEB_OK" = 1 ]; then
+    node "$DRIVER" "$ex" "$port" "$scen" "$abin" >"$log" 2>&1
+    return $?
+  fi
+  exercise_server "$abin" "$port" "$log"
+}
+
+# exercise_tui <bin> <logfile>  (pty smoke, OS-aware)
+exercise_tui() {
+  local bin="$1" log="$2" abin run_dir
+  abin="$(_abs_bin "$bin")"
+  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-tui.XXXXXX")"
+  case "$SKY_HOST_OS" in
+    macos)
+      if command -v script >/dev/null 2>&1; then
+        ( cd "$run_dir" && script -q /dev/null timeout 8 "$abin" ) >"$log" 2>&1 </dev/null
+      else
+        printf 'SKIP (macos: no `script` for pty)\n' >"$log"; rm -rf "$run_dir" 2>/dev/null; return "$EXERCISE_SKIP_RC"
+      fi
+      ;;
+    windows)
+      printf 'SKIP (windows: headless pty needs ConPTY/node-pty — not yet wired)\n' >"$log"
+      rm -rf "$run_dir" 2>/dev/null
+      return "$EXERCISE_SKIP_RC"
+      ;;
+    *)
+      local q_bin
+      printf -v q_bin '%q' "$abin"
+      ( cd "$run_dir" && script -qec "timeout 8 $q_bin" /dev/null ) >"$log" 2>&1 </dev/null
+      ;;
+  esac
+  rm -rf "$run_dir" 2>/dev/null
+  if   grep -qiE "$PANIC_RE" "$log"; then return 1
+  elif grep -qiE "not a tty|inappropriate ioctl|TERM environment" "$log"; then return 1
+  fi
+  return 0
+}
+
+# exercise_webview <bin> <logfile>  (OS-aware headless smoke)
+exercise_webview() {
+  local bin="$1" log="$2" abin run_dir
+  abin="$(_abs_bin "$bin")"
+  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-webview.XXXXXX")"
+  case "$SKY_HOST_OS" in
+    macos)
+      ( cd "$run_dir" && timeout 8 "$abin" ) >"$log" 2>&1 </dev/null
+      ;;
+    windows)
+      ( cd "$run_dir" && timeout -k 5 8 "$abin" ) >"$log" 2>&1 </dev/null
+      ;;
+    *)
+      if ! command -v xvfb-run >/dev/null 2>&1; then
+        printf 'SKIP (linux: xvfb-run not installed)\n' >"$log"; rm -rf "$run_dir" 2>/dev/null; return "$EXERCISE_SKIP_RC"
+      fi
+      ( cd "$run_dir" && xvfb-run -a timeout 8 "$abin" ) >"$log" 2>&1 </dev/null
+      ;;
+  esac
+  rm -rf "$run_dir" 2>/dev/null
+  grep -qiE "$PANIC_RE" "$log" && return 1
+  return 0
+}
+
+# ── _boot_server_at <bin> <port> <run_dir> <log> → echoes "PID:PORT" ─────────
+_boot_server_at() {
+  local bin="$1" port="$2" run_dir="$3" log="$4" abin pid i code lp
+  abin="$(cd "$(dirname "$bin")" 2>/dev/null && pwd)/$(basename "$bin")"
+  ( cd "$run_dir" && exec env SKY_LIVE_PORT="$port" PORT="$port" "$abin" ) >"$log" 2>&1 </dev/null &
+  pid=$!
+  for i in $(seq 1 30); do
+    kill -0 "$pid" 2>/dev/null || { echo ""; return 1; }
+    code="$(curl -s -o /dev/null -m 1 -w '%{http_code}' "http://127.0.0.1:$port/" 2>/dev/null || true)"
+    http_responds "$code" && { echo "$pid:$port"; return 0; }
+    lp="$(grep -iE "listening on" "$log" 2>/dev/null | grep -oE ':[0-9]+' | tail -1 | tr -d ':')"
+    if [ -n "$lp" ] && [ "$lp" != "$port" ]; then
+      code="$(curl -s -o /dev/null -m 1 -w '%{http_code}' "http://127.0.0.1:$lp/" 2>/dev/null || true)"
+      http_responds "$code" && { echo "$pid:$lp"; return 0; }
+    fi
+    sleep 0.5
+  done
+  echo ""; return 1
+}
+
+# ── exercise_server_equiv <go_bin> <rust_bin> <example_dir> <log> ────────────
+# SERVER body-equivalence: boot Go and Rust on separate ports (isolated cwds) and
+# byte-compare comparable GET-route bodies. PRINTS a result token:
+#   equiv-body N · equiv-serve · DIFFER · go-ref-broken · rust-broken
+# Used only in the PHASED Go≡Rust equiv step (NO_EQUIV=0); dormant in phase 1.
+exercise_server_equiv() {
+  local go_bin="$1" rust_bin="$2" dir="$3" log="$4"
+  local gport rport grun rrun gpid rpid route routes=() comparable=() n=0 verdict=""
+  gport="$(free_port)"; rport="$(free_port)"
+  if [ -z "$gport" ] || [ -z "$rport" ]; then
+    printf 'free_port unavailable (python3 missing) — cannot allocate equiv ports\n' >>"$log" 2>/dev/null
+    echo "rust-broken"; return 0
+  fi
+  [ "$gport" = "$rport" ] && rport=$((rport + 1))
+  grun="$(mktemp -d "${TMPDIR:-/tmp}/sky-eqv-go.XXXXXX")"
+  rrun="$(mktemp -d "${TMPDIR:-/tmp}/sky-eqv-rs.XXXXXX")"
+  : >"$log"
+
+  routes=()
+  while IFS= read -r route; do [ -n "$route" ] && routes+=("$route"); done < <(
+    rg --no-filename -No 'Server\.get[[:space:]]+"([^"]*)"' -r '$1' "$dir"/src 2>/dev/null | sort -u)
+  case " ${routes[*]} " in *" / "*) ;; *) routes=("/" "${routes[@]}");; esac
+
+  for route in "${routes[@]}"; do
+    case "$route" in
+      *:*) continue ;;
+      */ws|*ws/*|*/ws/*) continue ;;
+    esac
+    case "$(basename "$route")" in
+      ws|events|stream|sse|relay|upstream) continue ;;
+    esac
+    comparable+=("$route")
+  done
+
+  local gboot gpid gp
+  gboot="$(_boot_server_at "$go_bin" "$gport" "$grun" "$log.go")"
+  gpid="${gboot%%:*}"; gp="${gboot##*:}"
+  if [ -z "$gpid" ]; then
+    rm -rf "$grun" "$rrun"; cat "$log.go" >>"$log" 2>/dev/null
+    echo "go-ref-broken"; return 0
+  fi
+  local -A gobody=()
+  for route in "${comparable[@]}"; do
+    local g1 g2 t0 t1 gcode
+    gcode="$(curl -s -o /dev/null -m 2 -w '%{http_code}' "http://127.0.0.1:$gp$route" 2>/dev/null || true)"
+    [ "$gcode" = 404 ] && { printf 'SKIP (Go 404 — route not served) %s\n' "$route" >>"$log"; continue; }
+    t0="$( { gdate +%s%N 2>/dev/null || date +%s%N; } )"
+    g1="$(curl -s -m 2 "http://127.0.0.1:$gp$route" 2>/dev/null)" || { printf 'SKIP (no-response) %s\n' "$route" >>"$log"; continue; }
+    t1="$( { gdate +%s%N 2>/dev/null || date +%s%N; } )"
+    if [ "$(( (t1 - t0) / 1000000 ))" -ge 1900 ]; then printf 'SKIP (slow/streaming) %s\n' "$route" >>"$log"; continue; fi
+    g2="$(curl -s -m 2 "http://127.0.0.1:$gp$route" 2>/dev/null)"
+    if [ "$g1" != "$g2" ]; then printf 'SKIP (nondeterministic) %s\n' "$route" >>"$log"; continue; fi
+    gobody["$route"]="$g1"
+  done
+  kill -TERM "$gpid" 2>/dev/null; sleep 0.3; kill -KILL "$gpid" 2>/dev/null
+
+  local rboot rpid rp
+  rboot="$(_boot_server_at "$rust_bin" "$rport" "$rrun" "$log.rs")"
+  rpid="${rboot%%:*}"; rp="${rboot##*:}"
+  if [ -z "$rpid" ]; then
+    rm -rf "$grun" "$rrun"; cat "$log.rs" >>"$log" 2>/dev/null
+    echo "rust-broken"; return 0
+  fi
+  for route in "${!gobody[@]}"; do
+    local r1
+    r1="$(curl -s -m 2 "http://127.0.0.1:$rp$route" 2>/dev/null)"
+    if [ "${gobody[$route]}" = "$r1" ]; then
+      n=$((n + 1)); printf 'MATCH %s\n' "$route" >>"$log"
+    else
+      printf 'DIFFER %s\n  go:   %s\n  rust: %s\n' "$route" "${gobody[$route]:0:200}" "${r1:0:200}" >>"$log"
+      verdict="DIFFER"
+    fi
+  done
+  kill -TERM "$rpid" 2>/dev/null; sleep 0.3; kill -KILL "$rpid" 2>/dev/null
+  rm -rf "$grun" "$rrun"
+
+  if [ -n "$verdict" ]; then echo "DIFFER"; return 0; fi
+  if [ "$n" -ge 1 ]; then echo "equiv-body $n"; return 0; fi
+  echo "equiv-serve"; return 0
+}
