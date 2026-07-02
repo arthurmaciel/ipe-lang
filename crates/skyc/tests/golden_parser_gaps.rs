@@ -16,6 +16,10 @@
 //! * `m2lex_intdiv` — `//` integer division. `20 // 2` → `10` and `(-7) // 2` →
 //!   `-3` (truncation toward zero, Go + Elm parity; a floor-division backend
 //!   would give `-4`). Output: `"10 -3"`.
+//! * `m2lex_intdiv_minint` — F6 regression: `i64::MIN // -1`. Raw Rust `/`
+//!   panics here unconditionally (signed-overflow hardware trap); Sky-Go
+//!   returns `i64::MIN` (two's-complement wrap). `sky_int_div` reproduces this
+//!   via `wrapping_div`. Output: `"-9223372036854775808"`, exit 0.
 //! * `m1_let_fn` — a let-bound *function* (`inc n = n + 1`) applied inside the
 //!   `in` body. Output: `"30"`.
 //! * `m0_blockcomment` — a `{- … -}` block comment containing an em-dash plus a
@@ -171,6 +175,18 @@ fn intdiv_by_zero_aborts_exit_101() {
         outcome.stdout, "",
         "no value is printed once DivisionByZero fires"
     );
+}
+
+/// F6 regression — `i64::MIN // -1` must NOT panic.
+///
+/// Raw Rust `/` on `i64` panics here unconditionally (signed-overflow hardware
+/// trap, present even with `overflow-checks = false`). Sky-Go `rt.IntDiv` uses
+/// two's-complement arithmetic and returns `i64::MIN`. The fix routes
+/// `BinOp::IntDiv` through `sky_runtime::math::sky_int_div(a, b)` which calls
+/// `a.wrapping_div(b)` for non-zero divisors, reproducing Go's result.
+#[test]
+fn intdiv_minint_by_neg1_does_not_panic() {
+    assert_single_oracle("m2lex_intdiv_minint");
 }
 
 // ---------------------------------------------------------------------------
