@@ -2065,11 +2065,22 @@ fn emit_ui_call(
             Ok(Some(s))
         }
 
-        // ── App-entry stub (Phase 0 — Webview still deferred) ─────────────────
-        KernelFn::WebviewApp => Err(Diagnostic::CompilerBug {
-            where_: "sky_backend_rust::emit_ui_call",
-            detail: format!("kernel {k:?} is a Phase-0 stub — wired in Phase 2"),
-        }),
+        // ── Webview app-entry kernel (Phase-1d — fully wired) ─────────────────
+        // Delegate to `emit_webview::emit_webview_call`; it returns `Some(s)` for
+        // the WebviewApp variant and `None` for anything else. A `None` here is an
+        // internal error (the `k.is_webview()` guard above already filtered), so
+        // promote it to a `CompilerBug`.
+        KernelFn::WebviewApp => {
+            let s =
+                crate::emit_webview::emit_webview_call(ctx, callee, args, indent, child, generics)?
+                    .ok_or_else(|| Diagnostic::CompilerBug {
+                        where_: "sky_backend_rust::emit_ui_call",
+                        detail: format!(
+                            "emit_webview returned None for Webview kernel {k:?} — missing arm"
+                        ),
+                    })?;
+            Ok(Some(s))
+        }
 
         // Any is_ui/live/tui/webview() variant not listed is a gap — hard error.
         _ => Err(Diagnostic::CompilerBug {

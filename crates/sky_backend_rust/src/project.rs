@@ -105,6 +105,24 @@ const RUNTIME_MOD_RS_UI_APPEND: &str = "pub mod html;\npub use html::*;\npub mod
 const RUNTIME_MOD_RS_TUI_APPEND: &str = "#[cfg(feature = \"tui\")]\npub mod tui;\n\
      #[cfg(feature = \"tui\")]\npub use tui::{tui_app, tui_app_ui};\n";
 
+// ── Phase-1d: Std.Webview / Sky.Webview ─────────────────────────────────────
+
+/// Lines appended to `sky_runtime/mod.rs` when the program uses Std.Webview /
+/// Sky.Webview app-entry kernels.
+///
+/// `webview.rs` is gated by the `webview` Cargo feature in the runtime source
+/// (wry + tao deps). This addition wires `webview::webview_app` and
+/// `webview::WebviewWindowCfg` into the module namespace so the generated
+/// `main.rs` can call them.
+///
+/// The `live` module must also be loaded (webview's real backend imports
+/// `sky_runtime::live::dispatch::build_index` and `sky_runtime::html::*`)
+/// — but `uses_live` is forced true when `uses_webview` is true
+/// (see `emit_program`), so `RUNTIME_MOD_RS_LIVE_APPEND` is already appended
+/// by the time this addition fires.
+const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub mod webview;\n\
+     #[cfg(feature = \"webview\")]\npub use webview::{webview_app, WebviewWindowCfg};\n";
+
 // ── Phase-1b: Std.Live / Sky.Live ───────────────────────────────────────────
 
 /// Lines appended to `sky_runtime/mod.rs` when the program uses Std.Live /
@@ -171,6 +189,7 @@ fn runtime_bindings() -> DResult<&'static str> {
 }
 
 /// Emit the complete project for `program`.
+#[allow(clippy::too_many_lines)]
 pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject> {
     let mut out = String::new();
     out.push_str(&preamble()?);
@@ -221,6 +240,36 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 
     out.push_str(&epilogue()?);
 
+    // ── G3: Webview main-thread entry switch ──────────────────────────────────
+    // Sky.Webview's `tao` event loop requires the process's TRUE main thread on
+    // every OS (macOS: Cocoa NSApplication hard-requires it; Windows: expected;
+    // Linux/GTK: safe on main thread). The standard entry uses `block_on` (which
+    // spawns a detached OS thread); Webview MUST use `block_on_current_thread`
+    // (a current-thread tokio runtime polled inline on the calling — main —
+    // thread).
+    //
+    // Implementation: anchor-asserted `replacen` that emits `CompilerBug` and
+    // aborts if the anchor is absent (fail-loud, never a silent no-op). A silent
+    // no-op here would ship a well-typed Webview app that silently runs the event
+    // loop off the main thread, crashing at first paint on macOS.
+    if ctx.uses_webview {
+        const BLOCK_ON_ANCHOR: &str = "block_on(sky_main())";
+        const BLOCK_ON_THREAD_REPLACEMENT: &str = "block_on_current_thread(sky_main())";
+        let replaced = out.replacen(BLOCK_ON_ANCHOR, BLOCK_ON_THREAD_REPLACEMENT, 1);
+        if replaced == out {
+            return Err(Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::project::emit_program::G3_block_on",
+                detail: format!(
+                    "G3 webview entry-switch: anchor {BLOCK_ON_ANCHOR:?} not found in \
+                     emitted output — epilogue golden has drifted; Sky.Webview REQUIRES \
+                     block_on_current_thread (tao/Cocoa NSApplication mandates the \
+                     process main thread on macOS; omitting the switch is a runtime crash)"
+                ),
+            });
+        }
+        out = replaced;
+    }
+
     // ── Manifest + runtime module files ──────────────────────────────────────
     // The driver (skyc) first copies the full runtime source tree into
     // `<out>/src/sky_runtime/`, then writes the emitted files over the top.
@@ -242,10 +291,10 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     };
     // Apply server manifest extension on top of whichever base was chosen above.
     // Phase-1b: Live also needs axum + tower-http (the live runtime uses axum
-    // internally).  Apply server_cargo_toml for both `uses_server` and
-    // `uses_live` (the function is idempotent when both flags are set because
-    // `server = []` is only inserted once via `replacen`).
-    let cargo_toml = if ctx.uses_server || ctx.uses_live {
+    // internally).  Apply server_cargo_toml for both `uses_server`, `uses_live`,
+    // and `uses_webview` (Webview's real backend imports from the live module,
+    // which uses axum; the function is idempotent when multiple flags are set).
+    let cargo_toml = if ctx.uses_server || ctx.uses_live || ctx.uses_webview {
         server_cargo_toml(&cargo_toml)?
     } else {
         cargo_toml
@@ -254,7 +303,10 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     // The base manifest already declares `live = []` as a non-default feature;
     // we just need to promote it to the `default` list so the compiled binary
     // includes the `live` module.
-    let cargo_toml = if ctx.uses_live {
+    // Phase-1d: Webview's real backend imports `sky_runtime::live::dispatch`
+    // (for `build_index`) and `sky_runtime::html::render_html` — both gated
+    // behind the `live` feature. Force-promote `live` for Webview as well.
+    let cargo_toml = if ctx.uses_live || ctx.uses_webview {
         live_cargo_toml(&cargo_toml)?
     } else {
         cargo_toml
@@ -265,6 +317,15 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     // it and add the deps so the compiled binary includes the `tui` module.
     let cargo_toml = if ctx.uses_tui {
         tui_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
+    // Phase-1d: when the program uses Webview, add "webview" to the default
+    // features and inject the wry + tao deps required by the real native-window
+    // backend. The base manifest declares `webview = []` as a non-default feature;
+    // this function promotes it, wires it to wry + tao, and adds those deps.
+    let cargo_toml = if ctx.uses_webview {
+        webview_cargo_toml(&cargo_toml)?
     } else {
         cargo_toml
     };
@@ -286,12 +347,16 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
             mod_rs.push_str(RUNTIME_MOD_RS_UI_APPEND);
         }
         // Phase-1b: Std.Live / Sky.Live app-entry kernels.
-        if ctx.uses_live {
+        if ctx.uses_live || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_LIVE_APPEND);
         }
         // Phase-1c: Std.Tui / Sky.Tui app-entry kernels.
         if ctx.uses_tui {
             mod_rs.push_str(RUNTIME_MOD_RS_TUI_APPEND);
+        }
+        // Phase-1d: Std.Webview / Sky.Webview app-entry kernel.
+        if ctx.uses_webview {
+            mod_rs.push_str(RUNTIME_MOD_RS_WEBVIEW_APPEND);
         }
         mod_rs
     };
@@ -619,6 +684,87 @@ fn tui_cargo_toml(base: &str) -> DResult<String> {
     let mut result = String::with_capacity(step2.len() + TUI_DEPS.len());
     result.push_str(step2.get(..anchor_pos).unwrap_or(""));
     result.push_str(TUI_DEPS);
+    result.push_str(step2.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the webview-enabled `Cargo.toml` from the given base manifest by:
+///
+/// 1. Adding `"webview"` to the `default` feature list.
+/// 2. Wiring the `webview = []` feature declaration to actually pull `wry` and
+///    `tao` (changes it to `webview = ["dep:wry", "dep:tao"]`).
+/// 3. Appending `wry` and `tao` as optional dependencies before `[profile.dev]`.
+///
+/// Called AFTER `server_cargo_toml` and `live_cargo_toml` so the live feature
+/// (which the webview backend imports from) is already promoted.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if any anchor string is absent — a
+/// golden-drift invariant violation (fail-loud, never a silent no-op that
+/// ships a broken manifest or links the wrong backend).
+fn webview_cargo_toml(base: &str) -> DResult<String> {
+    // All anchor consts must precede the first `let` statement.
+    const DEFAULT_PREFIX: &str = "default = [";
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    // Change the empty `webview = []` feature to pull wry + tao when active.
+    // The `dep:` prefix is Cargo's "explicit dep" syntax (Cargo ≥1.60), so
+    // `webview = ["dep:wry", "dep:tao"]` activates the optional deps ONLY when
+    // the `webview` feature is in the default list — the stub path gets no
+    // heavy system deps.
+    const WEBVIEW_EMPTY: &str = "webview = []";
+    const WEBVIEW_WITH_DEPS: &str = r#"webview = ["dep:wry", "dep:tao"]"#;
+    // wry + tao are declared optional so the stub path (no `webview` feature)
+    // never downloads or links them.
+    const WEBVIEW_NATIVE_DEPS: &str = "wry = { version = \"0.55\", optional = true }\ntao = { version = \"0.35\", optional = true }\n\n";
+
+    // Step 1 — promote `webview` to the default feature list (generic
+    // closing-`]` anchor, same strategy as server/live/tui_cargo_toml).
+    let pfx = base
+        .find(DEFAULT_PREFIX)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::webview_cargo_toml",
+            detail: format!("Cargo.toml anchor {DEFAULT_PREFIX:?} not found — golden drifted"),
+        })?;
+    let search_from = pfx + DEFAULT_PREFIX.len();
+    let rel = base
+        .get(search_from..)
+        .and_then(|s| s.find(']'))
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::webview_cargo_toml",
+            detail: "default feature list has no closing ']' — golden drifted".to_owned(),
+        })?;
+    let close = search_from + rel;
+    let mut step1 = String::with_capacity(base.len() + 64);
+    step1.push_str(base.get(..close).unwrap_or(""));
+    step1.push_str(r#", "webview""#);
+    step1.push_str(base.get(close..).unwrap_or(""));
+
+    // Step 2 — wire the `webview` feature to its deps (`dep:wry` + `dep:tao`).
+    // Fail-loud if the empty anchor drifted — a silent no-op here would promote
+    // `webview` to defaults without pulling wry/tao, shipping a build where the
+    // real backend compiles as stub (exit-0-then-runtime-Err).
+    let step2 = step1.replacen(WEBVIEW_EMPTY, WEBVIEW_WITH_DEPS, 1);
+    if step2 == step1 {
+        return Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::webview_cargo_toml",
+            detail: format!(
+                "Cargo.toml anchor {WEBVIEW_EMPTY:?} not found — golden drifted; \
+                 the webview feature declaration must be present to wire wry + tao"
+            ),
+        });
+    }
+
+    // Step 3 — append wry + tao as optional deps before `[profile.dev]`.
+    let anchor_pos = step2
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::webview_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(step2.len() + WEBVIEW_NATIVE_DEPS.len());
+    result.push_str(step2.get(..anchor_pos).unwrap_or(""));
+    result.push_str(WEBVIEW_NATIVE_DEPS);
     result.push_str(step2.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }
