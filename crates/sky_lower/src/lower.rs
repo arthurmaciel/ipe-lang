@@ -21,7 +21,7 @@ use sky_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{
     Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
-    Module, Pat, Program, TypeDef, UiCtor, Variant,
+    Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant,
 };
 use sky_types::{SolvedTypes, Ty, TyBounds};
 
@@ -1742,7 +1742,7 @@ impl<'a> Lowerer<'a> {
             // any user type/ctor that shadows a builtin name, so this precedence
             // is sound (it can never silently override a user `type Int = …`),
             // not a deliberate override.
-            Ty::Con { name, args, .. } => match self.resolve(*name)? {
+            Ty::Con { name, args, module } => match self.resolve(*name)? {
                 "Int" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
@@ -1881,6 +1881,104 @@ impl<'a> Lowerer<'a> {
                 "Response" => Ok(IrType::ServerResponse),
                 "Route" => Ok(IrType::ServerRoute),
                 "Cookie" => Ok(IrType::ServerCookie),
+                // ── M7: Std.Ui / Std.Html parametric type constructors ────────
+                // Mirror of `ir_type_from_canon` (which handles user-written
+                // type ANNOTATIONS).  This path handles SOLVED types from the
+                // HM region map — `list_elem_ir` calls here when lowering a
+                // `List (Attribute msg)` region, among others.
+                //
+                // Key differences from `ir_type_from_canon`:
+                // 1. The msg arg is recursed through `ir_type_from_ty_ui_msg`
+                //    (free `Ty::Var` → `IrType::Unit`, not `Json`, not error).
+                // 2. `Attribute` is disambiguated by `Ty::Con.module` (T2 trap:
+                //    BOTH `Std.Ui.Attribute` and `Std.Html.Attribute` exist —
+                //    check the module path, never just the name).
+                // 3. Plain Ui types (`Length`, `Color`, …) are nullary — no msg.
+                // 4. `LiveReq` maps to `IrType::LiveReq` (opaque init arg).
+                "Html" if args.len() == 1 => {
+                    let msg = self.ir_type_from_ty_ui_msg(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_ty",
+                                "Html applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::Html,
+                        msg: Box::new(msg),
+                    })
+                }
+                "Element" if args.len() == 1 => {
+                    let msg = self.ir_type_from_ty_ui_msg(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_ty",
+                                "Element applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::Element,
+                        msg: Box::new(msg),
+                    })
+                }
+                // T2 trap: `Attribute` exists in BOTH `Std.Ui` and `Std.Html`.
+                // Disambiguate by `Ty::Con.module` — a module path containing
+                // "Html" identifies the `Std.Html.Attribute` form.
+                "Attribute" if args.len() == 1 => {
+                    let msg = self.ir_type_from_ty_ui_msg(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_ty",
+                                "Attribute applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    // A module path containing "Html" (e.g. ["Std","Html"] or
+                    // ["Html"]) selects `HtmlAttribute`; everything else
+                    // (["Std","Ui"], ["Ui"], or empty for builtin-injected)
+                    // selects `UiAttribute`.  `any` short-circuits on first hit.
+                    let is_html = module.iter().any(|s| self.resolve(*s).ok() == Some("Html"));
+                    let ctor = if is_html {
+                        UiCtor::HtmlAttribute
+                    } else {
+                        UiCtor::UiAttribute
+                    };
+                    Ok(IrType::Ui {
+                        ctor,
+                        msg: Box::new(msg),
+                    })
+                }
+                "Event" if args.len() == 1 => {
+                    let msg = self.ir_type_from_ty_ui_msg(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_ty",
+                                "Event applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::HtmlEvent,
+                        msg: Box::new(msg),
+                    })
+                }
+                // ── M7: Nullary Std.Ui plain types (no message parameter) ─────
+                "Length" => Ok(IrType::UiPlain(UiPlain::Length)),
+                "Color" => Ok(IrType::UiPlain(UiPlain::Color)),
+                "HAlign" => Ok(IrType::UiPlain(UiPlain::HAlign)),
+                "VAlign" => Ok(IrType::UiPlain(UiPlain::VAlign)),
+                "Location" => Ok(IrType::UiPlain(UiPlain::Location)),
+                "PseudoClass" => Ok(IrType::UiPlain(UiPlain::PseudoClass)),
+                "Description" => Ok(IrType::UiPlain(UiPlain::Description)),
+                "LayoutContext" => Ok(IrType::UiPlain(UiPlain::LayoutContext)),
+                // ── M7: Sky.Live opaque types ─────────────────────────────────
+                "LiveReq" => Ok(IrType::LiveReq),
                 _ if self.enum_variants.contains_key(name) => {
                     // A use-site enum type carries its solved type arguments, so
                     // `Opt Int` → `Enum { Opt, [Int] }` (rendered `MainOpt<i64>`).
@@ -1944,6 +2042,33 @@ impl<'a> Lowerer<'a> {
             // never a `CompilerBug` for well-typed input.
             // [SKY-L0102, feature: polymorphism]
             Ty::Var(_) => Err(unsupported(span, Feature::Polymorphism)),
+        }
+    }
+
+    /// Like [`ir_type_from_ty`] but treats an unresolved `Ty::Var` as
+    /// [`IrType::Unit`] instead of failing with `Feature::Polymorphism`.
+    ///
+    /// Used for the `msg` type parameter inside `Html msg` / `Element msg` /
+    /// `Attribute msg` / `Event msg` when the solver left `msg` as a bare type
+    /// variable (e.g. an empty attrs list `[]` whose element variable was never
+    /// further constrained to a concrete message type).  Mapping the free var to
+    /// `IrType::Unit` is sound because message-free subtrees carry no event
+    /// handlers and Rust represents them as `Html<()>` / `Element<()>` etc.,
+    /// which is byte-compatible with any monomorphisation at the call site via
+    /// type inference.
+    ///
+    /// DISTINCT from [`ir_type_from_ty_json`] (`Ty::Var` → Json): the Json path
+    /// is for `Value = any` kernel positions; this path is strictly for the
+    /// `msg` slot of Ui parametric types.  Using Json here would emit
+    /// `Html<JsonVal>` which conflicts with the typed callee's `Html<MainMsg>`.
+    fn ir_type_from_ty_ui_msg(&self, t: &Ty, span: Span) -> DResult<IrType> {
+        match t {
+            // A free type variable in msg position is a message-free subtree.
+            // Unit is the Rust conventional placeholder (`Html<()>`).
+            Ty::Var(_) => Ok(IrType::Unit),
+            // All other forms delegate to the strict helper — a concrete `Msg`
+            // type becomes `IrType::Enum(Msg)`, `()` becomes `IrType::Unit`, etc.
+            _ => self.ir_type_from_ty(t, span),
         }
     }
 
@@ -3177,6 +3302,27 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlInput
                 // `Html.img : List (Attribute msg) -> Html msg` (void element)
                 | KernelFn::HtmlImg
+                // ── M7: Phase-1a event-attribute builders — arity 1 ──────────
+                // `Ui.onClick : msg -> Attribute msg`
+                | KernelFn::UiOnClick
+                // `Ui.onFocus : msg -> Attribute msg`
+                | KernelFn::UiOnFocus
+                // `Ui.onBlur : msg -> Attribute msg`
+                | KernelFn::UiOnBlur
+                // `Ui.onMouseOver : msg -> Attribute msg`
+                | KernelFn::UiOnMouseOver
+                // `Ui.onMouseOut : msg -> Attribute msg`
+                | KernelFn::UiOnMouseOut
+                // `Ui.onInput : (String -> msg) -> Attribute msg`
+                | KernelFn::UiOnInput
+                // `Ui.onChange : (String -> msg) -> Attribute msg`
+                | KernelFn::UiOnChange
+                // `Ui.onKeyDown : (String -> msg) -> Attribute msg`
+                | KernelFn::UiOnKeyDown
+                // `Ui.onKeyUp : (String -> msg) -> Attribute msg`
+                | KernelFn::UiOnKeyUp
+                // `Event.onBool : (Bool -> msg) -> Attribute msg`
+                | KernelFn::UiOnBool
                 // ── M7: app-entry stubs — arity 1 ────────────────────────────
                 // `Live.app : LiveAppCfg model msg -> Task Error ()`
                 | KernelFn::LiveApp
@@ -3775,6 +3921,24 @@ impl<'a> Lowerer<'a> {
                         "img" | "br" | "hr" | "meta" | "area" | "base" | "col" | "embed" | "source"
                         | "track" | "wbr",
                     ) => Ok(Callee::Kernel(KernelFn::HtmlImg)),
+                    // ── M7: Phase-1a event-attribute builders (Ui + Event qualifiers) ──
+                    // Both "Ui" (qualified as `Ui.onClick`) and "Event" (qualified as
+                    // `Event.onClick` / `Std.Html.Events.onClick`) resolve here.
+                    ("Ui" | "Event", "onClick" | "onMsg") => {
+                        Ok(Callee::Kernel(KernelFn::UiOnClick))
+                    }
+                    ("Ui" | "Event", "onFocus") => Ok(Callee::Kernel(KernelFn::UiOnFocus)),
+                    ("Ui" | "Event", "onBlur") => Ok(Callee::Kernel(KernelFn::UiOnBlur)),
+                    ("Ui" | "Event", "onMouseOver") => Ok(Callee::Kernel(KernelFn::UiOnMouseOver)),
+                    ("Ui" | "Event", "onMouseOut") => Ok(Callee::Kernel(KernelFn::UiOnMouseOut)),
+                    ("Ui" | "Event", "onInput") => Ok(Callee::Kernel(KernelFn::UiOnInput)),
+                    ("Ui" | "Event", "onChange") => Ok(Callee::Kernel(KernelFn::UiOnChange)),
+                    ("Ui" | "Event", "onKeyDown") => Ok(Callee::Kernel(KernelFn::UiOnKeyDown)),
+                    ("Ui" | "Event", "onKeyUp") => Ok(Callee::Kernel(KernelFn::UiOnKeyUp)),
+                    ("Ui" | "Event", "onBool") => {
+                        // onBool : (Bool -> msg) -> Attribute msg — Bool-carrying closure
+                        Ok(Callee::Kernel(KernelFn::UiOnBool))
+                    }
                     // ── M7: Std.Live / Sky.Live app-entry kernels ─────────────
                     ("Live", "app") => Ok(Callee::Kernel(KernelFn::LiveApp)),
                     ("Live", "appRouted") => Ok(Callee::Kernel(KernelFn::LiveAppRouted)),

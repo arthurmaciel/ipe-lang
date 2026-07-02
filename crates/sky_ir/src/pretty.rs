@@ -637,6 +637,17 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlP => "Html.p",
         KernelFn::HtmlInput => "Html.input",
         KernelFn::HtmlImg => "Html.img",
+        // Phase-1a event-attribute builders
+        KernelFn::UiOnClick => "Ui.onClick",
+        KernelFn::UiOnFocus => "Ui.onFocus",
+        KernelFn::UiOnBlur => "Ui.onBlur",
+        KernelFn::UiOnMouseOver => "Ui.onMouseOver",
+        KernelFn::UiOnMouseOut => "Ui.onMouseOut",
+        KernelFn::UiOnInput => "Ui.onInput",
+        KernelFn::UiOnChange => "Ui.onChange",
+        KernelFn::UiOnKeyDown => "Ui.onKeyDown",
+        KernelFn::UiOnKeyUp => "Ui.onKeyUp",
+        KernelFn::UiOnBool => "Event.onBool",
     }
 }
 

@@ -686,6 +686,17 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HtmlP => "html_p_",
         KernelFn::HtmlInput => "html_input_",
         KernelFn::HtmlImg => "html_img_",
+        // Phase-1a event-attribute builders
+        KernelFn::UiOnClick => "ui_on_click_",
+        KernelFn::UiOnFocus => "ui_on_focus_",
+        KernelFn::UiOnBlur => "ui_on_blur_",
+        KernelFn::UiOnMouseOver => "ui_on_mouse_over_",
+        KernelFn::UiOnMouseOut => "ui_on_mouse_out_",
+        KernelFn::UiOnInput => "ui_on_input_",
+        KernelFn::UiOnChange => "ui_on_change_",
+        KernelFn::UiOnKeyDown => "ui_on_key_down_",
+        KernelFn::UiOnKeyUp => "ui_on_key_up_",
+        KernelFn::UiOnBool => "ui_on_bool_",
     }
 }
 

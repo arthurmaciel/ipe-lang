@@ -1,0 +1,27 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+
+
+-- Phase-1a regression sentinel (issue #43): `staticHtml` has return type
+-- `String` (NOT `Html Msg`), yet it renders an event-bearing subtree.
+-- Pre-fix this produced a cargo E0308 (M = `()` from turbofish but event
+-- carries `M = Msg`).  Post-fix M is inferred bottom-up from the `onClick`
+-- payload, no turbofish needed.
+-- oracle_divergence = true: Rust backend emits compact inline CSS.
+
+
+type Msg
+    = Bump
+
+
+-- Non-view function returning String — the key test: ret-type-heuristic
+-- cannot supply M here, so M must come from the event itself.
+staticHtml : String
+staticHtml =
+    Html.htmlRender (Ui.layout [] (Ui.el [ Ui.onClick Bump ] (Ui.text "x")))
+
+
+main =
+    println staticHtml

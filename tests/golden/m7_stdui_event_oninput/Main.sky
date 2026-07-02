@@ -1,0 +1,29 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+import Std.Html.Events as Event
+
+
+-- Phase-1a round-2 POSITIVE sentinel: correct `Event.onInput` usage.
+-- `Event.onInput` receives a `String -> msg` closure — well-typed.
+-- skyc must compile this, cargo must build it, and the binary must run.
+--
+-- oracle_divergence = true: Go oracle does not expose Html.htmlRender.
+
+
+type Msg
+    = SetText String
+
+
+staticHtml : String
+staticHtml =
+    Html.htmlRender
+        (Ui.layout []
+            (Ui.el
+                [ Event.onInput (\s -> SetText s) ]
+                (Ui.text "input here")))
+
+
+main =
+    println staticHtml
