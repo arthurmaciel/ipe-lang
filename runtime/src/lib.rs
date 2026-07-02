@@ -192,3 +192,59 @@ mod tests {
         assert_eq!(r.with_default(vec![]), vec![2, 4, 6]);
     }
 }
+
+// ============================================================================
+// Tui headless render tests (gated on the `tui` Cargo feature)
+// ============================================================================
+//
+// `tui_app_ui` / `tui_app` open the alternate screen (`TuiGuard::enter_mouse`)
+// and therefore require a real TTY — they cannot be invoked from a test.
+// These tests exercise the *render half* independently: they build an
+// `Element` tree using the same `sky_runtime::ui::helpers` builders that skyc
+// emits, call `tui::layout::element_to_cells` (headless — no TTY), and assert
+// the resulting ANSI-cell frame string contains the expected content.
+//
+// This mirrors the Sky counter's `view { count = 0 }` call at initial state:
+//
+//   view model =
+//     Ui.column [] [ Ui.el [] (Ui.text (String.fromInt model.count)) ]
+//
+// with `model.count = 0`, so `String.fromInt 0 = "0"`.
+#[cfg(all(test, feature = "tui"))]
+mod tui_headless {
+    use crate::sky_runtime::tui::layout::element_to_cells;
+    use crate::sky_runtime::ui::Attribute;
+    use crate::sky_runtime::ui::helpers::{ui_column_, ui_el_, ui_text_};
+
+    /// Render a `Ui.column [] [ Ui.el [] (Ui.text "0") ]` tree to a headless
+    /// 80×24 ANSI cell frame and verify it contains the digit `"0"`.
+    ///
+    /// This is the render half of the Phase-1c golden.  The build half (skyc +
+    /// cargo build the full Tui counter program) lives in
+    /// `crates/skyc/tests/tui_e2e.rs::tui_counter_build_only`.
+    #[test]
+    fn tui_headless_render_contains_count() {
+        // Construct the element tree equivalent to:
+        //   view { count = 0 } =
+        //     Ui.column [] [ Ui.el [] (Ui.text "0") ]
+        //
+        // `()` is the message type — irrelevant for a pure render, no events fired.
+        let elem = ui_column_::<()>(
+            Vec::<Attribute<()>>::new(),
+            vec![ui_el_::<()>(
+                Vec::<Attribute<()>>::new(),
+                ui_text_::<()>("0".to_string()),
+            )],
+        );
+
+        // Render headless (no TTY required).  80 columns × 24 rows = standard
+        // terminal size.
+        let frame = element_to_cells(&elem, 80, 24);
+
+        // The frame MUST contain "0" — the counter value at initial state.
+        assert!(
+            frame.contains('0'),
+            "expected rendered frame to contain '0', got:\n{frame}"
+        );
+    }
+}
