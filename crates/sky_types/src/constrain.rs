@@ -189,6 +189,11 @@ struct Builtins {
     /// Reserved for a future split scheme between `app` and `appRouted`.
     #[allow(dead_code)]
     live_f_not_found: Symbol,
+    // ── Tui cfg record field name symbols (Phase-1c) ─────────────────────────────
+    /// `"onKey"` — the onKey field of the `Tui.app` / `Tui.program` config record.
+    /// Flat `String -> String -> Msg` — byte-matches the runtime bound
+    /// `FOnKey: Fn(String, String) -> Msg`.
+    tui_f_on_key: Symbol,
 }
 
 impl Builtins {
@@ -263,6 +268,8 @@ impl Builtins {
             live_f_subscriptions: interner.intern("subscriptions")?,
             live_f_routes: interner.intern("routes")?,
             live_f_not_found: interner.intern("notFound")?,
+            // Phase-1c: Tui cfg field names.
+            tui_f_on_key: interner.intern("onKey")?,
         })
     }
 
@@ -3862,6 +3869,112 @@ impl<'a> Builder<'a> {
                 };
                 let view_ty = fun(var(0), html(var(1)));
                 fun(view_ty, fun(var(0), task_unit))
+            }
+
+            // ── Std.Tui / Sky.Tui app-entry kernels (Phase-1c) ──────────────────
+            //
+            // Both `Tui.app` and `Tui.program` share the same 5-field closed cfg
+            // shape.  The qualifier set here MUST equal the lower resolved set
+            // (lower.rs:4026-4027: `("Tui","app")→TuiApp`, `("Tui","program")→TuiProgram`)
+            // — any mismatch reopens the exit-0-then-cargo-fail class (task #45).
+            //
+            // var(0) = Model
+            // var(1) = Msg
+            //
+            // init         : () -> (Model, Cmd Msg)
+            //   Note: Tui init takes `()` (unit), NOT `LiveReq`.
+            //   The runtime bound is `FInit: Fn(()) -> (Model, SkyCmd<Msg>)`.
+            // update       : Msg -> Model -> (Model, Cmd Msg)
+            // view         : Model -> Element Msg   (TuiApp)
+            //             OR Model -> String         (TuiProgram)
+            // subscriptions: Model -> Sub Msg
+            // onKey        : String -> String -> Msg   (flat — bytes-matches the
+            //   runtime bound `FOnKey: Fn(String, String) -> Msg`)
+            //
+            // HARD SOUNDNESS CONSTRAINT: `onKey` MUST be in the closed cfg.
+            // The runtime calls `on_key(kind, value)` on every key event and returns
+            // a `Msg` (not `Option`) — there is no total way to fabricate a `Msg`
+            // without the handler.  Omitting `onKey` from the scheme would leave the
+            // runtime's `FOnKey` generic unconstrained, causing a Rust E0282.
+            (Some("Tui"), Some("app")) => {
+                let cmd = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.cmd,
+                    args: vec![msg],
+                };
+                let sub = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.sub,
+                    args: vec![msg],
+                };
+                let elem = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.element,
+                    args: vec![msg],
+                };
+                // `()` in Sky is the dedicated `Ty::Unit` variant, NOT an empty
+                // tuple.  An empty `Ty::Tuple` prints as `()` but does not unify
+                // with the `Ty::Unit` that a `() -> …` annotation produces (would
+                // surface as SKY-T0001 "expected (), found ()" at the call site).
+                let unit_ty = Ty::Unit;
+                // (Model, Cmd Msg)
+                let tup = tuple2(var(0), cmd(var(1)));
+                // init : () -> (Model, Cmd Msg)
+                let init_ty = fun(unit_ty, tup.clone());
+                // update : Msg -> Model -> (Model, Cmd Msg)
+                let update_ty = fun(var(1), fun(var(0), tup));
+                // view : Model -> Element Msg
+                let view_ty = fun(var(0), elem(var(1)));
+                // subscriptions : Model -> Sub Msg
+                let subs_ty = fun(var(0), sub(var(1)));
+                // onKey : String -> String -> Msg
+                let on_key_ty = fun(string.clone(), fun(string, var(1)));
+                let cfg_rec = Ty::Record({
+                    let mut m = std::collections::BTreeMap::new();
+                    m.insert(self.builtins.live_f_init, init_ty);
+                    m.insert(self.builtins.live_f_update, update_ty);
+                    m.insert(self.builtins.live_f_view, view_ty);
+                    m.insert(self.builtins.live_f_subscriptions, subs_ty);
+                    m.insert(self.builtins.tui_f_on_key, on_key_ty);
+                    m
+                });
+                fun(cfg_rec, task_unit)
+            }
+
+            // `Tui.program` — same as `Tui.app` but view returns `String`.
+            // `view : Model -> String` renders the raw ANSI frame directly;
+            // the runtime paints it verbatim (tui_app in app.rs:316).
+            (Some("Tui"), Some("program")) => {
+                let cmd = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.cmd,
+                    args: vec![msg],
+                };
+                let sub = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.sub,
+                    args: vec![msg],
+                };
+                // `()` in Sky is `Ty::Unit`, not an empty tuple (see the
+                // `Tui.app` arm above for the full rationale).
+                let unit_ty = Ty::Unit;
+                let tup = tuple2(var(0), cmd(var(1)));
+                let init_ty = fun(unit_ty, tup.clone());
+                let update_ty = fun(var(1), fun(var(0), tup));
+                // view : Model -> String
+                let view_ty = fun(var(0), string.clone());
+                let subs_ty = fun(var(0), sub(var(1)));
+                let on_key_ty = fun(string.clone(), fun(string, var(1)));
+                let cfg_rec = Ty::Record({
+                    let mut m = std::collections::BTreeMap::new();
+                    m.insert(self.builtins.live_f_init, init_ty);
+                    m.insert(self.builtins.live_f_update, update_ty);
+                    m.insert(self.builtins.live_f_view, view_ty);
+                    m.insert(self.builtins.live_f_subscriptions, subs_ty);
+                    m.insert(self.builtins.tui_f_on_key, on_key_ty);
+                    m
+                });
+                fun(cfg_rec, task_unit)
             }
 
             // Unknown kernel: a single flexible variable. The raw id is chosen
