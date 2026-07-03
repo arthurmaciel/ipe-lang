@@ -296,7 +296,14 @@ pub fn server_query_param(name: String, req: ServerRequest) -> SkyMaybe<String> 
     }
 }
 pub fn server_header(name: String, req: ServerRequest) -> SkyMaybe<String> {
-    match req.headers.get(&name) {
+    // Go's `r.Header.Get` canonicalises the lookup key, so `Server.header
+    // "content-type"` and `"Content-Type"` both resolve. `build_request` stores
+    // request headers under the same canonical key, so this lookup is
+    // case-insensitive with respect to the caller's casing.
+    match req
+        .headers
+        .get(&crate::sky_runtime::http_header::canonical_header(&name))
+    {
         Some(v) => SkyMaybe::Just(v.clone()),
         None => SkyMaybe::Nothing,
     }
@@ -450,7 +457,14 @@ async fn build_request(
             if k.as_str().eq_ignore_ascii_case("cookie") {
                 parse_cookies(s, &mut cookies);
             }
-            headers.insert(k.as_str().to_string(), s.to_string());
+            // Store under Go's canonical MIME casing (`content-type` ->
+            // `Content-Type`), aligning with Go's request-header storage and the
+            // Sky.Live path, so `server_header` (which canonicalises its lookup
+            // key) matches any caller casing.
+            headers.insert(
+                crate::sky_runtime::http_header::canonical_header(k.as_str()),
+                s.to_string(),
+            );
         }
     }
     let (mut parts, body) = req.into_parts();
@@ -1345,6 +1359,58 @@ pub fn rate_limit_allow(name: String, key: String, capacity: i64, refill_per_sec
 mod tests {
     use super::*;
     use std::future::ready;
+
+    #[test]
+    fn server_header_is_case_insensitive_go_parity() {
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        let req = ServerRequest {
+            method: "GET".to_string(),
+            path: "/".to_string(),
+            body: String::new(),
+            headers,
+            params: HashMap::new(),
+            query: HashMap::new(),
+            cookies: HashMap::new(),
+            remoteAddr: String::new(),
+        };
+        for probe in ["content-type", "Content-Type", "CONTENT-TYPE"] {
+            assert!(
+                matches!(
+                    server_header(probe.to_string(), req.clone()),
+                    SkyMaybe::Just(ref v) if v == "application/json"
+                ),
+                "lookup {probe:?} should resolve to the stored value",
+            );
+        }
+        assert!(matches!(
+            server_header("x-missing".to_string(), req.clone()),
+            SkyMaybe::Nothing
+        ));
+    }
+
+    #[tokio::test]
+    async fn build_request_stores_canonical_header_keys() {
+        let wire = axum::http::Request::builder()
+            .method("GET")
+            .uri("/")
+            .header("x-trace-id", "abc123")
+            .header("content-type", "text/plain")
+            .body(axum::body::Body::empty())
+            .expect("test request builds");
+        let (req, _upgrader) = build_request(wire).await.expect("build_request succeeds");
+        assert_eq!(req.headers.get("X-Trace-Id").map(String::as_str), Some("abc123"));
+        assert_eq!(
+            req.headers.get("Content-Type").map(String::as_str),
+            Some("text/plain")
+        );
+        // The verbatim lower-cased key must NOT be present (canonical only).
+        assert!(!req.headers.contains_key("x-trace-id"));
+        assert!(matches!(
+            server_header("X-TRACE-ID".to_string(), req),
+            SkyMaybe::Just(ref v) if v == "abc123"
+        ));
+    }
 
     #[test]
     fn build_routes_and_response() {
