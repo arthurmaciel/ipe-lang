@@ -510,6 +510,11 @@ pub enum StdlibKernel {
     HtmlTextNode,
     HtmlRawNode,
     HtmlNode,
+    /// `Html.styleNode : List Attr -> String -> Html msg` — arity-2, NOT the
+    /// arity-3 `HtmlNode` it was previously mis-folded into. Its dedicated
+    /// runtime kernel `html_style_node_` close-tag-neutralises the CSS body at
+    /// construction (F7).
+    HtmlStyleNode,
     HtmlDiv,
     HtmlSpan,
     HtmlA,
@@ -1087,6 +1092,7 @@ impl StdlibKernel {
             Self::HtmlTextNode => d("Html", "text", 1, Ui, "html_text_node_"),
             Self::HtmlRawNode => d("Html", "raw", 1, Ui, "html_raw_node_"),
             Self::HtmlNode => d("Html", "node", 3, Ui, "html_node_"),
+            Self::HtmlStyleNode => d("Html", "styleNode", 2, Ui, "html_style_node_"),
             Self::HtmlDiv => d("Html", "div", 3, Ui, "html_div_"),
             Self::HtmlSpan => d("Html", "span", 3, Ui, "html_span_"),
             Self::HtmlA => d("Html", "a", 3, Ui, "html_a_"),

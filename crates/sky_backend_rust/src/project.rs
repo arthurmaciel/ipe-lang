@@ -86,7 +86,17 @@ const RUNTIME_MOD_RS_SERVER_APPEND: &str =
 /// Note: intentionally NOT `pub use ui::*;` because `ui::Attribute` collides
 /// with `html::Attribute` (T2 soundness trap) — callers use the fully-qualified
 /// `sky_runtime::ui::element::Attribute` path instead.
-const RUNTIME_MOD_RS_UI_APPEND: &str = "pub mod html;\npub use html::*;\npub mod ui;\n";
+/// `css_safety` is declared FIRST because `html.rs` (`use super::css_safety;`),
+/// `ui/render.rs` (`SafeCssPropertyName`/`SafeCssValue`), and `live/style_inject.rs`
+/// (`strip_style_close`) all import it from the `sky_runtime` top level — it must
+/// exist in the trimmed emitted `mod.rs` for any UI program or those imports fail
+/// (E0432). `css` (the `Std.Css` sink) is declared alongside so the `CssProp` /
+/// `CssRule` IR types (`emit_types` → `sky_runtime::css::…`) resolve; it depends
+/// only on `css_safety`, so it compiles cleanly even before the `#47` lower
+/// wiring makes it reachable from Sky. `uses_live`/`uses_tui` ⇒ `uses_ui`, so
+/// this append fires for every render-capable program.
+const RUNTIME_MOD_RS_UI_APPEND: &str =
+    "pub mod css_safety;\npub mod css;\npub mod html;\npub use html::*;\npub mod ui;\n";
 
 // ── Phase-1c: Std.Tui / Sky.Tui ─────────────────────────────────────────────
 

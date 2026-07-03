@@ -19,106 +19,14 @@
 //! `Ui.layoutWith` additionally applies `wrapperAttrs` to the outer wrapper and
 //! `rootAttrs` to an intermediate flex root, mirroring `Ui.layoutWith`'s Go shape.
 
+use super::super::css_safety::{SafeCssPropertyName, SafeCssValue};
 use super::super::html::{Attribute as HtmlAttribute, Html};
 use super::element::{Attribute, Color, Description, Element, HAlign, Length, Location, VAlign};
 
-// ── CSS boundary smart constructors (parse-don't-validate, T3/T4) ─────────────
-
-/// A validated CSS property name.  The SOLE construction path runs the full
-/// charset policy exactly once at the call-site boundary; no downstream
-/// re-check is needed (PARSE, DON'T VALIDATE).
-///
-/// Accepted charset: ASCII alphanumeric + `-` (covers standard properties and
-/// vendor-prefixed ones).  CSS custom properties (`--foo`) are also accepted
-/// since `--` is two `-` chars.  The empty string and any char outside
-/// `[A-Za-z0-9-]` (including `:`, `;`, `{`, whitespace) is rejected, which
-/// closes the key-injection vector where a malicious key like
-/// `background:url(javascript:alert(1));x` could smuggle a full rule through.
-struct SafeCssPropertyName<'a>(&'a str);
-
-impl<'a> SafeCssPropertyName<'a> {
-    /// Parse and validate a CSS property name.
-    ///
-    /// Returns `None` (silently drop) when `k` is empty or contains any byte
-    /// outside `[A-Za-z0-9-]` after trimming leading/trailing whitespace.
-    fn parse(k: &'a str) -> Option<Self> {
-        let k = k.trim();
-        let ok = !k.is_empty() && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
-        if ok {
-            Some(SafeCssPropertyName(k))
-        } else {
-            None
-        }
-    }
-
-    fn as_str(&self) -> &str {
-        self.0
-    }
-}
-
-/// A validated CSS property value.  The SOLE construction path runs the full
-/// security scan exactly once at the call-site boundary (PARSE, DON'T
-/// VALIDATE).  Covers the two live XSS holes in the previous prefix-only gate:
-///
-/// 1. **Prefix bypass** — `0; background:url(javascript:…)` has a safe prefix
-///    but contains an injection mid-value.  Whole-string scan closes this.
-/// 2. **Key bypass** — delegated to [`SafeCssPropertyName`]; value gate is
-///    not responsible for keys.
-///
-/// Checks (all case-folded on the whole string, with whitespace stripped for
-/// the `url(`-scheme sub-checks to catch `url( javascript:…`):
-/// - Declaration / ruleset breakout chars: `;` `{` `}` `</` `/*` `@import`.
-/// - Script sinks anywhere in the value: `expression(`, `javascript:`,
-///   `vbscript:`, `url(javascript:`, `url(vbscript:`, `url(data:text`,
-///   `url(data:application`.
-struct SafeCssValue<'a>(&'a str);
-
-impl<'a> SafeCssValue<'a> {
-    /// Parse and validate a CSS property value.
-    ///
-    /// Returns `None` (silently drop) when any dangerous pattern is found.
-    fn parse(v: &'a str) -> Option<Self> {
-        let low = v.to_ascii_lowercase();
-
-        // Declaration / ruleset / style-tag breakout + comment obfuscation.
-        // These chars cannot appear legitimately in a single CSS declaration
-        // value; their presence always indicates an injection attempt.
-        if low.contains(';')
-            || low.contains('{')
-            || low.contains('}')
-            || low.contains("</")
-            || low.contains("/*")
-            || low.contains("@import")
-        {
-            return None;
-        }
-
-        // Script sinks — check WHOLE value (not prefix only) with whitespace
-        // stripped so `url( javascript:…` / `java script:` cannot evade.
-        let low_nows: String = low.chars().filter(|c| !c.is_whitespace()).collect();
-        for bad in &[
-            "expression(",
-            "javascript:",
-            "vbscript:",
-            "url(javascript:",
-            "url('javascript:",
-            "url(\"javascript:",
-            "url(vbscript:",
-            "url(data:text",
-            "url(data:application",
-        ] {
-            if low_nows.contains(bad) {
-                return None;
-            }
-        }
-
-        Some(SafeCssValue(v))
-    }
-
-    fn as_str(&self) -> &str {
-        self.0
-    }
-}
+// ── CSS boundary smart constructors ───────────────────────────────────────────
+// `SafeCssPropertyName` / `SafeCssValue` moved to the shared `css_safety` module
+// (design §Q5: one policy, one place). Imported above so the Std.Ui inline-style
+// path and the Std.Css / styleNode sinks share the identical encoder.
 
 /// Check whether a bare URL string (not yet wrapped in `url(…)`) carries a
 /// dangerous scheme.  Used for `AttrBgImage` / `AttrBgGradient` before the

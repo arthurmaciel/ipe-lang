@@ -161,6 +161,8 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             UiPlain::PseudoClass => "sky_runtime::ui::element::PseudoClass".to_owned(),
             UiPlain::Description => "sky_runtime::ui::element::Description".to_owned(),
             UiPlain::LayoutContext => "sky_runtime::ui::element::LayoutContext".to_owned(),
+            UiPlain::CssProp => "sky_runtime::css::CssProp".to_owned(),
+            UiPlain::CssRule => "sky_runtime::css::CssRule".to_owned(),
         },
         // M7 Live types — render to qualified runtime paths.
         IrType::LiveReq => "sky_runtime::live::LiveReq".to_owned(),
