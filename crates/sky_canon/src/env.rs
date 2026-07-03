@@ -11,6 +11,83 @@ use sky_diagnostics::DResult;
 use sky_intern::{Interner, Symbol};
 use sky_kernels::StdlibKernel;
 
+/// Authoritative map from a stdlib module's full import path (its segment list)
+/// to the canonical qualifier short-name under which that module's members are
+/// registered in [`Env::qual_vars`] (see the `QUALIFIERS` table in
+/// [`Env::install_prelude_qualifiers`]).
+///
+/// This is the single source of truth consulted by the canonicaliser when it
+/// registers a user's `import Sky.… as Alias` (or the Elm last-segment default)
+/// so the alias resolves to the same kernel members as the canonical qualifier.
+/// It is the Rust-port counterpart of the upstream Haskell
+/// `Sky.Canonicalise.Environment.staticKernelModules` (path → canonical name).
+///
+/// Two invariants keep this table from drifting out of sync with the qualifier
+/// registry, both enforced by unit tests:
+///
+/// * **No dangling target** (`stdlib_module_paths_target_a_known_qualifier`):
+///   every `canonical` here is a key of a freshly-built `Env`'s `qual_vars`. A
+///   path whose canonical were absent would resolve to `None` (fail-closed) —
+///   the alias is simply not registered and the reference surfaces the usual
+///   `UnknownModule` at its use site, never a silently-invented empty qualifier.
+/// * **Total coverage** (`every_canonical_qualifier_has_an_import_path`): every
+///   primary qualifier the registry defines appears here under at least one
+///   import path, so a newly-added kernel module cannot ship without a way for
+///   users to `import … as Alias` it.
+///
+/// Only real `Sky.*` / `Std.*` module paths belong here — the first segment must
+/// be `Sky` or `Std`, matching the guard in `resolve::register_stdlib_import_aliases`.
+pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
+    // ── Sky.Core.* pure + effect modules ────────────────────────────────────
+    (&["Sky", "Core", "Basics"], "Basics"),
+    (&["Sky", "Core", "Prelude"], "Basics"), // Prelude re-exports Basics
+    (&["Sky", "Core", "String"], "String"),
+    (&["Sky", "Core", "Char"], "Char"),
+    (&["Sky", "Core", "List"], "List"),
+    (&["Sky", "Core", "Maybe"], "Maybe"),
+    (&["Sky", "Core", "Result"], "Result"),
+    (&["Sky", "Core", "Math"], "Math"),
+    (&["Sky", "Core", "Dict"], "Dict"),
+    (&["Sky", "Core", "Set"], "Set"),
+    (&["Sky", "Core", "Bytes"], "Bytes"),
+    (&["Sky", "Core", "Encoding"], "Encoding"),
+    (&["Sky", "Core", "Crypto"], "Crypto"),
+    (&["Sky", "Core", "Uuid"], "Uuid"),
+    (&["Sky", "Core", "Jwt"], "Jwt"),
+    (&["Sky", "Core", "Json", "Encode"], "JsonEnc"),
+    (&["Sky", "Core", "Json", "Decode"], "JsonDec"),
+    (&["Sky", "Core", "Json", "Decode", "Pipeline"], "JsonDecP"),
+    (&["Sky", "Core", "Task"], "Task"),
+    (&["Sky", "Core", "Io"], "Io"),
+    (&["Sky", "Core", "Time"], "Time"),
+    (&["Sky", "Core", "System"], "System"),
+    (&["Sky", "Core", "Random"], "Random"),
+    (&["Sky", "Core", "File"], "File"),
+    (&["Sky", "Core", "Http"], "Http"),
+    // ── Sky.Http.* server surface ───────────────────────────────────────────
+    (&["Sky", "Http", "Server"], "Server"),
+    (&["Sky", "Http", "Middleware"], "Middleware"),
+    (&["Sky", "Http", "RateLimit"], "RateLimit"),
+    // ── Std.* modules ───────────────────────────────────────────────────────
+    (&["Std", "Log"], "Log"),
+    (&["Std", "Cmd"], "Cmd"),
+    (&["Std", "Sub"], "Sub"),
+    (&["Std", "Db"], "Db"),
+    (&["Std", "Db", "Decode"], "Db.Decode"),
+    (&["Std", "Time"], "Time"),
+    (&["Std", "System"], "System"),
+    (&["Std", "Ui"], "Ui"),
+    (&["Std", "Ui", "Background"], "Background"),
+    (&["Std", "Ui", "Border"], "Border"),
+    (&["Std", "Ui", "Font"], "Font"),
+    (&["Std", "Html"], "Html"),
+    (&["Std", "Html", "Attributes"], "Attr"),
+    (&["Std", "Html", "Events"], "Event"),
+    (&["Std", "Live"], "Live"),
+    (&["Std", "Tui"], "Tui"),
+    (&["Std", "Webview"], "Webview"),
+];
+
 /// Where a (possibly qualified) variable resolves to.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum VarHome {
@@ -165,6 +242,53 @@ impl Env {
     #[must_use]
     pub fn qual_members(&self, qualifier: Symbol) -> Option<&BTreeMap<Symbol, VarHome>> {
         self.qual_vars.get(&qualifier)
+    }
+
+    /// Resolve a stdlib module's full import `path` (segment symbols) to the
+    /// canonical qualifier symbol under which its kernel members are registered.
+    ///
+    /// Consults [`STDLIB_MODULE_QUALIFIERS`] (the single source of truth) and
+    /// returns the interned canonical qualifier **only when it actually carries
+    /// members** in [`Self::qual_vars`]. A path that names no known stdlib module
+    /// — or whose canonical is (defensively) absent from the registry — yields
+    /// `None`, so the caller registers nothing and the reference fails closed
+    /// with the ordinary `UnknownModule` diagnostic at its use site rather than
+    /// resolving to an invented, empty qualifier.
+    ///
+    /// # Errors
+    /// [`sky_diagnostics::Diagnostic::CompilerBug`] if interning the canonical
+    /// name exhausts the interner's symbol table.
+    pub fn canonical_stdlib_qualifier(
+        &self,
+        path: &[Symbol],
+        interner: &mut Interner,
+    ) -> DResult<Option<Symbol>> {
+        // Resolve the path to string segments under an immutable interner borrow
+        // and match it against the table. The `&'static str` canonical is owned
+        // by the table, so it outlives the borrow released at the end of the
+        // block — leaving the interner free for the mutable `intern` below.
+        let canonical: Option<&'static str> = {
+            let mut segs: Vec<&str> = Vec::with_capacity(path.len());
+            for &s in path {
+                match interner.resolve(s) {
+                    Some(seg) => segs.push(seg),
+                    // An un-interned path segment cannot name a known module.
+                    None => return Ok(None),
+                }
+            }
+            STDLIB_MODULE_QUALIFIERS
+                .iter()
+                .find(|(p, _)| p.len() == segs.len() && p.iter().zip(&segs).all(|(a, b)| a == b))
+                .map(|(_, canonical)| *canonical)
+        };
+        match canonical {
+            None => Ok(None),
+            Some(canon) => {
+                let sym = interner.intern(canon)?;
+                // Fail-closed: only report a qualifier that actually has members.
+                Ok(self.qual_vars.contains_key(&sym).then_some(sym))
+            }
+        }
     }
 
     /// Built-in unqualified variables (from the Prelude). M0 subset of
