@@ -3823,6 +3823,8 @@ impl<'a> Lowerer<'a> {
                 // `Ui.maximum : Int -> Length -> Length`
                 | KernelFn::UiMaximum
                 // ── M7: Html element builders — arity 2 ──────────────────────
+                // `Html.styleNode : List (Attribute msg) -> String -> Html msg`
+                | KernelFn::HtmlStyleNode
                 // `Html.div : List (Attribute msg) -> List (Html msg) -> Html msg`
                 | KernelFn::HtmlDiv
                 // `Html.span : List (Attribute msg) -> List (Html msg) -> Html msg`
@@ -4363,10 +4365,14 @@ impl<'a> Lowerer<'a> {
                     // ── M7: Html element builders ─────────────────────────────
                     ("Html", "text") => Ok(Callee::Kernel(KernelFn::HtmlTextNode)),
                     ("Html", "raw") => Ok(Callee::Kernel(KernelFn::HtmlRawNode)),
+                    // `styleNode : List Attr -> String -> Html msg` is arity-2 —
+                    // its own kernel, NOT folded into the arity-3 `HtmlNode`. The
+                    // dedicated kernel close-tag-neutralises the CSS body (F7).
+                    ("Html", "styleNode") => Ok(Callee::Kernel(KernelFn::HtmlStyleNode)),
                     (
                         "Html",
-                        "node" | "voidNode" | "doctype" | "styleNode" | "titleNode" | "htmlNode"
-                        | "headNode" | "title",
+                        "node" | "voidNode" | "doctype" | "titleNode" | "htmlNode" | "headNode"
+                        | "title",
                     ) => Ok(Callee::Kernel(KernelFn::HtmlNode)),
                     ("Html", "div" | "headerNode" | "header") => {
                         Ok(Callee::Kernel(KernelFn::HtmlDiv))

@@ -1776,6 +1776,22 @@ fn emit_ui_call(
             )))
         }
 
+        // `Html.styleNode : List Attr -> String -> Html msg` (arity-2; the
+        // dedicated kernel close-tag-neutralises the CSS body — F7).
+        KernelFn::HtmlStyleNode => {
+            let [attrs_e, css_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlStyleNode",
+                    detail: format!("Html.styleNode requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let css = emit_expr_at(ctx, css_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_style_node_({attrs}, {css})"
+            )))
+        }
+
         // `Html.div : List Attr -> List Html -> Html msg`
         KernelFn::HtmlDiv => {
             let [attrs_e, children_e] = args else {

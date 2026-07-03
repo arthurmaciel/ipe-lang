@@ -679,6 +679,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HtmlTextNode => "html_text_node_",
         KernelFn::HtmlRawNode => "html_raw_node_",
         KernelFn::HtmlNode => "html_node_",
+        KernelFn::HtmlStyleNode => "html_style_node_",
         KernelFn::HtmlDiv => "html_div_",
         KernelFn::HtmlSpan => "html_span_",
         KernelFn::HtmlA => "html_a_",

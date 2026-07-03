@@ -4655,6 +4655,30 @@ impl<'a> Builder<'a> {
                 fun(cfg_rec, fun(elem_t(var(0)), html_t(var(0))))
             }
 
+            // ── Std.Html special nodes ────────────────────────────────────────
+            // styleNode : List (Attribute msg) -> String -> Html msg
+            //
+            // The attribute list is a `Std.Html.Attribute` (the module path
+            // carries `html_con`'s "Html" symbol so `ir_type_from_ty`'s T2
+            // disambiguation selects `HtmlAttribute`, matching the runtime
+            // `html_style_node_(Vec<html::Attribute<M>>, String)` signature).
+            // The css body is a plain `String`; the result is `Html msg`. This
+            // replaces the fail-closed `Ty::Var(u32::MAX)` fallthrough so the
+            // arity-2 kernel is typed exactly (F7 arity-mis-wire fix).
+            (Some("Html"), Some("styleNode")) => {
+                let attr = |msg: Ty| Ty::Con {
+                    module: vec![self.builtins.html_con],
+                    name: self.builtins.attribute,
+                    args: vec![msg],
+                };
+                let html_t = |msg: Ty| Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.html_con,
+                    args: vec![msg],
+                };
+                fun(list(attr(var(0))), fun(string, html_t(var(0))))
+            }
+
             // ── Element builders ──────────────────────────────────────────────
             // el : List (Attribute msg) -> Element msg -> Element msg
             (Some("Ui"), Some("el")) => {
