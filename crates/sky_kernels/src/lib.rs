@@ -86,6 +86,10 @@ pub struct StdlibDecl {
 pub enum StdlibKernel {
     // ── Log ─────────────────────────────────────────────────────────────────
     LogPrintln,
+    LogInfo,
+    LogDebug,
+    LogWarn,
+    LogError,
     // ── String ──────────────────────────────────────────────────────────────
     StringFromInt,
     StringFromFloat,
@@ -606,6 +610,10 @@ impl StdlibKernel {
             // The tripwire test skips it because "Log" is absent from
             // `env.qual_vars`.
             Self::LogPrintln => d("Log", "println", 1, Pure, "log_println"),
+            Self::LogInfo => d("Log", "info", 1, Pure, "log_info"),
+            Self::LogDebug => d("Log", "debug", 1, Pure, "log_debug"),
+            Self::LogWarn => d("Log", "warn", 1, Pure, "log_warn"),
+            Self::LogError => d("Log", "error", 1, Pure, "log_error"),
             // ── String ──────────────────────────────────────────────────────
             Self::StringFromInt => d("String", "fromInt", 1, Pure, "string_from_int"),
             Self::StringFromFloat => d("String", "fromFloat", 1, Pure, "string_from_float"),
@@ -1212,6 +1220,10 @@ impl StdlibKernel {
     pub const ALL: &'static [Self] = &[
         // Log
         Self::LogPrintln,
+        Self::LogInfo,
+        Self::LogDebug,
+        Self::LogWarn,
+        Self::LogError,
         // String
         Self::StringFromInt,
         Self::StringFromFloat,
