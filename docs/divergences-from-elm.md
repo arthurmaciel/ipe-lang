@@ -21,9 +21,9 @@
 > post-parity rename collapses these prefixes into one flat auto-imported
 > namespace; when that lands, update the module names here.
 >
-> Items the author could not confirm against the docs are marked
-> **[UNVERIFIED]** and should be checked against a live build before the
-> README lifts them.
+> Items the author could not confirm against the docs were previously marked
+> **[UNVERIFIED]**; STR1, R4, and R5 have since been verified against the
+> ipê stdlib + runtime source (see the resolved Verification backlog below).
 
 ---
 
@@ -138,14 +138,14 @@ server/native target:
 | R1 | **Haystack-first `*In` String companions.** `String.containsIn`, `startsWithIn`, `endsWithIn` mirror Elm's needle-first `contains`/`startsWith`/`endsWith` with reversed argument order for `\|>` pipelines. Both forms ship. Elm has only the needle-first form. | Pipeline ergonomics without breaking Elm-compatible call sites. |
 | R2 | **`Sky.Core.ToString` discoverability surface.** `ToString.fromInt`/`fromFloat`/`fromBool`/`fromTime` alias the canonical kernels. Elm removed the polymorphic `toString` in 0.19 (replaced by `String.fromInt`/`fromFloat` + dev-only `Debug.toString`); ipê keeps `Basics.toString` **and** a discoverable `ToString.*` namespace. | Editor/`sky doc` discoverability; steers AI-written code to one obvious name. |
 | R3 | **`Sky.Core.Pure` arity-0 Task companions.** `Pure.uuidV4 ()`, `Pure.timeNow ()`, `Pure.dbConnect ()`, … give a uniform `() -> Task Error a` shape. This exists to work around ipê **Active limitation #7** (zero-arg calls follow the binding's declared type, so `Uuid.v4` is bare but `Time.now ()` needs the unit). Elm has no such split — nullary values are simply values. | Bridges a current codegen limitation without renaming existing bindings; honest about being a workaround. |
-| R4 | **`Task` normalizes to a unary internal shape** and rejects `Task String a`/`Task Int a` (see ER1). Elm's `Task x a` is binary with a free error slot and commonly `Task Never a` for `Cmd.perform`. **[UNVERIFIED]** whether ipê exposes a `Never`-error task form. | Enforces the typed-`Error` mandate at the type level. |
-| R5 | **Modules ipê appears to omit from elm/core.** No `Array`, `Bitwise`, `Tuple` (module — `fst`/`snd` live in `Basics`), or `Debug` module surfaced in the stdlib table. `elm/browser`, `elm/url` (only `parseQuery` present), and Elm **ports**/`Platform`/`Platform.Worker` have no ipê counterpart (replaced by FFI + Task + the server runtimes). **[UNVERIFIED]** for `Array`/`Bitwise`/`Tuple`/`Debug` — confirm none are surfaced under a different name before publishing. | Server/native target makes browser modules (`elm/browser`) and the port model moot; the rest may simply be unported rather than deliberately dropped. |
+| R4 | **`Task` normalizes to a unary internal shape** and rejects `Task String a`/`Task Int a` (see ER1). Elm's `Task x a` is binary with a free error slot and commonly `Task Never a` for `Cmd.perform`. **ipê exposes no `Never`-error task form.** Verified: every signature in the `Task` surface (`crates/skyc/stdlib/Sky/Core/Task.sky`) fixes the error slot to `Error` (`succeed : a -> Task Error a`, `map : (a -> b) -> Task Error a -> Task Error b`, etc.); there is no `Never` type in the stdlib or canon prelude, and no `Process` module. | Enforces the typed-`Error` mandate at the type level — the error channel is a fixed `Error`, never a free or `Never` slot. |
+| R5 | **Modules ipê omits from elm/core.** No `Array`, `Bitwise`, `Tuple` (module — `fst`/`snd` live in `Basics`), or `Debug` module. Verified absent: the stdlib module set (`crates/skyc/stdlib/Sky/Core/`) contains none of them, no `Array.sky`/`Bitwise.sky`/`Tuple.sky`/`Debug.sky` exists anywhere in the tree, and the closed kernel registry (`crates/sky_kernels`) surfaces no kernel under those names — so none is present under a different name. `elm/browser`, `elm/url` (only `parseQuery` present), and Elm **ports**/`Platform`/`Platform.Worker` likewise have no ipê counterpart (replaced by FFI + Task + the server runtimes). | Server/native target makes browser modules (`elm/browser`) and the port model moot; `Array`/`Bitwise`/`Tuple`/`Debug` are unported (`List`/`Dict` cover the container need; `Debug` is dev-only in Elm and superseded by `Std.Log`). |
 
 ### 4.5 String / Unicode semantics
 
 | # | Divergence from Elm | Rationale |
 |---|---|---|
-| STR1 | **Rune-based String operations.** ipê `String` ops (e.g. `dropLeft`/`dropRight` since v0.16.31) are "Elm-shaped **rune-based**" over Go's UTF-8 strings. Elm 0.19 `String` is backed by JavaScript strings, so `String.length` and slicing count **UTF-16 code units** — astral-plane characters (emoji, some CJK) count as 2 and can be split. ipê counting **code points (runes)** would treat such a character as length 1. **[UNVERIFIED]** — the exact per-function counting unit (code point vs. grapheme cluster) across the full 38-entry `String` module has not been audited; `Sky.Tui` separately uses `uniseg` grapheme segmentation for terminal width, which is a distinct concern. | UTF-8/rune semantics are the natural Go representation and avoid Elm's surrogate-pair splitting hazard; must be verified per-function before claiming full divergence. |
+| STR1 | **Code-point-based String operations.** Every ipê `String` length / index / slice operation counts **Unicode code points** (runes — Rust `char`, a Unicode scalar value), uniformly across the module. Elm 0.19 `String` is backed by JavaScript strings, so `String.length` and slicing count **UTF-16 code units** — astral-plane characters (emoji, some CJK) count as 2 and can be split. ipê counts such a character as length 1 and never splits it. Verified in the String kernel (`runtime/src/sky_runtime/string.rs`): `length` = `chars().count()`; `reverse` = `chars().rev()`; `slice`/`left`/`right`/`dropLeft`/`dropRight`/`padLeft`/`padRight`/`toList` and the empty-separator `split` case all iterate `chars()` (code points), with rune-index clamping. The unit is code points, **not** grapheme clusters — `Sky.Tui` separately uses `uniseg` grapheme segmentation for terminal display width, which is a distinct concern and does not affect `String` semantics. | UTF-8/code-point semantics are the natural Go/Rust representation and avoid Elm's surrogate-pair splitting hazard. |
 | STR2 | **Extra String surface:** `casefold`, `equalFold`, `isEmail`, `isUrl`, `words`, `lines`, `padLeft`/`padRight`, `repeat` beyond Elm's set. | Server text handling (validation, normalization) is a common need; keeps it in the typed stdlib rather than user regex. |
 
 ---
@@ -186,7 +186,7 @@ limits — they match Elm 0.19.x:
 | Foreign interop | Ports (typed JS message passing) | `Ffi.kernel` + auto-binding of Go/Rust crates | HM-typed native stdlib at SDK scale |
 | String interpolation | None (`++` concat) | `"""… {{expr}} …"""` with `\{{` escape | First-class server templating |
 | UI library | elm-ui (client-rendered) | `Std.Ui` (server-rendered inline CSS; +pseudo/media/anim/grid) | No client build; CSP-safe; cross-surface |
-| String semantics | UTF-16 code units (JS-backed) | Rune/code-point-based over UTF-8 **[UNVERIFIED per-fn]** | Avoids surrogate-pair splitting; Go-native |
+| String semantics | UTF-16 code units (JS-backed) | Code-point (rune) based over UTF-8, uniform across the module | Avoids surrogate-pair splitting; Go/Rust-native |
 | Regex | `elm/regex` de-emphasized (prefers `elm/parser`) | Built-in `Sky.Core.Regex` | Common server need in the typed stdlib |
 | Crypto / Auth / DB / Money | Not in core (browser via ports / packages) | `Std.Auth`, `Crypto`, `Jwt`, `Std.Db`, `Std.Money`/`Decimal` | Server target requires them first-class |
 | Servers / sockets | Cannot open a server socket | `Sky.Http.Server`, WebSocket, SSE stream | Server target |
@@ -196,11 +196,17 @@ limits — they match Elm 0.19.x:
 
 ---
 
-## Verification backlog (do before the README lifts these)
+## Verification backlog — resolved
 
-- **STR1** — audit the counting unit (code point vs. grapheme) of every
-  `Sky.Core.String` function against Elm's UTF-16 behaviour; confirm the
+- **STR1** — RESOLVED. The counting unit is **Unicode code points (runes)**,
+  uniform across the `String` kernel (`runtime/src/sky_runtime/string.rs`):
+  `length`/`reverse`/`slice`/`left`/`right`/`dropLeft`/`dropRight`/`padLeft`/
+  `padRight`/`toList` and the empty-separator `split` all iterate `chars()`
+  (code points), not grapheme clusters and not UTF-16 code units. The
   rune-based claim holds beyond `dropLeft`/`dropRight`.
-- **R5** — confirm `Array`, `Bitwise`, `Tuple` (module), and `Debug` are
-  genuinely absent (not surfaced under a different name).
-- **R4** — confirm whether a `Never`-error task form exists in ipê's `Task`.
+- **R5** — RESOLVED. `Array`, `Bitwise`, `Tuple` (module), and `Debug` are
+  genuinely absent — no `.sky` module, and no kernel under those names in the
+  closed registry (`crates/sky_kernels`).
+- **R4** — RESOLVED. No `Never`-error task form exists; the `Task` surface
+  (`crates/skyc/stdlib/Sky/Core/Task.sky`) fixes every error slot to `Error`,
+  and no `Never` type is defined in the stdlib or canon prelude.
