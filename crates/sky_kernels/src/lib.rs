@@ -154,6 +154,13 @@ pub enum StdlibKernel {
     ListAny,
     ListAll,
     ListFind,
+    // ── Basics (core Prelude) ────────────────────────────────────────────────
+    BasicsNot,
+    BasicsIdentity,
+    BasicsAlways,
+    BasicsFst,
+    BasicsSnd,
+    BasicsModBy,
     // ── Maybe ───────────────────────────────────────────────────────────────
     MaybeWithDefault,
     MaybeMap,
@@ -657,6 +664,12 @@ impl StdlibKernel {
             Self::ListAny => d("List", "any", 2, Pure, "list_any"),
             Self::ListAll => d("List", "all", 2, Pure, "list_all"),
             Self::ListFind => d("List", "find", 2, Pure, "list_find"),
+            Self::BasicsNot => d("Basics", "not", 1, Pure, "basics_not"),
+            Self::BasicsIdentity => d("Basics", "identity", 1, Pure, "basics_identity"),
+            Self::BasicsAlways => d("Basics", "always", 2, Pure, "basics_always"),
+            Self::BasicsFst => d("Basics", "fst", 1, Pure, "basics_fst"),
+            Self::BasicsSnd => d("Basics", "snd", 1, Pure, "basics_snd"),
+            Self::BasicsModBy => d("Basics", "modBy", 2, Pure, "basics_mod_by"),
             // ── Maybe ───────────────────────────────────────────────────────
             Self::MaybeWithDefault => d("Maybe", "withDefault", 2, Pure, "maybe_with_default"),
             Self::MaybeMap => d("Maybe", "map", 2, Pure, "sky_maybe_map"),
@@ -1249,6 +1262,13 @@ impl StdlibKernel {
         Self::ListAny,
         Self::ListAll,
         Self::ListFind,
+        // Basics
+        Self::BasicsNot,
+        Self::BasicsIdentity,
+        Self::BasicsAlways,
+        Self::BasicsFst,
+        Self::BasicsSnd,
+        Self::BasicsModBy,
         // Maybe
         Self::MaybeWithDefault,
         Self::MaybeMap,

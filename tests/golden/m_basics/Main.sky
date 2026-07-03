@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+main =
+    let
+        a =
+            not False
+
+        b =
+            identity 7
+
+        c =
+            always 3 "ignored"
+
+        d =
+            fst ( 10, 20 )
+
+        e =
+            snd ( 10, 20 )
+
+        f =
+            modBy 3 10
+    in
+    println
+        ((if a then "T" else "F")
+            ++ " "
+            ++ String.fromInt (b + c + d + e + f)
+        )

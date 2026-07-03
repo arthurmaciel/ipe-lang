@@ -3282,6 +3282,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListReverse
                 | KernelFn::ListConcat
                 | KernelFn::ListIsEmpty
+                | KernelFn::BasicsNot
+                | KernelFn::BasicsIdentity
+                | KernelFn::BasicsFst
+                | KernelFn::BasicsSnd
                 | KernelFn::ResultOkDefault
                 // ── Dict arity-1 ─────────────────────────────────────────────
                 | KernelFn::DictIsEmpty
@@ -3469,6 +3473,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListAny
                 | KernelFn::ListAll
                 | KernelFn::ListFind
+                | KernelFn::BasicsAlways
+                | KernelFn::BasicsModBy
                 | KernelFn::MaybeWithDefault
                 | KernelFn::MaybeMap
                 | KernelFn::MaybeAndThen
@@ -4011,6 +4017,12 @@ impl<'a> Lowerer<'a> {
                     ("List", "any") => Ok(Callee::Kernel(KernelFn::ListAny)),
                     ("List", "all") => Ok(Callee::Kernel(KernelFn::ListAll)),
                     ("List", "find") => Ok(Callee::Kernel(KernelFn::ListFind)),
+                    ("Basics", "not") => Ok(Callee::Kernel(KernelFn::BasicsNot)),
+                    ("Basics", "identity") => Ok(Callee::Kernel(KernelFn::BasicsIdentity)),
+                    ("Basics", "always") => Ok(Callee::Kernel(KernelFn::BasicsAlways)),
+                    ("Basics", "fst") => Ok(Callee::Kernel(KernelFn::BasicsFst)),
+                    ("Basics", "snd") => Ok(Callee::Kernel(KernelFn::BasicsSnd)),
+                    ("Basics", "modBy") => Ok(Callee::Kernel(KernelFn::BasicsModBy)),
                     // ── Maybe kernels ──────────────────────────────────────
                     ("Maybe", "withDefault") => Ok(Callee::Kernel(KernelFn::MaybeWithDefault)),
                     ("Maybe", "map") => Ok(Callee::Kernel(KernelFn::MaybeMap)),

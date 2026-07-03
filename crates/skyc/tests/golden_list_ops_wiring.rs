@@ -101,3 +101,25 @@ fn list_hof_any_all_find_runs() {
     // any (has even) = T ; all (>0) = T ; find (>2) = 3 ; find (>100) = -1.
     assert_eq!(out.stdout.trim(), "TT 3 -1");
 }
+
+/// #76 slice — the core `Basics`/Prelude fns `not`/`identity`/`always`/`fst`/
+/// `snd`/`modBy` are callable. Before wiring they were canon members with no
+/// `KernelFn` (id=None → SKY-L0108 post-seal) — a program could not even use
+/// `not`. Runtime fns pre-existed except `basics_not` (new).
+#[test]
+fn basics_core_prelude_runs() {
+    if !e2e_enabled() {
+        return;
+    }
+    let dir = compile_golden("m_basics");
+    let out = support::build_and_run_emitted("m_basics", &dir);
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "expected a clean exit; got {:?}",
+        out.exit_code
+    );
+    // not False = T ; identity 7 + always 3 + fst(10,20) + snd(10,20) + modBy 3 10
+    // = 7 + 3 + 10 + 20 + 1 = 41.
+    assert_eq!(out.stdout.trim(), "T 41");
+}
