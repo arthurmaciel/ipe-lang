@@ -8,7 +8,7 @@ use sky_intern::{Interner, Symbol};
 use sky_syntax as src;
 
 use crate::ast as canon;
-use crate::env::{CtorHome, Env, VarHome};
+use crate::env::{CtorHome, Env, VarHome, WildcardOrigin};
 
 /// The maximum number of `did you mean` suggestions attached to an unresolved
 /// name. Keeping it small prevents a wall of near-misses drowning the actual
@@ -481,6 +481,90 @@ fn inject_stdlib_exposed_values(
     Ok(())
 }
 
+/// Flood EVERY value member of a stdlib module named in
+/// `import Sky.*/Std.* exposing (..)` into the LOW-PRIORITY wildcard tier
+/// ([`Env::wildcard_vars`]) so bare `div` / `text` / … resolve unqualified (#98).
+///
+/// This is the open-import counterpart of [`inject_stdlib_exposed_values`]. The
+/// two paths differ ONLY in insertion discipline, and the difference is the whole
+/// point of the wildcard/explicit distinction:
+///
+/// * **Explicit `exposing (name)`** folds into `seen_values` + `env.vars` — a
+///   local of the same name is a hard [`NameError::DuplicateValue`] ("I demand
+///   this name"), and the name resolves at the same priority as a top-level
+///   binding.
+/// * **Wildcard `exposing (..)`** inserts into `env.wildcard_vars` ONLY — never
+///   into `seen_values`, so a local / explicit-exposed / synth-ctor / prelude
+///   name of the same spelling SILENTLY shadows it at resolve time ("fill in the
+///   rest"). [`resolve_var`] consults this tier last.
+///
+/// Ambiguity is NOT decided here: two wildcards exposing the same name are both
+/// legal at import time. The clash is recorded (both origins kept, keyed by
+/// canonical qualifier) and only surfaces as [`NameError::AmbiguousImport`] if a
+/// bare use of the name actually occurs and no higher-priority binding shadows it
+/// — matching the deferred-conflict rule Elm applies to open imports.
+///
+/// Soundness: each cloned [`VarHome::Kernel`] carries the canonical module + name
+/// (and kernel id) of the qualified member, so an unqualified wildcard reference
+/// lowers byte-identically to a qualified `M.member` reference. Keying by the
+/// canonical qualifier symbol means importing the same module twice (or once
+/// under an alias) collapses to a single origin — never a spurious self-ambiguity.
+///
+/// A path that names no known/ported stdlib module floods nothing (fail-closed,
+/// via [`Env::canonical_stdlib_qualifier`]); a later bare use surfaces the
+/// ordinary `SKY-N0001` at its use site.
+///
+/// # Errors
+/// [`Diagnostic::CompilerBug`] if interning `Sky` / `Std` exhausts the interner.
+fn inject_stdlib_wildcard_values(
+    m: &src::Module,
+    env: &mut Env,
+    interner: &mut Interner,
+) -> DResult<()> {
+    let sky_sym = interner.intern("Sky")?;
+    let std_sym = interner.intern("Std")?;
+    for import in &m.imports {
+        let dep_path = &import.name.value;
+        // Only `Sky.*` / `Std.*` imports name compiler stdlib modules.
+        if !dep_path
+            .first()
+            .copied()
+            .is_some_and(|s| s == sky_sym || s == std_sym)
+        {
+            continue;
+        }
+        // Only open imports (`exposing (..)`) flood the wildcard tier; the
+        // explicit-list case is handled by `inject_stdlib_exposed_values`.
+        if !matches!(&import.exposing.value, src::Exposing::All) {
+            continue;
+        }
+        let Some(canonical) = env.canonical_stdlib_qualifier(dep_path, interner)? else {
+            // Unknown / unported stdlib path: flood nothing (fail-closed).
+            continue;
+        };
+        // Snapshot the canonical qualifier's members (clone out so the immutable
+        // borrow of `env.qual_vars` ends before we mutate `env.wildcard_vars`).
+        let Some(members) = env.qual_vars.get(&canonical).cloned() else {
+            continue;
+        };
+        let dep_owned = dep_path.clone();
+        for (name, home) in members {
+            // Dedup by canonical qualifier: a second import of the SAME module
+            // (or an aliased re-import) overwrites its own prior origin rather
+            // than registering a phantom second candidate that would fake an
+            // ambiguity with itself.
+            env.wildcard_vars.entry(name).or_default().insert(
+                canonical,
+                WildcardOrigin {
+                    home,
+                    dep_path: dep_owned.clone(),
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Shared resolution body used by both [`canonicalise`] and
 /// [`canonicalise_module`].
 ///
@@ -635,6 +719,12 @@ fn canonicalise_with_env(
     // rule). Fail-closed: a lowercase name that is not a real value member of the
     // module surfaces `NameNotExposed`, never a dangling binding.
     inject_stdlib_exposed_values(m, env, &mut seen_values, interner)?;
+    // #98: flood every member of an `import Sky.*/Std.* exposing (..)` stdlib
+    // module into the LOW-PRIORITY wildcard tier. Deliberately does NOT touch
+    // `seen_values` — a local / explicit-exposed / synth-ctor / prelude name of
+    // the same spelling silently shadows a wildcard member (see the fn doc);
+    // cross-wildcard clashes surface only at an ambiguous use site.
+    inject_stdlib_wildcard_values(m, env, interner)?;
     for v in &m.values {
         let name = v.value.name.value;
         let name_span = v.value.name.span;
@@ -1747,32 +1837,96 @@ fn resolve_var(name: Symbol, span: Span, env: &Env, interner: &Interner) -> DRes
             index: ctor.index,
         });
     }
-    match env.lookup_var(name) {
-        Some(VarHome::Local) => Ok(canon::Expr_::VarLocal(name)),
-        Some(VarHome::TopLevel(module)) => Ok(canon::Expr_::VarTopLevel {
+    if let Some(home) = env.lookup_var(name) {
+        // A local / top-level / explicit-exposed / prelude binding wins over any
+        // wildcard-exposed member of the same spelling (silent shadow, #98).
+        return Ok(var_home_to_expr(name, home));
+    }
+    // Low-priority wildcard tier (#98): only reached when the higher tiers miss.
+    resolve_wildcard_var(name, span, env, interner)
+}
+
+/// Map a resolved [`VarHome`] to its canonical [`canon::Expr_`] form. Total over
+/// all three variants so both the primary tiers and the wildcard tier share one
+/// lowering rule (a wildcard clone is always a `Kernel`, but keeping the mapping
+/// total avoids any partial assumption).
+fn var_home_to_expr(name: Symbol, home: &VarHome) -> canon::Expr_ {
+    match home {
+        VarHome::Local => canon::Expr_::VarLocal(name),
+        VarHome::TopLevel(module) => canon::Expr_::VarTopLevel {
             module: module.clone(),
             name,
-        }),
-        Some(VarHome::Kernel(id, m, f)) => Ok(canon::Expr_::VarKernel {
+        },
+        VarHome::Kernel(id, m, f) => canon::Expr_::VarKernel {
             id: *id,
             module: *m,
             name: *f,
-        }),
-        // A bare value name can resolve to either a value binding or a
-        // constructor used as a value, so the suggestion pool spans both
-        // namespaces (value bindings first, then constructor names).
-        None => Err(Diagnostic::Name {
-            span,
-            msg: NameError::ValueNotFound {
-                name: name_str(interner, name)?,
-                suggestions: suggestions(
-                    name,
-                    env.vars.keys().chain(env.ctors.keys()).copied(),
-                    interner,
-                ),
-            },
-        }),
+        },
     }
+}
+
+/// Resolve a bare name against the low-priority wildcard tier ([`Env::wildcard_vars`],
+/// #98), or fail with the ordinary `SKY-N0001` when it is absent there too.
+///
+/// * Exactly one surviving origin → resolve to its cloned kernel home (identical
+///   to the qualified reference).
+/// * Two or more distinct origins → [`NameError::AmbiguousImport`] (SKY-N0024) at
+///   THIS use site, listing every contributing module — never a silent
+///   last-wins.
+fn resolve_wildcard_var(
+    name: Symbol,
+    span: Span,
+    env: &Env,
+    interner: &Interner,
+) -> DResult<canon::Expr_> {
+    // Only a non-empty origin set participates; an empty entry (never produced by
+    // the injector) falls through to `ValueNotFound`.
+    if let Some(origins) = env.wildcard_vars.get(&name).filter(|o| !o.is_empty()) {
+        if origins.len() == 1 {
+            if let Some(origin) = origins.values().next() {
+                return Ok(var_home_to_expr(name, &origin.home));
+            }
+            // Unreachable (len == 1 ⇒ non-empty), but stay total — no `unwrap`.
+            return Err(value_not_found(name, span, env, interner)?);
+        }
+        // Two or more distinct modules expose this name unqualified → ambiguous.
+        let modules: Box<[Box<str>]> = origins
+            .values()
+            .map(|o| path_to_dot_string(interner, &o.dep_path))
+            .collect();
+        return Err(Diagnostic::Name {
+            span,
+            msg: NameError::AmbiguousImport {
+                name: name_str(interner, name)?,
+                modules,
+            },
+        });
+    }
+    Err(value_not_found(name, span, env, interner)?)
+}
+
+/// Build the ordinary `SKY-N0001` [`NameError::ValueNotFound`] for a bare name.
+///
+/// A bare value name can resolve to either a value binding or a constructor used
+/// as a value, so the suggestion pool spans both namespaces (value bindings
+/// first, then constructor names).
+fn value_not_found(
+    name: Symbol,
+    span: Span,
+    env: &Env,
+    interner: &Interner,
+) -> DResult<Diagnostic> {
+    Ok(Diagnostic::Name {
+        span,
+        msg: NameError::ValueNotFound {
+            name: name_str(interner, name)?,
+            suggestions: suggestions(
+                name,
+                env.vars.keys().chain(env.ctors.keys()).copied(),
+                interner,
+            ),
+        },
+    })
 }
 
 /// Resolve a qualified name `Qualifier.name`. Distinguishes an unknown
