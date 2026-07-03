@@ -51,6 +51,25 @@ fn tostring_scalars_run() {
     assert_eq!(out.stdout.trim(), "42 true 3");
 }
 
+/// `Log.infoWith : String -> List a -> Task Error ()` with Stringify attrs
+/// compiles (the #77 obligation on the list element) — a pure skyc compile.
+#[test]
+fn log_info_with_stringify_attrs_compiles() {
+    let root = repo_root();
+    let entry = golden_dir(&root, "m_log_with").join("Main.sky");
+    let out = std::env::temp_dir().join("skyc_m_log_with_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        panic!("runtime must resolve");
+    };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "Log.infoWith with String attrs must compile: {:?}",
+        built.err()
+    );
+}
+
 /// SEAL-PRESERVING negative gate: `toString` on a FUNCTION is rejected at skyc
 /// type-check (the Stringify obligation's `Fun` head-rejection), NOT deferred to
 /// a cargo failure. A pure compile — no `SKY_E2E` needed.

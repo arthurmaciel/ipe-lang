@@ -1523,6 +1523,29 @@ impl<'a> Builder<'a> {
                 }
                 return Ok(var);
             }
+            // `Log.*With : String -> List a -> Task Error ()` — the attr-list
+            // ELEMENT `a` carries the STRINGIFY obligation (#77). Same
+            // `stdlib_scheme` + tie shape as Dict/Set: instantiate the base
+            // scheme and tie its list-element `var(0)` to a Show super-var, so a
+            // non-showable element (a function) fails closed at type-check.
+            if matches!(
+                k,
+                StdlibKernel::LogInfoWith
+                    | StdlibKernel::LogDebugWith
+                    | StdlibKernel::LogWarnWith
+                    | StdlibKernel::LogErrorWith
+            ) {
+                let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
+                    span,
+                    msg: LowerError::Unsupported(Feature::Kernels),
+                })?;
+                let (var, vars) = self.instantiate_tracked(&ty)?;
+                if let Some(&elem_var) = vars.get(&0) {
+                    let s = self.super_var(TyBounds::show(), span)?;
+                    self.eq(span, elem_var, s);
+                }
+                return Ok(var);
+            }
         }
         // ── Parse-once registry lookup (Phase E, Task 1c) ──
         //
@@ -2329,6 +2352,12 @@ impl<'a> Builder<'a> {
             // *With variants (List (String, a) attrs) are Stringify-bounded and
             // stay fail-closed until #77 adds a Stringify obligation.
             K::LogInfo | K::LogDebug | K::LogWarn | K::LogError => fun(string(), task_unit()),
+            // *With : String -> List a -> Task Error () where `a` is Stringify.
+            // Base scheme for the totality gate; the Stringify obligation on the
+            // list-element var(0) is tied in constrain_var_kernel (#77).
+            K::LogInfoWith | K::LogDebugWith | K::LogWarnWith | K::LogErrorWith => {
+                fun(string(), fun(list(var(0)), task_unit()))
+            }
 
             // ── Maybe ──
             K::MaybeWithDefault => fun(var(0), fun(maybe(var(0)), var(0))),
@@ -3795,6 +3824,11 @@ mod registry_phase_c_tests {
             K::LogDebug,
             K::LogWarn,
             K::LogError,
+            // Log *With (4 — #77 Stringify obligation on the attr list element).
+            K::LogInfoWith,
+            K::LogDebugWith,
+            K::LogWarnWith,
+            K::LogErrorWith,
             // `Basics.clamp` — first-schemed hole; carries the `Comparable a`
             // (Ord) obligation, base scheme in `stdlib_scheme`.
             K::BasicsClamp,
