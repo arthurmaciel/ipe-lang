@@ -17,16 +17,20 @@
 //!
 //! The pure-Sky combinators that WERE naively body-recursive in the non-tail
 //! position — `append` / `concat` / `concatMap` / `take` / `zip` /
-//! `indexedMap` — are rewritten to accumulator/CPS form in
+//! `indexedMap` — carry accumulator/CPS bodies in
 //! `crates/skyc/stdlib/Sky/Core/List.sky` (byte-identical to upstream
-//! `sky-stdlib/Sky/Core/List.sky`), so they are constant-stack BY CONSTRUCTION
-//! the moment they gain lowering support. Today they are unreachable from user
-//! code: they resolve to `VarKernel` with no lowering arm (`Unsupported(Kernels)`)
-//! or are absent from the qualifier registry (`indexedMap` / `find` →
-//! `NoSuchMember`). Wiring them through the lowerer as `VarTopLevel` (so the
-//! rewritten Sky bodies compile) is a compiler-crate change, out of this task's
-//! scope; when it lands, add a capped-stack golden that folds a 500k `append` /
-//! `concat` chain here — the accumulator rewrite already guarantees it passes.
+//! `sky-stdlib/Sky/Core/List.sky`). Task #68 made them CALLABLE, but as
+//! ITERATIVE Rust KERNELS (not by routing to those pure-Sky bodies): canon
+//! anchors every `List.x` to `VarHome::Kernel` unconditionally, so the kernel
+//! path is the only exit-0-safe wiring (see
+//! `docs/architecture/list-ops-lower-wiring.md`). Those kernels are constant-
+//! stack too — strictly better than the O(N)-stack pure-Sky recursion the Go
+//! backend uses — so the soundness thesis holds by a different mechanism. The
+//! pure-Sky `List.sky` bodies stay as the (currently unreached) upstream-parity
+//! reference for the eventual migration once typed-lambda lowering closes the
+//! cross-module `cannot infer T2` hole. Reachable-List E2E coverage now lives in
+//! `golden_list_ops_wiring.rs` (all nine ops + Elm edges); this file keeps the
+//! capped-stack proof over the pre-existing kernel subset.
 //!
 //! Gated on `SKY_E2E=1` (emitted-project cargo build/run), like the other
 //! end-to-end goldens. Run: `SKY_E2E=1 cargo test --test golden_list_cps`.

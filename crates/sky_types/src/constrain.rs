@@ -2213,6 +2213,30 @@ impl<'a> Builder<'a> {
             K::ListRange => fun(int(), fun(int(), list(int()))),
             // reverse : List a -> List a
             K::ListReverse => fun(list(var(0)), list(var(0))),
+            // append : List a -> List a -> List a
+            K::ListAppend => fun(list(var(0)), fun(list(var(0)), list(var(0)))),
+            // concat : List (List a) -> List a
+            K::ListConcat => fun(list(list(var(0))), list(var(0))),
+            // take : Int -> List a -> List a
+            K::ListTake => fun(int(), fun(list(var(0)), list(var(0)))),
+            // drop : Int -> List a -> List a
+            K::ListDrop => fun(int(), fun(list(var(0)), list(var(0)))),
+            // zip : List a -> List b -> List (a, b)
+            K::ListZip => fun(
+                list(var(0)),
+                fun(list(var(1)), list(tuple2(var(0), var(1)))),
+            ),
+            // cons : a -> List a -> List a
+            K::ListCons => fun(var(0), fun(list(var(0)), list(var(0)))),
+            // isEmpty : List a -> Bool
+            K::ListIsEmpty => fun(list(var(0)), bool_ty()),
+            // concatMap : (a -> List b) -> List a -> List b
+            K::ListConcatMap => fun(fun(var(0), list(var(1))), fun(list(var(0)), list(var(1)))),
+            // indexedMap : (Int -> a -> b) -> List a -> List b
+            K::ListIndexedMap => fun(
+                fun(int(), fun(var(0), var(1))),
+                fun(list(var(0)), list(var(1))),
+            ),
 
             // ── Math (min / max stay on the obligation path — NOT migrated) ──
             // Constants — bare Float values (arity 0).
@@ -5763,6 +5787,22 @@ mod registry_phase_c_tests {
             K::UuidV4,
             K::UuidV7,
             K::UuidParse,
+            // List (9 — task #68): the non-HOF combinators `append`/`concat`/
+            // `take`/`drop`/`zip`/`cons`/`isEmpty` plus the two HOFs
+            // `concatMap`/`indexedMap`. Canon anchored every `List.x` to
+            // `VarHome::Kernel`, but only 10 had a `KernelFn`+scheme — these nine
+            // were holes (`kernel_ty` had no arm → `Ty::Var(u32::MAX)`) and
+            // emitted SKY-L0108 at lower. Now schemed from their runtime + `.sky`
+            // signatures; confirmed holes by `first_schemed_were_holes`.
+            K::ListAppend,
+            K::ListConcat,
+            K::ListTake,
+            K::ListDrop,
+            K::ListZip,
+            K::ListCons,
+            K::ListIsEmpty,
+            K::ListConcatMap,
+            K::ListIndexedMap,
         ]
     };
 

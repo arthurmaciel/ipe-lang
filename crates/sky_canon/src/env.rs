@@ -272,6 +272,7 @@ impl Env {
                     "append",
                     "concat",
                     "concatMap",
+                    "indexedMap",
                     "reverse",
                     "member",
                     "any",
