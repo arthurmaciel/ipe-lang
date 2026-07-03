@@ -148,6 +148,11 @@ struct TypeCtx<'a> {
 pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::Module> {
     let home = m.name.value.clone();
     let mut env = Env::initial(home, interner)?;
+    // Register `import Sky.… as Alias` / `import Std.… as Alias` qualifiers.
+    // The single-module path does no dep injection, but stdlib qualifier
+    // aliases must still resolve (`import Sky.Core.Json.Encode as Encode` →
+    // `Encode.string`), so run the same registration the multi-module path uses.
+    register_stdlib_import_aliases(&m.imports, &mut env, interner)?;
     // type_home_map and extra_aliases both start empty; canonicalise_with_env
     // populates type_home_map from this module's unions and merges extra_aliases
     // (empty here) with the module's own aliases.
@@ -208,6 +213,11 @@ pub fn canonicalise_module(
     }
 
     let mut env = Env::initial(home.clone(), interner)?;
+    // Register user import aliases for stdlib (`Sky.*` / `Std.*`) modules BEFORE
+    // the dep-injection loop below. The loop bare-`continue`s for stdlib imports
+    // (they need no dep injection), so alias registration is a separate,
+    // self-contained pass keyed off the same authoritative path table.
+    register_stdlib_import_aliases(&m.imports, &mut env, interner)?;
     // type_home_map is extended first by dep-imported types, then by this
     // module's own unions in canonicalise_with_env. Having deps in the map first
     // means this module can reference imported types in its own type annotations.
@@ -270,6 +280,68 @@ pub fn canonicalise_module(
     // Build the export surface from the module's own `exposing (…)` clause.
     let exports = build_module_exports(&home, m, &env);
     Ok((canon_mod, exports))
+}
+
+/// Register user import aliases for stdlib (`Sky.*` / `Std.*`) modules.
+///
+/// For every stdlib import, resolve its full path to the canonical qualifier
+/// (via [`Env::canonical_stdlib_qualifier`]) and register the user's *effective*
+/// qualifier — the explicit `as Alias`, else the Elm last-segment default —
+/// against the canonical qualifier's kernel members. This is what makes
+/// `import Sky.Core.Json.Encode as Encode` register `Encode` → the `JsonEnc`
+/// members, and `import Std.Ui as U` register `U` → the `Ui` members.
+///
+/// Idempotent when the effective qualifier already equals the canonical name
+/// (the common `import Std.Log as Log` case — `Log` is already registered).
+///
+/// A path that names no known stdlib module is left unregistered (fail-closed,
+/// per [`Env::canonical_stdlib_qualifier`]): any later `Alias.member` reference
+/// surfaces the ordinary `UnknownModule` diagnostic at its use site rather than
+/// resolving against an invented qualifier. This preserves the pre-existing
+/// behaviour for as-yet-unported stdlib modules (e.g. `Sky.Core.ToString`).
+///
+/// # Errors
+/// [`Diagnostic::CompilerBug`] if interning `Sky` / `Std` or a canonical name
+/// exhausts the interner.
+fn register_stdlib_import_aliases(
+    imports: &[src::Import],
+    env: &mut Env,
+    interner: &mut Interner,
+) -> DResult<()> {
+    let sky_sym = interner.intern("Sky")?;
+    let std_sym = interner.intern("Std")?;
+    for import in imports {
+        let dep_path = &import.name.value;
+        // Only `Sky.*` / `Std.*` imports name compiler stdlib modules.
+        if !dep_path
+            .first()
+            .copied()
+            .is_some_and(|s| s == sky_sym || s == std_sym)
+        {
+            continue;
+        }
+        let Some(canonical) = env.canonical_stdlib_qualifier(dep_path, interner)? else {
+            // Unknown stdlib path: register nothing (fail-closed).
+            continue;
+        };
+        // Elm convention: an explicit `as Alias` names the qualifier, otherwise
+        // the module is exposed under the LAST path segment.
+        let alias = import
+            .alias
+            .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
+        if alias == canonical {
+            // Already registered under its canonical name — nothing to clone.
+            continue;
+        }
+        // Clone the canonical qualifier's members under the alias key. The cloned
+        // `VarHome::Kernel` entries carry the CANONICAL module + name symbols, so
+        // a later `Alias.member` resolves to the same `VarKernel` a canonical
+        // reference would (the lowerer's kernel match arms are unaffected).
+        if let Some(members) = env.qual_vars.get(&canonical).cloned() {
+            env.qual_vars.entry(alias).or_default().extend(members);
+        }
+    }
+    Ok(())
 }
 
 /// Shared resolution body used by both [`canonicalise`] and

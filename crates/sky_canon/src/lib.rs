@@ -704,6 +704,199 @@ mod tests {
         assert_eq!(names, vec!["a", "z"], "free vars sorted by name");
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // #78 — stdlib import-alias registration.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Parse + canonicalise a single module through the MULTI-module entry
+    /// (`canonicalise_module`) with no deps — the path the build driver uses for
+    /// a project with a `sky.toml`, and the one that processes `import`
+    /// declarations. Returns the canonical module + interner.
+    fn canon_module_src(src: &str) -> Option<(ast::Module, Interner)> {
+        let mut i = Interner::new();
+        let parsed = sky_parse::parse_module(src, &mut i).ok()?;
+        let expected: Vec<Symbol> = parsed.name.value.clone();
+        let deps: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        let (m, _exports) = canonicalise_module(&parsed, &expected, &deps, &mut i).ok()?;
+        Some((m, i))
+    }
+
+    /// Assert the body of `main` is a bare `Qualifier.member` reference resolving
+    /// to a kernel with the given canonical module + name.
+    fn assert_main_is_kernel(m: &ast::Module, i: &Interner, module: &str, name: &str) {
+        let Some(Def::Untyped { body, .. }) = find_def(m, i, "main") else {
+            assert!(false_marker(), "main should be an untyped def");
+            return;
+        };
+        let Expr_::VarKernel {
+            module: mo,
+            name: na,
+            ..
+        } = &body.value
+        else {
+            assert!(
+                false_marker(),
+                "main body should be a kernel reference, got {:?}",
+                body.value
+            );
+            return;
+        };
+        assert_eq!(i.resolve(*mo), Some(module), "kernel module");
+        assert_eq!(i.resolve(*na), Some(name), "kernel name");
+    }
+
+    #[test]
+    fn stdlib_alias_registers_multisegment_json_encode() {
+        // The reported failure: `import Sky.Core.Json.Encode as Encode` then
+        // `Encode.string` used to error SKY-N0004 (unknown module `Encode`)
+        // because the alias was never registered against the canonical `JsonEnc`.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Json.Encode as Encode\n\n\
+                   main = Encode.string\n";
+        let Some((m, i)) = canon_module_src(src) else {
+            assert!(false_marker(), "aliased stdlib import must canonicalise");
+            return;
+        };
+        assert_main_is_kernel(&m, &i, "JsonEnc", "string");
+    }
+
+    #[test]
+    fn stdlib_alias_registers_multisegment_json_decode_pipeline() {
+        // Deepest path (5 segments) → canonical `JsonDecP`.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Json.Decode.Pipeline as P\n\n\
+                   main = P.required\n";
+        let Some((m, i)) = canon_module_src(src) else {
+            assert!(false_marker(), "aliased pipeline import must canonicalise");
+            return;
+        };
+        assert_main_is_kernel(&m, &i, "JsonDecP", "required");
+    }
+
+    #[test]
+    fn stdlib_alias_registers_std_module() {
+        // Completeness: a `Std.*` module aliased to a name differing from both
+        // the last segment and the canonical qualifier.
+        let src = "module Main exposing (main)\n\
+                   import Std.Ui as U\n\n\
+                   main = U.text\n";
+        let Some((m, i)) = canon_module_src(src) else {
+            assert!(false_marker(), "aliased Std.Ui import must canonicalise");
+            return;
+        };
+        assert_main_is_kernel(&m, &i, "Ui", "text");
+    }
+
+    #[test]
+    fn stdlib_import_no_as_uses_last_segment() {
+        // No `as`: Elm exposes the module under its LAST path segment. Here the
+        // last segment (`Encode`) differs from the canonical qualifier
+        // (`JsonEnc`), so the fix must register `Encode`, not only `JsonEnc`.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Json.Encode\n\n\
+                   main = Encode.string\n";
+        let Some((m, i)) = canon_module_src(src) else {
+            assert!(false_marker(), "no-as stdlib import must canonicalise");
+            return;
+        };
+        assert_main_is_kernel(&m, &i, "JsonEnc", "string");
+    }
+
+    #[test]
+    fn stdlib_alias_works_on_single_module_path() {
+        // The single-module `canonicalise` entry also registers stdlib aliases
+        // (it previously ignored imports entirely).
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Json.Encode as Encode\n\n\
+                   main = Encode.int\n";
+        let mut i = Interner::new();
+        let Ok(parsed) = sky_parse::parse_module(src, &mut i) else {
+            assert!(false_marker(), "parse");
+            return;
+        };
+        let Ok(m) = canonicalise(&parsed, &mut i) else {
+            assert!(false_marker(), "single-module canonicalise must succeed");
+            return;
+        };
+        assert_main_is_kernel(&m, &i, "JsonEnc", "int");
+    }
+
+    #[test]
+    fn unknown_stdlib_alias_stays_fail_closed() {
+        // A `Sky.*` path with no registered canonical qualifier must NOT invent
+        // one: the alias reference surfaces UnknownModule at its use site.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Nonexistent as N\n\n\
+                   main = N.foo\n";
+        let mut i = Interner::new();
+        let Ok(parsed) = sky_parse::parse_module(src, &mut i) else {
+            assert!(false_marker(), "parse");
+            return;
+        };
+        let deps: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        let expected = parsed.name.value.clone();
+        let err = canonicalise_module(&parsed, &expected, &deps, &mut i).err();
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::UnknownModule { .. },
+                    ..
+                })
+            ),
+            "unknown stdlib alias must fail closed with UnknownModule, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn stdlib_module_paths_target_a_known_qualifier() {
+        // Anti-drift (no dangling target): every canonical named in the path
+        // table is a real registered qualifier, and every path is `Sky.*`/`Std.*`.
+        let mut i = Interner::new();
+        let home = vec![i.intern("Main").expect("intern Main")];
+        let env = Env::initial(home, &mut i).expect("build env");
+        for (path, canonical) in crate::env::STDLIB_MODULE_QUALIFIERS {
+            assert!(
+                matches!(path.first(), Some(&("Sky" | "Std"))),
+                "path {path:?} must start with Sky or Std"
+            );
+            let sym = i.intern(canonical).expect("intern canonical");
+            assert!(
+                env.qual_members(sym).is_some(),
+                "canonical `{canonical}` for path {path:?} is not a registered qualifier"
+            );
+        }
+    }
+
+    #[test]
+    fn every_canonical_qualifier_has_an_import_path() {
+        // Anti-drift (total coverage): every PRIMARY qualifier the registry
+        // defines is reachable via at least one import path, so a new kernel
+        // module cannot ship without an `import … as Alias` route.
+        //
+        // Primary qualifiers are the bare short-names (no `.`) plus the sole
+        // dotted canonical `Db.Decode`; the other dotted `qual_vars` keys are the
+        // inline-qualifier convenience aliases (`Std.Html`, …), not import targets.
+        let mut i = Interner::new();
+        let home = vec![i.intern("Main").expect("intern Main")];
+        let env = Env::initial(home, &mut i).expect("build env");
+        let targets: BTreeSet<&str> = crate::env::STDLIB_MODULE_QUALIFIERS
+            .iter()
+            .map(|(_, c)| *c)
+            .collect();
+        for &key in env.qual_vars.keys() {
+            let Some(name) = i.resolve(key) else { continue };
+            let is_primary = !name.contains('.') || name == "Db.Decode";
+            if is_primary {
+                assert!(
+                    targets.contains(name),
+                    "canonical qualifier `{name}` has no STDLIB_MODULE_QUALIFIERS \
+                     import path — add one so `import …Path… as Alias` can register it"
+                );
+            }
+        }
+    }
+
     /// A runtime `false` the optimiser cannot fold, so `assert!(false_marker())`
     /// fails the test (the desired "wrong variant" signal) without tripping
     /// `clippy::assertions_on_constants`, which fires on a literal `false`.
