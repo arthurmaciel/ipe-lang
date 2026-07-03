@@ -258,6 +258,255 @@ fn ir_contains_fun(ty: &IrType) -> bool {
     }
 }
 
+// ── TCO (#49): tail-recursion detection + rewrite ────────────────────────────
+//
+// Mirrors the reference implementation (`Sky.Build.TailCallOpt`:
+// `isTailRecursive` / `rewriteTailCalls`), improving the jump transport (a typed
+// `Expr::TailRecur`, never a stringly kernel-name sentinel) and the self-call
+// identity (`FuncId`, not `(module, name)`).
+
+/// Outcome of the tail-recursion analysis for one `Func`. Computed once; the
+/// rewrite consumes it. Distinct constructors keep "should we TCO?" a value —
+/// never a re-derived predicate.
+#[doc(hidden)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TailRecursion {
+    /// No self-call, or ≥ 1 self-call in non-tail position → leave as ordinary
+    /// recursion (Limitation #8, O(N) stack).
+    NotTailRecursive,
+    /// Every self-call is a tail-position call at the correct arity, and there is
+    /// ≥ 1 of them → safe to rewrite to a loop.
+    TailRecursive,
+}
+
+/// Classify `body` for TCO. Semantics mirror the reference's `isTailRecursive`:
+/// `tail_self_calls > 0 && non_tail_self_calls == 0`.
+#[doc(hidden)]
+#[must_use]
+pub fn analyze_tail_recursion(self_id: FuncId, arity: usize, body: &Expr) -> TailRecursion {
+    let mut tail = 0usize;
+    let mut non_tail = 0usize;
+    count_self_calls(self_id, arity, body, true, &mut tail, &mut non_tail);
+    if tail > 0 && non_tail == 0 {
+        TailRecursion::TailRecursive
+    } else {
+        TailRecursion::NotTailRecursive
+    }
+}
+
+/// Walk `expr`, counting self-calls to `self_id` split by tail vs non-tail
+/// position. `in_tail` is `true` only where the enclosing context puts `expr` in
+/// tail position: the trailing expression, `If.then_`/`.else_` (never `.cond`),
+/// every `Match` arm body (never the scrutinee), and `Let`/`Destructure` bodies
+/// (never their `value`). Every other descent — critically `Lambda.body`, all
+/// call/apply arguments, operands, list/tuple/record/ctor elements, and both
+/// `TaskSeq` sub-terms — is non-tail.
+fn count_self_calls(
+    self_id: FuncId,
+    arity: usize,
+    expr: &Expr,
+    in_tail: bool,
+    tail: &mut usize,
+    non_tail: &mut usize,
+) {
+    match expr {
+        // A direct call to the enclosing fn.
+        Expr::Call {
+            callee: Callee::Func(id),
+            args,
+        } if *id == self_id => {
+            if in_tail && args.len() == arity {
+                *tail += 1;
+            } else {
+                // A tail self-call at the WRONG arity, or a self-call in a
+                // non-tail position, is a genuine escape the loop must not touch:
+                // count it as non-tail so it disqualifies TCO.
+                *non_tail += 1;
+            }
+            // Arguments are ALWAYS non-tail, regardless of the call's position.
+            for a in args {
+                count_self_calls(self_id, arity, a, false, tail, non_tail);
+            }
+        }
+        // Forms that descend into an `args` vector with every element non-tail: a
+        // call to a DIFFERENT fn / kernel (self-calls are handled by the guarded
+        // arm above), a constructor application, and a `TailRecur` jump (its
+        // next-iteration args are evaluated non-tail).
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                count_self_calls(self_id, arity, a, false, tail, non_tail);
+            }
+        }
+        // A first-class reference to OUR fn that is not a direct call = escape.
+        Expr::FuncValue {
+            callee: Callee::Func(id),
+            ..
+        } if *id == self_id => {
+            *non_tail += 1;
+        }
+        Expr::Apply { func, args } => {
+            count_self_calls(self_id, arity, func, false, tail, non_tail);
+            for a in args {
+                count_self_calls(self_id, arity, a, false, tail, non_tail);
+            }
+        }
+        // Tail propagators.
+        Expr::If { cond, then_, else_ } => {
+            count_self_calls(self_id, arity, cond, false, tail, non_tail);
+            count_self_calls(self_id, arity, then_, in_tail, tail, non_tail);
+            count_self_calls(self_id, arity, else_, in_tail, tail, non_tail);
+        }
+        Expr::Match(m) => {
+            count_self_calls(self_id, arity, m.scrutinee(), false, tail, non_tail);
+            for arm in m.arms() {
+                count_self_calls(self_id, arity, &arm.body, in_tail, tail, non_tail);
+            }
+        }
+        // `Let` and `Destructure` share the shape `value` (non-tail) + `body`
+        // (in tail position).
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            count_self_calls(self_id, arity, value, false, tail, non_tail);
+            count_self_calls(self_id, arity, body, in_tail, tail, non_tail);
+        }
+        // Non-tail descents.
+        Expr::Lambda { body, .. } => {
+            count_self_calls(self_id, arity, body, false, tail, non_tail);
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            count_self_calls(self_id, arity, lhs, false, tail, non_tail);
+            count_self_calls(self_id, arity, rhs, false, tail, non_tail);
+        }
+        Expr::Cons { head, tail: t } => {
+            count_self_calls(self_id, arity, head, false, tail, non_tail);
+            count_self_calls(self_id, arity, t, false, tail, non_tail);
+        }
+        Expr::Tuple(xs) | Expr::List { items: xs, .. } => {
+            for x in xs {
+                count_self_calls(self_id, arity, x, false, tail, non_tail);
+            }
+        }
+        Expr::Record(fs) => {
+            for (_, v) in fs {
+                count_self_calls(self_id, arity, v, false, tail, non_tail);
+            }
+        }
+        Expr::Update { record, fields } => {
+            count_self_calls(self_id, arity, record, false, tail, non_tail);
+            for (_, v) in fields {
+                count_self_calls(self_id, arity, v, false, tail, non_tail);
+            }
+        }
+        Expr::Access { record, .. } => {
+            count_self_calls(self_id, arity, record, false, tail, non_tail);
+        }
+        // Task recursion excluded in v1: BOTH sub-terms non-tail (a Task-recursive
+        // fn is simply not TCO'd = today's behaviour, no regression).
+        Expr::TaskSeq { effect, rest } => {
+            count_self_calls(self_id, arity, effect, false, tail, non_tail);
+            count_self_calls(self_id, arity, rest, false, tail, non_tail);
+        }
+        // Leaves + a non-self `FuncValue` reference — no self-call to count.
+        Expr::FuncValue { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_) => {}
+        // The TCO nodes are not yet produced when analysis runs (the rewrite is
+        // the sole producer and runs AFTER analysis), but the walk stays explicit
+        // and total: a `TailLoop` body is tail (`TailRecur` is merged into the
+        // args-descent arm above).
+        Expr::TailLoop { body, .. } => {
+            count_self_calls(self_id, arity, body, in_tail, tail, non_tail);
+        }
+    }
+}
+
+/// Wrap a proven-tail-recursive body for loop emission. `analyze_tail_recursion`
+/// MUST have returned `TailRecursive` first (no non-tail self-call survives), so
+/// this cannot strand a self-`Call` outside the loop. Mirrors the reference's
+/// `rewriteTailCalls`.
+#[doc(hidden)]
+#[must_use]
+pub fn rewrite_tail_calls(
+    self_id: FuncId,
+    arity: usize,
+    params: Vec<(Symbol, IrType)>,
+    body: Expr,
+) -> Expr {
+    let rewritten = rewrite_in_tail(self_id, arity, body);
+    Expr::TailLoop {
+        params,
+        body: Box::new(rewritten),
+    }
+}
+
+/// Replace each qualifying tail self-call in tail position with `Expr::TailRecur`.
+/// Only the tail propagators recurse in-tail; every non-tail form is returned
+/// verbatim (the analysis proved no self-`Call` survives there, so nothing to
+/// rewrite).
+fn rewrite_in_tail(self_id: FuncId, arity: usize, expr: Expr) -> Expr {
+    match expr {
+        // The one transformation: a qualifying tail self-call becomes a jump.
+        Expr::Call {
+            callee: Callee::Func(id),
+            args,
+        } if id == self_id && args.len() == arity => Expr::TailRecur { args },
+        Expr::If { cond, then_, else_ } => Expr::If {
+            cond,
+            then_: Box::new(rewrite_in_tail(self_id, arity, *then_)),
+            else_: Box::new(rewrite_in_tail(self_id, arity, *else_)),
+        },
+        Expr::Match(m) => {
+            // Map only the arm bodies in tail position; the scrutinee and every
+            // pattern are preserved. A body-only remap keeps each arm's pattern,
+            // so whichever structural-exhaustiveness condition the original
+            // `Match` satisfied still holds → `new_flat` cannot fail here. On the
+            // impossible error, fall back to the un-rewritten `Match` (sound:
+            // ordinary recursion, never a stranded jump).
+            let scrutinee = m.scrutinee().clone();
+            let arms: Vec<Arm> = m
+                .arms()
+                .iter()
+                .map(|arm| Arm {
+                    pat: arm.pat.clone(),
+                    body: rewrite_in_tail(self_id, arity, arm.body.clone()),
+                })
+                .collect();
+            Match::new_flat(scrutinee, arms).map_or(Expr::Match(m), Expr::Match)
+        }
+        Expr::Let { name, value, body } => Expr::Let {
+            name,
+            value,
+            body: Box::new(rewrite_in_tail(self_id, arity, *body)),
+        },
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => Expr::Destructure {
+            binder,
+            value,
+            body: Box::new(rewrite_in_tail(self_id, arity, *body)),
+        },
+        // Every non-tail form (incl. non-jump Calls, Apply, Lambda, leaves,
+        // TaskSeq) is returned verbatim.
+        other => other,
+    }
+}
+
+/// Test-only re-export of the crate-private TCO analysis/rewrite so the
+/// integration-test binary (`tests/tail_analysis.rs`) can drive them directly.
+#[doc(hidden)]
+pub mod tco_analysis {
+    // The re-exports are consumed only by the integration-test binary
+    // (`tests/tail_analysis.rs`), which the in-crate unused-import lint cannot see.
+    #[allow(unused_imports)]
+    pub use super::{analyze_tail_recursion, rewrite_tail_calls, TailRecursion};
+}
+
 // ── M5b-db: Db-kernel presence detection ─────────────────────────────────────
 
 /// Return `true` when `expr` (or any of its sub-expressions, recursively)
@@ -290,7 +539,9 @@ fn expr_uses_db_kernel(expr: &Expr) -> bool {
             expr_uses_db_kernel(m.scrutinee())
                 || m.arms().iter().any(|arm| expr_uses_db_kernel(&arm.body))
         }
-        Expr::Lambda { body, .. } => expr_uses_db_kernel(body),
+        // `TailLoop` (a TCO'd body) recurses into its tail body exactly as the
+        // pre-TCO body would, so kernel-presence detection is unchanged in meaning.
+        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_db_kernel(body),
         Expr::Cons { head, tail } => expr_uses_db_kernel(head) || expr_uses_db_kernel(tail),
         Expr::Tuple(elems) => elems.iter().any(expr_uses_db_kernel),
         Expr::List { items, .. } => items.iter().any(expr_uses_db_kernel),
@@ -301,7 +552,8 @@ fn expr_uses_db_kernel(expr: &Expr) -> bool {
         }
         Expr::BinOp { lhs, rhs, .. } => expr_uses_db_kernel(lhs) || expr_uses_db_kernel(rhs),
         Expr::TaskSeq { effect, rest } => expr_uses_db_kernel(effect) || expr_uses_db_kernel(rest),
-        Expr::Ctor { args, .. } => args.iter().any(expr_uses_db_kernel),
+        // A `TailRecur` (a TCO jump) carries its next-iteration args like a `Ctor`.
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_db_kernel),
         // Leaf expressions that cannot contain a kernel call.
         Expr::Int(_)
         | Expr::Bool(_)
@@ -345,7 +597,7 @@ fn expr_uses_tea_kernel(expr: &Expr) -> bool {
         Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
             expr_uses_tea_kernel(value) || expr_uses_tea_kernel(body)
         }
-        Expr::Lambda { body, .. } => expr_uses_tea_kernel(body),
+        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_tea_kernel(body),
         Expr::If { cond, then_, else_ } => {
             expr_uses_tea_kernel(cond) || expr_uses_tea_kernel(then_) || expr_uses_tea_kernel(else_)
         }
@@ -361,7 +613,7 @@ fn expr_uses_tea_kernel(expr: &Expr) -> bool {
             expr_uses_tea_kernel(record) || fields.iter().any(|(_, v)| expr_uses_tea_kernel(v))
         }
         Expr::BinOp { lhs, rhs, .. } => expr_uses_tea_kernel(lhs) || expr_uses_tea_kernel(rhs),
-        Expr::Ctor { args, .. } => args.iter().any(expr_uses_tea_kernel),
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_tea_kernel),
         Expr::Cons { head, tail } => expr_uses_tea_kernel(head) || expr_uses_tea_kernel(tail),
         Expr::Apply { func, args } => {
             expr_uses_tea_kernel(func) || args.iter().any(expr_uses_tea_kernel)
@@ -408,7 +660,7 @@ fn expr_uses_server_kernel(expr: &Expr) -> bool {
         Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
             expr_uses_server_kernel(value) || expr_uses_server_kernel(body)
         }
-        Expr::Lambda { body, .. } => expr_uses_server_kernel(body),
+        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_server_kernel(body),
         Expr::If { cond, then_, else_ } => {
             expr_uses_server_kernel(cond)
                 || expr_uses_server_kernel(then_)
@@ -431,7 +683,9 @@ fn expr_uses_server_kernel(expr: &Expr) -> bool {
         Expr::BinOp { lhs, rhs, .. } => {
             expr_uses_server_kernel(lhs) || expr_uses_server_kernel(rhs)
         }
-        Expr::Ctor { args, .. } => args.iter().any(expr_uses_server_kernel),
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            args.iter().any(expr_uses_server_kernel)
+        }
         Expr::Cons { head, tail } => expr_uses_server_kernel(head) || expr_uses_server_kernel(tail),
         Expr::Apply { func, args } => {
             expr_uses_server_kernel(func) || args.iter().any(expr_uses_server_kernel)
@@ -474,7 +728,7 @@ fn expr_uses_ui_kernel(expr: &Expr) -> bool {
         Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
             expr_uses_ui_kernel(value) || expr_uses_ui_kernel(body)
         }
-        Expr::Lambda { body, .. } => expr_uses_ui_kernel(body),
+        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_ui_kernel(body),
         Expr::If { cond, then_, else_ } => {
             expr_uses_ui_kernel(cond) || expr_uses_ui_kernel(then_) || expr_uses_ui_kernel(else_)
         }
@@ -490,7 +744,7 @@ fn expr_uses_ui_kernel(expr: &Expr) -> bool {
             expr_uses_ui_kernel(record) || fields.iter().any(|(_, v)| expr_uses_ui_kernel(v))
         }
         Expr::BinOp { lhs, rhs, .. } => expr_uses_ui_kernel(lhs) || expr_uses_ui_kernel(rhs),
-        Expr::Ctor { args, .. } => args.iter().any(expr_uses_ui_kernel),
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_ui_kernel),
         Expr::Cons { head, tail } => expr_uses_ui_kernel(head) || expr_uses_ui_kernel(tail),
         Expr::TaskSeq { effect, rest } => expr_uses_ui_kernel(effect) || expr_uses_ui_kernel(rest),
         Expr::Int(_)
@@ -518,7 +772,7 @@ fn expr_uses_live_kernel(expr: &Expr) -> bool {
         Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
             expr_uses_live_kernel(value) || expr_uses_live_kernel(body)
         }
-        Expr::Lambda { body, .. } => expr_uses_live_kernel(body),
+        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_live_kernel(body),
         Expr::If { cond, then_, else_ } => {
             expr_uses_live_kernel(cond)
                 || expr_uses_live_kernel(then_)
@@ -536,7 +790,7 @@ fn expr_uses_live_kernel(expr: &Expr) -> bool {
             expr_uses_live_kernel(record) || fields.iter().any(|(_, v)| expr_uses_live_kernel(v))
         }
         Expr::BinOp { lhs, rhs, .. } => expr_uses_live_kernel(lhs) || expr_uses_live_kernel(rhs),
-        Expr::Ctor { args, .. } => args.iter().any(expr_uses_live_kernel),
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_live_kernel),
         Expr::Cons { head, tail } => expr_uses_live_kernel(head) || expr_uses_live_kernel(tail),
         Expr::TaskSeq { effect, rest } => {
             expr_uses_live_kernel(effect) || expr_uses_live_kernel(rest)
@@ -566,7 +820,7 @@ fn expr_uses_tui_kernel(expr: &Expr) -> bool {
         Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
             expr_uses_tui_kernel(value) || expr_uses_tui_kernel(body)
         }
-        Expr::Lambda { body, .. } => expr_uses_tui_kernel(body),
+        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_tui_kernel(body),
         Expr::If { cond, then_, else_ } => {
             expr_uses_tui_kernel(cond) || expr_uses_tui_kernel(then_) || expr_uses_tui_kernel(else_)
         }
@@ -582,7 +836,7 @@ fn expr_uses_tui_kernel(expr: &Expr) -> bool {
             expr_uses_tui_kernel(record) || fields.iter().any(|(_, v)| expr_uses_tui_kernel(v))
         }
         Expr::BinOp { lhs, rhs, .. } => expr_uses_tui_kernel(lhs) || expr_uses_tui_kernel(rhs),
-        Expr::Ctor { args, .. } => args.iter().any(expr_uses_tui_kernel),
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_tui_kernel),
         Expr::Cons { head, tail } => expr_uses_tui_kernel(head) || expr_uses_tui_kernel(tail),
         Expr::TaskSeq { effect, rest } => {
             expr_uses_tui_kernel(effect) || expr_uses_tui_kernel(rest)
@@ -612,7 +866,7 @@ fn expr_uses_webview_kernel(expr: &Expr) -> bool {
         Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
             expr_uses_webview_kernel(value) || expr_uses_webview_kernel(body)
         }
-        Expr::Lambda { body, .. } => expr_uses_webview_kernel(body),
+        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_webview_kernel(body),
         Expr::If { cond, then_, else_ } => {
             expr_uses_webview_kernel(cond)
                 || expr_uses_webview_kernel(then_)
@@ -635,7 +889,9 @@ fn expr_uses_webview_kernel(expr: &Expr) -> bool {
         Expr::BinOp { lhs, rhs, .. } => {
             expr_uses_webview_kernel(lhs) || expr_uses_webview_kernel(rhs)
         }
-        Expr::Ctor { args, .. } => args.iter().any(expr_uses_webview_kernel),
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            args.iter().any(expr_uses_webview_kernel)
+        }
         Expr::Cons { head, tail } => {
             expr_uses_webview_kernel(head) || expr_uses_webview_kernel(tail)
         }
@@ -1213,6 +1469,16 @@ impl<'a> Lowerer<'a> {
                     .iter()
                     .map(|v| (*v, Self::bounds_for(var_bounds, *v)))
                     .collect();
+                // TCO: if every self-call is a tail call, rewrite the body to a
+                // loop so the Rust stack stays flat (mirrors Sky's TailCallOpt).
+                // Self-recursion only, keyed on `FuncId`; Task-recursion excluded
+                // (see `analyze_tail_recursion`). Guarded by `TailRecursive` so the
+                // rewrite can never strand a self-`Call` outside the loop.
+                let arity = params.len();
+                if analyze_tail_recursion(id, arity, &lowered_body) == TailRecursion::TailRecursive
+                {
+                    lowered_body = rewrite_tail_calls(id, arity, params.clone(), lowered_body);
+                }
                 Ok(Func {
                     id,
                     name,
