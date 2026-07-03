@@ -1,0 +1,28 @@
+module Std.Palette exposing (Shade(..), toHex)
+
+-- Spike module for the compiled-source stdlib subsystem (#98).
+--
+-- The load-bearing property this exercises — impossible for a kernel — is a
+-- module in the reserved `Std.` namespace that DEFINES its own data type AND
+-- pattern-matches its own constructors. `Shade` is deliberately NOT a reserved
+-- built-in type name (unlike `Length` / `Color`), so this validates the
+-- injection + N0025 exemption seam independently of the reserved-name gate.
+--
+-- Every top-level binding is fully annotated: the compiled-source stdlib
+-- discipline (annotation-driven generalisation, no whole-program let-gen) is
+-- machine-checked by a fail-closed canon gate.
+
+
+type Shade
+    = Dark
+    | Light
+
+
+toHex : Shade -> String
+toHex shade =
+    case shade of
+        Dark ->
+            "#000"
+
+        Light ->
+            "#fff"

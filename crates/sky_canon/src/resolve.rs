@@ -105,6 +105,29 @@ fn reject_reserved_builtin_type(name: Symbol, span: Span, interner: &Interner) -
     }
 }
 
+/// Trust provenance of a module entering [`canonicalise_module_with_origin`].
+///
+/// This is the *unforgeable* answer to upstream's "a user file named `Std.Auth`
+/// silently shadows the audited stdlib" supply-chain hazard. The tag is a value
+/// the build **driver** constructs — set to [`Self::EmbeddedStdlib`] *only* for a
+/// module whose source came from `skyc`'s compile-time embed table, and never
+/// derivable from module text. A hostile user file literally named `Std.Palette`
+/// is discovered as ordinary user source, tagged [`Self::User`], and stays
+/// rejected by the reserved-namespace gate (SKY-N0025).
+///
+/// MAKE INVALID STATES UNREPRESENTABLE: "this module is trusted stdlib" is a
+/// typed value, not a string check on the module name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ModuleOrigin {
+    /// Ordinary user-authored source. Subject to every reserved-namespace and
+    /// reserved-builtin-type gate.
+    User,
+    /// A compiled-source stdlib module injected from `skyc`'s embed table. Exempt
+    /// from SKY-N0025 (it legitimately declares `module Std.…`) and required to
+    /// be fully annotated (fail-closed gate below).
+    EmbeddedStdlib,
+}
+
 /// A registered `type alias` awaiting expansion at its use sites.
 ///
 /// `params` are the declared type parameters in source order (empty for a
@@ -182,6 +205,33 @@ pub fn canonicalise_module(
     deps: &BTreeMap<Vec<Symbol>, crate::ModuleExports>,
     interner: &mut Interner,
 ) -> DResult<(canon::Module, crate::ModuleExports)> {
+    // Thin wrapper: an unqualified call is ordinary USER source. The trust tag
+    // can only be raised by a driver that explicitly reaches for
+    // [`canonicalise_module_with_origin`] with the compiled-stdlib source it
+    // embedded — never inferable from module text.
+    canonicalise_module_with_origin(m, expected_path, deps, ModuleOrigin::User, interner)
+}
+
+/// Canonicalise a module carrying an explicit trust [`ModuleOrigin`].
+///
+/// Identical to [`canonicalise_module`] except that an [`ModuleOrigin::EmbeddedStdlib`]
+/// module is (a) exempt from the SKY-N0025 reserved-namespace gate — it
+/// legitimately declares `module Std.…` — and (b) required to carry a type
+/// annotation on every top-level binding (fail-closed; see the gate at the end
+/// of this function). A [`ModuleOrigin::User`] module is treated exactly as
+/// before, so no user-facing behaviour changes on the default path.
+///
+/// # Errors
+/// Same set as [`canonicalise_module`], plus a fail-closed
+/// [`Diagnostic::CompilerBug`] when an [`ModuleOrigin::EmbeddedStdlib`] module has
+/// an un-annotated top-level binding.
+pub fn canonicalise_module_with_origin(
+    m: &src::Module,
+    expected_path: &[Symbol],
+    deps: &BTreeMap<Vec<Symbol>, crate::ModuleExports>,
+    origin: ModuleOrigin,
+    interner: &mut Interner,
+) -> DResult<(canon::Module, crate::ModuleExports)> {
     let home = m.name.value.clone();
 
     // SKY-N0023: declared module name must match the path the build driver
@@ -197,13 +247,17 @@ pub fn canonicalise_module(
 
     // SKY-N0025: `Sky` and `Std` are reserved for the compiler's own stdlib.
     // User modules whose first path segment matches either are rejected here so
-    // they never shadow prelude symbols downstream.
+    // they never shadow prelude symbols downstream. An EmbeddedStdlib module is
+    // the ONE legitimate definer of a `Std.…` / `Sky.…` home, so it is exempt —
+    // but ONLY because the driver vouched for its provenance (unforgeable tag),
+    // never because the text says `module Std.…`.
     let sky_sym = interner.intern("Sky")?;
     let std_sym = interner.intern("Std")?;
-    if home
-        .first()
-        .copied()
-        .is_some_and(|s| s == sky_sym || s == std_sym)
+    if origin == ModuleOrigin::User
+        && home
+            .first()
+            .copied()
+            .is_some_and(|s| s == sky_sym || s == std_sym)
     {
         let name = path_to_dot_string(interner, &home);
         return Err(Diagnostic::Name {
@@ -233,15 +287,22 @@ pub fn canonicalise_module(
     let mut unqual_ctor_origins: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
     for import in &m.imports {
         let dep_path = &import.name.value;
-        // SKY-kernel: Sky.* and Std.* are compiler stdlib modules whose
-        // qualifiers are pre-installed by Env::initial via
-        // install_prelude_qualifiers.  They are not in the user `deps` map and
-        // need no injection — attempting a deps.get on them would produce a
-        // spurious SKY-N0020 for every real module that imports Sky.Core.Prelude.
+        // SKY-kernel vs compiled-source discrimination (fail-closed).
+        //
+        // A `Sky.*` / `Std.*` import is EITHER a kernel module whose qualifiers
+        // are pre-installed by `Env::initial` (absent from the user `deps` map —
+        // a `deps.get` on it would spuriously SKY-N0020 every importer of
+        // `Sky.Core.Prelude`) OR a compiled-source stdlib module the build driver
+        // injected into `deps` (e.g. `Std.Palette` / `Std.Css`). The former stays
+        // on the qualifier-only `continue` path; the latter falls through to the
+        // ordinary `deps.get` + `inject_dep_exports`, resolving byte-identically
+        // to a user dependency. Presence in `deps` is the single discriminator:
+        // a genuine kernel is never in `deps`, a compiled-source module always is.
         if dep_path
             .first()
             .copied()
             .is_some_and(|s| s == sky_sym || s == std_sym)
+            && !deps.contains_key(dep_path)
         {
             continue;
         }
@@ -290,6 +351,33 @@ pub fn canonicalise_module(
         .map(|d| d.name().value)
         .filter(|n| own_alias_names.contains(n))
         .collect();
+    // Fail-closed stdlib annotation gate (design §3). Whole-program rank-based
+    // let-generalisation is NOT implemented: an UN-annotated top-level binding
+    // used at two distinct concrete types would unify under one mono var and
+    // could mis-infer deep inside the stdlib. For an EmbeddedStdlib module we
+    // therefore make the fully-annotated precondition a MACHINE-CHECKED contract
+    // rather than an assumption — any `Def::Untyped` top-level is a
+    // compiler-internal error at THIS boundary, turning a would-be confusing
+    // deep-stdlib unification failure (or exit-0-then-cargo-fail) into an explicit
+    // build-time invariant. It can never fire for user code (User origin skips
+    // this block); synthesised record-alias ctors are `Def::Typed`, so they pass.
+    if origin == ModuleOrigin::EmbeddedStdlib {
+        for d in &canon_mod.defs {
+            if let canon::Def::Untyped { name, .. } = d {
+                let binding = name_str(interner, name.value)?;
+                let module = path_to_dot_string(interner, &home);
+                return Err(Diagnostic::CompilerBug {
+                    where_: "canon.stdlib_unannotated",
+                    detail: format!(
+                        "compiled-source stdlib module `{module}` binding `{binding}` \
+                         must carry a type annotation (annotation-driven generalisation \
+                         is required for stdlib modules)"
+                    ),
+                });
+            }
+        }
+    }
+
     // Build the export surface from the module's own `exposing (…)` clause.
     let exports = build_module_exports(&home, m, &env, &synth_ctor_names);
     Ok((canon_mod, exports))
