@@ -1,0 +1,50 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+import Std.Ui.Background as Background
+
+
+-- #101 regression. A user `type Color` must resolve to its OWN enum
+-- (`MainColor`) even when it flows through the INFERRED lowering path (a boxed
+-- `Fn(Color)` HOF argument), while the genuine Std.Ui `Color` (`Ui.rgb` /
+-- `Background.color`) still lowers to the opaque `UiPlain::Color`. Both coexist
+-- in ONE module — the #100 nominal-identity payoff.
+
+
+type Color
+    = Cyan
+    | Magenta
+
+
+name : Color -> String
+name c =
+    case c of
+        Cyan ->
+            "cyan"
+
+        Magenta ->
+            "magenta"
+
+
+-- `applyTo` is a HOF; passing a lambda literal forces the argument's
+-- `Color -> String` type through the inferred (ty) lowering path — the exact
+-- #101 hijack site (pre-fix: `Box<dyn Fn(sky_runtime::ui::element::Color)>` →
+-- E0433 cargo-101).
+applyTo : (Color -> String) -> Color -> String
+applyTo f c =
+    f c
+
+
+-- Genuine Std.Ui Color (opaque `UiPlain::Color`) in the SAME module.
+styled : String
+styled =
+    Html.htmlRender
+        (Ui.layout []
+            (Ui.el
+                [ Background.color (Ui.rgb 0 128 255) ]
+                (Ui.text "box")))
+
+
+main =
+    println (applyTo (\c -> name c) Magenta ++ "\n" ++ styled)
