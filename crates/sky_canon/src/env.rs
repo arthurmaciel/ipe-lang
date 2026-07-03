@@ -106,6 +106,21 @@ pub enum VarHome {
     Kernel(Option<StdlibKernel>, Symbol, Symbol),
 }
 
+/// One origin of a wildcard-exposed stdlib value member (#98).
+///
+/// Records the resolved kernel [`VarHome`] together with the user's import
+/// `dep_path` (e.g. `["Std", "Html"]`) so an ambiguous bare use can name every
+/// contributing module in its diagnostic without re-deriving the path.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct WildcardOrigin {
+    /// The kernel home cloned from the canonical qualifier's member table — the
+    /// SAME `VarHome::Kernel` a qualified `M.member` reference resolves to, so
+    /// lowering is identical whether the call site is qualified or unqualified.
+    pub home: VarHome,
+    /// The user's import path, used only to render the ambiguity diagnostic.
+    pub dep_path: Vec<Symbol>,
+}
+
 /// Where a constructor resolves to.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CtorHome {
@@ -127,6 +142,22 @@ pub struct Env {
     pub ctors: BTreeMap<Symbol, CtorHome>,
     /// Qualified variable bindings: qualifier → (name → home).
     pub qual_vars: BTreeMap<Symbol, BTreeMap<Symbol, VarHome>>,
+    /// **Low-priority wildcard-exposed stdlib value members (#98).**
+    ///
+    /// A bare value name maps to the set of stdlib modules that flooded it into
+    /// unqualified scope via `import M exposing (..)`, keyed by canonical
+    /// qualifier so re-importing the same module (or importing it under an
+    /// alias) dedups to a single origin.
+    ///
+    /// This is a strictly LOWER-priority tier than [`Self::vars`] /
+    /// [`Self::ctors`]: [`resolve_var`](crate::resolve) consults it ONLY after a
+    /// local, top-level binding, explicit `exposing (name)`, synth record-alias
+    /// constructor, or prelude builtin of the same spelling all miss — so any of
+    /// those SILENTLY shadow a wildcard member (no `DuplicateValue`, unlike the
+    /// explicit-list path). When two or more distinct modules survive for a bare
+    /// use, that use is `AmbiguousImport` (SKY-N0024) AT THE USE SITE, never a
+    /// silent last-wins.
+    pub wildcard_vars: BTreeMap<Symbol, BTreeMap<Symbol, WildcardOrigin>>,
     /// **Phase-A parse-once registry index.**  Maps `(qualifier_sym, name_sym)`
     /// to the typed [`StdlibKernel`] variant, built anti-drift from
     /// [`StdlibKernel::ALL`] in `install_prelude_qualifiers`.
