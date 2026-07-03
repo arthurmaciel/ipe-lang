@@ -358,6 +358,79 @@ fn format_path(path: &[String]) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Compiled-source stdlib injection (#98)
+// ---------------------------------------------------------------------------
+
+/// Transitively inject every compiled-source stdlib module the graph imports.
+///
+/// For each compiled-source module (`Std.Palette`, later `Std.Css` /
+/// `Sky.Core.Error`) reachable from the current `sources`, seed a synthetic
+/// source entry + [`DiscoveredModule`] so the EXISTING topo → dep-first
+/// canonicalise → link path handles it unchanged.
+///
+/// Returns the set of module paths that were **actually injected from the embed
+/// table** — the driver's unforgeable record of which modules are trusted
+/// `EmbeddedStdlib` source. A path is added to this set ONLY when a NEW synthetic
+/// entry is inserted; if `sources` already holds the key (a user file squatting
+/// on `Std.Palette`, or an earlier injection), injection is skipped and the path
+/// is NOT tagged trusted. So a hostile `src/Std/Palette.sky` is canonicalised as
+/// `ModuleOrigin::User` and stays SKY-N0025-rejected.
+///
+/// Efficiency (design §7): the worklist is seeded only from imports that match a
+/// compiled-source module, so a build that imports none does zero work.
+pub fn inject_compiled_std_closure(
+    sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
+    discovered: &mut Vec<DiscoveredModule>,
+) -> BTreeSet<Vec<String>> {
+    let mut injected: BTreeSet<Vec<String>> = BTreeSet::new();
+
+    // Seed the worklist from every compiled-source import across current sources.
+    // Short-circuit: an unused-stdlib build enqueues nothing and returns empty.
+    let mut work: VecDeque<Vec<String>> = VecDeque::new();
+    for (_, src) in sources.values() {
+        for imp in extract_imports_from_source(src) {
+            if crate::stdlib::is_compiled_source_segments(&imp) {
+                work.push_back(imp);
+            }
+        }
+    }
+
+    while let Some(path) = work.pop_front() {
+        // Already present — a user file OR an already-injected node. Skip; do NOT
+        // tag trusted (BTreeMap key = free dedup; user-squat stays User origin).
+        if sources.contains_key(&path) {
+            continue;
+        }
+        let Some(embedded) = crate::stdlib::compiled_std_source_segments(&path) else {
+            // Not a compiled-source module (kernel import inside an embedded
+            // source, e.g. `Sky.Core.Prelude`): leave it kernel-resolved.
+            continue;
+        };
+
+        // Synthetic on-disk-looking path, for diagnostics only. It is never read
+        // from disk: `sources` already carries the embedded text.
+        let synth_path = PathBuf::from("<embedded-stdlib>").join(path.join("."));
+        sources.insert(path.clone(), (synth_path.clone(), embedded.to_owned()));
+        discovered.push(DiscoveredModule {
+            path: synth_path,
+            module_path: path.clone(),
+        });
+        injected.insert(path.clone());
+
+        // Std → Std closure: enqueue the embedded module's OWN compiled-source
+        // imports (a kernel import inside it is not enqueued — it stays
+        // qualifier-resolved). Fixpoint via the `sources.contains_key` guard.
+        for imp in extract_imports_from_source(embedded) {
+            if crate::stdlib::is_compiled_source_segments(&imp) && !sources.contains_key(&imp) {
+                work.push_back(imp);
+            }
+        }
+    }
+
+    injected
+}
+
+// ---------------------------------------------------------------------------
 // Import extraction from source text (pre-parse)
 // ---------------------------------------------------------------------------
 
@@ -479,6 +552,103 @@ import String
         assert!(
             lib_pos < main_pos,
             "Lib.Utils must precede Main in topo order"
+        );
+    }
+
+    #[test]
+    fn inject_closure_seeds_compiled_source_module() {
+        // A Main importing Std.Palette gets the embedded source injected + a
+        // DiscoveredModule pushed, and the path is recorded as trusted.
+        let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        sources.insert(
+            vec!["Main".to_owned()],
+            (
+                PathBuf::from("src/Main.sky"),
+                "module Main exposing (main)\nimport Std.Palette exposing (..)\nmain = 0\n"
+                    .to_owned(),
+            ),
+        );
+        let mut discovered = vec![DiscoveredModule {
+            path: PathBuf::from("src/Main.sky"),
+            module_path: vec!["Main".to_owned()],
+        }];
+
+        let injected = super::inject_compiled_std_closure(&mut sources, &mut discovered);
+
+        let palette = vec!["Std".to_owned(), "Palette".to_owned()];
+        assert!(injected.contains(&palette), "Std.Palette must be injected");
+        assert!(sources.contains_key(&palette), "source seeded");
+        assert!(
+            discovered.iter().any(|m| m.module_path == palette),
+            "DiscoveredModule pushed"
+        );
+    }
+
+    #[test]
+    fn inject_closure_short_circuits_when_no_compiled_import() {
+        // Efficiency: a build importing no compiled-source module does zero work.
+        let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        sources.insert(
+            vec!["Main".to_owned()],
+            (
+                PathBuf::from("src/Main.sky"),
+                "module Main exposing (main)\nimport Sky.Core.Prelude exposing (..)\nmain = 0\n"
+                    .to_owned(),
+            ),
+        );
+        let mut discovered = vec![DiscoveredModule {
+            path: PathBuf::from("src/Main.sky"),
+            module_path: vec!["Main".to_owned()],
+        }];
+
+        let injected = super::inject_compiled_std_closure(&mut sources, &mut discovered);
+        assert!(injected.is_empty(), "no compiled-source import → nothing injected");
+        assert_eq!(sources.len(), 1, "sources untouched");
+    }
+
+    #[test]
+    fn inject_closure_does_not_tag_user_squat_as_trusted() {
+        // SECURITY: a user file already occupying the Std.Palette key is NOT
+        // overwritten and NOT tagged trusted — it will canonicalise as User and
+        // hit SKY-N0025.
+        let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        sources.insert(
+            vec!["Main".to_owned()],
+            (
+                PathBuf::from("src/Main.sky"),
+                "module Main exposing (main)\nimport Std.Palette exposing (..)\nmain = 0\n"
+                    .to_owned(),
+            ),
+        );
+        let palette = vec!["Std".to_owned(), "Palette".to_owned()];
+        sources.insert(
+            palette.clone(),
+            (
+                PathBuf::from("src/Std/Palette.sky"),
+                "module Std.Palette exposing (..)\ntoHex = 0\n".to_owned(),
+            ),
+        );
+        let mut discovered = vec![
+            DiscoveredModule {
+                path: PathBuf::from("src/Main.sky"),
+                module_path: vec!["Main".to_owned()],
+            },
+            DiscoveredModule {
+                path: PathBuf::from("src/Std/Palette.sky"),
+                module_path: palette.clone(),
+            },
+        ];
+
+        let injected = super::inject_compiled_std_closure(&mut sources, &mut discovered);
+        assert!(
+            !injected.contains(&palette),
+            "a user file squatting on Std.Palette must NOT be tagged trusted"
+        );
+        // The user's source is preserved (not clobbered by the embed).
+        let (_, src) = sources.get(&palette).expect("user source kept");
+        assert!(
+            src.contains("toHex = 0"),
+            "user file preserved (injection skipped it)"
         );
     }
 

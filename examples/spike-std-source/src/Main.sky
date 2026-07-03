@@ -1,0 +1,13 @@
+module Main exposing (main)
+
+-- Mixed import set: a KERNEL module (Sky.Core.Prelude, qualifier-resolved) and a
+-- COMPILED-SOURCE module (Std.Palette, injected + canonicalised as ordinary Sky
+-- source). Both must resolve — the resolve.rs `!deps.contains_key` conjunct keeps
+-- the genuine kernel on the continue path while routing Std.Palette through the
+-- normal dep-injection path.
+import Sky.Core.Prelude exposing (..)
+import Std.Palette exposing (Shade(..), toHex)
+
+
+main =
+    println (toHex Dark)

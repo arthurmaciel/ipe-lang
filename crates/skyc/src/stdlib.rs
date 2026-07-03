@@ -155,6 +155,65 @@ pub fn source(module_name: &str) -> Option<&'static str> {
         .map(|m| m.source)
 }
 
+// ===========================================================================
+// Compiled-source stdlib modules (#98) — DISJOINT from `MODULES` above.
+// ===========================================================================
+//
+// `MODULES` above is a PARSE-TEST fixture: those `Sky.Core.*` files are shadow
+// copies whose real implementations are Rust kernels resolved by qualifier.
+// `COMPILED_STD_MODULES` is the opposite: modules that are ACTUALLY compiled
+// from Sky source through the ordinary parse → canon → infer → lower → emit
+// pipeline (a Std-source module that defines AND pattern-matches its own data
+// type — the exact thing a kernel cannot express).
+//
+// A module is EITHER kernel-qualified (a member of `STDLIB_MODULE_QUALIFIERS`)
+// OR compiled-source (here) — never both. `compiled_vs_kernel_qualifier_disjoint`
+// enforces that invariant; a name in both would be pre-installed as a kernel
+// qualifier AND injected as a source dep, giving ambiguous resolution.
+
+/// One compiled-from-source standard-library module: its dotted name and its
+/// embedded Sky source.
+pub struct CompiledStdModule {
+    /// The dotted module name as written in an `import`, e.g. `Std.Palette`.
+    pub dotted: &'static str,
+    /// The module's Sky source, embedded at compile time.
+    pub source: &'static str,
+}
+
+/// `Std.Palette` — the #98 spike: a Std-namespace module that defines `Shade`
+/// and pattern-matches its own constructors in `toHex`.
+const PALETTE: &str = include_str!("../stdlib/Std/Palette.sky");
+
+/// Every compiled-source stdlib module, keyed by its dotted import name.
+///
+/// Disjoint from [`MODULES`] (parse fixtures) and from `sky_canon`'s
+/// `STDLIB_MODULE_QUALIFIERS` (kernel qualifiers) — see the module comment.
+pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[CompiledStdModule {
+    dotted: "Std.Palette",
+    source: PALETTE,
+}];
+
+/// The embedded Sky source for a compiled-source stdlib module named by its path
+/// SEGMENTS (e.g. `["Std", "Palette"]`), or `None` when the segments name no
+/// compiled-source module.
+///
+/// Segment-based (rather than `Symbol`-based) so it composes directly with the
+/// build driver's `Vec<String>` module paths without an interner round-trip.
+#[must_use]
+pub fn compiled_std_source_segments(segments: &[String]) -> Option<&'static str> {
+    let dotted = segments.join(".");
+    COMPILED_STD_MODULES
+        .iter()
+        .find(|m| m.dotted == dotted)
+        .map(|m| m.source)
+}
+
+/// Whether `segments` name a compiled-source stdlib module.
+#[must_use]
+pub fn is_compiled_source_segments(segments: &[String]) -> bool {
+    compiled_std_source_segments(segments).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +247,56 @@ mod tests {
     #[test]
     fn unknown_module_is_absent() {
         assert_eq!(source("Sky.Core.Nope"), None);
+    }
+
+    /// Every compiled-source module must PARSE with the real front end — the
+    /// PARSE-DON'T-VALIDATE floor: a module cannot enter any build graph until it
+    /// is proven to parse with the same parser that reads user code.
+    #[test]
+    fn every_compiled_source_module_parses() {
+        for m in COMPILED_STD_MODULES {
+            let mut interner = Interner::new();
+            let parsed = sky_parse::parse_module(m.source, &mut interner);
+            assert!(
+                parsed.is_ok(),
+                "compiled-source module {} must parse: {:?}",
+                m.dotted,
+                parsed.err()
+            );
+        }
+    }
+
+    /// Load-bearing invariant (design §2.1): a module is EITHER a kernel
+    /// qualifier OR a compiled-source module, never both. A name in both would be
+    /// pre-installed as a kernel qualifier AND injected as a source dep — an
+    /// ambiguous resolution / silent miscompile.
+    #[test]
+    fn compiled_vs_kernel_qualifier_disjoint() {
+        for m in COMPILED_STD_MODULES {
+            let segments: Vec<&str> = m.dotted.split('.').collect();
+            let clash = sky_canon::STDLIB_MODULE_QUALIFIERS
+                .iter()
+                .any(|(path, _)| *path == segments.as_slice());
+            assert!(
+                !clash,
+                "{} is BOTH a compiled-source module and a kernel qualifier — \
+                 the two tables must be disjoint",
+                m.dotted
+            );
+        }
+    }
+
+    /// Segment lookup resolves a compiled-source module and rejects a non-member.
+    #[test]
+    fn compiled_source_segment_lookup() {
+        let palette = vec!["Std".to_owned(), "Palette".to_owned()];
+        assert!(is_compiled_source_segments(&palette));
+        assert!(compiled_std_source_segments(&palette).is_some());
+
+        let log = vec!["Std".to_owned(), "Log".to_owned()];
+        assert!(!is_compiled_source_segments(&log), "Std.Log is a kernel");
+
+        let nope = vec!["Std".to_owned(), "Nope".to_owned()];
+        assert!(!is_compiled_source_segments(&nope));
     }
 }
