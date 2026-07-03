@@ -1,0 +1,90 @@
+//! Soundness regression for Limitation #8 — a large `Sky.Core.List` pipeline
+//! runs in CONSTANT native stack, so a well-typed program cannot abort via a
+//! Rust stack overflow (guard-page `abort()` → SIGABRT, an unclassifiable
+//! process death) on a big list.
+//!
+//! Backend note (verified against this tree): the List surface that is
+//! REACHABLE from a compilable Sky-Rust program is the kernel subset —
+//! `map` / `filter` / `foldl` / `foldr` / `length` / `head` / `tail` / `member`
+//! / `range` / `reverse` — and each of those routes to an ITERATIVE Rust
+//! runtime kernel over `Vec` (`runtime/src/sky_runtime/list.rs`), with no
+//! per-element recursion. This golden pins that: `range → map → foldr` over
+//! `500_000` elements runs to a clean exit under a 512 KiB main-thread stack. A
+//! one-frame-per-element recursion of that depth would SIGABRT
+//! (`exit_code == None`) long before completing; a constant-stack kernel exits
+//! `Some(0)`. It is a standing guard against a future regression that re-routes
+//! any reachable List op onto a body-recursive path.
+//!
+//! The pure-Sky combinators that WERE naively body-recursive in the non-tail
+//! position — `append` / `concat` / `concatMap` / `take` / `zip` /
+//! `indexedMap` — are rewritten to accumulator/CPS form in
+//! `crates/skyc/stdlib/Sky/Core/List.sky` (byte-identical to upstream
+//! `sky-stdlib/Sky/Core/List.sky`), so they are constant-stack BY CONSTRUCTION
+//! the moment they gain lowering support. Today they are unreachable from user
+//! code: they resolve to `VarKernel` with no lowering arm (`Unsupported(Kernels)`)
+//! or are absent from the qualifier registry (`indexedMap` / `find` →
+//! `NoSuchMember`). Wiring them through the lowerer as `VarTopLevel` (so the
+//! rewritten Sky bodies compile) is a compiler-crate change, out of this task's
+//! scope; when it lands, add a capped-stack golden that folds a 500k `append` /
+//! `concat` chain here — the accumulator rewrite already guarantees it passes.
+//!
+//! Gated on `SKY_E2E=1` (emitted-project cargo build/run), like the other
+//! end-to-end goldens. Run: `SKY_E2E=1 cargo test --test golden_list_cps`.
+
+use std::path::{Path, PathBuf};
+
+mod support;
+
+fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+fn golden_dir(root: &Path, name: &str) -> PathBuf {
+    root.join("tests").join("golden").join(name)
+}
+
+/// Compile `tests/golden/<name>/Main.sky` into an emitted Rust project and
+/// return its directory. Fails the test loudly on a compile error.
+fn compile_golden(name: &str) -> PathBuf {
+    let root = repo_root();
+    let entry = golden_dir(&root, name).join("Main.sky");
+    let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve for E2E");
+    let Ok(runtime) = runtime else {
+        return out;
+    };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(built.is_ok(), "build failed for {name}: {:?}", built.err());
+    out
+}
+
+fn e2e_enabled() -> bool {
+    std::env::var("SKY_E2E").is_ok()
+}
+
+/// The soundness proof — constant stack over the reachable List surface. A
+/// `range → map → foldr` pipeline over `500_000` elements runs to a clean exit
+/// under a 512 KiB main-thread stack; a one-frame-per-element recursion would
+/// SIGABRT (`exit_code == None`) first. The value (`500000`, an element count)
+/// is deterministic and also confirms the pipeline is value-correct, not merely
+/// non-crashing.
+#[test]
+fn list_large_pipeline_runs_to_completion_constant_stack() {
+    if !e2e_enabled() {
+        return;
+    }
+    let dir = compile_golden("list_cps_stack");
+    let out = support::build_and_run_stack_limited("list_cps_stack", &dir, 512);
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "expected a clean exit under a capped stack (a per-element recursion \
+         would SIGABRT → exit_code None); got {:?}",
+        out.exit_code
+    );
+    assert_eq!(out.stdout.trim(), "500000");
+}

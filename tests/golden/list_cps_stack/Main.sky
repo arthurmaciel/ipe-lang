@@ -1,0 +1,20 @@
+module Main exposing (main)
+
+-- Soundness regression for Limitation #8 (Rust backend): the REACHABLE List
+-- pipeline runs in CONSTANT native stack. `range` / `map` / `foldr` route to
+-- iterative Rust runtime kernels (over `Vec`, no per-element recursion), so a
+-- 500_000-element pipeline completes under a capped main-thread stack where a
+-- one-frame-per-element recursion would trip the guard page and abort (SIGABRT).
+--
+-- `List.map (\x -> x + 1)` over `[1..500000]` is folded by counting elements,
+-- so the value is deterministic (500000) and independent of the sum's width.
+
+main =
+    println
+        (String.fromInt
+            (List.foldr
+                (\x acc -> acc + 1)
+                0
+                (List.map (\x -> x + 1) (List.range 1 500000))
+            )
+        )
