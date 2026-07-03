@@ -898,6 +898,7 @@ fn write_binding(
     write_expr(out, body, interner, level + 2);
 }
 
+#[allow(clippy::too_many_lines)] // an exhaustive per-variant walker; splitting it obscures the 1:1 map
 fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) {
     match expr {
         Expr::Int(n) => line(out, level, &format!("Int {n}")),
@@ -998,7 +999,43 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
         Expr::TaskSeq { effect, rest } => {
             write_task_seq(out, effect, rest, interner, level);
         }
+        Expr::TailLoop { params, body } => {
+            write_tail_loop(out, params, body, interner, level);
+        }
+        Expr::TailRecur { args } => {
+            line(out, level, "TailRecur");
+            for arg in args {
+                write_expr(out, arg, interner, level + 1);
+            }
+        }
     }
+}
+
+/// Render a [`Expr::TailLoop`] node: a header line, one `param name : ty` line
+/// per loop parameter, then the `body:` sub-tree. Extracted from [`write_expr`]
+/// to stay within the 100-line limit clippy enforces (sibling of
+/// [`write_task_seq`]).
+fn write_tail_loop(
+    out: &mut String,
+    params: &[(Symbol, IrType)],
+    body: &Expr,
+    interner: &Interner,
+    level: usize,
+) {
+    line(out, level, "TailLoop");
+    for (name, ty) in params {
+        line(
+            out,
+            level + 1,
+            &format!(
+                "param {} : {}",
+                sym_name(interner, *name),
+                ir_type_name(interner, ty)
+            ),
+        );
+    }
+    line(out, level + 1, "body");
+    write_expr(out, body, interner, level + 2);
 }
 
 /// Render a [`Expr::TaskSeq`] node: a header line followed by `effect:` and

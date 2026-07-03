@@ -1,0 +1,18 @@
+module Main exposing (main)
+
+-- Deep self-tail-recursion (#49): 2,000,000 iterations. Without TCO the Rust
+-- backend recurses and overflows the thread stack (SIGABRT — an unclassifiable
+-- process death from well-typed Sky). With TCO the body emits a flat
+-- `loop { … continue }`, so the stack stays constant. Value: 2000000.
+
+count : Int -> Int -> Int
+count n acc =
+    if n == 0 then
+        acc
+
+    else
+        count (n - 1) (acc + 1)
+
+
+main =
+    println (String.fromInt (count 2000000 0))

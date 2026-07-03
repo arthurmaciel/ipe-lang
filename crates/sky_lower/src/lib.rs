@@ -22,6 +22,12 @@
 
 mod lower;
 
+/// Test-only surface: the crate-private TCO analysis/rewrite (task #49),
+/// re-exported so the integration-test binary can drive them directly. Hidden
+/// from the public docs; not part of the stable API.
+#[doc(hidden)]
+pub use lower::tco_analysis;
+
 use sky_canon::ast as canon;
 use sky_diagnostics::DResult;
 use sky_intern::Interner;

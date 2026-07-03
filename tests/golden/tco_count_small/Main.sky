@@ -1,0 +1,17 @@
+module Main exposing (main)
+
+-- Small-N sibling of `tco_count` for the Go-parity byte-diff (the 2,000,000-iter
+-- run is reserved for the constant-stack proof; the Go oracle need only confirm
+-- TCO is value-preserving). Value: 1000.
+
+count : Int -> Int -> Int
+count n acc =
+    if n == 0 then
+        acc
+
+    else
+        count (n - 1) (acc + 1)
+
+
+main =
+    println (String.fromInt (count 1000 0))
