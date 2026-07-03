@@ -31,7 +31,7 @@ pub fn live_req(
             // First-value-wins on duplicate header keys, matching Go's
             // `headersToDict` (`vs[0]`). axum yields multi-valued headers in
             // arrival order, so the first `iter()` entry is the first value.
-            hdrs.entry(canonical_header(k.as_str()))
+            hdrs.entry(crate::sky_runtime::http_header::canonical_header(k.as_str()))
                 .or_insert_with(|| val.to_string());
         }
     }
@@ -54,21 +54,6 @@ pub fn live_req(
         headers: hdrs,
         cookies,
     }
-}
-
-/// Title-Case a `-`-separated header name: "content-type" -> "Content-Type"
-/// (axum lower-cases header keys; Go reports canonical case).
-fn canonical_header(k: &str) -> String {
-    k.split('-')
-        .map(|w| {
-            let mut c = w.chars();
-            match c.next() {
-                Some(f) => f.to_ascii_uppercase().to_string() + &c.as_str().to_ascii_lowercase(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("-")
 }
 
 #[cfg(test)]

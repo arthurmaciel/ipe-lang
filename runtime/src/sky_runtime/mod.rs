@@ -107,6 +107,10 @@ pub use tui::{tui_app, tui_app_ui};
 pub mod uuid_kernel;
 pub use uuid_kernel::*;
 
+// Canonical HTTP header-name casing, shared by Sky.Live and Sky.Http.Server.
+// `live` implies `server`, so gating on `server` covers both request paths.
+#[cfg(feature = "server")]
+pub mod http_header;
 #[cfg(feature = "server")]
 pub mod server;
 #[cfg(feature = "server")]
