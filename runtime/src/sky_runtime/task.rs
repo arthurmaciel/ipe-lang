@@ -191,21 +191,72 @@ pub fn task_run<E: From<String> + Send + 'static, A: Send + 'static>(
     block_on(task)
 }
 
+// Task.parallel : List (Task e a) -> Task e (List a)
+//
+// Runs every task concurrently, collecting the `Ok` values in INPUT order.
+//
+// EARLY-CANCEL (the load-bearing correctness property — task #65). On the first
+// failure we return `Err` immediately AND abort every still-running sibling.
+// Aborting is mandatory: a tokio `JoinHandle` that is merely DROPPED becomes
+// DETACHED — the spawned task keeps running to completion in the background.
+// For an effectful Sky task that means its observable side effect (a second DB
+// write, a duplicate charge, a duplicate email) would still fire AFTER the
+// batch has already been reported as failed — a double-write / double-charge
+// hazard. `abort()` on each survivor closes that hole. (Reference: ../sky's
+// Go/upstream `Task.parallel` early-cancel shape; adopted here for the Rust
+// runtime.)
+//
+// DETERMINISM — Ok order AND error order.
+//   * Ok results are pushed in INPUT order: we await the tasks front-to-back
+//     (`VecDeque::pop_front`), so `out[i]` is task `i`'s result. This is the
+//     documented contract and is unchanged from the previous implementation.
+//   * The `Err` that WINS when several tasks fail is the FIRST failure in INPUT
+//     order — never the wall-clock-first one. Because we observe results in
+//     input order, a given list of inputs always yields the same error value,
+//     run to run. This is the strictly more deterministic choice.
+//
+// TRADEOFF (documented, deliberate). Observing failures in input order means a
+// fast failure at index `k` is not ACTED ON until indices `0..k` have resolved.
+// Survivors are aborted the instant the winning (input-order-first) failure is
+// observed, not the instant the wall-clock-first failure occurs — so the abort
+// window can be slightly wider than a race-to-first-failure design. We trade a
+// marginally later abort for a deterministic, reproducible error result. The
+// correctness guarantee still holds unconditionally: once the batch is reported
+// failed, NO task ordered after the failing one can fire its side effect (they
+// are all aborted before this future resolves).
+//
+// TOTALITY: no unwrap/expect/panic/indexing. A `JoinError` from `h.await` is a
+// panic inside the spawned task (we never `.await` a handle after issuing its
+// abort, so the cancelled-handle case is unreachable on this path); it is
+// mapped to the same `Err` the previous implementation surfaced.
 pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
     tasks: Vec<SkyTask<E, A>>,
 ) -> SkyTask<E, Vec<A>> {
     Box::pin(async move {
-        let handles: Vec<tokio::task::JoinHandle<SkyResult<E, A>>> =
+        // Spawn every task up front so they run concurrently. `VecDeque` lets us
+        // pop the front (input order) to await while the un-awaited tail stays
+        // addressable for `abort()` on failure.
+        let mut handles: std::collections::VecDeque<tokio::task::JoinHandle<SkyResult<E, A>>> =
             tasks.into_iter().map(tokio::spawn).collect();
         let mut out = Vec::with_capacity(handles.len());
-        for h in handles {
+        while let Some(h) = handles.pop_front() {
             let result = match h.await {
                 Ok(r) => r,
-                Err(_) => SkyResult::Err("parallel task panicked".to_string().into()),
+                Err(_join_err) => SkyResult::Err("parallel task panicked".to_string().into()),
             };
             match result {
                 SkyResult::Ok(a) => out.push(a),
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                SkyResult::Err(e) => {
+                    // First failure (input order). Abort every survivor still in
+                    // the queue (all ordered AFTER this task) so none of their
+                    // side effects can fire once we have reported failure.
+                    // Already-awaited tasks (`Ok`, popped) are complete — nothing
+                    // to abort. `abort()` on a finished handle is a harmless no-op.
+                    for survivor in &handles {
+                        survivor.abort();
+                    }
+                    return SkyResult::Err(e);
+                }
             }
         }
         ok_res(out)
@@ -512,5 +563,123 @@ mod retry_tests {
             SkyResult::Err(e) => panic!("expected Ok(1), got Err({})", e),
         }
         assert_eq!(counter.load(Ordering::SeqCst), 1, "ran once on success");
+    }
+}
+
+// Task.parallel early-cancel / abort regression (task #65).
+//
+// Proves the two guarantees of the reworked `task_parallel`:
+//   1. On the FIRST `Err`, every still-running sibling is ABORTED — its
+//      delayed, observable side effect must NOT fire after the batch failed.
+//      (Under the old detach-on-drop behaviour the sibling would run to
+//      completion and fire; this test fails against that behaviour, so it is
+//      non-vacuous.)
+//   2. An all-`Ok` run returns the results in INPUT order regardless of the
+//      order in which the tasks actually complete.
+#[cfg(test)]
+mod parallel_abort_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use tokio::time::{Duration, sleep};
+
+    // A task that (would) record an observable side effect — bumping `counter`
+    // — but only AFTER `delay_ms`. If it is aborted before the delay elapses the
+    // side effect never happens, which is exactly what we assert.
+    fn side_effect_task(
+        counter: Arc<AtomicU64>,
+        delay_ms: u64,
+        value: i64,
+    ) -> SkyTask<String, i64> {
+        Box::pin(async move {
+            sleep(Duration::from_millis(delay_ms)).await;
+            counter.fetch_add(1, Ordering::SeqCst);
+            SkyResult::Ok(value)
+        })
+    }
+
+    #[tokio::test]
+    async fn first_err_aborts_siblings_before_their_side_effect_fires() {
+        let counter = Arc::new(AtomicU64::new(0));
+
+        // Index 0 fails immediately; indices 1..=3 would each bump the counter
+        // after 200 ms. Input-order await observes the index-0 failure first and
+        // must abort the three survivors mid-sleep.
+        let tasks: Vec<SkyTask<String, i64>> = vec![
+            Box::pin(async { SkyResult::Err("boom".to_string()) }),
+            side_effect_task(counter.clone(), 200, 1),
+            side_effect_task(counter.clone(), 200, 2),
+            side_effect_task(counter.clone(), 200, 3),
+        ];
+
+        let result = task_parallel(tasks).await;
+        match result {
+            SkyResult::Err(e) => assert_eq!(e, "boom"),
+            SkyResult::Ok(v) => panic!("expected Err(boom), got Ok({:?})", v),
+        }
+
+        // Wait comfortably past the siblings' 200 ms delay. If they had merely
+        // been DETACHED (the old behaviour) they would each fire here, driving
+        // the counter to 3. Aborted, they stay at 0.
+        sleep(Duration::from_millis(500)).await;
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            0,
+            "aborted siblings must not fire their side effect after the batch failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn all_ok_preserves_input_order() {
+        let counter = Arc::new(AtomicU64::new(0));
+
+        // Completion order is the REVERSE of input order: task 0 sleeps longest,
+        // task 3 finishes first. The result Vec must still be [0, 1, 2, 3].
+        let tasks: Vec<SkyTask<String, i64>> = vec![
+            side_effect_task(counter.clone(), 120, 0),
+            side_effect_task(counter.clone(), 90, 1),
+            side_effect_task(counter.clone(), 60, 2),
+            side_effect_task(counter.clone(), 30, 3),
+        ];
+
+        match task_parallel(tasks).await {
+            SkyResult::Ok(v) => assert_eq!(v, vec![0, 1, 2, 3], "Ok results in input order"),
+            SkyResult::Err(e) => panic!("expected Ok, got Err({})", e),
+        }
+        assert_eq!(counter.load(Ordering::SeqCst), 4, "every Ok task ran to completion");
+    }
+
+    #[tokio::test]
+    async fn error_order_is_input_order_not_wall_clock() {
+        // Two tasks fail. Index 1 fails FAST (wall-clock first); index 3 fails
+        // only after a delay. Input-order await must still surface the FIRST
+        // failure in INPUT order — which is index 1 here (index 0 is Ok). The
+        // point: the winning error is deterministic w.r.t. input order.
+        let counter = Arc::new(AtomicU64::new(0));
+        let tasks: Vec<SkyTask<String, i64>> = vec![
+            side_effect_task(counter.clone(), 10, 0),
+            Box::pin(async { SkyResult::Err("first-in-order".to_string()) }),
+            side_effect_task(counter.clone(), 300, 2),
+            Box::pin(async {
+                sleep(Duration::from_millis(5)).await;
+                SkyResult::Err("later-in-order".to_string())
+            }),
+        ];
+
+        match task_parallel(tasks).await {
+            SkyResult::Err(e) => assert_eq!(
+                e, "first-in-order",
+                "winning error is the first failure in INPUT order"
+            ),
+            SkyResult::Ok(v) => panic!("expected Err, got Ok({:?})", v),
+        }
+
+        // The index-2 survivor (300 ms) must have been aborted, not detached.
+        sleep(Duration::from_millis(500)).await;
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "only the index-0 Ok task fired; the index-2 survivor was aborted"
+        );
     }
 }
