@@ -2314,6 +2314,21 @@ impl<'a> Lowerer<'a> {
                         args: ir_args,
                     })
                 }
+                // The opaque JSON value type (`Value = any` in Sky). A concrete
+                // `Con { name: "Value" }` reaches here only from the schemed
+                // `JsonEnc.*` encoders (constrain's `json_value` builtin); it
+                // maps to the same `IrType::Json` (`JsonVal`) that the free-var
+                // JSON path (`ir_type_from_ty_json`) produces, so scheming
+                // JsonEnc leaves the emitted Rust byte-identical while closing the
+                // former `Ty::Var(u32::MAX)` exit-0 hole.
+                //
+                // Placed AFTER the `enum_variants` guard (unlike the sibling
+                // `Length` / `Color` / `Decoder` opaque-name arms, which precede
+                // it): the built-in JSON `Value` is never a user enum, so a
+                // user-declared `type Value` still resolves as its own enum here.
+                // The clean long-term fix is a canon-level reservation of these
+                // opaque builtin type names — see the rewrite report for #69.
+                "Value" => Ok(IrType::Json),
                 // Name resolution guarantees every type constructor resolves to
                 // a builtin or a declared union, so an unknown one here is an
                 // invariant violation, not user error.

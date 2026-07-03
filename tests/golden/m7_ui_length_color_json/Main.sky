@@ -1,0 +1,45 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+import Std.Ui.Background as Background
+
+
+-- Registry Phase-D (#69) end-to-end gate. Exercises the newly-schemed
+-- type-constructor kernel families all the way through type -> lower -> emit
+-- -> run:
+--
+--   * a Std.Ui `Length` value: `Ui.px 120` (fed to `Ui.width`) and
+--     `Ui.minimum 40 Ui.fill` (fed to `Ui.height`);
+--   * a Std.Ui `Color` value: `Ui.rgb 0 128 255` (fed to `Background.color`);
+--   * a `JsonEnc.Value` program: `JsonEnc.object` / `string` / `int` /
+--     `encode`.
+--
+-- Before #69 these kernels were `Ty::Var(u32::MAX)` scheme holes; now they
+-- carry concrete `Length` / `Color` / `Value` region types that lower to
+-- `IrType::UiPlain(_)` / `IrType::Json`.
+
+
+ui : String
+ui =
+    Html.htmlRender
+        (Ui.layout []
+            (Ui.el
+                [ Ui.width (Ui.px 120)
+                , Ui.height (Ui.minimum 40 Ui.fill)
+                , Background.color (Ui.rgb 0 128 255)
+                ]
+                (Ui.text "sized")))
+
+
+json : String
+json =
+    JsonEnc.encode 0
+        (JsonEnc.object
+            [ ( "name", JsonEnc.string "ada" )
+            , ( "age", JsonEnc.int 36 )
+            ])
+
+
+main =
+    println (ui ++ "\n" ++ json)
