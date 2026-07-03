@@ -1,31 +1,49 @@
 module Main exposing (main)
 
--- UUID v4: length must be 36 and version nibble at index 14 must be '4'.
--- UUID v7: length must be 36 and version nibble at index 14 must be '7'.
--- Parse: a freshly generated v4 UUID round-trips through Uuid.parse.
--- Each Uuid.v4 / Uuid.v7 reference calls the generator once; no variable is
--- used more than once, which is required by the current Rust lowering.
+-- Uuid.v4 / Uuid.v7 are `() -> Task Error String` (entropy is an EFFECT,
+-- task #54): each call re-evaluates and draws fresh entropy, so they are
+-- sequenced with Task.andThen. Each generated id is used exactly once (the
+-- current Rust lowering moves a String into a kernel call, so a single binding
+-- can't feed two by-value kernels). Checks, one fresh id each:
+--   * v4 length is 36; v4 version nibble at index 14 is '4';
+--   * a fresh v4 round-trips through the PURE Uuid.parse;
+--   * v7 length is 36; v7 version nibble at index 14 is '7'.
 main =
-    let
-        lenOk4 = String.length Uuid.v4 == 36
+    Task.andThen
+        (\lenId4 ->
+            Task.andThen
+                (\verId4 ->
+                    Task.andThen
+                        (\parseId4 ->
+                            Task.andThen
+                                (\lenId7 ->
+                                    Task.andThen
+                                        (\verId7 ->
+                                            let
+                                                lenOk4 = String.length lenId4 == 36
 
-        versionOk4 = String.slice 14 15 Uuid.v4 == "4"
+                                                versionOk4 = String.slice 14 15 verId4 == "4"
 
-        lenOk7 = String.length Uuid.v7 == 36
+                                                parseOk =
+                                                    case Uuid.parse parseId4 of
+                                                        Just _ ->
+                                                            True
 
-        versionOk7 = String.slice 14 15 Uuid.v7 == "7"
+                                                        Nothing ->
+                                                            False
 
-        parseOk =
-            case Uuid.parse Uuid.v4 of
-                Just _ ->
-                    True
+                                                lenOk7 = String.length lenId7 == 36
 
-                Nothing ->
-                    False
-    in
-    println
-        (if lenOk4 && versionOk4 && lenOk7 && versionOk7 && parseOk then
-            "ok"
+                                                versionOk7 = String.slice 14 15 verId7 == "7"
+                                            in
+                                            println
+                                                (if lenOk4 && versionOk4 && parseOk && lenOk7 && versionOk7 then
+                                                    "ok"
 
-         else
-            "fail")
+                                                 else
+                                                    "fail"))
+                                        (Uuid.v7 ()))
+                                (Uuid.v7 ()))
+                        (Uuid.v4 ()))
+                (Uuid.v4 ()))
+        (Uuid.v4 ())

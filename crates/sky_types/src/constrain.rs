@@ -2878,12 +2878,27 @@ impl<'a> Builder<'a> {
             K::JsonEncObject => fun(list(tuple2(string(), value())), value()),
             K::JsonEncEncode => fun(int(), fun(value(), string())),
 
+            // ── Sky.Core.Uuid (3 — task #54) — ENTROPY IS AN EFFECT ──
+            //    `v4`/`v7` draw fresh entropy per call, so they are typed on the
+            //    effect tier `() -> Task Error String` (runtime `uuid_v4::<E>(_:
+            //    ())` / `uuid_v7::<E>(_: ())` return `SkyTask<E, String>`),
+            //    called `Uuid.v4 ()` exactly like `Time.now ()`. This makes
+            //    "entropy typed as a memoizable pure `String`" unrepresentable —
+            //    a pure `String` is CSE/memoization-eligible, so two references
+            //    could collapse to one shared value (the soundness lie the Go
+            //    backend still carries via bare `Uuid.v4 : String`). `parse`
+            //    stays PURE (`String -> Maybe String`): it inspects an existing
+            //    string with no entropy — a genuine parser, NOT the arity-0
+            //    codegen artifact.
+            K::UuidV4 | K::UuidV7 => fun(Ty::Unit, task(string())),
+            K::UuidParse => fun(string(), maybe(string())),
+
             // Not-yet-migrated / EXCLUDED. `PubSub` (`publish`/`publishNoEcho`)
             // is a KNOWN-UNBACKED exclusion — see `KNOWN_UNBACKED`: no runtime
             // fn and its qualifier is absent from canon `qual_vars`, so it is
             // unreachable and must NOT be schemed (a scheme would forge an
-            // exit-0 path to an unbacked kernel). Uuid (#54) and Encoding (#55)
-            // remain deferred and fall back to the legacy symbol-keyed table.
+            // exit-0 path to an unbacked kernel). Encoding (#55) remains
+            // deferred and falls back to the legacy symbol-keyed table.
             _ => return None,
         })
     }
@@ -5615,10 +5630,12 @@ mod registry_phase_c_tests {
     /// encoders (`string`/`int`/`float`/`bool`/`null`/`list`/`object`/`encode`):
     /// `Length` / `Color` lower to `IrType::UiPlain(_)` and the JSON `Value` type
     /// to `IrType::Json`, all pre-existing IR forms with a complete emit path.
-    /// EXCLUDED (still on the `Ty::Var` fallback): `PubSub`
-    /// (`publish`/`publishNoEcho`) — a KNOWN-UNBACKED exclusion
-    /// (`KNOWN_UNBACKED`), no runtime backing and qualifier absent from canon
-    /// `qual_vars`; Uuid (task #54) and Encoding (task #55).
+    /// Task #54 schemed `Sky.Core.Uuid` (`v4`/`v7` as `() -> Task Error String`
+    /// — entropy is an effect; `parse` as the pure `String -> Maybe String`
+    /// parser), closing that exit-0 hole. EXCLUDED (still on the `Ty::Var`
+    /// fallback): `PubSub` (`publish`/`publishNoEcho`) — a KNOWN-UNBACKED
+    /// exclusion (`KNOWN_UNBACKED`), no runtime backing and qualifier absent
+    /// from canon `qual_vars`; Encoding (task #55).
     const FIRST_SCHEMED: &[StdlibKernel] = {
         use StdlibKernel as K;
         &[
@@ -5738,6 +5755,14 @@ mod registry_phase_c_tests {
             K::JsonEncList,
             K::JsonEncObject,
             K::JsonEncEncode,
+            // Uuid (3 — task #54): `v4`/`v7` are `() -> Task Error String`
+            // (entropy is an effect, not a memoizable pure String); `parse` is
+            // the pure `String -> Maybe String` parser. Each WAS a hole
+            // (`kernel_ty` has no Uuid arm → `Ty::Var(u32::MAX)`), confirmed by
+            // `first_schemed_were_holes`.
+            K::UuidV4,
+            K::UuidV7,
+            K::UuidParse,
         ]
     };
 
