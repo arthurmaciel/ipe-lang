@@ -2344,19 +2344,203 @@ mod tests {
     }
 
     #[test]
-    fn stdlib_exposing_wildcard_is_noop_and_allows_local_shadow() {
-        // `exposing (..)` on a stdlib module is a no-op here (open-import member
-        // flooding is deferred to #98). A local `map` must NOT collide — it is a
-        // legal low-priority shadow, not a `DuplicateValue`.
+    fn stdlib_exposing_wildcard_allows_local_shadow() {
+        // #98: `exposing (..)` on a stdlib module floods the LOW-PRIORITY
+        // wildcard tier. A local `map` must NOT collide (no `DuplicateValue`) and
+        // a bare `map` use must resolve to the LOCAL binding, silently shadowing
+        // the wildcard member.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   map = 1\n\
+                   main = map\n";
+        let Some((m, i)) = canon_src(src) else {
+            assert!(false_marker(), "local shadow of a wildcard member is legal");
+            return;
+        };
+        let body = match find_def(&m, &i, "main") {
+            Some(Def::Untyped { body, .. } | Def::Typed { body, .. }) => Some(&body.value),
+            None => None,
+        };
+        assert!(
+            matches!(body, Some(Expr_::VarTopLevel { name, .. }) if i.resolve(*name) == Some("map")),
+            "bare `map` must resolve to the LOCAL top-level binding, got {body:?}"
+        );
+    }
+
+    // ── #98: `import Sky.*/Std.* exposing (..)` floods the low-priority wildcard
+    // tier ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn stdlib_wildcard_brings_member_into_unqualified_scope() {
+        // `import Std.Html exposing (..)` → bare `div` resolves to the same
+        // `VarKernel { module: Html, name: div }` a `Html.div` reference would.
+        // This is the exact 09-live-counter blocker (SKY-N0001 on bare `div`).
+        let src = "module Main exposing (main)\n\
+                   import Std.Html exposing (..)\n\n\
+                   main = div\n";
+        let Some((m, i)) = canon_src(src) else {
+            assert!(false_marker(), "wildcard `div` must canonicalise");
+            return;
+        };
+        assert_main_is_kernel(&m, &i, "Html", "div");
+    }
+
+    #[test]
+    fn stdlib_wildcard_member_lowers_identically_to_qualified() {
+        // A wildcard `text` and a qualified `Html.text` must produce the same
+        // `VarKernel` (identical module + name), so lowering is unaffected.
+        let bare = "module Main exposing (main)\n\
+                    import Std.Html exposing (..)\n\n\
+                    main = text\n";
+        let qual = "module Main exposing (main)\n\
+                    import Std.Html\n\n\
+                    main = Html.text\n";
+        let Some((mb, ib)) = canon_src(bare) else {
+            assert!(false_marker(), "bare wildcard `text` must canonicalise");
+            return;
+        };
+        let Some((mq, iq)) = canon_src(qual) else {
+            assert!(false_marker(), "qualified `Html.text` must canonicalise");
+            return;
+        };
+        let kernel_of = |m: &ast::Module, i: &Interner| -> Option<(String, String)> {
+            match find_def(m, i, "main") {
+                Some(Def::Untyped { body, .. } | Def::Typed { body, .. }) => match &body.value {
+                    Expr_::VarKernel { module, name, .. } => {
+                        Some((i.resolve(*module)?.to_string(), i.resolve(*name)?.to_string()))
+                    }
+                    _ => None,
+                },
+                None => None,
+            }
+        };
+        assert_eq!(
+            kernel_of(&mb, &ib),
+            Some(("Html".to_string(), "text".to_string())),
+            "bare wildcard `text` resolves to VarKernel(Html, text)"
+        );
+        assert_eq!(
+            kernel_of(&mb, &ib),
+            kernel_of(&mq, &iq),
+            "wildcard and qualified references must lower identically"
+        );
+    }
+
+    #[test]
+    fn two_stdlib_wildcards_same_name_is_ambiguous_at_use() {
+        // Both `Std.Html` and `Std.Ui` export `text`. Two `exposing (..)` imports
+        // are BOTH legal at import time; a bare `text` USE is `AmbiguousImport`
+        // (SKY-N0024), never a silent last-wins.
+        let err = canon_err(
+            "module Main exposing (main)\n\
+             import Std.Html exposing (..)\n\
+             import Std.Ui exposing (..)\n\
+             main = text\n",
+        );
+        let Some(Diagnostic::Name {
+            msg: NameError::AmbiguousImport { name, modules },
+            ..
+        }) = &err
+        else {
+            assert!(false_marker(), "expected AmbiguousImport, got {err:?}");
+            return;
+        };
+        assert_eq!(&**name, "text");
+        assert!(
+            modules.iter().any(|m| &**m == "Std.Html")
+                && modules.iter().any(|m| &**m == "Std.Ui"),
+            "both origins named, got {modules:?}"
+        );
+    }
+
+    #[test]
+    fn two_stdlib_wildcards_shared_name_ok_when_unused() {
+        // The ambiguity is deferred: two wildcards exposing `text` are legal as
+        // long as no bare `text` is used (a non-shared name still resolves).
         let ok = canon_src(
             "module Main exposing (main)\n\
-             import Sky.Core.Prelude exposing (..)\n\
-             map = 1\n\
-             main = map\n",
+             import Std.Html exposing (..)\n\
+             import Std.Ui exposing (..)\n\
+             main = div\n",
         );
         assert!(
             ok.is_some(),
-            "wildcard stdlib import must stay a no-op; local shadow is legal"
+            "unused shared wildcard name must not fail at import time"
+        );
+    }
+
+    #[test]
+    fn two_stdlib_wildcards_ambiguity_resolved_by_local() {
+        // A local binding silently shadows BOTH wildcard origins — no ambiguity,
+        // no `DuplicateValue`.
+        let src = "module Main exposing (main)\n\
+                   import Std.Html exposing (..)\n\
+                   import Std.Ui exposing (..)\n\
+                   text = 1\n\
+                   main = text\n";
+        let Some((m, i)) = canon_src(src) else {
+            assert!(false_marker(), "local shadow resolves the ambiguity");
+            return;
+        };
+        let body = match find_def(&m, &i, "main") {
+            Some(Def::Untyped { body, .. } | Def::Typed { body, .. }) => Some(&body.value),
+            None => None,
+        };
+        assert!(
+            matches!(body, Some(Expr_::VarTopLevel { name, .. }) if i.resolve(*name) == Some("text")),
+            "local `text` shadows both wildcards, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn stdlib_wildcard_shadowed_by_explicit_exposing() {
+        // An explicit `exposing (text)` (higher priority, in `env.vars`) wins over
+        // a wildcard `text`; the pair is NOT ambiguous. Resolves to Html.text.
+        let src = "module Main exposing (main)\n\
+                   import Std.Ui exposing (..)\n\
+                   import Std.Html exposing (text)\n\
+                   main = text\n";
+        let Some((m, i)) = canon_src(src) else {
+            assert!(false_marker(), "explicit exposure wins over wildcard");
+            return;
+        };
+        assert_main_is_kernel(&m, &i, "Html", "text");
+    }
+
+    #[test]
+    fn stdlib_wildcard_same_module_twice_not_ambiguous() {
+        // Importing the same module under an alias AND a wildcard must not fake a
+        // self-ambiguity (dedup by canonical qualifier).
+        let src = "module Main exposing (main)\n\
+                   import Std.Html exposing (..)\n\
+                   import Std.Html as H exposing (..)\n\
+                   main = div\n";
+        let Some((m, i)) = canon_src(src) else {
+            assert!(false_marker(), "same module twice must not be ambiguous");
+            return;
+        };
+        assert_main_is_kernel(&m, &i, "Html", "div");
+    }
+
+    #[test]
+    fn explicit_exposing_still_collides_with_local() {
+        // #97 non-regression: an EXPLICIT `exposing (app)` still hard-collides
+        // with a local `app` (`DuplicateValue`) — unlike a wildcard member.
+        let err = canon_err(
+            "module Main exposing (main)\n\
+             import Std.Live exposing (app)\n\
+             app = 1\n\
+             main = 0\n",
+        );
+        assert!(
+            matches!(
+                &err,
+                Some(Diagnostic::Name {
+                    msg: NameError::DuplicateValue { .. },
+                    ..
+                })
+            ),
+            "explicit exposure must still collide, got {err:?}"
         );
     }
 }
