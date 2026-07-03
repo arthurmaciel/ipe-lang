@@ -192,6 +192,22 @@ pub fn module_value(module: &[&str], name: &str) -> String {
     if name == "main" && module == ["Main"] {
         return "sky_main".to_owned();
     }
+    // A record type-alias auto-constructor (#82) is the ONLY top-level value
+    // whose Sky name begins with an uppercase letter (the parser forces every
+    // other value / function name lowercase). Snake-casing it would fold the
+    // case and could COLLIDE with a same-spelled lowercase value in the same
+    // module — e.g. `type alias Row = { … }` yields the constructor `Row`, and a
+    // value `row` in the same module would both mangle to `main_row` (a
+    // duplicate-definition / wrong-arity miscompile). Emit the constructor's
+    // name VERBATIM (case-preserved) so the ident keeps an uppercase letter and
+    // is therefore provably disjoint from every snake-cased (all-lowercase)
+    // value name, while remaining injective across constructors (Sky names are
+    // unique per module) and across modules (the snake-cased module prefix). The
+    // module-level `#![allow(non_snake_case)]` suppresses the style lint.
+    if name.chars().next().is_some_and(char::is_uppercase) {
+        let prefix = to_snake_case(&module_prefix(module));
+        return mangle_reserved(format!("{prefix}_{name}"));
+    }
     mangle_reserved(to_snake_case(&format!(
         "{}_{}",
         module_prefix(module),
@@ -764,6 +780,32 @@ mod tests {
         assert_eq!(module_value(&["Main"], "main"), "sky_main");
         // `main` outside the `Main` module is NOT the entry.
         assert_eq!(module_value(&["Other"], "main"), "other_main");
+    }
+
+    #[test]
+    fn record_ctor_name_is_case_preserved_and_collision_free() {
+        // #82: a record-alias auto-constructor's uppercase Sky name must NOT
+        // snake-case-fold into a same-spelled lowercase value's ident.
+        assert_eq!(module_value(&["Main"], "Row"), "main_Row");
+        assert_eq!(module_value(&["Main"], "row"), "main_row");
+        assert_ne!(
+            module_value(&["Main"], "Row"),
+            module_value(&["Main"], "row"),
+            "ctor `Row` and value `row` must be distinct idents"
+        );
+        // A multi-word ctor stays verbatim (never `main_user_profile`, which a
+        // value `userProfile` could also produce).
+        assert_eq!(
+            module_value(&["Main"], "UserProfile"),
+            "main_UserProfile"
+        );
+        assert_ne!(
+            module_value(&["Main"], "UserProfile"),
+            module_value(&["Main"], "userProfile"),
+        );
+        // Multi-segment module prefix is still snake-cased; only the ctor name
+        // is preserved.
+        assert_eq!(module_value(&["Lib", "State"], "Widget"), "lib_state_Widget");
     }
 
     #[test]

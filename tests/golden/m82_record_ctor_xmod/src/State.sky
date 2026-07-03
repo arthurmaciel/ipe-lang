@@ -1,0 +1,9 @@
+module State exposing (Account)
+
+import Sky.Core.Prelude exposing (..)
+
+
+-- A record alias defined here; its value-level auto-constructor must be
+-- exported so `Main` can construct an `Account` positionally.
+type alias Account =
+    { id : Int, name : String }
