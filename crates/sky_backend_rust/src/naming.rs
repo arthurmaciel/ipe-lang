@@ -325,6 +325,23 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::BasicsModBy => "basics_mod_by",
         KernelFn::BasicsClamp => "basics_clamp",
         KernelFn::BasicsToString => "basics_to_string",
+        // ── Error kernels (Sky.Core.Error — minimal `Error = String` slice, #86) ─
+        // The eight message constructors share ONE identity runtime symbol: with
+        // `SkyError = String`, `String -> Error` is the identity. `toString`
+        // reuses the existing `errorToString` runtime (`basics_error_to_string`).
+        KernelFn::ErrorUnexpected
+        | KernelFn::ErrorInvalidInput
+        | KernelFn::ErrorIo
+        | KernelFn::ErrorNetwork
+        | KernelFn::ErrorFfi
+        | KernelFn::ErrorDecode
+        | KernelFn::ErrorConflict
+        | KernelFn::ErrorUnavailable => "sky_error_from_message",
+        KernelFn::ErrorTimeout => "sky_error_timeout",
+        KernelFn::ErrorNotFound => "sky_error_not_found",
+        KernelFn::ErrorPermissionDenied => "sky_error_permission_denied",
+        KernelFn::ErrorToString => "basics_error_to_string",
+        KernelFn::ErrorWithMessage => "sky_error_with_message",
         KernelFn::MaybeWithDefault => "maybe_with_default",
         KernelFn::MaybeMap => "sky_maybe_map",
         KernelFn::MaybeAndThen => "sky_maybe_and_then",

@@ -46,6 +46,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Sky", "Core", "List"], "List"),
     (&["Sky", "Core", "Maybe"], "Maybe"),
     (&["Sky", "Core", "Result"], "Result"),
+    (&["Sky", "Core", "Error"], "Error"),
     (&["Sky", "Core", "Math"], "Math"),
     (&["Sky", "Core", "Dict"], "Dict"),
     (&["Sky", "Core", "Set"], "Set"),
@@ -410,6 +411,29 @@ impl Env {
             ),
             ("Maybe", &["withDefault", "map", "andThen"]),
             ("Result", &["withDefault", "map", "andThen", "mapError"]),
+            // `Sky.Core.Error` — the unified error type (minimal `Error = String`
+            // slice, #86). Message constructors + nullary constructors + `toString`
+            // render + `withMessage` modifier. The rich `ErrorKind`/`ErrorDetails`
+            // ADT is deferred to #85; here `Error` is String-backed at runtime but
+            // a distinct nominal HM type.
+            (
+                "Error",
+                &[
+                    "unexpected",
+                    "invalidInput",
+                    "io",
+                    "network",
+                    "ffi",
+                    "decode",
+                    "conflict",
+                    "unavailable",
+                    "timeout",
+                    "notFound",
+                    "permissionDenied",
+                    "toString",
+                    "withMessage",
+                ],
+            ),
             // `Std.Log` — qualified form (`import Std.Log as Log`). `println`/
             // `info`/`debug`/`warn`/`error` are backed (task #78); the `*With`
             // variants take Stringify-bounded attrs and stay fail-closed
