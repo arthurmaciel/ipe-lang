@@ -13,13 +13,13 @@ main =
 
         result =
             case Jwt.encodeRs256 privKey claims of
-                Err e ->
-                    "encode-error: " ++ e
+                Err _ ->
+                    "encode-error"
 
                 Ok token ->
                     case Jwt.decodeRs256 pubKey token of
-                        Err e ->
-                            "decode-error: " ++ e
+                        Err _ ->
+                            "decode-error"
 
                         Ok _ ->
                             "ok"
