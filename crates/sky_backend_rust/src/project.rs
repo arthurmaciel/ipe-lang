@@ -75,6 +75,28 @@ const RUNTIME_MOD_RS_TEA_APPEND: &str = "pub mod tea;\npub use tea::*;\n";
 const RUNTIME_MOD_RS_SERVER_APPEND: &str =
     "pub mod server;\npub use server::*;\npub mod server_stream;\npub use server_stream::*;\n";
 
+// ── Shared transitive dep: http_header ──────────────────────────────────────
+
+/// Lines appended to `sky_runtime/mod.rs` when the program wires in the `server`
+/// OR `live` runtime module.
+///
+/// `http_header.rs` is an ungated, dependency-free leaf module exposing
+/// `canonical_header`. It is referenced UNCONDITIONALLY by BOTH `server.rs`
+/// (`server_header` / `build_request`) and `live/req.rs`
+/// (`crate::sky_runtime::http_header::canonical_header`). It is NOT part of the
+/// M0 base `mod.rs` (a plain CLI program never touches request-header
+/// canonicalisation), so without this append a `Std.Live` or `Sky.Http.Server`
+/// program emits `exit-0`-then-`cargo`-`E0433` (`could not find http_header in
+/// sky_runtime`).
+///
+/// This closes the mod-pruning transitive-dependency hole for `http_header`:
+/// a module that is an unconditional dependency of an INCLUDED module must
+/// itself be included. It is appended AT MOST ONCE — guarded on
+/// `uses_server || uses_live || uses_webview` and de-duplicated by the single
+/// guard — so a program using both Server and Live does not emit a duplicate
+/// `pub mod http_header;` (`E0428`).
+const RUNTIME_MOD_RS_HTTP_HEADER_APPEND: &str = "pub mod http_header;\n";
+
 // ── M7: Std.Ui / Std.Html ───────────────────────────────────────────────────
 
 /// Lines appended to `sky_runtime/mod.rs` when the program uses Std.Ui /
@@ -352,6 +374,14 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         }
         if ctx.uses_server {
             mod_rs.push_str(RUNTIME_MOD_RS_SERVER_APPEND);
+        }
+        // Shared transitive dependency: `http_header` is an unconditional leaf
+        // dependency of BOTH the `server` and `live` runtime modules. Include it
+        // exactly once whenever either is wired in (webview forces `live`). This
+        // is the transitive-closure invariant the append list must maintain — a
+        // module depended on by an included module MUST itself be included.
+        if ctx.uses_server || ctx.uses_live || ctx.uses_webview {
+            mod_rs.push_str(RUNTIME_MOD_RS_HTTP_HEADER_APPEND);
         }
         // M7: Std.Ui / Std.Html render kernels.
         if ctx.uses_ui {
