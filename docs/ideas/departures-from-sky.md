@@ -410,6 +410,33 @@ and `Task.chain` blocks remain options but LOSE inline effect-marking unless pai
 with a marker. Still UNDECIDED, post-M6 — but the criterion ordering is now: keep
 the `Task` type marker; prefer a VISIBLE per-call form (`!`) over invisible ones.
 
+### Idea 7 update (2026-07-03) — `Task.block` scoped-`!` refinement (coordinator steer; UNDECIDED, DEFERRED)
+
+Coordinator dislikes FREE-FLOATING `!` (scattered; "where is `!` legal?" is fuzzy).
+Refinement: **FENCE `!` inside a `Task.block`** — `!` is legal ONLY inside a block, which
+evaluates to `Task Error a`.
+- `x = e!` effect-bind; pure `x = e` (no `!`); a **bare `e!` line = run/discard** (kills
+  the `let _ = … in ()` wart); `!` may fire **INLINE** mid-expression
+  (`(read! a) + (read! b)`, fired LEFT-TO-RIGHT). Final expr = the tail (a pure final
+  auto-`Task.succeed`-wraps).
+- **DOUBLE visibility**: the block boundary marks the effect REGION + `!` marks each
+  effect LINE (pure lines have no `!`) — strictly more visible than bare `!`.
+- Desugars to `Task.andThen`; **Task-specific, no Monad typeclass**. **REPLACES the
+  `let _ = TaskExpr` auto-force** (retire it — `Task.block` becomes the one sequencing
+  form; effects outside a block are just `Task` values for `Cmd.perform`/`Task.run`).
+- Debug tracing in PURE code stays a dev-only `Debug.*` (prod-hard-error) — orthogonal.
+  Still **NO** general `Task.do : Task e a -> ()` (that erases the `Task` marker — the
+  effect-visibility leak the whole idea exists to avoid).
+
+Coordinator's lean: `Task.block` > bare `!`. THREE OPEN sub-decisions (coordinator is
+thinking): (1) **Task-only vs per-type blocks** — lean Task-only (Result/Maybe keep
+`andThen`+`map2-5`; a `Result.block`/`Maybe.block` family reintroduces the per-type-builder
+machinery Elm avoids); (2) **bind spelling** `=`+`!` (lean `!` — only spelling that also
+works INLINE) vs `<-` (statement-level only); (3) **name/shape** `Task.block` (a
+block-introducer, indentation-delimited like `let`; mild magic on a qualified name) vs a
+real keyword (`effect`/`perform`). DEFERRED 2026-07-03 — coordinator wants more thinking
+time. Post-M6 regardless (divergence, not oracle-verifiable).
+
 ## Idea — Elm-style time-travel debugger for live apps (dev-only) 🔬🧊
 
 A built-in debugger for TEA/live apps (Sky.Live + Webview + Tui), in the spirit of
