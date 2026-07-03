@@ -242,3 +242,91 @@ fn webview_counter_tier_b() -> Result<(), BoxError> {
         .into())
     }
 }
+
+/// The same counter, but with `window` let-bound instead of an inline record
+/// literal. Pre-fix, the let-bound `window` reaches emit and fires the G4
+/// `Expr::Record` guard as a spanless `CompilerBug` (`SKY-I0001`). Post-fix, the
+/// lower gate rejects it with `SKY-L0119` at the offending span.
+const SKY_WEBVIEW_LET_BOUND_WINDOW: &str = r#"module Main exposing (main)
+
+import Std.Webview as Webview
+import Std.Ui as Ui
+import Std.Cmd as Cmd
+import Std.Sub as Sub
+
+type Msg
+    = Increment
+    | Decrement
+
+type alias Model =
+    { count : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+        Decrement ->
+            ( { model | count = model.count - 1 }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (Ui.column []
+            [ Ui.el [ Ui.onClick Increment ] (Ui.text "+")
+            , Ui.text (String.fromInt model.count)
+            , Ui.el [ Ui.onClick Decrement ] (Ui.text "-")
+            ])
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    let win = { title = "Counter", size = ( 400, 300 ) } in
+    Webview.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , window = win
+        }
+"#;
+
+/// End-to-end guard: a let-bound `window` on `Webview.app` must produce a clean
+/// user-facing `SKY-L0119` diagnostic during lowering — NOT the pre-fix
+/// internal-compiler-error (`SKY-I0001`) from the emit-stage G4 `Expr::Record`
+/// guard. Compile-only (`skyc::build`) — no `cargo build`, so it runs fast and
+/// needs no wry/tao toolchain, and it exercises the whole parse → canon → types
+/// → lower pipeline end-to-end (unlike the isolated lower unit test).
+#[test]
+fn let_bound_webview_window_is_sky_l0119_not_ice() {
+    let dir = std::env::temp_dir().join("l0119_webview_window_sky");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp sky dir");
+    let entry = dir.join("Main.sky");
+    std::fs::write(&entry, SKY_WEBVIEW_LET_BOUND_WINDOW).expect("write Main.sky");
+
+    let out = std::env::temp_dir().join("l0119_webview_window_out");
+    let _ = std::fs::remove_dir_all(&out);
+    let runtime = skyc::resolve_runtime().expect("runtime available");
+
+    let err = skyc::build(&entry, &out, &runtime)
+        .expect_err("a let-bound window must be rejected, not compiled");
+    // Borrow `err` so it stays available for the assertion message. `None` means
+    // the error was not a `Pipeline` diagnostic at all — a failure just as much as
+    // the wrong code (so the assertion is non-vacuous on both axes).
+    let code = match &err {
+        skyc::CliError::Pipeline { diag, .. } => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        code,
+        Some(sky_diagnostics::SKY_L0119),
+        "expected a SKY-L0119 Pipeline diagnostic (not an ICE), got {err:?}"
+    );
+}

@@ -2789,6 +2789,57 @@ impl<'a> Lowerer<'a> {
         Ok(Expr::Record(lowered))
     }
 
+    /// Lower the single cfg argument of an app-entry kernel, fail-closed on any
+    /// non-literal shape.
+    ///
+    /// The Rust backend emits the runtime entry call by reading the cfg record's
+    /// field expressions directly (see `emit_{live,tui,webview}_call`), so the cfg
+    /// MUST be an inline `canon::Expr_::Record`. A let-bound / piped / call-result
+    /// cfg has no literal fields to read and is rejected here with `SKY-L0119`
+    /// ([`Feature::LetBoundAppCfg`]) at the argument's span — never allowed to
+    /// reach emit, where it would fire a spanless `CompilerBug`.
+    ///
+    /// For `Webview.app`, the nested `window` field must itself be an inline
+    /// record literal and its `size` field an inline 2-tuple literal (the G4 emit
+    /// gates). Those are validated here on the canon fields (which carry spans) so
+    /// a let-bound `window`/`size` gets `SKY-L0119` at the offending span, not an
+    /// ICE.
+    fn lower_app_entry_cfg(&self, peek: &Callee, arg0: &canon::Expr) -> DResult<Expr> {
+        let canon::Expr_::Record(fields) = &arg0.value else {
+            return Err(unsupported(arg0.span, Feature::LetBoundAppCfg));
+        };
+        if matches!(peek, Callee::Kernel(KernelFn::WebviewApp)) {
+            self.reject_non_literal_webview_window(fields)?;
+        }
+        self.lower_app_cfg_record(fields)
+    }
+
+    /// Webview `window` must be an inline record and `window.size` an inline
+    /// tuple. Checked on canon (spanned) fields; a present-but-non-literal shape
+    /// is `SKY-L0119` at that value's span. A MISSING window/size is left
+    /// untouched — the constrain scheme enforces the 5-field shape, so absence is
+    /// a genuine compiler bug handled fail-closed by emit's field lookup.
+    fn reject_non_literal_webview_window(
+        &self,
+        fields: &[(Symbol, canon::Expr)],
+    ) -> DResult<()> {
+        for (name, value) in fields {
+            if self.resolve(*name)? == "window" {
+                let canon::Expr_::Record(win_fields) = &value.value else {
+                    return Err(unsupported(value.span, Feature::LetBoundAppCfg));
+                };
+                for (wname, wvalue) in win_fields {
+                    if self.resolve(*wname)? == "size"
+                        && !matches!(&wvalue.value, canon::Expr_::Tuple(_))
+                    {
+                        return Err(unsupported(wvalue.span, Feature::LetBoundAppCfg));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn lower_call(
         &self,
         callee: &canon::Expr,
@@ -2817,14 +2868,11 @@ impl<'a> Lowerer<'a> {
                     // always `Some` here.  Using `first()` instead of `args[0]`
                     // keeps `clippy::indexing_slicing` clean.
                     if let Some(arg0) = args.first() {
-                        let lowered_cfg = match &arg0.value {
-                            // Direct cfg literal: lower without the L0107 gate.
-                            canon::Expr_::Record(fields) => self.lower_app_cfg_record(fields)?,
-                            // Non-literal (let-bound var, pipe result, etc.):
-                            // `lower_expr` applies `reject_function_through_type_var`
-                            // which is correctly fail-closed for function-embedding types.
-                            _ => self.lower_expr(arg0)?,
-                        };
+                        // Borrow `peek` for the gate BEFORE moving it into the
+                        // returned `Expr::Call`.  A non-literal cfg (let-bound,
+                        // piped, call-result) is rejected here with SKY-L0119
+                        // rather than reaching emit's spanless `CompilerBug`.
+                        let lowered_cfg = self.lower_app_entry_cfg(&peek, arg0)?;
                         return Ok(Expr::Call {
                             callee: peek,
                             args: vec![lowered_cfg],
@@ -2838,18 +2886,17 @@ impl<'a> Lowerer<'a> {
                 // (init/update/view/subscriptions/onKey) do not trip SKY-L0107.
                 // Phase-1c: TuiApp / TuiProgram.
                 // Phase-1d: WebviewApp — the extra `window` field is a plain record
-                //   value (no functions), so it lowers through `lower_expr` normally;
-                //   `lower_app_cfg_record` handles it uniformly with the fn fields.
-                // A non-literal cfg (let-bound, piped, etc.) still goes through
-                // `lower_expr` → `reject_function_through_type_var` — fail-closed.
+                //   value (no functions); `lower_app_entry_cfg` additionally
+                //   requires that record — and its `size` tuple — to be inline
+                //   literals (the G4 emit gates).
+                // A non-literal cfg (let-bound, piped, etc.) is rejected here with
+                // SKY-L0119 at the argument span — fail-closed, never an ICE.
                 Callee::Kernel(KernelFn::TuiApp | KernelFn::TuiProgram | KernelFn::WebviewApp)
                     if args.len() == 1 =>
                 {
                     if let Some(arg0) = args.first() {
-                        let lowered_cfg = match &arg0.value {
-                            canon::Expr_::Record(fields) => self.lower_app_cfg_record(fields)?,
-                            _ => self.lower_expr(arg0)?,
-                        };
+                        // Borrow `peek` for the gate BEFORE moving it below.
+                        let lowered_cfg = self.lower_app_entry_cfg(&peek, arg0)?;
                         return Ok(Expr::Call {
                             callee: peek,
                             args: vec![lowered_cfg],

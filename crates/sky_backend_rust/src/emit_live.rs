@@ -63,11 +63,14 @@ pub fn emit_live_call(
                     detail: format!("Live.app requires 1 argument, got {}", args.len()),
                 });
             };
+            // Unreachable for well-typed source: a non-literal cfg is rejected
+            // at lower with SKY-L0119 (Feature::LetBoundAppCfg); this guard is a
+            // defensive invariant, mirroring the `LiveAppRouted` precedent.
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_live_call::LiveApp",
                     detail: "Live.app cfg must be an inline record literal; \
-                             non-literal cfg is not supported in Phase-1b"
+                             a non-literal cfg is rejected at lower with SKY-L0119"
                         .into(),
                 });
             };

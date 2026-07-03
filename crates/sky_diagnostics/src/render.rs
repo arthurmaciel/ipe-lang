@@ -605,6 +605,12 @@ const fn feature_label(f: Feature) -> &'static str {
              { init, update, view, subscriptions } form for now \
              [feature: routed-live-app]"
         }
+        Feature::LetBoundAppCfg => {
+            "the cfg for an app entry point (`Live.app` / `Tui.app` / `Tui.program` / \
+             `Webview.app`), and for `Webview.app` its nested `window` record and \
+             `window.size` tuple, must be written inline as a record/tuple literal, \
+             not a let-bound variable [feature: let-bound-app-cfg]"
+        }
     }
 }
 

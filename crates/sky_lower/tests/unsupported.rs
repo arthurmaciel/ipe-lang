@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use sky_canon::ast as canon;
 use sky_diagnostics::{
     Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0101, SKY_L0102, SKY_L0105,
-    SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, Span,
+    SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0119, Span,
 };
 use sky_intern::{Interner, Symbol};
 use sky_ir::{BoundSet, Callee, Expr, FuncId, IrType, KernelFn};
@@ -1199,6 +1199,100 @@ fn over_application_with_partial_surplus_saturation_fails_closed() -> DResult<()
         &mut i,
     );
     assert_unsupported(res, Feature::PartialOverApplication, SKY_L0110, call_span);
+    Ok(())
+}
+
+#[test]
+fn let_bound_live_app_cfg_is_unsupported() -> DResult<()> {
+    // `Live.app cfg` where `cfg` is a plain local var (not a record literal)
+    // must lower to SKY-L0119 at the argument span — never an ICE, never the
+    // misleading SKY-L0107 first-class-function message.
+    let mut i = Interner::new();
+    let main = i.intern("main")?;
+    let live = i.intern("Live")?;
+    let app = i.intern("app")?;
+    let cfg = i.intern("cfg")?;
+    let callee = Located::new(
+        Span::new(10, 18),
+        canon::Expr_::VarKernel {
+            id: None,
+            module: live,
+            name: app,
+        },
+    );
+    let arg_span = Span::new(19, 22);
+    let arg = Located::new(arg_span, canon::Expr_::VarLocal(cfg));
+    let body = Located::new(
+        Span::new(10, 22),
+        canon::Expr_::Call(Box::new(callee), vec![arg]),
+    );
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(Span::new(0, 4), main),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty: con_int(&mut i)?, // body type is irrelevant to the intercept
+    };
+    assert_unsupported(
+        run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
+        Feature::LetBoundAppCfg,
+        SKY_L0119,
+        arg_span,
+    );
+    Ok(())
+}
+
+#[test]
+fn let_bound_webview_window_is_unsupported() -> DResult<()> {
+    // `Webview.app { …, window = win }` where `win` is a local var must lower
+    // to SKY-L0119 at the window value span, not an emit-stage CompilerBug.
+    let mut i = Interner::new();
+    let main = i.intern("main")?;
+    let webview = i.intern("Webview")?;
+    let app = i.intern("app")?;
+    let init = i.intern("init")?;
+    let update = i.intern("update")?;
+    let view = i.intern("view")?;
+    let subs = i.intern("subscriptions")?;
+    let window = i.intern("window")?;
+    let win = i.intern("win")?;
+    let placeholder = |span| Located::new(span, canon::Expr_::VarLocal(init));
+    let win_span = Span::new(90, 93);
+    let fields = vec![
+        (init, placeholder(Span::new(30, 34))),
+        (update, placeholder(Span::new(40, 46))),
+        (view, placeholder(Span::new(50, 54))),
+        (subs, placeholder(Span::new(60, 73))),
+        (window, Located::new(win_span, canon::Expr_::VarLocal(win))),
+    ];
+    let cfg = Located::new(Span::new(25, 95), canon::Expr_::Record(fields));
+    let callee = Located::new(
+        Span::new(10, 21),
+        canon::Expr_::VarKernel {
+            id: None,
+            module: webview,
+            name: app,
+        },
+    );
+    let body = Located::new(
+        Span::new(10, 95),
+        canon::Expr_::Call(Box::new(callee), vec![cfg]),
+    );
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(Span::new(0, 4), main),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty: con_int(&mut i)?,
+    };
+    assert_unsupported(
+        run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
+        Feature::LetBoundAppCfg,
+        SKY_L0119,
+        win_span,
+    );
     Ok(())
 }
 
