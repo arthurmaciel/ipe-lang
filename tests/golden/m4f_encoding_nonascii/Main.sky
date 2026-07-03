@@ -1,0 +1,24 @@
+module Main exposing (main)
+
+import Sky.Core.Encoding as Encoding
+
+-- Non-ASCII text under Encoding.base64Encode / hexEncode — GO PARITY (task #55a).
+--
+-- The Encoding.* text codecs encode a String's UTF-8 bytes, byte-for-byte with
+-- the Go backend (Go: base64/hex of []byte(goString)). 'é' is U+00E9, whose
+-- UTF-8 encoding is 0xC3 0xA9 — so hexEncode "café" = "636166c3a9" on BOTH
+-- backends. (The pre-#55a Rust runtime used a Latin-1 char-as-byte model that
+-- truncated 'é' to a single 0xE9 byte; that silent-truncation hole is closed —
+-- codepoints > 255 no longer collapse. Raw-byte round-tripping now lives on
+-- Std.Bytes / Vec<u8>.)
+--
+-- The leading "café" literal anchors the list's element type to String (the
+-- current Rust-backend milestone cannot infer a list whose elements are all
+-- function returns — SKY-L0102); it also echoes the input next to its encodings.
+main =
+    let
+        b64 = Encoding.base64Encode "café"
+
+        hexed = Encoding.hexEncode "café"
+    in
+    println (String.join " " [ "café", b64, hexed ])

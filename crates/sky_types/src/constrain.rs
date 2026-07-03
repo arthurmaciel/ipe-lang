@@ -2811,6 +2811,18 @@ impl<'a> Builder<'a> {
                 fun(string(), fun(string(), result(error_ty(), string())))
             }
 
+            // ── Encoding (6 — task #55a) — the base64 / url / hex text codecs.
+            //    Encoders `String -> String` (UTF-8 bytes, Go parity);
+            //    decoders `String -> Result Error String` (decoded bytes must be
+            //    valid UTF-8 — non-UTF-8 payloads surface as `Err`; raw bytes go
+            //    through `Std.Bytes`). Each WAS a `Ty::Var(u32::MAX)` hole. ──
+            K::EncodingBase64Encode | K::EncodingUrlEncode | K::EncodingHexEncode => {
+                fun(string(), string())
+            }
+            K::EncodingBase64Decode | K::EncodingUrlDecode | K::EncodingHexDecode => {
+                fun(string(), result(error_ty(), string()))
+            }
+
             // ── Json.Decode (17) — mirrors the already-relocated `Db.Decode`
             //    shapes (function-first `map`/`andThen`; `dec(a)` is the opaque
             //    `Decoder a`). Primitives are arity-0 bare decoders. ──
@@ -2917,12 +2929,13 @@ impl<'a> Builder<'a> {
             K::UuidV4 | K::UuidV7 => fun(Ty::Unit, task(string())),
             K::UuidParse => fun(string(), maybe(string())),
 
-            // Not-yet-migrated / EXCLUDED. `PubSub` (`publish`/`publishNoEcho`)
-            // is a KNOWN-UNBACKED exclusion — see `KNOWN_UNBACKED`: no runtime
-            // fn and its qualifier is absent from canon `qual_vars`, so it is
-            // unreachable and must NOT be schemed (a scheme would forge an
-            // exit-0 path to an unbacked kernel). Encoding (#55) remains
-            // deferred and falls back to the legacy symbol-keyed table.
+            // EXCLUDED. `PubSub` (`publish`/`publishNoEcho`) is a KNOWN-UNBACKED
+            // exclusion — see `KNOWN_UNBACKED`: no runtime fn and its qualifier
+            // is absent from canon `qual_vars`, so it is unreachable and must NOT
+            // be schemed (a scheme would forge an exit-0 path to an unbacked
+            // kernel). With Encoding schemed (task #55a), `PubSub` is now the
+            // ONLY family on the `Ty::Var(u32::MAX)` fallback — Phase E folds it
+            // into a hard "unreachable-kernel" error and deletes this arm.
             _ => return None,
         })
     }
@@ -5656,10 +5669,12 @@ mod registry_phase_c_tests {
     /// to `IrType::Json`, all pre-existing IR forms with a complete emit path.
     /// Task #54 schemed `Sky.Core.Uuid` (`v4`/`v7` as `() -> Task Error String`
     /// — entropy is an effect; `parse` as the pure `String -> Maybe String`
-    /// parser), closing that exit-0 hole. EXCLUDED (still on the `Ty::Var`
-    /// fallback): `PubSub` (`publish`/`publishNoEcho`) — a KNOWN-UNBACKED
-    /// exclusion (`KNOWN_UNBACKED`), no runtime backing and qualifier absent
-    /// from canon `qual_vars`; Encoding (task #55).
+    /// parser), closing that exit-0 hole. Task #68 schemed the nine remaining
+    /// `List` combinators; task #55a schemed the six `Encoding` codecs (text
+    /// path now UTF-8, Go parity). EXCLUDED (still on the `Ty::Var` fallback):
+    /// ONLY `PubSub` (`publish`/`publishNoEcho`) — a KNOWN-UNBACKED exclusion
+    /// (`KNOWN_UNBACKED`), no runtime backing and qualifier absent from canon
+    /// `qual_vars`; Phase E turns it into a hard unreachable-kernel error.
     const FIRST_SCHEMED: &[StdlibKernel] = {
         use StdlibKernel as K;
         &[
@@ -5803,6 +5818,18 @@ mod registry_phase_c_tests {
             K::ListIsEmpty,
             K::ListConcatMap,
             K::ListIndexedMap,
+            // Encoding (6 — task #55a): base64/url/hex text codecs. Encoders
+            // `String -> String`, decoders `String -> Result Error String`.
+            // Each WAS a `Ty::Var(u32::MAX)` hole (`kernel_ty` has no Encoding
+            // arm), confirmed by `first_schemed_were_holes`. The runtime text
+            // path is now UTF-8 (Go parity); byte round-tripping moved to
+            // `Std.Bytes`. #55b migrates the runtime-internal byte pipelines.
+            K::EncodingBase64Encode,
+            K::EncodingBase64Decode,
+            K::EncodingUrlEncode,
+            K::EncodingUrlDecode,
+            K::EncodingHexEncode,
+            K::EncodingHexDecode,
         ]
     };
 

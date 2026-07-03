@@ -26,19 +26,16 @@
 //! * `Encoding.base64Decode` of an invalid input → `Err _` branch taken →
 //!   `"invalid"` (`m4f_encoding_invalid`).
 //!
-//! * `Encoding.base64Encode` / `hexEncode` over non-ASCII text → recorded
-//!   `divergence:` (`m4f_encoding_nonascii_divergence`).
+//! * `Encoding.base64Encode` / `hexEncode` over non-ASCII text → Go-parity
+//!   UTF-8 bytes (`m4f_encoding_nonascii`).
 //!
 //! ## Oracle-divergence flags (per golden)
 //!
-//! The pure-ASCII ENCODE roundtrips (`m4f_encoding_base64`, `m4f_encoding_url`,
-//! `m4f_encoding_url_unreserved`, `m4f_encoding_hex`) carry `oracle_divergence
-//! = false`: for ASCII the Rust runtime's Latin-1 byte convention coincides with
-//! Go's string-as-bytes, so output is byte-identical to the Go reference.
-//!
-//! `m4f_encoding_nonascii_divergence` carries `oracle_divergence = true`
-//! (`divergence:` kind): for codepoints ≥ 0x80 the Latin-1 char-as-byte model
-//! differs from Go's UTF-8 string bytes. See `docs/architecture/divergence-policy.md`.
+//! The ENCODE roundtrips (`m4f_encoding_base64`, `m4f_encoding_url`,
+//! `m4f_encoding_url_unreserved`, `m4f_encoding_hex`, `m4f_encoding_nonascii`)
+//! carry `oracle_divergence = false`: the `Encoding.*` text codecs encode a
+//! String's UTF-8 bytes, byte-identical to the Go reference for BOTH ASCII and
+//! non-ASCII (task #55a closed the old Latin-1 truncation hole).
 //!
 //! `m4f_encoding_invalid` carries `oracle_divergence = true` (Go-failure kind):
 //! the Go backend PANICS with `CoerceFailure` (`rt.ResultCoerce` →
@@ -139,8 +136,8 @@ fn encoding_hex_roundtrip() {
 /// differs from Go's UTF-8 string bytes for codepoints ≥ 0x80.  Expected holds
 /// the Sky-Rust output (`café Y2Fm6Q== 636166e9`); see divergence-policy.md.
 #[test]
-fn encoding_nonascii_divergence() {
-    assert_runs_and_matches_oracle("m4f_encoding_nonascii_divergence");
+fn encoding_nonascii() {
+    assert_runs_and_matches_oracle("m4f_encoding_nonascii");
 }
 
 // ── base64Decode of invalid input ────────────────────────────────────────────
