@@ -514,6 +514,63 @@ fn function_in_record_field_via_type_variable_is_unsupported() -> DResult<()> {
 }
 
 #[test]
+fn function_inside_opaque_boxed_wrapper_is_accepted() -> DResult<()> {
+    // The dual of `function_in_record_field_via_type_variable_is_unsupported`:
+    // a function reaching the type argument of a built-in OPAQUE boxed wrapper
+    // (`Decoder`/`Task`/`Cmd`/`Sub`) is legitimate, not a non-derivable carrier.
+    // `JsonDec.succeed makeLabel : Decoder (String -> Int -> String -> String)`
+    // is the canonical decoder-pipeline shape; the runtime `Decoder<E, T>` boxes
+    // its payload behind a `Box<dyn Fn>` and derives nothing over `T`, so a
+    // function `T` compiles and runs (`decode_succeed(curryN(f))`). The
+    // region-based gate MUST NOT reject it the way it rejects a user-enum payload
+    // (`Opt (Int -> Int)`, SKY-L0114) or a record field (`{ v : Int -> Int }`,
+    // SKY-L0107). Regression for the m4h_json_dec_pipeline CtorPayloadFunction
+    // false positive.
+    let mut i = Interner::new();
+    let boxed = i.intern("boxed")?;
+    let r = i.intern("r")?;
+    let int_name = i.intern("Int")?;
+    let decoder_name = i.intern("Decoder")?;
+    let ty = con_int(&mut i)?;
+    let body_span = Span::new(40, 41);
+    // A plain local reference (the gate runs before var resolution, and lowering
+    // does not validate the binding — so a clean lowering proves the gate let it
+    // through rather than that the reference resolved).
+    let body = Located::new(body_span, canon::Expr_::VarLocal(r));
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(Span::new(36, 37), boxed),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty,
+    };
+    let con = |name| Ty::Con {
+        module: Vec::new(),
+        name,
+        args: Vec::new(),
+    };
+    // region type: `Decoder (Int -> Int)` — a function inside the opaque wrapper.
+    let mut regions = BTreeMap::new();
+    regions.insert(
+        body_span,
+        Ty::Con {
+            module: Vec::new(),
+            name: decoder_name,
+            args: vec![Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name)))],
+        },
+    );
+    let res = run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i);
+    assert!(
+        res.is_ok(),
+        "a function inside an opaque boxed wrapper (Decoder) must lower cleanly, \
+         not trip the ctor-payload/record-field function gate: {:?}",
+        res.err()
+    );
+    Ok(())
+}
+
+#[test]
 fn value_callee_lowers_to_apply() -> DResult<()> {
     // A call whose callee is not a kernel/top-level name (here a local that
     // would hold a function value) lowers to `Expr::Apply`, the first-class
