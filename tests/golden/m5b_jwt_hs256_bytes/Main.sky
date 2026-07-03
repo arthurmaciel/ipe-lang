@@ -18,5 +18,5 @@ main =
             Ok token ->
                 token
 
-            Err e ->
-                "encode-error: " ++ e)
+            Err _ ->
+                "encode-error")

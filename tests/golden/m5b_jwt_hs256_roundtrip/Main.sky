@@ -13,13 +13,13 @@ main =
 
         result =
             case Jwt.encodeHs256 encSecret claims of
-                Err e ->
-                    "encode-error: " ++ e
+                Err _ ->
+                    "encode-error"
 
                 Ok token ->
                     case Jwt.decodeHs256 decSecret token of
-                        Err e ->
-                            "decode-error: " ++ e
+                        Err _ ->
+                            "decode-error"
 
                         Ok _ ->
                             "ok"
