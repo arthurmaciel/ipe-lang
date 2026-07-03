@@ -16,8 +16,9 @@
 use std::collections::BTreeMap;
 
 use sky_canon::ast as canon;
-use sky_diagnostics::{DResult, Diagnostic, Span, TypeError};
+use sky_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span, TypeError};
 use sky_intern::{Interner, Symbol};
+use sky_kernels::StdlibKernel;
 
 use crate::doc::{VarNamer, canon_type_to_doc, ty_to_doc};
 use crate::solve::{Budget, Constraint};
@@ -1432,7 +1433,21 @@ impl<'a> Builder<'a> {
     ///   `Hash + Eq + Ord` (Dict) onto its annotation skolem (see `bounds_for`).
     ///   This is also more conservative than Sky's runtime, which keys a Set /
     ///   Dict on a stringified value.
-    fn constrain_var_kernel(&mut self, module: Symbol, name: Symbol, span: Span) -> DResult<VarId> {
+    fn constrain_var_kernel(
+        &mut self,
+        id: Option<StdlibKernel>,
+        module: Symbol,
+        name: Symbol,
+        span: Span,
+    ) -> DResult<VarId> {
+        // ── Obligation pre-checks (unchanged; they live OUTSIDE the scheme
+        //    tables and must fire BEFORE the registry/legacy delegation) ──
+        //
+        // `Math.min` / `Math.max`: `Comparable a => a -> a -> a`. The bounded
+        // super-var is what rejects `Math.min f g` / `Math.min recA recB`
+        // (M4c gate, `golden_m4c_math_gate`). Migrating the *other* Math
+        // kernels into `stdlib_scheme` does NOT touch this path, so the
+        // obligation keeps firing and the gate does not reopen.
         if matches!(self.interner.resolve(module), Some("Math"))
             && matches!(self.interner.resolve(name), Some("min" | "max"))
         {
@@ -1440,6 +1455,9 @@ impl<'a> Builder<'a> {
             let inner = self.structure(FlatType::Fun(s, s))?;
             return self.structure(FlatType::Fun(s, inner));
         }
+        // Dict / Set element-key `comparable` obligation (M4d). Un-migrated —
+        // still routed through the legacy `kernel_ty` scheme + the tied
+        // super-var.
         if let Some(bound) = key_obligation(self.interner, module) {
             let ty = self.kernel_ty(module, name);
             let (var, vars) = self.instantiate_tracked(&ty)?;
@@ -1449,8 +1467,52 @@ impl<'a> Builder<'a> {
             }
             return Ok(var);
         }
-        let ty = self.kernel_ty(module, name);
+        // ── Parse-once dual lookup (Phase C) ──
+        //
+        // Migrated families (String / List / Math-minus-min/max) resolve via
+        // the `StdlibKernel` id — never touching the legacy `Ty::Var(u32::MAX)`
+        // fallback. An un-migrated `Some(k)` (e.g. `String.toUpper`) or a
+        // `None` id (FFI `Rust.*`) falls through to the legacy string table,
+        // which still carries that fallback until Phase E. A miss on BOTH is
+        // fail-closed with SKY-L0108 (loud) rather than silently typed as a
+        // free variable that `cargo` later rejects — the exit-0-then-cargo-fail
+        // hole. (`legacy_kernel_ty` is total in Phase C, so the Err is dormant
+        // in production and covered directly by `both_miss_is_fail_closed`;
+        // Phase E flips the legacy fallback to `None` and the Err goes live.)
+        let registry = id.and_then(|k| self.stdlib_scheme(k));
+        let legacy = self.legacy_kernel_ty(module, name);
+        let ty = Self::kernel_scheme_or_unsupported(registry, legacy, span)?;
         self.instantiate(&ty)
+    }
+
+    /// Combine the parse-once registry scheme (`id` path) with the legacy
+    /// string-table scheme, failing closed with SKY-L0108 (`Feature::Kernels`,
+    /// the same shape lower raises at `lower_callee`) when NEITHER supplies a
+    /// type. Extracted as a pure fn so the fail-closed arm is unit-testable
+    /// independently of the (currently total) legacy table — see
+    /// `both_miss_is_fail_closed`.
+    fn kernel_scheme_or_unsupported(
+        registry: Option<Ty>,
+        legacy: Option<Ty>,
+        span: Span,
+    ) -> DResult<Ty> {
+        registry.or(legacy).ok_or(Diagnostic::Lower {
+            span,
+            msg: LowerError::Unsupported(Feature::Kernels),
+        })
+    }
+
+    /// Legacy string-keyed kernel-type lookup, wrapped as `Option<Ty>` for the
+    /// dual-lookup composition. Phase C keeps this **total**: it returns
+    /// `Some(self.kernel_ty(..))`, which still carries the historical
+    /// `Ty::Var(u32::MAX)` fallback for un-migrated kernels
+    /// (`String.toUpper`, `Ui.text`, `Html.render`, …) so they do not regress.
+    /// Phase E replaces the body with a sentinel-detecting variant that returns
+    /// `None` for un-typed kernels, at which point
+    /// [`Self::kernel_scheme_or_unsupported`] fails them closed.
+    #[allow(clippy::unnecessary_wraps)] // Phase C: total; Phase E returns None for un-typed kernels
+    fn legacy_kernel_ty(&self, module: Symbol, name: Symbol) -> Option<Ty> {
+        Some(self.kernel_ty(module, name))
     }
 
     fn constrain_expr(
@@ -1480,15 +1542,11 @@ impl<'a> Builder<'a> {
             canon::Expr_::VarTopLevel { module, name } => {
                 self.constrain_var_top_level(module, *name, span)?
             }
-            canon::Expr_::VarKernel {
-                id: _,
-                module,
-                name,
-            } => {
-                // Phase B: `id` carries the pre-resolved StdlibKernel but the
-                // constraint engine still operates via the symbol-based
-                // kernel-scheme table; propagate id in a later phase.
-                self.constrain_var_kernel(*module, *name, span)?
+            canon::Expr_::VarKernel { id, module, name } => {
+                // Phase C: the pre-resolved `id` selects the parse-once
+                // registry scheme (`stdlib_scheme`) for migrated families,
+                // falling back to the legacy symbol-keyed table otherwise.
+                self.constrain_var_kernel(*id, *module, *name, span)?
             }
             canon::Expr_::VarCtor {
                 home,
@@ -1878,6 +1936,121 @@ impl<'a> Builder<'a> {
                 },
             },
         )
+    }
+
+    /// Parse-once type scheme for a **migrated** stdlib kernel, keyed by the
+    /// pre-resolved [`StdlibKernel`] id carried on the `VarKernel` node.
+    /// `None` = the kernel is not yet migrated into the registry, so the caller
+    /// ([`Self::constrain_var_kernel`]) falls back to the legacy symbol-keyed
+    /// [`Self::kernel_ty`] table.
+    ///
+    /// Phase C migrates **String → List → Math**, EXCLUDING `Math.min` /
+    /// `Math.max` (they keep their dedicated `Comparable`-obligation path in
+    /// `constrain_var_kernel`, so the M4c gate does not reopen). Every arm here
+    /// is a byte-faithful copy of the corresponding `kernel_ty` arm; the
+    /// structural `Ty`-equality is pinned per-kernel by the
+    /// `stdlib_scheme_matches_legacy` parity tripwire, and the exact migrated
+    /// set is pinned by `migrated_set_burndown`.
+    #[allow(clippy::too_many_lines)] // declarative scheme table — mirrors kernel_ty
+    fn stdlib_scheme(&self, k: StdlibKernel) -> Option<Ty> {
+        use StdlibKernel as K;
+        // Constructors mirror `kernel_ty`'s so the two tables stay byte-faithful
+        // (verified structurally by `stdlib_scheme_matches_legacy`).
+        let int = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.int,
+            args: Vec::new(),
+        };
+        let float = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.float,
+            args: Vec::new(),
+        };
+        let string = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.string,
+            args: Vec::new(),
+        };
+        let bool_ty = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.bool,
+            args: Vec::new(),
+        };
+        let var = Ty::Var;
+        let fun = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b));
+        let list = |t: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.list,
+            args: vec![t],
+        };
+        let maybe = |t: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.maybe,
+            args: vec![t],
+        };
+        Some(match k {
+            // ── String ──
+            K::StringFromInt => fun(int(), string()),
+            K::StringFromFloat => fun(float(), string()),
+
+            // ── List (kernel-anchored combinators) ──
+            // map : (a -> b) -> List a -> List b
+            K::ListMap => fun(fun(var(0), var(1)), fun(list(var(0)), list(var(1)))),
+            // filter : (a -> Bool) -> List a -> List a
+            K::ListFilter => fun(fun(var(0), bool_ty()), fun(list(var(0)), list(var(0)))),
+            // foldl / foldr : (a -> b -> b) -> b -> List a -> b
+            K::ListFoldl | K::ListFoldr => fun(
+                fun(var(0), fun(var(1), var(1))),
+                fun(var(1), fun(list(var(0)), var(1))),
+            ),
+            // length : List a -> Int
+            K::ListLength => fun(list(var(0)), int()),
+            // head : List a -> Maybe a
+            K::ListHead => fun(list(var(0)), maybe(var(0))),
+            // tail : List a -> Maybe (List a)
+            K::ListTail => fun(list(var(0)), maybe(list(var(0)))),
+            // member : a -> List a -> Bool
+            K::ListMember => fun(var(0), fun(list(var(0)), bool_ty())),
+            // range : Int -> Int -> List Int
+            K::ListRange => fun(int(), fun(int(), list(int()))),
+            // reverse : List a -> List a
+            K::ListReverse => fun(list(var(0)), list(var(0))),
+
+            // ── Math (min / max stay on the obligation path — NOT migrated) ──
+            // Constants — bare Float values (arity 0).
+            K::MathPi | K::MathE | K::MathPhi | K::MathSqrt2 | K::MathInf | K::MathNan => float(),
+            // abs : Int -> Int.
+            K::MathAbs => fun(int(), int()),
+            // Arity-1 Float -> Float.
+            K::MathSqrt
+            | K::MathCbrt
+            | K::MathExp
+            | K::MathExp2
+            | K::MathLog
+            | K::MathLog2
+            | K::MathLog10
+            | K::MathSin
+            | K::MathCos
+            | K::MathTan
+            | K::MathAsin
+            | K::MathAcos
+            | K::MathAtan
+            | K::MathSinh
+            | K::MathCosh
+            | K::MathTanh
+            | K::MathAsinh
+            | K::MathAcosh
+            | K::MathAtanh => fun(float(), float()),
+            // Arity-1 Float -> Int (rounding functions).
+            K::MathFloor | K::MathCeil | K::MathRound | K::MathTrunc => fun(float(), int()),
+            // Arity-2 Float -> Float -> Float.
+            K::MathPow | K::MathHypot | K::MathAtan2 | K::MathMod | K::MathRemainder => {
+                fun(float(), fun(float(), float()))
+            }
+
+            // Not-yet-migrated: fall back to the legacy symbol-keyed table.
+            _ => return None,
+        })
     }
 
     /// The type of a kernel function. The wired set is `String.fromInt :
@@ -4236,5 +4409,245 @@ fn zonk_underflow() -> Diagnostic {
     Diagnostic::CompilerBug {
         where_: STAGE,
         detail: "zonk result stack underflow".to_owned(),
+    }
+}
+
+// ===========================================================================
+// Phase C — kernel-registry migration tripwires
+// ===========================================================================
+
+#[cfg(test)]
+impl<'a> Builder<'a> {
+    /// Minimal [`Builder`] for exercising the pure scheme tables
+    /// ([`Self::stdlib_scheme`] / [`Self::kernel_ty`]) in tests. Only `uf`,
+    /// `interner`, and `builtins` are load-bearing for those two methods; every
+    /// other field is empty. Pre-intern any needed strings BEFORE taking the
+    /// immutable borrow into `interner`.
+    fn for_scheme_test(
+        uf: &'a mut UnionFind<Content>,
+        interner: &'a Interner,
+        builtins: Builtins,
+    ) -> Self {
+        Self {
+            uf,
+            interner,
+            builtins,
+            regions: BTreeMap::new(),
+            constraints: Vec::new(),
+            top_level: BTreeMap::new(),
+            untyped: BTreeMap::new(),
+            field_accesses: Vec::new(),
+            record_updates: Vec::new(),
+            ctors: BTreeMap::new(),
+            typed_rigids: Vec::new(),
+            scheme_apps: Vec::new(),
+            super_vars: Vec::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod registry_phase_c_tests {
+    use super::{Builder, Builtins, Content, Diagnostic, Feature, LowerError, Ty, UnionFind};
+    use sky_diagnostics::Span;
+    use sky_intern::Interner;
+    use sky_kernels::StdlibKernel;
+
+    /// The exact set of kernels migrated into `stdlib_scheme` in Phase C
+    /// (String → List → Math, EXCLUDING `Math.min` / `Math.max`, which keep
+    /// their dedicated `Comparable`-obligation path). This is the monotone
+    /// burndown anchor: as later phases migrate more families the list GROWS;
+    /// it must never shrink, and it must exactly match what `stdlib_scheme`
+    /// returns `Some` for.
+    const MIGRATED: &[StdlibKernel] = {
+        use StdlibKernel as K;
+        &[
+            // String (2)
+            K::StringFromInt,
+            K::StringFromFloat,
+            // List (10)
+            K::ListMap,
+            K::ListFilter,
+            K::ListFoldl,
+            K::ListFoldr,
+            K::ListLength,
+            K::ListHead,
+            K::ListTail,
+            K::ListMember,
+            K::ListRange,
+            K::ListReverse,
+            // Math minus min/max (35)
+            K::MathPi,
+            K::MathE,
+            K::MathPhi,
+            K::MathSqrt2,
+            K::MathInf,
+            K::MathNan,
+            K::MathAbs,
+            K::MathSqrt,
+            K::MathCbrt,
+            K::MathExp,
+            K::MathExp2,
+            K::MathLog,
+            K::MathLog2,
+            K::MathLog10,
+            K::MathSin,
+            K::MathCos,
+            K::MathTan,
+            K::MathAsin,
+            K::MathAcos,
+            K::MathAtan,
+            K::MathSinh,
+            K::MathCosh,
+            K::MathTanh,
+            K::MathAsinh,
+            K::MathAcosh,
+            K::MathAtanh,
+            K::MathFloor,
+            K::MathCeil,
+            K::MathRound,
+            K::MathTrunc,
+            K::MathPow,
+            K::MathHypot,
+            K::MathAtan2,
+            K::MathMod,
+            K::MathRemainder,
+        ]
+    };
+
+    /// Build a scheme-test `Builder` plus the pre-interned `(qualifier, name)`
+    /// symbol for every `StdlibKernel::ALL` variant, in lockstep order.
+    ///
+    /// Returns the interner + uf by value so the caller owns them for the
+    /// `Builder` borrow (the closure-free layout keeps the borrow-checker happy
+    /// without `unsafe`).
+    fn make_builder(interner: &mut Interner) -> Builtins {
+        Builtins::new(interner).expect("Builtins::new must not fail in tests")
+    }
+
+    /// Condition 4 — per-migrated-kernel PARITY TRIPWIRE. For every kernel that
+    /// `stdlib_scheme` returns `Some` for, that scheme must be STRUCTURALLY
+    /// EQUAL to the legacy `kernel_ty(decl.qualifier, decl.name)` — the
+    /// Go-parity proof that the relocation was byte-faithful. Also enforces
+    /// condition 5: the delegation key is `decl(k).(qualifier, name)`, so a
+    /// transposed decl would compare against the wrong legacy arm and fail.
+    #[test]
+    fn stdlib_scheme_matches_legacy() {
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        // Pre-intern every kernel's (qualifier, name) BEFORE the immutable
+        // borrow into the Builder.
+        let syms: Vec<(StdlibKernel, sky_intern::Symbol, sky_intern::Symbol)> = StdlibKernel::ALL
+            .iter()
+            .map(|&k| {
+                let d = k.decl();
+                (
+                    k,
+                    interner.intern(d.qualifier).expect("intern qualifier"),
+                    interner.intern(d.name).expect("intern name"),
+                )
+            })
+            .collect();
+        let mut uf = UnionFind::<Content>::new();
+        let builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+
+        let mut migrated_count = 0usize;
+        for &(k, qual, name) in &syms {
+            if let Some(scheme) = builder.stdlib_scheme(k) {
+                let legacy = builder.kernel_ty(qual, name);
+                assert_eq!(
+                    scheme,
+                    legacy,
+                    "stdlib_scheme({k:?}) is NOT byte-faithful to \
+                     kernel_ty({:?}, {:?}); the Phase C relocation changed the \
+                     type (Go-parity break).",
+                    k.decl().qualifier,
+                    k.decl().name,
+                );
+                migrated_count += 1;
+            }
+        }
+
+        // Every migrated kernel accounted for, and none is Math.min/max.
+        assert_eq!(
+            migrated_count,
+            MIGRATED.len(),
+            "stdlib_scheme returned Some for {migrated_count} kernels but MIGRATED \
+             lists {}; update MIGRATED (burndown must track the real set).",
+            MIGRATED.len(),
+        );
+        assert!(
+            !MIGRATED.contains(&StdlibKernel::MathMin)
+                && !MIGRATED.contains(&StdlibKernel::MathMax),
+            "Math.min/max must stay on the Comparable-obligation path, NOT in \
+             stdlib_scheme, or the M4c gate reopens.",
+        );
+    }
+
+    /// Condition 4 — monotone burndown. `stdlib_scheme` returns `Some` for
+    /// EXACTLY the `MIGRATED` set and `None` for every other variant. Pins the
+    /// migrated set so an accidental over- or under-migration is caught.
+    #[test]
+    fn migrated_set_burndown() {
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        let mut uf = UnionFind::<Content>::new();
+        let builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+
+        for &k in StdlibKernel::ALL {
+            let migrated = builder.stdlib_scheme(k).is_some();
+            let expected = MIGRATED.contains(&k);
+            assert_eq!(
+                migrated, expected,
+                "stdlib_scheme({k:?}).is_some() = {migrated} but MIGRATED \
+                 membership = {expected}",
+            );
+        }
+    }
+
+    /// Condition 2 — the fail-closed path is REACHABLE. When neither the
+    /// registry nor the legacy table types a kernel, `kernel_scheme_or_unsupported`
+    /// raises the SKY-L0108-shaped `Err` (loud), NOT a silent `Ty::Var`. Also
+    /// checks registry-first precedence and single-source resolution.
+    ///
+    /// In production the legacy table is TOTAL (Phase C preserves the
+    /// `Ty::Var(u32::MAX)` fallback), so the `(None, None)` input cannot arise
+    /// yet — Phase E flips `legacy_kernel_ty` to return `None` for un-typed
+    /// kernels, at which point this exact `Err` fires in the constrain path.
+    #[test]
+    fn both_miss_is_fail_closed() {
+        let span = Span::DUMMY;
+        let a = Ty::Var(0);
+        let b = Ty::Var(1);
+
+        // BOTH miss → fail-closed SKY-L0108.
+        let err = Builder::kernel_scheme_or_unsupported(None, None, span)
+            .expect_err("both-miss must fail closed, not type as Ty::Var");
+        assert!(
+            matches!(
+                err,
+                Diagnostic::Lower {
+                    msg: LowerError::Unsupported(Feature::Kernels),
+                    ..
+                }
+            ),
+            "expected SKY-L0108 (Feature::Kernels), got {err:?}",
+        );
+
+        // Registry present → used.
+        assert_eq!(
+            Builder::kernel_scheme_or_unsupported(Some(a.clone()), None, span),
+            Ok(a.clone()),
+        );
+        // Only legacy present → used.
+        assert_eq!(
+            Builder::kernel_scheme_or_unsupported(None, Some(b.clone()), span),
+            Ok(b.clone()),
+        );
+        // Both present → registry wins (parse-once precedence).
+        assert_eq!(
+            Builder::kernel_scheme_or_unsupported(Some(a.clone()), Some(b), span),
+            Ok(a),
+        );
     }
 }
