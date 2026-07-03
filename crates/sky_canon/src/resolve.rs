@@ -45,14 +45,21 @@ const SUGGESTION_MAX_DISTANCE: usize = 2;
 /// LayoutContext 2302, LiveReq 2304.
 /// ```
 ///
-/// Two names that `ir_type_from_ty` also matches are deliberately EXCLUDED:
-///   * `Value` (lower.rs 2331) is matched *after* the `enum_variants` guard, so a
-///     user `type Value` already wins — it is not a silent-override hole.
-///   * `Color` (lower.rs 2296) *is* a genuine before-guard hole, but multiple
-///     shipped `.sky` fixtures (`m4d_dict_adt_gate`, `m4d_set_adt_fn_gate`,
-///     `mm_local_pkg`, …) declare `type Color` as a benign sample ADT. Reserving
-///     it belongs in a follow-up that renames those fixtures first; see the
-///     Phase-E #45 report.
+/// Several names that `ir_type_from_ty` also matches are deliberately EXCLUDED,
+/// because #101 moved them BELOW the `enum_variants` guard in BOTH lowering
+/// paths (ty + canon), so a program union of that name wins by its
+/// `(home, name)` identity and only a genuine opaque builtin (no union entry)
+/// reaches the fallback arm:
+///   * `Value` — matched *after* the `enum_variants` guard, so a user
+///     `type Value` already wins; it is not a silent-override hole.
+///   * `Color`, `Length`, `HAlign`, `VAlign`, `Location`, `PseudoClass`,
+///     `Description`, `LayoutContext`, `LiveReq` — the nullary Std.Ui / Sky.Live
+///     opaque names. Leaving them UNRESERVED is what lets a user ADT — and,
+///     crucially, a compiled-source `Std.Css` type (`Color` / `Length` / …) —
+///     declare them; the home-aware guard (#100/#101) keeps the genuine Std.Ui
+///     builtin resolving to `UiPlain`. Multiple shipped `.sky` fixtures
+///     (`m4d_dict_adt_gate`, `m4d_set_adt_fn_gate`, `mm_local_pkg`, …) already
+///     declare `type Color` as a benign sample ADT and now lower correctly.
 const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "Int",
     "Float",

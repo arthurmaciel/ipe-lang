@@ -2292,16 +2292,21 @@ impl<'a> Lowerer<'a> {
     fn ir_type_from_ty(&self, t: &Ty, span: Span) -> DResult<IrType> {
         match t {
             Ty::Unit => Ok(IrType::Unit),
-            // Builtin names are matched first. This precedence is sound because
-            // `sky_canon`'s `RESERVED_BUILTIN_TYPES` gate (resolve.rs, SKY-N0026)
-            // rejects any user `type` / `type alias` whose name is one of these
-            // builtin constructors, so this arm can never silently override a
-            // user `type Int = …` / `type Html = …`. The gate covers every name
-            // matched BEFORE the `enum_variants` guard below, except `Color`
-            // (a fixture-blocked follow-up — user `type Color` still resolves as
-            // its own enum for now) and `Value` (matched AFTER the guard, where
-            // the user enum already wins). See RESERVED_BUILTIN_TYPES for the
-            // per-name cite list.
+            // Reserved builtin names are matched first. This precedence is sound
+            // because `sky_canon`'s `RESERVED_BUILTIN_TYPES` gate (resolve.rs,
+            // SKY-N0026) rejects any user `type` / `type alias` whose name is one
+            // of these builtin constructors, so those arms can never silently
+            // override a user `type Int = …` / `type Html = …`.
+            //
+            // The nullary Std.Ui / Sky.Live opaque names (`Length` / `Color` /
+            // `HAlign` / `VAlign` / `Location` / `PseudoClass` / `Description` /
+            // `LayoutContext` / `LiveReq`) and `Value` are the exceptions:
+            // #101 moved them BELOW the `enum_variants` guard so a program union
+            // of the same name (a user ADT or a compiled-source `Std.Css` type)
+            // wins by its `(home, name)` identity, and only a genuine opaque
+            // builtin (no union entry) falls through to the `UiPlain` arm. This
+            // matches `ir_type_from_canon`, so the inferred and annotated paths
+            // agree. See RESERVED_BUILTIN_TYPES for the per-name cite list.
             Ty::Con { name, args, module } => match self.resolve(*name)? {
                 "Int" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
@@ -2531,17 +2536,24 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // ── M7: Nullary Std.Ui plain types (no message parameter) ─────
-                "Length" => Ok(IrType::UiPlain(UiPlain::Length)),
-                "Color" => Ok(IrType::UiPlain(UiPlain::Color)),
-                "HAlign" => Ok(IrType::UiPlain(UiPlain::HAlign)),
-                "VAlign" => Ok(IrType::UiPlain(UiPlain::VAlign)),
-                "Location" => Ok(IrType::UiPlain(UiPlain::Location)),
-                "PseudoClass" => Ok(IrType::UiPlain(UiPlain::PseudoClass)),
-                "Description" => Ok(IrType::UiPlain(UiPlain::Description)),
-                "LayoutContext" => Ok(IrType::UiPlain(UiPlain::LayoutContext)),
-                // ── M7: Sky.Live opaque types ─────────────────────────────────
-                "LiveReq" => Ok(IrType::LiveReq),
+                // ── Program-defined enum guard (home-aware; #100/#101) ────────
+                // Checked BEFORE the bare-name Std.Ui / Sky.Live opaque arms
+                // below, mirroring `ir_type_from_canon`'s ordering (the annotated
+                // path already places its enum guard ahead of every non-reserved
+                // name) so the inferred (ty) path and the annotated (canon) path
+                // resolve the SAME `(home, name)` identically.
+                //
+                // A program-defined `type Color` — a user ADT OR a compiled-source
+                // `Std.Css` type — is keyed in `enum_variants` under its real HOME
+                // (#100), so it resolves to ITS OWN enum (`MainColor` /
+                // `StdCssColor`) instead of being hijacked to the opaque
+                // `UiPlain::Color`. A genuine Std.Ui builtin (`Length` / `Color` /
+                // … that is NOT a program union — the real runtime `UiPlain`
+                // types) has no `enum_variants` entry for any home, so the guard
+                // fails and it falls through to the `UiPlain` arms below,
+                // unchanged. This closes the #101 exit-0-then-cargo-fail hole (HOF
+                // `applyTo _ Magenta` emitting a `UiPlain::Color` slot) and the
+                // SKY-I0001 ty-vs-canon disagreement on `{ c : Color }` literals.
                 _ if self
                     .enum_variants
                     .contains_key(&(ModPath(module.clone()), *name)) =>
@@ -2561,6 +2573,20 @@ impl<'a> Lowerer<'a> {
                         args: ir_args,
                     })
                 }
+                // ── M7: Nullary Std.Ui plain types (no message parameter) ─────
+                // Reached ONLY when `(home, name)` is NOT a program-defined enum
+                // (guard above) — i.e. the genuine opaque Std.Ui builtin. A
+                // program `type Color` / `type Length` never lands here.
+                "Length" => Ok(IrType::UiPlain(UiPlain::Length)),
+                "Color" => Ok(IrType::UiPlain(UiPlain::Color)),
+                "HAlign" => Ok(IrType::UiPlain(UiPlain::HAlign)),
+                "VAlign" => Ok(IrType::UiPlain(UiPlain::VAlign)),
+                "Location" => Ok(IrType::UiPlain(UiPlain::Location)),
+                "PseudoClass" => Ok(IrType::UiPlain(UiPlain::PseudoClass)),
+                "Description" => Ok(IrType::UiPlain(UiPlain::Description)),
+                "LayoutContext" => Ok(IrType::UiPlain(UiPlain::LayoutContext)),
+                // ── M7: Sky.Live opaque types ─────────────────────────────────
+                "LiveReq" => Ok(IrType::LiveReq),
                 // The opaque JSON value type (`Value = any` in Sky). A concrete
                 // `Con { name: "Value" }` reaches here only from the schemed
                 // `JsonEnc.*` encoders (constrain's `json_value` builtin); it
@@ -2569,12 +2595,14 @@ impl<'a> Lowerer<'a> {
                 // JsonEnc leaves the emitted Rust byte-identical while closing the
                 // former `Ty::Var(u32::MAX)` exit-0 hole.
                 //
-                // Placed AFTER the `enum_variants` guard (unlike the sibling
-                // `Length` / `Color` / `Decoder` opaque-name arms, which precede
-                // it): the built-in JSON `Value` is never a user enum, so a
+                // Placed AFTER the `enum_variants` guard (like the nullary
+                // `Length` / `Color` / … opaque arms, which #101 moved below the
+                // guard): the built-in JSON `Value` is never a program union, so a
                 // user-declared `type Value` still resolves as its own enum here.
-                // The clean long-term fix is a canon-level reservation of these
-                // opaque builtin type names — see the rewrite report for #69.
+                // The parametric reserved builtins (`Decoder` / `Cmd` / `Html` /
+                // …) stay ABOVE the guard — they are name-reserved
+                // (`RESERVED_BUILTIN_TYPES`, SKY-N0026) and so can never collide
+                // with a program union.
                 "Value" => Ok(IrType::Json),
                 // Name resolution guarantees every type constructor resolves to
                 // a builtin or a declared union, so an unknown one here is an
