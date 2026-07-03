@@ -56,7 +56,7 @@ not yet built on one side, or tooling ergonomics).
 | 24 | Harness self-tests (`examples_test.sh`, `keep_go_parity_test.sh`) | test the sweep classifier itself | absent | **T+** | correctness | port alongside equiv harness — **with equiv port** |
 | 25 | Numeric-parity unit tests (decimal/money/regex) | none | `runtime/tests/{decimal,money,regex}_parity.rs` (Go values inline, no oracle needed) | **O+** | correctness-per-cost | keep + extend to json-escape / float-threshold / Dict-Set |
 | 26 | Runtime within-module behaviour (env, decimal, json, http, auth, jwt, cache, regex, telemetry) | reference baseline | fork uniformly hardened ahead (see §Runtime) | **O+** | security/correctness/soundness | keep; do NOT cargo-cult reference runtime back |
-| 27 | `stringify.rs` float sci-notation threshold | `!(-4..21)` (switch at exp≥21) | `!(-4..6)` (switch at exp≥6) + pinning test | **O+** (evidence favours ours) | correctness | **OPEN** — one-line re-probe vs Go oracle before push |
+| 27 | `stringify.rs` float sci-notation threshold | `!(-4..21)` (switch at exp≥21) | `!(-4..6)` (switch at exp≥6) + pinning test | **O+** | correctness | **resolved** — Go 1.26.2 oracle confirms flat exp≥6 (ours); reference's 21 diverges. Pinned in stringify.rs::float_go_v_parity + string.rs::ff_go_g_threshold_is_six_not_twentyone |
 
 ---
 
@@ -93,12 +93,37 @@ ours-ahead:
 - **telemetry / trace** — ours strips CRLF from CSP frame-ancestors and scrubs
   log controls + U+2028/9; theirs uses them verbatim. *Security*.
 
-**One genuine cross-fork disagreement (OPEN):** `stringify.rs` float
-scientific-notation threshold — theirs switches at exp≥21, ours at exp≥6 with a
-`float_exponent_threshold_is_six` regression test. Current evidence (live Go
-oracle probe recorded in the math-parity work) favours ours, but because the
-forks flatly disagree and this is the exact golden-mask trap class, do a
-one-line re-probe (`toString 1000000.0` / `1e20` against Go) before push.
+**One cross-fork disagreement (RESOLVED):** `stringify.rs` float
+scientific-notation threshold — theirs switches at exp≥21, ours at exp≥6. Ours
+is correct. A Go 1.26.2 oracle re-probe confirms `fmt %v` ≡
+`strconv.FormatFloat(f,'g',-1,64)` for every input, with a **flat** cut to
+scientific notation at decimal exponent ≥ 6 (and < −4) and **no** exponent-21
+behaviour anywhere: `1000000 → "1e+06"`, `1e15 → "1e+15"`, `1e20 → "1e+20"`,
+`999999 → "999999"`, `0.0001 → "0.0001"`, true `-0.0 → "-0"`. The reference's 21
+is the diverging value — it would emit `1000000`, sixteen zeros for `1e15`, etc.
+Pinned by two discriminating regression tests
+(`stringify.rs::float_go_v_parity` + `string.rs::ff_go_g_threshold_is_six_not_twentyone`),
+each proven to fail if the threshold drifts to 21. Reproduce the oracle in-place:
+
+```go
+// probe.go — run: go run probe.go   (Go 1.26.2)
+package main
+
+import ( "fmt"; "math"; "strconv" )
+
+func main() {
+    negZero := math.Copysign(0, -1) // TRUE IEEE-754 negative zero
+    show := func(f float64) {
+        fmt.Printf("%%v=%-22q g=%-22q\n",
+            fmt.Sprintf("%v", f), strconv.FormatFloat(f, 'g', -1, 64))
+    }
+    for _, f := range []float64{
+        99999, 100000, 999999, 1000000, 1000001, 1234567,
+        1e15, 1e20, 1e21, 123456.789, 0.0001, 0.00001, 1.5, -1.5,
+    } { show(f) }
+    show(negZero); show(math.Inf(1)); show(math.Inf(-1)); show(math.NaN())
+}
+```
 
 ---
 
@@ -222,7 +247,8 @@ pre-sweep; #47 + F7 before push; sweep; parity; push; FFI post-DONE):
 - #49 TCO analysis port + Rust `loop` emission (item 2).
 - Crate-version SSOT + `crate_specs_sync` drift test (item 3 / NEW).
 - `quality-audit.sh` over emitted `sky-out/rust/` (item 23).
-- Re-probe the `stringify.rs` float threshold vs Go oracle (item 27, OPEN).
+- ~~Re-probe the `stringify.rs` float threshold vs Go oracle (item 27).~~ Done —
+  Go 1.26.2 oracle confirms ours (flat exp≥6); pinned by two discriminating tests.
 - 3-way callback classification IF a derive/Clone callback subsystem lands
   before push (item 12).
 
@@ -280,11 +306,13 @@ pre-sweep; #47 + F7 before push; sweep; parity; push; FFI post-DONE):
 
 ## Open decisions
 
-- **OPEN (item 27):** `stringify.rs` float sci-notation threshold — the two
-  forks disagree (exp≥21 vs exp≥6). Evidence favours ours (verified Go oracle +
-  pinning test), but re-probe `toString 1000000.0` / `1e20` against Go before
-  push to be certain; if the oracle says 21, ours is wrong and the test is a
-  false pin.
+- **RESOLVED (item 27):** `stringify.rs` float sci-notation threshold — the two
+  forks disagreed (exp≥21 vs exp≥6). Ours is correct: a Go 1.26.2 oracle re-probe
+  (`fmt %v` ≡ `strconv.FormatFloat(f,'g',-1,64)`) shows a flat exp≥6 cut with no
+  exponent-21 behaviour (`1000000 → "1e+06"`, `1e15 → "1e+15"`, `1e20 → "1e+20"`,
+  `999999 → "999999"`). The reference's 21 is the diverging value. Pinned by
+  `stringify.rs::float_go_v_parity` + `string.rs::ff_go_g_threshold_is_six_not_twentyone`,
+  each proven RED under a temporary 21-flip.
 - **OPEN (item 11):** whether to add superset-widening as a fallback to
   `record_struct_by_key`. Only warranted if a row-narrowed subset shape is
   observed reaching `render_record_use`; ipê's type-directed lowering may
