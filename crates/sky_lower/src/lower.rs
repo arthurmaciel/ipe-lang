@@ -3274,6 +3274,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListHead
                 | KernelFn::ListTail
                 | KernelFn::ListReverse
+                | KernelFn::ListConcat
+                | KernelFn::ListIsEmpty
                 | KernelFn::ResultOkDefault
                 // ── Dict arity-1 ─────────────────────────────────────────────
                 | KernelFn::DictIsEmpty
@@ -3451,6 +3453,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListFilter
                 | KernelFn::ListMember
                 | KernelFn::ListRange
+                | KernelFn::ListAppend
+                | KernelFn::ListTake
+                | KernelFn::ListDrop
+                | KernelFn::ListZip
+                | KernelFn::ListCons
+                | KernelFn::ListConcatMap
+                | KernelFn::ListIndexedMap
                 | KernelFn::MaybeWithDefault
                 | KernelFn::MaybeMap
                 | KernelFn::MaybeAndThen
@@ -3981,6 +3990,15 @@ impl<'a> Lowerer<'a> {
                     ("List", "member") => Ok(Callee::Kernel(KernelFn::ListMember)),
                     ("List", "range") => Ok(Callee::Kernel(KernelFn::ListRange)),
                     ("List", "reverse") => Ok(Callee::Kernel(KernelFn::ListReverse)),
+                    ("List", "append") => Ok(Callee::Kernel(KernelFn::ListAppend)),
+                    ("List", "concat") => Ok(Callee::Kernel(KernelFn::ListConcat)),
+                    ("List", "take") => Ok(Callee::Kernel(KernelFn::ListTake)),
+                    ("List", "drop") => Ok(Callee::Kernel(KernelFn::ListDrop)),
+                    ("List", "zip") => Ok(Callee::Kernel(KernelFn::ListZip)),
+                    ("List", "cons") => Ok(Callee::Kernel(KernelFn::ListCons)),
+                    ("List", "isEmpty") => Ok(Callee::Kernel(KernelFn::ListIsEmpty)),
+                    ("List", "concatMap") => Ok(Callee::Kernel(KernelFn::ListConcatMap)),
+                    ("List", "indexedMap") => Ok(Callee::Kernel(KernelFn::ListIndexedMap)),
                     // ── Maybe kernels ──────────────────────────────────────
                     ("Maybe", "withDefault") => Ok(Callee::Kernel(KernelFn::MaybeWithDefault)),
                     ("Maybe", "map") => Ok(Callee::Kernel(KernelFn::MaybeMap)),

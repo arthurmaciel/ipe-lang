@@ -1,0 +1,74 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+toStr : List Int -> String
+toStr xs =
+    "[" ++ String.join "," (List.map String.fromInt xs) ++ "]"
+
+
+main =
+    let
+        a =
+            List.append [ 1, 2 ] [ 3, 4 ]
+
+        c =
+            List.concat [ [ 1 ], [ 2, 3 ], [] ]
+
+        t =
+            List.take 2 [ 9, 8, 7 ]
+
+        tNeg =
+            List.take (-1) [ 9, 8, 7 ]
+
+        d =
+            List.drop 5 [ 9, 8, 7 ]
+
+        dNeg =
+            List.drop (-1) [ 9, 8 ]
+
+        cn =
+            List.cons 0 [ 1, 2 ]
+
+        cm =
+            List.concatMap (\x -> [ x, x ]) [ 1, 2 ]
+
+        im =
+            List.indexedMap (\i v -> i + (v * 0)) [ 5, 5, 5 ]
+
+        z =
+            List.zip [ 1, 2, 3 ] [ 4, 5 ]
+
+        emptyT =
+            List.isEmpty (List.drop 9 [ 1 ])
+
+        emptyF =
+            List.isEmpty [ 1 ]
+    in
+    println
+        (toStr a
+            ++ " "
+            ++ toStr c
+            ++ " "
+            ++ toStr t
+            ++ " "
+            ++ toStr tNeg
+            ++ " "
+            ++ toStr d
+            ++ " "
+            ++ toStr dNeg
+            ++ " "
+            ++ toStr cn
+            ++ " "
+            ++ toStr cm
+            ++ " "
+            ++ toStr im
+            ++ " zip="
+            ++ String.fromInt (List.length z)
+            ++ " "
+            ++ (if emptyT then "T" else "F")
+            ++ " "
+            ++ (if emptyF then "T" else "F")
+        )

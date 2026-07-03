@@ -47,6 +47,37 @@ pub fn list_drop<T>(n: i64, xs: Vec<T>) -> Vec<T> {
     }
 }
 
+/// `Sky.Core.List.append : List a -> List a -> List a` — the two lists
+/// concatenated. Iterative (`extend`, constant native stack); no `T: Clone`
+/// bound (both inputs are consumed and MOVE).
+pub fn list_append<T>(xs: Vec<T>, ys: Vec<T>) -> Vec<T> {
+    let mut xs = xs;
+    xs.extend(ys);
+    xs
+}
+
+/// `Sky.Core.List.concat : List (List a) -> List a` — flatten one level.
+/// Iterative (`flatten`, constant native stack); consumes the input.
+pub fn list_concat<T>(xss: Vec<Vec<T>>) -> Vec<T> {
+    xss.into_iter().flatten().collect()
+}
+
+/// `Sky.Core.List.take : Int -> List a -> List a` — the first `n` elements.
+/// Elm semantics: `n <= 0` yields `[]`; `n >= len` yields the whole list.
+/// `n.max(0)` is non-negative, so the `as usize` cast is total on 64-bit
+/// targets (an `i64` in `0..=i64::MAX` fits `usize`); `truncate(k)` with
+/// `k >= len` is a no-op. No indexing, no overflow, no panic.
+pub fn list_take<T>(n: i64, xs: Vec<T>) -> Vec<T> {
+    let mut xs = xs;
+    xs.truncate(n.max(0) as usize);
+    xs
+}
+
+/// `Sky.Core.List.isEmpty : List a -> Bool`. Total.
+pub fn list_is_empty<T>(xs: Vec<T>) -> bool {
+    xs.is_empty()
+}
+
 /// Sky `filterMap : (a -> Maybe b) -> List a -> List b`.
 /// Applies `f` to each element; keeps only `Just` results.
 pub fn list_filter_map<A, B>(f: impl Fn(A) -> SkyMaybe<B>, xs: Vec<A>) -> Vec<B> {
@@ -243,6 +274,36 @@ mod tests {
         let mut got = out.clone();
         got.sort();
         assert_eq!(got, (0..64).collect::<Vec<i64>>());
+    }
+
+    // #68 — new non-HOF List kernels: Elm edge-semantics + no-panic.
+    #[test]
+    fn append_concat_are_total_and_ordered() {
+        assert_eq!(list_append(vec![1, 2], vec![3, 4]), vec![1, 2, 3, 4]);
+        assert_eq!(list_append(Vec::<i64>::new(), vec![1]), vec![1]);
+        assert_eq!(list_append(vec![1], Vec::<i64>::new()), vec![1]);
+        assert_eq!(
+            list_concat(vec![vec![1, 2], vec![], vec![3]]),
+            vec![1, 2, 3]
+        );
+        assert_eq!(list_concat(Vec::<Vec<i64>>::new()), Vec::<i64>::new());
+    }
+
+    #[test]
+    fn take_clamps_negative_and_overlength() {
+        assert_eq!(list_take(2, vec![9, 8, 7]), vec![9, 8]);
+        assert_eq!(list_take(5, vec![9, 8]), vec![9, 8]); // n > len → whole
+        assert_eq!(list_take(0, vec![9, 8]), Vec::<i64>::new());
+        assert_eq!(list_take(-3, vec![9, 8]), Vec::<i64>::new()); // n < 0 → []
+    }
+
+    #[test]
+    fn is_empty_and_cons_and_zip_edges() {
+        assert!(list_is_empty(Vec::<i64>::new()));
+        assert!(!list_is_empty(vec![1]));
+        assert_eq!(sky_list_cons(0, vec![1, 2]), vec![0, 1, 2]);
+        // zip truncates to the shorter operand (Elm/Go parity).
+        assert_eq!(list_zip(vec![1, 2, 3], vec![4, 5]), vec![(1, 4), (2, 5)]);
     }
 
     #[test]
