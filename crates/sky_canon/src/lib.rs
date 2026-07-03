@@ -2250,4 +2250,113 @@ mod tests {
             "list-exposed record alias must export its ctor value"
         );
     }
+
+    // ── #97: `import Sky.*/Std.* exposing (member)` brings stdlib VALUE members
+    // into UNQUALIFIED scope ─────────────────────────────────────────────────
+
+    #[test]
+    fn stdlib_exposing_brings_value_into_unqualified_scope() {
+        // `import Std.Live exposing (app, route)` → bare `app` resolves to the
+        // same `VarKernel { module: Live, name: app }` a `Live.app` reference
+        // would (#97). Previously this was `SKY-N0001` "app not found".
+        let src = "module Main exposing (main)\n\
+                   import Std.Live exposing (app, route)\n\n\
+                   main = app\n";
+        let Some((m, i)) = canon_src(src) else {
+            assert!(false_marker(), "exposing (app, route) must canonicalise");
+            return;
+        };
+        assert_main_is_kernel(&m, &i, "Live", "app");
+    }
+
+    #[test]
+    fn stdlib_exposing_println_resolves_unqualified() {
+        // `import Std.Log exposing (println)` → bare `println` resolves via the
+        // exposing path to `VarKernel { module: Log, name: println }`.
+        let src = "module Main exposing (main)\n\
+                   import Std.Log exposing (println)\n\n\
+                   main = println\n";
+        let Some((m, i)) = canon_src(src) else {
+            assert!(false_marker(), "exposing (println) must canonicalise");
+            return;
+        };
+        assert_main_is_kernel(&m, &i, "Log", "println");
+    }
+
+    #[test]
+    fn stdlib_exposing_nonmember_is_name_not_exposed() {
+        // Fail-closed: a lowercase name that is NOT a real value member of the
+        // module surfaces `NameNotExposed`, never a dangling unqualified binding.
+        let err = canon_err(
+            "module Main exposing (main)\n\
+             import Std.Live exposing (bogusFn)\n\
+             main = 0\n",
+        );
+        let Some(Diagnostic::Name {
+            msg: NameError::NameNotExposed { module, name, .. },
+            ..
+        }) = &err
+        else {
+            assert!(false_marker(), "expected NameNotExposed, got {err:?}");
+            return;
+        };
+        assert_eq!(&**name, "bogusFn");
+        assert_eq!(&**module, "Std.Live");
+    }
+
+    #[test]
+    fn stdlib_exposed_name_colliding_with_local_is_duplicate_value() {
+        // An exposed name folds into `seen_values`, so a user top-level value of
+        // the same name is a genuine conflict (`DuplicateValue`), matching Elm's
+        // rule that importing a name and defining it locally clash.
+        let err = canon_err(
+            "module Main exposing (main)\n\
+             import Std.Live exposing (app)\n\
+             app = 1\n\
+             main = 0\n",
+        );
+        assert!(
+            matches!(
+                &err,
+                Some(Diagnostic::Name {
+                    msg: NameError::DuplicateValue { .. },
+                    ..
+                })
+            ),
+            "expected DuplicateValue, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn stdlib_exposing_type_is_untouched() {
+        // Capitalized TYPE exposures (`exposing (Element)`) are kernel-implicit
+        // types resolved elsewhere — the value-injection pass must NOT reject
+        // them as non-members. This must canonicalise cleanly.
+        let ok = canon_src(
+            "module Main exposing (main)\n\
+             import Std.Ui exposing (Element)\n\
+             main = 0\n",
+        );
+        assert!(
+            ok.is_some(),
+            "type exposure of a stdlib module must not be rejected as a non-member value"
+        );
+    }
+
+    #[test]
+    fn stdlib_exposing_wildcard_is_noop_and_allows_local_shadow() {
+        // `exposing (..)` on a stdlib module is a no-op here (open-import member
+        // flooding is deferred to #98). A local `map` must NOT collide — it is a
+        // legal low-priority shadow, not a `DuplicateValue`.
+        let ok = canon_src(
+            "module Main exposing (main)\n\
+             import Sky.Core.Prelude exposing (..)\n\
+             map = 1\n\
+             main = map\n",
+        );
+        assert!(
+            ok.is_some(),
+            "wildcard stdlib import must stay a no-op; local shadow is legal"
+        );
+    }
 }
