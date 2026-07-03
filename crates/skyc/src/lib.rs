@@ -318,8 +318,6 @@ fn compile_modules(
 
     // Link → infer → lower → emit on the merged module. Blame post-link errors on
     // the entry file.
-    let linked = sky_canon::link::link(entry_name, canon_modules);
-
     let entry_src_path = sources
         .get(entry_path)
         .map_or_else(|| blame_path.to_path_buf(), |(p, _)| p.clone());
@@ -332,6 +330,12 @@ fn compile_modules(
         src: entry_src.clone(),
         diag,
     };
+
+    // The link step now gates cross-module type-identity duplicates
+    // `(home, name)` (#100), so it is fallible; blame a duplicate on the entry
+    // file like every other post-link diagnostic.
+    let linked =
+        sky_canon::link::link(entry_name, canon_modules, &interner).map_err(&pipeline_err)?;
 
     let types = sky_types::infer(&linked, &mut interner).map_err(&pipeline_err)?;
     let program = sky_lower::lower(&linked, &types, &mut interner).map_err(&pipeline_err)?;

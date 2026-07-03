@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use sky_backend::{Backend, EmittedProject};
 use sky_diagnostics::{DResult, Diagnostic, NameError, Span};
 use sky_intern::{Interner, Symbol};
-use sky_ir::{FuncId, IrType, Program, TypeDef};
+use sky_ir::{FuncId, IrType, ModPath, Program, TypeDef};
 
 pub use preamble::{epilogue, preamble};
 
@@ -185,20 +185,23 @@ pub(crate) struct EmitCtx<'a> {
     /// The Rust type name for the emitted `SqlField` enum (e.g. `MainSqlField`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlfield_rust_name: Option<String>,
-    /// Enum type symbol → Rust type name (e.g. `Msg` → `MainMsg`).
-    enum_names: BTreeMap<Symbol, String>,
-    /// `(enum type symbol, variant symbol)` → that variant's declared payload
-    /// field types, in source (positional) order. Empty vector for a nullary
-    /// variant. Used at construction / pattern sites to box (and un-box) a
+    /// Type nominal identity `(home, name)` → Rust type name (e.g.
+    /// `(["Main"], Msg)` → `MainMsg`, `(["Lib"], Color)` → `LibColor`). Keyed by
+    /// `(home, name)` — not `name` alone — so two modules each declaring `type
+    /// Color` map to distinct Rust enums instead of colliding (#100).
+    enum_names: BTreeMap<(ModPath, Symbol), String>,
+    /// `((enum home, enum name), variant symbol)` → that variant's declared
+    /// payload field types, in source (positional) order. Empty vector for a
+    /// nullary variant. Used at construction / pattern sites to box (and un-box) a
     /// recursive field so the emitted Rust enum stays finite-sized.
-    variant_fields: BTreeMap<(Symbol, Symbol), Vec<IrType>>,
-    /// Enum type symbol → the field-type lists of all its variants (one inner
-    /// vector per variant, in declaration order). The whole-enum view that
-    /// [`Self::is_cyclic_self_field`] walks to decide whether a payload field
+    variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>>,
+    /// Type identity `(home, name)` → the field-type lists of all its variants
+    /// (one inner vector per variant, in declaration order). The whole-enum view
+    /// that [`Self::is_cyclic_self_field`] walks to decide whether a payload field
     /// sits on a type-size cycle back to its own enum — direct (`Node Tree …`)
     /// or indirect (mutual recursion, or a self-edge routed through a tuple /
     /// record / another generic's type argument).
-    enum_variants: BTreeMap<Symbol, Vec<Vec<IrType>>>,
+    enum_variants: BTreeMap<(ModPath, Symbol), Vec<Vec<IrType>>>,
     /// Enum type symbol → whether that user enum's rendered Rust type supports
     /// the full `#[derive(Clone, Debug, PartialEq)]` set. Computed by a monotone
     /// whole-program fixpoint at [`EmitCtx::build`]: an enum is non-derivable iff
@@ -206,7 +209,7 @@ pub(crate) struct EmitCtx<'a> {
     /// wrapper, or another non-derivable enum). Read by the emitter to gate the
     /// derive set on user enums and on record structs (#87 seal). Whole-program
     /// (all modules) so cross-module `IrType::Enum` references resolve soundly.
-    enum_derivable: BTreeMap<Symbol, bool>,
+    enum_derivable: BTreeMap<(ModPath, Symbol), bool>,
     /// Enum type symbol → whether that user enum's rendered Rust type derives
     /// `serde::Serialize` **and** `serde::de::DeserializeOwned`. Computed by a
     /// monotone whole-program fixpoint parallel to [`Self::enum_derivable`]: an
@@ -215,7 +218,7 @@ pub(crate) struct EmitCtx<'a> {
     /// [`sky_ir::ir_type_is_serde`]). Read by the Sky.Live app-entry Model gate
     /// (#91 seal). Whole-program so cross-module `IrType::Enum` references
     /// resolve soundly.
-    enum_serde: BTreeMap<Symbol, bool>,
+    enum_serde: BTreeMap<(ModPath, Symbol), bool>,
     /// Function id → Rust function name (e.g. `update` → `main_update`).
     func_names: BTreeMap<FuncId, String>,
     /// Every distinct record shape synthesised for the program, in emission
@@ -231,9 +234,9 @@ impl<'a> EmitCtx<'a> {
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally similar
     fn build(interner: &'a Interner, program: &Program) -> DResult<Self> {
-        let mut enum_names = BTreeMap::new();
-        let mut variant_fields: BTreeMap<(Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
-        let mut enum_variants: BTreeMap<Symbol, Vec<Vec<IrType>>> = BTreeMap::new();
+        let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
+        let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
+        let mut enum_variants: BTreeMap<(ModPath, Symbol), Vec<Vec<IrType>>> = BTreeMap::new();
         let mut func_names = BTreeMap::new();
         for module in &program.modules {
             let segs = module
@@ -244,16 +247,32 @@ impl<'a> EmitCtx<'a> {
                 .collect::<DResult<Vec<&str>>>()?;
             for ty in &module.types {
                 let TypeDef::Enum(def) = ty;
-                let rust_name = naming::enum_name(&segs, resolve_sym(interner, def.name)?);
-                // The IR keys a type by its bare name `Symbol`. Two modules
-                // declaring same-named types intern to the *same* `Symbol`, so a
-                // plain insert would silently overwrite the first mapping —
-                // making both use sites resolve to one module's Rust type. The
-                // user-facing duplicate is caught upstream (SKY-N0012); reaching
-                // here means the lowerer admitted a cross-module collision the
-                // backend cannot disambiguate from a bare `Symbol`, so fail fast
-                // (SKY-I0202) rather than emit code referencing the wrong type.
-                if enum_names.contains_key(&def.name) {
+                // The emitted Rust type name is derived from the type's HOME
+                // module (its defining module), NOT the merged entry module the
+                // linker pooled it into — so `Std.Palette.Shade` → `StdPaletteShade`
+                // and `Lib.Color` → `LibColor`, while a single-module program
+                // (home == entry) stays byte-identical (`Main.Msg` → `MainMsg`).
+                // When `def.home` is empty (IR built directly in backend unit
+                // tests, not through the full pipeline), fall back to the merged
+                // module path — always correct for single-module programs.
+                let home_segs: Vec<&str> = if def.home.0.is_empty() {
+                    segs.clone()
+                } else {
+                    def.home
+                        .0
+                        .iter()
+                        .map(|s| resolve_sym(interner, *s))
+                        .collect::<DResult<Vec<&str>>>()?
+                };
+                let rust_name = naming::enum_name(&home_segs, resolve_sym(interner, def.name)?);
+                // A type's nominal identity is `(home, name)`. Two modules each
+                // declaring `type Color` share the bare `name` `Symbol` but differ
+                // in `home`, so they no longer collide — each keys a distinct Rust
+                // enum (#100). A genuine duplicate `(home, name)` (the SAME type
+                // declared twice) is caught upstream by the link-level gate; this
+                // stays as a fail-closed defence-in-depth backstop (SKY-I0202).
+                let key = (def.home.clone(), def.name);
+                if enum_names.contains_key(&key) {
                     return Err(Diagnostic::Name {
                         span: Span::DUMMY,
                         msg: NameError::DuplicateType {
@@ -262,13 +281,29 @@ impl<'a> EmitCtx<'a> {
                         },
                     });
                 }
-                enum_names.insert(def.name, rust_name.clone());
+                // Guard the emitted-name space too: `naming::enum_name`'s camel-case
+                // fold is not injective over the (home, name) split (`["Std",
+                // "Palette"]/Color` and `["Std"]/PaletteColor` both fold to
+                // `StdPaletteColor`), so two DISTINCT identities could otherwise
+                // emit the same Rust enum and trip `rustc` E0428. Fail closed with
+                // the same duplicate-type diagnostic rather than emit a broken crate.
+                if enum_names.values().any(|n| n == &rust_name) {
+                    return Err(Diagnostic::Name {
+                        span: Span::DUMMY,
+                        msg: NameError::DuplicateType {
+                            name: rust_name.into_boxed_str(),
+                            first: Span::DUMMY,
+                        },
+                    });
+                }
+                enum_names.insert(key.clone(), rust_name.clone());
                 let mut all_fields = Vec::with_capacity(def.variants.len());
                 for variant in &def.variants {
-                    variant_fields.insert((def.name, variant.name), variant.fields.clone());
+                    variant_fields
+                        .insert((def.home.clone(), def.name, variant.name), variant.fields.clone());
                     all_fields.push(variant.fields.clone());
                 }
-                enum_variants.insert(def.name, all_fields);
+                enum_variants.insert(key, all_fields);
             }
             for func in &module.funcs {
                 // Use the function's own home module path for naming so that two
@@ -344,14 +379,19 @@ impl<'a> EmitCtx<'a> {
         // (never a user enum — builtins are distinct `IrType` variants) defaults
         // to derivable, which can only be as permissive as the pre-seal
         // unconditional derive.
-        let mut enum_derivable: BTreeMap<Symbol, bool> =
-            enum_variants.keys().map(|k| (*k, true)).collect();
+        let mut enum_derivable: BTreeMap<(ModPath, Symbol), bool> =
+            enum_variants.keys().map(|k| (k.clone(), true)).collect();
         loop {
-            let mut to_demote: Vec<Symbol> = Vec::new();
+            let mut to_demote: Vec<(ModPath, Symbol)> = Vec::new();
             {
-                let lookup = |q: Symbol| enum_derivable.get(&q).copied().unwrap_or(true);
-                for (sym, variants) in &enum_variants {
-                    if !enum_derivable.get(sym).copied().unwrap_or(true) {
+                let lookup = |home: &ModPath, name: Symbol| {
+                    enum_derivable
+                        .get(&(home.clone(), name))
+                        .copied()
+                        .unwrap_or(true)
+                };
+                for (key, variants) in &enum_variants {
+                    if !enum_derivable.get(key).copied().unwrap_or(true) {
                         continue;
                     }
                     let ok = variants.iter().all(|fields| {
@@ -360,7 +400,7 @@ impl<'a> EmitCtx<'a> {
                             .all(|f| sky_ir::ir_type_is_derivable(f, &lookup))
                     });
                     if !ok {
-                        to_demote.push(*sym);
+                        to_demote.push(key.clone());
                     }
                 }
             }
@@ -380,21 +420,26 @@ impl<'a> EmitCtx<'a> {
         // or a (currently-estimated) non-serde enum. Non-serde only propagates
         // (true → false), so the loop reaches a fixpoint in at most `enum count`
         // passes. Read by the Sky.Live Model-admissibility gate.
-        let mut enum_serde: BTreeMap<Symbol, bool> =
-            enum_variants.keys().map(|k| (*k, true)).collect();
+        let mut enum_serde: BTreeMap<(ModPath, Symbol), bool> =
+            enum_variants.keys().map(|k| (k.clone(), true)).collect();
         loop {
-            let mut to_demote: Vec<Symbol> = Vec::new();
+            let mut to_demote: Vec<(ModPath, Symbol)> = Vec::new();
             {
-                let lookup = |q: Symbol| enum_serde.get(&q).copied().unwrap_or(true);
-                for (sym, variants) in &enum_variants {
-                    if !enum_serde.get(sym).copied().unwrap_or(true) {
+                let lookup = |home: &ModPath, name: Symbol| {
+                    enum_serde
+                        .get(&(home.clone(), name))
+                        .copied()
+                        .unwrap_or(true)
+                };
+                for (key, variants) in &enum_variants {
+                    if !enum_serde.get(key).copied().unwrap_or(true) {
                         continue;
                     }
                     let ok = variants.iter().all(|fields| {
                         fields.iter().all(|f| sky_ir::ir_type_is_serde(f, &lookup))
                     });
                     if !ok {
-                        to_demote.push(*sym);
+                        to_demote.push(key.clone());
                     }
                 }
             }
@@ -415,7 +460,12 @@ impl<'a> EmitCtx<'a> {
             // #87 seal: a record struct is derivable iff every field type is,
             // consulting the enum fixpoint for referenced user enums.
             let is_derivable = {
-                let lookup = |q: Symbol| enum_derivable.get(&q).copied().unwrap_or(true);
+                let lookup = |home: &ModPath, name: Symbol| {
+                    enum_derivable
+                        .get(&(home.clone(), name))
+                        .copied()
+                        .unwrap_or(true)
+                };
                 fields
                     .iter()
                     .all(|(_, ty)| sky_ir::ir_type_is_derivable(ty, &lookup))
@@ -427,7 +477,12 @@ impl<'a> EmitCtx<'a> {
             // `uses_live` so a CDPeq-but-not-serde record (Html/Element/Color/
             // UiPlain field) in a Live program is not forced to serde.
             let is_serde = {
-                let lookup = |q: Symbol| enum_serde.get(&q).copied().unwrap_or(true);
+                let lookup = |home: &ModPath, name: Symbol| {
+                    enum_serde
+                        .get(&(home.clone(), name))
+                        .copied()
+                        .unwrap_or(true)
+                };
                 fields
                     .iter()
                     .all(|(_, ty)| sky_ir::ir_type_is_serde(ty, &lookup))
@@ -461,7 +516,7 @@ impl<'a> EmitCtx<'a> {
                 m.types.iter().find_map(|td| {
                     let TypeDef::Enum(def) = td;
                     if interner.resolve(def.name) == Some("SqlValue") {
-                        enum_names.get(&def.name).cloned()
+                        enum_names.get(&(def.home.clone(), def.name)).cloned()
                     } else {
                         None
                     }
@@ -475,7 +530,7 @@ impl<'a> EmitCtx<'a> {
                 m.types.iter().find_map(|td| {
                     let TypeDef::Enum(def) = td;
                     if interner.resolve(def.name) == Some("SqlField") {
-                        enum_names.get(&def.name).cloned()
+                        enum_names.get(&(def.home.clone(), def.name)).cloned()
                     } else {
                         None
                     }
@@ -529,8 +584,11 @@ impl<'a> EmitCtx<'a> {
     /// [`Self::build`]. A symbol that is not a user enum (never reachable as an
     /// [`IrType::Enum`] target — builtins are distinct `IrType` variants)
     /// defaults to `true`, matching the pre-seal unconditional derive.
-    pub(crate) fn enum_is_derivable(&self, sym: Symbol) -> bool {
-        self.enum_derivable.get(&sym).copied().unwrap_or(true)
+    pub(crate) fn enum_is_derivable(&self, home: &ModPath, sym: Symbol) -> bool {
+        self.enum_derivable
+            .get(&(home.clone(), sym))
+            .copied()
+            .unwrap_or(true)
     }
 
     /// Does user enum `sym`'s rendered Rust type derive `serde::Serialize` and
@@ -540,16 +598,21 @@ impl<'a> EmitCtx<'a> {
     /// [`Self::build`]. A symbol that is not a user enum defaults to `true`
     /// (builtins are distinct `IrType` variants and never reach this lookup as a
     /// bare enum name). Used by the Sky.Live Model-admissibility gate (#91).
-    pub(crate) fn enum_is_serde(&self, sym: Symbol) -> bool {
-        self.enum_serde.get(&sym).copied().unwrap_or(true)
+    pub(crate) fn enum_is_serde(&self, home: &ModPath, sym: Symbol) -> bool {
+        self.enum_serde
+            .get(&(home.clone(), sym))
+            .copied()
+            .unwrap_or(true)
     }
 
     /// The per-variant payload field-type lists of user enum `sym`, in variant
     /// order. Empty when `sym` is not a known user enum. Read by the Model-
     /// admissibility gate to walk a non-admissible enum down to its offending
     /// leaf (#91).
-    pub(crate) fn enum_variant_payloads(&self, sym: Symbol) -> &[Vec<IrType>] {
-        self.enum_variants.get(&sym).map_or(&[], Vec::as_slice)
+    pub(crate) fn enum_variant_payloads(&self, home: &ModPath, sym: Symbol) -> &[Vec<IrType>] {
+        self.enum_variants
+            .get(&(home.clone(), sym))
+            .map_or(&[], Vec::as_slice)
     }
 
     /// The declared payload field types of constructor `variant` of enum `ty`,
@@ -559,9 +622,9 @@ impl<'a> EmitCtx<'a> {
     /// program never declared — an upstream-contract violation (the type checker
     /// pins every constructor to its union), surfaced as a [`Diagnostic::CompilerBug`]
     /// rather than a silent mis-emit.
-    fn variant_fields(&self, ty: Symbol, variant: Symbol) -> DResult<&[IrType]> {
+    fn variant_fields(&self, home: &ModPath, ty: Symbol, variant: Symbol) -> DResult<&[IrType]> {
         self.variant_fields
-            .get(&(ty, variant))
+            .get(&(home.clone(), ty, variant))
             .map(Vec::as_slice)
             .ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "sky_backend_rust::EmitCtx::variant_fields",
@@ -592,9 +655,19 @@ impl<'a> EmitCtx<'a> {
     /// breaks every reachable cycle; a hypothetical pure record/tuple alias
     /// cycle (no enum on it) is rejected upstream before it can reach the
     /// backend.
-    pub(crate) fn is_cyclic_self_field(&self, field: &IrType, enum_sym: Symbol) -> bool {
+    pub(crate) fn is_cyclic_self_field(
+        &self,
+        field: &IrType,
+        enum_home: &ModPath,
+        enum_sym: Symbol,
+    ) -> bool {
         let mut visited = BTreeSet::new();
-        type_reaches_enum(field, enum_sym, &self.enum_variants, &mut visited)
+        type_reaches_enum(
+            field,
+            (enum_home, enum_sym),
+            &self.enum_variants,
+            &mut visited,
+        )
     }
 
     /// Every synthesised record struct, in emission order.
@@ -722,9 +795,9 @@ impl<'a> EmitCtx<'a> {
         Ok(naming::mangle_reserved(self.resolve_ident(sym)?.to_owned()))
     }
 
-    fn enum_name(&self, ty: Symbol) -> DResult<&str> {
+    fn enum_name(&self, home: &ModPath, ty: Symbol) -> DResult<&str> {
         self.enum_names
-            .get(&ty)
+            .get(&(home.clone(), ty))
             .map(String::as_str)
             .ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "sky_backend_rust::EmitCtx::enum_name",
@@ -739,12 +812,12 @@ impl<'a> EmitCtx<'a> {
     /// names match Sky's verbatim. A `Some` result steers constructor and pattern
     /// emission to the runtime type (no user-enum field-boxing lookup applies, as
     /// neither is self-recursive).
-    fn builtin_runtime_enum(&self, ty: Symbol) -> Option<&'static str> {
+    fn builtin_runtime_enum(&self, home: &ModPath, ty: Symbol) -> Option<&'static str> {
         // A declared user enum always wins: real Sky cannot name a `type` `Maybe`
         // or `Result` (canonicalisation rejects shadowing a built-in), so a
         // program-level enum carrying that symbol is a distinct, user-owned type
         // and must route to its own emitted enum, not the runtime shortcut.
-        if self.enum_names.contains_key(&ty) {
+        if self.enum_names.contains_key(&(home.clone(), ty)) {
             return None;
         }
         match self.interner.resolve(ty) {
@@ -890,13 +963,13 @@ fn collect_record_shapes(
 /// second visit.
 fn type_reaches_enum(
     ty: &IrType,
-    target: Symbol,
-    enums: &BTreeMap<Symbol, Vec<Vec<IrType>>>,
-    visited: &mut BTreeSet<Symbol>,
+    target: (&ModPath, Symbol),
+    enums: &BTreeMap<(ModPath, Symbol), Vec<Vec<IrType>>>,
+    visited: &mut BTreeSet<(ModPath, Symbol)>,
 ) -> bool {
     match ty {
-        IrType::Enum { name, args } => {
-            if *name == target {
+        IrType::Enum { home, name, args } => {
+            if (home, *name) == target {
                 return true;
             }
             if args
@@ -906,8 +979,9 @@ fn type_reaches_enum(
                 return true;
             }
             // Descend into this enum's own variant payload fields once.
-            if visited.insert(*name)
-                && let Some(variants) = enums.get(name)
+            let self_key = (home.clone(), *name);
+            if visited.insert(self_key.clone())
+                && let Some(variants) = enums.get(&self_key)
             {
                 return variants
                     .iter()
@@ -1132,11 +1206,17 @@ fn skeleton_ty(ty: &IrType, idx: &mut BTreeMap<Symbol, usize>, out: &mut String)
             out.push_str(")->");
             skeleton_ty(ret, idx, out);
         }
-        IrType::Enum { name, args } => {
-            // Key by the enum's symbol plus its (possibly generic) type args, so
-            // `Maybe a` and `Maybe Int` skeletonise distinctly while `Maybe a`
-            // and `Maybe b` (alpha-equivalent) coincide.
+        IrType::Enum { home, name, args } => {
+            // Key by the enum's nominal identity (home + symbol) plus its
+            // (possibly generic) type args, so `Maybe a` and `Maybe Int`
+            // skeletonise distinctly while `Maybe a` and `Maybe b`
+            // (alpha-equivalent) coincide. Home is included so two same-short-named
+            // types from different modules do not conflate record shapes (#100).
             out.push('E');
+            for seg in &home.0 {
+                out.push_str(&seg.as_raw().to_string());
+                out.push('.');
+            }
             out.push_str(&name.as_raw().to_string());
             out.push('<');
             for a in args {
@@ -1247,8 +1327,19 @@ fn match_template(
             }
             _ => Err(mismatch()),
         },
-        IrType::Enum { name: tn, args: ta } => match concrete {
-            IrType::Enum { name: cn, args: ca } if tn == cn && ta.len() == ca.len() => {
+        IrType::Enum {
+            home: th,
+            name: tn,
+            args: ta,
+        } => match concrete {
+            // Nominal identity is (home, name): a template enum reconciles with a
+            // concrete enum only when BOTH match, so two same-short-named types
+            // from different modules never cross-reconcile (#100).
+            IrType::Enum {
+                home: ch,
+                name: cn,
+                args: ca,
+            } if th == ch && tn == cn && ta.len() == ca.len() => {
                 for (t, c) in ta.iter().zip(ca.iter()) {
                     match_template(t, c, subst)?;
                 }

@@ -61,9 +61,9 @@ pub fn model_ty_of_view(view_e: &Expr) -> Option<&IrType> {
 /// diagnostics). Normal plain-data Models pass unchanged.
 pub fn check_admissible_model(ctx: &EmitCtx, model_ty: &IrType, app: AppShape) -> DResult<()> {
     let ok = match app {
-        AppShape::Live => ir_type_is_serde(model_ty, &|s| ctx.enum_is_serde(s)),
+        AppShape::Live => ir_type_is_serde(model_ty, &|home, name| ctx.enum_is_serde(home, name)),
         AppShape::Tui | AppShape::Webview => {
-            ir_type_is_derivable(model_ty, &|s| ctx.enum_is_derivable(s))
+            ir_type_is_derivable(model_ty, &|home, name| ctx.enum_is_derivable(home, name))
         }
     };
     if ok {
@@ -85,9 +85,9 @@ pub fn check_admissible_model(ctx: &EmitCtx, model_ty: &IrType, app: AppShape) -
 /// Return whether `ty` satisfies the admissibility predicate for `app`.
 fn admissible(ctx: &EmitCtx, ty: &IrType, app: AppShape) -> bool {
     match app {
-        AppShape::Live => ir_type_is_serde(ty, &|s| ctx.enum_is_serde(s)),
+        AppShape::Live => ir_type_is_serde(ty, &|home, name| ctx.enum_is_serde(home, name)),
         AppShape::Tui | AppShape::Webview => {
-            ir_type_is_derivable(ty, &|s| ctx.enum_is_derivable(s))
+            ir_type_is_derivable(ty, &|home, name| ctx.enum_is_derivable(home, name))
         }
     }
 }
@@ -149,10 +149,10 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
             .values()
             .find(|f| !admissible(ctx, f, app))
             .map_or(ModelLeaf::Handle, |f| leaf_of_bounded(ctx, f, app, next)),
-        IrType::Enum { name, .. } => {
+        IrType::Enum { home, name, .. } => {
             // A non-admissible user enum: descend into its variant payloads to
             // find the concrete offending leaf.
-            for payloads in ctx.enum_variant_payloads(*name) {
+            for payloads in ctx.enum_variant_payloads(home, *name) {
                 for field_ty in payloads {
                     if !admissible(ctx, field_ty, app) {
                         return leaf_of_bounded(ctx, field_ty, app, next);

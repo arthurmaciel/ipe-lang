@@ -987,13 +987,19 @@ pub struct Lowerer<'a> {
     /// module's path, not the merged entry module's path.
     func_ids: BTreeMap<(Vec<Symbol>, Symbol), FuncId>,
     /// Each union's complete, in-declaration-order constructor set — the *true*
-    /// variant set handed to [`Match::new`] (the IR layer cannot self-confirm
-    /// this; the lowerer carries the obligation).
-    enum_variants: BTreeMap<Symbol, Vec<Symbol>>,
-    /// Each constructor's declared payload arity, keyed by constructor name. A
-    /// saturated construction passes exactly this many arguments; a bare or
-    /// partially-applied payload constructor is the constructor-as-function gap.
-    ctor_arity: BTreeMap<Symbol, usize>,
+    /// variant set handed to [`Match::new`] — keyed by the type's nominal identity
+    /// `(home, type name)`. Keyed by `(home, name)`, not `name` alone, so two
+    /// modules each declaring `type Color` keep DISTINCT variant sets: a collapsed
+    /// `Symbol`-only key would hand a `case` on one `Color` the other's ctor set,
+    /// tripping the [`Match::new`] cover backstop (#100).
+    enum_variants: BTreeMap<(ModPath, Symbol), Vec<Symbol>>,
+    /// Each constructor's declared payload arity, keyed by its enum's nominal
+    /// identity paired with the constructor name `(home, ctor name)`. A saturated
+    /// construction passes exactly this many arguments; a bare or partially-applied
+    /// payload constructor is the constructor-as-function gap. Keyed by
+    /// `(home, ctor name)` so two same-short-named types whose constructors share a
+    /// name but differ in arity do not collapse (#100).
+    ctor_arity: BTreeMap<(ModPath, Symbol), usize>,
     /// Pre-minted, collision-free parameter names for eta-expanding a partial
     /// application into a boxed closure. Sized in [`crate::lower`] to the widest
     /// function arity in the module — an eta-lambda introduces at most that many
@@ -1174,21 +1180,38 @@ impl<'a> Lowerer<'a> {
         let mut enum_variants = BTreeMap::new();
         let mut ctor_arity = BTreeMap::new();
         for union in &m.unions {
-            enum_variants.insert(union.name, union.ctors.iter().map(|c| c.name).collect());
+            // Key by the union's HOME `(home, name)` so same-short-named types from
+            // different source modules keep distinct variant/arity entries (#100).
+            let uhome = ModPath(union.home.clone());
+            enum_variants.insert(
+                (uhome.clone(), union.name),
+                union.ctors.iter().map(|c| c.name).collect(),
+            );
             for ctor in &union.ctors {
-                ctor_arity.insert(ctor.name, ctor.arity);
+                ctor_arity.insert((uhome.clone(), ctor.name), ctor.arity);
             }
         }
         // Seed the built-in `Maybe` / `Result` variant sets + payload arities so
         // a `case m of Just x -> … ; Nothing -> …` takes the same validated
         // `Match::new` enum-cover path a user enum does, and `Just x` / `Ok x`
         // lower as saturated constructions.
-        enum_variants.insert(builtins.maybe, vec![builtins.just, builtins.nothing]);
-        enum_variants.insert(builtins.result, vec![builtins.ok, builtins.err]);
-        ctor_arity.insert(builtins.just, 1);
-        ctor_arity.insert(builtins.nothing, 0);
-        ctor_arity.insert(builtins.ok, 1);
-        ctor_arity.insert(builtins.err, 1);
+        // Prelude built-ins carry the empty canon home (`home: Vec::new()` in
+        // `Env`), so they key the identity map under the empty `ModPath` — the
+        // same home the lowered `Expr::Ctor` / `Pat::Ctor` for `Just` / `Ok` / …
+        // carry (#100).
+        let prelude_home = ModPath(Vec::new());
+        enum_variants.insert(
+            (prelude_home.clone(), builtins.maybe),
+            vec![builtins.just, builtins.nothing],
+        );
+        enum_variants.insert(
+            (prelude_home.clone(), builtins.result),
+            vec![builtins.ok, builtins.err],
+        );
+        ctor_arity.insert((prelude_home.clone(), builtins.just), 1);
+        ctor_arity.insert((prelude_home.clone(), builtins.nothing), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.ok), 1);
+        ctor_arity.insert((prelude_home.clone(), builtins.err), 1);
 
         // Seed `SqlValue` / `SqlField` variant sets + arities (M5b-db).
         // These are Prelude built-ins (like Maybe/Result) — no user `type`
@@ -1196,7 +1219,7 @@ impl<'a> Lowerer<'a> {
         // SqlString s -> … ; SqlInt i -> …` pattern is exhaustively validated and
         // constructor applications (e.g. `SqlInt 42`) lower as saturated.
         enum_variants.insert(
-            builtins.sqlvalue,
+            (prelude_home.clone(), builtins.sqlvalue),
             vec![
                 builtins.sql_string,
                 builtins.sql_int,
@@ -1210,20 +1233,20 @@ impl<'a> Lowerer<'a> {
             ],
         );
         enum_variants.insert(
-            builtins.sqlfield,
+            (prelude_home.clone(), builtins.sqlfield),
             vec![builtins.set_field, builtins.omit_field],
         );
-        ctor_arity.insert(builtins.sql_string, 1);
-        ctor_arity.insert(builtins.sql_int, 1);
-        ctor_arity.insert(builtins.sql_float, 1);
-        ctor_arity.insert(builtins.sql_bool, 1);
-        ctor_arity.insert(builtins.sql_bytes, 1);
-        ctor_arity.insert(builtins.sql_time, 1);
-        ctor_arity.insert(builtins.sql_decimal, 1); // SqlDecimal(String)
-        ctor_arity.insert(builtins.sql_money, 1); // SqlMoney(String) — "ISO_CODE AMOUNT"
-        ctor_arity.insert(builtins.sql_null, 1); // SqlNull(SqlValue)
-        ctor_arity.insert(builtins.set_field, 1); // SetField(SqlValue)
-        ctor_arity.insert(builtins.omit_field, 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.sql_string), 1);
+        ctor_arity.insert((prelude_home.clone(), builtins.sql_int), 1);
+        ctor_arity.insert((prelude_home.clone(), builtins.sql_float), 1);
+        ctor_arity.insert((prelude_home.clone(), builtins.sql_bool), 1);
+        ctor_arity.insert((prelude_home.clone(), builtins.sql_bytes), 1);
+        ctor_arity.insert((prelude_home.clone(), builtins.sql_time), 1);
+        ctor_arity.insert((prelude_home.clone(), builtins.sql_decimal), 1); // SqlDecimal(String)
+        ctor_arity.insert((prelude_home.clone(), builtins.sql_money), 1); // SqlMoney(String) — "ISO_CODE AMOUNT"
+        ctor_arity.insert((prelude_home.clone(), builtins.sql_null), 1); // SqlNull(SqlValue)
+        ctor_arity.insert((prelude_home.clone(), builtins.set_field), 1); // SetField(SqlValue)
+        ctor_arity.insert((prelude_home, builtins.omit_field), 0);
 
         Self {
             m,
@@ -1366,12 +1389,19 @@ impl<'a> Lowerer<'a> {
     /// at emission, exactly as user-defined recursive enums are.
     fn synthetic_sqlvalue_enum(&self) -> EnumDef {
         let b = self.builtins;
+        // `SqlValue` is a Prelude built-in (not a user `type`): its constructors
+        // carry the empty canon home, so its nominal identity uses the empty
+        // `ModPath` everywhere (EnumDef / IrType::Enum / Expr::Ctor). The backend's
+        // empty-home→entry-module naming fallback reproduces the pre-#100 Rust name
+        // byte-for-byte.
         let sv = IrType::Enum {
+            home: ModPath(Vec::new()),
             name: b.sqlvalue,
             args: Vec::new(),
         };
         EnumDef {
             name: b.sqlvalue,
+            home: ModPath(Vec::new()),
             type_params: Vec::new(),
             variants: vec![
                 Variant {
@@ -1430,12 +1460,16 @@ impl<'a> Lowerer<'a> {
     /// ```
     fn synthetic_sqlfield_enum(&self) -> EnumDef {
         let b = self.builtins;
+        // `SqlField` / `SqlValue` are Prelude built-ins: empty canon home (see
+        // [`Self::synthetic_sqlvalue_enum`]).
         let sv = IrType::Enum {
+            home: ModPath(Vec::new()),
             name: b.sqlvalue,
             args: Vec::new(),
         };
         EnumDef {
             name: b.sqlfield,
+            home: ModPath(Vec::new()),
             type_params: Vec::new(),
             variants: vec![
                 Variant {
@@ -1497,6 +1531,11 @@ impl<'a> Lowerer<'a> {
         }
         Ok(EnumDef {
             name: u.name,
+            // Carry the union's DEFINING module (its home) so the backend derives
+            // the emitted Rust enum name from the home, not the merged entry module
+            // (#100): `Std.Palette.Shade` → `StdPaletteShade`, `Lib.Color` →
+            // `LibColor`, `Main.Msg` → `MainMsg` (single-module unchanged).
+            home: ModPath(u.home.clone()),
             type_params,
             variants,
         })
@@ -1882,7 +1921,7 @@ impl<'a> Lowerer<'a> {
             // no args; a user enum carries its type arguments, each lowered under
             // the same generic scope so `Opt Int` → `Enum { Opt, [Int] }` and
             // `Opt a` (inside a generic signature) → `Enum { Opt, [Generic a] }`.
-            canon::Type::Con { name, args, .. } => match self.resolve(*name)? {
+            canon::Type::Con { home, name, args } => match self.resolve(*name)? {
                 "Int" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
@@ -2032,12 +2071,16 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                _ if self.enum_variants.contains_key(name) => {
+                _ if self
+                    .enum_variants
+                    .contains_key(&(ModPath(home.clone()), *name)) =>
+                {
                     let mut ir_args = Vec::with_capacity(args.len());
                     for a in args {
                         ir_args.push(self.ir_type_from_canon(a, generics)?);
                     }
                     Ok(IrType::Enum {
+                        home: ModPath(home.clone()),
                         name: *name,
                         args: ir_args,
                     })
@@ -2387,6 +2430,9 @@ impl<'a> Lowerer<'a> {
                 // backend emits the generated `StdDbSqlValue` / `StdDbSqlField`
                 // Rust enum name at use sites.
                 "SqlValue" | "SqlField" => Ok(IrType::Enum {
+                    // Prelude built-in: empty home, matching the synthetic EnumDef
+                    // and the `Expr::Ctor` home (#100).
+                    home: ModPath(Vec::new()),
                     name: *name,
                     args: Vec::new(),
                 }),
@@ -2496,14 +2542,21 @@ impl<'a> Lowerer<'a> {
                 "LayoutContext" => Ok(IrType::UiPlain(UiPlain::LayoutContext)),
                 // ── M7: Sky.Live opaque types ─────────────────────────────────
                 "LiveReq" => Ok(IrType::LiveReq),
-                _ if self.enum_variants.contains_key(name) => {
+                _ if self
+                    .enum_variants
+                    .contains_key(&(ModPath(module.clone()), *name)) =>
+                {
                     // A use-site enum type carries its solved type arguments, so
                     // `Opt Int` → `Enum { Opt, [Int] }` (rendered `MainOpt<i64>`).
+                    // `module` is the type's HOME (the solver threads it on
+                    // `Ty::Con`), which is the same identity the union was keyed
+                    // under (#100).
                     let mut ir_args = Vec::with_capacity(args.len());
                     for a in args {
                         ir_args.push(self.ir_type_from_ty(a, span)?);
                     }
                     Ok(IrType::Enum {
+                        home: ModPath(module.clone()),
                         name: *name,
                         args: ir_args,
                     })
@@ -2732,7 +2785,10 @@ impl<'a> Lowerer<'a> {
             canon::Expr_::Unit => Ok(Expr::Unit),
             canon::Expr_::VarLocal(s) => Ok(Expr::Var(*s)),
             canon::Expr_::VarCtor {
-                type_name, name, ..
+                home,
+                type_name,
+                name,
+                ..
             } => {
                 // `True` / `False` are the Prelude-exposed nullary constructors of
                 // the built-in `Bool`; they lower to the IR boolean literal
@@ -2747,9 +2803,11 @@ impl<'a> Lowerer<'a> {
                 // referenced without arguments is a constructor-as-function value,
                 // which awaits first-class-value support (a saturated construction
                 // is handled in `lower_call`).
-                let arity = self.ctor_arity_of(*name)?;
+                let ctor_home = ModPath(home.clone());
+                let arity = self.ctor_arity_of(&ctor_home, *name)?;
                 if arity == 0 {
                     Ok(Expr::Ctor {
+                        home: ctor_home,
                         ty: *type_name,
                         variant: *name,
                         args: vec![],
@@ -3171,7 +3229,10 @@ impl<'a> Lowerer<'a> {
             .collect::<DResult<Vec<_>>>()?;
         match &callee.value {
             canon::Expr_::VarCtor {
-                type_name, name, ..
+                home,
+                type_name,
+                name,
+                ..
             } => {
                 // A constructor application. M3a lowers a *saturated* construction
                 // to `Expr::Ctor`; a partial application (`Node l 1` for a
@@ -3179,7 +3240,8 @@ impl<'a> Lowerer<'a> {
                 // awaits first-class-value support. Over-application is ruled out
                 // by type-checking (applying past the fields makes the result a
                 // non-function), so a non-equal count here is always partial.
-                let arity = self.ctor_arity_of(*name)?;
+                let ctor_home = ModPath(home.clone());
+                let arity = self.ctor_arity_of(&ctor_home, *name)?;
                 if args.len() == arity {
                     // `Ok x` whose `Result e a` error type `e` is still
                     // unconstrained after solving would emit an ambiguous
@@ -3200,6 +3262,7 @@ impl<'a> Lowerer<'a> {
                         });
                     }
                     Ok(Expr::Ctor {
+                        home: ctor_home,
                         ty: *type_name,
                         variant: *name,
                         args: lowered_args,
@@ -4167,9 +4230,9 @@ impl<'a> Lowerer<'a> {
     /// The declared payload arity of a constructor. Name resolution guarantees
     /// every `VarCtor` / ctor pattern names a declared constructor, so a miss is a
     /// violated invariant rather than user error.
-    fn ctor_arity_of(&self, name: Symbol) -> DResult<usize> {
+    fn ctor_arity_of(&self, home: &ModPath, name: Symbol) -> DResult<usize> {
         self.ctor_arity
-            .get(&name)
+            .get(&(home.clone(), name))
             .copied()
             .ok_or_else(|| bug("sky_lower::ctor_arity_of", "unknown constructor"))
     }
@@ -4863,6 +4926,7 @@ impl<'a> Lowerer<'a> {
             // checker's call (SKY-T0010); a second arm for the same top-level
             // constructor is gated separately (SKY-L0116).
             canon::Pattern_::PCtor {
+                home,
                 type_name,
                 name,
                 args,
@@ -4873,6 +4937,7 @@ impl<'a> Lowerer<'a> {
                     .map(Self::lower_payload_pat)
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Pat::Ctor {
+                    home: ModPath(home.clone()),
                     ty: *type_name,
                     variant: *name,
                     args: subs,
@@ -5152,7 +5217,10 @@ impl<'a> Lowerer<'a> {
             // The scrutinee's enum is one this module declared (the type checker
             // pinned the constructor's union), so it is always in
             // `enum_variants` — the *true* variant set handed to `Match::new`.
-            let canon::Pattern_::PCtor { type_name, .. } = &first.pat.value else {
+            let canon::Pattern_::PCtor {
+                home, type_name, ..
+            } = &first.pat.value
+            else {
                 return Err(bug(
                     "sky_lower::lower_case",
                     "all-ctor case without a ctor head",
@@ -5160,7 +5228,7 @@ impl<'a> Lowerer<'a> {
             };
             let variants = self
                 .enum_variants
-                .get(type_name)
+                .get(&(ModPath(home.clone()), *type_name))
                 .ok_or_else(|| bug("sky_lower::lower_case", "unknown scrutinee enum"))?;
             Ok(Expr::Match(Match::new(scrutinee, arms, variants)?))
         } else {
@@ -5188,6 +5256,7 @@ impl<'a> Lowerer<'a> {
                 name.value,
             )),
             canon::Pattern_::PCtor {
+                home,
                 type_name,
                 name,
                 args,
@@ -5198,6 +5267,7 @@ impl<'a> Lowerer<'a> {
                     .map(Self::lower_payload_pat)
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Pat::Ctor {
+                    home: ModPath(home.clone()),
                     ty: *type_name,
                     variant: *name,
                     args: sub,

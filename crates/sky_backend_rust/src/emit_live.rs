@@ -115,12 +115,13 @@ pub fn emit_live_call(
             // how many payload fields the variant has so we can emit the right
             // `params.get(i)` chain.
             let build_closure = if let Expr::Ctor {
+                home,
                 ty,
                 variant,
                 args: ctor_args,
             } = builder_e
             {
-                let field_count = ctx.variant_fields(*ty, *variant)?.len();
+                let field_count = ctx.variant_fields(home, *ty, *variant)?.len();
                 let ctor_s = emit_expr_at(ctx, builder_e, indent, child, generics)?;
                 if field_count == 0 || !ctor_args.is_empty() {
                     // Nullary ctor or fully-applied ctor: wrap as a constant closure.

@@ -76,7 +76,7 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         // An enum renders by its type name, applied to its type arguments in
         // source-like prefix form (`Maybe Int`). A non-generic enum (empty
         // `args`) is just the bare type name.
-        IrType::Enum { name, args } => {
+        IrType::Enum { name, args, .. } => {
             let base = sym_name(interner, *name);
             if args.is_empty() {
                 base
@@ -748,7 +748,7 @@ fn pat_name(interner: &Interner, pat: &Pat) -> String {
                 .join(", ");
             format!("({inner})")
         }
-        Pat::Ctor { ty, variant, args } => {
+        Pat::Ctor { ty, variant, args, .. } => {
             let head = format!(
                 "{}.{}",
                 sym_name(interner, *ty),
@@ -814,6 +814,7 @@ fn write_type(out: &mut String, ty: &TypeDef, interner: &Interner) {
             name,
             type_params,
             variants,
+            ..
         }) => {
             let rendered = variants
                 .iter()
@@ -971,7 +972,7 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
         Expr::Char(c) => line(out, level, &format!("Char '{c}'")),
         Expr::Unit => line(out, level, "Unit"),
         Expr::Var(sym) => line(out, level, &format!("Var {}", sym_name(interner, *sym))),
-        Expr::Ctor { ty, variant, args } => {
+        Expr::Ctor { ty, variant, args, .. } => {
             line(
                 out,
                 level,
@@ -1253,6 +1254,7 @@ mod tests {
         let tick_arms = vec![
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty: msg,
                     variant: inc,
                     args: vec![],
@@ -1265,6 +1267,7 @@ mod tests {
             },
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty: msg,
                     variant: dec,
                     args: vec![],
@@ -1285,6 +1288,7 @@ mod tests {
                 (
                     m,
                     IrType::Enum {
+                        home: ModPath(vec![]),
                         name: msg,
                         args: vec![],
                     },
@@ -1299,6 +1303,7 @@ mod tests {
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
+                    home: ModPath(vec![]),
                     name: msg,
                     type_params: vec![],
                     variants: vec![
@@ -1732,6 +1737,7 @@ program
         let arms = vec![
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty: maybe,
                     variant: just,
                     args: vec![Pat::Var(x)],
@@ -1740,6 +1746,7 @@ program
             },
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty: maybe,
                     variant: nothing,
                     args: vec![],
@@ -1751,6 +1758,7 @@ program
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
+                    home: ModPath(vec![]),
                     name: maybe,
                     type_params: vec![a],
                     variants: vec![
@@ -1772,6 +1780,7 @@ program
                     params: vec![(
                         m,
                         IrType::Enum {
+                            home: ModPath(vec![]),
                             name: maybe,
                             args: vec![IrType::Int],
                         },
@@ -1824,6 +1833,7 @@ program
         // nop() -> () = ()
         let arms = vec![Arm {
             pat: Pat::Ctor {
+                home: ModPath(vec![]),
                 ty: wrap,
                 variant: mk_wrap,
                 args: vec![Pat::Tuple(vec![Pat::Var(a), Pat::Var(b)])],
@@ -1834,6 +1844,7 @@ program
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
+                    home: ModPath(vec![]),
                     name: wrap,
                     type_params: vec![],
                     variants: vec![Variant {
@@ -1850,6 +1861,7 @@ program
                         params: vec![(
                             w,
                             IrType::Enum {
+                                home: ModPath(vec![]),
                                 name: wrap,
                                 args: vec![],
                             },
