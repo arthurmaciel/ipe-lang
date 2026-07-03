@@ -22,9 +22,10 @@ pub use code::{
     explain_page, title,
 };
 pub use diagnostic::{
-    Applicability, CaseDefect, Construct, DResult, Diagnostic, Expected, ExpectedSet,
+    AppShape, Applicability, CaseDefect, Construct, DResult, Diagnostic, Expected, ExpectedSet,
     ExposingDefect, Feature, HeaderDefect, HelpLine, Hint, IfDefect, LetDefect, LowerError,
-    NameError, ParseError, SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect, TypeError,
+    ModelLeaf, NameError, ParseError, SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect,
+    TypeError,
 };
 pub use render::render;
 pub use span::{Located, Span};

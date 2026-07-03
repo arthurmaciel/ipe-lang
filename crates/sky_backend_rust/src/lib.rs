@@ -18,6 +18,7 @@
 mod crate_specs;
 mod emit_expr;
 mod emit_live;
+mod emit_model_gate;
 mod emit_tui;
 mod emit_types;
 mod emit_webview;
@@ -196,6 +197,15 @@ pub(crate) struct EmitCtx<'a> {
     /// derive set on user enums and on record structs (#87 seal). Whole-program
     /// (all modules) so cross-module `IrType::Enum` references resolve soundly.
     enum_derivable: BTreeMap<Symbol, bool>,
+    /// Enum type symbol → whether that user enum's rendered Rust type derives
+    /// `serde::Serialize` **and** `serde::de::DeserializeOwned`. Computed by a
+    /// monotone whole-program fixpoint parallel to [`Self::enum_derivable`]: an
+    /// enum is non-serde iff some variant payload reaches a non-serde leaf (the
+    /// non-derivable set PLUS the `Clone`-only UI value/carrier types, per
+    /// [`sky_ir::ir_type_is_serde`]). Read by the Sky.Live app-entry Model gate
+    /// (#91 seal). Whole-program so cross-module `IrType::Enum` references
+    /// resolve soundly.
+    enum_serde: BTreeMap<Symbol, bool>,
     /// Function id → Rust function name (e.g. `update` → `main_update`).
     func_names: BTreeMap<FuncId, String>,
     /// Every distinct record shape synthesised for the program, in emission
@@ -352,6 +362,40 @@ impl<'a> EmitCtx<'a> {
             }
         }
 
+        // #91 seal: whole-program enum-serde fixpoint, computed identically to
+        // `enum_derivable` above but through `ir_type_is_serde` (whose serde-OK
+        // leaf set is a strict subset — the UI value/carrier types are `Clone`
+        // but not `serde`). Every user enum starts optimistic (serde) and is
+        // monotonically demoted if any variant payload reaches a non-serde leaf
+        // or a (currently-estimated) non-serde enum. Non-serde only propagates
+        // (true → false), so the loop reaches a fixpoint in at most `enum count`
+        // passes. Read by the Sky.Live Model-admissibility gate.
+        let mut enum_serde: BTreeMap<Symbol, bool> =
+            enum_variants.keys().map(|k| (*k, true)).collect();
+        loop {
+            let mut to_demote: Vec<Symbol> = Vec::new();
+            {
+                let lookup = |q: Symbol| enum_serde.get(&q).copied().unwrap_or(true);
+                for (sym, variants) in &enum_variants {
+                    if !enum_serde.get(sym).copied().unwrap_or(true) {
+                        continue;
+                    }
+                    let ok = variants.iter().all(|fields| {
+                        fields.iter().all(|f| sky_ir::ir_type_is_serde(f, &lookup))
+                    });
+                    if !ok {
+                        to_demote.push(*sym);
+                    }
+                }
+            }
+            if to_demote.is_empty() {
+                break;
+            }
+            for s in to_demote {
+                enum_serde.insert(s, false);
+            }
+        }
+
         let mut record_structs = Vec::with_capacity(shapes.len());
         let mut record_by_fieldset = BTreeMap::new();
         let mut used_names: BTreeSet<String> = BTreeSet::new();
@@ -448,6 +492,7 @@ impl<'a> EmitCtx<'a> {
             variant_fields,
             enum_variants,
             enum_derivable,
+            enum_serde,
             func_names,
             record_structs,
             record_by_fieldset,
@@ -463,6 +508,25 @@ impl<'a> EmitCtx<'a> {
     /// defaults to `true`, matching the pre-seal unconditional derive.
     pub(crate) fn enum_is_derivable(&self, sym: Symbol) -> bool {
         self.enum_derivable.get(&sym).copied().unwrap_or(true)
+    }
+
+    /// Does user enum `sym`'s rendered Rust type derive `serde::Serialize` and
+    /// `serde::de::DeserializeOwned`?
+    ///
+    /// Resolved from the whole-program serde fixpoint computed at
+    /// [`Self::build`]. A symbol that is not a user enum defaults to `true`
+    /// (builtins are distinct `IrType` variants and never reach this lookup as a
+    /// bare enum name). Used by the Sky.Live Model-admissibility gate (#91).
+    pub(crate) fn enum_is_serde(&self, sym: Symbol) -> bool {
+        self.enum_serde.get(&sym).copied().unwrap_or(true)
+    }
+
+    /// The per-variant payload field-type lists of user enum `sym`, in variant
+    /// order. Empty when `sym` is not a known user enum. Read by the Model-
+    /// admissibility gate to walk a non-admissible enum down to its offending
+    /// leaf (#91).
+    pub(crate) fn enum_variant_payloads(&self, sym: Symbol) -> &[Vec<IrType>] {
+        self.enum_variants.get(&sym).map_or(&[], Vec::as_slice)
     }
 
     /// The declared payload field types of constructor `variant` of enum `ty`,

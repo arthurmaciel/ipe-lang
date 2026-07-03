@@ -120,6 +120,17 @@ fn emit_webview_app_inner(
     let subs_e = lookup_field(ctx, fields, "subscriptions")?;
     let window_e = lookup_field(ctx, fields, "window")?;
 
+    // #91 seal: gate the Model against `webview_app`'s `Clone` bound (same as
+    // Tui — memory-resident Model, `Clone` only). A non-clonable (non-derivable)
+    // Model becomes a fail-closed `SKY-L0120` error instead of a `cargo` fail.
+    if let Some(model_ty) = crate::emit_model_gate::model_ty_of_view(view_e) {
+        crate::emit_model_gate::check_admissible_model(
+            ctx,
+            model_ty,
+            sky_diagnostics::AppShape::Webview,
+        )?;
+    }
+
     // ── G4 gate 1: `window` must be an inline record literal ─────────────────
     // Unreachable for well-typed source: a let-bound `window` is rejected at lower
     // with SKY-L0119 (Feature::LetBoundAppCfg); this guard is a defensive invariant.

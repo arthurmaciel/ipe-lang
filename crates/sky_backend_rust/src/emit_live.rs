@@ -219,6 +219,19 @@ fn emit_live_app_inner(
     let view_e = lookup_field(ctx, fields, "view")?;
     let subs_e = lookup_field(ctx, fields, "subscriptions")?;
 
+    // #91 seal: gate the Model type against `live_app`'s serde+Clone+PartialEq
+    // bound BEFORE emitting. A non-serialisable Model (e.g. a field of type
+    // `Cmd`/`Sub`/`Task`/`Decoder`/`Db`/function, or `Html`/`Element`/`Color`)
+    // would otherwise `skyc`-succeed and then `cargo`-fail on the missing trait.
+    // The gate converts that into a fail-closed `SKY-L0120` diagnostic.
+    if let Some(model_ty) = crate::emit_model_gate::model_ty_of_view(view_e) {
+        crate::emit_model_gate::check_admissible_model(
+            ctx,
+            model_ty,
+            sky_diagnostics::AppShape::Live,
+        )?;
+    }
+
     let init_s = emit_live_fn(ctx, init_e, indent, child, generics)?;
     let update_s = emit_live_fn(ctx, update_e, indent, child, generics)?;
     let view_s = emit_live_fn(ctx, view_e, indent, child, generics)?;
