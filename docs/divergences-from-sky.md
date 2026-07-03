@@ -395,8 +395,19 @@ API-shape review):
 - ~~**B15 float sci-notation threshold.**~~ RESOLVED (task #52, commit `1903654`):
   probed Go 1.26.2 directly — `%v` cuts to scientific at exp ≥ 6, no exp-21
   behaviour; ipê matches Go byte-for-byte. No longer an open item.
-- The reference `TypeRenderer.hs` `"String"` default and `ExprEmitter.hs`
-  single-pass shape are asserted from the in-repo reference audit; the files exist
-  at `src/Sky/Generate/Rust/Builder/` on `feat/runtime-rust` but their exact
-  fallback lines were not line-cited here — **low risk, confirm the `"String"`
-  fallback line if quoting it verbatim in the README.**
+- ~~The reference `TypeRenderer.hs` `"String"` default and `ExprEmitter.hs`
+  single-pass shape line-cites.~~ CONFIRMED against the reference tree at
+  `src/Sky/Generate/Rust/Builder/`:
+  - **A5 — `TypeRenderer.hs` `"String"` fallback:** the catch-all is
+    `_ -> "String"` at `TypeRenderer.hs:345` (the closing arm of
+    `typeToRustString`); a second `| otherwise -> "String"` sits at line 211.
+    Safe to quote verbatim.
+  - **A4 — `Kernel.hs` fail-open snake_case default:** the fallthrough is
+    `_ -> toSnakeCase (map (\c -> if c == '.' then '_' else c) mod ++ "_" ++ name)`
+    at `Kernel.hs:802` (the file's last line), preceded by the `Rust_`-prefix
+    arm at 800–801. Matches the A4 `Kernel.hs:801-802` cite.
+  - **A2 — `ExprEmitter.hs` single-pass shape:** the emitter walks `Can.Expr`
+    to a Rust `String` in one pass (e.g. `argToRustString :: EmitCtx -> Bool ->
+    Can.Expr -> String` at `ExprEmitter.hs:793`, one of many `… -> String`
+    renderers across the 4324-line module) — no typed-IR checkpoint. Confirms
+    the A2 characterisation.
