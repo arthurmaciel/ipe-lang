@@ -12,9 +12,10 @@
 //! * All five required cfg fields are looked up fail-closed (missing field →
 //!   [`Diagnostic::CompilerBug`], not silent drop).
 //! * **G4**: `window` MUST be an inline `Expr::Record` AND `size` within it MUST
-//!   be an inline 2-element `Expr::Tuple`. Any non-literal shape is rejected
-//!   fail-closed at the emit site (defence-in-depth; the constrain scheme already
-//!   enforces the shape structurally).
+//!   be an inline 2-element `Expr::Tuple`. Any non-literal shape is rejected at
+//!   lower with `SKY-L0119` (`Feature::LetBoundAppCfg`); these emit-site guards
+//!   are unreachable-by-construction defensive invariants (defence-in-depth,
+//!   mirroring the `LiveAppRouted`/`SKY-L0118` precedent).
 //! * Function fields (init/update/view/subscriptions) are emitted via
 //!   `emit_webview_fn` (raw function name for `FuncValue`, fallback to
 //!   `emit_expr_at`). A named `fn` item satisfies `Send + Sync + 'static` via
@@ -64,11 +65,14 @@ pub fn emit_webview_call(
                     detail: format!("Webview.app requires 1 argument, got {}", args.len()),
                 });
             };
+            // Unreachable for well-typed source: a non-literal cfg is rejected
+            // at lower with SKY-L0119 (Feature::LetBoundAppCfg); this guard is a
+            // defensive invariant, mirroring the `LiveAppRouted` precedent.
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_webview_call::WebviewApp",
                     detail: "Webview.app cfg must be an inline record literal; \
-                             non-literal cfg is not supported in Phase-1d"
+                             a non-literal cfg is rejected at lower with SKY-L0119"
                         .into(),
                 });
             };
@@ -90,8 +94,10 @@ pub fn emit_webview_call(
 ///    literal `(w, h)`.
 ///
 /// `title` may be any String-typed expression (variable, literal, concatenation).
-/// Both checks emit [`Diagnostic::CompilerBug`] on failure — they are structural
-/// invariants enforced by the constrain scheme, so a violation is a compiler bug.
+/// Both checks emit [`Diagnostic::CompilerBug`] on failure — they are unreachable
+/// for well-typed source: a non-literal `window`/`size` is rejected at lower with
+/// SKY-L0119 (`Feature::LetBoundAppCfg`), so these guards are defensive
+/// invariants, mirroring the `LiveAppRouted` precedent.
 ///
 /// # Function-field emission
 ///
@@ -115,12 +121,14 @@ fn emit_webview_app_inner(
     let window_e = lookup_field(ctx, fields, "window")?;
 
     // ── G4 gate 1: `window` must be an inline record literal ─────────────────
+    // Unreachable for well-typed source: a let-bound `window` is rejected at lower
+    // with SKY-L0119 (Feature::LetBoundAppCfg); this guard is a defensive invariant.
     let Expr::Record(win_fields) = window_e else {
         return Err(Diagnostic::CompilerBug {
             where_: "sky_backend_rust::emit_webview_app_inner::G4_window",
             detail: "Webview.app `window` field must be an inline record literal \
-                     `{ title = ..., size = (..., ...) }` in Phase-1d; \
-                     a let-bound WindowCfg variable is not supported yet"
+                     `{ title = ..., size = (..., ...) }`; \
+                     a let-bound WindowCfg variable is rejected at lower with SKY-L0119"
                 .into(),
         });
     };
@@ -129,11 +137,13 @@ fn emit_webview_app_inner(
     let size_e = lookup_field(ctx, win_fields, "size")?;
 
     // ── G4 gate 2: `size` must be an inline 2-element tuple literal ──────────
+    // Unreachable for well-typed source: a let-bound `size` is rejected at lower
+    // with SKY-L0119 (Feature::LetBoundAppCfg); this guard is a defensive invariant.
     let Expr::Tuple(size_elems) = size_e else {
         return Err(Diagnostic::CompilerBug {
             where_: "sky_backend_rust::emit_webview_app_inner::G4_size",
-            detail: "Webview.app `window.size` must be an inline 2-tuple literal `(w, h)` \
-                     in Phase-1d; a let-bound size variable is not supported yet"
+            detail: "Webview.app `window.size` must be an inline 2-tuple literal `(w, h)`; \
+                     a let-bound size variable is rejected at lower with SKY-L0119"
                 .into(),
         });
     };
