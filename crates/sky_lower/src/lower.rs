@@ -2061,10 +2061,16 @@ impl<'a> Lowerer<'a> {
     fn ir_type_from_ty(&self, t: &Ty, span: Span) -> DResult<IrType> {
         match t {
             Ty::Unit => Ok(IrType::Unit),
-            // Builtin names are matched first: `sky_canon`'s §3.2 gate rejects
-            // any user type/ctor that shadows a builtin name, so this precedence
-            // is sound (it can never silently override a user `type Int = …`),
-            // not a deliberate override.
+            // Builtin names are matched first. This precedence is sound because
+            // `sky_canon`'s `RESERVED_BUILTIN_TYPES` gate (resolve.rs, SKY-N0026)
+            // rejects any user `type` / `type alias` whose name is one of these
+            // builtin constructors, so this arm can never silently override a
+            // user `type Int = …` / `type Html = …`. The gate covers every name
+            // matched BEFORE the `enum_variants` guard below, except `Color`
+            // (a fixture-blocked follow-up — user `type Color` still resolves as
+            // its own enum for now) and `Value` (matched AFTER the guard, where
+            // the user enum already wins). See RESERVED_BUILTIN_TYPES for the
+            // per-name cite list.
             Ty::Con { name, args, module } => match self.resolve(*name)? {
                 "Int" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
