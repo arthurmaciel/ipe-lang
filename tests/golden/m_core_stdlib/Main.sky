@@ -1,0 +1,93 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+tf : Bool -> String
+tf b =
+    if b then
+        "T"
+
+    else
+        "F"
+
+
+showErr : Result Int Int -> Int
+showErr r =
+    case r of
+        Ok v ->
+            v
+
+        Err e ->
+            e
+
+
+-- Typed seeds pin the Result error/value channels concretely so the
+-- monomorphising Rust backend never sees a free type variable.
+seedOk : Result String Int
+seedOk =
+    Ok 5
+
+
+seedErr : Result String Int
+seedErr =
+    Err "e"
+
+
+seedBoom : Result String Int
+seedBoom =
+    Err "boom"
+
+
+main =
+    let
+        -- Result.andThen — Ok chains through, Err short-circuits.
+        v1 =
+            Result.withDefault 0 (Result.andThen (\x -> Ok (x + 1)) seedOk)
+
+        v2 =
+            Result.withDefault 0 (Result.andThen (\x -> Ok (x + 1)) seedErr)
+
+        -- Result.mapError — maps the Err channel (String -> Int), Ok untouched.
+        mv =
+            showErr (Result.mapError (\e -> String.length e) seedBoom)
+
+        -- Basics.clamp lo hi x — comparable obligation, three tied positions.
+        c1 =
+            clamp 0 100 150
+
+        c2 =
+            clamp 0 100 (-5)
+
+        c3 =
+            clamp 0 100 42
+
+        -- String haystack-first companions.
+        s1 =
+            String.containsIn "hello world" "world"
+
+        s2 =
+            String.startsWithIn "/api/users" "/api"
+
+        s3 =
+            String.endsWithIn "image.png" ".png"
+
+        s4 =
+            String.containsIn "hello" "xyz"
+    in
+    println
+        ("andThen "
+            ++ String.fromInt v1
+            ++ " "
+            ++ String.fromInt v2
+            ++ " mapError "
+            ++ String.fromInt mv
+            ++ " clamp "
+            ++ String.fromInt (c1 + c2 + c3)
+            ++ " str "
+            ++ tf s1
+            ++ tf s2
+            ++ tf s3
+            ++ tf s4
+        )

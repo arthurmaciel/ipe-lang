@@ -50,6 +50,23 @@ pub fn basics_not(b: bool) -> bool {
     !b
 }
 
+/// Sky `clamp : comparable -> comparable -> comparable -> comparable`
+/// (`clamp lo hi x`). Polymorphic over any `PartialOrd` type — mirrors
+/// `math_min` / `math_max`, so the type-checker's `Comparable a` obligation
+/// (an `Ord` super-var, see `constrain_var_kernel`) rejects a function / record
+/// argument before this monomorphises. Total: returns `lo` below the range,
+/// `hi` above it, `x` within — no panic path. When `lo > hi` the lower bound
+/// wins (matches Elm's `if x < lo then lo else if x > hi then hi else x`).
+pub fn basics_clamp<T: PartialOrd>(lo: T, hi: T, x: T) -> T {
+    if x < lo {
+        lo
+    } else if x > hi {
+        hi
+    } else {
+        x
+    }
+}
+
 /// Sky `errorToString : a -> String` — universal Sky stringifier.
 /// Used by Sky.Test.debugShow and friends to render any Sky value into
 /// a diagnostic string. Backed by the total `SkyStringify` trait, which
