@@ -8,7 +8,7 @@ use core::fmt::Write as _;
 
 use sky_diagnostics::{DResult, Diagnostic, LowerError, Span};
 use sky_intern::Symbol;
-use sky_ir::{BinOp, BoundSet, Callee, Expr, Func, IrType, KernelFn, Match, Pat};
+use sky_ir::{BinOp, BoundSet, Callee, Expr, Func, IrType, KernelFn, Match, ModPath, Pat};
 
 use crate::EmitCtx;
 use crate::emit_types::{GenericScope, render_type};
@@ -2247,8 +2247,8 @@ pub fn emit_expr_at(
         // The unit value renders as the Rust unit expression `()`.
         Expr::Unit => Ok("()".to_owned()),
         Expr::Var(sym) => ctx.emit_ident(*sym),
-        Expr::Ctor { ty, variant, args } => {
-            emit_ctor(ctx, *ty, *variant, args, indent, depth, generics)
+        Expr::Ctor { home, ty, variant, args } => {
+            emit_ctor(ctx, home, *ty, *variant, args, indent, depth, generics)
         }
         Expr::BinOp { op, lhs, rhs } => {
             let l = emit_expr_at(ctx, lhs, indent, child, generics)?;
@@ -2534,8 +2534,12 @@ fn emit_list(
 /// `emit_expr_at` match (`#[inline(never)]`) so its locals don't inflate the
 /// recursive frame.
 #[inline(never)]
+// The extra `home` param is the type's nominal-identity half `(home, ty)` (#100);
+// splitting the ctor emitter would obscure the boxing/runtime-enum flow.
+#[allow(clippy::too_many_arguments)]
 fn emit_ctor(
     ctx: &EmitCtx,
+    home: &ModPath,
     ty: Symbol,
     variant: Symbol,
     args: &[Expr],
@@ -2547,7 +2551,7 @@ fn emit_ctor(
     // A built-in `Maybe` / `Result` constructor routes to the runtime enum
     // (`SkyMaybe::Just(..)`, `SkyResult::Err(..)`); its payload is never a
     // self-recursive user field, so no field-boxing lookup applies.
-    if let Some(runtime) = ctx.builtin_runtime_enum(ty) {
+    if let Some(runtime) = ctx.builtin_runtime_enum(home, ty) {
         let path = format!("{runtime}::{}", ctx.emit_ident(variant)?);
         if args.is_empty() {
             return Ok(path);
@@ -2558,11 +2562,11 @@ fn emit_ctor(
         }
         return Ok(format!("{path}({})", parts.join(", ")));
     }
-    let path = format!("{}::{}", ctx.enum_name(ty)?, ctx.emit_ident(variant)?);
+    let path = format!("{}::{}", ctx.enum_name(home, ty)?, ctx.emit_ident(variant)?);
     if args.is_empty() {
         return Ok(path);
     }
-    let fields = ctx.variant_fields(ty, variant)?;
+    let fields = ctx.variant_fields(home, ty, variant)?;
     if fields.len() != args.len() {
         return Err(Diagnostic::CompilerBug {
             where_: "sky_backend_rust::emit_ctor",
@@ -2581,7 +2585,7 @@ fn emit_ctor(
         let rendered = emit_expr_at(ctx, arg, indent, child, generics)?;
         // A cyclic self-edge field is boxed in the enum, so its construction
         // argument is boxed too.
-        if ctx.is_cyclic_self_field(field_ty, ty) {
+        if ctx.is_cyclic_self_field(field_ty, home, ty) {
             parts.push(format!("Box::new({rendered})"));
         } else {
             parts.push(rendered);
@@ -2673,8 +2677,8 @@ fn emit_arm_head(
     str_mode: bool,
     list_mode: bool,
 ) -> DResult<(String, String)> {
-    if let Pat::Ctor { ty, variant, args } = pat {
-        emit_ctor_arm_pat(ctx, *ty, *variant, args)
+    if let Pat::Ctor { home, ty, variant, args } = pat {
+        emit_ctor_arm_pat(ctx, home, *ty, *variant, args)
     } else {
         let prelude = if str_mode {
             str_binder_rebinds(ctx, pat)?
@@ -2692,13 +2696,14 @@ fn emit_arm_head(
 /// variable bound to it is unboxed (`let x = *x;`) at the arm body's head.
 fn emit_ctor_arm_pat(
     ctx: &EmitCtx,
+    home: &ModPath,
     ty: Symbol,
     variant: Symbol,
     args: &[Pat],
 ) -> DResult<(String, String)> {
     // A built-in `Maybe` / `Result` pattern matches the runtime enum; its
     // payload is never a boxed self-edge field, so no unbox prelude is needed.
-    if let Some(runtime) = ctx.builtin_runtime_enum(ty) {
+    if let Some(runtime) = ctx.builtin_runtime_enum(home, ty) {
         let path = format!("{runtime}::{}", ctx.emit_ident(variant)?);
         if args.is_empty() {
             return Ok((path, String::new()));
@@ -2709,11 +2714,11 @@ fn emit_ctor_arm_pat(
         }
         return Ok((format!("{path}({})", sub_pats.join(", ")), String::new()));
     }
-    let path = format!("{}::{}", ctx.enum_name(ty)?, ctx.emit_ident(variant)?);
+    let path = format!("{}::{}", ctx.enum_name(home, ty)?, ctx.emit_ident(variant)?);
     if args.is_empty() {
         return Ok((path, String::new()));
     }
-    let fields = ctx.variant_fields(ty, variant)?;
+    let fields = ctx.variant_fields(home, ty, variant)?;
     if fields.len() != args.len() {
         return Err(Diagnostic::CompilerBug {
             where_: "sky_backend_rust::emit_match",
@@ -2733,7 +2738,7 @@ fn emit_ctor_arm_pat(
         sub_pats.push(render_pat(ctx, sub)?);
         // A variable bound to a boxed self-edge field is unboxed so the body
         // sees the payload's own type, not `Box<…>`.
-        if ctx.is_cyclic_self_field(field_ty, ty)
+        if ctx.is_cyclic_self_field(field_ty, home, ty)
             && let Pat::Var(s) = sub
         {
             let binder = ctx.emit_ident(*s)?;
@@ -2977,12 +2982,12 @@ fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
             }
             Ok(format!("({})", subs.join(", ")))
         }
-        Pat::Ctor { ty, variant, args } => {
+        Pat::Ctor { home, ty, variant, args } => {
             // A built-in `Maybe` / `Result` pattern routes to the runtime enum
             // path; otherwise it is a user enum resolved by `enum_name`.
-            let path = match ctx.builtin_runtime_enum(*ty) {
+            let path = match ctx.builtin_runtime_enum(home, *ty) {
                 Some(runtime) => format!("{runtime}::{}", ctx.emit_ident(*variant)?),
-                None => format!("{}::{}", ctx.enum_name(*ty)?, ctx.emit_ident(*variant)?),
+                None => format!("{}::{}", ctx.enum_name(home, *ty)?, ctx.emit_ident(*variant)?),
             };
             if args.is_empty() {
                 Ok(path)

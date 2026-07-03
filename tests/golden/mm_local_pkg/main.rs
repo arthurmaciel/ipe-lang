@@ -29,15 +29,15 @@ type Value = JsonVal;
 // ===========================================
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum MainColor {
+pub enum LibColor {
     Red,
     Blue,
 }
-impl SkyStringify for MainColor {
+impl SkyStringify for LibColor {
     fn sky_show(&self) -> String {
         match self {
-            MainColor::Red => "Red".to_string(),
-            MainColor::Blue => "Blue".to_string(),
+            LibColor::Red => "Red".to_string(),
+            LibColor::Blue => "Blue".to_string(),
         }
     }
 }

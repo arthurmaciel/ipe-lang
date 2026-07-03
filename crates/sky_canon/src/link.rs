@@ -10,7 +10,10 @@
 //! module unchanged; they already emit qualified Go identifiers
 //! (`Module_name`) from the `module` field of every `VarTopLevel` node.
 
-use sky_intern::Symbol;
+use std::collections::HashSet;
+
+use sky_diagnostics::{DResult, Diagnostic, NameError, Span};
+use sky_intern::{Interner, Symbol};
 
 use crate::ast;
 
@@ -34,19 +37,52 @@ use crate::ast;
 /// only merge the set of modules discovered and canonicalised by
 /// [`crate::canonicalise_module`], which validates every import reference
 /// against `ModuleExports` before the caller reaches this function.
-#[must_use]
-pub fn link(entry_name: Vec<Symbol>, modules: Vec<ast::Module>) -> ast::Module {
+///
+/// # Errors
+///
+/// Returns [`NameError::DuplicateType`] (SKY-N0012) when two unions share the
+/// SAME nominal identity `(home, name)` — the same type declared twice in one
+/// home module. Two DIFFERENT homes declaring the same short name
+/// (`Std.Palette.Color` and `Main.Color`) are NOT a duplicate: they mangle to
+/// distinct Rust enums downstream (`StdPaletteColor` vs `MainColor`), so the
+/// gate keys on `(home, name)`, not `name` alone. This makes "two types with
+/// the same nominal identity in the linked program" unrepresentable while
+/// admitting same-short-name-different-module (#100).
+pub fn link(
+    entry_name: Vec<Symbol>,
+    modules: Vec<ast::Module>,
+    interner: &Interner,
+) -> DResult<ast::Module> {
     let total_unions: usize = modules.iter().map(|m| m.unions.len()).sum();
     let total_defs: usize = modules.iter().map(|m| m.defs.len()).sum();
     let mut unions = Vec::with_capacity(total_unions);
     let mut defs = Vec::with_capacity(total_defs);
+    // Nominal-identity gate: reject a genuine duplicate `(home, name)` (the same
+    // type declared twice), but ALLOW two distinct homes sharing a short name.
+    let mut seen: HashSet<(Vec<Symbol>, Symbol)> = HashSet::new();
     for m in modules {
+        for u in &m.unions {
+            if !seen.insert((u.home.clone(), u.name)) {
+                let name = interner
+                    .resolve(u.name)
+                    .unwrap_or("<?>")
+                    .to_owned()
+                    .into_boxed_str();
+                return Err(Diagnostic::Name {
+                    span: Span::DUMMY,
+                    msg: NameError::DuplicateType {
+                        name,
+                        first: Span::DUMMY,
+                    },
+                });
+            }
+        }
         unions.extend(m.unions);
         defs.extend(m.defs);
     }
-    ast::Module {
+    Ok(ast::Module {
         name: entry_name,
         unions,
         defs,
-    }
+    })
 }

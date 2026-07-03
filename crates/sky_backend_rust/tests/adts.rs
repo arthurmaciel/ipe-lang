@@ -77,6 +77,7 @@ fn maybe_def(i: &mut Interner) -> DResult<(EnumDef, Symbol, Symbol, Symbol, Symb
                 fields: vec![],
             },
         ],
+        home: ModPath(vec![]),
     };
     Ok((def, maybe, just, nothing, a))
 }
@@ -94,6 +95,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
     let arms = vec![
         Arm {
             pat: Pat::Ctor {
+                home: ModPath(vec![]),
                 ty: maybe,
                 variant: just,
                 args: vec![Pat::Var(x)],
@@ -102,6 +104,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
         },
         Arm {
             pat: Pat::Ctor {
+                home: ModPath(vec![]),
                 ty: maybe,
                 variant: nothing,
                 args: vec![],
@@ -117,6 +120,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
         params: vec![(
             m,
             IrType::Enum {
+                home: ModPath(vec![]),
                 name: maybe,
                 args: vec![IrType::Int],
             },
@@ -139,6 +143,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
                 args: vec![Expr::Call {
                     callee: Callee::Func(FuncId::from_raw(0)),
                     args: vec![Expr::Ctor {
+                        home: ModPath(vec![]),
                         ty: maybe,
                         variant: just,
                         args: vec![Expr::Int(5)],
@@ -180,6 +185,7 @@ fn tree_def(interner: &mut Interner) -> DResult<(EnumDef, TreeSyms)> {
     let leaf = interner.intern("Leaf")?;
     let node = interner.intern("Node")?;
     let self_ty = IrType::Enum {
+        home: ModPath(vec![]),
         name: tree,
         args: vec![],
     };
@@ -196,6 +202,7 @@ fn tree_def(interner: &mut Interner) -> DResult<(EnumDef, TreeSyms)> {
                 fields: vec![self_ty.clone(), IrType::Int, self_ty.clone()],
             },
         ],
+        home: ModPath(vec![]),
     };
     Ok((
         def,
@@ -224,6 +231,7 @@ fn tree_sum_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
     let arms = vec![
         Arm {
             pat: Pat::Ctor {
+                home: ModPath(vec![]),
                 ty: syms.tree,
                 variant: syms.leaf,
                 args: vec![],
@@ -232,6 +240,7 @@ fn tree_sum_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
         },
         Arm {
             pat: Pat::Ctor {
+                home: ModPath(vec![]),
                 ty: syms.tree,
                 variant: syms.node,
                 args: vec![Pat::Var(left), Pat::Var(val), Pat::Var(right)],
@@ -263,11 +272,13 @@ fn tree_sum_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
 fn tree_main_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
     let main = interner.intern("main")?;
     let leaf_lit = || Expr::Ctor {
+        home: ModPath(vec![]),
         ty: syms.tree,
         variant: syms.leaf,
         args: vec![],
     };
     let node_lit = |left: Expr, value: i64, right: Expr| Expr::Ctor {
+        home: ModPath(vec![]),
         ty: syms.tree,
         variant: syms.node,
         args: vec![left, Expr::Int(value), right],
@@ -398,11 +409,13 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
                 fields: vec![IrType::Float, IrType::Float],
             },
         ],
+        home: ModPath(vec![]),
     };
     // area s = case s of Circle r -> r ; Rect w h -> w
     let arms = vec![
         Arm {
             pat: Pat::Ctor {
+                home: ModPath(vec![]),
                 ty: shape,
                 variant: circle,
                 args: vec![Pat::Var(radius)],
@@ -411,6 +424,7 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
         },
         Arm {
             pat: Pat::Ctor {
+                home: ModPath(vec![]),
                 ty: shape,
                 variant: rect,
                 args: vec![Pat::Var(w), Pat::Wildcard],
@@ -427,6 +441,7 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
         params: vec![(
             s,
             IrType::Enum {
+                home: ModPath(vec![]),
                 name: shape,
                 args: vec![],
             },

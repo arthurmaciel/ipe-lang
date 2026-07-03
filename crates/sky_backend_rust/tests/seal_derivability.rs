@@ -220,6 +220,7 @@ fn enum_with_function_payload_has_no_derive() -> DResult<()> {
                 fields: vec![],
             },
         ],
+        home: ModPath(vec![]),
     };
     let src = emit(&interner, &program(main_mod, vec![TypeDef::Enum(def)], vec![]))?;
 

@@ -217,7 +217,7 @@ mod tests {
         };
         assert_eq!(i.resolve(*p0), Some("msg"));
         assert!(
-            matches!(t0, IrType::Enum { name, args } if i.resolve(*name) == Some("Msg") && args.is_empty())
+            matches!(t0, IrType::Enum { name, args, .. } if i.resolve(*name) == Some("Msg") && args.is_empty())
         );
         assert_eq!(i.resolve(*p1), Some("count"));
         assert_eq!(*t1, IrType::Int);
