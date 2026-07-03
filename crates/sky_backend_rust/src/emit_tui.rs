@@ -135,6 +135,19 @@ fn emit_tui_inner(
     let subs_e = lookup_field(ctx, fields, "subscriptions")?;
     let on_key_e = lookup_field(ctx, fields, "onKey")?;
 
+    // #91 seal: gate the Model against `tui_app`'s `Clone` bound. A non-clonable
+    // (non-derivable) Model — a field of type `Cmd`/`Sub`/`Task`/`Decoder`/`Db`/
+    // function — would otherwise `skyc`-succeed then `cargo`-fail; the gate makes
+    // it a fail-closed `SKY-L0120` error. (Tui needs only `Clone`, not serde, so
+    // an `Html`/`Color` field is admissible here.)
+    if let Some(model_ty) = crate::emit_model_gate::model_ty_of_view(view_e) {
+        crate::emit_model_gate::check_admissible_model(
+            ctx,
+            model_ty,
+            sky_diagnostics::AppShape::Tui,
+        )?;
+    }
+
     let init_s = emit_tui_fn(ctx, init_e, indent, child, generics)?;
     let update_s = emit_tui_fn(ctx, update_e, indent, child, generics)?;
     let view_s = emit_tui_fn(ctx, view_e, indent, child, generics)?;

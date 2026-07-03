@@ -301,7 +301,7 @@ fn primary_label(d: &Diagnostic) -> Option<String> {
         Diagnostic::Parse { msg, .. } => parse_label(msg),
         Diagnostic::Name { msg, .. } => name_label(msg),
         Diagnostic::Type { msg, .. } => type_label(msg),
-        Diagnostic::Lower { msg, .. } => Some(lower_label(*msg)),
+        Diagnostic::Lower { msg, .. } => Some(lower_label(msg)),
         Diagnostic::CompilerBug { .. } => None,
     }
 }
@@ -444,9 +444,12 @@ fn type_label(msg: &TypeError) -> Option<String> {
     }
 }
 
-fn lower_label(msg: LowerError) -> String {
+fn lower_label(msg: &LowerError) -> String {
     match msg {
-        LowerError::Unsupported(f) => feature_label(f).to_string(),
+        LowerError::Unsupported(f) => feature_label(*f).to_string(),
+        LowerError::InadmissibleAppModel { app, field, leaf } => {
+            crate::diagnostic::inadmissible_model_message(*app, field, *leaf)
+        }
         LowerError::BackendNestingTooDeep { limit } => {
             format!("nested past the backend limit of {limit}")
         }
@@ -470,6 +473,7 @@ const fn role_label(role: SpanRole) -> &'static str {
 fn help_text(line: &HelpLine) -> Option<String> {
     match line {
         HelpLine::DidYouMean(name) => Some(format!("help: did you mean `{name}`?")),
+        HelpLine::Note(text) => Some(format!("note: {text}")),
         HelpLine::Hint(hint) => Some(format!("help: {}", hint_text(*hint))),
         HelpLine::MissingConstructor(name) => {
             Some(format!("help: this case does not handle `{name}`"))

@@ -727,6 +727,94 @@ pub fn ir_type_is_derivable(ty: &IrType, enum_derivable: &impl Fn(Symbol) -> boo
     }
 }
 
+/// Total predicate: does the Rust type that [`IrType`] renders to derive
+/// `serde::Serialize` **and** `serde::de::DeserializeOwned`?
+///
+/// This is the authoritative admissibility gate for a `Std.Live` / `Sky.Live`
+/// **Model**: the live runtime persists the Model to the session store, so
+/// `live_app` bounds it "Serialize + `DeserializeOwned` + Clone + `PartialEq`".
+/// Without this gate a well-typed program that stores a non-serialisable value
+/// in its Model `skyc`-succeeds and then `cargo`-fails on the missing `serde`
+/// bound (the #91 seal hole).
+///
+/// The serde-OK leaf set is a **strict subset** of the derivable leaf set
+/// ([`ir_type_is_derivable`]): every serde-OK leaf is also derivable, so
+/// `ir_type_is_serde(t) ⇒ ir_type_is_derivable(t)` structurally (the two arms
+/// that differ both demote to `false` here). Consequently a serde-admissible
+/// Model automatically satisfies the `Clone + PartialEq` half of the bound too —
+/// the Live gate needs only this one predicate.
+///
+/// serde-OK leaves (render to a `serde`-deriving Rust type):
+/// * primitives `Int` / `Float` / `Bool` / `Str` / `Char` / `Unit`,
+/// * `Bytes` (`Vec<u8>`), `Json` (`serde_json::Value` — itself `serde`),
+/// * `Generic(_)` — the derive macro adds a per-parameter `T: Serialize` /
+///   `T: DeserializeOwned` bound, so the frame stays admissible (a concrete
+///   Model never carries a free generic anyway).
+///
+/// NON-serde leaves — the full non-derivable set (functions, the opaque
+/// effect/handle wrappers, the two `Clone`-only `Std.Html` carriers) PLUS the
+/// derivable-but-not-`serde` UI value types:
+/// * every [`IrType::Ui`] carrier (`Html` / `Element` / ui-`Attribute` and the
+///   two `html` carriers) — verified: `runtime/src/sky_runtime/{html,ui}` derive
+///   only `Clone, Debug, PartialEq`, never `Serialize` / `Deserialize`,
+/// * every [`IrType::UiPlain`] value type (`Length` / `Color` / `HAlign` / … →
+///   `sky_runtime::ui::element::*`) — verified: no `serde` derive in
+///   `runtime/src/sky_runtime/ui`.
+///
+/// A non-serde leaf poisons every transparent carrier that reaches it and every
+/// user enum whose payload reaches it. `enum_serde` answers the same question
+/// for a referenced user [`IrType::Enum`]; the caller resolves the enum-to-enum
+/// fixpoint before consulting it (see the backend `EmitCtx`, which computes an
+/// `enum_serde` fixpoint parallel to `enum_derivable`).
+///
+/// The match is deliberately exhaustive with no wildcard arm: a new [`IrType`]
+/// variant must make an explicit serde decision here (walker-arm rule).
+#[must_use]
+pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(Symbol) -> bool) -> bool {
+    match ty {
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::Generic(_) => true,
+        // All non-serde leaves collapse to `false`:
+        //   * `UiPlain` value types (`Length`/`Color`/… → `ui::element::*`) and
+        //     every `Ui` carrier (`Html`/`Element`/`Attribute`) derive only
+        //     Clone/Debug/PartialEq, never serde — the two arms where serde is
+        //     STRICTER than `ir_type_is_derivable` (there they are `true`);
+        //   * the opaque effect/handle wrappers + first-class functions (also
+        //     non-derivable) — a `Box<dyn Fn>` / future / handle is not serde.
+        IrType::UiPlain(_)
+        | IrType::Ui { .. }
+        | IrType::Task(_)
+        | IrType::Cmd(_)
+        | IrType::Sub(_)
+        | IrType::Decoder(_)
+        | IrType::Db
+        | IrType::Fun(_, _)
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::LiveReq
+        | IrType::LiveRoute => false,
+        // Transparent carriers: serde-OK iff every carried element is.
+        IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => ir_type_is_serde(e, enum_serde),
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            ir_type_is_serde(a, enum_serde) && ir_type_is_serde(b, enum_serde)
+        }
+        IrType::Tuple(es) => es.iter().all(|e| ir_type_is_serde(e, enum_serde)),
+        IrType::Record(fields) => fields.values().all(|f| ir_type_is_serde(f, enum_serde)),
+        IrType::Enum { name, args } => {
+            enum_serde(*name) && args.iter().all(|a| ir_type_is_serde(a, enum_serde))
+        }
+    }
+}
+
 /// An expression in the typed IR.
 ///
 /// Note: the [`Match`] variant wraps the opaque [`Match`] type rather than
@@ -2139,5 +2227,100 @@ mod tests {
         assert_eq!(def, def.clone());
         assert!(def.variants.get(1).is_some_and(|v| v.fields.len() == 3));
         Ok(())
+    }
+
+    // ── #91 seal: ir_type_is_serde ─────────────────────────────────────────
+
+    /// `true` for every referenced enum — the leaf-level predicate under test.
+    fn all_serde(_: Symbol) -> bool {
+        true
+    }
+
+    #[test]
+    fn serde_primitives_and_plain_carriers_are_ok() {
+        let ok = [
+            IrType::Int,
+            IrType::Float,
+            IrType::Bool,
+            IrType::Str,
+            IrType::Char,
+            IrType::Unit,
+            IrType::Bytes,
+            IrType::Json,
+            IrType::Generic(Symbol::from_raw(0)),
+            IrType::List(Box::new(IrType::Int)),
+            IrType::Maybe(Box::new(IrType::Str)),
+            IrType::Result(Box::new(IrType::Str), Box::new(IrType::Int)),
+            IrType::Tuple(vec![IrType::Int, IrType::Bool]),
+        ];
+        for t in ok {
+            assert!(ir_type_is_serde(&t, &all_serde), "{t:?} should be serde");
+        }
+    }
+
+    #[test]
+    fn serde_rejects_effects_handles_and_functions() {
+        let bad = [
+            IrType::Cmd(Box::new(IrType::Unit)),
+            IrType::Sub(Box::new(IrType::Unit)),
+            IrType::Task(Box::new(IrType::Unit)),
+            IrType::Decoder(Box::new(IrType::Int)),
+            IrType::Db,
+            IrType::Fun(vec![IrType::Int], Box::new(IrType::Int)),
+            IrType::ServerRequest,
+            IrType::LiveReq,
+        ];
+        for t in bad {
+            assert!(
+                !ir_type_is_serde(&t, &all_serde),
+                "{t:?} must NOT be serde"
+            );
+        }
+    }
+
+    /// The two arms where serde is STRICTER than derivable: UI carriers and UI
+    /// plain values are `Clone`/`Debug`/`PartialEq` but not `serde`.
+    #[test]
+    fn serde_rejects_ui_but_derivable_accepts_it() {
+        let html = IrType::Ui {
+            ctor: UiCtor::Html,
+            msg: Box::new(IrType::Unit),
+        };
+        let color = IrType::UiPlain(UiPlain::Color);
+        for t in [&html, &color] {
+            assert!(
+                ir_type_is_derivable(t, &all_serde),
+                "{t:?} IS derivable (CDPeq)"
+            );
+            assert!(
+                !ir_type_is_serde(t, &all_serde),
+                "{t:?} must NOT be serde (the #91 CDPeq-but-not-serde gap)"
+            );
+        }
+    }
+
+    /// A carrier is serde iff every child is; one bad field poisons it.
+    #[test]
+    fn serde_poisons_carriers_transitively() {
+        let bad_list = IrType::List(Box::new(IrType::Cmd(Box::new(IrType::Unit))));
+        assert!(!ir_type_is_serde(&bad_list, &all_serde));
+        let good_list = IrType::List(Box::new(IrType::Int));
+        assert!(ir_type_is_serde(&good_list, &all_serde));
+        // A record with one Cmd field is not serde; all-Int is.
+        let mut bad = std::collections::BTreeMap::new();
+        bad.insert(Symbol::from_raw(0), IrType::Int);
+        bad.insert(Symbol::from_raw(1), IrType::Cmd(Box::new(IrType::Unit)));
+        assert!(!ir_type_is_serde(&IrType::Record(bad), &all_serde));
+    }
+
+    /// A referenced enum's serde verdict flows through the `enum_serde` lookup.
+    #[test]
+    fn serde_consults_enum_lookup() {
+        let e = IrType::Enum {
+            name: Symbol::from_raw(7),
+            args: vec![],
+        };
+        assert!(ir_type_is_serde(&e, &|_| true), "serde enum passes");
+        assert!(!ir_type_is_serde(&e, &|_| false), "non-serde enum poisons");
     }
 }

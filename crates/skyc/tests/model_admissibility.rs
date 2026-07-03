@@ -1,0 +1,261 @@
+//! #91 seal regression: the `Std.Live` / `Std.Tui` / `Std.Webview` app-entry
+//! Model-admissibility gate.
+//!
+//! `live_app` bounds its Model `serde::Serialize + serde::de::DeserializeOwned +
+//! Clone + PartialEq`; `tui_app` / `webview_app` bound it `Clone`. Before the
+//! gate, a Model storing a non-admissible value (`Cmd` / `Sub` / `Task` /
+//! `Decoder` / `Db` / a function — or, for Live only, `Html` / `Element` /
+//! `Color`) made `skyc` exit 0 and then `cargo build` fail on the missing trait
+//! bound. The gate converts that into a fail-closed `SKY-L0120` diagnostic.
+//!
+//! These tests are COMPILE-ONLY (they run the `skyc` pipeline + write the
+//! project, but never invoke `cargo`), so they are fast and NOT gated on
+//! `SKY_E2E`.
+
+type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+/// Compile `source` through `skyc::build`, returning the pipeline result. The
+/// emitted project is written to a per-test temp dir; `cargo` is never invoked.
+fn compile(test_name: &str, source: &str) -> Result<Result<(), skyc::CliError>, BoxError> {
+    let sky_dir = std::env::temp_dir().join(format!("model_adm_{test_name}_sky"));
+    let _ = std::fs::remove_dir_all(&sky_dir);
+    std::fs::create_dir_all(&sky_dir)?;
+    let entry = sky_dir.join("Main.sky");
+    std::fs::write(&entry, source)?;
+
+    let out_dir = std::env::temp_dir().join(format!("model_adm_{test_name}_out"));
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let runtime = skyc::resolve_runtime().map_err(|e| -> BoxError { format!("{e:?}").into() })?;
+    Ok(skyc::build(&entry, &out_dir, &runtime))
+}
+
+/// Assert compilation failed with the given diagnostic code.
+fn assert_rejected_with(
+    test_name: &str,
+    source: &str,
+    expected_code: &str,
+) -> Result<(), BoxError> {
+    match compile(test_name, source)? {
+        Ok(()) => Err(format!("{test_name}: expected {expected_code}, but skyc succeeded").into()),
+        Err(skyc::CliError::Pipeline { diag, .. }) => {
+            assert_eq!(
+                diag.code().as_str(),
+                expected_code,
+                "{test_name}: wrong diagnostic code"
+            );
+            Ok(())
+        }
+        Err(other) => {
+            Err(format!("{test_name}: expected {expected_code}, got {other:?}").into())
+        }
+    }
+}
+
+/// Assert compilation succeeded (skyc-0).
+fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
+    match compile(test_name, source)? {
+        Ok(()) => Ok(()),
+        Err(e) => Err(format!("{test_name}: expected skyc success, got {e:?}").into()),
+    }
+}
+
+const LIVE_GOOD: &str = r"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg = Increment
+
+type alias Model = { count : Int }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout [] (Ui.text (String.fromInt model.count))
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app { init = init, update = update, view = view, subscriptions = subscriptions }
+";
+
+const LIVE_CMD_MODEL: &str = r"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg = Tick
+
+type alias Model = { count : Int, pending : Cmd Msg }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0, pending = Cmd.none }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Tick ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout [] (Ui.text (String.fromInt model.count))
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app { init = init, update = update, view = view, subscriptions = subscriptions }
+";
+
+const LIVE_HTML_MODEL: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg = Tick
+
+type alias Model = { count : Int, cached : Html Msg }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0, cached = Ui.layout [] (Ui.text "x") }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Tick ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout [] (Ui.text (String.fromInt model.count))
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app { init = init, update = update, view = view, subscriptions = subscriptions }
+"#;
+
+const TUI_GOOD: &str = r"module Main exposing (main)
+
+import Std.Tui as Tui
+import Std.Ui as Ui
+
+type Msg = Increment | NoOp
+
+type alias Model = { count : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+        NoOp ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view model =
+    Ui.column [] [ Ui.el [] (Ui.text (String.fromInt model.count)) ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onKey : String -> String -> Msg
+onKey _kind _value =
+    NoOp
+
+main =
+    Tui.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onKey = onKey
+        }
+";
+
+const TUI_CMD_MODEL: &str = r"module Main exposing (main)
+
+import Std.Tui as Tui
+import Std.Ui as Ui
+
+type Msg = Increment | NoOp
+
+type alias Model = { count : Int, pending : Cmd Msg }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0, pending = Cmd.none }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+        NoOp ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view model =
+    Ui.column [] [ Ui.el [] (Ui.text (String.fromInt model.count)) ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onKey : String -> String -> Msg
+onKey _kind _value =
+    NoOp
+
+main =
+    Tui.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onKey = onKey
+        }
+";
+
+#[test]
+fn live_plain_data_model_is_accepted() -> Result<(), BoxError> {
+    assert_accepted("live_good", LIVE_GOOD)
+}
+
+#[test]
+fn live_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
+    assert_rejected_with("live_cmd", LIVE_CMD_MODEL, "SKY-L0120")
+}
+
+/// The CDPeq-but-not-serde case: `Html` is `Clone`/`PartialEq` but not `serde`,
+/// so a `Sky.Live` Model storing it is rejected (unlike Tui/Webview).
+#[test]
+fn live_model_with_html_field_is_rejected() -> Result<(), BoxError> {
+    assert_rejected_with("live_html", LIVE_HTML_MODEL, "SKY-L0120")
+}
+
+#[test]
+fn tui_plain_data_model_is_accepted() -> Result<(), BoxError> {
+    assert_accepted("tui_good", TUI_GOOD)
+}
+
+#[test]
+fn tui_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
+    assert_rejected_with("tui_cmd", TUI_CMD_MODEL, "SKY-L0120")
+}
