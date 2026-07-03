@@ -135,3 +135,53 @@ building follows, hand off to `autonomous-swarm`.
 | Asker depth | Exhaustive + cited; the §0 blocking-contradictions group is the highest-value output |
 | Review effort | High — this is the soundness gate on the design before any build is authorised |
 | Agent type | Every phase — asker, reasoners, cross-critique, synthesis, review — runs as `security-soundness-guardian`. The guardian *authors* the design, not just reviews it. |
+
+## Field-tested refinements (2026-07-03)
+
+Learnings from running this method inline across a long build session. The skill
+is the METHOD; the orchestrator supplies the project CONSTRAINTS.
+
+**Run delegated + parallel (proven, non-negotiable).** Launch the panel as a
+background `Workflow` delegated from the orchestrator, parallel-safe with any
+active build lane — design is read-only/doc-only, so it never contends with a
+build. Do NOT run it in the main loop; that serialises and forfeits the
+parallelism. Into every phase brief the orchestrator fuses: the 6-principle order
++ the two rules verbatim, the PUBLIC-artifact rule (no reference-project
+disparagement; preserve upstream references), and any task-specific BLOCK
+condition.
+
+**Two modes.**
+- *Fresh design* — the full pipeline, for a new open question.
+- *Re-review-for-drift* — when a spec already exists, run the SAME guardian panel
+  as an adversarial re-review against the CURRENT code: catch stale line-cites,
+  moved anchors, and assumptions the intervening work invalidated. Output is
+  tightened entry conditions, not a new spec.
+
+**Review re-verifies against HEAD.** Specs drift. The review MUST re-open every
+cited `file:line` and confirm it against HEAD (line numbers shift; a claimed
+function may have moved/renamed). Reject any load-bearing claim not grounded in
+the current tree.
+
+**Synthesis reconciles user decisions.** The panel runs autonomously and cannot
+ask the user. If the user expresses a shape decision mid-flight, the orchestrator
+folds it into the synthesis as the DECIDED shape — prepended, superseding the
+panel's exploration — keeping the still-useful analysis (trade-offs, migration,
+edges) underneath.
+
+**Audit-flavoured output.** For comparison/audit swarms, always emit a "where the
+system is already equal-or-better — do NOT adopt" list beside the adopt list, so
+the swarm can't cargo-cult a change that regresses an existing strength.
+
+### Handoff to writing-plans — ipê addenda
+`superpowers:writing-plans` is an external plugin (not edited here); these project
+additions are embedded in every plan-agent brief authored from a design-swarm spec:
+- **Re-verify anchors against HEAD** before writing each task; correct drifted
+  cites in the plan rather than copying the spec's stale ones.
+- **Global Constraints carry the 6 principles + 2 rules** verbatim.
+- **Foreground-only verification.** Every impl/verify step runs in the FOREGROUND
+  — no background monitors/poll-loops, zero orphan processes. (A stalled
+  background mechcheck let a real regression slip this session; a green run with
+  the guarding test *absent* is the trap.)
+- **Tests present + non-vacuous.** Verification confirms the new test EXISTS in
+  the binary AND would FAIL under the bug it guards (prove by a scratch mutation,
+  then revert).
