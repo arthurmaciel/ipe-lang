@@ -3356,6 +3356,12 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
     if bounds.has_eq() {
         traits.push("PartialEq".to_owned());
     }
+    if bounds.has_show() {
+        // Sky `toString` / `Log.*With`: the value must render. Fully qualified —
+        // the trait is not in the Rust prelude. Every emitted record/ADT + every
+        // scalar has a `SkyStringify` impl.
+        traits.push("crate::sky_runtime::stringify::SkyStringify".to_owned());
+    }
     if bounds.has_ord_total() {
         // `Ord` (total order) for a `Set` element / sorted `Dict` op; carries
         // `Eq` + `PartialOrd` + `PartialEq` as supertraits, so a `Dict` key's

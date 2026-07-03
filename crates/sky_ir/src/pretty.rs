@@ -289,6 +289,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::BasicsSnd => "Basics.snd",
         KernelFn::BasicsModBy => "Basics.modBy",
         KernelFn::BasicsClamp => "Basics.clamp",
+        KernelFn::BasicsToString => "Basics.toString",
         KernelFn::MaybeWithDefault => "Maybe.withDefault",
         KernelFn::MaybeMap => "Maybe.map",
         KernelFn::MaybeAndThen => "Maybe.andThen",

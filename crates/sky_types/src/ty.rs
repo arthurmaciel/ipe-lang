@@ -72,6 +72,7 @@ impl TyBounds {
     const EQ: u8 = 1 << 4;
     const SET_ELEM: u8 = 1 << 5;
     const DICT_KEY: u8 = 1 << 6;
+    const SHOW: u8 = 1 << 7;
 
     /// No obligation — a structurally-parametric variable.
     pub const EMPTY: Self = Self(0);
@@ -119,6 +120,16 @@ impl TyBounds {
     pub const fn dict_key() -> Self {
         Self(Self::DICT_KEY)
     }
+    /// The stringify obligation (`toString` / `Log.*With` attrs / `Debug.toString`
+    /// → Rust `SkyStringify`). Satisfied by every NON-FUNCTION type — every scalar
+    /// primitive plus every codegen-emitted record/ADT gets a `SkyStringify` impl;
+    /// a bare function does not. Same head/deep discipline as [`Self::eq`]: a
+    /// function at the head (or nested) fails closed at type-check rather than
+    /// emitting an unbounded generic `cargo` rejects.
+    #[must_use]
+    pub const fn show() -> Self {
+        Self(Self::SHOW)
+    }
 
     /// Whether this set carries no obligation at all.
     #[must_use]
@@ -154,6 +165,11 @@ impl TyBounds {
     #[must_use]
     pub const fn has_dict_key(self) -> bool {
         self.0 & Self::DICT_KEY != 0
+    }
+    /// Whether the stringify obligation is set (`→ Rust SkyStringify`).
+    #[must_use]
+    pub const fn has_show(self) -> bool {
+        self.0 & Self::SHOW != 0
     }
     /// Whether this variable carries a Sky `comparable`-key obligation — used as
     /// a `Set` element or a `Dict` key. Both are satisfied by exactly the Sky

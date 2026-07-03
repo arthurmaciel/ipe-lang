@@ -1493,6 +1493,19 @@ impl<'a> Builder<'a> {
                 let inner2 = self.structure(FlatType::Fun(s, inner1))?;
                 return self.structure(FlatType::Fun(s, inner2));
             }
+            // `Basics.toString : a -> String` (#77). The argument carries the
+            // STRINGIFY obligation (a bounded super-var → Rust `SkyStringify`):
+            // a scalar / record / ADT satisfies it, a bare function (or a value
+            // nesting one) fails CLOSED at type-check rather than emitting an
+            // unbounded `basics_to_string::<T>` that `cargo` rejects. Direct-build
+            // (not stdlib_scheme + tie): only the argument position is bounded.
+            // This is the shared lever for the whole Stringify-bounded family
+            // (Log.*With / Debug.toString) — wire those the same way.
+            if matches!(k, StdlibKernel::BasicsToString) {
+                let s = self.super_var(TyBounds::show(), span)?;
+                let string_ty = self.string_var()?;
+                return self.structure(FlatType::Fun(s, string_ty));
+            }
             // Dict / Set element-key `comparable` obligation (M4d). The base
             // scheme is relocated into `stdlib_scheme` (Phase D); we instantiate
             // it and tie key-position raw var 0 to a bounded super-var. Only
@@ -2267,6 +2280,10 @@ impl<'a> Builder<'a> {
             // pre-check early-returns the bounded scheme); it exists so
             // `stdlib_scheme` is total and the burndown tripwire holds.
             K::BasicsClamp => fun(var(0), fun(var(0), fun(var(0), var(0)))),
+            // toString : a -> String — base scheme for the totality gate; the
+            // real STRINGIFY-bounded typing is direct-built in constrain_var_kernel
+            // (#77), same pattern as clamp/min/max.
+            K::BasicsToString => fun(var(0), string()),
 
             // ── Math (min / max stay on the obligation path — NOT migrated) ──
             // Constants — bare Float values (arity 0).
@@ -3781,6 +3798,7 @@ mod registry_phase_c_tests {
             // `Basics.clamp` — first-schemed hole; carries the `Comparable a`
             // (Ord) obligation, base scheme in `stdlib_scheme`.
             K::BasicsClamp,
+            K::BasicsToString,
             // Result combinators newly wired (holes post-seal; `withDefault` /
             // `map` are the RELOCATED pair, these two are first-schemed).
             K::ResultAndThen,
