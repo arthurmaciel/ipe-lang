@@ -2124,6 +2124,17 @@ impl<'a> Builder<'a> {
             name: self.builtins.attribute,
             args: vec![m],
         };
+        // `Std.Html.Attribute` — SAME name as `Std.Ui.Attribute` (`attr` above)
+        // but module-qualified with `html_con`, so `ir_type_from_ty`'s T2
+        // disambiguation selects `HtmlAttribute`, matching the runtime
+        // `Vec<html::Attribute<M>>` that every Std.Html node kernel takes
+        // (div/span/a/button/p/input/img/node/styleNode/attrToString). Using the
+        // bare Ui `attr` for these would mis-select the Ui attribute variant.
+        let html_attr = |m: Ty| Ty::Con {
+            module: vec![self.builtins.html_con],
+            name: self.builtins.attribute,
+            args: vec![m],
+        };
         let elem_t = |m: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.element,
@@ -2837,7 +2848,7 @@ impl<'a> Builder<'a> {
             // Std.Html serialise / escape (arity 1).
             K::HtmlRender => fun(html_t(var(0)), string()),
             K::HtmlEscapeText | K::HtmlEscapeAttr => fun(string(), string()),
-            K::HtmlAttrToString => fun(attr(var(0)), string()),
+            K::HtmlAttrToString => fun(html_attr(var(0)), string()),
 
             // Std.Ui element builders (arity 0 / 1).
             K::UiNone => elem_t(var(0)),
@@ -2881,23 +2892,30 @@ impl<'a> Builder<'a> {
             // Std.Html leaf nodes (arity 1).
             K::HtmlTextNode | K::HtmlRawNode => fun(string(), html_t(var(0))),
 
-            // Std.Html generic node (arity 3 — tag, attrs, children).
+            // Std.Html generic node (arity 3 — tag, attrs, children). Attrs are
+            // `Std.Html.Attribute` (html_attr) — matches `Vec<html::Attribute>`.
             K::HtmlNode => fun(
                 string(),
                 fun(
-                    list(attr(var(0))),
+                    list(html_attr(var(0))),
                     fun(list(html_t(var(0))), html_t(var(0))),
                 ),
             ),
 
             // Std.Html container nodes (arity 2 — attrs, children; tag baked).
             K::HtmlDiv | K::HtmlSpan | K::HtmlA | K::HtmlButton | K::HtmlP => fun(
-                list(attr(var(0))),
+                list(html_attr(var(0))),
                 fun(list(html_t(var(0))), html_t(var(0))),
             ),
 
             // Std.Html void nodes (arity 1 — attrs only).
-            K::HtmlInput | K::HtmlImg => fun(list(attr(var(0))), html_t(var(0))),
+            K::HtmlInput | K::HtmlImg => fun(list(html_attr(var(0))), html_t(var(0))),
+
+            // Std.Html styleNode (arity 2 — attrs, css string; #46/#47 F7). The
+            // runtime bakes `strip_style_close` on the css. RELOCATED — matches
+            // the legacy `kernel_ty(Html, styleNode)` byte-for-byte (html_attr +
+            // html_t). `List (Std.Html.Attribute msg) -> String -> Html msg`.
+            K::HtmlStyleNode => fun(list(html_attr(var(0))), fun(string(), html_t(var(0)))),
 
             // ── Json.Decode (17) — mirrors the already-relocated `Db.Decode`
             //    shapes (function-first `map`/`andThen`; `dec(a)` is the opaque
@@ -3005,14 +3023,37 @@ impl<'a> Builder<'a> {
             K::UuidV4 | K::UuidV7 => fun(Ty::Unit, task(string())),
             K::UuidParse => fun(string(), maybe(string())),
 
-            // EXCLUDED. `PubSub` (`publish`/`publishNoEcho`) is a KNOWN-UNBACKED
-            // exclusion — see `KNOWN_UNBACKED`: no runtime fn and its qualifier
-            // is absent from canon `qual_vars`, so it is unreachable and must NOT
-            // be schemed (a scheme would forge an exit-0 path to an unbacked
-            // kernel). With Encoding schemed (task #55a), `PubSub` is now the
-            // ONLY family on the `Ty::Var(u32::MAX)` fallback — Phase E folds it
-            // into a hard "unreachable-kernel" error and deletes this arm.
-            _ => return None,
+            // EXCLUDED — the ONLY kernels without a scheme (Phase E Task 1a made
+            // this an EXPLICIT wildcard-free arm, so F1 is structurally
+            // unrepresentable here: a future `StdlibKernel` variant fails to
+            // compile in `sky_types` until it is either schemed above or added to
+            // one of the two exclusion buckets below).
+            //
+            //  * `PubSub.publish` / `publishNoEcho` — KNOWN_UNBACKED: no runtime
+            //    fn AND qualifier absent from canon `qual_vars` (unreachable). A
+            //    scheme would forge an exit-0 path to an unbacked kernel.
+            //  * `Live.appRouted` — REACHABLE_BUT_UNLOWERED: has a runtime fn +
+            //    qualifier, but its lowering is `Feature::RoutedLiveApp`
+            //    unsupported and its type is a closed record, not a curried `Ty`.
+            //    A caller fails closed at type-check until routed lowering lands.
+            //
+            // Both buckets are gate-checked (`known_unbacked_never_schemed`,
+            // `stdlib_scheme_total_over_reachable`, the REACHABLE_BUT_UNLOWERED
+            // disjointness guard). Do NOT add a bare `_` back — it reopens F1.
+            //
+            //  * `Cmd.publish` / `Cmd.publishNoEcho` / `Sub.subscribeTopic` —
+            //    M6-reserved enum variants that are ABSENT from `StdlibKernel::ALL`
+            //    entirely (their `"Cmd"`/`"Sub"` qualifiers are wired but these
+            //    specific members are not registered), so canon can never mint a
+            //    `VarKernel` for them. Unreachable by construction; named here only
+            //    to keep this match wildcard-free. They join `ALL` + get a scheme
+            //    when M6 pub/sub lands.
+            K::PubSubPublish
+            | K::PubSubPublishNoEcho
+            | K::LiveAppRouted
+            | K::CmdPublish
+            | K::CmdPublishNoEcho
+            | K::SubSubscribeTopic => return None,
         })
     }
 
@@ -5722,6 +5763,9 @@ mod registry_phase_c_tests {
             K::TuiProgram,
             // Std.Webview app-entry (1)
             K::WebviewApp,
+            // Std.Html styleNode (1 — #46/#47 F7 schemed it in legacy kernel_ty;
+            // parity checked by stdlib_scheme_matches_legacy).
+            K::HtmlStyleNode,
         ]
     };
 
@@ -5953,6 +5997,9 @@ mod registry_phase_c_tests {
             K::HtmlP,
             K::HtmlInput,
             K::HtmlImg,
+            // NB: HtmlStyleNode is NOT here — it is RELOCATED (the F7 #46/#47 work
+            // already schemed `Html.styleNode` in the legacy `kernel_ty` table),
+            // so its parity is checked by `stdlib_scheme_matches_legacy`.
         ]
     };
 
