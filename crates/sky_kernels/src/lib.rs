@@ -1603,6 +1603,14 @@ impl StdlibKernel {
         Self::HtmlP,
         Self::HtmlInput,
         Self::HtmlImg,
+        // `Html.styleNode` (#46/#47 F7) — a canon `Html` qualifier member
+        // (env.rs) that was MISSING from ALL, so canon minted it with id=None and
+        // it silently rode the `Ty::Var(u32::MAX)` fallback (Task 0's ALL-iterating
+        // gate could not see it; Phase E Task 1a's wildcard-free match exposed it).
+        // Registering it here gives it id=Some so its stdlib_scheme arm is
+        // consulted — without this it would regress to fail-closed once kernel_ty
+        // is deleted (Task 1c).
+        Self::HtmlStyleNode,
         // M7: Live
         Self::LiveApp,
         Self::LiveAppRouted,
