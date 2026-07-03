@@ -3276,6 +3276,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CharToCode
                 | KernelFn::CharFromCode
                 | KernelFn::LogPrintln
+                | KernelFn::LogInfo
+                | KernelFn::LogDebug
+                | KernelFn::LogWarn
+                | KernelFn::LogError
                 | KernelFn::ListLength
                 | KernelFn::ListHead
                 | KernelFn::ListTail
@@ -3955,6 +3959,10 @@ impl<'a> Lowerer<'a> {
                 }
                 match (self.resolve(*module)?, self.resolve(*name)?) {
                     ("Log", "println") => Ok(Callee::Kernel(KernelFn::LogPrintln)),
+                    ("Log", "info") => Ok(Callee::Kernel(KernelFn::LogInfo)),
+                    ("Log", "debug") => Ok(Callee::Kernel(KernelFn::LogDebug)),
+                    ("Log", "warn") => Ok(Callee::Kernel(KernelFn::LogWarn)),
+                    ("Log", "error") => Ok(Callee::Kernel(KernelFn::LogError)),
                     // ── String kernels ─────────────────────────────────────
                     ("String", "fromInt") => Ok(Callee::Kernel(KernelFn::StringFromInt)),
                     ("String", "fromFloat") => Ok(Callee::Kernel(KernelFn::StringFromFloat)),

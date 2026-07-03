@@ -286,6 +286,24 @@ impl Env {
             ),
             ("Maybe", &["withDefault", "map", "andThen"]),
             ("Result", &["withDefault", "map", "andThen", "mapError"]),
+            // `Std.Log` — qualified form (`import Std.Log as Log`). `println`/
+            // `info`/`debug`/`warn`/`error` are backed (task #78); the `*With`
+            // variants take Stringify-bounded attrs and stay fail-closed
+            // (SKY-L0108) until #77 adds the Stringify obligation.
+            (
+                "Log",
+                &[
+                    "println",
+                    "info",
+                    "debug",
+                    "warn",
+                    "error",
+                    "infoWith",
+                    "debugWith",
+                    "warnWith",
+                    "errorWith",
+                ],
+            ),
             // `Sky.Core.Math` — `min` / `max` are polymorphic `a -> a -> a`
             // (Elm `Basics.min`/`max` semantics). Wired in the lowerer to the
             // runtime's generic compare. All other Math kernels have concrete
@@ -1004,6 +1022,8 @@ impl Env {
             ("Std.Live", "Live"),
             ("Std.Tui", "Tui"),
             ("Std.Webview", "Webview"),
+            ("Std.Log", "Log"),
+            ("Sky.Core.Log", "Log"),
             // Sky.* forms for consistency with other kernel module conventions.
             ("Sky.Html", "Html"),
             ("Sky.Ui", "Ui"),

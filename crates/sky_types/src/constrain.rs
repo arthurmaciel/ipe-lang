@@ -2308,6 +2308,10 @@ impl<'a> Builder<'a> {
 
             // ── Log ──
             K::LogPrintln => fun(string(), task_unit()),
+            // info/debug/warn/error : String -> Task Error () (#78 slice). The
+            // *With variants (List (String, a) attrs) are Stringify-bounded and
+            // stay fail-closed until #77 adds a Stringify obligation.
+            K::LogInfo | K::LogDebug | K::LogWarn | K::LogError => fun(string(), task_unit()),
 
             // ── Maybe ──
             K::MaybeWithDefault => fun(var(0), fun(maybe(var(0)), var(0))),
@@ -3769,6 +3773,11 @@ mod registry_phase_c_tests {
             K::BasicsFst,
             K::BasicsSnd,
             K::BasicsModBy,
+            // Log info/debug/warn/error (4 — task #78 slice).
+            K::LogInfo,
+            K::LogDebug,
+            K::LogWarn,
+            K::LogError,
             // `Basics.clamp` — first-schemed hole; carries the `Comparable a`
             // (Ord) obligation, base scheme in `stdlib_scheme`.
             K::BasicsClamp,
