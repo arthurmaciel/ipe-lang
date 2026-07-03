@@ -99,6 +99,14 @@ pub(crate) struct RecordStruct {
     /// *position* here, exactly as for [`sky_ir::Func::type_params`], so struct
     /// declaration, field types, and every use-site instantiation agree.
     pub type_params: Vec<Symbol>,
+    /// `true` iff every field's type renders to a Rust type supporting the full
+    /// `#[derive(Clone, Debug, PartialEq)]` set (see
+    /// [`sky_ir::ir_type_is_derivable`]). Computed once at [`EmitCtx::build`]
+    /// against the whole-program enum-derivability fixpoint. The emitter reads
+    /// this flag to choose the derive set, so a record holding a first-class
+    /// function / opaque wrapper can never reach the unconditional derive by
+    /// construction (#87 seal).
+    pub is_derivable: bool,
 }
 
 /// Shared emission context: the interner plus the precomputed Sky → Rust name
@@ -180,6 +188,14 @@ pub(crate) struct EmitCtx<'a> {
     /// or indirect (mutual recursion, or a self-edge routed through a tuple /
     /// record / another generic's type argument).
     enum_variants: BTreeMap<Symbol, Vec<Vec<IrType>>>,
+    /// Enum type symbol → whether that user enum's rendered Rust type supports
+    /// the full `#[derive(Clone, Debug, PartialEq)]` set. Computed by a monotone
+    /// whole-program fixpoint at [`EmitCtx::build`]: an enum is non-derivable iff
+    /// some variant payload reaches a non-derivable leaf (a function, an opaque
+    /// wrapper, or another non-derivable enum). Read by the emitter to gate the
+    /// derive set on user enums and on record structs (#87 seal). Whole-program
+    /// (all modules) so cross-module `IrType::Enum` references resolve soundly.
+    enum_derivable: BTreeMap<Symbol, bool>,
     /// Function id → Rust function name (e.g. `update` → `main_update`).
     func_names: BTreeMap<FuncId, String>,
     /// Every distinct record shape synthesised for the program, in emission
@@ -297,17 +313,65 @@ impl<'a> EmitCtx<'a> {
                 }
             }
         }
+        // #87 seal: whole-program enum-derivability fixpoint. Every user enum
+        // starts optimistic (derivable), then is monotonically demoted to
+        // non-derivable if any variant payload reaches a non-derivable leaf (a
+        // first-class function, an opaque effect/handle wrapper, or a — by the
+        // current estimate — non-derivable enum). Non-derivability only
+        // propagates (the lattice descends true → false), so the loop reaches a
+        // fixpoint in at most `enum count` passes. `ir_type_is_derivable`
+        // consults `lookup` for referenced enums; a name absent from the map
+        // (never a user enum — builtins are distinct `IrType` variants) defaults
+        // to derivable, which can only be as permissive as the pre-seal
+        // unconditional derive.
+        let mut enum_derivable: BTreeMap<Symbol, bool> =
+            enum_variants.keys().map(|k| (*k, true)).collect();
+        loop {
+            let mut to_demote: Vec<Symbol> = Vec::new();
+            {
+                let lookup = |q: Symbol| enum_derivable.get(&q).copied().unwrap_or(true);
+                for (sym, variants) in &enum_variants {
+                    if !enum_derivable.get(sym).copied().unwrap_or(true) {
+                        continue;
+                    }
+                    let ok = variants.iter().all(|fields| {
+                        fields
+                            .iter()
+                            .all(|f| sky_ir::ir_type_is_derivable(f, &lookup))
+                    });
+                    if !ok {
+                        to_demote.push(*sym);
+                    }
+                }
+            }
+            if to_demote.is_empty() {
+                break;
+            }
+            for s in to_demote {
+                enum_derivable.insert(s, false);
+            }
+        }
+
         let mut record_structs = Vec::with_capacity(shapes.len());
         let mut record_by_fieldset = BTreeMap::new();
         let mut used_names: BTreeSet<String> = BTreeSet::new();
         for (key, occurrences) in shapes {
             let (fields, type_params) = canonicalise_shape(&key, &occurrences)?;
             let name = unique_struct_name(naming::record_struct_name(&key), &mut used_names);
+            // #87 seal: a record struct is derivable iff every field type is,
+            // consulting the enum fixpoint for referenced user enums.
+            let is_derivable = {
+                let lookup = |q: Symbol| enum_derivable.get(&q).copied().unwrap_or(true);
+                fields
+                    .iter()
+                    .all(|(_, ty)| sky_ir::ir_type_is_derivable(ty, &lookup))
+            };
             record_by_fieldset.insert(key, record_structs.len());
             record_structs.push(RecordStruct {
                 name,
                 fields,
                 type_params,
+                is_derivable,
             });
         }
 
@@ -383,10 +447,22 @@ impl<'a> EmitCtx<'a> {
             enum_names,
             variant_fields,
             enum_variants,
+            enum_derivable,
             func_names,
             record_structs,
             record_by_fieldset,
         })
+    }
+
+    /// Does user enum `sym`'s rendered Rust type support the full
+    /// `#[derive(Clone, Debug, PartialEq)]` set?
+    ///
+    /// Resolved from the whole-program derivability fixpoint computed at
+    /// [`Self::build`]. A symbol that is not a user enum (never reachable as an
+    /// [`IrType::Enum`] target — builtins are distinct `IrType` variants)
+    /// defaults to `true`, matching the pre-seal unconditional derive.
+    pub(crate) fn enum_is_derivable(&self, sym: Symbol) -> bool {
+        self.enum_derivable.get(&sym).copied().unwrap_or(true)
     }
 
     /// The declared payload field types of constructor `variant` of enum `ty`,
