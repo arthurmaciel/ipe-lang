@@ -2718,10 +2718,11 @@ impl<'a> Builder<'a> {
             K::CharToCode => fun(char(), int()),
             K::CharFromCode => fun(int(), char()),
 
-            // ── Crypto (13) — AEAD (`aesGcm*`/`chacha20*`) EXCLUDED: registry
-            //    `decl().arity == 3` but the Rust runtime takes 2 args
-            //    (`sky_aes_gcm_encrypt(key, plaintext)`), so no faithful scheme
-            //    can satisfy the arrow-count == arity invariant. ──
+            // ── Crypto (15) — AEAD (`aesGcm*`/`chacha20*`) now schemed: the
+            //    registry `decl().arity` was corrected 3→2 to match the Rust
+            //    runtime (`sky_aes_gcm_encrypt(key, plaintext)` — a fresh random
+            //    nonce is prepended internally, so no third arg). Both take
+            //    `key -> plaintext/ciphertext -> Result Error String`. ──
             K::CryptoSha256 | K::CryptoSha512 | K::CryptoSha1 | K::CryptoMd5 => {
                 fun(string(), string())
             }
@@ -2729,16 +2730,23 @@ impl<'a> Builder<'a> {
             | K::CryptoHmacSha512
             | K::CryptoAesKeyFromPassword
             | K::CryptoChachaKeyFromPassword => fun(string(), fun(string(), string())),
-            K::CryptoRsaSha256Sign => fun(string(), fun(string(), result(error_ty(), string()))),
+            K::CryptoRsaSha256Sign
+            | K::CryptoAesGcmEncrypt
+            | K::CryptoAesGcmDecrypt
+            | K::CryptoChacha20Encrypt
+            | K::CryptoChacha20Decrypt => {
+                fun(string(), fun(string(), result(error_ty(), string())))
+            }
             K::CryptoRsaSha256Verify => fun(string(), fun(string(), fun(string(), bool_ty()))),
             K::CryptoConstantTimeEqual => fun(string(), fun(string(), bool_ty())),
             K::CryptoRandomBytes | K::CryptoRandomToken => fun(int(), task(string())),
 
-            // ── Jwt decode (2) — `secret -> token -> Result Error String`
-            //    (runtime returns the decoded claims JSON as a String). Jwt
-            //    ENCODE is EXCLUDED: `decl().arity == 3` but the Rust runtime
-            //    `sky_jwt_encode_hs256(secret, claims_json)` takes 2 args. ──
-            K::JwtDecodeHs256 | K::JwtDecodeRs256 => {
+            // ── Jwt (4) — `secret -> token/claims -> Result Error String`.
+            //    Decode returns the decoded claims JSON as a String; encode
+            //    (`sky_jwt_encode_hs256(secret, claims_json)`) takes the secret/
+            //    key and a claims-JSON String and returns the signed token — the
+            //    registry `decl().arity` was corrected 3→2 to match. ──
+            K::JwtDecodeHs256 | K::JwtDecodeRs256 | K::JwtEncodeHs256 | K::JwtEncodeRs256 => {
                 fun(string(), fun(string(), result(error_ty(), string())))
             }
 
@@ -2798,10 +2806,13 @@ impl<'a> Builder<'a> {
             //    used during lowering (runtime `ok_res(a) -> Result e a`). ──
             K::ResultOkDefault => fun(var(0), result(var(1), var(0))),
 
-            // Not-yet-migrated / EXCLUDED (Crypto AEAD, Jwt encode, PubSub —
-            // unbacked / arity-conflicted; Uuid, Encoding, JsonEnc, Ui
-            // Length/Color — deferred to sibling tasks): fall back to the legacy
-            // symbol-keyed table.
+            // Not-yet-migrated / EXCLUDED. `PubSub` (`publish`/`publishNoEcho`)
+            // is a KNOWN-UNBACKED exclusion — see `KNOWN_UNBACKED`: no runtime
+            // fn and its qualifier is absent from canon `qual_vars`, so it is
+            // unreachable and must NOT be schemed (a scheme would forge an
+            // exit-0 path to an unbacked kernel). Uuid, Encoding, JsonEnc, Ui
+            // Length/Color are deferred to sibling tasks (#54/#55/#46/#47/#43):
+            // fall back to the legacy symbol-keyed table.
             _ => return None,
         })
     }
@@ -5498,14 +5509,16 @@ mod registry_phase_c_tests {
     /// family task; never shrinks. Empty until the first-scheme family tasks land.
     ///
     /// Phase D8–D13 (this slice) schemes the independent holed families from
-    /// their runtime + `.sky` signatures. EXCLUDED (still on the `Ty::Var`
-    /// fallback, filed for their sibling tasks): Crypto AEAD
-    /// (`aesGcm*`/`chacha20*`) and Jwt ENCODE — `decl().arity == 3` but the Rust
-    /// runtime takes 2 args, so no faithful arrow-count == arity scheme exists;
-    /// `PubSub` (`publish`/`publishNoEcho`) — no runtime backing, qualifier absent
-    /// from canon `qual_vars`; Uuid (task #54), Encoding (task #55), and all
-    /// `JsonEnc.Value` / Ui `Length`/`Color` families (need new builtins,
-    /// tasks #46/#47/#43).
+    /// their runtime + `.sky` signatures. Task #58 additionally schemed Crypto
+    /// AEAD (`aesGcm*`/`chacha20*`) and Jwt ENCODE (`encodeHs256`/`encodeRs256`)
+    /// after correcting their registry `decl().arity` 3→2 to match the Rust
+    /// runtime (the AEAD nonce is internal; encode takes secret + claims-JSON),
+    /// so the arrow-count == arity invariant now holds. EXCLUDED (still on the
+    /// `Ty::Var` fallback): `PubSub` (`publish`/`publishNoEcho`) — a
+    /// KNOWN-UNBACKED exclusion (`KNOWN_UNBACKED`), no runtime backing and
+    /// qualifier absent from canon `qual_vars`; Uuid (task #54), Encoding
+    /// (task #55), and all `JsonEnc.Value` / Ui `Length`/`Color` families
+    /// (need new builtins, tasks #46/#47/#43).
     const FIRST_SCHEMED: &[StdlibKernel] = {
         use StdlibKernel as K;
         &[
@@ -5552,7 +5565,7 @@ mod registry_phase_c_tests {
             K::CharToUpper,
             K::CharToCode,
             K::CharFromCode,
-            // Crypto (13 — AEAD excluded)
+            // Crypto (17 — AEAD included after the arity 3→2 correction, #58)
             K::CryptoSha256,
             K::CryptoSha512,
             K::CryptoSha1,
@@ -5564,11 +5577,17 @@ mod registry_phase_c_tests {
             K::CryptoConstantTimeEqual,
             K::CryptoAesKeyFromPassword,
             K::CryptoChachaKeyFromPassword,
+            K::CryptoAesGcmEncrypt,
+            K::CryptoAesGcmDecrypt,
+            K::CryptoChacha20Encrypt,
+            K::CryptoChacha20Decrypt,
             K::CryptoRandomBytes,
             K::CryptoRandomToken,
-            // Jwt decode (2 — encode excluded)
+            // Jwt (4 — encode included after the arity 3→2 correction, #58)
             K::JwtDecodeHs256,
             K::JwtDecodeRs256,
+            K::JwtEncodeHs256,
+            K::JwtEncodeRs256,
             // Json.Decode (17)
             K::JsonDecString,
             K::JsonDecInt,
@@ -5596,6 +5615,49 @@ mod registry_phase_c_tests {
             K::ResultOkDefault,
         ]
     };
+
+    /// KNOWN-UNBACKED kernels: present in `StdlibKernel::ALL` (so they carry a
+    /// registry index) but deliberately NEVER schemed. `PubSub.publish` /
+    /// `PubSub.publishNoEcho` have no Rust runtime fn AND their `"PubSub"`
+    /// qualifier is absent from canon `qual_vars`, so no user program can name
+    /// them — they are unreachable. Scheming them would forge a well-typed
+    /// exit-0 path to an unbacked kernel, so they stay on the `Ty::Var(u32::MAX)`
+    /// fallback. Named explicitly here so Phase E's totality flip accounts for
+    /// them deliberately rather than tripping on an unexplained `None`.
+    /// Enforced by `known_unbacked_never_schemed`.
+    const KNOWN_UNBACKED: &[StdlibKernel] = {
+        use StdlibKernel as K;
+        &[K::PubSubPublish, K::PubSubPublishNoEcho]
+    };
+
+    /// KNOWN-UNBACKED kernels are in `ALL`, are disjoint from the migrated
+    /// sets, and `stdlib_scheme` returns `None` for them. Pins the deliberate
+    /// unbacked exclusion so a future accidental scheme (an exit-0 path to a
+    /// non-existent runtime fn) fails loudly here.
+    #[test]
+    fn known_unbacked_never_schemed() {
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        let mut uf = UnionFind::<Content>::new();
+        let builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+
+        for &k in KNOWN_UNBACKED {
+            assert!(
+                StdlibKernel::ALL.contains(&k),
+                "{k:?} must be in ALL to carry a registry index",
+            );
+            assert!(
+                !RELOCATED.contains(&k) && !FIRST_SCHEMED.contains(&k),
+                "{k:?} is KNOWN-UNBACKED and must not be in RELOCATED/FIRST_SCHEMED",
+            );
+            assert!(
+                builder.stdlib_scheme(k).is_none(),
+                "{k:?} is KNOWN-UNBACKED (no runtime fn, qualifier not in \
+                 qual_vars) and must NOT be schemed — a scheme forges an exit-0 \
+                 path to an unbacked kernel.",
+            );
+        }
+    }
 
     /// Build a scheme-test `Builder` plus the pre-interned `(qualifier, name)`
     /// symbol for every `StdlibKernel::ALL` variant, in lockstep order.
