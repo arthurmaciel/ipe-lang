@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use super::css_safety;
+
 /// Form data delivered to an `OnForm` handler (lower-cased keys; see dispatch).
 pub type FormData = HashMap<String, String>;
 
@@ -404,8 +406,28 @@ fn render_into_ctx<M>(
             } else {
                 None
             };
-            for c in kids {
-                render_into_ctx(c, s, child_select_value, raw_body, depth.saturating_add(1));
+            if tag == "style" {
+                // SECURITY (F7): every `<style>` body — from `Std.Html.styleNode`,
+                // a hand-built `Html.node "style" [] [Html.raw css]`, or a
+                // `Std.Css` stylesheet string — is close-tag-neutralised at THIS
+                // sink before it reaches the DOM. `styleNode` also pre-strips at
+                // construction (`html_style_node_`), so the body is gated twice
+                // (belt and braces). Rendered into a scratch buffer with
+                // raw_text=true (CSS is not HTML-decoded), then `strip_style_close`
+                // removes any `</style` breakout. Asymmetry with `<script>` is
+                // deliberate: `<style>` bodies are attacker-reachable via
+                // `Std.Css` values, whereas `<script>` is the documented,
+                // author-owned Go-parity raw escape hatch (see the HText comment
+                // above) and is NOT stripped.
+                let mut body = String::new();
+                for c in kids {
+                    render_into_ctx(c, &mut body, None, true, depth.saturating_add(1));
+                }
+                s.push_str(&css_safety::strip_style_close(&body));
+            } else {
+                for c in kids {
+                    render_into_ctx(c, s, child_select_value, raw_body, depth.saturating_add(1));
+                }
             }
             s.push_str("</");
             s.push_str(tag);
@@ -1162,5 +1184,212 @@ mod tests {
             dbg.contains("OnMsg") && dbg.contains("click"),
             "debug was: {dbg}"
         );
+    }
+
+    // ── F7: `<style>`-body injection regressions (design §Q6 #6/#8/#9) ─────────
+    use crate::sky_runtime::ui::helpers::html_style_node_;
+
+    /// Count occurrences of `</style` (case-insensitive) in `out`. A safe
+    /// `<style>` element has EXACTLY ONE — its own closing tag. Any additional
+    /// occurrence means the CSS body carried a `</style` that would close the
+    /// raw-text element early and let following `<script>` parse as markup.
+    fn style_close_count(out: &str) -> usize {
+        out.to_ascii_lowercase().matches("</style").count()
+    }
+
+    #[test]
+    fn style_node_strips_close_tag_breakout() {
+        // #6 — a `</style><script>` in the CSS body cannot break out. After
+        // stripping, the only `</style` left is the element's own closing tag,
+        // so the injected `<script>` is trapped INSIDE the raw-text <style>
+        // element (inert — the HTML parser does not parse elements inside
+        // <style>), never parsed as a live script element.
+        let node = html_style_node_::<()>(
+            vec![],
+            "body{color:red}</style><script>alert(1)</script>".into(),
+        );
+        let out = render_html(&node);
+        assert_eq!(style_close_count(&out), 1, "early </style break-out: {out}");
+        assert!(
+            !out.to_ascii_lowercase().contains("</style><script"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn hand_built_style_element_is_also_stripped() {
+        // Defence-in-depth — a hand-built `<style>` (NOT via styleNode) with an
+        // HRaw body is stripped at the render sink too.
+        let node: Html<()> = Html::HElement(
+            "style".into(),
+            vec![],
+            vec![Html::HRaw("x{}</StYlE ><script>".into())],
+        );
+        let out = render_html(&node);
+        assert_eq!(style_close_count(&out), 1, "{out}");
+        assert!(
+            !out.to_ascii_lowercase().contains("</style><script"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn style_node_defeats_reconstruction_trick() {
+        // #8 — the `</sty</stylele` reconstruction trick is defeated (fixpoint):
+        // no residual `</style` survives in the body, only the closing tag.
+        let node = html_style_node_::<()>(vec![], "a{}</sty</stylele>".into());
+        let out = render_html(&node);
+        assert_eq!(style_close_count(&out), 1, "{out}");
+    }
+
+    #[test]
+    fn script_element_body_stays_verbatim() {
+        // Asymmetry contract: `<script>` is the documented author-owned raw
+        // escape hatch (Go parity) and is NOT stripped — only `<style>` is.
+        let node: Html<()> = Html::HElement(
+            "script".into(),
+            vec![],
+            vec![Html::HRaw("if (1 < 2) { x(); }".into())],
+        );
+        assert!(render_html(&node).contains("if (1 < 2)"));
+    }
+
+    // ── Snapshot port of ../sky fixture `69-html-render-parity` (Go parity) ────
+    #[test]
+    fn fixture69_render_parity() {
+        // <select value="b"> flips `selected` onto the matching <option>, NOT the
+        // first; <script> text child emits verbatim; ordinary text stays
+        // entity-escaped; Html.doctype → literal <!DOCTYPE html>.
+        let tree: Html<()> = Html::HElement(
+            "!doctype-wrapper".into(),
+            vec![],
+            vec![Html::HElement(
+                "div".into(),
+                vec![],
+                vec![
+                    Html::HElement(
+                        "select".into(),
+                        vec![Attribute::Attr("value".into(), "b".into())],
+                        vec![
+                            Html::HElement(
+                                "option".into(),
+                                vec![Attribute::Attr("value".into(), "a".into())],
+                                vec![Html::HText("A".into())],
+                            ),
+                            Html::HElement(
+                                "option".into(),
+                                vec![Attribute::Attr("value".into(), "b".into())],
+                                vec![Html::HText("B".into())],
+                            ),
+                        ],
+                    ),
+                    Html::HElement(
+                        "script".into(),
+                        vec![],
+                        vec![Html::HText("if (1 < 2) { x = '&'; }".into())],
+                    ),
+                    Html::HElement("div".into(), vec![], vec![Html::HText("<b>raw</b>".into())]),
+                ],
+            )],
+        );
+        let out = render_html(&tree);
+        assert!(out.starts_with("<!DOCTYPE html>"), "{out}");
+        // selected flips onto the `b` option, not `a`.
+        assert!(
+            out.contains(r#"<option selected="selected" value="b">"#),
+            "{out}"
+        );
+        assert!(!out.contains(r#"value="a" selected"#), "{out}");
+        // <script> body verbatim (inline JS not entity-escaped).
+        assert!(out.contains("if (1 < 2) { x = '&'; }"), "{out}");
+        // ordinary text still entity-escaped.
+        assert!(out.contains("&lt;b&gt;raw&lt;/b&gt;"), "{out}");
+    }
+
+    // ── #46: attribute-builder injection regressions (design §Q6 #1–5, #10) ────
+
+    #[test]
+    fn attr_value_quote_breakout_is_escaped() {
+        // #1 — a `"` in an attribute value is entity-escaped, no live handler.
+        let n: Html<()> = Html::HElement(
+            "div".into(),
+            vec![Attribute::Attr(
+                "title".into(),
+                "x\" onmouseover=\"alert(1)".into(),
+            )],
+            vec![],
+        );
+        let out = render_html(&n);
+        assert!(out.contains("onmouseover=&#34;"), "{out}"); // escaped, inert
+        assert!(!out.contains("onmouseover=\""), "{out}"); // no live handler
+    }
+
+    #[test]
+    fn javascript_href_is_neutralised() {
+        // #2 — a `javascript:` scheme on href is neutralised to empty.
+        let n: Html<()> = Html::HElement(
+            "a".into(),
+            vec![Attribute::Attr("href".into(), "javascript:alert(1)".into())],
+            vec![],
+        );
+        let out = render_html(&n);
+        assert!(out.contains("href=\"\""), "{out}");
+        assert!(!out.to_ascii_lowercase().contains("javascript:"), "{out}");
+    }
+
+    #[test]
+    fn data_uri_src_policy() {
+        // #3 — scriptable `data:text/html` neutralised; inert raster passes.
+        let bad: Html<()> = Html::HElement(
+            "img".into(),
+            vec![Attribute::Attr(
+                "src".into(),
+                "data:text/html,<script>1</script>".into(),
+            )],
+            vec![],
+        );
+        assert!(render_html(&bad).contains("src=\"\""));
+        let ok: Html<()> = Html::HElement(
+            "img".into(),
+            vec![Attribute::Attr(
+                "src".into(),
+                "data:image/png;base64,iVBOR".into(),
+            )],
+            vec![],
+        );
+        assert!(render_html(&ok).contains("data:image/png;base64,iVBOR"));
+    }
+
+    #[test]
+    fn generic_attribute_drops_event_and_srcdoc_names() {
+        // #4 — the generic `attribute k v` setter cannot register `on*`/`srcdoc`.
+        for k in ["onclick", "OnClick", "onfoo", "srcdoc"] {
+            let n: Html<()> = Html::HElement(
+                "div".into(),
+                vec![Attribute::Attr(k.into(), "x".into())],
+                vec![],
+            );
+            let out = render_html(&n).to_ascii_lowercase();
+            assert!(
+                !out.contains(&format!("{}=", k.to_ascii_lowercase())),
+                "{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsafe_tag_name_drops_element() {
+        // #5 — a start-tag breakout in the tag name drops the whole element.
+        let n: Html<()> = Html::HElement("div><script>".into(), vec![], vec![]);
+        assert!(!render_html(&n).contains("<script"));
+    }
+
+    #[cfg(feature = "live")]
+    #[test]
+    fn sse_patch_shares_the_policy() {
+        // #10 — SSE patch attributes route through the same name+scheme gate.
+        assert!(safe_patch_attr("onclick", "x").is_none());
+        let (_, v) = safe_patch_attr("href", "javascript:alert(1)").unwrap();
+        assert!(!v.to_ascii_lowercase().contains("javascript:"));
     }
 }

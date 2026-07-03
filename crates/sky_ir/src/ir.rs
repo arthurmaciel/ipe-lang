@@ -615,6 +615,13 @@ pub enum UiPlain {
     Description,
     /// `LayoutContext` — `sky_runtime::ui::element::LayoutContext`.
     LayoutContext,
+    /// `Std.Css.CssProp` — `sky_runtime::css::CssProp` (message-free CSS
+    /// declaration ADT; consumed by the gated `css_styles_`/`css_stylesheet_`
+    /// sink kernels).
+    CssProp,
+    /// `Std.Css.CssRule` — `sky_runtime::css::CssRule` (message-free CSS
+    /// stylesheet-entry ADT).
+    CssRule,
 }
 
 /// An expression in the typed IR.

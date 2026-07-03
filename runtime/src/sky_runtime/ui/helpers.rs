@@ -304,6 +304,27 @@ pub fn html_raw_node_<M>(s: String) -> Html<M> {
     Html::HRaw(s)
 }
 
+/// `Html.styleNode : List (Attribute msg) -> String -> Html msg`
+///
+/// SECURITY (F7): `styleNode` is arity-2 `(attrs, css:String)` — NOT the arity-3
+/// `html_node_` it was previously mis-lowered to. It bakes the injection fix into
+/// construction (PARSE, DON'T VALIDATE): the CSS body is close-tag-neutralised
+/// exactly once, HERE, so the `HRaw` it produces is already safe. The `<style>`
+/// render sink (`html::render_into_ctx`) strips again — defence in depth — so a
+/// `</style><script>` breakout in a `Std.Css` value cannot reach the DOM.
+pub fn html_style_node_<M>(
+    attrs: Vec<crate::sky_runtime::html::Attribute<M>>,
+    css: String,
+) -> Html<M> {
+    Html::HElement(
+        "style".to_owned(),
+        attrs,
+        vec![Html::HRaw(
+            crate::sky_runtime::css_safety::strip_style_close(&css),
+        )],
+    )
+}
+
 /// `Html.node : String -> List (Attribute msg) -> List (Html msg) -> Html msg`
 pub fn html_node_<M>(
     tag: String,

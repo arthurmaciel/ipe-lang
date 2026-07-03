@@ -158,6 +158,17 @@ pub use ws_client::*;
 pub mod html;
 pub use html::*;
 
+// Shared CSS/style injection-safety encoders (SafeCssValue / SafeCssPropertyName
+// / SafeCssSelector / strip_style_close). One policy, one place — imported by the
+// Std.Ui inline-style path (`ui/render.rs`), the `<style>` sink (`html.rs`),
+// and the Std.Css renderers (`css.rs`). See design §Q5.
+pub mod css_safety;
+
+// Std.Css stylesheet renderers (css_stylesheet_ / css_styles_) — the two gated
+// sinks that fold user strings into CSS. Typed length/colour constructors stay
+// pure Sky in `Std/Css.sky`; only these free-string sinks are kernels (#47).
+pub mod css;
+
 // In-process telemetry sink (log/error rings + request counters) — always
 // compiled so `Std.Log.*` can feed it; the Sky.Live `console` module serves it.
 pub mod telemetry;
