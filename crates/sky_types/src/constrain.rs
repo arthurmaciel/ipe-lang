@@ -1537,12 +1537,20 @@ impl<'a> Builder<'a> {
     /// `Some(self.kernel_ty(..))`, which still carries the historical
     /// `Ty::Var(u32::MAX)` fallback for un-migrated kernels
     /// (`String.toUpper`, `Ui.text`, `Html.render`, …) so they do not regress.
-    /// Phase E replaces the body with a sentinel-detecting variant that returns
-    /// `None` for un-typed kernels, at which point
-    /// [`Self::kernel_scheme_or_unsupported`] fails them closed.
-    #[allow(clippy::unnecessary_wraps)] // Phase C: total; Phase E returns None for un-typed kernels
+    /// Phase E (Task 1b) SENTINEL-DETECTING variant: it returns `None` when the
+    /// legacy table would fall to the `Ty::Var(u32::MAX)` sentinel (an un-typed
+    /// kernel), so [`Self::kernel_scheme_or_unsupported`] fails it CLOSED with
+    /// SKY-L0108 instead of silently typing it as a free var that `cargo` later
+    /// rejects (the exit-0-then-cargo-fail hole, audit F1). Because
+    /// `stdlib_scheme` is now total over the reachable set (Task 0), the registry
+    /// branch serves every reachable kernel and this legacy path is inert for
+    /// them; it only fires the fail-closed `None` for the excluded buckets
+    /// (`LiveAppRouted` — unlowered). Task 1c deletes `kernel_ty` entirely.
     fn legacy_kernel_ty(&self, module: Symbol, name: Symbol) -> Option<Ty> {
-        Some(self.kernel_ty(module, name))
+        match self.kernel_ty(module, name) {
+            Ty::Var(u32::MAX) => None,
+            ty => Some(ty),
+        }
     }
 
     fn constrain_expr(
