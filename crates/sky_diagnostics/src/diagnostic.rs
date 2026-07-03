@@ -13,7 +13,8 @@ use crate::code::{
     Code, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200,
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
-    SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118, SKY_L0119, SKY_L0200, SKY_N0001,
+    SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118, SKY_L0119, SKY_L0120, SKY_L0200,
+    SKY_N0001,
     SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
     SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_P0001,
     SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015,
@@ -560,12 +561,67 @@ pub enum Feature {
     LetBoundAppCfg,
 }
 
-/// Errors raised during lowering: "not supported yet" — distinct from
-/// `CompilerBug` ("the compiler is broken").
+/// The app shape whose entry point rejected an inadmissible Model. Drives the
+/// required-trait wording rendered for [`LowerError::InadmissibleAppModel`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum AppShape {
+    /// `Std.Live` / `Sky.Live` — the Model is persisted to the session store, so
+    /// it must be `serde`-serialisable (as well as `Clone` + `PartialEq`).
+    Live,
+    /// `Std.Tui` / `Sky.Tui` — the Model is kept in memory, so it must be
+    /// `Clone`.
+    Tui,
+    /// `Std.Webview` / `Sky.Webview` — the Model is kept in memory, so it must
+    /// be `Clone`.
+    Webview,
+}
+
+/// The category of the non-admissible payload found inside a Model.
+///
+/// The leaf whose rendered Rust type lacks the trait the app entry requires. The
+/// renderer owns the exact wording; this enum keeps the presentation-free
+/// classification.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ModelLeaf {
+    /// A first-class function (`a -> b`).
+    Function,
+    /// A `Cmd` command.
+    Command,
+    /// A `Sub` subscription.
+    Subscription,
+    /// A `Task` effect.
+    Task,
+    /// A JSON `Decoder`.
+    Decoder,
+    /// An opaque `Db` / server / live request or response handle.
+    Handle,
+    /// A view value — `Html` / `Element` / a UI `Attribute` / a `Color` or other
+    /// `Std.Ui` plain value. Clonable and comparable, but not serialisable; only
+    /// reachable as the offending leaf for a `Sky.Live` Model.
+    ViewValue,
+}
+
+/// Errors raised during lowering / emission: "not supported yet" or
+/// "inadmissible for the target" — distinct from `CompilerBug` ("the compiler is
+/// broken").
+///
+/// Not `Copy`: [`LowerError::InadmissibleAppModel`] carries an owned field name.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum LowerError {
     /// A feature the M0 lowerer does not implement. [SKY-L01##]
     Unsupported(Feature),
+    /// A `Live`/`Tui`/`Webview` app-entry Model type whose Rust rendering does
+    /// not satisfy the runtime bound the entry requires (`Live` needs
+    /// `serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq`;
+    /// `Tui`/`Webview` need `Clone`). `app` drives the wording, `field` names the
+    /// offending Model field (empty when the Model is not a record), and `leaf`
+    /// categorises the payload. Converts a would-be `cargo` trait-bound failure
+    /// into a fail-closed `skyc` error. [SKY-L0120]
+    InadmissibleAppModel {
+        app: AppShape,
+        field: Box<str>,
+        leaf: ModelLeaf,
+    },
     /// Expression nesting exceeded the backend's bounded emit depth. [SKY-L0200]
     BackendNestingTooDeep { limit: u16 },
 }
@@ -682,6 +738,11 @@ pub struct Suggestion {
 pub enum HelpLine {
     /// "did you mean `<name>`?"
     DidYouMean(Box<str>),
+    /// A free-form `note:` line whose text is built by the producer. Used when
+    /// the message must carry producer-specific detail (e.g. the offending Model
+    /// field name for [`LowerError::InadmissibleAppModel`]) and the diagnostic
+    /// has no source span to hang a caret label on.
+    Note(Box<str>),
     /// A fixed guidance line.
     Hint(Hint),
     /// Point at a related source location.
@@ -706,7 +767,7 @@ impl Diagnostic {
             Self::Parse { msg, .. } => parse_code(msg),
             Self::Name { msg, .. } => name_code(msg),
             Self::Type { msg, .. } => type_code(msg),
-            Self::Lower { msg, .. } => lower_code(*msg),
+            Self::Lower { msg, .. } => lower_code(msg),
             Self::CompilerBug { where_, .. } => bug_code(where_),
         }
     }
@@ -754,7 +815,7 @@ impl Diagnostic {
             Self::Parse { msg, .. } => parse_help(msg),
             Self::Name { msg, span } => name_help(msg, *span),
             Self::Type { msg, .. } => type_help(msg),
-            Self::Lower { msg, .. } => lower_help(*msg),
+            Self::Lower { msg, .. } => lower_help(msg),
             Self::CompilerBug { .. } => Vec::new(),
         }
     }
@@ -823,9 +884,10 @@ const fn type_code(msg: &TypeError) -> Code {
     }
 }
 
-const fn lower_code(msg: LowerError) -> Code {
+const fn lower_code(msg: &LowerError) -> Code {
     match msg {
-        LowerError::Unsupported(f) => feature_code(f),
+        LowerError::Unsupported(f) => feature_code(*f),
+        LowerError::InadmissibleAppModel { .. } => SKY_L0120,
         LowerError::BackendNestingTooDeep { .. } => SKY_L0200,
     }
 }
@@ -959,12 +1021,53 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
     }
 }
 
-fn lower_help(msg: LowerError) -> Vec<HelpLine> {
+/// The human message for [`LowerError::InadmissibleAppModel`], shared by the
+/// `note:` help line (span-free path) and the render caret label (when a span is
+/// present). Names the offending field, the leaf kind, and the required trait.
+#[must_use]
+pub fn inadmissible_model_message(app: AppShape, field: &str, leaf: ModelLeaf) -> String {
+    let (shape, requirement) = match app {
+        AppShape::Live => (
+            "Sky.Live",
+            "serialisable (it is persisted to the session store)",
+        ),
+        AppShape::Tui => ("Sky.Tui", "clonable"),
+        AppShape::Webview => ("Sky.Webview", "clonable"),
+    };
+    let leaf_phrase = match leaf {
+        ModelLeaf::Function => "a function",
+        ModelLeaf::Command => "a command (`Cmd`)",
+        ModelLeaf::Subscription => "a subscription (`Sub`)",
+        ModelLeaf::Task => "a task (`Task`)",
+        ModelLeaf::Decoder => "a decoder (`Decoder`)",
+        ModelLeaf::Handle => "an opaque handle (`Db` / server / live request)",
+        ModelLeaf::ViewValue => "a view value (`Html` / `Element` / `Color`)",
+    };
+    if field.is_empty() {
+        format!(
+            "a {shape} Model must be {requirement}, but this Model is {leaf_phrase}, \
+             which is not — keep only plain data in the Model"
+        )
+    } else {
+        format!(
+            "a {shape} Model must be {requirement}, but its field `{field}` is {leaf_phrase}, \
+             which is not — keep only plain data in the Model"
+        )
+    }
+}
+
+fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
     match msg {
         LowerError::Unsupported(Feature::UntypedFunctions) => {
             vec![HelpLine::Hint(Hint::AddTypeSignature)]
         }
-        LowerError::Unsupported(f) => vec![HelpLine::Hint(Hint::FeatureNotSupported(f))],
+        LowerError::Unsupported(f) => vec![HelpLine::Hint(Hint::FeatureNotSupported(*f))],
+        // The Model gate has no source span (the IR is span-free at emit), so the
+        // field-naming message is carried as a `note:` line here — the caret
+        // label at [`crate::render`] only renders when a snippet is present.
+        LowerError::InadmissibleAppModel { app, field, leaf } => vec![HelpLine::Note(
+            inadmissible_model_message(*app, field, *leaf).into_boxed_str(),
+        )],
         LowerError::BackendNestingTooDeep { .. } => {
             vec![HelpLine::Hint(Hint::NestingBoundDeliberate)]
         }
