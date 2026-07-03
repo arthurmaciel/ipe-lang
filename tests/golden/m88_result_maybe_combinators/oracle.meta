@@ -1,0 +1,6 @@
+# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
+main_sky_sha256 = b016d5652e4ef607a31d963367fc3bb1c931996dbaf2b5d1946ef22673c224a7
+go_sky_version = sky dev
+exit_code = 0
+oracle_divergence = true
+divergence_reason = Go oracle failed: Go `sky build` exited Some(1): -- Discovering modules Found 1 module(s) -- Parsing Main: 24 declarations -- Canonicalising -- NAMING ERROR ───────────────────────────────────── Main.sky:20:10 [E1001] 18 | errInt : Result Error Int 19 | errInt = 20 | Err (Error.invalidInput "boom") | ^ 21 | Undefined name: Error.invalidInput Module `Error` is not imported and is not a known kernel module. Did you forget `import Error`? Or check for a typo in the module qualifier. Canonicalise error; using skyc output as the reference

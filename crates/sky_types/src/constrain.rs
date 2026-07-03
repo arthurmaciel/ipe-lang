@@ -2366,6 +2366,54 @@ impl<'a> Builder<'a> {
                 fun(var(0), maybe(var(1))),
                 fun(maybe(var(0)), maybe(var(1))),
             ),
+            // `map2 : (a -> b -> v) -> Maybe a -> Maybe b -> Maybe v`. The N-ary
+            // function is CURRIED at the Sky type level (`a -> b -> v`); the
+            // backend passes the multi-arg Rust fn value directly (mirrors
+            // JsonDec.map2). var(0)=a, var(1)=b, .., last=v.
+            K::MaybeMap2 => fun(
+                fun(var(0), fun(var(1), var(2))),
+                fun(maybe(var(0)), fun(maybe(var(1)), maybe(var(2)))),
+            ),
+            K::MaybeMap3 => fun(
+                fun(var(0), fun(var(1), fun(var(2), var(3)))),
+                fun(
+                    maybe(var(0)),
+                    fun(maybe(var(1)), fun(maybe(var(2)), maybe(var(3)))),
+                ),
+            ),
+            K::MaybeMap4 => fun(
+                fun(var(0), fun(var(1), fun(var(2), fun(var(3), var(4))))),
+                fun(
+                    maybe(var(0)),
+                    fun(
+                        maybe(var(1)),
+                        fun(maybe(var(2)), fun(maybe(var(3)), maybe(var(4)))),
+                    ),
+                ),
+            ),
+            K::MaybeMap5 => fun(
+                fun(
+                    var(0),
+                    fun(var(1), fun(var(2), fun(var(3), fun(var(4), var(5))))),
+                ),
+                fun(
+                    maybe(var(0)),
+                    fun(
+                        maybe(var(1)),
+                        fun(
+                            maybe(var(2)),
+                            fun(maybe(var(3)), fun(maybe(var(4)), maybe(var(5)))),
+                        ),
+                    ),
+                ),
+            ),
+            // `andMap : Maybe a -> Maybe (a -> b) -> Maybe b`. var(0)=a, var(1)=b.
+            K::MaybeAndMap => fun(
+                maybe(var(0)),
+                fun(maybe(fun(var(0), var(1))), maybe(var(1))),
+            ),
+            // `combine : List (Maybe a) -> Maybe (List a)`. var(0)=a.
+            K::MaybeCombine => fun(list(maybe(var(0))), maybe(list(var(0)))),
 
             // ── Result ──
             K::ResultWithDefault => fun(var(0), fun(result(var(1), var(0)), var(0))),
@@ -2386,6 +2434,79 @@ impl<'a> Builder<'a> {
             K::ResultMapError => fun(
                 fun(var(0), var(1)),
                 fun(result(var(0), var(2)), result(var(1), var(2))),
+            ),
+            // `map2 : (a -> b -> v) -> Result e a -> Result e b -> Result e v`.
+            // The error channel `e` is SHARED across all input `Result`s and the
+            // output. var(0)=a, var(1)=b, var(2)=v, last var = e (shared).
+            K::ResultMap2 => fun(
+                fun(var(0), fun(var(1), var(2))),
+                fun(
+                    result(var(3), var(0)),
+                    fun(result(var(3), var(1)), result(var(3), var(2))),
+                ),
+            ),
+            K::ResultMap3 => fun(
+                fun(var(0), fun(var(1), fun(var(2), var(3)))),
+                fun(
+                    result(var(4), var(0)),
+                    fun(
+                        result(var(4), var(1)),
+                        fun(result(var(4), var(2)), result(var(4), var(3))),
+                    ),
+                ),
+            ),
+            K::ResultMap4 => fun(
+                fun(var(0), fun(var(1), fun(var(2), fun(var(3), var(4))))),
+                fun(
+                    result(var(5), var(0)),
+                    fun(
+                        result(var(5), var(1)),
+                        fun(
+                            result(var(5), var(2)),
+                            fun(result(var(5), var(3)), result(var(5), var(4))),
+                        ),
+                    ),
+                ),
+            ),
+            K::ResultMap5 => fun(
+                fun(
+                    var(0),
+                    fun(var(1), fun(var(2), fun(var(3), fun(var(4), var(5))))),
+                ),
+                fun(
+                    result(var(6), var(0)),
+                    fun(
+                        result(var(6), var(1)),
+                        fun(
+                            result(var(6), var(2)),
+                            fun(
+                                result(var(6), var(3)),
+                                fun(result(var(6), var(4)), result(var(6), var(5))),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            // `andMap : Result e a -> Result e (a -> b) -> Result e b`.
+            // var(0)=a, var(1)=b, var(2)=e (shared).
+            K::ResultAndMap => fun(
+                result(var(2), var(0)),
+                fun(
+                    result(var(2), fun(var(0), var(1))),
+                    result(var(2), var(1)),
+                ),
+            ),
+            // `combine : List (Result e a) -> Result e (List a)`.
+            // var(0)=a, var(1)=e.
+            K::ResultCombine => fun(
+                list(result(var(1), var(0))),
+                result(var(1), list(var(0))),
+            ),
+            // `traverse : (a -> Result e b) -> List a -> Result e (List b)`.
+            // var(0)=a, var(1)=b, var(2)=e.
+            K::ResultTraverse => fun(
+                fun(var(0), result(var(2), var(1))),
+                fun(list(var(0)), result(var(2), list(var(1)))),
             ),
 
             // ── Bytes ──
@@ -3872,6 +3993,23 @@ mod registry_phase_c_tests {
             // `map` are the RELOCATED pair, these two are first-schemed).
             K::ResultAndThen,
             K::ResultMapError,
+            // Result / Maybe applicative combinators (#88 — mapN / andMap /
+            // combine / traverse). All genuine holes (no legacy `kernel_ty`
+            // arm); runtime fns in `core.rs` (`result_map2` .. `result_traverse`,
+            // `maybe_map2` .. `maybe_combine`; `result_traverse` pre-existed).
+            K::ResultMap2,
+            K::ResultMap3,
+            K::ResultMap4,
+            K::ResultMap5,
+            K::ResultAndMap,
+            K::ResultCombine,
+            K::ResultTraverse,
+            K::MaybeMap2,
+            K::MaybeMap3,
+            K::MaybeMap4,
+            K::MaybeMap5,
+            K::MaybeAndMap,
+            K::MaybeCombine,
             // Encoding (6 — task #55a): base64/url/hex text codecs. Encoders
             // `String -> String`, decoders `String -> Result Error String`.
             // Each WAS a `Ty::Var(u32::MAX)` hole (`kernel_ty` has no Encoding

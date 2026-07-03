@@ -409,8 +409,20 @@ impl Env {
                     "cons",
                 ],
             ),
-            ("Maybe", &["withDefault", "map", "andThen"]),
-            ("Result", &["withDefault", "map", "andThen", "mapError"]),
+            (
+                "Maybe",
+                &[
+                    "withDefault", "map", "andThen", "map2", "map3", "map4", "map5", "andMap",
+                    "combine",
+                ],
+            ),
+            (
+                "Result",
+                &[
+                    "withDefault", "map", "andThen", "mapError", "map2", "map3", "map4", "map5",
+                    "andMap", "combine", "traverse",
+                ],
+            ),
             // `Sky.Core.Error` — the unified error type (minimal `Error = String`
             // slice, #86). Message constructors + nullary constructors + `toString`
             // render + `withMessage` modifier. The rich `ErrorKind`/`ErrorDetails`

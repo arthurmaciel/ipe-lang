@@ -462,7 +462,12 @@ pub fn maybe_with_default<A>(def: A, m: SkyMaybe<A>) -> A {
     }
 }
 
-pub fn result_traverse<T0: Clone, T1: Clone, E>(
+// `Result.traverse : (a -> Result e b) -> List a -> Result e (List b)`. Maps
+// `f` across the list, collecting the `Ok` values; the FIRST `Err` (in list
+// order) short-circuits with the real error. No `Clone` bound — each element is
+// MOVED into `f`, matching the Sky pure-Sky one-pass definition. Total: no
+// unwrap/index/panic (`Vec::push` grows, never indexes).
+pub fn result_traverse<T0, T1, E>(
     f: impl Fn(T0) -> SkyResult<E, T1>,
     items: Vec<T0>,
 ) -> SkyResult<E, Vec<T1>> {
@@ -474,6 +479,273 @@ pub fn result_traverse<T0: Clone, T1: Clone, E>(
         }
     }
     SkyResult::Ok(out)
+}
+
+// ===========================================
+// Result / Maybe applicative combinators (mapN / andMap / combine)
+// ===========================================
+// FUNCTION-FIRST argument order (matches the Sky call surface AND the JsonDec
+// `decode_mapN` runtime shape), so NO `kernel_swaps_first_two` entry is needed.
+// The N-ary function is a MULTI-ARG Rust fn value — a Sky arity-N function /
+// record-alias auto-constructor lowers to `impl Fn(A, .., N) -> V`, so `f(a, b,
+// ..)` type-checks. Each combinator is TOTAL: the first `Err` / `Nothing` in
+// Sky evaluation order short-circuits; the `Ok` / `Just` value type is never
+// indexed or unwrapped. No panic, no `unsafe`, no allocation beyond the result.
+
+/// `Result.map2 : (a -> b -> v) -> Result e a -> Result e b -> Result e v`.
+/// First `Err` in (ra, rb) order wins — matches the nested-case `.sky` def.
+pub fn result_map2<E, A, B, V>(
+    f: impl FnOnce(A, B) -> V,
+    ra: SkyResult<E, A>,
+    rb: SkyResult<E, B>,
+) -> SkyResult<E, V> {
+    let a = match ra {
+        SkyResult::Ok(a) => a,
+        SkyResult::Err(e) => return SkyResult::Err(e),
+    };
+    let b = match rb {
+        SkyResult::Ok(b) => b,
+        SkyResult::Err(e) => return SkyResult::Err(e),
+    };
+    SkyResult::Ok(f(a, b))
+}
+
+/// `Result.map3 : (a -> b -> c -> v) -> Result e a -> Result e b -> Result e c
+/// -> Result e v`.
+pub fn result_map3<E, A, B, C, V>(
+    f: impl FnOnce(A, B, C) -> V,
+    ra: SkyResult<E, A>,
+    rb: SkyResult<E, B>,
+    rc: SkyResult<E, C>,
+) -> SkyResult<E, V> {
+    let a = match ra {
+        SkyResult::Ok(a) => a,
+        SkyResult::Err(e) => return SkyResult::Err(e),
+    };
+    let b = match rb {
+        SkyResult::Ok(b) => b,
+        SkyResult::Err(e) => return SkyResult::Err(e),
+    };
+    let c = match rc {
+        SkyResult::Ok(c) => c,
+        SkyResult::Err(e) => return SkyResult::Err(e),
+    };
+    SkyResult::Ok(f(a, b, c))
+}
+
+/// `Result.map4 : (a -> b -> c -> d -> v) -> Result e a -> .. -> Result e v`.
+pub fn result_map4<E, A, B, C, D, V>(
+    f: impl FnOnce(A, B, C, D) -> V,
+    ra: SkyResult<E, A>,
+    rb: SkyResult<E, B>,
+    rc: SkyResult<E, C>,
+    rd: SkyResult<E, D>,
+) -> SkyResult<E, V> {
+    let a = match ra {
+        SkyResult::Ok(a) => a,
+        SkyResult::Err(e) => return SkyResult::Err(e),
+    };
+    let b = match rb {
+        SkyResult::Ok(b) => b,
+        SkyResult::Err(e) => return SkyResult::Err(e),
+    };
+    let c = match rc {
+        SkyResult::Ok(c) => c,
+        SkyResult::Err(e) => return SkyResult::Err(e),
+    };
+    let d = match rd {
+        SkyResult::Ok(d) => d,
+        SkyResult::Err(e) => return SkyResult::Err(e),
+    };
+    SkyResult::Ok(f(a, b, c, d))
+}
+
+/// `Result.map5 : (a -> b -> c -> d -> e -> v) -> Result er a -> .. -> Result
+/// er v`. (`er` is the shared error channel; `e` is the fifth `Ok` value.)
+pub fn result_map5<Er, A, B, C, D, E, V>(
+    f: impl FnOnce(A, B, C, D, E) -> V,
+    ra: SkyResult<Er, A>,
+    rb: SkyResult<Er, B>,
+    rc: SkyResult<Er, C>,
+    rd: SkyResult<Er, D>,
+    re: SkyResult<Er, E>,
+) -> SkyResult<Er, V> {
+    let a = match ra {
+        SkyResult::Ok(a) => a,
+        SkyResult::Err(e) => return SkyResult::Err(e),
+    };
+    let b = match rb {
+        SkyResult::Ok(b) => b,
+        SkyResult::Err(e) => return SkyResult::Err(e),
+    };
+    let c = match rc {
+        SkyResult::Ok(c) => c,
+        SkyResult::Err(e) => return SkyResult::Err(e),
+    };
+    let d = match rd {
+        SkyResult::Ok(d) => d,
+        SkyResult::Err(e) => return SkyResult::Err(e),
+    };
+    let e_val = match re {
+        SkyResult::Ok(v) => v,
+        SkyResult::Err(e) => return SkyResult::Err(e),
+    };
+    SkyResult::Ok(f(a, b, c, d, e_val))
+}
+
+/// `Result.andMap : Result e a -> Result e (a -> b) -> Result e b`. The `.sky`
+/// definition inspects the FUNCTION result first, so its `Err` wins over the
+/// value's `Err`. The function is applied only when BOTH are `Ok`.
+pub fn result_and_map<E, A, B, F: FnOnce(A) -> B>(
+    ra: SkyResult<E, A>,
+    rf: SkyResult<E, F>,
+) -> SkyResult<E, B> {
+    match rf {
+        SkyResult::Ok(f) => match ra {
+            SkyResult::Ok(a) => SkyResult::Ok(f(a)),
+            SkyResult::Err(e) => SkyResult::Err(e),
+        },
+        SkyResult::Err(e) => SkyResult::Err(e),
+    }
+}
+
+/// `Result.combine : List (Result e a) -> Result e (List a)`. Collects every
+/// `Ok`; the first `Err` in list order short-circuits.
+pub fn result_combine<E, A>(results: Vec<SkyResult<E, A>>) -> SkyResult<E, Vec<A>> {
+    let mut out = Vec::with_capacity(results.len());
+    for r in results {
+        match r {
+            SkyResult::Ok(v) => out.push(v),
+            SkyResult::Err(e) => return SkyResult::Err(e),
+        }
+    }
+    SkyResult::Ok(out)
+}
+
+/// `Maybe.map2 : (a -> b -> v) -> Maybe a -> Maybe b -> Maybe v`.
+pub fn maybe_map2<A, B, V>(
+    f: impl FnOnce(A, B) -> V,
+    ma: SkyMaybe<A>,
+    mb: SkyMaybe<B>,
+) -> SkyMaybe<V> {
+    let a = match ma {
+        SkyMaybe::Just(a) => a,
+        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+    };
+    let b = match mb {
+        SkyMaybe::Just(b) => b,
+        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+    };
+    SkyMaybe::Just(f(a, b))
+}
+
+/// `Maybe.map3 : (a -> b -> c -> v) -> Maybe a -> Maybe b -> Maybe c -> Maybe v`.
+pub fn maybe_map3<A, B, C, V>(
+    f: impl FnOnce(A, B, C) -> V,
+    ma: SkyMaybe<A>,
+    mb: SkyMaybe<B>,
+    mc: SkyMaybe<C>,
+) -> SkyMaybe<V> {
+    let a = match ma {
+        SkyMaybe::Just(a) => a,
+        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+    };
+    let b = match mb {
+        SkyMaybe::Just(b) => b,
+        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+    };
+    let c = match mc {
+        SkyMaybe::Just(c) => c,
+        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+    };
+    SkyMaybe::Just(f(a, b, c))
+}
+
+/// `Maybe.map4 : (a -> b -> c -> d -> v) -> Maybe a -> .. -> Maybe v`.
+pub fn maybe_map4<A, B, C, D, V>(
+    f: impl FnOnce(A, B, C, D) -> V,
+    ma: SkyMaybe<A>,
+    mb: SkyMaybe<B>,
+    mc: SkyMaybe<C>,
+    md: SkyMaybe<D>,
+) -> SkyMaybe<V> {
+    let a = match ma {
+        SkyMaybe::Just(a) => a,
+        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+    };
+    let b = match mb {
+        SkyMaybe::Just(b) => b,
+        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+    };
+    let c = match mc {
+        SkyMaybe::Just(c) => c,
+        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+    };
+    let d = match md {
+        SkyMaybe::Just(d) => d,
+        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+    };
+    SkyMaybe::Just(f(a, b, c, d))
+}
+
+/// `Maybe.map5 : (a -> b -> c -> d -> e -> v) -> Maybe a -> .. -> Maybe v`.
+pub fn maybe_map5<A, B, C, D, E, V>(
+    f: impl FnOnce(A, B, C, D, E) -> V,
+    ma: SkyMaybe<A>,
+    mb: SkyMaybe<B>,
+    mc: SkyMaybe<C>,
+    md: SkyMaybe<D>,
+    me: SkyMaybe<E>,
+) -> SkyMaybe<V> {
+    let a = match ma {
+        SkyMaybe::Just(a) => a,
+        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+    };
+    let b = match mb {
+        SkyMaybe::Just(b) => b,
+        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+    };
+    let c = match mc {
+        SkyMaybe::Just(c) => c,
+        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+    };
+    let d = match md {
+        SkyMaybe::Just(d) => d,
+        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+    };
+    let e = match me {
+        SkyMaybe::Just(e) => e,
+        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+    };
+    SkyMaybe::Just(f(a, b, c, d, e))
+}
+
+/// `Maybe.andMap : Maybe a -> Maybe (a -> b) -> Maybe b`. Function-Maybe
+/// inspected first (matches the `.sky` definition).
+pub fn maybe_and_map<A, B, F: FnOnce(A) -> B>(
+    ma: SkyMaybe<A>,
+    mf: SkyMaybe<F>,
+) -> SkyMaybe<B> {
+    match mf {
+        SkyMaybe::Just(f) => match ma {
+            SkyMaybe::Just(a) => SkyMaybe::Just(f(a)),
+            SkyMaybe::Nothing => SkyMaybe::Nothing,
+        },
+        SkyMaybe::Nothing => SkyMaybe::Nothing,
+    }
+}
+
+/// `Maybe.combine : List (Maybe a) -> Maybe (List a)`. Collects every `Just`;
+/// the first `Nothing` short-circuits.
+pub fn maybe_combine<A>(maybes: Vec<SkyMaybe<A>>) -> SkyMaybe<Vec<A>> {
+    let mut out = Vec::with_capacity(maybes.len());
+    for m in maybes {
+        match m {
+            SkyMaybe::Just(v) => out.push(v),
+            SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        }
+    }
+    SkyMaybe::Just(out)
 }
 
 // ===========================================
