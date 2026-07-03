@@ -1,0 +1,97 @@
+//! #88 `Result` / `Maybe` applicative-combinator parity gate — the `mapN` /
+//! `andMap` / `combine` / `traverse` family wired as kernels.
+//!
+//! Exercises, end-to-end (skyc → emitted Cargo project → build → run):
+//!
+//! * `Result.map3` over three `Ok`s → `Ok 6`, and short-circuit on the first
+//!   `Err` (the middle argument) → the `Err` arm.  The N-ary builder
+//!   (`combine3`) is a MULTI-ARG function value — a Sky arity-N function lowers
+//!   to `impl Fn(A, .., N) -> V`, boxed at the call site, satisfying the
+//!   runtime's `impl FnOnce(A, .., N) -> V`.
+//! * `Result.map4` / `Result.map5` (max arity) — sum + short-circuit.
+//! * `Result.combine` over a `List (Result e a)` → `Ok (List a)`; first `Err`
+//!   short-circuits.
+//! * `Result.traverse` — one-pass map + collect; first `Err` short-circuits.
+//! * `Maybe.map3` + `Maybe.combine` — the `Nothing`-short-circuit mirror.
+//!
+//! Output (skyc, verified correct by construction — every value is a
+//! hand-computable pure fold):
+//!
+//! ```text
+//! 6        <- Result.map3 (Ok+Ok+Ok)
+//! ERR      <- Result.map3 short-circuit (middle Err)
+//! [1,2,3]  <- Result.combine (all Ok)
+//! ERR      <- Result.combine short-circuit
+//! [2,4,6]  <- Result.traverse (all Ok)
+//! ERR      <- Result.traverse short-circuit
+//! 60       <- Maybe.map3 (Just+Just+Just)
+//! nothing  <- Maybe.map3 short-circuit (middle Nothing)
+//! [1,2,3]  <- Maybe.combine (all Just)
+//! nothing  <- Maybe.combine short-circuit
+//! 10       <- Result.map4 (1+2+3+4)
+//! 15       <- Result.map5 (1+..+5)
+//! ERR      <- Result.map5 short-circuit
+//! done
+//! ```
+//!
+//! ORACLE DIVERGENCE (`oracle_divergence = true`): the Go reference compiler
+//! cannot produce a reference for this exact program — its `Error` module
+//! surface differs (Go requires `import Error`; the Rust port exposes the
+//! `Error.*` constructors as a prelude kernel qualifier, #86) AND
+//! `Result.traverse` is not in the Go reference's `sky-stdlib/Sky/Core/Result.sky`
+//! `exposing` list.  Both are pre-existing, sanctioned divergences; the cached
+//! expected output is skyc's own, per `docs/architecture/divergence-policy.md`.
+//! The load-bearing guarantee this gate enforces is the SEAL: well-typed use of
+//! these kernels emits cargo-buildable Rust that runs with the correct
+//! short-circuit semantics — NOT Go byte-parity.
+//!
+//! Gated on `SKY_E2E=1`; without it the test returns early.  Run:
+//!
+//! ```text
+//! SKY_E2E=1 cargo test -p skyc --test golden_m88_combinators
+//! ```
+
+use std::path::{Path, PathBuf};
+
+mod support;
+
+fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+fn golden_dir(root: &Path, name: &str) -> PathBuf {
+    root.join("tests").join("golden").join(name)
+}
+
+/// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
+/// run it, and assert its stdout matches the cached oracle.  Gated on
+/// `SKY_E2E=1`.
+fn assert_runs_and_matches_oracle(name: &str) {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+
+    let root = repo_root();
+    let dir = golden_dir(&root, name);
+    let entry = dir.join("Main.sky");
+    let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve for E2E");
+    let Ok(runtime) = runtime else { return };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(built.is_ok(), "build failed for {name}: {:?}", built.err());
+
+    let outcome = support::build_and_run_emitted(name, &out);
+    support::assert_go_parity(name, &dir, &outcome.stdout);
+    assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the oracle");
+}
+
+/// The full `Result` / `Maybe` applicative-combinator family, including
+/// short-circuit behaviour on the first `Err` / `Nothing`.
+#[test]
+fn result_maybe_combinators() {
+    assert_runs_and_matches_oracle("m88_result_maybe_combinators");
+}
