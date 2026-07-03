@@ -20,7 +20,7 @@ use crate::code::{
     SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015,
     SKY_P0016, SKY_P0017, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041,
     SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004,
-    SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, Severity,
+    SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_T0015, Severity,
 };
 use crate::span::Span;
 
@@ -455,6 +455,15 @@ pub enum TypeError {
     /// obligation cannot be propagated across the use). `class` names the
     /// super-type; `found` is the offending type. [SKY-T0014]
     SuperTypeUnsatisfied { class: Box<str>, found: Box<TyDoc> },
+    /// A **parameter** pattern (lambda param, function-def head, or `let`
+    /// binder) is **refutable** — it can fail to match some value of its type
+    /// (`\(Just x) ->`, `\1 ->`, `\[a] ->`, `f (Just x) =`). A binding position
+    /// must be irrefutable: it binds *every* value of its type and never
+    /// discriminates. Rejecting it here — before lowering — makes a
+    /// runtime match-failure on a well-typed program unrepresentable (no
+    /// emitted panic arm, no `DoS`/500 surface). The offending sub-pattern's span
+    /// rides on the wrapping [`Diagnostic::Type`]. [SKY-T0015]
+    RefutablePatternParameter,
 }
 
 /// A language feature that the Milestone-0 lowerer does not yet support. Each
@@ -703,6 +712,9 @@ pub enum Hint {
     ConstructorMustBeUppercase,
     /// State that a feature is not supported yet (carries the feature).
     FeatureNotSupported(Feature),
+    /// Explain that a parameter pattern must be irrefutable and suggest binding
+    /// the whole value and using `case` (SKY-T0015).
+    IrrefutableParameterRequired,
 }
 
 /// How confidently a [`Suggestion`] can be applied to source, mirroring rustc's
@@ -788,7 +800,8 @@ impl Diagnostic {
                 | TypeError::NonExhaustiveCase { .. }
                 | TypeError::NoSuchField { .. }
                 | TypeError::CtorPatternArity { .. }
-                | TypeError::SuperTypeUnsatisfied { .. } => Severity::Error,
+                | TypeError::SuperTypeUnsatisfied { .. }
+                | TypeError::RefutablePatternParameter => Severity::Error,
             },
             Self::CompilerBug { .. } => Severity::Bug,
         }
@@ -881,6 +894,7 @@ const fn type_code(msg: &TypeError) -> Code {
         TypeError::NoSuchField { .. } => SKY_T0012,
         TypeError::CtorPatternArity { .. } => SKY_T0013,
         TypeError::SuperTypeUnsatisfied { .. } => SKY_T0014,
+        TypeError::RefutablePatternParameter => SKY_T0015,
     }
 }
 
@@ -1011,6 +1025,9 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
             .iter()
             .map(|c| HelpLine::MissingConstructor(c.clone()))
             .collect(),
+        TypeError::RefutablePatternParameter => {
+            vec![HelpLine::Hint(Hint::IrrefutableParameterRequired)]
+        }
         TypeError::Mismatch
         | TypeError::InfiniteType { .. }
         | TypeError::TooManyParameters { .. }

@@ -38,7 +38,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use sky_canon::ast as canon;
-use sky_diagnostics::{DResult, Diagnostic, TypeError};
+use sky_diagnostics::{DResult, Diagnostic, Span, TypeError};
 use sky_intern::{Interner, Symbol};
 
 /// `where_` tag for any internal-invariant bug raised while checking.
@@ -245,18 +245,72 @@ fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
     }
 }
 
-/// Check every `case` in `module` for exhaustiveness + redundancy.
+/// Locate the outermost **refutable** sub-pattern of a parameter / binder
+/// pattern, returning its span, or `None` if the whole pattern is irrefutable.
+///
+/// This is a pure *blame-locator* — it runs only after
+/// [`canon::Pattern_::is_irrefutable`] has already decided the pattern is
+/// refutable, so it never influences the accept/reject decision (that is the
+/// single shared predicate's job). It merely points the diagnostic at the most
+/// specific offending node: for `(a, Just x)` it blames `Just x`, not the whole
+/// tuple. Mirrors `is_irrefutable`'s structure so the two cannot diverge on
+/// *which* nodes are refutable.
+fn refutable_span(pat: &canon::Pattern) -> Option<Span> {
+    match &pat.value {
+        canon::Pattern_::PVar(_) | canon::Pattern_::PAnything | canon::Pattern_::PRecord(_) => None,
+        canon::Pattern_::PTuple(elems) => elems.iter().find_map(refutable_span),
+        canon::Pattern_::PAlias(inner, _) => refutable_span(inner),
+        canon::Pattern_::PCtor { .. }
+        | canon::Pattern_::PInt(_)
+        | canon::Pattern_::PBool(_)
+        | canon::Pattern_::PChar(_)
+        | canon::Pattern_::PStr(_)
+        | canon::Pattern_::PList(_)
+        | canon::Pattern_::PCons(_, _) => Some(pat.span),
+    }
+}
+
+/// The irrefutability gate for a **binding** position (a lambda / function-def
+/// parameter or a `let` binder). A binding must match *every* value of its
+/// type; a refutable pattern (`Just x`, `1`, `[a]`, `x :: xs`) is rejected here
+/// — before lowering — as SKY-T0015, so a well-typed program can never fail a
+/// pattern match at runtime (no emitted panic arm, no `DoS` surface).
+///
+/// The decision is [`canon::Pattern_::is_irrefutable`] — the ONE predicate the
+/// lowerer also consumes, so the gate and the lowerer's capability set cannot
+/// desync. [`refutable_span`] only refines the blame location.
 ///
 /// # Errors
+/// [`TypeError::RefutablePatternParameter`] (SKY-T0015) when `pat` is refutable.
+fn check_param_irrefutable(pat: &canon::Pattern) -> DResult<()> {
+    if pat.value.is_irrefutable() {
+        return Ok(());
+    }
+    Err(Diagnostic::Type {
+        span: refutable_span(pat).unwrap_or(pat.span),
+        msg: TypeError::RefutablePatternParameter,
+    })
+}
+
+/// Check every `case` in `module` for exhaustiveness + redundancy, and every
+/// **parameter / binder** pattern for irrefutability (SKY-T0015).
+///
+/// # Errors
+/// * [`TypeError::RefutablePatternParameter`] when a param / binder is refutable.
 /// * [`TypeError::RedundantCaseBranch`] when an arm covers no new value.
 /// * [`TypeError::NonExhaustiveCase`] when the arms miss a value.
 /// * [`Diagnostic::CompilerBug`] if a constructor symbol cannot be resolved.
 pub fn check(module: &canon::Module, interner: &mut Interner) -> DResult<()> {
     let sigs = Sigs::build(module, interner)?;
     for def in &module.defs {
-        let body = match def {
-            canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+        let (patterns, body) = match def {
+            canon::Def::Untyped { patterns, body, .. }
+            | canon::Def::Typed { patterns, body, .. } => (patterns, body),
         };
+        // Every function-def head parameter is a binding position.
+        for p in patterns {
+            check_param_irrefutable(p)?;
+        }
         check_expr(body, &sigs, interner)?;
     }
     Ok(())
@@ -295,9 +349,13 @@ fn check_expr(e: &canon::Expr, sigs: &Sigs, interner: &Interner) -> DResult<()> 
             Ok(())
         }
         canon::Expr_::Let(bindings, body) => {
-            // A `let` binder is irrefutable (a name or an irrefutable destructure);
-            // there is no coverage obligation, only the binding bodies to recurse.
+            // A `let` binder is a binding position: it must be irrefutable (a name
+            // or an irrefutable destructure). Assert that invariant here — a
+            // refutable `let (Just x) = …` is SKY-T0015, not a latent runtime
+            // panic. (`let f p = …` desugars to a name binder over a `Lambda`,
+            // whose params are swept by the Lambda arm below.)
             for b in bindings {
+                check_param_irrefutable(&b.pat)?;
                 check_expr(&b.body, sigs, interner)?;
             }
             check_expr(body, sigs, interner)
@@ -325,7 +383,15 @@ fn check_expr(e: &canon::Expr, sigs: &Sigs, interner: &Interner) -> DResult<()> 
             }
             Ok(())
         }
-        canon::Expr_::Lambda(_, body) => check_expr(body, sigs, interner),
+        canon::Expr_::Lambda(params, body) => {
+            // Every lambda parameter is a binding position — sweep each for
+            // irrefutability (SKY-T0015) before recursing into the body. The
+            // pre-existing arm dropped the params entirely.
+            for p in params {
+                check_param_irrefutable(p)?;
+            }
+            check_expr(body, sigs, interner)
+        }
         canon::Expr_::Access(record, _) => check_expr(record, sigs, interner),
         canon::Expr_::Update(base, fields) => {
             check_expr(base, sigs, interner)?;

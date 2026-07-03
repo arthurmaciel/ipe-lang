@@ -69,11 +69,16 @@ pub fn lower(
     const MAX_CALLEE_ARITY: usize = 16;
     let eta_params =
         interner.fresh_symbols("eta_", lower::max_def_arity(m).max(MAX_CALLEE_ARITY))?;
-    // A tuple-destructuring function parameter has no single name; the lowerer
-    // gives each parameter position a synthetic binder from this pool and
-    // prepends a `Destructure` to the body. One per parameter position, sized to
-    // the widest function arity, minted through the same owned `&mut Interner`.
-    let param_binders = interner.fresh_symbols("arg_", lower::max_def_arity(m))?;
+    // A destructuring parameter (tuple / record / alias / wildcard) has no single
+    // source name; the lowerer gives it a synthetic binder from this pool and
+    // (for the destructuring shapes) prepends a `Destructure` to the body. Sized
+    // to the TOTAL number of non-variable param sites across every def head AND
+    // every (possibly nested) lambda, and handed out through a monotonic cursor
+    // so each site gets a GLOBALLY-unique name — a def param and a lambda param
+    // inside its body can never collide on `arg_i` (no reliance on shadowing).
+    // Minted through the same owned `&mut Interner`.
+    let param_binders =
+        interner.fresh_symbols("arg_", lower::count_destructure_param_sites(m))?;
     // The built-in `Maybe` / `Result` types + constructors are Prelude
     // built-ins (no `type` declaration), so the lowerer needs their symbols to
     // seed the variant-set / arity tables it would otherwise read from

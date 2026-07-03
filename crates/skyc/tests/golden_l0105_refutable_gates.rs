@@ -1,0 +1,111 @@
+//! SKY-L0105 refutable parameter patterns (#96) — the negative surface. A
+//! parameter (or `let` binder) is a BINDING position: it must match every value
+//! of its type. A refutable param must therefore be a clean, span-carrying
+//! compile-time error — never a runtime match failure (upstream Sky's
+//! `panic!("non-exhaustive … function argument")` is REJECTED here as a
+//! soundness + `DoS` hole).
+//!
+//! Two fail-closed phases cover the whole refutable class:
+//!
+//! * **SKY-T0015** (the new irrefutability gate, type/exhaustiveness phase) —
+//!   for the shapes that PARSE as a parameter yet are refutable: a constructor
+//!   pattern (`\(Just x) ->`, `f (Just x) =`), a tuple with a refutable element
+//!   (`\(a, Just x) ->`), a cons pattern (`\(x :: xs) ->`). This gate is the one
+//!   this task adds — those params reach the checker, so the checker must reject
+//!   them before lowering.
+//! * **SKY-P0001** (the pre-existing parser grammar) — a bare literal (`\1 ->`)
+//!   or bracket-list (`\[a] ->`) param is not admitted in binding position at
+//!   all, so it fails even earlier. Recorded here so the coverage is honest: the
+//!   refutable class is closed by BOTH gates, and no refutable param reaches
+//!   codegen.
+
+use std::path::{Path, PathBuf};
+
+use skyc::CliError;
+
+fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+/// Build the named golden fixture and assert it surfaces exactly `expected` as a
+/// pipeline diagnostic — never a panic / internal compiler bug. A skip occurs
+/// only when the runtime cannot be resolved.
+fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+    let root = repo_root();
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join(fixture)
+        .join("Main.sky");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+    let built = skyc::build(&entry, &out, &runtime);
+    let got = match &built {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        got,
+        Some(expected),
+        "fixture {fixture}: expected {expected:?}, got build result {built:?}"
+    );
+}
+
+#[test]
+fn ctor_lambda_param_is_sky_t0015() {
+    assert_gate(
+        "l0105_neg_ctor_lambda",
+        "l0105_neg_ctor_lambda_emit",
+        sky_diagnostics::SKY_T0015,
+    );
+}
+
+#[test]
+fn ctor_def_head_param_is_sky_t0015() {
+    assert_gate(
+        "l0105_neg_ctor_def",
+        "l0105_neg_ctor_def_emit",
+        sky_diagnostics::SKY_T0015,
+    );
+}
+
+#[test]
+fn tuple_param_with_refutable_element_is_sky_t0015() {
+    assert_gate(
+        "l0105_neg_nested_tuple",
+        "l0105_neg_nested_tuple_emit",
+        sky_diagnostics::SKY_T0015,
+    );
+}
+
+#[test]
+fn cons_lambda_param_is_sky_t0015() {
+    assert_gate(
+        "l0105_neg_cons_lambda",
+        "l0105_neg_cons_lambda_emit",
+        sky_diagnostics::SKY_T0015,
+    );
+}
+
+#[test]
+fn bare_int_literal_lambda_param_is_parse_rejected() {
+    assert_gate(
+        "l0105_neg_int_lambda",
+        "l0105_neg_int_lambda_emit",
+        sky_diagnostics::SKY_P0001,
+    );
+}
+
+#[test]
+fn bare_list_lambda_param_is_parse_rejected() {
+    assert_gate(
+        "l0105_neg_list_lambda",
+        "l0105_neg_list_lambda_emit",
+        sky_diagnostics::SKY_P0001,
+    );
+}

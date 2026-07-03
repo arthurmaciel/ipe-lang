@@ -438,6 +438,9 @@ fn type_label(msg: &TypeError) -> Option<String> {
         TypeError::SuperTypeUnsatisfied { class, found } => {
             Some(format!("{} is not a {class} type", ty_to_string(found)))
         }
+        TypeError::RefutablePatternParameter => {
+            Some("this parameter pattern can fail to match".to_string())
+        }
         TypeError::Mismatch | TypeError::BudgetExceeded | TypeError::StepBudgetExceeded { .. } => {
             None
         }
@@ -531,6 +534,11 @@ fn hint_text(hint: Hint) -> String {
             "constructor names must start with an uppercase letter".to_string()
         }
         Hint::FeatureNotSupported(f) => feature_label(f).to_string(),
+        Hint::IrrefutableParameterRequired => {
+            "a parameter pattern must be irrefutable; `Just x` can fail to match — \
+             bind the whole value and use `case`"
+                .to_string()
+        }
     }
 }
 

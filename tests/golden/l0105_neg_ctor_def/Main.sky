@@ -1,0 +1,10 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- REFUTABLE def-head param `f (Just x) =`: the same rule holds for a function
+-- head, not just a lambda — one shared irrefutability gate. SKY-T0015.
+f : Maybe Int -> Int
+f (Just x) = x
+
+main =
+    println (String.fromInt (f (Just 1)))

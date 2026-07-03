@@ -12,8 +12,10 @@
 //! * a SINGLE-arm tuple `case` with a refutable constructor element over a
 //!   one-constructor carrier (type-level exhaustive, so it clears SKY-T0010 but
 //!   the lowerer still can't destructure it) → SKY-L0115, and
-//! * a REFUTABLE `let` destructure (`let (Wrap x) = …`) → SKY-L0115, so the
-//!   backend never emits a refutable Rust `let` that rustc would reject.
+//! * a REFUTABLE `let` destructure (`let (Wrap x) = …`) → SKY-T0015, caught at
+//!   the exhaustiveness/irrefutability gate (a `let` binder is a binding
+//!   position: it must be irrefutable), so the backend never emits a refutable
+//!   Rust `let` that rustc would reject.
 //!
 //! (Two arms for the same constructor — once gated as SKY-L0116 — are now
 //! supported: each lowers to its own Rust `match` arm in source order. The
@@ -95,10 +97,10 @@ fn single_arm_refutable_tuple_case_is_sky_l0115() {
 }
 
 #[test]
-fn refutable_let_destructure_is_sky_l0115() {
+fn refutable_let_destructure_is_sky_t0015() {
     assert_gate(
         "m3b2_gate_refutable_let",
         "m3b2_gate_refutable_let_emit",
-        sky_diagnostics::SKY_L0115,
+        sky_diagnostics::SKY_T0015,
     );
 }
