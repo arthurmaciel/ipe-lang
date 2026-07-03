@@ -289,6 +289,27 @@ pub fn string_ends_with(suffix: String, s: String) -> bool {
     s.ends_with(&suffix)
 }
 
+// ── Haystack-first companions (`*In`) ────────────────────────────────────────
+// Sky `containsIn : String -> String -> Bool  -- containsIn haystack needle`.
+// Args arrive in Sky order `(haystack, needle)`, so the runtime signature is
+// haystack-first — the exact opposite operand order of `string_contains`.
+// Defined as a delegation so the single substring check stays in one place.
+pub fn string_contains_in(haystack: String, needle: String) -> bool {
+    string_contains(needle, haystack)
+}
+
+/// Sky `startsWithIn : String -> String -> Bool  -- startsWithIn haystack prefix`.
+/// Haystack-first companion of `startsWith`.
+pub fn string_starts_with_in(haystack: String, prefix: String) -> bool {
+    string_starts_with(prefix, haystack)
+}
+
+/// Sky `endsWithIn : String -> String -> Bool  -- endsWithIn haystack suffix`.
+/// Haystack-first companion of `endsWith`.
+pub fn string_ends_with_in(haystack: String, suffix: String) -> bool {
+    string_ends_with(suffix, haystack)
+}
+
 /// Sky `repeat : Int -> String -> String`. Non-positive `n` returns "".
 pub fn string_repeat(n: i64, s: String) -> String {
     if n <= 0 {

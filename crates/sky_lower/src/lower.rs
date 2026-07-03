@@ -3453,6 +3453,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StringContains
                 | KernelFn::StringStartsWith
                 | KernelFn::StringEndsWith
+                | KernelFn::StringContainsIn
+                | KernelFn::StringStartsWithIn
+                | KernelFn::StringEndsWithIn
                 | KernelFn::StringEqualFold
                 | KernelFn::StringJoin
                 | KernelFn::StringSplit
@@ -3480,6 +3483,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MaybeAndThen
                 | KernelFn::ResultWithDefault
                 | KernelFn::ResultMap
+                | KernelFn::ResultAndThen
+                | KernelFn::ResultMapError
                 | KernelFn::MathMin
                 | KernelFn::MathMax
                 // ── Dict arity-2 ─────────────────────────────────────────────
@@ -3623,6 +3628,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StringSlice
                 | KernelFn::StringPadLeft
                 | KernelFn::StringPadRight
+                | KernelFn::BasicsClamp
                 | KernelFn::ListFoldl
                 | KernelFn::ListFoldr
                 // ── Dict arity-3 ─────────────────────────────────────────────
@@ -3985,6 +3991,9 @@ impl<'a> Lowerer<'a> {
                     ("String", "slice") => Ok(Callee::Kernel(KernelFn::StringSlice)),
                     ("String", "padLeft") => Ok(Callee::Kernel(KernelFn::StringPadLeft)),
                     ("String", "padRight") => Ok(Callee::Kernel(KernelFn::StringPadRight)),
+                    ("String", "containsIn") => Ok(Callee::Kernel(KernelFn::StringContainsIn)),
+                    ("String", "startsWithIn") => Ok(Callee::Kernel(KernelFn::StringStartsWithIn)),
+                    ("String", "endsWithIn") => Ok(Callee::Kernel(KernelFn::StringEndsWithIn)),
                     // ── Char kernels ───────────────────────────────────────
                     ("Char", "isAlpha") => Ok(Callee::Kernel(KernelFn::CharIsAlpha)),
                     ("Char", "isDigit") => Ok(Callee::Kernel(KernelFn::CharIsDigit)),
@@ -4023,6 +4032,7 @@ impl<'a> Lowerer<'a> {
                     ("Basics", "fst") => Ok(Callee::Kernel(KernelFn::BasicsFst)),
                     ("Basics", "snd") => Ok(Callee::Kernel(KernelFn::BasicsSnd)),
                     ("Basics", "modBy") => Ok(Callee::Kernel(KernelFn::BasicsModBy)),
+                    ("Basics", "clamp") => Ok(Callee::Kernel(KernelFn::BasicsClamp)),
                     // ── Maybe kernels ──────────────────────────────────────
                     ("Maybe", "withDefault") => Ok(Callee::Kernel(KernelFn::MaybeWithDefault)),
                     ("Maybe", "map") => Ok(Callee::Kernel(KernelFn::MaybeMap)),
@@ -4030,6 +4040,8 @@ impl<'a> Lowerer<'a> {
                     // ── Result kernels ─────────────────────────────────────
                     ("Result", "withDefault") => Ok(Callee::Kernel(KernelFn::ResultWithDefault)),
                     ("Result", "map") => Ok(Callee::Kernel(KernelFn::ResultMap)),
+                    ("Result", "andThen") => Ok(Callee::Kernel(KernelFn::ResultAndThen)),
+                    ("Result", "mapError") => Ok(Callee::Kernel(KernelFn::ResultMapError)),
                     // ── Math kernels ───────────────────────────────────────
                     // `min` / `max` are polymorphic `a -> a -> a` — lowered to
                     // the runtime's generic compare, NOT through any `Int`

@@ -431,6 +431,20 @@ pub fn sky_result_and_then<E, A, B>(
     }
 }
 
+/// `Result.mapError : (e -> f) -> Result e a -> Result f a`. Container-first in
+/// the runtime (matching `sky_result_map` / `sky_result_and_then`); the emitter
+/// reverses the Sky `(fn, result)` order via `kernel_swaps_first_two`. Maps the
+/// `Err` channel and leaves the `Ok` value untouched — total, no panic path.
+pub fn sky_result_map_error<E, F, A>(
+    r: SkyResult<E, A>,
+    f: impl FnOnce(E) -> F,
+) -> SkyResult<F, A> {
+    match r {
+        SkyResult::Ok(v) => SkyResult::Ok(v),
+        SkyResult::Err(e) => SkyResult::Err(f(e)),
+    }
+}
+
 // ===========================================
 // Maybe / Result default + traverse helpers
 // ===========================================

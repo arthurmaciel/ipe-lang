@@ -119,6 +119,11 @@ const fn kernel_swaps_first_two(k: sky_ir::KernelFn) -> bool {
         KernelFn::MaybeMap
             | KernelFn::MaybeAndThen
             | KernelFn::ResultMap
+            // `Result.andThen f r` / `Result.mapError f r` — Sky passes the
+            // fn first; the runtime `sky_result_and_then(r, f)` /
+            // `sky_result_map_error(r, f)` take the container first.
+            | KernelFn::ResultAndThen
+            | KernelFn::ResultMapError
             // `JsonDec.andThen f decoder` — Sky passes fn first; Rust runtime
             // `decode_and_then(decoder, f)` expects decoder first.
             | KernelFn::JsonDecAndThen
