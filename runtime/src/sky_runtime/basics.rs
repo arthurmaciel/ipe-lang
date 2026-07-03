@@ -45,6 +45,11 @@ pub fn basics_always<A, B>(x: A, _y: B) -> A {
     x
 }
 
+/// Sky `not : Bool -> Bool` — boolean negation.
+pub fn basics_not(b: bool) -> bool {
+    !b
+}
+
 /// Sky `errorToString : a -> String` — universal Sky stringifier.
 /// Used by Sky.Test.debugShow and friends to render any Sky value into
 /// a diagnostic string. Backed by the total `SkyStringify` trait, which

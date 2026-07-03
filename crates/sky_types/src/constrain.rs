@@ -2238,6 +2238,14 @@ impl<'a> Builder<'a> {
             // find : (a -> Bool) -> List a -> Maybe a
             K::ListFind => fun(fun(var(0), bool_ty()), fun(list(var(0)), maybe(var(0)))),
 
+            // ── Basics core Prelude (6 — task #76 slice) ──
+            K::BasicsNot => fun(bool_ty(), bool_ty()),
+            K::BasicsIdentity => fun(var(0), var(0)),
+            K::BasicsAlways => fun(var(0), fun(var(1), var(0))),
+            K::BasicsFst => fun(tuple2(var(0), var(1)), var(0)),
+            K::BasicsSnd => fun(tuple2(var(0), var(1)), var(1)),
+            K::BasicsModBy => fun(int(), fun(int(), int())),
+
             // ── Math (min / max stay on the obligation path — NOT migrated) ──
             // Constants — bare Float values (arity 0).
             K::MathPi | K::MathE | K::MathPhi | K::MathSqrt2 | K::MathInf | K::MathNan => float(),
@@ -3710,6 +3718,13 @@ mod registry_phase_c_tests {
             K::ListAny,
             K::ListAll,
             K::ListFind,
+            // Basics core Prelude (6 — task #76 slice).
+            K::BasicsNot,
+            K::BasicsIdentity,
+            K::BasicsAlways,
+            K::BasicsFst,
+            K::BasicsSnd,
+            K::BasicsModBy,
             // Encoding (6 — task #55a): base64/url/hex text codecs. Encoders
             // `String -> String`, decoders `String -> Result Error String`.
             // Each WAS a `Ty::Var(u32::MAX)` hole (`kernel_ty` has no Encoding
