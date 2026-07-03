@@ -1,0 +1,68 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.String as String
+import Sky.Core.List as List
+import Std.Log exposing (println)
+
+
+-- Non-alphabetical declared order, MIXED types: a mis-order would be a type
+-- error (7 : Int into `apple : String`), so a clean build already proves the
+-- positional-to-field binding.
+type alias Row =
+    { zebra : Int, apple : String }
+
+
+-- SAME-typed fields in a non-obvious order: a mis-order would still type-check
+-- but print the wrong value, so RUNNING this is the decisive order oracle.
+type alias Pair =
+    { first : Int, second : Int }
+
+
+-- Parametric record alias: generalises over `a`.
+type alias Box a =
+    { value : a, tag : String }
+
+
+row : Row
+row =
+    Row 7 "hi"
+
+
+pair : Pair
+pair =
+    Pair 1 2
+
+
+-- Partial application: `Pair 3` is `Int -> Pair`; currying preserves order.
+mkPair : Int -> Pair
+mkPair =
+    Pair 3
+
+
+boxed : Box Int
+boxed =
+    Box 99 "n"
+
+
+-- Bare reference into a HOF: `Box` reified as a first-class function value,
+-- mapped over a list, then each result's `value` read back.
+boxes : List (Box Int)
+boxes =
+    List.map (\n -> Box n "x") [ 10, 20, 30 ]
+
+
+sumValues : Int
+sumValues =
+    List.foldl (\b acc -> acc + b.value) 0 boxes
+
+
+main =
+    let
+        _ = println (String.fromInt row.zebra ++ "/" ++ row.apple)
+        _ = println (String.fromInt pair.first ++ "," ++ String.fromInt pair.second)
+        _ = println (String.fromInt (mkPair 4).second)
+        _ = println (String.fromInt boxed.value ++ boxed.tag)
+        _ = println (String.fromInt sumValues)
+    in
+    println "ok"

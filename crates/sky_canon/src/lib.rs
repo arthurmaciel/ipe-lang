@@ -1765,4 +1765,489 @@ mod tests {
             );
         }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // #82 — record type-alias auto-constructor (SKY-N0001).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Flatten an arrow type into `(arg types…, final result type)`.
+    fn arrow_spine(ty: &ast::Type) -> (Vec<&ast::Type>, &ast::Type) {
+        let mut args = Vec::new();
+        let mut cur = ty;
+        while let ast::Type::Lambda(a, b) = cur {
+            args.push(a.as_ref());
+            cur = b.as_ref();
+        }
+        (args, cur)
+    }
+
+    #[test]
+    fn record_alias_synthesizes_typed_ctor() {
+        // `type alias Profile = { name : String, age : Int }` introduces a value
+        // `Profile : String -> Int -> { name:String, age:Int }`.
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (main)\n\
+             type alias Profile =\n    { name : String, age : Int }\n\n\
+             main = 0\n",
+        );
+        assert!(m.is_some(), "module must canonicalise");
+        let Some(m) = m else { return };
+        let Some(Def::Typed {
+            patterns,
+            body,
+            ty,
+            free_vars,
+            ..
+        }) = find_def(&m, &i, "Profile")
+        else {
+            assert!(false_marker(), "Profile is a synthesized typed def");
+            return;
+        };
+        assert!(free_vars.is_empty(), "monomorphic record: no free vars");
+        // Two params, in declared order.
+        let pnames: Vec<&str> = patterns
+            .iter()
+            .filter_map(|p| match &p.value {
+                Pattern_::PVar(s) => i.resolve(*s),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pnames, vec!["name", "age"], "params in declared order");
+        // Body is a record literal of VarLocal refs in declared order.
+        let Expr_::Record(fields) = &body.value else {
+            assert!(false_marker(), "body is a record literal");
+            return;
+        };
+        let bnames: Vec<&str> = fields.iter().filter_map(|(f, _)| i.resolve(*f)).collect();
+        assert_eq!(bnames, vec!["name", "age"]);
+        for (f, e) in fields {
+            assert!(
+                matches!(&e.value, Expr_::VarLocal(s) if s == f),
+                "each field value is the eponymous local"
+            );
+        }
+        // Arrow: String -> Int -> { name, age }.
+        let (arg_tys, result) = arrow_spine(ty);
+        assert_eq!(arg_tys.len(), 2, "two arrow arguments");
+        assert!(
+            matches!(arg_tys.first(), Some(ast::Type::Con { name, .. }) if i.resolve(*name) == Some("String"))
+        );
+        assert!(
+            matches!(arg_tys.get(1), Some(ast::Type::Con { name, .. }) if i.resolve(*name) == Some("Int"))
+        );
+        let ast::Type::Record(rfields) = result else {
+            assert!(false_marker(), "result is a closed record type");
+            return;
+        };
+        let rnames: Vec<&str> = rfields.iter().filter_map(|(f, _)| i.resolve(*f)).collect();
+        assert_eq!(rnames, vec!["name", "age"], "record fields in declared order");
+    }
+
+    #[test]
+    fn record_alias_ctor_field_order_is_declared_not_alphabetical() {
+        // Non-alphabetical declared order `{ zebra, apple }` must produce the
+        // ctor `zebra -> apple`, NOT alphabetised — the field-order guarantee.
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (main)\n\
+             type alias Row =\n    { zebra : Int, apple : String }\n\n\
+             main = 0\n",
+        );
+        assert!(m.is_some(), "module must canonicalise");
+        let Some(m) = m else { return };
+        let Some(Def::Typed { patterns, ty, .. }) = find_def(&m, &i, "Row") else {
+            assert!(false_marker(), "Row is a synthesized typed def");
+            return;
+        };
+        let pnames: Vec<&str> = patterns
+            .iter()
+            .filter_map(|p| match &p.value {
+                Pattern_::PVar(s) => i.resolve(*s),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pnames, vec!["zebra", "apple"], "declared, not alphabetical");
+        let (arg_tys, _) = arrow_spine(ty);
+        // First arg `zebra : Int`, second `apple : String` — positional binding.
+        assert!(
+            matches!(arg_tys.first(), Some(ast::Type::Con { name, .. }) if i.resolve(*name) == Some("Int")),
+            "first arg type is Int (zebra), got {:?}",
+            arg_tys.first()
+        );
+        assert!(
+            matches!(arg_tys.get(1), Some(ast::Type::Con { name, .. }) if i.resolve(*name) == Some("String")),
+            "second arg type is String (apple), got {:?}",
+            arg_tys.get(1)
+        );
+    }
+
+    #[test]
+    fn record_alias_ctor_resolves_as_a_value() {
+        // Bare use of the alias name as a value resolves to a top-level binding,
+        // not a name error — the SKY-N0001 fix.
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (main)\n\
+             type alias P =\n    { a : Int }\n\n\
+             mk = P\n\
+             main = 0\n",
+        );
+        assert!(m.is_some(), "bare `P` used as a value must resolve");
+        let Some(m) = m else { return };
+        let body = match find_def(&m, &i, "mk") {
+            Some(Def::Untyped { body, .. } | Def::Typed { body, .. }) => Some(&body.value),
+            None => None,
+        };
+        assert!(
+            matches!(body, Some(Expr_::VarTopLevel { name, .. }) if i.resolve(*name) == Some("P")),
+            "`mk = P` resolves P to a top-level ctor, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn parametric_record_alias_generalises_over_used_params() {
+        // `type alias Box a = { value : a, tag : String }` → the ctor generalises
+        // over `a`: `Box : a -> String -> { value:a, tag:String }`. The param
+        // canonicalises to `Type::Var`, never an unknown/opaque `Con`.
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (main)\n\
+             type alias Box a =\n    { value : a, tag : String }\n\n\
+             main = 0\n",
+        );
+        assert!(m.is_some(), "parametric record alias must canonicalise");
+        let Some(m) = m else { return };
+        let Some(Def::Typed { free_vars, ty, .. }) = find_def(&m, &i, "Box") else {
+            assert!(false_marker(), "Box is a synthesized typed def");
+            return;
+        };
+        let fv: Vec<&str> = free_vars.iter().filter_map(|s| i.resolve(*s)).collect();
+        assert_eq!(fv, vec!["a"], "generalises over the used param `a` only");
+        let (arg_tys, _) = arrow_spine(ty);
+        assert!(
+            matches!(arg_tys.first(), Some(ast::Type::Var(s)) if i.resolve(*s) == Some("a")),
+            "first arg is the type variable `a` (not UnknownType/Con), got {:?}",
+            arg_tys.first()
+        );
+    }
+
+    #[test]
+    fn phantom_param_drops_out_of_ctor_scheme() {
+        // A declared-but-unused param must NOT appear in the ctor's free vars.
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (main)\n\
+             type alias Tagged phantom =\n    { label : String }\n\n\
+             main = 0\n",
+        );
+        assert!(m.is_some(), "module must canonicalise");
+        let Some(m) = m else { return };
+        let Some(Def::Typed { free_vars, .. }) = find_def(&m, &i, "Tagged") else {
+            assert!(false_marker(), "Tagged is a synthesized typed def");
+            return;
+        };
+        assert!(
+            free_vars.is_empty(),
+            "phantom param must not generalise the ctor, got {:?}",
+            free_vars
+                .iter()
+                .filter_map(|s| i.resolve(*s))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn non_record_alias_has_no_ctor_and_still_errors_as_value() {
+        // `type alias Count = Int` gets NO value binding; using it as a value
+        // stays an ordinary SKY-N0001 ValueNotFound (Elm parity).
+        let mut i = Interner::new();
+        let ok = canon_ok(
+            &mut i,
+            "module Main exposing (main)\n\
+             type alias Count = Int\n\n\
+             main = 0\n",
+        );
+        assert!(ok.is_some(), "control module canonicalises");
+        if let Some(m) = ok {
+            assert!(
+                find_def(&m, &i, "Count").is_none(),
+                "non-record alias must not synthesize a def"
+            );
+        }
+        // Now use it as a value → ValueNotFound.
+        let err = canon_err(
+            "module Main exposing (main)\n\
+             type alias Count = Int\n\n\
+             main = Count\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::ValueNotFound { .. },
+                    ..
+                })
+            ),
+            "non-record alias used as a value must be ValueNotFound, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn head_alias_to_record_alias_gets_no_ctor() {
+        // `type alias U = P` where P is a record alias: U's SOURCE body is a
+        // TType, not a literal TRecord, so U gets NO constructor (Elm parity).
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (main)\n\
+             type alias P =\n    { a : Int }\n\
+             type alias U = P\n\n\
+             main = 0\n",
+        );
+        assert!(m.is_some(), "module must canonicalise");
+        let Some(m) = m else { return };
+        assert!(
+            find_def(&m, &i, "P").is_some(),
+            "the literal record alias P has a ctor"
+        );
+        assert!(
+            find_def(&m, &i, "U").is_none(),
+            "the head alias U must NOT get a ctor"
+        );
+    }
+
+    #[test]
+    fn record_alias_ctor_colliding_with_a_data_ctor_is_rejected() {
+        // A record alias whose name also names a data constructor would be
+        // silently shadowed (resolve_var consults ctors first). Reject instead.
+        let err = canon_err(
+            "module Main exposing (main)\n\
+             type alias Foo =\n    { x : Int }\n\
+             type Bar = Foo\n\n\
+             main = 0\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::DuplicateValue { .. },
+                    ..
+                })
+            ),
+            "record alias name colliding with a data ctor must be DuplicateValue, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn record_alias_ctor_colliding_with_a_user_value_is_rejected() {
+        // A user top-level value sharing the ctor name is a hard DuplicateValue,
+        // never a silent skip. (Uppercase value names are unusual, but the gate
+        // must hold defensively.)
+        let err = canon_err(
+            "module Main exposing (main)\n\
+             type alias Mk =\n    { x : Int }\n\n\
+             Mk = 0\n\
+             main = 0\n",
+        );
+        // Either the parser rejects an uppercase binding name, or canon rejects
+        // the duplicate — both are acceptable fail-closed outcomes; a SILENT
+        // accept (no error) is not.
+        assert!(
+            err.is_some(),
+            "an uppercase value colliding with a record-alias ctor must be rejected"
+        );
+    }
+
+    #[test]
+    fn function_field_record_alias_has_no_ctor() {
+        // A config-record alias with an ARROW-headed field must NOT synthesize a
+        // constructor — its body would be a record literal with a function field,
+        // which the lowerer rejects (SKY-L0107), and there is no DCE to prune an
+        // unused one. It keeps its pre-#82 behaviour: a type only.
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (main)\n\
+             type alias Cfg =\n    { run : Int -> Int, label : String }\n\n\
+             main = 0\n",
+        );
+        assert!(m.is_some(), "module must canonicalise");
+        let Some(m) = m else { return };
+        assert!(
+            find_def(&m, &i, "Cfg").is_none(),
+            "function-field record alias must not get a constructor"
+        );
+    }
+
+    #[test]
+    fn generic_carrier_field_without_function_still_gets_ctor() {
+        // A field carrying a GENERIC (non-function, non-opaque) argument
+        // (`List a`) is derivable, so the struct-derivability gate keeps its
+        // constructor. This is the control that the recursive
+        // `field_type_nonderivable` predicate does NOT over-gate an ordinary
+        // parametric container — only an embedded arrow (see
+        // `nested_function_in_derive_carrier_has_no_ctor`) or an opaque wrapper
+        // (see `opaque_wrapper_field_record_alias_gets_no_ctor`) blocks synthesis.
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (main)\n\
+             type alias Wrap a =\n    { items : List a, count : Int }\n\n\
+             main = 0\n",
+        );
+        assert!(m.is_some(), "module must canonicalise");
+        let Some(m) = m else { return };
+        assert!(
+            find_def(&m, &i, "Wrap").is_some(),
+            "a record alias with only non-function-embedding fields keeps its ctor"
+        );
+    }
+
+    #[test]
+    fn nested_function_in_derive_carrier_has_no_ctor() {
+        // SEAL FIX (#82). A field whose function is NESTED inside a derive carrier
+        // — `List (Int -> Bool)` (head `Con "List"`, not `Lambda`) — was MISSED by
+        // the earlier head-only gate: a ctor was synthesised, the backend emitted a
+        // `#[derive(Clone, Debug, PartialEq)]` struct over a `Box<dyn Fn>` field,
+        // and skyc exited 0 while cargo failed (the seal violation). The recursive
+        // gate now declines synthesis, so merely NAMING the alias builds clean.
+        let cases = [
+            "type alias T =\n    { xs : List (Int -> Int) }\n",
+            "type alias T =\n    { f : Maybe (Int -> Int) }\n",
+            "type alias T =\n    { p : (Int -> Int, Bool) }\n",
+            "type alias T =\n    { g : Result Error (Int -> Int) }\n",
+            "type alias T =\n    { inner : { h : Int -> Int } }\n",
+        ];
+        for body in cases {
+            let mut i = Interner::new();
+            let src = format!("module Main exposing (main)\n{body}\nmain = 0\n");
+            let m = canon_ok(&mut i, &src);
+            assert!(m.is_some(), "module must canonicalise: {body}");
+            let Some(m) = m else { continue };
+            assert!(
+                find_def(&m, &i, "T").is_none(),
+                "a record alias embedding a nested function must NOT get a ctor: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn opaque_wrapper_field_record_alias_gets_no_ctor() {
+        // ROUND-2 SEAL FIX (#82). An opaque boxed-wrapper in FIELD position
+        // (`Decoder` / `Cmd` / `Sub` / `Task`) is ITSELF non-derivable as a
+        // struct field — its runtime rep (`Box<dyn Fn>` / boxed-thunk enum /
+        // `Pin<Box<dyn Future>>`) impls no Clone/Debug/PartialEq/SkyStringify.
+        // Round-1 synthesised a ctor here, so the backend emitted a
+        // `#[derive(…)]` struct over the wrapper and skyc-0 then cargo-101 (the
+        // seal hole). The struct-derivability gate now DECLINES synthesis, so
+        // merely NAMING the alias builds clean and no dangling ctor value exists.
+        for (decl, field_ty) in [
+            ("Dec", "Decoder Int"),
+            ("Ev", "Cmd Msg"),
+            ("Sb", "Sub Msg"),
+            ("Tk", "Task Error Int"),
+        ] {
+            let mut i = Interner::new();
+            let src = format!(
+                "module Main exposing (main)\n\
+                 type alias {decl} =\n    {{ payload : {field_ty} }}\n\n\
+                 main = 0\n"
+            );
+            let m = canon_ok(&mut i, &src);
+            assert!(m.is_some(), "module must canonicalise: {field_ty}");
+            let Some(m) = m else { continue };
+            // NO constructor Def is synthesised for an opaque-wrapper-field alias.
+            assert!(
+                find_def(&m, &i, decl).is_none(),
+                "an opaque-wrapper-field record alias must NOT get a ctor: {field_ty}"
+            );
+        }
+    }
+
+    #[test]
+    fn function_field_alias_is_not_exported_as_a_value() {
+        // Exports must match synthesis: a gated-out function-field alias exports
+        // its TYPE but NOT a (non-existent) constructor value — otherwise an
+        // importer would inject a dangling binding.
+        let mut i = Interner::new();
+        let src = "module Lib exposing (..)\n\
+                   type alias Cfg =\n    { run : Int -> Int }\n";
+        let Ok(parsed) = sky_parse::parse_module(src, &mut i) else {
+            assert!(false_marker(), "parse");
+            return;
+        };
+        let expected = parsed.name.value.clone();
+        let deps: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        let Ok((_m, exports)) = canonicalise_module(&parsed, &expected, &deps, &mut i) else {
+            assert!(false_marker(), "Lib must canonicalise");
+            return;
+        };
+        let cfg = i.intern("Cfg").expect("intern Cfg");
+        assert!(
+            exports.aliases.contains_key(&cfg),
+            "Cfg is still exported as a type alias"
+        );
+        assert!(
+            !exports.values.contains(&cfg),
+            "Cfg must NOT be exported as a value (no ctor synthesized)"
+        );
+    }
+
+    #[test]
+    fn exposed_record_alias_exports_its_ctor_value() {
+        // `exposing (..)` on a module with a record alias must export the alias
+        // name in BOTH the type namespace (aliases) and the value namespace
+        // (values), so an importer can use it as a constructor.
+        let mut i = Interner::new();
+        let src = "module Lib exposing (..)\n\
+                   type alias Widget =\n    { w : Int, h : Int }\n";
+        let Ok(parsed) = sky_parse::parse_module(src, &mut i) else {
+            assert!(false_marker(), "parse");
+            return;
+        };
+        let expected = parsed.name.value.clone();
+        let deps: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        let Ok((_m, exports)) = canonicalise_module(&parsed, &expected, &deps, &mut i) else {
+            assert!(false_marker(), "Lib must canonicalise");
+            return;
+        };
+        let widget = i.intern("Widget").expect("intern Widget");
+        assert!(
+            exports.aliases.contains_key(&widget),
+            "Widget is exported as a type alias"
+        );
+        assert!(
+            exports.values.contains(&widget),
+            "Widget's auto-constructor is exported as a value"
+        );
+    }
+
+    #[test]
+    fn exposed_record_alias_via_list_exports_its_ctor_value() {
+        // Explicit `exposing (Widget)` (list form) must also export the value.
+        let mut i = Interner::new();
+        let src = "module Lib exposing (Widget)\n\
+                   type alias Widget =\n    { w : Int }\n";
+        let Ok(parsed) = sky_parse::parse_module(src, &mut i) else {
+            assert!(false_marker(), "parse");
+            return;
+        };
+        let expected = parsed.name.value.clone();
+        let deps: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        let Ok((_m, exports)) = canonicalise_module(&parsed, &expected, &deps, &mut i) else {
+            assert!(false_marker(), "Lib must canonicalise");
+            return;
+        };
+        let widget = i.intern("Widget").expect("intern Widget");
+        assert!(
+            exports.values.contains(&widget),
+            "list-exposed record alias must export its ctor value"
+        );
+    }
 }
