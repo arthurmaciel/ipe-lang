@@ -128,9 +128,11 @@ pub fn string_right(n: i64, s: String) -> String {
 /// always does, so neither can express `'g'`'s rule on its own. `'g'` chooses
 /// positional (`%f`) form when the decimal exponent lands in `[-4, 6)` and
 /// exponent (`%e`) form otherwise — the same `eprec = 6` shortest-mode cut Go's
-/// `internal/strconv` `formatDigits` applies. (Go's older public comment said
-/// 21; the shipped implementation we diff against uses 6, and the oracle agrees
-/// — `1e6` prints `1e+06`, `1e5` prints `100000`.) Non-finite values take Go's
+/// `internal/strconv` `formatDigits` applies. Verified against Go 1.26.2
+/// `strconv.FormatFloat(f,'g',-1,64)` == `fmt %v`: `1e6` -> `1e+06`, `1e15` ->
+/// `1e+15`, `999999` -> `999999` (see reference-audit.md item 27 for the oracle
+/// probe). The `../sky` reference uses 21 here, which diverges from the Go
+/// oracle on every `1e6..1e20` value. Non-finite values take Go's
 /// `+Inf` / `-Inf` / `NaN` spellings.
 ///
 /// We obtain the *shortest round-trip* significant digits + scientific exponent
@@ -652,6 +654,15 @@ mod tests {
     #[test]
     fn ff_e5_stays_positional() {
         assert_eq!(string_from_float(1e5), "100000");
+    }
+    #[test]
+    fn ff_go_g_threshold_is_six_not_twentyone() {
+        // Discriminates Go's flat exp>=6 cut from the reference's 21. Oracle:
+        // Go 1.26.2 strconv.FormatFloat(f,'g',-1,64) (see reference-audit.md item 27).
+        assert_eq!(string_from_float(999999.0), "999999"); // exp 5 positional
+        assert_eq!(string_from_float(1000001.0), "1.000001e+06"); // exp 6 scientific
+        assert_eq!(string_from_float(1e15), "1e+15"); // 21 would print 16 zeros
+        assert_eq!(string_from_float(1e20), "1e+20"); // 21 would print 21 digits
     }
     #[test]
     fn ff_many_fraction() {
