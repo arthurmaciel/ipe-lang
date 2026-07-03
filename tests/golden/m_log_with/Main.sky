@@ -1,0 +1,10 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Std.Log as Log
+
+
+main : Task Error ()
+main =
+    Log.infoWith "billing.charge" [ "amount", "42" ]

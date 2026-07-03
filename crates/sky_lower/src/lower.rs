@@ -3489,6 +3489,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListFind
                 | KernelFn::BasicsAlways
                 | KernelFn::BasicsModBy
+                | KernelFn::LogInfoWith
+                | KernelFn::LogDebugWith
+                | KernelFn::LogWarnWith
+                | KernelFn::LogErrorWith
                 | KernelFn::MaybeWithDefault
                 | KernelFn::MaybeMap
                 | KernelFn::MaybeAndThen
@@ -3970,6 +3974,10 @@ impl<'a> Lowerer<'a> {
                     ("Log", "debug") => Ok(Callee::Kernel(KernelFn::LogDebug)),
                     ("Log", "warn") => Ok(Callee::Kernel(KernelFn::LogWarn)),
                     ("Log", "error") => Ok(Callee::Kernel(KernelFn::LogError)),
+                    ("Log", "infoWith") => Ok(Callee::Kernel(KernelFn::LogInfoWith)),
+                    ("Log", "debugWith") => Ok(Callee::Kernel(KernelFn::LogDebugWith)),
+                    ("Log", "warnWith") => Ok(Callee::Kernel(KernelFn::LogWarnWith)),
+                    ("Log", "errorWith") => Ok(Callee::Kernel(KernelFn::LogErrorWith)),
                     // ── String kernels ─────────────────────────────────────
                     ("String", "fromInt") => Ok(Callee::Kernel(KernelFn::StringFromInt)),
                     ("String", "fromFloat") => Ok(Callee::Kernel(KernelFn::StringFromFloat)),
