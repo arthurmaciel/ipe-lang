@@ -1160,6 +1160,11 @@ impl<'a> Builder<'a> {
                     let arg = self.normalize_annotation_ty(from_canon(arg_ty), name.span)?;
                     let arg_var = self.instantiate_rigid(&arg, &mut rigid_vars)?;
                     self.constrain_pattern(&mut local, pat, arg_var)?;
+                    // Record the param pattern's region so the lowerer can read the
+                    // solved param type (record-param field-set completion, SKY-T0015
+                    // path). Cheap + additive; a param span never collides with an
+                    // expression span.
+                    self.regions.insert(pat.span, arg_var);
                     cursor = rest;
                 }
                 let ret_ty = self.normalize_annotation_ty(from_canon(cursor), name.span)?;
@@ -1190,6 +1195,7 @@ impl<'a> Builder<'a> {
                 for pat in patterns {
                     let v = self.flex()?;
                     self.constrain_pattern(&mut local, pat, v)?;
+                    self.regions.insert(pat.span, v);
                     param_vars.push(v);
                 }
                 let body_var = self.constrain_expr(&local, body)?;
@@ -1711,6 +1717,10 @@ impl<'a> Builder<'a> {
         for p in params {
             let v = self.flex()?;
             self.constrain_pattern(&mut lam_local, p, v)?;
+            // Record each lambda param's region so the lowerer can source a
+            // record-param's complete field set from its solved type (one path
+            // shared with the typed-def sites).
+            self.regions.insert(p.span, v);
             param_vars.push(v);
         }
         let mut arrow = self.constrain_expr(&lam_local, body)?;

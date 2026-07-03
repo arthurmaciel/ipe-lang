@@ -1030,6 +1030,72 @@ mod tests {
     }
 
     #[test]
+    fn refutable_ctor_def_head_param_is_rejected_t0015() {
+        // `f (Just x) = x` — a constructor parameter is a refutable binding
+        // position, rejected by the irrefutability gate BEFORE lowering.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   f : Maybe Int -> Int\n\
+                   f (Just x) = x\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::RefutablePatternParameter,
+                    ..
+                })
+            ),
+            "expected RefutablePatternParameter (SKY-T0015), got {r:?}"
+        );
+    }
+
+    #[test]
+    fn refutable_ctor_lambda_param_is_rejected_t0015() {
+        // `\(Just x) -> x` in argument position — the lambda-param sweep must
+        // catch it too (the pre-existing Lambda arm dropped its params).
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   apply : (Maybe Int -> Int) -> Int\n\
+                   apply f = f (Just 1)\n\
+                   main =\n    println (String.fromInt (apply (\\(Just x) -> x)))\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::RefutablePatternParameter,
+                    ..
+                })
+            ),
+            "expected RefutablePatternParameter (SKY-T0015), got {r:?}"
+        );
+    }
+
+    #[test]
+    fn irrefutable_tuple_and_wildcard_params_pass_the_gate() {
+        // `f _ (a, b) = a + b` — a wildcard and a tuple param are both
+        // irrefutable, so the gate lets them through (no false positive).
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   f : Int -> (Int, Int) -> Int\n\
+                   f _ (a, b) = a + b\n\
+                   main =\n    println (String.fromInt (f 9 (1, 2)))\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(r.is_ok(), "irrefutable params must pass the gate, got {r:?}");
+    }
+
+    #[test]
     fn redundant_case_branch_names_constructor() {
         // `Increment` is matched twice; the case is otherwise exhaustive, so the
         // redundancy is the only finding.

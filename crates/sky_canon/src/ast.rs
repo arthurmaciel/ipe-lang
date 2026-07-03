@@ -278,6 +278,45 @@ pub enum Pattern_ {
     PCons(Box<Pattern>, Box<Pattern>),
 }
 
+impl Pattern_ {
+    /// Is this pattern **irrefutable** — does it match *every* value of its
+    /// type, binding names only and never discriminating on a value?
+    ///
+    /// This is the single, purely-**syntactic** contract shared by the
+    /// exhaustiveness gate (which rejects a refutable *parameter* pattern with
+    /// SKY-T0015) and the lowerer (which `bug()`-asserts irrefutability before
+    /// desugaring a param to an irrefutable `Destructure`). Keeping it one
+    /// predicate makes the gate and the lowerer's capability set structurally
+    /// impossible to desync.
+    ///
+    /// Deliberately no type-directed single-constructor leniency: even a
+    /// single-variant ctor param (`\(Wrapper x) ->`) is refutable here, so the
+    /// rule is total and needs no type lookup.
+    ///
+    /// | Variant | irrefutable? |
+    /// |---|---|
+    /// | [`Self::PVar`], [`Self::PAnything`] | `true` |
+    /// | [`Self::PRecord`] | `true` (field-pun; always matches once the record type is fixed) |
+    /// | [`Self::PTuple`] | all elements irrefutable |
+    /// | [`Self::PAlias`] | inner irrefutable |
+    /// | [`Self::PCtor`], [`Self::PInt`], [`Self::PBool`], [`Self::PChar`], [`Self::PStr`], [`Self::PList`], [`Self::PCons`] | `false` |
+    #[must_use]
+    pub fn is_irrefutable(&self) -> bool {
+        match self {
+            Self::PVar(_) | Self::PAnything | Self::PRecord(_) => true,
+            Self::PTuple(elems) => elems.iter().all(|e| e.value.is_irrefutable()),
+            Self::PAlias(inner, _) => inner.value.is_irrefutable(),
+            Self::PCtor { .. }
+            | Self::PInt(_)
+            | Self::PBool(_)
+            | Self::PChar(_)
+            | Self::PStr(_)
+            | Self::PList(_)
+            | Self::PCons(_, _) => false,
+        }
+    }
+}
+
 /// Canonical type (M0 subset). Mirrors `Can.Type` narrowed to arrows, type
 /// variables, and constructor applications.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -303,4 +342,101 @@ pub enum Type {
     /// non-empty. A field type variable participates in the binding's
     /// quantification exactly like one in any other position (M2c).
     Record(Vec<(Symbol, Self)>),
+}
+
+#[cfg(test)]
+mod is_irrefutable_tests {
+    use super::*;
+    use sky_diagnostics::{Located, Span};
+    use sky_intern::Symbol;
+
+    fn sp<T>(v: T) -> Located<T> {
+        Located::new(Span::new(0, 0), v)
+    }
+
+    fn sym(n: u32) -> Symbol {
+        Symbol::from_raw(n)
+    }
+
+    #[test]
+    fn var_and_anything_and_record_are_irrefutable() {
+        assert!(Pattern_::PVar(sym(1)).is_irrefutable());
+        assert!(Pattern_::PAnything.is_irrefutable());
+        assert!(Pattern_::PRecord(vec![sp(sym(1)), sp(sym(2))]).is_irrefutable());
+    }
+
+    #[test]
+    fn literals_and_ctor_and_list_and_cons_are_refutable() {
+        assert!(!Pattern_::PInt(0).is_irrefutable());
+        assert!(!Pattern_::PBool(true).is_irrefutable());
+        assert!(!Pattern_::PChar("a".into()).is_irrefutable());
+        assert!(!Pattern_::PStr("hi".into()).is_irrefutable());
+        assert!(!Pattern_::PList(vec![]).is_irrefutable());
+        assert!(
+            !Pattern_::PCons(
+                Box::new(sp(Pattern_::PVar(sym(1)))),
+                Box::new(sp(Pattern_::PVar(sym(2)))),
+            )
+            .is_irrefutable()
+        );
+        assert!(
+            !Pattern_::PCtor {
+                home: vec![],
+                type_name: sym(1),
+                name: sym(2),
+                index: 0,
+                args: vec![],
+            }
+            .is_irrefutable()
+        );
+    }
+
+    #[test]
+    fn tuple_is_irrefutable_iff_every_element_is() {
+        let all_binders =
+            Pattern_::PTuple(vec![sp(Pattern_::PVar(sym(1))), sp(Pattern_::PAnything)]);
+        assert!(all_binders.is_irrefutable());
+
+        let with_literal =
+            Pattern_::PTuple(vec![sp(Pattern_::PVar(sym(1))), sp(Pattern_::PInt(0))]);
+        assert!(!with_literal.is_irrefutable());
+
+        // Nested tuple: refutability propagates from the leaf.
+        let nested_refutable = Pattern_::PTuple(vec![
+            sp(Pattern_::PVar(sym(1))),
+            sp(Pattern_::PTuple(vec![
+                sp(Pattern_::PAnything),
+                sp(Pattern_::PBool(false)),
+            ])),
+        ]);
+        assert!(!nested_refutable.is_irrefutable());
+    }
+
+    #[test]
+    fn alias_follows_its_inner_pattern() {
+        let over_var = Pattern_::PAlias(Box::new(sp(Pattern_::PVar(sym(1)))), sp(sym(2)));
+        assert!(over_var.is_irrefutable());
+
+        let over_ctor = Pattern_::PAlias(
+            Box::new(sp(Pattern_::PCtor {
+                home: vec![],
+                type_name: sym(1),
+                name: sym(2),
+                index: 0,
+                args: vec![],
+            })),
+            sp(sym(3)),
+        );
+        assert!(!over_ctor.is_irrefutable());
+
+        // Alias over an all-binder tuple stays irrefutable.
+        let over_tuple = Pattern_::PAlias(
+            Box::new(sp(Pattern_::PTuple(vec![
+                sp(Pattern_::PVar(sym(1))),
+                sp(Pattern_::PVar(sym(2))),
+            ]))),
+            sp(sym(3)),
+        );
+        assert!(over_tuple.is_irrefutable());
+    }
 }

@@ -2298,13 +2298,16 @@ pub fn emit_expr_at(
         } => {
             // An irrefutable destructuring binding renders as a parenthesised
             // Rust block, exactly like `Let`, but with a pattern binder:
-            // `({ let <binder> = <value>; <body> })`. The binder is irrefutable
-            // (the lowerer guarantees it — a tuple of var / wildcard binders, or
-            // a bare var / wildcard), so the `let` is exhaustive Rust.
-            let binder = render_pat(ctx, binder)?;
+            // `({ <binding stmts> <body> })`. The binder is irrefutable (the
+            // lowerer guarantees it — vars / wildcards / tuples / aliases / a
+            // top-level record), so the `let`s are exhaustive Rust.
+            // `emit_binding_stmts` renders a bare binder as the single flat
+            // `let <pat> = <value>;` and an aliased binder as the clone-split
+            // sequence that closes the by-value partial-move (E0382) hole.
             let value = emit_expr_at(ctx, value, indent, child, generics)?;
+            let stmts = emit_binding_stmts(ctx, binder, &value)?;
             let body = emit_expr_at(ctx, body, indent, child, generics)?;
-            Ok(format!("({{ let {binder} = {value}; {body} }})"))
+            Ok(format!("({{ {} {body} }})", stmts.join(" ")))
         }
         Expr::If { cond, then_, else_ } => {
             // Parenthesised so the whole `if`/`else` is a single expression
@@ -2950,6 +2953,16 @@ fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
         Pat::Str(s) => Ok(format!("{s:?}")),
         // `inner as name` → Rust binding-with-subpattern `name @ <inner>`. The
         // inner sub-pattern recurses through this same total renderer.
+        //
+        // This spelling is correct ONLY in a by-REF / refutable MATCH-ARM
+        // position, where default binding modes make the sub-bindings borrows
+        // so no move occurs. A by-VALUE irrefutable binding (`Expr::Destructure`
+        // — the desugaring of a `let`, a single-arm product `case`, and a #96
+        // function/lambda parameter pattern) must NOT reach this arm: `name @
+        // inner` would move BOTH the whole (`name`) and each sub-binding, which
+        // is a partial move (E0382) for any non-`Copy` payload. Those sites go
+        // through `emit_binding_stmts`, which intercepts every alias — at any
+        // nesting depth — before it can reach this renderer.
         Pat::Alias(inner, name) => {
             let name = ctx.emit_ident(*name)?;
             let inner = render_pat(ctx, inner)?;
@@ -2999,6 +3012,124 @@ fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
                 None => Ok(format!("[{}]", parts.join(", "))),
             }
         }
+    }
+}
+
+/// Does this irrefutable binder carry an `as`-alias anywhere in its shape?
+///
+/// A by-VALUE binding of an alias cannot use Rust's `name @ inner` spelling
+/// (it moves the whole AND the sub-bindings — a partial move / `E0382` for any
+/// non-`Copy` payload), so [`emit_binding_stmts`] takes the clone-splitting
+/// path whenever this returns `true`. This walks exactly the shapes the
+/// destructure-binder grammar admits — variable, wildcard, tuple, alias, and a
+/// top-level record whose fields are only variables / wildcards. A record field
+/// therefore never carries an alias (the lowerer forbids it — SKY-L0112), and a
+/// constructor / slice / literal never appears in an irrefutable binder, so
+/// those return `false`. The predicate and [`emit_binding_stmts`] special-case
+/// the SAME two shapes (`Alias`, `Tuple`); any disagreement fails closed there.
+fn pat_contains_alias(pat: &Pat) -> bool {
+    match pat {
+        Pat::Alias(..) => true,
+        Pat::Tuple(elems) => elems.iter().any(pat_contains_alias),
+        Pat::Var(_)
+        | Pat::Wildcard
+        | Pat::Int(_)
+        | Pat::Bool(_)
+        | Pat::Char(_)
+        | Pat::Str(_)
+        | Pat::Ctor { .. }
+        | Pat::Record(_)
+        | Pat::Slice { .. } => false,
+    }
+}
+
+/// Emit the Rust `let` statement sequence for an irrefutable destructuring
+/// binding `<binder> = <value>` (WITHOUT the trailing body). Shared by both
+/// `Expr::Destructure` emit sites (value-context and tail-context), which is the
+/// desugaring of a `let` destructure, a single-arm product `case`, and a #96
+/// function / lambda parameter pattern.
+///
+/// The seal fix lives here: in a by-VALUE binding position an `as`-alias must
+/// NOT render as `name @ inner`. That binds BOTH the whole (`name`) and the
+/// sub-bindings by move, a partial move (`E0382`) for any non-`Copy` payload
+/// (`\((a, b) as whole) -> …` over `(String, String)` was `skyc`-0 then
+/// `cargo`-101). Instead the whole is bound first and the inner shape is
+/// destructured from a CLONE:
+///
+/// ```ignore
+/// let whole = <value>;
+/// let (a, b) = whole.clone();
+/// ```
+///
+/// A destructure-position value is `Clone` — the #87/#93 derive-seal already
+/// rejected any non-`Clone` payload upstream — so the clone always resolves.
+/// When the binder carries NO alias the fast path emits the single flat
+/// `let <pat> = <value>;`, byte-identical to the pre-fix emission and clone-
+/// free. Aliases nested inside tuples (`let (x, (a, b) as inner) = …`) are
+/// handled at any depth: each tuple element binds to a fresh, uniquely-numbered
+/// temporary, so a nested alias clones from its OWN temp and never shares a move
+/// with a sibling binder.
+fn emit_binding_stmts(ctx: &EmitCtx, binder: &Pat, value: &str) -> DResult<Vec<String>> {
+    let mut out = Vec::new();
+    let mut counter: usize = 0;
+    push_binding_stmts(ctx, binder, value, &mut counter, &mut out)?;
+    Ok(out)
+}
+
+fn push_binding_stmts(
+    ctx: &EmitCtx,
+    pat: &Pat,
+    src: &str,
+    counter: &mut usize,
+    out: &mut Vec<String>,
+) -> DResult<()> {
+    // Fast path: an alias-free binder binds every name via a single flat,
+    // move-only `let <pat> = <src>;` — no clone, byte-identical to pre-fix.
+    if !pat_contains_alias(pat) {
+        let rendered = render_pat(ctx, pat)?;
+        out.push(format!("let {rendered} = {src};"));
+        return Ok(());
+    }
+    match pat {
+        // `inner as name`: bind the whole first, then destructure the inner
+        // shape from a CLONE so the whole binding and the sub-bindings never
+        // both move the same value.
+        Pat::Alias(inner, name) => {
+            let name = ctx.emit_ident(*name)?;
+            out.push(format!("let {name} = {src};"));
+            push_binding_stmts(ctx, inner, &format!("{name}.clone()"), counter, out)
+        }
+        // A tuple carrying an alias in some element: bind each element to a
+        // fresh, uniquely-numbered temp (a plain move-only destructure), then
+        // recurse per element. The unique counter guarantees a nested aliased
+        // tuple never re-uses an outer temp name.
+        Pat::Tuple(elems) => {
+            let base = *counter;
+            *counter += elems.len();
+            let temps: Vec<String> = (0..elems.len())
+                .map(|i| format!("__sky_bind_{}", base + i))
+                .collect();
+            out.push(format!("let ({}) = {src};", temps.join(", ")));
+            for (elem, temp) in elems.iter().zip(&temps) {
+                push_binding_stmts(ctx, elem, temp, counter, out)?;
+            }
+            Ok(())
+        }
+        // No other binder shape carries an alias (see [`pat_contains_alias`]).
+        // If the predicate and this match ever disagree, fail closed rather
+        // than silently emit a moving `name @ inner`.
+        Pat::Var(_)
+        | Pat::Wildcard
+        | Pat::Int(_)
+        | Pat::Bool(_)
+        | Pat::Char(_)
+        | Pat::Str(_)
+        | Pat::Ctor { .. }
+        | Pat::Record(_)
+        | Pat::Slice { .. } => Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::push_binding_stmts",
+            detail: "an aliased binder resolved to a non-alias, non-tuple shape".to_owned(),
+        }),
     }
 }
 
@@ -3192,10 +3323,15 @@ fn emit_expr_tail(
             value,
             body,
         } => {
-            let bnd = render_pat(ctx, binder)?;
             let v = emit_expr_at(ctx, value, indent, child, generics)?;
+            let stmts = emit_binding_stmts(ctx, binder, &v)?;
             let b = emit_expr_tail(ctx, body, indent, child, generics, loop_params)?;
-            Ok(format!("{pad}let {bnd} = {v};\n{b}"))
+            let joined = stmts
+                .iter()
+                .map(|s| format!("{pad}{s}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(format!("{joined}\n{b}"))
         }
         // The jump: temporaries-first reassignment + `continue`. Reading EVERY
         // next-iteration argument into a fresh `__tco_<i>` temp BEFORE any

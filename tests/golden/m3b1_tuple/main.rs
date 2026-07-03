@@ -238,8 +238,8 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 pub fn main_fst<T1, T2>(arg_0: (T1, T2)) -> T1 {
     ({ let (a, b) = arg_0; a })
 }
-pub fn main_snd<T1, T2>(arg_0: (T1, T2)) -> T2 {
-    ({ let (a, b) = arg_0; b })
+pub fn main_snd<T1, T2>(arg_1: (T1, T2)) -> T2 {
+    ({ let (a, b) = arg_1; b })
 }
 pub fn main_pair_sum() -> i64 {
     ({ let (a, b) = (1, 2); (a + b) })

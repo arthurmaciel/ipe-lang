@@ -28,6 +28,16 @@ type Value = JsonVal;
 // USER TYPES
 // ===========================================
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecXY {
+    x: i64,
+    y: i64,
+}
+impl SkyStringify for RecXY {
+    fn sky_show(&self) -> String {
+        format!("{{{} {}}}", (&sky_runtime::stringify::Wrap(&self.x)).dispatch(), (&sky_runtime::stringify::Wrap(&self.y)).dispatch())
+    }
+}
 
 type SkyError = String;
 pub fn str_err(s: &str) -> SkyError {
@@ -235,11 +245,48 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     sky_runtime::http_client::http_parse_query(raw)
 }
 
-pub fn main_combine(pair: (i64, i64)) -> i64 {
-    ({ let whole = pair; let (a, b) = whole.clone(); ({ let (x, y) = whole; ((a + b) + (x - y)) }) })
+pub fn main_apply_i(f: Box<dyn Fn(i64) -> i64 + Send + 'static>, x: i64) -> i64 {
+    (f)(x)
+}
+pub fn main_apply_p(f: Box<dyn Fn((i64, i64)) -> i64 + Send + 'static>, p: (i64, i64)) -> i64 {
+    (f)(p)
+}
+pub fn main_apply_r(f: Box<dyn Fn(RecXY) -> i64 + Send + 'static>, r: RecXY) -> i64 {
+    (f)(r)
+}
+pub fn main_apply_m(f: Box<dyn Fn(i64, i64, (i64, i64)) -> i64 + Send + 'static>) -> i64 {
+    (f)(100, 3, (4, 5))
+}
+pub fn main_ignore_arg(arg_0: i64) -> i64 {
+    7
+}
+pub fn main_sum_pair(arg_1: (i64, i64)) -> i64 {
+    ({ let (a, b) = arg_1; (a + b) })
+}
+pub fn main_get_y(arg_2: RecXY) -> i64 {
+    ({ let RecXY { x: _, y, .. } = arg_2; y })
+}
+pub fn main_first_of_alias(arg_3: (i64, i64)) -> i64 {
+    ({ let whole = arg_3; let (a, b) = whole.clone(); a })
+}
+pub fn main_countdown(arg_4: (i64, i64)) -> i64 {
+    let mut arg_4 = arg_4;
+    loop {
+        let (n, acc) = arg_4;
+        match n {
+            0 => {
+                return acc;
+            }
+            _ => {
+                let __tco_0 = ((n - 1), (acc + n));
+                arg_4 = __tco_0;
+                continue;
+            }
+        }
+    }
 }
 pub fn sky_main() -> SkyTask<()> {
-    log_println(string_from_int(main_combine((10, 3))))
+    log_println(string_from_int(((((((((main_apply_i(Box::new(move |arg_5: i64| -> i64 { 42 }), 0) + main_apply_p(Box::new(move |arg_6: (i64, i64)| -> i64 { ({ let (a, b) = arg_6; (a + b) }) }), (1, 2))) + main_apply_r(Box::new(move |arg_7: RecXY| -> i64 { ({ let RecXY { x, y: _, .. } = arg_7; x }) }), RecXY { x: 10, y: 5 })) + main_apply_m(Box::new(move |arg_8: i64, x: i64, arg_9: (i64, i64)| -> i64 { ({ let (a, b) = arg_9; ((x + a) + b) }) }))) + main_ignore_arg(99)) + main_sum_pair((4, 5))) + main_get_y(RecXY { x: 1, y: 8 })) + main_first_of_alias((6, 7))) + main_countdown((5, 0)))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
