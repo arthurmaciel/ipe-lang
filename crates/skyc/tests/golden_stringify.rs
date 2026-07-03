@@ -59,8 +59,10 @@ fn log_info_with_stringify_attrs_compiles() {
     let entry = golden_dir(&root, "m_log_with").join("Main.sky");
     let out = std::env::temp_dir().join("skyc_m_log_with_e2e");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
-        panic!("runtime must resolve");
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve");
+    let Ok(runtime) = runtime else {
+        return;
     };
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
@@ -79,8 +81,10 @@ fn tostring_on_function_is_rejected_at_typecheck() {
     let entry = golden_dir(&root, "m_tostring_fn_rejected").join("Main.sky");
     let out = std::env::temp_dir().join("skyc_m_tostring_fn_rejected_e2e");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
-        panic!("runtime must resolve");
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve");
+    let Ok(runtime) = runtime else {
+        return;
     };
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
