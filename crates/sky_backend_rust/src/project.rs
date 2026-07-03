@@ -21,6 +21,7 @@ use sky_diagnostics::{DResult, Diagnostic};
 use sky_ir::{Program, TypeDef};
 
 use crate::EmitCtx;
+use crate::crate_specs;
 use crate::emit_expr::emit_func;
 use crate::emit_types::{emit_enum, emit_record_struct};
 use crate::preamble::{epilogue, preamble};
@@ -384,8 +385,14 @@ fn db_cargo_toml() -> DResult<String> {
     // The sqlx line is appended right before the dev/release profile sections.
     // Anchoring on `[profile.dev]` is stable (always present in the template).
     const PROFILE_ANCHOR: &str = "[profile.dev]";
-    const SQLX_LINE: &str =
-        "sqlx = { version = \"0.8\", features = [\"runtime-tokio-rustls\", \"sqlite\"] }\n\n";
+    // Version + crate name sourced from the SSOT (`crate_specs`); the feature
+    // list stays inline (it depends on usage). Byte-identical to the prior
+    // literal.
+    let sqlx_line = format!(
+        "{} = {{ version = \"{}\", features = [\"runtime-tokio-rustls\", \"sqlite\"] }}\n\n",
+        crate_specs::SQLX.name,
+        crate_specs::SQLX.version,
+    );
 
     let step1 = CARGO_TOML.replacen(DEFAULT_LINE, DEFAULT_LINE_DB, 1);
     if step1 == CARGO_TOML {
@@ -400,9 +407,9 @@ fn db_cargo_toml() -> DResult<String> {
             where_: "sky_backend_rust::project::db_cargo_toml",
             detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
         })?;
-    let mut result = String::with_capacity(step1.len() + SQLX_LINE.len());
+    let mut result = String::with_capacity(step1.len() + sqlx_line.len());
     result.push_str(step1.get(..anchor_pos).unwrap_or(""));
-    result.push_str(SQLX_LINE);
+    result.push_str(&sqlx_line);
     result.push_str(step1.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }
@@ -427,12 +434,28 @@ fn server_cargo_toml(base: &str) -> DResult<String> {
     const DEFAULT_PREFIX: &str = "default = [";
     const DB_FEATURE: &str = "db = []";
     const DB_SERVER_FEATURE: &str = "db = []\nserver = []";
-    const TOKIO_TIME: &str =
-        r#"tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }"#;
-    const TOKIO_NET_SYNC: &str = r#"tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "net", "sync"] }"#;
     const PROFILE_ANCHOR: &str = "[profile.dev]";
-    const SERVER_DEPS: &str = "axum = { version = \"0.7\", features = [\"ws\"] }\n\
-         tower-http = { version = \"0.5\", features = [\"fs\", \"catch-panic\"] }\n\n";
+    // tokio version + name from the SSOT; the two feature-list forms (the
+    // replacen anchor and its net+sync successor) share the one version so the
+    // anchor and the golden base manifest cannot skew independently.
+    let tokio_time = format!(
+        "{} = {{ version = \"{}\", features = [\"rt\", \"rt-multi-thread\", \"macros\", \"time\"] }}",
+        crate_specs::TOKIO.name,
+        crate_specs::TOKIO.version,
+    );
+    let tokio_net_sync = format!(
+        "{} = {{ version = \"{}\", features = [\"rt\", \"rt-multi-thread\", \"macros\", \"time\", \"net\", \"sync\"] }}",
+        crate_specs::TOKIO.name,
+        crate_specs::TOKIO.version,
+    );
+    let server_deps = format!(
+        "{} = {{ version = \"{}\", features = [\"ws\"] }}\n\
+         {} = {{ version = \"{}\", features = [\"fs\", \"catch-panic\"] }}\n\n",
+        crate_specs::AXUM.name,
+        crate_specs::AXUM.version,
+        crate_specs::TOWER_HTTP.name,
+        crate_specs::TOWER_HTTP.version,
+    );
 
     // Step 1a — insert `"server"` as the LAST element of the `default = [...]`
     // feature list, immediately before its closing `]`.
@@ -480,11 +503,11 @@ fn server_cargo_toml(base: &str) -> DResult<String> {
     }
 
     // Step 2 — extend the tokio dependency line with "net" and "sync".
-    let step2 = step1.replacen(TOKIO_TIME, TOKIO_NET_SYNC, 1);
+    let step2 = step1.replacen(&tokio_time, &tokio_net_sync, 1);
     if step2 == step1 {
         return Err(Diagnostic::CompilerBug {
             where_: "sky_backend_rust::project::server_cargo_toml",
-            detail: format!("Cargo.toml anchor {TOKIO_TIME:?} not found — golden drifted"),
+            detail: format!("Cargo.toml anchor {tokio_time:?} not found — golden drifted"),
         });
     }
 
@@ -495,9 +518,9 @@ fn server_cargo_toml(base: &str) -> DResult<String> {
             where_: "sky_backend_rust::project::server_cargo_toml",
             detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
         })?;
-    let mut result = String::with_capacity(step2.len() + SERVER_DEPS.len());
+    let mut result = String::with_capacity(step2.len() + server_deps.len());
     result.push_str(step2.get(..anchor_pos).unwrap_or(""));
-    result.push_str(SERVER_DEPS);
+    result.push_str(&server_deps);
     result.push_str(step2.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }
@@ -534,11 +557,20 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
     // feature gate; the emitted project vendors the runtime source directly, so
     // they must appear as explicit `[dependencies]` entries.
     // `libc` is pulled by the runtime's `live` console-proxy (`libc::prctl`).
-    const LIVE_DEPS: &str = "async-trait = \"0.1\"\nserde_urlencoded = \"0.7\"\nlibc = \"0.2\"\n\n";
     // The `live` runtime mainline uses `tokio::signal` + `tokio::process`; the base
     // golden emits `net`+`sync` for the HTTP server, so add the two missing features.
     const TOKIO_NET_SYNC_FEATURES: &str = "\"time\", \"net\", \"sync\"]";
     const TOKIO_LIVE_FEATURES: &str = "\"time\", \"net\", \"sync\", \"signal\", \"process\"]";
+    // Versions + names from the SSOT; these three are bare `name = "ver"` deps.
+    let live_deps = format!(
+        "{} = \"{}\"\n{} = \"{}\"\n{} = \"{}\"\n\n",
+        crate_specs::ASYNC_TRAIT.name,
+        crate_specs::ASYNC_TRAIT.version,
+        crate_specs::SERDE_URLENCODED.name,
+        crate_specs::SERDE_URLENCODED.version,
+        crate_specs::LIBC.name,
+        crate_specs::LIBC.version,
+    );
 
     // Step 1 — promote the `live` feature.
     let pfx = base
@@ -584,9 +616,9 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
             where_: "sky_backend_rust::project::live_cargo_toml",
             detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
         })?;
-    let mut result = String::with_capacity(step1.len() + LIVE_DEPS.len());
+    let mut result = String::with_capacity(step1.len() + live_deps.len());
     result.push_str(step1.get(..anchor_pos).unwrap_or(""));
-    result.push_str(LIVE_DEPS);
+    result.push_str(&live_deps);
     result.push_str(step1.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }
@@ -613,7 +645,10 @@ fn tui_cargo_toml(base: &str) -> DResult<String> {
     // All anchor consts must precede the first `let` statement.
     const DEFAULT_PREFIX: &str = "default = [";
     const PROFILE_ANCHOR: &str = "[profile.dev]";
-    const TUI_DEPS: &str = "crossterm = \"0.28\"\nunicode-width = \"0.1\"\n\n";
+    // Versions + names from the SSOT. `tui_deps` are bare `name = "ver"` lines;
+    // the two tokio forms (the replacen anchor and its sync successor) share the
+    // one SSOT version so the anchor cannot skew from the golden base manifest.
+    //
     // The tui runtime uses `tokio::sync::mpsc`; add `"sync"` when it is not
     // yet present.  The base golden has only `"time"` in the tokio feature list;
     // server_cargo_toml adds `"net", "sync"`; live_cargo_toml extends to include
@@ -624,9 +659,23 @@ fn tui_cargo_toml(base: &str) -> DResult<String> {
     //
     // Three anchors: non-server base, server-only (no live), live (superset).
     // We check for the presence of `"sync"` and insert it only if absent.
-    const TOKIO_TIME_ONLY: &str =
-        r#"tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }"#;
-    const TOKIO_TIME_SYNC: &str = r#"tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }"#;
+    let tui_deps = format!(
+        "{} = \"{}\"\n{} = \"{}\"\n\n",
+        crate_specs::CROSSTERM.name,
+        crate_specs::CROSSTERM.version,
+        crate_specs::UNICODE_WIDTH.name,
+        crate_specs::UNICODE_WIDTH.version,
+    );
+    let tokio_time_only = format!(
+        "{} = {{ version = \"{}\", features = [\"rt\", \"rt-multi-thread\", \"macros\", \"time\"] }}",
+        crate_specs::TOKIO.name,
+        crate_specs::TOKIO.version,
+    );
+    let tokio_time_sync = format!(
+        "{} = {{ version = \"{}\", features = [\"rt\", \"rt-multi-thread\", \"macros\", \"time\", \"sync\"] }}",
+        crate_specs::TOKIO.name,
+        crate_specs::TOKIO.version,
+    );
 
     // Step 1 — promote the `tui` feature (generic closing-`]` anchor, same
     // strategy as server_cargo_toml / live_cargo_toml).
@@ -661,12 +710,12 @@ fn tui_cargo_toml(base: &str) -> DResult<String> {
     } else {
         // The only tokio line that can lack `"sync"` on a valid manifest is
         // the non-server, non-live base form.  Fail-loud if the anchor drifted.
-        let replaced = step1.replacen(TOKIO_TIME_ONLY, TOKIO_TIME_SYNC, 1);
+        let replaced = step1.replacen(&tokio_time_only, &tokio_time_sync, 1);
         if replaced == step1 {
             return Err(Diagnostic::CompilerBug {
                 where_: "sky_backend_rust::project::tui_cargo_toml",
                 detail: format!(
-                    "tokio anchor {TOKIO_TIME_ONLY:?} not found and no \"sync\" present — \
+                    "tokio anchor {tokio_time_only:?} not found and no \"sync\" present — \
                      golden drifted; tui runtime requires tokio sync"
                 ),
             });
@@ -681,9 +730,9 @@ fn tui_cargo_toml(base: &str) -> DResult<String> {
             where_: "sky_backend_rust::project::tui_cargo_toml",
             detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
         })?;
-    let mut result = String::with_capacity(step2.len() + TUI_DEPS.len());
+    let mut result = String::with_capacity(step2.len() + tui_deps.len());
     result.push_str(step2.get(..anchor_pos).unwrap_or(""));
-    result.push_str(TUI_DEPS);
+    result.push_str(&tui_deps);
     result.push_str(step2.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }
@@ -715,8 +764,15 @@ fn webview_cargo_toml(base: &str) -> DResult<String> {
     const WEBVIEW_EMPTY: &str = "webview = []";
     const WEBVIEW_WITH_DEPS: &str = r#"webview = ["dep:wry", "dep:tao"]"#;
     // wry + tao are declared optional so the stub path (no `webview` feature)
-    // never downloads or links them.
-    const WEBVIEW_NATIVE_DEPS: &str = "wry = { version = \"0.55\", optional = true }\ntao = { version = \"0.35\", optional = true }\n\n";
+    // never downloads or links them. Versions + names from the SSOT; the
+    // `optional = true` gate stays inline.
+    let webview_native_deps = format!(
+        "{} = {{ version = \"{}\", optional = true }}\n{} = {{ version = \"{}\", optional = true }}\n\n",
+        crate_specs::WRY.name,
+        crate_specs::WRY.version,
+        crate_specs::TAO.name,
+        crate_specs::TAO.version,
+    );
 
     // Step 1 — promote `webview` to the default feature list (generic
     // closing-`]` anchor, same strategy as server/live/tui_cargo_toml).
@@ -762,9 +818,9 @@ fn webview_cargo_toml(base: &str) -> DResult<String> {
             where_: "sky_backend_rust::project::webview_cargo_toml",
             detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
         })?;
-    let mut result = String::with_capacity(step2.len() + WEBVIEW_NATIVE_DEPS.len());
+    let mut result = String::with_capacity(step2.len() + webview_native_deps.len());
     result.push_str(step2.get(..anchor_pos).unwrap_or(""));
-    result.push_str(WEBVIEW_NATIVE_DEPS);
+    result.push_str(&webview_native_deps);
     result.push_str(step2.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }
@@ -839,6 +895,7 @@ impl {sf} {{
 #[cfg(test)]
 mod tests {
     use super::{CARGO_TOML, db_cargo_toml, server_cargo_toml};
+    use crate::crate_specs;
 
     /// Helper: extract the `default = [...]` line from a manifest string.
     fn default_line(manifest: &str) -> &str {
@@ -913,5 +970,30 @@ mod tests {
         // must both be present.
         assert!(out.contains("sqlx"), "sqlx dep must be present: {out}");
         assert!(out.contains("axum"), "axum dep must be present: {out}");
+    }
+
+    /// The emitted manifests must carry the SSOT versions — proves the surgery
+    /// reads the table, not a stale literal. Closes the loop the drift test
+    /// leaves open (SSOT ↔ manifests): this is SSOT ↔ emitted output.
+    #[test]
+    fn emitted_manifests_use_ssot_versions() {
+        let db = db_cargo_toml().expect("db_cargo_toml");
+        assert!(
+            db.contains(&format!(
+                "{} = {{ version = \"{}\"",
+                crate_specs::SQLX.name,
+                crate_specs::SQLX.version
+            )),
+            "db manifest must emit SSOT sqlx version:\n{db}"
+        );
+        let srv = server_cargo_toml(CARGO_TOML).expect("server_cargo_toml");
+        assert!(
+            srv.contains(&format!(
+                "{} = {{ version = \"{}\", features = [\"ws\"]",
+                crate_specs::AXUM.name,
+                crate_specs::AXUM.version
+            )),
+            "server manifest must emit SSOT axum version:\n{srv}"
+        );
     }
 }

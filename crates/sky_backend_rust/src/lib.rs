@@ -15,6 +15,7 @@
 //! backend resolves them through the [`sky_intern::Interner`] it is constructed
 //! with. The [`sky_backend::Backend`] trait stays string-free.
 
+mod crate_specs;
 mod emit_expr;
 mod emit_live;
 mod emit_tui;
