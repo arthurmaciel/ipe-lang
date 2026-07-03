@@ -299,6 +299,10 @@ pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) 
         && (!bounds.has_ord() || ord_ok)
         && (!bounds.has_eq() || ty_is_equatable(ty))
         && (!bounds.has_comparable_key() || ord_ok)
+        // Stringify (`toString` / `Log.*With`): showable iff it contains no
+        // function anywhere — the SAME "no function nested" rule as equatable,
+        // since every non-function type derives `SkyStringify`.
+        && (!bounds.has_show() || ty_is_equatable(ty))
 }
 
 /// Whether a resolved type derives Rust's `PartialEq`: true for every fully
@@ -335,6 +339,9 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
     }
     if bounds.has_eq() {
         classes.push("Equatable");
+    }
+    if bounds.has_show() {
+        classes.push("Stringify");
     }
     let class = if classes.is_empty() {
         "Equatable".to_owned()
