@@ -357,6 +357,130 @@ fn register_stdlib_import_aliases(
     Ok(())
 }
 
+/// Bring the stdlib VALUE members named in an explicit
+/// `import Sky.*/Std.* exposing (n1, n2, …)` list into UNQUALIFIED scope (#97).
+///
+/// `import M exposing (member)` for a stdlib module previously registered
+/// nothing — stdlib imports are skipped by the dep-injection loop
+/// ([`inject_dep_exports`] never runs for them), so a bare `member` reference
+/// fell through to `SKY-N0001`. This is the exposing-list counterpart of #78's
+/// alias registration ([`register_stdlib_import_aliases`]): it reuses the same
+/// authoritative path→qualifier table via [`Env::canonical_stdlib_qualifier`].
+///
+/// Scope and soundness:
+///
+/// * Only **VALUE** exposures ([`src::Exposed::Value`], lowercase names) are
+///   handled. Capitalized **TYPE** exposures (`exposing (Element)`,
+///   `exposing (Error)`) are kernel-implicit Prelude types resolved by a
+///   separate mechanism and are deliberately left untouched — treating them as
+///   value members would spuriously reject every `exposing (SomeType)`.
+/// * The registered [`VarHome::Kernel`] is **cloned verbatim** from the
+///   canonical qualifier's member table, so the cloned entry carries the SAME
+///   kernel id + canonical module + name a qualified `M.member` reference
+///   resolves to. Lowering is therefore identical whether the call site is
+///   qualified or unqualified (exactly like #78's alias clones).
+/// * **Fail-closed.** A lowercase exposed name that is NOT a real value member
+///   of the module yields [`NameError::NameNotExposed`] with a did-you-mean over
+///   the module's actual members — never a silently invented unqualified
+///   binding. A path that names no known/ported stdlib module registers nothing
+///   (matching [`register_stdlib_import_aliases`]); a later unqualified use
+///   surfaces the ordinary `SKY-N0001` at its use site.
+/// * Exposed names fold into `seen_values`, so a user top-level value (or a
+///   synth record-alias ctor) of the same name surfaces
+///   [`NameError::DuplicateValue`] rather than silently shadowing — matching the
+///   Elm rule that explicitly importing a name and defining it locally is a
+///   conflict.
+///
+/// `exposing (..)` (open import) on a stdlib module is intentionally a **no-op**
+/// here: open imports have low priority (a local definition shadows them without
+/// error), which is a different, non-strict insertion discipline than the
+/// explicit list above. Flooding every member into `seen_values` would wrongly
+/// turn a legal local shadow of a Prelude name (e.g. a user `map`) into a
+/// `DuplicateValue` and regress the corpus. The common wildcard case
+/// (`import Sky.Core.Prelude exposing (..)`) already works via the pre-installed
+/// Prelude builtins + qualified access; correct open-import member flooding is
+/// filed as follow-up #98.
+///
+/// # Errors
+/// [`NameError::NameNotExposed`] / [`NameError::DuplicateValue`]; or
+/// [`Diagnostic::CompilerBug`] if interning `Sky` / `Std` / a name exhausts the
+/// interner.
+fn inject_stdlib_exposed_values(
+    m: &src::Module,
+    env: &mut Env,
+    seen_values: &mut BTreeMap<Symbol, Span>,
+    interner: &mut Interner,
+) -> DResult<()> {
+    let sky_sym = interner.intern("Sky")?;
+    let std_sym = interner.intern("Std")?;
+    for import in &m.imports {
+        let dep_path = &import.name.value;
+        // Only `Sky.*` / `Std.*` imports name compiler stdlib modules.
+        if !dep_path
+            .first()
+            .copied()
+            .is_some_and(|s| s == sky_sym || s == std_sym)
+        {
+            continue;
+        }
+        // Open imports (`exposing (..)`) are a no-op — see the doc comment.
+        let src::Exposing::List(items) = &import.exposing.value else {
+            continue;
+        };
+        let Some(canonical) = env.canonical_stdlib_qualifier(dep_path, interner)? else {
+            // Unknown / unported stdlib path: register nothing (fail-closed).
+            continue;
+        };
+        for item in items {
+            // Only VALUE members are brought unqualified; TYPE exposures resolve
+            // through the kernel-implicit type mechanism and are left as-is.
+            let src::Exposed::Value(name) = &item.value else {
+                continue;
+            };
+            let name = *name;
+            // Resolve against the canonical qualifier's member table, cloning the
+            // kernel home out so the immutable borrow ends before the mutation.
+            let member = env
+                .qual_vars
+                .get(&canonical)
+                .and_then(|members| members.get(&name))
+                .cloned();
+            let Some(home) = member else {
+                // Fail-closed: not a real value member of this module.
+                let name_s = name_str(interner, name)?;
+                let module_s = path_to_dot_string(interner, dep_path);
+                let candidates: Vec<Symbol> = env
+                    .qual_vars
+                    .get(&canonical)
+                    .map(|members| members.keys().copied().collect())
+                    .unwrap_or_default();
+                let sugg = suggestions(name, candidates.into_iter(), interner);
+                return Err(Diagnostic::Name {
+                    span: item.span,
+                    msg: NameError::NameNotExposed {
+                        module: module_s,
+                        name: name_s,
+                        suggestions: sugg,
+                    },
+                });
+            };
+            // Fold into the value namespace with DuplicateValue detection.
+            if let Some(&first) = seen_values.get(&name) {
+                return Err(Diagnostic::Name {
+                    span: item.span,
+                    msg: NameError::DuplicateValue {
+                        name: name_str(interner, name)?,
+                        first,
+                    },
+                });
+            }
+            seen_values.insert(name, item.span);
+            env.vars.insert(name, home);
+        }
+    }
+    Ok(())
+}
+
 /// Shared resolution body used by both [`canonicalise`] and
 /// [`canonicalise_module`].
 ///
@@ -504,6 +628,13 @@ fn canonicalise_with_env(
         seen_values.insert(name.value, name.span);
         env.vars.insert(name.value, VarHome::TopLevel(home.clone()));
     }
+    // Bring stdlib VALUE members named in an explicit `import Sky.*/Std.* exposing
+    // (name, …)` list into UNQUALIFIED scope (#97). Runs after the synth-ctor
+    // seeding and before the local-value pre-pass so an exposed name and a local
+    // of the same name collide as `DuplicateValue` (mirrors #82's ctor-collision
+    // rule). Fail-closed: a lowercase name that is not a real value member of the
+    // module surfaces `NameNotExposed`, never a dangling binding.
+    inject_stdlib_exposed_values(m, env, &mut seen_values, interner)?;
     for v in &m.values {
         let name = v.value.name.value;
         let name_span = v.value.name.span;
