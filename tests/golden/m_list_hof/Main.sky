@@ -1,0 +1,29 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Maybe as Maybe
+import Std.Log exposing (println)
+
+
+main =
+    let
+        hasBig =
+            List.any (\x -> x > 3) [ 1, 3, 4 ]
+
+        allPos =
+            List.all (\x -> x > 0) [ 1, 2, 3 ]
+
+        firstBig =
+            Maybe.withDefault 0 (List.find (\x -> x > 2) [ 1, 2, 3, 4 ])
+
+        notFound =
+            Maybe.withDefault (-1) (List.find (\x -> x > 100) [ 1, 2, 3 ])
+    in
+    println
+        ((if hasBig then "T" else "F")
+            ++ (if allPos then "T" else "F")
+            ++ " "
+            ++ String.fromInt firstBig
+            ++ " "
+            ++ String.fromInt notFound
+        )

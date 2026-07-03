@@ -2233,6 +2233,10 @@ impl<'a> Builder<'a> {
                 fun(int(), fun(var(0), var(1))),
                 fun(list(var(0)), list(var(1))),
             ),
+            // any / all : (a -> Bool) -> List a -> Bool
+            K::ListAny | K::ListAll => fun(fun(var(0), bool_ty()), fun(list(var(0)), bool_ty())),
+            // find : (a -> Bool) -> List a -> Maybe a
+            K::ListFind => fun(fun(var(0), bool_ty()), fun(list(var(0)), maybe(var(0)))),
 
             // ── Math (min / max stay on the obligation path — NOT migrated) ──
             // Constants — bare Float values (arity 0).
@@ -3702,6 +3706,10 @@ mod registry_phase_c_tests {
             K::ListIsEmpty,
             K::ListConcatMap,
             K::ListIndexedMap,
+            // List HOFs any/all/find (3 — task #72, same class as #68).
+            K::ListAny,
+            K::ListAll,
+            K::ListFind,
             // Encoding (6 — task #55a): base64/url/hex text codecs. Encoders
             // `String -> String`, decoders `String -> Result Error String`.
             // Each WAS a `Ty::Var(u32::MAX)` hole (`kernel_ty` has no Encoding
