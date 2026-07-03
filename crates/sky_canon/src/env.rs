@@ -11,10 +11,12 @@ use sky_diagnostics::DResult;
 use sky_intern::{Interner, Symbol};
 use sky_kernels::StdlibKernel;
 
-/// Authoritative map from a stdlib module's full import path (its segment list)
-/// to the canonical qualifier short-name under which that module's members are
-/// registered in [`Env::qual_vars`] (see the `QUALIFIERS` table in
-/// [`Env::install_prelude_qualifiers`]).
+/// Authoritative map from a stdlib module's full import path to its canonical
+/// qualifier short-name.
+///
+/// The key is the module's segment list; the value is the short-name under which
+/// that module's members are registered in [`Env::qual_vars`] (see the
+/// `QUALIFIERS` table in [`Env::install_prelude_qualifiers`]).
 ///
 /// This is the single source of truth consulted by the canonicaliser when it
 /// registers a user's `import Sky.… as Alias` (or the Elm last-segment default)

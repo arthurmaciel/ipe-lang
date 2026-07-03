@@ -182,30 +182,169 @@ impl std::error::Error for CliError {}
 pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), CliError> {
     let source = fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
 
-    // A pipeline diagnostic is rendered against the entry's path + source, so
-    // bundle both into every `CliError::Pipeline` produced below.
+    // Parse ONCE with a throwaway interner to learn the entry's declared module
+    // path. Using the declared name as the entry's `module_path` means the shared
+    // graph core's N0023 (path mismatch) can never fire for a single-file build
+    // (expected == declared by construction), while still routing a single-file
+    // program through the SAME injection-aware pipeline as a project — so a
+    // single file importing `Std.Palette` injects the compiled source instead of
+    // 404-ing (design §2.6). For a program with no compiled-source import the
+    // core is emit-byte-identical to the pre-#98 single-module path (link over one
+    // module is the identity — regression-covered by the golden suite).
+    let mut name_interner = Interner::new();
     let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
         file: entry.to_path_buf(),
         src: source.clone(),
         diag,
     };
+    let parsed = sky_parse::parse_module(&source, &mut name_interner).map_err(&pipeline_err)?;
+    let entry_path: Vec<String> = parsed
+        .name
+        .value
+        .iter()
+        .map(|s| name_interner.resolve(*s).unwrap_or_default().to_owned())
+        .collect();
 
-    let mut interner = Interner::new();
-    let module = sky_parse::parse_module(&source, &mut interner).map_err(&pipeline_err)?;
-    let canonical = sky_canon::canonicalise(&module, &mut interner).map_err(&pipeline_err)?;
-    let types = sky_types::infer(&canonical, &mut interner).map_err(&pipeline_err)?;
-    let program = sky_lower::lower(&canonical, &types, &mut interner).map_err(&pipeline_err)?;
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    sources.insert(entry_path.clone(), (entry.to_path_buf(), source.clone()));
+    let discovered = vec![project::DiscoveredModule {
+        path: entry.to_path_buf(),
+        module_path: entry_path.clone(),
+    }];
+
+    compile_modules(sources, discovered, &entry_path, out_dir, runtime_dir, entry)
+}
+
+/// The shared multi-module compile core: inject the compiled-source stdlib
+/// closure, topologically order the graph, canonicalise each module dep-first
+/// (with its unforgeable [`sky_canon::ModuleOrigin`]), link, then infer → lower →
+/// emit → write. Both [`build`] and [`build_project`] route through this so the
+/// injection seam is identical on the single-file and project paths.
+///
+/// `blame_path` is the file a cross-file diagnostic with no single owner (an
+/// import cycle) is rendered against.
+///
+/// # Errors
+/// [`CliError::Pipeline`] carrying the first compiler diagnostic; [`CliError::Io`]
+/// on any filesystem failure.
+fn compile_modules(
+    mut sources: BTreeMap<Vec<String>, (PathBuf, String)>,
+    mut discovered: Vec<project::DiscoveredModule>,
+    entry_path: &[String],
+    out_dir: &Path,
+    runtime_dir: &Path,
+    blame_path: &Path,
+) -> Result<(), CliError> {
+    // Inject the transitive compiled-source stdlib closure. `injected` is the
+    // driver's unforgeable record of which module paths are trusted stdlib
+    // source — the ONLY inputs that earn `ModuleOrigin::EmbeddedStdlib` below.
+    let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
+
+    // Build the import graph, then topologically sort (dep-first, cycle = N0021).
+    let topo = project::topological_order(&discovered, entry_path, |mod_path| {
+        sources
+            .get(mod_path)
+            .map(|(_, src)| project::extract_imports_from_source(src))
+            .unwrap_or_default()
+    })
+    .map_err(|cycle| {
+        let path: Box<[Box<str>]> = cycle.path.into_iter().map(String::into_boxed_str).collect();
+        let diag = sky_diagnostics::Diagnostic::Name {
+            span: sky_diagnostics::Span::DUMMY,
+            msg: sky_diagnostics::NameError::ImportCycle { path },
+        };
+        CliError::Pipeline {
+            file: blame_path.to_path_buf(),
+            src: String::new(),
+            diag,
+        }
+    })?;
+
+    // Canonicalise each module in dep-first order.
+    let mut interner = sky_intern::Interner::new();
+    let mut dep_exports: BTreeMap<Vec<sky_intern::Symbol>, sky_canon::ModuleExports> =
+        BTreeMap::new();
+    let mut canon_modules: Vec<sky_canon::ast::Module> = Vec::new();
+    let mut entry_name: Vec<sky_intern::Symbol> = Vec::new();
+
+    for m in &topo {
+        let Some((path, src)) = sources.get(&m.module_path) else {
+            return Err(CliError::Usage(
+                "internal: module in topo order not in source map",
+            ));
+        };
+
+        let pipeline_err = |diag: sky_diagnostics::Diagnostic| CliError::Pipeline {
+            file: path.clone(),
+            src: src.clone(),
+            diag,
+        };
+
+        let parsed = sky_parse::parse_module(src, &mut interner).map_err(&pipeline_err)?;
+
+        let expected_path: Vec<sky_intern::Symbol> = m
+            .module_path
+            .iter()
+            .map(|s| interner.intern(s))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(&pipeline_err)?;
+
+        // The trust tag: EmbeddedStdlib IFF this exact module path was injected
+        // from the embed table. A user file squatting on `Std.Foo` is NOT in
+        // `injected` (injection skipped it on the pre-existing-key guard), so it
+        // is `User` and stays SKY-N0025-rejected.
+        let origin = if injected.contains(&m.module_path) {
+            sky_canon::ModuleOrigin::EmbeddedStdlib
+        } else {
+            sky_canon::ModuleOrigin::User
+        };
+
+        let (canon_mod, exports) = sky_canon::canonicalise_module_with_origin(
+            &parsed,
+            &expected_path,
+            &dep_exports,
+            origin,
+            &mut interner,
+        )
+        .map_err(&pipeline_err)?;
+
+        if m.module_path == entry_path {
+            entry_name.clone_from(&expected_path);
+        }
+
+        dep_exports.insert(expected_path, exports);
+        canon_modules.push(canon_mod);
+    }
+
+    // Link → infer → lower → emit on the merged module. Blame post-link errors on
+    // the entry file.
+    let linked = sky_canon::link::link(entry_name, canon_modules);
+
+    let entry_src_path = sources
+        .get(entry_path)
+        .map_or_else(|| blame_path.to_path_buf(), |(p, _)| p.clone());
+    let entry_src = sources
+        .get(entry_path)
+        .map(|(_, s)| s.clone())
+        .unwrap_or_default();
+    let pipeline_err = |diag: sky_diagnostics::Diagnostic| CliError::Pipeline {
+        file: entry_src_path.clone(),
+        src: entry_src.clone(),
+        diag,
+    };
+
+    let types = sky_types::infer(&linked, &mut interner).map_err(&pipeline_err)?;
+    let program = sky_lower::lower(&linked, &types, &mut interner).map_err(&pipeline_err)?;
     let emitted = RustBackend::new(&interner)
         .emit(&program)
         .map_err(&pipeline_err)?;
-
-    let src_dir = out_dir.join("src");
-    fs::create_dir_all(&src_dir).map_err(|e| io_err(&src_dir, e))?;
 
     // Vendor the runtime module tree FIRST, then write the emitted files. The
     // backend emits a trimmed `sky_runtime/mod.rs` + `config.rs`; writing the
     // emitted files last lets them overwrite the fuller copies from the source
     // tree (whose module list reaches for crates outside the M0 manifest).
+    let src_dir = out_dir.join("src");
+    fs::create_dir_all(&src_dir).map_err(|e| io_err(&src_dir, e))?;
     copy_dir(runtime_dir, &src_dir.join("sky_runtime"))?;
 
     let cargo_path = out_dir.join("Cargo.toml");
@@ -263,115 +402,16 @@ pub fn build_project(
 
     let entry_path = vec!["Main".to_owned()];
 
-    // Build the import graph, then topologically sort.
-    let topo = project::topological_order(&discovered, &entry_path, |mod_path| {
-        sources
-            .get(mod_path)
-            .map(|(_, src)| project::extract_imports_from_source(src))
-            .unwrap_or_default()
-    })
-    .map_err(|cycle| {
-        // Build a SKY-N0021 diagnostic. We use Span::DUMMY because the cycle
-        // spans multiple files; the rendered message carries the cycle path.
-        let path: Box<[Box<str>]> = cycle.path.into_iter().map(String::into_boxed_str).collect();
-        let diag = sky_diagnostics::Diagnostic::Name {
-            span: sky_diagnostics::Span::DUMMY,
-            msg: sky_diagnostics::NameError::ImportCycle { path },
-        };
-        // Use the manifest path as the "file" for rendering.
-        CliError::Pipeline {
-            file: manifest_path.to_path_buf(),
-            src: String::new(),
-            diag,
-        }
-    })?;
-
-    // Canonicalise each module in dep-first order.
-    let mut interner = sky_intern::Interner::new();
-    let mut dep_exports: BTreeMap<Vec<sky_intern::Symbol>, sky_canon::ModuleExports> =
-        BTreeMap::new();
-
-    let mut canon_modules: Vec<sky_canon::ast::Module> = Vec::new();
-    let mut entry_name: Vec<sky_intern::Symbol> = Vec::new();
-
-    for m in &topo {
-        let Some((path, src)) = sources.get(&m.module_path) else {
-            // Every module in `topo` was discovered from the filesystem, so a
-            // missing source entry here is a compiler-internal invariant violation.
-            return Err(CliError::Usage(
-                "internal: module in topo order not in source map",
-            ));
-        };
-
-        let pipeline_err = |diag: sky_diagnostics::Diagnostic| CliError::Pipeline {
-            file: path.clone(),
-            src: src.clone(),
-            diag,
-        };
-
-        let parsed = sky_parse::parse_module(src, &mut interner).map_err(&pipeline_err)?;
-
-        // Build the expected interned path from the discovered module_path.
-        let expected_path: Vec<sky_intern::Symbol> = m
-            .module_path
-            .iter()
-            .map(|s| interner.intern(s))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(&pipeline_err)?;
-
-        let (canon_mod, exports) =
-            sky_canon::canonicalise_module(&parsed, &expected_path, &dep_exports, &mut interner)
-                .map_err(&pipeline_err)?;
-
-        if m.module_path == entry_path {
-            entry_name.clone_from(&expected_path);
-        }
-
-        dep_exports.insert(expected_path, exports);
-        canon_modules.push(canon_mod);
-    }
-
-    // Link all canon modules into one.
-    let linked = sky_canon::link::link(entry_name, canon_modules);
-
-    // Run infer → lower → emit on the linked module.
-    // We use the entry file as the blame location for any post-link error.
-    let entry_src_path = sources
-        .get(&entry_path)
-        .map_or_else(|| manifest.src_root.join("Main.sky"), |(p, _)| p.clone());
-    let entry_src = sources
-        .get(&entry_path)
-        .map(|(_, s)| s.clone())
-        .unwrap_or_default();
-
-    let pipeline_err = |diag: sky_diagnostics::Diagnostic| CliError::Pipeline {
-        file: entry_src_path.clone(),
-        src: entry_src.clone(),
-        diag,
-    };
-
-    let types = sky_types::infer(&linked, &mut interner).map_err(&pipeline_err)?;
-    let program = sky_lower::lower(&linked, &types, &mut interner).map_err(&pipeline_err)?;
-    let emitted = sky_backend_rust::RustBackend::new(&interner)
-        .emit(&program)
-        .map_err(&pipeline_err)?;
-
-    let src_dir = out_dir.join("src");
-    fs::create_dir_all(&src_dir).map_err(|e| io_err(&src_dir, e))?;
-    copy_dir(runtime_dir, &src_dir.join("sky_runtime"))?;
-
-    let cargo_path = out_dir.join("Cargo.toml");
-    fs::write(&cargo_path, &emitted.cargo_toml).map_err(|e| io_err(&cargo_path, e))?;
-
-    for (rel, contents) in &emitted.files {
-        let p = out_dir.join(rel.as_str());
-        if let Some(parent) = p.parent() {
-            fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
-        }
-        fs::write(&p, contents).map_err(|e| io_err(&p, e))?;
-    }
-
-    Ok(())
+    // The manifest is the blame location for an import cycle (no single file
+    // owns it); post-link errors are blamed on the entry file inside the core.
+    compile_modules(
+        sources,
+        discovered,
+        &entry_path,
+        out_dir,
+        runtime_dir,
+        manifest_path,
+    )
 }
 
 /// Locate the Sky runtime module tree (`runtime/src/sky_runtime/`).

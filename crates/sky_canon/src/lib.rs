@@ -19,7 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use sky_diagnostics::DResult;
 use sky_intern::{Interner, Symbol};
 
-pub use env::{CtorHome, Env, VarHome};
+pub use env::{CtorHome, Env, STDLIB_MODULE_QUALIFIERS, VarHome};
+pub use resolve::ModuleOrigin;
 
 /// A type alias exported by a module in its raw (unresolved) source form.
 ///
@@ -94,6 +95,29 @@ pub fn canonicalise_module(
     interner: &mut Interner,
 ) -> DResult<(ast::Module, ModuleExports)> {
     resolve::canonicalise_module(m, expected_path, deps, interner)
+}
+
+/// Canonicalise a module carrying an explicit trust [`ModuleOrigin`].
+///
+/// Like [`canonicalise_module`] but lets the build driver vouch that a module's
+/// source came from the compiler's own embedded stdlib table
+/// ([`ModuleOrigin::EmbeddedStdlib`]) — the ONLY way to legitimately declare a
+/// `module Std.…` / `module Sky.…` home without tripping SKY-N0025. The trust tag
+/// is unforgeable from module text: a user file named `Std.Foo` reaches this
+/// function as [`ModuleOrigin::User`] and stays rejected.
+///
+/// # Errors
+/// Any error [`canonicalise_module`] can return, plus a fail-closed
+/// [`sky_diagnostics::Diagnostic::CompilerBug`] when an `EmbeddedStdlib` module
+/// carries an un-annotated top-level binding.
+pub fn canonicalise_module_with_origin(
+    m: &sky_syntax::Module,
+    expected_path: &[Symbol],
+    deps: &BTreeMap<Vec<Symbol>, ModuleExports>,
+    origin: ModuleOrigin,
+    interner: &mut Interner,
+) -> DResult<(ast::Module, ModuleExports)> {
+    resolve::canonicalise_module_with_origin(m, expected_path, deps, origin, interner)
 }
 
 #[cfg(test)]
@@ -2542,5 +2566,92 @@ mod tests {
             ),
             "explicit exposure must still collide, got {err:?}"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // #98 — ModuleOrigin: unforgeable stdlib trust tag.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Canonicalise `src` with an explicit [`ModuleOrigin`], returning the result.
+    fn canon_with_origin(
+        src: &str,
+        origin: ModuleOrigin,
+    ) -> DResult<(ast::Module, ModuleExports)> {
+        let mut i = Interner::new();
+        let parsed = sky_parse::parse_module(src, &mut i).expect("spike source parses");
+        let expected: Vec<Symbol> = parsed.name.value.clone();
+        let deps: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        canonicalise_module_with_origin(&parsed, &expected, &deps, origin, &mut i)
+    }
+
+    /// The exact spike module, declaring `module Std.Palette` and matching its
+    /// own ctor.
+    const PALETTE_SRC: &str = "module Std.Palette exposing (Shade(..), toHex)\n\
+         type Shade = Dark | Light\n\
+         toHex : Shade -> String\n\
+         toHex shade =\n    case shade of\n        Dark -> \"#000\"\n        Light -> \"#fff\"\n";
+
+    #[test]
+    fn embedded_stdlib_origin_exempts_reserved_namespace() {
+        // The compiled-source path: a driver-vouched `Std.Palette` is accepted,
+        // reserved-namespace gate exempted — it is the legitimate definer.
+        let res = canon_with_origin(PALETTE_SRC, ModuleOrigin::EmbeddedStdlib);
+        assert!(
+            res.is_ok(),
+            "EmbeddedStdlib Std.Palette must canonicalise: {:?}",
+            res.err()
+        );
+    }
+
+    #[test]
+    fn user_origin_std_module_is_reserved_namespace() {
+        // SECURITY: the SAME text, tagged User (a hostile file literally named
+        // `Std.Palette`), stays N0025-rejected. Trust is the tag, not the name.
+        let err = canon_with_origin(PALETTE_SRC, ModuleOrigin::User)
+            .expect_err("user Std.Palette must be rejected");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::Name {
+                    msg: NameError::ReservedNamespace { .. },
+                    ..
+                }
+            ),
+            "hostile user Std.Palette must be SKY-N0025, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn embedded_stdlib_unannotated_binding_fails_closed() {
+        // The fail-closed annotation gate: an EmbeddedStdlib module with an
+        // un-annotated top-level binding is a compiler-internal error at canon,
+        // never an exit-0-then-cargo-fail. `bad` has no signature.
+        let src = "module Std.Foo exposing (bad)\n\
+             good : Int\n\
+             good = 1\n\
+             bad = good\n";
+        let err = canon_with_origin(src, ModuleOrigin::EmbeddedStdlib)
+            .expect_err("unannotated stdlib binding must fail closed");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::CompilerBug {
+                    where_: "canon.stdlib_unannotated",
+                    ..
+                }
+            ),
+            "unannotated EmbeddedStdlib binding must be a fail-closed CompilerBug, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn user_unannotated_binding_is_fine() {
+        // The gate can NEVER fire for user code: an un-annotated top-level in a
+        // normal user module is business as usual.
+        let res = canon_with_origin(
+            "module Main exposing (main)\nmain = 0\n",
+            ModuleOrigin::User,
+        );
+        assert!(res.is_ok(), "user unannotated main is fine: {:?}", res.err());
     }
 }
