@@ -2823,6 +2823,82 @@ impl<'a> Builder<'a> {
                 fun(string(), result(error_ty(), string()))
             }
 
+            // ── Std.Html / Std.Ui / Sky.Live rendering (42 — task #74) ──
+            // The Html/Ui/Background/Border/Font rendering family. `attr(m)` /
+            // `elem_t(m)` / `html_t(m)` are the msg-polymorphic opaque cons;
+            // `length()` / `color()` are the nullary value cons (#69). Each is a
+            // genuine `Ty::Var(u32::MAX)` hole (legacy `kernel_ty` has no Html/
+            // Ui/Background/Border/Font arm), so all land in FIRST_SCHEMED.
+            // Verified vs runtime fn params + lower `callee_arity` per
+            // docs/architecture/html-ui-live-scheme-table.md. `Live.appRouted`
+            // is EXCLUDED (REACHABLE_BUT_UNLOWERED) — its lowering is
+            // `Feature::RoutedLiveApp` unsupported, so a caller fails closed.
+
+            // Std.Html serialise / escape (arity 1).
+            K::HtmlRender => fun(html_t(var(0)), string()),
+            K::HtmlEscapeText | K::HtmlEscapeAttr => fun(string(), string()),
+            K::HtmlAttrToString => fun(attr(var(0)), string()),
+
+            // Std.Ui element builders (arity 0 / 1).
+            K::UiNone => elem_t(var(0)),
+            K::UiText => fun(string(), elem_t(var(0))),
+            K::UiHtml => fun(html_t(var(0)), elem_t(var(0))),
+
+            // Std.Ui / Font attribute builders — nullary (arity 0).
+            K::UiCenterX
+            | K::UiCenterY
+            | K::UiAlignLeft
+            | K::UiAlignRight
+            | K::UiAlignTop
+            | K::UiAlignBottom
+            | K::UiPointer
+            | K::UiClip
+            | K::UiScrollbars
+            | K::FontBold
+            | K::FontItalic => attr(var(0)),
+
+            // Attribute builders — single Int arg.
+            K::UiSpacing
+            | K::UiPadding
+            | K::UiGridColumns
+            | K::BorderWidth
+            | K::BorderRounded
+            | K::FontSize => fun(int(), attr(var(0))),
+
+            // Attribute builders — Length arg.
+            K::UiWidth | K::UiHeight => fun(length(), attr(var(0))),
+
+            // Attribute builders — Color arg.
+            K::BackgroundColor | K::BorderColor | K::FontColor => fun(color(), attr(var(0))),
+
+            // Attribute builders — String / List String arg.
+            K::BackgroundImage => fun(string(), attr(var(0))),
+            K::FontFamily => fun(list(string()), attr(var(0))),
+
+            // Std.Ui — two Int args (arity 2).
+            K::UiPaddingXY => fun(int(), fun(int(), attr(var(0)))),
+
+            // Std.Html leaf nodes (arity 1).
+            K::HtmlTextNode | K::HtmlRawNode => fun(string(), html_t(var(0))),
+
+            // Std.Html generic node (arity 3 — tag, attrs, children).
+            K::HtmlNode => fun(
+                string(),
+                fun(
+                    list(attr(var(0))),
+                    fun(list(html_t(var(0))), html_t(var(0))),
+                ),
+            ),
+
+            // Std.Html container nodes (arity 2 — attrs, children; tag baked).
+            K::HtmlDiv | K::HtmlSpan | K::HtmlA | K::HtmlButton | K::HtmlP => fun(
+                list(attr(var(0))),
+                fun(list(html_t(var(0))), html_t(var(0))),
+            ),
+
+            // Std.Html void nodes (arity 1 — attrs only).
+            K::HtmlInput | K::HtmlImg => fun(list(attr(var(0))), html_t(var(0))),
+
             // ── Json.Decode (17) — mirrors the already-relocated `Db.Decode`
             //    shapes (function-first `map`/`andThen`; `dec(a)` is the opaque
             //    `Decoder a`). Primitives are arity-0 bare decoders. ──
@@ -5830,7 +5906,68 @@ mod registry_phase_c_tests {
             K::EncodingUrlDecode,
             K::EncodingHexEncode,
             K::EncodingHexDecode,
+            // Std.Html / Std.Ui / Sky.Live rendering family (42 — task #74).
+            // All genuine `Ty::Var(u32::MAX)` holes (legacy `kernel_ty` has no
+            // Html/Ui/Background/Border/Font arm). Verified vs runtime + lower
+            // `callee_arity` in docs/architecture/html-ui-live-scheme-table.md.
+            // `LiveAppRouted` is EXCLUDED here — it is `REACHABLE_BUT_UNLOWERED`.
+            K::HtmlRender,
+            K::HtmlEscapeText,
+            K::HtmlEscapeAttr,
+            K::HtmlAttrToString,
+            K::UiNone,
+            K::UiText,
+            K::UiHtml,
+            K::UiSpacing,
+            K::UiPadding,
+            K::UiPaddingXY,
+            K::UiWidth,
+            K::UiHeight,
+            K::UiCenterX,
+            K::UiCenterY,
+            K::UiAlignLeft,
+            K::UiAlignRight,
+            K::UiAlignTop,
+            K::UiAlignBottom,
+            K::UiPointer,
+            K::UiClip,
+            K::UiScrollbars,
+            K::UiGridColumns,
+            K::BackgroundColor,
+            K::BackgroundImage,
+            K::BorderWidth,
+            K::BorderRounded,
+            K::BorderColor,
+            K::FontSize,
+            K::FontColor,
+            K::FontFamily,
+            K::FontBold,
+            K::FontItalic,
+            K::HtmlTextNode,
+            K::HtmlRawNode,
+            K::HtmlNode,
+            K::HtmlDiv,
+            K::HtmlSpan,
+            K::HtmlA,
+            K::HtmlButton,
+            K::HtmlP,
+            K::HtmlInput,
+            K::HtmlImg,
         ]
+    };
+
+    /// REACHABLE-BUT-UNLOWERED kernels: they HAVE a runtime fn AND a canon
+    /// qualifier (so a user program can name them — distinct from
+    /// `KNOWN_UNBACKED`, which has no runtime fn), but their LOWERING is not yet
+    /// implemented, so `stdlib_scheme` intentionally leaves them un-schemed and a
+    /// caller fails closed. `Live.appRouted` lowering is `Feature::RoutedLiveApp`
+    /// unsupported (`lower.rs`); its type is a closed config record, not a simple
+    /// curried `Ty`. When routed-live lowering lands it moves to `FIRST_SCHEMED`
+    /// with the dedicated `Ty::Record` arm (design table Option A). Excluded from
+    /// `stdlib_scheme_total_over_reachable` until then.
+    const REACHABLE_BUT_UNLOWERED: &[StdlibKernel] = {
+        use StdlibKernel as K;
+        &[K::LiveAppRouted]
     };
 
     /// KNOWN-UNBACKED kernels: present in `StdlibKernel::ALL` (so they carry a
@@ -5872,6 +6009,28 @@ mod registry_phase_c_tests {
                 "{k:?} is KNOWN-UNBACKED (no runtime fn, qualifier not in \
                  qual_vars) and must NOT be schemed — a scheme forges an exit-0 \
                  path to an unbacked kernel.",
+            );
+        }
+
+        // REACHABLE_BUT_UNLOWERED is a bounded escape hatch, not a dumping
+        // ground: each entry must be in ALL, return `None` (un-schemed, fails
+        // closed for callers), and be disjoint from the other three buckets.
+        for &k in REACHABLE_BUT_UNLOWERED {
+            assert!(
+                StdlibKernel::ALL.contains(&k),
+                "{k:?} must be in ALL to carry a registry index",
+            );
+            assert!(
+                builder.stdlib_scheme(k).is_none(),
+                "{k:?} is REACHABLE_BUT_UNLOWERED and must NOT be schemed until \
+                 its lowering lands (a caller must fail closed, not type-check).",
+            );
+            assert!(
+                !RELOCATED.contains(&k)
+                    && !FIRST_SCHEMED.contains(&k)
+                    && !KNOWN_UNBACKED.contains(&k),
+                "{k:?} is REACHABLE_BUT_UNLOWERED and must be disjoint from the \
+                 other classification buckets.",
             );
         }
     }
@@ -6001,6 +6160,37 @@ mod registry_phase_c_tests {
                  RELOCATED∪FIRST_SCHEMED membership = {expected}",
             );
         }
+    }
+
+    /// Phase E — Task 0 gate. `stdlib_scheme` is TOTAL over the reachable set:
+    /// every `StdlibKernel` except the explicit `KNOWN_UNBACKED` exclusions has a
+    /// concrete scheme. This is the load-bearing precondition for the totality
+    /// flip (Task 1) — deleting the `Ty::Var(u32::MAX)` fallback is only sound if
+    /// no reachable kernel was silently riding it. If this fails, it prints the
+    /// un-schemed variants; they must be schemed (or classified `KNOWN_UNBACKED`)
+    /// before Phase E proceeds.
+    #[test]
+    fn stdlib_scheme_total_over_reachable() {
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        let mut uf = UnionFind::<Content>::new();
+        let builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+
+        let unschemed: Vec<StdlibKernel> = StdlibKernel::ALL
+            .iter()
+            .copied()
+            .filter(|k| {
+                !KNOWN_UNBACKED.contains(k)
+                    && !REACHABLE_BUT_UNLOWERED.contains(k)
+                    && builder.stdlib_scheme(*k).is_none()
+            })
+            .collect();
+        assert!(
+            unschemed.is_empty(),
+            "stdlib_scheme is NOT total over the reachable set — these variants \
+             are neither schemed nor KNOWN_UNBACKED, so the Ty::Var(u32::MAX) \
+             fallback cannot be deleted yet: {unschemed:?}",
+        );
     }
 
     /// Condition 2 — the fail-closed path is REACHABLE. When neither the

@@ -1116,13 +1116,18 @@ impl StdlibKernel {
             Self::HtmlRawNode => d("Html", "raw", 1, Ui, "html_raw_node_"),
             Self::HtmlNode => d("Html", "node", 3, Ui, "html_node_"),
             Self::HtmlStyleNode => d("Html", "styleNode", 2, Ui, "html_style_node_"),
-            Self::HtmlDiv => d("Html", "div", 3, Ui, "html_div_"),
-            Self::HtmlSpan => d("Html", "span", 3, Ui, "html_span_"),
-            Self::HtmlA => d("Html", "a", 3, Ui, "html_a_"),
-            Self::HtmlButton => d("Html", "button", 3, Ui, "html_button_"),
-            Self::HtmlP => d("Html", "p", 3, Ui, "html_p_"),
-            Self::HtmlInput => d("Html", "input", 2, Ui, "html_input_"),
-            Self::HtmlImg => d("Html", "img", 2, Ui, "html_img_"),
+            // Arity corrected 3→2 / 2→1 (task #74): the tag is a baked literal,
+            // not a parameter — `html_div_` etc. take (attrs, children) = 2, the
+            // void `html_input_`/`html_img_` take (attrs) = 1. Runtime fn params
+            // AND lower `callee_arity` (2/1) are the authorities; the old decl
+            // arity was an off-by-one (same class as the AEAD/Jwt 3→2 fix, #58).
+            Self::HtmlDiv => d("Html", "div", 2, Ui, "html_div_"),
+            Self::HtmlSpan => d("Html", "span", 2, Ui, "html_span_"),
+            Self::HtmlA => d("Html", "a", 2, Ui, "html_a_"),
+            Self::HtmlButton => d("Html", "button", 2, Ui, "html_button_"),
+            Self::HtmlP => d("Html", "p", 2, Ui, "html_p_"),
+            Self::HtmlInput => d("Html", "input", 1, Ui, "html_input_"),
+            Self::HtmlImg => d("Html", "img", 1, Ui, "html_img_"),
             // ── M7: Std.Live app-entry kernels ───────────────────────────────
             Self::LiveApp => d("Live", "app", 1, Live, "live_app"),
             Self::LiveAppRouted => d("Live", "appRouted", 1, Live, "live_app_routed"),
