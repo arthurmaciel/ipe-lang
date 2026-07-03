@@ -56,3 +56,7 @@ overflow-checks = false
 
 [profile.release]
 strip = true
+
+# Detach this generated crate from any ancestor cargo workspace so it builds
+# hermetically even when emitted inside another workspace tree.
+[workspace]
