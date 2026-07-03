@@ -1482,4 +1482,41 @@ mod tests {
             }
         }
     }
+
+    /// Phase E — Task 0 gate. The `KNOWN_UNBACKED` kernels (`PubSub.publish` /
+    /// `PubSub.publishNoEcho`) are UNREACHABLE from any user program: their
+    /// `"PubSub"` qualifier is absent from `env.qual_vars`, so canonicalisation
+    /// never mints a `VarKernel` for them. This is the fact that keeps the
+    /// `stdlib_scheme` totality flip (Phase E Task 1) sound — the `None` arm the
+    /// two `PubSub` variants return can never be hit on a real resolution path.
+    ///
+    /// Mirrors `sky_types` `KNOWN_UNBACKED` (guarded there by
+    /// `known_unbacked_never_schemed`); enumerated here directly because that
+    /// const is private to `sky_types`.
+    #[test]
+    fn known_unbacked_disjoint_from_qual_vars() {
+        use sky_intern::Interner;
+        use sky_kernels::StdlibKernel;
+
+        let mut interner = Interner::new();
+        let env = Env::initial(vec![], &mut interner)
+            .expect("Env::initial must not fail in the tripwire test");
+
+        for sk in [
+            StdlibKernel::PubSubPublish,
+            StdlibKernel::PubSubPublishNoEcho,
+        ] {
+            let qual = sk.decl().qualifier;
+            let Ok(qual_sym) = interner.intern(qual) else {
+                continue;
+            };
+            assert!(
+                !env.qual_vars.contains_key(&qual_sym),
+                "KNOWN_UNBACKED {sk:?} qualifier {qual:?} IS present in \
+                 env.qual_vars — it is reachable, so the stdlib_scheme None arm \
+                 could be hit and the Phase E totality flip would be unsound. \
+                 Either scheme it or remove it from qual_vars.",
+            );
+        }
+    }
 }
