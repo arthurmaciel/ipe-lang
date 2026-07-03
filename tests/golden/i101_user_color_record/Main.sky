@@ -1,0 +1,39 @@
+module Main exposing (main)
+
+
+-- #101 regression. A user `type Color` inside a record FIELD must resolve to
+-- `MainColor` on BOTH the inferred (record-literal) path and the annotated
+-- (alias) path, so the two agree. Pre-fix: the record literal lowered the field
+-- via the ty-path (→ `UiPlain::Color`) while the `Paint` alias / `shade`
+-- annotation lowered it via the canon-path (→ `MainColor`) — a SKY-I0001
+-- ty-vs-canon disagreement.
+
+
+type Color
+    = Cyan
+    | Magenta
+
+
+type alias Paint =
+    { c : Color
+    , label : String
+    }
+
+
+shade : Color -> String
+shade c =
+    case c of
+        Cyan ->
+            "cyan"
+
+        Magenta ->
+            "magenta"
+
+
+mkPaint : Paint
+mkPaint =
+    { c = Cyan, label = "sky" }
+
+
+main =
+    println (mkPaint.label ++ ":" ++ shade mkPaint.c)
