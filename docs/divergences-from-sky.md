@@ -331,6 +331,20 @@ and compiles it. *Rationale:* soundness over completeness for now; the
 completeness gap is a tracked front-end item. *Neutral: reference-ahead on
 completeness.*
 
+### A14 — Non-HOF `List` ops as iterative kernels vs pure-Sky recursion (efficiency-only, output-identical)
+ipê wires the non-HOF `List` combinators
+(`append`/`concat`/`take`/`drop`/`zip`/`cons`/`isEmpty`) as **iterative Rust
+kernels** (constant native stack), whereas the Go "Sky" backend classifies them
+as non-tail-recursive pure-Sky (O(N) call-stack). Output is byte-identical
+across all Elm edges (negative/over-length `take`/`drop`, shorter-truncating
+`zip`, empty `concat`); ipê additionally has a strictly better stack profile (no
+200k+-element stack-depth risk). *Rationale:* `List.*` is anchored to
+`VarHome::Kernel` in ipê canonicalisation (task #68), so the kernel path is the
+only exit-0-safe wiring — the improved stack behaviour is a free consequence, not
+a behavioural change. `concatMap`/`indexedMap` are kernels in both backends.
+*Neutral: efficiency-only, output-identical.* See
+`docs/architecture/list-ops-lower-wiring.md`.
+
 ---
 
 ## 4. Stdlib / surface divergences
