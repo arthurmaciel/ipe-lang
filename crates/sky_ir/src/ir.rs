@@ -637,6 +637,96 @@ pub enum UiPlain {
     CssRule,
 }
 
+/// Total predicate: does the Rust type that [`IrType`] renders to support the
+/// full `#[derive(Clone, Debug, PartialEq)]` set the backend stamps on every
+/// generated enum / record struct?
+///
+/// This is the authoritative soundness gate (#87) that keeps the *unconditional*
+/// derive off any type whose rendered Rust form lacks one of those traits, so a
+/// well-typed program that stores such a value in a record field or enum payload
+/// can never `skyc`-succeed and then `cargo`-fail on a missing `Clone` / `Debug`
+/// / `PartialEq` impl. The non-derivable leaves are:
+///
+/// * [`IrType::Fun`] — a first-class function, rendered `Box<dyn Fn(..) -> R>`
+///   (no `Clone`/`Debug`/`PartialEq`).
+/// * the opaque effect / handle wrappers [`IrType::Task`], [`IrType::Cmd`],
+///   [`IrType::Sub`], [`IrType::Decoder`], [`IrType::Db`] — each wraps a boxed
+///   closure or future (no `Clone`/`Debug`/`PartialEq`).
+/// * the opaque server / live handles [`IrType::ServerRequest`] /
+///   [`IrType::ServerResponse`] / [`IrType::ServerRoute`] /
+///   [`IrType::ServerCookie`] / [`IrType::LiveReq`] / [`IrType::LiveRoute`]
+///   (each lacks at least `PartialEq`).
+/// * the two `Clone`-only `Std.Html` carriers [`UiCtor::HtmlAttribute`] /
+///   [`UiCtor::HtmlEvent`] (they hold `Arc<dyn Fn>` event handlers).
+///
+/// A non-derivable leaf poisons every *transparent carrier* that reaches it
+/// (list / set / tuple / dict / result / maybe / closed record) and every user
+/// enum whose payload reaches it. `enum_derivable` answers the same question for
+/// a referenced user [`IrType::Enum`]; the caller resolves the enum-to-enum
+/// fixpoint before consulting it (see the backend `EmitCtx`).
+///
+/// Leaves that DO render to a fully-derivable Rust type return `true`:
+/// primitives, `Bytes` (`Vec<u8>`), `Json` (`serde_json::Value`), every
+/// [`UiPlain`] value type, the three fully-derivable [`IrType::Ui`] carriers
+/// (`Html` / `Element` / ui-`Attribute`), and a [`IrType::Generic`] parameter
+/// (the `derive` macro adds the per-parameter trait bound, so the generic frame
+/// stays derivable).
+///
+/// The match is deliberately exhaustive with no wildcard arm: a new [`IrType`]
+/// variant must make an explicit derivability decision here rather than default
+/// silently into the derivable branch (walker-arm rule).
+#[must_use]
+pub fn ir_type_is_derivable(ty: &IrType, enum_derivable: &impl Fn(Symbol) -> bool) -> bool {
+    match ty {
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::Generic(_)
+        | IrType::UiPlain(_) => true,
+        // The fully-derivable Std.Ui / Std.Html carriers vs the two Clone-only
+        // ones (`html::Attribute` / `html::Event`, which hold `Arc<dyn Fn>`).
+        IrType::Ui { ctor, msg } => {
+            matches!(
+                ctor,
+                UiCtor::Html | UiCtor::Element | UiCtor::UiAttribute
+            ) && ir_type_is_derivable(msg, enum_derivable)
+        }
+        // Non-derivable opaque leaves (each lacks ≥1 of Clone / Debug / PartialEq).
+        IrType::Task(_)
+        | IrType::Cmd(_)
+        | IrType::Sub(_)
+        | IrType::Decoder(_)
+        | IrType::Db
+        | IrType::Fun(_, _)
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::LiveReq
+        | IrType::LiveRoute => false,
+        // Transparent carriers: derivable iff every carried element is.
+        IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => {
+            ir_type_is_derivable(e, enum_derivable)
+        }
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            ir_type_is_derivable(a, enum_derivable) && ir_type_is_derivable(b, enum_derivable)
+        }
+        IrType::Tuple(es) => es.iter().all(|e| ir_type_is_derivable(e, enum_derivable)),
+        IrType::Record(fields) => fields
+            .values()
+            .all(|f| ir_type_is_derivable(f, enum_derivable)),
+        IrType::Enum { name, args } => {
+            enum_derivable(*name)
+                && args.iter().all(|a| ir_type_is_derivable(a, enum_derivable))
+        }
+    }
+}
+
 /// An expression in the typed IR.
 ///
 /// Note: the [`Match`] variant wraps the opaque [`Match`] type rather than
