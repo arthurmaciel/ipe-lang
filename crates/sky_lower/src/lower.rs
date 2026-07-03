@@ -2819,10 +2819,7 @@ impl<'a> Lowerer<'a> {
     /// is `SKY-L0119` at that value's span. A MISSING window/size is left
     /// untouched — the constrain scheme enforces the 5-field shape, so absence is
     /// a genuine compiler bug handled fail-closed by emit's field lookup.
-    fn reject_non_literal_webview_window(
-        &self,
-        fields: &[(Symbol, canon::Expr)],
-    ) -> DResult<()> {
+    fn reject_non_literal_webview_window(&self, fields: &[(Symbol, canon::Expr)]) -> DResult<()> {
         for (name, value) in fields {
             if self.resolve(*name)? == "window" {
                 let canon::Expr_::Record(win_fields) = &value.value else {

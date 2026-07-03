@@ -30,9 +30,7 @@ pub(crate) fn canonical_header(k: &str) -> String {
         .map(|w| {
             let mut c = w.chars();
             match c.next() {
-                Some(f) => {
-                    f.to_ascii_uppercase().to_string() + &c.as_str().to_ascii_lowercase()
-                }
+                Some(f) => f.to_ascii_uppercase().to_string() + &c.as_str().to_ascii_lowercase(),
                 None => String::new(),
             }
         })

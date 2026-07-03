@@ -1399,7 +1399,10 @@ mod tests {
             .body(axum::body::Body::empty())
             .expect("test request builds");
         let (req, _upgrader) = build_request(wire).await.expect("build_request succeeds");
-        assert_eq!(req.headers.get("X-Trace-Id").map(String::as_str), Some("abc123"));
+        assert_eq!(
+            req.headers.get("X-Trace-Id").map(String::as_str),
+            Some("abc123")
+        );
         assert_eq!(
             req.headers.get("Content-Type").map(String::as_str),
             Some("text/plain")
