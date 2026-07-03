@@ -800,17 +800,21 @@ impl StdlibKernel {
                 Pure,
                 "crypto_constant_time_equal",
             ),
+            // AEAD arity is 2 (key, plaintext/ciphertext): the Rust runtime
+            // (`sky_aes_gcm_encrypt(key, plaintext)` etc.) prepends/strips a
+            // fresh random nonce internally, so — unlike the Go backend which
+            // took an explicit nonce/AAD arg — there is no third argument.
             Self::CryptoAesGcmEncrypt => {
-                d("Crypto", "aesGcmEncrypt", 3, Pure, "sky_aes_gcm_encrypt")
+                d("Crypto", "aesGcmEncrypt", 2, Pure, "sky_aes_gcm_encrypt")
             }
             Self::CryptoAesGcmDecrypt => {
-                d("Crypto", "aesGcmDecrypt", 3, Pure, "sky_aes_gcm_decrypt")
+                d("Crypto", "aesGcmDecrypt", 2, Pure, "sky_aes_gcm_decrypt")
             }
             Self::CryptoChacha20Encrypt => {
-                d("Crypto", "chacha20Encrypt", 3, Pure, "sky_chacha20_encrypt")
+                d("Crypto", "chacha20Encrypt", 2, Pure, "sky_chacha20_encrypt")
             }
             Self::CryptoChacha20Decrypt => {
-                d("Crypto", "chacha20Decrypt", 3, Pure, "sky_chacha20_decrypt")
+                d("Crypto", "chacha20Decrypt", 2, Pure, "sky_chacha20_decrypt")
             }
             Self::CryptoAesKeyFromPassword => d(
                 "Crypto",
@@ -833,9 +837,12 @@ impl StdlibKernel {
             Self::UuidV7 => d("Uuid", "v7", 0, Pure, "uuid_v7"),
             Self::UuidParse => d("Uuid", "parse", 1, Pure, "uuid_parse"),
             // ── Jwt ─────────────────────────────────────────────────────────
-            Self::JwtEncodeHs256 => d("Jwt", "encodeHs256", 3, Pure, "sky_jwt_encode_hs256"),
+            // Encode arity is 2 (secret/key, claims_json): the Rust runtime
+            // `sky_jwt_encode_hs256(secret, claims_json)` / `_rs256(key_pem,
+            // claims_json)` take exactly two args.
+            Self::JwtEncodeHs256 => d("Jwt", "encodeHs256", 2, Pure, "sky_jwt_encode_hs256"),
             Self::JwtDecodeHs256 => d("Jwt", "decodeHs256", 2, Pure, "sky_jwt_decode_hs256"),
-            Self::JwtEncodeRs256 => d("Jwt", "encodeRs256", 3, Pure, "sky_jwt_encode_rs256"),
+            Self::JwtEncodeRs256 => d("Jwt", "encodeRs256", 2, Pure, "sky_jwt_encode_rs256"),
             Self::JwtDecodeRs256 => d("Jwt", "decodeRs256", 2, Pure, "sky_jwt_decode_rs256"),
             // ── Task combinators ────────────────────────────────────────────
             Self::TaskSucceed => d("Task", "succeed", 1, Pure, "task_succeed"),
