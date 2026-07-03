@@ -353,21 +353,24 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     // first-class function / opaque wrapper (directly or through a carrier /
     // another non-derivable enum) cannot derive those traits — emit no auto
     // derives (the hand-written `SkyStringify` impl below still gives it a total
-    // string form). serde rides on `self_derivable && uses_live` below — but
-    // NOTE (tracked as the Model-admissibility follow-up): this emit-gate does
-    // NOT prove Model admissibility. Two axes stay open here: (1) skyc does not
-    // yet reject a non-derivable type USED AS a Live/Tui/Webview Model at app
-    // entry, so such a Model still exit-0-then-cargo-fails on live_app's
-    // Clone/serde bounds; (2) `is_derivable` means CDPeq-support, NOT
-    // serde-support — a CDPeq-but-not-serde payload (Html/Element/Color/UiPlain)
-    // still gets serde forced here and cargo-fails. Both need an app-entry Model
-    // gate + an `ir_type_is_serde` predicate; do not read this as a seal proof
-    // for Live Models.
+    // string form).
     let self_derivable = ctx.enum_is_derivable(def.name);
+    // #93 seal: the serde derive is gated on the SERDE predicate, not the CDPeq
+    // one. serde-support ⊊ CDPeq-support: a `Clone + Debug + PartialEq` enum whose
+    // payload reaches a `Html` / `Element` / `Color` / `UiPlain` value (serde-less
+    // but derivable) must NOT be forced to `serde::Serialize` / `Deserialize` —
+    // doing so under `uses_live` is an exit-0-then-cargo-fail (E0277). Such an enum
+    // still gets its `#[derive(Clone, Debug, PartialEq)]` (self_derivable), just
+    // without serde, so it stays cargo-buildable. `enum_is_serde ⇒ enum_is_derivable`
+    // (the serde fixpoint is a demotion of the derivable one), so serde is never
+    // added without CDPeq. #91's app-entry Model gate independently rejects a
+    // NON-serde type used AS a Live/Tui/Webview Model; this gate covers every OTHER
+    // (non-Model) emitted type in a Live program.
+    let self_serde = ctx.enum_is_serde(def.name);
     // When the program uses Std.Live, model types must implement serde traits
     // so the session store can serialise/deserialise them. The live runtime
     // requires `Model: serde::Serialize + serde::de::DeserializeOwned`.
-    let serde_derives = if self_derivable && ctx.uses_live {
+    let serde_derives = if self_serde && ctx.uses_live {
         ", serde::Serialize, serde::Deserialize"
     } else {
         ""
@@ -492,14 +495,17 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
     // function / opaque wrapper field (directly or through a carrier / a
     // non-derivable enum) cannot derive those traits — emit no auto derives (the
     // hand-written `SkyStringify` impl below still gives it a total string form).
-    // serde rides on `is_derivable && uses_live` below. NOTE (tracked, Model-
-    // admissibility follow-up): this does NOT prove Model admissibility — skyc
-    // does not yet gate a non-derivable/non-serde type used AS a Live/Tui/Webview
-    // Model at app entry, so such a Model still exit-0-then-cargo-fails on
-    // live_app's bounds; and `is_derivable` is CDPeq-support, not serde-support,
-    // so a CDPeq-but-not-serde field (Html/Element/Color/UiPlain) still forces
-    // serde here and cargo-fails. Needs an app-entry Model gate + ir_type_is_serde.
-    let serde_derives = if rec.is_derivable && ctx.uses_live {
+    //
+    // #93 seal: the serde derive is gated on `rec.is_serde` (the per-record serde
+    // fixpoint), NOT `rec.is_derivable`. A CDPeq-but-not-serde record — e.g. a
+    // view-helper `{ title : String, body : Html Msg }` in a Std.Live program —
+    // keeps its `#[derive(Clone, Debug, PartialEq)]` but is NOT forced to
+    // `serde::Serialize` / `Deserialize`, which would be an exit-0-then-cargo-fail
+    // (E0277: `Html<Msg>: Serialize` unsatisfied). `is_serde ⇒ is_derivable`
+    // (serde-OK leaves ⊂ derivable leaves), so serde is never added without CDPeq.
+    // #91's app-entry Model gate independently rejects a non-serde type used AS a
+    // Live/Tui/Webview Model; this gate covers every OTHER (non-Model) record.
+    let serde_derives = if rec.is_serde && ctx.uses_live {
         ", serde::Serialize, serde::Deserialize"
     } else {
         ""

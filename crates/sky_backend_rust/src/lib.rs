@@ -104,10 +104,20 @@ pub(crate) struct RecordStruct {
     /// `#[derive(Clone, Debug, PartialEq)]` set (see
     /// [`sky_ir::ir_type_is_derivable`]). Computed once at [`EmitCtx::build`]
     /// against the whole-program enum-derivability fixpoint. The emitter reads
-    /// this flag to choose the derive set, so a record holding a first-class
+    /// this flag to choose the `CDPeq` derive set, so a record holding a first-class
     /// function / opaque wrapper can never reach the unconditional derive by
     /// construction (#87 seal).
     pub is_derivable: bool,
+    /// `true` iff every field's type renders to a Rust type that ALSO derives
+    /// `serde::Serialize` + `serde::Deserialize` (see [`sky_ir::ir_type_is_serde`]).
+    /// Computed once at [`EmitCtx::build`] against the whole-program enum-serde
+    /// fixpoint. STRICTLY implies [`Self::is_derivable`] (serde-OK leaves are a
+    /// subset of derivable leaves). The emitter reads this flag — NOT
+    /// `is_derivable` — to gate the serde derive under `uses_live`, so a
+    /// `CDPeq`-but-not-serde record (a view-helper holding `Html` / `Element` /
+    /// `Color` / a `UiPlain` value) in a Std.Live program never gets serde forced
+    /// onto it and therefore never exit-0-then-cargo-fails on `E0277` (#93 seal).
+    pub is_serde: bool,
 }
 
 /// Shared emission context: the interner plus the precomputed Sky → Rust name
@@ -410,12 +420,25 @@ impl<'a> EmitCtx<'a> {
                     .iter()
                     .all(|(_, ty)| sky_ir::ir_type_is_derivable(ty, &lookup))
             };
+            // #93 seal: a record struct is serde-OK iff every field type is,
+            // consulting the parallel enum-serde fixpoint. Strictly implies
+            // `is_derivable` (serde-OK leaves ⊂ derivable leaves), so a record
+            // never gets serde without CDPeq. Gates the serde derive under
+            // `uses_live` so a CDPeq-but-not-serde record (Html/Element/Color/
+            // UiPlain field) in a Live program is not forced to serde.
+            let is_serde = {
+                let lookup = |q: Symbol| enum_serde.get(&q).copied().unwrap_or(true);
+                fields
+                    .iter()
+                    .all(|(_, ty)| sky_ir::ir_type_is_serde(ty, &lookup))
+            };
             record_by_fieldset.insert(key, record_structs.len());
             record_structs.push(RecordStruct {
                 name,
                 fields,
                 type_params,
                 is_derivable,
+                is_serde,
             });
         }
 
