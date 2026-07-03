@@ -59,18 +59,26 @@ recorded reference.
   invalid state (non-UTF-8 in a `String`) unrepresentable.
 - **Sanctioned:** yes (`divergence:`). Goldens `m4e_bytes_*`.
 
-### B3 — `Encoding.base64Encode` / `hexEncode` over non-ASCII text
-- **Differs:** for the String-as-bytes surface, ipê's runtime uses a Latin-1
-  char-as-byte model (one codepoint U+0000..U+00FF → one byte), so
-  `hexEncode "café" → "636166e9"`. Go encodes the UTF-8 bytes of the text
-  (`→ "636166c3a9"`). **ASCII input is byte-identical.**
-- **Go-oracle relationship:** Go succeeds; only codepoints ≥ 0x80 diverge.
-- **Rationale:** the binary pipeline (email attachments, compression, WebSocket
-  frames, the `base64(hexDecode(hmac))` JWT path) must round-trip bytes ≥ 0x80
-  losslessly through a Rust `String`. A tracked follow-up migrates `Encoding.*`
-  onto the `Bytes` primitive so the text path can match Go while the binary path
-  stays lossless.
-- **Sanctioned:** yes (`divergence:`). Golden `m4f_encoding_nonascii_divergence`.
+### B3 — `Encoding.base64Encode` / `hexEncode` over non-ASCII text — ~~divergence~~ RETIRED (task #55a)
+- **Was:** ipê's runtime used a Latin-1 char-as-byte model that silently
+  truncated codepoints > 255 (`c as u8`), so `hexEncode "café" → "636166e9"` vs
+  Go's UTF-8 `"636166c3a9"`.
+- **Now (task #55a):** the `Encoding.*` text codecs encode a `String`'s UTF-8
+  bytes — **byte-identical to Go for BOTH ASCII and non-ASCII**. The
+  silent-truncation hole (a real security bug: two Basic-auth passwords differing
+  only above 0xFF collided) is closed; codepoints > 255 no longer collapse.
+  Golden `m4f_encoding_nonascii` now carries `oracle_divergence = false`.
+- **Related behavior change (recorded):** `base64Decode` / `hexDecode` now require
+  the decoded bytes to be valid UTF-8 and return `Err` otherwise (previously a
+  never-erroring lossy Latin-1 reinterpretation). This keeps
+  `decode (encode s) == Ok s` for every `String s`; raw-byte round-tripping moved
+  to `Std.Bytes` (`Vec<u8>`). No reachable caller depended on the old behavior
+  (the ASCII goldens round-trip identically; `jwt.rs` owns its own base64/hex).
+- **Deferred (#55b):** the runtime-internal binary pipelines (`compression.rs`,
+  `email.rs`, `ws_client.rs`) still use the Latin-1 `sky_bytes`/`bytes_to_sky`
+  helpers because they have no Sky-facing module in the skyc port yet; #55b
+  migrates them onto `Bytes`(`Vec<u8>`) and deletes the helpers. See
+  `docs/architecture/encoding-bytes-migration.md`.
 
 ### B4 — `Std.Money.allocate` over a negative total
 - **Differs:** ipê distributes the residue toward zero by sign so the shares sum
@@ -397,7 +405,7 @@ API-shape review):
 ## Counts
 
 - **Behavioral divergences:** 15 classes (B1–B15). Sanctioned/recorded: 42 goldens
-  carry a marker (`Math` 4, `Bytes` 5, `Encoding` 2, `Jwt` 5, `Db` 11, `Ui` 6,
+  carry a marker (`Math` 4, `Bytes` 5, `Encoding` 1, `Jwt` 5, `Db` 11, `Ui` 6,
   `Cmd`/`Sub` 3, `Uuid` 2, plus Go-failure kind-1 shapes and Money/case/toFloat
   sanctioned entries).
 - **Architectural divergences:** 13 (A1–A13); A8 and A13 are reference-ahead on

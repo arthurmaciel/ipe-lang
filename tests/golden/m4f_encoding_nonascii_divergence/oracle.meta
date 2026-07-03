@@ -1,6 +1,0 @@
-# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
-main_sky_sha256 = 7fb7473271f2b6c08a2cc63a2af116aaa72989fb2cd551fb0d91233fa084c889
-go_sky_version = sky dev
-exit_code = 0
-oracle_divergence = true
-divergence_reason = divergence: Encoding.base64Encode/hexEncode over non-ASCII text. The Sky-Rust runtime uses a Latin-1 char-as-byte model for the String-as-bytes surface (one codepoint U+0000..U+00FF → one byte), because Rust's String is UTF-8-constrained and the binary pipeline (email attachments, compression, WebSocket frames) must round-trip bytes ≥ 0x80 losslessly. Sky/Go's `string` is an arbitrary UTF-8 byte sequence, so Go encodes the UTF-8 bytes of non-ASCII text. ASCII is byte-identical. Divergence from Sky, rationale: Rust String UTF-8 invariant + lossless binary byte-pipeline. Follow-up tracked in docs/architecture/divergence-policy.md to migrate Encoding.* String callers onto the Bytes(Vec<u8>) primitive so base64Encode s == Bytes.toBase64 (Bytes.fromString s).

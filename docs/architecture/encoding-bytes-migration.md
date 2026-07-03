@@ -4,6 +4,39 @@ Status: APPROVED (guardian-synthesised). Task #55. Not yet implemented.
 Verified against HEAD 2026-07-03 (encoding.rs, jwt.rs, email.rs, compression.rs,
 ws_client.rs, server.rs, crates/sky_types/src/constrain.rs).
 
+> **SCOPE CORRECTION (2026-07-03, gap-1 enumeration before impl).** The panel
+> reasoned partly against the UPSTREAM `sky-stdlib/` tree. In the skyc PORT
+> (`crates/skyc/stdlib/`) there is **no `Compression.sky`, `Email.sky`, or
+> `WebSocket.sky`** — those modules are NOT ported yet, so they have no Sky-facing
+> binary surface to re-type. The swarm's "atomic step-3" (re-type
+> Compression/Email/WebSocket binary payloads `String→Bytes`) is therefore MOOT
+> in this tree, and `sky_bytes`/`bytes_to_sky` CANNOT be deleted — the
+> runtime-internal `compression.rs`/`email.rs`/`ws_client.rs` still consume them
+> and are the only consumers. Per the spec's own milestone-delay guard ("if step 3
+> can't land atomically → DELAY"), #55 SPLITS:
+>
+> - **#55a (lands now — reachable surface, exit-0 critical path):** (1) fix the
+>   ENCODE truncation — `base64_encode` + `encoding_hex_encode` use `s.as_bytes()`
+>   (UTF-8, Go parity) instead of `sky_bytes` (`url_encode` already UTF-8 via
+>   `utf8_percent_encode`); this also fixes the one Sky-adjacent security caller,
+>   `server.rs:1210` HTTP Basic-auth. (2) SCHEME the 6 Encoding kernels in
+>   `constrain.rs` (String→String encoders; String→Result Error String decoders),
+>   moving Encoding off the `Ty::Var(u32::MAX)` fallback → advances the exit-0
+>   seal. (3) flip the `m4f_encoding_nonascii_divergence` golden from the
+>   Latin-1 bug-recording (`café → Y2Fm6Q==`) to Go-parity (`Y2Fmw6k=`); ASCII
+>   goldens stay byte-identical. Add a non-ASCII red-discovery golden proving the
+>   truncation fails pre-fix. Decoder Latin-1→fallible (Shape A D5) is OPTIONAL in
+>   55a — keep current behavior if the golden set stays green; the type (`Result
+>   Error String`) is unchanged either way, so scheming is orthogonal.
+> - **#55b (deferred until Compression/Email/WebSocket are ported as Sky modules):**
+>   delete `sky_bytes`/`bytes_to_sky`, migrate the byte pipelines to the real
+>   `Bytes`(`Vec<u8>`) newtype, make decoders fallible, add the security
+>   non-collision + decode-back-compat goldens. Tracked as a follow-up; NOT a
+>   workaround — the reachable truncation IS closed by 55a; 55b only migrates
+>   currently-unreachable runtime-internal plumbing once its Sky surfaces exist.
+>
+> Everything below is the full Shape-A design; read it as the 55a+55b union.
+
 Principles order in force: security > correctness > soundness > efficiency >
 completeness > readability. Two rules: (1) parse, don't validate; (2) make
 invalid states unrepresentable.
