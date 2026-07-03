@@ -1604,6 +1604,12 @@ impl<'a> Lowerer<'a> {
         if b.has_eq() {
             set = set.with_eq();
         }
+        // Stringify (`toString` / `Log.*With`) → Rust `SkyStringify`. Like `eq`,
+        // it adds no `Copy` (a single stringify moves/borrows the value); the
+        // multi-use case is the general Clone concern, not Stringify-specific.
+        if b.has_show() {
+            set = set.with_show();
+        }
         // A `Set` element needs Rust `Ord` (`BTreeSet<A>`); a `Dict` key needs
         // `Hash + Ord` (`HashMap<K, V>` + the determinism-sorted key ops) plus
         // `Clone` (`Dict.union` / `Dict.map` duplicate keys). `Eq` arrives as
@@ -3287,6 +3293,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListConcat
                 | KernelFn::ListIsEmpty
                 | KernelFn::BasicsNot
+                | KernelFn::BasicsToString
                 | KernelFn::BasicsIdentity
                 | KernelFn::BasicsFst
                 | KernelFn::BasicsSnd
@@ -4041,6 +4048,7 @@ impl<'a> Lowerer<'a> {
                     ("Basics", "snd") => Ok(Callee::Kernel(KernelFn::BasicsSnd)),
                     ("Basics", "modBy") => Ok(Callee::Kernel(KernelFn::BasicsModBy)),
                     ("Basics", "clamp") => Ok(Callee::Kernel(KernelFn::BasicsClamp)),
+                    ("Basics", "toString") => Ok(Callee::Kernel(KernelFn::BasicsToString)),
                     // ── Maybe kernels ──────────────────────────────────────
                     ("Maybe", "withDefault") => Ok(Callee::Kernel(KernelFn::MaybeWithDefault)),
                     ("Maybe", "map") => Ok(Callee::Kernel(KernelFn::MaybeMap)),

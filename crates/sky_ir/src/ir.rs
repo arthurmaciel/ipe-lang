@@ -208,6 +208,7 @@ impl BoundSet {
     const EQ: u16 = 1 << 6;
     const ORD_TOTAL: u16 = 1 << 7;
     const HASH: u16 = 1 << 8;
+    const SHOW: u16 = 1 << 9;
 
     /// The empty bound set: an unconstrained, structurally-parametric variable.
     pub const UNBOUNDED: Self = Self(0);
@@ -274,6 +275,12 @@ impl BoundSet {
         Self(self.0 | Self::EQ)
     }
 
+    /// This set with the `SkyStringify` (Sky `toString` / `Log.*With`) bound.
+    #[must_use]
+    pub const fn with_show(self) -> Self {
+        Self(self.0 | Self::SHOW)
+    }
+
     /// This set with the `Copy` (bit-copyable reuse) bound.
     #[must_use]
     pub const fn with_copy(self) -> Self {
@@ -314,6 +321,12 @@ impl BoundSet {
     #[must_use]
     pub const fn has_eq(self) -> bool {
         self.0 & Self::EQ != 0
+    }
+
+    /// Whether the `SkyStringify` bound is set.
+    #[must_use]
+    pub const fn has_show(self) -> bool {
+        self.0 & Self::SHOW != 0
     }
 
     /// Whether the `Copy` bound is set.

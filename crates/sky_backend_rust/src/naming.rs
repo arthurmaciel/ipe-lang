@@ -304,6 +304,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::BasicsSnd => "basics_snd",
         KernelFn::BasicsModBy => "basics_mod_by",
         KernelFn::BasicsClamp => "basics_clamp",
+        KernelFn::BasicsToString => "basics_to_string",
         KernelFn::MaybeWithDefault => "maybe_with_default",
         KernelFn::MaybeMap => "sky_maybe_map",
         KernelFn::MaybeAndThen => "sky_maybe_and_then",

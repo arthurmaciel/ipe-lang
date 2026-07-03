@@ -169,6 +169,7 @@ pub enum StdlibKernel {
     BasicsFst,
     BasicsSnd,
     BasicsModBy,
+    BasicsToString,
     /// `clamp : comparable -> comparable -> comparable -> comparable`. Carries
     /// the `Comparable a` (Ord) obligation via `constrain_var_kernel`, exactly
     /// like `Math.min` / `Math.max`.
@@ -694,6 +695,7 @@ impl StdlibKernel {
             Self::BasicsSnd => d("Basics", "snd", 1, Pure, "basics_snd"),
             Self::BasicsModBy => d("Basics", "modBy", 2, Pure, "basics_mod_by"),
             Self::BasicsClamp => d("Basics", "clamp", 3, Pure, "basics_clamp"),
+            Self::BasicsToString => d("Basics", "toString", 1, Pure, "basics_to_string"),
             // ── Maybe ───────────────────────────────────────────────────────
             Self::MaybeWithDefault => d("Maybe", "withDefault", 2, Pure, "maybe_with_default"),
             Self::MaybeMap => d("Maybe", "map", 2, Pure, "sky_maybe_map"),
@@ -1303,6 +1305,7 @@ impl StdlibKernel {
         Self::BasicsSnd,
         Self::BasicsModBy,
         Self::BasicsClamp,
+        Self::BasicsToString,
         // Maybe
         Self::MaybeWithDefault,
         Self::MaybeMap,
