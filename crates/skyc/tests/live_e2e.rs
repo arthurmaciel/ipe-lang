@@ -97,6 +97,64 @@ main =
         }
 "#;
 
+/// #93 seal: a `Std.Live` program with a NON-Model view-helper record that holds
+/// an `Html` field (`Section = { title : String, body : Html Msg }`) and a
+/// plain-data Model.
+///
+/// `Section` is `CDPeq`-supporting (`Html<Msg>` derives Clone/Debug/PartialEq) but
+/// NOT serde-supporting. Before the #93 fix the emitter gated the serde derive on
+/// the `CDPeq` flag, so `Section` got `#[derive(..., serde::Serialize,
+/// serde::Deserialize)]` forced onto it under `uses_live` → `skyc` exit 0 then
+/// `cargo build` E0277 (`Html<MainMsg>: Serialize` unsatisfied). The fix gates the
+/// serde derive on the per-record serde flag, so `Section` keeps its `CDPeq` derive
+/// WITHOUT serde and the project is cargo-buildable. The Model (`{ count : Int }`)
+/// is plain data and still gets serde. `#91`'s Model-admissibility gate is NOT
+/// tripped because the non-serde record is a view helper, not the Model.
+const SKY_LIVE_HTML_HELPER: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg = Increment | Decrement
+
+type alias Model = { count : Int }
+
+type alias Section = { title : String, body : Html Msg }
+
+renderSection : Section -> Element Msg
+renderSection section =
+    Ui.column [] [ Ui.text section.title, Ui.html section.body ]
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+        Decrement ->
+            ( { model | count = model.count - 1 }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (renderSection { title = "Count", body = Ui.layout [] (Ui.text (String.fromInt model.count)) })
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        }
+"#;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Compile a Sky program string, build the emitted Rust project, and return
@@ -441,6 +499,27 @@ fn live_counter_build_only() -> Result<(), BoxError> {
 
     // compile_and_build already does skyc + cargo build; success is the proof.
     let _exe = compile_and_build("live_build_only", SKY_LIVE_COUNTER)?;
+    Ok(())
+}
+
+/// #93 seal — BUILD-ONLY: a Std.Live program with a NON-Model view-helper record
+/// holding an `Html` field must compile end-to-end.
+///
+/// A successful `skyc` + `cargo build` IS the assertion. Before the #93 fix this
+/// project was `skyc` exit 0 then `cargo build` E0277 (`Html<MainMsg>: Serialize`
+/// unsatisfied on the `Section` struct's forced serde derive). See
+/// `SKY_LIVE_HTML_HELPER` for the full rationale.
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn live_html_helper_record_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build("live_html_helper", SKY_LIVE_HTML_HELPER)?;
     Ok(())
 }
 

@@ -21,9 +21,22 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::{Interner, Symbol};
-use sky_ir::{EnumDef, Expr, Func, FuncId, IrType, ModPath, Module, Program, TypeDef, Variant};
+use sky_ir::{
+    EnumDef, Expr, Func, FuncId, IrType, ModPath, Module, Program, TypeDef, UiCtor, Variant,
+};
 
 fn program(name: Symbol, types: Vec<TypeDef>, funcs: Vec<Func>) -> Program {
+    program_with_live(name, types, funcs, false)
+}
+
+/// Like [`program`] but lets the test set `uses_live`, so the emitter takes the
+/// Std.Live serde-derive path (#93 gate exercise).
+fn program_with_live(
+    name: Symbol,
+    types: Vec<TypeDef>,
+    funcs: Vec<Func>,
+    uses_live: bool,
+) -> Program {
     Program {
         modules: vec![Module {
             name: ModPath(vec![name]),
@@ -33,12 +46,24 @@ fn program(name: Symbol, types: Vec<TypeDef>, funcs: Vec<Func>) -> Program {
             records: vec![],
             uses_tea: false,
             uses_server: false,
-            uses_ui: false,
-            uses_live: false,
+            uses_ui: uses_live,
+            uses_live,
             uses_tui: false,
             uses_webview: false,
         }],
     }
+}
+
+/// Classify the derive line that immediately precedes the monomorphic
+/// `pub struct <name> {` declaration. Returns `(has_cdpeq_only, has_serde)`:
+/// a serde-forced struct matches the second form (which is a superset of the
+/// first as text), so `has_serde` is checked against the exact serde line.
+fn derive_flavours(src: &str, name: &str) -> (bool, bool) {
+    let decl = format!("\npub struct {name} {{");
+    let cdpeq_only = format!("#[derive(Clone, Debug, PartialEq)]{decl}");
+    let with_serde =
+        format!("#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]{decl}");
+    (src.contains(&cdpeq_only), src.contains(&with_serde))
 }
 
 fn emit(interner: &Interner, prog: &Program) -> DResult<String> {
@@ -207,6 +232,105 @@ fn enum_with_function_payload_has_no_derive() -> DResult<()> {
     assert!(
         src.contains("MainHolder::Wrap(_)"),
         "function payload binds `_` in the SkyStringify arm:\n{src}"
+    );
+    Ok(())
+}
+
+/// #93 seal: in a `Std.Live` program, a NON-Model view-helper record that holds
+/// an `Html` field is `CDPeq`-supporting (`Html<M>` derives `Clone, Debug,
+/// PartialEq`) but NOT serde-supporting (`Html<M>` is not `Serialize`). Before
+/// the #93 fix the serde derive was gated on the `CDPeq` flag (`is_derivable`), so
+/// such a record got `#[derive(..., serde::Serialize, serde::Deserialize)]`
+/// forced onto it → `skyc` exit 0 then `cargo` E0277. The gate now reads the
+/// per-record serde flag (`is_serde`): the helper keeps its `CDPeq` derive WITHOUT
+/// serde, while a sibling all-primitive record still gets the serde derive.
+///
+/// This is the emit-text half of the seal (fast, no cargo). The cargo-buildable
+/// half is proven end-to-end by `skyc`'s `live_e2e::live_html_helper_record_build_only`.
+#[test]
+fn live_html_helper_record_gets_cdpeq_without_serde() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    // Field symbols. The synthesised struct name is field-name-sorted PascalCase,
+    // so `{ body, title }` → `RecBodyTitle` and `{ count }` → `RecCount`.
+    let body = interner.intern("body")?;
+    let title = interner.intern("title")?;
+    let count = interner.intern("count")?;
+    let p = interner.intern("p")?;
+    let helper_fn = interner.intern("renderSection")?;
+    let model_fn = interner.intern("useModel")?;
+
+    // A view-helper record `{ body : Html Int, title : String }` — Html carrier
+    // makes it `CDPeq`-but-not-serde. `Html<Int>` (msg = Int) is enough; the serde
+    // predicate rejects every `IrType::Ui` carrier regardless of the msg type.
+    let mut helper_fields = BTreeMap::new();
+    helper_fields.insert(
+        body,
+        IrType::Ui {
+            ctor: UiCtor::Html,
+            msg: Box::new(IrType::Int),
+        },
+    );
+    helper_fields.insert(title, IrType::Str);
+    let helper_rec = IrType::Record(helper_fields);
+
+    // A plain-data Model record `{ count : Int }` — fully serde.
+    let mut model_fields = BTreeMap::new();
+    model_fields.insert(count, IrType::Int);
+    let model_rec = IrType::Record(model_fields);
+
+    // Two functions, each taking one record shape, so both shapes are synthesised.
+    let helper_func = Func {
+        id: FuncId::from_raw(0),
+        name: helper_fn,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        params: vec![(p, helper_rec)],
+        ret: IrType::Str,
+        body: Expr::Access {
+            record: Box::new(Expr::Var(p)),
+            field: title,
+        },
+    };
+    let model_func = Func {
+        id: FuncId::from_raw(1),
+        name: model_fn,
+        home: ModPath(vec![]),
+        type_params: vec![],
+        params: vec![(p, model_rec)],
+        ret: IrType::Int,
+        body: Expr::Access {
+            record: Box::new(Expr::Var(p)),
+            field: count,
+        },
+    };
+
+    let prog = program_with_live(main_mod, vec![], vec![helper_func, model_func], true);
+    let src = emit(&interner, &prog)?;
+
+    // The helper renders its Html field type — sanity that the shape survived.
+    assert!(
+        src.contains("body: sky_runtime::html::Html<i64>"),
+        "helper record's Html field rendered:\n{src}"
+    );
+
+    // #93 core: the Html-holding helper carries `CDPeq` WITHOUT serde.
+    let (helper_cdpeq, helper_serde) = derive_flavours(&src, "RecBodyTitle");
+    assert!(
+        helper_cdpeq,
+        "view-helper record must keep `#[derive(Clone, Debug, PartialEq)]`:\n{src}"
+    );
+    assert!(
+        !helper_serde,
+        "view-helper record holding `Html` must NOT be forced to serde (E0277):\n{src}"
+    );
+
+    // Regression: a sibling all-primitive record in the same Live program still
+    // gets the serde derive (the fix only demotes non-serde records).
+    let (_model_cdpeq, model_serde) = derive_flavours(&src, "RecCount");
+    assert!(
+        model_serde,
+        "plain-data record in a Live program must still get serde:\n{src}"
     );
     Ok(())
 }
