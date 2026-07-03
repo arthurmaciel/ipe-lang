@@ -1851,7 +1851,8 @@ mod tests {
                  both declare (qualifier={:?}, name={:?}). \
                  decl() must be injective over non-internal ALL variants; \
                  stdlib_index's last-wins insert would silently drop one.",
-                decl.qualifier, decl.name,
+                decl.qualifier,
+                decl.name,
             );
         }
 
