@@ -1,0 +1,21 @@
+module Main exposing (main)
+
+-- SOUNDNESS regression (task #54): entropy is an EFFECT, not a memoizable pure
+-- value. `Uuid.v4 : () -> Task Error String`, so two separate `Uuid.v4 ()`
+-- calls re-evaluate and yield DIFFERENT ids. If v4 were typed as a pure
+-- `String` (the old arity-0 shape) the optimizer would be free to CSE the two
+-- references into one shared value, and this program would print "fail-same".
+-- It prints "ok-distinct".
+main =
+    Task.andThen
+        (\a ->
+            Task.andThen
+                (\b ->
+                    println
+                        (if a == b then
+                            "fail-same"
+
+                         else
+                            "ok-distinct"))
+                (Uuid.v4 ()))
+        (Uuid.v4 ())

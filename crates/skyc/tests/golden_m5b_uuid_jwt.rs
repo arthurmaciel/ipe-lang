@@ -20,10 +20,13 @@
 //!   `Main.sky` does not compile on the Go reference and the cached expected is
 //!   skyc's own output, NOT a Go run of the same source.
 //!
-//! * **UUID (`m5b_uuid_*`) — behavioural divergence.** The Go reference produces
-//!   a different result on these shapes (bare arity-0 `Uuid.v4` kernel value;
-//!   `Uuid.parse` of a canonical UUID). The cached expected is skyc's
-//!   (semantically correct) output.
+//! * **UUID (`m5b_uuid_*`) — soundness divergence.** `Uuid.v4` / `Uuid.v7` are
+//!   typed on the EFFECT tier (`() -> Task Error String`, task #54) because
+//!   entropy is not a memoizable pure value; the Go reference still types them as
+//!   bare `Uuid.v4 : String` (Limitation #7), so these Task-sequenced programs
+//!   are not co-typable with the Go backend and cannot be Go-oracled. The cached
+//!   expected is skyc's (semantically correct) output. `Uuid.parse` is the pure
+//!   `String -> Maybe String` parser on both backends.
 //!
 //! ## Byte-parity with Go IS proven — separately and explicitly
 //!
@@ -38,8 +41,12 @@
 //!
 //! ## Golden catalogue
 //!
-//! * `m5b_uuid_format` — `Uuid.v4`/`v7` length is 36 and the version nibble is
-//!   `4`/`7`; both round-trip through `Uuid.parse`.  Output: `"ok"`.
+//! * `m5b_uuid_format` — `Uuid.v4`/`v7` (each `() -> Task Error String`)
+//!   sequenced with `Task.andThen`: length is 36 and the version nibble is
+//!   `4`/`7`; a fresh `v4` round-trips through `Uuid.parse`.  Output: `"ok"`.
+//! * `m5b_uuid_distinct` — SOUNDNESS regression: two `Uuid.v4 ()` calls yield
+//!   DIFFERENT ids (entropy is an effect, not a CSE-able pure value).  Output:
+//!   `"ok-distinct"`.
 //! * `m5b_uuid_parse` — `Uuid.parse "not-a-uuid"` → `Nothing`;
 //!   `Uuid.parse "<valid-uuid>"` → `Just _`.  Output: `"ok"`.
 //! * `m5b_jwt_hs256_roundtrip` — `encodeHs256` then `decodeHs256` with the same
@@ -143,15 +150,28 @@ fn assert_token_byte_identical_to_go(name: &str, go_token: &str) {
 
 // ── UUID format + version nibble ─────────────────────────────────────────────
 
-/// `Uuid.v4` produces a 36-char string with version nibble `4`; `Uuid.v7`
-/// likewise with `7`; both round-trip through `Uuid.parse`.  Output: `"ok"`.
+/// `Uuid.v4` / `Uuid.v7` (each `() -> Task Error String`) sequenced with
+/// `Task.andThen`: a generated id is 36 chars with version nibble `4` / `7`, and
+/// a fresh `v4` round-trips through the pure `Uuid.parse`.  Output: `"ok"`.
 ///
-/// Recorded divergence (NOT Go-parity): the Go reference leaves the bare
-/// arity-0 `Uuid.v4` as a kernel function value (Limitation #7), so it differs
-/// on this shape. Expected holds skyc's correct output.
+/// Recorded soundness divergence (NOT Go-parity): the Go reference types
+/// `Uuid.v4` as a bare `String` (Limitation #7) and cannot express this
+/// Task-sequenced program. Expected holds skyc's correct output.
 #[test]
 fn uuid_format() {
     assert_runs_and_matches_oracle("m5b_uuid_format");
+}
+
+// ── UUID distinctness (entropy-is-an-effect soundness proof) ─────────────────
+
+/// SOUNDNESS regression (task #54): two `Uuid.v4 ()` calls in one program yield
+/// DIFFERENT ids. `Uuid.v4 : () -> Task Error String`, so the two references are
+/// distinct effect evaluations — NOT a memoizable pure `String` the optimizer
+/// could CSE into one shared value (which would print `"fail-same"`).  Output:
+/// `"ok-distinct"`.
+#[test]
+fn uuid_distinct() {
+    assert_runs_and_matches_oracle("m5b_uuid_distinct");
 }
 
 // ── UUID parse ────────────────────────────────────────────────────────────────

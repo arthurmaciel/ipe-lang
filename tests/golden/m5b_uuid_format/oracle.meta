@@ -1,6 +1,6 @@
 # Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
-main_sky_sha256 = 7a2a930e14ff0063d9200ccf46871e50fc672cb1c8b9093773772a28c073c44a
+main_sky_sha256 = a9981be6d2643f922b5e4fd8d588075ebd91ee45d87c78013a3285d6a79beb15
 go_sky_version = sky dev
 exit_code = 0
 oracle_divergence = true
-divergence_reason = sanctioned: the import-less arity-0 kernel value Uuid.v4 / Uuid.v7 evaluates to a fresh String call on the Rust backend (the documented bare-reference form), so the length and version-nibble checks hold. The Go reference leaves the bare reference as a kernel function value (CLAUDE.md Limitation #7 — arity-0 kernel codegen) and its checks differ on this shape. Sky-Rust records its own output.
+divergence_reason = sanctioned: Sky-Rust types Uuid.v4 / Uuid.v7 on the EFFECT tier (() -> Task Error String) because entropy is not a memoizable pure value (task #54) — this makes "entropy typed as a pure String" unrepresentable. The Go reference still types them as bare `Uuid.v4 : String` (Limitation #7), so this Task-sequenced program is not co-typable with the Go backend and cannot be Go-oracled; Sky-Rust records its own (semantically correct) output "ok". Uuid.parse remains the pure String -> Maybe String parser on both backends.

@@ -646,7 +646,11 @@ mod parallel_abort_tests {
             SkyResult::Ok(v) => assert_eq!(v, vec![0, 1, 2, 3], "Ok results in input order"),
             SkyResult::Err(e) => panic!("expected Ok, got Err({})", e),
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 4, "every Ok task ran to completion");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            4,
+            "every Ok task ran to completion"
+        );
     }
 
     #[tokio::test]

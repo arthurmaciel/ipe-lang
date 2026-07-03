@@ -437,7 +437,9 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::CryptoRandomBytes => "crypto_random_bytes",
         KernelFn::CryptoRandomToken => "crypto_random_token",
         // ── Uuid kernels (M5b) ──────────────────────────────────────────────
-        // uuid_v4 / uuid_v7 return String directly — no E type, no concretisation.
+        // uuid_v4 / uuid_v7 are `() -> Task Error String` (task #54): entropy is
+        // an effect, so they return `SkyTask<E, String>` (E inferred from the
+        // enclosing Task chain, like `crypto_random_token`).
         KernelFn::UuidV4 => "uuid_v4",
         KernelFn::UuidV7 => "uuid_v7",
         // uuid_parse returns SkyMaybe<String> — no E type, no concretisation.
