@@ -3302,6 +3302,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::BasicsFst
                 | KernelFn::BasicsSnd
                 | KernelFn::ResultOkDefault
+                // ── Result/Maybe combine — arity 1 (#88) ─────────────────────
+                | KernelFn::ResultCombine
+                | KernelFn::MaybeCombine
                 // ── Dict arity-1 ─────────────────────────────────────────────
                 | KernelFn::DictIsEmpty
                 | KernelFn::DictSize
@@ -3515,6 +3518,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ResultMap
                 | KernelFn::ResultAndThen
                 | KernelFn::ResultMapError
+                // ── Result/Maybe andMap + Result.traverse — arity 2 (#88) ────
+                | KernelFn::ResultAndMap
+                | KernelFn::ResultTraverse
+                | KernelFn::MaybeAndMap
                 | KernelFn::MathMin
                 | KernelFn::MathMax
                 // ── Dict arity-2 ─────────────────────────────────────────────
@@ -3672,6 +3679,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JsonDecMap2
                 | KernelFn::JsonDecPRequired
                 | KernelFn::JsonDecPRequiredAt
+                // ── Result/Maybe map2 — arity 3 (#88) ────────────────────────
+                | KernelFn::ResultMap2
+                | KernelFn::MaybeMap2
                 // ── Crypto arity-3 (M5a) ─────────────────────────────────────
                 | KernelFn::CryptoRsaSha256Verify
                 // ── Http arity-3 (M5b) ───────────────────────────────────────
@@ -3706,6 +3716,9 @@ impl<'a> Lowerer<'a> {
             // ── JsonDec arity-4 (M4h) ─────────────────────────────────────────
             Callee::Kernel(
                 KernelFn::JsonDecMap3
+                // ── Result/Maybe map3 — arity 4 (#88) ────────────────────────
+                | KernelFn::ResultMap3
+                | KernelFn::MaybeMap3
                 | KernelFn::JsonDecPOptional
                 // ── Db arity-4 (M5b-db) ───────────────────────────────────────
                 // `DbQueryDecode : Db -> String -> List SqlValue -> Decoder a -> Task Error (List a)`
@@ -3739,8 +3752,13 @@ impl<'a> Lowerer<'a> {
                 // `DbInsertFieldsReturning : Db -> String -> List (String, SqlField) -> String -> Decoder a -> Task Error (List a)`
                 | KernelFn::DbInsertFieldsReturning
                 // `map4 : (a->b->c->d->e) -> Da -> Db -> Dc -> Dd -> De`
-                | KernelFn::DbDecMap4,
+                | KernelFn::DbDecMap4
+                // ── Result/Maybe map4 — arity 5 (#88) ────────────────────────
+                | KernelFn::ResultMap4
+                | KernelFn::MaybeMap4,
             ) => Ok(5),
+            // ── Result/Maybe map5 — arity 6 (#88) ────────────────────────────
+            Callee::Kernel(KernelFn::ResultMap5 | KernelFn::MaybeMap5) => Ok(6),
             // ── M7: Std.Ui / Std.Html render kernels ─────────────────────────
             // Arity 0: nullary constants — no arguments.
             Callee::Kernel(
@@ -4095,11 +4113,24 @@ impl<'a> Lowerer<'a> {
                     ("Maybe", "withDefault") => Ok(Callee::Kernel(KernelFn::MaybeWithDefault)),
                     ("Maybe", "map") => Ok(Callee::Kernel(KernelFn::MaybeMap)),
                     ("Maybe", "andThen") => Ok(Callee::Kernel(KernelFn::MaybeAndThen)),
+                    ("Maybe", "map2") => Ok(Callee::Kernel(KernelFn::MaybeMap2)),
+                    ("Maybe", "map3") => Ok(Callee::Kernel(KernelFn::MaybeMap3)),
+                    ("Maybe", "map4") => Ok(Callee::Kernel(KernelFn::MaybeMap4)),
+                    ("Maybe", "map5") => Ok(Callee::Kernel(KernelFn::MaybeMap5)),
+                    ("Maybe", "andMap") => Ok(Callee::Kernel(KernelFn::MaybeAndMap)),
+                    ("Maybe", "combine") => Ok(Callee::Kernel(KernelFn::MaybeCombine)),
                     // ── Result kernels ─────────────────────────────────────
                     ("Result", "withDefault") => Ok(Callee::Kernel(KernelFn::ResultWithDefault)),
                     ("Result", "map") => Ok(Callee::Kernel(KernelFn::ResultMap)),
                     ("Result", "andThen") => Ok(Callee::Kernel(KernelFn::ResultAndThen)),
                     ("Result", "mapError") => Ok(Callee::Kernel(KernelFn::ResultMapError)),
+                    ("Result", "map2") => Ok(Callee::Kernel(KernelFn::ResultMap2)),
+                    ("Result", "map3") => Ok(Callee::Kernel(KernelFn::ResultMap3)),
+                    ("Result", "map4") => Ok(Callee::Kernel(KernelFn::ResultMap4)),
+                    ("Result", "map5") => Ok(Callee::Kernel(KernelFn::ResultMap5)),
+                    ("Result", "andMap") => Ok(Callee::Kernel(KernelFn::ResultAndMap)),
+                    ("Result", "combine") => Ok(Callee::Kernel(KernelFn::ResultCombine)),
+                    ("Result", "traverse") => Ok(Callee::Kernel(KernelFn::ResultTraverse)),
                     // ── Math kernels ───────────────────────────────────────
                     // `min` / `max` are polymorphic `a -> a -> a` — lowered to
                     // the runtime's generic compare, NOT through any `Int`

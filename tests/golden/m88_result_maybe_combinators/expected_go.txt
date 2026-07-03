@@ -1,0 +1,14 @@
+6
+ERR
+[1,2,3]
+ERR
+[2,4,6]
+ERR
+60
+nothing
+[1,2,3]
+nothing
+10
+15
+ERR
+done

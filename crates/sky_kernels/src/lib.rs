@@ -203,11 +203,35 @@ pub enum StdlibKernel {
     MaybeWithDefault,
     MaybeMap,
     MaybeAndThen,
+    /// `Maybe.map2` .. `Maybe.map5` — apply an N-ary function across N `Maybe`s;
+    /// the first `Nothing` short-circuits (#88).
+    MaybeMap2,
+    MaybeMap3,
+    MaybeMap4,
+    MaybeMap5,
+    /// `Maybe.andMap : Maybe a -> Maybe (a -> b) -> Maybe b` (#88).
+    MaybeAndMap,
+    /// `Maybe.combine : List (Maybe a) -> Maybe (List a)` (#88).
+    MaybeCombine,
     // ── Result ──────────────────────────────────────────────────────────────
     ResultWithDefault,
     ResultMap,
     ResultAndThen,
     ResultMapError,
+    /// `Result.map2` .. `Result.map5` — apply an N-ary function across N
+    /// `Result`s over a shared error channel; the first `Err` short-circuits (#88).
+    ResultMap2,
+    ResultMap3,
+    ResultMap4,
+    ResultMap5,
+    /// `Result.andMap : Result e a -> Result e (a -> b) -> Result e b` (#88).
+    ResultAndMap,
+    /// `Result.combine : List (Result e a) -> Result e (List a)` (#88).
+    ResultCombine,
+    /// `Result.traverse : (a -> Result e b) -> List a -> Result e (List b)`
+    /// — one-pass map+collect; first `Err` short-circuits (#88, runtime fn
+    /// `result_traverse` pre-existed).
+    ResultTraverse,
     /// Internal: `Result.withDefault`-style defaulting used during lowering.
     /// Qualifier `"_internal_"` — not registered in the canon `QUALIFIERS`
     /// table and excluded from the tripwire test.
@@ -753,11 +777,25 @@ impl StdlibKernel {
             Self::MaybeWithDefault => d("Maybe", "withDefault", 2, Pure, "maybe_with_default"),
             Self::MaybeMap => d("Maybe", "map", 2, Pure, "sky_maybe_map"),
             Self::MaybeAndThen => d("Maybe", "andThen", 2, Pure, "sky_maybe_and_then"),
+            // `mapN` arity = 1 (fn) + N containers; `andMap` = 2; `combine` = 1.
+            Self::MaybeMap2 => d("Maybe", "map2", 3, Pure, "maybe_map2"),
+            Self::MaybeMap3 => d("Maybe", "map3", 4, Pure, "maybe_map3"),
+            Self::MaybeMap4 => d("Maybe", "map4", 5, Pure, "maybe_map4"),
+            Self::MaybeMap5 => d("Maybe", "map5", 6, Pure, "maybe_map5"),
+            Self::MaybeAndMap => d("Maybe", "andMap", 2, Pure, "maybe_and_map"),
+            Self::MaybeCombine => d("Maybe", "combine", 1, Pure, "maybe_combine"),
             // ── Result ──────────────────────────────────────────────────────
             Self::ResultWithDefault => d("Result", "withDefault", 2, Pure, "result_with_default"),
             Self::ResultMap => d("Result", "map", 2, Pure, "sky_result_map"),
             Self::ResultAndThen => d("Result", "andThen", 2, Pure, "sky_result_and_then"),
             Self::ResultMapError => d("Result", "mapError", 2, Pure, "sky_result_map_error"),
+            Self::ResultMap2 => d("Result", "map2", 3, Pure, "result_map2"),
+            Self::ResultMap3 => d("Result", "map3", 4, Pure, "result_map3"),
+            Self::ResultMap4 => d("Result", "map4", 5, Pure, "result_map4"),
+            Self::ResultMap5 => d("Result", "map5", 6, Pure, "result_map5"),
+            Self::ResultAndMap => d("Result", "andMap", 2, Pure, "result_and_map"),
+            Self::ResultCombine => d("Result", "combine", 1, Pure, "result_combine"),
+            Self::ResultTraverse => d("Result", "traverse", 2, Pure, "result_traverse"),
             // Internal: qualifier starts with '_' → skipped by tripwire test.
             Self::ResultOkDefault => d("_internal_", "okDefault", 1, Pure, "ok_res"),
             // ── Math ────────────────────────────────────────────────────────
@@ -1381,11 +1419,24 @@ impl StdlibKernel {
         Self::MaybeWithDefault,
         Self::MaybeMap,
         Self::MaybeAndThen,
+        Self::MaybeMap2,
+        Self::MaybeMap3,
+        Self::MaybeMap4,
+        Self::MaybeMap5,
+        Self::MaybeAndMap,
+        Self::MaybeCombine,
         // Result
         Self::ResultWithDefault,
         Self::ResultMap,
         Self::ResultAndThen,
         Self::ResultMapError,
+        Self::ResultMap2,
+        Self::ResultMap3,
+        Self::ResultMap4,
+        Self::ResultMap5,
+        Self::ResultAndMap,
+        Self::ResultCombine,
+        Self::ResultTraverse,
         Self::ResultOkDefault, // qualifier "_internal_" → tripwire skips
         // Math
         Self::MathMin,

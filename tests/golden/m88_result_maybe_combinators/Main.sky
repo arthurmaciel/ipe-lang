@@ -1,0 +1,196 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+
+
+-- A 3-arg builder passed to `Result.map3` / `Maybe.map3` as a MULTI-ARG
+-- function value (the same shape a record-alias auto-constructor takes).
+combine3 : Int -> Int -> Int -> Int
+combine3 a b c =
+    a + b + c
+
+
+okInt : Int -> Result Error Int
+okInt n =
+    Ok n
+
+
+errInt : Result Error Int
+errInt =
+    Err (Error.invalidInput "boom")
+
+
+-- `Result.map3` over three Ok values → Ok 6.
+m3ok : Result Error Int
+m3ok =
+    Result.map3 combine3 (okInt 1) (okInt 2) (okInt 3)
+
+
+-- `Result.map3` short-circuits on the first Err (the middle argument).
+m3err : Result Error Int
+m3err =
+    Result.map3 combine3 (okInt 1) errInt (okInt 3)
+
+
+-- `Result.combine` over all-Ok → Ok [1,2,3].
+combOk : Result Error (List Int)
+combOk =
+    Result.combine [ okInt 1, okInt 2, okInt 3 ]
+
+
+-- `Result.combine` short-circuits on the Err element.
+combErr : Result Error (List Int)
+combErr =
+    Result.combine [ okInt 1, errInt, okInt 3 ]
+
+
+-- `Result.traverse` maps + collects in one pass; first Err short-circuits.
+doubleOk : Int -> Result Error Int
+doubleOk n =
+    if n < 0 then
+        Err (Error.invalidInput "neg")
+
+    else
+        Ok (n * 2)
+
+
+travOk : Result Error (List Int)
+travOk =
+    Result.traverse doubleOk [ 1, 2, 3 ]
+
+
+travErr : Result Error (List Int)
+travErr =
+    Result.traverse doubleOk [ 1, -2, 3 ]
+
+
+-- `Maybe.map3` over three Just values → Just 60; Nothing short-circuits.
+m3just : Maybe Int
+m3just =
+    Maybe.map3 combine3 (Just 10) (Just 20) (Just 30)
+
+
+m3nothing : Maybe Int
+m3nothing =
+    Maybe.map3 combine3 (Just 10) Nothing (Just 30)
+
+
+-- `Maybe.combine` over all-Just → Just [1,2,3]; Nothing short-circuits.
+mcombOk : Maybe (List Int)
+mcombOk =
+    Maybe.combine [ Just 1, Just 2, Just 3 ]
+
+
+mcombNothing : Maybe (List Int)
+mcombNothing =
+    Maybe.combine [ Just 1, Nothing, Just 3 ]
+
+
+-- A 5-arg builder for `Result.map4` / `Result.map5` (max arity).
+combine4 : Int -> Int -> Int -> Int -> Int
+combine4 a b c d =
+    a + b + c + d
+
+
+combine5 : Int -> Int -> Int -> Int -> Int -> Int
+combine5 a b c d e =
+    a + b + c + d + e
+
+
+m4ok : Result Error Int
+m4ok =
+    Result.map4 combine4 (okInt 1) (okInt 2) (okInt 3) (okInt 4)
+
+
+m5ok : Result Error Int
+m5ok =
+    Result.map5 combine5 (okInt 1) (okInt 2) (okInt 3) (okInt 4) (okInt 5)
+
+
+m5err : Result Error Int
+m5err =
+    Result.map5 combine5 (okInt 1) (okInt 2) (okInt 3) errInt (okInt 5)
+
+
+showR : Result Error Int -> String
+showR r =
+    case r of
+        Ok n ->
+            String.fromInt n
+
+        Err _ ->
+            "ERR"
+
+
+showRL : Result Error (List Int) -> String
+showRL r =
+    case r of
+        Ok xs ->
+            "[" ++ String.join "," (List.map String.fromInt xs) ++ "]"
+
+        Err _ ->
+            "ERR"
+
+
+showM : Maybe Int -> String
+showM m =
+    case m of
+        Just n ->
+            String.fromInt n
+
+        Nothing ->
+            "nothing"
+
+
+showML : Maybe (List Int) -> String
+showML m =
+    case m of
+        Just xs ->
+            "[" ++ String.join "," (List.map String.fromInt xs) ++ "]"
+
+        Nothing ->
+            "nothing"
+
+
+main =
+    let
+        _ =
+            println (showR m3ok)
+
+        _ =
+            println (showR m3err)
+
+        _ =
+            println (showRL combOk)
+
+        _ =
+            println (showRL combErr)
+
+        _ =
+            println (showRL travOk)
+
+        _ =
+            println (showRL travErr)
+
+        _ =
+            println (showM m3just)
+
+        _ =
+            println (showM m3nothing)
+
+        _ =
+            println (showML mcombOk)
+
+        _ =
+            println (showML mcombNothing)
+
+        _ =
+            println (showR m4ok)
+
+        _ =
+            println (showR m5ok)
+
+        _ =
+            println (showR m5err)
+    in
+    println "done"

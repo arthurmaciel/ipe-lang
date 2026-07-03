@@ -345,10 +345,23 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::MaybeWithDefault => "maybe_with_default",
         KernelFn::MaybeMap => "sky_maybe_map",
         KernelFn::MaybeAndThen => "sky_maybe_and_then",
+        KernelFn::MaybeMap2 => "maybe_map2",
+        KernelFn::MaybeMap3 => "maybe_map3",
+        KernelFn::MaybeMap4 => "maybe_map4",
+        KernelFn::MaybeMap5 => "maybe_map5",
+        KernelFn::MaybeAndMap => "maybe_and_map",
+        KernelFn::MaybeCombine => "maybe_combine",
         KernelFn::ResultWithDefault => "result_with_default",
         KernelFn::ResultMap => "sky_result_map",
         KernelFn::ResultAndThen => "sky_result_and_then",
         KernelFn::ResultMapError => "sky_result_map_error",
+        KernelFn::ResultMap2 => "result_map2",
+        KernelFn::ResultMap3 => "result_map3",
+        KernelFn::ResultMap4 => "result_map4",
+        KernelFn::ResultMap5 => "result_map5",
+        KernelFn::ResultAndMap => "result_and_map",
+        KernelFn::ResultCombine => "result_combine",
+        KernelFn::ResultTraverse => "result_traverse",
         // `Math.min` / `Math.max` map to the runtime's generic
         // `math_min<T: PartialOrd>` / `math_max<T: PartialOrd>`: a real
         // polymorphic compare at the argument's actual type — NO `Int`
