@@ -80,3 +80,24 @@ fn list_ops_wiring_runs_with_parity() {
         "[1,2,3,4] [1,2,3] [9,8] [] [] [9,8] [0,1,2] [1,1,2,2] [0,1,2] zip=2 T F"
     );
 }
+
+/// #72 — the List HOFs `any` / `all` / `find` are callable (same SKY-L0108 class
+/// as #68). Before wiring, `List.any`/`all` were canon members with no
+/// `KernelFn` (id=None → SKY-L0108 post-seal), and `find` was absent from the
+/// member array. `list_find` is new; `list_any`/`list_all` pre-existed.
+#[test]
+fn list_hof_any_all_find_runs() {
+    if !e2e_enabled() {
+        return;
+    }
+    let dir = compile_golden("m_list_hof");
+    let out = support::build_and_run_emitted("m_list_hof", &dir);
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "expected a clean exit; got {:?}",
+        out.exit_code
+    );
+    // any (has even) = T ; all (>0) = T ; find (>2) = 3 ; find (>100) = -1.
+    assert_eq!(out.stdout.trim(), "TT 3 -1");
+}

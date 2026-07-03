@@ -161,6 +161,20 @@ pub fn list_all<T0>(f: impl Fn(T0) -> bool + Clone, list: Vec<T0>) -> bool {
     list.into_iter().all(f)
 }
 
+/// `Sky.Core.List.find : (a -> Bool) -> List a -> Maybe a` — the first element
+/// satisfying the predicate, or `Nothing`. The predicate is by-value
+/// `Fn(T0) -> bool` (the shape codegen emits — same as `list_filter`), so the
+/// element is cloned before testing and the original returned on a hit.
+/// Iterative (short-circuits); total.
+pub fn list_find<T0: Clone>(f: impl Fn(T0) -> bool + Clone, list: Vec<T0>) -> SkyMaybe<T0> {
+    for x in list {
+        if f(x.clone()) {
+            return SkyMaybe::Just(x);
+        }
+    }
+    SkyMaybe::Nothing
+}
+
 // ── Sorting (mirrors Go's List_sort / List_sortBy; sortWith added for Rust) ──
 //
 // All three are STABLE (Rust's `Vec::sort_by` / `sort_by_key` are stable, matching

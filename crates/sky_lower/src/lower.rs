@@ -3466,6 +3466,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListCons
                 | KernelFn::ListConcatMap
                 | KernelFn::ListIndexedMap
+                | KernelFn::ListAny
+                | KernelFn::ListAll
+                | KernelFn::ListFind
                 | KernelFn::MaybeWithDefault
                 | KernelFn::MaybeMap
                 | KernelFn::MaybeAndThen
@@ -4005,6 +4008,9 @@ impl<'a> Lowerer<'a> {
                     ("List", "isEmpty") => Ok(Callee::Kernel(KernelFn::ListIsEmpty)),
                     ("List", "concatMap") => Ok(Callee::Kernel(KernelFn::ListConcatMap)),
                     ("List", "indexedMap") => Ok(Callee::Kernel(KernelFn::ListIndexedMap)),
+                    ("List", "any") => Ok(Callee::Kernel(KernelFn::ListAny)),
+                    ("List", "all") => Ok(Callee::Kernel(KernelFn::ListAll)),
+                    ("List", "find") => Ok(Callee::Kernel(KernelFn::ListFind)),
                     // ── Maybe kernels ──────────────────────────────────────
                     ("Maybe", "withDefault") => Ok(Callee::Kernel(KernelFn::MaybeWithDefault)),
                     ("Maybe", "map") => Ok(Callee::Kernel(KernelFn::MaybeMap)),

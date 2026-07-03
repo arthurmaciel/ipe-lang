@@ -277,6 +277,7 @@ impl Env {
                     "member",
                     "any",
                     "all",
+                    "find",
                     "range",
                     "zip",
                     "isEmpty",

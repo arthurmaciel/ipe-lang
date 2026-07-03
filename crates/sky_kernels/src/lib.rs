@@ -151,6 +151,9 @@ pub enum StdlibKernel {
     ListIsEmpty,
     ListConcatMap,
     ListIndexedMap,
+    ListAny,
+    ListAll,
+    ListFind,
     // ── Maybe ───────────────────────────────────────────────────────────────
     MaybeWithDefault,
     MaybeMap,
@@ -651,6 +654,9 @@ impl StdlibKernel {
             Self::ListIsEmpty => d("List", "isEmpty", 1, Pure, "list_is_empty"),
             Self::ListConcatMap => d("List", "concatMap", 2, Pure, "list_concat_map"),
             Self::ListIndexedMap => d("List", "indexedMap", 2, Pure, "list_indexed_map"),
+            Self::ListAny => d("List", "any", 2, Pure, "list_any"),
+            Self::ListAll => d("List", "all", 2, Pure, "list_all"),
+            Self::ListFind => d("List", "find", 2, Pure, "list_find"),
             // ── Maybe ───────────────────────────────────────────────────────
             Self::MaybeWithDefault => d("Maybe", "withDefault", 2, Pure, "maybe_with_default"),
             Self::MaybeMap => d("Maybe", "map", 2, Pure, "sky_maybe_map"),
@@ -1240,6 +1246,9 @@ impl StdlibKernel {
         Self::ListIsEmpty,
         Self::ListConcatMap,
         Self::ListIndexedMap,
+        Self::ListAny,
+        Self::ListAll,
+        Self::ListFind,
         // Maybe
         Self::MaybeWithDefault,
         Self::MaybeMap,
