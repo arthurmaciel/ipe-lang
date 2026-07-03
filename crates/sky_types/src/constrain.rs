@@ -161,6 +161,21 @@ struct Builtins {
     /// `"Html"` — Html type constructor `Html msg` (shared by Std.Html and
     /// Std.Ui render entry points).
     html_con: Symbol,
+    /// `"Length"` — Std.Ui nullary length type produced by `Ui.px` / `Ui.fill`
+    /// / `Ui.minimum` / …. Lowered to `IrType::UiPlain(UiPlain::Length)` via the
+    /// `"Length"` arm in `sky_lower::ir_type_from_ty`.
+    length: Symbol,
+    /// `"Color"` — Std.Ui nullary colour type produced by `Ui.rgb` / `Ui.rgba`
+    /// / `Ui.white` / …. Lowered to `IrType::UiPlain(UiPlain::Color)`.
+    color: Symbol,
+    /// `"Value"` — the opaque JSON value type (`Value = any` in Sky) produced /
+    /// consumed by the `JsonEnc.*` encoders. Lowered to `IrType::Json`
+    /// (`serde_json::Value`, re-exported as `JsonVal`) via the `"Value"` arm in
+    /// `sky_lower::ir_type_from_ty`. A distinct interned symbol so the `JsonEnc`
+    /// scheme can produce a *concrete* `Value` region type (closing the former
+    /// `Ty::Var(u32::MAX)` exit-0 hole) rather than leaning on the lowerer's
+    /// free-`Ty::Var` → `Json` fallback.
+    json_value: Symbol,
     /// `"wrapperAttrs"` — field name in the `Ui.layoutWith` config record.
     /// Pre-interned because `kernel_ty` builds a `Ty::Record` for the first
     /// argument of `Ui.layoutWith : { wrapperAttrs, rootAttrs } -> ...` and
@@ -267,6 +282,9 @@ impl Builtins {
             attribute: interner.intern("Attribute")?,
             element: interner.intern("Element")?,
             html_con: interner.intern("Html")?,
+            length: interner.intern("Length")?,
+            color: interner.intern("Color")?,
+            json_value: interner.intern("Value")?,
             lw_wrapper_attrs: interner.intern("wrapperAttrs")?,
             lw_root_attrs: interner.intern("rootAttrs")?,
             // Phase-1b: Std.Live / Sky.Live opaque types + cfg field names.
@@ -2116,6 +2134,25 @@ impl<'a> Builder<'a> {
             name: self.builtins.html_con,
             args: vec![m],
         };
+        // Nullary Std.Ui plain types (`Length` / `Color`) — lowered to
+        // `IrType::UiPlain(UiPlain::Length | UiPlain::Color)`.
+        let length = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.length,
+            args: Vec::new(),
+        };
+        let color = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.color,
+            args: Vec::new(),
+        };
+        // `value()` — the opaque `Value = any` JSON node produced/consumed by the
+        // `JsonEnc.*` encoders. Lowered to `IrType::Json` (`JsonVal`).
+        let value = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.json_value,
+            args: Vec::new(),
+        };
         let live_req = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.live_req,
@@ -2806,13 +2843,47 @@ impl<'a> Builder<'a> {
             //    used during lowering (runtime `ok_res(a) -> Result e a`). ──
             K::ResultOkDefault => fun(var(0), result(var(1), var(0))),
 
+            // ── Std.Ui Length builders (result type `Length`) — runtime
+            //    `ui_px_(i64) -> Length`, `ui_fill_() -> Length`, etc. `Length`
+            //    lowers to `IrType::UiPlain(UiPlain::Length)`. Arrow-count ==
+            //    `decl().arity` for every arm. ──
+            K::UiPx | K::UiFillPortion | K::UiVh | K::UiVw => fun(int(), length()),
+            K::UiFill | K::UiContent | K::UiShrink => length(),
+            K::UiMinimum | K::UiMaximum => fun(int(), fun(length(), length())),
+
+            // ── Std.Ui Color builders (result type `Color`) — runtime
+            //    `ui_rgb_(i64,i64,i64) -> Color`, `ui_rgba_(i64,i64,i64,f64) ->
+            //    Color`, `ui_white_() -> Color`, etc. `Color` lowers to
+            //    `IrType::UiPlain(UiPlain::Color)`. ──
+            K::UiRgb => fun(int(), fun(int(), fun(int(), color()))),
+            K::UiRgba => fun(int(), fun(int(), fun(int(), fun(float(), color())))),
+            K::UiWhite | K::UiBlack | K::UiTransparent => color(),
+
+            // ── Sky.Core.Json.Encode (8) — the `JsonEnc.*` encoders. `Value =
+            //    any` maps to `IrType::Json` (`JsonVal`) via the `"Value"` arm in
+            //    `sky_lower::ir_type_from_ty`. Runtime: `json_enc_string(String)
+            //    -> JsonVal`, `json_enc_null() -> JsonVal` (arity 0),
+            //    `json_enc_list(impl Fn(A) -> JsonVal, Vec<A>) -> JsonVal`,
+            //    `json_enc_object(Vec<(String, JsonVal)>) -> JsonVal`,
+            //    `json_enc_encode(i64, JsonVal) -> String`. Scheming these closes
+            //    the former `Ty::Var(u32::MAX)` exit-0 hole (the lowerer's
+            //    hardcoded `kernel_native_ir_type` fallback stays as a safety
+            //    net for bare-value references). ──
+            K::JsonEncString => fun(string(), value()),
+            K::JsonEncInt => fun(int(), value()),
+            K::JsonEncFloat => fun(float(), value()),
+            K::JsonEncBool => fun(bool_ty(), value()),
+            K::JsonEncNull => value(),
+            K::JsonEncList => fun(fun(var(0), value()), fun(list(var(0)), value())),
+            K::JsonEncObject => fun(list(tuple2(string(), value())), value()),
+            K::JsonEncEncode => fun(int(), fun(value(), string())),
+
             // Not-yet-migrated / EXCLUDED. `PubSub` (`publish`/`publishNoEcho`)
             // is a KNOWN-UNBACKED exclusion — see `KNOWN_UNBACKED`: no runtime
             // fn and its qualifier is absent from canon `qual_vars`, so it is
             // unreachable and must NOT be schemed (a scheme would forge an
-            // exit-0 path to an unbacked kernel). Uuid, Encoding, JsonEnc, Ui
-            // Length/Color are deferred to sibling tasks (#54/#55/#46/#47/#43):
-            // fall back to the legacy symbol-keyed table.
+            // exit-0 path to an unbacked kernel). Uuid (#54) and Encoding (#55)
+            // remain deferred and fall back to the legacy symbol-keyed table.
             _ => return None,
         })
     }
@@ -5537,12 +5608,17 @@ mod registry_phase_c_tests {
     /// AEAD (`aesGcm*`/`chacha20*`) and Jwt ENCODE (`encodeHs256`/`encodeRs256`)
     /// after correcting their registry `decl().arity` 3→2 to match the Rust
     /// runtime (the AEAD nonce is internal; encode takes secret + claims-JSON),
-    /// so the arrow-count == arity invariant now holds. EXCLUDED (still on the
-    /// `Ty::Var` fallback): `PubSub` (`publish`/`publishNoEcho`) — a
-    /// KNOWN-UNBACKED exclusion (`KNOWN_UNBACKED`), no runtime backing and
-    /// qualifier absent from canon `qual_vars`; Uuid (task #54), Encoding
-    /// (task #55), and all `JsonEnc.Value` / Ui `Length`/`Color` families
-    /// (need new builtins, tasks #46/#47/#43).
+    /// so the arrow-count == arity invariant now holds. Task #69 additionally
+    /// schemed the Std.Ui `Length` builders (`px`/`fill`/`content`/`shrink`/
+    /// `fillPortion`/`vh`/`vw`/`minimum`/`maximum`), the Std.Ui `Color` builders
+    /// (`rgb`/`rgba`/`white`/`black`/`transparent`), and the `Sky.Core.Json.Encode`
+    /// encoders (`string`/`int`/`float`/`bool`/`null`/`list`/`object`/`encode`):
+    /// `Length` / `Color` lower to `IrType::UiPlain(_)` and the JSON `Value` type
+    /// to `IrType::Json`, all pre-existing IR forms with a complete emit path.
+    /// EXCLUDED (still on the `Ty::Var` fallback): `PubSub`
+    /// (`publish`/`publishNoEcho`) — a KNOWN-UNBACKED exclusion
+    /// (`KNOWN_UNBACKED`), no runtime backing and qualifier absent from canon
+    /// `qual_vars`; Uuid (task #54) and Encoding (task #55).
     const FIRST_SCHEMED: &[StdlibKernel] = {
         use StdlibKernel as K;
         &[
@@ -5637,6 +5713,31 @@ mod registry_phase_c_tests {
             K::JsonDecPRequiredAt,
             // Result internal okDefault (1)
             K::ResultOkDefault,
+            // Std.Ui Length builders (9) — result type `Length`
+            K::UiPx,
+            K::UiFill,
+            K::UiContent,
+            K::UiShrink,
+            K::UiFillPortion,
+            K::UiVh,
+            K::UiVw,
+            K::UiMinimum,
+            K::UiMaximum,
+            // Std.Ui Color builders (5) — result type `Color`
+            K::UiRgb,
+            K::UiRgba,
+            K::UiWhite,
+            K::UiBlack,
+            K::UiTransparent,
+            // Sky.Core.Json.Encode (8) — `Value` positions map to `IrType::Json`
+            K::JsonEncString,
+            K::JsonEncInt,
+            K::JsonEncFloat,
+            K::JsonEncBool,
+            K::JsonEncNull,
+            K::JsonEncList,
+            K::JsonEncObject,
+            K::JsonEncEncode,
         ]
     };
 
