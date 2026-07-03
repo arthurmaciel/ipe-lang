@@ -13,6 +13,7 @@ live = []
 redis_store = []
 webview = []
 tui = []
+websocket_client = []
 static_alloc = ["mimalloc"]
 
 [dependencies]
