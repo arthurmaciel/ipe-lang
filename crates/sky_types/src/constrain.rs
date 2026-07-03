@@ -1479,6 +1479,20 @@ impl<'a> Builder<'a> {
                 let inner = self.structure(FlatType::Fun(s, s))?;
                 return self.structure(FlatType::Fun(s, inner));
             }
+            // `Basics.clamp lo hi x : comparable -> comparable -> comparable ->
+            // comparable`. Same ORDERING obligation as min/max, but arity 3:
+            // ONE bounded super-var reused across all three argument positions
+            // AND the result, so `clamp recA recB recC` (records / functions /
+            // ADTs) fails closed instead of emitting an unbounded
+            // `basics_clamp::<T>` that `cargo` rejects. DIRECT-build (not
+            // `stdlib_scheme` + tie) because the base scheme has three
+            // independent `var(0)`s that must collapse to one bounded var.
+            if matches!(k, StdlibKernel::BasicsClamp) {
+                let s = self.super_var(TyBounds::ord(), span)?;
+                let inner1 = self.structure(FlatType::Fun(s, s))?;
+                let inner2 = self.structure(FlatType::Fun(s, inner1))?;
+                return self.structure(FlatType::Fun(s, inner2));
+            }
             // Dict / Set element-key `comparable` obligation (M4d). The base
             // scheme is relocated into `stdlib_scheme` (Phase D); we instantiate
             // it and tie key-position raw var 0 to a bounded super-var. Only
@@ -2245,6 +2259,14 @@ impl<'a> Builder<'a> {
             K::BasicsFst => fun(tuple2(var(0), var(1)), var(0)),
             K::BasicsSnd => fun(tuple2(var(0), var(1)), var(1)),
             K::BasicsModBy => fun(int(), fun(int(), int())),
+            // `clamp : comparable -> comparable -> comparable -> comparable`.
+            // BASE scheme only — three independent `var(0)`s; the shared
+            // `Comparable a` (Ord) obligation is layered on in
+            // `constrain_var_kernel` (keyed off id), exactly as `Math.min` /
+            // `Math.max`. Production never reaches this arm (the obligation
+            // pre-check early-returns the bounded scheme); it exists so
+            // `stdlib_scheme` is total and the burndown tripwire holds.
+            K::BasicsClamp => fun(var(0), fun(var(0), fun(var(0), var(0)))),
 
             // ── Math (min / max stay on the obligation path — NOT migrated) ──
             // Constants — bare Float values (arity 0).
@@ -2300,6 +2322,20 @@ impl<'a> Builder<'a> {
             K::ResultMap => fun(
                 fun(var(0), var(1)),
                 fun(result(var(2), var(0)), result(var(2), var(1))),
+            ),
+            // `andThen : (a -> Result e b) -> Result e a -> Result e b`.
+            // var(0)=a, var(1)=e, var(2)=b. The error channel `e` is shared
+            // across the callback's Result, the input Result, and the output.
+            K::ResultAndThen => fun(
+                fun(var(0), result(var(1), var(2))),
+                fun(result(var(1), var(0)), result(var(1), var(2))),
+            ),
+            // `mapError : (e -> f) -> Result e a -> Result f a`.
+            // var(0)=e, var(1)=f, var(2)=a. Maps the error channel; the `Ok`
+            // value type `a` is preserved.
+            K::ResultMapError => fun(
+                fun(var(0), var(1)),
+                fun(result(var(0), var(2)), result(var(1), var(2))),
             ),
 
             // ── Bytes ──
@@ -2764,9 +2800,14 @@ impl<'a> Builder<'a> {
             K::StringWords | K::StringLines => fun(string(), list(string())),
             K::StringToList => fun(string(), list(char())),
             K::StringAppend => fun(string(), fun(string(), string())),
-            K::StringContains | K::StringStartsWith | K::StringEndsWith | K::StringEqualFold => {
-                fun(string(), fun(string(), bool_ty()))
-            }
+            K::StringContains
+            | K::StringStartsWith
+            | K::StringEndsWith
+            | K::StringEqualFold
+            // Haystack-first companions — same `String -> String -> Bool` shape.
+            | K::StringContainsIn
+            | K::StringStartsWithIn
+            | K::StringEndsWithIn => fun(string(), fun(string(), bool_ty())),
             K::StringJoin => fun(string(), fun(list(string()), string())),
             K::StringSplit => fun(string(), fun(string(), list(string()))),
             K::StringRepeat | K::StringDropLeft | K::StringDropRight => {
@@ -3608,6 +3649,9 @@ mod registry_phase_c_tests {
             K::StringSlice,
             K::StringPadLeft,
             K::StringPadRight,
+            K::StringContainsIn,
+            K::StringStartsWithIn,
+            K::StringEndsWithIn,
             // Char (8)
             K::CharIsAlpha,
             K::CharIsDigit,
@@ -3725,6 +3769,13 @@ mod registry_phase_c_tests {
             K::BasicsFst,
             K::BasicsSnd,
             K::BasicsModBy,
+            // `Basics.clamp` — first-schemed hole; carries the `Comparable a`
+            // (Ord) obligation, base scheme in `stdlib_scheme`.
+            K::BasicsClamp,
+            // Result combinators newly wired (holes post-seal; `withDefault` /
+            // `map` are the RELOCATED pair, these two are first-schemed).
+            K::ResultAndThen,
+            K::ResultMapError,
             // Encoding (6 — task #55a): base64/url/hex text codecs. Encoders
             // `String -> String`, decoders `String -> Result Error String`.
             // Each WAS a `Ty::Var(u32::MAX)` hole (`kernel_ty` has no Encoding

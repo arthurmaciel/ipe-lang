@@ -258,6 +258,9 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::StringSlice => "string_slice",
         KernelFn::StringPadLeft => "string_pad_left",
         KernelFn::StringPadRight => "string_pad_right",
+        KernelFn::StringContainsIn => "string_contains_in",
+        KernelFn::StringStartsWithIn => "string_starts_with_in",
+        KernelFn::StringEndsWithIn => "string_ends_with_in",
         // ── Char arity-1 ────────────────────────────────────────────────────
         KernelFn::CharIsAlpha => "char_is_alpha",
         KernelFn::CharIsDigit => "char_is_digit",
@@ -296,11 +299,14 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::BasicsFst => "basics_fst",
         KernelFn::BasicsSnd => "basics_snd",
         KernelFn::BasicsModBy => "basics_mod_by",
+        KernelFn::BasicsClamp => "basics_clamp",
         KernelFn::MaybeWithDefault => "maybe_with_default",
         KernelFn::MaybeMap => "sky_maybe_map",
         KernelFn::MaybeAndThen => "sky_maybe_and_then",
         KernelFn::ResultWithDefault => "result_with_default",
         KernelFn::ResultMap => "sky_result_map",
+        KernelFn::ResultAndThen => "sky_result_and_then",
+        KernelFn::ResultMapError => "sky_result_map_error",
         // `Math.min` / `Math.max` map to the runtime's generic
         // `math_min<T: PartialOrd>` / `math_max<T: PartialOrd>`: a real
         // polymorphic compare at the argument's actual type — NO `Int`

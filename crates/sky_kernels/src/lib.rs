@@ -122,6 +122,10 @@ pub enum StdlibKernel {
     StringSlice,
     StringPadLeft,
     StringPadRight,
+    // Haystack-first companions (`containsIn`/`startsWithIn`/`endsWithIn`).
+    StringContainsIn,
+    StringStartsWithIn,
+    StringEndsWithIn,
     // ── Char ────────────────────────────────────────────────────────────────
     CharIsAlpha,
     CharIsDigit,
@@ -161,6 +165,10 @@ pub enum StdlibKernel {
     BasicsFst,
     BasicsSnd,
     BasicsModBy,
+    /// `clamp : comparable -> comparable -> comparable -> comparable`. Carries
+    /// the `Comparable a` (Ord) obligation via `constrain_var_kernel`, exactly
+    /// like `Math.min` / `Math.max`.
+    BasicsClamp,
     // ── Maybe ───────────────────────────────────────────────────────────────
     MaybeWithDefault,
     MaybeMap,
@@ -168,6 +176,8 @@ pub enum StdlibKernel {
     // ── Result ──────────────────────────────────────────────────────────────
     ResultWithDefault,
     ResultMap,
+    ResultAndThen,
+    ResultMapError,
     /// Internal: `Result.withDefault`-style defaulting used during lowering.
     /// Qualifier `"_internal_"` — not registered in the canon `QUALIFIERS`
     /// table and excluded from the tripwire test.
@@ -632,6 +642,11 @@ impl StdlibKernel {
             Self::StringSlice => d("String", "slice", 3, Pure, "string_slice"),
             Self::StringPadLeft => d("String", "padLeft", 3, Pure, "string_pad_left"),
             Self::StringPadRight => d("String", "padRight", 3, Pure, "string_pad_right"),
+            Self::StringContainsIn => d("String", "containsIn", 2, Pure, "string_contains_in"),
+            Self::StringStartsWithIn => {
+                d("String", "startsWithIn", 2, Pure, "string_starts_with_in")
+            }
+            Self::StringEndsWithIn => d("String", "endsWithIn", 2, Pure, "string_ends_with_in"),
             // ── Char ────────────────────────────────────────────────────────
             Self::CharIsAlpha => d("Char", "isAlpha", 1, Pure, "char_is_alpha"),
             Self::CharIsDigit => d("Char", "isDigit", 1, Pure, "char_is_digit"),
@@ -670,6 +685,7 @@ impl StdlibKernel {
             Self::BasicsFst => d("Basics", "fst", 1, Pure, "basics_fst"),
             Self::BasicsSnd => d("Basics", "snd", 1, Pure, "basics_snd"),
             Self::BasicsModBy => d("Basics", "modBy", 2, Pure, "basics_mod_by"),
+            Self::BasicsClamp => d("Basics", "clamp", 3, Pure, "basics_clamp"),
             // ── Maybe ───────────────────────────────────────────────────────
             Self::MaybeWithDefault => d("Maybe", "withDefault", 2, Pure, "maybe_with_default"),
             Self::MaybeMap => d("Maybe", "map", 2, Pure, "sky_maybe_map"),
@@ -677,6 +693,8 @@ impl StdlibKernel {
             // ── Result ──────────────────────────────────────────────────────
             Self::ResultWithDefault => d("Result", "withDefault", 2, Pure, "result_with_default"),
             Self::ResultMap => d("Result", "map", 2, Pure, "sky_result_map"),
+            Self::ResultAndThen => d("Result", "andThen", 2, Pure, "sky_result_and_then"),
+            Self::ResultMapError => d("Result", "mapError", 2, Pure, "sky_result_map_error"),
             // Internal: qualifier starts with '_' → skipped by tripwire test.
             Self::ResultOkDefault => d("_internal_", "okDefault", 1, Pure, "ok_res"),
             // ── Math ────────────────────────────────────────────────────────
@@ -1230,6 +1248,9 @@ impl StdlibKernel {
         Self::StringSlice,
         Self::StringPadLeft,
         Self::StringPadRight,
+        Self::StringContainsIn,
+        Self::StringStartsWithIn,
+        Self::StringEndsWithIn,
         // Char
         Self::CharIsAlpha,
         Self::CharIsDigit,
@@ -1269,6 +1290,7 @@ impl StdlibKernel {
         Self::BasicsFst,
         Self::BasicsSnd,
         Self::BasicsModBy,
+        Self::BasicsClamp,
         // Maybe
         Self::MaybeWithDefault,
         Self::MaybeMap,
@@ -1276,6 +1298,8 @@ impl StdlibKernel {
         // Result
         Self::ResultWithDefault,
         Self::ResultMap,
+        Self::ResultAndThen,
+        Self::ResultMapError,
         Self::ResultOkDefault, // qualifier "_internal_" → tripwire skips
         // Math
         Self::MathMin,
