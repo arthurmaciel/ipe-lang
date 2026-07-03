@@ -1,0 +1,14 @@
+module Main exposing (main)
+
+import Sky.Core.Error as Error
+
+-- #86: the `Error` module qualifier. `Error.unexpected` builds a message-
+-- carrying Error (String-backed in this minimal slice); `Task.fail` raises it on
+-- the Task error channel; `Task.onError` recovers with a handler whose parameter
+-- `e : Error`; `Error.toString e` renders the error back to its message.
+--
+-- With `SkyError = String` the message round-trips verbatim (`boom`). Upstream's
+-- kind-prefixed rendering (`Unexpected: boom`) awaits the rich `ErrorKind` ADT
+-- (#85) — hence this golden is marked `oracle_divergence`.
+main =
+    Task.onError (\e -> println (Error.toString e)) (Task.fail (Error.unexpected "boom"))

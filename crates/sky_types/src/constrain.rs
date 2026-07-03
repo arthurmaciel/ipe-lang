@@ -3096,6 +3096,27 @@ impl<'a> Builder<'a> {
             K::JsonEncObject => fun(list(tuple2(string(), value())), value()),
             K::JsonEncEncode => fun(int(), fun(value(), string())),
 
+            // ── Sky.Core.Error (13 — minimal `Error = String` slice, #86) ──
+            //    `Error` is a DISTINCT nominal HM type (`builtins.error`) even
+            //    though it lowers to `IrType::Str` (`SkyError = String`), so
+            //    `Task.fail (Error.unexpected "…") : Task Error a` unifies and a
+            //    stringly `Task.fail "…"` still type-checks (both are `Error`-
+            //    channel). The eight message constructors are `String -> Error`;
+            //    `timeout`/`notFound`/`permissionDenied` are nullary `Error`;
+            //    `toString : Error -> String`; `withMessage : String -> Error ->
+            //    Error`. The rich `ErrorKind`/`ErrorDetails` ADT is deferred (#85).
+            K::ErrorUnexpected
+            | K::ErrorInvalidInput
+            | K::ErrorIo
+            | K::ErrorNetwork
+            | K::ErrorFfi
+            | K::ErrorDecode
+            | K::ErrorConflict
+            | K::ErrorUnavailable => fun(string(), error_ty()),
+            K::ErrorTimeout | K::ErrorNotFound | K::ErrorPermissionDenied => error_ty(),
+            K::ErrorToString => fun(error_ty(), string()),
+            K::ErrorWithMessage => fun(string(), fun(error_ty(), error_ty())),
+
             // ── Sky.Core.Uuid (3 — task #54) — ENTROPY IS AN EFFECT ──
             //    `v4`/`v7` draw fresh entropy per call, so they are typed on the
             //    effect tier `() -> Task Error String` (runtime `uuid_v4::<E>(_:
@@ -3711,6 +3732,20 @@ mod registry_phase_c_tests {
             K::CharToUpper,
             K::CharToCode,
             K::CharFromCode,
+            // Error (13 — Sky.Core.Error minimal `Error = String` slice, #86)
+            K::ErrorUnexpected,
+            K::ErrorInvalidInput,
+            K::ErrorIo,
+            K::ErrorNetwork,
+            K::ErrorFfi,
+            K::ErrorDecode,
+            K::ErrorConflict,
+            K::ErrorUnavailable,
+            K::ErrorTimeout,
+            K::ErrorNotFound,
+            K::ErrorPermissionDenied,
+            K::ErrorToString,
+            K::ErrorWithMessage,
             // Crypto (17 — AEAD included after the arity 3→2 correction, #58)
             K::CryptoSha256,
             K::CryptoSha512,

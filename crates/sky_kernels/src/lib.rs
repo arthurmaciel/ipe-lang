@@ -178,6 +178,27 @@ pub enum StdlibKernel {
     /// the `Comparable a` (Ord) obligation via `constrain_var_kernel`, exactly
     /// like `Math.min` / `Math.max`.
     BasicsClamp,
+    // ── Error (Sky.Core.Error — minimal `Error = String` slice, #86) ─────────
+    // Message-carrying constructors: `String -> Error`. With `SkyError = String`
+    // the message IS the error value, so all eight collapse to one identity
+    // runtime symbol (`sky_error_from_message`); the distinct Sky-level names are
+    // preserved for the rich-ADT upgrade (#85).
+    ErrorUnexpected,
+    ErrorInvalidInput,
+    ErrorIo,
+    ErrorNetwork,
+    ErrorFfi,
+    ErrorDecode,
+    ErrorConflict,
+    ErrorUnavailable,
+    // Nullary constructors: `Error` (a canonical message string).
+    ErrorTimeout,
+    ErrorNotFound,
+    ErrorPermissionDenied,
+    // Render: `Error -> String` (reuses the `errorToString` runtime).
+    ErrorToString,
+    // Modifier: `String -> Error -> Error` (replace the message).
+    ErrorWithMessage,
     // ── Maybe ───────────────────────────────────────────────────────────────
     MaybeWithDefault,
     MaybeMap,
@@ -704,6 +725,30 @@ impl StdlibKernel {
             Self::BasicsModBy => d("Basics", "modBy", 2, Pure, "basics_mod_by"),
             Self::BasicsClamp => d("Basics", "clamp", 3, Pure, "basics_clamp"),
             Self::BasicsToString => d("Basics", "toString", 1, Pure, "basics_to_string"),
+            // ── Error (Sky.Core.Error — minimal `Error = String` slice, #86) ──
+            // The eight message constructors share ONE identity runtime symbol
+            // (`sky_error_from_message`): with `SkyError = String` a `String ->
+            // Error` constructor is the identity. `toString` reuses the existing
+            // `errorToString` runtime (`basics_error_to_string`).
+            Self::ErrorUnexpected => d("Error", "unexpected", 1, Pure, "sky_error_from_message"),
+            Self::ErrorInvalidInput => {
+                d("Error", "invalidInput", 1, Pure, "sky_error_from_message")
+            }
+            Self::ErrorIo => d("Error", "io", 1, Pure, "sky_error_from_message"),
+            Self::ErrorNetwork => d("Error", "network", 1, Pure, "sky_error_from_message"),
+            Self::ErrorFfi => d("Error", "ffi", 1, Pure, "sky_error_from_message"),
+            Self::ErrorDecode => d("Error", "decode", 1, Pure, "sky_error_from_message"),
+            Self::ErrorConflict => d("Error", "conflict", 1, Pure, "sky_error_from_message"),
+            Self::ErrorUnavailable => d("Error", "unavailable", 1, Pure, "sky_error_from_message"),
+            Self::ErrorTimeout => d("Error", "timeout", 0, Pure, "sky_error_timeout"),
+            Self::ErrorNotFound => d("Error", "notFound", 0, Pure, "sky_error_not_found"),
+            Self::ErrorPermissionDenied => {
+                d("Error", "permissionDenied", 0, Pure, "sky_error_permission_denied")
+            }
+            Self::ErrorToString => d("Error", "toString", 1, Pure, "basics_error_to_string"),
+            Self::ErrorWithMessage => {
+                d("Error", "withMessage", 2, Pure, "sky_error_with_message")
+            }
             // ── Maybe ───────────────────────────────────────────────────────
             Self::MaybeWithDefault => d("Maybe", "withDefault", 2, Pure, "maybe_with_default"),
             Self::MaybeMap => d("Maybe", "map", 2, Pure, "sky_maybe_map"),
@@ -1318,6 +1363,20 @@ impl StdlibKernel {
         Self::BasicsModBy,
         Self::BasicsClamp,
         Self::BasicsToString,
+        // Error (Sky.Core.Error — minimal `Error = String` slice, #86)
+        Self::ErrorUnexpected,
+        Self::ErrorInvalidInput,
+        Self::ErrorIo,
+        Self::ErrorNetwork,
+        Self::ErrorFfi,
+        Self::ErrorDecode,
+        Self::ErrorConflict,
+        Self::ErrorUnavailable,
+        Self::ErrorTimeout,
+        Self::ErrorNotFound,
+        Self::ErrorPermissionDenied,
+        Self::ErrorToString,
+        Self::ErrorWithMessage,
         // Maybe
         Self::MaybeWithDefault,
         Self::MaybeMap,

@@ -3249,7 +3249,11 @@ impl<'a> Lowerer<'a> {
                 // `Cmd.none : Cmd msg`
                 | KernelFn::CmdNone
                 // `Sub.none : Sub msg`
-                | KernelFn::SubNone,
+                | KernelFn::SubNone
+                // ── Error nullary constructors (#86) : `Error` ────────────────
+                | KernelFn::ErrorTimeout
+                | KernelFn::ErrorNotFound
+                | KernelFn::ErrorPermissionDenied,
             ) => Ok(0),
             Callee::Kernel(
                 KernelFn::StringFromInt
@@ -3457,7 +3461,18 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ServerPath
                 | KernelFn::ServerMethod
                 // `Middleware.withLogging : Handler -> Handler`
-                | KernelFn::MiddlewareWithLogging,
+                | KernelFn::MiddlewareWithLogging
+                // ── Error message constructors (#86) : `String -> Error` ──────
+                | KernelFn::ErrorUnexpected
+                | KernelFn::ErrorInvalidInput
+                | KernelFn::ErrorIo
+                | KernelFn::ErrorNetwork
+                | KernelFn::ErrorFfi
+                | KernelFn::ErrorDecode
+                | KernelFn::ErrorConflict
+                | KernelFn::ErrorUnavailable
+                // `Error.toString : Error -> String`
+                | KernelFn::ErrorToString,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -3636,7 +3651,9 @@ impl<'a> Lowerer<'a> {
                 // `Server.withCookie : Cookie -> Response -> Response`
                 | KernelFn::ServerWithCookie
                 // `Middleware.withCors : List String -> Handler -> Handler`
-                | KernelFn::MiddlewareWithCors,
+                | KernelFn::MiddlewareWithCors
+                // `Error.withMessage : String -> Error -> Error` (#86)
+                | KernelFn::ErrorWithMessage,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::StringReplace
@@ -4057,6 +4074,23 @@ impl<'a> Lowerer<'a> {
                     ("Basics", "modBy") => Ok(Callee::Kernel(KernelFn::BasicsModBy)),
                     ("Basics", "clamp") => Ok(Callee::Kernel(KernelFn::BasicsClamp)),
                     ("Basics", "toString") => Ok(Callee::Kernel(KernelFn::BasicsToString)),
+                    // ── Error kernels (Sky.Core.Error — minimal `Error = String`
+                    //    slice, #86) ─────────────────────────────────────────
+                    ("Error", "unexpected") => Ok(Callee::Kernel(KernelFn::ErrorUnexpected)),
+                    ("Error", "invalidInput") => Ok(Callee::Kernel(KernelFn::ErrorInvalidInput)),
+                    ("Error", "io") => Ok(Callee::Kernel(KernelFn::ErrorIo)),
+                    ("Error", "network") => Ok(Callee::Kernel(KernelFn::ErrorNetwork)),
+                    ("Error", "ffi") => Ok(Callee::Kernel(KernelFn::ErrorFfi)),
+                    ("Error", "decode") => Ok(Callee::Kernel(KernelFn::ErrorDecode)),
+                    ("Error", "conflict") => Ok(Callee::Kernel(KernelFn::ErrorConflict)),
+                    ("Error", "unavailable") => Ok(Callee::Kernel(KernelFn::ErrorUnavailable)),
+                    ("Error", "timeout") => Ok(Callee::Kernel(KernelFn::ErrorTimeout)),
+                    ("Error", "notFound") => Ok(Callee::Kernel(KernelFn::ErrorNotFound)),
+                    ("Error", "permissionDenied") => {
+                        Ok(Callee::Kernel(KernelFn::ErrorPermissionDenied))
+                    }
+                    ("Error", "toString") => Ok(Callee::Kernel(KernelFn::ErrorToString)),
+                    ("Error", "withMessage") => Ok(Callee::Kernel(KernelFn::ErrorWithMessage)),
                     // ── Maybe kernels ──────────────────────────────────────
                     ("Maybe", "withDefault") => Ok(Callee::Kernel(KernelFn::MaybeWithDefault)),
                     ("Maybe", "map") => Ok(Callee::Kernel(KernelFn::MaybeMap)),
