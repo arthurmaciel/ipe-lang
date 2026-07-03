@@ -1,0 +1,24 @@
+module Main exposing (main)
+
+-- Arg-swap foreclosure (#49): the jump reassigns `a := b; b := a`. A naive
+-- sequential write would clobber (`a` overwritten before `b` reads it) →
+-- `1,1`. The temporaries-first emission reads BOTH current params into temps
+-- before any write → correct swap. With 3 list elements the params swap an odd
+-- number of times → `2,1`.
+
+go : Int -> Int -> List Int -> ( Int, Int )
+go a b xs =
+    case xs of
+        [] ->
+            ( a, b )
+
+        _ :: rest ->
+            go b a rest
+
+
+main =
+    let
+        ( x, y ) =
+            go 1 2 [ 0, 0, 0 ]
+    in
+    println (String.fromInt x ++ "," ++ String.fromInt y)

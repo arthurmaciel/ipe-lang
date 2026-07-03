@@ -2429,6 +2429,14 @@ pub fn emit_expr_at(
                 "task_and_then({effect_s}, Box::new(move |_| {{ {rest_s} }}))"
             ))
         }
+        // TCO nodes are produced by the lowerer's rewrite and consumed by
+        // `emit_func` / `emit_expr_tail`; reaching one on the ordinary value-emit
+        // path means the rewrite left a jump/loop outside a tail context — a
+        // compiler bug, surfaced fail-closed (never a panic, never a wildcard).
+        Expr::TailLoop { .. } | Expr::TailRecur { .. } => Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_expr_at",
+            detail: "TailLoop/TailRecur reached the non-tail emit path".to_string(),
+        }),
     }
 }
 
@@ -2581,44 +2589,12 @@ fn emit_match(
     generics: GenericScope,
 ) -> DResult<String> {
     let child = depth + 1;
-    let scrut_expr = emit_expr_at(ctx, m.scrutinee(), indent, child, generics)?;
-    // A string scrutinee is matched as `&str` so literal patterns apply; the
-    // presence of a `Pat::Str` head is the reliable signal (the type checker
-    // proved the scrutinee a `String`).
-    let str_mode = m.arms().iter().any(|a| matches!(a.pat, Pat::Str(_)));
-    // A LIST scrutinee (the runtime's `Vec<T>`) is matched as a slice so the
-    // native Rust slice patterns `[]` / `[a, b]` / `[x, rest @ ..]` apply; the
-    // presence of a `Pat::Slice` head is the signal. Binders an arm introduces
-    // are borrows into that slice, rebound to owned Sky values in the arm body
-    // (see [`list_binder_rebinds`]).
-    let list_mode = m.arms().iter().any(|a| matches!(a.pat, Pat::Slice { .. }));
-    let scrut = if str_mode {
-        format!("({scrut_expr}).as_str()")
-    } else if list_mode {
-        format!("({scrut_expr}).as_slice()")
-    } else {
-        scrut_expr
-    };
+    let (scrut, str_mode, list_mode) = emit_match_scrutinee(ctx, m, indent, depth, generics)?;
     let arm_indent = indent_of(indent + 1);
     let close_indent = indent_of(indent);
     let mut arms = Vec::with_capacity(m.arms().len());
     for arm in m.arms() {
-        let (pat, prelude) = if let Pat::Ctor { ty, variant, args } = &arm.pat {
-            emit_ctor_arm_pat(ctx, *ty, *variant, args)?
-        } else {
-            // A flat-match leaf head: literal / wildcard / variable / alias /
-            // slice. `render_pat` is total over the whole pattern set. In string
-            // mode, rebind any binder it introduces to an owned `String`; in list
-            // mode, rebind each slice binder to its owned Sky value.
-            let prelude = if str_mode {
-                str_binder_rebinds(ctx, &arm.pat)?
-            } else if list_mode {
-                list_binder_rebinds(ctx, &arm.pat)?
-            } else {
-                String::new()
-            };
-            (render_pat(ctx, &arm.pat)?, prelude)
-        };
+        let (pat, prelude) = emit_arm_head(ctx, &arm.pat, str_mode, list_mode)?;
         let body = emit_expr_at(ctx, &arm.body, indent + 1, child, generics)?;
         let arm_body = if prelude.is_empty() {
             body
@@ -2631,6 +2607,60 @@ fn emit_match(
         "match {scrut} {{\n{}\n{close_indent}}}",
         arms.join("\n")
     ))
+}
+
+/// Emit the scrutinee of a `Match` plus its two mode flags. A string scrutinee is
+/// matched as `&str` (so literal patterns apply) — the presence of a `Pat::Str`
+/// head is the reliable signal (the type checker proved the scrutinee a
+/// `String`). A LIST scrutinee (the runtime's `Vec<T>`) is matched as a slice so
+/// the native Rust slice patterns `[]` / `[a, b]` / `[x, rest @ ..]` apply — a
+/// `Pat::Slice` head is the signal. Shared by the value-context (`emit_match`)
+/// and tail-context (`emit_expr_tail`) match emitters so the two agree exactly.
+fn emit_match_scrutinee(
+    ctx: &EmitCtx,
+    m: &Match,
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+) -> DResult<(String, bool, bool)> {
+    let child = depth + 1;
+    let scrut_expr = emit_expr_at(ctx, m.scrutinee(), indent, child, generics)?;
+    let str_mode = m.arms().iter().any(|a| matches!(a.pat, Pat::Str(_)));
+    let list_mode = m.arms().iter().any(|a| matches!(a.pat, Pat::Slice { .. }));
+    let scrut = if str_mode {
+        format!("({scrut_expr}).as_str()")
+    } else if list_mode {
+        format!("({scrut_expr}).as_slice()")
+    } else {
+        scrut_expr
+    };
+    Ok((scrut, str_mode, list_mode))
+}
+
+/// Render one match-arm head to its Rust pattern plus any leading rebind/unbox
+/// prelude. A constructor head goes through `emit_ctor_arm_pat` (which unboxes a
+/// cyclic self-field binder); a flat-match leaf head — literal / wildcard /
+/// variable / alias / slice — goes through `render_pat` (total over the whole
+/// set), with a `String`/slice binder rebind prelude in string/list mode. Shared
+/// by the value-context and tail-context match emitters.
+fn emit_arm_head(
+    ctx: &EmitCtx,
+    pat: &Pat,
+    str_mode: bool,
+    list_mode: bool,
+) -> DResult<(String, String)> {
+    if let Pat::Ctor { ty, variant, args } = pat {
+        emit_ctor_arm_pat(ctx, *ty, *variant, args)
+    } else {
+        let prelude = if str_mode {
+            str_binder_rebinds(ctx, pat)?
+        } else if list_mode {
+            list_binder_rebinds(ctx, pat)?
+        } else {
+            String::new()
+        };
+        Ok((render_pat(ctx, pat)?, prelude))
+    }
 }
 
 /// Render a constructor arm head to its Rust pattern plus any leading unbox
@@ -3071,6 +3101,124 @@ fn emit_update(
     ))
 }
 
+/// Emit an `Expr` in TAIL/STATEMENT context — the interior of a `TailLoop`'s
+/// `loop { … }` (task #49). Every path ends in either a `return <expr>;` (a leaf
+/// tail position) or a `continue;` (a `TailRecur` jump), so the `loop` types as
+/// `!` and unifies with any `-> R` return type (no `break value`). The tail
+/// propagators (`If` / `Match` / `Let` / `Destructure`) recurse in-tail; every
+/// other node is a leaf whose VALUE is `return`ed. `loop_params` gives each
+/// `TailRecur.args[i]` its destination parameter name.
+///
+/// The `other => return` arm is the intended value/statement split (the
+/// reference's `walk True` leaf case), NOT a wildcard over `Expr` variants for
+/// exhaustiveness purposes — `emit_expr_at` inside it is the exhaustive,
+/// fail-closed walker: a stray `TailLoop`/`TailRecur` reaching it routes to the
+/// `CompilerBug` arm (never a panic, never a silent swallow).
+#[inline(never)]
+fn emit_expr_tail(
+    ctx: &EmitCtx,
+    expr: &Expr,
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+    loop_params: &[(Symbol, IrType)],
+) -> DResult<String> {
+    let pad = indent_of(indent);
+    let child = depth + 1;
+    match expr {
+        Expr::If { cond, then_, else_ } => {
+            let c = emit_expr_at(ctx, cond, indent, child, generics)?;
+            let t = emit_expr_tail(ctx, then_, indent + 1, child, generics, loop_params)?;
+            let e = emit_expr_tail(ctx, else_, indent + 1, child, generics, loop_params)?;
+            Ok(format!("{pad}if {c} {{\n{t}\n{pad}}} else {{\n{e}\n{pad}}}"))
+        }
+        Expr::Match(m) => {
+            let (scrut, str_mode, list_mode) =
+                emit_match_scrutinee(ctx, m, indent, depth, generics)?;
+            let arm_indent = indent_of(indent + 1);
+            let close_indent = indent_of(indent);
+            let mut arms = Vec::with_capacity(m.arms().len());
+            for arm in m.arms() {
+                let (patstr, prelude) = emit_arm_head(ctx, &arm.pat, str_mode, list_mode)?;
+                // The arm body is a STATEMENT sequence ending in return/continue;
+                // any binder-rebind prelude precedes it inside the arm's block.
+                let body = emit_expr_tail(ctx, &arm.body, indent + 2, child, generics, loop_params)?;
+                let inner = if prelude.is_empty() {
+                    body
+                } else {
+                    format!("{}{prelude}\n{body}", indent_of(indent + 2))
+                };
+                arms.push(format!(
+                    "{arm_indent}{patstr} => {{\n{inner}\n{arm_indent}}}"
+                ));
+            }
+            Ok(format!(
+                "{pad}match {scrut} {{\n{}\n{close_indent}}}",
+                arms.join("\n")
+            ))
+        }
+        Expr::Let { name, value, body } => {
+            let n = ctx.emit_ident(*name)?;
+            let v = emit_expr_at(ctx, value, indent, child, generics)?;
+            let b = emit_expr_tail(ctx, body, indent, child, generics, loop_params)?;
+            Ok(format!("{pad}let {n} = {v};\n{b}"))
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            let bnd = render_pat(ctx, binder)?;
+            let v = emit_expr_at(ctx, value, indent, child, generics)?;
+            let b = emit_expr_tail(ctx, body, indent, child, generics, loop_params)?;
+            Ok(format!("{pad}let {bnd} = {v};\n{b}"))
+        }
+        // The jump: temporaries-first reassignment + `continue`. Reading EVERY
+        // next-iteration argument into a fresh `__tco_<i>` temp BEFORE any
+        // parameter write forecloses the arg-swap clobber (`go b a rest` must not
+        // read an already-overwritten `a`); each temp reads the CURRENT params.
+        Expr::TailRecur { args } => {
+            if args.len() != loop_params.len() {
+                // Invariant broken by the rewrite — fail closed, never panic.
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_expr_tail",
+                    detail: format!(
+                        "TailRecur has {} args but the enclosing TailLoop has {} params",
+                        args.len(),
+                        loop_params.len()
+                    ),
+                });
+            }
+            let mut temps = String::new();
+            for (idx, arg) in args.iter().enumerate() {
+                let a = emit_expr_at(ctx, arg, indent, child, generics)?;
+                writeln!(temps, "{pad}let __tco_{idx} = {a};").map_err(|e| {
+                    Diagnostic::CompilerBug {
+                        where_: "sky_backend_rust::emit_expr_tail",
+                        detail: format!("writing TCO jump temp failed: {e}"),
+                    }
+                })?;
+            }
+            let mut writes = String::new();
+            for (idx, (name, _ty)) in loop_params.iter().enumerate() {
+                let n = ctx.emit_ident(*name)?;
+                writeln!(writes, "{pad}{n} = __tco_{idx};").map_err(|e| {
+                    Diagnostic::CompilerBug {
+                        where_: "sky_backend_rust::emit_expr_tail",
+                        detail: format!("writing TCO param reassignment failed: {e}"),
+                    }
+                })?;
+            }
+            Ok(format!("{temps}{writes}{pad}continue;"))
+        }
+        // Every other node is a leaf tail position → return its value.
+        other => {
+            let v = emit_expr_at(ctx, other, indent, child, generics)?;
+            Ok(format!("{pad}return {v};"))
+        }
+    }
+}
+
 /// Emit an application of a first-class function value, `(<func>)(<args>)`. The
 /// callee is parenthesised so a boxed `dyn Fn` (or any expression value) is
 /// applied uniformly — a `Box<dyn Fn(..)>` auto-derefs at the call. `depth` is
@@ -3257,7 +3405,34 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // Phase-1a: M is inferred bottom-up from concrete element/attrs types
     // propagated by the region-type–sourced lowerer.  The old ui_msg_string /
     // with_ui_msg mechanism is removed; `generics` is used directly.
-    let body = emit_expr(ctx, &func.body, 1, generics)?;
+    // TCO (task #49): a `TailLoop` body emits `let mut`-shadowed params + a
+    // `loop { … }` whose interior ends only in `return`/`continue`. Mutability is
+    // introduced ONLY by the local `let mut p = p;` shadow, so the public `fn`
+    // signature stays byte-identical to the non-TCO form (load-bearing for
+    // `FuncValue` boxing / trait-object slots). The loop types as `!` (it never
+    // falls through), so it unifies with any `-> R` — no `break value`. A
+    // non-`TailLoop` body (the common case) routes to the ordinary value emitter,
+    // which is exhaustive and fail-closed for any stray TCO node.
+    let body = match &func.body {
+        Expr::TailLoop {
+            params: loop_params,
+            body: loop_body,
+        } => {
+            let mut shadows = String::new();
+            for (param, _ty) in loop_params {
+                let p = ctx.emit_ident(*param)?;
+                write!(shadows, "let mut {p} = {p};\n    ").map_err(|e| {
+                    Diagnostic::CompilerBug {
+                        where_: "sky_backend_rust::emit_func",
+                        detail: format!("writing TCO param shadow failed: {e}"),
+                    }
+                })?;
+            }
+            let inner = emit_expr_tail(ctx, loop_body, 2, 1, generics, loop_params)?;
+            format!("{shadows}loop {{\n{inner}\n    }}")
+        }
+        _ => emit_expr(ctx, &func.body, 1, generics)?,
+    };
     Ok(format!(
         "pub fn {name}{generic_clause}({}) -> {ret} {{\n    {body}\n}}\n",
         params.join(", ")

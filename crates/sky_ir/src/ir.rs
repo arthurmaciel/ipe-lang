@@ -797,6 +797,25 @@ pub enum Expr {
         effect: Box<Self>,
         rest: Box<Self>,
     },
+    /// A tail-recursive function body wrapped for loop emission. Produced ONLY by
+    /// the lowerer's TCO rewrite (`sky_lower::rewrite_tail_calls`); `params` are
+    /// the enclosing [`Func`]'s parameters (name + type) so emission can shadow
+    /// them `let mut`. Invariant: `body` contains ≥ 1 [`Self::TailRecur`] in tail
+    /// position and no self-[`Self::Call`] to the enclosing [`FuncId`] remains.
+    /// Consumed by the Rust backend's `emit_func` / `emit_expr_tail`; reaching one
+    /// on the ordinary value-emit path is a compiler bug, surfaced fail-closed
+    /// (never a panic).
+    TailLoop {
+        params: Vec<(Symbol, IrType)>,
+        body: Box<Self>,
+    },
+    /// A tail self-call rewritten to a loop jump. `args` are the next-iteration
+    /// argument expressions, one per enclosing [`Self::TailLoop`] parameter, in the
+    /// same order. Invariant: appears ONLY in tail position inside a `TailLoop`,
+    /// and `args.len() == TailLoop.params.len()`.
+    TailRecur {
+        args: Vec<Self>,
+    },
 }
 
 /// The target of a [`Expr::Call`].

@@ -26,6 +26,7 @@
 //! the tool WRITES the cache via the same code the tests READ it through.
 
 use std::path::Path;
+use std::process::Command;
 
 /// Outcome of building and running an emitted Sky project.
 // Fields are only accessed from E2E test functions (`build_and_run_emitted`
@@ -71,6 +72,62 @@ pub fn build_and_run_emitted(golden_name: &str, emitted_dir: &Path) -> RunOutcom
     RunOutcome {
         stdout: result.stdout,
         exit_code: result.exit_code,
+    }
+}
+
+/// Build the emitted project and run its binary with the MAIN-THREAD stack
+/// capped to `stack_kib` KiB, via `bash -c 'ulimit -s <kib>; exec "$0"' <bin>`.
+///
+/// A deep non-TCO recursion then overflows deterministically at a few thousand
+/// frames instead of needing ~10^6, so the constant-stack proof is fast and
+/// robust. A stack overflow trips the guard page and `abort()`s (SIGABRT) — NOT
+/// a catchable panic — so the child dies by signal and `exit_code` is `None`;
+/// the TCO'd binary instead exits cleanly with `Some(0)`. Linux/macOS only (the
+/// Rust backend's target).
+///
+/// # Panics
+/// Fails the calling test if `cargo build` fails (surfacing cargo's stderr), the
+/// binary cannot be located, or the `bash`/`ulimit` runner cannot be spawned.
+#[must_use]
+#[allow(dead_code)] // only the constant-stack golden exercises this helper
+pub fn build_and_run_stack_limited(
+    golden_name: &str,
+    emitted_dir: &Path,
+    stack_kib: u32,
+) -> RunOutcome {
+    let exe = oracle::build_rust_binary(golden_name, emitted_dir);
+    assert!(
+        exe.is_ok(),
+        "{}",
+        exe.as_ref().err().map_or("", String::as_str)
+    );
+    let Ok(exe) = exe else {
+        return RunOutcome {
+            stdout: String::new(),
+            exit_code: None,
+        };
+    };
+    // `exec "$0"` replaces the shell after `ulimit -s` lowers the soft stack
+    // limit, so the child binary runs under the capped main-thread stack.
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(format!("ulimit -s {stack_kib}; exec \"$0\""))
+        .arg(&exe)
+        .output();
+    assert!(
+        output.is_ok(),
+        "{golden_name}: failed to spawn stack-limited runner: {:?}",
+        output.as_ref().err()
+    );
+    let Ok(output) = output else {
+        return RunOutcome {
+            stdout: String::new(),
+            exit_code: None,
+        };
+    };
+    RunOutcome {
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        exit_code: output.status.code(),
     }
 }
 
