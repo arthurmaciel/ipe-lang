@@ -31,8 +31,10 @@ pub fn live_req(
             // First-value-wins on duplicate header keys, matching Go's
             // `headersToDict` (`vs[0]`). axum yields multi-valued headers in
             // arrival order, so the first `iter()` entry is the first value.
-            hdrs.entry(crate::sky_runtime::http_header::canonical_header(k.as_str()))
-                .or_insert_with(|| val.to_string());
+            hdrs.entry(crate::sky_runtime::http_header::canonical_header(
+                k.as_str(),
+            ))
+            .or_insert_with(|| val.to_string());
         }
     }
     let mut cookies: SkyDict<String> = SkyDict::new();

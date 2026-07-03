@@ -2001,6 +2001,12 @@ impl<'a> Builder<'a> {
             name: self.builtins.maybe,
             args: vec![t],
         };
+        // `Char` is a zero-argument constructor (runtime rune / `char`).
+        let char = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.char,
+            args: Vec::new(),
+        };
         // ── Phase D relocation closures (mirror `kernel_ty`'s preamble so the
         //    relocated arms produce structurally identical `Ty` values; the
         //    `stdlib_scheme_matches_legacy` tripwire proves the equality). ──
@@ -2661,7 +2667,141 @@ impl<'a> Builder<'a> {
                 fun(cfg_rec, task_unit())
             }
 
-            // Not-yet-migrated: fall back to the legacy symbol-keyed table.
+            // ══ FIRST-SCHEMED families (Phase D8–D13) ══
+            // These had NO legacy scheme (`kernel_ty` → `Ty::Var(u32::MAX)`
+            // hole); they receive their FIRST correct scheme here, authored from
+            // the runtime signature + `.sky` HM signature. No parity oracle
+            // exists (legacy was a hole), so correctness is pinned by
+            // `first_schemed_were_holes` (each WAS a hole) plus skyc→cargo build
+            // fixtures. Every arrow-count equals `decl().arity` — the invariant
+            // `eta_expand_partial` relies on when peeling `arity` arrows off the
+            // inferred callee type.
+
+            // ── String (33 — the kernels beyond `fromInt`/`fromFloat`) ──
+            K::StringLength => fun(string(), int()),
+            K::StringIsEmpty | K::StringIsEmail | K::StringIsUrl => fun(string(), bool_ty()),
+            K::StringReverse
+            | K::StringToUpper
+            | K::StringToLower
+            | K::StringCasefold
+            | K::StringTrim
+            | K::StringTrimStart
+            | K::StringTrimEnd => fun(string(), string()),
+            K::StringToInt => fun(string(), maybe(int())),
+            K::StringToFloat => fun(string(), maybe(float())),
+            K::StringFromChar => fun(char(), string()),
+            K::StringFromList => fun(list(char()), string()),
+            K::StringConcat => fun(list(string()), string()),
+            K::StringWords | K::StringLines => fun(string(), list(string())),
+            K::StringToList => fun(string(), list(char())),
+            K::StringAppend => fun(string(), fun(string(), string())),
+            K::StringContains | K::StringStartsWith | K::StringEndsWith | K::StringEqualFold => {
+                fun(string(), fun(string(), bool_ty()))
+            }
+            K::StringJoin => fun(string(), fun(list(string()), string())),
+            K::StringSplit => fun(string(), fun(string(), list(string()))),
+            K::StringRepeat | K::StringDropLeft | K::StringDropRight => {
+                fun(int(), fun(string(), string()))
+            }
+            K::StringReplace => fun(string(), fun(string(), fun(string(), string()))),
+            K::StringSlice => fun(int(), fun(int(), fun(string(), string()))),
+            K::StringPadLeft | K::StringPadRight => {
+                fun(int(), fun(char(), fun(string(), string())))
+            }
+
+            // ── Char (8) — `Char -> …`; `toLower`/`toUpper` return a 1-rune
+            //    String (runtime `char_to_lower : char -> String`). ──
+            K::CharIsAlpha | K::CharIsDigit | K::CharIsLower | K::CharIsUpper => {
+                fun(char(), bool_ty())
+            }
+            K::CharToLower | K::CharToUpper => fun(char(), string()),
+            K::CharToCode => fun(char(), int()),
+            K::CharFromCode => fun(int(), char()),
+
+            // ── Crypto (13) — AEAD (`aesGcm*`/`chacha20*`) EXCLUDED: registry
+            //    `decl().arity == 3` but the Rust runtime takes 2 args
+            //    (`sky_aes_gcm_encrypt(key, plaintext)`), so no faithful scheme
+            //    can satisfy the arrow-count == arity invariant. ──
+            K::CryptoSha256 | K::CryptoSha512 | K::CryptoSha1 | K::CryptoMd5 => {
+                fun(string(), string())
+            }
+            K::CryptoHmacSha256
+            | K::CryptoHmacSha512
+            | K::CryptoAesKeyFromPassword
+            | K::CryptoChachaKeyFromPassword => fun(string(), fun(string(), string())),
+            K::CryptoRsaSha256Sign => fun(string(), fun(string(), result(error_ty(), string()))),
+            K::CryptoRsaSha256Verify => fun(string(), fun(string(), fun(string(), bool_ty()))),
+            K::CryptoConstantTimeEqual => fun(string(), fun(string(), bool_ty())),
+            K::CryptoRandomBytes | K::CryptoRandomToken => fun(int(), task(string())),
+
+            // ── Jwt decode (2) — `secret -> token -> Result Error String`
+            //    (runtime returns the decoded claims JSON as a String). Jwt
+            //    ENCODE is EXCLUDED: `decl().arity == 3` but the Rust runtime
+            //    `sky_jwt_encode_hs256(secret, claims_json)` takes 2 args. ──
+            K::JwtDecodeHs256 | K::JwtDecodeRs256 => {
+                fun(string(), fun(string(), result(error_ty(), string())))
+            }
+
+            // ── Json.Decode (17) — mirrors the already-relocated `Db.Decode`
+            //    shapes (function-first `map`/`andThen`; `dec(a)` is the opaque
+            //    `Decoder a`). Primitives are arity-0 bare decoders. ──
+            K::JsonDecString => dec(string()),
+            K::JsonDecInt => dec(int()),
+            K::JsonDecFloat => dec(float()),
+            K::JsonDecBool => dec(bool_ty()),
+            K::JsonDecDecodeString => fun(dec(var(0)), fun(string(), result(error_ty(), var(0)))),
+            K::JsonDecField => fun(string(), fun(dec(var(0)), dec(var(0)))),
+            K::JsonDecAt => fun(list(string()), fun(dec(var(0)), dec(var(0)))),
+            K::JsonDecIndex => fun(int(), fun(dec(var(0)), dec(var(0)))),
+            K::JsonDecList => fun(dec(var(0)), dec(list(var(0)))),
+            K::JsonDecMap => fun(fun(var(0), var(1)), fun(dec(var(0)), dec(var(1)))),
+            K::JsonDecAndThen => fun(fun(var(0), dec(var(1))), fun(dec(var(0)), dec(var(1)))),
+            K::JsonDecSucceed => fun(var(0), dec(var(0))),
+            K::JsonDecFail => fun(string(), dec(var(0))),
+            K::JsonDecOneOf => fun(list(dec(var(0))), dec(var(0))),
+            K::JsonDecMap2 => fun(
+                fun(var(0), fun(var(1), var(2))),
+                fun(dec(var(0)), fun(dec(var(1)), dec(var(2)))),
+            ),
+            K::JsonDecMap3 => fun(
+                fun(var(0), fun(var(1), fun(var(2), var(3)))),
+                fun(dec(var(0)), fun(dec(var(1)), fun(dec(var(2)), dec(var(3))))),
+            ),
+            K::JsonDecMap4 => fun(
+                fun(var(0), fun(var(1), fun(var(2), fun(var(3), var(4))))),
+                fun(
+                    dec(var(0)),
+                    fun(dec(var(1)), fun(dec(var(2)), fun(dec(var(3)), dec(var(4))))),
+                ),
+            ),
+
+            // ── Json.Decode.Pipeline (4) — mirrors `Db.Decode.required` /
+            //    `optional`; `next_decoder : Decoder (a -> b)`. ──
+            K::JsonDecPRequired => fun(
+                string(),
+                fun(dec(var(0)), fun(dec(fun(var(0), var(1))), dec(var(1)))),
+            ),
+            K::JsonDecPRequiredAt => fun(
+                list(string()),
+                fun(dec(var(0)), fun(dec(fun(var(0), var(1))), dec(var(1)))),
+            ),
+            K::JsonDecPOptional => fun(
+                string(),
+                fun(
+                    dec(var(0)),
+                    fun(var(0), fun(dec(fun(var(0), var(1))), dec(var(1)))),
+                ),
+            ),
+            K::JsonDecPCustom => fun(dec(var(0)), fun(dec(fun(var(0), var(1))), dec(var(1)))),
+
+            // ── Result (internal) — `okDefault : a -> Result e a`, the Ok-wrap
+            //    used during lowering (runtime `ok_res(a) -> Result e a`). ──
+            K::ResultOkDefault => fun(var(0), result(var(1), var(0))),
+
+            // Not-yet-migrated / EXCLUDED (Crypto AEAD, Jwt encode, PubSub —
+            // unbacked / arity-conflicted; Uuid, Encoding, JsonEnc, Ui
+            // Length/Color — deferred to sibling tasks): fall back to the legacy
+            // symbol-keyed table.
             _ => return None,
         })
     }
@@ -5356,7 +5496,106 @@ mod registry_phase_c_tests {
     /// exists; correctness is pinned by `first_schemed_were_holes` (the scheme
     /// closes a genuine hole) plus the skyc→cargo build fixtures. GROWS per
     /// family task; never shrinks. Empty until the first-scheme family tasks land.
-    const FIRST_SCHEMED: &[StdlibKernel] = &[];
+    ///
+    /// Phase D8–D13 (this slice) schemes the independent holed families from
+    /// their runtime + `.sky` signatures. EXCLUDED (still on the `Ty::Var`
+    /// fallback, filed for their sibling tasks): Crypto AEAD
+    /// (`aesGcm*`/`chacha20*`) and Jwt ENCODE — `decl().arity == 3` but the Rust
+    /// runtime takes 2 args, so no faithful arrow-count == arity scheme exists;
+    /// `PubSub` (`publish`/`publishNoEcho`) — no runtime backing, qualifier absent
+    /// from canon `qual_vars`; Uuid (task #54), Encoding (task #55), and all
+    /// `JsonEnc.Value` / Ui `Length`/`Color` families (need new builtins,
+    /// tasks #46/#47/#43).
+    const FIRST_SCHEMED: &[StdlibKernel] = {
+        use StdlibKernel as K;
+        &[
+            // String (33 — beyond the relocated `fromInt`/`fromFloat`)
+            K::StringLength,
+            K::StringIsEmpty,
+            K::StringReverse,
+            K::StringToUpper,
+            K::StringToLower,
+            K::StringCasefold,
+            K::StringTrim,
+            K::StringTrimStart,
+            K::StringTrimEnd,
+            K::StringToInt,
+            K::StringToFloat,
+            K::StringFromChar,
+            K::StringFromList,
+            K::StringConcat,
+            K::StringWords,
+            K::StringLines,
+            K::StringToList,
+            K::StringIsEmail,
+            K::StringIsUrl,
+            K::StringAppend,
+            K::StringContains,
+            K::StringStartsWith,
+            K::StringEndsWith,
+            K::StringEqualFold,
+            K::StringJoin,
+            K::StringSplit,
+            K::StringRepeat,
+            K::StringDropLeft,
+            K::StringDropRight,
+            K::StringReplace,
+            K::StringSlice,
+            K::StringPadLeft,
+            K::StringPadRight,
+            // Char (8)
+            K::CharIsAlpha,
+            K::CharIsDigit,
+            K::CharIsLower,
+            K::CharIsUpper,
+            K::CharToLower,
+            K::CharToUpper,
+            K::CharToCode,
+            K::CharFromCode,
+            // Crypto (13 — AEAD excluded)
+            K::CryptoSha256,
+            K::CryptoSha512,
+            K::CryptoSha1,
+            K::CryptoMd5,
+            K::CryptoHmacSha256,
+            K::CryptoHmacSha512,
+            K::CryptoRsaSha256Sign,
+            K::CryptoRsaSha256Verify,
+            K::CryptoConstantTimeEqual,
+            K::CryptoAesKeyFromPassword,
+            K::CryptoChachaKeyFromPassword,
+            K::CryptoRandomBytes,
+            K::CryptoRandomToken,
+            // Jwt decode (2 — encode excluded)
+            K::JwtDecodeHs256,
+            K::JwtDecodeRs256,
+            // Json.Decode (17)
+            K::JsonDecString,
+            K::JsonDecInt,
+            K::JsonDecFloat,
+            K::JsonDecBool,
+            K::JsonDecDecodeString,
+            K::JsonDecField,
+            K::JsonDecAt,
+            K::JsonDecIndex,
+            K::JsonDecList,
+            K::JsonDecMap,
+            K::JsonDecAndThen,
+            K::JsonDecSucceed,
+            K::JsonDecFail,
+            K::JsonDecOneOf,
+            K::JsonDecMap2,
+            K::JsonDecMap3,
+            K::JsonDecMap4,
+            // Json.Decode.Pipeline (4)
+            K::JsonDecPRequired,
+            K::JsonDecPOptional,
+            K::JsonDecPCustom,
+            K::JsonDecPRequiredAt,
+            // Result internal okDefault (1)
+            K::ResultOkDefault,
+        ]
+    };
 
     /// Build a scheme-test `Builder` plus the pre-interned `(qualifier, name)`
     /// symbol for every `StdlibKernel::ALL` variant, in lockstep order.
