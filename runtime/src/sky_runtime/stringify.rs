@@ -137,10 +137,13 @@ impl SkyStringify for f64 {
         // no `+` and no zero-padding on the exponent (e.g. "1e21", "1.5e-5").
         let sci = format!("{f:e}");
         match sci.split_once('e') {
-            // Go uses exponent form iff exp < -4 || exp >= 6, same threshold as
-            // string_from_float (see string.rs): Go's older public comment said
-            // 21, but the shipped implementation + oracle use 6, so 1e6 prints
-            // "1e+06" (not "1000000").
+            // Go uses exponent form iff exp < -4 || exp >= 6 (Go `'g'`
+            // shortest-mode cut), same threshold as string_from_float (see
+            // string.rs). Verified against Go 1.26.2 `fmt %v` ==
+            // `strconv.FormatFloat(f,'g',-1,64)`: 1e6 -> "1e+06", 1e15 ->
+            // "1e+15", 999999 -> "999999" (see reference-audit.md item 27 for
+            // the oracle probe). The `../sky` reference uses 21 here, which
+            // diverges from the Go oracle on every 1e6..1e20 value.
             Some((mantissa, exp_str)) => match exp_str.parse::<i32>() {
                 Ok(exp) if !(-4..6).contains(&exp) => {
                     // Go's `%e` exponent: explicit sign, minimum two digits.
@@ -347,13 +350,32 @@ mod tests {
     }
 
     #[test]
-    fn float_exponent_threshold_is_six() {
-        // Go parity: the switch to scientific notation happens at exponent 6,
-        // not 21. 1e6 must format exponential; 1e5 must stay positional.
-        assert_eq!(1e5f64.sky_show(), "100000"); // exp 5 → positional
-        assert_eq!(1e6f64.sky_show(), "1e+06"); // exp 6 → scientific
-        assert_eq!(1e20f64.sky_show(), "1e+20");
+    fn float_go_v_parity() {
+        // Byte-for-byte parity with Go `fmt %v` == `strconv.FormatFloat(f,'g',-1,64)`.
+        // Oracle: Go 1.26.2 `go run probe.go` (see reference-audit.md item 27). The cut
+        // to scientific notation is a FLAT decimal-exponent >= 6 (and < -4), NOT 21.
+        // Positional class (exp in [-4, 6)):
+        assert_eq!(99999.0f64.sky_show(), "99999"); // exp 4
+        assert_eq!(1e5f64.sky_show(), "100000"); // exp 5
+        assert_eq!(999999.0f64.sky_show(), "999999"); // exp 5 (lower guard)
+        assert_eq!(123456.789f64.sky_show(), "123456.789");
+        assert_eq!(0.0001f64.sky_show(), "0.0001"); // exp -4 boundary
+        // Scientific class (exp >= 6) — these DISCRIMINATE 6 from 21:
+        assert_eq!(1e6f64.sky_show(), "1e+06"); // exp 6 — 21 would print "1000000"
+        assert_eq!(1000001.0f64.sky_show(), "1.000001e+06"); // not a 1e6 special-case
+        assert_eq!(1234567.0f64.sky_show(), "1.234567e+06");
+        assert_eq!(1e15f64.sky_show(), "1e+15"); // 21 would print 16 zeros
+        assert_eq!(1e20f64.sky_show(), "1e+20"); // 21 would print 21 digits
         assert_eq!(1e21f64.sky_show(), "1e+21");
+        // Scientific class (exp <= -5):
+        assert_eq!(1e-5f64.sky_show(), "1e-05");
+        // Negative zero (shared positional branch): Go true -0.0 -> "-0".
+        assert_eq!((-0.0f64).sky_show(), "-0");
+        // Non-finite (shared branch):
+        assert_eq!(f64::INFINITY.sky_show(), "+Inf");
+        assert_eq!(f64::NEG_INFINITY.sky_show(), "-Inf");
+        assert_eq!(f64::NAN.sky_show(), "NaN");
+        assert_eq!((-1.5f64).sky_show(), "-1.5");
     }
 
     #[test]
