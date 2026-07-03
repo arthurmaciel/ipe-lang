@@ -7,7 +7,7 @@
 
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::Symbol;
-use sky_ir::{EnumDef, IrType, UiCtor, UiPlain};
+use sky_ir::{ir_type_is_derivable, EnumDef, IrType, UiCtor, UiPlain};
 
 use crate::naming::mangle_reserved;
 use crate::{EmitCtx, RecordStruct};
@@ -294,14 +294,25 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
                     rendered
                 };
                 field_types.push(rendered);
-                let binder = format!("p{i}");
-                // `binder` is a `match self` binder → already a `&FieldType`, so
-                // `Wrap(binder)` carries the reference the dispatch expects. This
-                // is total over any field type (the `Debug` arm is the fallback).
-                show_args.push(format!(
-                    "(&sky_runtime::stringify::Wrap({binder})).dispatch()"
-                ));
-                binders.push(binder);
+                if ir_type_is_derivable(field_ty, &|s| ctx.enum_is_derivable(s)) {
+                    let binder = format!("p{i}");
+                    // `binder` is a `match self` binder → already a `&FieldType`,
+                    // so `Wrap(binder)` carries the reference the dispatch
+                    // expects. Sound because a derivable field type impls
+                    // `SkyStringify` or `Debug` (the autoref fallback).
+                    show_args.push(format!(
+                        "(&sky_runtime::stringify::Wrap({binder})).dispatch()"
+                    ));
+                    binders.push(binder);
+                } else {
+                    // #87 seal: a non-derivable payload (a function / opaque
+                    // wrapper) impls neither `SkyStringify` nor `Debug`, so the
+                    // autoref `.dispatch()` would not resolve (E0599). Bind it
+                    // with `_` and render a `<fn>` placeholder — these carry no
+                    // user-visible data, matching the reference backend.
+                    binders.push("_".to_owned());
+                    show_args.push("\"<fn>\"".to_owned());
+                }
             }
             variant_lines.push(format!("    {vn}({}),", field_types.join(", ")));
             let placeholders = vec!["{}"; variant.fields.len()].join(" ");
@@ -337,17 +348,37 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
         )
     };
 
+    // #87 seal: only a fully-derivable enum takes the unconditional
+    // `#[derive(Clone, Debug, PartialEq)]`. An enum whose payload reaches a
+    // first-class function / opaque wrapper (directly or through a carrier /
+    // another non-derivable enum) cannot derive those traits — emit no auto
+    // derives (the hand-written `SkyStringify` impl below still gives it a total
+    // string form). serde rides on `self_derivable && uses_live` below — but
+    // NOTE (tracked as the Model-admissibility follow-up): this emit-gate does
+    // NOT prove Model admissibility. Two axes stay open here: (1) skyc does not
+    // yet reject a non-derivable type USED AS a Live/Tui/Webview Model at app
+    // entry, so such a Model still exit-0-then-cargo-fails on live_app's
+    // Clone/serde bounds; (2) `is_derivable` means CDPeq-support, NOT
+    // serde-support — a CDPeq-but-not-serde payload (Html/Element/Color/UiPlain)
+    // still gets serde forced here and cargo-fails. Both need an app-entry Model
+    // gate + an `ir_type_is_serde` predicate; do not read this as a seal proof
+    // for Live Models.
+    let self_derivable = ctx.enum_is_derivable(def.name);
     // When the program uses Std.Live, model types must implement serde traits
     // so the session store can serialise/deserialise them. The live runtime
     // requires `Model: serde::Serialize + serde::de::DeserializeOwned`.
-    let serde_derives = if ctx.uses_live {
+    let serde_derives = if self_derivable && ctx.uses_live {
         ", serde::Serialize, serde::Deserialize"
     } else {
         ""
     };
+    let derive_prefix = if self_derivable {
+        format!("#[derive(Clone, Debug, PartialEq{serde_derives})]\n")
+    } else {
+        String::new()
+    };
     Ok(format!(
-        "#[derive(Clone, Debug, PartialEq{serde_derives})]
-pub enum {name}{decl_clause} {{
+        "{derive_prefix}pub enum {name}{decl_clause} {{
 {variants}
 }}
 impl{impl_bounds} SkyStringify for {name}{use_clause} {{
@@ -413,9 +444,16 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
         let ident = mangle_reserved(field_name.clone());
         let rust_ty = render_type(ctx, field_ty, scope)?;
         field_lines.push(format!("    {ident}: {rust_ty},"));
-        show_args.push(format!(
-            "(&sky_runtime::stringify::Wrap(&self.{ident})).dispatch()"
-        ));
+        if ir_type_is_derivable(field_ty, &|s| ctx.enum_is_derivable(s)) {
+            show_args.push(format!(
+                "(&sky_runtime::stringify::Wrap(&self.{ident})).dispatch()"
+            ));
+        } else {
+            // #87 seal: a non-derivable field (a function / opaque wrapper)
+            // impls neither `SkyStringify` nor `Debug`, so `.dispatch()` would
+            // not resolve. Render a `<fn>` placeholder for that `{}` slot.
+            show_args.push("\"<fn>\"".to_owned());
+        }
     }
     let fields_block = field_lines.join("\n");
 
@@ -449,16 +487,30 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
         format!("format!(\"{fmt}\", {})", show_args.join(", "))
     };
 
-    // Matching the enum path: record structs also need serde when uses_live,
-    // since a record used as the Model type must be Serialize + Deserialize.
-    let serde_derives = if ctx.uses_live {
+    // #87 seal: only a fully-derivable record takes the unconditional
+    // `#[derive(Clone, Debug, PartialEq)]`. A record holding a first-class
+    // function / opaque wrapper field (directly or through a carrier / a
+    // non-derivable enum) cannot derive those traits — emit no auto derives (the
+    // hand-written `SkyStringify` impl below still gives it a total string form).
+    // serde rides on `is_derivable && uses_live` below. NOTE (tracked, Model-
+    // admissibility follow-up): this does NOT prove Model admissibility — skyc
+    // does not yet gate a non-derivable/non-serde type used AS a Live/Tui/Webview
+    // Model at app entry, so such a Model still exit-0-then-cargo-fails on
+    // live_app's bounds; and `is_derivable` is CDPeq-support, not serde-support,
+    // so a CDPeq-but-not-serde field (Html/Element/Color/UiPlain) still forces
+    // serde here and cargo-fails. Needs an app-entry Model gate + ir_type_is_serde.
+    let serde_derives = if rec.is_derivable && ctx.uses_live {
         ", serde::Serialize, serde::Deserialize"
     } else {
         ""
     };
+    let derive_prefix = if rec.is_derivable {
+        format!("#[derive(Clone, Debug, PartialEq{serde_derives})]\n")
+    } else {
+        String::new()
+    };
     Ok(format!(
-        "#[derive(Clone, Debug, PartialEq{serde_derives})]
-pub struct {name}{decl_clause} {{
+        "{derive_prefix}pub struct {name}{decl_clause} {{
 {fields_block}
 }}
 impl{impl_bounds} SkyStringify for {name}{use_clause} {{
