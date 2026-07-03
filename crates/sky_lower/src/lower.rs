@@ -3233,9 +3233,6 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JsonDecInt
                 | KernelFn::JsonDecFloat
                 | KernelFn::JsonDecBool
-                // ── Uuid arity-0 (M5b) ────────────────────────────────────────
-                | KernelFn::UuidV4
-                | KernelFn::UuidV7
                 // ── TEA arity-0 (M5c) ─────────────────────────────────────────
                 // `Cmd.none : Cmd msg`
                 | KernelFn::CmdNone
@@ -3351,6 +3348,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CryptoRandomBytes
                 | KernelFn::CryptoRandomToken
                 // ── Uuid arity-1 (M5b) ────────────────────────────────────────
+                // `v4`/`v7` are `() -> Task Error String` (task #54): they take
+                // the unit argument, exactly like `Time.now`. `parse` is the
+                // pure `String -> Maybe String` parser.
+                | KernelFn::UuidV4
+                | KernelFn::UuidV7
                 | KernelFn::UuidParse
                 // ── Task combinators arity-1 (M5a) ────────────────────────────
                 | KernelFn::TaskSucceed

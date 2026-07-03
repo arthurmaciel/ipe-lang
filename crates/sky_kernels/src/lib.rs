@@ -838,8 +838,13 @@ impl StdlibKernel {
             Self::CryptoRandomBytes => d("Crypto", "randomBytes", 1, Pure, "crypto_random_bytes"),
             Self::CryptoRandomToken => d("Crypto", "randomToken", 1, Pure, "crypto_random_token"),
             // ── Uuid ────────────────────────────────────────────────────────
-            Self::UuidV4 => d("Uuid", "v4", 0, Pure, "uuid_v4"),
-            Self::UuidV7 => d("Uuid", "v7", 0, Pure, "uuid_v7"),
+            // `v4`/`v7` are EFFECT-tier (`() -> Task Error String`, task #54):
+            // entropy is not a memoizable pure `String`. Arity is 1 (the unit
+            // argument) so the FIRST_SCHEMED `arrow-count == decl().arity`
+            // invariant holds against the `fun(Unit, task(string))` scheme.
+            // Runtime `uuid_v4::<E>(_: ())` / `uuid_v7::<E>(_: ())` take that unit.
+            Self::UuidV4 => d("Uuid", "v4", 1, Pure, "uuid_v4"),
+            Self::UuidV7 => d("Uuid", "v7", 1, Pure, "uuid_v7"),
             Self::UuidParse => d("Uuid", "parse", 1, Pure, "uuid_parse"),
             // ── Jwt ─────────────────────────────────────────────────────────
             // Encode arity is 2 (secret/key, claims_json): the Rust runtime
