@@ -90,6 +90,10 @@ pub enum StdlibKernel {
     LogDebug,
     LogWarn,
     LogError,
+    LogInfoWith,
+    LogDebugWith,
+    LogWarnWith,
+    LogErrorWith,
     // ── String ──────────────────────────────────────────────────────────────
     StringFromInt,
     StringFromFloat,
@@ -615,6 +619,10 @@ impl StdlibKernel {
             Self::LogDebug => d("Log", "debug", 1, Pure, "log_debug"),
             Self::LogWarn => d("Log", "warn", 1, Pure, "log_warn"),
             Self::LogError => d("Log", "error", 1, Pure, "log_error"),
+            Self::LogInfoWith => d("Log", "infoWith", 2, Pure, "log_info_with"),
+            Self::LogDebugWith => d("Log", "debugWith", 2, Pure, "log_debug_with"),
+            Self::LogWarnWith => d("Log", "warnWith", 2, Pure, "log_warn_with"),
+            Self::LogErrorWith => d("Log", "errorWith", 2, Pure, "log_error_with"),
             // ── String ──────────────────────────────────────────────────────
             Self::StringFromInt => d("String", "fromInt", 1, Pure, "string_from_int"),
             Self::StringFromFloat => d("String", "fromFloat", 1, Pure, "string_from_float"),
@@ -1226,6 +1234,10 @@ impl StdlibKernel {
         Self::LogDebug,
         Self::LogWarn,
         Self::LogError,
+        Self::LogInfoWith,
+        Self::LogDebugWith,
+        Self::LogWarnWith,
+        Self::LogErrorWith,
         // String
         Self::StringFromInt,
         Self::StringFromFloat,
