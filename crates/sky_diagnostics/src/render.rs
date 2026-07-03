@@ -388,6 +388,9 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::ReservedNamespace { name } => {
             Some(format!("`{name}` begins with a reserved namespace"))
         }
+        NameError::ReservedBuiltinType { name } => {
+            Some(format!("`{name}` is a built-in type name"))
+        }
         NameError::Unknown => None,
     }
 }

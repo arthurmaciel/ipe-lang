@@ -15,11 +15,11 @@ use crate::code::{
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
     SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118, SKY_L0119, SKY_L0200, SKY_N0001,
     SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
-    SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_P0001, SKY_P0002,
-    SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015, SKY_P0016,
-    SKY_P0017, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041, SKY_P0050,
-    SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004, SKY_T0010,
-    SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, Severity,
+    SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_P0001,
+    SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015,
+    SKY_P0016, SKY_P0017, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041,
+    SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004,
+    SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, Severity,
 };
 use crate::span::Span;
 
@@ -394,6 +394,13 @@ pub enum NameError {
     /// A local module's name starts with `Sky` or `Std`, which are reserved for
     /// the standard library. [SKY-N0025]
     ReservedNamespace { name: Box<str> },
+    /// A user `type` / `type alias` declaration reuses a name the compiler
+    /// reserves for a built-in type constructor (`Int`, `Maybe`, `Html`, `Cmd`,
+    /// `Length`, …). The lowerer matches these names ahead of the user-enum
+    /// lookup, so accepting the shadow would silently override the user type and
+    /// miscompile with no diagnostic; it is rejected at the declaration instead.
+    /// [SKY-N0026]
+    ReservedBuiltinType { name: Box<str> },
 }
 
 /// Errors raised during type inference / checking.
@@ -798,6 +805,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::ModulePathMismatch { .. } => SKY_N0023,
         NameError::AmbiguousImport { .. } => SKY_N0024,
         NameError::ReservedNamespace { .. } => SKY_N0025,
+        NameError::ReservedBuiltinType { .. } => SKY_N0026,
     }
 }
 
@@ -921,7 +929,8 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::ImportCycle { .. }
         | NameError::ModulePathMismatch { .. }
         | NameError::AmbiguousImport { .. }
-        | NameError::ReservedNamespace { .. } => Vec::new(),
+        | NameError::ReservedNamespace { .. }
+        | NameError::ReservedBuiltinType { .. } => Vec::new(),
     }
 }
 
