@@ -1031,8 +1031,36 @@ impl Env {
                 let func_sym = interner.intern(func)?;
                 // Phase B: thread the pre-resolved id into VarHome so
                 // lower_callee can use the fast path for registered kernels.
-                let id = self.stdlib_index.get(&(qual_sym, func_sym)).copied();
-                module.insert(func_sym, VarHome::Kernel(id, qual_sym, func_sym));
+                //
+                // `Std.Html.Events` (`Event`) re-exports the `Std.Ui` event
+                // kernels under the same names (`onMsg` is an alias for
+                // `onClick`), so resolve their id under the CANONICAL `Ui`
+                // qualifier and store the canonical `(Ui, name)` module+name —
+                // exactly like FUNC_ALIASES below. Without this, `Event.*` carried
+                // `id = None` and relied on the legacy `kernel_ty` string table,
+                // which the Phase E seal deleted (mirrors lower.rs's
+                // `("Ui" | "Event", …)` arms). A member with no `Ui` event kernel
+                // (e.g. `onSubmit`) falls through to the plain lookup, unchanged.
+                let (mod_sym, name_sym, id) = if *qual == "Event" {
+                    let canonical = if *func == "onMsg" { "onClick" } else { *func };
+                    let ui_sym = interner.intern("Ui")?;
+                    let canon_sym = interner.intern(canonical)?;
+                    match self.stdlib_index.get(&(ui_sym, canon_sym)).copied() {
+                        Some(sk) => (ui_sym, canon_sym, Some(sk)),
+                        None => (
+                            qual_sym,
+                            func_sym,
+                            self.stdlib_index.get(&(qual_sym, func_sym)).copied(),
+                        ),
+                    }
+                } else {
+                    (
+                        qual_sym,
+                        func_sym,
+                        self.stdlib_index.get(&(qual_sym, func_sym)).copied(),
+                    )
+                };
+                module.insert(func_sym, VarHome::Kernel(id, mod_sym, name_sym));
             }
             self.qual_vars.entry(qual_sym).or_default().extend(module);
         }
