@@ -794,6 +794,13 @@ impl SkyRow for SkyDict<String> {
 
 // The typed request an `init` handler receives. `Db.getString "path" req` reads
 // the named field; `params`/`headers`/`cookies` are searched for any other key.
+//
+// INVARIANT: `db` must build WITHOUT `live` — a DB-only server / CLI app does not
+// pull in Sky.Live. `super::LiveReq` is a `live`-only type, so this impl (the ONLY
+// `live` dependency in this module) stays behind `#[cfg(feature = "live")]`. Do not
+// reference `live`-only items from `db`-gated code without the same gate. Enforced
+// by CI job `runtime-feature-combos` (.github/workflows/ci.yml), which builds
+// `--no-default-features --features db` (no live) under `-D warnings`.
 #[cfg(feature = "live")]
 impl SkyRow for super::LiveReq {
     fn sky_get(&self, field: &str) -> String {
