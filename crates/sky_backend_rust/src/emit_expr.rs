@@ -3130,7 +3130,9 @@ fn emit_expr_tail(
             let c = emit_expr_at(ctx, cond, indent, child, generics)?;
             let t = emit_expr_tail(ctx, then_, indent + 1, child, generics, loop_params)?;
             let e = emit_expr_tail(ctx, else_, indent + 1, child, generics, loop_params)?;
-            Ok(format!("{pad}if {c} {{\n{t}\n{pad}}} else {{\n{e}\n{pad}}}"))
+            Ok(format!(
+                "{pad}if {c} {{\n{t}\n{pad}}} else {{\n{e}\n{pad}}}"
+            ))
         }
         Expr::Match(m) => {
             let (scrut, str_mode, list_mode) =
@@ -3142,7 +3144,8 @@ fn emit_expr_tail(
                 let (patstr, prelude) = emit_arm_head(ctx, &arm.pat, str_mode, list_mode)?;
                 // The arm body is a STATEMENT sequence ending in return/continue;
                 // any binder-rebind prelude precedes it inside the arm's block.
-                let body = emit_expr_tail(ctx, &arm.body, indent + 2, child, generics, loop_params)?;
+                let body =
+                    emit_expr_tail(ctx, &arm.body, indent + 2, child, generics, loop_params)?;
                 let inner = if prelude.is_empty() {
                     body
                 } else {
