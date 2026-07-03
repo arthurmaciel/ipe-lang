@@ -49,15 +49,26 @@ const STAGE: &str = "intern.resolve";
 /// search from fanning out) without losing the common small cases.
 const WITNESS_CAP: usize = 32;
 
+/// A type's nominal identity: its DEFINING module (home) paired with its bare
+/// name [`Symbol`]. Two modules each declaring `type Color` share the bare name
+/// but differ in home, so keying the constructor tables by `(home, name)` —
+/// never by `name` alone — keeps their constructor sets DISTINCT. A bare-`Symbol`
+/// key would let the second `type Color` overwrite the first's variant set,
+/// making a `case` over EITHER `Color` judged against the WRONG constructor set
+/// (a spurious or missed SKY-T0010) once both are linked (#100).
+type TyId = (Vec<Symbol>, Symbol);
+
 /// Constructor-signature tables, built once per module from its `type` decls.
 struct Sigs {
-    /// Constructor name → its owning union's name.
-    ctor_to_union: BTreeMap<Symbol, Symbol>,
-    /// Union name → its constructors in declaration (`index`) order, each paired
-    /// with its payload arity.
-    union_ctors: BTreeMap<Symbol, Vec<(Symbol, usize)>>,
-    /// Constructor name → payload arity (the field count its pattern binds).
-    ctor_arity: BTreeMap<Symbol, usize>,
+    /// Constructor identity `(home, ctor name)` → its owning union's identity
+    /// `(home, union name)`.
+    ctor_to_union: BTreeMap<TyId, TyId>,
+    /// Union identity `(home, name)` → its constructors in declaration (`index`)
+    /// order, each paired with its payload arity.
+    union_ctors: BTreeMap<TyId, Vec<(Symbol, usize)>>,
+    /// Constructor identity `(home, ctor name)` → payload arity (the field count
+    /// its pattern binds).
+    ctor_arity: BTreeMap<TyId, usize>,
 }
 
 impl Sigs {
@@ -78,28 +89,36 @@ impl Sigs {
         let nothing = interner.intern("Nothing")?;
         let ok = interner.intern("Ok")?;
         let err = interner.intern("Err")?;
+        // Prelude built-ins carry the empty home (matching how canonicalisation
+        // registers `Just`/`Nothing`/`Ok`/`Err` with `home: Vec::new()`), so a
+        // `Just` pattern's `(home=[], name=Just)` identity keys these entries.
+        let ph: Vec<Symbol> = Vec::new();
         for (ctor, union, arity) in [
             (just, maybe, 1usize),
             (nothing, maybe, 0),
             (ok, result, 1),
             (err, result, 1),
         ] {
-            ctor_to_union.insert(ctor, union);
-            ctor_arity.insert(ctor, arity);
+            ctor_to_union.insert((ph.clone(), ctor), (ph.clone(), union));
+            ctor_arity.insert((ph.clone(), ctor), arity);
         }
-        union_ctors.insert(maybe, vec![(just, 1), (nothing, 0)]);
-        union_ctors.insert(result, vec![(ok, 1), (err, 1)]);
+        union_ctors.insert((ph.clone(), maybe), vec![(just, 1), (nothing, 0)]);
+        union_ctors.insert((ph, result), vec![(ok, 1), (err, 1)]);
 
         for union in &module.unions {
+            // The union's DEFINING module — its nominal identity is `(home, name)`,
+            // distinct from a same-short-named type in another module (#100).
+            let uhome = union.home.clone();
+            let ukey = (uhome.clone(), union.name);
             let mut ctors: Vec<&canon::Ctor> = union.ctors.iter().collect();
             ctors.sort_by_key(|c| c.index);
             let mut list = Vec::with_capacity(ctors.len());
             for c in ctors {
-                ctor_to_union.insert(c.name, union.name);
-                ctor_arity.insert(c.name, c.arity);
+                ctor_to_union.insert((uhome.clone(), c.name), ukey.clone());
+                ctor_arity.insert((uhome.clone(), c.name), c.arity);
                 list.push((c.name, c.arity));
             }
-            union_ctors.insert(union.name, list);
+            union_ctors.insert(ukey, list);
         }
         Ok(Self {
             ctor_to_union,
@@ -116,7 +135,11 @@ impl Sigs {
     fn arity(&self, head: &Head) -> usize {
         match head {
             Head::Tuple(n) => *n,
-            Head::Adt(c) => self.ctor_arity.get(c).copied().unwrap_or(0),
+            Head::Adt(h, c) => self
+                .ctor_arity
+                .get(&(h.clone(), *c))
+                .copied()
+                .unwrap_or(0),
             // Literal heads carry no sub-patterns; the empty-list `[]` (`Nil`) is
             // likewise nullary.
             Head::Bool(_) | Head::Int(_) | Head::Char(_) | Head::Str(_) | Head::Nil => 0,
@@ -130,8 +153,11 @@ impl Sigs {
 /// A head constructor in the usefulness matrix.
 #[derive(Clone, PartialEq, Eq)]
 enum Head {
-    /// An ADT constructor, identified by name.
-    Adt(Symbol),
+    /// An ADT constructor, identified by its owning type's HOME module plus the
+    /// constructor name — the `(home, name)` nominal identity (#100). Home is
+    /// carried so two same-short-named types' constructors never conflate in the
+    /// usefulness matrix.
+    Adt(Vec<Symbol>, Symbol),
     /// The single constructor of a tuple type of the given arity.
     Tuple(usize),
     /// A boolean literal head — `Bool` is a CLOSED two-constructor type, so a
@@ -170,8 +196,10 @@ fn to_upat(p: &canon::Pattern_) -> UPat {
         canon::Pattern_::PAnything | canon::Pattern_::PVar(_) | canon::Pattern_::PRecord(_) => {
             UPat::Wild
         }
-        canon::Pattern_::PCtor { name, args, .. } => UPat::Ctor(
-            Head::Adt(*name),
+        canon::Pattern_::PCtor {
+            home, name, args, ..
+        } => UPat::Ctor(
+            Head::Adt(home.clone(), *name),
             args.iter().map(|a| to_upat(&a.value)).collect(),
         ),
         canon::Pattern_::PTuple(elems) => UPat::Ctor(
@@ -222,8 +250,10 @@ fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
         | canon::Pattern_::PBool(_)
         | canon::Pattern_::PChar(_)
         | canon::Pattern_::PStr(_) => false,
-        canon::Pattern_::PCtor { name, args, .. } => {
-            !sigs.ctor_to_union.contains_key(name)
+        canon::Pattern_::PCtor {
+            home, name, args, ..
+        } => {
+            !sigs.ctor_to_union.contains_key(&(home.clone(), *name))
                 || args
                     .iter()
                     .any(|a| pattern_uses_unknown_ctor(&a.value, sigs))
@@ -634,20 +664,25 @@ fn complete_signature(roots: &[Head], sigs: &Sigs) -> Option<Vec<(Head, usize)>>
                 None
             }
         }
-        Head::Adt(c) => {
-            let union = sigs.ctor_to_union.get(c)?;
+        Head::Adt(h, c) => {
+            let union = sigs.ctor_to_union.get(&(h.clone(), *c))?;
             let all = sigs.union_ctors.get(union)?;
+            // The union's home fixes each missing/present head's identity. All
+            // roots in one column share this union (the type checker pins the
+            // scrutinee's type before exhaustiveness runs), so comparing bare
+            // ctor names against `all` is sound.
+            let uhome = &union.0;
             let present: BTreeSet<Symbol> = roots
                 .iter()
                 .filter_map(|h| match h {
-                    Head::Adt(name) => Some(*name),
+                    Head::Adt(_, name) => Some(*name),
                     _ => None,
                 })
                 .collect();
             if all.iter().all(|(name, _)| present.contains(name)) {
                 Some(
                     all.iter()
-                        .map(|(name, ar)| (Head::Adt(*name), *ar))
+                        .map(|(name, ar)| (Head::Adt(uhome.clone(), *name), *ar))
                         .collect(),
                 )
             } else {
@@ -677,24 +712,25 @@ fn missing_heads(roots: &[Head], sigs: &Sigs) -> Vec<UPat> {
             }
             out
         }
-        Some(Head::Adt(c)) => {
-            let Some(union) = sigs.ctor_to_union.get(c) else {
+        Some(Head::Adt(h, c)) => {
+            let Some(union) = sigs.ctor_to_union.get(&(h.clone(), *c)) else {
                 return vec![UPat::Wild];
             };
             let Some(all) = sigs.union_ctors.get(union) else {
                 return vec![UPat::Wild];
             };
+            let uhome = &union.0;
             let present: BTreeSet<Symbol> = roots
                 .iter()
                 .filter_map(|h| match h {
-                    Head::Adt(name) => Some(*name),
+                    Head::Adt(_, name) => Some(*name),
                     _ => None,
                 })
                 .collect();
             let mut out: Vec<UPat> = all
                 .iter()
                 .filter(|(name, _)| !present.contains(name))
-                .map(|(name, ar)| UPat::Ctor(Head::Adt(*name), vec![UPat::Wild; *ar]))
+                .map(|(name, ar)| UPat::Ctor(Head::Adt(uhome.clone(), *name), vec![UPat::Wild; *ar]))
                 .collect();
             if out.is_empty() {
                 out.push(UPat::Wild);
@@ -769,7 +805,7 @@ fn render_upat(p: &UPat, interner: &Interner, atom: bool) -> DResult<String> {
                 Ok(inner)
             }
         }
-        UPat::Ctor(Head::Adt(name), args) => {
+        UPat::Ctor(Head::Adt(_home, name), args) => {
             let name = resolve(interner, *name)?;
             if args.is_empty() {
                 return Ok(name.into());

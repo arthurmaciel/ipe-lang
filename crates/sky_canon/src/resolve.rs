@@ -1102,6 +1102,40 @@ fn synthesize_record_alias_ctors(
     Ok(synth)
 }
 
+/// Register a dep-imported type name into `type_home_map`, rejecting a clash
+/// with a DIFFERENT already-imported home under [`NameError::DuplicateType`]
+/// (SKY-N0012).
+///
+/// The two types are genuinely distinct nominal identities `(home, name)` — the
+/// #100 fix lets each emit its own Rust enum — but bringing both into scope
+/// under the same UNQUALIFIED type name (`import ModA exposing (ColorA)` +
+/// `import ModB exposing (ColorA)`) leaves `ColorA` unresolvable to a single
+/// type. This is the type-level analogue of the value-import ambiguity gate
+/// ([`check_and_inject_value`], SKY-N0024). A re-injection of the SAME
+/// `(name, home)` — e.g. a diamond dependency reaching one home by two paths —
+/// is idempotent and accepted.
+fn inject_dep_type(
+    type_home_map: &mut BTreeMap<Symbol, Vec<Symbol>>,
+    type_name: Symbol,
+    home: &[Symbol],
+    span: Span,
+    interner: &Interner,
+) -> DResult<()> {
+    if let Some(existing) = type_home_map.get(&type_name)
+        && existing.as_slice() != home
+    {
+        return Err(Diagnostic::Name {
+            span,
+            msg: NameError::DuplicateType {
+                name: name_str(interner, type_name)?,
+                first: Span::DUMMY,
+            },
+        });
+    }
+    type_home_map.insert(type_name, home.to_vec());
+    Ok(())
+}
+
 /// Inject a dep module's exports into the resolving module's environment.
 ///
 /// Called once per `import` declaration, in source order. Handles:
@@ -1146,7 +1180,7 @@ fn inject_dep_exports(
             }
             // Inject all dep types (union homes) + all ctors.
             for (&type_name, home) in &dep.types {
-                type_home_map.insert(type_name, home.clone());
+                inject_dep_type(type_home_map, type_name, home, import.name.span, interner)?;
                 inject_ctors_for_type(
                     type_name,
                     dep,
@@ -1211,7 +1245,13 @@ fn inject_dep_exports(
                         }
                         if is_union {
                             if let Some(home) = dep.types.get(type_name) {
-                                type_home_map.insert(*type_name, home.clone());
+                                inject_dep_type(
+                                    type_home_map,
+                                    *type_name,
+                                    home,
+                                    item.span,
+                                    interner,
+                                )?;
                             }
                             let expose_ctors = !matches!(privacy, src::Privacy::Private);
                             if expose_ctors {

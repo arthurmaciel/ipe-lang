@@ -9,7 +9,7 @@ use sky_intern::Symbol;
 
 /// A dotted module path, e.g. `Main` or `Sky.Core.Io`, as interned segments in
 /// source order.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct ModPath(pub Vec<Symbol>);
 
 /// A function identifier, unique within a [`Program`].
@@ -124,6 +124,16 @@ pub enum TypeDef {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct EnumDef {
     pub name: Symbol,
+    /// The module that DEFINES this type (its *home*), not the entry module the
+    /// linker merged it into. Two modules may each declare a `type Color`; they
+    /// intern the same bare `name` [`Symbol`], so `(home, name)` — not `name`
+    /// alone — is the type's nominal identity. The backend derives the emitted
+    /// Rust enum name from `home` (`["Std","Palette"] + Shade` → `StdPaletteShade`,
+    /// `["Lib"] + Color` → `LibColor`, `["Main"] + Msg` → `MainMsg`), so a
+    /// single-module program (home == entry) is byte-identical to the pre-#100
+    /// output while two same-short-named types from different modules mangle to
+    /// distinct Rust enums. Empty for backend-unit-test IR built by hand.
+    pub home: ModPath,
     /// The type variables this enum quantifies, in declaration order. Each is a
     /// Sky type-variable [`Symbol`] that appears as an [`IrType::Generic`] in a
     /// variant's field types. A non-generic enum has an empty list.
@@ -397,14 +407,18 @@ pub enum IrType {
     Task(Box<Self>),
     /// A user-declared enum type, applied to its type arguments.
     ///
-    /// `name` is the enum's bare type [`Symbol`]; `args` are the concrete type
-    /// arguments at a use site (`Maybe Int` → `args = [Int]`, rendered
-    /// `MainMaybe<i64>`). A non-generic enum (`Msg`) carries an empty `args`
-    /// list, so it renders as the bare Rust type name — byte-identical to the M0
-    /// backend. An `arg` may itself be an [`IrType::Generic`] when a generic
-    /// enum is passed through a generic function (`Maybe a` inside a parametric
-    /// signature → `MainMaybe<T1>`).
+    /// `home` is the type's DEFINING module and `name` its bare type [`Symbol`];
+    /// together they are the type's nominal identity (see [`EnumDef::home`]). Two
+    /// modules each declaring `type Color` share the bare `name` but differ in
+    /// `home`, so the backend resolves each use site to the correct distinct Rust
+    /// enum. `args` are the concrete type arguments at a use site (`Maybe Int` →
+    /// `args = [Int]`, rendered `MainMaybe<i64>`). A non-generic enum (`Msg`)
+    /// carries an empty `args` list, so it renders as the bare Rust type name.
+    /// An `arg` may itself be an [`IrType::Generic`] when a generic enum is passed
+    /// through a generic function (`Maybe a` inside a parametric signature →
+    /// `MainMaybe<T1>`).
     Enum {
+        home: ModPath,
         name: Symbol,
         args: Vec<Self>,
     },
@@ -676,7 +690,10 @@ pub enum UiPlain {
 /// variant must make an explicit derivability decision here rather than default
 /// silently into the derivable branch (walker-arm rule).
 #[must_use]
-pub fn ir_type_is_derivable(ty: &IrType, enum_derivable: &impl Fn(Symbol) -> bool) -> bool {
+pub fn ir_type_is_derivable(
+    ty: &IrType,
+    enum_derivable: &impl Fn(&ModPath, Symbol) -> bool,
+) -> bool {
     match ty {
         IrType::Int
         | IrType::Float
@@ -720,8 +737,8 @@ pub fn ir_type_is_derivable(ty: &IrType, enum_derivable: &impl Fn(Symbol) -> boo
         IrType::Record(fields) => fields
             .values()
             .all(|f| ir_type_is_derivable(f, enum_derivable)),
-        IrType::Enum { name, args } => {
-            enum_derivable(*name)
+        IrType::Enum { home, name, args } => {
+            enum_derivable(home, *name)
                 && args.iter().all(|a| ir_type_is_derivable(a, enum_derivable))
         }
     }
@@ -770,7 +787,7 @@ pub fn ir_type_is_derivable(ty: &IrType, enum_derivable: &impl Fn(Symbol) -> boo
 /// The match is deliberately exhaustive with no wildcard arm: a new [`IrType`]
 /// variant must make an explicit serde decision here (walker-arm rule).
 #[must_use]
-pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(Symbol) -> bool) -> bool {
+pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> bool) -> bool {
     match ty {
         IrType::Int
         | IrType::Float
@@ -809,8 +826,8 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(Symbol) -> bool) -> bo
         }
         IrType::Tuple(es) => es.iter().all(|e| ir_type_is_serde(e, enum_serde)),
         IrType::Record(fields) => fields.values().all(|f| ir_type_is_serde(f, enum_serde)),
-        IrType::Enum { name, args } => {
-            enum_serde(*name) && args.iter().all(|a| ir_type_is_serde(a, enum_serde))
+        IrType::Enum { home, name, args } => {
+            enum_serde(home, *name) && args.iter().all(|a| ir_type_is_serde(a, enum_serde))
         }
     }
 }
@@ -853,12 +870,15 @@ pub enum Expr {
     /// A constructor application `Variant arg0 arg1 …` (a nullary constructor
     /// `Variant` has an empty `args`).
     ///
-    /// `ty` is the constructor's enum type [`Symbol`]; `variant` the constructor
-    /// name. `args` are the payload expressions, one per declared field, in
-    /// source order. The backend resolves the variant's declared field types
-    /// from the enum declaration to wrap any direct-self-recursive field in
-    /// `Box::new` at construction (matching the boxed enum field).
+    /// `home` + `ty` are the constructor's enum-type nominal identity (its
+    /// defining module and bare type [`Symbol`]; see [`EnumDef::home`]); `variant`
+    /// is the constructor name. `args` are the payload expressions, one per
+    /// declared field, in source order. The backend resolves the variant's
+    /// declared field types from the enum declaration (keyed by `(home, ty)`) to
+    /// wrap any direct-self-recursive field in `Box::new` at construction
+    /// (matching the boxed enum field).
     Ctor {
+        home: ModPath,
         ty: Symbol,
         variant: Symbol,
         args: Vec<Self>,
@@ -1125,8 +1145,10 @@ pub enum Pat {
     Alias(Box<Self>, Symbol),
     /// A constructor pattern `Variant sub0 sub1 …` (a nullary pattern `Variant`
     /// has an empty `args`). Each `args` element is an arbitrary [`Pat`] (M3b-2:
-    /// nested ctor / tuple / record sub-patterns are all permitted).
+    /// nested ctor / tuple / record sub-patterns are all permitted). `home` + `ty`
+    /// are the scrutinee enum's nominal identity (see [`EnumDef::home`]).
     Ctor {
+        home: ModPath,
         ty: Symbol,
         variant: Symbol,
         args: Vec<Self>,
@@ -1431,6 +1453,7 @@ mod tests {
         let arms = vec![
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty,
                     variant: inc,
                     args: vec![],
@@ -1443,6 +1466,7 @@ mod tests {
             },
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty,
                     variant: dec,
                     args: vec![],
@@ -1476,6 +1500,7 @@ mod tests {
         // Only the Increment arm — Decrement uncovered.
         let arms = vec![Arm {
             pat: Pat::Ctor {
+                home: ModPath(vec![]),
                 ty,
                 variant: inc,
                 args: vec![],
@@ -1498,6 +1523,7 @@ mod tests {
         let arms = vec![
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty,
                     variant: inc,
                     args: vec![],
@@ -1506,6 +1532,7 @@ mod tests {
             },
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty,
                     variant: inc,
                     args: vec![],
@@ -1514,6 +1541,7 @@ mod tests {
             },
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty,
                     variant: dec,
                     args: vec![],
@@ -1537,6 +1565,7 @@ mod tests {
         let arms = vec![
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty,
                     variant: inc,
                     args: vec![],
@@ -1545,6 +1574,7 @@ mod tests {
             },
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty,
                     variant: inc,
                     args: vec![],
@@ -1566,6 +1596,7 @@ mod tests {
         let arms = vec![
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty,
                     variant: inc,
                     args: vec![],
@@ -1574,6 +1605,7 @@ mod tests {
             },
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty,
                     variant: bogus,
                     args: vec![],
@@ -1669,9 +1701,11 @@ mod tests {
             Arm {
                 pat: Pat::Alias(
                     Box::new(Pat::Ctor {
+                        home: ModPath(vec![]),
                         ty: opt,
                         variant: som,
                         args: vec![Pat::Ctor {
+                            home: ModPath(vec![]),
                             ty: opt,
                             variant: som,
                             args: vec![Pat::Var(x)],
@@ -1683,9 +1717,11 @@ mod tests {
             },
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty: opt,
                     variant: som,
                     args: vec![Pat::Ctor {
+                        home: ModPath(vec![]),
                         ty: opt,
                         variant: non,
                         args: vec![],
@@ -1695,6 +1731,7 @@ mod tests {
             },
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty: opt,
                     variant: non,
                     args: vec![],
@@ -1980,6 +2017,7 @@ mod tests {
             modules: vec![Module {
                 name: ModPath(vec![main_mod]),
                 types: vec![TypeDef::Enum(EnumDef {
+                    home: ModPath(vec![]),
                     name: ty,
                     type_params: vec![],
                     variants: vec![
@@ -2093,6 +2131,7 @@ mod tests {
         // type Maybe a = Just a | Nothing — one generic param, one payload
         // variant (carrying the type variable), one nullary variant.
         let def = EnumDef {
+            home: ModPath(vec![]),
             name: maybe,
             type_params: vec![a],
             variants: vec![
@@ -2114,6 +2153,7 @@ mod tests {
 
         // A use-site type `Maybe Int` carries its concrete type argument.
         let use_ty = IrType::Enum {
+            home: ModPath(vec![]),
             name: maybe,
             args: vec![IrType::Int],
         };
@@ -2121,6 +2161,7 @@ mod tests {
         // A non-generic enum use carries no args and is distinct from the applied
         // form.
         let bare = IrType::Enum {
+            home: ModPath(vec![]),
             name: maybe,
             args: vec![],
         };
@@ -2128,6 +2169,7 @@ mod tests {
 
         // Construction `Just 5` carries its payload argument.
         let ctor = Expr::Ctor {
+            home: ModPath(vec![]),
             ty: maybe,
             variant: just,
             args: vec![Expr::Int(5)],
@@ -2152,6 +2194,7 @@ mod tests {
         let arms = vec![
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty: maybe,
                     variant: just,
                     args: vec![Pat::Var(x)],
@@ -2160,6 +2203,7 @@ mod tests {
             },
             Arm {
                 pat: Pat::Ctor {
+                    home: ModPath(vec![]),
                     ty: maybe,
                     variant: nothing,
                     args: vec![],
@@ -2172,6 +2216,7 @@ mod tests {
 
         // The wildcard payload sub-pattern is also representable.
         let wild = Pat::Ctor {
+            home: ModPath(vec![]),
             ty: maybe,
             variant: just,
             args: vec![Pat::Wildcard],
@@ -2207,10 +2252,12 @@ mod tests {
         // type Tree = Leaf | Node Tree Int Tree — the Node payload carries two
         // direct self-edges (the enum's own type) around an Int.
         let self_ty = IrType::Enum {
+            home: ModPath(vec![]),
             name: tree,
             args: vec![],
         };
         let def = EnumDef {
+            home: ModPath(vec![]),
             name: tree,
             type_params: vec![],
             variants: vec![
@@ -2232,7 +2279,7 @@ mod tests {
     // ── #91 seal: ir_type_is_serde ─────────────────────────────────────────
 
     /// `true` for every referenced enum — the leaf-level predicate under test.
-    fn all_serde(_: Symbol) -> bool {
+    fn all_serde(_: &ModPath, _: Symbol) -> bool {
         true
     }
 
@@ -2317,10 +2364,11 @@ mod tests {
     #[test]
     fn serde_consults_enum_lookup() {
         let e = IrType::Enum {
+            home: ModPath(vec![]),
             name: Symbol::from_raw(7),
             args: vec![],
         };
-        assert!(ir_type_is_serde(&e, &|_| true), "serde enum passes");
-        assert!(!ir_type_is_serde(&e, &|_| false), "non-serde enum poisons");
+        assert!(ir_type_is_serde(&e, &|_, _| true), "serde enum passes");
+        assert!(!ir_type_is_serde(&e, &|_, _| false), "non-serde enum poisons");
     }
 }

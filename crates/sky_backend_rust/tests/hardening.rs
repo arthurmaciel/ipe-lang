@@ -72,6 +72,7 @@ fn reserved_names_are_mangled_in_emitted_output() -> DResult<()> {
             name: variant,
             fields: vec![],
         }],
+        home: ModPath(vec![]),
     };
     let render_fn = Func {
         id: FuncId::from_raw(0),
@@ -223,6 +224,7 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
                 name: inc,
                 fields: vec![],
             }],
+            home: ModPath(vec![]),
         })
     };
     let prog = Program {

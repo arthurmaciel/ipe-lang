@@ -43,6 +43,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
     let arms = vec![
         Arm {
             pat: Pat::Ctor {
+                home: ModPath(vec![]),
                 ty: msg_ty,
                 variant: increment,
                 args: vec![],
@@ -55,6 +56,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
         },
         Arm {
             pat: Pat::Ctor {
+                home: ModPath(vec![]),
                 ty: msg_ty,
                 variant: decrement,
                 args: vec![],
@@ -77,6 +79,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
             (
                 msg,
                 IrType::Enum {
+                    home: ModPath(vec![]),
                     name: msg_ty,
                     args: vec![],
                 },
@@ -102,6 +105,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
                     callee: Callee::Func(update_id),
                     args: vec![
                         Expr::Ctor {
+                            home: ModPath(vec![]),
                             ty: msg_ty,
                             variant: increment,
                             args: vec![],
@@ -129,6 +133,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
                         fields: vec![],
                     },
                 ],
+                home: ModPath(vec![]),
             })],
             funcs: vec![update_fn, main_fn],
             entry: Some(main_id),

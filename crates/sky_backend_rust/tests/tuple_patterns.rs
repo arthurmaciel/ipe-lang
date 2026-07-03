@@ -71,11 +71,13 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
             name: mk_wrap,
             fields: vec![IrType::Tuple(vec![IrType::Int, IrType::Int])],
         }],
+        home: ModPath(vec![]),
     };
 
     // fstOf w = case w of MkWrap (a, b) -> a
     let arms = vec![Arm {
         pat: Pat::Ctor {
+            home: ModPath(vec![]),
             ty: wrap,
             variant: mk_wrap,
             args: vec![Pat::Tuple(vec![Pat::Var(a), Pat::Var(b)])],
@@ -90,6 +92,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
         params: vec![(
             w,
             IrType::Enum {
+                home: ModPath(vec![]),
                 name: wrap,
                 args: vec![],
             },
@@ -113,6 +116,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
                 args: vec![Expr::Call {
                     callee: Callee::Func(FuncId::from_raw(0)),
                     args: vec![Expr::Ctor {
+                        home: ModPath(vec![]),
                         ty: wrap,
                         variant: mk_wrap,
                         args: vec![Expr::Tuple(vec![Expr::Int(3), Expr::Int(4)])],

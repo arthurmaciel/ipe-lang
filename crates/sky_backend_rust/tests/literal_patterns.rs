@@ -82,11 +82,13 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
                 fields: vec![],
             },
         ],
+        home: ModPath(vec![]),
     };
 
     let arms = vec![
         Arm {
             pat: Pat::Ctor {
+                home: ModPath(vec![]),
                 ty: tag,
                 variant: a,
                 args: vec![payload],
@@ -95,6 +97,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
         },
         Arm {
             pat: Pat::Ctor {
+                home: ModPath(vec![]),
                 ty: tag,
                 variant: b,
                 args: vec![],
@@ -110,6 +113,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
         params: vec![(
             w,
             IrType::Enum {
+                home: ModPath(vec![]),
                 name: tag,
                 args: vec![],
             },
@@ -133,6 +137,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
                 args: vec![Expr::Call {
                     callee: Callee::Func(FuncId::from_raw(0)),
                     args: vec![Expr::Ctor {
+                        home: ModPath(vec![]),
                         ty: tag,
                         variant: a,
                         args: vec![Expr::Int(0)],
@@ -239,11 +244,13 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
             name: mk_wrap,
             fields: vec![IrType::Int],
         }],
+        home: ModPath(vec![]),
     };
 
     // f w = case w of MkWrap (x as y) -> y
     let arms = vec![Arm {
         pat: Pat::Ctor {
+            home: ModPath(vec![]),
             ty: wrap,
             variant: mk_wrap,
             args: vec![Pat::Alias(Box::new(Pat::Var(x)), y)],
@@ -258,6 +265,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
         params: vec![(
             w,
             IrType::Enum {
+                home: ModPath(vec![]),
                 name: wrap,
                 args: vec![],
             },
@@ -281,6 +289,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
                 args: vec![Expr::Call {
                     callee: Callee::Func(FuncId::from_raw(0)),
                     args: vec![Expr::Ctor {
+                        home: ModPath(vec![]),
                         ty: wrap,
                         variant: mk_wrap,
                         args: vec![Expr::Int(7)],

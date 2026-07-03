@@ -79,8 +79,8 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Char => "char".to_owned(),
         IrType::Unit => "()".to_owned(),
         IrType::Task(inner) => format!("SkyTask<{}>", render_type(ctx, inner, generics)?),
-        IrType::Enum { name, args } => {
-            let base = ctx.enum_name(*name)?.to_owned();
+        IrType::Enum { home, name, args } => {
+            let base = ctx.enum_name(home, *name)?.to_owned();
             if args.is_empty() {
                 // A non-generic enum renders as the bare Rust type name —
                 // byte-identical to the M0 backend.
@@ -261,7 +261,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
 /// construction and pattern emitters balance that boxing. See
 /// [`crate::EmitCtx::is_cyclic_self_field`].
 pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
-    let name = ctx.enum_name(def.name)?.to_owned();
+    let name = ctx.enum_name(&def.home, def.name)?.to_owned();
     // The enum's own generic scope: each type parameter → `T1`, `T2`, … by
     // position. Empty for a non-generic enum (byte-identical to M0).
     let scope = GenericScope::new(&def.type_params);
@@ -288,13 +288,13 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
             let mut show_args = Vec::with_capacity(variant.fields.len());
             for (i, field_ty) in variant.fields.iter().enumerate() {
                 let rendered = render_type(ctx, field_ty, scope)?;
-                let rendered = if ctx.is_cyclic_self_field(field_ty, def.name) {
+                let rendered = if ctx.is_cyclic_self_field(field_ty, &def.home, def.name) {
                     format!("Box<{rendered}>")
                 } else {
                     rendered
                 };
                 field_types.push(rendered);
-                if ir_type_is_derivable(field_ty, &|s| ctx.enum_is_derivable(s)) {
+                if ir_type_is_derivable(field_ty, &|home, name| ctx.enum_is_derivable(home, name)) {
                     let binder = format!("p{i}");
                     // `binder` is a `match self` binder → already a `&FieldType`,
                     // so `Wrap(binder)` carries the reference the dispatch
@@ -354,7 +354,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     // another non-derivable enum) cannot derive those traits — emit no auto
     // derives (the hand-written `SkyStringify` impl below still gives it a total
     // string form).
-    let self_derivable = ctx.enum_is_derivable(def.name);
+    let self_derivable = ctx.enum_is_derivable(&def.home, def.name);
     // #93 seal: the serde derive is gated on the SERDE predicate, not the CDPeq
     // one. serde-support ⊊ CDPeq-support: a `Clone + Debug + PartialEq` enum whose
     // payload reaches a `Html` / `Element` / `Color` / `UiPlain` value (serde-less
@@ -366,7 +366,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     // added without CDPeq. #91's app-entry Model gate independently rejects a
     // NON-serde type used AS a Live/Tui/Webview Model; this gate covers every OTHER
     // (non-Model) emitted type in a Live program.
-    let self_serde = ctx.enum_is_serde(def.name);
+    let self_serde = ctx.enum_is_serde(&def.home, def.name);
     // When the program uses Std.Live, model types must implement serde traits
     // so the session store can serialise/deserialise them. The live runtime
     // requires `Model: serde::Serialize + serde::de::DeserializeOwned`.
@@ -447,7 +447,7 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
         let ident = mangle_reserved(field_name.clone());
         let rust_ty = render_type(ctx, field_ty, scope)?;
         field_lines.push(format!("    {ident}: {rust_ty},"));
-        if ir_type_is_derivable(field_ty, &|s| ctx.enum_is_derivable(s)) {
+        if ir_type_is_derivable(field_ty, &|home, name| ctx.enum_is_derivable(home, name)) {
             show_args.push(format!(
                 "(&sky_runtime::stringify::Wrap(&self.{ident})).dispatch()"
             ));
