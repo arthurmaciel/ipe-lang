@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use sky_canon::ast as canon;
 use sky_diagnostics::{
-    Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0101, SKY_L0102, SKY_L0105,
-    SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0119, Span,
+    Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0101, SKY_L0102, SKY_L0106,
+    SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0119, Span,
 };
 use sky_intern::{Interner, Symbol};
 use sky_ir::{BoundSet, Callee, Expr, FuncId, IrType, KernelFn};
@@ -149,11 +149,14 @@ fn untyped_function_with_parameters() -> DResult<()> {
 }
 
 #[test]
-fn non_variable_parameter_pattern() -> DResult<()> {
+fn wildcard_parameter_lowers_to_a_fresh_binder() -> DResult<()> {
     let mut i = Interner::new();
     let f = i.intern("f")?;
     let ty = canon::Type::Lambda(Box::new(con_int(&mut i)?), Box::new(con_int(&mut i)?));
-    // A `_` parameter: M0 params must be plain names.
+    // `f _ = 0` — a wildcard parameter is now a valid IRREFUTABLE binding
+    // position (SKY-L0105 retired for param patterns; a refutable param is the
+    // separate SKY-T0015 gate). It lowers to a fresh unused parameter carrying
+    // the annotated type, with no destructure prologue.
     let patterns = vec![Located::new(Span::new(20, 21), canon::Pattern_::PAnything)];
     let def = canon::Def::Typed {
         home: vec![],
@@ -163,12 +166,12 @@ fn non_variable_parameter_pattern() -> DResult<()> {
         body: int(Span::new(22, 23), 0),
         ty,
     };
-    assert_unsupported(
-        run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
-        Feature::ParamPatterns,
-        SKY_L0105,
-        Span::new(20, 21),
-    );
+    let res = run(Vec::new(), vec![def], BTreeMap::new(), &mut i);
+    let func = single_func(&res).expect("wildcard-param function must lower cleanly");
+    assert_eq!(func.params.len(), 1, "one synthetic param expected: {res:?}");
+    let param_ty = func.params.first().map(|(_, t)| t);
+    assert_eq!(param_ty, Some(&IrType::Int), "param type is the annotation");
+    assert_eq!(func.ret, IrType::Int, "return type is the annotation tail");
     Ok(())
 }
 

@@ -1,0 +1,59 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- SKY-L0105 by-VALUE alias binding — the partial-move (E0382) seal.
+--
+-- In every position below an `as`-alias over a destructure binds BOTH the whole
+-- (`whole` / `inner`) AND its sub-parts, and ALL of them are used in the body.
+-- The payload is the NON-`Copy` `(String, String)`. Rust's `name @ (a, b)`
+-- spelling would move the whole and the sub-bindings from the same value — a
+-- partial move (E0382). The backend must instead bind the whole first and
+-- destructure the sub-parts from a CLONE, so every binder is independently
+-- owned. Each helper returns its parts re-concatenated, proving whole AND parts
+-- are live.
+
+-- PARAM position: `f ((a, b) as whole) = …` — a #96 function parameter pattern.
+paramPos : (String, String) -> String
+paramPos ((a, b) as whole) =
+    let
+        (x, y) = whole
+    in
+    String.append (String.append a b) (String.append x y)
+
+-- CASE position: a single-arm product `case`, an irrefutable destructure.
+casePos : (String, String) -> String
+casePos p =
+    case p of
+        ((a, b) as whole) ->
+            let
+                (x, y) = whole
+            in
+            String.append (String.append a b) (String.append x y)
+
+-- LET position: an irrefutable `let` destructure with an alias.
+letPos : (String, String) -> String
+letPos pair =
+    let
+        ((a, b) as whole) = pair
+        (x, y) = whole
+    in
+    String.append (String.append a b) (String.append x y)
+
+-- NESTED alias: `(h, ((c, d) as inner))` — an alias nested inside a tuple
+-- binder, exercising the fresh-temp (`__sky_bind_N`) path in a by-value binding.
+nestedPos : (String, (String, String)) -> String
+nestedPos (h, ((c, d) as inner)) =
+    let
+        (e, f) = inner
+    in
+    String.append (String.append h c) (String.append d (String.append e f))
+
+main =
+    println
+        (String.append
+            (String.append
+                (String.append (paramPos ( "p", "q" )) (casePos ( "r", "s" )))
+                (letPos ( "t", "u" ))
+            )
+            (nestedPos ( "h", ( "c", "d" ) ))
+        )

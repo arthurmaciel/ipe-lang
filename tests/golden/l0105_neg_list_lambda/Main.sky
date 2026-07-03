@@ -1,0 +1,12 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A bracket-list lambda param `\[a] ->` is refutable (fails on `[]` and longer
+-- lists). Like `\1 ->`, the parser's param grammar rejects a bare list pattern
+-- in binding position, so it fails closed as SKY-P0001 before the SKY-T0015
+-- gate. A refutable list param never reaches codegen.
+f : List Int -> Int
+f = \[a] -> a
+
+main =
+    println (String.fromInt (f [ 1 ]))

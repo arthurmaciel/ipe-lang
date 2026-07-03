@@ -14,6 +14,7 @@
 //!   a [`sky_diagnostics::Diagnostic::CompilerBug`] — the "compiler is broken"
 //!   channel, reachable only for ill-canonicalised or ill-typed input.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use sky_canon::ast as canon;
@@ -1012,7 +1013,19 @@ pub struct Lowerer<'a> {
     /// the pool is reused positionally across functions without collision;
     /// [`Interner::fresh_symbols`] guarantees the names dodge every user
     /// identifier and each other.
+    ///
+    /// Sized by [`count_destructure_param_sites`] (defs AND every lambda), the
+    /// pool is handed out through [`Self::param_cursor`] as a GLOBALLY-unique
+    /// supply — never positionally — so a def param and a lambda param inside its
+    /// body can never be minted the same `arg_i`. Distinct-per-site binders make
+    /// cross-nesting collision unrepresentable; the lowerer never relies on Rust
+    /// shadowing.
     param_binders: Vec<Symbol>,
+    /// Monotonic cursor into [`Self::param_binders`]. Each call to
+    /// [`Self::fresh_param_binder`] returns the next distinct synthetic binder and
+    /// advances; overrun fails closed as a [`bug`] (never an index panic). Interior
+    /// mutability so the lowering walk stays over a shared `&self`.
+    param_cursor: Cell<usize>,
 }
 
 /// The interned symbols of the built-in `Maybe` / `Result` types and their
@@ -1067,6 +1080,78 @@ pub fn max_def_arity(m: &canon::Module) -> usize {
         })
         .max()
         .unwrap_or(0)
+}
+
+/// Count every **non-variable** parameter pattern across the whole module — both
+/// function-def heads AND every (possibly nested) lambda. Each such site needs
+/// one globally-unique synthetic `arg_N` binder (a `PVar` param reuses its own
+/// name and needs none). This sizes the synthetic-binder pool so the monotonic
+/// `Cell` cursor in [`Lowerer`] can hand out a distinct name per site: a def
+/// param and a lambda param inside its body can never collide on `arg_i`, so the
+/// lowerer never leans on Rust shadowing (make-invalid-states-unrepresentable).
+///
+/// Over-counting is harmless (a few unused interned symbols); under-counting
+/// would let the cursor overrun, which fails closed as a [`bug`] — never an
+/// index panic, never a silent reuse.
+pub fn count_destructure_param_sites(m: &canon::Module) -> usize {
+    fn non_var_params(pats: &[canon::Pattern]) -> usize {
+        pats.iter()
+            .filter(|p| !matches!(p.value, canon::Pattern_::PVar(_)))
+            .count()
+    }
+    fn walk_expr(e: &canon::Expr) -> usize {
+        match &e.value {
+            canon::Expr_::Lambda(params, body) => {
+                non_var_params(params) + walk_expr(body)
+            }
+            // Recurse into every sub-expression that can host a lambda.
+            canon::Expr_::Call(callee, args) => {
+                walk_expr(callee) + args.iter().map(walk_expr).sum::<usize>()
+            }
+            canon::Expr_::Binop { lhs, rhs, .. } => walk_expr(lhs) + walk_expr(rhs),
+            canon::Expr_::Case(scrut, branches) => {
+                walk_expr(scrut) + branches.iter().map(|b| walk_expr(&b.body)).sum::<usize>()
+            }
+            canon::Expr_::Let(bindings, body) => {
+                bindings.iter().map(|b| walk_expr(&b.body)).sum::<usize>() + walk_expr(body)
+            }
+            canon::Expr_::If(branches, else_expr) => {
+                branches
+                    .iter()
+                    .map(|(c, b)| walk_expr(c) + walk_expr(b))
+                    .sum::<usize>()
+                    + walk_expr(else_expr)
+            }
+            canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
+                elems.iter().map(walk_expr).sum()
+            }
+            canon::Expr_::Cons(head, tail) => walk_expr(head) + walk_expr(tail),
+            canon::Expr_::Record(fields) => fields.iter().map(|(_, v)| walk_expr(v)).sum(),
+            canon::Expr_::Access(record, _) => walk_expr(record),
+            canon::Expr_::Update(base, fields) => {
+                walk_expr(base) + fields.iter().map(|(_, v)| walk_expr(v)).sum::<usize>()
+            }
+            // Leaves host no lambda.
+            canon::Expr_::VarLocal(_)
+            | canon::Expr_::VarTopLevel { .. }
+            | canon::Expr_::VarKernel { .. }
+            | canon::Expr_::VarCtor { .. }
+            | canon::Expr_::Int(_)
+            | canon::Expr_::Float(_)
+            | canon::Expr_::Str(_)
+            | canon::Expr_::Char(_)
+            | canon::Expr_::Unit => 0,
+        }
+    }
+    m.defs
+        .iter()
+        .map(|d| match d {
+            canon::Def::Typed { patterns, body, .. }
+            | canon::Def::Untyped { patterns, body, .. } => {
+                non_var_params(patterns) + walk_expr(body)
+            }
+        })
+        .sum()
 }
 
 impl<'a> Lowerer<'a> {
@@ -1150,7 +1235,26 @@ impl<'a> Lowerer<'a> {
             ctor_arity,
             eta_params,
             param_binders,
+            param_cursor: Cell::new(0),
         }
+    }
+
+    /// Hand out the next globally-unique synthetic parameter binder from
+    /// [`Self::param_binders`], advancing the monotonic cursor. Fails closed as a
+    /// [`bug`] if the pool is exhausted — the pool is sized by
+    /// [`count_destructure_param_sites`] to cover every non-var param site in the
+    /// module, so an overrun is an internal invariant violation, never a user
+    /// error and never an index panic.
+    fn fresh_param_binder(&self) -> DResult<Symbol> {
+        let i = self.param_cursor.get();
+        let sym = *self.param_binders.get(i).ok_or_else(|| {
+            bug(
+                "sky_lower::fresh_param_binder",
+                "synthetic parameter-binder pool exhausted",
+            )
+        })?;
+        self.param_cursor.set(i + 1);
+        Ok(sym)
     }
 
     /// Resolve a symbol the IR guarantees was interned by `interner`. A `None`
@@ -1653,7 +1757,7 @@ impl<'a> Lowerer<'a> {
         let mut cur = ty;
         let mut params = Vec::with_capacity(patterns.len());
         let mut prologue = Vec::new();
-        for (i, pat) in patterns.iter().enumerate() {
+        for pat in patterns {
             let canon::Type::Lambda(arg, rest) = cur else {
                 // More parameter patterns than the annotation has arrows. The
                 // type checker rejects this first (the body's inferred arity
@@ -1667,26 +1771,14 @@ impl<'a> Lowerer<'a> {
                 ));
             };
             let ir_ty = self.ir_type_from_canon(arg, generics)?;
-            match &pat.value {
-                canon::Pattern_::PTuple(_) => {
-                    // A tuple parameter: name it with a fresh synthetic binder
-                    // (one per parameter position) and record the destructure for
-                    // the body prologue. The pool is sized to the widest function
-                    // arity, so position `i` is always present; a missing slot is
-                    // an internal invariant violation.
-                    let synthetic = *self.param_binders.get(i).ok_or_else(|| {
-                        bug(
-                            "sky_lower::split_typed_sig",
-                            "tuple-parameter binder pool exhausted",
-                        )
-                    })?;
-                    params.push((synthetic, ir_ty));
-                    prologue.push((synthetic, Self::lower_destructure_pat(pat)?));
-                }
-                // A plain variable parameter. A wildcard / constructor parameter
-                // is parameter-destructuring the lowerer does not model yet
-                // (SKY-L0105); `pattern_var` makes that report.
-                _ => params.push((Self::pattern_var(pat)?, ir_ty)),
+            // One shared path for every parameter shape (see `lower_param`): a
+            // plain-var param contributes its name directly; a tuple / record /
+            // alias / wildcard param takes a fresh synthetic binder and (for the
+            // destructuring shapes) a `Destructure` prologue.
+            let (param, maybe_prologue) = self.lower_param(pat, ir_ty)?;
+            params.push(param);
+            if let Some(p) = maybe_prologue {
+                prologue.push(p);
             }
             cur = rest.as_ref();
         }
@@ -1694,13 +1786,83 @@ impl<'a> Lowerer<'a> {
         Ok((params, prologue, self.ir_type_from_canon(cur, generics)?))
     }
 
-    const fn pattern_var(pat: &canon::Pattern) -> DResult<Symbol> {
+    /// Lower ONE binding-position parameter pattern (a function-def head param or
+    /// a lambda param) into its IR parameter plus an optional destructure
+    /// prologue. This is the single shared path for BOTH binding sites — one code
+    /// path cannot disagree with itself about what a pattern param means
+    /// (the design rejects upstream's asymmetric lambda-vs-def lowering).
+    ///
+    /// The SKY-T0015 gate (exhaustiveness phase, before lowering) has already
+    /// proven `pat` irrefutable, so only irrefutable shapes are reachable:
+    ///
+    /// * `PVar(s)` — the param IS the name: `(s, ir_ty)`, no prologue, zero cost.
+    /// * `PAnything` — a fresh unused binder, no prologue. `\_ ->` rides the
+    ///   emitted crate's `#![allow(unused)]`, so no `let _ =` and no branch.
+    /// * `PTuple` / `PRecord` / `PAlias` — a fresh binder plus a `Destructure`
+    ///   prologue built by [`Self::lower_param_binder_pat`]; a record recovers its
+    ///   COMPLETE field set from the param's SOLVED type (not a name heuristic).
+    ///
+    /// A refutable pattern is a fail-closed [`bug`] — it can no longer reach the
+    /// lowerer (SKY-T0015 rejected it), so reaching this arm is an invariant
+    /// violation, never a user error and never an emitted panic arm.
+    fn lower_param(
+        &self,
+        pat: &canon::Pattern,
+        ir_ty: IrType,
+    ) -> DResult<(IrParam, Option<ParamPrologue>)> {
         match &pat.value {
-            canon::Pattern_::PVar(s) => Ok(*s),
-            // A non-variable parameter pattern (`_`, `Just x`, a literal). M0
-            // function parameters must be plain names.
-            // [SKY-L0105, feature: param-patterns]
-            _ => Err(unsupported(pat.span, Feature::ParamPatterns)),
+            // The param is its own name — no synthetic binder, no prologue.
+            canon::Pattern_::PVar(s) => Ok(((*s, ir_ty), None)),
+            // A wildcard param needs a name (Rust params are named) but binds
+            // nothing: a fresh unused binder, no destructure.
+            canon::Pattern_::PAnything => Ok(((self.fresh_param_binder()?, ir_ty), None)),
+            // A destructuring param: a fresh binder holds the whole argument, and
+            // a `Destructure` prologue opens it in the body.
+            canon::Pattern_::PTuple(_)
+            | canon::Pattern_::PRecord(_)
+            | canon::Pattern_::PAlias(_, _) => {
+                let fresh = self.fresh_param_binder()?;
+                let binder = self.lower_param_binder_pat(pat, pat.span)?;
+                Ok(((fresh, ir_ty), Some((fresh, binder))))
+            }
+            // Refutable — rejected upstream by SKY-T0015. Fail closed.
+            canon::Pattern_::PCtor { .. }
+            | canon::Pattern_::PInt(_)
+            | canon::Pattern_::PBool(_)
+            | canon::Pattern_::PChar(_)
+            | canon::Pattern_::PStr(_)
+            | canon::Pattern_::PList(_)
+            | canon::Pattern_::PCons(_, _) => Err(bug(
+                "sky_lower::lower_param",
+                "refutable parameter pattern reached the lowerer — the SKY-T0015 \
+                 irrefutability gate should have rejected it",
+            )),
+        }
+    }
+
+    /// Like [`Self::lower_binder_pat`] but for a PARAMETER pattern, whose solved
+    /// type lives at its own region span (recorded by the constraint generator on
+    /// every param) rather than at a bound value expression. A record param
+    /// recovers its COMPLETE field set from that solved type; an alias recurses on
+    /// the SAME `param_span` (an alias does not change the scrutinee's type), so a
+    /// nested record still recovers its full field set. Everything else
+    /// (variable / wildcard / nested irrefutable tuple) lowers structurally.
+    fn lower_param_binder_pat(&self, pat: &canon::Pattern, param_span: Span) -> DResult<Pat> {
+        match &pat.value {
+            canon::Pattern_::PRecord(fields) => {
+                let ty = self.types.regions.get(&param_span).ok_or_else(|| {
+                    bug(
+                        "sky_lower::lower_param_binder_pat",
+                        "record parameter has no solved region type",
+                    )
+                })?;
+                self.lower_record_pat(fields, ty, pat.span)
+            }
+            canon::Pattern_::PAlias(inner, name) => Ok(Pat::Alias(
+                Box::new(self.lower_param_binder_pat(inner, param_span)?),
+                name.value,
+            )),
+            _ => Self::lower_destructure_pat(pat),
         }
     }
 
@@ -1972,6 +2134,9 @@ impl<'a> Lowerer<'a> {
         })?;
         let mut cur = ty;
         let mut ir_params = Vec::with_capacity(params.len());
+        // Destructure prologues for the flattened params, in source (parameter)
+        // order; folded around the body outermost-first below.
+        let mut prologue: Vec<ParamPrologue> = Vec::new();
         // The frontier of the flatten: start at this lambda's own params/body,
         // then descend into each directly-nested lambda while the arrow type can
         // still supply a parameter type.
@@ -1989,10 +2154,15 @@ impl<'a> Lowerer<'a> {
                         "lambda type has fewer arrows than parameters",
                     ));
                 };
-                ir_params.push((
-                    Self::pattern_var(pat)?,
-                    self.ir_type_from_ty(arg, pat.span)?,
-                ));
+                let ir_ty = self.ir_type_from_ty(arg, pat.span)?;
+                // Same shared path as the def-head params (see `lower_param`): a
+                // plain-var param contributes its name; a destructuring param
+                // takes a fresh binder + a `Destructure` prologue.
+                let (param, maybe_prologue) = self.lower_param(pat, ir_ty)?;
+                ir_params.push(param);
+                if let Some(p) = maybe_prologue {
+                    prologue.push(p);
+                }
                 cur = rest.as_ref();
             }
             // Collapse a directly-nested lambda body into this same closure: a
@@ -2011,7 +2181,19 @@ impl<'a> Lowerer<'a> {
             }
         }
         let ret = self.ir_type_from_ty(cur, span)?;
-        let body = self.lower_expr(cur_body)?;
+        let mut body = self.lower_expr(cur_body)?;
+        // Fold each destructuring param's `Destructure` around the body,
+        // OUTERMOST-first (reverse of source order) so the first parameter's
+        // destructure is the outermost binding — identical to the def-head
+        // prologue folding in `lower_def`. (Lambdas are not TCO'd, so there is no
+        // TailLoop interaction here.)
+        for (binder_sym, binder_pat) in prologue.into_iter().rev() {
+            body = Expr::Destructure {
+                binder: binder_pat,
+                value: Box::new(Expr::Var(binder_sym)),
+                body: Box::new(body),
+            };
+        }
         Ok(Expr::Lambda {
             params: ir_params,
             ret,

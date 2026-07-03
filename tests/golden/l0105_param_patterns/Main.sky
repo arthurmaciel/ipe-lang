@@ -1,0 +1,61 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- SKY-L0105 lambda / function parameter patterns (#96), the positive surface.
+-- Every binding position below is IRREFUTABLE, so each lowers to a synthetic
+-- parameter plus (for the destructuring shapes) an irrefutable `Destructure` —
+-- never a runtime match. The wildcard cases ride the emitted crate's
+-- `#![allow(unused)]`, so `\_ ->` / `f _ =` stay warning-clean.
+
+-- Higher-order helpers, so the lambdas below appear in ARGUMENT position — the
+-- dominant `\_ ->` idiom (`Task.andThen (\_ -> …)`, `List.map (\_ -> …)`).
+applyI : (Int -> Int) -> Int -> Int
+applyI f x = f x
+
+applyP : ((Int, Int) -> Int) -> (Int, Int) -> Int
+applyP f p = f p
+
+applyR : ({ x : Int, y : Int } -> Int) -> { x : Int, y : Int } -> Int
+applyR f r = f r
+
+applyM : (Int -> Int -> (Int, Int) -> Int) -> Int
+applyM f = f 100 3 (4, 5)
+
+-- Def-head wildcard: `f _ =`.
+ignoreArg : Int -> Int
+ignoreArg _ = 7
+
+-- Def-head tuple: `f (a, b) =`.
+sumPair : (Int, Int) -> Int
+sumPair (a, b) = a + b
+
+-- Def-head record field-pun: `f { y } =`.
+getY : { x : Int, y : Int } -> Int
+getY { y } = y
+
+-- Def-head alias over a tuple: `((a, b) as whole)` binds both.
+firstOfAlias : (Int, Int) -> Int
+firstOfAlias ((a, b) as whole) = a
+
+-- Tail-recursive tuple param: the destructure `(n, acc) = arg` re-runs each
+-- iteration as the TailLoop reassigns the synthetic binder.
+countdown : (Int, Int) -> Int
+countdown (n, acc) =
+    case n of
+        0 -> acc
+        _ -> countdown (n - 1, acc + n)
+
+main =
+    println
+        (String.fromInt
+            (applyI (\_ -> 42) 0
+                + applyP (\( a, b ) -> a + b) ( 1, 2 )
+                + applyR (\{ x } -> x) { x = 10, y = 5 }
+                + applyM (\_ x ( a, b ) -> x + a + b)
+                + ignoreArg 99
+                + sumPair ( 4, 5 )
+                + getY { x = 1, y = 8 }
+                + firstOfAlias ( 6, 7 )
+                + countdown ( 5, 0 )
+            )
+        )
