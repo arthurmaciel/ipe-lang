@@ -20,6 +20,91 @@ const MAX_SUGGESTIONS: usize = 3;
 /// "did you mean" is more misleading than helpful, so silence wins.
 const SUGGESTION_MAX_DISTANCE: usize = 2;
 
+/// Type-constructor names the compiler reserves for built-ins. A user `type` /
+/// `type alias` whose name is one of these is rejected at declaration
+/// ([`NameError::ReservedBuiltinType`], SKY-N0026).
+///
+/// This is the exact set that `sky_lower`'s `ir_type_from_ty` matches *ahead of*
+/// its user-enum lookup (`enum_variants` guard). Because that match keys on the
+/// type name alone, a user declaration of any of these names would be silently
+/// overridden by the built-in IR mapping and miscompile with **no diagnostic** —
+/// so the shadow must be rejected here, at the parse/canon boundary, rather than
+/// validated downstream (parse-don't-validate; make-invalid-states-
+/// unrepresentable).
+///
+/// Every entry is cited to its `crates/sky_lower/src/lower.rs::ir_type_from_ty`
+/// arm (HEAD line numbers):
+///
+/// ```text
+/// Int 2069, Float 2070, Bool 2071, String/Error 2077, Char 2078, Bytes 2081,
+/// Task 2084, Maybe 2103, Result 2108, List 2114, Dict 2119, Set 2133,
+/// Decoder 2148, Db 2162, Cmd 2167, Sub 2179, SqlValue/SqlField 2195,
+/// Request 2203, Response 2204, Route 2205, Cookie 2206, Html 2221,
+/// Element 2236, Attribute 2254, Event 2279, Length 2295, HAlign 2297,
+/// VAlign 2298, Location 2299, PseudoClass 2300, Description 2301,
+/// LayoutContext 2302, LiveReq 2304.
+/// ```
+///
+/// Two names that `ir_type_from_ty` also matches are deliberately EXCLUDED:
+///   * `Value` (lower.rs 2331) is matched *after* the `enum_variants` guard, so a
+///     user `type Value` already wins — it is not a silent-override hole.
+///   * `Color` (lower.rs 2296) *is* a genuine before-guard hole, but multiple
+///     shipped `.sky` fixtures (`m4d_dict_adt_gate`, `m4d_set_adt_fn_gate`,
+///     `mm_local_pkg`, …) declare `type Color` as a benign sample ADT. Reserving
+///     it belongs in a follow-up that renames those fixtures first; see the
+///     Phase-E #45 report.
+const RESERVED_BUILTIN_TYPES: &[&str] = &[
+    "Int",
+    "Float",
+    "Bool",
+    "String",
+    "Error",
+    "Char",
+    "Bytes",
+    "Task",
+    "Maybe",
+    "Result",
+    "List",
+    "Dict",
+    "Set",
+    "Decoder",
+    "Db",
+    "Cmd",
+    "Sub",
+    "SqlValue",
+    "SqlField",
+    "Request",
+    "Response",
+    "Route",
+    "Cookie",
+    "Html",
+    "Element",
+    "Attribute",
+    "Event",
+    "Length",
+    "HAlign",
+    "VAlign",
+    "Location",
+    "PseudoClass",
+    "Description",
+    "LayoutContext",
+    "LiveReq",
+];
+
+/// Reject a user `type` / `type alias` whose name shadows a reserved built-in
+/// type constructor. See [`RESERVED_BUILTIN_TYPES`].
+fn reject_reserved_builtin_type(name: Symbol, span: Span, interner: &Interner) -> DResult<()> {
+    match interner.resolve(name) {
+        Some(resolved) if RESERVED_BUILTIN_TYPES.contains(&resolved) => Err(Diagnostic::Name {
+            span,
+            msg: NameError::ReservedBuiltinType {
+                name: Box::<str>::from(resolved),
+            },
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// A registered `type alias` awaiting expansion at its use sites.
 ///
 /// `params` are the declared type parameters in source order (empty for a
@@ -236,6 +321,9 @@ fn canonicalise_with_env(
     for u in &m.unions {
         let type_name = u.value.name.value;
         let type_span = u.value.name.span;
+        // SKY-N0026: reject a user type whose name shadows a reserved built-in
+        // before it can silently override the lowerer's builtin-name mapping.
+        reject_reserved_builtin_type(type_name, type_span, interner)?;
         if let Some(&first) = seen_types.get(&type_name) {
             return Err(Diagnostic::Name {
                 span: type_span,
@@ -264,6 +352,9 @@ fn canonicalise_with_env(
     for a in &m.aliases {
         let alias_name = a.value.name.value;
         let alias_span = a.value.name.span;
+        // SKY-N0026: `type alias` names are gated the same as `type` names — an
+        // alias shadowing a built-in would be silently overridden too.
+        reject_reserved_builtin_type(alias_name, alias_span, interner)?;
         if let Some(&first) = seen_types.get(&alias_name) {
             return Err(Diagnostic::Name {
                 span: alias_span,

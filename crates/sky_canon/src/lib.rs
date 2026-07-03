@@ -609,6 +609,59 @@ mod tests {
     }
 
     #[test]
+    fn user_type_shadowing_builtin_rejected() {
+        // `Length` is a reserved built-in (`Std.Ui` nullary type) that the
+        // lowerer matches ahead of the user-enum lookup; a user `type Length`
+        // would be silently overridden, so canon must reject it (SKY-N0026).
+        let src = "module Main exposing (main)\n\n\
+                   type Length = Red | Green\n\nmain = 0\n";
+        let err = canon_err(src);
+        let Some(Diagnostic::Name {
+            msg: NameError::ReservedBuiltinType { name },
+            ..
+        }) = err
+        else {
+            assert!(false_marker(), "expected ReservedBuiltinType, got {err:?}");
+            return;
+        };
+        assert_eq!(&*name, "Length");
+    }
+
+    #[test]
+    fn non_reserved_user_type_still_compiles() {
+        // A same-shaped ADT under a NON-reserved name must canonicalise cleanly —
+        // the gate is scoped to reserved built-in names only.
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
+            "module Main exposing (main)\n\n\
+             type Swatch = Red | Green\n\nmain = 0\n",
+        );
+        assert!(m.is_some(), "non-reserved `type Swatch` must canonicalise");
+    }
+
+    #[test]
+    fn type_alias_shadowing_builtin_rejected() {
+        // Aliases are gated identically — `type alias Html = String` shadows the
+        // built-in `Std.Html.Html`, which the lowerer maps to `IrType::Ui`.
+        let src = "module Main exposing (main)\n\n\
+                   type alias Html = String\n\nmain = 0\n";
+        let err = canon_err(src);
+        let Some(Diagnostic::Name {
+            msg: NameError::ReservedBuiltinType { name },
+            ..
+        }) = err
+        else {
+            assert!(
+                false_marker(),
+                "expected ReservedBuiltinType for the alias, got {err:?}"
+            );
+            return;
+        };
+        assert_eq!(&*name, "Html");
+    }
+
+    #[test]
     fn duplicate_constructor_across_unions_points_at_both_spans() {
         // Same constructor name `A` in two distinct unions.
         let src = "module Main exposing (main)\n\n\
