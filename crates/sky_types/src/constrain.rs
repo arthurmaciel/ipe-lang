@@ -538,19 +538,6 @@ const fn classify_binop(func: &str) -> BinopClass {
     }
 }
 
-/// The Sky `comparable`-key obligation a kernel module's element / key variable
-/// carries, or `None` for a module without such a position. `Set`'s element is
-/// keyed by `BTreeSet<A>` (`A : Ord`); `Dict`'s key by a determinism-sorted
-/// `HashMap<K, V>` (`K : Hash + Eq + Ord`). The obligation is attached to raw
-/// scheme-variable 0, which is the element / key in every `Set` / `Dict` kernel.
-fn key_obligation(interner: &Interner, module: Symbol) -> Option<TyBounds> {
-    match interner.resolve(module) {
-        Some("Set") => Some(TyBounds::set_elem()),
-        Some("Dict") => Some(TyBounds::dict_key()),
-        _ => None,
-    }
-}
-
 /// The constraint-generation state threaded through the walk.
 pub struct Builder<'a> {
     uf: &'a mut UnionFind<Content>,
@@ -1411,10 +1398,25 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// The Sky `comparable`-key obligation a kernel's element/key variable
+    /// carries, keyed off the resolved [`StdlibKernel`] id via its
+    /// `decl().qualifier` (parse-once — never a re-inspected module string).
+    /// `Set`'s element is keyed by `BTreeSet` (`Ord`) and `Dict`'s key by a
+    /// determinism-sorted `HashMap` (`Hash + Eq + Ord`); the obligation is
+    /// attached to raw scheme-variable 0, the element/key in every `Set` /
+    /// `Dict` kernel scheme.
+    fn key_obligation_for(k: StdlibKernel) -> Option<TyBounds> {
+        match k.decl().qualifier {
+            "Set" => Some(TyBounds::set_elem()),
+            "Dict" => Some(TyBounds::dict_key()),
+            _ => None,
+        }
+    }
+
     /// The type of a kernel reference (`Math.min`, `Set.insert`, …).
     ///
-    /// Most kernels take the declarative scheme from [`Self::kernel_ty`] verbatim
-    /// via `instantiate`. Two families instead mint super-typed obligations so a
+    /// Most kernels take the declarative scheme from [`Self::stdlib_scheme`] via
+    /// `instantiate`. Two families instead mint super-typed obligations so a
     /// generic use lifts the matching Rust trait bound onto its annotation
     /// skolem and a non-comparable argument fails closed at type-check:
     ///
@@ -1425,8 +1427,9 @@ impl<'a> Builder<'a> {
     ///   emitting an unbounded `math_min<T>(…)` that `cargo` rejects.
     /// * `Set` / `Dict` kernels — the element / key (raw scheme-variable 0 in
     ///   every Set / Dict kernel) carries the Sky `comparable`-key obligation
-    ///   ([`key_obligation`]). The scheme is instantiated, then variable 0 is
-    ///   tied to a fresh super-typed variable carrying that obligation, so a
+    ///   ([`Self::key_obligation_for`]). The base scheme (now in
+    ///   [`Self::stdlib_scheme`]) is instantiated, then variable 0 is tied to a
+    ///   fresh super-typed variable carrying that obligation, so a
     ///   non-comparable element / key (record, ADT, function) fails closed
     ///   instead of emitting an unbounded `set_insert::<T>` / `dict_insert::<T>`
     ///   call `cargo` rejects, and a generic `a -> Set a` lifts `Ord` (Set) /
@@ -1440,32 +1443,41 @@ impl<'a> Builder<'a> {
         name: Symbol,
         span: Span,
     ) -> DResult<VarId> {
-        // ── Obligation pre-checks (unchanged; they live OUTSIDE the scheme
-        //    tables and must fire BEFORE the registry/legacy delegation) ──
-        //
-        // `Math.min` / `Math.max`: `Comparable a => a -> a -> a`. The bounded
-        // super-var is what rejects `Math.min f g` / `Math.min recA recB`
-        // (M4c gate, `golden_m4c_math_gate`). Migrating the *other* Math
-        // kernels into `stdlib_scheme` does NOT touch this path, so the
-        // obligation keeps firing and the gate does not reopen.
-        if matches!(self.interner.resolve(module), Some("Math"))
-            && matches!(self.interner.resolve(name), Some("min" | "max"))
-        {
-            let s = self.super_var(TyBounds::ord(), span)?;
-            let inner = self.structure(FlatType::Fun(s, s))?;
-            return self.structure(FlatType::Fun(s, inner));
-        }
-        // Dict / Set element-key `comparable` obligation (M4d). Un-migrated —
-        // still routed through the legacy `kernel_ty` scheme + the tied
-        // super-var.
-        if let Some(bound) = key_obligation(self.interner, module) {
-            let ty = self.kernel_ty(module, name);
-            let (var, vars) = self.instantiate_tracked(&ty)?;
-            if let Some(&key_var) = vars.get(&0) {
-                let s = self.super_var(bound, span)?;
-                self.eq(span, key_var, s);
+        // ── Obligation pre-checks (Phase D: re-keyed off the resolved `id`,
+        //    not a re-inspected module string). They live OUTSIDE the scheme
+        //    tables and must fire BEFORE the registry/legacy delegation, so the
+        //    bounded super-var reaches the caller instead of the bare base
+        //    scheme now sitting in `stdlib_scheme`. ──
+        if let Some(k) = id {
+            // `Math.min` / `Math.max`: `Comparable a => a -> a -> a`. The bounded
+            // super-var (reused across BOTH arrow argument positions AND the
+            // result) is what rejects `Math.min f g` / `Math.min recA recB`
+            // (M4c gate, `golden_m4c_math_gate`). This is a DIRECT-build bounded
+            // scheme, NOT `stdlib_scheme` + a tie, because min/max's base scheme
+            // has three independent `var(0)`s and the gate needs all three tied
+            // to one bounded var.
+            if matches!(k, StdlibKernel::MathMin | StdlibKernel::MathMax) {
+                let s = self.super_var(TyBounds::ord(), span)?;
+                let inner = self.structure(FlatType::Fun(s, s))?;
+                return self.structure(FlatType::Fun(s, inner));
             }
-            return Ok(var);
+            // Dict / Set element-key `comparable` obligation (M4d). The base
+            // scheme is relocated into `stdlib_scheme` (Phase D); we instantiate
+            // it and tie key-position raw var 0 to a bounded super-var. Only
+            // key-position `var(0)` carries the bound, so this is `stdlib_scheme`
+            // + a tie (unlike min/max's direct-build shape above).
+            if let Some(bound) = Self::key_obligation_for(k) {
+                let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
+                    span,
+                    msg: LowerError::Unsupported(Feature::Kernels),
+                })?;
+                let (var, vars) = self.instantiate_tracked(&ty)?;
+                if let Some(&key_var) = vars.get(&0) {
+                    let s = self.super_var(bound, span)?;
+                    self.eq(span, key_var, s);
+                }
+                return Ok(var);
+            }
         }
         // ── Parse-once dual lookup (Phase C) ──
         //
@@ -1952,6 +1964,7 @@ impl<'a> Builder<'a> {
     /// `stdlib_scheme_matches_legacy` parity tripwire, and the exact migrated
     /// set is pinned by `migrated_set_burndown`.
     #[allow(clippy::too_many_lines)] // declarative scheme table — mirrors kernel_ty
+    #[allow(clippy::match_same_arms)] // family-grouped declarative type table; merging cross-family arms with coincidentally-equal schemes would obscure the per-family structure
     fn stdlib_scheme(&self, k: StdlibKernel) -> Option<Ty> {
         use StdlibKernel as K;
         // Constructors mirror `kernel_ty`'s so the two tables stay byte-faithful
@@ -1987,6 +2000,148 @@ impl<'a> Builder<'a> {
             module: Vec::new(),
             name: self.builtins.maybe,
             args: vec![t],
+        };
+        // ── Phase D relocation closures (mirror `kernel_ty`'s preamble so the
+        //    relocated arms produce structurally identical `Ty` values; the
+        //    `stdlib_scheme_matches_legacy` tripwire proves the equality). ──
+        let result = |e: Ty, a: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.result,
+            args: vec![e, a],
+        };
+        let dict = |kk: Ty, v: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.dict,
+            args: vec![kk, v],
+        };
+        let set = |a: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.set,
+            args: vec![a],
+        };
+        // `Bytes` is a zero-argument constructor.
+        let bytes = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.bytes,
+            args: Vec::new(),
+        };
+        let error_ty = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.error,
+            args: Vec::new(),
+        };
+        let tuple2 = |a: Ty, b: Ty| Ty::Tuple(vec![a, b]);
+        // `task(a)` — `Task a` (the error channel is the implicit `SkyError`).
+        let task = |a: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.task,
+            args: vec![a],
+        };
+        let task_unit = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.task,
+            args: vec![Ty::Unit],
+        };
+        let cmd = |m: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.cmd,
+            args: vec![m],
+        };
+        let sub = |m: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.sub,
+            args: vec![m],
+        };
+        // `dec(inner)` — `Decoder inner` — the opaque row-decoder type shared by
+        // JSON decode and Db.Decode.
+        let dec = |inner: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.decoder,
+            args: vec![inner],
+        };
+        // Opaque nullary type constructors (mirror `kernel_ty`'s inline `Ty::Con`s).
+        let db = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.db,
+            args: Vec::new(),
+        };
+        let sqlvalue = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.sqlvalue,
+            args: Vec::new(),
+        };
+        let sqlfield = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.sqlfield,
+            args: Vec::new(),
+        };
+        let req = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.server_request,
+            args: Vec::new(),
+        };
+        let resp = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.server_response,
+            args: Vec::new(),
+        };
+        let route = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.server_route,
+            args: Vec::new(),
+        };
+        let cookie = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.server_cookie,
+            args: Vec::new(),
+        };
+        let attr = |m: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.attribute,
+            args: vec![m],
+        };
+        let elem_t = |m: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.element,
+            args: vec![m],
+        };
+        let html_t = |m: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.html_con,
+            args: vec![m],
+        };
+        let live_req = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.live_req,
+            args: Vec::new(),
+        };
+        let live_route = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.live_route_con,
+            args: Vec::new(),
+        };
+        // `HttpResponse = { body : String, headers : Dict String String, status : Int }`
+        let http_response = || {
+            let mut resp_fields = BTreeMap::new();
+            resp_fields.insert(self.builtins.http_f_body, string());
+            resp_fields.insert(self.builtins.http_f_headers, dict(string(), string()));
+            resp_fields.insert(self.builtins.http_f_status, int());
+            Ty::Record(resp_fields)
+        };
+        // `HttpRequest = { body, followRedirects, headers, maxRedirects, method, timeout, url }`
+        let http_request = || {
+            let mut req_fields = BTreeMap::new();
+            req_fields.insert(self.builtins.http_f_body, string());
+            req_fields.insert(self.builtins.http_f_follow_redirects, bool_ty());
+            req_fields.insert(
+                self.builtins.http_f_headers,
+                list(tuple2(string(), string())),
+            );
+            req_fields.insert(self.builtins.http_f_max_redirects, int());
+            req_fields.insert(self.builtins.http_f_method, string());
+            req_fields.insert(self.builtins.http_f_timeout, int());
+            req_fields.insert(self.builtins.http_f_url, string());
+            Ty::Record(req_fields)
         };
         Some(match k {
             // ── String ──
@@ -2046,6 +2201,464 @@ impl<'a> Builder<'a> {
             // Arity-2 Float -> Float -> Float.
             K::MathPow | K::MathHypot | K::MathAtan2 | K::MathMod | K::MathRemainder => {
                 fun(float(), fun(float(), float()))
+            }
+            // Math.min / max — BASE scheme only (the `Comparable a` obligation is
+            // layered on top in `constrain_var_kernel`, keyed off the id). The
+            // parity tripwire checks this base against `kernel_ty("Math","min")`;
+            // production never reaches this arm for min/max (the obligation
+            // pre-check early-returns the bounded scheme).
+            K::MathMin | K::MathMax => fun(var(0), fun(var(0), var(0))),
+
+            // ── Log ──
+            K::LogPrintln => fun(string(), task_unit()),
+
+            // ── Maybe ──
+            K::MaybeWithDefault => fun(var(0), fun(maybe(var(0)), var(0))),
+            K::MaybeMap => fun(fun(var(0), var(1)), fun(maybe(var(0)), maybe(var(1)))),
+            K::MaybeAndThen => fun(
+                fun(var(0), maybe(var(1))),
+                fun(maybe(var(0)), maybe(var(1))),
+            ),
+
+            // ── Result ──
+            K::ResultWithDefault => fun(var(0), fun(result(var(1), var(0)), var(0))),
+            K::ResultMap => fun(
+                fun(var(0), var(1)),
+                fun(result(var(2), var(0)), result(var(2), var(1))),
+            ),
+
+            // ── Bytes ──
+            K::BytesEmpty => bytes(),
+            K::BytesLength => fun(bytes(), int()),
+            K::BytesIsEmpty => fun(bytes(), bool_ty()),
+            K::BytesFromString => fun(string(), bytes()),
+            K::BytesToString => fun(bytes(), maybe(string())),
+            K::BytesFromHex | K::BytesFromBase64 => fun(string(), maybe(bytes())),
+            K::BytesToHex | K::BytesToBase64 => fun(bytes(), string()),
+            K::BytesAppend => fun(bytes(), fun(bytes(), bytes())),
+            K::BytesSlice => fun(int(), fun(int(), fun(bytes(), bytes()))),
+
+            // ── Task ──
+            K::TaskSucceed => fun(var(0), task(var(0))),
+            K::TaskFail => fun(var(1), task(var(0))),
+            K::TaskMap => fun(fun(var(0), var(1)), fun(task(var(0)), task(var(1)))),
+            K::TaskAndThen => fun(fun(var(0), task(var(1))), fun(task(var(0)), task(var(1)))),
+            K::TaskMapError => fun(fun(error_ty(), error_ty()), fun(task(var(0)), task(var(0)))),
+            K::TaskOnError => fun(
+                fun(error_ty(), task(var(0))),
+                fun(task(var(0)), task(var(0))),
+            ),
+            K::TaskFromResult => fun(result(var(0), var(1)), task(var(1))),
+            K::TaskAndThenResult => fun(
+                fun(var(0), result(var(1), var(2))),
+                fun(task(var(0)), task(var(2))),
+            ),
+            K::TaskSequence | K::TaskParallel => fun(list(task(var(0))), task(list(var(0)))),
+            K::TaskRun => fun(task(var(0)), result(var(1), var(0))),
+
+            // ── Io / File / System: String -> Task () ──
+            K::IoWriteStdout
+            | K::IoWriteStderr
+            | K::FileRemove
+            | K::FileMkdirAll
+            | K::FileDelete
+            | K::SystemUnsetenv => fun(string(), task_unit()),
+            // () -> Task String
+            K::IoReadLine | K::SystemCwd => fun(Ty::Unit, task(string())),
+
+            // ── Time ──
+            K::TimeNow | K::TimeUnixMillis => fun(Ty::Unit, task(int())),
+            K::TimeSleep => fun(int(), task_unit()),
+            K::TimeEvery => fun(int(), fun(var(0), sub(var(0)))),
+
+            // ── System ──
+            K::SystemGetenv | K::FileReadFile | K::FileTempFile | K::FileTempDir => {
+                fun(string(), task(string()))
+            }
+            K::SystemGetenvOr => fun(string(), fun(string(), string())),
+            K::SystemArgs => fun(Ty::Unit, task(list(string()))),
+            K::SystemLoadEnv => fun(Ty::Unit, task_unit()),
+            K::SystemSetenv | K::FileWriteFile | K::FileAppend | K::FileCopy | K::FileRename => {
+                fun(string(), fun(string(), task_unit()))
+            }
+            K::SystemGetArg => fun(int(), task(maybe(string()))),
+            K::SystemGetenvInt => fun(string(), task(int())),
+            K::SystemGetenvBool | K::FileExists | K::FileIsDir => fun(string(), task(bool_ty())),
+            K::SystemExit => fun(int(), var(0)),
+
+            // ── Random ──
+            K::RandomInt => fun(int(), fun(int(), task(int()))),
+            K::RandomFloat => fun(float(), fun(float(), task(float()))),
+            K::RandomChoice => fun(list(var(0)), task(var(0))),
+
+            // ── File (remaining) ──
+            K::FileReadDir => fun(string(), task(list(string()))),
+            K::FileReadFileLimit => fun(string(), fun(int(), task(string()))),
+            K::FileReadFileBytes => fun(string(), task(list(int()))),
+
+            // ── Http ──
+            K::HttpGet => fun(string(), task(http_response())),
+            K::HttpPost => fun(string(), fun(string(), task(http_response()))),
+            K::HttpRequest => fun(http_request(), task(http_response())),
+            K::HttpParseQuery => fun(string(), dict(string(), string())),
+            K::HttpDefaultRequest => fun(string(), http_request()),
+            K::HttpWithMethod => fun(string(), fun(http_request(), http_request())),
+            K::HttpWithTimeout => fun(int(), fun(http_request(), http_request())),
+            K::HttpWithBody => fun(string(), fun(http_request(), http_request())),
+            K::HttpWithHeader => fun(string(), fun(string(), fun(http_request(), http_request()))),
+
+            // ── Cmd ──
+            K::CmdNone => cmd(var(0)),
+            K::CmdBatch => fun(list(cmd(var(0))), cmd(var(0))),
+            K::CmdPerform => fun(
+                task(var(0)),
+                fun(fun(result(error_ty(), var(0)), var(1)), cmd(var(1))),
+            ),
+
+            // ── Sub ──
+            K::SubNone => sub(var(0)),
+            K::SubBatch => fun(list(sub(var(0))), sub(var(0))),
+            K::SubEvery => fun(int(), fun(var(0), sub(var(0)))),
+
+            // ── Server ──
+            K::ServerGet
+            | K::ServerPost
+            | K::ServerPut
+            | K::ServerDelete
+            | K::ServerAny
+            | K::ServerApi => fun(string(), fun(fun(req(), task(resp())), route())),
+            K::ServerStatic => fun(string(), fun(string(), route())),
+            K::ServerListen => fun(int(), fun(list(route()), task_unit())),
+            K::ServerText | K::ServerJson | K::ServerHtml | K::ServerRedirect => {
+                fun(string(), resp())
+            }
+            K::ServerWithStatus => fun(int(), fun(resp(), resp())),
+            K::ServerWithHeader => fun(string(), fun(string(), fun(resp(), resp()))),
+            K::ServerParam | K::ServerQueryParam | K::ServerHeader | K::ServerGetCookie => {
+                fun(string(), fun(req(), maybe(string())))
+            }
+            K::ServerBody | K::ServerPath | K::ServerMethod => fun(req(), string()),
+            K::ServerCookieNew => fun(string(), fun(string(), cookie())),
+            K::ServerWithCookie => fun(cookie(), fun(resp(), resp())),
+
+            // ── Middleware ──
+            K::MiddlewareWithCors => fun(
+                list(string()),
+                fun(fun(req(), task(resp())), fun(req(), task(resp()))),
+            ),
+            K::MiddlewareWithLogging => fun(fun(req(), task(resp())), fun(req(), task(resp()))),
+            K::MiddlewareWithBasicAuth => fun(
+                string(),
+                fun(
+                    string(),
+                    fun(fun(req(), task(resp())), fun(req(), task(resp()))),
+                ),
+            ),
+            K::MiddlewareWithRateLimit => fun(
+                string(),
+                fun(
+                    int(),
+                    fun(
+                        int(),
+                        fun(fun(req(), task(resp())), fun(req(), task(resp()))),
+                    ),
+                ),
+            ),
+
+            // ── RateLimit ──
+            K::RateLimitAllow => fun(string(), fun(string(), fun(int(), fun(int(), bool_ty())))),
+
+            // ── Db ──
+            K::DbConnect => fun(Ty::Unit, task(db())),
+            K::DbOpen => fun(string(), fun(string(), task(db()))),
+            K::DbClose => fun(db(), task_unit()),
+            K::DbExecRaw => fun(db(), fun(string(), task(int()))),
+            K::DbExec => fun(db(), fun(string(), fun(list(sqlvalue()), task(int())))),
+            K::DbQuery => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(list(sqlvalue()), task(list(dict(string(), string())))),
+                ),
+            ),
+            K::DbQueryDecode => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(list(sqlvalue()), fun(dec(var(0)), task(list(var(0))))),
+                ),
+            ),
+            K::DbGetString | K::DbGetField => {
+                fun(string(), fun(dict(string(), string()), string()))
+            }
+            K::DbGetInt => fun(string(), fun(dict(string(), string()), int())),
+            K::DbGetBool => fun(string(), fun(dict(string(), string()), bool_ty())),
+            K::DbInsertRow => fun(
+                db(),
+                fun(string(), fun(list(tuple2(string(), string())), task(int()))),
+            ),
+            K::DbGetById => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(string(), task(maybe(dict(string(), string())))),
+                ),
+            ),
+            K::DbUpdateById => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(string(), fun(list(tuple2(string(), string())), task(int()))),
+                ),
+            ),
+            K::DbDeleteById => fun(db(), fun(string(), fun(string(), task(int())))),
+            K::DbFindOneByField => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(
+                        string(),
+                        fun(string(), task(maybe(dict(string(), string())))),
+                    ),
+                ),
+            ),
+            K::DbFindManyByField => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(
+                        string(),
+                        fun(string(), task(list(dict(string(), string())))),
+                    ),
+                ),
+            ),
+            K::DbFindByConditions => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(
+                        dict(string(), string()),
+                        task(list(dict(string(), string()))),
+                    ),
+                ),
+            ),
+            K::DbUnsafeFindWhere => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(
+                        string(),
+                        fun(list(string()), task(list(dict(string(), string())))),
+                    ),
+                ),
+            ),
+            K::DbInsertFields => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(list(tuple2(string(), sqlfield())), task(int())),
+                ),
+            ),
+            K::DbUpdateFields => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(
+                        list(tuple2(string(), sqlvalue())),
+                        fun(list(tuple2(string(), sqlfield())), task(int())),
+                    ),
+                ),
+            ),
+            K::DbInsertFieldsReturning => fun(
+                db(),
+                fun(
+                    string(),
+                    fun(
+                        list(tuple2(string(), sqlfield())),
+                        fun(string(), fun(dec(var(0)), task(list(var(0))))),
+                    ),
+                ),
+            ),
+            K::DbWithTransaction => fun(db(), fun(fun(db(), task(var(0))), task(var(0)))),
+            K::DbMigrate => fun(
+                db(),
+                fun(list(tuple2(string(), string())), task(list(string()))),
+            ),
+
+            // ── Db.Decode ──
+            K::DbDecString => fun(string(), dec(string())),
+            K::DbDecInt => fun(string(), dec(int())),
+            K::DbDecFloat => fun(string(), dec(float())),
+            K::DbDecBool => fun(string(), dec(bool_ty())),
+            K::DbDecFail => fun(string(), dec(var(0))),
+            K::DbDecNullable => fun(dec(var(0)), dec(maybe(var(0)))),
+            K::DbDecMap => fun(fun(var(0), var(1)), fun(dec(var(0)), dec(var(1)))),
+            K::DbDecAndThen => fun(fun(var(0), dec(var(1))), fun(dec(var(0)), dec(var(1)))),
+            K::DbDecSucceed => fun(var(0), dec(var(0))),
+            K::DbDecMap2 => fun(
+                fun(var(0), fun(var(1), var(2))),
+                fun(dec(var(0)), fun(dec(var(1)), dec(var(2)))),
+            ),
+            K::DbDecMap3 => fun(
+                fun(var(0), fun(var(1), fun(var(2), var(3)))),
+                fun(dec(var(0)), fun(dec(var(1)), fun(dec(var(2)), dec(var(3))))),
+            ),
+            K::DbDecMap4 => fun(
+                fun(var(0), fun(var(1), fun(var(2), fun(var(3), var(4))))),
+                fun(
+                    dec(var(0)),
+                    fun(dec(var(1)), fun(dec(var(2)), fun(dec(var(3)), dec(var(4))))),
+                ),
+            ),
+            K::DbDecRequired => fun(
+                string(),
+                fun(dec(var(0)), fun(dec(fun(var(0), var(1))), dec(var(1)))),
+            ),
+            K::DbDecOptional => fun(
+                string(),
+                fun(
+                    dec(var(0)),
+                    fun(var(0), fun(dec(fun(var(0), var(1))), dec(var(1)))),
+                ),
+            ),
+
+            // ── Set (base schemes; the `set_elem` obligation is layered in
+            //    constrain_var_kernel, keyed off the id) ──
+            K::SetEmpty => set(var(0)),
+            K::SetSize => fun(set(var(0)), int()),
+            K::SetInsert | K::SetRemove => fun(var(0), fun(set(var(0)), set(var(0)))),
+            K::SetMember => fun(var(0), fun(set(var(0)), bool_ty())),
+            K::SetToList => fun(set(var(0)), list(var(0))),
+            K::SetFromList => fun(list(var(0)), set(var(0))),
+            K::SetUnion | K::SetIntersect | K::SetDiff => {
+                fun(set(var(0)), fun(set(var(0)), set(var(0))))
+            }
+
+            // ── Dict (base schemes; the `dict_key` obligation is layered in
+            //    constrain_var_kernel, keyed off the id) ──
+            K::DictEmpty => dict(var(0), var(1)),
+            K::DictIsEmpty => fun(dict(var(0), var(1)), bool_ty()),
+            K::DictSize => fun(dict(var(0), var(1)), int()),
+            K::DictInsert => fun(
+                var(0),
+                fun(var(1), fun(dict(var(0), var(1)), dict(var(0), var(1)))),
+            ),
+            K::DictGet => fun(var(0), fun(dict(var(0), var(1)), maybe(var(1)))),
+            K::DictRemove => fun(var(0), fun(dict(var(0), var(1)), dict(var(0), var(1)))),
+            K::DictMember => fun(var(0), fun(dict(var(0), var(1)), bool_ty())),
+            K::DictKeys => fun(dict(var(0), var(1)), list(var(0))),
+            K::DictValues => fun(dict(var(0), var(1)), list(var(1))),
+            K::DictToList => fun(dict(var(0), var(1)), list(tuple2(var(0), var(1)))),
+            K::DictFromList => fun(list(tuple2(var(0), var(1))), dict(var(0), var(1))),
+            K::DictMap => fun(
+                fun(var(0), fun(var(1), var(2))),
+                fun(dict(var(0), var(1)), dict(var(0), var(2))),
+            ),
+            K::DictFoldl => fun(
+                fun(var(0), fun(var(1), fun(var(2), var(2)))),
+                fun(var(2), fun(dict(var(0), var(1)), var(2))),
+            ),
+            K::DictUnion => fun(
+                dict(var(0), var(1)),
+                fun(dict(var(0), var(1)), dict(var(0), var(1))),
+            ),
+
+            // ── Std.Ui layout / element / event (already schemed in kernel_ty) ──
+            K::UiLayout => fun(list(attr(var(0))), fun(elem_t(var(0)), html_t(var(0)))),
+            K::UiLayoutWith => {
+                let cfg_rec = Ty::Record({
+                    let mut m = BTreeMap::new();
+                    m.insert(self.builtins.lw_wrapper_attrs, list(attr(var(0))));
+                    m.insert(self.builtins.lw_root_attrs, list(attr(var(0))));
+                    m
+                });
+                fun(cfg_rec, fun(elem_t(var(0)), html_t(var(0))))
+            }
+            K::UiEl => fun(list(attr(var(0))), fun(elem_t(var(0)), elem_t(var(0)))),
+            K::UiColumn | K::UiRow | K::UiWrappedRow | K::UiGrid => fun(
+                list(attr(var(0))),
+                fun(list(elem_t(var(0))), elem_t(var(0))),
+            ),
+            K::UiOnClick | K::UiOnFocus | K::UiOnBlur | K::UiOnMouseOver | K::UiOnMouseOut => {
+                fun(var(0), attr(var(0)))
+            }
+            K::UiOnInput | K::UiOnChange | K::UiOnKeyDown | K::UiOnKeyUp => {
+                fun(fun(string(), var(0)), attr(var(0)))
+            }
+            K::UiOnBool => fun(fun(bool_ty(), var(0)), attr(var(0))),
+
+            // ── Std.Live app-entry (already schemed in kernel_ty) ──
+            K::LiveApp => {
+                let init_ret = tuple2(var(0), cmd(var(1)));
+                let cfg_rec = Ty::Record({
+                    let mut m = BTreeMap::new();
+                    m.insert(self.builtins.live_f_init, fun(live_req(), init_ret.clone()));
+                    m.insert(
+                        self.builtins.live_f_update,
+                        fun(var(1), fun(var(0), init_ret)),
+                    );
+                    m.insert(self.builtins.live_f_view, fun(var(0), html_t(var(1))));
+                    m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
+                    m
+                });
+                fun(cfg_rec, task_unit())
+            }
+            K::LiveRoute => fun(string(), fun(fun(list(string()), var(0)), live_route())),
+            K::LiveRenderStatic => fun(fun(var(0), html_t(var(1))), fun(var(0), task_unit())),
+
+            // ── Std.Tui app-entry (already schemed in kernel_ty) ──
+            K::TuiApp => {
+                let tup = tuple2(var(0), cmd(var(1)));
+                let cfg_rec = Ty::Record({
+                    let mut m = BTreeMap::new();
+                    m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
+                    m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
+                    m.insert(self.builtins.live_f_view, fun(var(0), elem_t(var(1))));
+                    m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
+                    m.insert(
+                        self.builtins.tui_f_on_key,
+                        fun(string(), fun(string(), var(1))),
+                    );
+                    m
+                });
+                fun(cfg_rec, task_unit())
+            }
+            K::TuiProgram => {
+                let tup = tuple2(var(0), cmd(var(1)));
+                let cfg_rec = Ty::Record({
+                    let mut m = BTreeMap::new();
+                    m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
+                    m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
+                    m.insert(self.builtins.live_f_view, fun(var(0), string()));
+                    m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
+                    m.insert(
+                        self.builtins.tui_f_on_key,
+                        fun(string(), fun(string(), var(1))),
+                    );
+                    m
+                });
+                fun(cfg_rec, task_unit())
+            }
+
+            // ── Std.Webview app-entry (already schemed in kernel_ty) ──
+            K::WebviewApp => {
+                let tup = tuple2(var(0), cmd(var(1)));
+                let window_ty = Ty::Record({
+                    let mut m = BTreeMap::new();
+                    m.insert(self.builtins.webview_f_title, string());
+                    m.insert(self.builtins.webview_f_size, tuple2(int(), int()));
+                    m
+                });
+                let cfg_rec = Ty::Record({
+                    let mut m = BTreeMap::new();
+                    m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
+                    m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
+                    m.insert(self.builtins.live_f_view, fun(var(0), html_t(var(1))));
+                    m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
+                    m.insert(self.builtins.webview_f_window, window_ty);
+                    m
+                });
+                fun(cfg_rec, task_unit())
             }
 
             // Not-yet-migrated: fall back to the legacy symbol-keyed table.
@@ -4453,15 +5066,22 @@ mod registry_phase_c_tests {
     use sky_intern::Interner;
     use sky_kernels::StdlibKernel;
 
-    /// The exact set of kernels migrated into `stdlib_scheme` in Phase C
-    /// (String → List → Math, EXCLUDING `Math.min` / `Math.max`, which keep
-    /// their dedicated `Comparable`-obligation path). This is the monotone
-    /// burndown anchor: as later phases migrate more families the list GROWS;
-    /// it must never shrink, and it must exactly match what `stdlib_scheme`
-    /// returns `Some` for.
-    const MIGRATED: &[StdlibKernel] = {
+    /// Kernels RELOCATED into `stdlib_scheme` from the legacy `kernel_ty` table
+    /// (Phase C's String/List/Math + Phase D's remaining backed families).
+    /// Each carries a byte-faithful legacy oracle, so `stdlib_scheme_matches_legacy`
+    /// proves the relocation changed no type. Monotone burndown anchor: GROWS per
+    /// family task, never shrinks, and must exactly match the RELOCATED slice of
+    /// what `stdlib_scheme` returns `Some` for.
+    ///
+    /// `Math.min` / `Math.max` are RELOCATED here as their *base* scheme
+    /// (`a -> a -> a`); the `Comparable` obligation is layered separately in
+    /// `constrain_var_kernel` (M4c gate), so their base is parity-checked like any
+    /// other relocation while the bound still fires in production.
+    const RELOCATED: &[StdlibKernel] = {
         use StdlibKernel as K;
         &[
+            // Log (1)
+            K::LogPrintln,
             // String (2)
             K::StringFromInt,
             K::StringFromFloat,
@@ -4476,7 +5096,7 @@ mod registry_phase_c_tests {
             K::ListMember,
             K::ListRange,
             K::ListReverse,
-            // Math minus min/max (35)
+            // Math including min/max base (37)
             K::MathPi,
             K::MathE,
             K::MathPhi,
@@ -4512,8 +5132,231 @@ mod registry_phase_c_tests {
             K::MathAtan2,
             K::MathMod,
             K::MathRemainder,
+            K::MathMin,
+            K::MathMax,
+            // Maybe (3)
+            K::MaybeWithDefault,
+            K::MaybeMap,
+            K::MaybeAndThen,
+            // Result (2)
+            K::ResultWithDefault,
+            K::ResultMap,
+            // Bytes (11)
+            K::BytesEmpty,
+            K::BytesLength,
+            K::BytesIsEmpty,
+            K::BytesFromString,
+            K::BytesToString,
+            K::BytesFromHex,
+            K::BytesToHex,
+            K::BytesFromBase64,
+            K::BytesToBase64,
+            K::BytesAppend,
+            K::BytesSlice,
+            // Task (11)
+            K::TaskSucceed,
+            K::TaskFail,
+            K::TaskMap,
+            K::TaskAndThen,
+            K::TaskMapError,
+            K::TaskOnError,
+            K::TaskFromResult,
+            K::TaskAndThenResult,
+            K::TaskSequence,
+            K::TaskParallel,
+            K::TaskRun,
+            // Io (3)
+            K::IoReadLine,
+            K::IoWriteStdout,
+            K::IoWriteStderr,
+            // Time (4)
+            K::TimeNow,
+            K::TimeUnixMillis,
+            K::TimeSleep,
+            K::TimeEvery,
+            // System (11)
+            K::SystemArgs,
+            K::SystemGetenv,
+            K::SystemGetenvOr,
+            K::SystemGetArg,
+            K::SystemGetenvInt,
+            K::SystemGetenvBool,
+            K::SystemSetenv,
+            K::SystemUnsetenv,
+            K::SystemCwd,
+            K::SystemLoadEnv,
+            K::SystemExit,
+            // Random (3)
+            K::RandomInt,
+            K::RandomFloat,
+            K::RandomChoice,
+            // File (15)
+            K::FileReadFile,
+            K::FileWriteFile,
+            K::FileExists,
+            K::FileRemove,
+            K::FileMkdirAll,
+            K::FileReadFileLimit,
+            K::FileReadFileBytes,
+            K::FileAppend,
+            K::FileReadDir,
+            K::FileIsDir,
+            K::FileTempFile,
+            K::FileTempDir,
+            K::FileCopy,
+            K::FileRename,
+            K::FileDelete,
+            // Http (9)
+            K::HttpGet,
+            K::HttpPost,
+            K::HttpRequest,
+            K::HttpParseQuery,
+            K::HttpDefaultRequest,
+            K::HttpWithMethod,
+            K::HttpWithTimeout,
+            K::HttpWithBody,
+            K::HttpWithHeader,
+            // Cmd (3)
+            K::CmdNone,
+            K::CmdBatch,
+            K::CmdPerform,
+            // Sub (3)
+            K::SubNone,
+            K::SubBatch,
+            K::SubEvery,
+            // Middleware (4)
+            K::MiddlewareWithCors,
+            K::MiddlewareWithLogging,
+            K::MiddlewareWithBasicAuth,
+            K::MiddlewareWithRateLimit,
+            // RateLimit (1)
+            K::RateLimitAllow,
+            // Server (23)
+            K::ServerGet,
+            K::ServerPost,
+            K::ServerPut,
+            K::ServerDelete,
+            K::ServerAny,
+            K::ServerApi,
+            K::ServerStatic,
+            K::ServerListen,
+            K::ServerText,
+            K::ServerJson,
+            K::ServerHtml,
+            K::ServerWithStatus,
+            K::ServerWithHeader,
+            K::ServerRedirect,
+            K::ServerParam,
+            K::ServerQueryParam,
+            K::ServerHeader,
+            K::ServerGetCookie,
+            K::ServerBody,
+            K::ServerPath,
+            K::ServerMethod,
+            K::ServerCookieNew,
+            K::ServerWithCookie,
+            // Db (23)
+            K::DbConnect,
+            K::DbOpen,
+            K::DbClose,
+            K::DbExecRaw,
+            K::DbExec,
+            K::DbQuery,
+            K::DbQueryDecode,
+            K::DbGetString,
+            K::DbGetInt,
+            K::DbGetBool,
+            K::DbGetField,
+            K::DbInsertRow,
+            K::DbGetById,
+            K::DbUpdateById,
+            K::DbDeleteById,
+            K::DbFindOneByField,
+            K::DbFindManyByField,
+            K::DbFindByConditions,
+            K::DbUnsafeFindWhere,
+            K::DbInsertFields,
+            K::DbUpdateFields,
+            K::DbInsertFieldsReturning,
+            K::DbWithTransaction,
+            K::DbMigrate,
+            // Db.Decode (14)
+            K::DbDecString,
+            K::DbDecInt,
+            K::DbDecFloat,
+            K::DbDecBool,
+            K::DbDecNullable,
+            K::DbDecMap,
+            K::DbDecAndThen,
+            K::DbDecSucceed,
+            K::DbDecFail,
+            K::DbDecMap2,
+            K::DbDecMap3,
+            K::DbDecMap4,
+            K::DbDecRequired,
+            K::DbDecOptional,
+            // Set (10) — base scheme; set_elem obligation layered in constrain_var_kernel
+            K::SetEmpty,
+            K::SetSize,
+            K::SetToList,
+            K::SetFromList,
+            K::SetMember,
+            K::SetInsert,
+            K::SetRemove,
+            K::SetUnion,
+            K::SetIntersect,
+            K::SetDiff,
+            // Dict (14) — base scheme; dict_key obligation layered in constrain_var_kernel
+            K::DictEmpty,
+            K::DictIsEmpty,
+            K::DictSize,
+            K::DictKeys,
+            K::DictValues,
+            K::DictToList,
+            K::DictFromList,
+            K::DictGet,
+            K::DictMember,
+            K::DictRemove,
+            K::DictUnion,
+            K::DictMap,
+            K::DictInsert,
+            K::DictFoldl,
+            // Std.Ui layout / element / event (17)
+            K::UiLayout,
+            K::UiLayoutWith,
+            K::UiEl,
+            K::UiRow,
+            K::UiColumn,
+            K::UiWrappedRow,
+            K::UiGrid,
+            K::UiOnClick,
+            K::UiOnFocus,
+            K::UiOnBlur,
+            K::UiOnMouseOver,
+            K::UiOnMouseOut,
+            K::UiOnInput,
+            K::UiOnChange,
+            K::UiOnKeyDown,
+            K::UiOnKeyUp,
+            K::UiOnBool,
+            // Std.Live app-entry (3)
+            K::LiveApp,
+            K::LiveRoute,
+            K::LiveRenderStatic,
+            // Std.Tui app-entry (2)
+            K::TuiApp,
+            K::TuiProgram,
+            // Std.Webview app-entry (1)
+            K::WebviewApp,
         ]
     };
+
+    /// Families that had NO legacy scheme (`kernel_ty` → `Ty::Var(u32::MAX)`) and
+    /// receive their FIRST correct scheme in Phase D (D8–D13). No parity oracle
+    /// exists; correctness is pinned by `first_schemed_were_holes` (the scheme
+    /// closes a genuine hole) plus the skyc→cargo build fixtures. GROWS per
+    /// family task; never shrinks. Empty until the first-scheme family tasks land.
+    const FIRST_SCHEMED: &[StdlibKernel] = &[];
 
     /// Build a scheme-test `Builder` plus the pre-interned `(qualifier, name)`
     /// symbol for every `StdlibKernel::ALL` variant, in lockstep order.
@@ -4551,42 +5394,79 @@ mod registry_phase_c_tests {
         let mut uf = UnionFind::<Content>::new();
         let builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
 
-        let mut migrated_count = 0usize;
+        let mut relocated_count = 0usize;
         for &(k, qual, name) in &syms {
             if let Some(scheme) = builder.stdlib_scheme(k) {
-                let legacy = builder.kernel_ty(qual, name);
-                assert_eq!(
-                    scheme,
-                    legacy,
-                    "stdlib_scheme({k:?}) is NOT byte-faithful to \
-                     kernel_ty({:?}, {:?}); the Phase C relocation changed the \
-                     type (Go-parity break).",
-                    k.decl().qualifier,
-                    k.decl().name,
-                );
-                migrated_count += 1;
+                if RELOCATED.contains(&k) {
+                    let legacy = builder.kernel_ty(qual, name);
+                    assert_eq!(
+                        scheme,
+                        legacy,
+                        "stdlib_scheme({k:?}) is NOT byte-faithful to \
+                         kernel_ty({:?}, {:?}); the relocation changed the \
+                         type (Go-parity break).",
+                        k.decl().qualifier,
+                        k.decl().name,
+                    );
+                    relocated_count += 1;
+                } else {
+                    // A `Some` scheme that is NOT a relocation must be a
+                    // deliberate FIRST_SCHEMED entry (a closed hole), never an
+                    // unclassified type sneaking past the oracle.
+                    assert!(
+                        FIRST_SCHEMED.contains(&k),
+                        "stdlib_scheme({k:?}) is Some but k is in neither \
+                         RELOCATED nor FIRST_SCHEMED — classify it.",
+                    );
+                }
             }
         }
 
-        // Every migrated kernel accounted for, and none is Math.min/max.
+        // Every relocation accounted for.
         assert_eq!(
-            migrated_count,
-            MIGRATED.len(),
-            "stdlib_scheme returned Some for {migrated_count} kernels but MIGRATED \
-             lists {}; update MIGRATED (burndown must track the real set).",
-            MIGRATED.len(),
-        );
-        assert!(
-            !MIGRATED.contains(&StdlibKernel::MathMin)
-                && !MIGRATED.contains(&StdlibKernel::MathMax),
-            "Math.min/max must stay on the Comparable-obligation path, NOT in \
-             stdlib_scheme, or the M4c gate reopens.",
+            relocated_count,
+            RELOCATED.len(),
+            "stdlib_scheme returned Some for {relocated_count} relocated kernels \
+             but RELOCATED lists {}; update RELOCATED (burndown must track the \
+             real set).",
+            RELOCATED.len(),
         );
     }
 
+    /// Every `FIRST_SCHEMED` kernel had NO legacy scheme (`kernel_ty` →
+    /// `Ty::Var(u32::MAX)`). Proves the new scheme closes a genuine exit-0 hole
+    /// rather than silently diverging from an existing legacy type — the
+    /// Recipe-F was-a-hole guarantee.
+    #[test]
+    fn first_schemed_were_holes() {
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        let syms: Vec<(StdlibKernel, sky_intern::Symbol, sky_intern::Symbol)> = FIRST_SCHEMED
+            .iter()
+            .map(|&k| {
+                let d = k.decl();
+                (
+                    k,
+                    interner.intern(d.qualifier).expect("intern qualifier"),
+                    interner.intern(d.name).expect("intern name"),
+                )
+            })
+            .collect();
+        let mut uf = UnionFind::<Content>::new();
+        let builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+        for (k, q, n) in syms {
+            assert_eq!(
+                builder.kernel_ty(q, n),
+                Ty::Var(u32::MAX),
+                "FIRST_SCHEMED {k:?} had a legacy scheme — it is a relocation; \
+                 move it to RELOCATED so its parity is checked.",
+            );
+        }
+    }
+
     /// Condition 4 — monotone burndown. `stdlib_scheme` returns `Some` for
-    /// EXACTLY the `MIGRATED` set and `None` for every other variant. Pins the
-    /// migrated set so an accidental over- or under-migration is caught.
+    /// EXACTLY `RELOCATED ∪ FIRST_SCHEMED` and `None` for every other variant.
+    /// Pins the migrated set so an accidental over- or under-migration is caught.
     #[test]
     fn migrated_set_burndown() {
         let mut interner = Interner::new();
@@ -4596,11 +5476,11 @@ mod registry_phase_c_tests {
 
         for &k in StdlibKernel::ALL {
             let migrated = builder.stdlib_scheme(k).is_some();
-            let expected = MIGRATED.contains(&k);
+            let expected = RELOCATED.contains(&k) || FIRST_SCHEMED.contains(&k);
             assert_eq!(
                 migrated, expected,
-                "stdlib_scheme({k:?}).is_some() = {migrated} but MIGRATED \
-                 membership = {expected}",
+                "stdlib_scheme({k:?}).is_some() = {migrated} but \
+                 RELOCATED∪FIRST_SCHEMED membership = {expected}",
             );
         }
     }

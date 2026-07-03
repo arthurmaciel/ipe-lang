@@ -6,7 +6,7 @@
 use sky_diagnostics::DResult;
 use sky_intern::{Interner, Symbol};
 use sky_ir::{BinOp, Callee, Expr, FuncId, IrType};
-use sky_lower::tco_analysis::{analyze_tail_recursion, rewrite_tail_calls, TailRecursion};
+use sky_lower::tco_analysis::{TailRecursion, analyze_tail_recursion, rewrite_tail_calls};
 
 const SELF: FuncId = FuncId::from_raw(7);
 
@@ -47,9 +47,10 @@ fn build_count(i: &mut Interner) -> DResult<BuiltFn> {
 
 fn contains_self_call(id: FuncId, e: &Expr) -> bool {
     match e {
-        Expr::Call { callee: Callee::Func(c), args } => {
-            *c == id || args.iter().any(|a| contains_self_call(id, a))
-        }
+        Expr::Call {
+            callee: Callee::Func(c),
+            args,
+        } => *c == id || args.iter().any(|a| contains_self_call(id, a)),
         Expr::Call { args, .. } => args.iter().any(|a| contains_self_call(id, a)),
         Expr::If { cond, then_, else_ } => {
             contains_self_call(id, cond)
@@ -82,9 +83,9 @@ fn contains_self_call(id: FuncId, e: &Expr) -> bool {
 fn contains_tail_recur(e: &Expr) -> bool {
     match e {
         Expr::TailRecur { .. } => true,
-        Expr::TailLoop { body, .. }
-        | Expr::Let { body, .. }
-        | Expr::Destructure { body, .. } => contains_tail_recur(body),
+        Expr::TailLoop { body, .. } | Expr::Let { body, .. } | Expr::Destructure { body, .. } => {
+            contains_tail_recur(body)
+        }
         Expr::If { then_, else_, .. } => contains_tail_recur(then_) || contains_tail_recur(else_),
         Expr::Match(m) => m.arms().iter().any(|a| contains_tail_recur(&a.body)),
         _ => false,

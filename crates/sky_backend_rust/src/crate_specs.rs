@@ -14,22 +14,50 @@ pub struct CrateSpec {
     pub version: &'static str,
 }
 
-pub const TOKIO: CrateSpec = CrateSpec { name: "tokio", version: "1" };
-pub const SQLX: CrateSpec = CrateSpec { name: "sqlx", version: "0.8" };
-pub const AXUM: CrateSpec = CrateSpec { name: "axum", version: "0.7" };
-pub const TOWER_HTTP: CrateSpec =
-    CrateSpec { name: "tower-http", version: "0.5" };
-pub const ASYNC_TRAIT: CrateSpec =
-    CrateSpec { name: "async-trait", version: "0.1" };
-pub const SERDE_URLENCODED: CrateSpec =
-    CrateSpec { name: "serde_urlencoded", version: "0.7" };
-pub const LIBC: CrateSpec = CrateSpec { name: "libc", version: "0.2" };
-pub const CROSSTERM: CrateSpec =
-    CrateSpec { name: "crossterm", version: "0.28" };
-pub const UNICODE_WIDTH: CrateSpec =
-    CrateSpec { name: "unicode-width", version: "0.1" };
-pub const WRY: CrateSpec = CrateSpec { name: "wry", version: "0.55" };
-pub const TAO: CrateSpec = CrateSpec { name: "tao", version: "0.35" };
+pub const TOKIO: CrateSpec = CrateSpec {
+    name: "tokio",
+    version: "1",
+};
+pub const SQLX: CrateSpec = CrateSpec {
+    name: "sqlx",
+    version: "0.8",
+};
+pub const AXUM: CrateSpec = CrateSpec {
+    name: "axum",
+    version: "0.7",
+};
+pub const TOWER_HTTP: CrateSpec = CrateSpec {
+    name: "tower-http",
+    version: "0.5",
+};
+pub const ASYNC_TRAIT: CrateSpec = CrateSpec {
+    name: "async-trait",
+    version: "0.1",
+};
+pub const SERDE_URLENCODED: CrateSpec = CrateSpec {
+    name: "serde_urlencoded",
+    version: "0.7",
+};
+pub const LIBC: CrateSpec = CrateSpec {
+    name: "libc",
+    version: "0.2",
+};
+pub const CROSSTERM: CrateSpec = CrateSpec {
+    name: "crossterm",
+    version: "0.28",
+};
+pub const UNICODE_WIDTH: CrateSpec = CrateSpec {
+    name: "unicode-width",
+    version: "0.1",
+};
+pub const WRY: CrateSpec = CrateSpec {
+    name: "wry",
+    version: "0.55",
+};
+pub const TAO: CrateSpec = CrateSpec {
+    name: "tao",
+    version: "0.35",
+};
 
 /// Every spec emitted by the surgery functions, for drift-test iteration.
 ///
@@ -37,8 +65,17 @@ pub const TAO: CrateSpec = CrateSpec { name: "tao", version: "0.35" };
 /// aggregate exists solely so the drift tripwire can walk the full set.
 #[cfg(test)]
 pub const ALL: &[CrateSpec] = &[
-    TOKIO, SQLX, AXUM, TOWER_HTTP, ASYNC_TRAIT, SERDE_URLENCODED, LIBC,
-    CROSSTERM, UNICODE_WIDTH, WRY, TAO,
+    TOKIO,
+    SQLX,
+    AXUM,
+    TOWER_HTTP,
+    ASYNC_TRAIT,
+    SERDE_URLENCODED,
+    LIBC,
+    CROSSTERM,
+    UNICODE_WIDTH,
+    WRY,
+    TAO,
 ];
 
 #[cfg(test)]

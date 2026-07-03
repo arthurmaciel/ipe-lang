@@ -504,7 +504,7 @@ pub mod tco_analysis {
     // The re-exports are consumed only by the integration-test binary
     // (`tests/tail_analysis.rs`), which the in-crate unused-import lint cannot see.
     #[allow(unused_imports)]
-    pub use super::{analyze_tail_recursion, rewrite_tail_calls, TailRecursion};
+    pub use super::{TailRecursion, analyze_tail_recursion, rewrite_tail_calls};
 }
 
 // ── M5b-db: Db-kernel presence detection ─────────────────────────────────────
@@ -790,7 +790,9 @@ fn expr_uses_live_kernel(expr: &Expr) -> bool {
             expr_uses_live_kernel(record) || fields.iter().any(|(_, v)| expr_uses_live_kernel(v))
         }
         Expr::BinOp { lhs, rhs, .. } => expr_uses_live_kernel(lhs) || expr_uses_live_kernel(rhs),
-        Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_live_kernel),
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            args.iter().any(expr_uses_live_kernel)
+        }
         Expr::Cons { head, tail } => expr_uses_live_kernel(head) || expr_uses_live_kernel(tail),
         Expr::TaskSeq { effect, rest } => {
             expr_uses_live_kernel(effect) || expr_uses_live_kernel(rest)
