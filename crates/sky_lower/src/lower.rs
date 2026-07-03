@@ -130,6 +130,31 @@ fn ty_contains_fun(ty: &Ty) -> bool {
     }
 }
 
+/// The built-in, heap-boxed OPAQUE wrapper type constructors whose payload the
+/// runtime stores behind a `Box<dyn Fn>` / trait object and NEVER derives
+/// `Clone`/`Debug`/`PartialEq`/`SkyStringify` over.
+///
+/// A function in one of their type arguments is therefore legitimate — a
+/// `Decoder (a -> b)` factory is the entire point of `JsonDec.succeed makeRecord
+/// |> required … |> required …`, and a `Cmd`/`Sub`/`Task` may carry a callback —
+/// so such a value must NOT be flagged as a non-derivable-function carrier the
+/// way a user enum's payload (`type Opt a = Som a`, `Opt (Int -> Int)`) is. Each
+/// maps to `IrType::Decoder` / `IrType::Task` / `IrType::Cmd` / `IrType::Sub`,
+/// aliased in the emitted project to a runtime type that boxes its payload
+/// (`sky_runtime::json::Decoder<E, T>` holds a `Box<dyn Fn(&JsonVal) -> …>`);
+/// the payload `T` is opaque to any derive, and the emitter already lowers
+/// `decode_succeed(curryN(f))`.
+///
+/// Matched by name only — consistent with [`Lowerer::ir_type_from_ty`], and
+/// sound because these are kernel-implicit Prelude type constructors the
+/// canonicaliser forbids a user program from redefining.
+fn is_opaque_boxed_wrapper(interner: &Interner, name: Symbol) -> bool {
+    matches!(
+        interner.resolve(name),
+        Some("Decoder" | "Task" | "Cmd" | "Sub")
+    )
+}
+
 /// Does this solved [`Ty`] embed a record field OR an enum payload whose type
 /// contains a function?
 ///
@@ -147,22 +172,38 @@ fn ty_contains_fun(ty: &Ty) -> bool {
 /// first-class-function gap ([`Feature::FirstClassFunctions`], SKY-L0107) and a
 /// constructor-payload carrier is [`Feature::CtorPayloadFunction`] (SKY-L0114) —
 /// see [`con_payload_carries_function`]; never broken Rust.
-fn embeds_nonderivable_function(ty: &Ty) -> bool {
+///
+/// Exception: a built-in opaque boxed wrapper ([`is_opaque_boxed_wrapper`] —
+/// `Decoder`/`Task`/`Cmd`/`Sub`) boxes its payload and derives nothing over it,
+/// so a function in its type arguments is a legitimate value, not a
+/// non-derivable carrier. Such a `Con` head short-circuits to `false`. A wrapper
+/// value nested INSIDE a real derive carrier is still caught by that outer
+/// carrier's own [`ty_contains_fun`] check (unchanged), so this only exempts the
+/// wrapper as the outermost shape.
+fn embeds_nonderivable_function(interner: &Interner, ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) | Ty::Unit => false,
-        Ty::Fun(a, b) => embeds_nonderivable_function(a) || embeds_nonderivable_function(b),
-        Ty::Tuple(elems) => elems.iter().any(embeds_nonderivable_function),
-        // A `Con` here is a user enum (which derives `Clone`/`Debug`/`PartialEq`
-        // + `SkyStringify`) applied to its type arguments. A function reaching a
-        // payload field — directly (`Opt (Int -> Int)`) or nested inside another
-        // payload/record under it — makes those derives fail, so it is the same
-        // non-derivable shape as a function in a record field.
+        Ty::Fun(a, b) => {
+            embeds_nonderivable_function(interner, a) || embeds_nonderivable_function(interner, b)
+        }
+        Ty::Tuple(elems) => elems
+            .iter()
+            .any(|e| embeds_nonderivable_function(interner, e)),
+        // An opaque boxed wrapper (`Decoder (a -> b)`, `Cmd msg`, …) stores its
+        // payload behind a trait object and derives nothing over it — a function
+        // there is legitimate, so it is NOT a non-derivable carrier.
+        Ty::Con { name, .. } if is_opaque_boxed_wrapper(interner, *name) => false,
+        // Otherwise a `Con` is a user enum (which derives `Clone`/`Debug`/
+        // `PartialEq` + `SkyStringify`) applied to its type arguments. A function
+        // reaching a payload field — directly (`Opt (Int -> Int)`) or nested
+        // inside another payload/record under it — makes those derives fail, so
+        // it is the same non-derivable shape as a function in a record field.
         Ty::Con { args, .. } => args
             .iter()
-            .any(|a| ty_contains_fun(a) || embeds_nonderivable_function(a)),
+            .any(|a| ty_contains_fun(a) || embeds_nonderivable_function(interner, a)),
         Ty::Record(fields) => fields
             .values()
-            .any(|f| ty_contains_fun(f) || embeds_nonderivable_function(f)),
+            .any(|f| ty_contains_fun(f) || embeds_nonderivable_function(interner, f)),
     }
 }
 
@@ -177,9 +218,15 @@ fn embeds_nonderivable_function(ty: &Ty) -> bool {
 /// [`Feature::FirstClassFunctions`]). Only the *head* is inspected — the gate
 /// has already confirmed a function is embedded somewhere; this picks the
 /// blame label, so the outermost carrier is the one named.
-fn con_payload_carries_function(ty: &Ty) -> bool {
-    matches!(ty, Ty::Con { args, .. }
-        if args.iter().any(|a| ty_contains_fun(a) || embeds_nonderivable_function(a)))
+///
+/// A built-in opaque boxed wrapper head ([`is_opaque_boxed_wrapper`]) is not a
+/// user-enum payload carrier and is excluded — though in practice
+/// [`embeds_nonderivable_function`] already returns `false` for such a bare head,
+/// so this is only reached for genuine user-enum `Con`s.
+fn con_payload_carries_function(interner: &Interner, ty: &Ty) -> bool {
+    matches!(ty, Ty::Con { name, args, .. }
+        if !is_opaque_boxed_wrapper(interner, *name)
+            && args.iter().any(|a| ty_contains_fun(a) || embeds_nonderivable_function(interner, a)))
 }
 
 /// Collect every type-variable [`Symbol`] mentioned in a canonical type into
@@ -2450,9 +2497,9 @@ impl<'a> Lowerer<'a> {
             &e.value,
             canon::Expr_::Record(_) | canon::Expr_::Update(_, _)
         ) && let Some(ty) = self.types.regions.get(&e.span)
-            && embeds_nonderivable_function(ty)
+            && embeds_nonderivable_function(self.interner, ty)
         {
-            let feature = if con_payload_carries_function(ty) {
+            let feature = if con_payload_carries_function(self.interner, ty) {
                 Feature::CtorPayloadFunction
             } else {
                 Feature::FirstClassFunctions
