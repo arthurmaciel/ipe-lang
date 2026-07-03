@@ -113,7 +113,11 @@ fn tco_count_small_matches_go_oracle() {
     let dir = compile_golden("tco_count_small");
     let out = support::build_and_run_emitted("tco_count_small", &dir);
     assert_eq!(out.exit_code, Some(0));
-    support::assert_go_parity("tco_count_small", &golden_dir(&root, "tco_count_small"), &out.stdout);
+    support::assert_go_parity(
+        "tco_count_small",
+        &golden_dir(&root, "tco_count_small"),
+        &out.stdout,
+    );
 }
 
 /// `tco_swap` matches the cached Go oracle.
@@ -139,5 +143,9 @@ fn tco_double_use_matches_go_oracle() {
     let dir = compile_golden("tco_double_use");
     let out = support::build_and_run_emitted("tco_double_use", &dir);
     assert_eq!(out.exit_code, Some(0));
-    support::assert_go_parity("tco_double_use", &golden_dir(&root, "tco_double_use"), &out.stdout);
+    support::assert_go_parity(
+        "tco_double_use",
+        &golden_dir(&root, "tco_double_use"),
+        &out.stdout,
+    );
 }
