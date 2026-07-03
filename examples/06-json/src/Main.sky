@@ -358,8 +358,3 @@ main =
         _ = println traverseExample
     in
         println "Done!"
-
-
-Profile : String -> Int -> Bool -> Profile
-Profile name age active =
-    { name = name, age = age, active = active }

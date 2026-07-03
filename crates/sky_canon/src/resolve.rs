@@ -277,8 +277,21 @@ pub fn canonicalise_module(
 
     let canon_mod =
         canonicalise_with_env(m, &mut env, &mut type_home_map, injected_aliases, interner)?;
+    // The record-alias auto-constructors that were actually synthesized (#82):
+    // exactly the defs whose name is an alias name. A function-field alias is
+    // gated out of synthesis, so it is absent here and must NOT be exported as a
+    // value — deriving the set from the real defs keeps exports and synthesis in
+    // lockstep (no re-derivation that could drift).
+    let own_alias_names: BTreeSet<Symbol> =
+        m.aliases.iter().map(|a| a.value.name.value).collect();
+    let synth_ctor_names: BTreeSet<Symbol> = canon_mod
+        .defs
+        .iter()
+        .map(|d| d.name().value)
+        .filter(|n| own_alias_names.contains(n))
+        .collect();
     // Build the export surface from the module's own `exposing (…)` clause.
-    let exports = build_module_exports(&home, m, &env);
+    let exports = build_module_exports(&home, m, &env, &synth_ctor_names);
     Ok((canon_mod, exports))
 }
 
@@ -359,6 +372,11 @@ fn register_stdlib_import_aliases(
 ///
 /// # Errors
 /// Same set as [`canonicalise`].
+// A linear resolution pipeline (register types → collect aliases → synthesize
+// record-alias ctors → register values → canonicalise bodies); splitting the
+// stages into separate functions would thread the same six mutable maps through
+// each and obscure the ordering the stages depend on.
+#[allow(clippy::too_many_lines)]
 fn canonicalise_with_env(
     m: &src::Module,
     env: &mut Env,
@@ -460,9 +478,32 @@ fn canonicalise_with_env(
         )?);
     }
 
+    // Synthesize a value-level auto-constructor for every local record type
+    // alias (SKY-N0001 / #82). Built here — the single site where each alias's
+    // source-order fields are known — as an ordinary typed `Def`, so no later
+    // stage special-cases it. Must run before the value pre-pass so the ctor
+    // names participate in `seen_values` (a user value colliding with a ctor
+    // name surfaces `DuplicateValue`, never a silent skip).
+    let synth_ctor_defs = synthesize_record_alias_ctors(
+        m,
+        &home,
+        env,
+        type_home_map,
+        &aliases,
+        &seen_ctors,
+        interner,
+    )?;
+
     // Register every top-level value name so bindings can be referenced before
     // their definition (mutual / forward references), rejecting duplicates.
+    // Seed with the synthesized record-alias constructors first so their names
+    // are reserved in the value namespace.
     let mut seen_values: BTreeMap<Symbol, Span> = BTreeMap::new();
+    for d in &synth_ctor_defs {
+        let name = d.name();
+        seen_values.insert(name.value, name.span);
+        env.vars.insert(name.value, VarHome::TopLevel(home.clone()));
+    }
     for v in &m.values {
         let name = v.value.name.value;
         let name_span = v.value.name.span;
@@ -480,7 +521,7 @@ fn canonicalise_with_env(
     }
 
     // Canonicalise each value declaration.
-    let mut defs = Vec::with_capacity(m.values.len());
+    let mut defs = Vec::with_capacity(m.values.len() + synth_ctor_defs.len());
     for v in &m.values {
         defs.push(canonicalise_value(
             &v.value,
@@ -490,12 +531,266 @@ fn canonicalise_with_env(
             interner,
         )?);
     }
+    // The synthesized constructor defs are already fully canonical.
+    defs.extend(synth_ctor_defs);
 
     Ok(canon::Module {
         name: home,
         unions,
         defs,
     })
+}
+
+/// Synthesize the value-level auto-constructor for every LOCAL `type alias`
+/// whose declaration body is a *literal* record (SKY-N0001 / task #82).
+///
+/// For `type alias T p0..pk = { f0 : A0, …, fN : AN }` this produces the
+/// ordinary typed binding
+///
+/// ```text
+/// T : ∀ (used-of p0..pk). A0 -> … -> AN -> { f0:A0, …, fN:AN }
+/// T f0 … fN = { f0 = f0, …, fN = fN }
+/// ```
+///
+/// materialised as a [`canon::Def::Typed`] indistinguishable from a hand-written
+/// function — every downstream stage (HM, lowering, backend) needs no
+/// special-casing and no new IR node. Field order is captured **once** from the
+/// source `TRecord` vec and projected into the parameter patterns, the body
+/// record literal, and the arrow argument types from a **single** iteration, so
+/// positional argument `i` provably binds field `f_i` (there is no structure in
+/// which the two orders can disagree).
+///
+/// Gating (PARSE, DON'T VALIDATE):
+/// * Only a **literal** `TRecord` body qualifies. A head alias to a record
+///   alias (`type alias U = T`) gets **no** constructor — matching Elm — because
+///   its source body is a `TType`, not a `TRecord`.
+/// * A non-record alias (`type alias Count = Int`) gets no binding, so using it
+///   as a value stays an ordinary `SKY-N0001` name error.
+///
+/// The result is a **closed** record: this compiler has no row variable, so a
+/// missing / extra / mis-typed field is a compile error, never silent
+/// acceptance — the constructor opens no row-poly surface.
+///
+/// # Errors
+/// [`NameError::DuplicateValue`] when the alias name already names a data
+/// constructor in scope (the value-namespace usage of that name is already
+/// taken — rejecting the silent constructor-wins shadow, Elm-faithful).
+/// [`Diagnostic::Name`] ([`NameError::AliasArity`] / [`NameError::UnknownModule`])
+/// propagated from canonicalising a field type; [`Diagnostic::CompilerBug`] on
+/// an un-interned symbol.
+/// Built-in opaque boxed-wrapper type constructors — `Decoder` / `Task` / `Cmd`
+/// / `Sub`. Each lowers to a runtime type that boxes its payload behind a trait
+/// object and derives nothing over that payload, so a function in its type
+/// arguments is a legitimate value rather than a non-derivable-derive carrier.
+///
+/// Mirrors `sky_lower`'s `is_opaque_boxed_wrapper`
+/// (`crates/sky_lower/src/lower.rs` L151) EXACTLY — the set MUST stay identical
+/// so this canon-side synthesis gate and the lowerer's
+/// `embeds_nonderivable_function` agree on which record-alias fields carry a
+/// buildable constructor. Matched by name only, sound because these are
+/// kernel-implicit Prelude type constructors a user program cannot redefine.
+fn is_opaque_boxed_wrapper_canon(interner: &Interner, name: Symbol) -> bool {
+    matches!(
+        interner.resolve(name),
+        Some("Decoder" | "Task" | "Cmd" | "Sub")
+    )
+}
+
+/// Could this canonical field type NOT be a field of a
+/// `#[derive(Clone, Debug, PartialEq)]` + `impl SkyStringify` struct — i.e. is it
+/// non-derivable-as-a-struct-field?
+///
+/// A synthesised record-alias constructor's body is a record literal, so the
+/// backend emits a `#[derive(Clone, Debug, PartialEq)]` struct (plus an
+/// `impl SkyStringify`) over the field types. A field whose type satisfies none
+/// of those obligations makes the emitted Rust fail to compile. Two disjoint
+/// shapes are non-derivable-as-a-struct-field:
+///
+/// 1. A raw function (`Lambda`) — lowers to `Box<dyn Fn(...) + Send>`, which
+///    is `!Clone`, `!Debug`, `!PartialEq`, `!SkyStringify`.
+/// 2. An OPAQUE boxed-wrapper VALUE ([`is_opaque_boxed_wrapper_canon`] —
+///    `Decoder` / `Task` / `Cmd` / `Sub`). Its runtime representation is a
+///    `Box<dyn Fn>` (`Decoder`), a boxed-thunk enum (`SkyCmd` / `SkySub`), or a
+///    `Pin<Box<dyn Future>>` (`SkyTask`) — none of which impl `Clone` / `Debug` /
+///    `PartialEq` / `SkyStringify` over their payload.
+///
+/// # Why this predicate is NOT the lowerer's function-embedding one
+///
+/// This is deliberately DISTINCT from `sky_lower`'s `embeds_nonderivable_function`
+/// (`crates/sky_lower/src/lower.rs` L183) — and from this crate's round-1 port
+/// `canon_type_embeds_function`, now deleted. That predicate answers a
+/// different question: "does a RAW FUNCTION appear anywhere inside this type",
+/// and it EXEMPTS an opaque wrapper HEAD (returns `false` and does NOT recurse)
+/// because a function nested inside a `Decoder` payload is boxed away — the
+/// L0107 concern is a bare function reaching the derive, not a wrapper doing its
+/// job.
+///
+/// That exemption is CORRECT for the lowerer's payload-scan but WRONG for the
+/// struct-synthesis decision: an opaque wrapper in FIELD position is ITSELF the
+/// non-derivable value, regardless of its payload. `{ dec : Decoder Int }`,
+/// `{ cmd : Cmd Msg }` carry no raw function at all, yet the emitted
+/// `#[derive(…)]` struct over `Decoder` / `SkyCmd` does not build (round-1
+/// verified: skyc-0 then cargo-101 — the seal hole this fix closes). So here the
+/// opaque head SHORT-CIRCUITS to `true` (the flip): the wrapper is non-derivable
+/// as a struct field, so the alias must DECLINE synthesis and keep its exact
+/// pre-#82 behaviour (no positional constructor). It loses zero capability — such
+/// a record is unbuildable-as-a-struct at every real construction/use site
+/// regardless — and turns the un-buildable constructor UNREPRESENTABLE at canon
+/// rather than emitted-then-cargo-rejected.
+///
+/// [`is_opaque_boxed_wrapper_canon`]'s SET stays byte-identical to
+/// `lower.rs` L151 (`Decoder` / `Task` / `Cmd` / `Sub`); only its ROLE here is
+/// flipped (field-position opaque head ⇒ non-derivable, not exempt).
+fn field_type_nonderivable(interner: &Interner, t: &canon::Type) -> bool {
+    match t {
+        canon::Type::Lambda(_, _) => true,
+        canon::Type::Con { name, args, .. } => {
+            // FLIP vs the lowerer's function-embedding predicate: an opaque
+            // boxed-wrapper HEAD in field position is ITSELF non-derivable —
+            // short-circuit to `true`, do NOT recurse-into-and-exempt its
+            // payload. Otherwise recurse: a carrier (`List`/`Maybe`/`Result`/…)
+            // is non-derivable exactly when one of its arguments is.
+            is_opaque_boxed_wrapper_canon(interner, *name)
+                || args
+                    .iter()
+                    .any(|a| field_type_nonderivable(interner, a))
+        }
+        canon::Type::Tuple(elems) => elems
+            .iter()
+            .any(|e| field_type_nonderivable(interner, e)),
+        canon::Type::Record(fields) => fields
+            .iter()
+            .any(|(_, f)| field_type_nonderivable(interner, f)),
+        canon::Type::Var(_) | canon::Type::Unit => false,
+    }
+}
+
+fn synthesize_record_alias_ctors(
+    m: &src::Module,
+    home: &[Symbol],
+    env: &Env,
+    type_home_map: &BTreeMap<Symbol, Vec<Symbol>>,
+    aliases: &BTreeMap<Symbol, AliasDef>,
+    seen_ctors: &BTreeMap<Symbol, Span>,
+    interner: &Interner,
+) -> DResult<Vec<canon::Def>> {
+    let mut synth = Vec::new();
+    for a in &m.aliases {
+        // Strict-literal gate: only a `{ … }` body carries a constructor.
+        let src::TypeAnnotation::TRecord(fields) = &a.value.body.value else {
+            continue;
+        };
+        let alias_name = a.value.name.value;
+        let alias_span = a.value.name.span;
+
+        // Canonicalise every field type ONCE, in declared (source) order. The
+        // alias's own params fall through to `Type::Var` (empty `subst`), so a
+        // param used in a field generalises and a phantom param drops out. The
+        // alias name is pre-seeded into `visited` so a self-referential field
+        // (`{ next : List T }`) expands exactly as `x : T` would — the ctor's
+        // return record is byte-identical to the annotation expansion.
+        let ctx = TypeCtx {
+            env,
+            type_home_map,
+            aliases,
+            interner,
+            ann_span: a.value.body.span,
+        };
+        let subst = BTreeMap::new();
+        let mut free_set = BTreeSet::new();
+        let mut visited = vec![alias_name];
+        let mut can_fields: Vec<(Symbol, canon::Type)> = Vec::with_capacity(fields.len());
+        for (fname, fty) in fields {
+            let cty = canonicalise_type(fty, &ctx, &subst, &mut free_set, &mut visited)?;
+            can_fields.push((*fname, cty));
+        }
+
+        // Data-record gate (#82 scope). DECLINE synthesis when ANY field type is
+        // non-derivable-as-a-struct-field ([`field_type_nonderivable`]). The
+        // synthesised constructor's body is a record literal that lowers to a
+        // `#[derive(Clone, Debug, PartialEq)]` + `impl SkyStringify` struct over
+        // the field types; a field that satisfies none of those obligations makes
+        // the emitted Rust fail to build. Two disjoint non-derivable shapes:
+        //
+        //   * a raw function — directly (`{ handler : Int -> Msg }`, config-record
+        //     aliases like `Live.app`'s cfg) OR nested inside a derive carrier
+        //     (`{ xs : List (Int -> Int) }`, `{ f : Maybe (Int -> Int) }`,
+        //     `{ p : (Int -> Int, Bool) }`, `{ g : Result e (Int -> Int) }`, a
+        //     nested record). For a DIRECT arrow the lowerer's own
+        //     `embeds_nonderivable_function` region gate would reject the (unused,
+        //     un-DCE'd) ctor body at SKY-L0107; for a nested one the head-only
+        //     round-0 gate emitted-then-cargo-failed.
+        //   * an OPAQUE boxed-wrapper field (`{ dec : Decoder Int }`,
+        //     `{ cmd : Cmd Msg }`, `Sub`, `Task`) — round-1 verified skyc-0 then
+        //     cargo-101 (E0277 Clone/Debug, E0369 ==, E0599 SkyStringify), because
+        //     the wrapper VALUE is itself non-derivable; nesting one under a
+        //     carrier (`List (Decoder Int)`, `Maybe (Cmd Msg)`) is equally
+        //     non-derivable (the predicate recurses).
+        //
+        // There is no whole-program DCE to prune an *unused* such ctor, so
+        // synthesizing it would turn a module that merely *names* the alias into a
+        // build failure — a regression (pre-#82 a merely-named alias built clean).
+        // Declining keeps the alias's exact pre-#82 behaviour (no positional
+        // constructor) and makes the un-buildable constructor UNREPRESENTABLE at
+        // canon rather than emitted-then-rejected. See [`field_type_nonderivable`]
+        // for why the synthesis predicate is NOT the lowerer's function-embedding
+        // one (opaque head in field position ⇒ non-derivable, a deliberate flip).
+        if can_fields
+            .iter()
+            .any(|(_, t)| field_type_nonderivable(interner, t))
+        {
+            continue;
+        }
+
+        // A record alias whose name already names a data constructor would have
+        // its value binding silently shadowed by the constructor (`resolve_var`
+        // consults `env.ctors` first). Reject instead — Elm-faithful, fail-closed.
+        if let Some(&first) = seen_ctors.get(&alias_name) {
+            return Err(Diagnostic::Name {
+                span: alias_span,
+                msg: NameError::DuplicateValue {
+                    name: name_str(interner, alias_name)?,
+                    first,
+                },
+            });
+        }
+
+        // Quantified vars, ordered by resolved NAME (stable wire order — intern
+        // ids are allocation-dependent), matching `canonicalise_value`.
+        let mut free_vars: Vec<Symbol> = free_set.into_iter().collect();
+        free_vars.sort_by(|x, y| interner.resolve(*x).cmp(&interner.resolve(*y)));
+
+        // Three co-constructed views from the one ordered `can_fields` vec:
+        // parameter patterns, the body record literal, and the arrow arg types.
+        let patterns: Vec<canon::Pattern> = can_fields
+            .iter()
+            .map(|(fname, _)| Located::new(alias_span, canon::Pattern_::PVar(*fname)))
+            .collect();
+        let body_fields: Vec<(Symbol, canon::Expr)> = can_fields
+            .iter()
+            .map(|(fname, _)| {
+                (
+                    *fname,
+                    Located::new(alias_span, canon::Expr_::VarLocal(*fname)),
+                )
+            })
+            .collect();
+        let body = Located::new(alias_span, canon::Expr_::Record(body_fields));
+        let mut ty = canon::Type::Record(can_fields.clone());
+        for (_, fty) in can_fields.iter().rev() {
+            ty = canon::Type::Lambda(Box::new(fty.clone()), Box::new(ty));
+        }
+
+        synth.push(canon::Def::Typed {
+            home: home.to_vec(),
+            name: a.value.name,
+            free_vars,
+            patterns,
+            body,
+            ty,
+        });
+    }
+    Ok(synth)
 }
 
 /// Inject a dep module's exports into the resolving module's environment.
@@ -628,6 +923,21 @@ fn inject_dep_exports(
                                     params: ea.params.clone(),
                                     body: ea.body.clone(),
                                 });
+                            // A record alias also exports a value-level
+                            // auto-constructor under the same name (#82); when the
+                            // dep exposed it (present in `dep.values`), bring it
+                            // into the value namespace too so `exposing (Account)`
+                            // makes `Account` usable as a constructor.
+                            if dep.values.contains(type_name) {
+                                check_and_inject_value(
+                                    *type_name,
+                                    dep_path,
+                                    item.span,
+                                    env,
+                                    unqual_origins,
+                                    interner,
+                                )?;
+                            }
                         }
                     }
                 }
@@ -738,7 +1048,12 @@ fn inject_ctors_for_type(
 /// Only names declared in THIS module are considered as exportable; re-exporting
 /// an imported name is not yet supported (and would require a separate pass after
 /// imports are resolved, which the current design defers to a later milestone).
-fn build_module_exports(home: &[Symbol], m: &src::Module, env: &Env) -> crate::ModuleExports {
+fn build_module_exports(
+    home: &[Symbol],
+    m: &src::Module,
+    env: &Env,
+    synth_ctor_names: &BTreeSet<Symbol>,
+) -> crate::ModuleExports {
     let mut exports = crate::ModuleExports {
         path: home.to_owned(),
         ..crate::ModuleExports::default()
@@ -768,6 +1083,15 @@ fn build_module_exports(home: &[Symbol], m: &src::Module, env: &Env) -> crate::M
                         body: a.value.body.value.clone(),
                     },
                 );
+                // A record alias also exports its value-level auto-constructor
+                // (#82) — but ONLY when one was actually synthesized (a
+                // function-field alias is gated out). The synthesized `Def` lives
+                // in this module's `defs`, so the importer's
+                // `check_and_inject_value` path registers the name as
+                // `TopLevel(dep_path)` with no re-synthesis.
+                if synth_ctor_names.contains(&a.value.name.value) {
+                    exports.values.insert(a.value.name.value);
+                }
             }
         }
         src::Exposing::List(items) => {
@@ -799,6 +1123,13 @@ fn build_module_exports(home: &[Symbol], m: &src::Module, env: &Env) -> crate::M
                                             body: a.value.body.value.clone(),
                                         },
                                     );
+                                    // Exposing a record alias also exposes its
+                                    // value-level auto-constructor (#82), when one
+                                    // was synthesized (function-field aliases are
+                                    // gated out).
+                                    if synth_ctor_names.contains(type_name) {
+                                        exports.values.insert(*type_name);
+                                    }
                                 }
                             }
                         }
@@ -1766,4 +2097,185 @@ fn levenshtein(a: &str, b: &str) -> usize {
 /// so we cannot hardcode it). Used only on the unreachable unnamed-type path.
 const fn name_zero() -> Symbol {
     Symbol::from_raw(0)
+}
+
+#[cfg(test)]
+mod alias_ctor_gate_tests {
+    //! Unit coverage for [`field_type_nonderivable`] — the STRUCT-derivability
+    //! gate that decides whether a record `type alias` gets a synthesised
+    //! auto-constructor (SKY-N0001 / #82). It returns `true` (DECLINE synthesis)
+    //! when a field type could NOT be a field of a
+    //! `#[derive(Clone, Debug, PartialEq)]` + `impl SkyStringify` struct — a raw
+    //! function at ANY depth inside a derive carrier (the round-1 seal fix) OR an
+    //! OPAQUE boxed-wrapper (`Decoder` / `Task` / `Cmd` / `Sub`) in field
+    //! position (the round-2 flip: the wrapper VALUE is itself non-derivable).
+    //! It returns `false` only for genuinely derivable data (plain records,
+    //! non-opaque parametric containers of derivable payloads, vars, unit).
+
+    use super::*;
+
+    fn sym(i: &mut Interner, s: &str) -> Symbol {
+        i.intern(s).expect("intern must succeed")
+    }
+
+    /// A bare arrow `() -> ()` — the minimal `Lambda`; only its shape matters to
+    /// the predicate.
+    fn arrow() -> canon::Type {
+        canon::Type::Lambda(Box::new(canon::Type::Unit), Box::new(canon::Type::Unit))
+    }
+
+    fn con(i: &mut Interner, name: &str, args: Vec<canon::Type>) -> canon::Type {
+        let n = sym(i, name);
+        canon::Type::Con {
+            home: Vec::new(),
+            name: n,
+            args,
+        }
+    }
+
+    #[test]
+    fn direct_arrow_field_is_nonderivable() {
+        let i = Interner::new();
+        // `{ handler : () -> () }` — a raw function lowers to `Box<dyn Fn>`.
+        assert!(field_type_nonderivable(&i, &arrow()));
+    }
+
+    #[test]
+    fn function_nested_in_derive_carriers_is_nonderivable() {
+        let mut i = Interner::new();
+
+        // `List (a -> b)` — the round-1 seal break.
+        let list_arrow = con(&mut i, "List", vec![arrow()]);
+        assert!(
+            field_type_nonderivable(&i, &list_arrow),
+            "List (arrow) must be gated"
+        );
+
+        // `Maybe (a -> b)`.
+        let maybe_arrow = con(&mut i, "Maybe", vec![arrow()]);
+        assert!(
+            field_type_nonderivable(&i, &maybe_arrow),
+            "Maybe (arrow) must be gated"
+        );
+
+        // `(a -> b, Bool)` — arrow in a tuple element.
+        let bool_con = con(&mut i, "Bool", vec![]);
+        let tuple_arrow = canon::Type::Tuple(vec![arrow(), bool_con]);
+        assert!(
+            field_type_nonderivable(&i, &tuple_arrow),
+            "tuple carrying an arrow must be gated"
+        );
+
+        // `Result Error (a -> b)` — arrow in the second type argument.
+        let err_con = con(&mut i, "Error", vec![]);
+        let result_arrow = con(&mut i, "Result", vec![err_con, arrow()]);
+        assert!(
+            field_type_nonderivable(&i, &result_arrow),
+            "Result e (arrow) must be gated"
+        );
+
+        // Nested record: `{ inner : { f : a -> b } }`.
+        let f = sym(&mut i, "f");
+        let inner = sym(&mut i, "inner");
+        let inner_rec = canon::Type::Record(vec![(f, arrow())]);
+        let nested_rec = canon::Type::Record(vec![(inner, inner_rec)]);
+        assert!(
+            field_type_nonderivable(&i, &nested_rec),
+            "a nested record carrying an arrow must be gated"
+        );
+    }
+
+    #[test]
+    fn opaque_wrapper_field_is_nonderivable() {
+        // ROUND-2 FLIP. An opaque boxed-wrapper in FIELD position is ITSELF
+        // non-derivable as a struct field — its runtime rep (`Box<dyn Fn>` /
+        // boxed-thunk enum / `Pin<Box<dyn Future>>`) impls no
+        // `Clone`/`Debug`/`PartialEq`/`SkyStringify`. So the head SHORT-CIRCUITS
+        // to `true`, DECLINING synthesis (round-1 asserted the opposite — the
+        // seal hole: skyc-0 then cargo-101).
+        let mut i = Interner::new();
+
+        // `Decoder Int` — opaque head, no raw arrow anywhere, yet non-derivable.
+        let int_con = con(&mut i, "Int", vec![]);
+        let decoder_int = con(&mut i, "Decoder", vec![int_con]);
+        assert!(
+            field_type_nonderivable(&i, &decoder_int),
+            "Decoder Int is a non-derivable struct field → must be gated"
+        );
+
+        // `Cmd Msg` — boxed-thunk enum, non-derivable.
+        let msg_con = con(&mut i, "Msg", vec![]);
+        let cmd_msg = con(&mut i, "Cmd", vec![msg_con]);
+        assert!(
+            field_type_nonderivable(&i, &cmd_msg),
+            "Cmd Msg is a non-derivable struct field → must be gated"
+        );
+
+        // `Sub Msg`.
+        let msg2 = con(&mut i, "Msg", vec![]);
+        let sub_msg = con(&mut i, "Sub", vec![msg2]);
+        assert!(
+            field_type_nonderivable(&i, &sub_msg),
+            "Sub Msg is a non-derivable struct field → must be gated"
+        );
+
+        // `Task Error a` — `Pin<Box<dyn Future>>`, non-derivable regardless of
+        // its (here function) payload.
+        let err_con = con(&mut i, "Error", vec![]);
+        let task_arrow = con(&mut i, "Task", vec![err_con, arrow()]);
+        assert!(
+            field_type_nonderivable(&i, &task_arrow),
+            "Task Error a is a non-derivable struct field → must be gated"
+        );
+    }
+
+    #[test]
+    fn opaque_wrapper_nested_under_carrier_is_nonderivable() {
+        // The predicate RECURSES into non-opaque carriers, so an opaque wrapper
+        // nested one level down is still caught.
+        let mut i = Interner::new();
+
+        // `List (Decoder Int)`.
+        let int_con = con(&mut i, "Int", vec![]);
+        let decoder_int = con(&mut i, "Decoder", vec![int_con]);
+        let list_decoder = con(&mut i, "List", vec![decoder_int]);
+        assert!(
+            field_type_nonderivable(&i, &list_decoder),
+            "List (Decoder Int) must be gated"
+        );
+
+        // `Maybe (Cmd Msg)`.
+        let msg_con = con(&mut i, "Msg", vec![]);
+        let cmd_msg = con(&mut i, "Cmd", vec![msg_con]);
+        let maybe_cmd = con(&mut i, "Maybe", vec![cmd_msg]);
+        assert!(
+            field_type_nonderivable(&i, &maybe_cmd),
+            "Maybe (Cmd Msg) must be gated"
+        );
+    }
+
+    #[test]
+    fn plain_data_types_are_derivable() {
+        let mut i = Interner::new();
+
+        // `{ x : Int }` — a plain record field.
+        let int_con = con(&mut i, "Int", vec![]);
+        assert!(!field_type_nonderivable(&i, &int_con));
+
+        // `List Int` — a non-opaque container of a derivable payload.
+        let int_arg = con(&mut i, "Int", vec![]);
+        let list_int = con(&mut i, "List", vec![int_arg]);
+        assert!(!field_type_nonderivable(&i, &list_int));
+
+        // `Maybe (List String)` — nested derivable data.
+        let str_con = con(&mut i, "String", vec![]);
+        let list_str = con(&mut i, "List", vec![str_con]);
+        let maybe_list_str = con(&mut i, "Maybe", vec![list_str]);
+        assert!(!field_type_nonderivable(&i, &maybe_list_str));
+
+        // Type variables and unit are derivable.
+        let a = sym(&mut i, "a");
+        assert!(!field_type_nonderivable(&i, &canon::Type::Var(a)));
+        assert!(!field_type_nonderivable(&i, &canon::Type::Unit));
+    }
 }

@@ -1,0 +1,23 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.String as String
+import Std.Log exposing (println)
+
+
+type alias Pt =
+    { x : Int, y : Int }
+
+
+viaLiteral : Pt
+viaLiteral =
+    { x = 1, y = 2 }
+
+
+viaCtor : Pt
+viaCtor =
+    Pt 1 2
+
+
+main =
+    println (String.fromInt (viaLiteral.x + viaCtor.y))

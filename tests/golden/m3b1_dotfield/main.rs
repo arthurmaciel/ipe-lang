@@ -250,6 +250,9 @@ pub fn main_wrap(n: i64) -> RecValue {
 pub fn sky_main() -> SkyTask<()> {
     ({ let r = RecValue { value: 1 }; log_println(string_from_int(((main_wrap(41)).value + (r).value))) })
 }
+pub fn main_Box(value: i64) -> RecValue {
+    RecValue { value: value }
+}
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
 // the codegen routes Ffi.kernel calls directly, but some construction
