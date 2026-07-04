@@ -504,6 +504,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::TaskSequence => "Task.sequence",
         KernelFn::TaskParallel => "Task.parallel",
         KernelFn::TaskRun => "Task.run",
+        KernelFn::TaskPerform => "Task.perform",
         // ── Io kernels (M5a) ──────────────────────────────────────────────────
         KernelFn::IoReadLine => "Io.readLine",
         KernelFn::IoWriteStdout => "Io.writeStdout",

@@ -722,6 +722,7 @@ impl Env {
                     "sequence",
                     "parallel",
                     "run",
+                    "perform",
                 ],
             ),
             // `Sky.Core.Io` — I/O effects (M5a).
@@ -792,12 +793,13 @@ impl Env {
                     "parseQuery",
                 ],
             ),
-            // ── M5c: TEA Cmd / Sub kernels ──────────────────────────────────────
-            // Construct-only in M5c; the TEA dispatch loop lands in M6.
-            // `Cmd.publish*` / `Sub.subscribeTopic` / `PubSub.*` are NOT listed
-            // here — they will get their own qualifier entries in M6.
+            // ── M5c/M5d: TEA Cmd / Sub kernels ──────────────────────────────────
+            // `Cmd.publish*` / `PubSub.*` are NOT listed here — they will get
+            // their own qualifier entries in M6.
+            // `Sub.subscribeTopic` is wired (M5d): runtime `sub_subscribe_topic`
+            // exists in live/pubsub.rs; emit path uses the standard N-arg route.
             ("Cmd", &["none", "batch", "perform"]),
-            ("Sub", &["none", "batch", "every"]),
+            ("Sub", &["none", "batch", "every", "subscribeTopic"]),
             // ── Db kernels (M5b-db) ─────────────────────────────────────────────
             // `Std.Db` — database connection + query surface.
             // All effect-returning kernels (Task Error …) and pure helpers

@@ -562,7 +562,9 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::TaskAndThenResult => "task_and_then_result",
         KernelFn::TaskSequence => "task_sequence",
         KernelFn::TaskParallel => "task_parallel",
-        KernelFn::TaskRun => "task_run",
+        // `Task.perform` is a 1-arg legacy alias for `Task.run`; both lower to the
+        // same runtime function.
+        KernelFn::TaskRun | KernelFn::TaskPerform => "task_run",
         // ── Io kernels (M5a) ──────────────────────────────────────────────────
         KernelFn::IoReadLine => "io_read_line",
         KernelFn::IoWriteStdout => "io_write_stdout",
