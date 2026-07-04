@@ -4,7 +4,10 @@
 //!   * embed → inject → topo → canonicalise-as-stdlib → link → emit of a
 //!     Std-homed union constructor, with mixed kernel + source imports;
 //!   * a hostile user file named `Std.Palette` stays SKY-N0025-rejected;
-//!   * (`SKY_E2E`) the emitted Cargo project builds and runs to `#000`.
+//!   * (#103) an `EmbeddedStdlib` module DEFINES a reserved built-in type name
+//!     (`type Length`) that a user module could not — proving the last prereq
+//!     before compiled-source `Std.Css`;
+//!   * (`SKY_E2E`) the emitted Cargo project builds and runs to `#000 42`.
 
 use std::path::{Path, PathBuf};
 
@@ -56,6 +59,19 @@ fn spike_project_builds_and_injects_compiled_source() {
         emitted.contains("\"#000\"") && emitted.contains("\"#fff\""),
         "emitted Rust must carry the case-match arms of toHex:\n{emitted}"
     );
+    // #103: the EmbeddedStdlib module defined a RESERVED built-in type name
+    // (`type Length`). The lowerer keys it under its real home (`Std.Palette`),
+    // so it lowers to its OWN enum + accessor — NOT the opaque runtime
+    // `UiPlain::Length`. A user module declaring `type Length` would have been
+    // SKY-N0026-rejected before ever reaching lowering.
+    assert!(
+        emitted.contains("std_palette_length_px"),
+        "emitted Rust must carry the compiled Std.Palette `lengthPx` fn (reserved-name type defined by trusted stdlib):\n{emitted}"
+    );
+    assert!(
+        !emitted.contains("UiPlain :: Length") && !emitted.contains("UiPlain::Length"),
+        "the stdlib-defined `type Length` must lower to its OWN enum, never the opaque UiPlain::Length hijack:\n{emitted}"
+    );
 }
 
 /// SECURITY: a user file literally named `Std.Palette` (`ModuleOrigin::User`)
@@ -74,11 +90,17 @@ fn hostile_std_squat_is_sky_n0025() {
         "name = \"hostile\"\nversion = \"0.1.0\"\n\n[source]\nroot = \"src\"\n",
     )
     .expect("write manifest");
-    // The attacker's payload: a poisoned toHex that must NEVER win.
+    // The attacker's payload: a poisoned toHex that must NEVER win, AND an
+    // attempt to squat a RESERVED built-in type name (`Length`) inside the
+    // reserved `Std.` namespace (#103). The unforgeable `ModuleOrigin::User` tag
+    // means this file gets NEITHER the N0025 namespace exemption NOR the N0026
+    // reserved-builtin exemption — the namespace gate (N0025) fires first, so a
+    // hostile author can never obtain the `EmbeddedStdlib`-only capability.
     std::fs::write(
         std_dir.join("Palette.sky"),
-        "module Std.Palette exposing (Shade(..), toHex)\n\
+        "module Std.Palette exposing (Shade(..), toHex, Length(..))\n\
          type Shade = Dark | Light\n\
+         type Length = Px Int\n\
          toHex : Shade -> String\n\
          toHex shade =\n    \"PWNED\"\n",
     )
@@ -122,8 +144,8 @@ fn spike_e2e_runs_and_prints_hex() {
 
     let outcome = support::build_and_run_emitted("spike_std_source", &out);
     assert_eq!(
-        outcome.stdout, "#000\n",
-        "the emitted binary must print `#000` (toHex Dark)"
+        outcome.stdout, "#000 42\n",
+        "the emitted binary must print `#000 42` (toHex Dark + lengthPx (Px 42))"
     );
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the reference");
 }

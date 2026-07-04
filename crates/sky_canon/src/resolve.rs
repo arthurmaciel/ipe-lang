@@ -98,16 +98,70 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "LiveReq",
 ];
 
-/// Reject a user `type` / `type alias` whose name shadows a reserved built-in
-/// type constructor. See [`RESERVED_BUILTIN_TYPES`].
-fn reject_reserved_builtin_type(name: Symbol, span: Span, interner: &Interner) -> DResult<()> {
+/// The subset of [`RESERVED_BUILTIN_TYPES`] that a trusted
+/// [`ModuleOrigin::EmbeddedStdlib`] module is permitted to DEFINE, while a
+/// [`ModuleOrigin::User`] module stays rejected (SKY-N0026).
+///
+/// These are exactly the nullary Std.Ui / Sky.Live opaque names that #101 moved
+/// BELOW the home-aware `enum_variants` guard in the lowerer
+/// (`sky_lower::ir_type_from_ty` + `ir_type_from_canon`). Because the lowerer
+/// now keys a program-defined `type Length` under its real `(home, name)`
+/// (#100) and resolves it to its OWN enum, a compiled-source stdlib module
+/// (`Std.Css` / the `Std.Palette` spike) can canonically DEFINE these types
+/// without the former `UiPlain` hijack — so canon reservation is no longer
+/// load-bearing for lowering-soundness on this exact set.
+///
+/// The reservation is retained for [`ModuleOrigin::User`] as a defence-in-depth
+/// *user-facing guarantee* ("you cannot shadow `Length`" → a clean SKY-N0026
+/// rather than a confusing dual-`Length` type-boundary error against the
+/// built-in `UiPlain::Length`). The carve-out is keyed on the UNFORGEABLE typed
+/// [`ModuleOrigin`] (#98/#100), never on module text: a hostile user file named
+/// `Std.Css` is discovered as User source and gets NEITHER this exemption NOR
+/// the SKY-N0025 namespace exemption.
+///
+/// NOTE: the load-bearing built-in names whose lowerer arms sit ABOVE the
+/// `enum_variants` guard (`Html` / `Attribute` / `Event` / `Element`, plus every
+/// primitive like `Int` / `Task` / `List`) are deliberately EXCLUDED — even the
+/// trusted stdlib must not redefine them, since a same-named union would be
+/// hijacked by the bare-name arm and mis-lower. This set is precisely the
+/// below-guard nullary opaque names, and nothing else.
+const STDLIB_DEFINABLE_UI_TYPES: &[&str] = &[
+    "Length",
+    "HAlign",
+    "VAlign",
+    "Location",
+    "PseudoClass",
+    "Description",
+    "LayoutContext",
+    "LiveReq",
+];
+
+/// Reject a `type` / `type alias` whose name shadows a reserved built-in type
+/// constructor. See [`RESERVED_BUILTIN_TYPES`].
+///
+/// A [`ModuleOrigin::EmbeddedStdlib`] module is exempt for the
+/// [`STDLIB_DEFINABLE_UI_TYPES`] subset only — it is the canonical definer of
+/// those types (`Std.Css`). A [`ModuleOrigin::User`] module is gated against the
+/// full reserved set, so the default user-facing behaviour is byte-identical.
+fn reject_reserved_builtin_type(
+    name: Symbol,
+    span: Span,
+    origin: ModuleOrigin,
+    interner: &Interner,
+) -> DResult<()> {
     match interner.resolve(name) {
-        Some(resolved) if RESERVED_BUILTIN_TYPES.contains(&resolved) => Err(Diagnostic::Name {
-            span,
-            msg: NameError::ReservedBuiltinType {
-                name: Box::<str>::from(resolved),
-            },
-        }),
+        Some(resolved)
+            if RESERVED_BUILTIN_TYPES.contains(&resolved)
+                && !(origin == ModuleOrigin::EmbeddedStdlib
+                    && STDLIB_DEFINABLE_UI_TYPES.contains(&resolved)) =>
+        {
+            Err(Diagnostic::Name {
+                span,
+                msg: NameError::ReservedBuiltinType {
+                    name: Box::<str>::from(resolved),
+                },
+            })
+        }
         _ => Ok(()),
     }
 }
@@ -188,7 +242,16 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
     // (empty here) with the module's own aliases.
     let mut type_home_map: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
     let extra_aliases: BTreeMap<Symbol, AliasDef> = BTreeMap::new();
-    canonicalise_with_env(m, &mut env, &mut type_home_map, extra_aliases, interner)
+    // The bare single-module entry is always ordinary USER source: the trust tag
+    // can only be raised via `canonicalise_module_with_origin`.
+    canonicalise_with_env(
+        m,
+        &mut env,
+        &mut type_home_map,
+        extra_aliases,
+        ModuleOrigin::User,
+        interner,
+    )
 }
 
 /// Canonicalise a module in a multi-module project context.
@@ -344,7 +407,14 @@ pub fn canonicalise_module_with_origin(
     }
 
     let canon_mod =
-        canonicalise_with_env(m, &mut env, &mut type_home_map, injected_aliases, interner)?;
+        canonicalise_with_env(
+            m,
+            &mut env,
+            &mut type_home_map,
+            injected_aliases,
+            origin,
+            interner,
+        )?;
     // The record-alias auto-constructors that were actually synthesized (#82):
     // exactly the defs whose name is an alias name. A function-field alias is
     // gated out of synthesis, so it is absent here and must NOT be exported as a
@@ -685,6 +755,7 @@ fn canonicalise_with_env(
     env: &mut Env,
     type_home_map: &mut BTreeMap<Symbol, Vec<Symbol>>,
     extra_aliases: BTreeMap<Symbol, AliasDef>,
+    origin: ModuleOrigin,
     interner: &mut Interner,
 ) -> DResult<canon::Module> {
     let home = env.home.clone();
@@ -716,7 +787,7 @@ fn canonicalise_with_env(
         let type_span = u.value.name.span;
         // SKY-N0026: reject a user type whose name shadows a reserved built-in
         // before it can silently override the lowerer's builtin-name mapping.
-        reject_reserved_builtin_type(type_name, type_span, interner)?;
+        reject_reserved_builtin_type(type_name, type_span, origin, interner)?;
         if let Some(&first) = seen_types.get(&type_name) {
             return Err(Diagnostic::Name {
                 span: type_span,
@@ -747,7 +818,7 @@ fn canonicalise_with_env(
         let alias_span = a.value.name.span;
         // SKY-N0026: `type alias` names are gated the same as `type` names — an
         // alias shadowing a built-in would be silently overridden too.
-        reject_reserved_builtin_type(alias_name, alias_span, interner)?;
+        reject_reserved_builtin_type(alias_name, alias_span, origin, interner)?;
         if let Some(&first) = seen_types.get(&alias_name) {
             return Err(Diagnostic::Name {
                 span: alias_span,
