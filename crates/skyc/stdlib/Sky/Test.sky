@@ -1,0 +1,188 @@
+-- | Sky.Test — lightweight in-process test framework.
+--
+-- A port of the Haskell-backend `sky-stdlib/Sky/Test.sky`.
+--
+-- SIMPLIFICATIONS vs the reference:
+--  - `expectErrorKind` / `kindName` OMITTED: they require `Error` /
+--    `ErrorKind` ADT constructors which are not yet accessible from
+--    compiled-source (Sky.Core.Error is currently a kernel qualifier,
+--    not a compiled-source module). Tracked as a separate backlog item.
+--  - `filterMap` replaced by `concatMap` (both semantically equivalent
+--    for this use-case; the stdlib does not yet export `filterMap`).
+--  - `summarise` is a pure function (no IO). All IO lives in `runMain`.
+--
+-- All top-level bindings are fully annotated (compiled-source
+-- discipline — annotation-driven generalisation; no whole-program
+-- let-gen).
+module Sky.Test exposing
+    ( Test, TestResult(..)
+    , test, suite
+    , pass, fail
+    , equal, notEqual
+    , ok, err
+    , isTrue, isFalse
+    , run, runWithPrefix, summarise, runMain
+    )
+
+
+-- ─── Types ───────────────────────────────────────────────────────────────────
+
+
+type Test
+    = Leaf String (() -> TestResult)
+    | Suite String (List Test)
+
+
+type TestResult
+    = Passed
+    | Failed String
+
+
+-- ─── Builders ────────────────────────────────────────────────────────────────
+
+
+test : String -> (() -> TestResult) -> Test
+test name thunk =
+    Leaf name thunk
+
+
+suite : String -> List Test -> Test
+suite name items =
+    Suite name items
+
+
+-- ─── Assertions ──────────────────────────────────────────────────────────────
+
+
+pass : TestResult
+pass =
+    Passed
+
+
+fail : String -> TestResult
+fail msg =
+    Failed msg
+
+
+equal : a -> a -> TestResult
+equal expected actual =
+    if expected == actual then
+        Passed
+    else
+        Failed
+            ("expected "
+                ++ errorToString expected
+                ++ " but got "
+                ++ errorToString actual)
+
+
+notEqual : a -> a -> TestResult
+notEqual expected actual =
+    if expected /= actual then
+        Passed
+    else
+        Failed ("expected inequality but both were " ++ errorToString actual)
+
+
+ok : Result e a -> TestResult
+ok result =
+    case result of
+        Ok _ ->
+            Passed
+
+        Err e ->
+            Failed ("expected Ok but got Err " ++ errorToString e)
+
+
+err : Result e a -> TestResult
+err result =
+    case result of
+        Err _ ->
+            Passed
+
+        Ok v ->
+            Failed ("expected Err but got Ok " ++ errorToString v)
+
+
+isTrue : Bool -> TestResult
+isTrue b =
+    case b of
+        True ->
+            Passed
+
+        False ->
+            Failed "expected True but got False"
+
+
+isFalse : Bool -> TestResult
+isFalse b =
+    case b of
+        False ->
+            Passed
+
+        True ->
+            Failed "expected False but got True"
+
+
+-- ─── Runner ──────────────────────────────────────────────────────────────────
+
+
+run : List Test -> List ( String, TestResult )
+run tests =
+    runWithPrefix "" tests
+
+
+runWithPrefix : String -> List Test -> List ( String, TestResult )
+runWithPrefix prefix tests =
+    List.concat
+        (List.map
+            (\t ->
+                case t of
+                    Leaf name thunk ->
+                        [ ( prefix ++ name, thunk () ) ]
+
+                    Suite name inner ->
+                        let
+                            nextPrefix =
+                                if prefix == "" then
+                                    name ++ " > "
+                                else
+                                    prefix ++ name ++ " > "
+                        in
+                        runWithPrefix nextPrefix inner)
+            tests)
+
+
+summarise : List ( String, TestResult ) -> Bool
+summarise results =
+    let
+        failures =
+            List.concatMap
+                (\pair ->
+                    case pair of
+                        ( _, Passed ) ->
+                            []
+
+                        ( name, Failed _ ) ->
+                            [ name ])
+                results
+
+        failCount =
+            List.length failures
+    in
+    failCount == 0
+
+
+runMain : List Test -> Task Error ()
+runMain tests =
+    let
+        results =
+            run tests
+
+        allPassed =
+            summarise results
+    in
+    if allPassed then
+        System.exit 0
+    else
+        System.exit 1
