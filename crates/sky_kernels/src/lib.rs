@@ -43,6 +43,8 @@ pub enum KernelClass {
     Tui,
     /// `Std.Webview` app-entry kernel (M7).
     Webview,
+    /// `Std.Cli` / `Sky.Cli` app-entry kernel (#111).
+    Cli,
     /// Reserved for the FFI kernel tier (Phase B+).
     Ffi,
 }
@@ -820,6 +822,29 @@ pub enum StdlibKernel {
     FontHoverSize, // Int → Attr pseudo
     // Html.Attributes — tabindex
     HtmlAttrTabindex, // Int → HtmlAttr
+    // ── #111: Effect stdlib modules ────────────────────────────────────────
+    // Std.Cli / Sky.Cli — line-oriented TEA app-entry (fully wired).
+    CliProgram,
+    // Std.Auth / Sky.Auth — authentication helpers (fail-closed: no lower arm
+    // yet → SKY-L0108 at lower time; qualified registration removes N0004).
+    AuthHashPassword,
+    AuthHashPasswordCost,
+    AuthVerifyPassword,
+    AuthPasswordStrength,
+    AuthSignToken,
+    AuthVerifyToken,
+    AuthRegister,
+    AuthLogin,
+    AuthSetRole,
+    // Sky.Http.Server.Stream — server-side streaming HTTP (fail-closed).
+    StreamStream,
+    StreamEmit,
+    StreamFinish,
+    StreamWithContentType,
+    // Sky.Core.Http.Stream — client-side HTTP streaming (fail-closed).
+    HttpStreamOpen,
+    HttpStreamForEachChunk,
+    HttpStreamClose,
 }
 
 impl StdlibKernel {
@@ -1660,6 +1685,36 @@ impl StdlibKernel {
             Self::FontHoverSize => d("Font", "hoverSize", 1, Ui, "ui_font_hover_size_"),
             // Html.Attributes
             Self::HtmlAttrTabindex => d("Attr", "tabindex", 1, Ui, "html_attr_tabindex_"),
+            // ── #111: Effect stdlib modules ────────────────────────────────────
+            // Std.Cli / Sky.Cli app-entry (fully wired, Phase 1).
+            Self::CliProgram => d("Cli", "program", 1, KernelClass::Cli, "cli_program"),
+            // Std.Auth / Sky.Auth (fail-closed: qual-registered only, no lower arm).
+            Self::AuthHashPassword => d("Auth", "hashPassword", 1, Pure, "auth_hash_password"),
+            Self::AuthHashPasswordCost => {
+                d("Auth", "hashPasswordCost", 2, Pure, "auth_hash_password_cost")
+            }
+            Self::AuthVerifyPassword => d("Auth", "verifyPassword", 2, Pure, "auth_verify_password"),
+            Self::AuthPasswordStrength => {
+                d("Auth", "passwordStrength", 1, Pure, "auth_password_strength")
+            }
+            Self::AuthSignToken => d("Auth", "signToken", 3, Pure, "auth_sign_token"),
+            Self::AuthVerifyToken => d("Auth", "verifyToken", 2, Pure, "auth_verify_token"),
+            Self::AuthRegister => d("Auth", "register", 3, Pure, "auth_register"),
+            Self::AuthLogin => d("Auth", "login", 3, Pure, "auth_login"),
+            Self::AuthSetRole => d("Auth", "setRole", 3, Pure, "auth_set_role"),
+            // Sky.Http.Server.Stream (fail-closed: qual-registered only, no lower arm).
+            Self::StreamStream => d("Stream", "stream", 2, Server, "server_stream_stream"),
+            Self::StreamEmit => d("Stream", "emit", 2, Server, "server_stream_emit"),
+            Self::StreamFinish => d("Stream", "finish", 1, Server, "server_stream_finish"),
+            Self::StreamWithContentType => {
+                d("Stream", "withContentType", 2, Server, "server_stream_with_content_type")
+            }
+            // Sky.Core.Http.Stream (fail-closed: qual-registered only, no lower arm).
+            Self::HttpStreamOpen => d("HttpStream", "open", 1, Pure, "http_stream_open"),
+            Self::HttpStreamForEachChunk => {
+                d("HttpStream", "forEachChunk", 2, Pure, "http_stream_for_each_chunk")
+            }
+            Self::HttpStreamClose => d("HttpStream", "close", 1, Pure, "http_stream_close"),
         }
     }
 
@@ -2338,6 +2393,24 @@ impl StdlibKernel {
         Self::FontDisabledColor,
         Self::FontHoverSize,
         Self::HtmlAttrTabindex,
+        // ── #111: Effect stdlib modules ────────────────────────────────────────
+        Self::CliProgram,
+        Self::AuthHashPassword,
+        Self::AuthHashPasswordCost,
+        Self::AuthVerifyPassword,
+        Self::AuthPasswordStrength,
+        Self::AuthSignToken,
+        Self::AuthVerifyToken,
+        Self::AuthRegister,
+        Self::AuthLogin,
+        Self::AuthSetRole,
+        Self::StreamStream,
+        Self::StreamEmit,
+        Self::StreamFinish,
+        Self::StreamWithContentType,
+        Self::HttpStreamOpen,
+        Self::HttpStreamForEachChunk,
+        Self::HttpStreamClose,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────
@@ -2951,6 +3024,12 @@ impl StdlibKernel {
     #[must_use]
     pub const fn is_webview(self) -> bool {
         matches!(self, Self::WebviewApp)
+    }
+
+    /// `true` when this variant is the `Std.Cli` / `Sky.Cli` app-entry kernel (#111).
+    #[must_use]
+    pub const fn is_cli(self) -> bool {
+        matches!(self, Self::CliProgram)
     }
 
     /// `true` when this variant belongs to the `Sky.Core.CssSafety` leaf
