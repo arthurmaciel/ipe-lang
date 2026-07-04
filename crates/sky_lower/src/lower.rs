@@ -2009,18 +2009,54 @@ impl<'a> Lowerer<'a> {
                 })
             }
             canon::Def::Untyped { patterns, body, .. } => {
-                if !patterns.is_empty() {
-                    // An unannotated top-level binding with parameters: the M0
-                    // lowerer needs the annotation's arrows to type its params.
-                    // [SKY-L0106, feature: untyped-functions]
-                    return Err(unsupported(sig_span, Feature::UntypedFunctions));
-                }
-                let ret_ty = self
+                // Read the HM-solved type once; both the parameterless and the
+                // parameterised paths need it.
+                let solved_ty = self
                     .types
                     .env
                     .get(&(def.home().to_vec(), name))
-                    .ok_or_else(|| bug("sky_lower::lower_def", "no inferred type for binding"))?;
-                let ret = self.ir_type_from_ty(ret_ty, sig_span)?;
+                    .ok_or_else(|| {
+                        bug("sky_lower::lower_def", "no inferred type for unannotated fn")
+                    })?;
+                if !patterns.is_empty() {
+                    // An unannotated top-level function: synthesise the typed
+                    // parameter/return split from the HM-solved type, mirroring
+                    // what `split_typed_sig` does for annotated bindings.
+                    // Concrete solved types lower cleanly; a free `Ty::Var` in
+                    // a parameter or return position surfaces as
+                    // `Feature::Polymorphism` (SKY-L0102) rather than emitting
+                    // unsound `any`-shaped parameters — fail-closed by design.
+                    let (params, prologue, ret) =
+                        self.split_unannotated_sig(solved_ty, patterns, sig_span)?;
+                    let mut lowered_body = self.lower_expr(body)?;
+                    // Fold destructuring prologues outermost-first (reverse)
+                    // so the first parameter's destructure is the outer binding.
+                    for (binder_sym, binder_pat) in prologue.into_iter().rev() {
+                        lowered_body = Expr::Destructure {
+                            binder: binder_pat,
+                            value: Box::new(Expr::Var(binder_sym)),
+                            body: Box::new(lowered_body),
+                        };
+                    }
+                    // No source-level type variables → no type_params (the
+                    // function is monomorphic).  TCO still applies.
+                    let arity = params.len();
+                    if analyze_tail_recursion(id, arity, &lowered_body)
+                        == TailRecursion::TailRecursive
+                    {
+                        lowered_body = rewrite_tail_calls(id, arity, params.clone(), lowered_body);
+                    }
+                    return Ok(Func {
+                        id,
+                        name,
+                        home: ModPath(def.home().to_vec()),
+                        type_params: Vec::new(),
+                        params,
+                        ret,
+                        body: lowered_body,
+                    });
+                }
+                let ret = self.ir_type_from_ty(solved_ty, sig_span)?;
                 Ok(Func {
                     id,
                     name,
@@ -2100,6 +2136,48 @@ impl<'a> Lowerer<'a> {
             set = set.with_copy();
         }
         set
+    }
+
+    /// Like [`split_typed_sig`] but operates on a SOLVED [`Ty`] instead of a
+    /// parsed `canon::Type` annotation.  Used for unannotated top-level
+    /// functions whose complete type the HM solver has inferred — it peels the
+    /// `Ty::Fun` chain one step per parameter pattern and converts each layer
+    /// with [`ir_type_from_ty`].
+    ///
+    /// A free [`Ty::Var`] in a parameter or return position surfaces as
+    /// [`Feature::Polymorphism`] (SKY-L0102): the unannotated function is
+    /// polymorphic, and the backend has no source-level name with which to
+    /// emit a `<T>` generic.  Fail-closed — never emits unsound `any`-shaped
+    /// parameters.
+    ///
+    /// An arity mismatch (fewer arrows than patterns) is an invariant
+    /// violation — the type checker rejects this shape first (arity mismatch →
+    /// T0001), so reaching it here is a compiler bug.
+    fn split_unannotated_sig(
+        &self,
+        ty: &Ty,
+        patterns: &[canon::Pattern],
+        span: Span,
+    ) -> DResult<(Vec<IrParam>, Vec<ParamPrologue>, IrType)> {
+        let mut cur = ty;
+        let mut params = Vec::with_capacity(patterns.len());
+        let mut prologue = Vec::new();
+        for pat in patterns {
+            let Ty::Fun(arg, rest) = cur else {
+                return Err(bug(
+                    "sky_lower::split_unannotated_sig",
+                    "solved type has fewer arrows than parameters",
+                ));
+            };
+            let ir_ty = self.ir_type_from_ty(arg, span)?;
+            let (param, maybe_prologue) = self.lower_param(pat, ir_ty)?;
+            params.push(param);
+            if let Some(p) = maybe_prologue {
+                prologue.push(p);
+            }
+            cur = rest.as_ref();
+        }
+        Ok((params, prologue, self.ir_type_from_ty(cur, span)?))
     }
 
     /// Split a typed binding's arrow annotation into one [`IrType`] per

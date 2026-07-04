@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use sky_canon::ast as canon;
 use sky_diagnostics::{
-    Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0101, SKY_L0102, SKY_L0106,
+    Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0101, SKY_L0102,
     SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0119, Span,
 };
 use sky_intern::{Interner, Symbol};
@@ -125,8 +125,12 @@ fn func_named<'a>(
         .find(|f| interner.resolve(f.name) == Some(name))
 }
 
+/// An unannotated function whose solved type is polymorphic (`f : T0 -> T0`)
+/// cannot be lowered without a source-level name for the generic: the backend
+/// surfaces `Feature::Polymorphism` (SKY-L0102) rather than emitting unsound
+/// `any`-shaped parameters.
 #[test]
-fn untyped_function_with_parameters() -> DResult<()> {
+fn unannotated_fn_with_polymorphic_solved_type_fails_with_polymorphism() -> DResult<()> {
     let mut i = Interner::new();
     let f = i.intern("f")?;
     let x = i.intern("x")?;
@@ -138,12 +142,65 @@ fn untyped_function_with_parameters() -> DResult<()> {
         patterns,
         body: int(Span::new(14, 15), 0),
     };
-    // The binding's name span is blamed.
+    // Supply a polymorphic solved type `T0 -> T0` in the env.  The lowerer
+    // must peel the Fun, hit `Ty::Var(0)`, and surface Polymorphism rather
+    // than emitting an unsound `any` parameter.
+    let mut env = BTreeMap::new();
+    env.insert(
+        (vec![], f),
+        Ty::Fun(Box::new(Ty::Var(0)), Box::new(Ty::Var(0))),
+    );
     assert_unsupported(
-        run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
-        Feature::UntypedFunctions,
-        SKY_L0106,
+        run(Vec::new(), vec![def], env, &mut i),
+        Feature::Polymorphism,
+        SKY_L0102,
         Span::new(10, 11),
+    );
+    Ok(())
+}
+
+/// An unannotated function with a fully-concrete solved type (`f x = 0`,
+/// solved as `Int -> Int`) lowers cleanly without a type annotation — the
+/// gate that used to emit SKY-L0106 is now lifted for monomorphic bindings.
+#[test]
+fn unannotated_fn_with_concrete_solved_type_lowers_cleanly() -> DResult<()> {
+    let mut i = Interner::new();
+    let f = i.intern("f")?;
+    let x = i.intern("x")?;
+    let int_sym = i.intern("Int")?;
+    let ty_int = Ty::Con {
+        module: vec![],
+        name: int_sym,
+        args: vec![],
+    };
+    let name = Located::new(Span::new(10, 11), f);
+    let patterns = vec![Located::new(Span::new(12, 13), canon::Pattern_::PVar(x))];
+    let def = canon::Def::Untyped {
+        home: vec![],
+        name,
+        patterns,
+        body: int(Span::new(14, 15), 0),
+    };
+    // Solved type `Int -> Int` in the env.
+    let mut env = BTreeMap::new();
+    env.insert(
+        (vec![], f),
+        Ty::Fun(Box::new(ty_int.clone()), Box::new(ty_int)),
+    );
+    let res = run(Vec::new(), vec![def], env, &mut i);
+    let func = single_func(&res)
+        .expect("unannotated monomorphic fn must lower cleanly without a type annotation");
+    assert_eq!(func.params.len(), 1, "one typed param expected: {res:?}");
+    let param_ty = func.params.first().map(|(_, t)| t);
+    assert_eq!(
+        param_ty,
+        Some(&IrType::Int),
+        "param type must be Int (from solved env)"
+    );
+    assert_eq!(func.ret, IrType::Int, "return type must be Int");
+    assert!(
+        func.type_params.is_empty(),
+        "monomorphic function must have no type_params"
     );
     Ok(())
 }
