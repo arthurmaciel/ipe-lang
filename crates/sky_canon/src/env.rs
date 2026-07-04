@@ -453,6 +453,9 @@ impl Env {
                     "zip",
                     "isEmpty",
                     "cons",
+                    // ── List batch (#119) ────────────────────────────────────
+                    "filterMap",
+                    "sortBy",
                 ],
             ),
             (

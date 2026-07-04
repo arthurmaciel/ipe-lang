@@ -1,0 +1,20 @@
+module Main exposing (main)
+
+-- #119 seal — List.filterMap : (a -> Maybe b) -> List a -> List b
+-- Applies f to each element, keeps only Just results, unwraps them.
+
+import Sky.Core.Prelude exposing (..)
+
+parsePositive : Int -> Maybe String
+parsePositive n =
+    if n > 0 then
+        Just (String.fromInt n)
+    else
+        Nothing
+
+main =
+    let
+        inputs = [ -1, 2, 0, 5, -3, 10 ]
+        results = List.filterMap parsePositive inputs
+    in
+    println (String.join "," results)

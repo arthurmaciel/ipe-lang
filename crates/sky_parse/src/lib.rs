@@ -32,6 +32,10 @@ pub fn parse_module(src: &str, interner: &mut Interner) -> DResult<Module> {
 }
 
 #[cfg(test)]
+// Triple-string lexer tests use `toks[0]` after asserting `toks.len() == 1`.
+// The index is provably in-bounds at that point; suppressing the lint is
+// cleaner than restructuring all assertions.
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use sky_syntax::{Exposed, Exposing, Expr_, Pattern_, TypeAnnotation, Value};
