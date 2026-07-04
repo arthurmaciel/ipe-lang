@@ -1088,6 +1088,197 @@ const fn unsupported(span: Span, feature: Feature) -> Diagnostic {
     }
 }
 
+/// Does this pattern bind the symbol `target`?
+///
+/// Used by [`rewrite_var_to_apply`] to detect shadow bindings — when a
+/// pattern in a `let`-destructure / `case` arm / lambda rebinds `target`,
+/// `Var(target)` reads inside that scope are NOT references to the outer
+/// thunk binding and must NOT be rewritten.
+fn pat_binds_symbol(pat: &Pat, target: Symbol) -> bool {
+    match pat {
+        Pat::Var(s) => *s == target,
+        Pat::Wildcard
+        | Pat::Int(_)
+        | Pat::Bool(_)
+        | Pat::Char(_)
+        | Pat::Str(_) => false,
+        Pat::Alias(inner, s) => *s == target || pat_binds_symbol(inner, target),
+        Pat::Ctor { args, .. } => args.iter().any(|p| pat_binds_symbol(p, target)),
+        Pat::Tuple(elems) => elems.iter().any(|p| pat_binds_symbol(p, target)),
+        Pat::Record(fields) => fields.iter().any(|(_, p)| pat_binds_symbol(p, target)),
+        Pat::Slice { prefix, rest } => {
+            prefix.iter().any(|p| pat_binds_symbol(p, target))
+                || rest.as_deref().is_some_and(|p| pat_binds_symbol(p, target))
+        }
+    }
+}
+
+/// Rewrite every free `Expr::Var(target)` in `expr` to
+/// `Expr::Apply { func: Var(target), args: [] }` (emitted as `(target)()`).
+///
+/// This is the read-site half of the Decoder thunk rewrite (F2 in
+/// `docs/architecture/seal-jsondecp-design.md` §5.C): after
+/// [`Lowerer::lower_let`] wraps a Decoder-typed binding value in a zero-arg
+/// lambda, every read of that binding must call the thunk to obtain a fresh
+/// `Decoder` value.
+///
+/// Shadow-safe: stops rewriting into any scope where `target` is rebound by:
+/// * `Expr::Let { name, … }` — `name == target` shadows in `body`
+/// * `Expr::Destructure { binder, … }` — `binder` binds `target`
+/// * `Expr::Lambda { params, … }` — a param named `target`
+/// * `Expr::Match` arms — an arm's `pat` binds `target`
+///
+/// `value` is never rewritten inside a `Let` (it is evaluated in the outer
+/// scope, matching the `let` scoping rule), and the thunk's own body (the
+/// decoder expression) is also in the outer scope and is already correct.
+#[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
+fn rewrite_var_to_apply(target: Symbol, expr: Expr) -> Expr {
+    match expr {
+        Expr::Var(s) if s == target => Expr::Apply {
+            func: Box::new(Expr::Var(s)),
+            args: vec![],
+        },
+        Expr::Var(_)
+        | Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => expr,
+        Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
+            op,
+            lhs: Box::new(rewrite_var_to_apply(target, *lhs)),
+            rhs: Box::new(rewrite_var_to_apply(target, *rhs)),
+        },
+        // `let name = value in body` — `value` is outer-scope; `body` is
+        // inner-scope but the shadow check applies.
+        Expr::Let { name, value, body } => {
+            let new_value = Box::new(rewrite_var_to_apply(target, *value));
+            let new_body = if name == target {
+                // `target` is shadowed; reads in body are the new binding.
+                body
+            } else {
+                Box::new(rewrite_var_to_apply(target, *body))
+            };
+            Expr::Let {
+                name,
+                value: new_value,
+                body: new_body,
+            }
+        }
+        Expr::Destructure { binder, value, body } => {
+            let new_value = Box::new(rewrite_var_to_apply(target, *value));
+            let new_body = if pat_binds_symbol(&binder, target) {
+                body
+            } else {
+                Box::new(rewrite_var_to_apply(target, *body))
+            };
+            Expr::Destructure {
+                binder,
+                value: new_value,
+                body: new_body,
+            }
+        }
+        Expr::If { cond, then_, else_ } => Expr::If {
+            cond: Box::new(rewrite_var_to_apply(target, *cond)),
+            then_: Box::new(rewrite_var_to_apply(target, *then_)),
+            else_: Box::new(rewrite_var_to_apply(target, *else_)),
+        },
+        Expr::Match(m) => {
+            let (scrutinee, arms) = m.into_parts();
+            let new_scrutinee = Box::new(rewrite_var_to_apply(target, *scrutinee));
+            let new_arms = arms
+                .into_iter()
+                .map(|arm| {
+                    let new_body = if pat_binds_symbol(&arm.pat, target) {
+                        arm.body
+                    } else {
+                        rewrite_var_to_apply(target, arm.body)
+                    };
+                    Arm {
+                        pat: arm.pat,
+                        body: new_body,
+                    }
+                })
+                .collect();
+            Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms))
+        }
+        Expr::Call { callee, args } => Expr::Call {
+            callee,
+            args: args
+                .into_iter()
+                .map(|a| rewrite_var_to_apply(target, a))
+                .collect(),
+        },
+        Expr::Tuple(items) => {
+            Expr::Tuple(items.into_iter().map(|e| rewrite_var_to_apply(target, e)).collect())
+        }
+        Expr::List { elem, items } => Expr::List {
+            elem,
+            items: items.into_iter().map(|e| rewrite_var_to_apply(target, e)).collect(),
+        },
+        Expr::Cons { head, tail } => Expr::Cons {
+            head: Box::new(rewrite_var_to_apply(target, *head)),
+            tail: Box::new(rewrite_var_to_apply(target, *tail)),
+        },
+        Expr::Record(fields) => Expr::Record(
+            fields
+                .into_iter()
+                .map(|(sym, e)| (sym, rewrite_var_to_apply(target, e)))
+                .collect(),
+        ),
+        Expr::Access { record, field } => Expr::Access {
+            record: Box::new(rewrite_var_to_apply(target, *record)),
+            field,
+        },
+        Expr::Update { record, fields } => Expr::Update {
+            record: Box::new(rewrite_var_to_apply(target, *record)),
+            fields: fields
+                .into_iter()
+                .map(|(sym, e)| (sym, rewrite_var_to_apply(target, e)))
+                .collect(),
+        },
+        Expr::Lambda { params, ret, body } => {
+            let new_body = if params.iter().any(|(s, _)| *s == target) {
+                body
+            } else {
+                Box::new(rewrite_var_to_apply(target, *body))
+            };
+            Expr::Lambda { params, ret, body: new_body }
+        }
+        Expr::Apply { func, args } => Expr::Apply {
+            func: Box::new(rewrite_var_to_apply(target, *func)),
+            args: args.into_iter().map(|a| rewrite_var_to_apply(target, a)).collect(),
+        },
+        Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
+            effect: Box::new(rewrite_var_to_apply(target, *effect)),
+            rest: Box::new(rewrite_var_to_apply(target, *rest)),
+        },
+        Expr::Ctor { home, ty, variant, args } => Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args: args.into_iter().map(|a| rewrite_var_to_apply(target, a)).collect(),
+        },
+        // TailLoop/TailRecur are produced by a separate TCO pass that runs
+        // AFTER lower_let, so they never appear in the IR at the point this
+        // rewrite runs. The `_ => expr` below keeps the match exhaustive-
+        // compatible with future IR additions (they're also leaf-like).
+        Expr::TailLoop { params, body } => {
+            let new_body = if params.iter().any(|(s, _)| *s == target) {
+                body
+            } else {
+                Box::new(rewrite_var_to_apply(target, *body))
+            };
+            Expr::TailLoop { params, body: new_body }
+        }
+        Expr::TailRecur { args } => Expr::TailRecur {
+            args: args.into_iter().map(|a| rewrite_var_to_apply(target, a)).collect(),
+        },
+    }
+}
+
 /// The lowering pass over a single canonical module.
 pub struct Lowerer<'a> {
     m: &'a canon::Module,
@@ -5971,16 +6162,62 @@ impl<'a> Lowerer<'a> {
         )
     }
 
+    /// Return `Some(IrType::Decoder(inner))` when the solved type at `span` is
+    /// `Decoder T`, or `None` for any other type (including unsolvable inner
+    /// types, which will surface as diagnostics at emit time).
+    ///
+    /// Used by [`lower_let`] to decide whether a named binding should be thunked
+    /// into a zero-arg lambda so the value can be rebuilt per use (F2 — Decoder
+    /// is `!Clone` and `decode_from_json_string` consumes it by value).
+    fn decoder_ir_type(&self, span: Span) -> Option<IrType> {
+        let ty = self.types.regions.get(&span)?;
+        let Ty::Con { name, args, .. } = ty else {
+            return None;
+        };
+        if self.interner.resolve(*name).is_none_or(|n| n != "Decoder") {
+            return None;
+        }
+        let inner_ty = args.first()?;
+        // If the inner type cannot be lowered (e.g. it is a polymorphic variable
+        // the M0 lowerer cannot yet handle), return None — the binding will
+        // proceed through the standard path and surface the real diagnostic.
+        self.ir_type_from_ty(inner_ty, span)
+            .ok()
+            .map(|inner| IrType::Decoder(Box::new(inner)))
+    }
+
     fn lower_let(&self, bindings: &[canon::LetBinding], body: &canon::Expr) -> DResult<Expr> {
         let mut acc = self.lower_expr(body)?;
         for b in bindings.iter().rev() {
             let value = self.lower_expr(&b.body)?;
             acc = match &b.pat.value {
-                canon::Pattern_::PVar(name) => Expr::Let {
-                    name: *name,
-                    value: Box::new(value),
-                    body: Box::new(acc),
-                },
+                canon::Pattern_::PVar(name) => {
+                    // F2 — Decoder thunk: `Decoder` is `!Clone` and every
+                    // function that consumes it does so by value.  When the
+                    // binding's solved type is `Decoder T`, wrap the value in a
+                    // zero-arg lambda so the decoder is rebuilt on each use, and
+                    // rewrite every `Var(name)` read in the body to
+                    // `Apply(Var(name), [])` (emitted as `(d)()`).
+                    if let Some(dec_ty) = self.decoder_ir_type(b.body.span) {
+                        let thunk = Expr::Lambda {
+                            params: vec![],
+                            ret: dec_ty,
+                            body: Box::new(value),
+                        };
+                        let thunked_body = rewrite_var_to_apply(*name, acc);
+                        Expr::Let {
+                            name: *name,
+                            value: Box::new(thunk),
+                            body: Box::new(thunked_body),
+                        }
+                    } else {
+                        Expr::Let {
+                            name: *name,
+                            value: Box::new(value),
+                            body: Box::new(acc),
+                        }
+                    }
+                }
                 // F1 (auto-force): `let _ = <task>` — if the discarded value is
                 // Task-typed, sequence it via `TaskSeq` so the future is awaited
                 // rather than silently dropped. Non-Task wildcards keep the plain
