@@ -4913,6 +4913,17 @@ mod registry_phase_c_tests {
             K::RegionLabel,
             K::RegionAnnounce,
             K::RegionAnnounceUrgently,
+            // ── Ui.input + Ui.describe batch ──
+            K::UiInput,
+            K::UiDescribe,
+            K::UiDescMain,
+            K::UiDescNavigation,
+            K::UiDescContentInfo,
+            K::UiDescComplementary,
+            K::UiDescLivePolite,
+            K::UiDescLiveAssertive,
+            K::UiDescHeading,
+            K::UiDescLabel,
         ]
     };
 
