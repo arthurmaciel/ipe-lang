@@ -4444,6 +4444,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FontBlack
                 | KernelFn::FontUnderline
                 | KernelFn::FontNoDecoration
+                | KernelFn::FontLineThrough
                 | KernelFn::FontAlignLeft
                 | KernelFn::FontAlignRight
                 | KernelFn::FontCenter
@@ -4655,6 +4656,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiWrappedRow
                 // `Ui.grid : List (Attribute msg) -> List (Element msg) -> Element msg`
                 | KernelFn::UiGrid
+                // `Ui.button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } -> Element msg`
+                | KernelFn::UiButton
                 // `Ui.paddingXY : Int -> Int -> Attribute msg`
                 | KernelFn::UiPaddingXY
                 // `Ui.minimum : Int -> Length -> Length`
@@ -5374,6 +5377,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "column") => Ok(Callee::Kernel(KernelFn::UiColumn)),
                     ("Ui", "wrappedRow") => Ok(Callee::Kernel(KernelFn::UiWrappedRow)),
                     ("Ui", "grid") => Ok(Callee::Kernel(KernelFn::UiGrid)),
+                    ("Ui", "button") => Ok(Callee::Kernel(KernelFn::UiButton)),
                     // ── M7: Std.Ui attribute builders ─────────────────────────
                     ("Ui", "spacing") => Ok(Callee::Kernel(KernelFn::UiSpacing)),
                     ("Ui", "padding") => Ok(Callee::Kernel(KernelFn::UiPadding)),
@@ -5598,6 +5602,7 @@ impl<'a> Lowerer<'a> {
                     ("Font", "black") => Ok(Callee::Kernel(KernelFn::FontBlack)),
                     ("Font", "underline") => Ok(Callee::Kernel(KernelFn::FontUnderline)),
                     ("Font", "noDecoration") => Ok(Callee::Kernel(KernelFn::FontNoDecoration)),
+                    ("Font", "lineThrough") => Ok(Callee::Kernel(KernelFn::FontLineThrough)),
                     ("Font", "letterSpacing") => Ok(Callee::Kernel(KernelFn::FontLetterSpacing)),
                     ("Font", "wordSpacing") => Ok(Callee::Kernel(KernelFn::FontWordSpacing)),
                     ("Font", "alignLeft") => Ok(Callee::Kernel(KernelFn::FontAlignLeft)),

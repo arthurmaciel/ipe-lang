@@ -599,6 +599,7 @@ pub enum StdlibKernel {
     UiColumn,
     UiWrappedRow,
     UiGrid,
+    UiButton, // (List Attr, { onPress : Maybe msg, label : Element msg }) → Element msg
     // ── M7: Std.Ui attribute builders ────────────────────────────────────────
     UiSpacing,
     UiPadding,
@@ -818,6 +819,7 @@ pub enum StdlibKernel {
     // Font namespace — decoration
     FontUnderline,     // nullary (AttrFontUnderline)
     FontNoDecoration,  // nullary (AttrFontDecoration("none"))
+    FontLineThrough,   // nullary (AttrFontDecoration("line-through"))
     // Font namespace — spacing (Float → Attr)
     FontLetterSpacing, // Float → Attr (AttrFontLetterSpacing)
     FontWordSpacing,   // Float → Attr (AttrFontWordSpacing)
@@ -1474,6 +1476,7 @@ impl StdlibKernel {
             Self::UiColumn => d("Ui", "column", 2, Ui, "ui_column_"),
             Self::UiWrappedRow => d("Ui", "wrappedRow", 2, Ui, "ui_wrapped_row_"),
             Self::UiGrid => d("Ui", "grid", 2, Ui, "ui_grid_"),
+            Self::UiButton => d("Ui", "button", 2, Ui, "ui_button_"),
             // ── M7: Std.Ui attribute builders ────────────────────────────────
             Self::UiSpacing => d("Ui", "spacing", 1, Ui, "ui_spacing_"),
             Self::UiPadding => d("Ui", "padding", 1, Ui, "ui_padding_"),
@@ -1704,6 +1707,7 @@ impl StdlibKernel {
             Self::FontBlack => d("Font", "black", 0, Ui, "ui_font_black_"),
             Self::FontUnderline => d("Font", "underline", 0, Ui, "ui_font_underline_"),
             Self::FontNoDecoration => d("Font", "noDecoration", 0, Ui, "ui_font_no_decoration_"),
+            Self::FontLineThrough => d("Font", "lineThrough", 0, Ui, "ui_font_line_through_"),
             Self::FontLetterSpacing => d("Font", "letterSpacing", 1, Ui, "ui_font_letter_spacing_"),
             Self::FontWordSpacing => d("Font", "wordSpacing", 1, Ui, "ui_font_word_spacing_"),
             Self::FontAlignLeft => d("Font", "alignLeft", 0, Ui, "ui_font_align_left_"),
@@ -2228,6 +2232,7 @@ impl StdlibKernel {
         Self::UiColumn,
         Self::UiWrappedRow,
         Self::UiGrid,
+        Self::UiButton,
         // M7: Ui attribute builders
         Self::UiSpacing,
         Self::UiPadding,
@@ -2434,6 +2439,7 @@ impl StdlibKernel {
         Self::FontBlack,
         Self::FontUnderline,
         Self::FontNoDecoration,
+        Self::FontLineThrough,
         Self::FontLetterSpacing,
         Self::FontWordSpacing,
         Self::FontAlignLeft,
@@ -2638,6 +2644,7 @@ impl StdlibKernel {
                 | Self::UiColumn
                 | Self::UiWrappedRow
                 | Self::UiGrid
+                | Self::UiButton
                 | Self::UiSpacing
                 | Self::UiPadding
                 | Self::UiPaddingXY
@@ -2816,6 +2823,7 @@ impl StdlibKernel {
                 | Self::FontBlack
                 | Self::FontUnderline
                 | Self::FontNoDecoration
+                | Self::FontLineThrough
                 | Self::FontLetterSpacing
                 | Self::FontWordSpacing
                 | Self::FontAlignLeft
