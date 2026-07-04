@@ -225,7 +225,14 @@ def normalize(path):
     p = Norm()
     p.feed(root)
     p.close()
-    return re.sub(r'>(?=<)', '>\n', ''.join(p.out))
+    # Insert newlines between adjacent tags for readability, then strip blank
+    # lines. Blank lines arise from whitespace text nodes that surrounded
+    # suppressed Go <style> delivery children; stripping them is safe (blank
+    # lines are never semantically significant in HTML) and necessary so the
+    # Go output with <style>-adjacent whitespace compares equal to the Rust
+    # output that never had those <style> children.
+    raw = re.sub(r'>(?=<)', '>\n', ''.join(p.out))
+    return '\n'.join(line for line in raw.splitlines() if line.strip())
 
 
 if __name__ == '__main__':
