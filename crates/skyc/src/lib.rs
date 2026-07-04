@@ -650,13 +650,13 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
         find_manifest_for_sky_file(&entry_path)
     };
 
-    match manifest {
-        Some(m) => build_project(&m, &out_dir, &runtime_dir),
-        // No sky.toml found: compile entry + all sibling .sky files in the
-        // same directory. Byte-identical to `build` when the directory holds
-        // only the entry file (regression-covered by the golden suite).
-        None => build_with_sibling_discovery(&entry_path, &out_dir, &runtime_dir),
-    }
+    // No sky.toml found: compile entry + all sibling .sky files in the
+    // same directory. Byte-identical to `build` when the directory holds
+    // only the entry file (regression-covered by the golden suite).
+    manifest.map_or_else(
+        || build_with_sibling_discovery(&entry_path, &out_dir, &runtime_dir),
+        |m| build_project(&m, &out_dir, &runtime_dir),
+    )
 }
 
 /// `skyc explain [<CODE>]`. No argument prints the one-line index of every code

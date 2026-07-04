@@ -1,0 +1,21 @@
+module Main exposing (main)
+
+-- #119 seal — List.sortBy : (a -> comparable) -> List a -> List a
+-- Stable sort by a key projection. Preserves insertion order for equal keys.
+
+import Sky.Core.Prelude exposing (..)
+
+type alias Person =
+    { name : String, age : Int }
+
+main =
+    let
+        people =
+            [ { name = "Charlie", age = 30 }
+            , { name = "Alice", age = 25 }
+            , { name = "Bob", age = 25 }
+            ]
+        sorted = List.sortBy (\p -> p.age) people
+        names = List.map (\p -> p.name) sorted
+    in
+    println (String.join "," names)
