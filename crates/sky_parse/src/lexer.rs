@@ -406,13 +406,29 @@ fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     }
 }
 
-/// Lex a single-line string literal `"…"`. The opening `"` is the current char.
-/// Escape sequences are resolved into the runtime value; an unrecognised escape
-/// is kept verbatim (backslash + char) so a typo surfaces as wrong text rather
-/// than lost data, matching the Go reference's `unescapeString`. Reaching end of
-/// input before the closing `"` is [`ParseError::UnterminatedString`].
+/// Lex a string literal.  The opening `"` is the current character.
+///
+/// If the next two characters are also `"` (i.e. the source spells `"""`),
+/// dispatches to [`lex_triple_string`] which terminates only on a closing
+/// `"""`. Otherwise lexes a single-line `"…"` string: escape sequences are
+/// resolved into the runtime value; an unrecognised escape is kept verbatim
+/// (backslash + char) so a typo surfaces as wrong text rather than lost data,
+/// matching the Go reference's `unescapeString`. Reaching end of input before
+/// the closing `"` is [`ParseError::UnterminatedString`].
 fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     lx.advance(); // consume opening `"`
+
+    // Detect triple-quoted string `"""…"""`.
+    // After consuming the first `"`, a second and third `"` immediately
+    // following means we are opening a multiline string, not an empty `""`
+    // followed by a third `"`.
+    if lx.peek() == Some('"') && lx.peek2() == Some('"') {
+        lx.advance(); // consume second `"`
+        lx.advance(); // consume third `"`
+        return lex_triple_string(lx, lo);
+    }
+
+    // Single-line string `"…"`.
     let mut value = String::new();
     loop {
         match lx.peek() {
@@ -430,6 +446,53 @@ fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
             Some('\\') => {
                 lx.advance();
                 push_escape(lx, &mut value);
+            }
+            Some(c) => {
+                value.push(c);
+                lx.advance();
+            }
+        }
+    }
+}
+
+/// Lex a triple-quoted string `"""…"""`.  The opening `"""` has already been
+/// consumed by [`lex_string`].
+///
+/// The closing terminator is exactly three consecutive `"` characters.  A lone
+/// `"` or a pair `""` not followed by a third `"` is treated as literal content
+/// — this is the critical invariant that fixes the bug where inline HTML
+/// (`class="card"`) terminated the string early.
+///
+/// Raw content is returned without escape processing: `{{expr}}` interpolation,
+/// `\{{` literal-brace escapes, and `\\` collapse are handled downstream by the
+/// canonicaliser (mirroring `Sky.Parse.String.findTripleClose` in the Haskell
+/// reference, which performs no escape resolution).
+///
+/// Reaching end of input before `"""` is [`ParseError::UnterminatedString`].
+fn lex_triple_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
+    let mut value = String::new();
+    loop {
+        match lx.peek() {
+            None => {
+                let hi = lx.offset();
+                return Err(Diagnostic::Parse {
+                    span: Span::new(lo, hi),
+                    msg: ParseError::UnterminatedString,
+                });
+            }
+            Some('"') => {
+                // Check whether the current `"` starts the closing `"""`.
+                // peek() is `"` (confirmed by this arm); peek2() and peek3()
+                // must also be `"` for a triple-close.
+                if lx.peek2() == Some('"') && lx.peek3() == Some('"') {
+                    lx.advance(); // consume first `"`  of `"""`
+                    lx.advance(); // consume second `"` of `"""`
+                    lx.advance(); // consume third `"`  of `"""`
+                    return Ok(Tok::Str(value));
+                }
+                // Not a closing triple — this `"` is literal content.
+                value.push('"');
+                lx.advance();
             }
             Some(c) => {
                 value.push(c);
