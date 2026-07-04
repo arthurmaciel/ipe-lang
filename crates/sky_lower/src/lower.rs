@@ -4305,7 +4305,14 @@ impl<'a> Lowerer<'a> {
                 // Font string constants (nullary, return String)
                 | KernelFn::FontSansSerif
                 | KernelFn::FontSerif
-                | KernelFn::FontMonospace,
+                | KernelFn::FontMonospace
+                // ── Std.Ui.Region (#117) — arity-0 attrs ─────────────────────────
+                | KernelFn::RegionMainContent
+                | KernelFn::RegionNavigation
+                | KernelFn::RegionFooter
+                | KernelFn::RegionAside
+                | KernelFn::RegionAnnounce
+                | KernelFn::RegionAnnounceUrgently,
             ) => Ok(0),
             // Arity 1: single-argument pure serialisation / escape helpers.
             Callee::Kernel(
@@ -4479,7 +4486,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FontActiveColor
                 | KernelFn::FontDisabledColor
                 | KernelFn::FontHoverSize
-                | KernelFn::HtmlAttrTabindex,
+                | KernelFn::HtmlAttrTabindex
+                // ── Std.Ui.Region (#117) — arity-1 attrs ─────────────────────────
+                | KernelFn::RegionHeading
+                | KernelFn::RegionLabel,
             ) => Ok(1),
             // Arity 2: `Ui.layout attrs elem`, `Ui.layoutWith cfg elem`,
             //          `Live.route path ctor`, `Live.renderStatic cfg path`.
@@ -5450,6 +5460,19 @@ impl<'a> Lowerer<'a> {
                     ("Font", "disabledColor") => Ok(Callee::Kernel(KernelFn::FontDisabledColor)),
                     ("Font", "hoverSize") => Ok(Callee::Kernel(KernelFn::FontHoverSize)),
                     ("Attr", "tabindex") => Ok(Callee::Kernel(KernelFn::HtmlAttrTabindex)),
+                    // ── #117: Std.Ui.Region sub-module ───────────────────────
+                    ("Region", "mainContent") => {
+                        Ok(Callee::Kernel(KernelFn::RegionMainContent))
+                    }
+                    ("Region", "navigation") => Ok(Callee::Kernel(KernelFn::RegionNavigation)),
+                    ("Region", "footer") => Ok(Callee::Kernel(KernelFn::RegionFooter)),
+                    ("Region", "aside") => Ok(Callee::Kernel(KernelFn::RegionAside)),
+                    ("Region", "heading") => Ok(Callee::Kernel(KernelFn::RegionHeading)),
+                    ("Region", "label") => Ok(Callee::Kernel(KernelFn::RegionLabel)),
+                    ("Region", "announce") => Ok(Callee::Kernel(KernelFn::RegionAnnounce)),
+                    ("Region", "announceUrgently") => {
+                        Ok(Callee::Kernel(KernelFn::RegionAnnounceUrgently))
+                    }
                     // ── M7: Std.Live / Sky.Live app-entry kernels ─────────────
                     ("Live", "app") => Ok(Callee::Kernel(KernelFn::LiveApp)),
                     ("Live", "appRouted") => Ok(Callee::Kernel(KernelFn::LiveAppRouted)),
