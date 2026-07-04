@@ -616,6 +616,33 @@ pub enum StdlibKernel {
     HtmlP,
     HtmlInput,
     HtmlImg,
+    // ── #76: Std.Html.Attributes builders (corpus-used direct-backing) ───────
+    // String fixed-key attributes (`String -> Attribute msg`). The wire key is
+    // the member name except `type_`→`type` / `for_`→`for` (see `html_attr_key`).
+    HtmlAttrClass,
+    HtmlAttrId,
+    HtmlAttrHref,
+    HtmlAttrSrc,
+    HtmlAttrAlt,
+    HtmlAttrValue,
+    HtmlAttrName,
+    HtmlAttrPlaceholder,
+    HtmlAttrType,
+    HtmlAttrFor,
+    HtmlAttrStyle,
+    HtmlAttrTitle,
+    // Bool fixed-key attributes (`Bool -> Attribute msg`).
+    HtmlAttrChecked,
+    HtmlAttrDisabled,
+    HtmlAttrReadonly,
+    HtmlAttrRequired,
+    HtmlAttrMultiple,
+    HtmlAttrSelected,
+    HtmlAttrAutofocus,
+    // Generic attribute builders + identity.
+    HtmlAttribute,     // `attribute : String -> String -> Attribute msg`
+    HtmlBoolAttribute, // `boolAttribute : String -> Bool -> Attribute msg`
+    HtmlNoAttr,        // `noAttr : Attribute msg`
     // ── M7: Std.Live app-entry kernels ───────────────────────────────────────
     LiveApp,
     LiveAppRouted,
@@ -1291,6 +1318,32 @@ impl StdlibKernel {
             Self::HtmlP => d("Html", "p", 2, Ui, "html_p_"),
             Self::HtmlInput => d("Html", "input", 1, Ui, "html_input_"),
             Self::HtmlImg => d("Html", "img", 1, Ui, "html_img_"),
+            // ── #76: Std.Html.Attributes builders ────────────────────────────
+            // Qualifier "Attr" matches the `QUALIFIERS` table in env.rs. Emit
+            // routes through the two generic runtime helpers; the fixed key is
+            // supplied by the emit arm (see `html_attr_key`).
+            Self::HtmlAttrClass => d("Attr", "class", 1, Ui, "html_named_attr_"),
+            Self::HtmlAttrId => d("Attr", "id", 1, Ui, "html_named_attr_"),
+            Self::HtmlAttrHref => d("Attr", "href", 1, Ui, "html_named_attr_"),
+            Self::HtmlAttrSrc => d("Attr", "src", 1, Ui, "html_named_attr_"),
+            Self::HtmlAttrAlt => d("Attr", "alt", 1, Ui, "html_named_attr_"),
+            Self::HtmlAttrValue => d("Attr", "value", 1, Ui, "html_named_attr_"),
+            Self::HtmlAttrName => d("Attr", "name", 1, Ui, "html_named_attr_"),
+            Self::HtmlAttrPlaceholder => d("Attr", "placeholder", 1, Ui, "html_named_attr_"),
+            Self::HtmlAttrType => d("Attr", "type_", 1, Ui, "html_named_attr_"),
+            Self::HtmlAttrFor => d("Attr", "for_", 1, Ui, "html_named_attr_"),
+            Self::HtmlAttrStyle => d("Attr", "style", 1, Ui, "html_named_attr_"),
+            Self::HtmlAttrTitle => d("Attr", "title", 1, Ui, "html_named_attr_"),
+            Self::HtmlAttrChecked => d("Attr", "checked", 1, Ui, "html_bool_named_attr_"),
+            Self::HtmlAttrDisabled => d("Attr", "disabled", 1, Ui, "html_bool_named_attr_"),
+            Self::HtmlAttrReadonly => d("Attr", "readonly", 1, Ui, "html_bool_named_attr_"),
+            Self::HtmlAttrRequired => d("Attr", "required", 1, Ui, "html_bool_named_attr_"),
+            Self::HtmlAttrMultiple => d("Attr", "multiple", 1, Ui, "html_bool_named_attr_"),
+            Self::HtmlAttrSelected => d("Attr", "selected", 1, Ui, "html_bool_named_attr_"),
+            Self::HtmlAttrAutofocus => d("Attr", "autofocus", 1, Ui, "html_bool_named_attr_"),
+            Self::HtmlAttribute => d("Attr", "attribute", 2, Ui, "html_named_attr_"),
+            Self::HtmlBoolAttribute => d("Attr", "boolAttribute", 2, Ui, "html_bool_named_attr_"),
+            Self::HtmlNoAttr => d("Attr", "noAttr", 0, Ui, "html_no_attr_"),
             // ── M7: Std.Live app-entry kernels ───────────────────────────────
             Self::LiveApp => d("Live", "app", 1, Live, "live_app"),
             Self::LiveAppRouted => d("Live", "appRouted", 1, Live, "live_app_routed"),
@@ -1823,6 +1876,30 @@ impl StdlibKernel {
         Self::HtmlP,
         Self::HtmlInput,
         Self::HtmlImg,
+        // #76: Std.Html.Attributes builders (all registered under "Attr" in
+        // env.rs QUALIFIERS).
+        Self::HtmlAttrClass,
+        Self::HtmlAttrId,
+        Self::HtmlAttrHref,
+        Self::HtmlAttrSrc,
+        Self::HtmlAttrAlt,
+        Self::HtmlAttrValue,
+        Self::HtmlAttrName,
+        Self::HtmlAttrPlaceholder,
+        Self::HtmlAttrType,
+        Self::HtmlAttrFor,
+        Self::HtmlAttrStyle,
+        Self::HtmlAttrTitle,
+        Self::HtmlAttrChecked,
+        Self::HtmlAttrDisabled,
+        Self::HtmlAttrReadonly,
+        Self::HtmlAttrRequired,
+        Self::HtmlAttrMultiple,
+        Self::HtmlAttrSelected,
+        Self::HtmlAttrAutofocus,
+        Self::HtmlAttribute,
+        Self::HtmlBoolAttribute,
+        Self::HtmlNoAttr,
         // `Html.styleNode` (#46/#47 F7) — a canon `Html` qualifier member
         // (env.rs) that was MISSING from ALL, so canon minted it with id=None and
         // it silently rode the `Ty::Var(u32::MAX)` fallback (Task 0's ALL-iterating
@@ -2031,6 +2108,28 @@ impl StdlibKernel {
                 | Self::HtmlP
                 | Self::HtmlInput
                 | Self::HtmlImg
+                | Self::HtmlAttrClass
+                | Self::HtmlAttrId
+                | Self::HtmlAttrHref
+                | Self::HtmlAttrSrc
+                | Self::HtmlAttrAlt
+                | Self::HtmlAttrValue
+                | Self::HtmlAttrName
+                | Self::HtmlAttrPlaceholder
+                | Self::HtmlAttrType
+                | Self::HtmlAttrFor
+                | Self::HtmlAttrStyle
+                | Self::HtmlAttrTitle
+                | Self::HtmlAttrChecked
+                | Self::HtmlAttrDisabled
+                | Self::HtmlAttrReadonly
+                | Self::HtmlAttrRequired
+                | Self::HtmlAttrMultiple
+                | Self::HtmlAttrSelected
+                | Self::HtmlAttrAutofocus
+                | Self::HtmlAttribute
+                | Self::HtmlBoolAttribute
+                | Self::HtmlNoAttr
                 | Self::UiOnClick
                 | Self::UiOnFocus
                 | Self::UiOnBlur
@@ -2042,6 +2141,76 @@ impl StdlibKernel {
                 | Self::UiOnKeyUp
                 | Self::UiOnBool
         )
+    }
+
+    /// `true` for a `Std.Html.Attributes` string-valued fixed-key builder
+    /// (`class`/`id`/… — `String -> Attribute msg`). Used by the backend emit
+    /// arm to route through `html_named_attr_` with the wire key from
+    /// [`Self::html_attr_key`].
+    #[must_use]
+    pub const fn is_html_str_attr(self) -> bool {
+        matches!(
+            self,
+            Self::HtmlAttrClass
+                | Self::HtmlAttrId
+                | Self::HtmlAttrHref
+                | Self::HtmlAttrSrc
+                | Self::HtmlAttrAlt
+                | Self::HtmlAttrValue
+                | Self::HtmlAttrName
+                | Self::HtmlAttrPlaceholder
+                | Self::HtmlAttrType
+                | Self::HtmlAttrFor
+                | Self::HtmlAttrStyle
+                | Self::HtmlAttrTitle
+        )
+    }
+
+    /// `true` for a `Std.Html.Attributes` bool-valued fixed-key builder
+    /// (`checked`/`disabled`/… — `Bool -> Attribute msg`).
+    #[must_use]
+    pub const fn is_html_bool_attr(self) -> bool {
+        matches!(
+            self,
+            Self::HtmlAttrChecked
+                | Self::HtmlAttrDisabled
+                | Self::HtmlAttrReadonly
+                | Self::HtmlAttrRequired
+                | Self::HtmlAttrMultiple
+                | Self::HtmlAttrSelected
+                | Self::HtmlAttrAutofocus
+        )
+    }
+
+    /// The wire attribute name for a fixed-key `Std.Html.Attributes` builder.
+    /// Matches the member name except for the two Sky-keyword-avoidance
+    /// spellings `type_`→`type` and `for_`→`for`. `None` for any non-fixed-key
+    /// variant (the generic `attribute`/`boolAttribute` carry the key as a
+    /// runtime argument, `noAttr` has none).
+    #[must_use]
+    pub const fn html_attr_key(self) -> Option<&'static str> {
+        Some(match self {
+            Self::HtmlAttrClass => "class",
+            Self::HtmlAttrId => "id",
+            Self::HtmlAttrHref => "href",
+            Self::HtmlAttrSrc => "src",
+            Self::HtmlAttrAlt => "alt",
+            Self::HtmlAttrValue => "value",
+            Self::HtmlAttrName => "name",
+            Self::HtmlAttrPlaceholder => "placeholder",
+            Self::HtmlAttrType => "type",
+            Self::HtmlAttrFor => "for",
+            Self::HtmlAttrStyle => "style",
+            Self::HtmlAttrTitle => "title",
+            Self::HtmlAttrChecked => "checked",
+            Self::HtmlAttrDisabled => "disabled",
+            Self::HtmlAttrReadonly => "readonly",
+            Self::HtmlAttrRequired => "required",
+            Self::HtmlAttrMultiple => "multiple",
+            Self::HtmlAttrSelected => "selected",
+            Self::HtmlAttrAutofocus => "autofocus",
+            _ => return None,
+        })
     }
 
     /// `true` when this variant belongs to the `Std.Live` app-entry subsystem.

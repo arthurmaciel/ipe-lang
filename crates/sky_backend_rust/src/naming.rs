@@ -776,6 +776,31 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HtmlP => "html_p_",
         KernelFn::HtmlInput => "html_input_",
         KernelFn::HtmlImg => "html_img_",
+        // #76: Std.Html.Attributes builders. The full call (including the fixed
+        // key literal) is produced by `emit_ui_call`; these names are the bare
+        // runtime helpers, kept for the exhaustive match / any generic path.
+        KernelFn::HtmlAttrClass
+        | KernelFn::HtmlAttrId
+        | KernelFn::HtmlAttrHref
+        | KernelFn::HtmlAttrSrc
+        | KernelFn::HtmlAttrAlt
+        | KernelFn::HtmlAttrValue
+        | KernelFn::HtmlAttrName
+        | KernelFn::HtmlAttrPlaceholder
+        | KernelFn::HtmlAttrType
+        | KernelFn::HtmlAttrFor
+        | KernelFn::HtmlAttrStyle
+        | KernelFn::HtmlAttrTitle
+        | KernelFn::HtmlAttribute => "html_named_attr_",
+        KernelFn::HtmlAttrChecked
+        | KernelFn::HtmlAttrDisabled
+        | KernelFn::HtmlAttrReadonly
+        | KernelFn::HtmlAttrRequired
+        | KernelFn::HtmlAttrMultiple
+        | KernelFn::HtmlAttrSelected
+        | KernelFn::HtmlAttrAutofocus
+        | KernelFn::HtmlBoolAttribute => "html_bool_named_attr_",
+        KernelFn::HtmlNoAttr => "html_no_attr_",
         // Phase-1a event-attribute builders
         KernelFn::UiOnClick => "ui_on_click_",
         KernelFn::UiOnFocus => "ui_on_focus_",

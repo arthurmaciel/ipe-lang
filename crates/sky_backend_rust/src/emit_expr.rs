@@ -2055,6 +2055,78 @@ fn emit_ui_call(
             )))
         }
 
+        // ── #76: Std.Html.Attributes builders ─────────────────────────────────
+        // Fixed-key string attr: `class v` → `html_named_attr_("class", v)`.
+        // The key is a compile-time literal (never attacker data); the VALUE is
+        // escaped at the render sink (`escape_attr`), so no escaping here.
+        k if k.is_html_str_attr() => {
+            let [v_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlStrAttr",
+                    detail: format!("{k:?} requires exactly 1 argument, got {}", args.len()),
+                });
+            };
+            let key = k.html_attr_key().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_ui_call::HtmlStrAttr",
+                detail: format!("{k:?} is_html_str_attr but html_attr_key returned None"),
+            })?;
+            let v_s = emit_expr_at(ctx, v_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::html::html_named_attr_({key:?}.to_owned(), {v_s})"
+            )))
+        }
+        // Fixed-key bool attr: `checked b` → `html_bool_named_attr_("checked", b)`.
+        k if k.is_html_bool_attr() => {
+            let [b_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlBoolAttr",
+                    detail: format!("{k:?} requires exactly 1 argument, got {}", args.len()),
+                });
+            };
+            let key = k.html_attr_key().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_ui_call::HtmlBoolAttr",
+                detail: format!("{k:?} is_html_bool_attr but html_attr_key returned None"),
+            })?;
+            let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::html::html_bool_named_attr_({key:?}.to_owned(), {b_s})"
+            )))
+        }
+        // Generic `attribute k v` — runtime key gated at the render sink through
+        // `SafeAttrName` (drops `on*`/`srcdoc`/charset-invalid names).
+        KernelFn::HtmlAttribute => {
+            let [k_e, v_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlAttribute",
+                    detail: format!("Attr.attribute requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let k_s = emit_expr_at(ctx, k_e, indent, child, generics)?;
+            let v_s = emit_expr_at(ctx, v_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::html::html_named_attr_({k_s}, {v_s})"
+            )))
+        }
+        // Generic `boolAttribute k b`.
+        KernelFn::HtmlBoolAttribute => {
+            let [k_e, b_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlBoolAttribute",
+                    detail: format!(
+                        "Attr.boolAttribute requires 2 arguments, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let k_s = emit_expr_at(ctx, k_e, indent, child, generics)?;
+            let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::html::html_bool_named_attr_({k_s}, {b_s})"
+            )))
+        }
+        // `noAttr : Attribute msg` — nullary identity attribute.
+        KernelFn::HtmlNoAttr => Ok(Some("sky_runtime::html::html_no_attr_()".to_owned())),
+
         // ── Live app-entry kernels (Phase 1b — fully wired) ───────────────────
         // Delegate to `emit_live::emit_live_call`; it returns `Some(s)` for the
         // four Live variants and `None` for anything else (the `_ => None` arm).

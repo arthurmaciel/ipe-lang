@@ -1,0 +1,103 @@
+//! #76 — Std.Html.Attributes family end-to-end golden.
+//!
+//! Compiles `tests/golden/m7_html_attrs/Main.sky` through `skyc`, builds the
+//! emitted Rust project with the shared cargo target, runs the binary, and
+//! asserts on the rendered HTML. Gated on `SKY_E2E=1`.
+//!
+//! ## What is proven
+//!
+//! * Fixed-key string attrs (`class` / `id` / `href` / `value` / `type_` /
+//!   `placeholder`) render with the correct wire name — including the
+//!   Sky-keyword-avoidance fixup `type_` → `type`.
+//! * Fixed-key bool attrs render bare-when-true (`checked`) and omitted-when-
+//!   false (`disabled`).
+//! * The generic `attribute k v` / `boolAttribute k b` builders round-trip.
+//! * SECURITY (P1): the render sink escapes attribute VALUES (`<` → `&lt;`,
+//!   `"` → `&#34;`, `'` → `&#39;`) and DROPS a hostile event attribute name
+//!   (`attribute "onclick" "alert(1)"`) via `SafeAttrName` — no XSS reflection.
+//!
+//! Run: `SKY_E2E=1 cargo test golden_m7_html_attrs`
+
+use std::path::{Path, PathBuf};
+
+mod support;
+
+fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+#[test]
+fn html_attributes_family_renders_and_escapes() {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+
+    let root = repo_root();
+    let dir = root.join("tests").join("golden").join("m7_html_attrs");
+    let entry = dir.join("Main.sky");
+    let out = std::env::temp_dir().join("skyc_m7_html_attrs_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = skyc::resolve_runtime().expect("runtime must resolve for E2E");
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "skyc build must succeed for m7_html_attrs: {:?}",
+        built.err()
+    );
+
+    let outcome = support::build_and_run_emitted("m7_html_attrs", &out);
+    let html = &outcome.stdout;
+
+    // Fixed-key string attrs, including the `type_` → `type` wire fixup.
+    for needle in [
+        "class=\"app\"",
+        "id=\"main\"",
+        "type=\"text\"",
+        "placeholder=\"name\"",
+        "data-ok=\"safe\"",
+    ] {
+        assert!(
+            html.contains(needle),
+            "m7_html_attrs: expected `{needle}`\n--- actual ---\n{html}"
+        );
+    }
+
+    // Bool attrs: checked (true) present, disabled (false) omitted.
+    assert!(
+        html.contains("checked=\"true\""),
+        "m7_html_attrs: checked True must render\n--- actual ---\n{html}"
+    );
+    assert!(
+        !html.contains("disabled"),
+        "m7_html_attrs: disabled False must be omitted\n--- actual ---\n{html}"
+    );
+    // Generic boolAttribute.
+    assert!(
+        html.contains("hidden=\"true\""),
+        "m7_html_attrs: boolAttribute hidden True must render\n--- actual ---\n{html}"
+    );
+
+    // SECURITY: attribute value is escaped, never reflected verbatim.
+    assert!(
+        html.contains("value=\"a&lt;b&#34;c\""),
+        "m7_html_attrs: value must be HTML-escaped\n--- actual ---\n{html}"
+    );
+    assert!(
+        !html.contains("a<b\"c"),
+        "m7_html_attrs: raw unescaped value must NOT appear\n--- actual ---\n{html}"
+    );
+    assert!(
+        html.contains("href=\"/x?q=&#39;z\""),
+        "m7_html_attrs: href single-quote must be escaped\n--- actual ---\n{html}"
+    );
+
+    // SECURITY: the hostile event-attribute name must be DROPPED at the sink.
+    assert!(
+        !html.contains("onclick") && !html.contains("alert(1)"),
+        "m7_html_attrs: hostile `attribute \"onclick\"` must be neutralised\n--- actual ---\n{html}"
+    );
+
+    assert_eq!(outcome.exit_code, Some(0), "m7_html_attrs: must exit 0");
+}
