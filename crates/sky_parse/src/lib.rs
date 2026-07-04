@@ -1828,4 +1828,152 @@ mod tests {
             "OK"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Triple-quoted string regression tests (Task #118)
+    // -----------------------------------------------------------------------
+    // Reference: Sky.Parse.String.findTripleClose (Haskell) — the closing
+    // terminator is exactly `"""`, never a lone `"`.
+
+    /// A triple-quoted string containing a lone `"` must not terminate early.
+    /// This is the core 33-websocket-echo regression: inline HTML such as
+    /// `<div class="card">` caused a premature close on the `"` after `class=`,
+    /// making the rest lex as identifiers and triggering a misleading SKY-N0001.
+    #[test]
+    fn triple_string_lone_quote_does_not_terminate_early() {
+        use lexer::{Tok, lex};
+        // A triple-quoted string with an embedded `"` (HTML attribute value).
+        let src = r#""""<div class="card"></div>""""#;
+        let toks = lex(src).expect("triple string with lone quote must lex");
+        assert_eq!(toks.len(), 1, "must produce exactly one token");
+        assert_eq!(
+            toks[0].kind,
+            Tok::Str(r#"<div class="card"></div>"#.to_owned()),
+            "content including embedded quote is preserved verbatim"
+        );
+    }
+
+    /// A triple-quoted string containing `""` (two consecutive quotes) must
+    /// also lex correctly — two quotes are literal, not a premature close.
+    #[test]
+    fn triple_string_two_consecutive_quotes_are_literal() {
+        use lexer::{Tok, lex};
+        // `""` inside triple quotes is literal content, not an early close.
+        let src = "\"\"\"before\"\"after\"\"\"";
+        let toks = lex(src).expect("triple string with double quote must lex");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(
+            toks[0].kind,
+            Tok::Str("before\"\"after".to_owned()),
+        );
+    }
+
+    /// `{{interp}}` inside a triple-quoted string is preserved verbatim at the
+    /// lexer stage (interpolation is resolved downstream by the canonicaliser,
+    /// mirroring `findTripleClose` which performs no escape resolution).
+    #[test]
+    fn triple_string_interpolation_braces_preserved_verbatim() {
+        use lexer::{Tok, lex};
+        let src = "\"\"\"hello {{name}}!\"\"\"";
+        let toks = lex(src).expect("triple string with interpolation must lex");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(
+            toks[0].kind,
+            Tok::Str("hello {{name}}!".to_owned()),
+        );
+    }
+
+    /// `\{{` (escaped open brace) inside a triple-quoted string is preserved
+    /// verbatim — the lexer does not resolve it; the canonicaliser does.
+    #[test]
+    fn triple_string_escaped_brace_preserved_verbatim() {
+        use lexer::{Tok, lex};
+        let src = r#""""price: \{{amount}}""""#;
+        let toks = lex(src).expect("triple string with escaped brace must lex");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(
+            toks[0].kind,
+            Tok::Str(r#"price: \{{amount}}"#.to_owned()),
+        );
+    }
+
+    /// `\\` inside a triple-quoted string is preserved verbatim (two backslashes
+    /// in the source → two backslashes in the token content; the canonicaliser
+    /// collapses them to one).
+    #[test]
+    fn triple_string_double_backslash_preserved_verbatim() {
+        use lexer::{Tok, lex};
+        let src = "\"\"\"a\\\\b\"\"\"";
+        let toks = lex(src).expect("triple string with double backslash must lex");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(
+            toks[0].kind,
+            Tok::Str("a\\\\b".to_owned()),
+        );
+    }
+
+    /// A multiline triple-quoted string spanning real newlines lexes correctly.
+    #[test]
+    fn triple_string_spanning_newlines_lexes() {
+        use lexer::{Tok, lex};
+        let src = "\"\"\"line one\nline two\nline three\"\"\"";
+        let toks = lex(src).expect("multiline triple string must lex");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(
+            toks[0].kind,
+            Tok::Str("line one\nline two\nline three".to_owned()),
+        );
+    }
+
+    /// A triple-quoted string with embedded `"` parses successfully at the
+    /// module level — confirming no downstream SKY-N0001 leaks through.
+    #[test]
+    fn triple_string_with_quote_parses_in_module_context() {
+        // If the lexer terminated early on the `"`, the rest would be mis-lexed
+        // as identifiers and the module parser would fail with SKY-N0001 or a
+        // similar error rather than "OK".
+        assert_eq!(
+            err_code(&format!(
+                "{HDR}html =\n    \"\"\"<div class=\"card\">hello</div>\"\"\"\n"
+            )),
+            "OK"
+        );
+    }
+
+    /// An unterminated triple-quoted string reports SKY-P0014 (same as a
+    /// single-line unterminated string), not a misleading identifier error.
+    #[test]
+    fn unterminated_triple_string_is_p0014() {
+        use lexer::lex;
+        let result = lex("\"\"\"oops no close");
+        assert!(result.is_err(), "unterminated triple string must fail");
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.code().as_str(),
+            "SKY-P0014",
+            "unterminated triple string is SKY-P0014, got {err:?}"
+        );
+    }
+
+    /// An empty triple-quoted string `""""""` is valid and yields an empty string.
+    #[test]
+    fn empty_triple_string_lexes_to_empty_str() {
+        use lexer::{Tok, lex};
+        let toks = lex("\"\"\"\"\"\"").expect("empty triple string must lex");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(toks[0].kind, Tok::Str(String::new()));
+    }
+
+    /// Regression non-regression: regular single-line strings still lex
+    /// correctly after the triple-string dispatch was introduced.
+    #[test]
+    fn single_line_string_unaffected_by_triple_dispatch() {
+        use lexer::{Tok, lex};
+        let toks = lex("\"hello world\"").expect("single string must lex");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(toks[0].kind, Tok::Str("hello world".to_owned()));
+        // Escape still resolved in single-line strings.
+        let toks2 = lex("\"a\\tb\"").expect("escaped single string must lex");
+        assert_eq!(toks2[0].kind, Tok::Str("a\tb".to_owned()));
+    }
 }
