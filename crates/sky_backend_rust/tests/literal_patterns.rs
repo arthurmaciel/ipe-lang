@@ -160,6 +160,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
             uses_live: false,
             uses_tui: false,
             uses_webview: false,
+            uses_css: false,
         }],
     })
 }
@@ -313,6 +314,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
                 uses_live: false,
                 uses_tui: false,
                 uses_webview: false,
+                uses_css: false,
             }],
         },
         x,

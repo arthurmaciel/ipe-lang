@@ -56,6 +56,12 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Sky", "Core", "Encoding"], "Encoding"),
     (&["Sky", "Core", "Crypto"], "Crypto"),
     (&["Sky", "Core", "Uuid"], "Uuid"),
+    // `Sky.Core.CssSafety` — the four Std.Css leaf security kernels (#47). This
+    // is a KERNEL qualifier (imported by the compiled-source `Std.Css`); `Std.Css`
+    // itself stays OUT of this table (it is compiled source, registered in skyc's
+    // `COMPILED_STD_MODULES`), so the `compiled_vs_kernel_qualifier_disjoint`
+    // invariant holds.
+    (&["Sky", "Core", "CssSafety"], "CssSafety"),
     (&["Sky", "Core", "Jwt"], "Jwt"),
     (&["Sky", "Core", "Json", "Encode"], "JsonEnc"),
     (&["Sky", "Core", "Json", "Decode"], "JsonDec"),
@@ -478,6 +484,14 @@ impl Env {
                     "toString",
                     "withMessage",
                 ],
+            ),
+            // `Sky.Core.CssSafety` — the four Std.Css leaf security kernels (#47):
+            // three `String -> Maybe String` parsers + the `String -> String`
+            // `<style>`-breakout floor. Imported (and called unqualified) by the
+            // compiled-source `Std.Css`.
+            (
+                "CssSafety",
+                &["safeValue", "safePropName", "safeSelector", "stripStyleClose"],
             ),
             // `Std.Log` — qualified form (`import Std.Log as Log`). `println`/
             // `info`/`debug`/`warn`/`error` are backed (task #78); the `*With`

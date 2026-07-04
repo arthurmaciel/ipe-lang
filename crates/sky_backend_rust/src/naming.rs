@@ -337,6 +337,14 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         | KernelFn::ErrorDecode
         | KernelFn::ErrorConflict
         | KernelFn::ErrorUnavailable => "sky_error_from_message",
+        // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf kernels, #47) ──────
+        // The bare runtime fn names, re-exported at the `sky_runtime` root via
+        // `pub use css::*`. `safe_value`/`safe_prop_name`/`safe_selector` return
+        // `SkyMaybe<String>`; `strip_style_close_kernel` returns `String`.
+        KernelFn::CssSafetySafeValue => "safe_value",
+        KernelFn::CssSafetySafePropName => "safe_prop_name",
+        KernelFn::CssSafetySafeSelector => "safe_selector",
+        KernelFn::CssSafetyStripStyleClose => "strip_style_close_kernel",
         KernelFn::ErrorTimeout => "sky_error_timeout",
         KernelFn::ErrorNotFound => "sky_error_not_found",
         KernelFn::ErrorPermissionDenied => "sky_error_permission_denied",

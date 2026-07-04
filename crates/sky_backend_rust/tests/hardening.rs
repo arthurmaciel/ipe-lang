@@ -36,6 +36,7 @@ fn program(name: Symbol, types: Vec<TypeDef>, funcs: Vec<Func>) -> Program {
             uses_live: false,
             uses_tui: false,
             uses_webview: false,
+            uses_css: false,
         }],
     }
 }
@@ -241,6 +242,7 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
                 uses_live: false,
                 uses_tui: false,
                 uses_webview: false,
+                uses_css: false,
             },
             Module {
                 name: ModPath(vec![other_mod]),
@@ -254,6 +256,7 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
                 uses_live: false,
                 uses_tui: false,
                 uses_webview: false,
+                uses_css: false,
             },
         ],
     };
