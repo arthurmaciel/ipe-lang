@@ -210,7 +210,16 @@ pub fn auth_verify_token<E: From<String>>(
 }
 
 // ─── DB-touching kernels ──────────────────────────────────────────────
+// All three functions (`register`, `login`, `setRole`) take a `Db` connection
+// and use `sqlx` directly. They are gated on `#[cfg(feature = "db")]` so a
+// non-db project that imports `auth` for the pure-crypto tier (hashPassword,
+// verifyPassword, signToken, verifyToken, passwordStrength) still compiles.
+// When `db` is disabled `Db = ()` (from config.rs's non-db branch), so the
+// call sites never have a real connection to pass — the generated code for
+// `AuthRegister/Login/SetRole` is only emitted when the lowerer detects those
+// kernel calls, which implies `uses_db = true` and `db` in default features.
 
+#[cfg(feature = "db")]
 /// Idempotent `CREATE TABLE IF NOT EXISTS users (...)`. Runs at the start of
 /// register/login/setRole so the schema is always available without users
 /// having to call a separate migration. The id-column DDL is per-driver
@@ -234,6 +243,7 @@ async fn ensure_users_schema<E: From<String> + Send>(conn: &Db) -> SkyResult<E, 
     }
 }
 
+#[cfg(feature = "db")]
 /// Sky `register : Db -> String -> String -> Task Error Int`.
 /// Creates a new user. Returns the new user id.
 pub fn auth_register<E: Send + From<String> + 'static>(
@@ -293,6 +303,7 @@ pub fn auth_register<E: Send + From<String> + 'static>(
     })
 }
 
+#[cfg(feature = "db")]
 /// Sky `login : Db -> String -> String -> Task Error Int`.
 /// Authenticates the user. Returns user id on success. Does NOT leak whether
 /// the email exists vs. password was wrong — both paths return the same
@@ -352,6 +363,7 @@ pub fn auth_login<E: Send + From<String> + 'static>(
     })
 }
 
+#[cfg(feature = "db")]
 /// Sky `setRole : Db -> Int -> String -> Task Error ()`.
 /// Sets the user's role. No-op if the user doesn't exist (returns Ok).
 pub fn auth_set_role<E: Send + From<String> + 'static>(

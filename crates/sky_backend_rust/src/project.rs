@@ -69,11 +69,14 @@ const RUNTIME_MOD_RS_TEA_APPEND: &str = "pub mod tea;\npub use tea::*;\n";
 /// Lines appended to `sky_runtime/mod.rs` when the program uses
 /// Sky.Http.Server kernels.
 ///
-/// Both `server.rs` and `server_stream.rs` are gated by the `server` Cargo
-/// feature in the runtime source; the generated Cargo.toml's default features
-/// include `"server"` when these lines are appended.
-const RUNTIME_MOD_RS_SERVER_APPEND: &str =
-    "pub mod server;\npub use server::*;\npub mod server_stream;\npub use server_stream::*;\n";
+/// `server.rs` and `server_stream.rs` are gated by the `server` Cargo
+/// feature in the runtime source; `http_stream.rs` (the client-side
+/// streaming reader) is always usable when `reqwest` is present.
+/// The generated Cargo.toml's default features include `"server"` when
+/// these lines are appended.
+const RUNTIME_MOD_RS_SERVER_APPEND: &str = "pub mod server;\npub use server::*;\n\
+    pub mod server_stream;\npub use server_stream::*;\n\
+    pub mod http_stream;\npub use http_stream::*;\n";
 
 // ── Shared transitive dep: http_header ──────────────────────────────────────
 
@@ -96,6 +99,18 @@ const RUNTIME_MOD_RS_SERVER_APPEND: &str =
 /// guard — so a program using both Server and Live does not emit a duplicate
 /// `pub mod http_header;` (`E0428`).
 const RUNTIME_MOD_RS_HTTP_HEADER_APPEND: &str = "pub mod http_header;\n";
+
+// ── #111: Std.Auth ──────────────────────────────────────────────────────────
+
+/// Lines appended to `sky_runtime/mod.rs` when the program uses Std.Auth
+/// kernels (`Auth.hashPassword` / `verifyPassword` / `signToken` /
+/// `verifyToken` / `register` / `login` / `setRole` etc.).
+///
+/// `auth.rs` requires `bcrypt` (password hashing) and `jsonwebtoken` (JWT
+/// signing/verification); both are unconditional deps in the generated
+/// project's `Cargo.toml` (included in the `crypto` and `json` default
+/// features), so no manifest surgery is needed — only a `mod.rs` declaration.
+const RUNTIME_MOD_RS_AUTH_APPEND: &str = "pub mod auth;\npub use auth::*;\n";
 
 // ── M7: Std.Ui / Std.Html ───────────────────────────────────────────────────
 
@@ -198,6 +213,55 @@ const RUNTIME_MOD_RS_LIVE_APPEND: &str = "#[cfg(feature = \"live\")]\npub mod li
 const TEA_TYPE_ALIASES: &str = "pub type SkyCmd<M> = sky_runtime::tea::SkyCmd<M>;\n\
      pub type SkySub<M> = sky_runtime::tea::SkySub<M>;\n";
 
+// ── #111: Std.Auth — concrete wrappers emitted when uses_auth is true ────────
+
+/// Concrete wrappers appended to `main.rs` when the program uses Std.Auth
+/// kernels.  Each wrapper specialises the generic `E` type parameter to
+/// `SkyError` so call sites in user function bodies compile without requiring
+/// a turbofish annotation.
+///
+/// `auth_register`, `auth_login`, and `auth_set_role` are gated on
+/// `#[cfg(feature = "db")]` in the runtime source, so the three wrappers
+/// here are also gated.  A non-db Auth-only program (using only `hashPassword`
+/// / `verifyPassword` / `signToken` / `verifyToken`) will compile the four
+/// ungated wrappers + the `passwordStrength` helper and ignore the db-gated
+/// three.  When `uses_db` is also true the `db` feature is in the generated
+/// project's defaults and the db-gated wrappers become active.
+const AUTH_WRAPPERS: &str = "\
+pub fn auth_hash_password(pw: String) -> SkyResult<SkyError, String> {\n    \
+    sky_runtime::auth::auth_hash_password(pw)\n\
+}\n\
+pub fn auth_hash_password_cost(pw: String, cost: i64) -> SkyResult<SkyError, String> {\n    \
+    sky_runtime::auth::auth_hash_password_cost(pw, cost)\n\
+}\n\
+pub fn auth_verify_password(pw: String, hash: String) -> SkyResult<SkyError, bool> {\n    \
+    sky_runtime::auth::auth_verify_password(pw, hash)\n\
+}\n\
+pub fn auth_password_strength(pw: String) -> SkyResult<SkyError, String> {\n    \
+    sky_runtime::auth::auth_password_strength(pw)\n\
+}\n\
+pub fn auth_sign_token(\n    \
+    secret: String, claims: HashMap<String, String>, expiry_seconds: i64,\n\
+) -> SkyResult<SkyError, String> {\n    \
+    sky_runtime::auth::auth_sign_token(secret, claims, expiry_seconds)\n\
+}\n\
+pub fn auth_verify_token(secret: String, token: String) -> SkyResult<SkyError, HashMap<String, String>> {\n    \
+    sky_runtime::auth::auth_verify_token(secret, token)\n\
+}\n\
+#[cfg(feature = \"db\")]\n\
+pub fn auth_register(conn: Db, email: String, password: String) -> SkyTask<i64> {\n    \
+    sky_runtime::auth::auth_register(conn, email, password)\n\
+}\n\
+#[cfg(feature = \"db\")]\n\
+pub fn auth_login(conn: Db, email: String, password: String) -> SkyTask<i64> {\n    \
+    sky_runtime::auth::auth_login(conn, email, password)\n\
+}\n\
+#[cfg(feature = \"db\")]\n\
+pub fn auth_set_role(conn: Db, user_id: i64, role: String) -> SkyTask<()> {\n    \
+    sky_runtime::auth::auth_set_role(conn, user_id, role)\n\
+}\n\
+";
+
 /// The `sky_runtime/config.rs` emitted for db-enabled programs. Replaces the
 /// no-op M0 stub with the `SQLite` type aliases + helper fns the `db.rs` module
 /// requires. Mirrors `runtime/src/sky_runtime/config.rs` verbatim, keeping the
@@ -280,6 +344,11 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     // type aliases immediately after the other top-level type aliases.
     if ctx.uses_tea {
         out.push_str(TEA_TYPE_ALIASES);
+    }
+    // #111: when the program uses Std.Auth kernels, append concrete wrappers
+    // that specialise E = SkyError so call sites compile without turbofish.
+    if ctx.uses_auth {
+        out.push_str(AUTH_WRAPPERS);
     }
     out.push('\n');
 
@@ -389,11 +458,21 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         if ctx.uses_db {
             mod_rs.push_str(RUNTIME_MOD_RS_DB_APPEND);
         }
-        if ctx.uses_tea {
+        // `tea` must be included whenever user code uses TEA kernels directly,
+        // OR whenever `uses_server` is true — because `http_stream.rs` (included
+        // via SERVER_APPEND) uses `SkySub` from `tea.rs` via `use super::*;`.
+        // Guarded as a union so a program using both emits `pub mod tea;` exactly
+        // once (E0428). Transitive-closure invariant: any module depended on by an
+        // included module MUST itself be included (same rule as http_header).
+        if ctx.uses_tea || ctx.uses_server {
             mod_rs.push_str(RUNTIME_MOD_RS_TEA_APPEND);
         }
         if ctx.uses_server {
             mod_rs.push_str(RUNTIME_MOD_RS_SERVER_APPEND);
+        }
+        // #111: Std.Auth — append auth module when any Auth kernel is used.
+        if ctx.uses_auth {
+            mod_rs.push_str(RUNTIME_MOD_RS_AUTH_APPEND);
         }
         // Shared transitive dependency: `http_header` is an unconditional leaf
         // dependency of BOTH the `server` and `live` runtime modules. Include it

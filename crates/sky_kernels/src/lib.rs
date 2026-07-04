@@ -2583,6 +2583,37 @@ impl StdlibKernel {
                 | Self::MiddlewareWithBasicAuth
                 | Self::MiddlewareWithRateLimit
                 | Self::RateLimitAllow
+                // ── #111: Sky.Http.Server.Stream (server-side) ───────────────────
+                | Self::StreamStream
+                | Self::StreamEmit
+                | Self::StreamFinish
+                | Self::StreamWithContentType
+                // ── #111: Sky.Core.Http.Stream (client-side relay) ───────────────
+                | Self::HttpStreamOpen
+                | Self::HttpStreamForEachChunk
+                | Self::HttpStreamClose
+        )
+    }
+
+    /// `true` when this variant belongs to the `Std.Auth` kernel family
+    /// (`Std.Auth.hashPassword` / `verifyPassword` / `signToken` / `verifyToken` /
+    /// `register` / `login` / `setRole` and companions).
+    ///
+    /// Used by `sky_lower` to detect `uses_auth` and emit the `auth` module into
+    /// the generated `sky_runtime/mod.rs`.
+    #[must_use]
+    pub const fn is_auth(self) -> bool {
+        matches!(
+            self,
+            Self::AuthHashPassword
+                | Self::AuthHashPasswordCost
+                | Self::AuthVerifyPassword
+                | Self::AuthPasswordStrength
+                | Self::AuthSignToken
+                | Self::AuthVerifyToken
+                | Self::AuthRegister
+                | Self::AuthLogin
+                | Self::AuthSetRole
         )
     }
 

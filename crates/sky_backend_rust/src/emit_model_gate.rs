@@ -197,6 +197,10 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
+        // `StreamWriter` is an opaque handle — not a valid Model leaf.
+        | IrType::StreamWriter
+        // `HttpRequest` is an opaque handle — not a valid Model leaf.
+        | IrType::HttpRequest
         | IrType::LiveReq
         | IrType::LiveRoute(_)
         | IrType::Int

@@ -89,6 +89,11 @@ const STREAM_CHAN_BUFFER: usize = 16;
 
 /// Sky.Http.Server.Stream.stream
 ///   : String -> (StreamWriter -> Task Error ()) -> Task Error Response
+///
+/// The Sky codegen (Rust backend) lowers the handler argument as `StreamWriter`
+/// because the HM type scheme uses the `StreamWriter` opaque type for
+/// `Stream.emit` / `Stream.finish` / `Stream.withContentType`.  The user
+/// closure receives a `StreamWriter` and passes it directly to those kernels.
 pub fn server_stream_stream<E, H>(content_type: String, handler: H) -> SkyTask<E, ServerResponse>
 where
     E: Send + 'static,
@@ -122,13 +127,14 @@ where
     })
 }
 
-/// Sky.Http.Server.Stream.emit : String -> Int -> Task Error ()
-/// (the stdlib unwraps StreamWriter → Int.) Sends the chunk + flushes
-/// (the channel feeds an unbuffered axum body). emit-after-finish is a no-op.
+/// Sky.Http.Server.Stream.emit : String -> StreamWriter -> Task Error ()
+/// Sends the chunk + flushes (the channel feeds an unbuffered axum body).
+/// emit-after-finish is a no-op.
 pub fn server_stream_emit<E: From<String> + Send + 'static>(
     chunk: String,
-    id: i64,
+    writer: StreamWriter,
 ) -> SkyTask<E, ()> {
+    let StreamWriter::StreamWriter(id) = writer;
     Box::pin(async move {
         let sender = stream_senders()
             .lock()
@@ -149,10 +155,13 @@ pub fn server_stream_emit<E: From<String> + Send + 'static>(
     })
 }
 
-/// Sky.Http.Server.Stream.finish : Int -> Task Error ()
+/// Sky.Http.Server.Stream.finish : StreamWriter -> Task Error ()
 /// Idempotent — drops the sender (ends the body stream). Implicit at handler
 /// return; explicit when the handler wants to release the connection early.
-pub fn server_stream_finish<E: From<String> + Send + 'static>(id: i64) -> SkyTask<E, ()> {
+pub fn server_stream_finish<E: From<String> + Send + 'static>(
+    writer: StreamWriter,
+) -> SkyTask<E, ()> {
+    let StreamWriter::StreamWriter(id) = writer;
     Box::pin(async move {
         stream_senders()
             .lock()
@@ -162,13 +171,13 @@ pub fn server_stream_finish<E: From<String> + Send + 'static>(id: i64) -> SkyTas
     })
 }
 
-/// Sky.Http.Server.Stream.withContentType : String -> Int -> Task Error ()
+/// Sky.Http.Server.Stream.withContentType : String -> StreamWriter -> Task Error ()
 /// Best-effort: the head is already committed by the time the handler runs in
 /// this model (axum sends headers when the streaming Response is returned), so
 /// this is a no-op. Set the Content-Type via the `stream` argument instead.
 pub fn server_stream_with_content_type<E: From<String> + Send + 'static>(
     _ct: String,
-    _id: i64,
+    _writer: StreamWriter,
 ) -> SkyTask<E, ()> {
     Box::pin(async move { SkyResult::Ok(()) })
 }

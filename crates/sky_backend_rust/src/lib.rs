@@ -189,6 +189,12 @@ pub(crate) struct EmitCtx<'a> {
     /// `Std.Css` program never sets `uses_ui`, so the UI append alone would leave
     /// those names undeclared (E0425).
     pub(crate) uses_css: bool,
+    /// `true` when the program uses at least one `Std.Auth` kernel
+    /// (`Auth.hashPassword`, `Auth.verifyPassword`, `Auth.signToken`,
+    /// `Auth.verifyToken`, `Auth.register`, `Auth.login`, `Auth.setRole`, etc.).
+    /// When set, [`crate::project::emit_program`] appends
+    /// `pub mod auth; pub use auth::*;` to the emitted `sky_runtime/mod.rs`.
+    pub(crate) uses_auth: bool,
     /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlvalue_rust_name: Option<String>,
@@ -568,6 +574,9 @@ impl<'a> EmitCtx<'a> {
         // #47: detect Std.Css (Sky.Core.CssSafety) leaf-kernel usage.
         let uses_css = program.modules.iter().any(|m| m.uses_css);
 
+        // #111: detect Std.Auth kernel usage.
+        let uses_auth = program.modules.iter().any(|m| m.uses_auth);
+
         Ok(Self {
             interner,
             uses_db,
@@ -578,6 +587,7 @@ impl<'a> EmitCtx<'a> {
             uses_tui,
             uses_webview,
             uses_css,
+            uses_auth,
             sqlvalue_rust_name,
             sqlfield_rust_name,
             enum_names,
@@ -945,6 +955,10 @@ fn collect_record_shapes(
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
+        // `StreamWriter` is an opaque handle — no record shape.
+        | IrType::StreamWriter
+        // `HttpRequest` is an opaque handle — no record shape.
+        | IrType::HttpRequest
         // A generic type variable carries no concrete record shape of its own.
         | IrType::Generic(_)
         // M7: nullary plain types (`Length`, `Color`, …) and the opaque live
@@ -1052,6 +1066,10 @@ fn type_reaches_enum(
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
+        // `StreamWriter` is a pointer-sized opaque handle — no size cycle.
+        | IrType::StreamWriter
+        // `HttpRequest` is a pointer-sized opaque handle — no size cycle.
+        | IrType::HttpRequest
         | IrType::Fun(_, _)
         | IrType::Generic(_)
         // M7: nullary plain types and the opaque live request handle are
@@ -1097,6 +1115,10 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
+        // `StreamWriter` is monomorphic — no generic parameters.
+        | IrType::StreamWriter
+        // `HttpRequest` is monomorphic — no generic parameters.
+        | IrType::HttpRequest
         // M7: nullary plain types and the opaque live request handle are
         // monomorphic.
         | IrType::UiPlain(_)
@@ -1168,6 +1190,10 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
+        // `StreamWriter` is monomorphic — no generics to collect.
+        | IrType::StreamWriter
+        // `HttpRequest` is monomorphic — no generics to collect.
+        | IrType::HttpRequest
         // M7: nullary plain types and the opaque live request handle
         // contribute no generics.
         | IrType::UiPlain(_)
@@ -1431,6 +1457,10 @@ fn match_template(
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
+        // `StreamWriter` is a monomorphic opaque handle.
+        | IrType::StreamWriter
+        // `HttpRequest` is a monomorphic opaque handle.
+        | IrType::HttpRequest
         // M7: nullary plain types (`Length`, `Color`, …) and the opaque live
         // request handle are monomorphic — must equal exactly.
         | IrType::UiPlain(_)

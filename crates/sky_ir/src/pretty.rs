@@ -115,6 +115,10 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::ServerResponse => "Response".to_owned(),
         IrType::ServerRoute => "Route".to_owned(),
         IrType::ServerCookie => "Cookie".to_owned(),
+        // #111: stream writer handle.
+        IrType::StreamWriter => "StreamWriter".to_owned(),
+        // #111: HTTP request handle (opaque, structural record folded to this variant).
+        IrType::HttpRequest => "HttpRequest".to_owned(),
         // M7 Std.Ui / Std.Html parametric types.
         IrType::Ui { ctor, msg } => {
             let ctor_name = match ctor {
@@ -1504,6 +1508,7 @@ mod tests {
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
+                uses_auth: false,
             }],
         })
     }
@@ -1604,6 +1609,7 @@ program
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
+                uses_auth: false,
             }],
         };
 
@@ -1666,6 +1672,7 @@ program
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
+                uses_auth: false,
             }],
         };
 
@@ -1730,6 +1737,7 @@ program
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
+                uses_auth: false,
             }],
         };
 
@@ -1780,6 +1788,7 @@ program
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
+                uses_auth: false,
             }],
         };
 
@@ -1839,6 +1848,7 @@ program
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
+                uses_auth: false,
             }],
         };
 
@@ -1890,6 +1900,7 @@ program
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
+                uses_auth: false,
             }],
         };
 
@@ -1981,6 +1992,7 @@ program
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
+                uses_auth: false,
             }],
         };
 
@@ -2073,6 +2085,7 @@ program
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
+                uses_auth: false,
             }],
         };
 
@@ -2111,6 +2124,7 @@ program
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
+                uses_auth: false,
             }],
         };
         let rendered = pretty(&program, &i);
