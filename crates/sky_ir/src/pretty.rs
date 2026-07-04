@@ -733,6 +733,15 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::FontDisabledColor => "Font.disabledColor",
         KernelFn::FontHoverSize => "Font.hoverSize",
         KernelFn::HtmlAttrTabindex => "Attr.tabindex",
+        // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
+        KernelFn::RegionMainContent => "Region.mainContent",
+        KernelFn::RegionNavigation => "Region.navigation",
+        KernelFn::RegionFooter => "Region.footer",
+        KernelFn::RegionAside => "Region.aside",
+        KernelFn::RegionHeading => "Region.heading",
+        KernelFn::RegionLabel => "Region.label",
+        KernelFn::RegionAnnounce => "Region.announce",
+        KernelFn::RegionAnnounceUrgently => "Region.announceUrgently",
         // ── M7: Html element builders ────────────────────────────────────────
         KernelFn::HtmlTextNode => "Html.text",
         KernelFn::HtmlRawNode => "Html.raw",

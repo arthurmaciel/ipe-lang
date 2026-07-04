@@ -1,0 +1,30 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+import Std.Ui.Region as Region
+
+
+-- #117 seal — every Std.Ui.Region member used inside Ui.layout.
+-- Asserts: skyc-0 ∧ cargo-0.
+
+
+view : String
+view =
+    Html.htmlRender
+        (Ui.layout []
+            (Ui.column []
+                [ Ui.el [ Region.mainContent ] (Ui.text "main")
+                , Ui.el [ Region.navigation ] (Ui.text "nav")
+                , Ui.el [ Region.footer ] (Ui.text "footer")
+                , Ui.el [ Region.aside ] (Ui.text "aside")
+                , Ui.el [ Region.heading 1 ] (Ui.text "h1")
+                , Ui.el [ Region.heading 2 ] (Ui.text "h2")
+                , Ui.el [ Region.label "search" ] (Ui.text "search label")
+                , Ui.el [ Region.announce ] (Ui.text "status")
+                , Ui.el [ Region.announceUrgently ] (Ui.text "alert")
+                ]))
+
+
+main =
+    println view

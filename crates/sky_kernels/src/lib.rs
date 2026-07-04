@@ -820,6 +820,15 @@ pub enum StdlibKernel {
     FontHoverSize, // Int → Attr pseudo
     // Html.Attributes — tabindex
     HtmlAttrTabindex, // Int → HtmlAttr
+    // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
+    RegionMainContent,   // Attribute msg (arity 0)
+    RegionNavigation,    // Attribute msg (arity 0)
+    RegionFooter,        // Attribute msg (arity 0)
+    RegionAside,         // Attribute msg (arity 0)
+    RegionHeading,       // Int → Attribute msg (arity 1)
+    RegionLabel,         // String → Attribute msg (arity 1)
+    RegionAnnounce,      // Attribute msg (arity 0)
+    RegionAnnounceUrgently, // Attribute msg (arity 0)
 }
 
 impl StdlibKernel {
@@ -1660,6 +1669,17 @@ impl StdlibKernel {
             Self::FontHoverSize => d("Font", "hoverSize", 1, Ui, "ui_font_hover_size_"),
             // Html.Attributes
             Self::HtmlAttrTabindex => d("Attr", "tabindex", 1, Ui, "html_attr_tabindex_"),
+            // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
+            Self::RegionMainContent => d("Region", "mainContent", 0, Ui, "ui_region_main_content_"),
+            Self::RegionNavigation => d("Region", "navigation", 0, Ui, "ui_region_navigation_"),
+            Self::RegionFooter => d("Region", "footer", 0, Ui, "ui_region_footer_"),
+            Self::RegionAside => d("Region", "aside", 0, Ui, "ui_region_aside_"),
+            Self::RegionHeading => d("Region", "heading", 1, Ui, "ui_region_heading_"),
+            Self::RegionLabel => d("Region", "label", 1, Ui, "ui_region_label_"),
+            Self::RegionAnnounce => d("Region", "announce", 0, Ui, "ui_region_announce_"),
+            Self::RegionAnnounceUrgently => {
+                d("Region", "announceUrgently", 0, Ui, "ui_region_announce_urgently_")
+            }
         }
     }
 
@@ -2338,6 +2358,15 @@ impl StdlibKernel {
         Self::FontDisabledColor,
         Self::FontHoverSize,
         Self::HtmlAttrTabindex,
+        // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
+        Self::RegionMainContent,
+        Self::RegionNavigation,
+        Self::RegionFooter,
+        Self::RegionAside,
+        Self::RegionHeading,
+        Self::RegionLabel,
+        Self::RegionAnnounce,
+        Self::RegionAnnounceUrgently,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────
@@ -2662,6 +2691,15 @@ impl StdlibKernel {
                 | Self::FontDisabledColor
                 | Self::FontHoverSize
                 | Self::HtmlAttrTabindex
+                // ── Std.Ui.Region (#117) ──────────────────────────────────────
+                | Self::RegionMainContent
+                | Self::RegionNavigation
+                | Self::RegionFooter
+                | Self::RegionAside
+                | Self::RegionHeading
+                | Self::RegionLabel
+                | Self::RegionAnnounce
+                | Self::RegionAnnounceUrgently
         )
     }
 
