@@ -1512,6 +1512,158 @@ mod tests {
         );
     }
 
+    // ── Unary negation on identifiers / expressions (Task #114) ──────────────
+    //
+    // Port of the Haskell `exprAtom_` `Negate` arm (Expression.hs:356–367):
+    // `-e` in prefix position desugars to `Call(VarLocal("negate"), [e])`.
+    // The upstream both-branches-produce-Negate rule extends negation beyond
+    // numeric literals to identifiers and parenthesised expressions.
+
+    #[test]
+    fn negation_of_identifier_desugars_to_negate_call() {
+        // `-cents` → `Call(VarLocal("negate"), [VarLocal("cents")])`.
+        // This is the exact shape that triggered SKY-P0001 in
+        // 37-composite-live-shop / State.sky:156:
+        //   `if cents < 0 then -cents else cents`
+        let mut i = Interner::new();
+        let src = format!("{HDR}v cents =\n    -cents\n");
+        let result = parse_module(&src, &mut i);
+        assert!(result.is_ok(), "-cents must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|val| match &val.body.value {
+                Expr_::Call(callee, args) =>
+                    matches!(callee.value, Expr_::VarLocal(s) if i.resolve(s) == Some("negate"))
+                        && args.len() == 1
+                        && matches!(
+                            args.first().map(|a| &a.value),
+                            Some(Expr_::VarLocal(s)) if i.resolve(*s) == Some("cents")
+                        ),
+                _ => false,
+            }),
+            "body must be Call(negate, [VarLocal(cents)]), got {:?}",
+            v.map(|val| &val.body.value)
+        );
+    }
+
+    #[test]
+    fn negation_in_if_then_else_parses() {
+        // `if c < 0 then -c else c` — the `-c` in the `then` branch is in
+        // prefix (atom) position, not after any complete expression, so it
+        // must parse as unary negation desugared to `negate c`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v c =\n    if c < 0 then -c else c\n");
+        let result = parse_module(&src, &mut i);
+        assert!(result.is_ok(), "if c < 0 then -c else c must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        // Body is an `If`; the `then` branch is `negate c` (a Call).
+        assert!(
+            v.is_some_and(|val| matches!(&val.body.value, Expr_::If(_, _))),
+            "body must be an If expression"
+        );
+    }
+
+    #[test]
+    fn negation_then_binary_add_parses_correctly() {
+        // `-x + y` → `Binops([(Call(negate,[x]), "+")], y)`.
+        // Negation binds tighter than the binary `+` operator — the `-x` is an
+        // atom, and `+ y` is the infix continuation.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v x y =\n    -x + y\n");
+        let result = parse_module(&src, &mut i);
+        assert!(result.is_ok(), "-x + y must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        // Body is a Binops chain; first operand is the negate call.
+        assert!(
+            v.is_some_and(|val| matches!(&val.body.value,
+                Expr_::Binops(ops, _) if ops.len() == 1
+                    && matches!(ops.first(), Some((e, _))
+                        if matches!(e.value, Expr_::Call(_, _)))
+            )),
+            "body must be Binops with negate-call as first operand"
+        );
+    }
+
+    #[test]
+    fn parenthesised_negation_of_identifier_is_negate_call() {
+        // `f (-x)` — inside the parens, `-x` is in prefix position.
+        // The paren unwraps to `Call(negate, [x])`, which becomes the argument
+        // to `f`: `Call(f, [Call(negate, [x])])`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v f x =\n    f (-x)\n");
+        let result = parse_module(&src, &mut i);
+        assert!(result.is_ok(), "f (-x) must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        let is_call_negate = v.is_some_and(|val| match &val.body.value {
+            Expr_::Call(_, args) => args.len() == 1
+                && matches!(
+                    args.first().map(|a| &a.value),
+                    Some(Expr_::Call(c, inner_args))
+                        if matches!(c.value, Expr_::VarLocal(s) if i.resolve(s) == Some("negate"))
+                        && inner_args.len() == 1
+                ),
+            _ => false,
+        });
+        assert!(is_call_negate, "body must be Call(f, [Call(negate, [x])])");
+    }
+
+    #[test]
+    fn binary_subtraction_still_works_after_unary_negate_fix() {
+        // `a - b` stays a Binops([(a, "-")], b): the `-` is consumed as a
+        // binary operator after the complete expression `a`, so
+        // `parse_negative_literal` is never invoked.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v a b =\n    a - b\n");
+        let result = parse_module(&src, &mut i);
+        assert!(result.is_ok(), "a - b must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|val| matches!(&val.body.value,
+                Expr_::Binops(ops, _) if ops.len() == 1
+            )),
+            "a - b must be a one-operator Binops chain"
+        );
+    }
+
+    #[test]
+    fn double_minus_binary_then_unary_parses() {
+        // `a - -b` — first `-` is the binary subtraction operator (after `a`),
+        // second `-` is in atom position for the RHS, desugaring to `negate b`.
+        // Result: `Binops([(a, "-")], Call(negate, [b]))`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v a b =\n    a - -b\n");
+        let result = parse_module(&src, &mut i);
+        assert!(result.is_ok(), "a - -b must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|val| matches!(&val.body.value,
+                Expr_::Binops(ops, tail)
+                    if ops.len() == 1
+                    && matches!(tail.value, Expr_::Call(_, _))
+            )),
+            "a - -b must be Binops([(a, -)], Call(negate, [b]))"
+        );
+    }
+
+    #[test]
+    fn space_between_minus_and_ident_is_a_parse_error() {
+        // `(- x)` (space between `-` and the identifier) must fail.
+        // Mirrors the Haskell behaviour: `exprAtom_` has no `spaces` call after
+        // consuming `-`, so a space before the operand causes the nested atom
+        // parse to fail (consumed error, no backtrack).
+        let src = format!("{HDR}v x =\n    (- x)\n");
+        assert!(
+            parse_module(&src, &mut Interner::new()).is_err(),
+            "`(- x)` with space must NOT parse"
+        );
+    }
+
     // ── Pipe-operator lexer maximal-munch tests ───────────────────────────────
 
     /// `|>` lexes as a single `PipeGt` token (maximal munch), not as

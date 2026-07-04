@@ -1139,7 +1139,7 @@ impl<'a> Parser<'a> {
             Tok::Float(f) => Ok(Located::new(tok.span, Expr_::Float(*f))),
             Tok::Str(s) => Ok(Located::new(tok.span, Expr_::Str(s.clone()))),
             Tok::Char(c) => Ok(Located::new(tok.span, Expr_::Char(c.clone()))),
-            Tok::Minus => self.parse_negative_literal(tok.span),
+            Tok::Minus => self.parse_negative_literal(tok.span, threshold, depth),
             Tok::Ident(text) => {
                 let expr = self.ident_expr(text, tok.span)?;
                 Ok(Located::new(tok.span, expr))
@@ -1148,26 +1148,57 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse a negative numeric literal in atom (prefix) position, the `-`
-    /// already consumed at `minus_span`.
+    /// Parse a unary minus in atom (prefix) position, the `-` already consumed
+    /// at `minus_span`.
     ///
-    /// Mirrors the Go reference's `Src.Negate` of a numeric literal, but folds
-    /// the sign directly into a signed [`Expr_::Int`] / [`Expr_::Float`] node so
-    /// no downstream `Negate` AST / canon / type / codegen arm is required — the
-    /// observable value is identical (`-5`, `-2.7`) for a literal operand.
+    /// **Faithful port of the Haskell `exprAtom_` `Negate` arm**
+    /// (`Sky.Parse.Expression`, lines 356–367 of the upstream reference):
     ///
-    /// Only a numeric literal *immediately* following the `-` (byte-adjacent
-    /// spans — Go's "minus followed by a digit without space" rule) is a
-    /// negation. Any other prefix `-` (a space before the literal, or a `-`
-    /// before a non-literal atom) stays a parse error: general unary negation of
-    /// an arbitrary expression is not yet modelled. Binary subtraction `a - b`
-    /// never reaches here — `peek_binop` consumes the `-` after an operand in
-    /// [`Self::parse_expr`], so this method is only entered when an atom (a fresh
-    /// operand) was expected.
-    fn parse_negative_literal(&mut self, minus_span: Span) -> DResult<Expr> {
+    /// ```haskell
+    /// do char mkError '-'
+    ///    mc <- peek
+    ///    case mc of
+    ///        Just c | c >= '0' && c <= '9' -> do
+    ///            e <- addLocation (exprAtom_ mkError)
+    ///            return (Src.Negate e)
+    ///        _ -> do
+    ///            e <- addLocation (exprAtom_ mkError)
+    ///            return (Src.Negate e)
+    /// ```
+    ///
+    /// Both branches of the digit/non-digit dispatch produce `Src.Negate(e)` —
+    /// the digit check is vestigial; the disambiguation between unary negation
+    /// and binary subtraction is positional: `parse_negative_literal` is only
+    /// reached when an atom (fresh operand) was expected, never after a complete
+    /// expression (`peek_binop` in [`Self::parse_expr`] would have consumed the
+    /// `-` as binary subtraction first).
+    ///
+    /// ## Operand forms
+    ///
+    /// * **Adjacent numeric literal** (`-5`, `-2.7`) — the sign is folded
+    ///   directly into a signed [`Expr_::Int`] / [`Expr_::Float`] node.  No
+    ///   downstream `Negate` AST arm is required, and the value is identical to
+    ///   `negate 5`.
+    ///
+    /// * **Adjacent non-literal atom** (`-x`, `-(e)`, `-f x`) — desugared at
+    ///   parse time to `Call(VarLocal("negate"), [e])`, matching the canonical
+    ///   Elm / Sky desugar path.  This closes the SKY-P0001 that 37-composite-
+    ///   live-shop hit on `if cents < 0 then -cents else cents` (State.sky:156).
+    ///
+    /// * **Non-adjacent** (`- 5`, `- x`) — the Haskell parser's `exprAtom_`
+    ///   has no leading `spaces` call after consuming `-`, so a space before the
+    ///   operand causes the nested atom parse to fail on the space character
+    ///   (consumed error, no backtrack).  We mirror this by checking byte-span
+    ///   adjacency and erroring when the gap is non-zero.
+    fn parse_negative_literal(
+        &mut self,
+        minus_span: Span,
+        threshold: u32,
+        depth: u32,
+    ) -> DResult<Expr> {
+        // ── Attempt 1: adjacent numeric literal ──────────────────────────────
         // Snapshot the Copy payload of the following token, then drop the borrow
-        // before consuming it. A non-adjacent or non-literal follower is not a
-        // negative literal.
+        // before consuming it.
         enum NegLit {
             Int(i64, Span),
             Float(f64, Span),
@@ -1195,26 +1226,48 @@ impl<'a> Parser<'a> {
                         expected: ExpectedSet([Expected::Expression].into()),
                     },
                 })?;
-                Ok(Located::new(
+                return Ok(Located::new(
                     Self::span_merge(minus_span, lit_span),
                     Expr_::Int(value),
-                ))
+                ));
             }
             Some(NegLit::Float(f, lit_span)) => {
                 self.bump(Construct::Expression)?;
-                Ok(Located::new(
+                return Ok(Located::new(
                     Self::span_merge(minus_span, lit_span),
                     Expr_::Float(-f),
-                ))
+                ));
             }
-            None => Err(Diagnostic::Parse {
-                span: minus_span,
-                msg: ParseError::UnexpectedToken {
-                    found: tok_kind(&Tok::Minus),
-                    expected: ExpectedSet([Expected::Expression].into()),
-                },
-            }),
+            None => {}
         }
+
+        // ── Attempt 2: adjacent non-literal atom → `negate(e)` ──────────────
+        // Port of the Haskell `_` branch: parse the sub-atom immediately
+        // following `-` and desugar to `Call(VarLocal("negate"), [e])`.
+        // Adjacency check mirrors the Haskell `exprAtom_` having no leading
+        // `spaces` call after the `-`: a space before the operand would cause
+        // the recursive atom parse to fail on the space character (consumed
+        // error). The check uses byte-span adjacency: `t.span.lo == minus_span.hi`.
+        let is_adjacent = self.peek().is_some_and(|t| t.span.lo == minus_span.hi);
+        if is_adjacent {
+            let negate_sym = self.intern("negate")?;
+            let negate_expr = Located::new(minus_span, Expr_::VarLocal(negate_sym));
+            let sub_expr = self.parse_atom_postfix(threshold, depth + 1)?;
+            let call_span = Self::span_merge(minus_span, sub_expr.span);
+            return Ok(Located::new(
+                call_span,
+                Expr_::Call(Box::new(negate_expr), vec![sub_expr]),
+            ));
+        }
+
+        // ── No match: non-adjacent `-` in atom position ──────────────────────
+        Err(Diagnostic::Parse {
+            span: minus_span,
+            msg: ParseError::UnexpectedToken {
+                found: tok_kind(&Tok::Minus),
+                expected: ExpectedSet([Expected::Expression].into()),
+            },
+        })
     }
 
     /// Parse what follows a just-consumed `(`: empty parens `()` are the unit
