@@ -198,14 +198,18 @@ const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub 
 ///
 /// `live/mod.rs` is gated by the `live` Cargo feature in the runtime source;
 /// this addition wires the `live` module (and its public re-exports `live_app`,
-/// `live_app_routed`, `live_render_static`, `live::route::Route`) into the
-/// module namespace so the generated `main.rs` can call them.
+/// `live_app_routed`, `live_render_static`, `live::route::Route`,
+/// `sub_subscribe_topic`) into the module namespace so the generated `main.rs`
+/// can call them.
+///
+/// `sub_subscribe_topic` is the `Sub.subscribeTopic` runtime kernel (M5d); it
+/// lives in `live/pubsub.rs` because it needs the session-aware broker.
 ///
 /// The `route` sub-module is referenced by path (`sky_runtime::live::route::Route`)
 /// not via `pub use live::*;` (to avoid surfacing the internal `store` / `req`
 /// internals in the top-level namespace).
 const RUNTIME_MOD_RS_LIVE_APPEND: &str = "#[cfg(feature = \"live\")]\npub mod live;\n\
-     #[cfg(feature = \"live\")]\npub use live::{live_app, live_app_routed, live_render_static};\n";
+     #[cfg(feature = \"live\")]\npub use live::{live_app, live_app_routed, live_render_static, sub_subscribe_topic};\n";
 
 /// The `SkyCmd<M>` and `SkySub<M>` project-level type aliases emitted when the
 /// program uses TEA kernels. Placed immediately after `runtime_bindings()` (the

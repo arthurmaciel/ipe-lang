@@ -2852,6 +2852,8 @@ impl<'a> Builder<'a> {
             ),
             K::TaskSequence | K::TaskParallel => fun(list(task(var(0))), task(list(var(0)))),
             K::TaskRun => fun(task(var(0)), result(var(1), var(0))),
+            // `Task.perform` is a 1-arg legacy alias for `Task.run`; identical type.
+            K::TaskPerform => fun(task(var(0)), result(var(1), var(0))),
 
             // ── Io / File / System: String -> Task () ──
             K::IoWriteStdout
@@ -2916,6 +2918,9 @@ impl<'a> Builder<'a> {
             K::SubNone => sub(var(0)),
             K::SubBatch => fun(list(sub(var(0))), sub(var(0))),
             K::SubEvery => fun(int(), fun(var(0), sub(var(0)))),
+            // `Sub.subscribeTopic : String -> (any -> msg) -> Sub msg`
+            // var(0) = payload type (the `any`), var(1) = message type.
+            K::SubSubscribeTopic => fun(string(), fun(fun(var(0), var(1)), sub(var(1)))),
 
             // ── Server ──
             K::ServerGet
@@ -3822,19 +3827,19 @@ impl<'a> Builder<'a> {
             // `stdlib_scheme_total_over_reachable`, the REACHABLE_BUT_UNLOWERED
             // disjointness guard). Do NOT add a bare `_` back — it reopens F1.
             //
-            //  * `Cmd.publish` / `Cmd.publishNoEcho` / `Sub.subscribeTopic` —
+            //  * `Cmd.publish` / `Cmd.publishNoEcho` / `PubSub.*` —
             //    M6-reserved enum variants that are ABSENT from `StdlibKernel::ALL`
-            //    entirely (their `"Cmd"`/`"Sub"` qualifiers are wired but these
-            //    specific members are not registered), so canon can never mint a
-            //    `VarKernel` for them. Unreachable by construction; named here only
-            //    to keep this match wildcard-free. They join `ALL` + get a scheme
-            //    when M6 pub/sub lands.
+            //    entirely (their qualifiers are wired but these specific members are
+            //    not registered), so canon can never mint a `VarKernel` for them.
+            //    Unreachable by construction; named here only to keep this match
+            //    wildcard-free. They join `ALL` + get a scheme when M6 pub/sub lands.
+            //  * `Sub.subscribeTopic` is wired (M5d) and has its type above;
+            //    this arm no longer covers it.
             K::PubSubPublish
             | K::PubSubPublishNoEcho
             | K::LiveAppRouted
             | K::CmdPublish
-            | K::CmdPublishNoEcho
-            | K::SubSubscribeTopic => return None,
+            | K::CmdPublishNoEcho => return None,
 
             // ── #111: Std.Auth (9 kernels) ──────────────────────────────────────
             // hashPassword : String -> Result Error String
@@ -4194,7 +4199,7 @@ mod registry_phase_c_tests {
             K::BytesToBase64,
             K::BytesAppend,
             K::BytesSlice,
-            // Task (11)
+            // Task (12)
             K::TaskSucceed,
             K::TaskFail,
             K::TaskMap,
@@ -4206,6 +4211,7 @@ mod registry_phase_c_tests {
             K::TaskSequence,
             K::TaskParallel,
             K::TaskRun,
+            K::TaskPerform,
             // Io (3)
             K::IoReadLine,
             K::IoWriteStdout,
@@ -4261,10 +4267,11 @@ mod registry_phase_c_tests {
             K::CmdNone,
             K::CmdBatch,
             K::CmdPerform,
-            // Sub (3)
+            // Sub (4)
             K::SubNone,
             K::SubBatch,
             K::SubEvery,
+            K::SubSubscribeTopic,
             // Middleware (4)
             K::MiddlewareWithCors,
             K::MiddlewareWithLogging,

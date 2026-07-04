@@ -443,6 +443,9 @@ pub enum StdlibKernel {
     TaskSequence,
     TaskParallel,
     TaskRun,
+    /// `Task.perform` — 1-arg legacy alias of `Task.run`; both map to
+    /// `task_run` at the runtime boundary.
+    TaskPerform,
     // ── Io ──────────────────────────────────────────────────────────────────
     IoReadLine,
     IoWriteStdout,
@@ -1292,6 +1295,7 @@ impl StdlibKernel {
             Self::TaskSequence => d("Task", "sequence", 1, Pure, "task_sequence"),
             Self::TaskParallel => d("Task", "parallel", 1, Pure, "task_parallel"),
             Self::TaskRun => d("Task", "run", 1, Pure, "task_run"),
+            Self::TaskPerform => d("Task", "perform", 1, Pure, "task_run"),
             // ── Io ──────────────────────────────────────────────────────────
             Self::IoReadLine => d("Io", "readLine", 0, Pure, "io_read_line"),
             Self::IoWriteStdout => d("Io", "writeStdout", 1, Pure, "io_write_stdout"),
@@ -1783,8 +1787,6 @@ impl StdlibKernel {
     /// - [`Self::CmdPublish`] — `"Cmd"` qualifier is in `qual_vars` but
     ///   `"publish"` is not yet; adding prematurely would break the tripwire.
     /// - [`Self::CmdPublishNoEcho`] — same reason.
-    /// - [`Self::SubSubscribeTopic`] — `"Sub"` qualifier is in `qual_vars`
-    ///   but `"subscribeTopic"` is not yet.
     ///
     /// When those entries are added to `QUALIFIERS`, add the variant here in
     /// the same commit to keep the tripwire green.
@@ -2085,6 +2087,7 @@ impl StdlibKernel {
         Self::TaskSequence,
         Self::TaskParallel,
         Self::TaskRun,
+        Self::TaskPerform,
         // Io
         Self::IoReadLine,
         Self::IoWriteStdout,
@@ -2182,6 +2185,7 @@ impl StdlibKernel {
         Self::SubNone,
         Self::SubBatch,
         Self::SubEvery,
+        Self::SubSubscribeTopic,
         Self::TimeEvery,
         // TEA: PubSub M6 reserved (qualifier "PubSub" not yet in qual_vars →
         // tripwire skips; kept here so they appear in the registry index)

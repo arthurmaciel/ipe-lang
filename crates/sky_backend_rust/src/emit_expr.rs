@@ -920,12 +920,17 @@ fn emit_tea_call(
         // `Time.every : Int -> msg -> Sub msg`
         // Both pass through the default N-arg emitter (no boxing needed).
         KernelFn::SubEvery | KernelFn::TimeEvery => Ok(None),
+        // ── Arity-2: pub/sub subscription — standard path ────────────────────────
+        // `Sub.subscribeTopic : String -> (any -> msg) -> Sub msg`
+        // The runtime `sub_subscribe_topic` is in live/pubsub.rs (live-feature
+        // gated). The payload type T is resolved by Rust's type inference from
+        // the matching `cmd_publish` call site; no boxing required here.
+        KernelFn::SubSubscribeTopic => Ok(None),
         // ── M6 reserved: NOT emittable yet ───────────────────────────────────────
         // If a program somehow reaches one of these kernels through lower_callee
         // routing, that is a compiler invariant violation — hard error.
         KernelFn::CmdPublish
         | KernelFn::CmdPublishNoEcho
-        | KernelFn::SubSubscribeTopic
         | KernelFn::PubSubPublish
         | KernelFn::PubSubPublishNoEcho => Err(Diagnostic::CompilerBug {
             where_: "sky_backend_rust::emit_tea_call",

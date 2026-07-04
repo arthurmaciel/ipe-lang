@@ -4008,6 +4008,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TaskSequence
                 | KernelFn::TaskParallel
                 | KernelFn::TaskRun
+                | KernelFn::TaskPerform
                 // ── Io arity-1 (M5a) ──────────────────────────────────────────
                 | KernelFn::IoReadLine
                 | KernelFn::IoWriteStdout
@@ -4254,13 +4255,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SubEvery
                 // `Time.every : Int -> msg -> Sub msg`  (alias)
                 | KernelFn::TimeEvery
+                // `Sub.subscribeTopic : String -> (any -> msg) -> Sub msg`  (M5d wired)
+                | KernelFn::SubSubscribeTopic
                 // ── TEA arity-2 (M6 reserved — not emitted yet) ───────────────
                 // `Cmd.publish : String -> a -> Cmd msg`
                 | KernelFn::CmdPublish
                 // `Cmd.publishNoEcho : String -> a -> Cmd msg`
                 | KernelFn::CmdPublishNoEcho
-                // `Sub.subscribeTopic : String -> (a -> msg) -> Sub msg`
-                | KernelFn::SubSubscribeTopic
                 // `PubSub.publish : String -> a -> Task Error ()`
                 | KernelFn::PubSubPublish
                 // `PubSub.publishNoEcho : String -> a -> Task Error ()`
@@ -5224,6 +5225,7 @@ impl<'a> Lowerer<'a> {
                     ("Task", "sequence") => Ok(Callee::Kernel(KernelFn::TaskSequence)),
                     ("Task", "parallel") => Ok(Callee::Kernel(KernelFn::TaskParallel)),
                     ("Task", "run") => Ok(Callee::Kernel(KernelFn::TaskRun)),
+                    ("Task", "perform") => Ok(Callee::Kernel(KernelFn::TaskPerform)),
                     // ── Io kernels (M5a) ──────────────────────────────────────
                     ("Io", "readLine") => Ok(Callee::Kernel(KernelFn::IoReadLine)),
                     ("Io", "writeStdout") => Ok(Callee::Kernel(KernelFn::IoWriteStdout)),
@@ -5323,6 +5325,7 @@ impl<'a> Lowerer<'a> {
                     ("Sub", "none") => Ok(Callee::Kernel(KernelFn::SubNone)),
                     ("Sub", "batch") => Ok(Callee::Kernel(KernelFn::SubBatch)),
                     ("Sub", "every") => Ok(Callee::Kernel(KernelFn::SubEvery)),
+                    ("Sub", "subscribeTopic") => Ok(Callee::Kernel(KernelFn::SubSubscribeTopic)),
                     ("Time", "every") => Ok(Callee::Kernel(KernelFn::TimeEvery)),
                     // ── Sky.Http.Server kernels (M6) ─────────────────────────────
                     ("Server", "get") => Ok(Callee::Kernel(KernelFn::ServerGet)),
