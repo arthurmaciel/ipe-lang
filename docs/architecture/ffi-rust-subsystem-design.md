@@ -3,6 +3,19 @@
 **Status:** design-ahead. Tier-2 FFI is implemented LAST per the roadmap
 (`docs/roadmap.md` §B); nothing in this doc executes now.
 **Date:** 2026-07-04.
+
+> **GOAL CORRECTION (coordinator, 2026-07-04) — supersedes this doc's scope +
+> P-ordering.** The goal is fully-automatic, UNIVERSAL (every crate) Sky→Rust
+> FFI. **The acceptance metric is `../sky/examples/rust/skyshop-rs` running with
+> ZERO manual shims for firestore, firebase, and stripe** — the reference itself
+> still hand-shims these, so this is exactly where we exceed it — **plus DCE of
+> unused FFI functions/values** (bind/emit only the used subset; Stripe-scale =
+> 76k symbols). Consequence: §6's "P7 async bridge LAST" ordering is WRONG under
+> this goal — the async→`Task Error a` auto-bridge is the make-or-break spine
+> and must be designed + de-risked EARLY (spine-first principle). An async-bridge
+> double-swarm (fresh-design ∥ reference-learning → conciliation) supersedes P7;
+> its output will amend this doc. The reference-validated architecture in §1-§5
+> (inspector, generator, sandbox, no-fallback wall) stands unchanged.
 **Relationship to prior docs:** this doc RECONCILES and PARTIALLY SUPERSEDES
 the banked #39 suite — `ffi-design.md`, `ffi-port-spec.md`,
 `ffi-subsystem-design.md`, `ffi-sandbox-and-generator-impl-ready.md` — now
