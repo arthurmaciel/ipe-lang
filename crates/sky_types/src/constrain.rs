@@ -145,6 +145,11 @@ struct Builtins {
     server_route: Symbol,
     /// `"Cookie"` — the opaque server cookie type.
     server_cookie: Symbol,
+    // ── #111: Sky.Http.Server.Stream opaque type constructor symbol ───────────
+    /// `"StreamWriter"` — the opaque stream writer handle passed to the
+    /// `Stream.stream` callback and consumed by `Stream.emit` /
+    /// `Stream.finish` / `Stream.withContentType`.
+    stream_writer: Symbol,
     // ── M7: Std.Ui / Std.Html parametric type constructor symbols ─────────────
     /// `"Attribute"` — Std.Ui attribute type constructor `Attribute msg`.
     ///
@@ -282,6 +287,8 @@ impl Builtins {
             server_response: interner.intern("Response")?,
             server_route: interner.intern("Route")?,
             server_cookie: interner.intern("Cookie")?,
+            // #111: Sky.Http.Server.Stream opaque handle.
+            stream_writer: interner.intern("StreamWriter")?,
             // M7: Std.Ui / Std.Html parametric type constructor symbols.
             attribute: interner.intern("Attribute")?,
             element: interner.intern("Element")?,
@@ -1387,6 +1394,7 @@ impl<'a> Builder<'a> {
     /// `Task String a` or `Task Int a`).  Returns a `CompilerBug` when a
     /// `Task` annotation has a number of type arguments other than 1 or 2
     /// (canonicalisation rules out arity-0 or arity-3+ applications).
+    #[allow(clippy::too_many_lines)]
     fn normalize_annotation_ty(&self, ty: Ty, span: Span) -> DResult<Ty> {
         match ty {
             Ty::Con { module, name, args } => {
@@ -1456,6 +1464,56 @@ impl<'a> Builder<'a> {
                             ),
                         }),
                     }
+                } else if args.is_empty()
+                    && self.interner.resolve(name) == Some("HttpRequest")
+                {
+                    // `HttpRequest` is a stdlib type alias for a structural record
+                    // (`{ body, followRedirects, headers, maxRedirects, method,
+                    // timeout, url }`).  The Rust port has no Sky-source stdlib
+                    // files, so the canonicaliser never registers `HttpRequest` as a
+                    // type alias — it falls through to an opaque `Con`.  Expand it
+                    // here so user annotations like `upstreamRequest : HttpRequest`
+                    // unify with the structural record that kernels such as
+                    // `HttpStreamOpen` / `HttpGet` / `HttpPost` expect.
+                    let mk = |n: Symbol| Ty::Con { module: Vec::new(), name: n, args: Vec::new() };
+                    let string = || mk(self.builtins.string);
+                    let int = || mk(self.builtins.int);
+                    let bool_ty = || mk(self.builtins.bool);
+                    let list = |t: Ty| Ty::Con {
+                        module: Vec::new(),
+                        name: self.builtins.list,
+                        args: vec![t],
+                    };
+                    let mut req_fields = BTreeMap::new();
+                    req_fields.insert(self.builtins.http_f_body, string());
+                    req_fields.insert(self.builtins.http_f_follow_redirects, bool_ty());
+                    req_fields
+                        .insert(self.builtins.http_f_headers, list(Ty::Tuple(vec![string(), string()])));
+                    req_fields.insert(self.builtins.http_f_max_redirects, int());
+                    req_fields.insert(self.builtins.http_f_method, string());
+                    req_fields.insert(self.builtins.http_f_timeout, int());
+                    req_fields.insert(self.builtins.http_f_url, string());
+                    Ok(Ty::Record(req_fields, RowTail::Closed))
+                } else if args.is_empty()
+                    && self.interner.resolve(name) == Some("HttpResponse")
+                {
+                    // `HttpResponse` is a stdlib type alias for `{ body : String,
+                    // headers : Dict String String, status : Int }`.  Expand for the
+                    // same reason as `HttpRequest` above.
+                    let mk = |n: Symbol| Ty::Con { module: Vec::new(), name: n, args: Vec::new() };
+                    let string = || mk(self.builtins.string);
+                    let int = || mk(self.builtins.int);
+                    let dict = |k: Ty, v: Ty| Ty::Con {
+                        module: Vec::new(),
+                        name: self.builtins.dict,
+                        args: vec![k, v],
+                    };
+                    let mut resp_fields = BTreeMap::new();
+                    resp_fields.insert(self.builtins.http_f_body, string());
+                    resp_fields
+                        .insert(self.builtins.http_f_headers, dict(string(), string()));
+                    resp_fields.insert(self.builtins.http_f_status, int());
+                    Ok(Ty::Record(resp_fields, RowTail::Closed))
                 } else {
                     // Non-Task constructor: recurse into type arguments.
                     let args = args
@@ -2340,6 +2398,13 @@ impl<'a> Builder<'a> {
         let cookie = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.server_cookie,
+            args: Vec::new(),
+        };
+        // `sw()` — the opaque `StreamWriter` handle (#111). Used by
+        // `Stream.stream` callback arg and `Stream.emit`/`finish`/`withContentType`.
+        let sw = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.stream_writer,
             args: Vec::new(),
         };
         let attr = |m: Ty| Ty::Con {
@@ -3718,24 +3783,49 @@ impl<'a> Builder<'a> {
             | K::LiveAppRouted
             | K::CmdPublish
             | K::CmdPublishNoEcho
-            | K::SubSubscribeTopic
-            // ── #111 — Reachable but not yet lowered (fail-closed at lower time) ─
-            | K::AuthHashPassword
-            | K::AuthHashPasswordCost
-            | K::AuthVerifyPassword
-            | K::AuthPasswordStrength
-            | K::AuthSignToken
-            | K::AuthVerifyToken
-            | K::AuthRegister
-            | K::AuthLogin
-            | K::AuthSetRole
-            | K::StreamStream
-            | K::StreamEmit
-            | K::StreamFinish
-            | K::StreamWithContentType
-            | K::HttpStreamOpen
-            | K::HttpStreamForEachChunk
-            | K::HttpStreamClose => return None,
+            | K::SubSubscribeTopic => return None,
+
+            // ── #111: Std.Auth (9 kernels) ──────────────────────────────────────
+            // hashPassword : String -> Result Error String
+            K::AuthHashPassword => fun(string(), result(error_ty(), string())),
+            // hashPasswordCost : String -> Int -> Result Error String
+            K::AuthHashPasswordCost => fun(string(), fun(int(), result(error_ty(), string()))),
+            // verifyPassword : String -> String -> Result Error Bool
+            K::AuthVerifyPassword => fun(string(), fun(string(), result(error_ty(), bool_ty()))),
+            // passwordStrength : String -> Result Error String
+            K::AuthPasswordStrength => fun(string(), result(error_ty(), string())),
+            // signToken : String -> a -> Int -> Result Error String
+            // var(0) = claims dict (polymorphic — Dict String String at runtime)
+            K::AuthSignToken => fun(string(), fun(var(0), fun(int(), result(error_ty(), string())))),
+            // verifyToken : String -> String -> Result Error a
+            // var(0) = claims dict (polymorphic — Dict String String at runtime)
+            K::AuthVerifyToken => fun(string(), fun(string(), result(error_ty(), var(0)))),
+            // register : Db -> String -> String -> Task Error Int
+            K::AuthRegister => fun(db(), fun(string(), fun(string(), task(int())))),
+            // login : Db -> String -> String -> Task Error Int
+            K::AuthLogin => fun(db(), fun(string(), fun(string(), task(int())))),
+            // setRole : Db -> Int -> String -> Task Error ()
+            K::AuthSetRole => fun(db(), fun(int(), fun(string(), task_unit()))),
+
+            // ── #111: Sky.Http.Server.Stream (4 kernels) ────────────────────────
+            // stream : String -> (StreamWriter -> Task Error ()) -> Task Error Response
+            // The callback receives an opaque `StreamWriter` handle; emit/finish
+            // consume the same handle directly (no Int unwrap layer needed).
+            K::StreamStream => fun(string(), fun(fun(sw(), task_unit()), task(resp()))),
+            // emit : String -> StreamWriter -> Task Error ()
+            K::StreamEmit => fun(string(), fun(sw(), task_unit())),
+            // finish : StreamWriter -> Task Error ()
+            K::StreamFinish => fun(sw(), task_unit()),
+            // withContentType : String -> StreamWriter -> Task Error ()
+            K::StreamWithContentType => fun(string(), fun(sw(), task_unit())),
+
+            // ── #111: Sky.Core.Http.Stream (3 kernels) ──────────────────────────
+            // openRaw : HttpRequest -> Task Error Int
+            K::HttpStreamOpen => fun(http_request(), task(int())),
+            // forEachChunkRaw : Int -> (String -> Task Error ()) -> Task Error ()
+            K::HttpStreamForEachChunk => fun(int(), fun(fun(string(), task_unit()), task_unit())),
+            // closeRaw : Int -> Task Error ()
+            K::HttpStreamClose => fun(int(), task_unit()),
         })
     }
 }
@@ -4699,6 +4789,25 @@ mod registry_phase_c_tests {
             K::HtmlAttrTabindex,
             // Std.Cli / Sky.Cli app-entry (#111) — brand-new kernel, no legacy oracle.
             K::CliProgram,
+            // ── #111: Std.Auth (9 kernels) — schemed + lowered, moved from REACHABLE_BUT_UNLOWERED ──
+            K::AuthHashPassword,
+            K::AuthHashPasswordCost,
+            K::AuthVerifyPassword,
+            K::AuthPasswordStrength,
+            K::AuthSignToken,
+            K::AuthVerifyToken,
+            K::AuthRegister,
+            K::AuthLogin,
+            K::AuthSetRole,
+            // ── #111: Sky.Http.Server.Stream (4 kernels) ─────────────────────────
+            K::StreamStream,
+            K::StreamEmit,
+            K::StreamFinish,
+            K::StreamWithContentType,
+            // ── #111: Sky.Core.Http.Stream (3 kernels) ───────────────────────────
+            K::HttpStreamOpen,
+            K::HttpStreamForEachChunk,
+            K::HttpStreamClose,
             // ── Std.Ui.Region (#117) — all 8 landmark/live-region attrs ──
             K::RegionMainContent,
             K::RegionNavigation,
@@ -4724,27 +4833,6 @@ mod registry_phase_c_tests {
         use StdlibKernel as K;
         &[
             K::LiveAppRouted,
-            // ── #111: Std.Auth, Sky.Http.Server.Stream, Sky.Core.Http.Stream ───────
-            // These have a canon qualifier + a Rust runtime fn, but their lowering
-            // arms are not yet implemented.  A caller that reaches them fails closed
-            // with SKY-L0108 at lower time.  When lowering lands, move them to
-            // FIRST_SCHEMED and add the stdlib_scheme arms.
-            K::AuthHashPassword,
-            K::AuthHashPasswordCost,
-            K::AuthVerifyPassword,
-            K::AuthPasswordStrength,
-            K::AuthSignToken,
-            K::AuthVerifyToken,
-            K::AuthRegister,
-            K::AuthLogin,
-            K::AuthSetRole,
-            K::StreamStream,
-            K::StreamEmit,
-            K::StreamFinish,
-            K::StreamWithContentType,
-            K::HttpStreamOpen,
-            K::HttpStreamForEachChunk,
-            K::HttpStreamClose,
         ]
     };
 
