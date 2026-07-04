@@ -228,6 +228,13 @@ struct Builtins {
     /// `"onLine"` — the onLine field of the `Cli.program` config record.
     /// Typed as `String -> Msg` — called once per stdin line.
     cli_f_on_line: Symbol,
+    // ── Ui.button cfg record field name symbols ───────────────────────────────
+    /// `"onPress"` — the onPress field of the `Ui.button` config record.
+    /// Typed as `Maybe msg`.
+    btn_f_on_press: Symbol,
+    /// `"label"` — the label field of the `Ui.button` config record.
+    /// Typed as `Element msg`.
+    btn_f_label: Symbol,
 }
 
 impl Builtins {
@@ -315,6 +322,9 @@ impl Builtins {
             webview_f_size: interner.intern("size")?,
             // #111: Cli cfg field names.
             cli_f_on_line: interner.intern("onLine")?,
+            // Ui.button cfg field names.
+            btn_f_on_press: interner.intern("onPress")?,
+            btn_f_label: interner.intern("label")?,
         })
     }
 
@@ -3166,6 +3176,15 @@ impl<'a> Builder<'a> {
                 list(attr(var(0))),
                 fun(list(elem_t(var(0))), elem_t(var(0))),
             ),
+            K::UiButton => {
+                let cfg_rec = Ty::Record({
+                    let mut m = BTreeMap::new();
+                    m.insert(self.builtins.btn_f_on_press, maybe(var(0)));
+                    m.insert(self.builtins.btn_f_label, elem_t(var(0)));
+                    m
+                }, RowTail::Closed);
+                fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
+            }
             K::UiOnClick | K::UiOnFocus | K::UiOnBlur | K::UiOnMouseOver | K::UiOnMouseOut => {
                 fun(var(0), attr(var(0)))
             }
@@ -3518,6 +3537,7 @@ impl<'a> Builder<'a> {
             | K::FontBlack
             | K::FontUnderline
             | K::FontNoDecoration
+            | K::FontLineThrough
             | K::FontAlignLeft
             | K::FontAlignRight
             | K::FontCenter
@@ -4350,6 +4370,7 @@ mod registry_phase_c_tests {
             K::UiColumn,
             K::UiWrappedRow,
             K::UiGrid,
+            K::UiButton,
             K::UiOnClick,
             K::UiOnFocus,
             K::UiOnBlur,
@@ -4810,6 +4831,7 @@ mod registry_phase_c_tests {
             K::FontBlack,
             K::FontUnderline,
             K::FontNoDecoration,
+            K::FontLineThrough,
             K::FontLetterSpacing,
             K::FontWordSpacing,
             K::FontAlignLeft,
