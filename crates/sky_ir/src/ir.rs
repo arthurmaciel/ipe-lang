@@ -1060,6 +1060,11 @@ pub enum Callee {
 /// [`sky_kernels::StdlibKernel::decl`] for per-variant metadata.
 pub type KernelFn = sky_kernels::StdlibKernel;
 
+/// Re-export of the `Std.Html.Events` payload-shape ADT (#107), so backend
+/// crates that already depend on `sky_ir` (for `KernelFn`) can match on it
+/// without taking a direct `sky_kernels` dependency.
+pub use sky_kernels::HtmlEventShape;
+
 /// Binary operators.
 ///
 /// M0 shipped `Add`/`Sub`; M1 core widens the set with the remaining

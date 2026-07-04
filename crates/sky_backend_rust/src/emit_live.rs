@@ -92,9 +92,10 @@ pub fn emit_live_call(
 
         // ── Live.route pattern ctor ─────────────────────────────────────────
         //
-        // `Live.route : String -> (List String -> Page) -> LiveRoute`
+        // `Live.route : String -> page -> LiveRoute`  (#106)
         //
-        // The second argument is either:
+        // The second argument's Sky type is a bare polymorphic `page`, so it is
+        // either:
         //   * A nullary ctor expression (`HomePage`) — lowered by the Sky compiler
         //     as a ctor-ref (no params), so the emit wraps it in `|_params| ctor`.
         //   * A partially-applied ctor function or lambda — emit as a generic

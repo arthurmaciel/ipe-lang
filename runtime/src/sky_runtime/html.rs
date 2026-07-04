@@ -789,6 +789,45 @@ pub fn html_no_attr_<M>() -> Attribute<M> {
     Attribute::NoAttr
 }
 
+/// `Std.Html.Events.{onClick,onFocus,onBlur,onMouseOver,onMouseOut}` (#107) —
+/// a zero-wire-arg event whose `Msg` dispatches as-is. The `name` is the fixed
+/// DOM event name supplied by the compile-time `html_event_wire_name` (never
+/// attacker data).
+#[must_use]
+pub fn html_on_msg_<M>(name: String, msg: M) -> Attribute<M> {
+    Attribute::EventAttr(Event::OnMsg(name, msg))
+}
+
+/// `Std.Html.Events.{onInput,onChange,onKeyDown,onKeyUp}` (#107) — a
+/// value-carrying event; the handler receives the input string. The compiler
+/// Arc-wraps the emitted Sky fn before this call.
+#[must_use]
+pub fn html_on_string_<M>(
+    name: String,
+    handler: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>,
+) -> Attribute<M> {
+    Attribute::EventAttr(Event::OnString(name, handler))
+}
+
+/// `Std.Html.Events.{onBool,onCheck}` (#107) — a checkbox-state event; the
+/// handler receives the checked bool.
+#[must_use]
+pub fn html_on_bool_<M>(
+    name: String,
+    handler: std::sync::Arc<dyn Fn(bool) -> M + Send + Sync>,
+) -> Attribute<M> {
+    Attribute::EventAttr(Event::OnBool(name, handler))
+}
+
+/// `Std.Html.Events.{onSubmit,on}` (#107) — a heterogeneous-payload event whose
+/// handler type is DECOUPLED from `M` (a form's `onSubmit DoSignIn` must not
+/// leak `LoginForm -> Msg` into the surrounding `Html msg`). The payload is
+/// type-erased behind `Arc<dyn Any>`; the wire driver downcasts it at dispatch.
+#[must_use]
+pub fn html_on_raw_<M, A: std::any::Any + Send + Sync>(name: String, payload: A) -> Attribute<M> {
+    Attribute::EventAttr(Event::OnRaw(name, std::sync::Arc::new(payload)))
+}
+
 /// `Ffi.callPure "htmlEscapeText"` — HTML-escape a string for text content.
 /// Routes through the same escaper as render so the escape set (`& ' < > "`,
 /// matching Go's html.EscapeString for the text subset) can never drift.

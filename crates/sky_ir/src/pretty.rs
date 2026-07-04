@@ -798,7 +798,19 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiOnChange => "Ui.onChange",
         KernelFn::UiOnKeyDown => "Ui.onKeyDown",
         KernelFn::UiOnKeyUp => "Ui.onKeyUp",
-        KernelFn::UiOnBool => "Event.onBool",
+        KernelFn::UiOnBool => "Ui.onBool",
+        // #107: Std.Html.Events builders (produce Std.Html.Attribute).
+        KernelFn::HtmlOnClick => "Event.onClick",
+        KernelFn::HtmlOnFocus => "Event.onFocus",
+        KernelFn::HtmlOnBlur => "Event.onBlur",
+        KernelFn::HtmlOnMouseOver => "Event.onMouseOver",
+        KernelFn::HtmlOnMouseOut => "Event.onMouseOut",
+        KernelFn::HtmlOnSubmit => "Event.onSubmit",
+        KernelFn::HtmlOnInput => "Event.onInput",
+        KernelFn::HtmlOnChange => "Event.onChange",
+        KernelFn::HtmlOnKeyDown => "Event.onKeyDown",
+        KernelFn::HtmlOnKeyUp => "Event.onKeyUp",
+        KernelFn::HtmlOnBool => "Event.onBool",
     }
 }
 
