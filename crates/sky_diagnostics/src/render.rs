@@ -456,6 +456,9 @@ fn lower_label(msg: &LowerError) -> String {
         LowerError::BackendNestingTooDeep { limit } => {
             format!("nested past the backend limit of {limit}")
         }
+        LowerError::DecodeSucceedArityTooHigh { n } => {
+            format!("`succeed` constructor has {n} parameters; the `curry1`..`curry10` cap is 10")
+        }
     }
 }
 

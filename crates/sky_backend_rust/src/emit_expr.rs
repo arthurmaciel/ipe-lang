@@ -2885,18 +2885,24 @@ pub fn emit_expr(
     emit_expr_at(ctx, expr, indent, 0, generics)
 }
 
-/// Handle JSON decoder kernel calls that require custom argument wrapping.
+/// Handle JSON / Db decoder kernel calls that require custom argument wrapping.
 ///
-/// Returns `Some(emitted)` for the three special cases:
+/// Returns `Some(emitted)` for the four special cases:
 ///
 /// * **Arity-0 primitive decoders** (`JsonDecString/Int/Float/Bool`) — these
 ///   carry a free `E: From<String>` type parameter that Rust cannot infer when
 ///   passed to another polymorphic function (e.g. `decode_from_json_string`).
 ///   Emits with an explicit `SkyError` turbofish.
 ///
-/// * **`JsonDecSucceed` applied to a named multi-arg function** — `decode_succeed`
-///   expects a `Box<dyn Fn() -> A + Send>` FACTORY. A named N-arg function
-///   `makeUser` is wrapped as `decode_succeed(curry_N(makeUser))`.
+/// * **`JsonDecSucceed | DbDecSucceed`** applied to any argument — `decode_succeed`
+///   expects a `Box<dyn Fn() -> A + Send>` FACTORY (not a raw value).
+///   Three sub-cases:
+///   1. Named N-arg function (`FuncValue`) → `decode_succeed(curry{n}(fn_name))`
+///   2. Lambda with N params → `decode_succeed(curry{n}(move |p1: T1, …| -> R { body }))`
+///   3. Any other value → `decode_succeed({ let __sky_succeed = <arg>; Box::new(move || __sky_succeed.clone()) })`
+///
+///   Cases 1+2 are fail-closed when N > 10 via [`LowerError::DecodeSucceedArityTooHigh`]
+///   (no `curry11` exists in the runtime).
 ///
 /// * **`JsonDecList`** — `decode_list` expects `impl Fn() -> Decoder<E, T> + Send`
 ///   (a factory) rather than the decoder value. Wraps the argument in a
@@ -2929,17 +2935,49 @@ fn emit_json_decoder_call(
         let name = callee_name(ctx, callee)?;
         return Ok(Some(format!("{name}::<SkyError>()")));
     }
-    // ── JsonDecSucceed with named function argument ───────────────────────────
-    if matches!(callee, Callee::Kernel(sky_ir::KernelFn::JsonDecSucceed))
-        && let Some(Expr::FuncValue {
-            callee: fn_callee,
-            ty: IrType::Fun(params, _),
-        }) = args.first()
-        && !params.is_empty()
+    // ── succeed(arg) — JsonDecSucceed and DbDecSucceed share decode_succeed ───
+    if matches!(callee, Callee::Kernel(KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed))
+        && let Some(arg) = args.first()
     {
-        let fn_name = callee_name(ctx, fn_callee)?;
-        let n = params.len();
-        return Ok(Some(format!("decode_succeed(curry{n}({fn_name}))")));
+        match arg {
+                // Case 1: named function (FuncValue) — curry{n}(fn_name)
+                Expr::FuncValue {
+                    callee: fn_callee,
+                    ty: IrType::Fun(params, _),
+                } if !params.is_empty() => {
+                    let n = params.len();
+                    if n > 10 {
+                        return Err(Diagnostic::Lower {
+                            span: Span::DUMMY,
+                            msg: LowerError::DecodeSucceedArityTooHigh { n },
+                        });
+                    }
+                    let fn_name = callee_name(ctx, fn_callee)?;
+                    return Ok(Some(format!("decode_succeed(curry{n}({fn_name}))")));
+                }
+                // Case 2: lambda — curry{n}(move |params| -> ret { body })
+                Expr::Lambda { params, ret, body } if !params.is_empty() => {
+                    let n = params.len();
+                    if n > 10 {
+                        return Err(Diagnostic::Lower {
+                            span: Span::DUMMY,
+                            msg: LowerError::DecodeSucceedArityTooHigh { n },
+                        });
+                    }
+                    let closure =
+                        emit_lambda_unboxed(ctx, params, ret, body, indent, child, generics)?;
+                    return Ok(Some(format!("decode_succeed(curry{n}({closure}))")));
+                }
+                // Case 3: any other value — factory-wrap so it is called per run.
+                // Turbofish `<SkyError, _>` pins the error type when there is no
+                // surrounding pipeline to drive inference (E0283 otherwise).
+                other => {
+                    let val = emit_expr_at(ctx, other, indent, child, generics)?;
+                    return Ok(Some(format!(
+                        "decode_succeed::<SkyError, _>({{ let __sky_succeed = {val}; Box::new(move || __sky_succeed.clone()) }})"
+                    )));
+                }
+        }
     }
     // ── JsonDecList — wrap argument in factory closure ────────────────────────
     if matches!(callee, Callee::Kernel(sky_ir::KernelFn::JsonDecList))
@@ -4234,15 +4272,12 @@ fn emit_func_value(
     ))
 }
 
-/// Emit a lambda `\p0 p1 ... -> body` as a boxed closure
-/// `Box::new(move |p0: T0, ...| -> R { <body> })`. The `move` capture takes any
-/// free locals by value; the explicit return type pins the closure's signature
-/// so it coerces cleanly to the `Box<dyn Fn(..) -> R>` slot it fills. `depth` is
-/// the lambda's own IR-nesting level; its body is emitted one level deeper. Kept
-/// out of the `emit_expr_at` match (`#[inline(never)]`) for the same frame-size
-/// reason as [`emit_record`] / [`emit_update`].
-#[inline(never)]
-fn emit_lambda(
+/// Emit the unboxed inner `move |p0: T0, …| -> R { <body> }` closure expression.
+/// Used by both [`emit_lambda`] (wraps it in `Box::new(…)`) and the `succeed`
+/// curry path in [`emit_json_decoder_call`] (wraps it in `curry{n}(…)` instead).
+/// `depth` is the lambda's own IR-nesting level; the body is emitted one level
+/// deeper.
+fn emit_lambda_unboxed(
     ctx: &EmitCtx,
     params: &[(Symbol, IrType)],
     ret: &IrType,
@@ -4260,12 +4295,33 @@ fn emit_lambda(
             render_type(ctx, ty, generics)?
         ));
     }
-    let ret = render_type(ctx, ret, generics)?;
-    let body = emit_expr_at(ctx, body, indent, child, generics)?;
+    let ret_s = render_type(ctx, ret, generics)?;
+    let body_s = emit_expr_at(ctx, body, indent, child, generics)?;
     Ok(format!(
-        "Box::new(move |{}| -> {ret} {{ {body} }})",
+        "move |{}| -> {ret_s} {{ {body_s} }}",
         parts.join(", ")
     ))
+}
+
+/// Emit a lambda `\p0 p1 ... -> body` as a boxed closure
+/// `Box::new(move |p0: T0, ...| -> R { <body> })`. The `move` capture takes any
+/// free locals by value; the explicit return type pins the closure's signature
+/// so it coerces cleanly to the `Box<dyn Fn(..) -> R>` slot it fills. `depth` is
+/// the lambda's own IR-nesting level; its body is emitted one level deeper. Kept
+/// out of the `emit_expr_at` match (`#[inline(never)]`) for the same frame-size
+/// reason as [`emit_record`] / [`emit_update`].
+#[inline(never)]
+fn emit_lambda(
+    ctx: &EmitCtx,
+    params: &[(Symbol, IrType)],
+    ret: &IrType,
+    body: &Expr,
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+) -> DResult<String> {
+    let inner = emit_lambda_unboxed(ctx, params, ret, body, indent, depth, generics)?;
+    Ok(format!("Box::new({inner})"))
 }
 
 /// Render one type parameter's trailing bound clause for the generic list:

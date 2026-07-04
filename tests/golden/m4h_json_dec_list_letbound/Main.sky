@@ -1,0 +1,21 @@
+module Main exposing (main)
+
+-- R4-variant: let-bound decoder passed to decode_list factory.
+-- Exercises Fix C × decode_list factory composition:
+-- the thunked decoder emits (d)() inside the move closure,
+-- so each list element gets a fresh Decoder.
+-- Expected: 2
+
+main =
+    let
+        d =
+            JsonDec.int
+
+        r1 =
+            JsonDec.decodeString
+                (JsonDec.list d)
+                "[1,2]"
+    in
+    case r1 of
+        Ok xs -> println (String.fromInt (List.length xs))
+        Err _ -> println "err1"

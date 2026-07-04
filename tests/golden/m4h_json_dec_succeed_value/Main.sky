@@ -1,0 +1,16 @@
+module Main exposing (main)
+
+-- R3: plain value `JsonDec.succeed 42`.
+-- Exercises Fix A case 3 (factory-wrap for plain value).
+-- Expected: 42
+
+main =
+    let
+        r1 =
+            JsonDec.decodeString
+                (JsonDec.succeed 42)
+                "{}"
+    in
+    case r1 of
+        Ok n -> println (String.fromInt n)
+        Err _ -> println "err1"
