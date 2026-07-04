@@ -23,26 +23,53 @@ use sky_ir::{ir_type_is_derivable, ir_type_is_serde, Expr, IrType};
 
 use crate::EmitCtx;
 
-/// Extract the Model type from an app cfg's `view` field expression.
+/// The `idx`-th parameter type of a function-valued app-cfg field, whether
+/// that field is a named function reference ([`Expr::FuncValue`]) or an inline
+/// lambda ([`Expr::Lambda`]).
 ///
-/// `view : Model -> Html Msg` (Live/Webview) / `Model -> Element Msg` (Tui)
-/// lowers to an [`Expr::FuncValue`] whose `ty` is the concrete
-/// `IrType::Fun([Model], Ret)`. The Model is the first parameter.
+/// Both shapes carry **concrete, solved** parameter [`IrType`]s: a `FuncValue`
+/// stores its full `IrType::Fun(params, ret)`, and `lower_lambda` reads each
+/// lambda parameter's type from the solver's region map (`lower.rs`), so
+/// `params[idx].1` is the settled type, not a placeholder.
 ///
-/// Returns `None` when the Model type cannot be recovered structurally (e.g. a
-/// lambda `view` that did not reify a `Fun` type). Callers treat `None` as
-/// "cannot prove inadmissible" and skip the gate — this never *false-blocks* a
-/// well-formed program; an inadmissible Model behind an unrecoverable `view`
-/// shape simply falls back to the prior behaviour rather than regressing.
+/// Returns `None` for any other expression shape (a `Var` referencing a
+/// let-bound local, a partial application, …) — the documented fail-open
+/// residual of the #91/#95 gates. Callers treat `None` as "cannot prove
+/// inadmissible" and skip; see `seal-gates-msg-lambda-view-design.md` §3.3.
+///
+/// This is the SHARED recovery primitive for (a) the #91 Model gate, (b) the
+/// #95 lambda-`view` fix (a lambda `view` previously returned `None` here and
+/// silently skipped the gate), and (c) #108's routed-vs-non-routed emit branch
+/// (`emit_live::routed_page_field`), keeping the type-tier `RoutedLiveCheck`
+/// and the emit-tier detection in agreement on lambda-shaped cfg fields.
 #[must_use]
-pub fn model_ty_of_view(view_e: &Expr) -> Option<&IrType> {
-    match view_e {
+pub fn fn_param_ty(e: &Expr, idx: usize) -> Option<&IrType> {
+    match e {
         Expr::FuncValue {
             ty: IrType::Fun(params, _),
             ..
-        } => params.first(),
+        } => params.get(idx),
+        Expr::Lambda { params, .. } => params.get(idx).map(|(_, ty)| ty),
         _ => None,
     }
+}
+
+/// Extract the Model type from an app cfg's `view` field expression.
+///
+/// `view : Model -> Html Msg` (Live/Webview) / `Model -> Element Msg` (Tui) is
+/// either a named function reference ([`Expr::FuncValue`]) or an inline lambda
+/// ([`Expr::Lambda`]); the Model is the first parameter type in both shapes
+/// (see [`fn_param_ty`] — the #95 fix made this Lambda-aware).
+///
+/// Returns `None` when the Model type cannot be recovered structurally (the
+/// field is neither a function reference nor a lambda). Callers treat `None`
+/// as "cannot prove inadmissible" and skip the gate — this never
+/// *false-blocks* a well-formed program; an inadmissible Model behind an
+/// unrecoverable `view` shape simply falls back to the prior behaviour rather
+/// than regressing.
+#[must_use]
+pub fn model_ty_of_view(view_e: &Expr) -> Option<&IrType> {
+    fn_param_ty(view_e, 0)
 }
 
 /// Gate the Model type of an app entry against the runtime bound `app` requires.
@@ -62,7 +89,7 @@ pub fn model_ty_of_view(view_e: &Expr) -> Option<&IrType> {
 pub fn check_admissible_model(ctx: &EmitCtx, model_ty: &IrType, app: AppShape) -> DResult<()> {
     let ok = match app {
         AppShape::Live => ir_type_is_serde(model_ty, &|home, name| ctx.enum_is_serde(home, name)),
-        AppShape::Tui | AppShape::Webview => {
+        AppShape::Tui | AppShape::Webview | AppShape::Cli => {
             ir_type_is_derivable(model_ty, &|home, name| ctx.enum_is_derivable(home, name))
         }
     };
@@ -86,7 +113,7 @@ pub fn check_admissible_model(ctx: &EmitCtx, model_ty: &IrType, app: AppShape) -
 fn admissible(ctx: &EmitCtx, ty: &IrType, app: AppShape) -> bool {
     match app {
         AppShape::Live => ir_type_is_serde(ty, &|home, name| ctx.enum_is_serde(home, name)),
-        AppShape::Tui | AppShape::Webview => {
+        AppShape::Tui | AppShape::Webview | AppShape::Cli => {
             ir_type_is_derivable(ty, &|home, name| ctx.enum_is_derivable(home, name))
         }
     }
@@ -171,7 +198,7 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::ServerRoute
         | IrType::ServerCookie
         | IrType::LiveReq
-        | IrType::LiveRoute
+        | IrType::LiveRoute(_)
         | IrType::Int
         | IrType::Float
         | IrType::Bool

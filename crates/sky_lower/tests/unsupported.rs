@@ -506,7 +506,7 @@ fn function_in_record_field_via_type_variable_is_unsupported() -> DResult<()> {
         Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name))),
     );
     let mut regions = BTreeMap::new();
-    regions.insert(body_span, Ty::Record(record_fields));
+    regions.insert(body_span, Ty::Record(record_fields, sky_types::RowTail::Closed));
     assert_unsupported(
         run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i),
         Feature::FirstClassFunctions,

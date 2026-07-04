@@ -164,7 +164,15 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         },
         // M7 Live types — render to qualified runtime paths.
         IrType::LiveReq => "sky_runtime::live::LiveReq".to_owned(),
-        IrType::LiveRoute => "sky_runtime::live::route::Route".to_owned(),
+        // `Route<Page>` has NO default type parameter in the runtime
+        // (`live/route.rs`), so the page argument MUST be rendered: a bare
+        // `Route` is an E0107 cargo failure in every rendered position — the
+        // empty `routes = []` literal's `Vec::<…>::new()` turbofish and any
+        // let-bound route table's fn signature (#108 round 4, hole 1).
+        IrType::LiveRoute(page) => format!(
+            "sky_runtime::live::route::Route<{}>",
+            render_type(ctx, page, generics)?
+        ),
         IrType::Tuple(elems) => {
             let mut parts = Vec::with_capacity(elems.len());
             for elem in elems {

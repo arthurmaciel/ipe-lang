@@ -16,6 +16,7 @@
 //! with. The [`sky_backend::Backend`] trait stays string-free.
 
 mod crate_specs;
+mod emit_cli;
 mod emit_expr;
 mod emit_live;
 mod emit_model_gate;
@@ -946,11 +947,15 @@ fn collect_record_shapes(
         | IrType::ServerCookie
         // A generic type variable carries no concrete record shape of its own.
         | IrType::Generic(_)
-        // M7: nullary plain types (`Length`, `Color`, …) and opaque live handles
-        // carry no record shapes of their own.
+        // M7: nullary plain types (`Length`, `Color`, …) and the opaque live
+        // request handle carry no record shapes of their own.
         | IrType::UiPlain(_)
-        | IrType::LiveReq
-        | IrType::LiveRoute => {}
+        | IrType::LiveReq => {}
+        // `LiveRoute page` is page-parametric — descend in case the page type
+        // carries a nested record shape.
+        IrType::LiveRoute(page) => {
+            collect_record_shapes(interner, page, shapes)?;
+        }
         // M7: `Ui { ctor, msg }` is a msg-parametric wrapper — descend into
         // `msg` in case it carries a nested record (e.g. `Element { x : Int }`).
         IrType::Ui { msg, .. } => {
@@ -1049,11 +1054,13 @@ fn type_reaches_enum(
         | IrType::ServerCookie
         | IrType::Fun(_, _)
         | IrType::Generic(_)
-        // M7: nullary plain types and opaque live handles are pointer-sized —
-        // they cannot form an infinite-size cycle.
+        // M7: nullary plain types and the opaque live request handle are
+        // pointer-sized — they cannot form an infinite-size cycle.
         | IrType::UiPlain(_)
-        | IrType::LiveReq
-        | IrType::LiveRoute => false,
+        | IrType::LiveReq => false,
+        // `Route<Page>` stores its `not_found`/built pages by value — a page
+        // type reaching `target` through a route is a genuine size edge.
+        IrType::LiveRoute(page) => type_reaches_enum(page, target, enums, visited),
         // M7: `Ui { ctor, msg }` — descend into `msg`.
         IrType::Ui { msg, .. } => type_reaches_enum(msg, target, enums, visited),
     }
@@ -1090,10 +1097,13 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
-        // M7: nullary plain types and opaque live handles are monomorphic.
+        // M7: nullary plain types and the opaque live request handle are
+        // monomorphic.
         | IrType::UiPlain(_)
-        | IrType::LiveReq
-        | IrType::LiveRoute => false,
+        | IrType::LiveReq => false,
+        // `LiveRoute page` is parametric on `page`; check if it carries a
+        // generic.
+        IrType::LiveRoute(page) => contains_generic(page),
         // M7: `Ui { ctor, msg }` is parametric on `msg`; check if `msg` carries
         // a generic.
         IrType::Ui { msg, .. } => contains_generic(msg),
@@ -1158,10 +1168,12 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
-        // M7: nullary plain types and opaque live handles contribute no generics.
+        // M7: nullary plain types and the opaque live request handle
+        // contribute no generics.
         | IrType::UiPlain(_)
-        | IrType::LiveReq
-        | IrType::LiveRoute => {}
+        | IrType::LiveReq => {}
+        // `LiveRoute page` may carry generic parameters through `page`.
+        IrType::LiveRoute(page) => collect_generics(page, out),
         // M7: `Ui { ctor, msg }` may carry generic parameters through `msg`.
         IrType::Ui { msg, .. } => collect_generics(msg, out),
     }
@@ -1419,17 +1431,22 @@ fn match_template(
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
-        // M7: nullary plain types (`Length`, `Color`, …) and opaque live handles
-        // are monomorphic — must equal exactly.
+        // M7: nullary plain types (`Length`, `Color`, …) and the opaque live
+        // request handle are monomorphic — must equal exactly.
         | IrType::UiPlain(_)
-        | IrType::LiveReq
-        | IrType::LiveRoute => {
+        | IrType::LiveReq => {
             if template == concrete {
                 Ok(())
             } else {
                 Err(mismatch())
             }
         }
+        // `LiveRoute page` is parametric on `page` — recurse into the page
+        // argument.
+        IrType::LiveRoute(tp) => match concrete {
+            IrType::LiveRoute(cp) => match_template(tp, cp, subst),
+            _ => Err(mismatch()),
+        },
         // M7: `Ui { ctor, msg }` is parametric on `msg`; match the ctor tag
         // then recurse into the msg argument.
         IrType::Ui { ctor: tc, msg: tm } => match concrete {

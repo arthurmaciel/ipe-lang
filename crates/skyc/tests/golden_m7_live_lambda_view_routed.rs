@@ -1,0 +1,121 @@
+//! #108 round 4 (hole 2) — a ROUTED app whose `view` is an inline LAMBDA must
+//! emit `live_app_routed`, not silently fall back to the non-routed `live_app`.
+//!
+//! ## Background
+//!
+//! `emit_live::routed_page_field` recovers the Model from the cfg's `view`
+//! field via `emit_model_gate::model_ty_of_view`. That helper used to match
+//! ONLY `Expr::FuncValue`, so a lambda `view` returned `None` and the emitter
+//! silently chose the single-page `live_app` — `routes` and `notFound` were
+//! DISCARDED with no diagnostic (skyc-0, cargo-0, wrong runtime behaviour: a
+//! silent wrong-accept, worse than a cargo failure). Meanwhile the type tier's
+//! `RoutedLiveCheck` reads the SOLVER's Model and correctly classified the
+//! same app as routed — the two tiers disagreed exactly on the lambda-view
+//! shape (design-coherence review C4).
+//!
+//! The #95 fix (`fn_param_ty`, matching both `Expr::FuncValue` and
+//! `Expr::Lambda`) is shared by the Model gate and `routed_page_field`, so
+//! the tiers agree again. The Model-gate side of #95 is pinned in
+//! `model_admissibility.rs` (`live_lambda_view_*`); THIS file pins the routed
+//! emit side.
+//!
+//! Compile-only assertions always run; the cargo build is `SKY_E2E=1`-gated
+//! with an ISOLATED `CARGO_TARGET_DIR` (a shared dir's fingerprint reuse can
+//! mask a rustc failure as a false pass).
+
+use std::path::PathBuf;
+
+/// Routed cfg (routes + notFound, Model has `page : Page`) with an inline
+/// LAMBDA `view`. Plain-data Model, so the #91/#95 admissibility gate passes —
+/// isolating the routed-detection behaviour.
+const LIVE_LAMBDA_VIEW_ROUTED: &str = r#"module Main exposing (main)
+import Std.Live as Live
+import Std.Ui as Ui
+type Page = CounterPage | AboutPage
+type Msg = Increment
+type alias Model = { page : Page, count : Int }
+init : a -> ( Model, Cmd Msg )
+init _req = ( { page = CounterPage, count = 0 }, Cmd.none )
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment -> ( { model | count = model.count + 1 }, Cmd.none )
+subscriptions : Model -> Sub Msg
+subscriptions _model = Sub.none
+main =
+    Live.app
+        { init = init, update = update
+        , view = \model -> Ui.layout [] (Ui.text (String.fromInt model.count))
+        , subscriptions = subscriptions
+        , routes = [ Live.route "/" CounterPage, Live.route "/about" AboutPage ]
+        , notFound = CounterPage
+        }
+"#;
+
+fn out_dir() -> PathBuf {
+    std::env::temp_dir().join("m7_live_lambda_view_routed_out")
+}
+
+/// Compile the fixture; `None` (skip) when the runtime cannot be resolved.
+fn compile() -> Option<Result<(), skyc::CliError>> {
+    let sky_dir = std::env::temp_dir().join("m7_live_lambda_view_routed_sky");
+    let _ = std::fs::remove_dir_all(&sky_dir);
+    std::fs::create_dir_all(&sky_dir).ok()?;
+    let entry = sky_dir.join("Main.sky");
+    std::fs::write(&entry, LIVE_LAMBDA_VIEW_ROUTED).ok()?;
+    let out = out_dir();
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return None;
+    };
+    Some(skyc::build(&entry, &out, &runtime))
+}
+
+/// The lambda-view routed app must be skyc-0 AND emit `live_app_routed` with
+/// its routes wired — pre-fix it silently emitted the non-routed `live_app`
+/// and dropped `routes`/`notFound`.
+#[test]
+fn lambda_view_routed_app_emits_live_app_routed() {
+    let Some(result) = compile() else {
+        return;
+    };
+    assert!(
+        result.is_ok(),
+        "#108 hole 2: lambda-view routed app must be skyc-0, got: {:?}",
+        result.err(),
+    );
+    let main_rs = std::fs::read_to_string(out_dir().join("src").join("main.rs"))
+        .expect("emitted main.rs must exist");
+    assert!(
+        main_rs.contains("live_app_routed"),
+        "#108 hole 2: a routed app with a LAMBDA `view` must emit \
+         `live_app_routed` — the FuncValue-only recovery silently emitted the \
+         non-routed `live_app` (routes/notFound discarded, no diagnostic)",
+    );
+    assert!(
+        main_rs.contains("route::Route::new"),
+        "#108 hole 2: the routes vec must be wired into the emitted call",
+    );
+}
+
+/// `SKY_E2E` tier: the emitted project must cargo-build (isolated target dir).
+#[test]
+fn lambda_view_routed_app_cargo_builds() {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    lambda_view_routed_app_emits_live_app_routed();
+
+    let target = std::env::temp_dir().join("r4").join("m7_lambda_view_routed");
+    let build = std::process::Command::new("cargo")
+        .arg("build")
+        .env("CARGO_TARGET_DIR", &target)
+        .current_dir(out_dir())
+        .output()
+        .expect("cargo must spawn");
+    assert!(
+        build.status.success(),
+        "#108 hole 2: lambda-view routed project must cargo-build\n--- cargo stderr ---\n{}",
+        String::from_utf8_lossy(&build.stderr),
+    );
+}

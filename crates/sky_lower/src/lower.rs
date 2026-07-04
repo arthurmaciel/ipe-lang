@@ -110,7 +110,7 @@ fn ty_contains_var(ty: &Ty) -> bool {
         Ty::Unit => false,
         Ty::Fun(a, b) => ty_contains_var(a) || ty_contains_var(b),
         Ty::Tuple(elems) => elems.iter().any(ty_contains_var),
-        Ty::Record(fields) => fields.values().any(ty_contains_var),
+        Ty::Record(fields, _) => fields.values().any(ty_contains_var),
         Ty::Con { args, .. } => args.iter().any(ty_contains_var),
     }
 }
@@ -127,7 +127,7 @@ fn ty_contains_fun(ty: &Ty) -> bool {
         Ty::Var(_) | Ty::Unit => false,
         Ty::Tuple(elems) => elems.iter().any(ty_contains_fun),
         Ty::Con { args, .. } => args.iter().any(ty_contains_fun),
-        Ty::Record(fields) => fields.values().any(ty_contains_fun),
+        Ty::Record(fields, _) => fields.values().any(ty_contains_fun),
     }
 }
 
@@ -202,7 +202,7 @@ fn embeds_nonderivable_function(interner: &Interner, ty: &Ty) -> bool {
         Ty::Con { args, .. } => args
             .iter()
             .any(|a| ty_contains_fun(a) || embeds_nonderivable_function(interner, a)),
-        Ty::Record(fields) => fields
+        Ty::Record(fields, _) => fields
             .values()
             .any(|f| ty_contains_fun(f) || embeds_nonderivable_function(interner, f)),
     }
@@ -290,10 +290,12 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::ServerCookie
         | IrType::Generic(_)
         // M7: nullary plain types (`Length`, `Color`, etc.) trivially contain no
-        // functions.  `LiveReq` / `LiveRoute` are opaque handles with no `Fn` fields.
+        // functions.  `LiveReq` is an opaque handle with no `Fn` fields.
         | IrType::UiPlain(_)
-        | IrType::LiveReq
-        | IrType::LiveRoute => false,
+        | IrType::LiveReq => false,
+        // `LiveRoute page` carries the page type it builds — recurse (the
+        // route's own builder closure is runtime-internal, not a Sky `Fn`).
+        IrType::LiveRoute(page) => ir_contains_fun(page),
         IrType::Enum { args, .. } => args.iter().any(ir_contains_fun),
         IrType::Maybe(elem) | IrType::List(elem) => ir_contains_fun(elem),
         IrType::Result(err, ok) => ir_contains_fun(err) || ir_contains_fun(ok),
@@ -1622,7 +1624,7 @@ impl<'a> Lowerer<'a> {
     /// children; leaves contribute nothing.
     fn collect_records_in_ty(&self, ty: &Ty, out: &mut Vec<IrType>) -> DResult<()> {
         match ty {
-            Ty::Record(fields) => {
+            Ty::Record(fields, _tail) => {
                 for field_ty in fields.values() {
                     self.collect_records_in_ty(field_ty, out)?;
                 }
@@ -2129,6 +2131,25 @@ impl<'a> Lowerer<'a> {
                         ctor: UiCtor::Element,
                         msg: Box::new(msg),
                     })
+                }
+                // Sky.Live opaque types in annotations (mirrors `ir_type_from_ty`).
+                "LiveReq" => Ok(IrType::LiveReq),
+                // `LiveRoute page` is parametric on the page type it builds
+                // (#108 round 4) — a bare `LiveRoute` annotation cannot
+                // type-check (the solver's `LiveRoute` Con carries exactly one
+                // argument, so a 0-arg annotation is a Con-arity SKY-T0001
+                // before lowering); a miss here is an invariant violation.
+                "LiveRoute" if args.len() == 1 => {
+                    let page = self.ir_type_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_canon",
+                                "LiveRoute applied without its page type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::LiveRoute(Box::new(page)))
                 }
                 _ if self
                     .enum_variants
@@ -2646,6 +2667,27 @@ impl<'a> Lowerer<'a> {
                 "LayoutContext" => Ok(IrType::UiPlain(UiPlain::LayoutContext)),
                 // ── M7: Sky.Live opaque types ─────────────────────────────────
                 "LiveReq" => Ok(IrType::LiveReq),
+                // `LiveRoute page` — the route descriptor produced by
+                // `Live.route`, parametric on the page type it builds (#108).
+                // The solver's `LiveRoute` Con always carries exactly one
+                // argument (constrain's `live_route(page)` builder), so the
+                // page type is threaded into the IR and rendered as
+                // `Route<Page>` — the runtime `Route` struct has no default
+                // type parameter, so dropping the argument is an E0107 cargo
+                // failure in any rendered position (empty-vec turbofish /
+                // fn signatures of let-bound route tables).
+                "LiveRoute" if args.len() == 1 => {
+                    let page = self.ir_type_from_ty(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_ty",
+                                "LiveRoute Con without its page type argument",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::LiveRoute(Box::new(page)))
+                }
                 // The opaque JSON value type (`Value = any` in Sky). A concrete
                 // `Con { name: "Value" }` reaches here only from the schemed
                 // `JsonEnc.*` encoders (constrain's `json_value` builtin); it
@@ -2680,8 +2722,12 @@ impl<'a> Lowerer<'a> {
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(IrType::Tuple(lowered))
             }
-            // A closed record type: lower each field type, keyed by field name.
-            Ty::Record(fields) => {
+            // A record type (closed or open): lower each field type, keyed by
+            // field name. The RowTail is a solver artefact — the IR type is
+            // always a flat field map. Open fields not present in the resolved
+            // `Ty` are simply absent from the IR (the optional-field mechanism
+            // works through the open row var at type-check time, not at codegen).
+            Ty::Record(fields, _tail) => {
                 let mut lowered = BTreeMap::new();
                 for (name, field_ty) in fields {
                     lowered.insert(*name, self.ir_type_from_ty(field_ty, span)?);
@@ -3238,6 +3284,43 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    /// Lower the page-builder argument of a `Live.route pattern builder` call
+    /// (#108 round 4).
+    ///
+    /// A BARE payload constructor (`UserPage` with `UserPage : String -> Page`
+    /// — the canonical `:param` route shape) lowers to a zero-arg
+    /// [`Expr::Ctor`] carrier instead of tripping the general
+    /// `Feature::CtorAsFunction` gate: in this one position the constructor is
+    /// never a first-class function value — `emit_live_call::LiveRoute` folds
+    /// it into the route's builder closure, applying one type-directed
+    /// `params.get(i)` conversion per declared payload field.
+    ///
+    /// `True` / `False` are excluded (they lower to boolean literals, and a
+    /// `Bool`-built route page is nonsense the type checker rejects anyway).
+    /// Every other builder shape — nullary ctor, lambda, saturated call —
+    /// takes the uniform [`Self::lower_expr`] path unchanged.
+    fn lower_route_builder(&self, e: &canon::Expr) -> DResult<Expr> {
+        if let canon::Expr_::VarCtor {
+            home,
+            type_name,
+            name,
+            ..
+        } = &e.value
+            && !matches!(self.resolve(*name)?, "True" | "False")
+        {
+            let ctor_home = ModPath(home.clone());
+            if self.ctor_arity_of(&ctor_home, *name)? > 0 {
+                return Ok(Expr::Ctor {
+                    home: ctor_home,
+                    ty: *type_name,
+                    variant: *name,
+                    args: vec![],
+                });
+            }
+        }
+        self.lower_expr(e)
+    }
+
     fn lower_call(
         &self,
         callee: &canon::Expr,
@@ -3248,15 +3331,28 @@ impl<'a> Lowerer<'a> {
         // `ir_type_from_ty` conversion) is gated here on its own region type.
         self.reject_float_keyed_collection(call_span)?;
 
-        // ── Phase-1b: App-entry intercept ──────────────────────────────────
-        // Intercept `Live.app` / `Live.appRouted` BEFORE the uniform arg
-        // lowering below.  The `Live.app` cfg record carries function-typed
-        // fields (`init`/`update`/`view`/`subscriptions`) that would trip
-        // SKY-L0107 in the `Record` arm of `lower_expr`.
-        //
-        // `lower_callee` is a pure symbol-table lookup (no side effects); the
-        // `VarKernel | VarTopLevel` arm re-calls it below for all other
-        // callees — that second call is safe and deliberate (minimal diff).
+        // App-entry / Live.route intercepts (Phase-1b/#108) — see the helper.
+        if let Some(intercepted) = self.intercept_live_kernel_call(callee, args)? {
+            return Ok(intercepted);
+        }
+
+        self.lower_call_uniform(callee, args, call_span)
+    }
+
+    /// Kernel-call intercepts that must run BEFORE the uniform arg lowering
+    /// of [`Self::lower_call_uniform`] (Phase-1b + #108).
+    ///
+    /// Returns `Ok(Some(expr))` when the call was intercepted and fully
+    /// lowered here; `Ok(None)` to fall through to the uniform path.
+    ///
+    /// `lower_callee` is a pure symbol-table lookup (no side effects); the
+    /// uniform path re-calls it for all other callees — that second call is
+    /// safe and deliberate (minimal diff).
+    fn intercept_live_kernel_call(
+        &self,
+        callee: &canon::Expr,
+        args: &[canon::Expr],
+    ) -> DResult<Option<Expr>> {
         if let canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } = &callee.value {
             let peek = self.lower_callee(callee)?;
             match &peek {
@@ -3271,10 +3367,10 @@ impl<'a> Lowerer<'a> {
                         // piped, call-result) is rejected here with SKY-L0119
                         // rather than reaching emit's spanless `CompilerBug`.
                         let lowered_cfg = self.lower_app_entry_cfg(&peek, arg0)?;
-                        return Ok(Expr::Call {
+                        return Ok(Some(Expr::Call {
                             callee: peek,
                             args: vec![lowered_cfg],
-                        });
+                        }));
                     }
                 }
                 // ── Tui.app / Tui.program / Webview.app cfg literal (L0107 exemption) ──
@@ -3295,21 +3391,68 @@ impl<'a> Lowerer<'a> {
                     if let Some(arg0) = args.first() {
                         // Borrow `peek` for the gate BEFORE moving it below.
                         let lowered_cfg = self.lower_app_entry_cfg(&peek, arg0)?;
-                        return Ok(Expr::Call {
+                        return Ok(Some(Expr::Call {
                             callee: peek,
                             args: vec![lowered_cfg],
-                        });
+                        }));
                     }
                 }
-                Callee::Kernel(KernelFn::LiveAppRouted) => {
-                    return Err(unsupported(call_span, Feature::RoutedLiveApp));
+                // T4 (#108): `Live.appRouted` is a vestigial alias — the
+                // reference has ONE `Live.app` that branches at emit time
+                // (emit_live.rs T5).  Route it through the same
+                // `lower_app_entry_cfg` path as `Live.app` so any code that
+                // still calls the deprecated form compiles rather than hitting
+                // SKY-L0118.  The emit branch (T5) will select `live_app` vs
+                // `live_app_routed` based on whether the Model has a `page` field.
+                Callee::Kernel(KernelFn::LiveAppRouted) if args.len() == 1 => {
+                    if let Some(arg0) = args.first() {
+                        let lowered_cfg = self.lower_app_entry_cfg(&peek, arg0)?;
+                        return Ok(Some(Expr::Call {
+                            callee: peek,
+                            args: vec![lowered_cfg],
+                        }));
+                    }
+                }
+                // ── #108 round 4: `Live.route pattern PageCtor` builder peephole ──
+                //
+                // The canonical param-route shape passes a BARE payload
+                // constructor as the page builder (`Live.route "/u/:id"
+                // UserPage` with `UserPage : String -> Page`).  The uniform
+                // `lower_expr` path rejects a bare payload-constructor
+                // reference (`Feature::CtorAsFunction`) because a general
+                // first-class constructor value is unsupported — but in THIS
+                // position the constructor never becomes a first-class
+                // function: `emit_live_call::LiveRoute` compiles it into the
+                // route's `move |params| Ctor(param0, …)` builder closure (the
+                // `route_param_get` type-directed conversion path).  Lower it
+                // directly to a zero-arg `Expr::Ctor` carrier, mirroring the
+                // exemption precedent of the app-cfg intercepts above.
+                Callee::Kernel(KernelFn::LiveRoute) if args.len() == 2 => {
+                    if let (Some(pattern_e), Some(builder_e)) = (args.first(), args.get(1)) {
+                        let lowered_pattern = self.lower_expr(pattern_e)?;
+                        let lowered_builder = self.lower_route_builder(builder_e)?;
+                        return Ok(Some(Expr::Call {
+                            callee: peek,
+                            args: vec![lowered_pattern, lowered_builder],
+                        }));
+                    }
                 }
                 _ => {}
             }
-            // Any other callee: fall through to the uniform path below.
-            // `lower_callee` will be called again in the match arm — pure, safe.
+            // Any other callee: fall through to the uniform path.
+            // `lower_callee` will be called again there — pure, safe.
         }
+        Ok(None)
+    }
 
+    /// The uniform (non-intercepted) call lowering: lower every argument with
+    /// [`Self::lower_expr`], then dispatch on the callee shape.
+    fn lower_call_uniform(
+        &self,
+        callee: &canon::Expr,
+        args: &[canon::Expr],
+        call_span: Span,
+    ) -> DResult<Expr> {
         let lowered_args = args
             .iter()
             .map(|a| self.lower_expr(a))
@@ -4291,6 +4434,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TuiApp
                 // `Webview.app : WebviewCfg model msg -> Task Error ()`
                 | KernelFn::WebviewApp
+                // `Cli.program : CliCfg model msg -> Task Error ()` (#111)
+                | KernelFn::CliProgram
                 // #76: Std.Html.Attributes fixed-key builders (`String`/`Bool`
                 // -> Attribute msg).
                 | KernelFn::HtmlAttrClass
@@ -4493,6 +4638,33 @@ impl<'a> Lowerer<'a> {
                 // `Ui.rgba : Int -> Int -> Int -> Float -> Color`
                 KernelFn::UiRgba,
             ) => Ok(4),
+            // ── #111: Std.Auth / Stream / HttpStream — fail-closed kernels ──
+            // These kernels are registered in the qualifier table but have no
+            // lower arm (they hit SKY-L0108).  callee_arity is consulted
+            // before lowering, so each variant must declare its correct arity
+            // (matching the `decl()` table in sky_kernels).
+            Callee::Kernel(
+                KernelFn::AuthHashPassword
+                | KernelFn::AuthPasswordStrength
+                | KernelFn::StreamFinish
+                | KernelFn::HttpStreamOpen
+                | KernelFn::HttpStreamClose,
+            ) => Ok(1),
+            Callee::Kernel(
+                KernelFn::AuthHashPasswordCost
+                | KernelFn::AuthVerifyPassword
+                | KernelFn::AuthVerifyToken
+                | KernelFn::StreamStream
+                | KernelFn::StreamEmit
+                | KernelFn::StreamWithContentType
+                | KernelFn::HttpStreamForEachChunk,
+            ) => Ok(2),
+            Callee::Kernel(
+                KernelFn::AuthSignToken
+                | KernelFn::AuthRegister
+                | KernelFn::AuthLogin
+                | KernelFn::AuthSetRole,
+            ) => Ok(3),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -5282,6 +5454,39 @@ impl<'a> Lowerer<'a> {
                     ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TuiApp)),
                     // ── M7: Std.Webview / Sky.Webview app-entry kernel ────────
                     ("Webview", "app") => Ok(Callee::Kernel(KernelFn::WebviewApp)),
+                    // ── #111: Std.Cli / Sky.Cli app-entry kernel ──────────────
+                    ("Cli", "program") => Ok(Callee::Kernel(KernelFn::CliProgram)),
+                    // ── #111: Std.Auth / Sky.Auth — auth helpers ──────────────
+                    ("Auth", "hashPassword") => {
+                        Ok(Callee::Kernel(KernelFn::AuthHashPassword))
+                    }
+                    ("Auth", "hashPasswordCost") => {
+                        Ok(Callee::Kernel(KernelFn::AuthHashPasswordCost))
+                    }
+                    ("Auth", "verifyPassword") => {
+                        Ok(Callee::Kernel(KernelFn::AuthVerifyPassword))
+                    }
+                    ("Auth", "passwordStrength") => {
+                        Ok(Callee::Kernel(KernelFn::AuthPasswordStrength))
+                    }
+                    ("Auth", "signToken") => Ok(Callee::Kernel(KernelFn::AuthSignToken)),
+                    ("Auth", "verifyToken") => Ok(Callee::Kernel(KernelFn::AuthVerifyToken)),
+                    ("Auth", "register") => Ok(Callee::Kernel(KernelFn::AuthRegister)),
+                    ("Auth", "login") => Ok(Callee::Kernel(KernelFn::AuthLogin)),
+                    ("Auth", "setRole") => Ok(Callee::Kernel(KernelFn::AuthSetRole)),
+                    // ── #111: Sky.Http.Server.Stream — server-side streaming ───
+                    ("Stream", "stream") => Ok(Callee::Kernel(KernelFn::StreamStream)),
+                    ("Stream", "emit") => Ok(Callee::Kernel(KernelFn::StreamEmit)),
+                    ("Stream", "finish") => Ok(Callee::Kernel(KernelFn::StreamFinish)),
+                    ("Stream", "withContentType") => {
+                        Ok(Callee::Kernel(KernelFn::StreamWithContentType))
+                    }
+                    // ── #111: Sky.Core.Http.Stream — client-side streaming ─────
+                    ("HttpStream", "open") => Ok(Callee::Kernel(KernelFn::HttpStreamOpen)),
+                    ("HttpStream", "forEachChunk") => {
+                        Ok(Callee::Kernel(KernelFn::HttpStreamForEachChunk))
+                    }
+                    ("HttpStream", "close") => Ok(Callee::Kernel(KernelFn::HttpStreamClose)),
                     // A kernel beyond the wired set.
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),
@@ -5506,7 +5711,7 @@ impl<'a> Lowerer<'a> {
     /// field-name set, exactly as a record literal does. Entries are ordered by
     /// resolved field name for deterministic output.
     fn lower_record_pat(&self, fields: &[Located<Symbol>], ty: &Ty, span: Span) -> DResult<Pat> {
-        let Ty::Record(rec) = ty else {
+        let Ty::Record(rec, _tail) = ty else {
             // A record pattern whose scrutinee did not solve to a record type.
             // The type checker proves the scrutinee is a record before this runs,
             // so reaching here is fail-closed defence rather than a live path.

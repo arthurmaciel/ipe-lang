@@ -94,6 +94,8 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
+        , routes = []
+        , notFound = Increment
         }
 "#;
 
@@ -152,6 +154,72 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
+        , routes = []
+        , notFound = Increment
+        }
+"#;
+
+/// A routed Sky.Live app: two pages, nullary page ctors, `routes`/`notFound`
+/// supplied. The Model carries a `page` field → `emit_live_app_inner` takes
+/// the T5 routed branch and emits `live_app_routed` instead of `live_app`.
+///
+/// Exercises the full T5 emit path through the compiler:
+/// - open-record unification of the 6-field `Live.app` cfg (T2/T3)
+/// - `routed_page_field` detection in `emit_live_app_inner` (T5)
+/// - `set_page` closure generation (T5)
+/// - `live_app_routed` runtime entry (already ported in `runtime/`)
+///
+/// This is the same structure as `examples/09-live-counter/src/Main.sky`.
+const SKY_LIVE_ROUTED: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Page
+    = CounterPage
+    | AboutPage
+
+type Msg = Increment | GoAbout | GoCounter
+
+type alias Model =
+    { page : Page
+    , count : Int
+    }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { page = CounterPage, count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+        GoAbout ->
+            ( { model | page = AboutPage }, Cmd.none )
+        GoCounter ->
+            ( { model | page = CounterPage }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (Ui.column []
+            [ Ui.text (String.fromInt model.count)
+            , Ui.el [ Ui.onClick Increment ] (Ui.text "+")
+            ])
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = [ Live.route "/" CounterPage, Live.route "/about" AboutPage ]
+        , notFound = CounterPage
         }
 "#;
 
@@ -633,5 +701,31 @@ fn live_onclick_increments_counter() -> Result<(), BoxError> {
         &body2[..body2.len().min(2000)]
     );
 
+    Ok(())
+}
+
+/// T5 seal — BUILD-ONLY: a routed `Live.app` with a `page` field in the Model
+/// must compile and produce a Cargo project that links against
+/// `live_app_routed` rather than `live_app`.
+///
+/// This regression-tests the full T3→T5 emit path:
+/// - T3: 6-field open-record constraint passes type-checking.
+/// - T5: `routed_page_field` detects the `page` field in the Model and the
+///   emitter branches to `live_app_routed` with a generated `set_page` closure.
+///
+/// A successful `skyc` + `cargo build` is the assertion.  If T5 emits
+/// `live_app` instead of `live_app_routed`, or emits a malformed `set_page`
+/// closure, `cargo build` surfaces the type mismatch.
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn live_routed_app_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build("live_routed_build_only", SKY_LIVE_ROUTED)?;
     Ok(())
 }

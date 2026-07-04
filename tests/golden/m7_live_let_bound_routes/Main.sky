@@ -1,0 +1,72 @@
+module Main exposing (main)
+
+-- SKY-I0001 regression: a top-level `routeTable` binding whose type is inferred
+-- as `List LiveRoute` (the opaque route-descriptor type) MUST type-check and
+-- lower successfully.  Before #106 / #108 this pattern caused an ICE because
+-- the emitter assumed all route-list elements were inlined Expr::Ctor nodes.
+--
+-- Exercises:
+--   * The `Live.route` kernel is correctly typed in `constrain.rs` (String ->
+--     page -> LiveRoute) so `routeTable` resolves to `List LiveRoute`.
+--   * The T3 open-record scheme accepts `routes = routeTable` (not inline).
+--   * `emit_live_app_inner` (T5) lowers the `routes` field as a normal
+--     expression (not a literal `[...]` — the list is a top-level ref).
+--   * The `routed_page_field` helper sees the `page` field in the Model and
+--     emits `live_app_routed` (not `live_app`).
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Page
+    = CounterPage
+    | AboutPage
+
+type Msg
+    = Increment
+    | Navigate Page
+
+type alias Model =
+    { page : Page
+    , count : Int
+    }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { page = CounterPage, count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+        Navigate p ->
+            ( { model | page = p }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (Ui.column []
+            [ Ui.text (String.fromInt model.count)
+            ])
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+-- The route table is a top-level binding — its type is inferred as
+-- `List LiveRoute`.  This is the SKY-I0001 shape.
+routeTable =
+    [ Live.route "/" CounterPage
+    , Live.route "/about" AboutPage
+    ]
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = routeTable
+        , notFound = CounterPage
+        }
