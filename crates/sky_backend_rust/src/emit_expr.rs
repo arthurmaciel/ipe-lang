@@ -2233,6 +2233,84 @@ fn emit_ui_call(
             "sky_runtime::ui::helpers::ui_region_announce_urgently_()".to_owned(),
         )),
 
+        // ── Ui.input + Ui.describe + desc* constructors ───────────────────────
+
+        // `Ui.input : List (Attribute msg) -> Element msg`
+        KernelFn::UiInput => {
+            let [attrs_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiInput",
+                    detail: format!("Ui.input requires 1 argument, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_input_({attrs})"
+            )))
+        }
+
+        // `Ui.describe : Description -> Attribute msg`
+        KernelFn::UiDescribe => {
+            let [d_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiDescribe",
+                    detail: format!("Ui.describe requires 1 argument, got {}", args.len()),
+                });
+            };
+            let d = emit_expr_at(ctx, d_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_describe_({d})"
+            )))
+        }
+
+        // Nullary `Description` constructors (arity 0).
+        KernelFn::UiDescMain => Ok(Some(
+            "sky_runtime::ui::helpers::ui_desc_main_()".to_owned(),
+        )),
+        KernelFn::UiDescNavigation => Ok(Some(
+            "sky_runtime::ui::helpers::ui_desc_navigation_()".to_owned(),
+        )),
+        KernelFn::UiDescContentInfo => Ok(Some(
+            "sky_runtime::ui::helpers::ui_desc_content_info_()".to_owned(),
+        )),
+        KernelFn::UiDescComplementary => Ok(Some(
+            "sky_runtime::ui::helpers::ui_desc_complementary_()".to_owned(),
+        )),
+        KernelFn::UiDescLivePolite => Ok(Some(
+            "sky_runtime::ui::helpers::ui_desc_live_polite_()".to_owned(),
+        )),
+        KernelFn::UiDescLiveAssertive => Ok(Some(
+            "sky_runtime::ui::helpers::ui_desc_live_assertive_()".to_owned(),
+        )),
+
+        // `Ui.descHeading : Int -> Description`
+        KernelFn::UiDescHeading => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiDescHeading",
+                    detail: format!("Ui.descHeading requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_desc_heading_({n})"
+            )))
+        }
+
+        // `Ui.descLabel : String -> Description`
+        KernelFn::UiDescLabel => {
+            let [s_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiDescLabel",
+                    detail: format!("Ui.descLabel requires 1 argument, got {}", args.len()),
+                });
+            };
+            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_desc_label_({s})"
+            )))
+        }
+
         // ── Std.Html element builders ─────────────────────────────────────────
 
         // `Html.text : String -> Html msg`

@@ -173,6 +173,10 @@ struct Builtins {
     /// `"Color"` — Std.Ui nullary colour type produced by `Ui.rgb` / `Ui.rgba`
     /// / `Ui.white` / …. Lowered to `IrType::UiPlain(UiPlain::Color)`.
     color: Symbol,
+    /// `"Description"` — Std.Ui semantic description type produced by `Ui.descMain`
+    /// / `Ui.descNavigation` / …. Lowered to `IrType::UiPlain(UiPlain::Description)`
+    /// via the `"Description"` arm in `sky_lower::ir_type_from_ty`.
+    description: Symbol,
     /// `"Value"` — the opaque JSON value type (`Value = any` in Sky) produced /
     /// consumed by the `JsonEnc.*` encoders. Lowered to `IrType::Json`
     /// (`serde_json::Value`, re-exported as `JsonVal`) via the `"Value"` arm in
@@ -302,6 +306,7 @@ impl Builtins {
             html_con: interner.intern("Html")?,
             length: interner.intern("Length")?,
             color: interner.intern("Color")?,
+            description: interner.intern("Description")?,
             json_value: interner.intern("Value")?,
             lw_wrapper_attrs: interner.intern("wrapperAttrs")?,
             lw_root_attrs: interner.intern("rootAttrs")?,
@@ -2474,6 +2479,14 @@ impl<'a> Builder<'a> {
             name: self.builtins.color,
             args: Vec::new(),
         };
+        // `description()` — the opaque `Description` semantic-description type
+        // produced by `Ui.descMain` / `Ui.descHeading` / …. Lowered to
+        // `IrType::UiPlain(UiPlain::Description)`.
+        let description = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.description,
+            args: Vec::new(),
+        };
         // `value()` — the opaque `Value = any` JSON node produced/consumed by the
         // `JsonEnc.*` encoders. Lowered to `IrType::Json` (`JsonVal`).
         let value = || Ty::Con {
@@ -3669,6 +3682,22 @@ impl<'a> Builder<'a> {
             // Arity-1 region attrs.
             K::RegionHeading => fun(int(), attr(var(0))),
             K::RegionLabel => fun(string(), attr(var(0))),
+
+            // ── Ui.input + Ui.describe + desc* constructors ───────────────────
+            // `Ui.input : List (Attribute msg) -> Element msg`
+            K::UiInput => fun(list(attr(var(0))), elem_t(var(0))),
+            // `Ui.describe : Description -> Attribute msg`
+            K::UiDescribe => fun(description(), attr(var(0))),
+            // Nullary `Description` constructors — return `Description`.
+            K::UiDescMain
+            | K::UiDescNavigation
+            | K::UiDescContentInfo
+            | K::UiDescComplementary
+            | K::UiDescLivePolite
+            | K::UiDescLiveAssertive => description(),
+            // Arity-1 `Description` constructors.
+            K::UiDescHeading => fun(int(), description()),
+            K::UiDescLabel => fun(string(), description()),
 
             // ── Json.Decode (17) — mirrors the already-relocated `Db.Decode`
             //    shapes (function-first `map`/`andThen`; `dec(a)` is the opaque

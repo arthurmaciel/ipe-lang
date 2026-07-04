@@ -4460,7 +4460,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::RegionFooter
                 | KernelFn::RegionAside
                 | KernelFn::RegionAnnounce
-                | KernelFn::RegionAnnounceUrgently,
+                | KernelFn::RegionAnnounceUrgently
+                // ── Ui.describe desc* constructors — arity-0 ────────────────
+                | KernelFn::UiDescMain
+                | KernelFn::UiDescNavigation
+                | KernelFn::UiDescContentInfo
+                | KernelFn::UiDescComplementary
+                | KernelFn::UiDescLivePolite
+                | KernelFn::UiDescLiveAssertive,
             ) => Ok(0),
             // Arity 1: single-argument pure serialisation / escape helpers.
             Callee::Kernel(
@@ -4637,7 +4644,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlAttrTabindex
                 // ── Std.Ui.Region (#117) — arity-1 attrs ─────────────────────────
                 | KernelFn::RegionHeading
-                | KernelFn::RegionLabel,
+                | KernelFn::RegionLabel
+                // ── Ui.input + Ui.describe + desc* arity-1 ──────────────────────
+                | KernelFn::UiInput
+                | KernelFn::UiDescribe
+                | KernelFn::UiDescHeading
+                | KernelFn::UiDescLabel,
             ) => Ok(1),
             // Arity 2: `Ui.layout attrs elem`, `Ui.layoutWith cfg elem`,
             //          `Live.route path ctor`, `Live.renderStatic cfg path`.
@@ -5634,6 +5646,21 @@ impl<'a> Lowerer<'a> {
                     ("Region", "announceUrgently") => {
                         Ok(Callee::Kernel(KernelFn::RegionAnnounceUrgently))
                     }
+                    // ── Ui.input + Ui.describe + desc* constructors ───────────
+                    ("Ui", "input") => Ok(Callee::Kernel(KernelFn::UiInput)),
+                    ("Ui", "describe") => Ok(Callee::Kernel(KernelFn::UiDescribe)),
+                    ("Ui", "descMain") => Ok(Callee::Kernel(KernelFn::UiDescMain)),
+                    ("Ui", "descNavigation") => Ok(Callee::Kernel(KernelFn::UiDescNavigation)),
+                    ("Ui", "descContentInfo") => Ok(Callee::Kernel(KernelFn::UiDescContentInfo)),
+                    ("Ui", "descComplementary") => {
+                        Ok(Callee::Kernel(KernelFn::UiDescComplementary))
+                    }
+                    ("Ui", "descLivePolite") => Ok(Callee::Kernel(KernelFn::UiDescLivePolite)),
+                    ("Ui", "descLiveAssertive") => {
+                        Ok(Callee::Kernel(KernelFn::UiDescLiveAssertive))
+                    }
+                    ("Ui", "descHeading") => Ok(Callee::Kernel(KernelFn::UiDescHeading)),
+                    ("Ui", "descLabel") => Ok(Callee::Kernel(KernelFn::UiDescLabel)),
                     // ── M7: Std.Live / Sky.Live app-entry kernels ─────────────
                     ("Live", "app") => Ok(Callee::Kernel(KernelFn::LiveApp)),
                     ("Live", "appRouted") => Ok(Callee::Kernel(KernelFn::LiveAppRouted)),

@@ -875,6 +875,17 @@ pub enum StdlibKernel {
     RegionLabel,         // String → Attribute msg (arity 1)
     RegionAnnounce,      // Attribute msg (arity 0)
     RegionAnnounceUrgently, // Attribute msg (arity 0)
+    // ── Ui.input + Ui.describe + desc* constructors ───────────────────────
+    UiInput,             // List (Attribute msg) -> Element msg (arity 1)
+    UiDescribe,          // Description -> Attribute msg (arity 1)
+    UiDescMain,          // Description (arity 0)
+    UiDescNavigation,    // Description (arity 0)
+    UiDescContentInfo,   // Description (arity 0)
+    UiDescComplementary, // Description (arity 0)
+    UiDescLivePolite,    // Description (arity 0)
+    UiDescLiveAssertive, // Description (arity 0)
+    UiDescHeading,       // Int -> Description (arity 1)
+    UiDescLabel,         // String -> Description (arity 1)
 }
 
 impl StdlibKernel {
@@ -1769,6 +1780,21 @@ impl StdlibKernel {
             Self::RegionAnnounceUrgently => {
                 d("Region", "announceUrgently", 0, Ui, "ui_region_announce_urgently_")
             }
+            // ── Ui.input + Ui.describe + desc* constructors ───────────────
+            Self::UiInput => d("Ui", "input", 1, Ui, "ui_input_"),
+            Self::UiDescribe => d("Ui", "describe", 1, Ui, "ui_describe_"),
+            Self::UiDescMain => d("Ui", "descMain", 0, Ui, "ui_desc_main_"),
+            Self::UiDescNavigation => d("Ui", "descNavigation", 0, Ui, "ui_desc_navigation_"),
+            Self::UiDescContentInfo => d("Ui", "descContentInfo", 0, Ui, "ui_desc_content_info_"),
+            Self::UiDescComplementary => {
+                d("Ui", "descComplementary", 0, Ui, "ui_desc_complementary_")
+            }
+            Self::UiDescLivePolite => d("Ui", "descLivePolite", 0, Ui, "ui_desc_live_polite_"),
+            Self::UiDescLiveAssertive => {
+                d("Ui", "descLiveAssertive", 0, Ui, "ui_desc_live_assertive_")
+            }
+            Self::UiDescHeading => d("Ui", "descHeading", 1, Ui, "ui_desc_heading_"),
+            Self::UiDescLabel => d("Ui", "descLabel", 1, Ui, "ui_desc_label_"),
         }
     }
 
@@ -2486,6 +2512,17 @@ impl StdlibKernel {
         Self::RegionLabel,
         Self::RegionAnnounce,
         Self::RegionAnnounceUrgently,
+        // ── Ui.input + Ui.describe + desc* constructors ───────────────────
+        Self::UiInput,
+        Self::UiDescribe,
+        Self::UiDescMain,
+        Self::UiDescNavigation,
+        Self::UiDescContentInfo,
+        Self::UiDescComplementary,
+        Self::UiDescLivePolite,
+        Self::UiDescLiveAssertive,
+        Self::UiDescHeading,
+        Self::UiDescLabel,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────
@@ -2852,6 +2889,17 @@ impl StdlibKernel {
                 | Self::RegionLabel
                 | Self::RegionAnnounce
                 | Self::RegionAnnounceUrgently
+                // ── Ui.input + Ui.describe + desc* constructors ──────────
+                | Self::UiInput
+                | Self::UiDescribe
+                | Self::UiDescMain
+                | Self::UiDescNavigation
+                | Self::UiDescContentInfo
+                | Self::UiDescComplementary
+                | Self::UiDescLivePolite
+                | Self::UiDescLiveAssertive
+                | Self::UiDescHeading
+                | Self::UiDescLabel
         )
     }
 
