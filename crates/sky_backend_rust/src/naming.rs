@@ -328,6 +328,14 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::BasicsModBy => "basics_mod_by",
         KernelFn::BasicsClamp => "basics_clamp",
         KernelFn::BasicsToString => "basics_to_string",
+        // ── Basics numerics (#115) ──────────────────────────────────────────
+        KernelFn::BasicsNegate => "basics_negate",
+        KernelFn::BasicsAbs    => "basics_abs",
+        // BasicsSqrt / BasicsMin / BasicsMax reuse the existing Math runtime
+        // helpers: `math_sqrt(f64->f64)`, `math_min<T:PartialOrd>`,
+        // `math_max<T:PartialOrd>`. No new runtime symbol needed.
+        // These arms are merged with their Math.* counterparts below.
+        // ── end Basics numerics (#115) ──────────────────────────────────────
         // ── Error kernels (Sky.Core.Error — minimal `Error = String` slice, #86) ─
         // The eight message constructors share ONE identity runtime symbol: with
         // `SkyError = String`, `String -> Error` is the identity. `toString`
@@ -379,8 +387,10 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // coercion, NO float truncation. Divergence from Sky (PR #136):
         // Sky routes args through AsInt; Sky-Rust follows Elm's polymorphic
         // comparable (a -> a -> a). Rationale: Elm-conformance.
-        KernelFn::MathMin => "math_min",
-        KernelFn::MathMax => "math_max",
+        // ── Basics numerics (#115): BasicsSqrt / BasicsMin / BasicsMax merged here ──
+        KernelFn::BasicsSqrt | KernelFn::MathSqrt => "math_sqrt",
+        KernelFn::BasicsMin  | KernelFn::MathMin  => "math_min",
+        KernelFn::BasicsMax  | KernelFn::MathMax  => "math_max",
         // ── Math constants ───────────────────────────────────────────────────
         KernelFn::MathPi => "math_pi",
         KernelFn::MathE => "math_e",
@@ -391,7 +401,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // ── Math arity-1 (Int → Int) ─────────────────────────────────────────
         KernelFn::MathAbs => "math_abs",
         // ── Math arity-1 (Float → Float) ────────────────────────────────────
-        KernelFn::MathSqrt => "math_sqrt",
+        // MathSqrt merged with BasicsSqrt above (Basics numerics #115).
         KernelFn::MathCbrt => "math_cbrt",
         KernelFn::MathExp => "math_exp",
         KernelFn::MathExp2 => "math_exp2",

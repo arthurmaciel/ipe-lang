@@ -295,6 +295,13 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::BasicsModBy => "Basics.modBy",
         KernelFn::BasicsClamp => "Basics.clamp",
         KernelFn::BasicsToString => "Basics.toString",
+        // ── Basics numerics (#115) ──────────────────────────────────────────
+        KernelFn::BasicsNegate => "Basics.negate",
+        KernelFn::BasicsAbs    => "Basics.abs",
+        KernelFn::BasicsSqrt   => "Basics.sqrt",
+        KernelFn::BasicsMin    => "Basics.min",
+        KernelFn::BasicsMax    => "Basics.max",
+        // ── end Basics numerics (#115) ──────────────────────────────────────
         // ── Error kernels (Sky.Core.Error — minimal `Error = String` slice, #86) ─
         KernelFn::ErrorUnexpected => "Error.unexpected",
         KernelFn::ErrorInvalidInput => "Error.invalidInput",
