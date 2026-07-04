@@ -1152,6 +1152,7 @@ impl Env {
                     "href",
                     "src",
                     "alt",
+                    "title",
                     "for_",
                     "checked",
                     "disabled",

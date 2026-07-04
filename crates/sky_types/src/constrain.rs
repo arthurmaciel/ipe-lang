@@ -3136,6 +3136,33 @@ impl<'a> Builder<'a> {
             // html_t). `List (Std.Html.Attribute msg) -> String -> Html msg`.
             K::HtmlStyleNode => fun(list(html_attr(var(0))), fun(string(), html_t(var(0)))),
 
+            // ── #76: Std.Html.Attributes builders ────────────────────────────
+            // String fixed-key: `String -> Std.Html.Attribute msg`.
+            K::HtmlAttrClass
+            | K::HtmlAttrId
+            | K::HtmlAttrHref
+            | K::HtmlAttrSrc
+            | K::HtmlAttrAlt
+            | K::HtmlAttrValue
+            | K::HtmlAttrName
+            | K::HtmlAttrPlaceholder
+            | K::HtmlAttrType
+            | K::HtmlAttrFor
+            | K::HtmlAttrStyle
+            | K::HtmlAttrTitle => fun(string(), html_attr(var(0))),
+            // Bool fixed-key: `Bool -> Std.Html.Attribute msg`.
+            K::HtmlAttrChecked
+            | K::HtmlAttrDisabled
+            | K::HtmlAttrReadonly
+            | K::HtmlAttrRequired
+            | K::HtmlAttrMultiple
+            | K::HtmlAttrSelected
+            | K::HtmlAttrAutofocus => fun(bool_ty(), html_attr(var(0))),
+            // Generic builders + identity.
+            K::HtmlAttribute => fun(string(), fun(string(), html_attr(var(0)))),
+            K::HtmlBoolAttribute => fun(string(), fun(bool_ty(), html_attr(var(0)))),
+            K::HtmlNoAttr => html_attr(var(0)),
+
             // ── Json.Decode (17) — mirrors the already-relocated `Db.Decode`
             //    shapes (function-first `map`/`andThen`; `dec(a)` is the opaque
             //    `Decoder a`). Primitives are arity-0 bare decoders. ──
@@ -4099,6 +4126,29 @@ mod registry_phase_c_tests {
             K::HtmlP,
             K::HtmlInput,
             K::HtmlImg,
+            // #76: Std.Html.Attributes builders (first-schemed — no legacy).
+            K::HtmlAttrClass,
+            K::HtmlAttrId,
+            K::HtmlAttrHref,
+            K::HtmlAttrSrc,
+            K::HtmlAttrAlt,
+            K::HtmlAttrValue,
+            K::HtmlAttrName,
+            K::HtmlAttrPlaceholder,
+            K::HtmlAttrType,
+            K::HtmlAttrFor,
+            K::HtmlAttrStyle,
+            K::HtmlAttrTitle,
+            K::HtmlAttrChecked,
+            K::HtmlAttrDisabled,
+            K::HtmlAttrReadonly,
+            K::HtmlAttrRequired,
+            K::HtmlAttrMultiple,
+            K::HtmlAttrSelected,
+            K::HtmlAttrAutofocus,
+            K::HtmlAttribute,
+            K::HtmlBoolAttribute,
+            K::HtmlNoAttr,
             // NB: HtmlStyleNode is NOT here — it is RELOCATED (the F7 #46/#47 work
             // already schemed `Html.styleNode` in the legacy `kernel_ty` table),
             // so its parity is checked by `stdlib_scheme_matches_legacy`.
