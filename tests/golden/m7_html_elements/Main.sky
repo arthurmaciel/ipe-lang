@@ -1,0 +1,42 @@
+module Main exposing (main)
+
+import Std.Html exposing (..)
+import Std.Html.Attributes exposing (..)
+
+
+-- #76 batch 2: Std.Html ELEMENT family end-to-end golden. Proves the tag-as-data
+-- lowering renders the CORRECT tag for each builder — NOT the pre-batch wrong-
+-- render fold (nav→<p>, h1→<p>, br→<img>, header→<div>, link→<a>). Containers
+-- (nav/h1/table/tr/td/th/thead/tbody/ul/li/section/header/footer/a) open+close
+-- their own tag; void elements (img/br/hr/link) self-close with no children.
+-- oracle_divergence = true: pure Rust-backend HTML; asserted by substring.
+
+
+main =
+    println
+        (render
+            (section
+                [ class "wrap" ]
+                [ nav
+                    []
+                    [ a [ href "/" ] [ text "Home" ]
+                    , a [ href "/about" ] [ text "About" ]
+                    ]
+                , h1 [] [ text "Title" ]
+                , table
+                    []
+                    [ thead [] [ tr [] [ th [] [ text "H" ] ] ]
+                    , tbody [] [ tr [] [ td [] [ text "C" ] ] ]
+                    ]
+                , ul
+                    []
+                    [ li [] [ text "one" ]
+                    , li [] [ text "two" ]
+                    ]
+                , header [] [ text "hdr" ]
+                , footer [] [ text "ftr" ]
+                , img [ src "/a.png", alt "pic" ]
+                , br []
+                , hr []
+                , link [ href "/s.css" ]
+                ]))

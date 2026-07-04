@@ -1900,6 +1900,54 @@ fn emit_ui_call(
             )))
         }
 
+        // ── #76 batch 2: Std.Html element builders (tag-as-data) ──────────────────
+        //
+        // Every container (`h1`/`nav`/`table`/…) and void (`br`/`hr`/`link`/…)
+        // element routes through the SAME generic `html_node_(tag, attrs, children)`
+        // runtime sink — no per-tag runtime fn. The wire tag is the kernel's
+        // `html_element_tag()` literal (injected here as data), so `nav` renders
+        // `<nav>`, `h1` renders `<h1>`, etc. — NOT the old wrong-render fold to
+        // `<p>`/`<img>`. Void elements pass an empty child vec; the render sink
+        // (`html::render_into`) additionally self-closes and drops children for any
+        // tag in its `VOID` set, so no injected-child XSS surface exists.
+
+        // Container: `<tag> : List Attr -> List Html -> Html msg`.
+        k if k.is_html_container() => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlContainer",
+                    detail: format!("{k:?} container requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let tag = k.html_element_tag().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_ui_call::HtmlContainer",
+                detail: format!("{k:?} is_html_container but html_element_tag returned None"),
+            })?;
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_node_({tag:?}.to_owned(), {attrs}, {children})"
+            )))
+        }
+
+        // Void: `<tag> : List Attr -> Html msg` (no children).
+        k if k.is_html_void() => {
+            let [attrs_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlVoid",
+                    detail: format!("{k:?} void element requires 1 argument, got {}", args.len()),
+                });
+            };
+            let tag = k.html_element_tag().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_ui_call::HtmlVoid",
+                detail: format!("{k:?} is_html_void but html_element_tag returned None"),
+            })?;
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_node_({tag:?}.to_owned(), {attrs}, ::std::vec::Vec::new())"
+            )))
+        }
+
         // ── Phase-1a: Event-attribute builders ───────────────────────────────────
         //
         // Plain-message events (onClick/onFocus/onBlur/onMouseOver/onMouseOut):
