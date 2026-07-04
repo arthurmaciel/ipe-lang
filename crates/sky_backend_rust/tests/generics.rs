@@ -142,6 +142,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
             uses_tui: false,
             uses_webview: false,
             uses_css: false,
+            uses_auth: false,
         }],
     })
 }
@@ -286,6 +287,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
             uses_tui: false,
             uses_webview: false,
             uses_css: false,
+            uses_auth: false,
         }],
     })
 }

@@ -117,6 +117,16 @@ pub struct Module {
     /// kernel, so the UI append would never fire and the bare kernel names would
     /// be out of scope (E0425).
     pub uses_css: bool,
+    /// `true` when the lowerer detected at least one `Std.Auth` kernel call
+    /// (`Auth.hashPassword`, `Auth.verifyPassword`, `Auth.signToken`,
+    /// `Auth.verifyToken`, `Auth.register`, `Auth.login`, `Auth.setRole`, etc.)
+    /// in the module's function bodies.
+    ///
+    /// Set by `sky_lower` when any call site resolves to a
+    /// `KernelFn::is_auth()` variant.  The backend reads this flag to decide
+    /// whether to append `pub mod auth; pub use auth::*;` to the emitted
+    /// `sky_runtime/mod.rs`.
+    pub uses_auth: bool,
 }
 
 /// A user-declared type. The IR models user types as enums (Sky's `type`
@@ -574,6 +584,25 @@ pub enum IrType {
     ///
     /// Corresponds to `sky_runtime::server::ServerCookie`.
     ServerCookie,
+    /// `StreamWriter` — opaque server-side stream writer handle.  Renders as
+    /// `StreamWriter`.
+    ///
+    /// Corresponds to `sky_runtime::server_stream::StreamWriter`.  Used as the
+    /// argument type of the `Stream.stream` callback and the target type of
+    /// `Stream.emit` / `Stream.finish` / `Stream.withContentType`.  Never
+    /// synthesised as a record struct; always treated as an opaque handle.
+    StreamWriter,
+    /// `HttpRequest` — opaque HTTP request descriptor used by `Sky.Core.Http`
+    /// and `Sky.Core.Http.Stream`.  Renders as `HttpRequest`.
+    ///
+    /// Corresponds to `sky_runtime::http::HttpRequest`.  In Sky source, users
+    /// write `HttpRequest` literals as structural records; the lowerer detects
+    /// the canonical 7-field set (`body`, `followRedirects`, `headers`,
+    /// `maxRedirects`, `method`, `timeout`, `url`) and folds it to this opaque
+    /// variant instead of synthesising a backend record struct, so call sites
+    /// that pass the value to `http_stream_open` / `http_request` kernels see
+    /// the correct runtime type.  Never stored in a Sky.Live Model.
+    HttpRequest,
     // ── M7: Std.Ui / Std.Html parametric types ──────────────────────────────
     /// A parametric `Std.Ui` or `Std.Html` type — one that carries a message type
     /// parameter `msg`.  The `ctor` field identifies which of the five
@@ -680,7 +709,8 @@ pub enum UiPlain {
 ///   closure or future (no `Clone`/`Debug`/`PartialEq`).
 /// * the opaque server / live handles [`IrType::ServerRequest`] /
 ///   [`IrType::ServerResponse`] / [`IrType::ServerRoute`] /
-///   [`IrType::ServerCookie`] / [`IrType::LiveReq`] / [`IrType::LiveRoute`]
+///   [`IrType::ServerCookie`] / [`IrType::StreamWriter`] /
+///   [`IrType::HttpRequest`] / [`IrType::LiveReq`] / [`IrType::LiveRoute`]
 ///   (each lacks at least `PartialEq`).
 /// * the two `Clone`-only `Std.Html` carriers [`UiCtor::HtmlAttribute`] /
 ///   [`UiCtor::HtmlEvent`] (they hold `Arc<dyn Fn>` event handlers).
@@ -736,6 +766,10 @@ pub fn ir_type_is_derivable(
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
+        // `StreamWriter` derives Clone+Copy+Debug but not PartialEq — not fully derivable.
+        | IrType::StreamWriter
+        // `HttpRequest` is an opaque handle — not fully derivable.
+        | IrType::HttpRequest
         | IrType::LiveReq
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
@@ -831,6 +865,10 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
+        // `StreamWriter` is an opaque handle; not serde.
+        | IrType::StreamWriter
+        // `HttpRequest` is an opaque handle; not serde.
+        | IrType::HttpRequest
         | IrType::LiveReq
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
@@ -2062,6 +2100,7 @@ mod tests {
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
+                uses_auth: false,
             }],
         };
         let clone = program.clone();
