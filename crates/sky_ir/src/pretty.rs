@@ -284,6 +284,9 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::ListAny => "List.any",
         KernelFn::ListAll => "List.all",
         KernelFn::ListFind => "List.find",
+        // ── List batch (#119) ────────────────────────────────────────────────
+        KernelFn::ListFilterMap => "List.filterMap",
+        KernelFn::ListSortBy => "List.sortBy",
         KernelFn::BasicsNot => "Basics.not",
         KernelFn::BasicsIdentity => "Basics.identity",
         KernelFn::BasicsAlways => "Basics.always",
