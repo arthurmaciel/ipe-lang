@@ -3253,6 +3253,18 @@ impl<'a> Builder<'a> {
             // #76 Tier 1 — Int-keyed html attr.
             K::HtmlAttrTabindex => fun(int(), html_attr(var(0))),
 
+            // ── Std.Ui.Region (#117) ──────────────────────────────────────────
+            // Nullary region landmark attrs — `Attribute msg`.
+            K::RegionMainContent
+            | K::RegionNavigation
+            | K::RegionFooter
+            | K::RegionAside
+            | K::RegionAnnounce
+            | K::RegionAnnounceUrgently => attr(var(0)),
+            // Arity-1 region attrs.
+            K::RegionHeading => fun(int(), attr(var(0))),
+            K::RegionLabel => fun(string(), attr(var(0))),
+
             // ── Json.Decode (17) — mirrors the already-relocated `Db.Decode`
             //    shapes (function-first `map`/`andThen`; `dec(a)` is the opaque
             //    `Decoder a`). Primitives are arity-0 bare decoders. ──
@@ -4357,6 +4369,15 @@ mod registry_phase_c_tests {
             K::FontDisabledColor,
             K::FontHoverSize,
             K::HtmlAttrTabindex,
+            // ── Std.Ui.Region (#117) — all 8 landmark/live-region attrs ──
+            K::RegionMainContent,
+            K::RegionNavigation,
+            K::RegionFooter,
+            K::RegionAside,
+            K::RegionHeading,
+            K::RegionLabel,
+            K::RegionAnnounce,
+            K::RegionAnnounceUrgently,
         ]
     };
 

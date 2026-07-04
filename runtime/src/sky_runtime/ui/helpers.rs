@@ -731,3 +731,45 @@ pub fn ui_font_disabled_color_<M>(c: Color) -> Attribute<M> {
 pub fn ui_font_hover_size_<M>(n: i64) -> Attribute<M> {
     Attribute::AttrPseudoRule(PseudoClass::Hover, format!("font-size:{n}px"))
 }
+
+// ── Std.Ui.Region (#117) ────────────────────────────────────────────────────
+
+/// `Region.mainContent : Attribute msg`
+pub fn ui_region_main_content_<M>() -> Attribute<M> {
+    Attribute::AttrDescribe(Description::DescMain)
+}
+
+/// `Region.navigation : Attribute msg`
+pub fn ui_region_navigation_<M>() -> Attribute<M> {
+    Attribute::AttrDescribe(Description::DescNavigation)
+}
+
+/// `Region.footer : Attribute msg`
+pub fn ui_region_footer_<M>() -> Attribute<M> {
+    Attribute::AttrDescribe(Description::DescContentInfo)
+}
+
+/// `Region.aside : Attribute msg`
+pub fn ui_region_aside_<M>() -> Attribute<M> {
+    Attribute::AttrDescribe(Description::DescComplementary)
+}
+
+/// `Region.heading : Int -> Attribute msg`
+pub fn ui_region_heading_<M>(n: i64) -> Attribute<M> {
+    Attribute::AttrDescribe(Description::DescHeading(n))
+}
+
+/// `Region.label : String -> Attribute msg`
+pub fn ui_region_label_<M>(s: String) -> Attribute<M> {
+    Attribute::AttrDescribe(Description::DescLabel(s))
+}
+
+/// `Region.announce : Attribute msg`
+pub fn ui_region_announce_<M>() -> Attribute<M> {
+    Attribute::AttrDescribe(Description::DescLivePolite)
+}
+
+/// `Region.announceUrgently : Attribute msg`
+pub fn ui_region_announce_urgently_<M>() -> Attribute<M> {
+    Attribute::AttrDescribe(Description::DescLiveAssertive)
+}
