@@ -1614,6 +1614,25 @@ impl<'a> Builder<'a> {
                 let inner2 = self.structure(FlatType::Fun(s, inner1))?;
                 return self.structure(FlatType::Fun(s, inner2));
             }
+            // ── Basics numerics (#115) ────────────────────────────────────────
+            // `negate / abs : number a => a -> a`. SUB obligation (Number
+            // super-type — same as the unary-minus operator). A function / record
+            // argument fails closed (T0001) before reaching a runtime that would
+            // panic. Base scheme for the totality gate is in `stdlib_scheme`.
+            if matches!(k, StdlibKernel::BasicsNegate | StdlibKernel::BasicsAbs) {
+                let s = self.super_var(TyBounds::sub(), span)?;
+                return self.structure(FlatType::Fun(s, s));
+            }
+            // `min / max : comparable a => a -> a -> a` — same Comparable (Ord)
+            // obligation as `Math.min` / `Math.max`. DIRECT-build (not
+            // `stdlib_scheme` + tie) so all three positions collapse to ONE
+            // bounded super-var, rejecting function / record arguments closed.
+            if matches!(k, StdlibKernel::BasicsMin | StdlibKernel::BasicsMax) {
+                let s = self.super_var(TyBounds::ord(), span)?;
+                let inner = self.structure(FlatType::Fun(s, s))?;
+                return self.structure(FlatType::Fun(s, inner));
+            }
+            // ── end Basics numerics (#115) ────────────────────────────────────
             // `Basics.toString : a -> String` (#77). The argument carries the
             // STRINGIFY obligation (a bounded super-var → Rust `SkyStringify`):
             // a scalar / record / ADT satisfies it, a bare function (or a value
@@ -2516,6 +2535,18 @@ impl<'a> Builder<'a> {
             // real STRINGIFY-bounded typing is direct-built in constrain_var_kernel
             // (#77), same pattern as clamp/min/max.
             K::BasicsToString => fun(var(0), string()),
+            // ── Basics numerics (#115) ────────────────────────────────────────
+            // negate / abs: `number a => a -> a`. BASE scheme only (bounded scheme
+            // is direct-built in constrain_var_kernel). Production never reaches
+            // this arm (obligation pre-check early-returns); exists for the totality
+            // gate (`stdlib_scheme_total_over_reachable`).
+            K::BasicsNegate | K::BasicsAbs => fun(var(0), var(0)),
+            // sqrt : Float -> Float — monomorphic, no obligation pre-check needed.
+            K::BasicsSqrt => fun(float(), float()),
+            // min / max: `comparable a => a -> a -> a`. BASE scheme only (bounded
+            // scheme is direct-built in constrain_var_kernel, same as MathMin/MathMax).
+            K::BasicsMin | K::BasicsMax => fun(var(0), fun(var(0), var(0))),
+            // ── end Basics numerics (#115) ────────────────────────────────────
 
             // ── Math (min / max stay on the obligation path — NOT migrated) ──
             // Constants — bare Float values (arity 0).
@@ -4476,6 +4507,13 @@ mod registry_phase_c_tests {
             // (Ord) obligation, base scheme in `stdlib_scheme`.
             K::BasicsClamp,
             K::BasicsToString,
+            // ── Basics numerics (#115) — negate/abs/sqrt/min/max ────────────
+            K::BasicsNegate,
+            K::BasicsAbs,
+            K::BasicsSqrt,
+            K::BasicsMin,
+            K::BasicsMax,
+            // ── end Basics numerics (#115) ──────────────────────────────────
             // Result combinators newly wired (holes post-seal; `withDefault` /
             // `map` are the RELOCATED pair, these two are first-schemed).
             K::ResultAndThen,
