@@ -192,6 +192,9 @@ pub enum StdlibKernel {
     ListAny,
     ListAll,
     ListFind,
+    // ── List batch (#119) ───────────────────────────────────────────────────
+    ListFilterMap,
+    ListSortBy,
     // ── Basics (core Prelude) ────────────────────────────────────────────────
     BasicsNot,
     BasicsIdentity,
@@ -960,6 +963,9 @@ impl StdlibKernel {
             Self::ListAny => d("List", "any", 2, Pure, "list_any"),
             Self::ListAll => d("List", "all", 2, Pure, "list_all"),
             Self::ListFind => d("List", "find", 2, Pure, "list_find"),
+            // ── List batch (#119) ────────────────────────────────────────────
+            Self::ListFilterMap => d("List", "filterMap", 2, Pure, "list_filter_map"),
+            Self::ListSortBy => d("List", "sortBy", 2, Pure, "list_sort_by"),
             Self::BasicsNot => d("Basics", "not", 1, Pure, "basics_not"),
             Self::BasicsIdentity => d("Basics", "identity", 1, Pure, "basics_identity"),
             Self::BasicsAlways => d("Basics", "always", 2, Pure, "basics_always"),
@@ -1820,6 +1826,9 @@ impl StdlibKernel {
         Self::ListAny,
         Self::ListAll,
         Self::ListFind,
+        // ── List batch (#119) ────────────────────────────────────────────────
+        Self::ListFilterMap,
+        Self::ListSortBy,
         // Basics
         Self::BasicsNot,
         Self::BasicsIdentity,
