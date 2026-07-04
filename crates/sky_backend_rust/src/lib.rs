@@ -16,6 +16,7 @@
 //! with. The [`sky_backend::Backend`] trait stays string-free.
 
 mod crate_specs;
+mod emit_cli;
 mod emit_expr;
 mod emit_live;
 mod emit_model_gate;

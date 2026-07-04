@@ -4291,6 +4291,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TuiApp
                 // `Webview.app : WebviewCfg model msg -> Task Error ()`
                 | KernelFn::WebviewApp
+                // `Cli.program : CliCfg model msg -> Task Error ()` (#111)
+                | KernelFn::CliProgram
                 // #76: Std.Html.Attributes fixed-key builders (`String`/`Bool`
                 // -> Attribute msg).
                 | KernelFn::HtmlAttrClass
@@ -4493,6 +4495,33 @@ impl<'a> Lowerer<'a> {
                 // `Ui.rgba : Int -> Int -> Int -> Float -> Color`
                 KernelFn::UiRgba,
             ) => Ok(4),
+            // ── #111: Std.Auth / Stream / HttpStream — fail-closed kernels ──
+            // These kernels are registered in the qualifier table but have no
+            // lower arm (they hit SKY-L0108).  callee_arity is consulted
+            // before lowering, so each variant must declare its correct arity
+            // (matching the `decl()` table in sky_kernels).
+            Callee::Kernel(
+                KernelFn::AuthHashPassword
+                | KernelFn::AuthPasswordStrength
+                | KernelFn::StreamFinish
+                | KernelFn::HttpStreamOpen
+                | KernelFn::HttpStreamClose,
+            ) => Ok(1),
+            Callee::Kernel(
+                KernelFn::AuthHashPasswordCost
+                | KernelFn::AuthVerifyPassword
+                | KernelFn::AuthVerifyToken
+                | KernelFn::StreamStream
+                | KernelFn::StreamEmit
+                | KernelFn::StreamWithContentType
+                | KernelFn::HttpStreamForEachChunk,
+            ) => Ok(2),
+            Callee::Kernel(
+                KernelFn::AuthSignToken
+                | KernelFn::AuthRegister
+                | KernelFn::AuthLogin
+                | KernelFn::AuthSetRole,
+            ) => Ok(3),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -5282,6 +5311,39 @@ impl<'a> Lowerer<'a> {
                     ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TuiApp)),
                     // ── M7: Std.Webview / Sky.Webview app-entry kernel ────────
                     ("Webview", "app") => Ok(Callee::Kernel(KernelFn::WebviewApp)),
+                    // ── #111: Std.Cli / Sky.Cli app-entry kernel ──────────────
+                    ("Cli", "program") => Ok(Callee::Kernel(KernelFn::CliProgram)),
+                    // ── #111: Std.Auth / Sky.Auth — auth helpers ──────────────
+                    ("Auth", "hashPassword") => {
+                        Ok(Callee::Kernel(KernelFn::AuthHashPassword))
+                    }
+                    ("Auth", "hashPasswordCost") => {
+                        Ok(Callee::Kernel(KernelFn::AuthHashPasswordCost))
+                    }
+                    ("Auth", "verifyPassword") => {
+                        Ok(Callee::Kernel(KernelFn::AuthVerifyPassword))
+                    }
+                    ("Auth", "passwordStrength") => {
+                        Ok(Callee::Kernel(KernelFn::AuthPasswordStrength))
+                    }
+                    ("Auth", "signToken") => Ok(Callee::Kernel(KernelFn::AuthSignToken)),
+                    ("Auth", "verifyToken") => Ok(Callee::Kernel(KernelFn::AuthVerifyToken)),
+                    ("Auth", "register") => Ok(Callee::Kernel(KernelFn::AuthRegister)),
+                    ("Auth", "login") => Ok(Callee::Kernel(KernelFn::AuthLogin)),
+                    ("Auth", "setRole") => Ok(Callee::Kernel(KernelFn::AuthSetRole)),
+                    // ── #111: Sky.Http.Server.Stream — server-side streaming ───
+                    ("Stream", "stream") => Ok(Callee::Kernel(KernelFn::StreamStream)),
+                    ("Stream", "emit") => Ok(Callee::Kernel(KernelFn::StreamEmit)),
+                    ("Stream", "finish") => Ok(Callee::Kernel(KernelFn::StreamFinish)),
+                    ("Stream", "withContentType") => {
+                        Ok(Callee::Kernel(KernelFn::StreamWithContentType))
+                    }
+                    // ── #111: Sky.Core.Http.Stream — client-side streaming ─────
+                    ("HttpStream", "open") => Ok(Callee::Kernel(KernelFn::HttpStreamOpen)),
+                    ("HttpStream", "forEachChunk") => {
+                        Ok(Callee::Kernel(KernelFn::HttpStreamForEachChunk))
+                    }
+                    ("HttpStream", "close") => Ok(Callee::Kernel(KernelFn::HttpStreamClose)),
                     // A kernel beyond the wired set.
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),
