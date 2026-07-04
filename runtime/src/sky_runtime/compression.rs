@@ -1,10 +1,9 @@
-//! Std.Compression — gzip (flate2) + zstd over the Sky bytes convention.
+//! Std.Compression — gzip (flate2) + zstd kernels operating on raw byte buffers.
 //!
-//! All entries are `String -> Task Error String`. Input/output are Sky
-//! "bytes" — `String`s under the Latin-1 byte convention (one char per byte,
-//! see encoding.rs) — so compressed payloads (binary, non-UTF-8) round-trip
-//! through `String` losslessly. Compression is sync CPU work wrapped in a
-//! ready Future to satisfy the `Task` shape.
+//! All entries are `Vec<u8> -> Task Error Vec<u8>`. Input and output are raw
+//! byte buffers (`Vec<u8>`) — Sky's `Bytes` primitive — so compressed payloads
+//! (including non-UTF-8 binary) round-trip losslessly. Compression is sync CPU
+//! work wrapped in a ready Future to satisfy the `Task` shape.
 //!
 //! # Decompression bomb protection
 //!
@@ -13,7 +12,6 @@
 //! beyond that limit is rejected with an error rather than allowed to OOM
 //! the process.
 
-use super::encoding::{bytes_to_sky, sky_bytes};
 use super::*;
 use std::future::ready;
 use std::io::{Read, Write};
@@ -60,41 +58,41 @@ fn gunzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// Compression.gzip : String -> Task Error String
-pub fn compression_gzip<E: From<String> + Send + 'static>(s: String) -> SkyTask<E, String> {
-    let r = match gzip_bytes(&sky_bytes(&s)) {
-        Ok(b) => ok_res(bytes_to_sky(&b)),
+/// Compression.gzip : Bytes -> Task Error Bytes
+pub fn compression_gzip<E: From<String> + Send + 'static>(data: Vec<u8>) -> SkyTask<E, Vec<u8>> {
+    let r = match gzip_bytes(&data) {
+        Ok(b) => ok_res(b),
         Err(e) => SkyResult::Err(format!("Compression.gzip: {}", e).into()),
     };
     Box::pin(ready(r))
 }
 
-/// Compression.gunzip : String -> Task Error String
-pub fn compression_gunzip<E: From<String> + Send + 'static>(s: String) -> SkyTask<E, String> {
-    let r = match gunzip_bytes(&sky_bytes(&s)) {
-        Ok(b) => ok_res(bytes_to_sky(&b)),
+/// Compression.gunzip : Bytes -> Task Error Bytes
+pub fn compression_gunzip<E: From<String> + Send + 'static>(data: Vec<u8>) -> SkyTask<E, Vec<u8>> {
+    let r = match gunzip_bytes(&data) {
+        Ok(b) => ok_res(b),
         Err(e) => SkyResult::Err(format!("Compression.gunzip: {}", e).into()),
     };
     Box::pin(ready(r))
 }
 
-/// Compression.zstdCompress : String -> Task Error String
+/// Compression.zstdCompress : Bytes -> Task Error Bytes
 pub fn compression_zstd_compress<E: From<String> + Send + 'static>(
-    s: String,
-) -> SkyTask<E, String> {
-    let r = match zstd::encode_all(&sky_bytes(&s)[..], 0) {
-        Ok(out) => ok_res(bytes_to_sky(&out)),
+    data: Vec<u8>,
+) -> SkyTask<E, Vec<u8>> {
+    let r = match zstd::encode_all(&data[..], 0) {
+        Ok(out) => ok_res(out),
         Err(e) => SkyResult::Err(format!("Compression.zstdCompress: {}", e).into()),
     };
     Box::pin(ready(r))
 }
 
-/// Compression.zstdDecompress : String -> Task Error String
+/// Compression.zstdDecompress : Bytes -> Task Error Bytes
 pub fn compression_zstd_decompress<E: From<String> + Send + 'static>(
-    s: String,
-) -> SkyTask<E, String> {
-    let r = match zstd_decompress_capped(&sky_bytes(&s)) {
-        Ok(b) => ok_res(bytes_to_sky(&b)),
+    data: Vec<u8>,
+) -> SkyTask<E, Vec<u8>> {
+    let r = match zstd_decompress_capped(&data) {
+        Ok(b) => ok_res(b),
         Err(e) => SkyResult::Err(format!("Compression.zstdDecompress: {}", e).into()),
     };
     Box::pin(ready(r))
@@ -124,32 +122,58 @@ mod tests {
 
     #[test]
     fn gzip_roundtrip() {
-        let orig = "hello, sky - gzip round-trip with some length to compress".to_string();
-        let z: SkyResult<String, String> = task_run(compression_gzip(orig.clone()));
+        let orig = b"hello, sky - gzip round-trip with some length to compress".to_vec();
+        let z: SkyResult<Vec<u8>, String> = task_run(compression_gzip(orig.clone()));
         let comp = match z {
             SkyResult::Ok(c) => c,
             _ => panic!("gzip failed"),
         };
-        let back: SkyResult<String, String> = task_run(compression_gunzip(comp));
-        assert!(matches!(back, SkyResult::Ok(ref s) if *s == orig));
+        let back: SkyResult<Vec<u8>, String> = task_run(compression_gunzip(comp));
+        assert!(matches!(back, SkyResult::Ok(ref b) if *b == orig));
+    }
+
+    #[test]
+    fn gzip_roundtrip_binary() {
+        // High bytes (> 127) that are not valid UTF-8 must round-trip without
+        // truncation — the old Latin-1 bridge would silently corrupt these.
+        let orig: Vec<u8> = (0u8..=255u8).collect();
+        let z: SkyResult<Vec<u8>, String> = task_run(compression_gzip(orig.clone()));
+        let comp = match z {
+            SkyResult::Ok(c) => c,
+            _ => panic!("gzip binary failed"),
+        };
+        let back: SkyResult<Vec<u8>, String> = task_run(compression_gunzip(comp));
+        assert!(matches!(back, SkyResult::Ok(ref b) if *b == orig));
     }
 
     #[test]
     fn zstd_roundtrip() {
-        let orig = "zstd payload zstd payload zstd payload".to_string();
-        let z: SkyResult<String, String> = task_run(compression_zstd_compress(orig.clone()));
+        let orig = b"zstd payload zstd payload zstd payload".to_vec();
+        let z: SkyResult<Vec<u8>, String> = task_run(compression_zstd_compress(orig.clone()));
         let comp = match z {
             SkyResult::Ok(c) => c,
             _ => panic!("zstd failed"),
         };
-        let back: SkyResult<String, String> = task_run(compression_zstd_decompress(comp));
-        assert!(matches!(back, SkyResult::Ok(ref s) if *s == orig));
+        let back: SkyResult<Vec<u8>, String> = task_run(compression_zstd_decompress(comp));
+        assert!(matches!(back, SkyResult::Ok(ref b) if *b == orig));
+    }
+
+    #[test]
+    fn zstd_roundtrip_binary() {
+        let orig: Vec<u8> = (0u8..=255u8).collect();
+        let z: SkyResult<Vec<u8>, String> = task_run(compression_zstd_compress(orig.clone()));
+        let comp = match z {
+            SkyResult::Ok(c) => c,
+            _ => panic!("zstd binary failed"),
+        };
+        let back: SkyResult<Vec<u8>, String> = task_run(compression_zstd_decompress(comp));
+        assert!(matches!(back, SkyResult::Ok(ref b) if *b == orig));
     }
 
     #[test]
     fn gunzip_rejects_garbage() {
-        let bad: SkyResult<String, String> =
-            task_run(compression_gunzip("not a gzip stream".to_string()));
+        let bad: SkyResult<Vec<u8>, String> =
+            task_run(compression_gunzip(b"not a gzip stream".to_vec()));
         assert!(matches!(bad, SkyResult::Err(_)));
     }
 
@@ -158,9 +182,9 @@ mod tests {
     /// doesn't need to produce a real multi-GiB bomb.
     #[test]
     fn gunzip_rejects_decompression_bomb() {
-        // Build a gzip of 32 bytes (> 16-byte cap we will set).
-        let plain = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 34 bytes
-        let compressed: SkyResult<String, String> = task_run(compression_gzip(plain.to_string()));
+        // Build a gzip of 34 bytes (> 16-byte cap we will set).
+        let plain = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 34 bytes
+        let compressed: SkyResult<Vec<u8>, String> = task_run(compression_gzip(plain.to_vec()));
         let comp = match compressed {
             SkyResult::Ok(c) => c,
             _ => panic!("gzip failed"),
@@ -171,11 +195,11 @@ mod tests {
         // so we use a separate env-var read path below. Because OnceLock caches
         // the value, we test the helper directly instead.
         let max: u64 = 16;
-        let data = sky_bytes(&comp);
+        // comp is already Vec<u8> — no conversion needed.
         let result = {
             use flate2::read::GzDecoder;
             use std::io::Read;
-            let d = GzDecoder::new(&data[..]);
+            let d = GzDecoder::new(&comp[..]);
             let mut out = Vec::new();
             let _ = d.take(max.saturating_add(1)).read_to_end(&mut out);
             if out.len() as u64 > max {
@@ -194,20 +218,20 @@ mod tests {
     /// Verify that zstd rejects a payload that would expand beyond the cap.
     #[test]
     fn zstd_rejects_decompression_bomb() {
-        let plain = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"; // 34 bytes
-        let compressed: SkyResult<String, String> =
-            task_run(compression_zstd_compress(plain.to_string()));
+        let plain = b"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"; // 34 bytes
+        let compressed: SkyResult<Vec<u8>, String> =
+            task_run(compression_zstd_compress(plain.to_vec()));
         let comp = match compressed {
             SkyResult::Ok(c) => c,
             _ => panic!("zstd compress failed"),
         };
 
         let max: u64 = 16;
-        let data = sky_bytes(&comp);
+        // comp is already Vec<u8> — no conversion needed.
         let result = {
             use std::io::Read;
             use zstd::stream::read::Decoder as ZstdDecoder;
-            let d = ZstdDecoder::new(&data[..]).expect("zstd decoder");
+            let d = ZstdDecoder::new(&comp[..]).expect("zstd decoder");
             let mut out = Vec::new();
             let _ = d.take(max.saturating_add(1)).read_to_end(&mut out);
             if out.len() as u64 > max {

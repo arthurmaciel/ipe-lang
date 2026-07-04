@@ -27,37 +27,11 @@ const QUERY: &AsciiSet = &NON_ALPHANUMERIC
 // for every `String`. ASCII is unchanged; only non-ASCII moves from the old
 // Latin-1 bytes to the correct UTF-8 bytes.
 //
-// BYTE path: the `sky_bytes` / `bytes_to_sky` Latin-1 helpers below are the
-// String-as-bytes convention used by the runtime-internal binary pipelines
-// (`compression.rs`, `email.rs`, `ws_client.rs`) that do NOT yet have a
-// Sky-facing module in the skyc port and so treat "bytes" as a Latin-1 `String`.
-// They are NOT on the `Encoding.*` text path and NOT the JWT path (jwt.rs owns
-// its own `base64::URL_SAFE_NO_PAD` + `hex::decode` on raw `&[u8]`; it never
-// calls these). Task #55b migrates those pipelines onto the real `Bytes`
-// (`Vec<u8>`) newtype and removes these helpers, once those modules gain Sky
-// surfaces.
-
-/// Interpret a (Latin-1) Sky byte-string as raw bytes: one char -> one byte.
-/// Byte-pipeline-internal only (compression / email / websocket); NOT the
-/// `Encoding.*` text path (which is UTF-8). See the BYTE-path note above.
-//
-// `allow(dead_code)`: the only consumers are the `compression`/`server`/
-// `websocket_client` feature-gated modules (and generated projects, which
-// compile the runtime WITHOUT cargo features and always include those modules).
-// A default-feature standalone lib build sees no caller — same situation as
-// `form_url_decode` above. Removed entirely by #55b once the byte pipelines
-// move onto the `Bytes`(`Vec<u8>`) newtype.
-#[allow(dead_code)]
-pub(crate) fn sky_bytes(s: &str) -> Vec<u8> {
-    s.chars().map(|c| c as u8).collect()
-}
-
-/// Wrap raw bytes as a (Latin-1) Sky byte-string: one byte -> one char.
-/// Byte-pipeline-internal only; NOT the `Encoding.*` text path.
-#[allow(dead_code)]
-pub(crate) fn bytes_to_sky(bytes: &[u8]) -> String {
-    bytes.iter().map(|&b| b as char).collect()
-}
+// BYTE path (task #55b, completed): the Latin-1 `sky_bytes` / `bytes_to_sky`
+// helpers that the old binary pipelines (compression / email / websocket) used
+// have been deleted. Those pipelines now operate on `Vec<u8>` end-to-end and no
+// longer need a String↔bytes bridge. The `Encoding.*` text path and the JWT path
+// (jwt.rs, which owns its own raw-byte base64/hex) are unaffected.
 
 /// Decode an application/x-www-form-urlencoded component: `+` -> space, `%XX` ->
 /// byte (best-effort). Shared by the HTTP server's query parser and the HTTP

@@ -19,6 +19,7 @@
 //! `SKY_EMAIL_ENDPOINT_<PROVIDER>` overrides per-provider URLs for fixtures.
 
 use super::*;
+use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -40,13 +41,15 @@ pub struct EmailMessage {
     pub replyTo: String,
 }
 
-/// Sky.Email.Attachment — `content` carries raw bytes (Sky.Core.Bytes alias).
+/// Sky.Email.Attachment — `content` carries raw bytes as `Vec<u8>`.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct EmailAttachment {
     pub filename: String,
     pub mimeType: String,
-    pub content: String,
+    /// Raw attachment bytes. Use `Bytes.*` kernels to construct from a Sky
+    /// `Bytes` value (e.g. `bytes_from_string`, `bytes_from_base64`).
+    pub content: Vec<u8>,
 }
 
 /// Sky.Email.SesConfig.
@@ -218,14 +221,12 @@ async fn send_resend<E: From<String>>(api_key: &str, m: &EmailMessage) -> SkyRes
             .attachments
             .iter()
             .map(|a| {
-                // Resend expects `content` as a base64 STRING, not a JSON byte
-                // array. `a.content` is a Latin-1 byte-string (one char per byte
-                // per encoding.rs convention), so decode it back to raw bytes via
-                // sky_bytes BEFORE base64 — `as_bytes()` would re-UTF-8-encode and
-                // corrupt any byte >= 0x80. `base64_encode` does sky_bytes→base64.
+                // Resend expects `content` as a base64 string. `a.content` is
+                // `Vec<u8>` — encode directly without any intermediate String
+                // conversion so every byte value round-trips correctly.
                 serde_json::json!({
                     "filename": a.filename,
-                    "content": base64_encode(a.content.clone()),
+                    "content": B64.encode(&a.content),
                 })
             })
             .collect();
@@ -289,15 +290,15 @@ async fn send_sendgrid<E: From<String>>(api_key: &str, m: &EmailMessage) -> SkyR
         );
     }
     if !m.attachments.is_empty() {
-        // SendGrid v3 attachments: base64 `content` (decode the Latin-1 byte-string
-        // via base64_encode, NOT as_bytes() which would re-UTF-8 corrupt bytes ≥0x80),
-        // `filename`, `type` (MIME), `disposition`. Previously dropped silently.
+        // SendGrid v3 attachments: base64 `content` (encode the raw `Vec<u8>`
+        // directly so every byte value round-trips correctly), `filename`,
+        // `type` (MIME), `disposition`.
         let atts: Vec<serde_json::Value> = m
             .attachments
             .iter()
             .map(|a| {
                 serde_json::json!({
-                    "content": base64_encode(a.content.clone()),
+                    "content": B64.encode(&a.content),
                     "filename": a.filename,
                     "type": a.mimeType,
                     "disposition": "attachment",
@@ -586,11 +587,9 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> SkyRe
                 .mimeType
                 .parse::<ContentType>()
                 .unwrap_or(ContentType::TEXT_PLAIN);
-            // `att.content` is a Latin-1 byte-string (one char per byte); decode
-            // it back to raw bytes via sky_bytes. `into_bytes()` would re-UTF-8-
-            // encode and corrupt any attachment byte >= 0x80.
+            // `att.content` is `Vec<u8>` — pass the raw bytes directly.
             mixed = mixed.singlepart(
-                Attachment::new(att.filename.clone()).body(sky_bytes(&att.content), ct),
+                Attachment::new(att.filename.clone()).body(att.content.clone(), ct),
             );
         }
         builder.multipart(mixed)

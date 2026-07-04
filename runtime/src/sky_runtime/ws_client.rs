@@ -23,7 +23,9 @@ use tokio_tungstenite::tungstenite::Message;
 #[derive(Clone, Debug, PartialEq)]
 pub enum WsClientMessage {
     Text(String),
-    Binary(String),
+    /// Binary frames carry raw bytes (`Vec<u8>`) — no Latin-1 bridge. Sky code
+    /// that needs to inspect binary payload passes it through `Bytes.*` kernels.
+    Binary(Vec<u8>),
 }
 
 /// Sky.Core.WebSocket.CloseCode — bridged so the runtime can build close codes
@@ -368,8 +370,8 @@ async fn do_connect<E: From<String> + Send + 'static>(
                     let _ = frames.send(WsEvent::Message(WsClientMessage::Text(t)));
                 }
                 Ok(Message::Binary(b)) => {
-                    let _ =
-                        frames.send(WsEvent::Message(WsClientMessage::Binary(bytes_to_sky(&b))));
+                    // `b` is already `Vec<u8>` from tungstenite — no conversion needed.
+                    let _ = frames.send(WsEvent::Message(WsClientMessage::Binary(b)));
                 }
                 Ok(Message::Close(cf)) => {
                     let code = cf.map(|f| u16::from(f.code) as i64).unwrap_or(1000);
@@ -470,13 +472,13 @@ pub fn web_socket_send<E: From<String> + Send + 'static>(id: i64, msg: String) -
     })
 }
 
-/// WebSocket.sendBinary : Int -> String -> Task Error ()
+/// WebSocket.sendBinary : Int -> Bytes -> Task Error ()
 pub fn web_socket_send_binary<E: From<String> + Send + 'static>(
     id: i64,
-    msg: String,
+    msg: Vec<u8>,
 ) -> SkyTask<E, ()> {
     Box::pin(async move {
-        if send_cmd(id, WsCmd::Binary(sky_bytes(&msg))) {
+        if send_cmd(id, WsCmd::Binary(msg)) {
             ok_res(())
         } else {
             SkyResult::Err(format!("WebSocket.sendBinary: no socket {}", id).into())

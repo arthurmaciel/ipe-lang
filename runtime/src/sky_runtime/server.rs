@@ -824,7 +824,14 @@ async fn ws_loop<E: From<String> + Send + 'static>(
                         let _ = socket.send(Message::Close(None)).await;
                         break;
                     }
-                    let s = bytes_to_sky(&b);
+                    // Convert binary frame bytes to String via UTF-8 (lossy): Sky's
+                    // String invariant is valid UTF-8; non-UTF-8 binary replaces
+                    // malformed sequences with U+FFFD rather than producing an
+                    // ill-formed String. The server `onMessage` callback receives a
+                    // uniform `String` for both text and binary frames; applications
+                    // that need lossless binary round-trips should use a text+base64
+                    // encoding at the Sky level.
+                    let s = String::from_utf8_lossy(&b).into_owned();
                     let _ = (cfg.onMessage)(WsHandle::WebSocketServer(id), s).await;
                 }
                 Some(Ok(Message::Close(_))) | None => break,
@@ -1002,13 +1009,13 @@ pub fn server_web_socket_send_to_client<E: From<String> + Send + 'static>(
     })
 }
 
-/// ServerWebSocket_sendBinaryToClient : Int -> String -> Task Error ()
+/// ServerWebSocket_sendBinaryToClient : Int -> Bytes -> Task Error ()
 pub fn server_web_socket_send_binary_to_client<E: From<String> + Send + 'static>(
     id: i64,
-    msg: String,
+    msg: Vec<u8>,
 ) -> SkyTask<E, ()> {
     Box::pin(async move {
-        if ws_send_raw(id, WsOut::Binary(sky_bytes(&msg))) {
+        if ws_send_raw(id, WsOut::Binary(msg)) {
             ok_res(())
         } else {
             SkyResult::Err(format!("ws: no client {}", id).into())
