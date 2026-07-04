@@ -387,6 +387,7 @@ fn generic_enum_def_construction_and_pattern_emit() -> DResult<()> {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn concrete_multi_field_enum_emits() -> DResult<()> {
     let mut interner = Interner::new();
     let main_mod = interner.intern("Main")?;
