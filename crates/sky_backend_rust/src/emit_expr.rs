@@ -1036,7 +1036,16 @@ fn emit_server_call(
         | KernelFn::MiddlewareWithLogging
         | KernelFn::MiddlewareWithBasicAuth
         | KernelFn::MiddlewareWithRateLimit
-        | KernelFn::RateLimitAllow => Ok(None),
+        | KernelFn::RateLimitAllow
+        // ── #111: Sky.Http.Server.Stream (server-side streaming) ─────────────
+        | KernelFn::StreamStream
+        | KernelFn::StreamEmit
+        | KernelFn::StreamFinish
+        | KernelFn::StreamWithContentType
+        // ── #111: Sky.Core.Http.Stream (client-side relay) ───────────────────
+        | KernelFn::HttpStreamOpen
+        | KernelFn::HttpStreamForEachChunk
+        | KernelFn::HttpStreamClose => Ok(None),
         // Any is_server() variant not listed above is a gap — hard error so
         // the Rust compiler's exhaustiveness check catches it at compile time.
         _ => Err(Diagnostic::CompilerBug {
@@ -3819,6 +3828,20 @@ fn render_record_pat(ctx: &EmitCtx, fields: &[(Symbol, Pat)]) -> DResult<String>
     }
 }
 
+/// Field names of the `HttpRequest` runtime struct, sorted alphabetically.
+/// Used by [`emit_record`] to detect `HttpRequest` literals and bypass the
+/// synthesised-struct lookup (the type is defined in `sky_runtime::http_client`,
+/// not emitted by the backend).
+const HTTP_REQUEST_FIELDS: &[&str] = &[
+    "body",
+    "followRedirects",
+    "headers",
+    "maxRedirects",
+    "method",
+    "timeout",
+    "url",
+];
+
 /// Emit a record literal `{ x = e1, ... }` as a named struct literal
 /// `RecXY { x: <e1>, ... }`. `depth` is the literal's own IR-nesting level; its
 /// field values are emitted one level deeper. Kept out of the `emit_expr_at`
@@ -3839,7 +3862,20 @@ fn emit_record(
     for (sym, _) in fields {
         key.push(ctx.resolve_ident(*sym)?.to_owned());
     }
-    let struct_name = ctx.record_name_for_literal(&key)?.to_owned();
+    let struct_name: String = {
+        let mut sorted = key.clone();
+        sorted.sort();
+        let is_http_request = sorted.len() == HTTP_REQUEST_FIELDS.len()
+            && sorted
+                .iter()
+                .zip(HTTP_REQUEST_FIELDS.iter())
+                .all(|(a, b)| a.as_str() == *b);
+        if is_http_request {
+            "HttpRequest".to_owned()
+        } else {
+            ctx.record_name_for_literal(&key)?.to_owned()
+        }
+    };
     let mut parts = Vec::with_capacity(fields.len());
     for (sym, value) in fields {
         let field_ident = ctx.emit_ident(*sym)?;
@@ -4029,15 +4065,23 @@ fn emit_apply(
 }
 
 /// Emit a top-level function (or kernel) named as a first-class *value* as a
-/// type-pinned boxed closure: `{ let __sky_fn: Box<dyn Fn(..) -> R> =
-/// Box::new(<name>); __sky_fn }`. The explicit binding type drives the unsized
-/// coercion of the named `fn` item (a zero-sized `Fn` implementor) to the boxed
-/// trait object, so the value fills a `Box<dyn Fn(..) -> R>` slot uniformly in
-/// every position — argument, return, or let-binding — rather than relying on a
-/// coercion site that an `if`/`match` branch or a bare `let` would not provide.
-/// `ty` is the value's `Fun` IR type; [`render_type`] renders it as the boxed
-/// trait object. Kept out of the `emit_expr_at` match (`#[inline(never)]`) for
-/// the same frame-size reason as the neighbouring helpers.
+/// type-pinned smart-pointer closure.
+///
+/// For the server-handler shape (`ServerRequest -> Task Error ServerResponse`,
+/// which renders as `ServerHandler<SkyError>` — an `Arc<dyn Fn(…)>` alias in
+/// the runtime), emits `Arc::new(<name>)` so the coercion produces the correct
+/// runtime type.  For every other `Fun` shape, emits `Box::new(<name>)` as
+/// before (`Box<dyn Fn(..) -> R + Send + 'static>`).
+///
+/// The explicit binding type drives the unsized coercion of the named `fn`
+/// item (a zero-sized `Fn` implementor) to the smart-pointer trait object, so
+/// the value fills the slot uniformly in every position — argument, return, or
+/// let-binding — rather than relying on a coercion site that an `if`/`match`
+/// branch or a bare `let` would not provide.
+///
+/// `ty` is the value's `Fun` IR type; [`render_type`] renders it as the typed
+/// smart-pointer.  Kept `#[inline(never)]` for the same frame-size reason as
+/// the neighbouring helpers.
 #[inline(never)]
 fn emit_func_value(
     ctx: &EmitCtx,
@@ -4046,9 +4090,23 @@ fn emit_func_value(
     generics: GenericScope,
 ) -> DResult<String> {
     let name = callee_name(ctx, callee)?;
-    let boxed = render_type(ctx, ty, generics)?;
+    let typed = render_type(ctx, ty, generics)?;
+    // ServerHandler<E> is Arc<dyn Fn(ServerRequest) -> SkyTask<E, ServerResponse>
+    //   + Send + Sync> (defined in sky_runtime::server).  Using Box::new here
+    // produces a type-mismatch because Arc and Box are distinct smart pointers.
+    // Detect this shape and use Arc::new instead.
+    let ctor = if matches!(ty,
+        IrType::Fun(params, ret)
+            if matches!(params.as_slice(), [IrType::ServerRequest])
+                && matches!(ret.as_ref(), IrType::Task(inner)
+                    if matches!(inner.as_ref(), IrType::ServerResponse))
+    ) {
+        "Arc"
+    } else {
+        "Box"
+    };
     Ok(format!(
-        "{{ let __sky_fn: {boxed} = Box::new({name}); __sky_fn }}"
+        "{{ let __sky_fn: {typed} = {ctor}::new({name}); __sky_fn }}"
     ))
 }
 
