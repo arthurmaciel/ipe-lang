@@ -50,6 +50,7 @@ fn program_with_live(
             uses_live,
             uses_tui: false,
             uses_webview: false,
+            uses_css: false,
         }],
     }
 }

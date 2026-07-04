@@ -108,17 +108,37 @@ const RUNTIME_MOD_RS_HTTP_HEADER_APPEND: &str = "pub mod http_header;\n";
 /// Note: intentionally NOT `pub use ui::*;` because `ui::Attribute` collides
 /// with `html::Attribute` (T2 soundness trap) — callers use the fully-qualified
 /// `sky_runtime::ui::element::Attribute` path instead.
-/// `css_safety` is declared FIRST because `html.rs` (`use super::css_safety;`),
-/// `ui/render.rs` (`SafeCssPropertyName`/`SafeCssValue`), and `live/style_inject.rs`
-/// (`strip_style_close`) all import it from the `sky_runtime` top level — it must
-/// exist in the trimmed emitted `mod.rs` for any UI program or those imports fail
-/// (E0432). `css` (the `Std.Css` sink) is declared alongside so the `CssProp` /
-/// `CssRule` IR types (`emit_types` → `sky_runtime::css::…`) resolve; it depends
-/// only on `css_safety`, so it compiles cleanly even before the `#47` lower
-/// wiring makes it reachable from Sky. `uses_live`/`uses_tui` ⇒ `uses_ui`, so
-/// this append fires for every render-capable program.
-const RUNTIME_MOD_RS_UI_APPEND: &str =
-    "pub mod css_safety;\npub mod css;\npub mod html;\npub use html::*;\npub mod ui;\n";
+///
+/// The `css_safety` / `css` declarations are NOT here — they live in
+/// [`RUNTIME_MOD_RS_CSS_APPEND`], which is pushed BEFORE this append whenever
+/// `uses_ui || uses_css` holds. `html.rs` (`use super::css_safety;`),
+/// `ui/render.rs` (`SafeCssPropertyName`/`SafeCssValue`), and
+/// `live/style_inject.rs` (`strip_style_close`) all import `css_safety` from the
+/// `sky_runtime` top level, so it MUST be declared before this UI append or
+/// those imports fail (E0432) — the caller preserves that ordering. Splitting
+/// css out lets a pure-`Std.Css` program (no render kernel ⇒ no `uses_ui`) still
+/// get the css declarations via `uses_css` alone (#47).
+const RUNTIME_MOD_RS_UI_APPEND: &str = "pub mod html;\npub use html::*;\npub mod ui;\n";
+
+/// Lines appended to `sky_runtime/mod.rs` when the program uses the `Std.Css`
+/// leaf security kernels (`Sky.Core.CssSafety.safeValue` / `safePropName` /
+/// `safeSelector` / `stripStyleClose`, #47) — OR any `Std.Ui` / `Std.Html`
+/// render kernel (whose runtime modules import `css_safety` at the top level).
+///
+/// `css_safety.rs` is a dependency-free, audited leaf; `css.rs` (the four
+/// `Std.Css` leaf kernels — `safe_value` / `safe_prop_name` / `safe_selector` /
+/// `strip_style_close_kernel`) depends only on `css_safety`, and is glob-re-
+/// exported (`pub use css::*;`) so the emitted `pub use sky_runtime::*;`
+/// surfaces those bare kernel names that `naming::kernel_name` emits. Both live
+/// in the runtime source tree (copied into every emitted project); this append
+/// wires them into the trimmed `mod.rs`.
+///
+/// Pushed BEFORE [`RUNTIME_MOD_RS_UI_APPEND`] because `html.rs` and friends
+/// import `css_safety` — it must be declared first. Guarded on
+/// `uses_ui || uses_css` and appended AT MOST ONCE, so a program that uses both
+/// `Std.Css` and `Std.Ui` does not emit a duplicate `pub mod css_safety;`
+/// (`E0428`).
+const RUNTIME_MOD_RS_CSS_APPEND: &str = "pub mod css_safety;\npub mod css;\npub use css::*;\n";
 
 // ── Phase-1c: Std.Tui / Sky.Tui ─────────────────────────────────────────────
 
@@ -382,6 +402,16 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // module depended on by an included module MUST itself be included.
         if ctx.uses_server || ctx.uses_live || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_HTTP_HEADER_APPEND);
+        }
+        // #47: Std.Css leaf security kernels — declared for any render-capable
+        // program (`uses_ui`, whose html/ui/live runtime modules import
+        // `css_safety`) OR a pure-`Std.Css` program (`uses_css`, no render
+        // kernel). Pushed BEFORE the UI append because `html.rs` /
+        // `ui/render.rs` / `live/style_inject.rs` import `css_safety` at the
+        // top level — it must be declared first. The single guard de-duplicates:
+        // a program using both emits `pub mod css_safety;` exactly once (E0428).
+        if ctx.uses_ui || ctx.uses_css {
+            mod_rs.push_str(RUNTIME_MOD_RS_CSS_APPEND);
         }
         // M7: Std.Ui / Std.Html render kernels.
         if ctx.uses_ui {

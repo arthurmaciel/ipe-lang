@@ -806,6 +806,60 @@ fn expr_uses_ui_kernel(expr: &Expr) -> bool {
 }
 
 /// Return `true` when `expr` (or any sub-expression) contains a call to a
+/// `Sky.Core.CssSafety` leaf security kernel (the `Std.Css` backing, #47).
+///
+/// Mirrors [`expr_uses_ui_kernel`] exactly, delegating to
+/// [`KernelFn::is_css`]. A pure `Std.Css` program (CSS + `println`, no
+/// `Std.Ui` / `Std.Html`) never sets `uses_ui`, so the backend needs this
+/// independent flag to declare `css_safety` / `css` in the emitted
+/// `sky_runtime/mod.rs`.
+fn expr_uses_css_kernel(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, args } => {
+            let is_css = matches!(callee, Callee::Kernel(k) if k.is_css());
+            is_css || args.iter().any(expr_uses_css_kernel)
+        }
+        Expr::FuncValue { callee, .. } => matches!(callee, Callee::Kernel(k) if k.is_css()),
+        Expr::Apply { func, args } => {
+            expr_uses_css_kernel(func) || args.iter().any(expr_uses_css_kernel)
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            expr_uses_css_kernel(value) || expr_uses_css_kernel(body)
+        }
+        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_css_kernel(body),
+        Expr::If { cond, then_, else_ } => {
+            expr_uses_css_kernel(cond) || expr_uses_css_kernel(then_) || expr_uses_css_kernel(else_)
+        }
+        Expr::Match(m) => {
+            expr_uses_css_kernel(m.scrutinee())
+                || m.arms().iter().any(|arm| expr_uses_css_kernel(&arm.body))
+        }
+        Expr::Tuple(elems) => elems.iter().any(expr_uses_css_kernel),
+        Expr::List { items, .. } => items.iter().any(expr_uses_css_kernel),
+        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_css_kernel(v)),
+        Expr::Access { record, .. } => expr_uses_css_kernel(record),
+        Expr::Update { record, fields } => {
+            expr_uses_css_kernel(record) || fields.iter().any(|(_, v)| expr_uses_css_kernel(v))
+        }
+        Expr::BinOp { lhs, rhs, .. } => expr_uses_css_kernel(lhs) || expr_uses_css_kernel(rhs),
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            args.iter().any(expr_uses_css_kernel)
+        }
+        Expr::Cons { head, tail } => expr_uses_css_kernel(head) || expr_uses_css_kernel(tail),
+        Expr::TaskSeq { effect, rest } => {
+            expr_uses_css_kernel(effect) || expr_uses_css_kernel(rest)
+        }
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_) => false,
+    }
+}
+
+/// Return `true` when `expr` (or any sub-expression) contains a call to a
 /// Std.Live / Sky.Live app-entry kernel introduced in M7.
 fn expr_uses_live_kernel(expr: &Expr) -> bool {
     match expr {
@@ -1353,6 +1407,10 @@ impl<'a> Lowerer<'a> {
             funcs.iter().any(|f| expr_uses_webview_kernel(&f.body)),
         );
 
+        // #47: detect Std.Css (Sky.Core.CssSafety) leaf-kernel usage. Independent
+        // of `uses_ui` — a pure-Std.Css program uses no render kernel.
+        let uses_css = funcs.iter().any(|f| expr_uses_css_kernel(&f.body));
+
         let module = Module {
             name: ModPath(self.m.name.clone()),
             types: types_ir,
@@ -1365,6 +1423,7 @@ impl<'a> Lowerer<'a> {
             uses_live,
             uses_tui,
             uses_webview,
+            uses_css,
         };
         Ok(Program {
             modules: vec![module],
@@ -3748,7 +3807,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ErrorConflict
                 | KernelFn::ErrorUnavailable
                 // `Error.toString : Error -> String`
-                | KernelFn::ErrorToString,
+                | KernelFn::ErrorToString
+                // ── CssSafety arity-1 (Std.Css leaf kernels, #47) ─────────────
+                // `safeValue`/`safePropName`/`safeSelector : String -> Maybe String`
+                // `stripStyleClose : String -> String`
+                | KernelFn::CssSafetySafeValue
+                | KernelFn::CssSafetySafePropName
+                | KernelFn::CssSafetySafeSelector
+                | KernelFn::CssSafetyStripStyleClose,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -4382,6 +4448,20 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Error", "toString") => Ok(Callee::Kernel(KernelFn::ErrorToString)),
                     ("Error", "withMessage") => Ok(Callee::Kernel(KernelFn::ErrorWithMessage)),
+                    // ── CssSafety kernels (Sky.Core.CssSafety — Std.Css leaf
+                    //    security kernels, #47) ──────────────────────────────
+                    ("CssSafety", "safeValue") => {
+                        Ok(Callee::Kernel(KernelFn::CssSafetySafeValue))
+                    }
+                    ("CssSafety", "safePropName") => {
+                        Ok(Callee::Kernel(KernelFn::CssSafetySafePropName))
+                    }
+                    ("CssSafety", "safeSelector") => {
+                        Ok(Callee::Kernel(KernelFn::CssSafetySafeSelector))
+                    }
+                    ("CssSafety", "stripStyleClose") => {
+                        Ok(Callee::Kernel(KernelFn::CssSafetyStripStyleClose))
+                    }
                     // ── Maybe kernels ──────────────────────────────────────
                     ("Maybe", "withDefault") => Ok(Callee::Kernel(KernelFn::MaybeWithDefault)),
                     ("Maybe", "map") => Ok(Callee::Kernel(KernelFn::MaybeMap)),

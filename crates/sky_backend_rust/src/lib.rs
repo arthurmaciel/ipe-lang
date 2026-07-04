@@ -179,6 +179,15 @@ pub(crate) struct EmitCtx<'a> {
     /// (which transitively pulls `"live"`) and the main entry is switched to
     /// `block_on_current_thread` (G3: tao/Cocoa requires the process main thread).
     pub(crate) uses_webview: bool,
+    /// `true` when the program uses at least one `Sky.Core.CssSafety` leaf
+    /// security kernel (the `Std.Css` backing, #47).  When set (independently of
+    /// [`Self::uses_ui`]), [`crate::project::emit_program`] declares
+    /// `css_safety` / `css` (`pub use css::*`) in the emitted
+    /// `sky_runtime/mod.rs` so the bare `safe_value` / `safe_prop_name` /
+    /// `safe_selector` / `strip_style_close_kernel` names are in scope — a pure
+    /// `Std.Css` program never sets `uses_ui`, so the UI append alone would leave
+    /// those names undeclared (E0425).
+    pub(crate) uses_css: bool,
     /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlvalue_rust_name: Option<String>,
@@ -555,6 +564,9 @@ impl<'a> EmitCtx<'a> {
             program.modules.iter().any(|m| m.uses_webview),
         );
 
+        // #47: detect Std.Css (Sky.Core.CssSafety) leaf-kernel usage.
+        let uses_css = program.modules.iter().any(|m| m.uses_css);
+
         Ok(Self {
             interner,
             uses_db,
@@ -564,6 +576,7 @@ impl<'a> EmitCtx<'a> {
             uses_live,
             uses_tui,
             uses_webview,
+            uses_css,
             sqlvalue_rust_name,
             sqlfield_rust_name,
             enum_names,

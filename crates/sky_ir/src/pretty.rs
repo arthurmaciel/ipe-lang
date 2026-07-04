@@ -135,8 +135,6 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
             UiPlain::PseudoClass => "PseudoClass".to_owned(),
             UiPlain::Description => "Description".to_owned(),
             UiPlain::LayoutContext => "LayoutContext".to_owned(),
-            UiPlain::CssProp => "CssProp".to_owned(),
-            UiPlain::CssRule => "CssRule".to_owned(),
         },
         IrType::LiveReq => "LiveReq".to_owned(),
         IrType::LiveRoute => "LiveRoute".to_owned(),
@@ -308,6 +306,11 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::ErrorPermissionDenied => "Error.permissionDenied",
         KernelFn::ErrorToString => "Error.toString",
         KernelFn::ErrorWithMessage => "Error.withMessage",
+        // CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels, #47)
+        KernelFn::CssSafetySafeValue => "CssSafety.safeValue",
+        KernelFn::CssSafetySafePropName => "CssSafety.safePropName",
+        KernelFn::CssSafetySafeSelector => "CssSafety.safeSelector",
+        KernelFn::CssSafetyStripStyleClose => "CssSafety.stripStyleClose",
         KernelFn::MaybeWithDefault => "Maybe.withDefault",
         KernelFn::MaybeMap => "Maybe.map",
         KernelFn::MaybeAndThen => "Maybe.andThen",
@@ -1326,6 +1329,7 @@ mod tests {
                 uses_live: false,
                 uses_tui: false,
                 uses_webview: false,
+                uses_css: false,
             }],
         })
     }
@@ -1425,6 +1429,7 @@ program
                 uses_live: false,
                 uses_tui: false,
                 uses_webview: false,
+                uses_css: false,
             }],
         };
 
@@ -1486,6 +1491,7 @@ program
                 uses_live: false,
                 uses_tui: false,
                 uses_webview: false,
+                uses_css: false,
             }],
         };
 
@@ -1549,6 +1555,7 @@ program
                 uses_live: false,
                 uses_tui: false,
                 uses_webview: false,
+                uses_css: false,
             }],
         };
 
@@ -1598,6 +1605,7 @@ program
                 uses_live: false,
                 uses_tui: false,
                 uses_webview: false,
+                uses_css: false,
             }],
         };
 
@@ -1656,6 +1664,7 @@ program
                 uses_live: false,
                 uses_tui: false,
                 uses_webview: false,
+                uses_css: false,
             }],
         };
 
@@ -1706,6 +1715,7 @@ program
                 uses_live: false,
                 uses_tui: false,
                 uses_webview: false,
+                uses_css: false,
             }],
         };
 
@@ -1796,6 +1806,7 @@ program
                 uses_live: false,
                 uses_tui: false,
                 uses_webview: false,
+                uses_css: false,
             }],
         };
 
@@ -1887,6 +1898,7 @@ program
                 uses_live: false,
                 uses_tui: false,
                 uses_webview: false,
+                uses_css: false,
             }],
         };
 
@@ -1924,6 +1936,7 @@ program
                 uses_live: false,
                 uses_tui: false,
                 uses_webview: false,
+                uses_css: false,
             }],
         };
         let rendered = pretty(&program, &i);
