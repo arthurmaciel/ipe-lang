@@ -8,8 +8,17 @@
 //! match the `naming.rs` convention for kernel helpers (e.g. `ui_column_`)
 //! and to avoid shadowing the runtime's own `element` type names.
 
-use super::element::{Attribute, Color, Description, Element, HAlign, Length, VAlign};
+use super::element::{Attribute, Color, Description, Element, HAlign, Length, PseudoClass, VAlign};
 use crate::sky_runtime::html::Html;
+
+/// Inline colour → CSS string.  Mirrors `render::color_css`; kept private so
+/// helpers.rs stays self-contained without a dependency on render.rs.
+#[inline]
+fn color_to_css(c: &Color) -> String {
+    match c {
+        Color::Rgba(r, g, b, a) => format!("rgba({r},{g},{b},{a})"),
+    }
+}
 
 // ── Element builders ──────────────────────────────────────────────────────────
 
@@ -476,4 +485,249 @@ pub fn ui_on_key_up_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) ->
 /// The `f` argument is arc-wrapped at the call site by the emitter (T6 trap).
 pub fn ui_on_bool_<M>(f: std::sync::Arc<dyn Fn(bool) -> M + Send + Sync>) -> Attribute<M> {
     Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnBool("change".into(), f)))
+}
+
+// ── #76 Tier 1: extended Std.Ui / Font / Background / Border builders ────────
+
+// Ui namespace — aspect-ratio
+
+/// `Ui.square : Attribute msg` — aspect-ratio 1 / 1.
+pub fn ui_square_<M>() -> Attribute<M> {
+    Attribute::AttrStyle("aspect-ratio".into(), "1 / 1".into())
+}
+
+/// `Ui.widescreen : Attribute msg` — aspect-ratio 16 / 9.
+pub fn ui_widescreen_<M>() -> Attribute<M> {
+    Attribute::AttrStyle("aspect-ratio".into(), "16 / 9".into())
+}
+
+/// `Ui.aspectRatio : Float -> Attribute msg`
+pub fn ui_aspect_ratio_<M>(r: f64) -> Attribute<M> {
+    Attribute::AttrStyle("aspect-ratio".into(), format!("{r}"))
+}
+
+/// `Ui.aspectRatioWH : Int -> Int -> Attribute msg`
+pub fn ui_aspect_ratio_wh_<M>(w: i64, h: i64) -> Attribute<M> {
+    Attribute::AttrStyle("aspect-ratio".into(), format!("{w} / {h}"))
+}
+
+/// `Ui.htmlAttribute : String -> String -> Attribute msg`
+pub fn ui_html_attribute_<M>(key: String, value: String) -> Attribute<M> {
+    Attribute::AttrAttribute(key, value)
+}
+
+// Background pseudo-class colour attrs
+
+/// `Background.hoverColor : Color -> Attribute msg`
+pub fn ui_bg_hover_color_<M>(c: Color) -> Attribute<M> {
+    Attribute::AttrPseudoRule(
+        PseudoClass::Hover,
+        format!("background-color:{}", color_to_css(&c)),
+    )
+}
+
+/// `Background.focusColor : Color -> Attribute msg`
+pub fn ui_bg_focus_color_<M>(c: Color) -> Attribute<M> {
+    Attribute::AttrPseudoRule(
+        PseudoClass::FocusVisible,
+        format!("background-color:{}", color_to_css(&c)),
+    )
+}
+
+/// `Background.activeColor : Color -> Attribute msg`
+pub fn ui_bg_active_color_<M>(c: Color) -> Attribute<M> {
+    Attribute::AttrPseudoRule(
+        PseudoClass::Active,
+        format!("background-color:{}", color_to_css(&c)),
+    )
+}
+
+/// `Background.disabledColor : Color -> Attribute msg`
+pub fn ui_bg_disabled_color_<M>(c: Color) -> Attribute<M> {
+    Attribute::AttrPseudoRule(
+        PseudoClass::Disabled,
+        format!("background-color:{}", color_to_css(&c)),
+    )
+}
+
+// Border namespace — style keywords (nullary)
+
+/// `Border.solid : Attribute msg`
+pub fn ui_border_solid_<M>() -> Attribute<M> {
+    Attribute::AttrBorderStyle("solid".into())
+}
+
+/// `Border.dashed : Attribute msg`
+pub fn ui_border_dashed_<M>() -> Attribute<M> {
+    Attribute::AttrBorderStyle("dashed".into())
+}
+
+/// `Border.dotted : Attribute msg`
+pub fn ui_border_dotted_<M>() -> Attribute<M> {
+    Attribute::AttrBorderStyle("dotted".into())
+}
+
+// Border pseudo-class attrs
+
+/// `Border.hoverColor : Color -> Attribute msg`
+pub fn ui_border_hover_color_<M>(c: Color) -> Attribute<M> {
+    Attribute::AttrPseudoRule(
+        PseudoClass::Hover,
+        format!("border-color:{}", color_to_css(&c)),
+    )
+}
+
+/// `Border.focusColor : Color -> Attribute msg`
+pub fn ui_border_focus_color_<M>(c: Color) -> Attribute<M> {
+    Attribute::AttrPseudoRule(
+        PseudoClass::FocusVisible,
+        format!("border-color:{}", color_to_css(&c)),
+    )
+}
+
+/// `Border.activeColor : Color -> Attribute msg`
+pub fn ui_border_active_color_<M>(c: Color) -> Attribute<M> {
+    Attribute::AttrPseudoRule(
+        PseudoClass::Active,
+        format!("border-color:{}", color_to_css(&c)),
+    )
+}
+
+/// `Border.hoverWidth : Int -> Attribute msg`
+pub fn ui_border_hover_width_<M>(n: i64) -> Attribute<M> {
+    Attribute::AttrPseudoRule(PseudoClass::Hover, format!("border-width:{n}px"))
+}
+
+/// `Border.hoverRounded : Int -> Attribute msg`
+pub fn ui_border_hover_rounded_<M>(n: i64) -> Attribute<M> {
+    Attribute::AttrPseudoRule(PseudoClass::Hover, format!("border-radius:{n}px"))
+}
+
+// Font namespace — weight
+
+/// `Font.weight : Int -> Attribute msg`
+pub fn ui_font_weight_<M>(n: i64) -> Attribute<M> {
+    Attribute::AttrFontWeight(n)
+}
+
+/// `Font.semiBold : Attribute msg` (weight 600)
+pub fn ui_font_semi_bold_<M>() -> Attribute<M> {
+    Attribute::AttrFontWeight(600)
+}
+
+/// `Font.regular : Attribute msg` (weight 400)
+pub fn ui_font_regular_<M>() -> Attribute<M> {
+    Attribute::AttrFontWeight(400)
+}
+
+/// `Font.light : Attribute msg` (weight 300)
+pub fn ui_font_light_<M>() -> Attribute<M> {
+    Attribute::AttrFontWeight(300)
+}
+
+/// `Font.extraBold : Attribute msg` (weight 800)
+pub fn ui_font_extra_bold_<M>() -> Attribute<M> {
+    Attribute::AttrFontWeight(800)
+}
+
+/// `Font.black : Attribute msg` (weight 900)
+pub fn ui_font_black_<M>() -> Attribute<M> {
+    Attribute::AttrFontWeight(900)
+}
+
+// Font namespace — decoration
+
+/// `Font.underline : Attribute msg`
+pub fn ui_font_underline_<M>() -> Attribute<M> {
+    Attribute::AttrFontUnderline
+}
+
+/// `Font.noDecoration : Attribute msg`
+pub fn ui_font_no_decoration_<M>() -> Attribute<M> {
+    Attribute::AttrFontDecoration("none".into())
+}
+
+// Font namespace — spacing (Float → Attr)
+
+/// `Font.letterSpacing : Float -> Attribute msg`
+pub fn ui_font_letter_spacing_<M>(v: f64) -> Attribute<M> {
+    Attribute::AttrFontLetterSpacing(v)
+}
+
+/// `Font.wordSpacing : Float -> Attribute msg`
+pub fn ui_font_word_spacing_<M>(v: f64) -> Attribute<M> {
+    Attribute::AttrFontWordSpacing(v)
+}
+
+// Font namespace — text alignment (nullary)
+
+/// `Font.alignLeft : Attribute msg`
+pub fn ui_font_align_left_<M>() -> Attribute<M> {
+    Attribute::AttrFontAlign("left".into())
+}
+
+/// `Font.alignRight : Attribute msg`
+pub fn ui_font_align_right_<M>() -> Attribute<M> {
+    Attribute::AttrFontAlign("right".into())
+}
+
+/// `Font.center : Attribute msg`
+pub fn ui_font_center_<M>() -> Attribute<M> {
+    Attribute::AttrFontAlign("center".into())
+}
+
+/// `Font.justify : Attribute msg`
+pub fn ui_font_justify_<M>() -> Attribute<M> {
+    Attribute::AttrFontAlign("justify".into())
+}
+
+// Font namespace — String constants (NOT Attribute; used as members of List String
+// passed to Font.family)
+
+/// `Font.sansSerif : String`
+pub fn ui_font_sans_serif_() -> String {
+    "sans-serif".into()
+}
+
+/// `Font.serif : String`
+pub fn ui_font_serif_() -> String {
+    "serif".into()
+}
+
+/// `Font.monospace : String`
+pub fn ui_font_monospace_() -> String {
+    "monospace".into()
+}
+
+// Font namespace — pseudo-class colour attrs
+
+/// `Font.hoverColor : Color -> Attribute msg`
+pub fn ui_font_hover_color_<M>(c: Color) -> Attribute<M> {
+    Attribute::AttrPseudoRule(PseudoClass::Hover, format!("color:{}", color_to_css(&c)))
+}
+
+/// `Font.focusColor : Color -> Attribute msg`
+pub fn ui_font_focus_color_<M>(c: Color) -> Attribute<M> {
+    Attribute::AttrPseudoRule(
+        PseudoClass::FocusVisible,
+        format!("color:{}", color_to_css(&c)),
+    )
+}
+
+/// `Font.activeColor : Color -> Attribute msg`
+pub fn ui_font_active_color_<M>(c: Color) -> Attribute<M> {
+    Attribute::AttrPseudoRule(PseudoClass::Active, format!("color:{}", color_to_css(&c)))
+}
+
+/// `Font.disabledColor : Color -> Attribute msg`
+pub fn ui_font_disabled_color_<M>(c: Color) -> Attribute<M> {
+    Attribute::AttrPseudoRule(
+        PseudoClass::Disabled,
+        format!("color:{}", color_to_css(&c)),
+    )
+}
+
+/// `Font.hoverSize : Int -> Attribute msg`
+pub fn ui_font_hover_size_<M>(n: i64) -> Attribute<M> {
+    Attribute::AttrPseudoRule(PseudoClass::Hover, format!("font-size:{n}px"))
 }
