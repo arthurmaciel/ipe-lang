@@ -89,6 +89,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Std", "Ui", "Background"], "Background"),
     (&["Std", "Ui", "Border"], "Border"),
     (&["Std", "Ui", "Font"], "Font"),
+    (&["Std", "Ui", "Region"], "Region"), // #117
     (&["Std", "Html"], "Html"),
     (&["Std", "Html", "Attributes"], "Attr"),
     (&["Std", "Html", "Events"], "Event"),
@@ -1031,6 +1032,20 @@ impl Env {
                     "activeColor",
                     "disabledColor",
                     "hoverSize",
+                ],
+            ),
+            // ── #117: Std.Ui.Region sub-module ───────────────────────────────────
+            (
+                "Region",
+                &[
+                    "mainContent",
+                    "navigation",
+                    "footer",
+                    "aside",
+                    "heading",
+                    "label",
+                    "announce",
+                    "announceUrgently",
                 ],
             ),
             // ── M7: Std.Html — typed HTML element / text surface ─────────────────
