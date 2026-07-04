@@ -2047,24 +2047,32 @@ mod tests {
     }
 
     #[test]
-    fn record_alias_ctor_colliding_with_a_data_ctor_is_rejected() {
-        // A record alias whose name also names a data constructor would be
-        // silently shadowed (resolve_var consults ctors first). Reject instead.
-        let err = canon_err(
-            "module Main exposing (main)\n\
-             type alias Foo =\n    { x : Int }\n\
-             type Bar = Foo\n\n\
-             main = 0\n",
-        );
+    fn record_alias_name_coinciding_with_data_ctor_is_allowed() {
+        // A record alias whose name also names a data constructor is VALID: the
+        // TYPE namespace (`type alias Foo`) and the CONSTRUCTOR namespace
+        // (`type Bar = Foo`) are distinct. The upstream Haskell (`registerAliases`)
+        // inserts into `_vars` without checking `_ctors`, so both coexist.
+        //
+        // Previously this wrongly emitted SKY-N0010 (DuplicateValue). The fix
+        // changes `synthesize_record_alias_ctors` to `continue` (skip synthesis)
+        // when the alias name coincides with a known ADT constructor, instead of
+        // erroring — achieving the same "ADT ctor wins in expression position"
+        // outcome more cleanly.
+        //
+        // Ref: upstream `Sky.Canonicalise.Module.registerAliases`.
+        let src = "module Main exposing (main)\n\
+                   type alias Foo =\n    { x : Int }\n\
+                   type Bar = Foo\n\n\
+                   main = 0\n";
+        let mut i = Interner::new();
+        let Ok(parsed) = sky_parse::parse_module(src, &mut i) else {
+            assert!(false_marker(), "source must parse");
+            return;
+        };
         assert!(
-            matches!(
-                err,
-                Some(Diagnostic::Name {
-                    msg: NameError::DuplicateValue { .. },
-                    ..
-                })
-            ),
-            "record alias name colliding with a data ctor must be DuplicateValue, got {err:?}"
+            canonicalise(&parsed, &mut i).is_ok(),
+            "record alias `Foo` and ADT ctor `Foo` in `type Bar = Foo` must \
+             coexist without N0010 — they live in separate namespaces"
         );
     }
 
@@ -2725,5 +2733,81 @@ mod tests {
             ),
             "load-bearing builtin `Html` must stay SKY-N0026 even for stdlib, got {err:?}"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SKY-N0010 regression: type-alias name coinciding with an ADT constructor
+    // must NOT produce a DuplicateValue error.  The TYPE namespace (`type alias`)
+    // and the CONSTRUCTOR namespace (`type … = Ctor`) are distinct in both
+    // Elm and Sky.  Reproduces the failure seen in
+    // examples/25-sky-console/src/State.sky where `type Tab = Overview | …`
+    // and `type alias Overview = { … }` coexist in the same module.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn type_alias_name_coinciding_with_adt_ctor_is_not_a_duplicate_value() {
+        // `type Tab = Overview | Metrics | Logs` defines ADT constructors.
+        // `type alias Overview = { skyVersion : String }` defines a type alias
+        // in a SEPARATE namespace.  Both should coexist without an error.
+        //
+        // The regression was SKY-N0010 (DuplicateValue) from
+        // `synthesize_record_alias_ctors` incorrectly checking `seen_ctors`.
+        let src = "module Main exposing (main)\n\n\
+                   type Tab = Overview | Metrics | Logs\n\n\
+                   type alias Overview =\n    { skyVersion : String\n    , commit : String\n    }\n\n\
+                   main : Int\n\
+                   main = 0\n";
+        let mut i = Interner::new();
+        let parsed = sky_parse::parse_module(src, &mut i);
+        assert!(parsed.is_ok(), "source must parse");
+        let Ok(parsed) = parsed else { return };
+        let result = canonicalise(&parsed, &mut i);
+        assert!(
+            result.is_ok(),
+            "type alias `Overview` and ADT ctor `Overview` must coexist without N0010; \
+             got {result:?}"
+        );
+    }
+
+    #[test]
+    fn adt_ctor_wins_in_expression_position_over_same_named_alias() {
+        // When both an ADT ctor `Overview` (from `type Tab = Overview | …`)
+        // and a record alias `type alias Overview = { … }` share a name,
+        // a bare `Overview` in expression position MUST resolve to the ADT
+        // constructor, not to the alias auto-ctor (which is suppressed).
+        // Verifies that `resolve_var` correctly returns `VarCtor`, not
+        // `VarTopLevel`.
+        let src = "module Main exposing (main)\n\n\
+                   type Tab = Overview | Metrics\n\n\
+                   type alias Overview =\n    { skyVersion : String\n    }\n\n\
+                   main : Tab\n\
+                   main = Overview\n";
+        let mut i = Interner::new();
+        let parsed = sky_parse::parse_module(src, &mut i);
+        assert!(parsed.is_ok(), "source must parse");
+        let Ok(parsed) = parsed else { return };
+        let m = canonicalise(&parsed, &mut i);
+        assert!(
+            m.is_ok(),
+            "must canonicalise cleanly; got {m:?}"
+        );
+        let Ok(m) = m else { return };
+        // `main = Overview` → the body should be a VarCtor, not a VarTopLevel.
+        let Some(Def::Typed { body, .. }) = find_def(&m, &i, "main") else {
+            assert!(false_marker(), "main is a typed def");
+            return;
+        };
+        assert!(
+            matches!(body.value, Expr_::VarCtor { .. }),
+            "bare `Overview` in expression position must resolve to the ADT ctor, \
+             not to the alias auto-ctor; got {:?}",
+            body.value
+        );
+        let Expr_::VarCtor { type_name, name, index, .. } = body.value else {
+            return;
+        };
+        assert_eq!(i.resolve(type_name), Some("Tab"), "ctor belongs to `Tab`");
+        assert_eq!(i.resolve(name), Some("Overview"), "ctor name is `Overview`");
+        assert_eq!(index, 0, "`Overview` is the first ctor");
     }
 }
