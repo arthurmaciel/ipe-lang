@@ -2879,6 +2879,34 @@ impl<'a> Builder<'a> {
             }
             K::UiOnBool => fun(fun(bool_ty(), var(0)), attr(var(0))),
 
+            // ── #107: Std.Html.Events builders — produce `Std.Html.Attribute
+            // msg` (`html_attr`), matching the `Std.Html.Attributes` builders
+            // and the element builders' `List (html_attr msg)` slot. The arg
+            // shape is dictated by `html_event_shape`; the `Raw` (onSubmit) form
+            // DECOUPLES the handler type (`var(1)`) from `msg` (`var(0)`) so a
+            // form handler `LoginForm -> Msg` does not leak into the surrounding
+            // `Html msg` — exactly as the `.sky` `onSubmit : a -> Attribute msg`.
+            K::HtmlOnClick
+            | K::HtmlOnFocus
+            | K::HtmlOnBlur
+            | K::HtmlOnMouseOver
+            | K::HtmlOnMouseOut
+            | K::HtmlOnSubmit
+            | K::HtmlOnInput
+            | K::HtmlOnChange
+            | K::HtmlOnKeyDown
+            | K::HtmlOnKeyUp
+            | K::HtmlOnBool => match k.html_event_shape()? {
+                sky_kernels::HtmlEventShape::Msg => fun(var(0), html_attr(var(0))),
+                sky_kernels::HtmlEventShape::String => {
+                    fun(fun(string(), var(0)), html_attr(var(0)))
+                }
+                sky_kernels::HtmlEventShape::Bool => fun(fun(bool_ty(), var(0)), html_attr(var(0))),
+                // `onSubmit : a -> Attribute msg` — the handler `var(1)` is
+                // type-erased into `Event::OnRaw`, leaving `msg` (`var(0)`) free.
+                sky_kernels::HtmlEventShape::Raw => fun(var(1), html_attr(var(0))),
+            },
+
             // ── Std.Live app-entry (already schemed in kernel_ty) ──
             K::LiveApp => {
                 let init_ret = tuple2(var(0), cmd(var(1)));
@@ -2895,7 +2923,18 @@ impl<'a> Builder<'a> {
                 });
                 fun(cfg_rec, task_unit())
             }
-            K::LiveRoute => fun(string(), fun(fun(list(string()), var(0)), live_route())),
+            // #106: `Live.route : String -> page -> LiveRoute`. The second arg
+            // is a BARE polymorphic `page` (matches upstream ../sky
+            // `route : String -> page -> Route`), so it unifies with EITHER a
+            // nullary `Page` value (`route "/" HomePage`, the common param-less
+            // case) OR a params-consuming constructor `String -> Page`
+            // (`route "/apps/:slug" AppPage`). `page` is phantom in the result
+            // (`LiveRoute` has no type param), so a `List LiveRoute` stays
+            // homogeneous regardless of each route's arity. The backend
+            // `emit_live_call::LiveRoute` already dispatches nullary-ctor /
+            // partial-ctor / lambda shapes into the runtime's
+            // `Fn(Vec<String>) -> Page` closure.
+            K::LiveRoute => fun(string(), fun(var(0), live_route())),
             K::LiveRenderStatic => fun(fun(var(0), html_t(var(1))), fun(var(0), task_unit())),
 
             // ── Std.Tui app-entry (already schemed in kernel_ty) ──
@@ -4211,6 +4250,19 @@ mod registry_phase_c_tests {
             K::HtmlAttribute,
             K::HtmlBoolAttribute,
             K::HtmlNoAttr,
+            // #107: Std.Html.Events builders (first-schemed — no legacy; before
+            // #107 `Std.Html.Events.*` aliased to the `Ui*` event kernels).
+            K::HtmlOnClick,
+            K::HtmlOnFocus,
+            K::HtmlOnBlur,
+            K::HtmlOnMouseOver,
+            K::HtmlOnMouseOut,
+            K::HtmlOnSubmit,
+            K::HtmlOnInput,
+            K::HtmlOnChange,
+            K::HtmlOnKeyDown,
+            K::HtmlOnKeyUp,
+            K::HtmlOnBool,
             // NB: HtmlStyleNode is NOT here — it is RELOCATED (the F7 #46/#47 work
             // already schemed `Html.styleNode` in the legacy `kernel_ty` table),
             // so its parity is checked by `stdlib_scheme_matches_legacy`.

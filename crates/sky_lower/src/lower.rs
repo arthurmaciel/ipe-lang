@@ -4247,6 +4247,18 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiOnKeyUp
                 // `Event.onBool : (Bool -> msg) -> Attribute msg`
                 | KernelFn::UiOnBool
+                // ── #107: Std.Html.Events builders — arity 1 (all shapes) ────
+                | KernelFn::HtmlOnClick
+                | KernelFn::HtmlOnFocus
+                | KernelFn::HtmlOnBlur
+                | KernelFn::HtmlOnMouseOver
+                | KernelFn::HtmlOnMouseOut
+                | KernelFn::HtmlOnSubmit
+                | KernelFn::HtmlOnInput
+                | KernelFn::HtmlOnChange
+                | KernelFn::HtmlOnKeyDown
+                | KernelFn::HtmlOnKeyUp
+                | KernelFn::HtmlOnBool
                 // ── M7: app-entry stubs — arity 1 ────────────────────────────
                 // `Live.app : LiveAppCfg model msg -> Task Error ()`
                 | KernelFn::LiveApp
@@ -4416,7 +4428,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlScript
                 // `Html.body : List (Attribute msg) -> List (Html msg) -> Html msg`
                 | KernelFn::HtmlBody
-                // `Live.route : String -> (List String -> Page) -> LiveRoute`
+                // `Live.route : String -> page -> LiveRoute` (#106: `page` is a
+                // bare polymorphic value — nullary ctor OR `String -> Page`)
                 | KernelFn::LiveRoute
                 // `Live.renderStatic : LiveAppCfg model msg -> String -> Task Error String`
                 | KernelFn::LiveRenderStatic
@@ -5131,24 +5144,39 @@ impl<'a> Lowerer<'a> {
                     ("Attr", "attribute") => Ok(Callee::Kernel(KernelFn::HtmlAttribute)),
                     ("Attr", "boolAttribute") => Ok(Callee::Kernel(KernelFn::HtmlBoolAttribute)),
                     ("Attr", "noAttr") => Ok(Callee::Kernel(KernelFn::HtmlNoAttr)),
-                    // ── M7: Phase-1a event-attribute builders (Ui + Event qualifiers) ──
-                    // Both "Ui" (qualified as `Ui.onClick`) and "Event" (qualified as
-                    // `Event.onClick` / `Std.Html.Events.onClick`) resolve here.
-                    ("Ui" | "Event", "onClick" | "onMsg") => {
-                        Ok(Callee::Kernel(KernelFn::UiOnClick))
-                    }
-                    ("Ui" | "Event", "onFocus") => Ok(Callee::Kernel(KernelFn::UiOnFocus)),
-                    ("Ui" | "Event", "onBlur") => Ok(Callee::Kernel(KernelFn::UiOnBlur)),
-                    ("Ui" | "Event", "onMouseOver") => Ok(Callee::Kernel(KernelFn::UiOnMouseOver)),
-                    ("Ui" | "Event", "onMouseOut") => Ok(Callee::Kernel(KernelFn::UiOnMouseOut)),
-                    ("Ui" | "Event", "onInput") => Ok(Callee::Kernel(KernelFn::UiOnInput)),
-                    ("Ui" | "Event", "onChange") => Ok(Callee::Kernel(KernelFn::UiOnChange)),
-                    ("Ui" | "Event", "onKeyDown") => Ok(Callee::Kernel(KernelFn::UiOnKeyDown)),
-                    ("Ui" | "Event", "onKeyUp") => Ok(Callee::Kernel(KernelFn::UiOnKeyUp)),
-                    ("Ui" | "Event", "onBool") => {
+                    // ── M7: Phase-1a event-attribute builders (Std.Ui qualifier) ──
+                    // `Ui.onClick` etc. produce the `Std.Ui.Attribute` variant.
+                    // NB: the primary resolution path is the id fast-path above
+                    // (env.rs threads the pre-resolved kernel id); these string
+                    // arms are the legacy fallback for an `id = None` VarKernel.
+                    ("Ui", "onClick" | "onMsg") => Ok(Callee::Kernel(KernelFn::UiOnClick)),
+                    ("Ui", "onFocus") => Ok(Callee::Kernel(KernelFn::UiOnFocus)),
+                    ("Ui", "onBlur") => Ok(Callee::Kernel(KernelFn::UiOnBlur)),
+                    ("Ui", "onMouseOver") => Ok(Callee::Kernel(KernelFn::UiOnMouseOver)),
+                    ("Ui", "onMouseOut") => Ok(Callee::Kernel(KernelFn::UiOnMouseOut)),
+                    ("Ui", "onInput") => Ok(Callee::Kernel(KernelFn::UiOnInput)),
+                    ("Ui", "onChange") => Ok(Callee::Kernel(KernelFn::UiOnChange)),
+                    ("Ui", "onKeyDown") => Ok(Callee::Kernel(KernelFn::UiOnKeyDown)),
+                    ("Ui", "onKeyUp") => Ok(Callee::Kernel(KernelFn::UiOnKeyUp)),
+                    ("Ui", "onBool") => {
                         // onBool : (Bool -> msg) -> Attribute msg — Bool-carrying closure
                         Ok(Callee::Kernel(KernelFn::UiOnBool))
                     }
+                    // ── #107: Std.Html.Events builders (Event qualifier) — produce
+                    // the `Std.Html.Attribute` variant so they compose with the
+                    // Std.Html element + attribute builders. Same fallback note
+                    // as the `Ui` arms above (id fast-path is primary).
+                    ("Event", "onClick" | "onMsg") => Ok(Callee::Kernel(KernelFn::HtmlOnClick)),
+                    ("Event", "onFocus") => Ok(Callee::Kernel(KernelFn::HtmlOnFocus)),
+                    ("Event", "onBlur") => Ok(Callee::Kernel(KernelFn::HtmlOnBlur)),
+                    ("Event", "onMouseOver") => Ok(Callee::Kernel(KernelFn::HtmlOnMouseOver)),
+                    ("Event", "onMouseOut") => Ok(Callee::Kernel(KernelFn::HtmlOnMouseOut)),
+                    ("Event", "onSubmit") => Ok(Callee::Kernel(KernelFn::HtmlOnSubmit)),
+                    ("Event", "onInput") => Ok(Callee::Kernel(KernelFn::HtmlOnInput)),
+                    ("Event", "onChange") => Ok(Callee::Kernel(KernelFn::HtmlOnChange)),
+                    ("Event", "onKeyDown") => Ok(Callee::Kernel(KernelFn::HtmlOnKeyDown)),
+                    ("Event", "onKeyUp") => Ok(Callee::Kernel(KernelFn::HtmlOnKeyUp)),
+                    ("Event", "onBool") => Ok(Callee::Kernel(KernelFn::HtmlOnBool)),
                     // ── M7: Std.Live / Sky.Live app-entry kernels ─────────────
                     ("Live", "app") => Ok(Callee::Kernel(KernelFn::LiveApp)),
                     ("Live", "appRouted") => Ok(Callee::Kernel(KernelFn::LiveAppRouted)),

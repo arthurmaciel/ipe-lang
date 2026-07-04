@@ -47,6 +47,30 @@ pub enum KernelClass {
     Ffi,
 }
 
+/// The event-payload shape of a `Std.Html.Events` builder (#107).
+///
+/// Drives both the constrain scheme (the argument type) and the backend emit
+/// arm (which `html::Event` variant to construct). Making the shape an ADT —
+/// rather than re-deriving it from the kernel name at each site — keeps the
+/// scheme and the emit in lockstep and makes an unhandled shape a
+/// non-exhaustive-match error.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HtmlEventShape {
+    /// Zero wire args — the `Msg` dispatches as-is. `msg -> Attribute msg`.
+    /// Constructs `Event::OnMsg(name, msg)`.
+    Msg,
+    /// Value-carrying — the handler receives the input string.
+    /// `(String -> msg) -> Attribute msg`. Constructs `Event::OnString`.
+    String,
+    /// Checkbox state — the handler receives the checked bool.
+    /// `(Bool -> msg) -> Attribute msg`. Constructs `Event::OnBool`.
+    Bool,
+    /// Heterogeneous payload whose handler type is DECOUPLED from `msg`
+    /// (`onSubmit`: `a -> Attribute msg`). Constructs `Event::OnRaw`, which
+    /// type-erases the payload behind `Arc<dyn Any>`, so `msg` stays free.
+    Raw,
+}
+
 /// Per-variant metadata returned by [`StdlibKernel::decl`].
 ///
 /// All fields are `'static` — the struct is `Copy` and can be embedded in
@@ -728,6 +752,22 @@ pub enum StdlibKernel {
     UiOnKeyDown,
     UiOnKeyUp,
     UiOnBool,
+    // ── #107: Std.Html.Events builders — produce `Std.Html.Attribute msg`
+    // (`html_attr`), so they unify with `Std.Html.Attributes` builders and the
+    // element builders' `List (Std.Html.Attribute msg)` slot. Distinct from the
+    // `UiOn*` kernels above, which produce the `Std.Ui.Attribute` variant for
+    // the Std.Ui element family. Emit constructs `html::Attribute::EventAttr`.
+    HtmlOnClick,
+    HtmlOnFocus,
+    HtmlOnBlur,
+    HtmlOnMouseOver,
+    HtmlOnMouseOut,
+    HtmlOnSubmit,
+    HtmlOnInput,
+    HtmlOnChange,
+    HtmlOnKeyDown,
+    HtmlOnKeyUp,
+    HtmlOnBool,
 }
 
 impl StdlibKernel {
@@ -1490,6 +1530,22 @@ impl StdlibKernel {
             Self::UiOnKeyDown => d("Ui", "onKeyDown", 1, Ui, "ui_on_key_down_"),
             Self::UiOnKeyUp => d("Ui", "onKeyUp", 1, Ui, "ui_on_key_up_"),
             Self::UiOnBool => d("Ui", "onBool", 1, Ui, "ui_on_bool_"),
+            // ── #107: Std.Html.Events builders (qualifier "Event" — matches the
+            // `QUALIFIERS` table in env.rs). Each produces `html::Attribute<M>`
+            // via a dedicated runtime constructor (family `Ui` so emit routes
+            // through `emit_ui_call`). The emit arm supplies the fixed wire
+            // event name; see `html_event_wire_name`.
+            Self::HtmlOnClick => d("Event", "onClick", 1, Ui, "html_on_msg_"),
+            Self::HtmlOnFocus => d("Event", "onFocus", 1, Ui, "html_on_msg_"),
+            Self::HtmlOnBlur => d("Event", "onBlur", 1, Ui, "html_on_msg_"),
+            Self::HtmlOnMouseOver => d("Event", "onMouseOver", 1, Ui, "html_on_msg_"),
+            Self::HtmlOnMouseOut => d("Event", "onMouseOut", 1, Ui, "html_on_msg_"),
+            Self::HtmlOnSubmit => d("Event", "onSubmit", 1, Ui, "html_on_raw_"),
+            Self::HtmlOnInput => d("Event", "onInput", 1, Ui, "html_on_string_"),
+            Self::HtmlOnChange => d("Event", "onChange", 1, Ui, "html_on_string_"),
+            Self::HtmlOnKeyDown => d("Event", "onKeyDown", 1, Ui, "html_on_string_"),
+            Self::HtmlOnKeyUp => d("Event", "onKeyUp", 1, Ui, "html_on_string_"),
+            Self::HtmlOnBool => d("Event", "onBool", 1, Ui, "html_on_bool_"),
         }
     }
 
@@ -2115,6 +2171,18 @@ impl StdlibKernel {
         Self::UiOnKeyDown,
         Self::UiOnKeyUp,
         Self::UiOnBool,
+        // #107: Std.Html.Events builders (produce html_attr)
+        Self::HtmlOnClick,
+        Self::HtmlOnFocus,
+        Self::HtmlOnBlur,
+        Self::HtmlOnMouseOver,
+        Self::HtmlOnMouseOut,
+        Self::HtmlOnSubmit,
+        Self::HtmlOnInput,
+        Self::HtmlOnChange,
+        Self::HtmlOnKeyDown,
+        Self::HtmlOnKeyUp,
+        Self::HtmlOnBool,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────
@@ -2387,7 +2455,61 @@ impl StdlibKernel {
                 | Self::UiOnKeyDown
                 | Self::UiOnKeyUp
                 | Self::UiOnBool
+                | Self::HtmlOnClick
+                | Self::HtmlOnFocus
+                | Self::HtmlOnBlur
+                | Self::HtmlOnMouseOver
+                | Self::HtmlOnMouseOut
+                | Self::HtmlOnSubmit
+                | Self::HtmlOnInput
+                | Self::HtmlOnChange
+                | Self::HtmlOnKeyDown
+                | Self::HtmlOnKeyUp
+                | Self::HtmlOnBool
         )
+    }
+
+    /// The fixed wire event name for a `Std.Html.Events` builder (`onClick` →
+    /// `"click"`). `None` for any non-Html-event variant. The name is a
+    /// compile-time constant (never attacker data) that the emit arm passes to
+    /// the `html_on_*_` runtime constructor.
+    #[must_use]
+    pub const fn html_event_wire_name(self) -> Option<&'static str> {
+        Some(match self {
+            Self::HtmlOnClick => "click",
+            Self::HtmlOnFocus => "focus",
+            Self::HtmlOnBlur => "blur",
+            Self::HtmlOnMouseOver => "mouseover",
+            Self::HtmlOnMouseOut => "mouseout",
+            Self::HtmlOnSubmit => "submit",
+            Self::HtmlOnInput => "input",
+            Self::HtmlOnKeyDown => "keydown",
+            Self::HtmlOnKeyUp => "keyup",
+            // `onBool` mirrors `Std.Html.Events.onCheck` — the checkbox check
+            // state arrives on the `change` DOM event, same wire name as
+            // `onChange`.
+            Self::HtmlOnChange | Self::HtmlOnBool => "change",
+            _ => return None,
+        })
+    }
+
+    /// The event payload shape of a `Std.Html.Events` builder, driving both the
+    /// constrain scheme and the emit arm. `None` for any non-Html-event variant.
+    #[must_use]
+    pub const fn html_event_shape(self) -> Option<HtmlEventShape> {
+        Some(match self {
+            Self::HtmlOnClick
+            | Self::HtmlOnFocus
+            | Self::HtmlOnBlur
+            | Self::HtmlOnMouseOver
+            | Self::HtmlOnMouseOut => HtmlEventShape::Msg,
+            Self::HtmlOnInput | Self::HtmlOnChange | Self::HtmlOnKeyDown | Self::HtmlOnKeyUp => {
+                HtmlEventShape::String
+            }
+            Self::HtmlOnBool => HtmlEventShape::Bool,
+            Self::HtmlOnSubmit => HtmlEventShape::Raw,
+            _ => return None,
+        })
     }
 
     /// `true` for a `Std.Html.Attributes` string-valued fixed-key builder

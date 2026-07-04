@@ -2103,6 +2103,46 @@ fn emit_ui_call(
             )))
         }
 
+        // ── #107: Std.Html.Events builders ────────────────────────────────────
+        // Produce a `html::Attribute::EventAttr(Event::On*)` via a dedicated
+        // runtime constructor. The fixed wire event name (`"click"`, `"input"`,
+        // …) is a compile-time constant from `html_event_wire_name`; the payload
+        // shape (Msg / String / Bool / Raw) comes from `html_event_shape`. The
+        // `String`/`Bool` forms Arc-wrap the emitted Sky fn (`f` is a 'static
+        // closure); the `Raw` (onSubmit) form Arc-wraps the type-erased handler.
+        k if k.html_event_shape().is_some() => {
+            let (Some(shape), Some(name)) = (k.html_event_shape(), k.html_event_wire_name()) else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlEvent",
+                    detail: format!("{k:?} is not a fully-classified Html event kernel"),
+                });
+            };
+            let [payload_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlEvent",
+                    detail: format!("{k:?} requires exactly 1 argument, got {}", args.len()),
+                });
+            };
+            let payload_s = emit_expr_at(ctx, payload_e, indent, child, generics)?;
+            let call = match shape {
+                sky_ir::HtmlEventShape::Msg => format!(
+                    "sky_runtime::html::html_on_msg_({name:?}.to_owned(), {payload_s})"
+                ),
+                sky_ir::HtmlEventShape::String => format!(
+                    "sky_runtime::html::html_on_string_({name:?}.to_owned(), \
+                     ::std::sync::Arc::new(move |_x| ({payload_s})(_x)))"
+                ),
+                sky_ir::HtmlEventShape::Bool => format!(
+                    "sky_runtime::html::html_on_bool_({name:?}.to_owned(), \
+                     ::std::sync::Arc::new(move |_x| ({payload_s})(_x)))"
+                ),
+                sky_ir::HtmlEventShape::Raw => format!(
+                    "sky_runtime::html::html_on_raw_({name:?}.to_owned(), {payload_s})"
+                ),
+            };
+            Ok(Some(call))
+        }
+
         // ── #76: Std.Html.Attributes builders ─────────────────────────────────
         // Fixed-key string attr: `class v` → `html_named_attr_("class", v)`.
         // The key is a compile-time literal (never attacker data); the VALUE is

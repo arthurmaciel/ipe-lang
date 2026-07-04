@@ -1261,27 +1261,25 @@ impl Env {
                 // Phase B: thread the pre-resolved id into VarHome so
                 // lower_callee can use the fast path for registered kernels.
                 //
-                // `Std.Html.Events` (`Event`) re-exports the `Std.Ui` event
-                // kernels under the same names (`onMsg` is an alias for
-                // `onClick`), so resolve their id under the CANONICAL `Ui`
-                // qualifier and store the canonical `(Ui, name)` module+name —
-                // exactly like FUNC_ALIASES below. Without this, `Event.*` carried
-                // `id = None` and relied on the legacy `kernel_ty` string table,
-                // which the Phase E seal deleted (mirrors lower.rs's
-                // `("Ui" | "Event", …)` arms). A member with no `Ui` event kernel
-                // (e.g. `onSubmit`) falls through to the plain lookup, unchanged.
+                // #107: `Std.Html.Events` (`Event`) resolves to the DEDICATED
+                // `Html*` event kernels (`HtmlOnClick` …), which produce
+                // `Std.Html.Attribute msg` (`html_attr`) — the same nominal type
+                // the `Std.Html.Attributes` builders and every element builder's
+                // `List (html_attr msg)` slot use. (Before #107 these aliased to
+                // the `Ui` event kernels, which produce the `Std.Ui.Attribute`
+                // variant — so `button [ onClick Msg ]` failed to unify.) `onMsg`
+                // is the generic alias for `onClick`. All members are registered
+                // under `(Event, name)` in `stdlib_index`, so the id is always
+                // `Some` and `lower_callee`'s fast path returns the `Html*`
+                // kernel directly.
                 let (mod_sym, name_sym, id) = if *qual == "Event" {
                     let canonical = if *func == "onMsg" { "onClick" } else { *func };
-                    let ui_sym = interner.intern("Ui")?;
                     let canon_sym = interner.intern(canonical)?;
-                    match self.stdlib_index.get(&(ui_sym, canon_sym)).copied() {
-                        Some(sk) => (ui_sym, canon_sym, Some(sk)),
-                        None => (
-                            qual_sym,
-                            func_sym,
-                            self.stdlib_index.get(&(qual_sym, func_sym)).copied(),
-                        ),
-                    }
+                    (
+                        qual_sym,
+                        canon_sym,
+                        self.stdlib_index.get(&(qual_sym, canon_sym)).copied(),
+                    )
                 } else {
                     (
                         qual_sym,

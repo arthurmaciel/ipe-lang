@@ -875,6 +875,21 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiOnKeyDown => "ui_on_key_down_",
         KernelFn::UiOnKeyUp => "ui_on_key_up_",
         KernelFn::UiOnBool => "ui_on_bool_",
+        // #107: Std.Html.Events builders — emitted via the dedicated
+        // `emit_ui_call` arm (`html_event_shape().is_some()`), so this generic
+        // name map is not consulted at emit time; the arms are here to keep the
+        // match exhaustive and the name faithful to each runtime constructor.
+        KernelFn::HtmlOnClick
+        | KernelFn::HtmlOnFocus
+        | KernelFn::HtmlOnBlur
+        | KernelFn::HtmlOnMouseOver
+        | KernelFn::HtmlOnMouseOut => "html_on_msg_",
+        KernelFn::HtmlOnInput
+        | KernelFn::HtmlOnChange
+        | KernelFn::HtmlOnKeyDown
+        | KernelFn::HtmlOnKeyUp => "html_on_string_",
+        KernelFn::HtmlOnBool => "html_on_bool_",
+        KernelFn::HtmlOnSubmit => "html_on_raw_",
     }
 }
 
