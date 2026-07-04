@@ -3373,7 +3373,8 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
-                // ── Tui.app / Tui.program / Webview.app cfg literal (L0107 exemption) ──
+                // ── Tui.app / Tui.program / Webview.app / Cli.program cfg literal
+                //    (L0107 exemption) ──
                 //
                 // Same pattern as `Live.app`: intercept the single cfg-record arg
                 // BEFORE the uniform `lower_expr` path so function-typed fields
@@ -3383,10 +3384,18 @@ impl<'a> Lowerer<'a> {
                 //   value (no functions); `lower_app_entry_cfg` additionally
                 //   requires that record — and its `size` tuple — to be inline
                 //   literals (the G4 emit gates).
+                // #111: CliProgram — 5-field cfg (init/update/view/subscriptions/
+                //   onLine), all function-typed; without this arm every real
+                //   `Cli.program` call would trip SKY-L0107 and the emit_cli
+                //   path could never fire.
                 // A non-literal cfg (let-bound, piped, etc.) is rejected here with
                 // SKY-L0119 at the argument span — fail-closed, never an ICE.
-                Callee::Kernel(KernelFn::TuiApp | KernelFn::TuiProgram | KernelFn::WebviewApp)
-                    if args.len() == 1 =>
+                Callee::Kernel(
+                    KernelFn::TuiApp
+                    | KernelFn::TuiProgram
+                    | KernelFn::WebviewApp
+                    | KernelFn::CliProgram,
+                ) if args.len() == 1 =>
                 {
                     if let Some(arg0) = args.first() {
                         // Borrow `peek` for the gate BEFORE moving it below.

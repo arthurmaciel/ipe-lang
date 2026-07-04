@@ -1,0 +1,41 @@
+module Main exposing (main)
+
+-- #111 reconciler fixture: Cli.program is FULLY WIRED.
+-- Expected: skyc-0 AND cargo-0 on the emitted project.
+
+import Std.Cli as Cli
+
+type Msg = GotLine String
+
+type alias Model = { lines : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { lines = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        GotLine _line ->
+            ( { model | lines = model.lines + 1 }, Cmd.none )
+
+view : Model -> String
+view model =
+    "lines: " ++ String.fromInt model.lines
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onLine : String -> Msg
+onLine line =
+    GotLine line
+
+main =
+    Cli.program
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onLine = onLine
+        }
