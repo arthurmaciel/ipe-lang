@@ -1735,6 +1735,389 @@ fn emit_ui_call(
             "sky_runtime::ui::helpers::ui_font_italic_()".to_owned(),
         )),
 
+        // ── #76 Tier 1: extended Std.Ui / Font / Background / Border builders ──
+
+        // Ui namespace — nullary aspect-ratio attrs
+        KernelFn::UiSquare => {
+            Ok(Some("sky_runtime::ui::helpers::ui_square_()".to_owned()))
+        }
+        KernelFn::UiWidescreen => {
+            Ok(Some("sky_runtime::ui::helpers::ui_widescreen_()".to_owned()))
+        }
+
+        // `Ui.aspectRatio : Float -> Attribute msg`
+        KernelFn::UiAspectRatio => {
+            let [r_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiAspectRatio",
+                    detail: format!("Ui.aspectRatio requires 1 argument, got {}", args.len()),
+                });
+            };
+            let r = emit_expr_at(ctx, r_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_aspect_ratio_({r})"
+            )))
+        }
+
+        // `Ui.aspectRatioWH : Int -> Int -> Attribute msg`
+        KernelFn::UiAspectRatioWH => {
+            let [w_e, h_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiAspectRatioWH",
+                    detail: format!(
+                        "Ui.aspectRatioWH requires 2 arguments, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let w = emit_expr_at(ctx, w_e, indent, child, generics)?;
+            let h = emit_expr_at(ctx, h_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_aspect_ratio_wh_({w}, {h})"
+            )))
+        }
+
+        // `Ui.htmlAttribute : String -> String -> Attribute msg`
+        KernelFn::UiHtmlAttribute => {
+            let [k_e, v_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiHtmlAttribute",
+                    detail: format!(
+                        "Ui.htmlAttribute requires 2 arguments, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let k = emit_expr_at(ctx, k_e, indent, child, generics)?;
+            let v = emit_expr_at(ctx, v_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_html_attribute_({k}, {v})"
+            )))
+        }
+
+        // Background pseudo-class colour attrs (Color -> Attribute msg)
+        KernelFn::BackgroundHoverColor => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BackgroundHoverColor",
+                    detail: format!(
+                        "Background.hoverColor requires 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_bg_hover_color_({c})"
+            )))
+        }
+        KernelFn::BackgroundFocusColor => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BackgroundFocusColor",
+                    detail: format!(
+                        "Background.focusColor requires 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_bg_focus_color_({c})"
+            )))
+        }
+        KernelFn::BackgroundActiveColor => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BackgroundActiveColor",
+                    detail: format!(
+                        "Background.activeColor requires 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_bg_active_color_({c})"
+            )))
+        }
+        KernelFn::BackgroundDisabledColor => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BackgroundDisabledColor",
+                    detail: format!(
+                        "Background.disabledColor requires 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_bg_disabled_color_({c})"
+            )))
+        }
+
+        // Border namespace — nullary style attrs
+        KernelFn::BorderSolid => {
+            Ok(Some("sky_runtime::ui::helpers::ui_border_solid_()".to_owned()))
+        }
+        KernelFn::BorderDashed => {
+            Ok(Some("sky_runtime::ui::helpers::ui_border_dashed_()".to_owned()))
+        }
+        KernelFn::BorderDotted => {
+            Ok(Some("sky_runtime::ui::helpers::ui_border_dotted_()".to_owned()))
+        }
+
+        // Border pseudo-class attrs
+        KernelFn::BorderHoverColor => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BorderHoverColor",
+                    detail: format!(
+                        "Border.hoverColor requires 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_border_hover_color_({c})"
+            )))
+        }
+        KernelFn::BorderFocusColor => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BorderFocusColor",
+                    detail: format!(
+                        "Border.focusColor requires 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_border_focus_color_({c})"
+            )))
+        }
+        KernelFn::BorderActiveColor => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BorderActiveColor",
+                    detail: format!(
+                        "Border.activeColor requires 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_border_active_color_({c})"
+            )))
+        }
+        KernelFn::BorderHoverWidth => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BorderHoverWidth",
+                    detail: format!(
+                        "Border.hoverWidth requires 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_border_hover_width_({n})"
+            )))
+        }
+        KernelFn::BorderHoverRounded => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BorderHoverRounded",
+                    detail: format!(
+                        "Border.hoverRounded requires 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_border_hover_rounded_({n})"
+            )))
+        }
+
+        // Font namespace — Int-keyed weight
+        KernelFn::FontWeight => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::FontWeight",
+                    detail: format!("Font.weight requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_font_weight_({n})"
+            )))
+        }
+
+        // Font namespace — nullary weight presets
+        KernelFn::FontSemiBold => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_semi_bold_()".to_owned(),
+        )),
+        KernelFn::FontRegular => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_regular_()".to_owned(),
+        )),
+        KernelFn::FontLight => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_light_()".to_owned(),
+        )),
+        KernelFn::FontExtraBold => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_extra_bold_()".to_owned(),
+        )),
+        KernelFn::FontBlack => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_black_()".to_owned(),
+        )),
+
+        // Font namespace — nullary decoration
+        KernelFn::FontUnderline => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_underline_()".to_owned(),
+        )),
+        KernelFn::FontNoDecoration => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_no_decoration_()".to_owned(),
+        )),
+
+        // Font namespace — Float spacing attrs
+        KernelFn::FontLetterSpacing => {
+            let [v_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::FontLetterSpacing",
+                    detail: format!(
+                        "Font.letterSpacing requires 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let v = emit_expr_at(ctx, v_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_font_letter_spacing_({v})"
+            )))
+        }
+        KernelFn::FontWordSpacing => {
+            let [v_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::FontWordSpacing",
+                    detail: format!("Font.wordSpacing requires 1 argument, got {}", args.len()),
+                });
+            };
+            let v = emit_expr_at(ctx, v_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_font_word_spacing_({v})"
+            )))
+        }
+
+        // Font namespace — nullary text-alignment
+        KernelFn::FontAlignLeft => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_align_left_()".to_owned(),
+        )),
+        KernelFn::FontAlignRight => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_align_right_()".to_owned(),
+        )),
+        KernelFn::FontCenter => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_center_()".to_owned(),
+        )),
+        KernelFn::FontJustify => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_justify_()".to_owned(),
+        )),
+
+        // Font namespace — String constants (nullary, return String not Attr)
+        KernelFn::FontSansSerif => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_sans_serif_()".to_owned(),
+        )),
+        KernelFn::FontSerif => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_serif_()".to_owned(),
+        )),
+        KernelFn::FontMonospace => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_monospace_()".to_owned(),
+        )),
+
+        // Font namespace — pseudo-class colour attrs (Color -> Attribute msg)
+        KernelFn::FontHoverColor => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::FontHoverColor",
+                    detail: format!("Font.hoverColor requires 1 argument, got {}", args.len()),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_font_hover_color_({c})"
+            )))
+        }
+        KernelFn::FontFocusColor => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::FontFocusColor",
+                    detail: format!("Font.focusColor requires 1 argument, got {}", args.len()),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_font_focus_color_({c})"
+            )))
+        }
+        KernelFn::FontActiveColor => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::FontActiveColor",
+                    detail: format!("Font.activeColor requires 1 argument, got {}", args.len()),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_font_active_color_({c})"
+            )))
+        }
+        KernelFn::FontDisabledColor => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::FontDisabledColor",
+                    detail: format!(
+                        "Font.disabledColor requires 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_font_disabled_color_({c})"
+            )))
+        }
+        KernelFn::FontHoverSize => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::FontHoverSize",
+                    detail: format!("Font.hoverSize requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_font_hover_size_({n})"
+            )))
+        }
+
+        // Html.Attributes — tabindex (Int → Html.Attribute msg)
+        // Converted to string at emit time: `tabindex 3` → `<... tabindex="3">`.
+        KernelFn::HtmlAttrTabindex => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlAttrTabindex",
+                    detail: format!("Attr.tabindex requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::html::html_named_attr_(\"tabindex\".to_owned(), ({n}).to_string())"
+            )))
+        }
+
         // ── Std.Html element builders ─────────────────────────────────────────
 
         // `Html.text : String -> Html msg`

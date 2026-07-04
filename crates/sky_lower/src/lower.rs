@@ -4138,7 +4138,28 @@ impl<'a> Lowerer<'a> {
                 // `Font.italic : Attribute msg`
                 | KernelFn::FontItalic
                 // `Attr.noAttr : Attribute msg` (#76)
-                | KernelFn::HtmlNoAttr,
+                | KernelFn::HtmlNoAttr
+                // ── #76 Tier 1 — nullary attrs ────────────────────────────────
+                | KernelFn::UiSquare
+                | KernelFn::UiWidescreen
+                | KernelFn::BorderSolid
+                | KernelFn::BorderDashed
+                | KernelFn::BorderDotted
+                | KernelFn::FontSemiBold
+                | KernelFn::FontRegular
+                | KernelFn::FontLight
+                | KernelFn::FontExtraBold
+                | KernelFn::FontBlack
+                | KernelFn::FontUnderline
+                | KernelFn::FontNoDecoration
+                | KernelFn::FontAlignLeft
+                | KernelFn::FontAlignRight
+                | KernelFn::FontCenter
+                | KernelFn::FontJustify
+                // Font string constants (nullary, return String)
+                | KernelFn::FontSansSerif
+                | KernelFn::FontSerif
+                | KernelFn::FontMonospace,
             ) => Ok(0),
             // Arity 1: single-argument pure serialisation / escape helpers.
             Callee::Kernel(
@@ -4290,7 +4311,27 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlAttrRequired
                 | KernelFn::HtmlAttrMultiple
                 | KernelFn::HtmlAttrSelected
-                | KernelFn::HtmlAttrAutofocus,
+                | KernelFn::HtmlAttrAutofocus
+                // ── #76 Tier 1 — arity 1 ────────────────────────────────────
+                | KernelFn::UiAspectRatio
+                | KernelFn::BackgroundHoverColor
+                | KernelFn::BackgroundFocusColor
+                | KernelFn::BackgroundActiveColor
+                | KernelFn::BackgroundDisabledColor
+                | KernelFn::BorderHoverColor
+                | KernelFn::BorderFocusColor
+                | KernelFn::BorderActiveColor
+                | KernelFn::BorderHoverWidth
+                | KernelFn::BorderHoverRounded
+                | KernelFn::FontWeight
+                | KernelFn::FontLetterSpacing
+                | KernelFn::FontWordSpacing
+                | KernelFn::FontHoverColor
+                | KernelFn::FontFocusColor
+                | KernelFn::FontActiveColor
+                | KernelFn::FontDisabledColor
+                | KernelFn::FontHoverSize
+                | KernelFn::HtmlAttrTabindex,
             ) => Ok(1),
             // Arity 2: `Ui.layout attrs elem`, `Ui.layoutWith cfg elem`,
             //          `Live.route path ctor`, `Live.renderStatic cfg path`.
@@ -4435,7 +4476,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::LiveRenderStatic
                 // #76: generic `Attr.attribute k v` / `Attr.boolAttribute k b`.
                 | KernelFn::HtmlAttribute
-                | KernelFn::HtmlBoolAttribute,
+                | KernelFn::HtmlBoolAttribute
+                // ── #76 Tier 1 — arity 2 ────────────────────────────────────
+                | KernelFn::UiAspectRatioWH
+                | KernelFn::UiHtmlAttribute,
             ) => Ok(2),
             // Arity 3: `Ui.rgb r g b`, `Html.node tag attrs children`.
             Callee::Kernel(
@@ -5177,6 +5221,57 @@ impl<'a> Lowerer<'a> {
                     ("Event", "onKeyDown") => Ok(Callee::Kernel(KernelFn::HtmlOnKeyDown)),
                     ("Event", "onKeyUp") => Ok(Callee::Kernel(KernelFn::HtmlOnKeyUp)),
                     ("Event", "onBool") => Ok(Callee::Kernel(KernelFn::HtmlOnBool)),
+                    // ── #76 Tier 1: extended Std.Ui attribute builders ────────
+                    ("Ui", "square") => Ok(Callee::Kernel(KernelFn::UiSquare)),
+                    ("Ui", "widescreen") => Ok(Callee::Kernel(KernelFn::UiWidescreen)),
+                    ("Ui", "aspectRatio") => Ok(Callee::Kernel(KernelFn::UiAspectRatio)),
+                    ("Ui", "aspectRatioWH") => Ok(Callee::Kernel(KernelFn::UiAspectRatioWH)),
+                    ("Ui", "htmlAttribute") => Ok(Callee::Kernel(KernelFn::UiHtmlAttribute)),
+                    ("Background", "hoverColor") => {
+                        Ok(Callee::Kernel(KernelFn::BackgroundHoverColor))
+                    }
+                    ("Background", "focusColor") => {
+                        Ok(Callee::Kernel(KernelFn::BackgroundFocusColor))
+                    }
+                    ("Background", "activeColor") => {
+                        Ok(Callee::Kernel(KernelFn::BackgroundActiveColor))
+                    }
+                    ("Background", "disabledColor") => {
+                        Ok(Callee::Kernel(KernelFn::BackgroundDisabledColor))
+                    }
+                    ("Border", "solid") => Ok(Callee::Kernel(KernelFn::BorderSolid)),
+                    ("Border", "dashed") => Ok(Callee::Kernel(KernelFn::BorderDashed)),
+                    ("Border", "dotted") => Ok(Callee::Kernel(KernelFn::BorderDotted)),
+                    ("Border", "hoverColor") => Ok(Callee::Kernel(KernelFn::BorderHoverColor)),
+                    ("Border", "focusColor") => Ok(Callee::Kernel(KernelFn::BorderFocusColor)),
+                    ("Border", "activeColor") => Ok(Callee::Kernel(KernelFn::BorderActiveColor)),
+                    ("Border", "hoverWidth") => Ok(Callee::Kernel(KernelFn::BorderHoverWidth)),
+                    ("Border", "hoverRounded") => {
+                        Ok(Callee::Kernel(KernelFn::BorderHoverRounded))
+                    }
+                    ("Font", "weight") => Ok(Callee::Kernel(KernelFn::FontWeight)),
+                    ("Font", "semiBold") => Ok(Callee::Kernel(KernelFn::FontSemiBold)),
+                    ("Font", "regular") => Ok(Callee::Kernel(KernelFn::FontRegular)),
+                    ("Font", "light") => Ok(Callee::Kernel(KernelFn::FontLight)),
+                    ("Font", "extraBold") => Ok(Callee::Kernel(KernelFn::FontExtraBold)),
+                    ("Font", "black") => Ok(Callee::Kernel(KernelFn::FontBlack)),
+                    ("Font", "underline") => Ok(Callee::Kernel(KernelFn::FontUnderline)),
+                    ("Font", "noDecoration") => Ok(Callee::Kernel(KernelFn::FontNoDecoration)),
+                    ("Font", "letterSpacing") => Ok(Callee::Kernel(KernelFn::FontLetterSpacing)),
+                    ("Font", "wordSpacing") => Ok(Callee::Kernel(KernelFn::FontWordSpacing)),
+                    ("Font", "alignLeft") => Ok(Callee::Kernel(KernelFn::FontAlignLeft)),
+                    ("Font", "alignRight") => Ok(Callee::Kernel(KernelFn::FontAlignRight)),
+                    ("Font", "center") => Ok(Callee::Kernel(KernelFn::FontCenter)),
+                    ("Font", "justify") => Ok(Callee::Kernel(KernelFn::FontJustify)),
+                    ("Font", "sansSerif") => Ok(Callee::Kernel(KernelFn::FontSansSerif)),
+                    ("Font", "serif") => Ok(Callee::Kernel(KernelFn::FontSerif)),
+                    ("Font", "monospace") => Ok(Callee::Kernel(KernelFn::FontMonospace)),
+                    ("Font", "hoverColor") => Ok(Callee::Kernel(KernelFn::FontHoverColor)),
+                    ("Font", "focusColor") => Ok(Callee::Kernel(KernelFn::FontFocusColor)),
+                    ("Font", "activeColor") => Ok(Callee::Kernel(KernelFn::FontActiveColor)),
+                    ("Font", "disabledColor") => Ok(Callee::Kernel(KernelFn::FontDisabledColor)),
+                    ("Font", "hoverSize") => Ok(Callee::Kernel(KernelFn::FontHoverSize)),
+                    ("Attr", "tabindex") => Ok(Callee::Kernel(KernelFn::HtmlAttrTabindex)),
                     // ── M7: Std.Live / Sky.Live app-entry kernels ─────────────
                     ("Live", "app") => Ok(Callee::Kernel(KernelFn::LiveApp)),
                     ("Live", "appRouted") => Ok(Callee::Kernel(KernelFn::LiveAppRouted)),

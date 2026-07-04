@@ -3124,7 +3124,27 @@ impl<'a> Builder<'a> {
             | K::UiClip
             | K::UiScrollbars
             | K::FontBold
-            | K::FontItalic => attr(var(0)),
+            | K::FontItalic
+            // #76 Tier 1 — nullary Attr
+            | K::UiSquare
+            | K::UiWidescreen
+            | K::BorderSolid
+            | K::BorderDashed
+            | K::BorderDotted
+            | K::FontSemiBold
+            | K::FontRegular
+            | K::FontLight
+            | K::FontExtraBold
+            | K::FontBlack
+            | K::FontUnderline
+            | K::FontNoDecoration
+            | K::FontAlignLeft
+            | K::FontAlignRight
+            | K::FontCenter
+            | K::FontJustify => attr(var(0)),
+
+            // Font string constants — nullary (arity 0), return String.
+            K::FontSansSerif | K::FontSerif | K::FontMonospace => string(),
 
             // Attribute builders — single Int arg.
             K::UiSpacing
@@ -3132,13 +3152,37 @@ impl<'a> Builder<'a> {
             | K::UiGridColumns
             | K::BorderWidth
             | K::BorderRounded
-            | K::FontSize => fun(int(), attr(var(0))),
+            | K::FontSize
+            // #76 Tier 1 — Int → Attr
+            | K::FontWeight
+            | K::FontHoverSize
+            | K::BorderHoverWidth
+            | K::BorderHoverRounded => fun(int(), attr(var(0))),
+
+            // Attribute builders — single Float arg.
+            K::FontLetterSpacing | K::FontWordSpacing | K::UiAspectRatio => {
+                fun(float(), attr(var(0)))
+            }
 
             // Attribute builders — Length arg.
             K::UiWidth | K::UiHeight => fun(length(), attr(var(0))),
 
             // Attribute builders — Color arg.
-            K::BackgroundColor | K::BorderColor | K::FontColor => fun(color(), attr(var(0))),
+            K::BackgroundColor
+            | K::BorderColor
+            | K::FontColor
+            // #76 Tier 1 — Color pseudo-class attrs
+            | K::BackgroundHoverColor
+            | K::BackgroundFocusColor
+            | K::BackgroundActiveColor
+            | K::BackgroundDisabledColor
+            | K::BorderHoverColor
+            | K::BorderFocusColor
+            | K::BorderActiveColor
+            | K::FontHoverColor
+            | K::FontFocusColor
+            | K::FontActiveColor
+            | K::FontDisabledColor => fun(color(), attr(var(0))),
 
             // Attribute builders — String / List String arg.
             K::BackgroundImage => fun(string(), attr(var(0))),
@@ -3146,6 +3190,10 @@ impl<'a> Builder<'a> {
 
             // Std.Ui — two Int args (arity 2).
             K::UiPaddingXY => fun(int(), fun(int(), attr(var(0)))),
+
+            // #76 Tier 1 — two-arg attrs.
+            K::UiAspectRatioWH => fun(int(), fun(int(), attr(var(0)))),
+            K::UiHtmlAttribute => fun(string(), fun(string(), attr(var(0)))),
 
             // Std.Html leaf nodes (arity 1).
             K::HtmlTextNode | K::HtmlRawNode => fun(string(), html_t(var(0))),
@@ -3202,6 +3250,8 @@ impl<'a> Builder<'a> {
             K::HtmlAttribute => fun(string(), fun(string(), html_attr(var(0)))),
             K::HtmlBoolAttribute => fun(string(), fun(bool_ty(), html_attr(var(0)))),
             K::HtmlNoAttr => html_attr(var(0)),
+            // #76 Tier 1 — Int-keyed html attr.
+            K::HtmlAttrTabindex => fun(int(), html_attr(var(0))),
 
             // ── Json.Decode (17) — mirrors the already-relocated `Db.Decode`
             //    shapes (function-first `map`/`andThen`; `dec(a)` is the opaque
@@ -4266,6 +4316,47 @@ mod registry_phase_c_tests {
             // NB: HtmlStyleNode is NOT here — it is RELOCATED (the F7 #46/#47 work
             // already schemed `Html.styleNode` in the legacy `kernel_ty` table),
             // so its parity is checked by `stdlib_scheme_matches_legacy`.
+            // ── #76 Tier 1: extended Std.Ui / Font / Background / Border builders ──
+            K::UiSquare,
+            K::UiWidescreen,
+            K::UiAspectRatio,
+            K::UiAspectRatioWH,
+            K::UiHtmlAttribute,
+            K::BackgroundHoverColor,
+            K::BackgroundFocusColor,
+            K::BackgroundActiveColor,
+            K::BackgroundDisabledColor,
+            K::BorderSolid,
+            K::BorderDashed,
+            K::BorderDotted,
+            K::BorderHoverColor,
+            K::BorderFocusColor,
+            K::BorderActiveColor,
+            K::BorderHoverWidth,
+            K::BorderHoverRounded,
+            K::FontWeight,
+            K::FontSemiBold,
+            K::FontRegular,
+            K::FontLight,
+            K::FontExtraBold,
+            K::FontBlack,
+            K::FontUnderline,
+            K::FontNoDecoration,
+            K::FontLetterSpacing,
+            K::FontWordSpacing,
+            K::FontAlignLeft,
+            K::FontAlignRight,
+            K::FontCenter,
+            K::FontJustify,
+            K::FontSansSerif,
+            K::FontSerif,
+            K::FontMonospace,
+            K::FontHoverColor,
+            K::FontFocusColor,
+            K::FontActiveColor,
+            K::FontDisabledColor,
+            K::FontHoverSize,
+            K::HtmlAttrTabindex,
         ]
     };
 
