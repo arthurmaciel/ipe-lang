@@ -3785,6 +3785,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::BasicsIdentity
                 | KernelFn::BasicsFst
                 | KernelFn::BasicsSnd
+                // ── Basics numerics (#115) — arity 1 ────────────────────────
+                | KernelFn::BasicsNegate
+                | KernelFn::BasicsAbs
+                | KernelFn::BasicsSqrt
+                // ── end Basics numerics (#115) ──────────────────────────────
                 | KernelFn::ResultOkDefault
                 // ── Result/Maybe combine — arity 1 (#88) ─────────────────────
                 | KernelFn::ResultCombine
@@ -4018,6 +4023,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MaybeAndMap
                 | KernelFn::MathMin
                 | KernelFn::MathMax
+                // ── Basics numerics (#115) — arity 2 ────────────────────────
+                | KernelFn::BasicsMin
+                | KernelFn::BasicsMax
+                // ── end Basics numerics (#115) ──────────────────────────────
                 // ── Dict arity-2 ─────────────────────────────────────────────
                 | KernelFn::DictGet
                 | KernelFn::DictMember
@@ -4833,6 +4842,13 @@ impl<'a> Lowerer<'a> {
                     ("Basics", "modBy") => Ok(Callee::Kernel(KernelFn::BasicsModBy)),
                     ("Basics", "clamp") => Ok(Callee::Kernel(KernelFn::BasicsClamp)),
                     ("Basics", "toString") => Ok(Callee::Kernel(KernelFn::BasicsToString)),
+                    // ── Basics numerics (#115) ────────────────────────────────
+                    ("Basics", "negate") => Ok(Callee::Kernel(KernelFn::BasicsNegate)),
+                    ("Basics", "abs")    => Ok(Callee::Kernel(KernelFn::BasicsAbs)),
+                    ("Basics", "sqrt")   => Ok(Callee::Kernel(KernelFn::BasicsSqrt)),
+                    ("Basics", "min")    => Ok(Callee::Kernel(KernelFn::BasicsMin)),
+                    ("Basics", "max")    => Ok(Callee::Kernel(KernelFn::BasicsMax)),
+                    // ── end Basics numerics (#115) ────────────────────────────
                     // ── Error kernels (Sky.Core.Error — minimal `Error = String`
                     //    slice, #86) ─────────────────────────────────────────
                     ("Error", "unexpected") => Ok(Callee::Kernel(KernelFn::ErrorUnexpected)),
