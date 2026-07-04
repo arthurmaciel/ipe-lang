@@ -207,6 +207,19 @@ pub enum StdlibKernel {
     /// the `Comparable a` (Ord) obligation via `constrain_var_kernel`, exactly
     /// like `Math.min` / `Math.max`.
     BasicsClamp,
+    // ── Basics numerics (#115) ──────────────────────────────────────────────
+    /// `negate : number -> number` — unary negation on Int or Float.
+    /// Also the runtime target for the `-x` desugar (`negate x`).
+    BasicsNegate,
+    /// `abs : number -> number` — absolute value on Int or Float.
+    BasicsAbs,
+    /// `sqrt : Float -> Float` — square root (Float-only, matches Elm).
+    BasicsSqrt,
+    /// `min : comparable -> comparable -> comparable` — Basics.min.
+    BasicsMin,
+    /// `max : comparable -> comparable -> comparable` — Basics.max.
+    BasicsMax,
+    // ── end Basics numerics (#115) ──────────────────────────────────────────
     // ── Error (Sky.Core.Error — minimal `Error = String` slice, #86) ─────────
     // Message-carrying constructors: `String -> Error`. With `SkyError = String`
     // the message IS the error value, so all eight collapse to one identity
@@ -983,6 +996,13 @@ impl StdlibKernel {
             Self::BasicsModBy => d("Basics", "modBy", 2, Pure, "basics_mod_by"),
             Self::BasicsClamp => d("Basics", "clamp", 3, Pure, "basics_clamp"),
             Self::BasicsToString => d("Basics", "toString", 1, Pure, "basics_to_string"),
+            // ── Basics numerics (#115) ──────────────────────────────────────────
+            Self::BasicsNegate => d("Basics", "negate", 1, Pure, "basics_negate"),
+            Self::BasicsAbs    => d("Basics", "abs",    1, Pure, "basics_abs"),
+            Self::BasicsSqrt   => d("Basics", "sqrt",   1, Pure, "math_sqrt"),
+            Self::BasicsMin    => d("Basics", "min",    2, Pure, "math_min"),
+            Self::BasicsMax    => d("Basics", "max",    2, Pure, "math_max"),
+            // ── end Basics numerics (#115) ──────────────────────────────────────
             // ── Error (Sky.Core.Error — minimal `Error = String` slice, #86) ──
             // The eight message constructors share ONE identity runtime symbol
             // (`sky_error_from_message`): with `SkyError = String` a `String ->
@@ -1858,6 +1878,13 @@ impl StdlibKernel {
         Self::BasicsModBy,
         Self::BasicsClamp,
         Self::BasicsToString,
+        // ── Basics numerics (#115) ──────────────────────────────────────────
+        Self::BasicsNegate,
+        Self::BasicsAbs,
+        Self::BasicsSqrt,
+        Self::BasicsMin,
+        Self::BasicsMax,
+        // ── end Basics numerics (#115) ──────────────────────────────────────
         // Error (Sky.Core.Error — minimal `Error = String` slice, #86)
         Self::ErrorUnexpected,
         Self::ErrorInvalidInput,
