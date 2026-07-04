@@ -95,6 +95,13 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Std", "Live"], "Live"),
     (&["Std", "Tui"], "Tui"),
     (&["Std", "Webview"], "Webview"),
+    // ── Effect stdlib modules (#111) ────────────────────────────────────────
+    (&["Std", "Cli"], "Cli"),
+    (&["Sky", "Cli"], "Cli"),
+    (&["Std", "Auth"], "Auth"),
+    (&["Sky", "Auth"], "Auth"),
+    (&["Sky", "Http", "Server", "Stream"], "Stream"),
+    (&["Sky", "Core", "Http", "Stream"], "HttpStream"),
 ];
 
 /// Where a (possibly qualified) variable resolves to.
@@ -1189,6 +1196,29 @@ impl Env {
             ("Tui", &["app", "program"]),
             // ── M7: Sky.Webview / Std.Webview app-entry kernel ───────────────────
             ("Webview", &["app"]),
+            // ── #111: Effect stdlib modules ───────────────────────────────────────
+            // Std.Cli / Sky.Cli — line-oriented TEA app-entry (fully wired).
+            ("Cli", &["program"]),
+            // Std.Auth / Sky.Auth — authentication helpers (fail-closed: no lower
+            // arm yet → SKY-L0108 at lower time; canon registration removes N0004).
+            (
+                "Auth",
+                &[
+                    "hashPassword",
+                    "hashPasswordCost",
+                    "verifyPassword",
+                    "passwordStrength",
+                    "signToken",
+                    "verifyToken",
+                    "register",
+                    "login",
+                    "setRole",
+                ],
+            ),
+            // Sky.Http.Server.Stream — server-side streaming HTTP (fail-closed).
+            ("Stream", &["stream", "emit", "finish", "withContentType"]),
+            // Sky.Core.Http.Stream — client-side HTTP streaming (fail-closed).
+            ("HttpStream", &["open", "forEachChunk", "close"]),
         ];
 
         // ── M7: Per-qualifier function name aliases ───────────────────────────
@@ -1237,6 +1267,12 @@ impl Env {
             ("Sky.Ui", "Ui"),
             ("Sky.Live", "Live"),
             ("Sky.Tui", "Tui"),
+            // ── #111: Effect stdlib module aliases ────────────────────────────────
+            ("Sky.Cli", "Cli"),
+            ("Std.Auth", "Auth"),
+            ("Sky.Auth", "Auth"),
+            ("Sky.Http.Server.Stream", "Stream"),
+            ("Sky.Core.Http.Stream", "HttpStream"),
         ];
 
         // ── Phase-B: build stdlib_index FIRST so all VarHome::Kernel(id, ..)

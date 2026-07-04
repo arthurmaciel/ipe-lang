@@ -583,6 +583,9 @@ pub enum AppShape {
     /// `Std.Webview` / `Sky.Webview` — the Model is kept in memory, so it must
     /// be `Clone`.
     Webview,
+    /// `Std.Cli` / `Sky.Cli` — the Model is kept in memory, so it must be
+    /// `Clone`.
+    Cli,
 }
 
 /// The category of the non-admissible payload found inside a Model.
@@ -1050,6 +1053,7 @@ pub fn inadmissible_model_message(app: AppShape, field: &str, leaf: ModelLeaf) -
         ),
         AppShape::Tui => ("Sky.Tui", "clonable"),
         AppShape::Webview => ("Sky.Webview", "clonable"),
+        AppShape::Cli => ("Sky.Cli", "clonable"),
     };
     let leaf_phrase = match leaf {
         ModelLeaf::Function => "a function",

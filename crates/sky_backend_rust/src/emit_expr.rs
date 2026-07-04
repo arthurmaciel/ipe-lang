@@ -1112,7 +1112,7 @@ fn emit_ui_call(
         return Ok(None);
     };
     // Only handle M7 kernels.
-    if !k.is_ui() && !k.is_live() && !k.is_tui() && !k.is_webview() {
+    if !k.is_ui() && !k.is_live() && !k.is_tui() && !k.is_webview() && !k.is_cli() {
         return Ok(None);
     }
     match k {
@@ -2646,11 +2646,28 @@ fn emit_ui_call(
             Ok(Some(s))
         }
 
-        // Any is_ui/live/tui/webview() variant not listed is a gap — hard error.
+        // ── Cli app-entry kernel (#111 — fully wired) ────────────────────────
+        // Delegate to `emit_cli::emit_cli_call`; it returns `Some(s)` for
+        // the CliProgram variant and `None` for anything else. A `None` here is an
+        // internal error (the `k.is_cli()` guard above already filtered), so
+        // promote it to a `CompilerBug`.
+        KernelFn::CliProgram => {
+            let s =
+                crate::emit_cli::emit_cli_call(ctx, callee, args, indent, child, generics)?
+                    .ok_or_else(|| Diagnostic::CompilerBug {
+                        where_: "sky_backend_rust::emit_ui_call",
+                        detail: format!(
+                            "emit_cli returned None for Cli kernel {k:?} — missing arm"
+                        ),
+                    })?;
+            Ok(Some(s))
+        }
+
+        // Any is_ui/live/tui/webview/cli() variant not listed is a gap — hard error.
         _ => Err(Diagnostic::CompilerBug {
             where_: "sky_backend_rust::emit_ui_call",
             detail: format!(
-                "UI/Live/Tui/Webview kernel {k:?} has no emit arm — add it to emit_ui_call"
+                "UI/Live/Tui/Webview/Cli kernel {k:?} has no emit arm — add it to emit_ui_call"
             ),
         }),
     }

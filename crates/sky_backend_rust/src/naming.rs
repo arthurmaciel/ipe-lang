@@ -931,6 +931,27 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         | KernelFn::HtmlOnKeyUp => "html_on_string_",
         KernelFn::HtmlOnBool => "html_on_bool_",
         KernelFn::HtmlOnSubmit => "html_on_raw_",
+        // ── #111: Cli app-entry + Auth + Stream + HttpStream ─────────────────
+        // These kernels are emitted via dedicated emit_cli_call / fail-closed
+        // paths; the generic kernel_name is not consulted at emit time.  Arms
+        // are here to keep the match exhaustive.
+        KernelFn::CliProgram => "sky_cli_program_",
+        KernelFn::AuthHashPassword => "auth_hash_password_",
+        KernelFn::AuthHashPasswordCost => "auth_hash_password_cost_",
+        KernelFn::AuthVerifyPassword => "auth_verify_password_",
+        KernelFn::AuthPasswordStrength => "auth_password_strength_",
+        KernelFn::AuthSignToken => "auth_sign_token_",
+        KernelFn::AuthVerifyToken => "auth_verify_token_",
+        KernelFn::AuthRegister => "auth_register_",
+        KernelFn::AuthLogin => "auth_login_",
+        KernelFn::AuthSetRole => "auth_set_role_",
+        KernelFn::StreamStream => "stream_stream_",
+        KernelFn::StreamEmit => "stream_emit_",
+        KernelFn::StreamFinish => "stream_finish_",
+        KernelFn::StreamWithContentType => "stream_with_content_type_",
+        KernelFn::HttpStreamOpen => "http_stream_open_",
+        KernelFn::HttpStreamForEachChunk => "http_stream_for_each_chunk_",
+        KernelFn::HttpStreamClose => "http_stream_close_",
     }
 }
 

@@ -852,6 +852,24 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlOnKeyDown => "Event.onKeyDown",
         KernelFn::HtmlOnKeyUp => "Event.onKeyUp",
         KernelFn::HtmlOnBool => "Event.onBool",
+        // ── #111: Cli app-entry + Auth + Stream + HttpStream ─────────────────
+        KernelFn::CliProgram => "Cli.program",
+        KernelFn::AuthHashPassword => "Auth.hashPassword",
+        KernelFn::AuthHashPasswordCost => "Auth.hashPasswordCost",
+        KernelFn::AuthVerifyPassword => "Auth.verifyPassword",
+        KernelFn::AuthPasswordStrength => "Auth.passwordStrength",
+        KernelFn::AuthSignToken => "Auth.signToken",
+        KernelFn::AuthVerifyToken => "Auth.verifyToken",
+        KernelFn::AuthRegister => "Auth.register",
+        KernelFn::AuthLogin => "Auth.login",
+        KernelFn::AuthSetRole => "Auth.setRole",
+        KernelFn::StreamStream => "Stream.stream",
+        KernelFn::StreamEmit => "Stream.emit",
+        KernelFn::StreamFinish => "Stream.finish",
+        KernelFn::StreamWithContentType => "Stream.withContentType",
+        KernelFn::HttpStreamOpen => "HttpStream.open",
+        KernelFn::HttpStreamForEachChunk => "HttpStream.forEachChunk",
+        KernelFn::HttpStreamClose => "HttpStream.close",
     }
 }
 
