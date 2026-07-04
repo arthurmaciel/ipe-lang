@@ -848,6 +848,15 @@ pub enum StdlibKernel {
     HttpStreamOpen,
     HttpStreamForEachChunk,
     HttpStreamClose,
+    // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
+    RegionMainContent,   // Attribute msg (arity 0)
+    RegionNavigation,    // Attribute msg (arity 0)
+    RegionFooter,        // Attribute msg (arity 0)
+    RegionAside,         // Attribute msg (arity 0)
+    RegionHeading,       // Int → Attribute msg (arity 1)
+    RegionLabel,         // String → Attribute msg (arity 1)
+    RegionAnnounce,      // Attribute msg (arity 0)
+    RegionAnnounceUrgently, // Attribute msg (arity 0)
 }
 
 impl StdlibKernel {
@@ -1721,6 +1730,17 @@ impl StdlibKernel {
                 d("HttpStream", "forEachChunk", 2, Pure, "http_stream_for_each_chunk")
             }
             Self::HttpStreamClose => d("HttpStream", "close", 1, Pure, "http_stream_close"),
+            // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
+            Self::RegionMainContent => d("Region", "mainContent", 0, Ui, "ui_region_main_content_"),
+            Self::RegionNavigation => d("Region", "navigation", 0, Ui, "ui_region_navigation_"),
+            Self::RegionFooter => d("Region", "footer", 0, Ui, "ui_region_footer_"),
+            Self::RegionAside => d("Region", "aside", 0, Ui, "ui_region_aside_"),
+            Self::RegionHeading => d("Region", "heading", 1, Ui, "ui_region_heading_"),
+            Self::RegionLabel => d("Region", "label", 1, Ui, "ui_region_label_"),
+            Self::RegionAnnounce => d("Region", "announce", 0, Ui, "ui_region_announce_"),
+            Self::RegionAnnounceUrgently => {
+                d("Region", "announceUrgently", 0, Ui, "ui_region_announce_urgently_")
+            }
         }
     }
 
@@ -2420,6 +2440,15 @@ impl StdlibKernel {
         Self::HttpStreamOpen,
         Self::HttpStreamForEachChunk,
         Self::HttpStreamClose,
+        // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
+        Self::RegionMainContent,
+        Self::RegionNavigation,
+        Self::RegionFooter,
+        Self::RegionAside,
+        Self::RegionHeading,
+        Self::RegionLabel,
+        Self::RegionAnnounce,
+        Self::RegionAnnounceUrgently,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────
@@ -2744,6 +2773,15 @@ impl StdlibKernel {
                 | Self::FontDisabledColor
                 | Self::FontHoverSize
                 | Self::HtmlAttrTabindex
+                // ── Std.Ui.Region (#117) ──────────────────────────────────────
+                | Self::RegionMainContent
+                | Self::RegionNavigation
+                | Self::RegionFooter
+                | Self::RegionAside
+                | Self::RegionHeading
+                | Self::RegionLabel
+                | Self::RegionAnnounce
+                | Self::RegionAnnounceUrgently
         )
     }
 
