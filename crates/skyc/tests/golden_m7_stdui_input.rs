@@ -1,4 +1,4 @@
-//! m7_stdui_input seal — `Ui.input` + `Ui.describe` + `desc*` constructors.
+//! `m7_stdui_input` seal — `Ui.input` + `Ui.describe` + `desc*` constructors.
 //!
 //! Kernels under test:
 //! * `Ui.input : List (Attribute msg) -> Element msg` — void `<input>` element
