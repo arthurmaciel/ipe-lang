@@ -138,10 +138,16 @@ build_rust() {
 }
 
 # ── build_go <dir> <example> → 0=ok (binary at $d/sky-out/app), 1=fail ──────
-# PHASED: only reachable when NO_EQUIV=0. Requires the Haskell `sky` on PATH as
-# SKY_GO_BIN (this repo does not ship it — see the port doc's Go-parity plan).
+# PHASED: only reachable when NO_EQUIV=0. Go reference = the Haskell `sky`.
+# Resolution order: $SKY_GO_BIN → pinned $REPO/tools/oracle/bin/sky (the
+# v0.17.3 sky-linux-x64 release, fetched not committed) → `sky` on PATH.
+# The pinned binary keeps the reference at the PORT-TARGET version so we never
+# read v0.16↔v0.17 stdlib skew as a parity failure.
 build_go() {
-  local d="$1" n="$2" go_bin="${SKY_GO_BIN:-sky}"
+  local d="$1" n="$2" go_bin="${SKY_GO_BIN:-}"
+  if [ -z "$go_bin" ]; then
+    if [ -x "$REPO/tools/oracle/bin/sky" ]; then go_bin="$REPO/tools/oracle/bin/sky"; else go_bin="sky"; fi
+  fi
   command -v "$go_bin" >/dev/null 2>&1 || return 1
   # SKY_RUNTIME_DIR is a skyc-ONLY knob (env.sh exports it so skyc's --runtime
   # auto-resolve is CWD-independent). The Haskell `sky` Go reference ALSO honours
