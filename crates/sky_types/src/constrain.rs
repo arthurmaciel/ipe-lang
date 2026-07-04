@@ -219,6 +219,10 @@ struct Builtins {
     /// `"size"` — the size field inside the Webview window config record.
     /// Typed as `(Int, Int)` — width × height in logical pixels.
     webview_f_size: Symbol,
+    // ── Cli cfg record field name symbols (#111) ──────────────────────────────
+    /// `"onLine"` — the onLine field of the `Cli.program` config record.
+    /// Typed as `String -> Msg` — called once per stdin line.
+    cli_f_on_line: Symbol,
 }
 
 impl Builtins {
@@ -302,6 +306,8 @@ impl Builtins {
             webview_f_window: interner.intern("window")?,
             webview_f_title: interner.intern("title")?,
             webview_f_size: interner.intern("size")?,
+            // #111: Cli cfg field names.
+            cli_f_on_line: interner.intern("onLine")?,
         })
     }
 
@@ -2971,6 +2977,27 @@ impl<'a> Builder<'a> {
                 fun(cfg_rec, task_unit())
             }
 
+            // ── Std.Cli / Sky.Cli app-entry (#111) ─────────────────────
+            // `Cli.program : { init : () -> (model, Cmd msg)
+            //                , update : msg -> model -> (model, Cmd msg)
+            //                , view : model -> String
+            //                , subscriptions : model -> Sub msg
+            //                , onLine : String -> msg
+            //                } -> Task () ()`
+            K::CliProgram => {
+                let tup = tuple2(var(0), cmd(var(1)));
+                let cfg_rec = Ty::Record({
+                    let mut m = BTreeMap::new();
+                    m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
+                    m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
+                    m.insert(self.builtins.live_f_view, fun(var(0), string()));
+                    m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
+                    m.insert(self.builtins.cli_f_on_line, fun(string(), var(1)));
+                    m
+                });
+                fun(cfg_rec, task_unit())
+            }
+
             // ── Std.Webview app-entry (already schemed in kernel_ty) ──
             K::WebviewApp => {
                 let tup = tuple2(var(0), cmd(var(1)));
@@ -3422,7 +3449,24 @@ impl<'a> Builder<'a> {
             | K::LiveAppRouted
             | K::CmdPublish
             | K::CmdPublishNoEcho
-            | K::SubSubscribeTopic => return None,
+            | K::SubSubscribeTopic
+            // ── #111 — Reachable but not yet lowered (fail-closed at lower time) ─
+            | K::AuthHashPassword
+            | K::AuthHashPasswordCost
+            | K::AuthVerifyPassword
+            | K::AuthPasswordStrength
+            | K::AuthSignToken
+            | K::AuthVerifyToken
+            | K::AuthRegister
+            | K::AuthLogin
+            | K::AuthSetRole
+            | K::StreamStream
+            | K::StreamEmit
+            | K::StreamFinish
+            | K::StreamWithContentType
+            | K::HttpStreamOpen
+            | K::HttpStreamForEachChunk
+            | K::HttpStreamClose => return None,
         })
     }
 }
@@ -4357,6 +4401,8 @@ mod registry_phase_c_tests {
             K::FontDisabledColor,
             K::FontHoverSize,
             K::HtmlAttrTabindex,
+            // Std.Cli / Sky.Cli app-entry (#111) — brand-new kernel, no legacy oracle.
+            K::CliProgram,
         ]
     };
 
@@ -4371,7 +4417,30 @@ mod registry_phase_c_tests {
     /// `stdlib_scheme_total_over_reachable` until then.
     const REACHABLE_BUT_UNLOWERED: &[StdlibKernel] = {
         use StdlibKernel as K;
-        &[K::LiveAppRouted]
+        &[
+            K::LiveAppRouted,
+            // ── #111: Std.Auth, Sky.Http.Server.Stream, Sky.Core.Http.Stream ───────
+            // These have a canon qualifier + a Rust runtime fn, but their lowering
+            // arms are not yet implemented.  A caller that reaches them fails closed
+            // with SKY-L0108 at lower time.  When lowering lands, move them to
+            // FIRST_SCHEMED and add the stdlib_scheme arms.
+            K::AuthHashPassword,
+            K::AuthHashPasswordCost,
+            K::AuthVerifyPassword,
+            K::AuthPasswordStrength,
+            K::AuthSignToken,
+            K::AuthVerifyToken,
+            K::AuthRegister,
+            K::AuthLogin,
+            K::AuthSetRole,
+            K::StreamStream,
+            K::StreamEmit,
+            K::StreamFinish,
+            K::StreamWithContentType,
+            K::HttpStreamOpen,
+            K::HttpStreamForEachChunk,
+            K::HttpStreamClose,
+        ]
     };
 
     /// KNOWN-UNBACKED kernels: present in `StdlibKernel::ALL` (so they carry a

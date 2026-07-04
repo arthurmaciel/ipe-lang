@@ -62,7 +62,7 @@ pub fn model_ty_of_view(view_e: &Expr) -> Option<&IrType> {
 pub fn check_admissible_model(ctx: &EmitCtx, model_ty: &IrType, app: AppShape) -> DResult<()> {
     let ok = match app {
         AppShape::Live => ir_type_is_serde(model_ty, &|home, name| ctx.enum_is_serde(home, name)),
-        AppShape::Tui | AppShape::Webview => {
+        AppShape::Tui | AppShape::Webview | AppShape::Cli => {
             ir_type_is_derivable(model_ty, &|home, name| ctx.enum_is_derivable(home, name))
         }
     };
@@ -86,7 +86,7 @@ pub fn check_admissible_model(ctx: &EmitCtx, model_ty: &IrType, app: AppShape) -
 fn admissible(ctx: &EmitCtx, ty: &IrType, app: AppShape) -> bool {
     match app {
         AppShape::Live => ir_type_is_serde(ty, &|home, name| ctx.enum_is_serde(home, name)),
-        AppShape::Tui | AppShape::Webview => {
+        AppShape::Tui | AppShape::Webview | AppShape::Cli => {
             ir_type_is_derivable(ty, &|home, name| ctx.enum_is_derivable(home, name))
         }
     }
