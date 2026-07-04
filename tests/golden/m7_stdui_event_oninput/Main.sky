@@ -1,13 +1,18 @@
 module Main exposing (main)
 
 import Std.Html as Html
-import Std.Ui as Ui
 import Std.Html.Events as Event
 
 
--- Phase-1a round-2 POSITIVE sentinel: correct `Event.onInput` usage.
--- `Event.onInput` receives a `String -> msg` closure — well-typed.
--- skyc must compile this, cargo must build it, and the binary must run.
+-- #107 POSITIVE sentinel: `Std.Html.Events.onInput` produces a
+-- `Std.Html.Attribute msg` that composes with a Std.Html element's attribute
+-- list. `onInput` receives a `String -> msg` closure — well-typed.
+--
+-- Pre-#107 this fixture rendered via `Ui.el`, relying on the (incorrect)
+-- Event→Ui conflation that made `Std.Html.Events.*` produce a `Std.Ui`
+-- attribute. #107 makes `Std.Html.Events` produce `Std.Html.Attribute`, so the
+-- correct host is a Std.Html element. Std.Ui events stay covered by
+-- `m7_stdui_onclick` (which uses `Ui.onClick`).
 --
 -- oracle_divergence = true: Go oracle does not expose Html.htmlRender.
 
@@ -19,10 +24,7 @@ type Msg
 staticHtml : String
 staticHtml =
     Html.htmlRender
-        (Ui.layout []
-            (Ui.el
-                [ Event.onInput (\s -> SetText s) ]
-                (Ui.text "input here")))
+        (Html.input [ Event.onInput (\s -> SetText s) ])
 
 
 main =
