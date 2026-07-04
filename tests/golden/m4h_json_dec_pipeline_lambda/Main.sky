@@ -1,0 +1,19 @@
+module Main exposing (main)
+
+-- R1: `JsonDec.succeed (\name age -> …)` — multi-arg lambda curry.
+-- Exercises Fix A case 2 (lambda → curry2).
+-- Expected: Alice|30
+
+main =
+    let
+        r1 =
+            JsonDec.decodeString
+                (JsonDecP.required "age" JsonDec.int
+                    (JsonDecP.required "name" JsonDec.string
+                        (JsonDec.succeed
+                            (\name age -> name ++ "|" ++ String.fromInt age))))
+                "{\"name\":\"Alice\",\"age\":30}"
+    in
+    case r1 of
+        Ok label1 -> println label1
+        Err _ -> println "err1"

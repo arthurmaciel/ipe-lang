@@ -1,0 +1,17 @@
+module Main exposing (main)
+
+-- R2: 1-arg lambda `JsonDec.succeed (\name -> name ++ "!")`.
+-- Exercises Fix A case 2 with arity 1 (lambda → curry1).
+-- Expected: Alice!
+
+main =
+    let
+        r1 =
+            JsonDec.decodeString
+                (JsonDecP.required "name" JsonDec.string
+                    (JsonDec.succeed (\name -> name ++ "!")))
+                "{\"name\":\"Alice\"}"
+    in
+    case r1 of
+        Ok label1 -> println label1
+        Err _ -> println "err1"
