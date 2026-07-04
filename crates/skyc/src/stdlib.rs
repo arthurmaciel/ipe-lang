@@ -208,6 +208,17 @@ const TOSTRING_CORE: &str = include_str!("../stdlib/Sky/Core/ToString.sky");
 /// Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Test"` entry exists there).
 const SKY_TEST: &str = include_str!("../stdlib/Sky/Test.sky");
 
+/// `Std.Live.Head` (#98) — typed `<head>` helpers for Sky.Live per-page injection.
+///
+/// Faithfully ported from `../sky/sky-stdlib/Std/Live/Head.sky`.
+/// All helpers delegate to existing M7 kernel qualifiers (`Html` / `Attr`) —
+/// no new kernel variants required.  `Std.Live.Head` is NOT in
+/// `STDLIB_MODULE_QUALIFIERS` (that table only has `Std.Live` → `"Live"`),
+/// so the disjointness invariant holds.
+///
+/// Unblocks `38-composite-ui-multibackend` (N0004: Std.Live.Head).
+const STD_LIVE_HEAD: &str = include_str!("../stdlib/Std/Live/Head.sky");
+
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
 /// Disjoint from [`MODULES`] (parse fixtures) and from `sky_canon`'s
@@ -228,6 +239,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Sky.Test",
         source: SKY_TEST,
+    },
+    CompiledStdModule {
+        dotted: "Std.Live.Head",
+        source: STD_LIVE_HEAD,
     },
 ];
 
