@@ -759,6 +759,17 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::RegionLabel => "Region.label",
         KernelFn::RegionAnnounce => "Region.announce",
         KernelFn::RegionAnnounceUrgently => "Region.announceUrgently",
+        // ── Ui.input + Ui.describe + desc* constructors ───────────────────────
+        KernelFn::UiInput => "Ui.input",
+        KernelFn::UiDescribe => "Ui.describe",
+        KernelFn::UiDescMain => "Ui.descMain",
+        KernelFn::UiDescNavigation => "Ui.descNavigation",
+        KernelFn::UiDescContentInfo => "Ui.descContentInfo",
+        KernelFn::UiDescComplementary => "Ui.descComplementary",
+        KernelFn::UiDescLivePolite => "Ui.descLivePolite",
+        KernelFn::UiDescLiveAssertive => "Ui.descLiveAssertive",
+        KernelFn::UiDescHeading => "Ui.descHeading",
+        KernelFn::UiDescLabel => "Ui.descLabel",
         // ── M7: Html element builders ────────────────────────────────────────
         KernelFn::HtmlTextNode => "Html.text",
         KernelFn::HtmlRawNode => "Html.raw",

@@ -812,3 +812,58 @@ pub fn ui_region_announce_<M>() -> Attribute<M> {
 pub fn ui_region_announce_urgently_<M>() -> Attribute<M> {
     Attribute::AttrDescribe(Description::DescLiveAssertive)
 }
+
+// ── Ui.input + Ui.describe + desc* constructors ────────────────────────────
+
+/// `Ui.input : List (Attribute msg) -> Element msg`
+///
+/// Creates a real `<input>` void HTML element:
+/// `TaggedNode "input" NoDescription attrs []`
+pub fn ui_input_<M>(attrs: Vec<Attribute<M>>) -> Element<M> {
+    Element::TaggedNode("input".into(), Description::NoDescription, attrs, vec![])
+}
+
+/// `Ui.describe : Description -> Attribute msg`
+pub fn ui_describe_<M>(d: Description) -> Attribute<M> {
+    Attribute::AttrDescribe(d)
+}
+
+/// `Ui.descMain : Description`
+pub fn ui_desc_main_() -> Description {
+    Description::DescMain
+}
+
+/// `Ui.descNavigation : Description`
+pub fn ui_desc_navigation_() -> Description {
+    Description::DescNavigation
+}
+
+/// `Ui.descContentInfo : Description`
+pub fn ui_desc_content_info_() -> Description {
+    Description::DescContentInfo
+}
+
+/// `Ui.descComplementary : Description`
+pub fn ui_desc_complementary_() -> Description {
+    Description::DescComplementary
+}
+
+/// `Ui.descLivePolite : Description`
+pub fn ui_desc_live_polite_() -> Description {
+    Description::DescLivePolite
+}
+
+/// `Ui.descLiveAssertive : Description`
+pub fn ui_desc_live_assertive_() -> Description {
+    Description::DescLiveAssertive
+}
+
+/// `Ui.descHeading : Int -> Description`
+pub fn ui_desc_heading_(n: i64) -> Description {
+    Description::DescHeading(n)
+}
+
+/// `Ui.descLabel : String -> Description`
+pub fn ui_desc_label_(s: String) -> Description {
+    Description::DescLabel(s)
+}
