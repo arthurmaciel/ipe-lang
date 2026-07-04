@@ -573,3 +573,37 @@ API-shape review):
   LiveRoute` typing (#106) as "✅ done (Port — matches `../sky`)." The latent
   E0308 for non-String page constructor payloads (`emit_live.rs:135`) is a
   known bug to fix, not a sanctioned divergence. Not added to the ledger.
+
+### B-route-param — Routed page-constructor payload typing (#108)
+
+- **Differs:** `emit_live_call::LiveRoute`'s partial-ctor branch emits a
+  type-directed `params.get(i)` conversion expression per constructor payload
+  field. Sky's Haskell reference (`ExprEmitter.hs:1823`) and the Go backend
+  both unconditionally emit `params.get(i).cloned().unwrap_or_default()` (a
+  `String`) for every payload slot, relying on reflect-coercion at the Go
+  runtime to coerce the captured string to the expected field type.
+- **Go-oracle relationship:** for `String`-payload constructors the output is
+  byte-identical. For `Int`/`Float`/`Bool` payloads the Go oracle coerces at
+  runtime (opaque to the type checker); ipê emits explicit `.parse::<i64>()`/
+  `.parse::<f64>()`/`s == "true"` expressions that decode at the call site. For
+  payloads of any other type, the reference emits a String and relies on the
+  Go runtime to coerce; ipê rejects at compile time with a `Diagnostic::CompilerBug`
+  (to be upgraded to the reserved diagnostic code `SKY-L0123` in a follow-up
+  task — NOT `SKY-L0121`, which is owned by the #94 `InadmissibleAppMsg` gate;
+  see `docs/architecture/design-coherence-review.md` §C1). The same follow-up
+  covers the sibling fail-closed arm added in #108 round 4: a route page
+  builder that is neither a page constructor, an inline lambda, nor a named
+  function (a let-bound or computed builder value) is rejected at emit with
+  the same interim `CompilerBug` shape — pre-round-4 that arm silently
+  emitted an untyped `(builder)(params)` call that cargo-failed
+  (E0308/E0618) for every realistic shape.
+- **Rationale:** parse, don't validate — a `:param` segment is inherently a URL
+  string; feeding it to a constructor payload without an explicit decode is a
+  type contract violation. Catching it at emit time gives the user a Sky error
+  instead of an opaque downstream `rustc` E0308 or a runtime coercion panic.
+  The `unwrap_or_default` fallback on parse failure keeps the "never panic"
+  spirit of the reference's `unwrap_or_default` for missing captures.
+- **Sanctioned:** yes (`sanctioned:`). Reference: `emit_live.rs::route_param_get`.
+  Residual: malformed numeric captures silently degrade to `0`/`0.0`/`false`
+  (same as reference's missing-capture behavior); routing to `not_found` on
+  bad parse is a future refinement (not yet designed in the reference either).

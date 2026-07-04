@@ -40,9 +40,11 @@ use sky_diagnostics::{DResult, Diagnostic, Span, TypeError};
 use sky_intern::{Interner, Symbol};
 
 pub use solve::{BUDGET_ENV, Budget, DEFAULT_SOLVER_BUDGET};
-pub use ty::{Ty, TyBounds};
+pub use ty::{RowTail, Ty, TyBounds};
 
-use constrain::{Builder, FieldAccess, RecordUpdate, SchemeApp, zonk};
+use constrain::{
+    Builder, FieldAccess, RecordUpdate, RoutedLiveCheck, RouteWitnessCheck, SchemeApp, zonk,
+};
 use doc::{VarNamer, ty_to_doc};
 use solve::solve;
 use ty::{Content, FlatType};
@@ -112,6 +114,21 @@ fn infer_with_budget(
     // exist in the (now-settled) base record's type, and its new value must
     // unify with that field's type.
     resolve_record_updates(&mut uf, budget, interner, &generated.record_updates)?;
+
+    // Per-route page witnesses (#108 round 4): each `Live.route pattern ctor`
+    // relates its builder argument's settled type to the route's page type —
+    // a nullary builder witnesses the page directly, a params-consuming
+    // constructor (`String -> Page`) witnesses it with its result type.  Must
+    // run BEFORE `resolve_routed_live_checks` so route constructors pin the
+    // page variable before the `notFound ≟ Model.page` gate reads it.  See
+    // the `RouteWitnessCheck` doc comment for the full rationale.
+    resolve_route_witness_checks(&mut uf, budget, interner, &generated.route_witness_checks)?;
+
+    // For routed `Live.app` calls: if the now-settled Model type has a `page`
+    // field, the `notFound` type must match that field's type.  Non-routed
+    // apps (Model has no `page` field) are silently skipped.  See the
+    // `RoutedLiveCheck` doc comment for the full rationale.
+    resolve_routed_live_checks(&mut uf, budget, interner, &generated.routed_live_checks)?;
 
     // End-of-checking exhaustiveness + redundancy pass. Running it here — after
     // the solver settles — makes the lowerer's `Match::new` exhaustiveness
@@ -315,7 +332,7 @@ fn ty_is_equatable(ty: &Ty) -> bool {
         Ty::Var(_) | Ty::Fun(_, _) => false,
         Ty::Unit => true,
         Ty::Tuple(elems) => elems.iter().all(ty_is_equatable),
-        Ty::Record(fields) => fields.values().all(ty_is_equatable),
+        Ty::Record(fields, _) => fields.values().all(ty_is_equatable),
         Ty::Con { args, .. } => args.iter().all(ty_is_equatable),
     }
 }
@@ -380,7 +397,7 @@ fn resolve_field_accesses(
     for fa in accesses {
         let root = uf.find(fa.record)?;
         let field_var = match uf.content(root)? {
-            Content::Structure(FlatType::Record(fields)) => fields.get(&fa.field).copied(),
+            Content::Structure(FlatType::Record(fields, _ext)) => fields.get(&fa.field).copied(),
             _ => None,
         };
         match field_var {
@@ -413,7 +430,7 @@ fn resolve_record_updates(
         // Clone the field map so the base's descriptor is not borrowed across the
         // `unify` calls below (which mutate the arena).
         let base_fields = match uf.content(root)? {
-            Content::Structure(FlatType::Record(fields)) => fields,
+            Content::Structure(FlatType::Record(fields, _ext)) => fields,
             _ => BTreeMap::new(),
         };
         for (field, value_var) in &ru.fields {
@@ -426,6 +443,106 @@ fn resolve_record_updates(
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// Discharge every deferred per-route page witness (#108 round 4).
+///
+/// For each `Live.route pattern builder` reference: follow the builder
+/// variable's settled structure and peel its leading `_ -> rest` arrows —
+/// each arrow is one `:param` payload slot of a params-consuming page
+/// constructor (`String -> Page`, `String -> String -> Page`, …; the emit
+/// tier separately gates the payload types to `String`/`Int`/`Float`/`Bool`).
+/// What remains after peeling is the PAGE type the route builds; unify it
+/// with the route's page variable, which the `K::LiveRoute` scheme threads
+/// into `LiveRoute page` and thence (through `List (LiveRoute var(2))` in the
+/// `K::LiveApp` scheme) into `notFound` and `Model.page`.
+///
+/// * Nullary builder (`Live.route "/" HomePage` — no arrows) → the builder IS
+///   the page: unify directly.
+/// * Param constructor (`Live.route "/u/:id" UserPage`) → peel `String ->`,
+///   unify the result — the canonical corpus shape, falsely SKY-T0001'd by
+///   the pre-round-4 shared-variable scheme.
+/// * Wrong-ADT constructor (`Live.route "/" Increment` in a `Page` app) →
+///   the peeled result (`Msg`) fails unification → SKY-T0001 at this route's
+///   span.
+/// * A builder that never settled (an unapplied `Live.route "/"` value) has a
+///   flex root — not an arrow — and unifies with the page variable directly,
+///   which merely links the two variables (sound: no structure is invented).
+///
+/// The peel is bounded by the arena's acyclicity (the occurs check forbids an
+/// infinite arrow chain); the explicit fuel is belt-and-braces so a violated
+/// invariant degrades to a normal unification error instead of a hang.
+fn resolve_route_witness_checks(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    checks: &[RouteWitnessCheck],
+) -> DResult<()> {
+    for check in checks {
+        let mut cur = uf.find(check.builder_var)?;
+        let mut fuel: u32 = 1024;
+        while fuel > 0 {
+            match uf.content(cur)? {
+                Content::Structure(FlatType::Fun(_, ret)) => {
+                    cur = uf.find(ret)?;
+                }
+                _ => break,
+            }
+            fuel -= 1;
+        }
+        // Unify the built page type with the route's page variable.  A
+        // mismatch is a normal SKY-T0001 blamed at the `Live.route` span.
+        unify(uf, budget, interner, check.span, cur, check.page_var)?;
+    }
+    Ok(())
+}
+
+/// For routed `Live.app` calls: if the settled Model type has a `page` field,
+/// the `notFound` type must match (SKY-T0001) — the `set_page` closure emitted
+/// by the backend already assumes this invariant.  Non-routed apps (Model has
+/// no `page` field) are silently skipped, so a blanket open-row projection is
+/// never needed and every non-routed app continues to pass.
+///
+/// The detection criterion (`page` field presence) mirrors `emit_live.rs`'s
+/// `routed_page_field` helper: both agree on what "routed" means, ensuring the
+/// type-check gate and the emit gate fire on exactly the same programs.
+fn resolve_routed_live_checks(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    checks: &[RoutedLiveCheck],
+) -> DResult<()> {
+    for check in checks {
+        // Find the settled root of the Model type variable.
+        let model_root = uf.find(check.model_var)?;
+        // Clone the content to avoid borrowing `uf` across the subsequent
+        // `unify` call.
+        let model_content = uf.content(model_root)?;
+        // Extract the `page` field's VarId from the settled Model Record, if
+        // any.  A non-Record descriptor (Flex, Con, etc.) or a Record without
+        // a `page` field means this is a non-routed app — silently skip.
+        let page_var = match model_content {
+            Content::Structure(FlatType::Record(fields, _ext)) => fields
+                .iter()
+                .find(|(sym, _)| interner.resolve(**sym) == Some("page"))
+                .map(|(_, v)| *v),
+            _ => None,
+        };
+        if let Some(page_var) = page_var {
+            // Routed app: `notFound` must be the same type as `Model.page`.
+            // `unify` produces SKY-T0001 (TypeMismatch) if they differ.
+            unify(
+                uf,
+                budget,
+                interner,
+                check.span,
+                check.not_found_var,
+                page_var,
+            )?;
+        }
+        // Non-routed (no `page` field) → silently skip.
     }
     Ok(())
 }
@@ -530,7 +647,7 @@ mod tests {
         // final assertion rather than via a forbidden `panic!`).
         let ids: Option<(u32, u32)> = match ty {
             Ty::Fun(arg, ret) => match (arg.as_ref(), ret.as_ref()) {
-                (Ty::Var(arg_id), Ty::Record(fields)) => fields
+                (Ty::Var(arg_id), Ty::Record(fields, _)) => fields
                     .iter()
                     .find(|(name, _)| i.resolve(**name) == Some("value"))
                     .and_then(|(_, fty)| match fty {
@@ -1495,7 +1612,7 @@ mod tests {
         assert!(opt.is_some(), "v must infer");
         let Some((ty, i)) = opt else { return };
         let shape = match &ty {
-            Ty::Record(fields) => Some((
+            Ty::Record(fields, _) => Some((
                 fields.len(),
                 fields
                     .values()

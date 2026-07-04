@@ -256,22 +256,92 @@ fn unify_flat(
             }
             Ok(())
         }
-        (FlatType::Record(fs1), FlatType::Record(fs2)) => {
-            // Closed records unify only when their field-name SETS are identical,
-            // then field-by-field. A differing field set (a missing or extra
-            // field) is a mismatch — there is no row variable to absorb it. Both
-            // maps are keyed by `Symbol`, so equal key sequences mean equal sets.
-            if !fs1.keys().eq(fs2.keys()) {
+        // ── Open-record unification (#108 T2 / #56 row-poly) ─────────────────
+        //
+        // Faithful port of `unifyRecords` from
+        // `../sky/src/Sky/Type/Unify.hs:468-512`.
+        //
+        // Algorithm (four cases):
+        //   1. Unify every field present on BOTH sides pairwise.
+        //   2. A CLOSED side cannot absorb the other's extra fields → mismatch
+        //      (SKY-T0001).
+        //   3. If both sides carry identical field sets → unify the two extension
+        //      variables and merge.
+        //   4. Both sides are open with differing fields → mint a fresh flex
+        //      tail, merge as the union of both field maps under it (so future
+        //      unifications can still constrain the merged open tail).
+        //
+        // `is_empty_record`: follow `v` to its root; `true` iff the content is
+        // `FlatType::EmptyRecord` (the closed-tail sentinel).
+        (FlatType::Record(fs1, ext1), FlatType::Record(fs2, ext2)) => {
+            // Step 1 — unify shared fields pairwise.
+            // Both `.get()` calls are infallible: `name` came from `fs1.keys()`
+            // and the filter already proved `fs2.contains_key(name)`.
+            for name in fs1.keys().filter(|k| fs2.contains_key(*k)) {
+                // Unreachable else: both keys are confirmed present.
+                let Some((v1, v2)) =
+                    fs1.get(name).copied().zip(fs2.get(name).copied())
+                else {
+                    continue;
+                };
+                unify(uf, budget, interner, span, v1, v2)?;
+            }
+
+            // Partition into only-on-left and only-on-right.
+            let only1: Vec<(_, _)> = fs1
+                .iter()
+                .filter(|(k, _)| !fs2.contains_key(*k))
+                .map(|(k, v)| (*k, *v))
+                .collect();
+            let only2: Vec<(_, _)> = fs2
+                .iter()
+                .filter(|(k, _)| !fs1.contains_key(*k))
+                .map(|(k, v)| (*k, *v))
+                .collect();
+
+            // Is the extension variable a closed tail (`EmptyRecord`)?
+            let closed1 = is_empty_record(uf, ext1)?;
+            let closed2 = is_empty_record(uf, ext2)?;
+
+            // Step 2 — closed side cannot absorb the other's extras.
+            let extras1_illegal = closed2 && !only1.is_empty();
+            let extras2_illegal = closed1 && !only2.is_empty();
+            if extras1_illegal || extras2_illegal {
                 return Err(mismatch(uf, budget, interner, span, ra, rb));
             }
-            uf.union(ra, rb, Content::Structure(FlatType::Record(fs1.clone())))?;
-            for (name, v1) in &fs1 {
-                // Present in `fs2` because the key sets are equal.
-                if let Some(v2) = fs2.get(name) {
-                    unify(uf, budget, interner, span, *v1, *v2)?;
+
+            if only1.is_empty() && only2.is_empty() {
+                // Step 3 — identical field sets: merge first, then unify tails.
+                // `fs1` is moved into the union; no clone needed.
+                uf.union(ra, rb, Content::Structure(FlatType::Record(fs1, ext1)))?;
+                unify(uf, budget, interner, span, ext1, ext2)?;
+            } else {
+                // Step 4 — both open, differing extras: mint a fresh flex tail
+                // that absorbs any still-unspecified optional fields.
+                let new_ext = uf.fresh(Content::Flex)?;
+                // Build the merged field map (union of both sides).
+                // Move `fs1` into `merged`; no clone needed since this branch
+                // is mutually exclusive with step 3.
+                let mut merged = fs1;
+                for (k, v) in only2 {
+                    merged.insert(k, v);
                 }
+                uf.union(
+                    ra,
+                    rb,
+                    Content::Structure(FlatType::Record(merged, new_ext)),
+                )?;
             }
             Ok(())
+        }
+        // Two closed-tail sentinels: identical structures, merge and succeed.
+        // Mirrors the Haskell `(EmptyRecord1, EmptyRecord1) -> return ()` arm
+        // in `../sky/src/Sky/Type/Unify.hs`. Without this arm both roots would
+        // fall through to the wildcard mismatch, producing a spurious
+        // "TypeMismatch { expected: Unit, found: Unit }" (zonk renders
+        // EmptyRecord as Unit for display purposes).
+        (FlatType::EmptyRecord, FlatType::EmptyRecord) => {
+            uf.union(ra, rb, Content::Structure(FlatType::EmptyRecord))
         }
         _ => Err(mismatch(uf, budget, interner, span, ra, rb)),
     }
@@ -293,6 +363,21 @@ fn occurs_guard(
     } else {
         Ok(())
     }
+}
+
+/// Whether the extension variable `v` resolves to [`FlatType::EmptyRecord`]
+/// (the closed-tail sentinel).
+///
+/// Mirrors `isClosedRecordExt` from `../sky/src/Sky/Type/Unify.hs:505`.
+/// A record is closed iff this returns `true`; open iff it returns `false`
+/// (the extension is still a flex variable or has been merged into another open
+/// record).
+fn is_empty_record(uf: &mut UnionFind<Content>, v: VarId) -> DResult<bool> {
+    let root = uf.find(v)?;
+    Ok(matches!(
+        uf.content(root)?,
+        Content::Structure(FlatType::EmptyRecord)
+    ))
 }
 
 /// Whether `target`'s representative appears within the structure rooted at
@@ -317,12 +402,12 @@ fn occurs(
             return Ok(true);
         }
         match uf.content(here)? {
-            // Leaves: a flexible, rigid, or super-typed variable and `Unit` carry
-            // no children.
+            // Leaves: a flexible, rigid, or super-typed variable, `Unit`, and the
+            // `EmptyRecord` closed-tail sentinel carry no children.
             Content::Flex
             | Content::Rigid
             | Content::Super { .. }
-            | Content::Structure(FlatType::Unit) => {}
+            | Content::Structure(FlatType::Unit | FlatType::EmptyRecord) => {}
             Content::Structure(FlatType::Fun(a, r)) => {
                 stack.push(a);
                 stack.push(r);
@@ -337,10 +422,13 @@ fn occurs(
                     stack.push(elem);
                 }
             }
-            Content::Structure(FlatType::Record(fields)) => {
+            Content::Structure(FlatType::Record(fields, ext)) => {
                 for v in fields.values() {
                     stack.push(*v);
                 }
+                // Also walk the extension variable: a row tail that points back
+                // to the record itself would be a cyclic open record.
+                stack.push(ext);
             }
         }
     }

@@ -1,0 +1,52 @@
+module Main exposing (main)
+
+-- #108 round 4 (hole 1) regression — WELL-TYPED routed app with EMPTY routes.
+--
+-- `routes = []` emits a typed empty vec (`Vec::<Route<…>>::new()`).  The
+-- runtime `Route<Page>` struct has NO default type parameter, so the
+-- pre-round-4 `IrType::LiveRoute` rendering (a bare
+-- `sky_runtime::live::route::Route`) made this skyc-0 program cargo-fail with
+-- E0107 ("missing generics for struct `route::Route`") — an
+-- exit-0-then-cargo-fail seal violation.  Post-fix `IrType::LiveRoute(page)`
+-- threads the page type through the lowerer and renders `Route<MainPage>`.
+--
+-- skyc MUST exit 0 AND the emitted project MUST cargo-build.
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Page
+    = CounterPage
+    | AboutPage
+
+type Msg
+    = Increment
+
+type alias Model =
+    { page : Page
+    , count : Int
+    }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { page = CounterPage, count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout [] (Ui.text (String.fromInt model.count))
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = CounterPage
+        }

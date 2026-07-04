@@ -22,7 +22,7 @@ use sky_kernels::StdlibKernel;
 
 use crate::doc::{VarNamer, canon_type_to_doc, ty_to_doc};
 use crate::solve::{Budget, Constraint};
-use crate::ty::{Content, FlatType, Ty, TyBounds, from_canon};
+use crate::ty::{Content, FlatType, RowTail, Ty, TyBounds, from_canon};
 use crate::unionfind::{UnionFind, VarId};
 
 /// `where_` tag for any `CompilerBug` raised during constraint generation.
@@ -219,6 +219,10 @@ struct Builtins {
     /// `"size"` — the size field inside the Webview window config record.
     /// Typed as `(Int, Int)` — width × height in logical pixels.
     webview_f_size: Symbol,
+    // ── Cli cfg record field name symbols (#111) ──────────────────────────────
+    /// `"onLine"` — the onLine field of the `Cli.program` config record.
+    /// Typed as `String -> Msg` — called once per stdin line.
+    cli_f_on_line: Symbol,
 }
 
 impl Builtins {
@@ -302,6 +306,8 @@ impl Builtins {
             webview_f_window: interner.intern("window")?,
             webview_f_title: interner.intern("title")?,
             webview_f_size: interner.intern("size")?,
+            // #111: Cli cfg field names.
+            cli_f_on_line: interner.intern("onLine")?,
         })
     }
 
@@ -584,6 +590,11 @@ pub struct Builder<'a> {
     field_accesses: Vec<FieldAccess>,
     /// Deferred record-update obligations, resolved after the main solve.
     record_updates: Vec<RecordUpdate>,
+    /// Deferred routed-Live.app type checks, resolved after the main solve.
+    routed_live_checks: Vec<RoutedLiveCheck>,
+    /// Deferred per-route page-witness checks (one per `Live.route` reference),
+    /// resolved after the main solve, BEFORE the routed-Live.app checks.
+    route_witness_checks: Vec<RouteWitnessCheck>,
     /// The type scheme of every data constructor declared in this module, keyed
     /// by constructor name. A constructor is a (possibly generic) function
     /// `field0 -> … -> fieldN -> T vars`; each use site instantiates the scheme
@@ -676,6 +687,73 @@ pub struct RecordUpdate {
     pub span: Span,
 }
 
+/// A deferred post-solve check for routed `Live.app` configurations.
+///
+/// `Live.app`'s cfg row accepts both routed apps (Model has a `page : Page`
+/// field) and non-routed apps (Model has no `page` field) through the same
+/// open-record scheme.  The distinction cannot be expressed as a plain HM
+/// constraint at build time (a conditional `{ page : var(2) | ρ }` projection
+/// would break every non-routed app whose Model has no `page` field).
+///
+/// Instead, the constrain pass pushes one `RoutedLiveCheck` per `Live.app`
+/// call site and defers the gate to [`crate::resolve_routed_live_checks`],
+/// which runs after the main solve when the Model type has settled:
+///
+/// * If Model's settled type has a `page` field → this is a routed app →
+///   `notFound`'s type must match `Model.page`'s type (same `var(2)` share).
+///   A mismatch produces SKY-T0001 here instead of a cargo E0308 / E0631
+///   from the emitted `set_page` closure.
+/// * If Model has no `page` field → non-routed → no validation; passes.
+pub struct RoutedLiveCheck {
+    /// `var(0)` from the `K::LiveApp` scheme instantiation — the Model type.
+    pub model_var: VarId,
+    /// `var(2)` from the `K::LiveApp` scheme instantiation — the `notFound` type.
+    pub not_found_var: VarId,
+    /// The `Live.app { … }` call span; used to blame a type mismatch.
+    pub span: Span,
+}
+
+/// A deferred per-route page-witness check for `Live.route` (#108 round 4).
+///
+/// `Live.route : String -> builder -> LiveRoute page` types its second
+/// argument with a variable (`builder`, var(1)) DISTINCT from the result's
+/// page variable (`page`, var(0)), because the argument is legitimately either
+/// shape:
+///
+/// * a nullary page VALUE — `Live.route "/" HomePage` (builder : `Page`), or
+/// * a params-consuming page CONSTRUCTOR —
+///   `Live.route "/apps/:slug" AppDetailPage` (builder : `String -> Page`;
+///   multi-`:param` routes curry further: `String -> String -> Page`, …).
+///
+/// A single shared variable (the pre-round-4 scheme) forced
+/// `Page ≟ String -> Page` on every param route — a false SKY-T0001 on the
+/// canonical corpus shape.  A plain HM constraint cannot express the
+/// disjunction, so the constrain pass pushes one `RouteWitnessCheck` per
+/// `Live.route` reference and defers it to
+/// [`crate::resolve_route_witness_checks`], which runs after the main solve:
+///
+/// * Follow `builder_var`'s settled structure, peeling leading `_ -> rest`
+///   arrows (each arrow is one `:param` payload slot; the emit tier separately
+///   gates the payload types to `String`/`Int`/`Float`/`Bool`).
+/// * Unify what remains — the built PAGE type — with `page_var`.
+///
+/// A nullary route therefore witnesses `page` directly, a param constructor
+/// witnesses it with its result type, and a wrong-ADT constructor
+/// (`Live.route "/" Increment` in a `Page`-routed app) still fails unification
+/// with SKY-T0001 at this route's span.  Runs BEFORE
+/// [`crate::resolve_routed_live_checks`] so route constructors pin the page
+/// variable before the `notFound ≟ Model.page` gate reads it.
+pub struct RouteWitnessCheck {
+    /// `var(1)` from the `K::LiveRoute` scheme instantiation — the route's
+    /// page-builder argument type.
+    pub builder_var: VarId,
+    /// `var(0)` from the `K::LiveRoute` scheme instantiation — the page type
+    /// carried by the resulting `LiveRoute page`.
+    pub page_var: VarId,
+    /// The `Live.route` reference span; used to blame a type mismatch.
+    pub span: Span,
+}
+
 /// The output of constraint generation, consumed by the solver + read-back.
 pub struct Generated {
     pub regions: BTreeMap<Span, VarId>,
@@ -684,6 +762,11 @@ pub struct Generated {
     pub untyped: BTreeMap<(Vec<Symbol>, Symbol), VarId>,
     pub field_accesses: Vec<FieldAccess>,
     pub record_updates: Vec<RecordUpdate>,
+    /// Deferred routed-Live.app checks, resolved after the main solve.
+    pub routed_live_checks: Vec<RoutedLiveCheck>,
+    /// Deferred per-route page-witness checks, resolved after the main solve
+    /// (before `routed_live_checks`).
+    pub route_witness_checks: Vec<RouteWitnessCheck>,
     pub typed_rigids: Vec<(Symbol, BTreeMap<Symbol, VarId>)>,
     pub scheme_apps: Vec<SchemeApp>,
     pub super_vars: Vec<(VarId, TyBounds, Span)>,
@@ -712,6 +795,8 @@ impl<'a> Builder<'a> {
             untyped: BTreeMap::new(),   // (home, name) → VarId
             field_accesses: Vec::new(),
             record_updates: Vec::new(),
+            routed_live_checks: Vec::new(),
+            route_witness_checks: Vec::new(),
             ctors: BTreeMap::new(),
             typed_rigids: Vec::new(),
             scheme_apps: Vec::new(),
@@ -801,6 +886,8 @@ impl<'a> Builder<'a> {
             untyped: builder.untyped,
             field_accesses: builder.field_accesses,
             record_updates: builder.record_updates,
+            routed_live_checks: builder.routed_live_checks,
+            route_witness_checks: builder.route_witness_checks,
             typed_rigids: builder.typed_rigids,
             scheme_apps: builder.scheme_apps,
             super_vars: builder.super_vars,
@@ -819,6 +906,18 @@ impl<'a> Builder<'a> {
 
     fn structure(&mut self, f: FlatType) -> DResult<VarId> {
         self.uf.fresh(Content::Structure(f))
+    }
+
+    /// Mint a fresh [`FlatType::EmptyRecord`] variable — the closed-tail
+    /// sentinel for closed records. Every `FlatType::Record(fields, ext)`
+    /// whose `ext` points here is a closed record (field set exact).
+    ///
+    /// Each closed record gets its own `EmptyRecord` node rather than sharing
+    /// one, so the occurs-check can distinguish different records' tails;
+    /// this matches the Haskell reference's `UF.fresh EmptyRecord1` per
+    /// record literal.
+    fn empty_record_tail(&mut self) -> DResult<VarId> {
+        self.structure(FlatType::EmptyRecord)
     }
 
     fn int_var(&mut self) -> DResult<VarId> {
@@ -1088,13 +1187,29 @@ impl<'a> Builder<'a> {
                 }
                 self.structure(FlatType::Tuple(elem_vars))
             }
-            Ty::Record(fields) => {
+            Ty::Record(fields, tail) => {
                 let mut field_vars = BTreeMap::new();
                 for (name, field_ty) in fields {
                     let v = self.instantiate_in(field_ty, vars, rigid)?;
                     field_vars.insert(*name, v);
                 }
-                self.structure(FlatType::Record(field_vars))
+                // Open records: instantiate the row tail variable via the same
+                // `vars` map so the same source-level row var (`appExt`) maps
+                // to a single UF node across all uses in the same binding.
+                // Closed records: mint a fresh EmptyRecord sentinel.
+                let ext = match tail {
+                    RowTail::Closed => self.empty_record_tail()?,
+                    RowTail::Open(raw_id) => {
+                        if let Some(v) = vars.get(raw_id).copied() {
+                            v
+                        } else {
+                            let v = if rigid { self.rigid()? } else { self.flex()? };
+                            vars.insert(*raw_id, v);
+                            v
+                        }
+                    }
+                };
+                self.structure(FlatType::Record(field_vars, ext))
             }
             Ty::Var(id) => {
                 if let Some(v) = vars.get(id).copied() {
@@ -1362,12 +1477,12 @@ impl<'a> Builder<'a> {
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Ty::Tuple(elems))
             }
-            Ty::Record(fields) => {
+            Ty::Record(fields, tail) => {
                 let fields = fields
                     .into_iter()
                     .map(|(k, v)| self.normalize_annotation_ty(v, span).map(|v| (k, v)))
                     .collect::<DResult<_>>()?;
-                Ok(Ty::Record(fields))
+                Ok(Ty::Record(fields, tail))
             }
             // Leaf types: pass through unchanged.
             other @ (Ty::Var(_) | Ty::Unit) => Ok(other),
@@ -1549,6 +1664,65 @@ impl<'a> Builder<'a> {
                 if let Some(&elem_var) = vars.get(&0) {
                     let s = self.super_var(TyBounds::show(), span)?;
                     self.eq(span, elem_var, s);
+                }
+                return Ok(var);
+            }
+            // `Live.app` — post-solve routed-Live check (#108 Part B).
+            //
+            // The open-record cfg scheme for K::LiveApp is shared by both routed
+            // apps (Model has a `page : Page` field) and non-routed apps (Model
+            // has no `page` field).  We cannot express the conditional
+            // `Model.page ≡ notFound` constraint at build time because a blanket
+            // `var(0) ≡ { page : var(2) | ρ }` would break every non-routed
+            // app whose Model has no `page` field.
+            //
+            // Instead: instantiate the scheme with `instantiate_tracked`, record
+            // the Model var (var index 0) and notFound var (var index 2), then
+            // push a `RoutedLiveCheck` so `resolve_routed_live_checks` can run
+            // the gate after the HM solver settles.
+            if matches!(k, StdlibKernel::LiveApp) {
+                let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
+                    span,
+                    msg: LowerError::Unsupported(Feature::Kernels),
+                })?;
+                let (var, vars) = self.instantiate_tracked(&ty)?;
+                if let (Some(&model_var), Some(&not_found_var)) =
+                    (vars.get(&0), vars.get(&2))
+                {
+                    self.routed_live_checks.push(RoutedLiveCheck {
+                        model_var,
+                        not_found_var,
+                        span,
+                    });
+                }
+                return Ok(var);
+            }
+            // `Live.route` — per-route page witness (#108 round 4).
+            //
+            // The scheme types the page-builder argument with var(1) DISTINCT
+            // from the result's page var(0): the argument is EITHER a nullary
+            // page value (`Live.route "/" HomePage`) OR a params-consuming
+            // constructor (`Live.route "/apps/:slug" AppDetailPage` — type
+            // `String -> Page`).  That disjunction is not expressible as a
+            // plain HM constraint, so — like `RoutedLiveCheck` above — the
+            // relation is deferred: record both instantiated vars and push a
+            // `RouteWitnessCheck`; `resolve_route_witness_checks` peels the
+            // builder's settled leading arrows and unifies the resulting page
+            // type with var(0) after the main solve.
+            if matches!(k, StdlibKernel::LiveRoute) {
+                let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
+                    span,
+                    msg: LowerError::Unsupported(Feature::Kernels),
+                })?;
+                let (var, vars) = self.instantiate_tracked(&ty)?;
+                if let (Some(&page_var), Some(&builder_var)) =
+                    (vars.get(&0), vars.get(&1))
+                {
+                    self.route_witness_checks.push(RouteWitnessCheck {
+                        builder_var,
+                        page_var,
+                        span,
+                    });
                 }
                 return Ok(var);
             }
@@ -1734,6 +1908,9 @@ impl<'a> Builder<'a> {
     /// closed record `{ name : <field type>, ... }`, each field value
     /// constrained independently. Canonicalisation has already rejected a
     /// duplicate field name, so the resulting field map is exact.
+    ///
+    /// User-written record literals are always **closed** — they carry an
+    /// `EmptyRecord` tail so the unifier rejects extra fields on either side.
     fn constrain_record(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
@@ -1744,7 +1921,8 @@ impl<'a> Builder<'a> {
             let v = self.constrain_expr(local, value)?;
             field_vars.insert(*name, v);
         }
-        self.structure(FlatType::Record(field_vars))
+        let ext = self.empty_record_tail()?;
+        self.structure(FlatType::Record(field_vars, ext))
     }
 
     /// Constrain a record field access `record.field`. With closed records (no
@@ -2214,10 +2392,22 @@ impl<'a> Builder<'a> {
             name: self.builtins.live_req,
             args: Vec::new(),
         };
-        let live_route = || Ty::Con {
+        // `live_route(page)` — `LiveRoute page` is parametric on the page type.
+        // Its purpose is to carry the page type through HM unification so that
+        //   routes : List (LiveRoute var(2))            [K::LiveApp]
+        //   Live.route : String -> builder -> LiveRoute page  [K::LiveRoute]
+        //   notFound : var(2)
+        // all share ONE page type variable.  A `notFound = 5` in a routed app
+        // that also uses `Live.route "/" CounterPage` sets `var(2) = Page`
+        // (through the per-route witness — see [`RouteWitnessCheck`]) and then
+        // forces `5 : Page` → SKY-T0001.  Seal fix for #108 / the
+        // "exit-0-then-cargo-fail E0308" class.  Since round 4 the arg is no
+        // longer phantom at the IR level: the lowerer threads it into
+        // `IrType::LiveRoute(page)` so the backend renders `Route<Page>`.
+        let live_route = |page: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.live_route_con,
-            args: Vec::new(),
+            args: vec![page],
         };
         // `HttpResponse = { body : String, headers : Dict String String, status : Int }`
         let http_response = || {
@@ -2225,7 +2415,7 @@ impl<'a> Builder<'a> {
             resp_fields.insert(self.builtins.http_f_body, string());
             resp_fields.insert(self.builtins.http_f_headers, dict(string(), string()));
             resp_fields.insert(self.builtins.http_f_status, int());
-            Ty::Record(resp_fields)
+            Ty::Record(resp_fields, RowTail::Closed)
         };
         // `HttpRequest = { body, followRedirects, headers, maxRedirects, method, timeout, url }`
         let http_request = || {
@@ -2240,7 +2430,7 @@ impl<'a> Builder<'a> {
             req_fields.insert(self.builtins.http_f_method, string());
             req_fields.insert(self.builtins.http_f_timeout, int());
             req_fields.insert(self.builtins.http_f_url, string());
-            Ty::Record(req_fields)
+            Ty::Record(req_fields, RowTail::Closed)
         };
         Some(match k {
             // ── String ──
@@ -2863,7 +3053,7 @@ impl<'a> Builder<'a> {
                     m.insert(self.builtins.lw_wrapper_attrs, list(attr(var(0))));
                     m.insert(self.builtins.lw_root_attrs, list(attr(var(0))));
                     m
-                });
+                }, RowTail::Closed);
                 fun(cfg_rec, fun(elem_t(var(0)), html_t(var(0))))
             }
             K::UiEl => fun(list(attr(var(0))), fun(elem_t(var(0)), elem_t(var(0)))),
@@ -2907,88 +3097,173 @@ impl<'a> Builder<'a> {
                 sky_kernels::HtmlEventShape::Raw => fun(var(1), html_attr(var(0))),
             },
 
-            // ── Std.Live app-entry (already schemed in kernel_ty) ──
+            // ── Std.Live app-entry (#108 T3 — open 6-field scheme) ──
+            //
+            // Mirrors `../sky/src/Sky/Type/Constrain/Expression.hs:2674-2695`.
+            // The cfg record is OPEN (row variable `var(3)` = `appExt`) so the
+            // user can supply optional extra fields (`head`, `consoleAuth`,
+            // `guard`, `status`, `auth`, …) without the type checker rejecting
+            // them as unknown extras.  The six named fields (indices 0-5) are
+            // the REQUIRED fields; the row variable absorbs all additional ones.
+            //
+            // var index mapping:
+            //   var(0) = model      var(1) = msg
+            //   var(2) = page       var(3) = appExt (open row tail)
+            //
+            // `routes : List LiveRoute` and `notFound : page` are required fields
+            // even for non-routed apps (they default to `[]` / `CounterPage`).
+            // The emit stage branches on Model.page at code-gen time
+            // (emit_live.rs T5) — not at type time.
+            //
+            // Removes #[allow(dead_code)] from `live_f_routes` / `live_f_not_found`.
             K::LiveApp => {
                 let init_ret = tuple2(var(0), cmd(var(1)));
-                let cfg_rec = Ty::Record({
-                    let mut m = BTreeMap::new();
-                    m.insert(self.builtins.live_f_init, fun(live_req(), init_ret.clone()));
-                    m.insert(
-                        self.builtins.live_f_update,
-                        fun(var(1), fun(var(0), init_ret)),
-                    );
-                    m.insert(self.builtins.live_f_view, fun(var(0), html_t(var(1))));
-                    m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
-                    m
-                });
+                let cfg_rec = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.live_f_init, fun(live_req(), init_ret.clone()));
+                        m.insert(
+                            self.builtins.live_f_update,
+                            fun(var(1), fun(var(0), init_ret)),
+                        );
+                        m.insert(self.builtins.live_f_view, fun(var(0), html_t(var(1))));
+                        m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
+                        // routes : List (LiveRoute page)  — page = var(2).
+                        // Parametrising LiveRoute on the page type variable
+                        // connects each route ctor's page type to `notFound`'s
+                        // page type through the SAME var(2), so a type mismatch
+                        // between them is caught here (SKY-T0001) instead of
+                        // passing skyc and failing later in cargo (E0308).
+                        m.insert(self.builtins.live_f_routes, list(live_route(var(2))));
+                        // notFound : page
+                        m.insert(self.builtins.live_f_not_found, var(2));
+                        m
+                    },
+                    // Open row tail — var(3) absorbs optional extra fields.
+                    RowTail::Open(3),
+                );
                 fun(cfg_rec, task_unit())
             }
-            // #106: `Live.route : String -> page -> LiveRoute`. The second arg
-            // is a BARE polymorphic `page` (matches upstream ../sky
-            // `route : String -> page -> Route`), so it unifies with EITHER a
-            // nullary `Page` value (`route "/" HomePage`, the common param-less
-            // case) OR a params-consuming constructor `String -> Page`
-            // (`route "/apps/:slug" AppPage`). `page` is phantom in the result
-            // (`LiveRoute` has no type param), so a `List LiveRoute` stays
-            // homogeneous regardless of each route's arity. The backend
-            // `emit_live_call::LiveRoute` already dispatches nullary-ctor /
-            // partial-ctor / lambda shapes into the runtime's
-            // `Fn(Vec<String>) -> Page` closure.
-            K::LiveRoute => fun(string(), fun(var(0), live_route())),
+            // #106 / #108 round 4: `Live.route : String -> builder -> LiveRoute page`
+            // with builder = var(1) DISTINCT from page = var(0).
+            //
+            // The second argument is either a nullary page VALUE
+            // (`route "/" HomePage` — builder : Page) or a params-consuming
+            // page CONSTRUCTOR (`route "/apps/:slug" AppPage` — builder :
+            // String -> Page; multi-`:param` routes curry further).  Sharing
+            // ONE variable for both (the pre-round-4 `fun(var(0),
+            // live_route(var(0)))` shape) forced `Page ≟ String -> Page` on
+            // every param route — a false SKY-T0001 on the CANONICAL corpus
+            // shape (`route "/apps/:slug" AppDetailPage`).
+            //
+            // Instead the builder var is related to the page var by a deferred
+            // per-route witness ([`RouteWitnessCheck`], pushed in the
+            // `constrain_kernel` special-case below and discharged by
+            // `crate::resolve_route_witness_checks` after the main solve):
+            // peel the builder's settled leading arrows, then unify the result
+            // with `page`.  A nullary route witnesses `page` directly; a param
+            // ctor witnesses it with its RESULT type; a wrong-ADT ctor still
+            // fails unification → SKY-T0001.
+            //
+            // The result `LiveRoute page` places every route of a list in
+            // `List (LiveRoute var(2))` (K::LiveApp scheme), so all routes AND
+            // `notFound : var(2)` share one page variable.  The page arg is no
+            // longer phantom at the IR level: the lowerer threads it into
+            // `IrType::LiveRoute(page)` and the backend renders `Route<Page>`.
+            K::LiveRoute => fun(string(), fun(var(1), live_route(var(0)))),
             K::LiveRenderStatic => fun(fun(var(0), html_t(var(1))), fun(var(0), task_unit())),
 
             // ── Std.Tui app-entry (already schemed in kernel_ty) ──
             K::TuiApp => {
                 let tup = tuple2(var(0), cmd(var(1)));
-                let cfg_rec = Ty::Record({
-                    let mut m = BTreeMap::new();
-                    m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
-                    m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
-                    m.insert(self.builtins.live_f_view, fun(var(0), elem_t(var(1))));
-                    m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
-                    m.insert(
-                        self.builtins.tui_f_on_key,
-                        fun(string(), fun(string(), var(1))),
-                    );
-                    m
-                });
+                let cfg_rec = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
+                        m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
+                        m.insert(self.builtins.live_f_view, fun(var(0), elem_t(var(1))));
+                        m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
+                        m.insert(
+                            self.builtins.tui_f_on_key,
+                            fun(string(), fun(string(), var(1))),
+                        );
+                        m
+                    },
+                    RowTail::Closed,
+                );
                 fun(cfg_rec, task_unit())
             }
             K::TuiProgram => {
                 let tup = tuple2(var(0), cmd(var(1)));
-                let cfg_rec = Ty::Record({
-                    let mut m = BTreeMap::new();
-                    m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
-                    m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
-                    m.insert(self.builtins.live_f_view, fun(var(0), string()));
-                    m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
-                    m.insert(
-                        self.builtins.tui_f_on_key,
-                        fun(string(), fun(string(), var(1))),
-                    );
-                    m
-                });
+                let cfg_rec = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
+                        m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
+                        m.insert(self.builtins.live_f_view, fun(var(0), string()));
+                        m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
+                        m.insert(
+                            self.builtins.tui_f_on_key,
+                            fun(string(), fun(string(), var(1))),
+                        );
+                        m
+                    },
+                    RowTail::Closed,
+                );
+                fun(cfg_rec, task_unit())
+            }
+
+            // ── Std.Cli / Sky.Cli app-entry (#111) ─────────────────────
+            // `Cli.program : { init : () -> (model, Cmd msg)
+            //                , update : msg -> model -> (model, Cmd msg)
+            //                , view : model -> String
+            //                , subscriptions : model -> Sub msg
+            //                , onLine : String -> msg
+            //                } -> Task () ()`
+            K::CliProgram => {
+                let tup = tuple2(var(0), cmd(var(1)));
+                let cfg_rec = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
+                        m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
+                        m.insert(self.builtins.live_f_view, fun(var(0), string()));
+                        m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
+                        m.insert(self.builtins.cli_f_on_line, fun(string(), var(1)));
+                        m
+                    },
+                    // Closed cfg record — like `Tui.app` / `Webview.app`, the
+                    // Cli cfg takes exactly its named fields (the #108 open
+                    // row is a `Live.app`-only surface).
+                    RowTail::Closed,
+                );
                 fun(cfg_rec, task_unit())
             }
 
             // ── Std.Webview app-entry (already schemed in kernel_ty) ──
             K::WebviewApp => {
                 let tup = tuple2(var(0), cmd(var(1)));
-                let window_ty = Ty::Record({
-                    let mut m = BTreeMap::new();
-                    m.insert(self.builtins.webview_f_title, string());
-                    m.insert(self.builtins.webview_f_size, tuple2(int(), int()));
-                    m
-                });
-                let cfg_rec = Ty::Record({
-                    let mut m = BTreeMap::new();
-                    m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
-                    m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
-                    m.insert(self.builtins.live_f_view, fun(var(0), html_t(var(1))));
-                    m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
-                    m.insert(self.builtins.webview_f_window, window_ty);
-                    m
-                });
+                let window_ty = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.webview_f_title, string());
+                        m.insert(self.builtins.webview_f_size, tuple2(int(), int()));
+                        m
+                    },
+                    RowTail::Closed,
+                );
+                let cfg_rec = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
+                        m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
+                        m.insert(self.builtins.live_f_view, fun(var(0), html_t(var(1))));
+                        m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
+                        m.insert(self.builtins.webview_f_window, window_ty);
+                        m
+                    },
+                    RowTail::Closed,
+                );
                 fun(cfg_rec, task_unit())
             }
 
@@ -3422,7 +3697,24 @@ impl<'a> Builder<'a> {
             | K::LiveAppRouted
             | K::CmdPublish
             | K::CmdPublishNoEcho
-            | K::SubSubscribeTopic => return None,
+            | K::SubSubscribeTopic
+            // ── #111 — Reachable but not yet lowered (fail-closed at lower time) ─
+            | K::AuthHashPassword
+            | K::AuthHashPasswordCost
+            | K::AuthVerifyPassword
+            | K::AuthPasswordStrength
+            | K::AuthSignToken
+            | K::AuthVerifyToken
+            | K::AuthRegister
+            | K::AuthLogin
+            | K::AuthSetRole
+            | K::StreamStream
+            | K::StreamEmit
+            | K::StreamFinish
+            | K::StreamWithContentType
+            | K::HttpStreamOpen
+            | K::HttpStreamForEachChunk
+            | K::HttpStreamClose => return None,
         })
     }
 }
@@ -3521,15 +3813,33 @@ pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DRe
                             work.push(ZonkTask::Visit(e));
                         }
                     }
-                    Content::Structure(FlatType::Record(fields)) => {
+                    Content::Structure(FlatType::Record(fields, _ext)) => {
                         // Capture the field names (BTreeMap order) for the
                         // rebuild, and visit each field var in reverse so the
                         // results land in the same order the names are popped.
+                        // The extension var is intentionally not zonked here —
+                        // `Ty::Record` does not carry a RowTail in its resolved
+                        // form (the tail is a solver artefact consumed only by
+                        // unify.rs and the `BuildRecord` path).  Closed records
+                        // resolve to fields only; open records show as the same
+                        // (tail is transparent to diagnostics for now).
                         let names: Vec<Symbol> = fields.keys().copied().collect();
                         work.push(ZonkTask::BuildRecord { names });
                         for v in fields.values().copied().rev() {
                             work.push(ZonkTask::Visit(v));
                         }
+                    }
+                    Content::Structure(FlatType::EmptyRecord) => {
+                        // EmptyRecord is the closed-tail sentinel — it carries no
+                        // children and does not produce a `Ty` of its own.
+                        // It should only appear as the extension variable of a
+                        // `FlatType::Record`, never as the root type of a
+                        // standalone expression.  Push `Ty::Unit` as a safe
+                        // fallback so the work stack stays balanced (this arm is
+                        // reachable if zonk is called directly on an extension
+                        // var, which does not happen in normal code, but must not
+                        // panic).
+                        results.push(Ty::Unit);
                     }
                 }
             }
@@ -3568,7 +3878,11 @@ pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DRe
                 // `tys` is in the same order as `names` (field var visits were
                 // reversed, so the results stack restores `BTreeMap` order).
                 let fields: BTreeMap<Symbol, Ty> = names.into_iter().zip(tys).collect();
-                results.push(Ty::Record(fields));
+                // Zonked records are always presented as closed — the RowTail
+                // is a solver artefact; the resolved `Ty` simply carries the
+                // settled field map without advertising openness (consistent
+                // with the Haskell reference's read-back behaviour).
+                results.push(Ty::Record(fields, RowTail::Closed));
             }
         }
     }
@@ -3614,6 +3928,8 @@ impl<'a> Builder<'a> {
             untyped: BTreeMap::new(),
             field_accesses: Vec::new(),
             record_updates: Vec::new(),
+            routed_live_checks: Vec::new(),
+            route_witness_checks: Vec::new(),
             ctors: BTreeMap::new(),
             typed_rigids: Vec::new(),
             scheme_apps: Vec::new(),
@@ -4357,6 +4673,8 @@ mod registry_phase_c_tests {
             K::FontDisabledColor,
             K::FontHoverSize,
             K::HtmlAttrTabindex,
+            // Std.Cli / Sky.Cli app-entry (#111) — brand-new kernel, no legacy oracle.
+            K::CliProgram,
         ]
     };
 
@@ -4371,7 +4689,30 @@ mod registry_phase_c_tests {
     /// `stdlib_scheme_total_over_reachable` until then.
     const REACHABLE_BUT_UNLOWERED: &[StdlibKernel] = {
         use StdlibKernel as K;
-        &[K::LiveAppRouted]
+        &[
+            K::LiveAppRouted,
+            // ── #111: Std.Auth, Sky.Http.Server.Stream, Sky.Core.Http.Stream ───────
+            // These have a canon qualifier + a Rust runtime fn, but their lowering
+            // arms are not yet implemented.  A caller that reaches them fails closed
+            // with SKY-L0108 at lower time.  When lowering lands, move them to
+            // FIRST_SCHEMED and add the stdlib_scheme arms.
+            K::AuthHashPassword,
+            K::AuthHashPasswordCost,
+            K::AuthVerifyPassword,
+            K::AuthPasswordStrength,
+            K::AuthSignToken,
+            K::AuthVerifyToken,
+            K::AuthRegister,
+            K::AuthLogin,
+            K::AuthSetRole,
+            K::StreamStream,
+            K::StreamEmit,
+            K::StreamFinish,
+            K::StreamWithContentType,
+            K::HttpStreamOpen,
+            K::HttpStreamForEachChunk,
+            K::HttpStreamClose,
+        ]
     };
 
     /// KNOWN-UNBACKED kernels: present in `StdlibKernel::ALL` (so they carry a

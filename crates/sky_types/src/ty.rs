@@ -7,6 +7,24 @@
 //!   union-find nodes during inference (mirrors Haskell `Content` / `FlatType`,
 //!   narrowed to the M0 lattice: functions, type-constructor applications, and
 //!   unit; no records / tuples / aliases / super-types yet).
+//!
+//! # Open records (#108 `RoutedLiveApp` / #56 row-poly)
+//!
+//! Row-polymorphic records mirror `../sky`'s `TRecord (Map …) (Maybe var)` /
+//! `Record1 map var` / `EmptyRecord1`.
+//!
+//! * [`RowTail::Closed`] — field set is exact (the common case for all
+//!   user-written records).
+//! * [`RowTail::Open(u32)`] — the record can absorb extra fields via the row
+//!   variable whose representative id is carried here; the `u32` is consistent
+//!   with [`Ty::Var`]'s id space.
+//!
+//! At the solver level, [`FlatType::EmptyRecord`] is the closed-tail sentinel
+//! (mirrors `EmptyRecord1`); an open tail is a plain [`Content::Flex`] variable.
+//! The only open records currently are the `Live.app` / `Tui.app` /
+//! `Webview.app` kernel cfg records (T3, #108), which absorb optional fields
+//! (`head` / `consoleAuth` / `guard` / `status` / `onKey` …) without forcing
+//! every app to enumerate empty optionals.
 
 use std::collections::BTreeMap;
 
@@ -36,10 +54,32 @@ pub enum Ty {
     /// An anonymous product (tuple) type `(T1, T2, ...)`. Invariant: arity ≥ 2 —
     /// a 0-tuple is [`Ty::Unit`] and a 1-tuple is just its element.
     Tuple(Vec<Self>),
-    /// A closed record type `{ x : Int, y : Bool }`, keyed by field name. The
+    /// A record type `{ x : Int, y : Bool }`, keyed by field name. The
     /// [`BTreeMap`] fixes iteration order (by [`Symbol`]); consumers that need a
     /// source-like order re-sort by the resolved field name.
-    Record(BTreeMap<Symbol, Self>),
+    ///
+    /// The [`RowTail`] distinguishes closed records (most user records — field
+    /// set exact) from open records (kernel cfg records that absorb optional
+    /// extra fields via a row variable).
+    Record(BTreeMap<Symbol, Self>, RowTail),
+}
+
+/// The tail of a record type's row variable — whether the record is closed
+/// (field set exact) or open (extra fields flow into a named row variable).
+///
+/// Mirrors `Maybe String` on `TRecord (Map …) (Maybe String)` in
+/// `../sky/src/Sky/AST/Canonical.hs:159`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum RowTail {
+    /// Closed record — no extension variable; the field set is exact.
+    /// Corresponds to `Nothing` on the Haskell `TRecord` / `EmptyRecord1`
+    /// at the solver level.
+    Closed,
+    /// Open record — extra fields are absorbed by the row variable whose raw
+    /// representative id is carried here. The id space is the same as
+    /// [`Ty::Var`]'s, so `Open(n)` is the open tail linked to type variable
+    /// `n`. Corresponds to `Just var` / `Content::Flex` at the solver level.
+    Open(u32),
 }
 
 /// The super-type obligations a type variable carries: the operations a body
@@ -244,10 +284,20 @@ pub enum FlatType {
     Unit,
     /// Anonymous product (tuple) over variable elements. Invariant: arity ≥ 2.
     Tuple(Vec<VarId>),
-    /// Closed record `{ name : var, ... }`, keyed by field name; each value is
-    /// the union-find variable of that field's type, refined in place by
-    /// unification.
-    Record(BTreeMap<Symbol, VarId>),
+    /// Record `{ name : var, ... }`, keyed by field name; each value is the
+    /// union-find variable of that field's type, refined in place by
+    /// unification. The second `VarId` is the **extension variable**: when it
+    /// resolves to [`FlatType::EmptyRecord`] the record is closed (field set
+    /// exact); when it resolves to [`Content::Flex`] the record is open and can
+    /// absorb additional fields. This mirrors `Record1 (Map …) Variable` in
+    /// `../sky/src/Sky/Type/Type.hs:75`.
+    Record(BTreeMap<Symbol, VarId>, VarId),
+    /// The closed-tail sentinel — mirrors `EmptyRecord1` in `Type.hs:75`.
+    ///
+    /// An extension variable that resolves to `EmptyRecord` means the record it
+    /// belongs to is closed: no extra fields are allowed. A plain
+    /// [`Content::Flex`] extension variable means the record is open.
+    EmptyRecord,
 }
 
 /// Convert a canonical annotation type into a resolved [`Ty`].
@@ -273,11 +323,13 @@ pub fn from_canon(t: &canon::Type) -> Ty {
         // through via its raw id exactly as a top-level [`canon::Type::Var`] does,
         // so an annotated record field var becomes a rigid skolem when the
         // signature is instantiated to check the body.
+        // User-written annotations never carry a row tail, so always `RowTail::Closed`.
         canon::Type::Record(fields) => Ty::Record(
             fields
                 .iter()
                 .map(|(name, fty)| (*name, from_canon(fty)))
                 .collect(),
+            RowTail::Closed,
         ),
     }
 }

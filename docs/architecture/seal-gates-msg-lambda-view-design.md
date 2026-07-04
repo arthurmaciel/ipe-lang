@@ -4,6 +4,16 @@
 > written. Both gates are **seal-touching** (`skyc` exit-0 MUST imply `cargo`
 > exit-0) → **Opus adversarial review before commit** (see §6).
 >
+> **Update (2026-07-04, #108 round 4):** the §2.3 shared extractor
+> `fn_param_ty` LANDED in `emit_model_gate.rs` as part of the #108 seal fixes
+> (review C4 required it — a lambda-`view` ROUTED app silently emitted the
+> non-routed `live_app`). `model_ty_of_view` now routes through it, closing
+> **#95** (Model-gate side — regressions in `model_admissibility.rs`
+> `live_lambda_view_*`) and the #108 routed-detection side (regressions in
+> `golden_m7_live_lambda_view_routed.rs`). **#94 (Msg gate, SKY-L0121) remains
+> unimplemented** — §2's `msg_ty_of_update` / `check_admissible_msg` /
+> `InadmissibleAppMsg` are still to build on top of the landed extractor.
+>
 > **Reference:** #91 (COMPLETED) — the app-entry Model-admissibility gate. This
 > design ports #91's shape to the Msg type parameter (#94) and closes the
 > lambda-binding bypass that lets an inadmissible Model slip past the #91 gate

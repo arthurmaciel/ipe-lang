@@ -5,7 +5,14 @@
 > `../sky` (the original Haskell compiler **and its own already-shipped
 > Rust backend + `runtime-rust`**) is the reference spec throughout.
 >
-> Status: DESIGN. No code changed by this document.
+> Status: **IMPLEMENTED** — T1–T7 complete (open-record types, unify, Live.app
+> scheme, routed emit + set_page, type-directed payload conversion, SKY-I0001
+> closed). Sweep gate (T8 E2E) pending CI run with `SKY_E2E=1`.
+> **Round 4 (seal review):** three adversarial holes fixed — see §11
+> (parametric `IrType::LiveRoute(page)` rendering `Route<Page>`; lambda-view
+> routed detection via the shared `fn_param_ty`; per-route page witness
+> replacing the shared-var `Live.route` scheme that false-blocked `:param`
+> routes).
 
 ---
 
@@ -579,3 +586,97 @@ under the standard mechcheck, gated by the example sweep + Go oracle.
    don't-validate. Log in `docs/divergences-from-sky.md`.*
 3. **Open records = general row var** (Option A) also lands task #56's
    row-poly subset/superset — one mechanism, not a Live-only special case.
+
+---
+
+## 11. Round-4 seal fixes (2026-07-04)
+
+The round-3 adversarial review (`design-coherence-review.md` §1.7/§C4) found
+three holes in the landed T1–T7 implementation plus a clippy gate. All four
+fixed in round 4; the reviewer's repro fixtures are pinned as goldens.
+
+### 11.1 Hole 1 — bare `Route` rendering (exit-0-then-cargo-fail, E0107)
+
+`IrType::LiveRoute` was nullary and rendered as a bare
+`sky_runtime::live::route::Route` — but the runtime `Route<Page>`
+(`live/route.rs`) has **no default type parameter**. Reachable via (a) an
+empty `routes = []` literal's `Vec::<Route>::new()` turbofish and (b) ANY
+let-bound route table's top-level fn signature — the `m7_live_let_bound_routes`
+golden itself was skyc-0-then-E0107.
+
+**Fix:** `IrType::LiveRoute(Box<IrType>)` — the page type is threaded from the
+solver (`Ty::Con "LiveRoute" [page]`, already 1-arg since Part A) through both
+lowerer conversion paths (`ir_type_from_ty` / `ir_type_from_canon`) and
+rendered as `Route<Page>` in `emit_types.rs`. All structural walkers
+(`collect_record_shapes` / `type_reaches_enum` / `contains_generic` /
+`collect_generics` / `match_template` / `ir_contains_fun` / `leaf_of`) descend
+into the page argument. Goldens `m7_live_routed_empty_routes_ok` (new) and
+`m7_live_let_bound_routes` (extended) now skyc-0 **and cargo-build** under
+`SKY_E2E=1` with per-fixture isolated `CARGO_TARGET_DIR`s.
+
+### 11.2 Hole 2 — lambda-view routed app silently emitted non-routed
+
+`routed_page_field` → `model_ty_of_view` matched only `Expr::FuncValue`; a
+lambda `view` returned `None` → the emitter silently chose `live_app`,
+DISCARDING `routes`/`notFound` (no diagnostic — a silent wrong-accept), and
+the L0120 Model gate was skipped (the #95 bypass). The type tier's
+`RoutedLiveCheck` meanwhile classified the app as routed — tier disagreement
+(review §C4).
+
+**Fix:** the #95-designed `fn_param_ty` (matches `Expr::FuncValue` AND
+`Expr::Lambda`, whose params carry solved `IrType`s per `lower_lambda`) landed
+in `emit_model_gate.rs`; `model_ty_of_view` routes through it, so the Model
+gate and `routed_page_field` inherit Lambda-awareness together. Regressions:
+`golden_m7_live_lambda_view_routed.rs` (routed lambda-view → `live_app_routed`
+emitted, cargo-0) and `model_admissibility.rs::live_lambda_view_*` (gate fires
+/ no false-reject). The #94 Msg gate (SKY-L0121) remains its own follow-up.
+
+### 11.3 Hole 3 — param routes could not type-check (false block)
+
+The Part-A scheme `Live.route : String -> page -> LiveRoute page` shared ONE
+variable between the builder argument and the page, forcing
+`Page ≟ String -> Page` for `Live.route "/u/:id" UserPage` — SKY-T0001 on the
+CANONICAL corpus shape, leaving emit's `route_param_get` path dead.
+
+**Fix — per-route witnessing:** the scheme is now
+`String -> builder -> LiveRoute page` (distinct vars); each `Live.route`
+reference pushes a `RouteWitnessCheck { builder_var, page_var, span }`
+(constrain.rs, same pattern as `RoutedLiveCheck`) discharged post-solve by
+`resolve_route_witness_checks` (sky_types/lib.rs), which peels the builder's
+settled leading arrows and unifies the result with the page var. Nullary
+builders witness the page directly; param ctors witness with their result
+type; wrong-ADT ctors still SKY-T0001. Runs BEFORE
+`resolve_routed_live_checks` so route ctors pin the page var first.
+R1/R2/T4d/T4f/MIX rejections all preserved.
+
+Two supporting changes:
+
+* **Lower peephole** (`lower_route_builder`): a BARE payload ctor
+  (`UserPage`) as the builder of a `Live.route` call lowers to a zero-arg
+  `Expr::Ctor` carrier instead of tripping `Feature::CtorAsFunction` — in this
+  one position the ctor never becomes a first-class function (emit folds it
+  into the route builder closure). Mirrors the app-cfg intercept precedent.
+* **Emit hardening**: function-shaped builders (named fn / inline lambda) now
+  emit per-param `route_param_get` conversions (raw `List String -> Page`
+  builders pass the vec through); any OTHER builder shape fails CLOSED with
+  the interim `CompilerBug` (upgrades to SKY-L0123 with `route_param_get`'s
+  payload arm — ledger §B-route-param). Pre-round-4 that arm emitted an
+  untyped `(builder)(params)` that cargo-failed for every realistic shape.
+
+Golden: `m7_live_param_routes` — solo + mixed skyc-0 ∧ cargo-0, wrong-ADT
+T0001, and under `SKY_E2E=1` the running binary delivers `GET /u/42` →
+`user:42` (param captured through `match_routes` into the ctor).
+
+### 11.4 Gate 4 — clippy
+
+`K::LiveApp` backticked in the `RoutedLiveCheck` field docs
+(constrain.rs; `doc_markdown` under `-D warnings`).
+
+### 11.5 Also fixed in passing
+
+`Live.appRouted`'s emit arm still ICE'd (`CompilerBug` "should have been
+rejected with SKY-L0118") even though T4 aliased the kernel through
+`lower_app_entry_cfg`; it now takes the same `emit_live_app_inner` branch as
+`Live.app`. (The alias is still unreachable for corpus code — the constrain
+registry excludes it — so this is consistency hardening, not a behaviour
+change.)
