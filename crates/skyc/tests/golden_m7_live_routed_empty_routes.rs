@@ -1,0 +1,405 @@
+//! #108 Part B regression — routed `Live.app` with `routes = []` and a wrong
+//! `notFound` type must be rejected by skyc with SKY-T0001.
+//!
+//! ## Background
+//!
+//! Part A of #108 made `LiveRoute` phantom-parametric (`LiveRoute page`) so
+//! route CONSTRUCTORS force `var(2)` (the page type) to match.  But with an
+//! EMPTY `routes = []` list there is no constructor to witness `var(2)`, so
+//! `var(2)` was pinned only by `notFound` — any type satisfied it.  The result
+//! was that `notFound = 5` (Int) typed as skyc-Ok, then the emitted `set_page`
+//! closure (`__page: Page, __model: Model`) was rejected by cargo with E0308.
+//!
+//! Part B closes the hole by adding a post-solve `RoutedLiveCheck`:
+//! * If the settled Model type has a `page` field → routed app → unify
+//!   `notFound`'s type with `Model.page`'s type → SKY-T0001 on mismatch.
+//! * If Model has no `page` field → non-routed app → no check.
+//!
+//! ## Tests in this file
+//!
+//! * R1 (`int_notfound`): routed Model, `routes = []`, `notFound = 5` → SKY-T0001.
+//! * R2 (`wrong_ctor_notfound`): routed Model, `routes = []`,
+//!   `notFound = Increment` (Msg ctor, wrong ADT) → SKY-T0001.
+//! * Positive control: well-typed routed app (let-bound routes, correct notFound)
+//!   → skyc Ok (reuses the `m7_live_let_bound_routes` fixture).
+//!
+//! All tests are pure skyc-pipeline checks (parse → canon → types → lower →
+//! emit). No cargo build or runtime binary required — they run without
+//! `SKY_E2E=1` and skip if the embedded runtime cannot be resolved.
+
+use std::path::{Path, PathBuf};
+
+use skyc::CliError;
+
+// ── Inline source strings for T4d/T4f/MIX and non-routed regression ──────────
+
+/// T4d: non-empty routes, but `notFound` is the wrong ADT type (Msg not Page).
+/// Part A's `LiveRoute page` parametric fix pins `var(2)` via route ctors to
+/// `Page`; `notFound = Increment` (Msg) then fails unification → SKY-T0001.
+const T4D_NONEMPTY_ROUTES_WRONG_NOTFOUND: &str = r#"module Main exposing (main)
+import Std.Live as Live
+import Std.Ui as Ui
+type Page = CounterPage | AboutPage
+type Msg = Increment
+type alias Model = { page : Page, count : Int }
+init _req = ( { page = CounterPage, count = 0 }, Cmd.none )
+update msg model =
+    case msg of
+        Increment -> ( { model | count = model.count + 1 }, Cmd.none )
+view model = Ui.layout [] (Ui.text (String.fromInt model.count))
+subscriptions _model = Sub.none
+main =
+    Live.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [ Live.route "/" CounterPage, Live.route "/about" AboutPage ]
+        , notFound = Increment
+        }
+"#;
+
+/// T4f: non-empty routes, route ctor from wrong ADT (Increment from Msg, not Page).
+/// The route ctor forces `var(2) = Msg`; `notFound = CounterPage` (Page) then
+/// fails unification → SKY-T0001.
+const T4F_WRONG_ROUTE_CTOR_CORRECT_NOTFOUND: &str = r#"module Main exposing (main)
+import Std.Live as Live
+import Std.Ui as Ui
+type Page = CounterPage | AboutPage
+type Msg = Increment
+type alias Model = { page : Page, count : Int }
+init _req = ( { page = CounterPage, count = 0 }, Cmd.none )
+update msg model =
+    case msg of
+        Increment -> ( { model | count = model.count + 1 }, Cmd.none )
+view model = Ui.layout [] (Ui.text (String.fromInt model.count))
+subscriptions _model = Sub.none
+main =
+    Live.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [ Live.route "/" Increment ]
+        , notFound = CounterPage
+        }
+"#;
+
+/// MIX: non-empty routes with mixed types — one correct route ctor, one wrong
+/// route ctor. All route ctors share `var(2)`; the wrong ctor forces a mismatch.
+const MIX_MIXED_ROUTE_CTORS: &str = r#"module Main exposing (main)
+import Std.Live as Live
+import Std.Ui as Ui
+type Page = CounterPage | AboutPage
+type Msg = Increment
+type alias Model = { page : Page, count : Int }
+init _req = ( { page = CounterPage, count = 0 }, Cmd.none )
+update msg model =
+    case msg of
+        Increment -> ( { model | count = model.count + 1 }, Cmd.none )
+view model = Ui.layout [] (Ui.text (String.fromInt model.count))
+subscriptions _model = Sub.none
+main =
+    Live.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [ Live.route "/" CounterPage, Live.route "/inc" Increment ]
+        , notFound = CounterPage
+        }
+"#;
+
+/// Non-routed regression: a plain Live.app with Model = `{ count : Int }` (no
+/// `page` field) and `notFound = Increment` (Msg).  Part B's hook MUST NOT fire
+/// here — the Model has no `page` field, so we skip the check.
+///
+/// Type annotations are required to pass the lowerer (mirrors `LIVE_GOOD` in
+/// `model_admissibility.rs`).
+const NON_ROUTED_LIVE: &str = r"module Main exposing (main)
+import Std.Live as Live
+import Std.Ui as Ui
+type Msg = Increment
+type alias Model = { count : Int }
+init : a -> ( Model, Cmd Msg )
+init _req = ( { count = 0 }, Cmd.none )
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment -> ( { model | count = model.count + 1 }, Cmd.none )
+view : Model -> Html Msg
+view model = Ui.layout [] (Ui.text (String.fromInt model.count))
+subscriptions : Model -> Sub Msg
+subscriptions _model = Sub.none
+main =
+    Live.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Increment
+        }
+";
+
+/// Compile `source` through the skyc pipeline (no cargo). Returns `None` to
+/// skip when the embedded runtime cannot be resolved.
+fn compile_src(
+    test_name: &str,
+    source: &str,
+) -> Option<Result<(), skyc::CliError>> {
+    let sky_dir = std::env::temp_dir().join(format!("live_routed_empty_{test_name}_sky"));
+    let _ = std::fs::remove_dir_all(&sky_dir);
+    std::fs::create_dir_all(&sky_dir).ok()?;
+    let entry = sky_dir.join("Main.sky");
+    std::fs::write(&entry, source).ok()?;
+    let out = std::env::temp_dir().join(format!("live_routed_empty_{test_name}_out"));
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return None;
+    };
+    Some(skyc::build(&entry, &out, &runtime))
+}
+
+fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+/// Run the skyc pipeline on the named fixture and return the build result.
+/// Returns `None` (skip) when the embedded runtime cannot be resolved.
+fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
+    let root = repo_root();
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join(fixture)
+        .join("Main.sky");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return None;
+    };
+    Some(skyc::build(&entry, &out, &runtime))
+}
+
+/// R1: Routed Model (`page : Page`), `routes = []`, `notFound = 5` (Int).
+///
+/// Before Part B: skyc exited 0 (empty-routes hole), cargo rejected with E0308.
+/// After Part B: skyc rejects with SKY-T0001 at type-check time.
+#[test]
+fn routed_empty_routes_int_notfound_is_sky_t0001() {
+    let Some(result) = run_skyc(
+        "m7_live_routed_empty_routes_int_notfound",
+        "m7_live_routed_empty_routes_int_notfound_emit",
+    ) else {
+        return;
+    };
+
+    let got = match &result {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        got,
+        Some(sky_diagnostics::SKY_T0001),
+        "#108 R1: routed Live.app with empty routes and Int notFound \
+         must be rejected with SKY-T0001, got: {result:?}",
+    );
+}
+
+/// R2: Routed Model (`page : Page`), `routes = []`,
+/// `notFound = Increment` (Msg constructor — wrong ADT).
+///
+/// Before Part B: skyc exited 0, cargo rejected with E0631 / E0308.
+/// After Part B: skyc rejects with SKY-T0001 at type-check time.
+#[test]
+fn routed_empty_routes_wrong_ctor_notfound_is_sky_t0001() {
+    let Some(result) = run_skyc(
+        "m7_live_routed_empty_routes_wrong_ctor_notfound",
+        "m7_live_routed_empty_routes_wrong_ctor_notfound_emit",
+    ) else {
+        return;
+    };
+
+    let got = match &result {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        got,
+        Some(sky_diagnostics::SKY_T0001),
+        "#108 R2: routed Live.app with empty routes and wrong-ADT notFound \
+         must be rejected with SKY-T0001, got: {result:?}",
+    );
+}
+
+/// Positive control: well-typed routed app (let-bound routeTable, correct
+/// `notFound = CounterPage` which matches `page : Page`) must compile.
+///
+/// Reuses the `m7_live_let_bound_routes` fixture (the SKY-I0001 regression).
+/// Confirms the Part B hook does NOT trigger on a correctly-typed routed app.
+#[test]
+fn routed_correct_app_compiles() {
+    let Some(result) = run_skyc(
+        "m7_live_let_bound_routes",
+        "m7_live_let_bound_routes_partb_control",
+    ) else {
+        return;
+    };
+    assert!(
+        result.is_ok(),
+        "#108 positive control: well-typed routed Live.app must compile, got: {:?}",
+        result.err(),
+    );
+}
+
+// ── Previously-fixed (Part A) regressions — must still produce SKY-T0001 ──────
+
+/// T4d: non-empty routes (Part A fix), `notFound` from wrong ADT.
+///
+/// Part A pins `var(2)` to `Page` via route constructors.  The wrong `notFound =
+/// Increment` (Msg) then fails unification → SKY-T0001.
+/// Part B must NOT interfere: the hook still fires (Model has `page` field) and
+/// should produce the same SKY-T0001 (or the Part A constraint fires first —
+/// either way SKY-T0001 is the result).
+#[test]
+fn t4d_nonempty_routes_wrong_notfound_is_sky_t0001() {
+    let Some(result) = compile_src("t4d", T4D_NONEMPTY_ROUTES_WRONG_NOTFOUND) else {
+        return;
+    };
+    let got = match &result {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        got,
+        Some(sky_diagnostics::SKY_T0001),
+        "T4d: non-empty routes + wrong-ADT notFound must be SKY-T0001, got: {result:?}",
+    );
+}
+
+/// T4f: non-empty routes, route ctor from wrong ADT, correct notFound.
+///
+/// A route ctor `Live.route "/" Increment` forces `var(2) = Msg`.  The correct
+/// `notFound = CounterPage` (Page) then fails unification → SKY-T0001.
+#[test]
+fn t4f_wrong_route_ctor_is_sky_t0001() {
+    let Some(result) = compile_src("t4f", T4F_WRONG_ROUTE_CTOR_CORRECT_NOTFOUND) else {
+        return;
+    };
+    let got = match &result {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        got,
+        Some(sky_diagnostics::SKY_T0001),
+        "T4f: wrong-ADT route ctor must be SKY-T0001, got: {result:?}",
+    );
+}
+
+/// MIX: non-empty routes with one correct + one wrong-ADT route ctor.
+///
+/// All route ctors share `var(2)`.  The wrong ctor forces a collision →
+/// SKY-T0001 from the Part A constraint.
+#[test]
+fn mix_mixed_route_ctors_is_sky_t0001() {
+    let Some(result) = compile_src("mix", MIX_MIXED_ROUTE_CTORS) else {
+        return;
+    };
+    let got = match &result {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        got,
+        Some(sky_diagnostics::SKY_T0001),
+        "MIX: mixed-type route ctors must be SKY-T0001, got: {result:?}",
+    );
+}
+
+/// Non-routed regression: plain `Live.app` with Model = `{ count : Int }` (no
+/// `page` field) and `notFound = Increment` (Msg) must compile cleanly.
+///
+/// Part B's post-solve hook MUST NOT fire here: the Model has no `page` field,
+/// so the check is skipped and skyc exits Ok.
+#[test]
+fn non_routed_live_app_compiles() {
+    let Some(result) = compile_src("non_routed", NON_ROUTED_LIVE) else {
+        return;
+    };
+    assert!(
+        result.is_ok(),
+        "NON-ROUTED regression: plain Live.app (no `page` field) must compile, got: {:?}",
+        result.err(),
+    );
+}
+
+// ── #108 round 4 (hole 1) — WELL-TYPED empty-routes golden must CARGO-build ──
+//
+// R1/R2 above pin the REJECTIONS; this pins the acceptance side of the same
+// empty-routes surface. `routes = []` emits a typed `Vec::<Route<…>>::new()`
+// turbofish, and the runtime `Route<Page>` struct has NO default type
+// parameter — so the pre-round-4 bare `Route` rendering made a WELL-TYPED
+// routed app (`notFound = CounterPage`, matching `page : Page`) skyc-0 and
+// then cargo-fail with E0107 ("missing generics for struct `route::Route`").
+// Post-fix `IrType::LiveRoute(page)` renders `Route<MainPage>`.
+
+/// The emitted-project dir for the well-typed empty-routes golden.
+fn empty_routes_ok_out() -> PathBuf {
+    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_routed_empty_routes_ok_emit")
+}
+
+/// Well-typed routed app with `routes = []` → skyc MUST exit 0, and the
+/// emitted `main.rs` MUST render the page-parametrised `Route<MainPage>`
+/// (never a bare `Route`, which is the E0107 shape). Compile-only — always
+/// runs (no `SKY_E2E` gate).
+#[test]
+fn routed_empty_routes_well_typed_compiles_and_renders_route_page() {
+    let root = repo_root();
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join("m7_live_routed_empty_routes_ok")
+        .join("Main.sky");
+    let out = empty_routes_ok_out();
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+    let result = skyc::build(&entry, &out, &runtime);
+    assert!(
+        result.is_ok(),
+        "#108 hole 1: well-typed empty-routes routed app must be skyc-0, got: {:?}",
+        result.err(),
+    );
+
+    let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
+        .expect("emitted main.rs must exist");
+    assert!(
+        main_rs.contains("route::Route<MainPage>"),
+        "#108 hole 1: emitted code must render the page-parametrised \
+         `Route<MainPage>` (bare `Route` is the E0107 cargo failure)",
+    );
+    assert!(
+        main_rs.contains("live_app_routed"),
+        "#108: a Model with a `page` field must emit `live_app_routed`",
+    );
+}
+
+/// `SKY_E2E` tier: the emitted project must CARGO-build. Uses an ISOLATED
+/// `CARGO_TARGET_DIR` (`/tmp/r4/<case>` shape — NEVER the shared target: a
+/// shared dir's fingerprint reuse can mask an E0308/E0107 as a false pass).
+#[test]
+fn routed_empty_routes_well_typed_cargo_builds() {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    // Ensure the emitted project exists (the compile-only test above may not
+    // have run in this process ordering).
+    routed_empty_routes_well_typed_compiles_and_renders_route_page();
+
+    let out = empty_routes_ok_out();
+    let target = std::env::temp_dir().join("r4").join("m7_empty_routes_ok");
+    let build = std::process::Command::new("cargo")
+        .arg("build")
+        .env("CARGO_TARGET_DIR", &target)
+        .current_dir(&out)
+        .output()
+        .expect("cargo must spawn");
+    assert!(
+        build.status.success(),
+        "#108 hole 1: emitted empty-routes project must cargo-build \
+         (pre-fix: E0107 missing generics for `route::Route`)\n--- cargo stderr ---\n{}",
+        String::from_utf8_lossy(&build.stderr),
+    );
+}

@@ -607,9 +607,15 @@ pub enum IrType {
     /// `LiveReq` — opaque request type threaded through `Live.app`'s `init`
     /// callback.  Rendered as `sky_runtime::live::LiveReq`.
     LiveReq,
-    /// `LiveRoute` — opaque route descriptor returned by `Live.route`.
-    /// Rendered as `sky_runtime::live::route::Route`.
-    LiveRoute,
+    /// `LiveRoute page` — route descriptor returned by `Live.route`, carrying
+    /// the page type it builds. Rendered as
+    /// `sky_runtime::live::route::Route<Page>`. The runtime `Route<Page>`
+    /// struct has NO default type parameter, so the page argument is
+    /// load-bearing: rendering a bare `Route` (the pre-#108-round-4 shape) is
+    /// an E0107 `cargo` failure whenever the type reaches a rendered position
+    /// (an empty `routes = []` literal's `Vec::<…>::new()` turbofish, or a
+    /// let-bound route table's fn signature).
+    LiveRoute(Box<Self>),
 }
 
 /// Tag enum for the five message-parametric `Std.Ui` / `Std.Html` types.
@@ -731,7 +737,9 @@ pub fn ir_type_is_derivable(
         | IrType::ServerRoute
         | IrType::ServerCookie
         | IrType::LiveReq
-        | IrType::LiveRoute => false,
+        // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
+        // regardless of its page argument.
+        | IrType::LiveRoute(_) => false,
         // Transparent carriers: derivable iff every carried element is.
         IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => {
             ir_type_is_derivable(e, enum_derivable)
@@ -824,7 +832,9 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::ServerRoute
         | IrType::ServerCookie
         | IrType::LiveReq
-        | IrType::LiveRoute => false,
+        // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
+        // regardless of its page argument.
+        | IrType::LiveRoute(_) => false,
         // Transparent carriers: serde-OK iff every carried element is.
         IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => ir_type_is_serde(e, enum_serde),
         IrType::Result(a, b) | IrType::Dict(a, b) => {

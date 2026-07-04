@@ -1,0 +1,51 @@
+module Main exposing (main)
+
+-- #108 Part B regression fixture — R1.
+--
+-- The app is ROUTED (Model has a `page : Page` field) but `routes = []`
+-- (empty list, so no route constructor witnesses `var(2)`) and `notFound = 5`
+-- (Int, which is NOT the Page type).
+--
+-- Expected: skyc rejects with SKY-T0001 (type mismatch: Int vs Page).
+-- Before Part B: skyc exited 0 (the empty-routes hole let var(2) = Int slip
+-- through), then cargo rejected the emitted `set_page` closure with E0308.
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Page
+    = CounterPage
+    | AboutPage
+
+type Msg
+    = Increment
+
+type alias Model =
+    { page : Page
+    , count : Int
+    }
+
+init _req =
+    ( { page = CounterPage, count = 0 }, Cmd.none )
+
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+view model =
+    Ui.layout []
+        (Ui.text (String.fromInt model.count))
+
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = 5
+        }

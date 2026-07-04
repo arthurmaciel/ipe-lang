@@ -117,9 +117,12 @@ pub fn ty_to_doc(ty: &Ty, interner: &Interner, namer: &mut VarNamer) -> DResult<
             }
             Ok(TyDoc::Tuple(doc_elems.into_boxed_slice()))
         }
-        Ty::Record(fields) => {
+        Ty::Record(fields, _tail) => {
             // Render in field-name order. The map is keyed by `Symbol`, so resolve
             // each name and sort the resulting pairs for a deterministic form.
+            // `_tail` is intentionally not rendered here — open records read back
+            // as closed in the resolved `Ty` form (the tail is a solver artefact
+            // consumed by unify.rs, not by diagnostics).
             let mut entries: Vec<(Box<str>, TyDoc)> = Vec::with_capacity(fields.len());
             for (name, field_ty) in fields {
                 entries.push((

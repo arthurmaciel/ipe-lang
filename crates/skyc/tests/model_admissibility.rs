@@ -88,7 +88,10 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app { init = init, update = update, view = view, subscriptions = subscriptions }
+    Live.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Increment
+        }
 ";
 
 const LIVE_CMD_MODEL: &str = r"module Main exposing (main)
@@ -119,7 +122,10 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app { init = init, update = update, view = view, subscriptions = subscriptions }
+    Live.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Tick
+        }
 ";
 
 const LIVE_HTML_MODEL: &str = r#"module Main exposing (main)
@@ -150,7 +156,10 @@ subscriptions _model =
     Sub.none
 
 main =
-    Live.app { init = init, update = update, view = view, subscriptions = subscriptions }
+    Live.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Tick
+        }
 "#;
 
 const TUI_GOOD: &str = r"module Main exposing (main)
@@ -258,4 +267,92 @@ fn tui_plain_data_model_is_accepted() -> Result<(), BoxError> {
 #[test]
 fn tui_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
     assert_rejected_with("tui_cmd", TUI_CMD_MODEL, "SKY-L0120")
+}
+
+// ── #95 lambda-`view` gate-bypass regressions ────────────────────────────────
+//
+// `model_ty_of_view` used to match ONLY `Expr::FuncValue`, so a cfg whose
+// `view` was an inline LAMBDA returned `None` and the caller skipped the gate
+// (fail-open): an inadmissible Model behind a lambda `view` sailed past #91
+// and `cargo`-failed on the missing serde bound. The #95 fix routes the
+// recovery through the Lambda-aware `fn_param_ty`, closing the bypass. These
+// fixtures pin both directions: the gate now FIRES for a lambda `view` with a
+// bad Model, and does NOT false-reject a lambda `view` with a plain Model.
+
+/// #95 core regression: Model has a `Cmd` field AND `view` is an inline
+/// lambda. Pre-fix: skyc-0 then cargo-fail (gate skipped). Post-fix: SKY-L0120.
+const LIVE_LAMBDA_VIEW_CMD_MODEL: &str = r"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg = Tick
+
+type alias Model = { count : Int, pending : Cmd Msg }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0, pending = Cmd.none }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Tick ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init, update = update
+        , view = \model -> Ui.layout [] (Ui.text (String.fromInt model.count))
+        , subscriptions = subscriptions
+        , routes = [], notFound = Tick
+        }
+";
+
+/// #95 non-regression control: plain-data Model + lambda `view` must still be
+/// ACCEPTED — proves the Lambda arm recovers the Model without false-rejecting.
+const LIVE_LAMBDA_VIEW_GOOD: &str = r"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg = Increment
+
+type alias Model = { count : Int }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init, update = update
+        , view = \model -> Ui.layout [] (Ui.text (String.fromInt model.count))
+        , subscriptions = subscriptions
+        , routes = [], notFound = Increment
+        }
+";
+
+#[test]
+fn live_lambda_view_with_cmd_model_is_rejected() -> Result<(), BoxError> {
+    assert_rejected_with("live_lambda_cmd", LIVE_LAMBDA_VIEW_CMD_MODEL, "SKY-L0120")
+}
+
+#[test]
+fn live_lambda_view_with_plain_model_is_accepted() -> Result<(), BoxError> {
+    assert_accepted("live_lambda_good", LIVE_LAMBDA_VIEW_GOOD)
 }

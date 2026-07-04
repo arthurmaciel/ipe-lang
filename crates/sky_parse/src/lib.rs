@@ -1847,8 +1847,8 @@ mod tests {
         let toks = lex(src).expect("triple string with lone quote must lex");
         assert_eq!(toks.len(), 1, "must produce exactly one token");
         assert_eq!(
-            toks[0].kind,
-            Tok::Str(r#"<div class="card"></div>"#.to_owned()),
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::Str(r#"<div class="card"></div>"#.to_owned())),
             "content including embedded quote is preserved verbatim"
         );
     }
@@ -1863,8 +1863,8 @@ mod tests {
         let toks = lex(src).expect("triple string with double quote must lex");
         assert_eq!(toks.len(), 1);
         assert_eq!(
-            toks[0].kind,
-            Tok::Str("before\"\"after".to_owned()),
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::Str("before\"\"after".to_owned())),
         );
     }
 
@@ -1878,8 +1878,8 @@ mod tests {
         let toks = lex(src).expect("triple string with interpolation must lex");
         assert_eq!(toks.len(), 1);
         assert_eq!(
-            toks[0].kind,
-            Tok::Str("hello {{name}}!".to_owned()),
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::Str("hello {{name}}!".to_owned())),
         );
     }
 
@@ -1892,8 +1892,8 @@ mod tests {
         let toks = lex(src).expect("triple string with escaped brace must lex");
         assert_eq!(toks.len(), 1);
         assert_eq!(
-            toks[0].kind,
-            Tok::Str(r#"price: \{{amount}}"#.to_owned()),
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::Str(r"price: \{{amount}}".to_owned())),
         );
     }
 
@@ -1907,8 +1907,8 @@ mod tests {
         let toks = lex(src).expect("triple string with double backslash must lex");
         assert_eq!(toks.len(), 1);
         assert_eq!(
-            toks[0].kind,
-            Tok::Str("a\\\\b".to_owned()),
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::Str("a\\\\b".to_owned())),
         );
     }
 
@@ -1920,8 +1920,8 @@ mod tests {
         let toks = lex(src).expect("multiline triple string must lex");
         assert_eq!(toks.len(), 1);
         assert_eq!(
-            toks[0].kind,
-            Tok::Str("line one\nline two\nline three".to_owned()),
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::Str("line one\nline two\nline three".to_owned())),
         );
     }
 
@@ -1961,7 +1961,10 @@ mod tests {
         use lexer::{Tok, lex};
         let toks = lex("\"\"\"\"\"\"").expect("empty triple string must lex");
         assert_eq!(toks.len(), 1);
-        assert_eq!(toks[0].kind, Tok::Str(String::new()));
+        assert_eq!(
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::Str(String::new()))
+        );
     }
 
     /// Regression non-regression: regular single-line strings still lex
@@ -1971,9 +1974,15 @@ mod tests {
         use lexer::{Tok, lex};
         let toks = lex("\"hello world\"").expect("single string must lex");
         assert_eq!(toks.len(), 1);
-        assert_eq!(toks[0].kind, Tok::Str("hello world".to_owned()));
+        assert_eq!(
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::Str("hello world".to_owned()))
+        );
         // Escape still resolved in single-line strings.
         let toks2 = lex("\"a\\tb\"").expect("escaped single string must lex");
-        assert_eq!(toks2[0].kind, Tok::Str("a\tb".to_owned()));
+        assert_eq!(
+            toks2.first().map(|t| t.kind.clone()),
+            Some(Tok::Str("a\tb".to_owned()))
+        );
     }
 }

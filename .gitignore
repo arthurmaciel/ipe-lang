@@ -6,3 +6,6 @@ sky-out/
 
 # Pinned Go-reference oracle binaries (v0.17.3) — large, fetched not committed
 tools/oracle/bin/
+
+# agent worktrees — never commit
+.claude/worktrees/
