@@ -616,6 +616,70 @@ pub enum StdlibKernel {
     HtmlP,
     HtmlInput,
     HtmlImg,
+    // ── #76 batch 2: Std.Html ELEMENT builders (tag-as-data) ──────────
+    // Container elements (arity-2 attrs->children) and void elements (arity-1
+    // attrs) that all route through the generic `html_node_` runtime sink with
+    // their wire tag from `html_element_tag`. See `is_html_container`/`is_html_void`.
+    HtmlH1,
+    HtmlH2,
+    HtmlH3,
+    HtmlH4,
+    HtmlH5,
+    HtmlH6,
+    HtmlNav,
+    HtmlSection,
+    HtmlArticle,
+    HtmlHeader,
+    HtmlFooter,
+    HtmlMain,
+    HtmlAside,
+    HtmlUl,
+    HtmlOl,
+    HtmlLi,
+    HtmlTable,
+    HtmlThead,
+    HtmlTbody,
+    HtmlTfoot,
+    HtmlTr,
+    HtmlTh,
+    HtmlTd,
+    HtmlTextarea,
+    HtmlSelect,
+    HtmlOption,
+    HtmlLabel,
+    HtmlForm,
+    HtmlFieldset,
+    HtmlLegend,
+    HtmlPre,
+    HtmlCode,
+    HtmlStrong,
+    HtmlEm,
+    HtmlSmall,
+    HtmlBlockquote,
+    HtmlFigure,
+    HtmlFigcaption,
+    HtmlDetails,
+    HtmlSummary,
+    HtmlDialog,
+    HtmlVideo,
+    HtmlAudio,
+    HtmlCanvas,
+    HtmlIframe,
+    HtmlProgress,
+    HtmlMeter,
+    HtmlScript,
+    HtmlBody,
+    HtmlBr,
+    HtmlHr,
+    HtmlMeta,
+    HtmlLink,
+    HtmlArea,
+    HtmlBase,
+    HtmlCol,
+    HtmlEmbed,
+    HtmlSource,
+    HtmlTrack,
+    HtmlWbr,
     // ── #76: Std.Html.Attributes builders (corpus-used direct-backing) ───────
     // String fixed-key attributes (`String -> Attribute msg`). The wire key is
     // the member name except `type_`→`type` / `for_`→`for` (see `html_attr_key`).
@@ -1318,6 +1382,67 @@ impl StdlibKernel {
             Self::HtmlP => d("Html", "p", 2, Ui, "html_p_"),
             Self::HtmlInput => d("Html", "input", 1, Ui, "html_input_"),
             Self::HtmlImg => d("Html", "img", 1, Ui, "html_img_"),
+            // ── #76 batch 2: Std.Html element builders (tag baked via decl name) ─
+            Self::HtmlH1 => d("Html", "h1", 2, Ui, "html_node_"),
+            Self::HtmlH2 => d("Html", "h2", 2, Ui, "html_node_"),
+            Self::HtmlH3 => d("Html", "h3", 2, Ui, "html_node_"),
+            Self::HtmlH4 => d("Html", "h4", 2, Ui, "html_node_"),
+            Self::HtmlH5 => d("Html", "h5", 2, Ui, "html_node_"),
+            Self::HtmlH6 => d("Html", "h6", 2, Ui, "html_node_"),
+            Self::HtmlNav => d("Html", "nav", 2, Ui, "html_node_"),
+            Self::HtmlSection => d("Html", "section", 2, Ui, "html_node_"),
+            Self::HtmlArticle => d("Html", "article", 2, Ui, "html_node_"),
+            Self::HtmlHeader => d("Html", "header", 2, Ui, "html_node_"),
+            Self::HtmlFooter => d("Html", "footer", 2, Ui, "html_node_"),
+            Self::HtmlMain => d("Html", "main", 2, Ui, "html_node_"),
+            Self::HtmlAside => d("Html", "aside", 2, Ui, "html_node_"),
+            Self::HtmlUl => d("Html", "ul", 2, Ui, "html_node_"),
+            Self::HtmlOl => d("Html", "ol", 2, Ui, "html_node_"),
+            Self::HtmlLi => d("Html", "li", 2, Ui, "html_node_"),
+            Self::HtmlTable => d("Html", "table", 2, Ui, "html_node_"),
+            Self::HtmlThead => d("Html", "thead", 2, Ui, "html_node_"),
+            Self::HtmlTbody => d("Html", "tbody", 2, Ui, "html_node_"),
+            Self::HtmlTfoot => d("Html", "tfoot", 2, Ui, "html_node_"),
+            Self::HtmlTr => d("Html", "tr", 2, Ui, "html_node_"),
+            Self::HtmlTh => d("Html", "th", 2, Ui, "html_node_"),
+            Self::HtmlTd => d("Html", "td", 2, Ui, "html_node_"),
+            Self::HtmlTextarea => d("Html", "textarea", 2, Ui, "html_node_"),
+            Self::HtmlSelect => d("Html", "select", 2, Ui, "html_node_"),
+            Self::HtmlOption => d("Html", "option", 2, Ui, "html_node_"),
+            Self::HtmlLabel => d("Html", "label", 2, Ui, "html_node_"),
+            Self::HtmlForm => d("Html", "form", 2, Ui, "html_node_"),
+            Self::HtmlFieldset => d("Html", "fieldset", 2, Ui, "html_node_"),
+            Self::HtmlLegend => d("Html", "legend", 2, Ui, "html_node_"),
+            Self::HtmlPre => d("Html", "pre", 2, Ui, "html_node_"),
+            Self::HtmlCode => d("Html", "code", 2, Ui, "html_node_"),
+            Self::HtmlStrong => d("Html", "strong", 2, Ui, "html_node_"),
+            Self::HtmlEm => d("Html", "em", 2, Ui, "html_node_"),
+            Self::HtmlSmall => d("Html", "small", 2, Ui, "html_node_"),
+            Self::HtmlBlockquote => d("Html", "blockquote", 2, Ui, "html_node_"),
+            Self::HtmlFigure => d("Html", "figure", 2, Ui, "html_node_"),
+            Self::HtmlFigcaption => d("Html", "figcaption", 2, Ui, "html_node_"),
+            Self::HtmlDetails => d("Html", "details", 2, Ui, "html_node_"),
+            Self::HtmlSummary => d("Html", "summary", 2, Ui, "html_node_"),
+            Self::HtmlDialog => d("Html", "dialog", 2, Ui, "html_node_"),
+            Self::HtmlVideo => d("Html", "video", 2, Ui, "html_node_"),
+            Self::HtmlAudio => d("Html", "audio", 2, Ui, "html_node_"),
+            Self::HtmlCanvas => d("Html", "canvas", 2, Ui, "html_node_"),
+            Self::HtmlIframe => d("Html", "iframe", 2, Ui, "html_node_"),
+            Self::HtmlProgress => d("Html", "progress", 2, Ui, "html_node_"),
+            Self::HtmlMeter => d("Html", "meter", 2, Ui, "html_node_"),
+            Self::HtmlScript => d("Html", "script", 2, Ui, "html_node_"),
+            Self::HtmlBody => d("Html", "body", 2, Ui, "html_node_"),
+            Self::HtmlBr => d("Html", "br", 1, Ui, "html_node_"),
+            Self::HtmlHr => d("Html", "hr", 1, Ui, "html_node_"),
+            Self::HtmlMeta => d("Html", "meta", 1, Ui, "html_node_"),
+            Self::HtmlLink => d("Html", "link", 1, Ui, "html_node_"),
+            Self::HtmlArea => d("Html", "area", 1, Ui, "html_node_"),
+            Self::HtmlBase => d("Html", "base", 1, Ui, "html_node_"),
+            Self::HtmlCol => d("Html", "col", 1, Ui, "html_node_"),
+            Self::HtmlEmbed => d("Html", "embed", 1, Ui, "html_node_"),
+            Self::HtmlSource => d("Html", "source", 1, Ui, "html_node_"),
+            Self::HtmlTrack => d("Html", "track", 1, Ui, "html_node_"),
+            Self::HtmlWbr => d("Html", "wbr", 1, Ui, "html_node_"),
             // ── #76: Std.Html.Attributes builders ────────────────────────────
             // Qualifier "Attr" matches the `QUALIFIERS` table in env.rs. Emit
             // routes through the two generic runtime helpers; the fixed key is
@@ -1876,6 +2001,67 @@ impl StdlibKernel {
         Self::HtmlP,
         Self::HtmlInput,
         Self::HtmlImg,
+        // #76 batch 2: Std.Html element builders (container + void).
+        Self::HtmlH1,
+        Self::HtmlH2,
+        Self::HtmlH3,
+        Self::HtmlH4,
+        Self::HtmlH5,
+        Self::HtmlH6,
+        Self::HtmlNav,
+        Self::HtmlSection,
+        Self::HtmlArticle,
+        Self::HtmlHeader,
+        Self::HtmlFooter,
+        Self::HtmlMain,
+        Self::HtmlAside,
+        Self::HtmlUl,
+        Self::HtmlOl,
+        Self::HtmlLi,
+        Self::HtmlTable,
+        Self::HtmlThead,
+        Self::HtmlTbody,
+        Self::HtmlTfoot,
+        Self::HtmlTr,
+        Self::HtmlTh,
+        Self::HtmlTd,
+        Self::HtmlTextarea,
+        Self::HtmlSelect,
+        Self::HtmlOption,
+        Self::HtmlLabel,
+        Self::HtmlForm,
+        Self::HtmlFieldset,
+        Self::HtmlLegend,
+        Self::HtmlPre,
+        Self::HtmlCode,
+        Self::HtmlStrong,
+        Self::HtmlEm,
+        Self::HtmlSmall,
+        Self::HtmlBlockquote,
+        Self::HtmlFigure,
+        Self::HtmlFigcaption,
+        Self::HtmlDetails,
+        Self::HtmlSummary,
+        Self::HtmlDialog,
+        Self::HtmlVideo,
+        Self::HtmlAudio,
+        Self::HtmlCanvas,
+        Self::HtmlIframe,
+        Self::HtmlProgress,
+        Self::HtmlMeter,
+        Self::HtmlScript,
+        Self::HtmlBody,
+        Self::HtmlBr,
+        Self::HtmlHr,
+        Self::HtmlMeta,
+        Self::HtmlLink,
+        Self::HtmlArea,
+        Self::HtmlBase,
+        Self::HtmlCol,
+        Self::HtmlEmbed,
+        Self::HtmlSource,
+        Self::HtmlTrack,
+        Self::HtmlWbr,
         // #76: Std.Html.Attributes builders (all registered under "Attr" in
         // env.rs QUALIFIERS).
         Self::HtmlAttrClass,
@@ -2042,6 +2228,7 @@ impl StdlibKernel {
     /// `true` when this variant belongs to the `Std.Ui` / `Std.Html` M7
     /// subsystem.
     #[must_use]
+    #[allow(clippy::too_many_lines)] // exhaustive Ui/Html kernel enumeration
     pub const fn is_ui(self) -> bool {
         matches!(
             self,
@@ -2108,6 +2295,66 @@ impl StdlibKernel {
                 | Self::HtmlP
                 | Self::HtmlInput
                 | Self::HtmlImg
+                | Self::HtmlH1
+                | Self::HtmlH2
+                | Self::HtmlH3
+                | Self::HtmlH4
+                | Self::HtmlH5
+                | Self::HtmlH6
+                | Self::HtmlNav
+                | Self::HtmlSection
+                | Self::HtmlArticle
+                | Self::HtmlHeader
+                | Self::HtmlFooter
+                | Self::HtmlMain
+                | Self::HtmlAside
+                | Self::HtmlUl
+                | Self::HtmlOl
+                | Self::HtmlLi
+                | Self::HtmlTable
+                | Self::HtmlThead
+                | Self::HtmlTbody
+                | Self::HtmlTfoot
+                | Self::HtmlTr
+                | Self::HtmlTh
+                | Self::HtmlTd
+                | Self::HtmlTextarea
+                | Self::HtmlSelect
+                | Self::HtmlOption
+                | Self::HtmlLabel
+                | Self::HtmlForm
+                | Self::HtmlFieldset
+                | Self::HtmlLegend
+                | Self::HtmlPre
+                | Self::HtmlCode
+                | Self::HtmlStrong
+                | Self::HtmlEm
+                | Self::HtmlSmall
+                | Self::HtmlBlockquote
+                | Self::HtmlFigure
+                | Self::HtmlFigcaption
+                | Self::HtmlDetails
+                | Self::HtmlSummary
+                | Self::HtmlDialog
+                | Self::HtmlVideo
+                | Self::HtmlAudio
+                | Self::HtmlCanvas
+                | Self::HtmlIframe
+                | Self::HtmlProgress
+                | Self::HtmlMeter
+                | Self::HtmlScript
+                | Self::HtmlBody
+                | Self::HtmlBr
+                | Self::HtmlHr
+                | Self::HtmlMeta
+                | Self::HtmlLink
+                | Self::HtmlArea
+                | Self::HtmlBase
+                | Self::HtmlCol
+                | Self::HtmlEmbed
+                | Self::HtmlSource
+                | Self::HtmlTrack
+                | Self::HtmlWbr
                 | Self::HtmlAttrClass
                 | Self::HtmlAttrId
                 | Self::HtmlAttrHref
@@ -2209,6 +2456,160 @@ impl StdlibKernel {
             Self::HtmlAttrMultiple => "multiple",
             Self::HtmlAttrSelected => "selected",
             Self::HtmlAttrAutofocus => "autofocus",
+            _ => return None,
+        })
+    }
+
+    /// `true` for a `#76 batch 2` Std.Html CONTAINER element builder
+    /// (`h1`/`nav`/`table`/... — `List Attr -> List Html -> Html msg`). The
+    /// backend emit arm routes these through `html_node_(tag, attrs, children)`
+    /// with the wire tag from [`Self::html_element_tag`]. Excludes the older
+    /// per-tag kernels (`HtmlDiv`/`HtmlSpan`/`HtmlA`/`HtmlButton`/`HtmlP`).
+    #[must_use]
+    pub const fn is_html_container(self) -> bool {
+        matches!(
+            self,
+                Self::HtmlH1
+                | Self::HtmlH2
+                | Self::HtmlH3
+                | Self::HtmlH4
+                | Self::HtmlH5
+                | Self::HtmlH6
+                | Self::HtmlNav
+                | Self::HtmlSection
+                | Self::HtmlArticle
+                | Self::HtmlHeader
+                | Self::HtmlFooter
+                | Self::HtmlMain
+                | Self::HtmlAside
+                | Self::HtmlUl
+                | Self::HtmlOl
+                | Self::HtmlLi
+                | Self::HtmlTable
+                | Self::HtmlThead
+                | Self::HtmlTbody
+                | Self::HtmlTfoot
+                | Self::HtmlTr
+                | Self::HtmlTh
+                | Self::HtmlTd
+                | Self::HtmlTextarea
+                | Self::HtmlSelect
+                | Self::HtmlOption
+                | Self::HtmlLabel
+                | Self::HtmlForm
+                | Self::HtmlFieldset
+                | Self::HtmlLegend
+                | Self::HtmlPre
+                | Self::HtmlCode
+                | Self::HtmlStrong
+                | Self::HtmlEm
+                | Self::HtmlSmall
+                | Self::HtmlBlockquote
+                | Self::HtmlFigure
+                | Self::HtmlFigcaption
+                | Self::HtmlDetails
+                | Self::HtmlSummary
+                | Self::HtmlDialog
+                | Self::HtmlVideo
+                | Self::HtmlAudio
+                | Self::HtmlCanvas
+                | Self::HtmlIframe
+                | Self::HtmlProgress
+                | Self::HtmlMeter
+                | Self::HtmlScript
+                | Self::HtmlBody
+        )
+    }
+
+    /// `true` for a `#76 batch 2` Std.Html VOID element builder
+    /// (`br`/`hr`/`meta`/`link`/... — `List Attr -> Html msg`, no children).
+    /// The emit arm routes these through `html_node_(tag, attrs, vec![])`; the
+    /// render sink self-closes any tag in its `VOID` set and drops children, so
+    /// passing an empty child vec is belt-and-braces. Excludes `HtmlInput`/`HtmlImg`.
+    #[must_use]
+    pub const fn is_html_void(self) -> bool {
+        matches!(
+            self,
+                Self::HtmlBr
+                | Self::HtmlHr
+                | Self::HtmlMeta
+                | Self::HtmlLink
+                | Self::HtmlArea
+                | Self::HtmlBase
+                | Self::HtmlCol
+                | Self::HtmlEmbed
+                | Self::HtmlSource
+                | Self::HtmlTrack
+                | Self::HtmlWbr
+        )
+    }
+
+    /// The wire tag name for a `#76 batch 2` Std.Html element builder
+    /// (container or void). `None` for any non-element variant. The name is the
+    /// HTML tag emitted verbatim as the first `html_node_` argument.
+    #[must_use]
+    pub const fn html_element_tag(self) -> Option<&'static str> {
+        Some(match self {
+            Self::HtmlH1 => "h1",
+            Self::HtmlH2 => "h2",
+            Self::HtmlH3 => "h3",
+            Self::HtmlH4 => "h4",
+            Self::HtmlH5 => "h5",
+            Self::HtmlH6 => "h6",
+            Self::HtmlNav => "nav",
+            Self::HtmlSection => "section",
+            Self::HtmlArticle => "article",
+            Self::HtmlHeader => "header",
+            Self::HtmlFooter => "footer",
+            Self::HtmlMain => "main",
+            Self::HtmlAside => "aside",
+            Self::HtmlUl => "ul",
+            Self::HtmlOl => "ol",
+            Self::HtmlLi => "li",
+            Self::HtmlTable => "table",
+            Self::HtmlThead => "thead",
+            Self::HtmlTbody => "tbody",
+            Self::HtmlTfoot => "tfoot",
+            Self::HtmlTr => "tr",
+            Self::HtmlTh => "th",
+            Self::HtmlTd => "td",
+            Self::HtmlTextarea => "textarea",
+            Self::HtmlSelect => "select",
+            Self::HtmlOption => "option",
+            Self::HtmlLabel => "label",
+            Self::HtmlForm => "form",
+            Self::HtmlFieldset => "fieldset",
+            Self::HtmlLegend => "legend",
+            Self::HtmlPre => "pre",
+            Self::HtmlCode => "code",
+            Self::HtmlStrong => "strong",
+            Self::HtmlEm => "em",
+            Self::HtmlSmall => "small",
+            Self::HtmlBlockquote => "blockquote",
+            Self::HtmlFigure => "figure",
+            Self::HtmlFigcaption => "figcaption",
+            Self::HtmlDetails => "details",
+            Self::HtmlSummary => "summary",
+            Self::HtmlDialog => "dialog",
+            Self::HtmlVideo => "video",
+            Self::HtmlAudio => "audio",
+            Self::HtmlCanvas => "canvas",
+            Self::HtmlIframe => "iframe",
+            Self::HtmlProgress => "progress",
+            Self::HtmlMeter => "meter",
+            Self::HtmlScript => "script",
+            Self::HtmlBody => "body",
+            Self::HtmlBr => "br",
+            Self::HtmlHr => "hr",
+            Self::HtmlMeta => "meta",
+            Self::HtmlLink => "link",
+            Self::HtmlArea => "area",
+            Self::HtmlBase => "base",
+            Self::HtmlCol => "col",
+            Self::HtmlEmbed => "embed",
+            Self::HtmlSource => "source",
+            Self::HtmlTrack => "track",
+            Self::HtmlWbr => "wbr",
             _ => return None,
         })
     }
