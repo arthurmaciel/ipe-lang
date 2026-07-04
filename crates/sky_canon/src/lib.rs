@@ -2654,4 +2654,76 @@ mod tests {
         );
         assert!(res.is_ok(), "user unannotated main is fine: {:?}", res.err());
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // #103 — ModuleOrigin-gated reserved-builtin exemption (last Std.Css prereq).
+    //
+    // #100 threaded the unforgeable `ModuleOrigin`; #101 made the lowerer
+    // home-aware (the nullary Std.Ui opaque names sit BELOW the `enum_variants`
+    // guard). So the canon reservation of those names is no longer load-bearing
+    // for lowering-soundness, and a trusted `EmbeddedStdlib` module — the
+    // canonical definer — is exempt for that subset while USER modules stay
+    // rejected (option A: keep the user-facing "cannot shadow Length" guarantee).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn embedded_stdlib_origin_exempts_reserved_ui_type() {
+        // The capability compiled-source `Std.Css` needs: DEFINE `type Length`
+        // (a reserved built-in name). Exempt ONLY because the driver vouched for
+        // the origin (unforgeable). The same text tagged User is N0026-rejected
+        // — see `user_type_shadowing_builtin_rejected`.
+        let src = "module Std.Css exposing (Length(..))\n\
+             type Length = Px Int\n";
+        let res = canon_with_origin(src, ModuleOrigin::EmbeddedStdlib);
+        assert!(
+            res.is_ok(),
+            "EmbeddedStdlib `type Length` must be exempt from SKY-N0026: {:?}",
+            res.err()
+        );
+    }
+
+    #[test]
+    fn user_origin_reserved_ui_type_still_rejected() {
+        // The mirror of the exemption: the identical `type Length`, in a
+        // non-Std user module (so N0025 does not pre-empt), stays SKY-N0026.
+        // A hostile author gets NEITHER the namespace nor the builtin exemption.
+        let src = "module Main exposing (main)\n\
+             type Length = Px Int\n\
+             main = 0\n";
+        let err = canon_with_origin(src, ModuleOrigin::User)
+            .expect_err("user `type Length` must stay reserved");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::Name {
+                    msg: NameError::ReservedBuiltinType { .. },
+                    ..
+                }
+            ),
+            "user `type Length` must be SKY-N0026, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn embedded_stdlib_origin_still_rejects_load_bearing_builtin() {
+        // The carve-out is SCOPED to the below-guard nullary UI set
+        // (`STDLIB_DEFINABLE_UI_TYPES`). `Html`'s lowerer arm sits ABOVE the
+        // home-aware `enum_variants` guard, so a same-named union would be
+        // hijacked to `IrType::Ui` and mis-lower — even trusted stdlib must not
+        // redefine it. Stays SKY-N0026 for EVERY origin.
+        let src = "module Std.Css exposing (Html(..))\n\
+             type Html = Blob\n";
+        let err = canon_with_origin(src, ModuleOrigin::EmbeddedStdlib)
+            .expect_err("EmbeddedStdlib `type Html` must still be reserved");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::Name {
+                    msg: NameError::ReservedBuiltinType { .. },
+                    ..
+                }
+            ),
+            "load-bearing builtin `Html` must stay SKY-N0026 even for stdlib, got {err:?}"
+        );
+    }
 }

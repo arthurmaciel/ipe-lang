@@ -5,9 +5,14 @@ module Main exposing (main)
 -- source). Both must resolve — the resolve.rs `!deps.contains_key` conjunct keeps
 -- the genuine kernel on the continue path while routing Std.Palette through the
 -- normal dep-injection path.
+--
+-- #103: Std.Palette now also defines `type Length` (a reserved built-in name),
+-- proving an EmbeddedStdlib module can define + export a reserved type that a
+-- user module could not. `Px` / `lengthPx` exercise it end-to-end.
 import Sky.Core.Prelude exposing (..)
-import Std.Palette exposing (Shade(..), toHex)
+import Sky.Core.String as String
+import Std.Palette exposing (Shade(..), toHex, Length(..), lengthPx)
 
 
 main =
-    println (toHex Dark)
+    println (toHex Dark ++ " " ++ String.fromInt (lengthPx (Px 42)))
