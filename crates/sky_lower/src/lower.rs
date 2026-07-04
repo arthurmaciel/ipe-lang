@@ -4136,7 +4136,9 @@ impl<'a> Lowerer<'a> {
                 // `Font.bold : Attribute msg`
                 | KernelFn::FontBold
                 // `Font.italic : Attribute msg`
-                | KernelFn::FontItalic,
+                | KernelFn::FontItalic
+                // `Attr.noAttr : Attribute msg` (#76)
+                | KernelFn::HtmlNoAttr,
             ) => Ok(0),
             // Arity 1: single-argument pure serialisation / escape helpers.
             Callee::Kernel(
@@ -4232,7 +4234,28 @@ impl<'a> Lowerer<'a> {
                 // `Tui.app : TuiCfg model msg -> Task Error ()`
                 | KernelFn::TuiApp
                 // `Webview.app : WebviewCfg model msg -> Task Error ()`
-                | KernelFn::WebviewApp,
+                | KernelFn::WebviewApp
+                // #76: Std.Html.Attributes fixed-key builders (`String`/`Bool`
+                // -> Attribute msg).
+                | KernelFn::HtmlAttrClass
+                | KernelFn::HtmlAttrId
+                | KernelFn::HtmlAttrHref
+                | KernelFn::HtmlAttrSrc
+                | KernelFn::HtmlAttrAlt
+                | KernelFn::HtmlAttrValue
+                | KernelFn::HtmlAttrName
+                | KernelFn::HtmlAttrPlaceholder
+                | KernelFn::HtmlAttrType
+                | KernelFn::HtmlAttrFor
+                | KernelFn::HtmlAttrStyle
+                | KernelFn::HtmlAttrTitle
+                | KernelFn::HtmlAttrChecked
+                | KernelFn::HtmlAttrDisabled
+                | KernelFn::HtmlAttrReadonly
+                | KernelFn::HtmlAttrRequired
+                | KernelFn::HtmlAttrMultiple
+                | KernelFn::HtmlAttrSelected
+                | KernelFn::HtmlAttrAutofocus,
             ) => Ok(1),
             // Arity 2: `Ui.layout attrs elem`, `Ui.layoutWith cfg elem`,
             //          `Live.route path ctor`, `Live.renderStatic cfg path`.
@@ -4274,7 +4297,10 @@ impl<'a> Lowerer<'a> {
                 // `Live.route : String -> (List String -> Page) -> LiveRoute`
                 | KernelFn::LiveRoute
                 // `Live.renderStatic : LiveAppCfg model msg -> String -> Task Error String`
-                | KernelFn::LiveRenderStatic,
+                | KernelFn::LiveRenderStatic
+                // #76: generic `Attr.attribute k v` / `Attr.boolAttribute k b`.
+                | KernelFn::HtmlAttribute
+                | KernelFn::HtmlBoolAttribute,
             ) => Ok(2),
             // Arity 3: `Ui.rgb r g b`, `Html.node tag attrs children`.
             Callee::Kernel(
@@ -4910,6 +4936,31 @@ impl<'a> Lowerer<'a> {
                         "img" | "br" | "hr" | "meta" | "area" | "base" | "col" | "embed" | "source"
                         | "track" | "wbr",
                     ) => Ok(Callee::Kernel(KernelFn::HtmlImg)),
+                    // ── #76: Std.Html.Attributes builders (legacy arm; the
+                    //    id-fast-path handles these in practice, this arm keeps
+                    //    decl() ⇔ legacy parity per `decl_equiv_legacy_match`). ──
+                    ("Attr", "class") => Ok(Callee::Kernel(KernelFn::HtmlAttrClass)),
+                    ("Attr", "id") => Ok(Callee::Kernel(KernelFn::HtmlAttrId)),
+                    ("Attr", "href") => Ok(Callee::Kernel(KernelFn::HtmlAttrHref)),
+                    ("Attr", "src") => Ok(Callee::Kernel(KernelFn::HtmlAttrSrc)),
+                    ("Attr", "alt") => Ok(Callee::Kernel(KernelFn::HtmlAttrAlt)),
+                    ("Attr", "value") => Ok(Callee::Kernel(KernelFn::HtmlAttrValue)),
+                    ("Attr", "name") => Ok(Callee::Kernel(KernelFn::HtmlAttrName)),
+                    ("Attr", "placeholder") => Ok(Callee::Kernel(KernelFn::HtmlAttrPlaceholder)),
+                    ("Attr", "type_") => Ok(Callee::Kernel(KernelFn::HtmlAttrType)),
+                    ("Attr", "for_") => Ok(Callee::Kernel(KernelFn::HtmlAttrFor)),
+                    ("Attr", "style") => Ok(Callee::Kernel(KernelFn::HtmlAttrStyle)),
+                    ("Attr", "title") => Ok(Callee::Kernel(KernelFn::HtmlAttrTitle)),
+                    ("Attr", "checked") => Ok(Callee::Kernel(KernelFn::HtmlAttrChecked)),
+                    ("Attr", "disabled") => Ok(Callee::Kernel(KernelFn::HtmlAttrDisabled)),
+                    ("Attr", "readonly") => Ok(Callee::Kernel(KernelFn::HtmlAttrReadonly)),
+                    ("Attr", "required") => Ok(Callee::Kernel(KernelFn::HtmlAttrRequired)),
+                    ("Attr", "multiple") => Ok(Callee::Kernel(KernelFn::HtmlAttrMultiple)),
+                    ("Attr", "selected") => Ok(Callee::Kernel(KernelFn::HtmlAttrSelected)),
+                    ("Attr", "autofocus") => Ok(Callee::Kernel(KernelFn::HtmlAttrAutofocus)),
+                    ("Attr", "attribute") => Ok(Callee::Kernel(KernelFn::HtmlAttribute)),
+                    ("Attr", "boolAttribute") => Ok(Callee::Kernel(KernelFn::HtmlBoolAttribute)),
+                    ("Attr", "noAttr") => Ok(Callee::Kernel(KernelFn::HtmlNoAttr)),
                     // ── M7: Phase-1a event-attribute builders (Ui + Event qualifiers) ──
                     // Both "Ui" (qualified as `Ui.onClick`) and "Event" (qualified as
                     // `Event.onClick` / `Std.Html.Events.onClick`) resolve here.

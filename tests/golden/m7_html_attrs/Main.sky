@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+import Std.Html exposing (..)
+import Std.Html.Attributes exposing (..)
+
+
+-- #76: Std.Html.Attributes family end-to-end golden. Exercises fixed-key
+-- string attrs (class/id/href/value/type_/placeholder), fixed-key bool attrs
+-- (checked/disabled), the generic `attribute`/`boolAttribute` builders, and
+-- the render-sink SECURITY gate (a hostile `attribute "onclick" ...` and an
+-- unsafe value must be neutralised, never reflected verbatim).
+-- oracle_divergence = true: pure Rust-backend HTML; asserted by substring.
+
+
+main =
+    println
+        (render
+            (div
+                [ class "app", id "main" ]
+                [ input
+                    [ value "a<b\"c"
+                    , type_ "text"
+                    , placeholder "name"
+                    , checked True
+                    , disabled False
+                    , attribute "data-ok" "safe"
+                    , attribute "onclick" "alert(1)"
+                    , boolAttribute "hidden" True
+                    ]
+                , a [ href "/x?q='z" ] [ text "go" ]
+                ]))

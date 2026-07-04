@@ -754,6 +754,41 @@ pub fn html_render_<M>(node: Html<M>) -> String {
     render_html(&node)
 }
 
+// --- Std.Html.Attributes builder kernels (#76 corpus-used direct-backing) ---
+//
+// Every builder produces the runtime `Attribute<M>` value the render sink
+// already knows how to neutralise. SECURITY (P1): the value string is escaped
+// at the sink (`render_into_ctx` runs `SafeAttrName::parse` on the KEY and
+// `escape_attr` on the VALUE), so no builder here re-implements escaping —
+// there is exactly one escaping boundary. Fixed-key builders (`class`/`id`/…)
+// pass a compile-time-literal key (never attacker data). The generic
+// `attribute k v` / `boolAttribute k b` pass a runtime key, which the sink
+// gates through `SafeAttrName` (drops `on*`/`srcdoc`/charset-invalid names).
+
+/// `Std.Html.Attributes.{class,id,href,…}` and the generic
+/// `attribute k v` — a string-valued HTML attribute. The key is a literal for
+/// the fixed-key builders and a runtime string for `attribute`; both are gated
+/// at the render sink.
+#[must_use]
+pub fn html_named_attr_<M>(key: String, val: String) -> Attribute<M> {
+    Attribute::Attr(key, val)
+}
+
+/// `Std.Html.Attributes.{checked,disabled,…}` and the generic
+/// `boolAttribute k b` — a boolean HTML attribute (emitted bare when `true`,
+/// omitted when `false`, per the render sink's `BoolAttr` handling).
+#[must_use]
+pub fn html_bool_named_attr_<M>(key: String, on: bool) -> Attribute<M> {
+    Attribute::BoolAttr(key, on)
+}
+
+/// `Std.Html.Attributes.noAttr` — the identity attribute (renders nothing).
+/// Makes "no attribute" a first-class value rather than an `Option`/sentinel.
+#[must_use]
+pub fn html_no_attr_<M>() -> Attribute<M> {
+    Attribute::NoAttr
+}
+
 /// `Ffi.callPure "htmlEscapeText"` — HTML-escape a string for text content.
 /// Routes through the same escaper as render so the escape set (`& ' < > "`,
 /// matching Go's html.EscapeString for the text subset) can never drift.
