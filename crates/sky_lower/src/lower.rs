@@ -3987,6 +3987,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListAny
                 | KernelFn::ListAll
                 | KernelFn::ListFind
+                // ── List batch (#119) ────────────────────────────────────────
+                | KernelFn::ListFilterMap
+                | KernelFn::ListSortBy
                 | KernelFn::BasicsAlways
                 | KernelFn::BasicsModBy
                 | KernelFn::LogInfoWith
@@ -4800,6 +4803,9 @@ impl<'a> Lowerer<'a> {
                     ("List", "any") => Ok(Callee::Kernel(KernelFn::ListAny)),
                     ("List", "all") => Ok(Callee::Kernel(KernelFn::ListAll)),
                     ("List", "find") => Ok(Callee::Kernel(KernelFn::ListFind)),
+                    // ── List batch (#119) ────────────────────────────────────
+                    ("List", "filterMap") => Ok(Callee::Kernel(KernelFn::ListFilterMap)),
+                    ("List", "sortBy") => Ok(Callee::Kernel(KernelFn::ListSortBy)),
                     ("Basics", "not") => Ok(Callee::Kernel(KernelFn::BasicsNot)),
                     ("Basics", "identity") => Ok(Callee::Kernel(KernelFn::BasicsIdentity)),
                     ("Basics", "always") => Ok(Callee::Kernel(KernelFn::BasicsAlways)),

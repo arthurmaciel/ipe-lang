@@ -2487,6 +2487,15 @@ impl<'a> Builder<'a> {
             K::ListAny | K::ListAll => fun(fun(var(0), bool_ty()), fun(list(var(0)), bool_ty())),
             // find : (a -> Bool) -> List a -> Maybe a
             K::ListFind => fun(fun(var(0), bool_ty()), fun(list(var(0)), maybe(var(0)))),
+            // ── List batch (#119) ────────────────────────────────────────────
+            // filterMap : (a -> Maybe b) -> List a -> List b
+            K::ListFilterMap => fun(fun(var(0), maybe(var(1))), fun(list(var(0)), list(var(1)))),
+            // sortBy : (a -> comparable) -> List a -> List a — BASE scheme only.
+            // var(0)=a (element), var(1)=key type (Comparable obligation layered in
+            // constrain_var_kernel, keyed off id, same pattern as MathMin/MathMax).
+            // Production never reaches this arm (obligation pre-check early-returns
+            // the bounded scheme); it exists so `stdlib_scheme` is total.
+            K::ListSortBy => fun(fun(var(0), var(1)), fun(list(var(0)), list(var(0)))),
 
             // ── Basics core Prelude (6 — task #76 slice) ──
             K::BasicsNot => fun(bool_ty(), bool_ty()),
@@ -4431,6 +4440,9 @@ mod registry_phase_c_tests {
             K::ListAny,
             K::ListAll,
             K::ListFind,
+            // List filterMap/sortBy (2 — task #119, same class as #72).
+            K::ListFilterMap,
+            K::ListSortBy,
             // Basics core Prelude (6 — task #76 slice).
             K::BasicsNot,
             K::BasicsIdentity,
