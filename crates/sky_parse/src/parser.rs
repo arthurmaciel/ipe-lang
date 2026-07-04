@@ -927,18 +927,23 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a closed record type `{ field : T, ... }`, the opening `{` already
-    /// consumed (its span is `opener`). At least one field is required — the
-    /// empty record `{}` is outside the grammar. Each field is a lowercase name,
-    /// a `:`, then its type; fields are comma-separated and the list is closed by
-    /// `}`. Duplicate field names are not rejected here (a later stage owns that),
+    /// consumed (its span is `opener`). The empty record `{}` is valid and
+    /// produces a `TRecord` with an empty field list (mirrors the Haskell
+    /// compiler's behaviour). Each non-empty field is a lowercase name, a `:`,
+    /// then its type; fields are comma-separated and the list is closed by `}`.
+    /// Duplicate field names are not rejected here (a later stage owns that),
     /// matching how the record *literal* parser stays purely syntactic.
     fn parse_record_type(&mut self, opener: Span, depth: u32) -> DResult<Located<TypeAnnotation>> {
         if depth > MAX_DEPTH {
             return Err(self.too_deep(Construct::Type));
         }
-        // `{}` (the empty record type) is outside the grammar.
+        // `{}` (the empty record type) — valid, produces `TRecord []`.
+        // Mirrors the Haskell reference: `Just '}' -> char '}'  >> return (TRecord [] Nothing)`.
         if let Some(t) = self.peek().filter(|t| t.kind == Tok::RBrace) {
-            return Err(Self::unexpected_token(t, &[Expected::Identifier]));
+            let close = t.span;
+            self.bump(Construct::Type)?;
+            let span = Self::span_merge(opener, close);
+            return Ok(Located::new(span, TypeAnnotation::TRecord(Vec::new())));
         }
         let mut fields = Vec::new();
         loop {
@@ -1358,9 +1363,10 @@ impl<'a> Parser<'a> {
 
     /// Parse a record literal `{ field = expr, ... }`, the `{` already consumed.
     ///
-    /// M1 records are **closed**. After the opening `{` two forms are accepted,
-    /// distinguished by the token following the first lowercase identifier:
+    /// After the opening `{` three forms are accepted:
     ///
+    /// * `{}` — the **empty record literal**: zero fields. Mirrors the Haskell
+    ///   compiler's `Src.Record []` (line 309-311 of Expression.hs).
     /// * `{ name = value, ... }` — a record **literal**: a non-empty, comma-
     ///   separated list of `name = value` fields.
     /// * `{ base | field = value, ... }` — a record **update** (a `|` after the
@@ -1368,16 +1374,18 @@ impl<'a> Parser<'a> {
     ///   fields replaced. The base is a bare lowercase variable, matching Sky's
     ///   (and Elm's) grammar.
     ///
-    /// The empty record `{}` is not part of the M1 grammar — it surfaces as a
-    /// clean parse error rather than a silently-different AST. `opener` is the
-    /// `{`'s span; `depth` bounds the field-value recursion.
+    /// `opener` is the `{`'s span; `depth` bounds the field-value recursion.
     fn parse_record(&mut self, opener: Span, depth: u32) -> DResult<Expr> {
         if depth > MAX_DEPTH {
             return Err(self.too_deep(Construct::Record));
         }
-        // `{}` (the empty record) is outside the M1 grammar.
+        // `{}` (the empty record literal) — valid, produces `Record []`.
+        // Mirrors the Haskell reference: `Just '}' -> char '}' >> return (Record [])`.
         if let Some(t) = self.peek().filter(|t| t.kind == Tok::RBrace) {
-            return Err(Self::unexpected_token(t, &[Expected::Identifier]));
+            let close = t.span;
+            self.bump(Construct::Record)?;
+            let span = Self::span_merge(opener, close);
+            return Ok(Located::new(span, Expr_::Record(Vec::new())));
         }
         // The first lowercase identifier is either the first field's name (a
         // literal) or the base record variable (an update); a following `|`

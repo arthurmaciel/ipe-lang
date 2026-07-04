@@ -1043,16 +1043,63 @@ mod tests {
     }
 
     #[test]
-    fn empty_record_type_is_rejected() {
-        // The empty record type `{}` is outside the grammar.
+    fn empty_record_type_parses_into_empty_trecord() {
+        // `{}` in type position is the empty record type — valid, yields `TRecord []`.
+        // Mirrors the Haskell reference (Type.hs line 131-133):
+        //   Just '}' -> char mkError '}' >> return (TRecord [] Nothing)
+        let mut i = Interner::new();
+        let m = parse_module(&format!("{HDR}f : {{}}\nf =\n    0\n"), &mut i);
+        assert!(m.is_ok(), "empty record type must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let ann = find_value(&m, &i, "f")
+            .and_then(|v| v.type_annotation.as_ref())
+            .map(|a| &a.value);
         assert!(
-            parse_module(
-                &format!("{HDR}f : {{}}\nf =\n    0\n"),
-                &mut Interner::new()
-            )
-            .is_err(),
-            "the empty record type must be rejected"
+            matches!(ann, Some(TypeAnnotation::TRecord(fields)) if fields.is_empty()),
+            "type annotation must be an empty TRecord, got {ann:?}"
         );
+    }
+
+    #[test]
+    fn empty_record_type_with_spaces_parses() {
+        // `{  }` (spaces inside) must also parse — the layout filter allows
+        // whitespace between `{` and `}`.
+        let m = parse_module(
+            &format!("{HDR}f : {{  }}\nf =\n    0\n"),
+            &mut Interner::new(),
+        );
+        assert!(m.is_ok(), "empty record type with spaces must parse: {m:?}");
+    }
+
+    #[test]
+    fn empty_record_type_alias_parses() {
+        // `type alias Model = {}` — the empty record as an alias body.
+        // This is the construct that appears in examples/29-webview-threejs-spike.
+        let mut i = Interner::new();
+        let m = parse_module(&format!("{HDR}type alias Model = {{}}\n"), &mut i);
+        assert!(m.is_ok(), "empty-record type alias must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let body = m.aliases.first().map(|a| &a.value.body.value);
+        assert!(
+            matches!(body, Some(TypeAnnotation::TRecord(fields)) if fields.is_empty()),
+            "alias body must be an empty TRecord, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn empty_record_literal_parses_into_record_node() {
+        // `{}` in expression position is a valid empty record literal.
+        // Mirrors Haskell's Expression.hs line 309-311:
+        //   Just '}' -> char mkError '}' >> return (Src.Record [])
+        let mut i = Interner::new();
+        let m = parse_module(&format!("{HDR}v : Int\nv =\n    {{}}\n"), &mut i);
+        assert!(m.is_ok(), "empty record literal must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::Record(fields)) => Some(fields.len()),
+            _ => None,
+        };
+        assert_eq!(shape, Some(0), "empty record literal yields Record with 0 fields");
     }
 
     #[test]
@@ -1227,9 +1274,20 @@ mod tests {
     }
 
     #[test]
-    fn empty_record_is_rejected() {
-        // `{}` (the empty record) is outside the M1 grammar: a clean parse error.
-        assert_eq!(err_code(&format!("{HDR}v =\n    {{}}\n")), "SKY-P0001");
+    fn empty_record_literal_in_expression_parses() {
+        // `{}` in expression position is valid — mirrors Haskell's Expression.hs
+        // line 309-311: `Just '}' -> char '}' >> return (Src.Record [])`.
+        // This test replaces the old `empty_record_is_rejected` which assumed
+        // the empty record was outside the grammar.
+        let mut i = Interner::new();
+        let m = parse_module(&format!("{HDR}v =\n    {{}}\n"), &mut i);
+        assert!(m.is_ok(), "empty record literal `{{}}` must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::Record(fields)) => Some(fields.len()),
+            _ => None,
+        };
+        assert_eq!(shape, Some(0), "empty record literal yields Record with 0 fields");
     }
 
     #[test]

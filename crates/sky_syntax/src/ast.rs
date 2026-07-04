@@ -297,9 +297,8 @@ pub enum TypeAnnotation {
     /// unwraps to `T` (neither is a `TTuple`).
     TTuple(Vec<Self>),
     /// A closed record type `{ field : T, ... }`. Fields are `(name, type)` pairs
-    /// in source order. The empty record `{}` is outside the grammar, so a
-    /// `TRecord` always carries at least one field. Mirrors the Haskell
-    /// compiler's `Src.TRecord`, narrowed to the closed-record subset (no row
-    /// variable / extension form).
+    /// in source order. The empty record `{}` is valid and produces an empty
+    /// field list. Mirrors the Haskell compiler's `Src.TRecord`, narrowed to the
+    /// closed-record subset (no row variable / extension form).
     TRecord(Vec<(Symbol, Self)>),
 }
