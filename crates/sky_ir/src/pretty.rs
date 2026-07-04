@@ -1406,6 +1406,7 @@ mod tests {
     /// Build the canonical M0 program: a `Main` module with a `Msg` enum and a
     /// `main` function whose body is `Log.println (String.fromInt 1)`, plus a
     /// `tick` function with a `Match` over `Msg`.
+    #[allow(clippy::too_many_lines)]
     fn m0_program(i: &mut Interner) -> DResult<Program> {
         let main_mod = i.intern("Main")?;
         let msg = i.intern("Msg")?;
