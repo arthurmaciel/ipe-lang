@@ -191,6 +191,23 @@ const PALETTE: &str = include_str!("../stdlib/Std/Palette.sky");
 /// kernel qualifier (NOT under `Std.Css`, so the disjointness invariant holds).
 const CSS: &str = include_str!("../stdlib/Std/Css.sky");
 
+/// `Sky.Core.ToString` (#80) — naming-consistency surface (v0.15.48+).
+///
+/// Thin pure-Sky aliases to canonical kernels in their home modules so callers
+/// can write `ToString.fromInt n` without memorising the per-type kernel
+/// sub-namespace.  `fromTime` is OMITTED pending the `Time_timeString` Rust
+/// kernel.  Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"ToString"` entry
+/// exists in `STDLIB_MODULE_QUALIFIERS`).
+const TOSTRING_CORE: &str = include_str!("../stdlib/Sky/Core/ToString.sky");
+
+/// `Sky.Test` (#80) — lightweight in-process test framework.
+///
+/// Compiled pure-Sky source that defines the `Test` / `TestResult` ADTs and
+/// all assertion helpers.  `expectErrorKind` / `kindName` are OMITTED pending
+/// the `Sky.Core.Error` compiled-source migration; `summarise` is pure (no IO).
+/// Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Test"` entry exists there).
+const SKY_TEST: &str = include_str!("../stdlib/Sky/Test.sky");
+
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
 /// Disjoint from [`MODULES`] (parse fixtures) and from `sky_canon`'s
@@ -203,6 +220,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Std.Css",
         source: CSS,
+    },
+    CompiledStdModule {
+        dotted: "Sky.Core.ToString",
+        source: TOSTRING_CORE,
+    },
+    CompiledStdModule {
+        dotted: "Sky.Test",
+        source: SKY_TEST,
     },
 ];
 
