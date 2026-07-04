@@ -1487,6 +1487,28 @@ impl Match {
     pub fn arms(&self) -> &[Arm] {
         &self.arms
     }
+
+    /// Decompose the `Match` into its raw parts for structural transformation.
+    ///
+    /// Used by `sky_lower`'s `rewrite_var_to_apply` to rewrite arm bodies
+    /// in-place without re-running the structural validation in
+    /// [`Self::new`] / [`Self::new_flat`] (the pattern shapes are unchanged,
+    /// so all invariants those constructors verify still hold).
+    #[must_use]
+    pub fn into_parts(self) -> (Box<Expr>, Vec<Arm>) {
+        (self.scrutinee, self.arms)
+    }
+
+    /// Rebuild a `Match` from raw parts without re-running structural
+    /// validation. Only safe when the patterns are unmodified — the structural
+    /// invariants checked by [`Self::new`] / [`Self::new_flat`] are over the
+    /// arm pattern shapes, not over the arm bodies. Body rewrites (e.g.
+    /// variable-to-apply substitution) never change pattern shapes, so this
+    /// stays sound.
+    #[must_use]
+    pub const fn from_parts_unchecked(scrutinee: Box<Expr>, arms: Vec<Arm>) -> Self {
+        Self { scrutinee, arms }
+    }
 }
 
 #[cfg(test)]
