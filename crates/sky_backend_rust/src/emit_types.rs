@@ -139,6 +139,10 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::ServerResponse => "ServerResponse".to_owned(),
         IrType::ServerRoute => "ServerRoute".to_owned(),
         IrType::ServerCookie => "ServerCookie".to_owned(),
+        // #111: stream writer handle — re-exported from sky_runtime::server_stream.
+        IrType::StreamWriter => "StreamWriter".to_owned(),
+        // #111: HTTP request handle — re-exported from sky_runtime::http.
+        IrType::HttpRequest => "HttpRequest".to_owned(),
         // M7 Std.Ui / Std.Html parametric types.  Use fully-qualified Rust paths
         // (T2 soundness: `Attribute` exists in BOTH Std.Ui and Std.Html namespaces;
         // qualified paths keep them unambiguous and prevent glob-import shadowing).

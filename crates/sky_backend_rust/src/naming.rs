@@ -953,27 +953,29 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         | KernelFn::HtmlOnKeyUp => "html_on_string_",
         KernelFn::HtmlOnBool => "html_on_bool_",
         KernelFn::HtmlOnSubmit => "html_on_raw_",
-        // ── #111: Cli app-entry + Auth + Stream + HttpStream ─────────────────
-        // These kernels are emitted via dedicated emit_cli_call / fail-closed
-        // paths; the generic kernel_name is not consulted at emit time.  Arms
-        // are here to keep the match exhaustive.
+        // ── #111: Cli app-entry ───────────────────────────────────────────────
+        // CliProgram is emitted via the dedicated emit_cli_call path;
+        // kernel_name is kept for match exhaustiveness.
         KernelFn::CliProgram => "sky_cli_program_",
-        KernelFn::AuthHashPassword => "auth_hash_password_",
-        KernelFn::AuthHashPasswordCost => "auth_hash_password_cost_",
-        KernelFn::AuthVerifyPassword => "auth_verify_password_",
-        KernelFn::AuthPasswordStrength => "auth_password_strength_",
-        KernelFn::AuthSignToken => "auth_sign_token_",
-        KernelFn::AuthVerifyToken => "auth_verify_token_",
-        KernelFn::AuthRegister => "auth_register_",
-        KernelFn::AuthLogin => "auth_login_",
-        KernelFn::AuthSetRole => "auth_set_role_",
-        KernelFn::StreamStream => "stream_stream_",
-        KernelFn::StreamEmit => "stream_emit_",
-        KernelFn::StreamFinish => "stream_finish_",
-        KernelFn::StreamWithContentType => "stream_with_content_type_",
-        KernelFn::HttpStreamOpen => "http_stream_open_",
-        KernelFn::HttpStreamForEachChunk => "http_stream_for_each_chunk_",
-        KernelFn::HttpStreamClose => "http_stream_close_",
+        // ── #111: Std.Auth runtime function names (auth.rs) ──────────────────
+        KernelFn::AuthHashPassword => "auth_hash_password",
+        KernelFn::AuthHashPasswordCost => "auth_hash_password_cost",
+        KernelFn::AuthVerifyPassword => "auth_verify_password",
+        KernelFn::AuthPasswordStrength => "auth_password_strength",
+        KernelFn::AuthSignToken => "auth_sign_token",
+        KernelFn::AuthVerifyToken => "auth_verify_token",
+        KernelFn::AuthRegister => "auth_register",
+        KernelFn::AuthLogin => "auth_login",
+        KernelFn::AuthSetRole => "auth_set_role",
+        // ── #111: Sky.Http.Server.Stream runtime function names (server_stream.rs)
+        KernelFn::StreamStream => "server_stream_stream",
+        KernelFn::StreamEmit => "server_stream_emit",
+        KernelFn::StreamFinish => "server_stream_finish",
+        KernelFn::StreamWithContentType => "server_stream_with_content_type",
+        // ── #111: Sky.Core.Http.Stream runtime function names (http_stream.rs) ─
+        KernelFn::HttpStreamOpen => "http_stream_open",
+        KernelFn::HttpStreamForEachChunk => "http_stream_for_each_chunk",
+        KernelFn::HttpStreamClose => "http_stream_close",
     }
 }
 
