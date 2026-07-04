@@ -1129,17 +1129,28 @@ fn synthesize_record_alias_ctors(
             continue;
         }
 
-        // A record alias whose name already names a data constructor would have
-        // its value binding silently shadowed by the constructor (`resolve_var`
-        // consults `env.ctors` first). Reject instead — Elm-faithful, fail-closed.
-        if let Some(&first) = seen_ctors.get(&alias_name) {
-            return Err(Diagnostic::Name {
-                span: alias_span,
-                msg: NameError::DuplicateValue {
-                    name: name_str(interner, alias_name)?,
-                    first,
-                },
-            });
+        // A record alias whose name coincides with a data constructor is valid
+        // per the upstream Elm / Sky rules: the TYPE namespace (`type alias`) and
+        // the CONSTRUCTOR namespace (`type … = Ctor | …`) are distinct.
+        //
+        // The upstream Haskell (`Sky.Canonicalise.Module.registerAliases`) inserts
+        // the alias name into `_vars` via `Map.insert` without ANY check against
+        // `_ctors` — the two occupy separate namespaces and coexist peacefully.
+        //
+        // `resolve_var` here also checks `env.ctors` BEFORE `env.vars`, so if we
+        // DID synthesise the alias auto-ctor entry into `env.vars`, the ADT ctor
+        // would always win in expression position anyway.  Skipping synthesis
+        // achieves the same effect more cleanly: the ADT constructor is the sole
+        // winner, and there is no competing entry in `env.vars` that a user could
+        // accidentally reference.
+        //
+        // The old code emitted SKY-N0010 (DuplicateValue) here, which was wrong
+        // and broke the `type Tab = Overview | …` + `type alias Overview = { … }`
+        // pattern found in examples/25-sky-console/src/State.sky.
+        //
+        // Ref: `Sky.Canonicalise.Module.registerAliases` upstream, lines 1759–1775.
+        if seen_ctors.contains_key(&alias_name) {
+            continue;
         }
 
         // Quantified vars, ordered by resolved NAME (stable wire order — intern
