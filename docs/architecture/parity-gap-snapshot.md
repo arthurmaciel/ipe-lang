@@ -1,18 +1,155 @@
 # Parity-Gap Snapshot — skyc examples sweep
 
+---
+
+## Snapshot 2026-07-04 — HEAD `10611cb` (batch-111 + batch-117 + batch-119)
+
+**Date:** 2026-07-04  
+**Binary:** `/home/arthur/.cache/sky-rust-target-3/debug/skyc` (built 2026-07-04T15:35, HEAD `10611cb`)  
+**Environment:** `SKY_RUNTIME_DIR=/home/arthur/Documentos/comp/sky-rust/runtime/src/sky_runtime`  
+**Scope:** All 35 in-scope example directories (`examples/00` → `examples/test_pkg`).  
+**Measurement:** `skyc build <sky.toml|src/Main.sky> --out <dir>/sky-out/rust` with `timeout 120`. Exit-0 = OK; anything else = FAIL with first diagnostic recorded.
+
+> **Caveat — skyc-0 only.** OK means skyc exited 0 (canonicaliser + type-checker + emit all passed). Cargo-level compilation of the emitted Rust is a separate gate not measured here.
+
+### (a) Full Example Table
+
+| Example | Exit | First error code | First blocker (exact message) | Layer | Notes |
+|---|---|---|---|---|---|
+| 00-standard-libs | 1 | SKY-N0005 | `` `Task` has no member `perform` `` | L1b | Unchanged |
+| 01-hello-world | **0** | — | — | OK | |
+| 02-go-stdlib | 1 | SKY-N0005 | `` `Time` has no member `timeString` `` | L1b | Unchanged |
+| 04-local-pkg | **0** | — | — | OK | |
+| 06-json | 1 | SKY-L0106 | `top-level function needs a type signature` | L5 | Unchanged |
+| 09-live-counter | 1 | SKY-L0106 | `update: top-level function needs a type signature` | L5 | **Advanced** — was T0001 #108; #108 fixed, now L0106 untyped-functions |
+| 10-live-component | 1 | SKY-T0001 | `Counter.update: expected Main.Msg, found Counter.Msg` | L3 | Unchanged |
+| 12-skyvote | 1 | SKY-N0003 | `Error kind info: unknown constructor` | L2 | **Advanced** — was N0004 `Auth` absent; #111 registered Auth, now Error ADT constructor unknown |
+| 14-task-demo | 1 | SKY-L0102 | `\_ stays fully polymorphic` | L3 | Unchanged |
+| 15-http-server | 1 | SKY-T0004 | `` `handleHome` has type Handler — more parameters than signature describes `` | L3 | Unchanged |
+| 16-skychess | 1 | SKY-L0108 | `` `Std.Sub` import: kernel not available yet `` | L1c | **Advanced** — was N0005 `filterMap`; #119 added filterMap, now Sub.every absent |
+| 17-skymon | 1 | SKY-T0001 | `expected String, found SqlValue` (bad span on import line) | L3 | Unchanged |
+| 18-job-queue | 1 | SKY-T0001 | `` `Db.exec`: expected Int, found SqlValue `` | L3 | Unchanged |
+| 19-skyforum | 1 | SKY-N0005 | `` `Ui` has no member `name` `` | L1b | **Advanced** — was N0004 `Region` absent; #117 added Region, now Ui.name absent |
+| 20-cli-counter | 1 | SKY-L0102 | `` `\_ -> NoOp` in Cmd.perform: stays fully polymorphic `` | L3 | **Advanced** — was N0004 `Cli` absent; #111 registered Cli, now L0102 polymorphic `_` |
+| 21-tui-stopwatch | 1 | SKY-T0001 | `` `Tui.program`: expected `{ kind : String, value : String }`, found String `` | L3 | Unchanged |
+| 22-tui-stopwatch-ui | 1 | SKY-L0108 | `` `Ui.button` kernel not available yet `` | L1c | Unchanged |
+| 23-tui-todo | 1 | SKY-N0005 | `` `Font` has no member `lineThrough` `` | L1b | Unchanged |
+| 24-tui-kitchen-sink | 1 | SKY-N0005 | `` `Font` has no member `lineThrough` `` | L1b | Unchanged |
+| 25-sky-console | 1 | SKY-L0108 | `blank-span kernel not available` (route kernel) | L1c | Unchanged — still L0108 on route; #108 partial |
+| 26-ui-showcase | 1 | SKY-N0004 | `unknown module \`Input\`` | L1a | Unchanged |
+| 27-multi-session-chat | 1 | SKY-N0005 | `` `Sub` has no member `subscribeTopic` `` | L1b | Unchanged |
+| 28-streaming-chat | 1 | SKY-N0005 | `` `HttpStream` has no member `chunks` `` | L1b | **Advanced** — was N0004 `HttpStream` absent; #111 registered HttpStream, now `chunks` kernel absent |
+| 29-webview-threejs-spike | 1 | SKY-T0001 | `` `Html.node`: expected a, found Html b `` | L3 | Unchanged |
+| 30-sse-server-demo | 1 | SKY-L0108 | `` `Stream.stream` kernel not available yet `` | L1c | **Advanced** — was N0004 `Stream` absent; #111 registered Stream, now `stream` kernel not backed |
+| 31-webview-stopwatch-ui | 1 | SKY-L0108 | `` `Ui.button` kernel not available yet `` | L1c | Unchanged |
+| 32-sse-relay | 1 | SKY-L0108 | `` `ServerStream.stream` kernel not available yet `` | L1c | **Advanced** — was N0004 `ServerStream` absent; #111 registered ServerStream, now `stream` kernel not backed |
+| 33-websocket-echo | 1 | SKY-N0004 | `unknown module \`Ws\`` | L1a | **Advanced** — was N0001 (triple-quoted parser bug); parser bug fixed, now Ws (Sky.Core.WebSocket) absent |
+| 34-multi-tier-console | **0** | — | — | **OK** | **NEW PASS** — was T0001 #108; now fully passes |
+| 37-composite-live-shop | 1 | SKY-N0004 | `unknown module \`Responsive\`` | L1a | **Advanced** — was N0004 `Region`; #117 added Region, now Responsive absent |
+| 38-composite-ui-multibackend | 1 | SKY-N0004 | `unknown module \`Input\`` | L1a | **Advanced** — was N0004 `Region`; #117 added Region, now Input absent |
+| simple | 1 | SKY-N0005 | `` `Task` has no member `perform` `` | L1b | Unchanged |
+| spike-css-source | **0** | — | — | OK | |
+| spike-std-source | **0** | — | — | OK | |
+| test_pkg | **0** | — | — | OK | |
+
+### (b) Counts
+
+**6/35 OK** (up from 5/35 at `1806aa2`).
+
+| Status | Count | Examples |
+|---|---|---|
+| skyc-0 (OK) | **6** | 01, 04, **34**, spike-css-source, spike-std-source, test_pkg |
+| FAIL | **29** | all others |
+
+#### By SKY error code
+
+| Code | Count | Δ vs 1806aa2 | Short description |
+|---|---|---|---|
+| SKY-N0005 | 8 | +1 | module member absent (gained examples that advanced past N0004) |
+| SKY-L0108 | 6 | +3 | kernel not available yet (registered modules, unimplemented kernels) |
+| SKY-T0001 | 5 | −3 | type mismatch |
+| SKY-N0004 | 4 | −5 | unknown module |
+| SKY-L0106 | 2 | +1 | top-level function needs type signature |
+| SKY-L0102 | 2 | +1 | polymorphic type undetermined |
+| SKY-T0004 | 1 | — | more parameters than signature |
+| SKY-N0003 | 1 | — | constructor not found |
+| SKY-N0001 | 0 | −1 | **(cleared)** triple-quoted parser bug fixed by batch-111 |
+
+#### By blocker layer
+
+| Layer | Count | Description |
+|---|---|---|
+| **L1** | **18** | Missing kernel / module / member |
+|  L1a — N0004 | 4 | Unknown module: Input (×2), Responsive, Ws |
+|  L1b — N0005 | 8 | Module exists but member absent: Task.perform (×2), Font.lineThrough (×2), Time.timeString, Sub.subscribeTopic, HttpStream.chunks, Ui.name |
+|  L1c — L0108 | 6 | Module registered, kernel unimplemented: Ui.button (×2), Sub.every, route, Stream.stream, ServerStream.stream |
+| **L3** | **9** | Typing / semantics |
+|  T0001 | 5 | SqlValue scheme (×2), cross-module ADT (×1), Tui.program scheme (×1), Html.node any-unification (×1) |
+|  L0102 | 2 | Polymorphic `_` lambda (×2) |
+|  T0004 | 1 | Handler head-alias unfold |
+|  N0003 | 1 | Error ADT constructor pattern |
+| **L5** | **2** | Language feature gap |
+|  L0106 | 2 | Untyped top-level function |
+
+### (b) Delta from `1806aa2`
+
+| Example | Was | Now | Driver |
+|---|---|---|---|
+| **34-multi-tier-console** | FAIL T0001 (#108) | **OK** | #108 partial fix unblocked this example |
+| 09-live-counter | FAIL T0001 (#108) | FAIL L0106 | #108 fix advanced past routing check; untyped-functions now the gate |
+| 12-skyvote | FAIL N0004 (Auth) | FAIL N0003 (Error ctor) | #111 registered Std.Auth; Error ADT constructor pattern now the gate |
+| 16-skychess | FAIL N0005 (filterMap) | FAIL L0108 (Sub.every) | #119 added filterMap; Sub.every now the gate |
+| 19-skyforum | FAIL N0004 (Region) | FAIL N0005 (Ui.name) | #117 added Region; Ui.name now the gate |
+| 20-cli-counter | FAIL N0004 (Cli) | FAIL L0102 (polymorphic `_`) | #111 registered Cli; `\_ -> NoOp` lambda type now the gate |
+| 28-streaming-chat | FAIL N0004 (HttpStream) | FAIL N0005 (HttpStream.chunks) | #111 registered HttpStream; `chunks` kernel now the gate |
+| 30-sse-server-demo | FAIL N0004 (Stream) | FAIL L0108 (Stream.stream) | #111 registered Stream module; `stream` kernel not backed |
+| 32-sse-relay | FAIL N0004 (ServerStream) | FAIL L0108 (ServerStream.stream) | #111 registered ServerStream; `stream` kernel not backed |
+| 33-websocket-echo | FAIL N0001 (parser bug) | FAIL N0004 (Ws) | Triple-quoted string parser bug fixed; Ws (WebSocket) module absent |
+| 37-composite-live-shop | FAIL N0004 (Region) | FAIL N0004 (Responsive) | #117 added Region; Responsive (Std.Ui.Responsive) now the gate |
+| 38-composite-ui-multibackend | FAIL N0004 (Region) | FAIL N0004 (Input) | #117 added Region; Input (Std.Ui.Input) now the gate |
+| 25-sky-console | FAIL L0108 (route, blank span) | FAIL L0108 (route, blank span) | No change |
+| 26-ui-showcase | FAIL N0004 (Input) | FAIL N0004 (Input) | No change |
+| all other FAILs (17) | same code | same code | No change |
+
+### (c) New dominant blocker classes
+
+Ranked by example count for this snapshot:
+
+1. **N0005 — missing module member (8 examples):** Task.perform (00, simple), Font.lineThrough (23, 24), Time.timeString (02), Sub.subscribeTopic (27), HttpStream.chunks (28), Ui.name (19). All in already-registered modules; need kernel implementations.
+
+2. **L0108 — kernel registered but not backed (6 examples):** Ui.button (22, 31), Sub.every (16), route (25), Stream.stream (30), ServerStream.stream (32). Module is in the registry; the kernel dispatch entry is absent.
+
+3. **T0001 — type mismatch (5 examples):** SqlValue return scheme (17, 18 — task #34), cross-module ADT inference (10), Tui.program Sub shape (21), Html.node `any` unification (29).
+
+4. **N0004 — unknown module (4 examples):** Std.Ui.Input (26, 38), Std.Ui.Responsive (37), Sky.Core.WebSocket alias `Ws` (33). All need module registration + kernel family.
+
+5. **L0106 + L0102 — language feature gaps (4 examples):** Untyped top-level functions (06, 09), polymorphic `_` in lambda (14, 20).
+
+### (d) Top-5 next fixes by unblock impact
+
+| Rank | Fix | Examples unblocked | Notes |
+|---|---|---|---|
+| 1 | **`Font.lineThrough` + `Ui.button` kernels** | 4 — 22, 23, 24, 31 | Two missing kernels in existing modules; simple kernel-registration work; each unblocks 2 examples |
+| 2 | **`Task.perform` + `Task.retryWith`/`linearBackoff`** | 2 direct — 00, simple; high secondary | Task.perform is a prerequisite for async flows in nearly every real app; clearing it exposes the next layer |
+| 3 | **Register `Std.Ui.Input` + implement `Input.text`/`Input.multiline` kernels** | 2 — 26, 38 | Both fail at the same N0004 `Input`; module registration + ~4 kernels |
+| 4 | **`Sub.every` + `Sub.subscribeTopic` kernels** | 2 — 16 (Sub.every via L0108), 27 (subscribeTopic via N0005) | Pub/sub family; both likely in the same batch |
+| 5 | **`Stream.stream` + `ServerStream.stream` + `HttpStream.chunks` kernels** | 3 — 28, 30, 32 | All three are SSE/streaming examples; #111 registered the modules, now the kernels need backing |
+
+---
+
+## Snapshot 2026-07-04 — HEAD `1806aa2` (task #114)
+
 **Date:** 2026-07-04  
 **Binary:** `/home/arthur/.cache/sky-rust-target-2/debug/skyc` (built 2026-07-04T02:43, HEAD `1806aa2` = task #114)  
 **Environment:** `SKY_RUNTIME_DIR=/home/arthur/Documentos/comp/sky-rust/runtime/src/sky_runtime`  
 **Scope:** All 35 in-scope example directories (`examples/00` → `examples/test_pkg`).  
 **Measurement:** `skyc build src/Main.sky --out /tmp/parity-sweep/<name>/rust` with `timeout 120`. Exit-0 = skyc-0; anything else = FAIL with first diagnostic recorded.  
 
-> **Caveat — skyc-0 only.** OK means skyc exited 0 (canonicaliser + type-checker + emit all passed). It does NOT mean the emitted Rust compiled via cargo. Cargo-level failures (exit-0-then-cargo-fail, seal class) are a separate and ongoing concern tracked by tasks #89/#94/#95/#99/#104/#112. This sweep measures the earlier gate.
+> **Caveat — skyc-0 only.** OK means skyc exited 0 (canonicaliser + type-checker + emit all passed). Cargo-level failures are a separate gate tracked by tasks #89/#94/#95/#99/#104/#112.
 
-> **Caveat — #108 known cases.** Examples 09-live-counter and 34-multi-tier-console are documented to produce T0001 due to `#108` (RoutedLiveApp open-record) being pending. Example 10-live-component also shows T0001 but for a *different* reason (cross-module ADT case-arm payload type).
+> **Caveat — #108 known cases.** Examples 09-live-counter and 34-multi-tier-console were documented to produce T0001 due to `#108` (RoutedLiveApp open-record). See 10611cb snapshot for updated status.
 
----
-
-## (a) Full Example Table
+### (a) Full Example Table
 
 | Example | Exit | First error code | First blocker (exact message) | Layer | Task-ref / note |
 |---|---|---|---|---|---|
@@ -54,16 +191,16 @@
 
 ---
 
-## (b) Counts
+### (b) Counts
 
-### By exit code
+#### By exit code
 
 | Status | Count | Examples |
 |---|---|---|
 | skyc-0 (OK) | **5** | 01, 04, spike-css-source, spike-std-source, test_pkg |
 | FAIL | **30** | all others |
 
-### By SKY error code
+#### By SKY error code
 
 | Code | Count | Short description |
 |---|---|---|
@@ -76,7 +213,7 @@
 | SKY-T0004 | 1 | more params than signature |
 | SKY-N0001 | 1 | value not in scope (parser bug) |
 
-### By blocker layer
+#### By blocker layer
 
 | Layer | Count | Description |
 |---|---|---|
@@ -94,11 +231,11 @@
 
 ---
 
-## (c) Critical Path to Sweep-Green
+### (c) Critical Path to Sweep-Green (as of 1806aa2)
 
 Ordered by number of first-blockers each fix would remove. Second-order unblocks noted separately.
 
-### Fix 1 — #111: Effect stdlib modules (Std.Auth, Std.Cli, Sky.Http.Server.Stream, Sky.Core.Http.Stream)
+#### Fix 1 — #111: Effect stdlib modules (Std.Auth, Std.Cli, Sky.Http.Server.Stream, Sky.Core.Http.Stream)
 
 **Direct unblock: 5 examples** → 12-skyvote, 20-cli-counter, 28-streaming-chat, 30-sse-server-demo, 32-sse-relay
 
@@ -106,26 +243,26 @@ All five fail with N0004 because their primary import is to one of these absent 
 
 Note on Std.Cli specifically: example 20-cli-counter has the explicit `import Std.Cli as Cli` import statement, so this is genuinely an absent module, not a missing qualifier registration.
 
-### Fix 2 — New task: Register Std.Ui.Region + Std.Ui.Input
+#### Fix 2 — New task: Register Std.Ui.Region + Std.Ui.Input
 
 **Direct unblock: 4 examples** → 19-skyforum, 26-ui-showcase, 37-composite-live-shop, 38-composite-ui-multibackend
 
 Three examples (19, 37, 38) fail on N0004 for `Region` (imported as `Std.Ui.Region`). Example 26 fails on N0004 for `Input` (Std.Ui.Input). Neither module appears in the compiled-source stdlib or kernel registry. This is NOT covered by any existing pending task — it needs a new issue. Likely the same implementation pattern as other Std.Ui sub-modules.
 
-### Fix 3 — #108: RoutedLiveApp (routes/notFound row-poly cfg + route kernel)
+#### Fix 3 — #108: RoutedLiveApp (routes/notFound row-poly cfg + route kernel)
 
 **Direct unblock: 3 examples** → 09-live-counter, 25-sky-console, 34-multi-tier-console
 
 - 09 and 34: T0001 because `app`'s constrain scheme always expects `routes : List LiveRoute` + `notFound : Page` fields in the cfg record, but both examples provide the non-routed shape. Fixing #108 (open row-poly cfg) makes these fields optional.
 - 25-sky-console: provides routes + notFound but gets L0108 on the `route` kernel itself (backed by #108's implementation).
 
-### Fix 4 — Task.perform + retry kernels (N0005)
+#### Fix 4 — Task.perform + retry kernels (N0005)
 
 **Direct unblock: 2 examples first-blocker** → 00-standard-libs, simple
 
 Both fail immediately on `Task.perform`. However, fixing this is a **prerequisite for many other examples' secondary blockers** — nearly every CLI, Live, and Tui app eventually calls `Task.perform` or `Task.run`. Second-order impact is high. The retry family (`retryWith`, `linearBackoff`, `exponentialBackoff`, `withJitter`) and the two Std.Time members (`isLeapYear`, `daysInMonth`) as well as `Std.Decimal` and `Std.Money` are further blockers in 00-standard-libs after this first one clears.
 
-### Fix 5 — Ui.button + Font.lineThrough + Sub.subscribeTopic kernels
+#### Fix 5 — Ui.button + Font.lineThrough + Sub.subscribeTopic kernels
 
 **Direct unblock: 5 examples** → 22-tui-stopwatch-ui (Ui.button), 23-tui-todo (Font.lineThrough), 24-tui-kitchen-sink (Font.lineThrough), 27-multi-session-chat (Sub.subscribeTopic), 31-webview-stopwatch-ui (Ui.button)
 
@@ -133,7 +270,7 @@ These are three independent L1b/L1c gaps that each block specific examples. Batc
 
 ---
 
-### Remaining blockers (1 example each)
+#### Remaining blockers (1 example each)
 
 After the top-5, the remaining FAIL examples each have a unique blocker:
 
@@ -153,7 +290,7 @@ After the top-5, the remaining FAIL examples each have a unique blocker:
 
 ---
 
-## Summary of impact by fix
+### Summary of impact by fix
 
 | Fix | Examples directly unblocked |
 |---|---|
@@ -166,7 +303,7 @@ After the top-5, the remaining FAIL examples each have a unique blocker:
 
 ---
 
-## How many examples does #108 unblock?
+### How many examples did #108 unblock? (as of 1806aa2)
 
 **3 examples** (09-live-counter, 25-sky-console, 34-multi-tier-console).
 
@@ -176,7 +313,7 @@ After the top-5, the remaining FAIL examples each have a unique blocker:
 
 ---
 
-## Sweep environment notes
+### Sweep environment notes
 
 - Binary HEAD: commit `1806aa2` (task #114, unary-negation parser support). All tasks up to and including #114 are in the binary.
 - Tasks #78 and #80 (register Cli/Stream/ServerStream/HttpStream in canon) are marked completed, but the sweep confirms `Std.Cli`, `Sky.Http.Server.Stream`, and `Sky.Core.Http.Stream` are still absent from both the compiled-source stdlib and the kernel registry. These remain open as the first-blockers for examples 20, 28, 30, 32. Task #111 is the appropriate owner.
