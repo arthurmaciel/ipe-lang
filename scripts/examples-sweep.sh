@@ -90,7 +90,7 @@ say() { echo "$@" | tee -a "$RUNLOG"; }
 say "=== ipê EXAMPLES sweep @ $STAMP (repo: $REPO · skyc: $SKYC_BIN) ==="
 [ "$BUILD_ONLY" = 1 ] && say "  (SKY_SWEEP_BUILD_ONLY=1 — BUILD column only; RUN+EQUIV skipped)"
 [ "$BUILD_ONLY" != 1 ] && [ "$NO_EQUIV" = 1 ] && say "  (SKY_SWEEP_NO_EQUIV=1 — BUILD+RUN; EQUIV skipped — the phase-1 default)"
-[ "$NO_EQUIV" = 1 ] || [ "$WEB_OK" = 1 ] || say "  NOTE: browser stack incomplete — scenario equiv falls back to a both-backends boot check."
+[ "$NO_EQUIV" = 1 ] || [ "$WEB_OK" = 1 ] || say "  NOTE: browser stack incomplete — scenario equiv falls back to normalised HTML body comparison (GET / → #sky-root diff via equiv_normalize_html.py)."
 
 # ── skyc build target for an example dir — sky.toml if present, else src/Main.sky
 # skyc's project build (crates/skyc/src/lib.rs build_project) needs a sky.toml to
@@ -235,13 +235,35 @@ equiv_for() {
         return 0
       fi
       scen="$(scenario_for "$n")"
-      exercise_live "$rbin" "$n" "$(free_port)" "$scen" "$rsl" || rok=0; reap
-      build_go "$d" "$n" || { printf 'go-ref-broken\tGo build failed\n'; return 0; }
-      exercise_live "$d/sky-out/app" "$n" "$(free_port)" "$scen" "$gol" || gok=0; reap
-      if [ "$gok" = 0 ] && [ "$rok" = 0 ]; then printf 'go-ref-broken\tboth fail scenario\n'
-      elif [ "$gok" = 0 ]; then printf 'go-ref-broken\tGo fails scenario %s\n' "$scen"
-      elif [ "$rok" = 1 ]; then printf 'equiv-scenario\t(scenario %s; APP-behaviour)\n' "$scen"
-      else printf 'DIFFER\tRust fails scenario %s where Go passes\n' "$scen"; fi
+      if [ "$WEB_OK" = 1 ]; then
+        # Full browser scenario — the gold standard for Sky.Live equivalence.
+        exercise_live "$rbin" "$n" "$(free_port)" "$scen" "$rsl" || rok=0; reap
+        build_go "$d" "$n" || { printf 'go-ref-broken\tGo build failed\n'; return 0; }
+        exercise_live "$d/sky-out/app" "$n" "$(free_port)" "$scen" "$gol" || gok=0; reap
+        if [ "$gok" = 0 ] && [ "$rok" = 0 ]; then printf 'go-ref-broken\tboth fail scenario\n'
+        elif [ "$gok" = 0 ]; then printf 'go-ref-broken\tGo fails scenario %s\n' "$scen"
+        elif [ "$rok" = 1 ]; then printf 'equiv-scenario\t(scenario %s; APP-behaviour)\n' "$scen"
+        else printf 'DIFFER\tRust fails scenario %s where Go passes\n' "$scen"; fi
+      else
+        # No browser stack — fall back to normalised HTML body comparison.
+        # Sky.Live serves a full HTML page at GET / with id="sky-root"; the
+        # normaliser collapses implementation-freedom surface (sky-id format,
+        # attr order, event encoding, style delivery) so the diff is
+        # behaviourally meaningful. Same exercise_server_equiv path used for
+        # Sky.Http.Server body mode, but driven against a Live server.
+        build_go "$d" "$n" || { printf 'go-ref-broken\tGo build failed\n'; return 0; }
+        local res
+        res="$(exercise_server_equiv "$d/sky-out/app" "$rbin" "$d" "$HIST/$n.equiv")"
+        reap
+        case "$res" in
+          equiv-body\ *) printf '%s\t(HTML-norm; no browser stack)\n' "$res" ;;
+          equiv-serve)   printf 'equiv-serve\t0 comparable GET routes — both boot (no browser)\n' ;;
+          go-ref-broken) printf 'go-ref-broken\tGo reference did not boot+serve\n' ;;
+          rust-broken)   printf 'DIFFER\tRust did not boot+serve where Go did\n' ;;
+          DIFFER)        printf 'DIFFER\tHTML body differs after normalisation (see %s.equiv)\n' "$n" ;;
+          *)             printf 'go-ref-broken\tequiv probe inconclusive (%s)\n' "$res" ;;
+        esac
+      fi
       ;;
     *) printf 'n/a\tunknown mode %s\n' "$mode" ;;
   esac
