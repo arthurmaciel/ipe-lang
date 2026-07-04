@@ -212,6 +212,44 @@ runtime (each either matches Go or is more correct):
 - **Sanctioned:** these are runtime-fork differences, not source-program
   divergences; they are captured in `docs/architecture/sky-rust-backend-reference-audit.md` §Runtime.
 
+### B16 — True last-use clone analysis vs reference's use-count≥2 blanket (#104)
+- **Differs:** For a local binding of non-`Copy` type that appears in multiple
+  owned-consume positions, the reference clones **all** occurrences — including
+  the last one — when the binding is in `ecCloneVars` (the set of locals used
+  ≥ 2 times; `ExprEmitter.hs` `collectVarLocalsMulti`, `varLocalRead:781-787`).
+  ipê performs true last-use analysis: borrow-position reads (comparison operands,
+  `++`, interpolation) are emitted bare; among owned-consume reads the **last** is
+  emitted as a move (zero clones), and every earlier one is `x.clone()`. Result:
+  N uses → N−1 clones instead of N; borrow positions are excluded from the count.
+- **Go-oracle relationship:** Go succeeds; output is identical (clone count is an
+  internal concern). The divergence is in emitted-Rust efficiency only.
+- **Rationale:** soundness/efficiency — Rust's move semantics let the last use
+  move; over-cloning the last use is incorrect by Rust's standards (wastes an
+  allocation on a path where the original is never touched again). Strictly better
+  than the reference. See `docs/architecture/seal-noncopy-move-design.md §4.1`.
+- **Verified:** design doc §4.1; reference `ExprEmitter.hs:294,781-787`.
+- **Sanctioned:** yes (`sanctioned:`). Pending fixture goldens for #104.
+
+### B17 — Refutable as-pattern alias bind vs reference's drop-the-alias bug (#99)
+- **Differs:** For a match-arm alias pattern `name @ inner` over an owned
+  scrutinee, the reference drops the alias name: `patternToMatchString` renders
+  `((a,b) as w)` as just `(a, b)` and never binds `w`
+  (`ExprEmitter.hs:4206`). A body that uses `w` would fail with E0425 "cannot
+  find value `w`" — the alias whole is lost. ipê correctly binds the whole by
+  move (`name @ skeleton`) and reconstructs the inner bindings from
+  `name.clone()` in the arm prelude, routing through `emit_binding_stmts` for
+  nested aliases. The reference's `let-else` + `patternIsIrrefutable` discipline
+  (`Pattern.hs:113-171`) is ported for the refutable reconstruction branch.
+- **Go-oracle relationship:** Go backend does not generate Rust, so the reference
+  pattern is the Haskell-emitting-Rust path. ipê's output is correct on this
+  shape; the reference's output is wrong when `name` is used in the arm body.
+- **Rationale:** correctness — the reference has a latent bug (alias name dropped
+  → E0425 on use). ipê fixes it. See `docs/architecture/seal-noncopy-move-design.md §4.2`.
+- **Verified:** design doc §4.2; `ExprEmitter.hs:4206`; existing #96 clone-split
+  machinery (`emit_expr.rs:3237`) extended into `emit_arm_head`.
+- **Sanctioned:** yes (`sanctioned:` — correctness improvement over a reference
+  latent bug). Pending fixture goldens for #99.
+
 ### B15 — Float scientific-notation threshold — **RESOLVED (ipê-correct)**
 - **Differs:** ipê's `stringify.rs` switches to scientific notation at exponent ≥ 6
   (`!(-4..6)`); the reference's Rust backend switches at exponent ≥ 21 (`!(-4..21)`).
@@ -353,6 +391,76 @@ a behavioural change. `concatMap`/`indexedMap` are kernels in both backends.
 *Neutral: efficiency-only, output-identical.* See
 `docs/architecture/list-ops-lower-wiring.md`.
 
+### A15 — Model/Msg admissibility gates #91/#94/#95 (Rust-static-bounds–forced)
+The reference Go backend types Model and Msg through HM (`("Live","app")` record
+constraint in `Expression.hs:2674`) but performs **no static admissibility
+check**: Go's runtime reflects/gob-encodes Model dynamically and tolerates
+functions, `Html`, `Cmd`, and `Task` values in Model or Msg at compile time (they
+fail to round-trip or are carried as `any`, but the compiler accepts them
+silently).
+
+ipê's Rust runtime imposes **static trait bounds** on both type parameters:
+`live_app<Model, Msg>` requires
+`Model: serde::Serialize + DeserializeOwned + Clone + PartialEq + Send + Sync`
+and `Msg: Clone + Send + Sync + Debug` (`runtime/src/sky_runtime/live/mod.rs`).
+A Model or Msg that carries a function, `Cmd`, `Sub`, `Task`, or `Decoder` does
+not satisfy these bounds, so the emitted Rust fails `cargo build`. Because
+`skyc` exit-0 MUST imply `cargo` exit-0 (the seal), the backend adds explicit
+admissibility gates:
+
+- **#91 (shipped):** `check_admissible_model` in `emit_model_gate.rs:62` — gates
+  Model at `skyc`, emits `SKY-L0120` on a non-serde/non-Clone leaf. Verified:
+  `code.rs:198-200`, `emit_model_gate.rs`.
+- **#94 (designed, not yet in code.rs):** `check_admissible_msg` — gates Msg
+  at `skyc` using `ir_type_is_derivable` for all three app shapes (NOT serde —
+  Html is derivable and thus admissible as a Live Msg payload, unlike Live Model).
+  Emits the planned `SKY-L0121`. Designed in
+  `docs/architecture/seal-gates-msg-lambda-view-design.md §2`.
+- **#95 (designed, not yet committed):** Lambda-aware `fn_param_ty(e, idx)` in
+  `emit_model_gate.rs:38` — closes the fail-open gap where `view = \m -> …`
+  (an `Expr::Lambda`) bypassed the `FuncValue`-only model recovery and silently
+  skipped the gate. Designed in §3 of the same doc.
+
+*Rationale:* seal-forced divergence. The Go backend's dynamic path is correct for
+Go; the Rust backend's static bounds make the Go-dynamic path a `cargo`-fail.
+Gates at `skyc` convert the `cargo`-fail class into a clear user diagnostic.
+See `docs/architecture/seal-gates-msg-lambda-view-design.md §4`.
+*Note:* `SKY-L0121` (InadmissibleAppMsg) is **designed but not yet in
+`code.rs`** — mark as pending-implementation.
+
+### A16 — App cfg must be an inline record literal (SKY-L0119)
+The reference Go backend accepts any expression as the `Live.app` / `Tui.app` /
+`Webview.app` cfg argument, including a let-bound variable
+(`let cfg = { … } in Live.app cfg`). ipê's backend reads the cfg's fields
+(`init`, `update`, `view`, `subscriptions`, …) directly from the structural
+record at the call site; a non-literal argument (a `Var`, a pipe result, a
+function call) cannot be field-indexed at lower time, so it is rejected with
+`SKY-L0119` ("app entry cfg must be an inline record literal").
+
+*Rationale:* Rust-lowering constraint — the backend must structurally decompose
+the cfg record at lower time to emit the correct `live_app` call; a variable
+reference loses the field structure. The reference's Go backend reconstructs the
+cfg at runtime via reflection; ipê does not have that escape hatch.
+*Verified:* `code.rs:196`, `explain/SKY-L0119.md`, `emit_live.rs` (lookup_field).
+*Note:* let-bound-cfg support (`[feature: let-bound-app-cfg]` in the explain
+page) is a tracked future item — not a permanent limitation.
+
+### A17 — `Float` rejected as `Set` element or `Dict` key (SKY-L0117)
+Sky's type system treats `Float` as a `comparable` value, so the Sky type checker
+accepts `Set Float` / `Dict Float v` — the reference Go backend uses `interface{}`
+comparison and tolerates these at runtime. ipê backs `Set a` with
+`BTreeSet<a>` and `Dict k v` with `HashMap<k, v>`; Rust's `f64` implements
+neither `Ord` (NaN has no place in a total order) nor `Hash`/`Eq` (NaN != NaN).
+Emitting `BTreeSet<f64>` / `HashMap<f64, _>` would produce Rust that does not
+compile, so the case is rejected at lower with `SKY-L0117`.
+
+*Rationale:* Rust-substrate constraint, permanent. The NaN/ordering issue is a
+semantic property of IEEE 754 floating point that does not arise in Go's
+`interface{}`-keyed maps. The diagnostic is deliberate and named a divergence from
+Sky in its own explain page. *Verified:* `code.rs:192-194`,
+`explain/SKY-L0117.md`. Total-order `Float` set/dict (e.g. via an
+ordered-float wrapper) is a tracked future enhancement.
+
 ---
 
 ## 4. Stdlib / surface divergences
@@ -399,20 +507,29 @@ API-shape review):
 | `Std.Ui` HTML | skeleton + `<style>` reset | compact inline CSS, no reset block | Separate renderer; byte-parity later |
 | Runtime | shared fork baseline | strict superset (auth/jwt/SSRF/decimal/cache/env/telemetry hardening) | Security/correctness/soundness |
 | Float sci-notation | exp ≥ 21 (reference Rust) | exp ≥ 6 (Go `%v` parity) — **confirmed vs Go 1.26.2 (#52)** | ipê matches Go; the reference's Rust fork diverges |
+| Clone strategy (non-`Copy` bindings) | use-count ≥ 2 → clone ALL reads (including last) | true last-use: clone all-but-last owned reads, last moves; borrow reads exempt | Rust move semantics; N−1 clones vs N |
+| As-pattern alias in match arm | drops alias name → E0425 on use (latent bug) | binds whole by move, reconstructs inner from clone | Correctness; reference latent bug fixed |
+| Model admissibility | dynamic (Go reflects at runtime; no compile-time gate) | static `SKY-L0120` gate at `skyc` | Rust static trait bounds (seal) |
+| Msg admissibility | dynamic (no compile-time gate) | static `SKY-L0121` gate (designed; pending impl) | Rust static trait bounds (seal) |
+| App cfg argument | any expression (let-bound variable OK) | must be an inline record literal (`SKY-L0119`) | Backend reads fields at lower time; no runtime reflection |
+| `Float` as `Set`/`Dict` key | accepted (Go `interface{}` comparison) | rejected `SKY-L0117` | `f64` lacks `Ord`/`Hash` in Rust |
 
 ---
 
 ## Counts
 
-- **Behavioral divergences:** 15 classes (B1–B15). Sanctioned/recorded: 42 goldens
-  carry a marker (`Math` 4, `Bytes` 5, `Encoding` 1, `Jwt` 5, `Db` 11, `Ui` 6,
-  `Cmd`/`Sub` 3, `Uuid` 2, plus Go-failure kind-1 shapes and Money/case/toFloat
-  sanctioned entries).
-- **Architectural divergences:** 13 (A1–A13); A8 and A13 are reference-ahead on
-  completeness.
-- **Stdlib/surface divergences:** 4 API-shape + 4 front-end capability gaps.
+- **Behavioral divergences:** 17 classes (B1–B17). B16 (#104 true last-use) and
+  B17 (#99 alias bind) are newly filed — pending fixture goldens. B3 RETIRED
+  (task #55a) per inline note. Sanctioned/recorded goldens: 42 carry a marker
+  (`Math` 4, `Bytes` 5, `Encoding` 1, `Jwt` 5, `Db` 11, `Ui` 6, `Cmd`/`Sub` 3,
+  `Uuid` 2, plus Go-failure kind-1 shapes and Money/case/toFloat sanctioned
+  entries). B16/B17 goldens pending.
+- **Architectural divergences:** 17 (A1–A17). A8 and A13 are reference-ahead on
+  completeness. A15–A17 are newly added this pass.
+- **Stdlib/surface divergences:** 4 API-shape + 4 front-end capability gaps +
+  2 new gate-forced surface constraints (SKY-L0119, SKY-L0117).
 
-## Could not confirm / verify before README
+## Could not confirm / verify
 
 - ~~**B15 float sci-notation threshold.**~~ RESOLVED (task #52, commit `1903654`):
   probed Go 1.26.2 directly — `%v` cuts to scientific at exp ≥ 6, no exp-21
@@ -433,3 +550,26 @@ API-shape review):
     Can.Expr -> String` at `ExprEmitter.hs:793`, one of many `… -> String`
     renderers across the 4324-line module) — no typed-IR checkpoint. Confirms
     the A2 characterisation.
+
+- **SKY-L0121 (InadmissibleAppMsg) — PENDING IMPLEMENTATION.** The Msg-gate
+  design is complete (`docs/architecture/seal-gates-msg-lambda-view-design.md §2`)
+  and the diagnostic code constant is reserved in the design, but as of this pass
+  `SKY_L0121` does not yet appear in `crates/sky_diagnostics/src/code.rs` (the
+  file has 79 taxonomy codes; `SKY-L0121` is not among them). A15 captures the
+  designed behaviour; mark as asserted-pending-impl until the code lands.
+
+- **"Nominal (home, name) identity types #100" — NOT VERIFIED AS SKY DIVERGENCE.**
+  Session memory referenced this as a divergence, but in-repo search finds no
+  file or commit that records it as a Sky-specific divergence. The principled-
+  decisions-audit (#12) confirms ipê already keys on `(home, name)` canonical
+  naming — following `elm/compiler` — and the audit verdict is REJECT (already
+  better). Sky's own Haskell compiler also uses name-qualified lookup internally,
+  so this appears to be a PORT (convergence with elm/compiler), not a divergence
+  from Sky. If a specific Sky-runtime divergence exists under this label, re-file
+  with a concrete file:line cite.
+
+- **Live.route non-String payload (#106) — PORT, not a divergence.**
+  `routed-live-app-design.md` classifies `Live.route : String -> page ->
+  LiveRoute` typing (#106) as "✅ done (Port — matches `../sky`)." The latent
+  E0308 for non-String page constructor payloads (`emit_live.rs:135`) is a
+  known bug to fix, not a sanctioned divergence. Not added to the ledger.
