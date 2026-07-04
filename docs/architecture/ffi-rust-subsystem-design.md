@@ -4,18 +4,25 @@
 (`docs/roadmap.md` §B); nothing in this doc executes now.
 **Date:** 2026-07-04.
 
-> **GOAL CORRECTION (coordinator, 2026-07-04) — supersedes this doc's scope +
+> **GOAL CORRECTION (coordinator, 2026-07-04; premise corrected by the
+> async-bridge conciliation, 2026-07-04) — supersedes this doc's scope +
 > P-ordering.** The goal is fully-automatic, UNIVERSAL (every crate) Sky→Rust
 > FFI. **The acceptance metric is `../sky/examples/rust/skyshop-rs` running with
-> ZERO manual shims for firestore, firebase, and stripe** — the reference itself
-> still hand-shims these, so this is exactly where we exceed it — **plus DCE of
-> unused FFI functions/values** (bind/emit only the used subset; Stripe-scale =
-> 76k symbols). Consequence: §6's "P7 async bridge LAST" ordering is WRONG under
-> this goal — the async→`Task Error a` auto-bridge is the make-or-break spine
-> and must be designed + de-risked EARLY (spine-first principle). An async-bridge
-> double-swarm (fresh-design ∥ reference-learning → conciliation) supersedes P7;
-> its output will amend this doc. The reference-validated architecture in §1-§5
-> (inspector, generator, sandbox, no-fallback wall) stands unchanged.
+> ZERO manual shims for firestore, firebase, and stripe, plus DCE of unused FFI
+> functions/values** (bind/emit only the used subset; stripe visible surface =
+> 20,358 symbols post-#89, 3,534 bound). CORRECTED PREMISE: the reference did
+> NOT give up on async — it binds foreign `async fn` as `Task Error a` natively
+> since #44 (2026-06-23), binds firestore 0.49 direct and shim-free (fixture
+> 104), and proved every stripe mechanism on fixtures 93-96 (WALL-I/J/K); the
+> skyshop shims are a pre-#44 fossil. We PORT that campaign and FINISH its two
+> open ends — the never-run real async-stripe E2E build, and the never-done
+> skyshop de-shim. "Exceed the reference" means exactly the acceptance metric
+> above, not out-inventing its async design. Consequence: §6's "P7 async bridge
+> LAST" ordering is WRONG — async emission is part of the base generator (P1-P3)
+> per the authoritative conciliated design, **`async-ffi-bridge-design.md`**,
+> which re-slots the P-phases (its §9) and supersedes P7/M-G. The
+> reference-validated architecture in §1-§5 (inspector, generator, sandbox,
+> no-fallback wall) stands unchanged.
 **Relationship to prior docs:** this doc RECONCILES and PARTIALLY SUPERSEDES
 the banked #39 suite — `ffi-design.md`, `ffi-port-spec.md`,
 `ffi-subsystem-design.md`, `ffi-sandbox-and-generator-impl-ready.md` — now
@@ -53,12 +60,18 @@ and sharpens four things (§7):
    reference's own `runtime-rust/src/sky_runtime/ffi_polyfills.rs` contains
    the same two panicking polyfills with the same rationale. The only thing
    it diverges from is the Go runtime's `%v`-string registry.
-4. The reference's honest scope is ours too: **10 pure/sync crates are
-   proven shim-free** (semver, toml, serde-json, regex, bytes, jiff, …);
-   **async SDKs (firestore/firebase/stripe) remain hand-shimmed** even in
-   the completed reference (`examples/rust/skyshop-rs` binds
-   `sky-firestore-shim` / `sky-stripe-shim` wrapper crates, not the SDKs
-   directly). We must not market beyond that.
+4. ~~The reference's honest scope is ours too: 10 pure/sync crates proven
+   shim-free; async SDKs remain hand-shimmed even in the completed
+   reference.~~ **STALE — corrected 2026-07-04 by the async-bridge
+   conciliation** (`async-ffi-bridge-design.md`, verified in-repo): the
+   reference binds async natively since #44 — firestore 0.49 direct +
+   shim-free (fixture 104, `SKY_DCE=0` residual 124 → 10), all stripe
+   mechanisms proven on fixtures 93-96. `examples/rust/skyshop-rs` still
+   *ships* its three shim crates, but that is an unfinished migration
+   (pre-#44 fossil), not a capability boundary. The honest scope statement
+   is now: 10 sync crates + firestore proven; real async-stripe E2E and the
+   skyshop de-shim are the two open ends we finish (P6/P7 of the
+   conciliated plan).
 
 ---
 
@@ -383,7 +396,7 @@ here + in `docs/divergences-from-sky.md` when implemented.
 | Dynamic `Ffi.callTask`/`callPure` | Rust runtime panics by design (`ffi_polyfills.rs:53-61`) | identical (vendored) | **adopt** — reclassified from "our divergence" to reference parity |
 | DCE of unused bindings | `FfiRef` reachability (`Dce.hs:19-22`) + sentinel-sliced `_bindings.rs` | same (S4, conservative-keep text slicing on BEGIN/END sentinels) | **adopt** |
 | Cargo dep wiring | exact locked version + effective features from PkgInfo (`FfiGen.hs:186-201`) | same; resolve `(ident, canonical_name, version)` triple, never guess `_`→`-`, never `"*"` | **adopt** |
-| Async SDKs | hand-shimmed wrapper crates (`examples/rust/skyshop-rs/sky.toml`) | same honest scope; M-G proves the bridge on a small async crate only | **adopt** (honesty) |
+| Async SDKs | binds natively since #44 (firestore direct, fixture 104; stripe mechanisms proven on fixtures 93-96); skyshop-rs shims are an unfinished migration | port the async emission + finish the two open ends (real stripe E2E, skyshop de-shim) — see `async-ffi-bridge-design.md` | **adopt + finish** (row corrected 2026-07-04) |
 
 ## 6. Milestone plan
 
@@ -415,7 +428,7 @@ keeping the security gate ahead of anything a user can invoke.
 | **P4 — #41 sandbox** | `ipe_sandbox` crate: bwrap argv builder; unshare fallback + post-spawn isolation proof; refusal `SKY-F4410` + `IPE_FFI_ALLOW_UNSANDBOXED=1`; phase-separated fetch/compile/inspect; resource caps; env scrub | Isolation proof tests (ns-id comparison, no-egress probe from inside jail); refusal path test; caps enforced (OOM-crate fixture killed at RSS cap) | 2-3 sessions |
 | **P5 — #42d driver + consumer wiring** | `ipe add/install/remove` (argv-exec, trust gate, `--git` gating, dynamic `Cargo.toml` with locked versions + effective features, S4 sentinel DCE); `.ipei` HM seeding via `KernelId::Ffi` (needs M4); lowering + backend emission | **E2E rung 1:** `ipe add semver` → inspect-in-jail → emit → type-check → cargo build → run, matching reference behavior | 3-4 sessions (after M4) |
 | **P6 — E2E ladder** | All 10 shim-free crates (fixtures 107-114 + regressions 73/76/92/97/105/106) through the full pipeline; `ffi-audit` skill re-pointed at our inspector | **E2E rung 2:** 10/10 byte-diff (or recorded-divergence-diff) vs reference; audit-skill sweep produces verdict table | 2 sessions |
-| **P7 — M-G async bridge** | `async_bridge.rs`: pinned-future catch_unwind → `Task Error a`; `compile_error!` panic-profile fence; Send-verdict consumption | Small async crate E2E; panic-in-foreign-async → Sky `Err` test; `panic=abort` build fails with the fence message | 2-3 sessions |
+| **P7 — M-G async bridge** | **SUPERSEDED 2026-07-04** — async emission is part of the base emitters (P2/P3) per `async-ffi-bridge-design.md` §9; M-G dissolves into M-D/M-E. New P6 = 10 sync crates + firestore parity + the real async-stripe E2E; new P7 = skyshop-rs zero-shim + used-set DCE (acceptance) | see `async-ffi-bridge-design.md` §9-§10 | — |
 
 Total: ~16-22 sessions, of which P1-P3 (≈8-10) are parallel-safe with the
 critical-path compiler work (design-ahead lane discipline applies: they are
