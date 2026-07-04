@@ -3,3 +3,6 @@ sky-out/
 .skycache/
 .skydeps/
 /tmp-parity/
+
+# Pinned Go-reference oracle binaries (v0.17.3) — large, fetched not committed
+tools/oracle/bin/
