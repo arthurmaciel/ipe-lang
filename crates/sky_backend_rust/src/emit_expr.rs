@@ -2118,6 +2118,66 @@ fn emit_ui_call(
             )))
         }
 
+        // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
+
+        // `Region.mainContent : Attribute msg`
+        KernelFn::RegionMainContent => Ok(Some(
+            "sky_runtime::ui::helpers::ui_region_main_content_()".to_owned(),
+        )),
+
+        // `Region.navigation : Attribute msg`
+        KernelFn::RegionNavigation => Ok(Some(
+            "sky_runtime::ui::helpers::ui_region_navigation_()".to_owned(),
+        )),
+
+        // `Region.footer : Attribute msg`
+        KernelFn::RegionFooter => Ok(Some(
+            "sky_runtime::ui::helpers::ui_region_footer_()".to_owned(),
+        )),
+
+        // `Region.aside : Attribute msg`
+        KernelFn::RegionAside => Ok(Some(
+            "sky_runtime::ui::helpers::ui_region_aside_()".to_owned(),
+        )),
+
+        // `Region.heading : Int -> Attribute msg`
+        KernelFn::RegionHeading => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::RegionHeading",
+                    detail: format!("Region.heading requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_region_heading_({n})"
+            )))
+        }
+
+        // `Region.label : String -> Attribute msg`
+        KernelFn::RegionLabel => {
+            let [s_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::RegionLabel",
+                    detail: format!("Region.label requires 1 argument, got {}", args.len()),
+                });
+            };
+            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_region_label_({s})"
+            )))
+        }
+
+        // `Region.announce : Attribute msg`
+        KernelFn::RegionAnnounce => Ok(Some(
+            "sky_runtime::ui::helpers::ui_region_announce_()".to_owned(),
+        )),
+
+        // `Region.announceUrgently : Attribute msg`
+        KernelFn::RegionAnnounceUrgently => Ok(Some(
+            "sky_runtime::ui::helpers::ui_region_announce_urgently_()".to_owned(),
+        )),
+
         // ── Std.Html element builders ─────────────────────────────────────────
 
         // `Html.text : String -> Html msg`
