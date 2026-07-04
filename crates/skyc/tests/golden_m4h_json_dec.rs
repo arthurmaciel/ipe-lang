@@ -133,3 +133,64 @@ fn json_dec_one_of() {
 fn json_dec_pipeline() {
     assert_runs_and_matches_oracle("m4h_json_dec_pipeline");
 }
+
+// ── Fix A: lambda curry ───────────────────────────────────────────────────────
+
+/// `succeed (\name age -> name ++ "|" ++ fromInt age)` — 2-arg lambda passed
+/// to `succeed`; the emitter wraps it in `curry2(move |name, age| ...)` and
+/// feeds the result to `decode_succeed`.
+/// Output: `"Alice|30"`.
+#[test]
+fn json_dec_pipeline_lambda() {
+    assert_runs_and_matches_oracle("m4h_json_dec_pipeline_lambda");
+}
+
+/// `succeed (\name -> name ++ "!")` — 1-arg lambda; emits `curry1(move |name| ...)`.
+/// Output: `"Alice!"`.
+#[test]
+fn json_dec_pipeline_lambda1() {
+    assert_runs_and_matches_oracle("m4h_json_dec_pipeline_lambda1");
+}
+
+// ── Fix A: plain-value factory-wrap ──────────────────────────────────────────
+
+/// `succeed 42` — plain integer value; the emitter factory-wraps it as
+/// `decode_succeed({ let __sky_succeed = 42; Box::new(move || __sky_succeed.clone()) })`.
+/// Output: `"42"`.
+#[test]
+fn json_dec_succeed_value() {
+    assert_runs_and_matches_oracle("m4h_json_dec_succeed_value");
+}
+
+// ── Fix C: thunk-rewrite for let-bound decoder reuse ─────────────────────────
+
+/// A `let d = ...` decoder used twice in the same scope — Fix C wraps it in a
+/// zero-arg lambda so each `decodeString d` call gets a fresh `Decoder` value
+/// rather than double-moving out of the binding.
+/// Output:
+/// ```text
+/// Alice|30
+/// Bob|25
+/// ```
+#[test]
+fn json_dec_pipeline_reuse() {
+    assert_runs_and_matches_oracle("m4h_json_dec_pipeline_reuse");
+}
+
+/// `let d = JsonDec.int` reused inside `JsonDec.list d` — Fix C × list factory.
+/// Output: `"2"`.
+#[test]
+fn json_dec_list_letbound() {
+    assert_runs_and_matches_oracle("m4h_json_dec_list_letbound");
+}
+
+// ── R9: named-function FuncValue control ─────────────────────────────────────
+
+/// `succeed makeProfile |> required "username" string |> optional "followers" int 0`.
+/// Named `makeProfile` function is a `FuncValue` — the pre-existing passing
+/// shape; confirms Fix A case 1 is not regressed.
+/// Output: `"skydev 0"`.
+#[test]
+fn json_dec_pipeline_record() {
+    assert_runs_and_matches_oracle("m4h_json_dec_pipeline_record");
+}

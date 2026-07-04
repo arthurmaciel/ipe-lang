@@ -1,0 +1,29 @@
+module Main exposing (main)
+
+-- R4: let-bound decoder used twice (Decoder reuse → thunk).
+-- Exercises Fix C: the decoder is thunked so each decodeString call
+-- gets a fresh Decoder value rather than moving out of the binding.
+-- Expected:
+--   Alice|30
+--   Bob|25
+
+main =
+    let
+        d =
+            JsonDecP.required "age" JsonDec.int
+                (JsonDecP.required "name" JsonDec.string
+                    (JsonDec.succeed
+                        (\name age -> name ++ "|" ++ String.fromInt age)))
+
+        r1 =
+            JsonDec.decodeString d "{\"name\":\"Alice\",\"age\":30}"
+
+        r2 =
+            JsonDec.decodeString d "{\"name\":\"Bob\",\"age\":25}"
+    in
+    case r1 of
+        Ok label1 ->
+            case r2 of
+                Ok label2 -> println (label1 ++ "\n" ++ label2)
+                Err _ -> println "err2"
+        Err _ -> println "err1"

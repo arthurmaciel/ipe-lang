@@ -13,7 +13,8 @@ use crate::code::{
     Code, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200,
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
-    SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118, SKY_L0119, SKY_L0120, SKY_L0200,
+    SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118, SKY_L0119, SKY_L0120, SKY_L0121,
+    SKY_L0200,
     SKY_N0001,
     SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
     SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_P0001,
@@ -636,6 +637,10 @@ pub enum LowerError {
     },
     /// Expression nesting exceeded the backend's bounded emit depth. [SKY-L0200]
     BackendNestingTooDeep { limit: u16 },
+    /// `JsonDec.succeed` / `Db.Decode.succeed` constructor has more than 10
+    /// parameters, which exceeds the `curry1`..`curry10` helpers in the runtime.
+    /// [SKY-L0121]
+    DecodeSucceedArityTooHigh { n: usize },
 }
 
 // ===========================================================================
@@ -906,6 +911,7 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::Unsupported(f) => feature_code(*f),
         LowerError::InadmissibleAppModel { .. } => SKY_L0120,
         LowerError::BackendNestingTooDeep { .. } => SKY_L0200,
+        LowerError::DecodeSucceedArityTooHigh { .. } => SKY_L0121,
     }
 }
 
@@ -1092,6 +1098,15 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
         LowerError::BackendNestingTooDeep { .. } => {
             vec![HelpLine::Hint(Hint::NestingBoundDeliberate)]
         }
+        LowerError::DecodeSucceedArityTooHigh { n } => vec![HelpLine::Note(
+            format!(
+                "the constructor passed to `succeed` has {n} parameters; \
+                 the runtime's `curry1`..`curry10` helpers cap at 10. \
+                 Split the record into multiple smaller decoders and combine \
+                 them with `andThen`, or reduce the field count below 10."
+            )
+            .into_boxed_str(),
+        )],
     }
 }
 
