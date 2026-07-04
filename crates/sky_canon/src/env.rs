@@ -984,6 +984,16 @@ impl Env {
                     "button",
                     "input",
                     "form",
+                    // ── Ui.describe + desc* constructors ─────────────────────
+                    "describe",
+                    "descMain",
+                    "descNavigation",
+                    "descContentInfo",
+                    "descComplementary",
+                    "descLivePolite",
+                    "descLiveAssertive",
+                    "descHeading",
+                    "descLabel",
                 ],
             ),
             // ── M7: Std.Ui.Background sub-module ─────────────────────────────────
