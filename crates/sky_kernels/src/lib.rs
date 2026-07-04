@@ -768,6 +768,58 @@ pub enum StdlibKernel {
     HtmlOnKeyDown,
     HtmlOnKeyUp,
     HtmlOnBool,
+    // ── #76 Tier 1: Std.Ui extended attribute builders ───────────────────────
+    // Ui namespace — aspect-ratio + htmlAttribute
+    UiSquare,         // nullary Attr: "1 / 1"
+    UiWidescreen,     // nullary Attr: "16 / 9"
+    UiAspectRatio,    // Float → Attr
+    UiAspectRatioWH,  // Int → Int → Attr
+    UiHtmlAttribute,  // String → String → Attr (AttrAttribute escape-hatch)
+    // Background namespace — pseudo-class colour tints
+    BackgroundHoverColor,
+    BackgroundFocusColor,
+    BackgroundActiveColor,
+    BackgroundDisabledColor,
+    // Border namespace — style keywords (nullary)
+    BorderSolid,
+    BorderDashed,
+    BorderDotted,
+    // Border namespace — pseudo-class
+    BorderHoverColor,
+    BorderFocusColor,
+    BorderActiveColor,
+    BorderHoverWidth,   // Int → Attr
+    BorderHoverRounded, // Int → Attr
+    // Font namespace — weight variants (nullary)
+    FontWeight,     // Int → Attr
+    FontSemiBold,   // nullary (600)
+    FontRegular,    // nullary (400)
+    FontLight,      // nullary (300)
+    FontExtraBold,  // nullary (800)
+    FontBlack,      // nullary (900)
+    // Font namespace — decoration
+    FontUnderline,     // nullary (AttrFontUnderline)
+    FontNoDecoration,  // nullary (AttrFontDecoration("none"))
+    // Font namespace — spacing (Float → Attr)
+    FontLetterSpacing, // Float → Attr (AttrFontLetterSpacing)
+    FontWordSpacing,   // Float → Attr (AttrFontWordSpacing)
+    // Font namespace — text alignment (nullary)
+    FontAlignLeft,  // nullary (AttrFontAlign("left"))
+    FontAlignRight, // nullary (AttrFontAlign("right"))
+    FontCenter,     // nullary (AttrFontAlign("center"))
+    FontJustify,    // nullary (AttrFontAlign("justify"))
+    // Font namespace — string constants (nullary → String, NOT Attribute)
+    FontSansSerif, // String constant "sans-serif"
+    FontSerif,     // String constant "serif"
+    FontMonospace, // String constant "monospace"
+    // Font namespace — pseudo-class
+    FontHoverColor,
+    FontFocusColor,
+    FontActiveColor,
+    FontDisabledColor,
+    FontHoverSize, // Int → Attr pseudo
+    // Html.Attributes — tabindex
+    HtmlAttrTabindex, // Int → HtmlAttr
 }
 
 impl StdlibKernel {
@@ -1546,6 +1598,68 @@ impl StdlibKernel {
             Self::HtmlOnKeyDown => d("Event", "onKeyDown", 1, Ui, "html_on_string_"),
             Self::HtmlOnKeyUp => d("Event", "onKeyUp", 1, Ui, "html_on_string_"),
             Self::HtmlOnBool => d("Event", "onBool", 1, Ui, "html_on_bool_"),
+            // ── #76 Tier 1 ────────────────────────────────────────────────────
+            // Ui namespace
+            Self::UiSquare => d("Ui", "square", 0, Ui, "ui_square_"),
+            Self::UiWidescreen => d("Ui", "widescreen", 0, Ui, "ui_widescreen_"),
+            Self::UiAspectRatio => d("Ui", "aspectRatio", 1, Ui, "ui_aspect_ratio_"),
+            Self::UiAspectRatioWH => d("Ui", "aspectRatioWH", 2, Ui, "ui_aspect_ratio_wh_"),
+            Self::UiHtmlAttribute => d("Ui", "htmlAttribute", 2, Ui, "ui_html_attribute_"),
+            // Background namespace
+            Self::BackgroundHoverColor => {
+                d("Background", "hoverColor", 1, Ui, "ui_bg_hover_color_")
+            }
+            Self::BackgroundFocusColor => {
+                d("Background", "focusColor", 1, Ui, "ui_bg_focus_color_")
+            }
+            Self::BackgroundActiveColor => {
+                d("Background", "activeColor", 1, Ui, "ui_bg_active_color_")
+            }
+            Self::BackgroundDisabledColor => {
+                d("Background", "disabledColor", 1, Ui, "ui_bg_disabled_color_")
+            }
+            // Border namespace
+            Self::BorderSolid => d("Border", "solid", 0, Ui, "ui_border_solid_"),
+            Self::BorderDashed => d("Border", "dashed", 0, Ui, "ui_border_dashed_"),
+            Self::BorderDotted => d("Border", "dotted", 0, Ui, "ui_border_dotted_"),
+            Self::BorderHoverColor => {
+                d("Border", "hoverColor", 1, Ui, "ui_border_hover_color_")
+            }
+            Self::BorderFocusColor => {
+                d("Border", "focusColor", 1, Ui, "ui_border_focus_color_")
+            }
+            Self::BorderActiveColor => {
+                d("Border", "activeColor", 1, Ui, "ui_border_active_color_")
+            }
+            Self::BorderHoverWidth => d("Border", "hoverWidth", 1, Ui, "ui_border_hover_width_"),
+            Self::BorderHoverRounded => {
+                d("Border", "hoverRounded", 1, Ui, "ui_border_hover_rounded_")
+            }
+            // Font namespace
+            Self::FontWeight => d("Font", "weight", 1, Ui, "ui_font_weight_"),
+            Self::FontSemiBold => d("Font", "semiBold", 0, Ui, "ui_font_semi_bold_"),
+            Self::FontRegular => d("Font", "regular", 0, Ui, "ui_font_regular_"),
+            Self::FontLight => d("Font", "light", 0, Ui, "ui_font_light_"),
+            Self::FontExtraBold => d("Font", "extraBold", 0, Ui, "ui_font_extra_bold_"),
+            Self::FontBlack => d("Font", "black", 0, Ui, "ui_font_black_"),
+            Self::FontUnderline => d("Font", "underline", 0, Ui, "ui_font_underline_"),
+            Self::FontNoDecoration => d("Font", "noDecoration", 0, Ui, "ui_font_no_decoration_"),
+            Self::FontLetterSpacing => d("Font", "letterSpacing", 1, Ui, "ui_font_letter_spacing_"),
+            Self::FontWordSpacing => d("Font", "wordSpacing", 1, Ui, "ui_font_word_spacing_"),
+            Self::FontAlignLeft => d("Font", "alignLeft", 0, Ui, "ui_font_align_left_"),
+            Self::FontAlignRight => d("Font", "alignRight", 0, Ui, "ui_font_align_right_"),
+            Self::FontCenter => d("Font", "center", 0, Ui, "ui_font_center_"),
+            Self::FontJustify => d("Font", "justify", 0, Ui, "ui_font_justify_"),
+            Self::FontSansSerif => d("Font", "sansSerif", 0, Ui, "ui_font_sans_serif_"),
+            Self::FontSerif => d("Font", "serif", 0, Ui, "ui_font_serif_"),
+            Self::FontMonospace => d("Font", "monospace", 0, Ui, "ui_font_monospace_"),
+            Self::FontHoverColor => d("Font", "hoverColor", 1, Ui, "ui_font_hover_color_"),
+            Self::FontFocusColor => d("Font", "focusColor", 1, Ui, "ui_font_focus_color_"),
+            Self::FontActiveColor => d("Font", "activeColor", 1, Ui, "ui_font_active_color_"),
+            Self::FontDisabledColor => d("Font", "disabledColor", 1, Ui, "ui_font_disabled_color_"),
+            Self::FontHoverSize => d("Font", "hoverSize", 1, Ui, "ui_font_hover_size_"),
+            // Html.Attributes
+            Self::HtmlAttrTabindex => d("Attr", "tabindex", 1, Ui, "html_attr_tabindex_"),
         }
     }
 
@@ -2183,6 +2297,47 @@ impl StdlibKernel {
         Self::HtmlOnKeyDown,
         Self::HtmlOnKeyUp,
         Self::HtmlOnBool,
+        // ── #76 Tier 1 ────────────────────────────────────────────────────────
+        Self::UiSquare,
+        Self::UiWidescreen,
+        Self::UiAspectRatio,
+        Self::UiAspectRatioWH,
+        Self::UiHtmlAttribute,
+        Self::BackgroundHoverColor,
+        Self::BackgroundFocusColor,
+        Self::BackgroundActiveColor,
+        Self::BackgroundDisabledColor,
+        Self::BorderSolid,
+        Self::BorderDashed,
+        Self::BorderDotted,
+        Self::BorderHoverColor,
+        Self::BorderFocusColor,
+        Self::BorderActiveColor,
+        Self::BorderHoverWidth,
+        Self::BorderHoverRounded,
+        Self::FontWeight,
+        Self::FontSemiBold,
+        Self::FontRegular,
+        Self::FontLight,
+        Self::FontExtraBold,
+        Self::FontBlack,
+        Self::FontUnderline,
+        Self::FontNoDecoration,
+        Self::FontLetterSpacing,
+        Self::FontWordSpacing,
+        Self::FontAlignLeft,
+        Self::FontAlignRight,
+        Self::FontCenter,
+        Self::FontJustify,
+        Self::FontSansSerif,
+        Self::FontSerif,
+        Self::FontMonospace,
+        Self::FontHoverColor,
+        Self::FontFocusColor,
+        Self::FontActiveColor,
+        Self::FontDisabledColor,
+        Self::FontHoverSize,
+        Self::HtmlAttrTabindex,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────
@@ -2466,6 +2621,47 @@ impl StdlibKernel {
                 | Self::HtmlOnKeyDown
                 | Self::HtmlOnKeyUp
                 | Self::HtmlOnBool
+                // ── #76 Tier 1 ────────────────────────────────────────────────
+                | Self::UiSquare
+                | Self::UiWidescreen
+                | Self::UiAspectRatio
+                | Self::UiAspectRatioWH
+                | Self::UiHtmlAttribute
+                | Self::BackgroundHoverColor
+                | Self::BackgroundFocusColor
+                | Self::BackgroundActiveColor
+                | Self::BackgroundDisabledColor
+                | Self::BorderSolid
+                | Self::BorderDashed
+                | Self::BorderDotted
+                | Self::BorderHoverColor
+                | Self::BorderFocusColor
+                | Self::BorderActiveColor
+                | Self::BorderHoverWidth
+                | Self::BorderHoverRounded
+                | Self::FontWeight
+                | Self::FontSemiBold
+                | Self::FontRegular
+                | Self::FontLight
+                | Self::FontExtraBold
+                | Self::FontBlack
+                | Self::FontUnderline
+                | Self::FontNoDecoration
+                | Self::FontLetterSpacing
+                | Self::FontWordSpacing
+                | Self::FontAlignLeft
+                | Self::FontAlignRight
+                | Self::FontCenter
+                | Self::FontJustify
+                | Self::FontSansSerif
+                | Self::FontSerif
+                | Self::FontMonospace
+                | Self::FontHoverColor
+                | Self::FontFocusColor
+                | Self::FontActiveColor
+                | Self::FontDisabledColor
+                | Self::FontHoverSize
+                | Self::HtmlAttrTabindex
         )
     }
 
