@@ -288,6 +288,10 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
+        // `StreamWriter` is an opaque stream handle — not a function type.
+        | IrType::StreamWriter
+        // `HttpRequest` is an opaque handle — not a function type.
+        | IrType::HttpRequest
         | IrType::Generic(_)
         // M7: nullary plain types (`Length`, `Color`, etc.) trivially contain no
         // functions.  `LiveReq` is an opaque handle with no `Fn` fields.
@@ -861,6 +865,63 @@ fn expr_uses_css_kernel(expr: &Expr) -> bool {
     }
 }
 
+// ── #111: Std.Auth kernel presence detection ─────────────────────────────────
+
+/// Return `true` when `expr` (or any sub-expression, recursively) contains a
+/// call whose callee is one of the `Std.Auth` kernel variants (`hashPassword`,
+/// `verifyPassword`, `signToken`, `verifyToken`, `register`, `login`,
+/// `setRole`, and companions).
+///
+/// Used by [`Lowerer::run`] to decide whether the emitted project needs
+/// `pub mod auth; pub use auth::*;` appended to `sky_runtime/mod.rs`.
+fn expr_uses_auth_kernel(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, args } => {
+            let callee_is_auth = matches!(callee, Callee::Kernel(k) if k.is_auth());
+            callee_is_auth || args.iter().any(expr_uses_auth_kernel)
+        }
+        Expr::FuncValue { callee, .. } => {
+            matches!(callee, Callee::Kernel(k) if k.is_auth())
+        }
+        Expr::Apply { func, args } => {
+            expr_uses_auth_kernel(func) || args.iter().any(expr_uses_auth_kernel)
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            expr_uses_auth_kernel(value) || expr_uses_auth_kernel(body)
+        }
+        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_auth_kernel(body),
+        Expr::If { cond, then_, else_ } => {
+            expr_uses_auth_kernel(cond) || expr_uses_auth_kernel(then_) || expr_uses_auth_kernel(else_)
+        }
+        Expr::Match(m) => {
+            expr_uses_auth_kernel(m.scrutinee())
+                || m.arms().iter().any(|arm| expr_uses_auth_kernel(&arm.body))
+        }
+        Expr::Tuple(elems) => elems.iter().any(expr_uses_auth_kernel),
+        Expr::List { items, .. } => items.iter().any(expr_uses_auth_kernel),
+        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_auth_kernel(v)),
+        Expr::Access { record, .. } => expr_uses_auth_kernel(record),
+        Expr::Update { record, fields } => {
+            expr_uses_auth_kernel(record) || fields.iter().any(|(_, v)| expr_uses_auth_kernel(v))
+        }
+        Expr::BinOp { lhs, rhs, .. } => expr_uses_auth_kernel(lhs) || expr_uses_auth_kernel(rhs),
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            args.iter().any(expr_uses_auth_kernel)
+        }
+        Expr::Cons { head, tail } => expr_uses_auth_kernel(head) || expr_uses_auth_kernel(tail),
+        Expr::TaskSeq { effect, rest } => {
+            expr_uses_auth_kernel(effect) || expr_uses_auth_kernel(rest)
+        }
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_) => false,
+    }
+}
+
 /// Return `true` when `expr` (or any sub-expression) contains a call to a
 /// Std.Live / Sky.Live app-entry kernel introduced in M7.
 fn expr_uses_live_kernel(expr: &Expr) -> bool {
@@ -1413,6 +1474,12 @@ impl<'a> Lowerer<'a> {
         // of `uses_ui` — a pure-Std.Css program uses no render kernel.
         let uses_css = funcs.iter().any(|f| expr_uses_css_kernel(&f.body));
 
+        // #111: detect Std.Auth kernel usage — any of hashPassword, verifyPassword,
+        // signToken, verifyToken, register, login, setRole, and companions.  The
+        // backend uses this flag to append `pub mod auth; pub use auth::*;` to
+        // the emitted `sky_runtime/mod.rs`.
+        let uses_auth = funcs.iter().any(|f| expr_uses_auth_kernel(&f.body));
+
         let module = Module {
             name: ModPath(self.m.name.clone()),
             types: types_ir,
@@ -1426,6 +1493,7 @@ impl<'a> Lowerer<'a> {
             uses_tui,
             uses_webview,
             uses_css,
+            uses_auth,
         };
         Ok(Program {
             modules: vec![module],
@@ -1701,6 +1769,13 @@ impl<'a> Lowerer<'a> {
                 // matching Rust trait bound (see [`Self::bounds_for`]). An empty
                 // `free_vars` keeps the function monomorphic, byte-identical to a
                 // non-generic binding.
+                //
+                // `ir_type_from_canon` now handles every stdlib opaque alias
+                // (including `HttpRequest`) directly, so there is no need for a
+                // separate value-binding fast path that bypasses it.  Always use
+                // `split_typed_sig` — it routes through `ir_type_from_canon` for
+                // the annotation type and handles both 0-parameter and N-parameter
+                // bindings correctly.
                 let (params, prologue, ret) = self.split_typed_sig(ty, patterns, free_vars)?;
                 // A tuple-destructuring parameter binds its synthetic name to the
                 // tuple, then the body opens it with a `Destructure`. Fold the
@@ -2065,6 +2140,13 @@ impl<'a> Lowerer<'a> {
                 }
                 // `Db` — opaque connection pool handle introduced by M5b-db.
                 "Db" => Ok(IrType::Db),
+                // M6 opaque server types — users may annotate handlers with
+                // `Request -> Task Error Response` (via `exposing (Request, Response)`)
+                // or route lists with `List Route`.  Mirrors `ir_type_from_ty`.
+                "Request" => Ok(IrType::ServerRequest),
+                "Response" => Ok(IrType::ServerResponse),
+                "Route" => Ok(IrType::ServerRoute),
+                "Cookie" => Ok(IrType::ServerCookie),
                 // `Cmd msg` / `Sub msg` — TEA command and subscription types
                 // introduced in M5c.  Users may write annotations like
                 // `myCmd : Cmd Int`.
@@ -2134,6 +2216,14 @@ impl<'a> Lowerer<'a> {
                 }
                 // Sky.Live opaque types in annotations (mirrors `ir_type_from_ty`).
                 "LiveReq" => Ok(IrType::LiveReq),
+                // `StreamWriter` — opaque server-side stream writer handle (#111).
+                // Mirrors `ir_type_from_ty`'s "StreamWriter" arm.
+                "StreamWriter" => Ok(IrType::StreamWriter),
+                // `HttpRequest` — opaque HTTP request descriptor (#111).
+                // Sky users write this as a structural record literal, but the
+                // annotation `HttpRequest` maps directly to the runtime type via
+                // this opaque variant.
+                "HttpRequest" => Ok(IrType::HttpRequest),
                 // `LiveRoute page` is parametric on the page type it builds
                 // (#108 round 4) — a bare `LiveRoute` annotation cannot
                 // type-check (the solver's `LiveRoute` Con carries exactly one
@@ -2529,6 +2619,11 @@ impl<'a> Lowerer<'a> {
                 "Response" => Ok(IrType::ServerResponse),
                 "Route" => Ok(IrType::ServerRoute),
                 "Cookie" => Ok(IrType::ServerCookie),
+                // `StreamWriter` — opaque stream writer handle (#111).
+                "StreamWriter" => Ok(IrType::StreamWriter),
+                // `HttpRequest` — opaque HTTP request descriptor (#111).
+                // Mirrors `ir_type_from_canon`'s "HttpRequest" arm.
+                "HttpRequest" => Ok(IrType::HttpRequest),
                 // ── M7: Std.Ui / Std.Html parametric type constructors ────────
                 // Mirror of `ir_type_from_canon` (which handles user-written
                 // type ANNOTATIONS).  This path handles SOLVED types from the
@@ -2727,7 +2822,40 @@ impl<'a> Lowerer<'a> {
             // always a flat field map. Open fields not present in the resolved
             // `Ty` are simply absent from the IR (the optional-field mechanism
             // works through the open row var at type-check time, not at codegen).
+            //
+            // Special case: detect the canonical 7-field `HttpRequest` record —
+            // `body`, `followRedirects`, `headers`, `maxRedirects`, `method`,
+            // `timeout`, `url` — and fold it to the opaque `IrType::HttpRequest`
+            // so call sites that pass the value to `http_stream_open` /
+            // `http_request` kernels see the correct runtime type, rather than a
+            // backend-synthesised struct with an auto-generated name.
             Ty::Record(fields, _tail) => {
+                const HTTP_REQUEST_FIELDS: &[&str] = &[
+                    "body",
+                    "followRedirects",
+                    "headers",
+                    "maxRedirects",
+                    "method",
+                    "timeout",
+                    "url",
+                ];
+                // `BTreeMap<Symbol, _>` iterates in Symbol-integer order (intern
+                // assignment order), NOT in alphabetical order.  Collect names,
+                // sort them, then compare to the alphabetically-sorted constant.
+                if fields.len() == HTTP_REQUEST_FIELDS.len() {
+                    let mut field_names: Vec<&str> = fields
+                        .keys()
+                        .filter_map(|sym| self.interner.resolve(*sym))
+                        .collect();
+                    field_names.sort_unstable();
+                    let is_http_request = field_names
+                        .iter()
+                        .zip(HTTP_REQUEST_FIELDS.iter())
+                        .all(|(a, b)| *a == *b);
+                    if is_http_request {
+                        return Ok(IrType::HttpRequest);
+                    }
+                }
                 let mut lowered = BTreeMap::new();
                 for (name, field_ty) in fields {
                     lowered.insert(*name, self.ir_type_from_ty(field_ty, span)?);
