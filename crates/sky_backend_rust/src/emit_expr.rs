@@ -1380,6 +1380,44 @@ fn emit_ui_call(
             )))
         }
 
+        // `Ui.button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } -> Element msg`
+        //
+        // Emits: `sky_runtime::ui::helpers::ui_button_(attrs, on_press, label)`
+        KernelFn::UiButton => {
+            let [attrs_e, cfg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiButton",
+                    detail: format!("Ui.button requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let Expr::Record(fields) = cfg_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiButton",
+                    detail: "Ui.button cfg must be an inline record literal \
+                             in Phase 0; non-literal cfg is deferred to Phase 1"
+                        .into(),
+                });
+            };
+            let on_press_e = lookup_field(
+                ctx,
+                fields,
+                "onPress",
+                "sky_backend_rust::emit_ui_call::UiButton::onPress",
+            )?;
+            let label_e = lookup_field(
+                ctx,
+                fields,
+                "label",
+                "sky_backend_rust::emit_ui_call::UiButton::label",
+            )?;
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let on_press_s = emit_expr_at(ctx, on_press_e, indent, child, generics)?;
+            let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_button_({attrs_s}, {on_press_s}, {label_s})"
+            )))
+        }
+
         // ── Std.Ui attribute builders ─────────────────────────────────────────
 
         // `Ui.spacing : Int -> Attribute msg`
@@ -1991,6 +2029,9 @@ fn emit_ui_call(
         )),
         KernelFn::FontNoDecoration => Ok(Some(
             "sky_runtime::ui::helpers::ui_font_no_decoration_()".to_owned(),
+        )),
+        KernelFn::FontLineThrough => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_line_through_()".to_owned(),
         )),
 
         // Font namespace — Float spacing attrs

@@ -9,6 +9,7 @@
 //! and to avoid shadowing the runtime's own `element` type names.
 
 use super::element::{Attribute, Color, Description, Element, HAlign, Length, PseudoClass, VAlign};
+use crate::sky_runtime::core::SkyMaybe;
 use crate::sky_runtime::html::Html;
 
 /// Inline colour → CSS string.  Mirrors `render::color_css`; kept private so
@@ -84,6 +85,39 @@ pub fn ui_grid_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -
     full.push(Attribute::AttrStyle("__grid".to_owned(), "true".to_owned()));
     full.extend(attrs);
     Element::Node(Description::NoDescription, full, children)
+}
+
+/// `Ui.button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } -> Element msg`
+///
+/// When `onPress` is `Just msg`, adds an `onclick` event attribute + `cursor: pointer`.
+/// When `onPress` is `Nothing`, adds `disabled="true"` so the button is visually and
+/// semantically disabled.
+pub fn ui_button_<M: Clone>(
+    attrs: Vec<Attribute<M>>,
+    on_press: SkyMaybe<M>,
+    label: Element<M>,
+) -> Element<M> {
+    use crate::sky_runtime::html::{Attribute as HtmlAttribute, Event};
+    let mut full = Vec::with_capacity(attrs.len() + 2);
+    match on_press {
+        SkyMaybe::Just(msg) => {
+            full.push(Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnMsg(
+                "click".into(),
+                msg,
+            ))));
+            full.push(Attribute::AttrPointer);
+        }
+        SkyMaybe::Nothing => {
+            full.push(Attribute::AttrAttribute("disabled".into(), "true".into()));
+        }
+    }
+    full.extend(attrs);
+    Element::TaggedNode(
+        "button".into(),
+        Description::NoDescription,
+        full,
+        vec![label],
+    )
 }
 
 // ── Attribute builders ────────────────────────────────────────────────────────
@@ -645,6 +679,11 @@ pub fn ui_font_underline_<M>() -> Attribute<M> {
 /// `Font.noDecoration : Attribute msg`
 pub fn ui_font_no_decoration_<M>() -> Attribute<M> {
     Attribute::AttrFontDecoration("none".into())
+}
+
+/// `Font.lineThrough : Attribute msg`
+pub fn ui_font_line_through_<M>() -> Attribute<M> {
+    Attribute::AttrFontDecoration("line-through".into())
 }
 
 // Font namespace — spacing (Float → Attr)

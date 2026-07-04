@@ -1034,6 +1034,7 @@ impl Env {
                     "black",
                     "italic",
                     "underline",
+                    "lineThrough",
                     "noDecoration",
                     "letterSpacing",
                     "wordSpacing",
