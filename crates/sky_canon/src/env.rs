@@ -358,6 +358,13 @@ impl Env {
             ("snd", basics, "snd"),
             ("errorToString", basics, "errorToString"),
             ("println", log, "println"),
+            // ── Basics numerics (#115) ──────────────────────────────────────
+            ("negate", basics, "negate"),
+            ("abs",    basics, "abs"),
+            ("sqrt",   basics, "sqrt"),
+            ("min",    basics, "min"),
+            ("max",    basics, "max"),
+            // ── end Basics numerics (#115) ──────────────────────────────────
         ] {
             let key = interner.intern(name)?;
             let func_sym = interner.intern(func)?;

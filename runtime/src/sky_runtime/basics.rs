@@ -67,6 +67,31 @@ pub fn basics_clamp<T: PartialOrd>(lo: T, hi: T, x: T) -> T {
     }
 }
 
+// ── Basics numerics (#115) ──────────────────────────────────────────────────
+
+/// Sky `negate : number -> number` — unary negation on Int or Float.
+///
+/// This is also the runtime target for the `-x` desugar in the parser
+/// (`negate x`). Both `i64` and `f64` implement `Neg<Output = Self>`, so
+/// the same generic function covers both Sky numeric primitives with no
+/// runtime type dispatch — matching Go's natural `-x` operator.
+pub fn basics_negate<T: ::core::ops::Neg<Output = T>>(x: T) -> T {
+    -x
+}
+
+/// Sky `abs : number -> number` — absolute value on Int or Float.
+///
+/// Uses `T::default()` as the zero sentinel (`0_i64` / `0.0_f64`), both of
+/// which satisfy `Default`. The `Copy` bound allows reusing `x` after the
+/// comparison without a clone. Matches Go's `Basics_abs` semantics exactly:
+/// negative values are negated, non-negatives pass through unchanged.
+pub fn basics_abs<T: PartialOrd + ::core::ops::Neg<Output = T> + Copy + Default>(x: T) -> T {
+    let zero = T::default();
+    if x < zero { -x } else { x }
+}
+
+// ── end Basics numerics (#115) ──────────────────────────────────────────────
+
 /// Sky `errorToString : a -> String` — universal Sky stringifier.
 /// Used by Sky.Test.debugShow and friends to render any Sky value into
 /// a diagnostic string. Backed by the total `SkyStringify` trait, which
