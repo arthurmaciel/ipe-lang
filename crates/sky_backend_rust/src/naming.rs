@@ -767,7 +767,6 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // ── M7: Html element builders ────────────────────────────────────────
         KernelFn::HtmlTextNode => "html_text_node_",
         KernelFn::HtmlRawNode => "html_raw_node_",
-        KernelFn::HtmlNode => "html_node_",
         KernelFn::HtmlStyleNode => "html_style_node_",
         KernelFn::HtmlDiv => "html_div_",
         KernelFn::HtmlSpan => "html_span_",
@@ -776,6 +775,70 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HtmlP => "html_p_",
         KernelFn::HtmlInput => "html_input_",
         KernelFn::HtmlImg => "html_img_",
+        // #76 batch 2: Std.Html element builders — tag-as-data, all share the
+        // generic `html_node_` sink (the wire tag is injected by `emit_ui_call`).
+        // `Html.node` itself shares this bare helper name (same sink).
+        KernelFn::HtmlNode
+        | KernelFn::HtmlH1
+        | KernelFn::HtmlH2
+        | KernelFn::HtmlH3
+        | KernelFn::HtmlH4
+        | KernelFn::HtmlH5
+        | KernelFn::HtmlH6
+        | KernelFn::HtmlNav
+        | KernelFn::HtmlSection
+        | KernelFn::HtmlArticle
+        | KernelFn::HtmlHeader
+        | KernelFn::HtmlFooter
+        | KernelFn::HtmlMain
+        | KernelFn::HtmlAside
+        | KernelFn::HtmlUl
+        | KernelFn::HtmlOl
+        | KernelFn::HtmlLi
+        | KernelFn::HtmlTable
+        | KernelFn::HtmlThead
+        | KernelFn::HtmlTbody
+        | KernelFn::HtmlTfoot
+        | KernelFn::HtmlTr
+        | KernelFn::HtmlTh
+        | KernelFn::HtmlTd
+        | KernelFn::HtmlTextarea
+        | KernelFn::HtmlSelect
+        | KernelFn::HtmlOption
+        | KernelFn::HtmlLabel
+        | KernelFn::HtmlForm
+        | KernelFn::HtmlFieldset
+        | KernelFn::HtmlLegend
+        | KernelFn::HtmlPre
+        | KernelFn::HtmlCode
+        | KernelFn::HtmlStrong
+        | KernelFn::HtmlEm
+        | KernelFn::HtmlSmall
+        | KernelFn::HtmlBlockquote
+        | KernelFn::HtmlFigure
+        | KernelFn::HtmlFigcaption
+        | KernelFn::HtmlDetails
+        | KernelFn::HtmlSummary
+        | KernelFn::HtmlDialog
+        | KernelFn::HtmlVideo
+        | KernelFn::HtmlAudio
+        | KernelFn::HtmlCanvas
+        | KernelFn::HtmlIframe
+        | KernelFn::HtmlProgress
+        | KernelFn::HtmlMeter
+        | KernelFn::HtmlScript
+        | KernelFn::HtmlBody
+        | KernelFn::HtmlBr
+        | KernelFn::HtmlHr
+        | KernelFn::HtmlMeta
+        | KernelFn::HtmlLink
+        | KernelFn::HtmlArea
+        | KernelFn::HtmlBase
+        | KernelFn::HtmlCol
+        | KernelFn::HtmlEmbed
+        | KernelFn::HtmlSource
+        | KernelFn::HtmlTrack
+        | KernelFn::HtmlWbr => "html_node_",
         // #76: Std.Html.Attributes builders. The full call (including the fixed
         // key literal) is produced by `emit_ui_call`; these names are the bare
         // runtime helpers, kept for the exhaustive match / any generic path.
