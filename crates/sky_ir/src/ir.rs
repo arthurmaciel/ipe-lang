@@ -104,6 +104,19 @@ pub struct Module {
     /// `KernelFn::is_webview()` variant.  Implies `uses_live` for the
     /// runtime dependency chain (webview pulls live transitively).
     pub uses_webview: bool,
+    /// `true` when the lowerer detected at least one `Sky.Core.CssSafety`
+    /// leaf security kernel (`CssSafety.safeValue` / `safePropName` /
+    /// `safeSelector` / `stripStyleClose` — the `Std.Css` backing, #47) in the
+    /// module's function bodies.
+    ///
+    /// Set by `sky_lower` when any call site resolves to a
+    /// `KernelFn::is_css()` variant.  The backend reads this flag to decide
+    /// whether to declare `css_safety` / `css` (`pub use css::*`) in the emitted
+    /// `sky_runtime/mod.rs` even when `uses_ui` is `false` — a pure `Std.Css`
+    /// program uses the css kernels without any `Std.Ui` / `Std.Html` render
+    /// kernel, so the UI append would never fire and the bare kernel names would
+    /// be out of scope (E0425).
+    pub uses_css: bool,
 }
 
 /// A user-declared type. The IR models user types as enums (Sky's `type`
@@ -642,13 +655,6 @@ pub enum UiPlain {
     Description,
     /// `LayoutContext` — `sky_runtime::ui::element::LayoutContext`.
     LayoutContext,
-    /// `Std.Css.CssProp` — `sky_runtime::css::CssProp` (message-free CSS
-    /// declaration ADT; consumed by the gated `css_styles_`/`css_stylesheet_`
-    /// sink kernels).
-    CssProp,
-    /// `Std.Css.CssRule` — `sky_runtime::css::CssRule` (message-free CSS
-    /// stylesheet-entry ADT).
-    CssRule,
 }
 
 /// Total predicate: does the Rust type that [`IrType`] renders to support the
@@ -2040,6 +2046,7 @@ mod tests {
                 uses_live: false,
                 uses_tui: false,
                 uses_webview: false,
+                uses_css: false,
             }],
         };
         let clone = program.clone();

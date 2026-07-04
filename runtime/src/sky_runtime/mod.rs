@@ -164,10 +164,14 @@ pub use html::*;
 // and the Std.Css renderers (`css.rs`). See design §Q5.
 pub mod css_safety;
 
-// Std.Css stylesheet renderers (css_stylesheet_ / css_styles_) — the two gated
-// sinks that fold user strings into CSS. Typed length/colour constructors stay
-// pure Sky in `Std/Css.sky`; only these free-string sinks are kernels (#47).
+// Std.Css leaf security kernels (safe_value / safe_prop_name / safe_selector /
+// strip_style_close_kernel) — the four primitive shims the compiled-source
+// `Std.Css` funnels every free-string entry through (#47). Re-exported at the
+// crate root so the emitted `pub use sky_runtime::*` resolves the bare kernel
+// names that `naming::kernel_name` emits. Typed length/colour constructors +
+// the render fold stay pure Sky in `Std/Css.sky`.
 pub mod css;
+pub use css::*;
 
 // In-process telemetry sink (log/error rings + request counters) — always
 // compiled so `Std.Log.*` can feed it; the Sky.Live `console` module serves it.

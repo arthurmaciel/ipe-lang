@@ -199,6 +199,17 @@ pub enum StdlibKernel {
     ErrorToString,
     // Modifier: `String -> Error -> Error` (replace the message).
     ErrorWithMessage,
+    // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels, #47) ───
+    // The FOUR primitive leaf shims over the audited `css_safety` policy that the
+    // compiled-source `Std.Css` funnels every free-string entry through (PARSE,
+    // DON'T VALIDATE). `safeValue`/`safePropName`/`safeSelector` are the
+    // `String -> Maybe String` parsers (`None` => the Sky side drops the
+    // declaration/rule); `stripStyleClose` is the `String -> String` breakout
+    // floor for a raw `<style>` body.
+    CssSafetySafeValue,
+    CssSafetySafePropName,
+    CssSafetySafeSelector,
+    CssSafetyStripStyleClose,
     // ── Maybe ───────────────────────────────────────────────────────────────
     MaybeWithDefault,
     MaybeMap,
@@ -772,6 +783,20 @@ impl StdlibKernel {
             Self::ErrorToString => d("Error", "toString", 1, Pure, "basics_error_to_string"),
             Self::ErrorWithMessage => {
                 d("Error", "withMessage", 2, Pure, "sky_error_with_message")
+            }
+            // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf kernels, #47) ────
+            // The `emit` symbols are the bare runtime fn names re-exported at the
+            // `sky_runtime` root (`pub use css::*`): `safe_value` /
+            // `safe_prop_name` / `safe_selector` / `strip_style_close_kernel`.
+            Self::CssSafetySafeValue => d("CssSafety", "safeValue", 1, Pure, "safe_value"),
+            Self::CssSafetySafePropName => {
+                d("CssSafety", "safePropName", 1, Pure, "safe_prop_name")
+            }
+            Self::CssSafetySafeSelector => {
+                d("CssSafety", "safeSelector", 1, Pure, "safe_selector")
+            }
+            Self::CssSafetyStripStyleClose => {
+                d("CssSafety", "stripStyleClose", 1, Pure, "strip_style_close_kernel")
             }
             // ── Maybe ───────────────────────────────────────────────────────
             Self::MaybeWithDefault => d("Maybe", "withDefault", 2, Pure, "maybe_with_default"),
@@ -1415,6 +1440,11 @@ impl StdlibKernel {
         Self::ErrorPermissionDenied,
         Self::ErrorToString,
         Self::ErrorWithMessage,
+        // CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels, #47)
+        Self::CssSafetySafeValue,
+        Self::CssSafetySafePropName,
+        Self::CssSafetySafeSelector,
+        Self::CssSafetyStripStyleClose,
         // Maybe
         Self::MaybeWithDefault,
         Self::MaybeMap,
@@ -2033,6 +2063,28 @@ impl StdlibKernel {
     #[must_use]
     pub const fn is_webview(self) -> bool {
         matches!(self, Self::WebviewApp)
+    }
+
+    /// `true` when this variant belongs to the `Sky.Core.CssSafety` leaf
+    /// security-kernel family (the `Std.Css` backing, #47): `safe_value` /
+    /// `safe_prop_name` / `safe_selector` / `strip_style_close_kernel`.
+    ///
+    /// These kernels live in `sky_runtime::css` (which glob-re-exports their
+    /// bare names) and depend only on `sky_runtime::css_safety`. A program that
+    /// uses `Std.Css` WITHOUT any `Std.Ui` / `Std.Html` kernel does NOT set
+    /// `uses_ui`, so the backend consults this predicate to decide whether the
+    /// emitted `sky_runtime/mod.rs` must declare `css_safety` / `css` (and
+    /// `pub use css::*`) on its own — otherwise the bare `safe_value` … names
+    /// `naming::kernel_name` emits are out of scope (E0425).
+    #[must_use]
+    pub const fn is_css(self) -> bool {
+        matches!(
+            self,
+            Self::CssSafetySafeValue
+                | Self::CssSafetySafePropName
+                | Self::CssSafetySafeSelector
+                | Self::CssSafetyStripStyleClose
+        )
     }
 }
 

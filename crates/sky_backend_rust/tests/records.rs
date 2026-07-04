@@ -53,6 +53,7 @@ fn program(name: Symbol, funcs: Vec<Func>, entry: Option<FuncId>) -> Program {
             uses_live: false,
             uses_tui: false,
             uses_webview: false,
+            uses_css: false,
         }],
     }
 }

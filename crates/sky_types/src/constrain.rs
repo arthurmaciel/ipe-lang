@@ -3248,6 +3248,18 @@ impl<'a> Builder<'a> {
             K::ErrorToString => fun(error_ty(), string()),
             K::ErrorWithMessage => fun(string(), fun(error_ty(), error_ty())),
 
+            // ── Sky.Core.CssSafety (4 — Std.Css leaf security kernels, #47) ──
+            //    The three parsers are `String -> Maybe String` (`None` => the
+            //    Sky side drops the declaration/rule via `CssDropped` /
+            //    `CssRuleDropped`); `stripStyleClose` is the `String -> String`
+            //    breakout floor. Runtime `safe_value` / `safe_prop_name` /
+            //    `safe_selector` return `SkyMaybe<String>` (mirrors `uuid_parse`);
+            //    `strip_style_close_kernel` returns `String`.
+            K::CssSafetySafeValue | K::CssSafetySafePropName | K::CssSafetySafeSelector => {
+                fun(string(), maybe(string()))
+            }
+            K::CssSafetyStripStyleClose => fun(string(), string()),
+
             // ── Sky.Core.Uuid (3 — task #54) — ENTROPY IS AN EFFECT ──
             //    `v4`/`v7` draw fresh entropy per call, so they are typed on the
             //    effect tier `() -> Task Error String` (runtime `uuid_v4::<E>(_:
@@ -3877,6 +3889,14 @@ mod registry_phase_c_tests {
             K::ErrorPermissionDenied,
             K::ErrorToString,
             K::ErrorWithMessage,
+            // CssSafety (4 — Std.Css leaf security kernels, #47). Each WAS a hole
+            // (`kernel_ty` has no CssSafety arm → `Ty::Var(u32::MAX)`) until
+            // schemed above; the three parsers are `String -> Maybe String`,
+            // `stripStyleClose` is `String -> String`.
+            K::CssSafetySafeValue,
+            K::CssSafetySafePropName,
+            K::CssSafetySafeSelector,
+            K::CssSafetyStripStyleClose,
             // Crypto (17 — AEAD included after the arity 3→2 correction, #58)
             K::CryptoSha256,
             K::CryptoSha512,

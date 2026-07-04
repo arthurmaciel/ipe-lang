@@ -144,6 +144,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
             uses_live: false,
             uses_tui: false,
             uses_webview: false,
+            uses_css: false,
         }],
     })
 }

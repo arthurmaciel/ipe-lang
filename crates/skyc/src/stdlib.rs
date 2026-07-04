@@ -184,14 +184,27 @@ pub struct CompiledStdModule {
 /// and pattern-matches its own constructors in `toHex`.
 const PALETTE: &str = include_str!("../stdlib/Std/Palette.sky");
 
+/// `Std.Css` (#47) — the typed stylesheet DSL, compiled pure Sky source: it
+/// defines AND pattern-matches its own `CssProp` / `CssRule` / `Length` /
+/// `Color` / keyword-enum ADTs and folds them to a CSS string.  Its only Rust
+/// surface is the four leaf security kernels under the `Sky.Core.CssSafety`
+/// kernel qualifier (NOT under `Std.Css`, so the disjointness invariant holds).
+const CSS: &str = include_str!("../stdlib/Std/Css.sky");
+
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
 /// Disjoint from [`MODULES`] (parse fixtures) and from `sky_canon`'s
 /// `STDLIB_MODULE_QUALIFIERS` (kernel qualifiers) — see the module comment.
-pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[CompiledStdModule {
-    dotted: "Std.Palette",
-    source: PALETTE,
-}];
+pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
+    CompiledStdModule {
+        dotted: "Std.Palette",
+        source: PALETTE,
+    },
+    CompiledStdModule {
+        dotted: "Std.Css",
+        source: CSS,
+    },
+];
 
 /// The embedded Sky source for a compiled-source stdlib module named by its path
 /// SEGMENTS (e.g. `["Std", "Palette"]`), or `None` when the segments name no

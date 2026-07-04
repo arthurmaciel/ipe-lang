@@ -1,0 +1,5 @@
+name = "spike-css-source"
+version = "0.1.0"
+
+[source]
+root = "src"

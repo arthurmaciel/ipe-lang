@@ -139,6 +139,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
             uses_live: false,
             uses_tui: false,
             uses_webview: false,
+            uses_css: false,
         }],
     })
 }
@@ -190,6 +191,7 @@ fn unit_value_and_type_render() -> DResult<()> {
             uses_live: false,
             uses_tui: false,
             uses_webview: false,
+            uses_css: false,
         }],
     };
     let src = emit(&i, &prog)?;
