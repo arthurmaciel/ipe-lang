@@ -143,7 +143,13 @@ build_rust() {
 build_go() {
   local d="$1" n="$2" go_bin="${SKY_GO_BIN:-sky}"
   command -v "$go_bin" >/dev/null 2>&1 || return 1
-  ( cd "$d" && timeout 300 "$go_bin" build src/Main.sky >"$HIST/$n.go.build.log" 2>&1 )
+  # SKY_RUNTIME_DIR is a skyc-ONLY knob (env.sh exports it so skyc's --runtime
+  # auto-resolve is CWD-independent). The Haskell `sky` Go reference ALSO honours
+  # SKY_RUNTIME_DIR — and would vendor the REPO's *Rust* runtime tree as its Go
+  # `rt/` package, yielding `undefined: rt.SetPortDefault` (every rt.* symbol) at
+  # `go build`. `sky` has its own TH-embedded Go runtime, so the reference build
+  # MUST run with SKY_RUNTIME_DIR unset. `env -u` scopes the unset to this child.
+  ( cd "$d" && env -u SKY_RUNTIME_DIR timeout 300 "$go_bin" build src/Main.sky >"$HIST/$n.go.build.log" 2>&1 )
   sync
   [ -x "$d/sky-out/app" ]
 }
