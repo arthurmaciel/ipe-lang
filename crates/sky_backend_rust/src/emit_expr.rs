@@ -471,13 +471,234 @@ fn emit_http_builder_call(
 #[inline(never)]
 #[allow(clippy::too_many_lines)]
 // linear dispatch over many projection cases
+/// Emit `Task.retryWith` and all `RetryPolicy` builder kernels.
+///
+/// Design rationale:
+/// - `RetryPolicy e` is a closed record with a function field `shouldRetry : e ->
+///   Bool`.  Because `Box<dyn Fn>` is not `Clone`, builders use MOVE semantics
+///   (`let mut __sky_rec = (rec); __sky_rec.field = val; __sky_rec`) rather than
+///   `.clone()`.
+/// - `Task.retryWith` decomposes the policy and calls the runtime function
+///   `sky_runtime::task::task_retry_with`, adapting the `Box<dyn Fn(E) -> bool>`
+///   field to the `impl Fn(&E) -> bool` expected by the runtime via a cloning
+///   adapter closure.
+fn emit_task_retry_call(
+    ctx: &EmitCtx,
+    callee: &Callee,
+    args: &[Expr],
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    let Callee::Kernel(
+        k @ (KernelFn::TaskRetryWith
+        | KernelFn::TaskLinearBackoff
+        | KernelFn::TaskExponentialBackoff
+        | KernelFn::TaskWithJitter
+        | KernelFn::TaskRetryOn
+        | KernelFn::TaskWithRetryOn
+        | KernelFn::TaskDefaultRetryPolicy
+        | KernelFn::TaskWithMaxAttempts
+        | KernelFn::TaskWithBaseMs
+        | KernelFn::TaskWithKind),
+    ) = callee
+    else {
+        return Ok(None);
+    };
+
+    // `RetryPolicy e = { baseMs, jitter, kind, maxAttempts, shouldRetry }` —
+    // alphabetical BTreeMap order matches the emitted struct name.
+    let rp_key: Vec<String> = vec![
+        "baseMs".to_owned(),
+        "jitter".to_owned(),
+        "kind".to_owned(),
+        "maxAttempts".to_owned(),
+        "shouldRetry".to_owned(),
+    ];
+    // Only builders that construct a new struct need the struct name.
+    // For the pure move-update builders (TaskWithJitter etc.) we look it up too
+    // so the pattern is consistent; a missing struct signals a lowering bug.
+    let rp_name = ctx
+        .record_struct_by_key(&rp_key)
+        .map_err(|_| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_task_retry_call",
+            detail: "no synthesised struct for RetryPolicy fieldset \
+                 {baseMs, jitter, kind, maxAttempts, shouldRetry}; \
+                 the lowerer must surface the RetryPolicy record type before emission"
+                .to_owned(),
+        })?
+        .name
+        .clone();
+
+    match k {
+        KernelFn::TaskDefaultRetryPolicy => {
+            // `defaultRetryPolicy : RetryPolicy e` — 0-arg, emit inline literal.
+            // 3 attempts, 500 ms, exponential (kind=1), no jitter, always-retry.
+            Ok(Some(format!(
+                "{rp_name} {{ baseMs: 500i64, jitter: false, kind: 1i64, \
+                 maxAttempts: 3i64, shouldRetry: Box::new(|_: SkyError| true) }}"
+            )))
+        }
+        KernelFn::TaskLinearBackoff => {
+            // `linearBackoff maxAttempts delayMs` — constant delay, kind=0.
+            let n = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail: "TaskLinearBackoff expects 2 arguments (maxAttempts, delayMs)".to_owned(),
+            })?;
+            let ms = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail: "TaskLinearBackoff expects 2 arguments (maxAttempts, delayMs)".to_owned(),
+            })?;
+            let n_s = emit_expr_at(ctx, n, indent, child, generics)?;
+            let ms_s = emit_expr_at(ctx, ms, indent, child, generics)?;
+            Ok(Some(format!(
+                "{rp_name} {{ baseMs: {ms_s}, jitter: false, kind: 0i64, \
+                 maxAttempts: {n_s}, shouldRetry: Box::new(|_: SkyError| true) }}"
+            )))
+        }
+        KernelFn::TaskExponentialBackoff => {
+            // `exponentialBackoff maxAttempts baseMs` — exponential, kind=1.
+            let n = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail:
+                    "TaskExponentialBackoff expects 2 arguments (maxAttempts, baseMs)".to_owned(),
+            })?;
+            let ms = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail:
+                    "TaskExponentialBackoff expects 2 arguments (maxAttempts, baseMs)".to_owned(),
+            })?;
+            let n_s = emit_expr_at(ctx, n, indent, child, generics)?;
+            let ms_s = emit_expr_at(ctx, ms, indent, child, generics)?;
+            Ok(Some(format!(
+                "{rp_name} {{ baseMs: {ms_s}, jitter: false, kind: 1i64, \
+                 maxAttempts: {n_s}, shouldRetry: Box::new(|_: SkyError| true) }}"
+            )))
+        }
+        KernelFn::TaskWithJitter => {
+            // `withJitter policy` — set jitter=true, MOVE the record.
+            let policy = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail: "TaskWithJitter expects 1 argument (policy)".to_owned(),
+            })?;
+            let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({policy_s}); __sky_rec.jitter = true; __sky_rec }}"
+            )))
+        }
+        KernelFn::TaskWithMaxAttempts => {
+            // `withMaxAttempts n policy` — move-update maxAttempts.
+            let n = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail: "TaskWithMaxAttempts expects 2 arguments (n, policy)".to_owned(),
+            })?;
+            let policy = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail: "TaskWithMaxAttempts expects 2 arguments (n, policy)".to_owned(),
+            })?;
+            let n_s = emit_expr_at(ctx, n, indent, child, generics)?;
+            let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({policy_s}); __sky_rec.maxAttempts = {n_s}; __sky_rec }}"
+            )))
+        }
+        KernelFn::TaskWithBaseMs => {
+            // `withBaseMs ms policy` — move-update baseMs.
+            let ms = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail: "TaskWithBaseMs expects 2 arguments (ms, policy)".to_owned(),
+            })?;
+            let policy = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail: "TaskWithBaseMs expects 2 arguments (ms, policy)".to_owned(),
+            })?;
+            let ms_s = emit_expr_at(ctx, ms, indent, child, generics)?;
+            let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({policy_s}); __sky_rec.baseMs = {ms_s}; __sky_rec }}"
+            )))
+        }
+        KernelFn::TaskWithKind => {
+            // `withKind k policy` — move-update kind.
+            let k_arg = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail: "TaskWithKind expects 2 arguments (k, policy)".to_owned(),
+            })?;
+            let policy = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail: "TaskWithKind expects 2 arguments (k, policy)".to_owned(),
+            })?;
+            let k_s = emit_expr_at(ctx, k_arg, indent, child, generics)?;
+            let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({policy_s}); __sky_rec.kind = {k_s}; __sky_rec }}"
+            )))
+        }
+        KernelFn::TaskRetryOn | KernelFn::TaskWithRetryOn => {
+            // `retryOn pred policy` / `withRetryOn pred policy` — move-update shouldRetry.
+            let pred = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail: "TaskRetryOn/TaskWithRetryOn expects 2 arguments (pred, policy)"
+                    .to_owned(),
+            })?;
+            let policy = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail: "TaskRetryOn/TaskWithRetryOn expects 2 arguments (pred, policy)"
+                    .to_owned(),
+            })?;
+            let pred_s = emit_expr_at(ctx, pred, indent, child, generics)?;
+            let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({policy_s}); \
+                 __sky_rec.shouldRetry = {pred_s}; __sky_rec }}"
+            )))
+        }
+        KernelFn::TaskRetryWith => {
+            // `retryWith policy task` — decompose policy, call runtime.
+            // The `shouldRetry` field is `Box<dyn Fn(SkyError) -> bool>` but
+            // `task_retry_with` expects `impl Fn(&SkyError) -> bool`.  The adapter
+            // closure bridges the gap by cloning the (cheap String) error ref.
+            let policy = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail: "TaskRetryWith expects 2 arguments (policy, task)".to_owned(),
+            })?;
+            let task = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_task_retry_call",
+                detail: "TaskRetryWith expects 2 arguments (policy, task)".to_owned(),
+            })?;
+            let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
+            let task_s = emit_expr_at(ctx, task, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ \
+                 let __sky_p = {policy_s}; \
+                 let __sky_sr = __sky_p.shouldRetry; \
+                 sky_runtime::task::task_retry_with(\
+                 __sky_p.maxAttempts, \
+                 __sky_p.baseMs, \
+                 __sky_p.jitter, \
+                 __sky_p.kind, \
+                 move |__sky_e: &SkyError| (__sky_sr)(__sky_e.clone()), \
+                 move || {{ {task_s} }}\
+                 ) }}"
+            )))
+        }
+        _ => Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_task_retry_call",
+            detail: "non-retry kernel reached retry dispatch arm — guard should have excluded it"
+                .to_owned(),
+        }),
+    }
+}
+
 // The match below lists standard-path Db kernels explicitly (same Ok(None) body
 // as the wildcard) so that any future param-taking Db kernel added to `KernelFn`
 // that NEEDS a custom arm causes a *compile error* here — not a silent
 // exit-0-then-cargo-fail when `_ => Ok(None)` swallows it.
 // `match_same_arms` fires because both the list and `_` return `Ok(None)`; the
-// documentation value justifies the suppression.
-#[allow(clippy::match_same_arms)]
+// documentation value justifies the suppression.  `too_many_lines` fires because
+// the function explicitly enumerates every Db kernel arm for compile-time
+// completeness; extracting sub-helpers would hide the intentional coverage.
+#[allow(clippy::match_same_arms, clippy::too_many_lines)]
 fn emit_db_call(
     ctx: &EmitCtx,
     callee: &Callee,
@@ -3430,6 +3651,13 @@ pub fn emit_expr_at(
             // struct construction or clone-and-reassign record updates.
             if let Some(result) =
                 emit_http_builder_call(ctx, callee, args, indent, child, generics)?
+            {
+                return Ok(result);
+            }
+            // Task.RetryPolicy builders and Task.retryWith: inline struct
+            // construction / move-update / runtime call.
+            if let Some(result) =
+                emit_task_retry_call(ctx, callee, args, indent, child, generics)?
             {
                 return Ok(result);
             }

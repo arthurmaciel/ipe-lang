@@ -710,7 +710,7 @@ impl Env {
                 "Jwt",
                 &["encodeHs256", "decodeHs256", "encodeRs256", "decodeRs256"],
             ),
-            // `Sky.Core.Task` — Task combinators (M5a).
+            // `Sky.Core.Task` — Task combinators (M5a) + retry surface.
             (
                 "Task",
                 &[
@@ -727,6 +727,17 @@ impl Env {
                     "run",
                     "perform",
                     "lazy",
+                    // retry surface
+                    "retryWith",
+                    "linearBackoff",
+                    "exponentialBackoff",
+                    "withJitter",
+                    "retryOn",
+                    "withRetryOn",
+                    "defaultRetryPolicy",
+                    "withMaxAttempts",
+                    "withBaseMs",
+                    "withKind",
                 ],
             ),
             // `Sky.Core.Io` — I/O effects (M5a).
