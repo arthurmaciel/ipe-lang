@@ -38,6 +38,12 @@ fn run(
 /// Lower a hand-built module with an explicit per-region (`span` → solved `Ty`)
 /// map — needed by the arms that reify a value's solved type (a first-class
 /// function reference, a function-typed lambda parameter).
+///
+/// Test modules have an empty name (`m.name = Vec::new()`), so every span
+/// belongs to the empty home.  The helper converts the convenient
+/// `BTreeMap<Span, Ty>` the test callers build into the real
+/// `BTreeMap<(Vec<Symbol>, Span), Ty>` that `SolvedTypes` expects, using
+/// `vec![]` as the home for every entry.
 fn run_with_regions(
     unions: Vec<canon::Union>,
     defs: Vec<canon::Def>,
@@ -52,8 +58,12 @@ fn run_with_regions(
     };
     let types = SolvedTypes {
         env,
-        regions,
+        regions: regions
+            .into_iter()
+            .map(|(span, ty)| ((vec![], span), ty))
+            .collect(),
         bounds: BTreeMap::new(),
+        warnings: Vec::new(),
     };
     lower(&m, &types, interner)
 }

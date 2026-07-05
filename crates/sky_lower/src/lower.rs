@@ -1962,6 +1962,12 @@ pub struct Lowerer<'a> {
     /// advances; overrun fails closed as a [`bug`] (never an index panic). Interior
     /// mutability so the lowering walk stays over a shared `&self`.
     param_cursor: Cell<usize>,
+    /// Home module path of the def currently being lowered.  Set at the start of
+    /// each [`Self::lower_def`] call; read by [`Self::region_ty`] to key the
+    /// region map as `(home, span)` — matching the discriminant the constraint
+    /// builder recorded.  Interior mutability so `lower_def` can update it through
+    /// the shared `&self` reference that the lowering walk uses.
+    current_home: std::cell::RefCell<Vec<Symbol>>,
 }
 
 /// The interned symbols of the built-in `Maybe` / `Result` types and their
@@ -2204,6 +2210,7 @@ impl<'a> Lowerer<'a> {
             cap_params,
             param_binders,
             param_cursor: Cell::new(0),
+            current_home: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -2236,6 +2243,20 @@ impl<'a> Lowerer<'a> {
                 format!("symbol {} not present in interner", sym.as_raw()),
             )
         })
+    }
+
+    /// Look up the solved type for a source `span` in the current def's home
+    /// module.
+    ///
+    /// The region map is keyed by `(home_module_path, Span)` to prevent
+    /// cross-module span collisions after `link::link` merges dep modules.
+    /// This helper reads [`Self::current_home`] (set by [`Self::lower_def`])
+    /// and constructs the composite key automatically, so callers need only
+    /// supply the span.
+    #[inline]
+    fn region_ty(&self, span: Span) -> Option<&Ty> {
+        let home = self.current_home.borrow().clone();
+        self.types.regions.get(&(home, span))
     }
 
     /// Run the pass, producing the single-module program.
@@ -2582,6 +2603,10 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_def(&self, def: &canon::Def) -> DResult<Func> {
+        // Track the current def's home so every `region_ty(span)` lookup uses the
+        // correct `(home, span)` key, matching what the constraint builder wrote.
+        *self.current_home.borrow_mut() = def.home().to_vec();
+
         let name = def.name().value;
         let id = *self
             .func_ids
@@ -2942,7 +2967,7 @@ impl<'a> Lowerer<'a> {
     fn lower_param_binder_pat(&self, pat: &canon::Pattern, param_span: Span) -> DResult<Pat> {
         match &pat.value {
             canon::Pattern_::PRecord(fields) => {
-                let ty = self.types.regions.get(&param_span).ok_or_else(|| {
+                let ty = self.region_ty(param_span).ok_or_else(|| {
                     bug(
                         "sky_lower::lower_param_binder_pat",
                         "record parameter has no solved region type",
@@ -3200,10 +3225,38 @@ impl<'a> Lowerer<'a> {
                         args: ir_args,
                     })
                 }
-                other => Err(bug(
-                    "sky_lower::ir_type_from_canon",
-                    format!("unknown type constructor `{other}`"),
-                )),
+                other => {
+                    // The type has `home = []` but is not a known builtin.
+                    // This happens when a module references a user-defined type in
+                    // its annotation without explicitly importing the defining
+                    // module — the Haskell compiler accepts this via looser scoping.
+                    // Match that behaviour: scan `enum_variants` for a unique entry
+                    // with this name (any home).  If exactly one exists, use it.
+                    // If zero or many exist, fall through to the invariant-violation
+                    // ICE (which is still the right outcome for genuinely unknown
+                    // or ambiguous names).
+                    let candidates: Vec<_> = self
+                        .enum_variants
+                        .keys()
+                        .filter(|(_, sym)| *sym == *name)
+                        .collect();
+                    if let [single] = candidates.as_slice() {
+                        let resolved_home = single.0.clone();
+                        let mut ir_args = Vec::with_capacity(args.len());
+                        for a in args {
+                            ir_args.push(self.ir_type_from_canon(a, generics)?);
+                        }
+                        return Ok(IrType::Enum {
+                            home: resolved_home,
+                            name: *name,
+                            args: ir_args,
+                        });
+                    }
+                    Err(bug(
+                        "sky_lower::ir_type_from_canon",
+                        format!("unknown type constructor `{other}`"),
+                    ))
+                }
             },
             // A function type in argument/return position of a value annotation
             // (`apply : (Int -> Int) -> Int`). Flatten the curried arrow chain
@@ -3285,9 +3338,7 @@ impl<'a> Lowerer<'a> {
         free.into_iter()
             .map(|(sym, span)| {
                 let ty = self
-                    .types
-                    .regions
-                    .get(&span)
+                    .region_ty(span)
                     .and_then(|ty| self.ir_type_from_ty(ty, span).ok());
                 (sym, ty)
             })
@@ -3316,7 +3367,7 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) -> DResult<Expr> {
         // The region type the solver recorded for this lambda is its arrow.
-        let ty = self.types.regions.get(&span).ok_or_else(|| {
+        let ty = self.region_ty(span).ok_or_else(|| {
             bug(
                 "sky_lower::lower_lambda",
                 "no inferred type for lambda expression",
@@ -3436,7 +3487,7 @@ impl<'a> Lowerer<'a> {
     /// an internal invariant violation (the constraint generator pins every list
     /// expression to a `List` type), surfaced as a [`bug`] rather than guessed.
     fn list_elem_ir(&self, span: Span) -> DResult<IrType> {
-        let ty = self.types.regions.get(&span).ok_or_else(|| {
+        let ty = self.region_ty(span).ok_or_else(|| {
             bug(
                 "sky_lower::list_elem_ir",
                 "no inferred type for a list literal",
@@ -3449,7 +3500,7 @@ impl<'a> Lowerer<'a> {
                 // maps to `IrType::Json` rather than failing with Polymorphism.
                 self.ir_type_from_ty_json(args.first().ok_or_else(list_arg_bug)?, span)
             }
-            _ => Err(bug(
+            _other => Err(bug(
                 "sky_lower::list_elem_ir",
                 "list literal's region type is not a `List`",
             )),
@@ -3842,10 +3893,33 @@ impl<'a> Lowerer<'a> {
                 // Name resolution guarantees every type constructor resolves to
                 // a builtin or a declared union, so an unknown one here is an
                 // invariant violation, not user error.
-                other => Err(bug(
-                    "sky_lower::ir_type_from_ty",
-                    format!("unknown type constructor `{other}`"),
-                )),
+                other => {
+                    // Solver-side counterpart of the `ir_type_from_canon` fallback:
+                    // a `Ty::Con { module: [] }` can arise when an annotation used a
+                    // type without importing its defining module (the Haskell compiler
+                    // accepts this); try a unique-match by name across all homes.
+                    let candidates: Vec<_> = self
+                        .enum_variants
+                        .keys()
+                        .filter(|(_, sym)| *sym == *name)
+                        .collect();
+                    if let [single] = candidates.as_slice() {
+                        let resolved_home = single.0.clone();
+                        let mut ir_args = Vec::with_capacity(args.len());
+                        for a in args {
+                            ir_args.push(self.ir_type_from_ty(a, span)?);
+                        }
+                        return Ok(IrType::Enum {
+                            home: resolved_home,
+                            name: *name,
+                            args: ir_args,
+                        });
+                    }
+                    Err(bug(
+                        "sky_lower::ir_type_from_ty",
+                        format!("unknown type constructor `{other}`"),
+                    ))
+                }
             },
             // A tuple in value position (e.g. a binding whose body is a tuple
             // literal): lower element-wise to the IR tuple type.
@@ -4032,7 +4106,7 @@ impl<'a> Lowerer<'a> {
     /// until the record struct can carry a non-deriving function field.
     /// [SKY-L0107, feature: first-class-functions]
     fn reject_function_valued_field(&self, value: &canon::Expr) -> DResult<()> {
-        if let Some(Ty::Fun(_, _)) = self.types.regions.get(&value.span) {
+        if let Some(Ty::Fun(_, _)) = self.region_ty(value.span) {
             return Err(unsupported(value.span, Feature::FirstClassFunctions));
         }
         Ok(())
@@ -4058,7 +4132,7 @@ impl<'a> Lowerer<'a> {
         if !matches!(
             &e.value,
             canon::Expr_::Record(_) | canon::Expr_::Update(_, _)
-        ) && let Some(ty) = self.types.regions.get(&e.span)
+        ) && let Some(ty) = self.region_ty(e.span)
             && embeds_nonderivable_function(self.interner, ty)
         {
             let feature = if con_payload_carries_function(self.interner, ty) {
@@ -4113,7 +4187,59 @@ impl<'a> Lowerer<'a> {
                         args: vec![],
                     })
                 } else {
-                    Err(unsupported(e.span, Feature::CtorAsFunction))
+                    // Bare payload constructor used as a first-class function value
+                    // (e.g. `onInput InputAlertMetric`, `List.map Just`).  Elm / Sky
+                    // treat constructors as ordinary functions; here we eta-expand:
+                    //   `Ctor` (arity N)  →  `|p0, …, p{N-1}| Ctor(p0, …, p{N-1})`
+                    //
+                    // Retrieve the inferred function type for this expression —
+                    // the region type at `e.span` should be `T0 -> … -> Tn -> R`.
+                    let fn_ty = self.region_ty(e.span).ok_or_else(|| {
+                        bug(
+                            "sky_lower::lower_expr/VarCtor",
+                            "no region type for a bare payload-constructor reference",
+                        )
+                    })?;
+                    // Peel `arity` arrows to collect param types and the return type.
+                    let mut cur = fn_ty;
+                    let mut arg_tys: Vec<&Ty> = Vec::with_capacity(arity);
+                    for _ in 0..arity {
+                        let Ty::Fun(arg, rest) = cur else {
+                            return Err(bug(
+                                "sky_lower::lower_expr/VarCtor",
+                                "bare-ctor region type has fewer arrows than declared arity",
+                            ));
+                        };
+                        arg_tys.push(arg);
+                        cur = rest.as_ref();
+                    }
+                    let ret_ty = cur;
+                    // Mint fresh parameter symbols from the eta pool and build the lambda.
+                    let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity);
+                    let mut ctor_args: Vec<Expr> = Vec::with_capacity(arity);
+                    for (i, arg_ty) in arg_tys.iter().enumerate() {
+                        let sym = *self.eta_params.get(i).ok_or_else(|| {
+                            bug(
+                                "sky_lower::lower_expr/VarCtor",
+                                "eta-parameter pool smaller than constructor arity",
+                            )
+                        })?;
+                        let ir = self.ir_type_from_ty(arg_ty, e.span)?;
+                        params.push((sym, ir));
+                        ctor_args.push(Expr::Var(sym));
+                    }
+                    let ret = self.ir_type_from_ty(ret_ty, e.span)?;
+                    let body = Expr::Ctor {
+                        home: ctor_home,
+                        ty: *type_name,
+                        variant: *name,
+                        args: ctor_args,
+                    };
+                    Ok(Expr::Lambda {
+                        params,
+                        ret,
+                        body: Box::new(body),
+                    })
                 }
             }
             canon::Expr_::Binop { func, lhs, rhs, .. } => Ok(Expr::BinOp {
@@ -4215,7 +4341,7 @@ impl<'a> Lowerer<'a> {
                     if matches!(
                         &callee,
                         Callee::Kernel(KernelFn::CmdNone | KernelFn::SubNone)
-                    ) && let Some(ty) = self.types.regions.get(&e.span)
+                    ) && let Some(ty) = self.region_ty(e.span)
                     {
                         // Return value discarded — only the error path matters.
                         let _ = self.ir_type_from_ty(ty, e.span)?;
@@ -4225,7 +4351,7 @@ impl<'a> Lowerer<'a> {
                         args: Vec::new(),
                     });
                 }
-                let ty = self.types.regions.get(&e.span).ok_or_else(|| {
+                let ty = self.region_ty(e.span).ok_or_else(|| {
                     bug(
                         "sky_lower::lower_expr",
                         "no inferred type for a function/value reference",
@@ -4309,7 +4435,7 @@ impl<'a> Lowerer<'a> {
     /// SKY-L0111) rather than broken Rust. The base's solved region type tells us
     /// whether it is generic; a monomorphic update is byte-identical to b3.
     fn lower_update(&self, base: &canon::Expr, fields: &[(Symbol, canon::Expr)]) -> DResult<Expr> {
-        if let Some(base_ty) = self.types.regions.get(&base.span)
+        if let Some(base_ty) = self.region_ty(base.span)
             && ty_contains_var(base_ty)
         {
             return Err(unsupported(base.span, Feature::BoundedRecordUpdate));
@@ -4375,7 +4501,7 @@ impl<'a> Lowerer<'a> {
     /// (and forcing it through [`Self::ir_type_from_ty`] would mis-report it as
     /// the polymorphism gap rather than this capability gap).
     fn reject_float_keyed_collection(&self, span: Span) -> DResult<()> {
-        let Some(Ty::Con { name, args, .. }) = self.types.regions.get(&span) else {
+        let Some(Ty::Con { name, args, .. }) = self.region_ty(span) else {
             return Ok(());
         };
         let key = match (self.resolve(*name)?, args.as_slice()) {
@@ -4781,7 +4907,7 @@ impl<'a> Lowerer<'a> {
                 // makes the result a non-function — so a mismatch here is always
                 // partial.) A missing or non-arrow region type falls through to
                 // the direct apply, preserving the exact-application fast path.
-                if let Some(ty) = self.types.regions.get(&callee.span) {
+                if let Some(ty) = self.region_ty(callee.span) {
                     let arity = Self::ty_arrow_arity(ty);
                     if arity != 0 && args.len() != arity {
                         return Err(unsupported(call_span, Feature::PartialOverApplication));
@@ -4831,7 +4957,7 @@ impl<'a> Lowerer<'a> {
         arity: usize,
         call_span: Span,
     ) -> DResult<Expr> {
-        let fn_ty = self.types.regions.get(&callee.span).ok_or_else(|| {
+        let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
             bug(
                 "sky_lower::eta_expand_partial",
                 "no inferred type for a partially-applied callee",
@@ -5093,7 +5219,7 @@ impl<'a> Lowerer<'a> {
         call_span: Span,
     ) -> DResult<Expr> {
         let surplus = lowered_args.len().saturating_sub(arity);
-        if let Some(ty) = self.types.regions.get(&callee.span) {
+        if let Some(ty) = self.region_ty(callee.span) {
             let returned_arity = Self::ty_arrow_arity(ty).saturating_sub(arity);
             if surplus != returned_arity {
                 return Err(unsupported(call_span, Feature::PartialOverApplication));
@@ -6200,7 +6326,7 @@ impl<'a> Lowerer<'a> {
     /// bare `SkyResult::Ok` without tripping rustc's E0282 ambiguity. A missing
     /// region type or a concrete error type yields `false`.
     fn result_error_unresolved(&self, span: Span) -> bool {
-        match self.types.regions.get(&span) {
+        match self.region_ty(span) {
             Some(Ty::Con { name, args, .. }) => {
                 self.resolve(*name).map(|n| n == "Result").unwrap_or(false)
                     && matches!(args.first(), Some(Ty::Var(_)))
@@ -7265,7 +7391,7 @@ impl<'a> Lowerer<'a> {
     fn lower_binder_pat(&self, pat: &canon::Pattern, value: &canon::Expr) -> DResult<Pat> {
         match &pat.value {
             canon::Pattern_::PRecord(fields) => {
-                let ty = self.types.regions.get(&value.span).ok_or_else(|| {
+                let ty = self.region_ty(value.span).ok_or_else(|| {
                     bug(
                         "sky_lower::lower_binder_pat",
                         "record destructure value has no solved region type",
@@ -7344,7 +7470,7 @@ impl<'a> Lowerer<'a> {
     /// [`Expr::TaskSeq`] rather than silently dropping the unawaited future (F1).
     fn is_task_typed(&self, span: Span) -> bool {
         matches!(
-            self.types.regions.get(&span),
+            self.region_ty(span),
             Some(Ty::Con { name, .. })
                 if self.interner.resolve(*name).is_some_and(|n| n == "Task")
         )
@@ -7358,7 +7484,7 @@ impl<'a> Lowerer<'a> {
     /// into a zero-arg lambda so the value can be rebuilt per use (F2 — Decoder
     /// is `!Clone` and `decode_from_json_string` consumes it by value).
     fn decoder_ir_type(&self, span: Span) -> Option<IrType> {
-        let ty = self.types.regions.get(&span)?;
+        let ty = self.region_ty(span)?;
         let Ty::Con { name, args, .. } = ty else {
             return None;
         };
@@ -7832,6 +7958,7 @@ mod tests {
             env: BTreeMap::new(),
             regions: BTreeMap::new(),
             bounds: BTreeMap::new(),
+            warnings: Vec::new(),
         };
 
         // Immutable borrow of interner starts here — no more intern() calls.
