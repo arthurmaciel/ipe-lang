@@ -54,7 +54,7 @@
 
 ### (b) Counts
 
-**16/35 OK.** batch-xm merged: 17/10 cleared T0001 (cross-module nominal identity) but stopped at NEW emit-layer blockers — 17: sqlx/PgPool+LiveReq deps gap (#137); 10: E0308 in emitted project. T0011 now a WARNING (Go parity) with unreachable-arm truncation at lowering; policy review = #136.
+**17/35 OK** (+10-live-component — #139 poly-tvar map + Access-clone; cargo-sealed). Lanes in flight: #141 (28/37/38 round-2), #140 (17 codegen clusters). Types/canon surface hardened: #136 review closed, #138 total resolution (SKY-N0002 + did-you-mean).
 
 | Status | Count | Examples |
 |---|---|---|
