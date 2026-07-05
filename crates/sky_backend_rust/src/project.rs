@@ -1282,8 +1282,7 @@ mod tests {
         assert!(
             RUNTIME_MOD_RS_LIVE_APPEND.contains("LiveReq"),
             "RUNTIME_MOD_RS_LIVE_APPEND must re-export LiveReq from the live module (E0412 fix): \
-             {}",
-            RUNTIME_MOD_RS_LIVE_APPEND
+             {RUNTIME_MOD_RS_LIVE_APPEND}"
         );
     }
 }
