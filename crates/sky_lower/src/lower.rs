@@ -369,8 +369,12 @@ fn clone_class(t: &IrType) -> CloneClass {
             clone_class_composite([e.as_ref(), a.as_ref()].into_iter())
         }
         IrType::Tuple(elems) => clone_class_composite(elems.iter()),
-        IrType::Record(fields) => clone_class_composite(fields.values()),
-        IrType::Enum { args, .. } => clone_class_composite(args.iter()),
+        // Named types: emitted Rust struct/enum derives `Clone` but NOT `Copy`.
+        // A CopyLeaf payload (e.g. all-Int record, no-arg enum) does NOT make the
+        // wrapper `Copy` — bare capture would move it on first closure call → E0525.
+        // Floor to CloneOk so the rewrite inserts `.clone()` per call.
+        IrType::Record(fields) => clone_class_named_composite(fields.values()),
+        IrType::Enum { args, .. } => clone_class_named_composite(args.iter()),
         // Ui{msg} / LiveRoute(page) — recurse on the message/page type-param.
         IrType::Ui { msg, .. } => clone_class_composite(std::iter::once(msg.as_ref())),
         IrType::LiveRoute(page) => clone_class_composite(std::iter::once(page.as_ref())),
@@ -390,6 +394,25 @@ fn clone_class_composite<'a>(parts: impl Iterator<Item = &'a IrType>) -> CloneCl
         CloneClass::CloneOk
     } else {
         CloneClass::CopyLeaf
+    }
+}
+
+/// Like [`clone_class_composite`] but floors `CopyLeaf` to `CloneOk`.
+///
+/// Use for **named Rust types** (emitted `struct` / `enum`) that derive `Clone`
+/// but **not** `Copy`.  A payload of all-scalar fields makes
+/// `clone_class_composite` return `CopyLeaf`, falsely claiming the wrapper is
+/// `Copy`.  Bare capture of such a type inside a `move` closure moves the value
+/// on first call, causing E0525 on any subsequent call.  Flooring to `CloneOk`
+/// ensures the rewrite inserts `.clone()` per call — safe because the wrapper
+/// derives `Clone`.
+fn clone_class_named_composite<'a>(parts: impl Iterator<Item = &'a IrType>) -> CloneClass {
+    match clone_class_composite(parts) {
+        CloneClass::NonClone => CloneClass::NonClone,
+        // CopyLeaf is only valid for Rust primitive types that implement `Copy`.
+        // Named structs and enums never derive `Copy` (derive macro doesn't emit it),
+        // so the weakest safe class here is `CloneOk`.
+        CloneClass::CloneOk | CloneClass::CopyLeaf => CloneClass::CloneOk,
     }
 }
 
@@ -560,11 +583,19 @@ fn pat_binds_any_in(pat: &Pat, set: &BTreeSet<Symbol>) -> bool {
 /// / `Lambda` / `Match`-arm patterns rebind and remove the symbol from the
 /// active sets inside the shadowed sub-expression.
 #[allow(clippy::too_many_lines)]
+// `depth`: closure-nesting depth relative to the outermost lambda being
+// processed.  Used to gate the NonClone callee-position exemption: at depth 0
+// a `Var(f)` in direct `Apply.func` position is allowed bare (Rust borrows
+// `&self` for `Fn::call`).  At depth > 0 the symbol is captured by an inner
+// `move` closure which steals it from the outer env on the first call →
+// outer closure becomes `FnOnce` (E0525).  The exemption is therefore only
+// sound at depth 0.
 fn rewrite_captured_clones(
     clone_set: &BTreeSet<Symbol>,
     noncl_set: &BTreeSet<Symbol>,
     lambda_span: Span,
     expr: Expr,
+    depth: u32,
 ) -> DResult<Expr> {
     if clone_set.is_empty() && noncl_set.is_empty() {
         return Ok(expr);
@@ -589,26 +620,30 @@ fn rewrite_captured_clones(
         | Expr::Unit
         | Expr::FuncValue { .. } => Ok(expr),
         // Apply: a `Var(s)` in DIRECT func position where `s ∈ noncl_set`
-        // is allowed bare (Rust's `Fn::call` borrows `&self`).
+        // is allowed bare ONLY at depth 0.  At depth 0, Rust's `Fn::call`
+        // borrows `&self`, so re-calling the closure is safe.
+        // At depth > 0 the symbol lives inside an inner `move` closure: the
+        // inner closure would move it out of the outer env on the first call,
+        // making the outer closure `FnOnce` (E0525).
         Expr::Apply { func, args } => {
             let new_func = Box::new(match *func {
-                Expr::Var(s) if noncl_set.contains(&s) => Expr::Var(s),
-                other => rewrite_captured_clones(clone_set, noncl_set, lambda_span, other)?,
+                Expr::Var(s) if noncl_set.contains(&s) && depth == 0 => Expr::Var(s),
+                other => rewrite_captured_clones(clone_set, noncl_set, lambda_span, other, depth)?,
             });
             let new_args = args
                 .into_iter()
-                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a))
+                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a, depth))
                 .collect::<DResult<Vec<_>>>()?;
             Ok(Expr::Apply { func: new_func, args: new_args })
         }
         Expr::BinOp { op, lhs, rhs } => Ok(Expr::BinOp {
             op,
-            lhs: Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *lhs)?),
-            rhs: Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *rhs)?),
+            lhs: Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *lhs, depth)?),
+            rhs: Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *rhs, depth)?),
         }),
         Expr::Let { name, value, body } => {
             let new_value =
-                Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *value)?);
+                Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *value, depth)?);
             if clone_set.contains(&name) || noncl_set.contains(&name) {
                 let inner_clone: BTreeSet<Symbol> =
                     clone_set.iter().copied().filter(|&s| s != name).collect();
@@ -622,6 +657,7 @@ fn rewrite_captured_clones(
                         &inner_noncl,
                         lambda_span,
                         *body,
+                        depth,
                     )?),
                 })
             } else {
@@ -633,13 +669,14 @@ fn rewrite_captured_clones(
                         noncl_set,
                         lambda_span,
                         *body,
+                        depth,
                     )?),
                 })
             }
         }
         Expr::Destructure { binder, value, body } => {
             let new_value =
-                Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *value)?);
+                Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *value, depth)?);
             if pat_binds_any_in(&binder, clone_set) || pat_binds_any_in(&binder, noncl_set) {
                 let inner_clone: BTreeSet<Symbol> = clone_set
                     .iter()
@@ -659,6 +696,7 @@ fn rewrite_captured_clones(
                         &inner_noncl,
                         lambda_span,
                         *body,
+                        depth,
                     )?),
                 })
             } else {
@@ -670,11 +708,16 @@ fn rewrite_captured_clones(
                         noncl_set,
                         lambda_span,
                         *body,
+                        depth,
                     )?),
                 })
             }
         }
-        // Lambda: its own params shadow for the body.
+        // Lambda: its own params shadow for the body.  The body is at depth+1
+        // relative to the enclosing lambda: its `move` capture steals any remaining
+        // noncl symbols from the outer env on first call, making the outer closure
+        // `FnOnce`.  Increment depth so the callee-position exemption (depth==0)
+        // does not fire inside inner lambdas.
         Expr::Lambda { params, ret, body } => {
             let param_names: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
             let inner_clone: BTreeSet<Symbol> =
@@ -689,6 +732,7 @@ fn rewrite_captured_clones(
                     &inner_noncl,
                     lambda_span,
                     *body,
+                    depth + 1,
                 )?),
             })
         }
@@ -699,6 +743,7 @@ fn rewrite_captured_clones(
                 noncl_set,
                 lambda_span,
                 *scrutinee,
+                depth,
             )?);
             let new_arms = arms
                 .into_iter()
@@ -722,6 +767,7 @@ fn rewrite_captured_clones(
                                 &inner_noncl,
                                 lambda_span,
                                 arm.body,
+                                depth,
                             )?
                         } else {
                             rewrite_captured_clones(
@@ -729,6 +775,7 @@ fn rewrite_captured_clones(
                                 noncl_set,
                                 lambda_span,
                                 arm.body,
+                                depth,
                             )?
                         };
                     Ok(Arm { pat: arm.pat, body: new_body })
@@ -738,76 +785,76 @@ fn rewrite_captured_clones(
         }
         Expr::If { cond, then_, else_ } => Ok(Expr::If {
             cond: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *cond,
+                clone_set, noncl_set, lambda_span, *cond, depth,
             )?),
             then_: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *then_,
+                clone_set, noncl_set, lambda_span, *then_, depth,
             )?),
             else_: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *else_,
+                clone_set, noncl_set, lambda_span, *else_, depth,
             )?),
         }),
         Expr::Call { callee, args } => Ok(Expr::Call {
             callee,
             args: args
                 .into_iter()
-                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a))
+                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a, depth))
                 .collect::<DResult<Vec<_>>>()?,
         }),
         Expr::Tuple(items) => Ok(Expr::Tuple(
             items
                 .into_iter()
-                .map(|e| rewrite_captured_clones(clone_set, noncl_set, lambda_span, e))
+                .map(|e| rewrite_captured_clones(clone_set, noncl_set, lambda_span, e, depth))
                 .collect::<DResult<Vec<_>>>()?,
         )),
         Expr::List { elem, items } => Ok(Expr::List {
             elem,
             items: items
                 .into_iter()
-                .map(|e| rewrite_captured_clones(clone_set, noncl_set, lambda_span, e))
+                .map(|e| rewrite_captured_clones(clone_set, noncl_set, lambda_span, e, depth))
                 .collect::<DResult<Vec<_>>>()?,
         }),
         Expr::Cons { head, tail } => Ok(Expr::Cons {
             head: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *head,
+                clone_set, noncl_set, lambda_span, *head, depth,
             )?),
             tail: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *tail,
+                clone_set, noncl_set, lambda_span, *tail, depth,
             )?),
         }),
         Expr::Record(fields) => Ok(Expr::Record(
             fields
                 .into_iter()
                 .map(|(sym, e)| {
-                    rewrite_captured_clones(clone_set, noncl_set, lambda_span, e)
+                    rewrite_captured_clones(clone_set, noncl_set, lambda_span, e, depth)
                         .map(|e| (sym, e))
                 })
                 .collect::<DResult<Vec<_>>>()?,
         )),
         Expr::Access { record, field } => Ok(Expr::Access {
             record: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *record,
+                clone_set, noncl_set, lambda_span, *record, depth,
             )?),
             field,
         }),
         Expr::Update { record, fields } => Ok(Expr::Update {
             record: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *record,
+                clone_set, noncl_set, lambda_span, *record, depth,
             )?),
             fields: fields
                 .into_iter()
                 .map(|(sym, e)| {
-                    rewrite_captured_clones(clone_set, noncl_set, lambda_span, e)
+                    rewrite_captured_clones(clone_set, noncl_set, lambda_span, e, depth)
                         .map(|e| (sym, e))
                 })
                 .collect::<DResult<Vec<_>>>()?,
         }),
         Expr::TaskSeq { effect, rest } => Ok(Expr::TaskSeq {
             effect: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *effect,
+                clone_set, noncl_set, lambda_span, *effect, depth,
             )?),
             rest: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *rest,
+                clone_set, noncl_set, lambda_span, *rest, depth,
             )?),
         }),
         Expr::Ctor { home, ty, variant, args } => Ok(Expr::Ctor {
@@ -816,12 +863,13 @@ fn rewrite_captured_clones(
             variant,
             args: args
                 .into_iter()
-                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a))
+                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a, depth))
                 .collect::<DResult<Vec<_>>>()?,
         }),
         // TailLoop/TailRecur are produced by a post-lower TCO pass that runs
         // AFTER lower_lambda — they cannot appear inside a lambda body at this
         // point. Handle defensively: TailLoop params shadow; TailRecur recurse.
+        // TailLoop is NOT a new closure scope — do NOT increment depth here.
         Expr::TailLoop { params, body } => {
             let param_names: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
             let inner_clone: BTreeSet<Symbol> =
@@ -835,13 +883,14 @@ fn rewrite_captured_clones(
                     &inner_noncl,
                     lambda_span,
                     *body,
+                    depth,
                 )?),
             })
         }
         Expr::TailRecur { args } => Ok(Expr::TailRecur {
             args: args
                 .into_iter()
-                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a))
+                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a, depth))
                 .collect::<DResult<Vec<_>>>()?,
         }),
     }
@@ -1868,8 +1917,6 @@ pub struct Lowerer<'a> {
     /// `let __sky_cap_i = <arg> in <lambda>` so it evaluates once even though
     /// the lambda is called multiple times. Sized identically to `eta_params`
     /// (widest arity); position `i` names the i-th hoisted capture.
-    // Complex-arg hoisting (non-Var supplied args) is deferred; field reserved for T4 completion.
-    #[allow(dead_code)]
     cap_params: Vec<Symbol>,
     /// Pre-minted, collision-free binder names for a tuple-destructuring
     /// function parameter. A parameter pattern `(a, b)` has no single name, so
@@ -3316,7 +3363,7 @@ impl<'a> Lowerer<'a> {
                     Some(CloneClass::CopyLeaf) | None => {}
                 }
             }
-            body = rewrite_captured_clones(&clone_set, &noncl_set, span, body)?;
+            body = rewrite_captured_clones(&clone_set, &noncl_set, span, body, 0)?;
         }
         // Fold each destructuring param's `Destructure` around the body,
         // OUTERMOST-first (reverse of source order) so the first parameter's
@@ -4783,26 +4830,81 @@ impl<'a> Lowerer<'a> {
         // The missing parameters are argument positions `supplied..arity`.
         let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
         let mut call_args = lowered_args;
-        // T4 (#121): the supplied args are captured inside the emitted closure.
+        // T4 (#121/#130): the supplied args are captured inside the emitted closure.
         // A non-Copy CloneOk arg (e.g. a String-typed var) must be cloned on
         // each call so the closure is `Fn` (re-callable), not `FnOnce`.
-        // Replace `Var(sym)` reads whose slot type is `CloneOk` with
-        // `CloneVar(sym)`; emit SKY-L0125 for `NonClone` captured args
-        // (function/task values cannot be cloned, and at this point they are
-        // not in direct callee position).
-        for (call_arg, slot_ty) in call_args.iter_mut().take(supplied).zip(arg_tys.iter().take(supplied))
-        {
-            if let Expr::Var(sym) = *call_arg {
-                let ir = self.ir_type_from_ty(slot_ty, call_span).ok();
+        //
+        // Var supplied args: replace `Var(sym)` with `CloneVar(sym)` for
+        // CloneOk, error for NonClone, leave bare for CopyLeaf.
+        //
+        // Non-Var supplied args (complex expressions): hoist to a
+        // `let __sky_cap_i = <expr>` binding OUTSIDE the lambda using a
+        // pre-minted symbol from `cap_params`.  The lambda body uses the
+        // cap symbol (clone-wrapped if CloneOk) so each call reads a
+        // captured binding rather than re-evaluating the expression —
+        // closing both the re-evaluation and the FnOnce hazard (T4).
+        //
+        // T7 (#130): unknown type (`ir_type_from_ty` returns None) is treated
+        // as NonClone — conservative fail-close rather than silent bare capture.
+        let mut hoisted: Vec<(Symbol, Expr)> = Vec::new();
+        let mut cap_cursor = 0usize;
+        for i in 0..supplied {
+            let slot_ty = arg_tys[i];
+            let ir = self.ir_type_from_ty(slot_ty, call_span).ok();
+            if let Expr::Var(sym) = call_args[i] {
                 match ir.as_ref().map(clone_class) {
-                    Some(CloneClass::CloneOk) => *call_arg = Expr::CloneVar(sym),
+                    Some(CloneClass::CloneOk) => call_args[i] = Expr::CloneVar(sym),
                     Some(CloneClass::NonClone) => {
                         return Err(unsupported(call_span, Feature::NonCloneCapture));
                     }
-                    Some(CloneClass::CopyLeaf) | None => {} // bare Var unchanged
+                    Some(CloneClass::CopyLeaf) => {} // bare Var unchanged — Copy
+                    None => {
+                        // T7 (#130): unknown type on a bare Var — conservatively
+                        // fail-close (SKY-L0126) instead of silently leaving the Var
+                        // bare.  The slot type is genuinely indeterminate (polymorphic
+                        // or a failed `ir_type_from_ty`), so we cannot prove the Var is
+                        // Copy-safe; a NonClone value would produce E0525 at cargo.
+                        return Err(unsupported(call_span, Feature::NonCloneCapture));
+                    }
+                }
+            } else {
+                // Non-Var complex expression.
+                //
+                // CopyLeaf slot: the expression evaluates to a Rust `Copy`
+                // scalar — inlining is safe.  No hoist needed.
+                //
+                // CloneOk slot: hoist to a `let __sky_cap_i = <expr>` OUTSIDE
+                // the lambda.  The lambda body uses `CloneVar(__sky_cap_i)` so
+                // each call clones the named binding rather than re-evaluating
+                // the expression with bare-moved free vars → FnOnce → E0525.
+                //
+                // NonClone slot: inline as-is.  A complex expression in a
+                // NonClone slot constructs a FRESH value on every call (e.g.
+                // `\x -> f x` constructs a new `Box<dyn Fn>` each call).  This
+                // is NOT a variable capture — no move-out-of-closure issue.
+                // Distinct from a Var in NonClone position (above), which IS a
+                // capture.  `List.map (\x -> x + 1)` is the canonical case:
+                // the lambda is a NonClone fresh construction, safe to inline.
+                //
+                // None (unknown / polymorphic slot): inline as-is for the same
+                // reason as NonClone above.
+                match ir.as_ref().map(clone_class) {
+                    Some(CloneClass::CloneOk) => {
+                        let cap_sym = *self.cap_params.get(cap_cursor).ok_or_else(|| {
+                            bug(
+                                "sky_lower::eta_expand_partial",
+                                "cap_params pool too small for complex-arg hoist",
+                            )
+                        })?;
+                        cap_cursor += 1;
+                        let original =
+                            std::mem::replace(&mut call_args[i], Expr::CloneVar(cap_sym));
+                        hoisted.push((cap_sym, original));
+                    }
+                    // CopyLeaf, NonClone, or unknown: inline as-is.
+                    Some(CloneClass::CopyLeaf) | Some(CloneClass::NonClone) | None => {}
                 }
             }
-            // Non-Var supplied args: complex-expr hoist (cap_params pool) deferred.
         }
         for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
             // Reuse pool slot `offset`: each eta-lambda is its own scope, so the
@@ -4824,11 +4926,21 @@ impl<'a> Lowerer<'a> {
             callee: resolved,
             args: call_args,
         };
-        Ok(Expr::Lambda {
+        let lambda = Expr::Lambda {
             params,
             ret,
             body: Box::new(body),
-        })
+        };
+        // T4 (#130): wrap any hoisted let-bindings around the lambda.
+        // hoisted = [(cap_sym_0, expr_0), (cap_sym_1, expr_1), ...] in source
+        // order.  Folding in reverse yields:
+        //   let cap_0 = expr_0 in let cap_1 = expr_1 in <lambda>
+        // which evaluates the args left-to-right before the closure is built,
+        // matching Sky's pure-functional semantics.
+        let result = hoisted.into_iter().rev().fold(lambda, |inner, (cap_sym, original)| {
+            Expr::Let { name: cap_sym, value: Box::new(original), body: Box::new(inner) }
+        });
+        Ok(result)
     }
 
     /// T6 (#121): emit an eta-adapter `Lambda` when a callee's def-arity is
@@ -7217,7 +7329,7 @@ impl<'a> Lowerer<'a> {
                                     Some(CloneClass::CopyLeaf) | None => {}
                                 }
                             }
-                            rewrite_captured_clones(&clone_set, &noncl_set, b.body.span, value)?
+                            rewrite_captured_clones(&clone_set, &noncl_set, b.body.span, value, 0)?
                         };
                         let thunk = Expr::Lambda {
                             params: vec![],
