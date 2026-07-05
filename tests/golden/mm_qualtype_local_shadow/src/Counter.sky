@@ -1,0 +1,22 @@
+module Counter exposing (Msg(..), initial, apply)
+
+import Sky.Core.Prelude exposing (..)
+
+-- Internal messages — same name as Main's Msg to trigger the shadow.
+type Msg
+    = Increment
+    | Decrement
+
+-- A value of type Msg that Main can obtain without naming the constructors.
+initial : Msg
+initial =
+    Increment
+
+apply : Msg -> Int -> Int
+apply msg n =
+    case msg of
+        Increment ->
+            n + 1
+
+        Decrement ->
+            n - 1
