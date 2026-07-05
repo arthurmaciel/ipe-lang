@@ -3793,9 +3793,20 @@ pub fn emit_expr_at(
             // Field access `<record>.<field>`. The base is parenthesised so a
             // record literal in record position (`{ ... }.field`) is never
             // misparsed; the field ident is keyword-mangled to match the struct.
+            //
+            // `.clone()` is emitted unconditionally: Sky is a purely-functional
+            // language with value semantics, so every field read is logically a
+            // copy.  In Rust, a `Copy` field's `.clone()` compiles down to a
+            // bitwise copy (no heap allocation), so this is zero-cost for ints /
+            // bools / function pointers.  For heap-allocated types (String, Vec,
+            // user structs) the clone allocates, but it prevents partial-move
+            // errors when the same owner or field is accessed more than once in
+            // the same expression — a common pattern in Sky (e.g. `view` and
+            // `update` both read `model.someField`).  The Rust compiler will
+            // elide redundant clones under standard optimisation passes.
             let base = emit_expr_at(ctx, record, indent, child, generics)?;
             let field = ctx.emit_ident(*field)?;
-            Ok(format!("({base}).{field}"))
+            Ok(format!("({base}).{field}.clone()"))
         }
         Expr::Update { record, fields } => {
             emit_update(ctx, record, fields, indent, depth, generics)
@@ -5027,10 +5038,11 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     let generics = GenericScope::new(&scope_syms);
 
     // The generic clause `<T1, T2: <bounds>, ..>` — one entry per quantified
-    // variable in declaration order, the position fixing its `T{i+1}` name. An
-    // unbounded variable (M2a) emits a bare `T{i+1}`, so a function with no
-    // bounds matches the pre-M2d golden exactly. Empty for a monomorphic
-    // function, matching the pre-M2a golden.
+    // variable in declaration order, the position fixing its `T{i+1}` name.
+    // `Clone` is always included: Sky has value semantics so every type must be
+    // cloneable (field reads emit `.clone()` to prevent partial-move errors).
+    // For `Copy` types (`i64`, `bool`, …) the bound is trivially satisfied.
+    // Empty for a monomorphic function.
     let generic_clause = if func.type_params.is_empty() {
         String::new()
     } else {
@@ -5040,7 +5052,10 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
             .enumerate()
             .map(|(i, (_, bounds))| {
                 let n = i.saturating_add(1);
-                let clause = render_bounds(*bounds, n);
+                // Always inject `Clone` — field reads emit `.clone()` so every
+                // generic position must satisfy `Clone`, regardless of whether
+                // the solver's BoundSet already carries it.
+                let clause = render_bounds(bounds.with_clone(), n);
                 format!("T{n}{clause}")
             })
             .collect::<Vec<_>>()

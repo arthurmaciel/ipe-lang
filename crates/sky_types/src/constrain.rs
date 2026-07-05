@@ -28,6 +28,13 @@ use crate::unionfind::{UnionFind, VarId};
 /// `where_` tag for any `CompilerBug` raised during constraint generation.
 const STAGE: &str = "sky_types::constrain";
 
+/// Per-binding polymorphic-variable entry: maps `(home_module, def_name)` to
+/// the annotation-variable → rigid-VarId map for that definition.
+///
+/// Used in [`Builder::typed_rigids`] and re-exported via [`Generated::typed_rigids`]
+/// so `SolvedTypes::poly_var_map` can build the lowerer's generic-variable lookup.
+type PolyVarEntry = ((Vec<Symbol>, Symbol), BTreeMap<Symbol, VarId>);
+
 /// Maximum number of nodes [`zonk`] reads back from a single type before
 /// declaring it pathologically deep. The occurs check in unification rules out
 /// true cycles, so this bound is only ever hit on adversarial input.
@@ -740,11 +747,14 @@ pub struct Builder<'a> {
     /// `field0 -> … -> fieldN -> T vars`; each use site instantiates the scheme
     /// fresh, exactly as a polymorphic top-level binding does.
     ctors: BTreeMap<Symbol, CtorScheme>,
-    /// One entry per typed binding: its name and the rigid (skolem) variable each
-    /// of its annotation type variables instantiated to while its body was
-    /// checked. Read post-solve to recover each variable's super-type obligations
-    /// (the bounds the body imposed) for generalisation.
-    typed_rigids: Vec<(Symbol, BTreeMap<Symbol, VarId>)>,
+    /// One entry per typed binding: its `(home, name)` and the rigid (skolem)
+    /// variable each of its annotation type variables instantiated to while its
+    /// body was checked. Read post-solve to recover each variable's super-type
+    /// obligations (the bounds the body imposed) for generalisation, and to build
+    /// `SolvedTypes::poly_var_map` (the per-binding generic-variable map the
+    /// lowerer uses to distinguish enclosing-generic `Ty::Var`s from
+    /// message-free `Ty::Var`s inside UI attribute lists).
+    typed_rigids: Vec<PolyVarEntry>,
     /// One entry per *reference* to a typed top-level binding (each `VarTopLevel`
     /// use site), recording how that use instantiated the binding's scheme. Used
     /// post-solve to check a super-typed binding's obligations against the
@@ -909,7 +919,7 @@ pub struct Generated {
     /// Deferred per-route page-witness checks, resolved after the main solve
     /// (before `routed_live_checks`).
     pub route_witness_checks: Vec<RouteWitnessCheck>,
-    pub typed_rigids: Vec<(Symbol, BTreeMap<Symbol, VarId>)>,
+    pub typed_rigids: Vec<PolyVarEntry>,
     pub scheme_apps: Vec<SchemeApp>,
     pub super_vars: Vec<(VarId, TyBounds, Span)>,
 }
@@ -1444,7 +1454,8 @@ impl<'a> Builder<'a> {
                         var_rigids.insert(*fv, *rigid);
                     }
                 }
-                self.typed_rigids.push((name.value, var_rigids));
+                self.typed_rigids
+                    .push(((self.current_home.clone(), name.value), var_rigids));
                 Ok(())
             }
             canon::Def::Untyped {
@@ -4853,6 +4864,8 @@ mod registry_phase_c_tests {
             K::UiColumn,
             K::UiWrappedRow,
             K::UiGrid,
+            K::UiParagraph,
+            K::UiTextColumn,
             K::UiButton,
             K::UiOnClick,
             K::UiOnFocus,
