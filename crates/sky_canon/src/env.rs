@@ -90,6 +90,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Std", "Ui", "Border"], "Border"),
     (&["Std", "Ui", "Font"], "Font"),
     (&["Std", "Ui", "Region"], "Region"), // #117
+    (&["Std", "Ui", "Input"], "Input"),   // Task #124
     (&["Std", "Html"], "Html"),
     (&["Std", "Html", "Attributes"], "Attr"),
     (&["Std", "Html", "Events"], "Event"),
@@ -1078,6 +1079,26 @@ impl Env {
                     "announceUrgently",
                 ],
             ),
+            // ── #124: Std.Ui.Input sub-module ────────────────────────────────────
+            (
+                "Input",
+                &[
+                    "labelAbove",
+                    "labelBelow",
+                    "labelLeft",
+                    "labelRight",
+                    "labelHidden",
+                    "placeholder",
+                    "text",
+                    "multiline",
+                    "email",
+                    "username",
+                    "search",
+                    "currentPassword",
+                    "newPassword",
+                    "checkbox",
+                ],
+            ),
             // ── M7: Std.Html — typed HTML element / text surface ─────────────────
             // `render` / `escapeHtml` / `escapeAttr` / `attrToString` are render
             // kernels; all element-builder names create `Html msg` values.
@@ -1311,6 +1332,8 @@ impl Env {
             ("Sky.Auth", "Auth"),
             ("Sky.Http.Server.Stream", "Stream"),
             ("Sky.Core.Http.Stream", "HttpStream"),
+            // #124: Std.Ui.Input sub-module.
+            ("Std.Ui.Input", "Input"),
         ];
 
         // ── Phase-B: build stdlib_index FIRST so all VarHome::Kernel(id, ..)
