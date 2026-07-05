@@ -4384,6 +4384,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MathCeil
                 | KernelFn::MathRound
                 | KernelFn::MathTrunc
+                // ── Math arity-1 (Float → Bool) ──────────────────────────────
+                | KernelFn::MathIsNaN
                 // ── Crypto arity-1 (M5a) ─────────────────────────────────────
                 | KernelFn::CryptoSha256
                 | KernelFn::CryptoSha512
@@ -5521,6 +5523,8 @@ impl<'a> Lowerer<'a> {
                     ("Math", "ceil") => Ok(Callee::Kernel(KernelFn::MathCeil)),
                     ("Math", "round") => Ok(Callee::Kernel(KernelFn::MathRound)),
                     ("Math", "trunc") => Ok(Callee::Kernel(KernelFn::MathTrunc)),
+                    // ── Math arity-1 (Float → Bool) ──────────────────────────
+                    ("Math", "isNaN") => Ok(Callee::Kernel(KernelFn::MathIsNaN)),
                     // ── Math arity-2 (Float → Float → Float) ────────────────
                     ("Math", "pow") => Ok(Callee::Kernel(KernelFn::MathPow)),
                     ("Math", "hypot") => Ok(Callee::Kernel(KernelFn::MathHypot)),

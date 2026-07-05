@@ -206,3 +206,9 @@ fn math_pi() {
 fn math_nan() {
     assert_runs_and_matches_oracle("m4c_math_nan");
 }
+
+/// `Math.isNaN Math.nan` → `True`; `Math.isNaN 1.0` → `False`.
+#[test]
+fn math_is_nan() {
+    assert_runs_and_matches_oracle("m4c_math_is_nan");
+}
