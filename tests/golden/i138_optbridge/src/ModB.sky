@@ -1,0 +1,13 @@
+module ModB exposing (Token(..), makeB, lenB)
+
+import Sky.Core.Prelude exposing (..)
+
+type Token = TokB Int
+
+makeB : Token
+makeB = TokB 999
+
+lenB : Token -> Int
+lenB t =
+    case t of
+        TokB n -> n
