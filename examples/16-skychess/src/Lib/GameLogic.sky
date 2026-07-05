@@ -12,6 +12,7 @@ import Chess.Move as Move
 import Chess.Ai as Ai
 import Lib.Games as Games
 import Sky.Core.Error as Error exposing (Error(..), ErrorKind(..))
+import State exposing (..)
 
 
 -- logIfErr inspects a Result and logs with a tag if it's Err.
