@@ -27,8 +27,15 @@ pub fn time_unix_millis<E: Send + 'static>(_: ()) -> SkyTask<E, i64> {
     time_now(())
 }
 
+/// `Time.timeString : Int -> String` — Go oracle: `time.Unix(ms/1000, 0).Format("15:04:05")`.
+/// Formats the Unix-millis timestamp as local-time `HH:MM:SS`.
 pub fn time_time_string(ms: i64) -> String {
-    format!("timestamp:{}", ms)
+    use chrono::{Local, TimeZone};
+    Local
+        .timestamp_opt(ms / 1000, 0)
+        .single()
+        .map(|dt| dt.format("%H:%M:%S").to_string())
+        .unwrap_or_default()
 }
 
 /// `Time.addMillis : Int -> Int -> Int` — pure integer addition.

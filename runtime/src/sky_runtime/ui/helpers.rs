@@ -535,6 +535,21 @@ pub fn ui_widescreen_<M>() -> Attribute<M> {
     Attribute::AttrStyle("aspect-ratio".into(), "16 / 9".into())
 }
 
+/// `Ui.cinemascope : Attribute msg` — aspect-ratio 2.35 / 1 (anamorphic wide).
+pub fn ui_cinemascope_<M>() -> Attribute<M> {
+    Attribute::AttrStyle("aspect-ratio".into(), "2.35 / 1".into())
+}
+
+/// `Ui.name : String -> Attribute msg` — HTML name= attribute (radio groups, form fields).
+pub fn ui_name_<M>(value: String) -> Attribute<M> {
+    Attribute::AttrAttribute("name".into(), value)
+}
+
+/// `Ui.style : String -> String -> Attribute msg` — raw inline CSS property + value.
+pub fn ui_style_<M>(property: String, value: String) -> Attribute<M> {
+    Attribute::AttrStyle(property, value)
+}
+
 /// `Ui.aspectRatio : Float -> Attribute msg`
 pub fn ui_aspect_ratio_<M>(r: f64) -> Attribute<M> {
     Attribute::AttrStyle("aspect-ratio".into(), format!("{r}"))

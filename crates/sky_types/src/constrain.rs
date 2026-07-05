@@ -2988,6 +2988,8 @@ impl<'a> Builder<'a> {
             K::TaskRun => fun(task(var(0)), result(var(1), var(0))),
             // `Task.perform` is a 1-arg legacy alias for `Task.run`; identical type.
             K::TaskPerform => fun(task(var(0)), result(var(1), var(0))),
+            // `Task.lazy : (() -> Task e a) -> Task e a`
+            K::TaskLazy => fun(fun(Ty::Unit, task(var(0))), task(var(0))),
 
             // ── Io / File / System: String -> Task () ──
             K::IoWriteStdout
@@ -3002,6 +3004,7 @@ impl<'a> Builder<'a> {
             // ── Time ──
             K::TimeNow | K::TimeUnixMillis => fun(Ty::Unit, task(int())),
             K::TimeSleep => fun(int(), task_unit()),
+            K::TimeTimeString => fun(int(), string()),
             K::TimeEvery => fun(int(), fun(var(0), sub(var(0)))),
 
             // ── System ──
@@ -3666,6 +3669,7 @@ impl<'a> Builder<'a> {
             // #76 Tier 1 — nullary Attr
             | K::UiSquare
             | K::UiWidescreen
+            | K::UiCinemascope
             | K::BorderSolid
             | K::BorderDashed
             | K::BorderDotted
@@ -3733,6 +3737,8 @@ impl<'a> Builder<'a> {
             // #76 Tier 1 — two-arg attrs.
             K::UiAspectRatioWH => fun(int(), fun(int(), attr(var(0)))),
             K::UiHtmlAttribute => fun(string(), fun(string(), attr(var(0)))),
+            K::UiName => fun(string(), attr(var(0))),
+            K::UiStyle => fun(string(), fun(string(), attr(var(0)))),
 
             // Std.Html leaf nodes (arity 1).
             K::HtmlTextNode | K::HtmlRawNode => fun(string(), html_t(var(0))),
@@ -4442,7 +4448,7 @@ mod registry_phase_c_tests {
             K::BytesToBase64,
             K::BytesAppend,
             K::BytesSlice,
-            // Task (12)
+            // Task (13)
             K::TaskSucceed,
             K::TaskFail,
             K::TaskMap,
@@ -4455,14 +4461,16 @@ mod registry_phase_c_tests {
             K::TaskParallel,
             K::TaskRun,
             K::TaskPerform,
+            K::TaskLazy,
             // Io (3)
             K::IoReadLine,
             K::IoWriteStdout,
             K::IoWriteStderr,
-            // Time (4)
+            // Time (5)
             K::TimeNow,
             K::TimeUnixMillis,
             K::TimeSleep,
+            K::TimeTimeString,
             K::TimeEvery,
             // System (11)
             K::SystemArgs,
@@ -5059,9 +5067,12 @@ mod registry_phase_c_tests {
             // ── #76 Tier 1: extended Std.Ui / Font / Background / Border builders ──
             K::UiSquare,
             K::UiWidescreen,
+            K::UiCinemascope,
             K::UiAspectRatio,
             K::UiAspectRatioWH,
             K::UiHtmlAttribute,
+            K::UiName,
+            K::UiStyle,
             K::BackgroundHoverColor,
             K::BackgroundFocusColor,
             K::BackgroundActiveColor,

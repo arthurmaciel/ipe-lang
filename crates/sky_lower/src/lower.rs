@@ -5145,6 +5145,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TaskParallel
                 | KernelFn::TaskRun
                 | KernelFn::TaskPerform
+                | KernelFn::TaskLazy
                 // ── Io arity-1 (M5a) ──────────────────────────────────────────
                 | KernelFn::IoReadLine
                 | KernelFn::IoWriteStdout
@@ -5153,6 +5154,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TimeNow
                 | KernelFn::TimeSleep
                 | KernelFn::TimeUnixMillis
+                | KernelFn::TimeTimeString
                 // ── System arity-1 (M5a) ──────────────────────────────────────
                 | KernelFn::SystemArgs
                 | KernelFn::SystemGetenv
@@ -5573,6 +5575,7 @@ impl<'a> Lowerer<'a> {
                 // ── #76 Tier 1 — nullary attrs ────────────────────────────────
                 | KernelFn::UiSquare
                 | KernelFn::UiWidescreen
+                | KernelFn::UiCinemascope
                 | KernelFn::BorderSolid
                 | KernelFn::BorderDashed
                 | KernelFn::BorderDotted
@@ -5762,6 +5765,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlAttrAutofocus
                 // ── #76 Tier 1 — arity 1 ────────────────────────────────────
                 | KernelFn::UiAspectRatio
+                | KernelFn::UiName
                 | KernelFn::BackgroundHoverColor
                 | KernelFn::BackgroundFocusColor
                 | KernelFn::BackgroundActiveColor
@@ -5941,6 +5945,7 @@ impl<'a> Lowerer<'a> {
                 // -- #76 Tier 1 -- arity 2
                 | KernelFn::UiAspectRatioWH
                 | KernelFn::UiHtmlAttribute
+                | KernelFn::UiStyle
                 // ── Std.Ui.Input (#124) — arity-2 constructors ───────────────────
                 // `Input.labelAbove : List (Attribute msg) -> Element msg -> Label msg`
                 | KernelFn::InputLabelAbove
@@ -6410,6 +6415,7 @@ impl<'a> Lowerer<'a> {
                     ("Task", "parallel") => Ok(Callee::Kernel(KernelFn::TaskParallel)),
                     ("Task", "run") => Ok(Callee::Kernel(KernelFn::TaskRun)),
                     ("Task", "perform") => Ok(Callee::Kernel(KernelFn::TaskPerform)),
+                    ("Task", "lazy") => Ok(Callee::Kernel(KernelFn::TaskLazy)),
                     // ── Io kernels (M5a) ──────────────────────────────────────
                     ("Io", "readLine") => Ok(Callee::Kernel(KernelFn::IoReadLine)),
                     ("Io", "writeStdout") => Ok(Callee::Kernel(KernelFn::IoWriteStdout)),
@@ -6418,6 +6424,7 @@ impl<'a> Lowerer<'a> {
                     ("Time", "now") => Ok(Callee::Kernel(KernelFn::TimeNow)),
                     ("Time", "sleep") => Ok(Callee::Kernel(KernelFn::TimeSleep)),
                     ("Time", "unixMillis") => Ok(Callee::Kernel(KernelFn::TimeUnixMillis)),
+                    ("Time", "timeString") => Ok(Callee::Kernel(KernelFn::TimeTimeString)),
                     // ── System kernels (M5a) ──────────────────────────────────
                     ("System", "args") => Ok(Callee::Kernel(KernelFn::SystemArgs)),
                     ("System", "getenv") => Ok(Callee::Kernel(KernelFn::SystemGetenv)),
@@ -6756,9 +6763,12 @@ impl<'a> Lowerer<'a> {
                     // ── #76 Tier 1: extended Std.Ui attribute builders ────────
                     ("Ui", "square") => Ok(Callee::Kernel(KernelFn::UiSquare)),
                     ("Ui", "widescreen") => Ok(Callee::Kernel(KernelFn::UiWidescreen)),
+                    ("Ui", "cinemascope") => Ok(Callee::Kernel(KernelFn::UiCinemascope)),
                     ("Ui", "aspectRatio") => Ok(Callee::Kernel(KernelFn::UiAspectRatio)),
                     ("Ui", "aspectRatioWH") => Ok(Callee::Kernel(KernelFn::UiAspectRatioWH)),
                     ("Ui", "htmlAttribute") => Ok(Callee::Kernel(KernelFn::UiHtmlAttribute)),
+                    ("Ui", "name") => Ok(Callee::Kernel(KernelFn::UiName)),
+                    ("Ui", "style") => Ok(Callee::Kernel(KernelFn::UiStyle)),
                     ("Background", "hoverColor") => {
                         Ok(Callee::Kernel(KernelFn::BackgroundHoverColor))
                     }
