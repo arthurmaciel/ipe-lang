@@ -2,7 +2,7 @@
 //!
 //! Exercises the generic-codegen spine added by the IR's [`IrType::Generic`] +
 //! `Func::type_params`: a structurally-parametric function `identity : a -> a`
-//! emits `pub fn main_identity<T1>(x: T1) -> T1 { x }`, every `IrType::Generic`
+//! emits `pub fn main_identity<T1: Clone>(x: T1) -> T1 { x }`, every `IrType::Generic`
 //! in its signature / body renders as the deterministic Rust generic name
 //! (`a` → `T1` by quantification position), and a same-module use at two
 //! distinct concrete types (`Int` and `Bool`) resolves to the ONE generic
@@ -163,12 +163,12 @@ fn emits_generic_function_signature() -> DResult<()> {
     // The generic clause + the `Generic(a)` → `T1` rendering in both the
     // parameter and the return position.
     assert!(
-        main_rs.contains("pub fn main_identity<T1>(x: T1) -> T1 {"),
+        main_rs.contains("pub fn main_identity<T1: Clone>(x: T1) -> T1 {"),
         "generic function emits a `<T1>` clause with T1-typed param and return:\n{main_rs}"
     );
     // Its body is the bare pass-through parameter.
     assert!(
-        main_rs.contains("pub fn main_identity<T1>(x: T1) -> T1 {\n    x\n}"),
+        main_rs.contains("pub fn main_identity<T1: Clone>(x: T1) -> T1 {\n    x\n}"),
         "identity's body is the bare parameter `x`:\n{main_rs}"
     );
     // The monomorphic entry carries NO generic clause — the empty `type_params`
@@ -309,13 +309,13 @@ fn emits_super_typed_bound_clauses() -> DResult<()> {
     // with `Output` closed over the parameter's own generic name.
     assert!(
         main_rs.contains(
-            "pub fn main_double<T1: ::core::ops::Add<Output = T1> + Copy>(x: T1) -> T1 {"
+            "pub fn main_double<T1: ::core::ops::Add<Output = T1> + Copy + Clone>(x: T1) -> T1 {"
         ),
         "double emits a Number bound (Add + Copy):\n{main_rs}"
     );
     // Comparable → `PartialOrd` plus `Copy`.
     assert!(
-        main_rs.contains("pub fn main_max<T1: PartialOrd + Copy>(p: T1, q: T1) -> T1 {"),
+        main_rs.contains("pub fn main_max<T1: PartialOrd + Copy + Clone>(p: T1, q: T1) -> T1 {"),
         "max emits a Comparable bound (PartialOrd + Copy):\n{main_rs}"
     );
     Ok(())
