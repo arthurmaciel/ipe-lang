@@ -2311,6 +2311,258 @@ fn emit_ui_call(
             )))
         }
 
+        // ── Std.Ui.Input (#124) — Label constructors ──────────────────────────
+
+        KernelFn::InputLabelAbove => {
+            let [attrs_e, el_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputLabelAbove",
+                    detail: format!("Input.labelAbove requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let el_s = emit_expr_at(ctx, el_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::input::input_label_above_({attrs_s}, {el_s})"
+            )))
+        }
+
+        KernelFn::InputLabelBelow => {
+            let [attrs_e, el_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputLabelBelow",
+                    detail: format!("Input.labelBelow requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let el_s = emit_expr_at(ctx, el_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::input::input_label_below_({attrs_s}, {el_s})"
+            )))
+        }
+
+        KernelFn::InputLabelLeft => {
+            let [attrs_e, el_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputLabelLeft",
+                    detail: format!("Input.labelLeft requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let el_s = emit_expr_at(ctx, el_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::input::input_label_left_({attrs_s}, {el_s})"
+            )))
+        }
+
+        KernelFn::InputLabelRight => {
+            let [attrs_e, el_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputLabelRight",
+                    detail: format!("Input.labelRight requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let el_s = emit_expr_at(ctx, el_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::input::input_label_right_({attrs_s}, {el_s})"
+            )))
+        }
+
+        KernelFn::InputLabelHidden => {
+            let [s_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputLabelHidden",
+                    detail: format!("Input.labelHidden requires 1 argument, got {}", args.len()),
+                });
+            };
+            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::input::input_label_hidden_({s})"
+            )))
+        }
+
+        KernelFn::InputPlaceholder => {
+            let [attrs_e, el_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputPlaceholder",
+                    detail: format!("Input.placeholder requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let el_s = emit_expr_at(ctx, el_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::input::input_placeholder_({attrs_s}, {el_s})"
+            )))
+        }
+
+        // ── Std.Ui.Input (#124) — text-family controls ────────────────────────
+
+        KernelFn::InputText
+        | KernelFn::InputEmail
+        | KernelFn::InputUsername
+        | KernelFn::InputSearch
+        | KernelFn::InputCurrentPassword
+        | KernelFn::InputNewPassword => {
+            let [attrs_e, cfg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputText",
+                    detail: format!("Input.text/email/… requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let Expr::Record(fields) = cfg_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputText",
+                    detail: "Input.text cfg must be an inline record literal in Phase 0; \
+                             non-literal cfg is deferred to Phase 1"
+                        .into(),
+                });
+            };
+            let on_change_e = lookup_field(
+                ctx,
+                fields,
+                "onChange",
+                "sky_backend_rust::emit_ui_call::InputText::onChange",
+            )?;
+            let text_e = lookup_field(
+                ctx,
+                fields,
+                "text",
+                "sky_backend_rust::emit_ui_call::InputText::text",
+            )?;
+            let placeholder_e = lookup_field(
+                ctx,
+                fields,
+                "placeholder",
+                "sky_backend_rust::emit_ui_call::InputText::placeholder",
+            )?;
+            let label_e = lookup_field(
+                ctx,
+                fields,
+                "label",
+                "sky_backend_rust::emit_ui_call::InputText::label",
+            )?;
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let on_change_s = emit_expr_at(ctx, on_change_e, indent, child, generics)?;
+            let text_s = emit_expr_at(ctx, text_e, indent, child, generics)?;
+            let placeholder_s = emit_expr_at(ctx, placeholder_e, indent, child, generics)?;
+            let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
+            let fn_name = match k {
+                KernelFn::InputEmail => "input_email_",
+                KernelFn::InputUsername => "input_username_",
+                KernelFn::InputSearch => "input_search_",
+                KernelFn::InputCurrentPassword => "input_current_password_",
+                KernelFn::InputNewPassword => "input_new_password_",
+                _ => "input_text_",
+            };
+            Ok(Some(format!(
+                "sky_runtime::ui::input::{fn_name}({attrs_s}, {on_change_s}, {text_s}, {placeholder_s}, {label_s})"
+            )))
+        }
+
+        KernelFn::InputMultiline => {
+            let [attrs_e, cfg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputMultiline",
+                    detail: format!("Input.multiline requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let Expr::Record(fields) = cfg_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputMultiline",
+                    detail: "Input.multiline cfg must be an inline record literal in Phase 0"
+                        .into(),
+                });
+            };
+            let on_change_e = lookup_field(
+                ctx,
+                fields,
+                "onChange",
+                "sky_backend_rust::emit_ui_call::InputMultiline::onChange",
+            )?;
+            let text_e = lookup_field(
+                ctx,
+                fields,
+                "text",
+                "sky_backend_rust::emit_ui_call::InputMultiline::text",
+            )?;
+            let placeholder_e = lookup_field(
+                ctx,
+                fields,
+                "placeholder",
+                "sky_backend_rust::emit_ui_call::InputMultiline::placeholder",
+            )?;
+            let label_e = lookup_field(
+                ctx,
+                fields,
+                "label",
+                "sky_backend_rust::emit_ui_call::InputMultiline::label",
+            )?;
+            let spellcheck_e = lookup_field(
+                ctx,
+                fields,
+                "spellcheck",
+                "sky_backend_rust::emit_ui_call::InputMultiline::spellcheck",
+            )?;
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let on_change_s = emit_expr_at(ctx, on_change_e, indent, child, generics)?;
+            let text_s = emit_expr_at(ctx, text_e, indent, child, generics)?;
+            let placeholder_s = emit_expr_at(ctx, placeholder_e, indent, child, generics)?;
+            let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
+            let spellcheck_s = emit_expr_at(ctx, spellcheck_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::input::input_multiline_({attrs_s}, {on_change_s}, {text_s}, {placeholder_s}, {label_s}, {spellcheck_s})"
+            )))
+        }
+
+        KernelFn::InputCheckbox => {
+            let [attrs_e, cfg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputCheckbox",
+                    detail: format!("Input.checkbox requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let Expr::Record(fields) = cfg_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputCheckbox",
+                    detail: "Input.checkbox cfg must be an inline record literal in Phase 0"
+                        .into(),
+                });
+            };
+            let on_change_e = lookup_field(
+                ctx,
+                fields,
+                "onChange",
+                "sky_backend_rust::emit_ui_call::InputCheckbox::onChange",
+            )?;
+            let icon_e = lookup_field(
+                ctx,
+                fields,
+                "icon",
+                "sky_backend_rust::emit_ui_call::InputCheckbox::icon",
+            )?;
+            let checked_e = lookup_field(
+                ctx,
+                fields,
+                "checked",
+                "sky_backend_rust::emit_ui_call::InputCheckbox::checked",
+            )?;
+            let label_e = lookup_field(
+                ctx,
+                fields,
+                "label",
+                "sky_backend_rust::emit_ui_call::InputCheckbox::label",
+            )?;
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let on_change_s = emit_expr_at(ctx, on_change_e, indent, child, generics)?;
+            let icon_s = emit_expr_at(ctx, icon_e, indent, child, generics)?;
+            let checked_s = emit_expr_at(ctx, checked_e, indent, child, generics)?;
+            let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::input::input_checkbox_({attrs_s}, {on_change_s}, {icon_s}, {checked_s}, {label_s})"
+            )))
+        }
+
         // ── Std.Html element builders ─────────────────────────────────────────
 
         // `Html.text : String -> Html msg`
