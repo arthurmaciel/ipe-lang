@@ -755,6 +755,8 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiColumn => "ui_column_",
         KernelFn::UiWrappedRow => "ui_wrapped_row_",
         KernelFn::UiGrid => "ui_grid_",
+        KernelFn::UiParagraph => "ui_paragraph_",
+        KernelFn::UiTextColumn => "ui_text_column_",
         KernelFn::UiButton => "ui_button_",
         // ── M7: Std.Ui attribute builders ────────────────────────────────────
         KernelFn::UiSpacing => "ui_spacing_",
@@ -944,6 +946,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         | KernelFn::HtmlMeter
         | KernelFn::HtmlScript
         | KernelFn::HtmlBody
+        | KernelFn::HtmlTitle
         | KernelFn::HtmlBr
         | KernelFn::HtmlHr
         | KernelFn::HtmlMeta
