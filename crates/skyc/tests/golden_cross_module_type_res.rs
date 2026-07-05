@@ -1,16 +1,17 @@
-//! Regression gate: skyc must exit 0 on multi-module projects that reference a
-//! user-defined type in an annotation without explicitly importing the defining
-//! module — the Haskell compiler accepts this; the Rust compiler must match.
+//! Regression gate: skyc must exit 0 on multi-module projects.
 //!
-//! Root cause: `Ui/Charts.sky` in example 17 uses `(Html Msg)` in its
-//! annotations without `import State exposing (..)`.  `canonicalise_type`
-//! produced `Type::Con { home: [], name: "Msg" }` and `ir_type_from_canon`
-//! ICE'd with SKY-I0001 "unknown type constructor `Msg`".
+//! Historical context: `Ui/Charts.sky` in example 17 originally used `(Html Msg)`
+//! in annotations without `import State exposing (..)`.  The Rust compiler ICE'd
+//! with SKY-I0001 because `ir_type_from_canon` had a unique-match heuristic that
+//! searched `enum_variants` by name when `home = []` and no builtin matched.  The
+//! heuristic ICE'd when zero or multiple matches existed.
 //!
-//! Fix: `ir_type_from_canon` (and its `ir_type_from_ty` counterpart) now do a
-//! by-name-only fallback lookup in `enum_variants` when `home = []` and no
-//! builtin matches — finding the unique entry `(["State"], "Msg")` and using
-//! the correct home.
+//! **#138 total-resolution fix** (replaces the heuristic): unknown unqualified
+//! type names now fail closed at canon time with SKY-N0002 (`TypeNotFound`).
+//! The heuristic in `ir_type_from_canon` and `ir_type_from_ty` is removed.
+//! Examples 16 and 17 were updated to add the missing `import State exposing (..)`
+//! so they compile cleanly without the heuristic.  See `golden_i138_total_resolution`
+//! for the error-path regression gate.
 //!
 //! These tests only check that `skyc::build` succeeds (exit 0); they do NOT
 //! build or run the emitted Rust project and do NOT require `SKY_E2E`.
