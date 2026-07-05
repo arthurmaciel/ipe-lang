@@ -333,10 +333,19 @@ fn emitted_bound_satisfied(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bo
     // generic-use gate uses the `String`-inclusive scalar set rather than the
     // `Copy`-restricted ordering set above.
     let key_ok = matches!(prim, Some("Int" | "Float" | "Char" | "String" | "Bool"));
+    // `++` at a generic emission site: accepted for `String` or `List _`.
+    let appendable_ok = matches!(prim, Some("String"))
+        || matches!(ty,
+            Ty::Con { module, name, args }
+                if module.is_empty()
+                    && args.len() == 1
+                    && interner.resolve(*name) == Some("List")
+        );
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
         && (!bounds.has_eq() || ty_is_equatable(ty))
         && (!bounds.has_comparable_key() || key_ok)
+        && (!bounds.has_append() || appendable_ok)
 }
 
 /// Whether a resolved concrete type satisfies super-type obligations `bounds`
@@ -356,6 +365,14 @@ pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) 
     };
     let number_ok = matches!(prim, Some("Int" | "Float"));
     let ord_ok = matches!(prim, Some("Int" | "Float" | "Char" | "String" | "Bool"));
+    // `++` accepts `String` (bare scalar) or `List _` (one type arg).
+    let appendable_ok = matches!(prim, Some("String"))
+        || matches!(ty,
+            Ty::Con { module, name, args }
+                if module.is_empty()
+                    && args.len() == 1
+                    && interner.resolve(*name) == Some("List")
+        );
     // A `Set` element / `Dict` key pinned directly to a concrete type: the Sky
     // `comparable` scalar set, exactly as ordering. `Float` satisfies the Sky
     // typing here; the Rust-backend `f64`-as-key reality is gated at lowering.
@@ -367,6 +384,7 @@ pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) 
         // function anywhere — the SAME "no function nested" rule as equatable,
         // since every non-function type derives `SkyStringify`.
         && (!bounds.has_show() || ty_is_equatable(ty))
+        && (!bounds.has_append() || appendable_ok)
 }
 
 /// Whether a resolved type derives Rust's `PartialEq`: true for every fully
@@ -406,6 +424,9 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
     }
     if bounds.has_show() {
         classes.push("Stringify");
+    }
+    if bounds.has_append() {
+        classes.push("Appendable");
     }
     let class = if classes.is_empty() {
         "Equatable".to_owned()
@@ -1667,9 +1688,9 @@ mod tests {
 
     #[test]
     fn append_on_non_string_operand_is_rejected() {
-        // `++` is pinned to `String`; an `Int` operand fails to unify and so is
-        // a type error rather than reaching the backend (fail-closed — list
-        // `++` is a later batch). Mirrors the would-be `List` rejection.
+        // `++` carries an `Appendable` obligation; an `Int` operand (which is
+        // neither `String` nor `List _`) fails the pin and surfaces as a type
+        // error rather than reaching the backend (fail-closed).
         let mut i = Interner::new();
         let source = "module Main exposing (v)\nv : Int\nv =\n    1 ++ 2\n";
         let parsed = sky_parse::parse_module(source, &mut i);

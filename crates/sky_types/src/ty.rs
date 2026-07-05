@@ -102,17 +102,19 @@ pub enum RowTail {
 /// variable that owes `Add` becomes a generic parameter bounded by Rust's
 /// `Add` trait, and so on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct TyBounds(u8);
+pub struct TyBounds(u16);
 
 impl TyBounds {
-    const ADD: u8 = 1 << 0;
-    const SUB: u8 = 1 << 1;
-    const MUL: u8 = 1 << 2;
-    const ORD: u8 = 1 << 3;
-    const EQ: u8 = 1 << 4;
-    const SET_ELEM: u8 = 1 << 5;
-    const DICT_KEY: u8 = 1 << 6;
-    const SHOW: u8 = 1 << 7;
+    const ADD: u16 = 1 << 0;
+    const SUB: u16 = 1 << 1;
+    const MUL: u16 = 1 << 2;
+    const ORD: u16 = 1 << 3;
+    const EQ: u16 = 1 << 4;
+    const SET_ELEM: u16 = 1 << 5;
+    const DICT_KEY: u16 = 1 << 6;
+    const SHOW: u16 = 1 << 7;
+    /// The append obligation (`++` → `Appendable a ⊇ { String, List a }`).
+    const APPEND: u16 = 1 << 8;
 
     /// No obligation — a structurally-parametric variable.
     pub const EMPTY: Self = Self(0);
@@ -170,6 +172,13 @@ impl TyBounds {
     pub const fn show() -> Self {
         Self(Self::SHOW)
     }
+    /// The append obligation (`++`). Satisfied by `String` and `List a` only.
+    /// The lowerer dispatches to [`sky_ir::BinOp::Append`] for `String` and
+    /// [`sky_ir::KernelFn::ListAppend`] for `List a`.
+    #[must_use]
+    pub const fn appendable() -> Self {
+        Self(Self::APPEND)
+    }
 
     /// Whether this set carries no obligation at all.
     #[must_use]
@@ -210,6 +219,11 @@ impl TyBounds {
     #[must_use]
     pub const fn has_show(self) -> bool {
         self.0 & Self::SHOW != 0
+    }
+    /// Whether the append obligation is set (`++` on `String` or `List _`).
+    #[must_use]
+    pub const fn has_append(self) -> bool {
+        self.0 & Self::APPEND != 0
     }
     /// Whether this variable carries a Sky `comparable`-key obligation — used as
     /// a `Set` element or a `Dict` key. Both are satisfied by exactly the Sky
