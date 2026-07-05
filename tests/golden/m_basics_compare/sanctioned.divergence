@@ -1,0 +1,1 @@
+divergence: Sky's `compare` returns an untyped Int (-1, 0, 1); the Order ADT (LT/EQ/GT) does not exist in the Go backend. Sky-Rust introduces Order as a first-class ADT backed by SkyOrder (repr(u8) enum), allowing exhaustive case dispatch. This fixture is Rust-only. Divergence from Sky, rationale: Elm-conformance (Elm's compare returns Order).

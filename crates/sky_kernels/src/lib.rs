@@ -219,6 +219,12 @@ pub enum StdlibKernel {
     BasicsMin,
     /// `max : comparable -> comparable -> comparable` — Basics.max.
     BasicsMax,
+    /// `compare : comparable -> comparable -> Order` — three-way comparison.
+    ///
+    /// Returns `LT` / `EQ` / `GT` (a typed Rust enum on the Rust backend;
+    /// `-1 / 0 / 1` int on the Go/Sky backend — sanctioned divergence).
+    /// The `comparable` (`Ord`) constraint is enforced via `constrain_var_kernel`.
+    BasicsCompare,
     // ── end Basics numerics (#115) ──────────────────────────────────────────
     // ── Error (Sky.Core.Error — minimal `Error = String` slice, #86) ─────────
     // Message-carrying constructors: `String -> Error`. With `SkyError = String`
@@ -1047,6 +1053,7 @@ impl StdlibKernel {
             Self::BasicsSqrt   => d("Basics", "sqrt",   1, Pure, "math_sqrt"),
             Self::BasicsMin    => d("Basics", "min",    2, Pure, "math_min"),
             Self::BasicsMax    => d("Basics", "max",    2, Pure, "math_max"),
+            Self::BasicsCompare => d("Basics", "compare", 2, Pure, "basics_compare"),
             // ── end Basics numerics (#115) ──────────────────────────────────────
             // ── Error (Sky.Core.Error — minimal `Error = String` slice, #86) ──
             // The eight message constructors share ONE identity runtime symbol
@@ -1961,6 +1968,7 @@ impl StdlibKernel {
         Self::BasicsSqrt,
         Self::BasicsMin,
         Self::BasicsMax,
+        Self::BasicsCompare,
         // ── end Basics numerics (#115) ──────────────────────────────────────
         // Error (Sky.Core.Error — minimal `Error = String` slice, #86)
         Self::ErrorUnexpected,
