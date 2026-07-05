@@ -64,6 +64,7 @@ fn run_with_regions(
             .collect(),
         bounds: BTreeMap::new(),
         warnings: Vec::new(),
+        poly_var_map: BTreeMap::new(),
     };
     lower(&m, &types, interner)
 }
