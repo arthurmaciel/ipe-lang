@@ -306,6 +306,9 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — not a function type.
         | IrType::HttpRequest
+        // #127: `WsHandle` / `WsServerCfg` are opaque handles — not function types.
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
         | IrType::Generic(_)
         // M7: nullary plain types (`Length`, `Color`, etc.) trivially contain no
         // functions.  `LiveReq` is an opaque handle with no `Fn` fields.
@@ -365,14 +368,17 @@ fn clone_class(t: &IrType) -> CloneClass {
         // ServerRequest/ServerResponse/ServerCookie (server.rs:33/50/59),
         // ServerRoute (server.rs:136), HttpRequest (http_client.rs:64) all
         // `#[derive(Clone, …)]`.
+        // #127: `WsServerCfg` holds Arc<dyn Fn> callbacks — Clone via Arc.
         IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
-        | IrType::HttpRequest => CloneClass::CloneOk,
+        | IrType::HttpRequest
+        | IrType::WebSocketServerCfg => CloneClass::CloneOk,
         // StreamWriter is `#[derive(Clone, Copy)]` — an i64 id wrapper
         // (server_stream.rs:38). Bare capture is sound.
-        IrType::StreamWriter => CloneClass::CopyLeaf,
+        // #127: `WsHandle` is `#[derive(Clone, Copy)]` — an i64 id wrapper.
+        IrType::StreamWriter | IrType::WebSocketServer => CloneClass::CopyLeaf,
         // Non-Clone: function-typed, task, decoder, Cmd, Sub.
         // Also Generic(_) until T5 (which injects `T: Clone`).
         IrType::Fun(_, _)
@@ -3144,6 +3150,10 @@ impl<'a> Lowerer<'a> {
                 // annotation `HttpRequest` maps directly to the runtime type via
                 // this opaque variant.
                 "HttpRequest" => Ok(IrType::HttpRequest),
+                // #127: `WebSocketServer` — opaque per-peer WsHandle.
+                "WebSocketServer" => Ok(IrType::WebSocketServer),
+                // #127: `WebSocketServerCfg` — opaque WsServerCfg<SkyError>.
+                "WebSocketServerCfg" => Ok(IrType::WebSocketServerCfg),
                 // `LiveRoute page` is parametric on the page type it builds
                 // (#108 round 4) — a bare `LiveRoute` annotation cannot
                 // type-check (the solver's `LiveRoute` Con carries exactly one
@@ -3628,6 +3638,10 @@ impl<'a> Lowerer<'a> {
                 // `HttpRequest` — opaque HTTP request descriptor (#111).
                 // Mirrors `ir_type_from_canon`'s "HttpRequest" arm.
                 "HttpRequest" => Ok(IrType::HttpRequest),
+                // #127: `WebSocketServer` — opaque per-peer WsHandle.
+                "WebSocketServer" => Ok(IrType::WebSocketServer),
+                // #127: `WebSocketServerCfg` — opaque WsServerCfg<SkyError>.
+                "WebSocketServerCfg" => Ok(IrType::WebSocketServerCfg),
                 // ── M7: Std.Ui / Std.Html parametric type constructors ────────
                 // Mirror of `ir_type_from_canon` (which handles user-written
                 // type ANNOTATIONS).  This path handles SOLVED types from the
@@ -5151,7 +5165,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ErrorNotFound
                 | KernelFn::ErrorPermissionDenied
                 // ── Task.defaultRetryPolicy — arity 0 ────────────────────────
-                | KernelFn::TaskDefaultRetryPolicy,
+                | KernelFn::TaskDefaultRetryPolicy
+                // ── #127: Sky.Http.Server.WebSocket arity-0 ──────────────────
+                | KernelFn::WsDefaultCfg,
             ) => Ok(0),
             Callee::Kernel(
                 KernelFn::StringFromInt
@@ -6159,7 +6175,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::AuthPasswordStrength
                 | KernelFn::StreamFinish
                 | KernelFn::HttpStreamOpen
-                | KernelFn::HttpStreamClose,
+                | KernelFn::HttpStreamClose
+                // ── #127: Sky.Http.Server.WebSocket arity-1 ──────────────────
+                | KernelFn::WsCloseClient,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::AuthHashPasswordCost
@@ -6168,7 +6186,18 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StreamStream
                 | KernelFn::StreamEmit
                 | KernelFn::StreamWithContentType
-                | KernelFn::HttpStreamForEachChunk,
+                | KernelFn::HttpStreamForEachChunk
+                // ── #127: Sky.Http.Server.WebSocket arity-2 ──────────────────
+                | KernelFn::WsWithOnConnect
+                | KernelFn::WsWithOnMessage
+                | KernelFn::WsWithOnClose
+                | KernelFn::WsWithOnError
+                | KernelFn::WsWithMaxMessageBytes
+                | KernelFn::WsWithOriginPatterns
+                | KernelFn::WsUpgrade
+                | KernelFn::WsSendToClient
+                | KernelFn::WsSendBinaryToClient
+                | KernelFn::WsBroadcast,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::AuthSignToken
@@ -7083,6 +7112,25 @@ impl<'a> Lowerer<'a> {
                         Ok(Callee::Kernel(KernelFn::HttpStreamForEachChunk))
                     }
                     ("HttpStream", "close") => Ok(Callee::Kernel(KernelFn::HttpStreamClose)),
+                    // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────
+                    ("Ws", "defaultCfg") => Ok(Callee::Kernel(KernelFn::WsDefaultCfg)),
+                    ("Ws", "withOnConnect") => Ok(Callee::Kernel(KernelFn::WsWithOnConnect)),
+                    ("Ws", "withOnMessage") => Ok(Callee::Kernel(KernelFn::WsWithOnMessage)),
+                    ("Ws", "withOnClose") => Ok(Callee::Kernel(KernelFn::WsWithOnClose)),
+                    ("Ws", "withOnError") => Ok(Callee::Kernel(KernelFn::WsWithOnError)),
+                    ("Ws", "withMaxMessageBytes") => {
+                        Ok(Callee::Kernel(KernelFn::WsWithMaxMessageBytes))
+                    }
+                    ("Ws", "withOriginPatterns") => {
+                        Ok(Callee::Kernel(KernelFn::WsWithOriginPatterns))
+                    }
+                    ("Ws", "upgrade") => Ok(Callee::Kernel(KernelFn::WsUpgrade)),
+                    ("Ws", "sendToClient") => Ok(Callee::Kernel(KernelFn::WsSendToClient)),
+                    ("Ws", "sendBinaryToClient") => {
+                        Ok(Callee::Kernel(KernelFn::WsSendBinaryToClient))
+                    }
+                    ("Ws", "broadcast") => Ok(Callee::Kernel(KernelFn::WsBroadcast)),
+                    ("Ws", "closeClient") => Ok(Callee::Kernel(KernelFn::WsCloseClient)),
                     // A kernel beyond the wired set.
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),

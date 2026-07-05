@@ -622,6 +622,9 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::ServerCookie => "Cookie",
         IrType::StreamWriter => "StreamWriter",
         IrType::HttpRequest => "HttpRequest",
+        // #127: Sky.Http.Server.WebSocket opaque handles.
+        IrType::WebSocketServer => "WebSocketServer",
+        IrType::WebSocketServerCfg => "WebSocketServerCfg",
         IrType::Ui { .. } => "Element",
         IrType::UiPlain(_) => "UiAttribute",
         IrType::LiveReq => "LiveReq",

@@ -254,6 +254,9 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — not a valid Model leaf.
         | IrType::HttpRequest
+        // #127: `WsHandle` / `WsServerCfg` are opaque handles — not valid Model leaves.
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
         | IrType::LiveReq
         | IrType::LiveRoute(_)
         // `Order` is a plain three-variant data enum — an admissible leaf.

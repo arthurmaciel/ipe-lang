@@ -1289,7 +1289,20 @@ fn emit_server_call(
         // ── #111: Sky.Core.Http.Stream (client-side relay) ───────────────────
         | KernelFn::HttpStreamOpen
         | KernelFn::HttpStreamForEachChunk
-        | KernelFn::HttpStreamClose => Ok(None),
+        | KernelFn::HttpStreamClose
+        // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+        | KernelFn::WsDefaultCfg
+        | KernelFn::WsWithOnConnect
+        | KernelFn::WsWithOnMessage
+        | KernelFn::WsWithOnClose
+        | KernelFn::WsWithOnError
+        | KernelFn::WsWithMaxMessageBytes
+        | KernelFn::WsWithOriginPatterns
+        | KernelFn::WsUpgrade
+        | KernelFn::WsSendToClient
+        | KernelFn::WsSendBinaryToClient
+        | KernelFn::WsBroadcast
+        | KernelFn::WsCloseClient => Ok(None),
         // Any is_server() variant not listed above is a gap — hard error so
         // the Rust compiler's exhaustiveness check catches it at compile time.
         _ => Err(Diagnostic::CompilerBug {
@@ -4786,11 +4799,24 @@ fn emit_func_value(
     //   + Send + Sync> (defined in sky_runtime::server).  Using Box::new here
     // produces a type-mismatch because Arc and Box are distinct smart pointers.
     // Detect this shape and use Arc::new instead.
+    //
+    // WsServerCfg callback fields are also Arc<dyn Fn + Send + Sync> — same
+    // reason.  Shapes: Fn(WsHandle) -> SkyTask<()>  (onConnect / onClose) and
+    // Fn(WsHandle, String) -> SkyTask<()>  (onMessage / onError).
+    // Use Arc::new when the runtime field is Arc<dyn Fn + Send + Sync>:
+    //   • ServerHandler<E>: Fn(ServerRequest) -> SkyTask<E, ServerResponse>
+    //   • WsServerCfg callbacks: Fn(WsHandle) -> SkyTask<E, ()>
+    //                            Fn(WsHandle, String) -> SkyTask<E, ()>
     let ctor = if matches!(ty,
         IrType::Fun(params, ret)
-            if matches!(params.as_slice(), [IrType::ServerRequest])
+            if (matches!(params.as_slice(), [IrType::ServerRequest])
                 && matches!(ret.as_ref(), IrType::Task(inner)
-                    if matches!(inner.as_ref(), IrType::ServerResponse))
+                    if matches!(inner.as_ref(), IrType::ServerResponse)))
+               || (matches!(
+                    params.as_slice(),
+                    [IrType::WebSocketServer] | [IrType::WebSocketServer, IrType::Str]
+                ) && matches!(ret.as_ref(), IrType::Task(inner)
+                    if matches!(inner.as_ref(), IrType::Unit)))
     ) {
         "Arc"
     } else {
