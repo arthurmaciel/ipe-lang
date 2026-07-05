@@ -225,10 +225,11 @@ impl Env {
         // Db ADTs (M5b-db).
         let sqlvalue = interner.intern("SqlValue")?;
         let sqlfield = interner.intern("SqlField")?;
-        // Sky.Core.Http.Stream ADT (HttpStream kernel qualifier — not a compiled
-        // source module, so its constructors are never registered via
+        // Sky.Core.Http.Stream ADTs (HttpStream kernel qualifier — not a compiled
+        // source module, so their constructors are never registered via
         // `build_module_exports`; they must be pre-registered here instead).
         let chunkev = interner.intern("ChunkEvent")?;
+        let streamid = interner.intern("StreamId")?;
         // (constructor name, owning built-in type, index within the type, arity).
         for (name, type_name, index, arity) in [
             ("True", bool_, 0, 0),
@@ -259,6 +260,9 @@ impl Env {
             ("Done", chunkev, 1, 0),
             // Errored : Error -> ChunkEvent
             ("Errored", chunkev, 2, 1),
+            // ── StreamId (Sky.Core.Http.Stream) ──────────────────────────────
+            // StreamId : Int -> StreamId (opaque wrapper used in Stream.open return)
+            ("StreamId", streamid, 0, 1),
         ] {
             let name = interner.intern(name)?;
             self.ctors.insert(
@@ -1084,6 +1088,7 @@ impl Env {
                     "wordSpacing",
                     "alignLeft",
                     "alignRight",
+                    "alignCenter",
                     "center",
                     "justify",
                     "sansSerif",
@@ -1258,6 +1263,7 @@ impl Env {
                     "multiple",
                     "selected",
                     "autofocus",
+                    "autocomplete",
                     "tabindex",
                     "noAttr",
                 ],

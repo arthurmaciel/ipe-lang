@@ -730,6 +730,11 @@ pub fn ui_font_align_right_<M>() -> Attribute<M> {
     Attribute::AttrFontAlign("right".into())
 }
 
+/// `Font.alignCenter : Attribute msg`
+pub fn ui_font_align_center_<M>() -> Attribute<M> {
+    Attribute::AttrFontAlign("center".into())
+}
+
 /// `Font.center : Attribute msg`
 pub fn ui_font_center_<M>() -> Attribute<M> {
     Attribute::AttrFontAlign("center".into())
