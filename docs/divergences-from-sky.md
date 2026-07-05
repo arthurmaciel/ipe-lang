@@ -317,6 +317,35 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   peers eventually). Tracked. **Sanctioned:** yes (`divergence:`), pending H1
   close.
 
+### B21 — Unknown type names fail-closed at canon (SKY-N0002) vs deferred ICE (#138)
+- **Differs:** Sky's Haskell canonicaliser resolves an unqualified uppercase type
+  name by calling `Map.findWithDefault []` on `type_home_map`, silently supplying
+  an empty home `[]` for any name absent from the map. An empty home downstream
+  in the Go code-gen is a silent runtime error (or, in the Rust backend, a
+  `SKY-I0001` ICE via the `ir_type_from_canon` unique-match heuristic). ipê's
+  `canonicalise_type` now classifies every unqualified upper-case type name
+  explicitly at canon time:
+  - **Known builtins** (`RESERVED_BUILTIN_TYPES` + `EXTRA_BUILTIN_TYPE_NAMES`) →
+    empty-home sentinel `home = []` as before; the lowerer resolves them via
+    explicit named arms.
+  - **User-defined / unknown names** → `TypeNotFound` / `SKY-N0002` with a
+    did-you-mean suggestion list from `type_home_map` + `ctx.aliases`. The ICE
+    path and the unique-match `enum_variants` heuristic in `ir_type_from_canon`
+    and `ir_type_from_ty` are removed.
+- **Go-oracle relationship:** the Go backend accepts a program where a type name
+  is referenced without importing its home module (the empty-home fallback is
+  harmless in Go's stringly-typed codegen). ipê rejects such programs with a
+  clear user error instead.
+- **Rationale:** correctness / robustness — a reference to a type that is not in
+  scope is a genuine user error; silently giving it an empty home and deferring
+  the failure to codegen (or crashing with an ICE) violates "make invalid states
+  unrepresentable". The Sky Haskell compiler's `findWithDefault ""` is a known
+  deferred-failure hole; this is the stricter-is-better class.
+- **Sanctioned:** yes (`sanctioned:`). Regression gate: `golden_i138_total_resolution`
+  (error fixtures `i138_empty_home_bridge` / `i138_optbridge` → must emit
+  SKY-N0002 not SKY-I0001; positive control `i138_kernel_implicit_positive` →
+  must compile clean).
+
 ---
 
 ## 3. Architectural divergences (compiler + runtime structure)
@@ -592,9 +621,10 @@ API-shape review):
 
 ## Counts
 
-- **Behavioral divergences:** 20 classes (B1–B20). B16 (#104 true last-use) and
+- **Behavioral divergences:** 21 classes (B1–B21). B16 (#104 true last-use) and
   B17 (#99 alias bind) are pending fixture goldens. B3 RETIRED (task #55a) per
-  inline note. B18–B20 are WS-server entries added with task #127. Sanctioned/
+  inline note. B18–B20 are WS-server entries added with task #127. B21 is the
+  #138 total-resolution gate (unknown-type → SKY-N0002 not ICE). Sanctioned/
   recorded goldens: 42 carry a marker (`Math` 4, `Bytes` 5, `Encoding` 1, `Jwt` 5,
   `Db` 11, `Ui` 6, `Cmd`/`Sub` 3, `Uuid` 2, plus Go-failure kind-1 shapes and
   Money/case/toFloat sanctioned entries). B16/B17 goldens pending; B20 pending H1.
