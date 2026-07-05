@@ -641,6 +641,8 @@ pub enum StdlibKernel {
     UiColumn,
     UiWrappedRow,
     UiGrid,
+    UiParagraph,
+    UiTextColumn,
     UiButton, // (List Attr, { onPress : Maybe msg, label : Element msg }) → Element msg
     // ── M7: Std.Ui attribute builders ────────────────────────────────────────
     UiSpacing,
@@ -756,6 +758,7 @@ pub enum StdlibKernel {
     HtmlMeter,
     HtmlScript,
     HtmlBody,
+    HtmlTitle,
     HtmlBr,
     HtmlHr,
     HtmlMeta,
@@ -1601,6 +1604,8 @@ impl StdlibKernel {
             Self::UiColumn => d("Ui", "column", 2, Ui, "ui_column_"),
             Self::UiWrappedRow => d("Ui", "wrappedRow", 2, Ui, "ui_wrapped_row_"),
             Self::UiGrid => d("Ui", "grid", 2, Ui, "ui_grid_"),
+            Self::UiParagraph => d("Ui", "paragraph", 2, Ui, "ui_paragraph_"),
+            Self::UiTextColumn => d("Ui", "textColumn", 2, Ui, "ui_text_column_"),
             Self::UiButton => d("Ui", "button", 2, Ui, "ui_button_"),
             // ── M7: Std.Ui attribute builders ────────────────────────────────
             Self::UiSpacing => d("Ui", "spacing", 1, Ui, "ui_spacing_"),
@@ -1713,6 +1718,7 @@ impl StdlibKernel {
             Self::HtmlMeter => d("Html", "meter", 2, Ui, "html_node_"),
             Self::HtmlScript => d("Html", "script", 2, Ui, "html_node_"),
             Self::HtmlBody => d("Html", "body", 2, Ui, "html_node_"),
+            Self::HtmlTitle => d("Html", "title", 2, Ui, "html_node_"),
             Self::HtmlBr => d("Html", "br", 1, Ui, "html_node_"),
             Self::HtmlHr => d("Html", "hr", 1, Ui, "html_node_"),
             Self::HtmlMeta => d("Html", "meta", 1, Ui, "html_node_"),
@@ -2426,6 +2432,8 @@ impl StdlibKernel {
         Self::UiColumn,
         Self::UiWrappedRow,
         Self::UiGrid,
+        Self::UiParagraph,
+        Self::UiTextColumn,
         Self::UiButton,
         // M7: Ui attribute builders
         Self::UiSpacing,
@@ -2532,6 +2540,7 @@ impl StdlibKernel {
         Self::HtmlMeter,
         Self::HtmlScript,
         Self::HtmlBody,
+        Self::HtmlTitle,
         Self::HtmlBr,
         Self::HtmlHr,
         Self::HtmlMeta,
@@ -2896,6 +2905,8 @@ impl StdlibKernel {
                 | Self::UiColumn
                 | Self::UiWrappedRow
                 | Self::UiGrid
+                | Self::UiParagraph
+                | Self::UiTextColumn
                 | Self::UiButton
                 | Self::UiSpacing
                 | Self::UiPadding
@@ -2997,6 +3008,7 @@ impl StdlibKernel {
                 | Self::HtmlMeter
                 | Self::HtmlScript
                 | Self::HtmlBody
+                | Self::HtmlTitle
                 | Self::HtmlBr
                 | Self::HtmlHr
                 | Self::HtmlMeta
@@ -3305,6 +3317,7 @@ impl StdlibKernel {
                 | Self::HtmlMeter
                 | Self::HtmlScript
                 | Self::HtmlBody
+                | Self::HtmlTitle
         )
     }
 
@@ -3386,6 +3399,7 @@ impl StdlibKernel {
             Self::HtmlMeter => "meter",
             Self::HtmlScript => "script",
             Self::HtmlBody => "body",
+            Self::HtmlTitle => "title",
             Self::HtmlBr => "br",
             Self::HtmlHr => "hr",
             Self::HtmlMeta => "meta",
