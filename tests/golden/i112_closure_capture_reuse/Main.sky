@@ -1,0 +1,25 @@
+module Main exposing (main)
+
+-- #112 seal: a `CloneOk` local (`prefix : String`) captured by a `move`
+-- closure AND used again after the closure.  Without T5, the `move` closure
+-- steals `prefix`; the subsequent `++ "[" ++ prefix ++ "]"` reuse is E0382.
+--
+-- T5 fix: `rewrite_multiuse_clones` detects that the Lambda consumes one use
+-- of `prefix`, wraps the Lambda in a pre-clone Let binding:
+--   `let prefix = prefix.clone() in Lambda { … }`.
+-- The outer `prefix` survives; the `move` closure captures the inner clone.
+--
+-- Expected output: "sky-one,sky-two[sky-]"
+
+
+format : String -> List String -> String
+format prefix items =
+    let
+        mapped = List.map (\x -> String.append prefix x) items
+        joined = String.join "," mapped
+    in
+        joined ++ "[" ++ prefix ++ "]"
+
+
+main =
+    println (format "sky-" [ "one", "two" ])
