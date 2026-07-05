@@ -17,6 +17,7 @@ members = [
     "tools/refresh-oracle",
     "runtime",
     "tools/sky-ffi-inspect-rs",
+    "tools/parity-matrix",
 ]
 
 [workspace.package]
