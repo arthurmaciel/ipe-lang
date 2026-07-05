@@ -46,10 +46,10 @@ impl Config {
         // workspace root is `../../` (crate is tools/parity-matrix/).
         if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
             let p = PathBuf::from(manifest);
-            if let Some(workspace) = p.parent().and_then(|p| p.parent()) {
-                if workspace.join("Cargo.toml").exists() {
-                    return workspace.to_path_buf();
-                }
+            if let Some(workspace) = p.parent().and_then(|p| p.parent())
+                && workspace.join("Cargo.toml").exists()
+            {
+                return workspace.to_path_buf();
             }
         }
         // Fallback: current working directory.
@@ -391,19 +391,15 @@ fn scan_runtime_fns_dir(dir: &Path, fns: &mut HashSet<String>) -> Result<(), Str
             for line in src.lines() {
                 let trimmed = line.trim();
                 // Match: pub fn <name>( or pub async fn <name>(
-                let rest = if let Some(r) = trimmed.strip_prefix("pub fn ") {
-                    Some(r)
-                } else if let Some(r) = trimmed.strip_prefix("pub async fn ") {
-                    Some(r)
-                } else {
-                    None
-                };
+                let rest = trimmed
+                    .strip_prefix("pub fn ")
+                    .or_else(|| trimmed.strip_prefix("pub async fn "));
                 if let Some(rest) = rest {
                     // Extract name up to `(` or `<` (generic params) or end of token.
                     // Handles both one-liners `pub fn foo(` and multi-line generics
                     // `pub fn foo<\n    T: ...`.
                     let name_end = rest
-                        .find(|c: char| c == '(' || c == '<' || c == ' ' || c == '\t')
+                        .find(['(', '<', ' ', '\t'])
                         .unwrap_or(rest.len());
                     let base = rest[..name_end].trim();
                     if !base.is_empty() && base != "new" && base.chars().all(|c| c.is_alphanumeric() || c == '_') {
@@ -838,9 +834,7 @@ fn scan_canon_qualifiers(src: &str) -> HashSet<(String, String)> {
                     }
                 }
                 ')' => {
-                    if depth > 0 {
-                        depth -= 1;
-                    }
+                    depth = depth.saturating_sub(1);
                     if depth == 0 {
                         done = true;
                         break;
@@ -857,9 +851,7 @@ fn scan_canon_qualifiers(src: &str) -> HashSet<(String, String)> {
                     }
                 }
                 ']' => {
-                    if depth > 0 {
-                        depth -= 1;
-                    }
+                    depth = depth.saturating_sub(1);
                     if depth == 0 {
                         done = true;
                         break;
@@ -873,7 +865,7 @@ fn scan_canon_qualifiers(src: &str) -> HashSet<(String, String)> {
                     // Scan to closing `"`.
                     let str_start = i + 1;
                     let mut end = str_start;
-                    while let Some((j, c)) = chars.next() {
+                    for (j, c) in chars.by_ref() {
                         if c == '"' {
                             end = j;
                             break;

@@ -3863,6 +3863,53 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
+                // ── Input.text / email / username / search / currentPassword /
+                //    newPassword / multiline / checkbox cfg literal
+                //    (L0107 exemption, #124) ──
+                //
+                // Input kernels take TWO arguments: `(attrs : List Attr, cfg : Cfg)`.
+                // The cfg record contains function-valued fields (e.g. `onChange :
+                // String -> msg`), which the per-field `reject_function_valued_field`
+                // gate would reject as SKY-L0107 if lowered through the uniform path.
+                //
+                // Fix: lower `args[0]` (attrs list) normally — it never carries
+                // function values — and lower `args[1]` (the cfg record) via
+                // `lower_app_cfg_record`, which intentionally omits the L0107 gate.
+                // The emit side (emit_expr.rs) already destructures the cfg record
+                // directly (`let Expr::Record(fields) = cfg_e`), so the record MUST
+                // remain a literal — matching the require in `lower_app_cfg_record`.
+                //
+                // A non-literal cfg arg is currently unsupported (emit would ICE); it
+                // is fail-closed via the `Expr::Record` guard in emit_expr.rs rather
+                // than a separate SKY-L0119 here, since Phase-0 only wires literal
+                // cfg forms and a non-literal would produce a CompilerBug diagnostic
+                // with a clear location at the emit boundary.
+                Callee::Kernel(
+                    KernelFn::InputText
+                    | KernelFn::InputEmail
+                    | KernelFn::InputUsername
+                    | KernelFn::InputSearch
+                    | KernelFn::InputCurrentPassword
+                    | KernelFn::InputNewPassword
+                    | KernelFn::InputMultiline
+                    | KernelFn::InputCheckbox,
+                ) if args.len() == 2 =>
+                {
+                    if let (Some(attrs_arg), Some(cfg_arg)) = (args.first(), args.get(1)) {
+                        let lowered_attrs = self.lower_expr(attrs_arg)?;
+                        let canon::Expr_::Record(fields) = &cfg_arg.value else {
+                            // Non-literal cfg: fall through to uniform path, which
+                            // surfaces SKY-L0107 on the function-valued field — a
+                            // clear, actionable diagnostic at the right span.
+                            return Ok(None);
+                        };
+                        let lowered_cfg = self.lower_app_cfg_record(fields)?;
+                        return Ok(Some(Expr::Call {
+                            callee: peek,
+                            args: vec![lowered_attrs, lowered_cfg],
+                        }));
+                    }
+                }
                 // T4 (#108): `Live.appRouted` is a vestigial alias — the
                 // reference has ONE `Live.app` that branches at emit time
                 // (emit_live.rs T5).  Route it through the same

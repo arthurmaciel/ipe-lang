@@ -3,10 +3,10 @@
 //! Run: `cargo test -p skyc parity_matrix_drift`
 //!
 //! MISMATCH = a wired kernel whose naming.rs symbol doesn't exist as a pub fn
-//! in the runtime, or whose lower_callee() arm is missing.  These are bugs.
+//! in the runtime, or whose `lower_callee()` arm is missing.  These are bugs.
 //!
 //! BACKLOG = a kernel not yet in ALL — these are allowed (they're the backlog).
-//! Missing canon_qual for known non-QUALIFIERS qualifiers is also allowed.
+//! Missing `canon_qual` for known non-`QUALIFIERS` qualifiers is also allowed.
 //!
 //! The test works by shelling out to the `parity-matrix` binary (built during
 //! the same `cargo test` run via a build.rs hook — see below).  If the binary
@@ -15,7 +15,7 @@
 
 use std::process::Command;
 
-/// Path to the workspace root — detected from CARGO_MANIFEST_DIR.
+/// Path to the workspace root — detected from `CARGO_MANIFEST_DIR`.
 fn workspace_root() -> std::path::PathBuf {
     // CARGO_MANIFEST_DIR for skyc is `crates/skyc/`; workspace root is two levels up.
     let manifest = std::env::var("CARGO_MANIFEST_DIR")
@@ -23,8 +23,7 @@ fn workspace_root() -> std::path::PathBuf {
     std::path::PathBuf::from(manifest)
         .parent()
         .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .map_or_else(|| std::path::PathBuf::from("."), std::path::Path::to_path_buf)
 }
 
 /// Find the parity-matrix binary: check the Cargo target directory first, then PATH.
@@ -42,12 +41,12 @@ fn find_binary() -> Option<std::path::PathBuf> {
         }
     }
     // Fallback: search PATH.
-    if let Ok(output) = Command::new("which").arg("parity-matrix").output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Some(std::path::PathBuf::from(path));
-            }
+    if let Ok(output) = Command::new("which").arg("parity-matrix").output()
+        && output.status.success()
+    {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Some(std::path::PathBuf::from(path));
         }
     }
     None
@@ -55,16 +54,13 @@ fn find_binary() -> Option<std::path::PathBuf> {
 
 #[test]
 fn parity_matrix_zero_mismatches() {
-    let bin = match find_binary() {
-        Some(b) => b,
-        None => {
-            eprintln!(
-                "parity-matrix binary not found — \
-                 build with `cargo build -p parity-matrix` to run this gate"
-            );
-            // Skip rather than fail when the tool isn't built yet.
-            return;
-        }
+    let Some(bin) = find_binary() else {
+        eprintln!(
+            "parity-matrix binary not found — \
+             build with `cargo build -p parity-matrix` to run this gate"
+        );
+        // Skip rather than fail when the tool isn't built yet.
+        return;
     };
 
     let root = workspace_root();
@@ -90,21 +86,20 @@ fn parity_matrix_zero_mismatches() {
     for line in tsv.lines().skip(1) {
         // The status column is the last (16th, index 15).
         let cols: Vec<&str> = line.split('\t').collect();
-        if let Some(status) = cols.get(15) {
-            if status.starts_with("MISMATCH") {
-                let variant = cols.first().copied().unwrap_or("?");
-                mismatch_rows.push(format!("  {} → {}", variant, status));
-            }
+        if let Some(status) = cols.get(15)
+            && status.starts_with("MISMATCH")
+        {
+            let variant = cols.first().copied().unwrap_or("?");
+            mismatch_rows.push(format!("  {variant} → {status}"));
         }
     }
 
-    if !mismatch_rows.is_empty() {
-        panic!(
-            "parity-matrix: {} MISMATCH rows found (these are bugs, not backlog):\n{}\n\
-             Run `parity-matrix extract > docs/architecture/parity-matrix.tsv && \
-             parity-matrix report docs/architecture/parity-matrix.tsv` for the full report.",
-            mismatch_rows.len(),
-            mismatch_rows.join("\n")
-        );
-    }
+    assert!(
+        mismatch_rows.is_empty(),
+        "parity-matrix: {} MISMATCH rows found (these are bugs, not backlog):\n{}\n\
+         Run `parity-matrix extract > docs/architecture/parity-matrix.tsv && \
+         parity-matrix report docs/architecture/parity-matrix.tsv` for the full report.",
+        mismatch_rows.len(),
+        mismatch_rows.join("\n")
+    );
 }
