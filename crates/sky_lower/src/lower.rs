@@ -8309,7 +8309,10 @@ impl<'a> Lowerer<'a> {
                 )
             })
             .map_or(branches.len(), |i| i + 1);
-        let branches = &branches[..live_end];
+        // `live_end <= branches.len()` by construction; `get` keeps the
+        // no-panic lint satisfied with the full slice as the impossible-miss
+        // fallback.
+        let branches = branches.get(..live_end).unwrap_or(branches);
 
         let all_ctor = branches
             .iter()
