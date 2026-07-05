@@ -628,9 +628,15 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HttpWithBody => "http_with_body",
         KernelFn::HttpWithHeader => "http_with_header",
         // ── Db kernels (M5b-db) ─────────────────────────────────────────────
-        // NOTE: DbExec → `db_exec_params` (NOT `db_exec`): the Sky surface always
-        // uses typed `SqlValue` params; the untyped `db_exec(Vec<String>)` path is
-        // only used by legacy String-param callers and is never exposed to Sky source.
+        // `DbExec`/`DbQuery`/`DbQueryDecode` → `db_exec_params` / `db_query_params` /
+        // `db_query_decode_params`.  The Sky surface type is polymorphic
+        // (`exec : Db -> String -> List a -> Task Error Int`) so `a` may be
+        // `String`, `Int`, `Float`, `Bool`, or `SqlValue`.  The emitter projects
+        // the params list via `sky_runtime::db::SqlParam::from` which is
+        // implemented for all of those types (runtime primitives + generated
+        // `StdDbSqlValue`).  The untyped `db_exec(Vec<String>)` variant in the
+        // runtime is retained for direct Rust test use but is no longer emitted
+        // for Sky source.
         KernelFn::DbConnect => "db_connect",
         KernelFn::DbOpen => "db_open",
         KernelFn::DbClose => "db_close",
