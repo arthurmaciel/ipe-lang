@@ -274,6 +274,11 @@ pub fn ui_transparent_() -> Color {
     Color::Rgba(0, 0, 0, 0.0)
 }
 
+/// `Ui.colorCss : Color -> String` — convert a `Color` to its CSS string.
+pub fn ui_color_css_(c: Color) -> String {
+    color_to_css(&c)
+}
+
 // ── Background sub-module ─────────────────────────────────────────────────────
 
 /// `Background.color : Color -> Attribute msg`

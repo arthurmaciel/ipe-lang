@@ -6314,6 +6314,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StreamFinish
                 | KernelFn::HttpStreamOpen
                 | KernelFn::HttpStreamClose
+                | KernelFn::UiColorCss
                 // ── #127: Sky.Http.Server.WebSocket arity-1 ──────────────────
                 | KernelFn::WsCloseClient,
             ) => Ok(1),
@@ -6325,6 +6326,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StreamEmit
                 | KernelFn::StreamWithContentType
                 | KernelFn::HttpStreamForEachChunk
+                | KernelFn::HttpStreamChunks
                 // ── #127: Sky.Http.Server.WebSocket arity-2 ──────────────────
                 | KernelFn::WsWithOnConnect
                 | KernelFn::WsWithOnMessage
@@ -6953,6 +6955,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "white") => Ok(Callee::Kernel(KernelFn::UiWhite)),
                     ("Ui", "black") => Ok(Callee::Kernel(KernelFn::UiBlack)),
                     ("Ui", "transparent") => Ok(Callee::Kernel(KernelFn::UiTransparent)),
+                    ("Ui", "colorCss") => Ok(Callee::Kernel(KernelFn::UiColorCss)),
                     // ── M7: Background sub-module ─────────────────────────────
                     ("Background", "color") => Ok(Callee::Kernel(KernelFn::BackgroundColor)),
                     ("Background", "image") => Ok(Callee::Kernel(KernelFn::BackgroundImage)),
@@ -7250,6 +7253,7 @@ impl<'a> Lowerer<'a> {
                         Ok(Callee::Kernel(KernelFn::HttpStreamForEachChunk))
                     }
                     ("HttpStream", "close") => Ok(Callee::Kernel(KernelFn::HttpStreamClose)),
+                    ("HttpStream", "chunks") => Ok(Callee::Kernel(KernelFn::HttpStreamChunks)),
                     // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────
                     ("Ws", "defaultCfg") => Ok(Callee::Kernel(KernelFn::WsDefaultCfg)),
                     ("Ws", "withOnConnect") => Ok(Callee::Kernel(KernelFn::WsWithOnConnect)),
