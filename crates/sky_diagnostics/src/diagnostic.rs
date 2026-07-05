@@ -14,7 +14,7 @@ use crate::code::{
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
     SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118, SKY_L0119, SKY_L0120, SKY_L0121,
-    SKY_L0200,
+    SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0200,
     SKY_N0001,
     SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
     SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_P0001,
@@ -641,6 +641,38 @@ pub enum LowerError {
     /// parameters, which exceeds the `curry1`..`curry10` helpers in the runtime.
     /// [SKY-L0121]
     DecodeSucceedArityTooHigh { n: usize },
+    /// A `Live.route` pattern has a different number of `:param` segments than
+    /// the page-constructor has payload fields. The extra params would be
+    /// silently discarded or the constructor could never be fully applied.
+    /// [SKY-L0122]
+    RouteParamCountMismatch {
+        /// The URL pattern string (e.g. `"/apps/:id/:slug"`).
+        pattern: Box<str>,
+        /// How many `:param` segments the pattern contains.
+        param_count: usize,
+        /// How many payload fields the page constructor declares.
+        ctor_payload_count: usize,
+    },
+    /// A `Live.route` page builder is not a page constructor, inline lambda, or
+    /// named function — the Rust backend cannot emit a type-directed params
+    /// closure for a let-bound variable or computed expression. [SKY-L0123]
+    RouteBuilderUnsupportedShape,
+    /// A `Live.route` page-constructor payload field has a type that cannot be
+    /// decoded from a URL `:param` string (only `String`, `Int`, `Float`, and
+    /// `Bool` are supported). [SKY-L0123]
+    RouteParamUnsupportedType {
+        /// Zero-based index of the offending constructor payload field.
+        field_index: usize,
+        /// Short display name of the unsupported IR type.
+        type_name: Box<str>,
+    },
+    /// `Live.app` carries a non-empty `routes` list but the Model type has no
+    /// `page` field. The compiler would silently ignore the routes and emit a
+    /// non-routed `live_app`, discarding the routing logic entirely. [SKY-L0124]
+    RoutedAppMissingPageField {
+        /// How many routes were declared.
+        route_count: usize,
+    },
 }
 
 // ===========================================================================
@@ -912,6 +944,10 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::InadmissibleAppModel { .. } => SKY_L0120,
         LowerError::BackendNestingTooDeep { .. } => SKY_L0200,
         LowerError::DecodeSucceedArityTooHigh { .. } => SKY_L0121,
+        LowerError::RouteParamCountMismatch { .. } => SKY_L0122,
+        LowerError::RouteBuilderUnsupportedShape
+        | LowerError::RouteParamUnsupportedType { .. } => SKY_L0123,
+        LowerError::RoutedAppMissingPageField { .. } => SKY_L0124,
     }
 }
 
@@ -1104,6 +1140,46 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
                  the runtime's `curry1`..`curry10` helpers cap at 10. \
                  Split the record into multiple smaller decoders and combine \
                  them with `andThen`, or reduce the field count below 10."
+            )
+            .into_boxed_str(),
+        )],
+        LowerError::RouteParamCountMismatch {
+            pattern,
+            param_count,
+            ctor_payload_count,
+        } => vec![HelpLine::Note(
+            format!(
+                "pattern `{pattern}` has {param_count} `:param` segment(s) but the \
+                 page constructor has {ctor_payload_count} payload field(s). \
+                 Add or remove `:param` segments in the pattern to match the \
+                 constructor's arity, or use a nullary constructor for routes \
+                 without parameters."
+            )
+            .into_boxed_str(),
+        )],
+        LowerError::RouteBuilderUnsupportedShape => vec![HelpLine::Note(
+            "inline the constructor or lambda directly at the `Live.route` call site; \
+             a let-bound variable or computed expression cannot be used as a page builder."
+                .into(),
+        )],
+        LowerError::RouteParamUnsupportedType {
+            field_index,
+            type_name,
+        } => vec![HelpLine::Note(
+            format!(
+                "payload field {field_index} has type `{type_name}`, which cannot be \
+                 decoded from a URL `:param` string. Change the field type to `String`, \
+                 `Int`, `Float`, or `Bool`, or use a nullary constructor for routes \
+                 without `:param` segments."
+            )
+            .into_boxed_str(),
+        )],
+        LowerError::RoutedAppMissingPageField { route_count } => vec![HelpLine::Note(
+            format!(
+                "the `routes` list has {route_count} route(s) but the Model has no \
+                 `page` field. Add a `page : Page` field to the Model record, where \
+                 `Page` is the ADT whose constructors appear as route destinations, \
+                 or remove the `routes` list if routing is not needed."
             )
             .into_boxed_str(),
         )],

@@ -183,6 +183,7 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
             parts.push(ir_type_name(interner, ret));
             parts.join(" -> ")
         }
+        IrType::Order => "Order".to_owned(),
     }
 }
 
@@ -925,6 +926,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::InputCurrentPassword => "Input.currentPassword",
         KernelFn::InputNewPassword => "Input.newPassword",
         KernelFn::InputCheckbox => "Input.checkbox",
+        KernelFn::BasicsCompare => "Basics.compare",
     }
 }
 

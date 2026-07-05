@@ -258,6 +258,15 @@ struct Builtins {
     input_f_icon: Symbol,
     /// `"spellcheck"` — the spellcheck field of the multiline cfg record.
     input_f_spellcheck: Symbol,
+    // ── Order ADT (#123) ─────────────────────────────────────────────────────
+    /// `"Order"` — the type constructor for three-way comparison results.
+    order: Symbol,
+    /// `"LT"` — the LT constructor of the Order ADT (less-than).
+    lt: Symbol,
+    /// `"EQ"` — the EQ constructor of the Order ADT (equal).
+    eq: Symbol,
+    /// `"GT"` — the GT constructor of the Order ADT (greater-than).
+    gt: Symbol,
 }
 
 impl Builtins {
@@ -358,6 +367,11 @@ impl Builtins {
             input_f_checked: interner.intern("checked")?,
             input_f_icon: interner.intern("icon")?,
             input_f_spellcheck: interner.intern("spellcheck")?,
+            // ── Order ADT (#123) ─────────────────────────────────────────────
+            order: interner.intern("Order")?,
+            lt: interner.intern("LT")?,
+            eq: interner.intern("EQ")?,
+            gt: interner.intern("GT")?,
         })
     }
 
@@ -556,6 +570,41 @@ impl Builtins {
                 CtorScheme {
                     arg_tys: Vec::new(),
                     result: sqlfield_ty,
+                },
+            ),
+            // ── Order constructors (#123) ──────────────────────────────────
+            // LT, EQ, GT are all nullary: no payload, result is Order.
+            (
+                self.lt,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: Ty::Con {
+                        module: Vec::new(),
+                        name: self.order,
+                        args: Vec::new(),
+                    },
+                },
+            ),
+            (
+                self.eq,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: Ty::Con {
+                        module: Vec::new(),
+                        name: self.order,
+                        args: Vec::new(),
+                    },
+                },
+            ),
+            (
+                self.gt,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: Ty::Con {
+                        module: Vec::new(),
+                        name: self.order,
+                        args: Vec::new(),
+                    },
                 },
             ),
         ]
@@ -1676,6 +1725,7 @@ impl<'a> Builder<'a> {
     ///   `Hash + Eq + Ord` (Dict) onto its annotation skolem (see `bounds_for`).
     ///   This is also more conservative than Sky's runtime, which keys a Set /
     ///   Dict on a stringified value.
+    #[allow(clippy::too_many_lines)]
     fn constrain_var_kernel(
         &mut self,
         id: Option<StdlibKernel>,
@@ -1731,6 +1781,19 @@ impl<'a> Builder<'a> {
             if matches!(k, StdlibKernel::BasicsMin | StdlibKernel::BasicsMax) {
                 let s = self.super_var(TyBounds::ord(), span)?;
                 let inner = self.structure(FlatType::Fun(s, s))?;
+                return self.structure(FlatType::Fun(s, inner));
+            }
+            // `compare : comparable a => a -> a -> Order` (#123). Direct-build
+            // (not stdlib_scheme + tie): both argument positions share one
+            // Ord-bounded super-var; the return is the monomorphic Order type.
+            if matches!(k, StdlibKernel::BasicsCompare) {
+                let s = self.super_var(TyBounds::ord(), span)?;
+                let order_var = self.structure(FlatType::Con {
+                    module: Vec::new(),
+                    name: self.builtins.order,
+                    args: Vec::new(),
+                })?;
+                let inner = self.structure(FlatType::Fun(s, order_var))?;
                 return self.structure(FlatType::Fun(s, inner));
             }
             // ── end Basics numerics (#115) ────────────────────────────────────
@@ -2392,6 +2455,12 @@ impl<'a> Builder<'a> {
             name: self.builtins.bytes,
             args: Vec::new(),
         };
+        // `Order` is a zero-argument constructor (#123).
+        let order = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.order,
+            args: Vec::new(),
+        };
         let error_ty = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.error,
@@ -2681,6 +2750,9 @@ impl<'a> Builder<'a> {
             // min / max: `comparable a => a -> a -> a`. BASE scheme only (bounded
             // scheme is direct-built in constrain_var_kernel, same as MathMin/MathMax).
             K::BasicsMin | K::BasicsMax => fun(var(0), fun(var(0), var(0))),
+            // `compare`: base scheme (production hits the direct-build in
+            // constrain_var_kernel; this arm exists for the totality gate).
+            K::BasicsCompare => fun(var(0), fun(var(0), order())),
             // ── end Basics numerics (#115) ────────────────────────────────────
 
             // ── Math (min / max stay on the obligation path — NOT migrated) ──
@@ -4799,6 +4871,7 @@ mod registry_phase_c_tests {
             K::BasicsSqrt,
             K::BasicsMin,
             K::BasicsMax,
+            K::BasicsCompare,
             // ── end Basics numerics (#115) ──────────────────────────────────
             // Result combinators newly wired (holes post-seal; `withDefault` /
             // `map` are the RELOCATED pair, these two are first-schemed).

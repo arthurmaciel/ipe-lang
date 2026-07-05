@@ -459,6 +459,30 @@ fn lower_label(msg: &LowerError) -> String {
         LowerError::DecodeSucceedArityTooHigh { n } => {
             format!("`succeed` constructor has {n} parameters; the `curry1`..`curry10` cap is 10")
         }
+        LowerError::RouteParamCountMismatch {
+            pattern,
+            param_count,
+            ctor_payload_count,
+        } => format!(
+            "pattern `{pattern}` has {param_count} `:param` segment(s) but the page \
+             constructor takes {ctor_payload_count} payload field(s)"
+        ),
+        LowerError::RouteBuilderUnsupportedShape => {
+            "this page builder shape is not supported — inline a constructor or lambda \
+             at the `Live.route` call site"
+                .to_string()
+        }
+        LowerError::RouteParamUnsupportedType {
+            field_index,
+            type_name,
+        } => format!(
+            "payload field {field_index} has type `{type_name}`, which cannot be decoded \
+             from a URL `:param` string"
+        ),
+        LowerError::RoutedAppMissingPageField { route_count } => format!(
+            "{route_count} route(s) declared but the Model has no `page` field — the \
+             routes would be silently discarded"
+        ),
     }
 }
 

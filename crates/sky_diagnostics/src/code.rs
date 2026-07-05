@@ -200,6 +200,15 @@ pub const SKY_L0120: Code = Code("SKY-L0120");
 /// `JsonDec.succeed` / `Db.Decode.succeed` constructor arity exceeds 10
 /// (the maximum supported by `curry1`..`curry10` in the runtime)
 pub const SKY_L0121: Code = Code("SKY-L0121");
+/// `Live.route` pattern `:param` count does not match the page-constructor
+/// payload count; the route can never deliver the right number of arguments
+pub const SKY_L0122: Code = Code("SKY-L0122");
+/// `Live.route` page builder is neither a page constructor, an inline lambda,
+/// nor a named function — the Rust backend cannot emit a type-directed closure
+pub const SKY_L0123: Code = Code("SKY-L0123");
+/// `Live.app` has a non-empty `routes` list but the Model has no `page` field;
+/// the route list would be silently ignored
+pub const SKY_L0124: Code = Code("SKY-L0124");
 /// expression nests too deeply for the backend
 pub const SKY_L0200: Code = Code("SKY-L0200");
 
@@ -306,6 +315,9 @@ pub fn title(c: Code) -> &'static str {
         SKY_L0119 => "app entry cfg must be an inline record literal",
         SKY_L0120 => "app Model is not admissible for this app shape",
         SKY_L0121 => "`JsonDec.succeed` / `Db.Decode.succeed` constructor arity exceeds 10",
+        SKY_L0122 => "`Live.route` `:param` count does not match page-constructor payload count",
+        SKY_L0123 => "`Live.route` page builder is not a constructor, lambda, or named function",
+        SKY_L0124 => "`Live.app` routes list is non-empty but Model has no `page` field",
         SKY_L0200 => "expression nests too deeply for the backend",
         SKY_I0001 => "internal compiler error",
         SKY_I0010 => "intern: unresolved symbol",
@@ -403,6 +415,9 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         SKY_L0119 => Some(include_str!("../explain/SKY-L0119.md")),
         SKY_L0120 => Some(include_str!("../explain/SKY-L0120.md")),
         SKY_L0121 => Some(include_str!("../explain/SKY-L0121.md")),
+        SKY_L0122 => Some(include_str!("../explain/SKY-L0122.md")),
+        SKY_L0123 => Some(include_str!("../explain/SKY-L0123.md")),
+        SKY_L0124 => Some(include_str!("../explain/SKY-L0124.md")),
         SKY_L0200 => Some(include_str!("../explain/SKY-L0200.md")),
         SKY_I0001 => Some(include_str!("../explain/SKY-I0001.md")),
         SKY_I0010 => Some(include_str!("../explain/SKY-I0010.md")),
@@ -434,13 +449,14 @@ mod tests {
         SKY_L0101,
         SKY_L0102, SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110,
         SKY_L0111, SKY_L0112, SKY_L0113, SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118,
-        SKY_L0119, SKY_L0120, SKY_L0121, SKY_L0200, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101,
+        SKY_L0119, SKY_L0120, SKY_L0121, SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0200, SKY_I0001, SKY_I0010,
+        SKY_I0011, SKY_I0100, SKY_I0101,
         SKY_I0102, SKY_I0103, SKY_I0200, SKY_I0201, SKY_I0202, SKY_I0203,
     ];
 
     #[test]
-    fn taxonomy_has_eighty_codes() {
-        assert_eq!(ALL.len(), 80);
+    fn taxonomy_has_eighty_three_codes() {
+        assert_eq!(ALL.len(), 83);
     }
 
     #[test]
@@ -458,7 +474,7 @@ mod tests {
             assert!(s.starts_with("SKY-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 80);
+        assert_eq!(seen.len(), 83);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.

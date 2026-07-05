@@ -21,7 +21,7 @@
 //!   `lower_app_entry_cfg` path as `Live.app` (#108 T4); its arm here is a
 //!   defensive invariant check.
 
-use sky_diagnostics::{DResult, Diagnostic};
+use sky_diagnostics::{DResult, Diagnostic, LowerError, Span};
 use sky_ir::{Callee, Expr, IrType, KernelFn};
 
 use crate::EmitCtx;
@@ -198,8 +198,33 @@ fn emit_live_route(
                  move |_params: ::std::vec::Vec<::std::string::String>| __c.clone() }}"
             )
         } else {
-            // Partial-ctor with N payload fields — emit type-directed
-            // `params.get(i)` conversions matching each field's IrType.
+            // Partial-ctor with N payload fields.
+            //
+            // Item 1 (#120): static arity check — count ':param' segments in
+            // the pattern and compare against the constructor's payload count.
+            // A mismatch is a compile-time error (SKY-L0122): the route can
+            // never deliver the right arguments.  Only checked when the pattern
+            // is a string literal (the only shape the parser accepts for a
+            // route pattern); other shapes are left to cargo for now.
+            if let Expr::Str(pat_s) = pattern_e {
+                let param_count = pat_s
+                    .split('/')
+                    .filter(|seg| seg.starts_with(':'))
+                    .count();
+                let ctor_payload_count = variant_tys.len();
+                if param_count != ctor_payload_count {
+                    return Err(Diagnostic::Lower {
+                        span: Span::DUMMY,
+                        msg: LowerError::RouteParamCountMismatch {
+                            pattern: pat_s.as_str().into(),
+                            param_count,
+                            ctor_payload_count,
+                        },
+                    });
+                }
+            }
+            // Emit type-directed `params.get(i)` conversions matching each
+            // field's IrType.
             let mut param_gets = Vec::with_capacity(variant_tys.len());
             for (i, field_ty) in variant_tys.iter().enumerate() {
                 param_gets.push(route_param_get(field_ty, i)?);
@@ -245,22 +270,13 @@ fn emit_live_route(
     } else {
         // Any other builder shape (a `Var` referencing a local, a call
         // result, …) carries no recoverable parameter types, so the builder
-        // closure cannot be emitted soundly — fail CLOSED.  Pre-round-4 this
-        // arm emitted `(builder)(params)` untyped, which cargo-failed
-        // (E0308/E0618) for every shape except the rare raw
-        // `List String -> Page` builder — a silent seal hole.  Interim shape:
-        // `CompilerBug`, same as `route_param_get`'s unsupported-payload arm;
-        // both upgrade to the reserved SKY-L0123 route diagnostic in the
-        // ledgered follow-up (see `docs/divergences-from-sky.md`
-        // §B-route-param).
-        return Err(Diagnostic::CompilerBug {
-            where_: "sky_backend_rust::emit_live_call::LiveRoute",
-            detail: "a `Live.route` page builder must be a page constructor \
-                     (nullary or `:param`-consuming), an inline lambda, or a \
-                     named function; a let-bound or computed builder value is \
-                     not supported — inline the constructor/lambda at the \
-                     `Live.route` call site"
-                .into(),
+        // closure cannot be emitted soundly — fail CLOSED with SKY-L0123.
+        // Pre-round-4 this arm emitted `(builder)(params)` untyped, which
+        // cargo-failed (E0308/E0618) for every shape except the rare raw
+        // `List String -> Page` builder — a silent seal hole.
+        return Err(Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::RouteBuilderUnsupportedShape,
         });
     };
 
@@ -371,6 +387,24 @@ fn emit_live_app_inner(
         )));
     }
 
+    // Item 2 (#120): guard against a non-empty `routes` list on a non-routed app.
+    //
+    // If `routed_page_field` returned None but the `routes` field is a non-empty
+    // list literal, the routes would be silently ignored — the backend would emit
+    // `live_app` (non-routed) while the user's intent was routing. Fail-closed
+    // with SKY-L0124 so the compiler tells the user to add a `page` field.
+    if let Ok(routes_e) = lookup_field(ctx, fields, "routes")
+        && let Expr::List { items, .. } = routes_e
+        && !items.is_empty()
+    {
+        return Err(Diagnostic::Lower {
+            span: Span::DUMMY,
+            msg: LowerError::RoutedAppMissingPageField {
+                route_count: items.len(),
+            },
+        });
+    }
+
     // Single-page (non-routed) path — `routes`/`notFound` are structurally
     // present in the cfg but not forwarded to the runtime entry.
     //
@@ -420,17 +454,15 @@ fn route_param_get(field_ty: &IrType, i: usize) -> DResult<String> {
             "params.get({i}).map(|s| s == \"true\").unwrap_or_default()"
         ),
         other => {
-            return Err(Diagnostic::CompilerBug {
-                where_: "sky_backend_rust::route_param_get",
-                detail: format!(
-                    "route `:param` segments can only be decoded into \
-                     `String`, `Int`, `Float`, or `Bool` page-constructor \
-                     payload fields; field {i} of the route-page constructor \
-                     has IR type `{other:?}`. \
-                     Change the constructor field to one of the supported types, \
-                     or use a nullary page constructor for routes without \
-                     `:param` segments."
-                ),
+            // Item 3b (#120): upgrade to SKY-L0123. Item 4 (#120): replace
+            // `{other:?}` (which leaks internal IR representation like
+            // `Enum { home: ModPath([…]) }`) with a user-facing type name.
+            return Err(Diagnostic::Lower {
+                span: Span::DUMMY,
+                msg: LowerError::RouteParamUnsupportedType {
+                    field_index: i,
+                    type_name: ir_type_display_name(other).into(),
+                },
             });
         }
     })
@@ -538,4 +570,50 @@ fn lookup_field<'f>(
                 .join(", ")
         ),
     })
+}
+
+/// A short, user-facing display name for an [`IrType`] used in diagnostic
+/// messages. Avoids leaking the internal `Debug` representation of the IR
+/// (which includes interned `Symbol` IDs and `ModPath` vectors that are
+/// meaningless to the user).
+///
+/// This is intentionally coarse — diagnostics only need enough detail to
+/// direct the user to the right fix, not a full type-printer.
+const fn ir_type_display_name(ty: &IrType) -> &'static str {
+    match ty {
+        IrType::Int => "Int",
+        IrType::Float => "Float",
+        IrType::Str => "String",
+        IrType::Bool => "Bool",
+        IrType::Char => "Char",
+        IrType::Unit => "Unit",
+        IrType::Task(_) => "Task",
+        IrType::Enum { .. } => "ADT",
+        IrType::Maybe(_) => "Maybe",
+        IrType::Result(_, _) => "Result",
+        IrType::List(_) => "List",
+        IrType::Tuple(_) => "Tuple",
+        IrType::Record(_) => "record",
+        IrType::Fun(_, _) => "function",
+        IrType::Generic(_) => "generic",
+        IrType::Dict(_, _) => "Dict",
+        IrType::Set(_) => "Set",
+        IrType::Bytes => "Bytes",
+        IrType::Json => "Json",
+        IrType::Decoder(_) => "Decoder",
+        IrType::Db => "Db",
+        IrType::Cmd(_) => "Cmd",
+        IrType::Sub(_) => "Sub",
+        IrType::ServerRequest => "Request",
+        IrType::ServerResponse => "Response",
+        IrType::ServerRoute => "ServerRoute",
+        IrType::ServerCookie => "Cookie",
+        IrType::StreamWriter => "StreamWriter",
+        IrType::HttpRequest => "HttpRequest",
+        IrType::Ui { .. } => "Element",
+        IrType::UiPlain(_) => "UiAttribute",
+        IrType::LiveReq => "LiveReq",
+        IrType::LiveRoute(_) => "LiveRoute",
+        IrType::Order => "Order",
+    }
 }
