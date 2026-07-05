@@ -75,6 +75,18 @@ impl Config {
 /// naming strings that never reach `callee_name()` (emit intercepts inline)
 /// or live in the generated-code preamble, not the runtime library.
 const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
+    // ── Dead: emit_task_retry_call (#134) constructs RetryPolicy / ShouldRetry
+    //         values inline for the builder variants; only task_retry_with has
+    //         a real runtime fn. These name strings are never emitted. ────────
+    "task_default_retry_policy",
+    "task_exponential_backoff",
+    "task_linear_backoff",
+    "task_retry_on",
+    "task_with_base_ms",
+    "task_with_jitter",
+    "task_with_kind",
+    "task_with_max_attempts",
+    "task_with_retry_on",
     "html_attr_tabindex_",
     "http_default_request",
     "http_with_method",
