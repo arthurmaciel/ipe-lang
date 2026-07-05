@@ -3022,9 +3022,14 @@ impl<'a> Builder<'a> {
                 fun(task(var(0)), task(var(2))),
             ),
             K::TaskSequence | K::TaskParallel => fun(list(task(var(0))), task(list(var(0)))),
-            K::TaskRun => fun(task(var(0)), result(var(1), var(0))),
+            // `Task.run : Task Error a -> Result Error a`.
+            // The error channel is the fixed `Error` type — using `var(1)` here
+            // leaves the result's error type free, causing SKY-L0102 at the
+            // `main` binding in programs that end with `|> Task.run` and have no
+            // annotation that would pin `var(1)` to `Error`.
+            K::TaskRun => fun(task(var(0)), result(error_ty(), var(0))),
             // `Task.perform` is a 1-arg legacy alias for `Task.run`; identical type.
-            K::TaskPerform => fun(task(var(0)), result(var(1), var(0))),
+            K::TaskPerform => fun(task(var(0)), result(error_ty(), var(0))),
             // `Task.lazy : (() -> Task e a) -> Task e a`
             K::TaskLazy => fun(fun(Ty::Unit, task(var(0))), task(var(0))),
             // ── Task retry surface (M5a) ────────────────────────────────────

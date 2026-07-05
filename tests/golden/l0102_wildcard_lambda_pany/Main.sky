@@ -1,0 +1,59 @@
+module Main exposing (main)
+
+-- SKY-L0102 regression fixture: wildcard lambda parameter `\_ -> expr`.
+--
+-- Before the fix, the lowerer raised `Feature::Polymorphism` when it
+-- encountered a `PAnything` lambda parameter whose type is a free `Ty::Var`.
+-- The fix maps `Ty::Var(_)` to `IrType::Json` inside `ir_type_from_ty_json`
+-- and emits a fresh `_sky_wildcard_N` binder in `lower_lambda` / `eta_expand_partial`.
+--
+-- This fixture exercises three shapes:
+--   1. `\_ -> Task.succeed v`  — wildcard ignoring the previous task result
+--   2. `Task.fail e |> Task.andThen (\_ -> Task.succeed "unreachable")`
+--   3. A named helper that takes the discarded argument explicitly
+--
+-- Expected: skyc-0 AND cargo-0 on the emitted project; output contains
+-- "ok: done" and "err: intentional".
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Sky.Core.Error as Error exposing (Error)
+import Std.Log exposing (println)
+
+
+-- Shape 1 & 2: wildcard lambda inside a task chain.
+runPipeline =
+    let
+        ok =
+            Task.succeed "done"
+                |> Task.andThen (\_ -> Task.succeed "done")
+
+        err =
+            Task.fail (Error.unexpected "intentional")
+                |> Task.andThen (\_ -> Task.succeed "unreachable")
+    in
+    ( Task.run ok, Task.run err )
+
+
+-- Shape 3: named helper — same PAnything binder, different spelling.
+ignore : a -> Task Error String
+ignore _ =
+    Task.succeed "ignored"
+
+
+main =
+    let
+        ( okResult, errResult ) = runPipeline
+        _ =
+            case okResult of
+                Ok v  -> println ("ok: " ++ v)
+                Err e -> println ("ok-path error: " ++ Error.toString e)
+        _ =
+            case errResult of
+                Ok _  -> println "err-path should not reach Ok"
+                Err e -> println ("err: " ++ Error.toString e)
+        ignoreResult = Task.run (ignore 42)
+    in
+        case ignoreResult of
+            Ok v  -> println ("ignore: " ++ v)
+            Err e -> println ("ignore error: " ++ Error.toString e)
