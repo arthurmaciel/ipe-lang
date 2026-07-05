@@ -908,6 +908,19 @@ pub enum StdlibKernel {
     HttpStreamOpen,
     HttpStreamForEachChunk,
     HttpStreamClose,
+    // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+    WsDefaultCfg,           // WebSocketServerCfg (arity 0)
+    WsWithOnConnect,        // (WebSocketServer -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
+    WsWithOnMessage,        // (WebSocketServer -> String -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
+    WsWithOnClose,          // (WebSocketServer -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
+    WsWithOnError,          // (WebSocketServer -> Error -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
+    WsWithMaxMessageBytes,  // Int -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
+    WsWithOriginPatterns,   // List String -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
+    WsUpgrade,              // Request -> WebSocketServerCfg -> Task Error Response (arity 2)
+    WsSendToClient,         // WebSocketServer -> String -> Task Error () (arity 2)
+    WsSendBinaryToClient,   // WebSocketServer -> Bytes -> Task Error () (arity 2)
+    WsBroadcast,            // List WebSocketServer -> String -> Task Error () (arity 2)
+    WsCloseClient,          // WebSocketServer -> Task Error () (arity 1)
     // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
     RegionMainContent,   // Attribute msg (arity 0)
     RegionNavigation,    // Attribute msg (arity 0)
@@ -1864,6 +1877,25 @@ impl StdlibKernel {
                 d("HttpStream", "forEachChunk", 2, Pure, "http_stream_for_each_chunk")
             }
             Self::HttpStreamClose => d("HttpStream", "close", 1, Pure, "http_stream_close"),
+            // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+            Self::WsDefaultCfg => d("Ws", "defaultCfg", 0, Server, "ws_server_default_cfg"),
+            Self::WsWithOnConnect => d("Ws", "withOnConnect", 2, Server, "ws_server_with_on_connect"),
+            Self::WsWithOnMessage => d("Ws", "withOnMessage", 2, Server, "ws_server_with_on_message"),
+            Self::WsWithOnClose => d("Ws", "withOnClose", 2, Server, "ws_server_with_on_close"),
+            Self::WsWithOnError => d("Ws", "withOnError", 2, Server, "ws_server_with_on_error"),
+            Self::WsWithMaxMessageBytes => {
+                d("Ws", "withMaxMessageBytes", 2, Server, "ws_server_with_max_message_bytes")
+            }
+            Self::WsWithOriginPatterns => {
+                d("Ws", "withOriginPatterns", 2, Server, "ws_server_with_origin_patterns")
+            }
+            Self::WsUpgrade => d("Ws", "upgrade", 2, Server, "server_web_socket_upgrade"),
+            Self::WsSendToClient => d("Ws", "sendToClient", 2, Server, "ws_server_send_to_client"),
+            Self::WsSendBinaryToClient => {
+                d("Ws", "sendBinaryToClient", 2, Server, "ws_server_send_binary_to_client")
+            }
+            Self::WsBroadcast => d("Ws", "broadcast", 2, Server, "ws_server_broadcast"),
+            Self::WsCloseClient => d("Ws", "closeClient", 1, Server, "ws_server_close_client"),
             // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
             Self::RegionMainContent => d("Region", "mainContent", 0, Ui, "ui_region_main_content_"),
             Self::RegionNavigation => d("Region", "navigation", 0, Ui, "ui_region_navigation_"),
@@ -2631,6 +2663,19 @@ impl StdlibKernel {
         Self::HttpStreamOpen,
         Self::HttpStreamForEachChunk,
         Self::HttpStreamClose,
+        // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+        Self::WsDefaultCfg,
+        Self::WsWithOnConnect,
+        Self::WsWithOnMessage,
+        Self::WsWithOnClose,
+        Self::WsWithOnError,
+        Self::WsWithMaxMessageBytes,
+        Self::WsWithOriginPatterns,
+        Self::WsUpgrade,
+        Self::WsSendToClient,
+        Self::WsSendBinaryToClient,
+        Self::WsBroadcast,
+        Self::WsCloseClient,
         // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
         Self::RegionMainContent,
         Self::RegionNavigation,
@@ -2782,6 +2827,19 @@ impl StdlibKernel {
                 | Self::HttpStreamOpen
                 | Self::HttpStreamForEachChunk
                 | Self::HttpStreamClose
+                // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────
+                | Self::WsDefaultCfg
+                | Self::WsWithOnConnect
+                | Self::WsWithOnMessage
+                | Self::WsWithOnClose
+                | Self::WsWithOnError
+                | Self::WsWithMaxMessageBytes
+                | Self::WsWithOriginPatterns
+                | Self::WsUpgrade
+                | Self::WsSendToClient
+                | Self::WsSendBinaryToClient
+                | Self::WsBroadcast
+                | Self::WsCloseClient
         )
     }
 
