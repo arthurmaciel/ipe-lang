@@ -453,6 +453,8 @@ pub enum StdlibKernel {
     /// `Task.perform` — 1-arg legacy alias of `Task.run`; both map to
     /// `task_run` at the runtime boundary.
     TaskPerform,
+    /// `Task.lazy : (() -> Task e a) -> Task e a` — deferred task creation.
+    TaskLazy,
     // ── Io ──────────────────────────────────────────────────────────────────
     IoReadLine,
     IoWriteStdout,
@@ -461,6 +463,7 @@ pub enum StdlibKernel {
     TimeNow,
     TimeSleep,
     TimeUnixMillis,
+    TimeTimeString,
     // ── System ──────────────────────────────────────────────────────────────
     SystemArgs,
     SystemGetenv,
@@ -798,12 +801,15 @@ pub enum StdlibKernel {
     HtmlOnKeyUp,
     HtmlOnBool,
     // ── #76 Tier 1: Std.Ui extended attribute builders ───────────────────────
-    // Ui namespace — aspect-ratio + htmlAttribute
+    // Ui namespace — aspect-ratio + htmlAttribute + name/style/cinemascope
     UiSquare,         // nullary Attr: "1 / 1"
     UiWidescreen,     // nullary Attr: "16 / 9"
+    UiCinemascope,    // nullary Attr: "2.35 / 1"
     UiAspectRatio,    // Float → Attr
     UiAspectRatioWH,  // Int → Int → Attr
     UiHtmlAttribute,  // String → String → Attr (AttrAttribute escape-hatch)
+    UiName,           // String → Attr (HTML name= attribute)
+    UiStyle,          // String → String → Attr (raw CSS property + value)
     // Background namespace — pseudo-class colour tints
     BackgroundHoverColor,
     BackgroundFocusColor,
@@ -1345,6 +1351,7 @@ impl StdlibKernel {
             Self::TaskParallel => d("Task", "parallel", 1, Pure, "task_parallel"),
             Self::TaskRun => d("Task", "run", 1, Pure, "task_run"),
             Self::TaskPerform => d("Task", "perform", 1, Pure, "task_run"),
+            Self::TaskLazy => d("Task", "lazy", 1, Pure, "task_lazy"),
             // ── Io ──────────────────────────────────────────────────────────
             Self::IoReadLine => d("Io", "readLine", 0, Pure, "io_read_line"),
             Self::IoWriteStdout => d("Io", "writeStdout", 1, Pure, "io_write_stdout"),
@@ -1353,6 +1360,7 @@ impl StdlibKernel {
             Self::TimeNow => d("Time", "now", 0, Pure, "time_now"),
             Self::TimeSleep => d("Time", "sleep", 1, Pure, "time_sleep"),
             Self::TimeUnixMillis => d("Time", "unixMillis", 0, Pure, "time_unix_millis"),
+            Self::TimeTimeString => d("Time", "timeString", 1, Pure, "time_time_string"),
             // ── System ──────────────────────────────────────────────────────
             Self::SystemArgs => d("System", "args", 0, Pure, "system_args"),
             Self::SystemGetenv => d("System", "getenv", 1, Pure, "system_getenv"),
@@ -1718,9 +1726,12 @@ impl StdlibKernel {
             // Ui namespace
             Self::UiSquare => d("Ui", "square", 0, Ui, "ui_square_"),
             Self::UiWidescreen => d("Ui", "widescreen", 0, Ui, "ui_widescreen_"),
+            Self::UiCinemascope => d("Ui", "cinemascope", 0, Ui, "ui_cinemascope_"),
             Self::UiAspectRatio => d("Ui", "aspectRatio", 1, Ui, "ui_aspect_ratio_"),
             Self::UiAspectRatioWH => d("Ui", "aspectRatioWH", 2, Ui, "ui_aspect_ratio_wh_"),
             Self::UiHtmlAttribute => d("Ui", "htmlAttribute", 2, Ui, "ui_html_attribute_"),
+            Self::UiName => d("Ui", "name", 1, Ui, "ui_name_"),
+            Self::UiStyle => d("Ui", "style", 2, Ui, "ui_style_"),
             // Background namespace
             Self::BackgroundHoverColor => {
                 d("Background", "hoverColor", 1, Ui, "ui_bg_hover_color_")
@@ -2170,6 +2181,7 @@ impl StdlibKernel {
         Self::TaskParallel,
         Self::TaskRun,
         Self::TaskPerform,
+        Self::TaskLazy,
         // Io
         Self::IoReadLine,
         Self::IoWriteStdout,
@@ -2178,6 +2190,7 @@ impl StdlibKernel {
         Self::TimeNow,
         Self::TimeSleep,
         Self::TimeUnixMillis,
+        Self::TimeTimeString,
         // System
         Self::SystemArgs,
         Self::SystemGetenv,
@@ -2502,9 +2515,12 @@ impl StdlibKernel {
         // ── #76 Tier 1 ────────────────────────────────────────────────────────
         Self::UiSquare,
         Self::UiWidescreen,
+        Self::UiCinemascope,
         Self::UiAspectRatio,
         Self::UiAspectRatioWH,
         Self::UiHtmlAttribute,
+        Self::UiName,
+        Self::UiStyle,
         Self::BackgroundHoverColor,
         Self::BackgroundFocusColor,
         Self::BackgroundActiveColor,
@@ -2913,9 +2929,12 @@ impl StdlibKernel {
                 // ── #76 Tier 1 ────────────────────────────────────────────────
                 | Self::UiSquare
                 | Self::UiWidescreen
+                | Self::UiCinemascope
                 | Self::UiAspectRatio
                 | Self::UiAspectRatioWH
                 | Self::UiHtmlAttribute
+                | Self::UiName
+                | Self::UiStyle
                 | Self::BackgroundHoverColor
                 | Self::BackgroundFocusColor
                 | Self::BackgroundActiveColor

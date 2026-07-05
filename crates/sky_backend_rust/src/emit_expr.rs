@@ -1796,6 +1796,36 @@ fn emit_ui_call(
         KernelFn::UiWidescreen => {
             Ok(Some("sky_runtime::ui::helpers::ui_widescreen_()".to_owned()))
         }
+        KernelFn::UiCinemascope => {
+            Ok(Some("sky_runtime::ui::helpers::ui_cinemascope_()".to_owned()))
+        }
+
+        // `Ui.name : String -> Attribute msg`
+        KernelFn::UiName => {
+            let [v_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiName",
+                    detail: format!("Ui.name requires 1 argument, got {}", args.len()),
+                });
+            };
+            let v = emit_expr_at(ctx, v_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_name_({v})")))
+        }
+
+        // `Ui.style : String -> String -> Attribute msg`
+        KernelFn::UiStyle => {
+            let [k_e, v_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiStyle",
+                    detail: format!("Ui.style requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let k = emit_expr_at(ctx, k_e, indent, child, generics)?;
+            let v = emit_expr_at(ctx, v_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_style_({k}, {v})"
+            )))
+        }
 
         // `Ui.aspectRatio : Float -> Attribute msg`
         KernelFn::UiAspectRatio => {

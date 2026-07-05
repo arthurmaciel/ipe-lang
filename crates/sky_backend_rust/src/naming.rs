@@ -567,6 +567,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // `Task.perform` is a 1-arg legacy alias for `Task.run`; both lower to the
         // same runtime function.
         KernelFn::TaskRun | KernelFn::TaskPerform => "task_run",
+        KernelFn::TaskLazy => "task_lazy",
         // ── Io kernels (M5a) ──────────────────────────────────────────────────
         KernelFn::IoReadLine => "io_read_line",
         KernelFn::IoWriteStdout => "io_write_stdout",
@@ -575,6 +576,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::TimeNow => "time_now",
         KernelFn::TimeSleep => "time_sleep",
         KernelFn::TimeUnixMillis => "time_unix_millis",
+        KernelFn::TimeTimeString => "time_time_string",
         // ── System kernels (M5a) ──────────────────────────────────────────────
         KernelFn::SystemArgs => "system_args",
         KernelFn::SystemGetenv => "system_getenv",
@@ -781,9 +783,12 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // ── #76 Tier 1: extended Std.Ui / Font / Background / Border builders ──
         KernelFn::UiSquare => "ui_square_",
         KernelFn::UiWidescreen => "ui_widescreen_",
+        KernelFn::UiCinemascope => "ui_cinemascope_",
         KernelFn::UiAspectRatio => "ui_aspect_ratio_",
         KernelFn::UiAspectRatioWH => "ui_aspect_ratio_wh_",
         KernelFn::UiHtmlAttribute => "ui_html_attribute_",
+        KernelFn::UiName => "ui_name_",
+        KernelFn::UiStyle => "ui_style_",
         KernelFn::BackgroundHoverColor => "ui_bg_hover_color_",
         KernelFn::BackgroundFocusColor => "ui_bg_focus_color_",
         KernelFn::BackgroundActiveColor => "ui_bg_active_color_",

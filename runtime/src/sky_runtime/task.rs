@@ -114,10 +114,13 @@ where
     })
 }
 
+/// `Task.lazy : (() -> Task e a) -> Task e a`.
+/// Sky closures of type `() -> Task e a` are lowered as `FnOnce(()) -> SkyTask`
+/// (unit-arg), so the wrapper must accept `(())` and pass it through.
 pub fn task_lazy<E: Send + 'static, A: Send + 'static>(
-    f: impl FnOnce() -> SkyTask<E, A> + Send + 'static,
+    f: impl FnOnce(()) -> SkyTask<E, A> + Send + 'static,
 ) -> SkyTask<E, A> {
-    Box::pin(async move { f().await })
+    Box::pin(async move { f(()).await })
 }
 
 pub fn task_from_result<E: Send + 'static, A: Send + 'static>(r: SkyResult<E, A>) -> SkyTask<E, A> {
