@@ -246,7 +246,7 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn sky_main() -> SkyTask<()> {
-    ({ let p = RecXY { x: 2, y: 40 }; log_println(string_from_int(((p).x.clone() + (p).y.clone()))) })
+    ({ let p = RecXY { x: 2, y: 40 }; log_println(string_from_int(((p.clone()).x.clone() + (p).y.clone()))) })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
