@@ -13,6 +13,12 @@ Three orthogonal axes classify every way of combining Tasks:
 3. **Arity shape** — heterogeneous (different types, fixed arity) or
    homogeneous (`List` of one type, any length)?
 
+**Form regularity:** every independent row has an *expression* form (a
+combinator — pipeline-composable, first-class) and a *block* form (`do` /
+`parallelDo`, fixed shape spelled out): `map2..5`/`do`,
+`parallel2..5`/`parallelDo`, `sequence`/`do`, `parallel`/`parallelDo`.
+Capability comes from the row; expression-vs-block is spelling.
+
 **Key law: dependent values ⇒ sequential execution.** A step that needs
 another's output cannot run alongside it. So the "dependent + parallel" cells
 are *logically empty*, and the table has six rows, not eight.
@@ -37,6 +43,10 @@ special case.)
   means later tasks are **never started** (their effects don't fire). Use
   when the *effects'* order matters even though the *values* are independent
   (e.g. two appends to one log).
+- **`parallel2..5`** — the expression form of the same row: signature
+  mirrors `map2..5` exactly (execution bit differs); same fail-fast +
+  sibling-abort + leftmost-error semantics as `parallelDo`; tuple form
+  derivable (`parallel2 Tuple.pair ta tb`).
 - **`parallelDo`** — spawn all binds, await all; latency = max, not sum.
   Fail-fast with **sibling abort** (same discipline as `Task.parallel`,
   #65); when several fail, the **leftmost** (first-written) error is
@@ -51,7 +61,7 @@ special case.)
 |---|---|
 | steps that feed each other | `do` / `andThen` |
 | independent steps, effect order matters | `map2..5` (or `do`) |
-| independent steps, want max-latency win | `parallelDo` |
+| independent steps, want max-latency win | `parallel2..5` (expression) / `parallelDo` (block) |
 | a list of same-typed tasks, ordered effects | `sequence` |
 | a list of same-typed tasks, concurrent | `parallel` |
 
@@ -96,10 +106,16 @@ parallelDo          -- hardcoded homogeneous, discard results
     ()
 ```
 
+Compiler enforcement (kind-teacher): a Task-typed `parallelDo` tail is a
+compile error with a rewrite hint ("move the follow-up Task into an
+enclosing `do`"); a pure `do` tail auto-wraps in `Task.succeed` (a Task
+tail passes through). Tail position takes an **expression** — `()` is the
+discard-all result (unit value); `_` is a *pattern* and cannot appear
+there (it belongs left of `<-`, where a bare line already discards).
+
 The rule that survives: **`do` is the sequential column, spelled top-to-
-bottom; concurrency is always explicit — the `parallelDo` keyword or the
-list combinator `Task.parallel`.** One glance tells you the execution
-model.
+bottom; concurrency is always explicit — a `parallel*` combinator or the
+`parallelDo` keyword.** One glance tells you the execution model.
 
 ## Contract notes
 
