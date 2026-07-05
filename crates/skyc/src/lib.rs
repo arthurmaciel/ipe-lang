@@ -1331,6 +1331,139 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
     }
 
+    // -----------------------------------------------------------------------
+    // Regression: PAnything (wildcard lambda param with unconstrained Ty::Var)
+    // -----------------------------------------------------------------------
+
+    /// Regression for `SKY-L0102` (Feature::Polymorphism) on wildcard `_`
+    /// lambda parameters.
+    ///
+    /// Before the fix, `lower_lambda` called `ir_type_from_ty` on the `_`
+    /// param's type.  When the type was still an unconstrained `Ty::Var` (e.g.
+    /// the continuation of a `Task.andThen` after `Task.fail` where the ok-type
+    /// is never forced), `ir_type_from_ty` returned `Err(unsupported(…,
+    /// Feature::Polymorphism))` and the pipeline aborted.
+    ///
+    /// The fix routes `PAnything` params through `ir_type_from_ty_json` which
+    /// maps `Ty::Var → IrType::Json` instead of failing.
+    ///
+    /// Source mirrors the failing pattern from `examples/14-task-demo`.
+    #[test]
+    fn panything_wildcard_lambda_compiles_without_polymorphism_error() {
+        const SRC: &str = "\
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Sky.Core.Error as Error exposing (Error)
+import Std.Log exposing (println)
+
+main =
+    let
+        result =
+            Task.run
+                (Task.fail (Error.unexpected \"intentional\")
+                    |> Task.andThen (\\_ -> Task.succeed \"unreachable\"))
+    in
+        case result of
+            Ok val -> println val
+            Err e  -> println (Error.toString e)
+";
+
+        let runtime = resolve_runtime();
+        if runtime.is_err() {
+            // Runtime not present in this environment — skip rather than fail.
+            return;
+        }
+        let Ok(runtime) = runtime else { return };
+
+        let dir = std::env::temp_dir().join("skyc_panything_regression");
+        let _ = fs::remove_dir_all(&dir);
+        let entry = dir.join("Main.sky");
+        let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
+        assert!(created.is_ok(), "write source: {created:?}");
+
+        let out = dir.join("out");
+        let result = build(&entry, &out, &runtime);
+        assert!(
+            result.is_ok(),
+            "wildcard lambda with unconstrained type must not fire SKY-L0102: {result:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // Regression: Task.run elision — sky_main must return SkyTask<A>
+    // -----------------------------------------------------------------------
+
+    /// Regression for the `Task.run` elision in `emit_func`.
+    ///
+    /// Before the fix, `main = someTask |> Task.run` lowered to:
+    ///   `func.ret  = IrType::Result(Error, A)`
+    ///   `func.body = Call(TaskRun, [inner])`
+    /// and `emit_func` emitted `task_run(inner)` which returns
+    /// `SkyResult<E, A>`.  The epilogue calls `block_on(sky_main())`, which
+    /// requires `SkyTask<A>`.  This caused an `E0308 mismatched types` Rust
+    /// compile error.
+    ///
+    /// The fix detects the `Call(TaskRun|TaskPerform, [inner])` body in
+    /// `sky_main`, emits `inner` directly, and rewrites the return type from
+    /// `Result(Error, A)` → `Task(A)`.
+    ///
+    /// This test verifies that the emitted `src/main.rs` contains
+    /// `fn sky_main() -> SkyTask<` and does NOT contain `task_run(` at the
+    /// `sky_main` definition site.
+    #[test]
+    fn task_run_main_emits_skytask_not_skyresult() {
+        // A minimal Sky.Cli-style program: main = task |> Task.run
+        // The shape that previously caused E0308 in the emitted Rust.
+        const SRC: &str = "\
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Std.Log exposing (println)
+
+main =
+    println \"hello from task run\" |> Task.run
+";
+
+        let runtime = resolve_runtime();
+        if runtime.is_err() {
+            return;
+        }
+        let Ok(runtime) = runtime else { return };
+
+        let dir = std::env::temp_dir().join("skyc_taskrun_elision_regression");
+        let _ = fs::remove_dir_all(&dir);
+        let entry = dir.join("Main.sky");
+        let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
+        assert!(created.is_ok(), "write source: {created:?}");
+
+        let out = dir.join("out");
+        let built = build(&entry, &out, &runtime);
+        assert!(built.is_ok(), "Task.run main must compile: {built:?}");
+
+        // Read the emitted main.rs and verify the signature.
+        let main_rs = out.join("src").join("main.rs");
+        let emitted =
+            fs::read_to_string(&main_rs).expect("emitted main.rs must exist after build");
+
+        assert!(
+            emitted.contains("fn sky_main() -> SkyTask<"),
+            "sky_main must return SkyTask<…>, got signature region:\n{}",
+            emitted
+                .lines()
+                .filter(|l| l.contains("sky_main") || l.contains("SkyTask") || l.contains("SkyResult"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        assert!(
+            !emitted.contains("fn sky_main() -> SkyResult"),
+            "sky_main must NOT return SkyResult (Task.run elision missing)"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// When no sky.toml exists in any parent directory, returns None.
     #[test]
     fn find_manifest_returns_none_when_absent() {
