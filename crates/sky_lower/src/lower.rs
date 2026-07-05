@@ -296,7 +296,9 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // M7: nullary plain types (`Length`, `Color`, etc.) trivially contain no
         // functions.  `LiveReq` is an opaque handle with no `Fn` fields.
         | IrType::UiPlain(_)
-        | IrType::LiveReq => false,
+        | IrType::LiveReq
+        // `Order` (LT/EQ/GT) is a primitive leaf — no embedded function.
+        | IrType::Order => false,
         // `LiveRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Sky `Fn`).
         IrType::LiveRoute(page) => ir_contains_fun(page),
@@ -1379,6 +1381,11 @@ pub struct BuiltinCtors {
     pub sql_null: Symbol,
     pub set_field: Symbol,
     pub omit_field: Symbol,
+    // ── Order ADT (#123) ─────────────────────────────────────────────────────
+    pub order: Symbol,
+    pub lt: Symbol,
+    pub eq: Symbol,
+    pub gt: Symbol,
 }
 
 /// The widest parameter-pattern count across the module's top-level bindings —
@@ -1554,7 +1561,15 @@ impl<'a> Lowerer<'a> {
         ctor_arity.insert((prelude_home.clone(), builtins.sql_money), 1); // SqlMoney(String) — "ISO_CODE AMOUNT"
         ctor_arity.insert((prelude_home.clone(), builtins.sql_null), 1); // SqlNull(SqlValue)
         ctor_arity.insert((prelude_home.clone(), builtins.set_field), 1); // SetField(SqlValue)
-        ctor_arity.insert((prelude_home, builtins.omit_field), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.omit_field), 0);
+        // ── Order ADT (#123) ─────────────────────────────────────────────────
+        enum_variants.insert(
+            (prelude_home.clone(), builtins.order),
+            vec![builtins.lt, builtins.eq, builtins.gt],
+        );
+        ctor_arity.insert((prelude_home.clone(), builtins.lt), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.eq), 0);
+        ctor_arity.insert((prelude_home, builtins.gt), 0);
 
         Self {
             m,
@@ -2330,6 +2345,9 @@ impl<'a> Lowerer<'a> {
                 "Int" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
+                // `Order` is the built-in three-way comparison result type (#123).
+                // Backed by `sky_runtime::SkyOrder` (repr(u8) enum: LT/EQ/GT).
+                "Order" => Ok(IrType::Order),
                 // `Error` is Sky's fixed error-channel type, backed by `SkyError =
                 // String` in the runtime.  Merged with `String` here since they
                 // share the same IR representation (`IrType::Str`).
@@ -2750,6 +2768,9 @@ impl<'a> Lowerer<'a> {
                 "Int" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
+                // `Order` is the built-in three-way comparison result type (#123).
+                // Backed by `sky_runtime::SkyOrder` (repr(u8) enum: LT/EQ/GT).
+                "Order" => Ok(IrType::Order),
                 // `Error` is Sky's fixed error-channel type, backed by `SkyError =
                 // String` in the runtime.  Lambda parameters typed as `Error` (e.g.
                 // the `e` in `\e -> ...` when `onError`/`mapError` pins the handler)
@@ -4424,6 +4445,8 @@ impl<'a> Lowerer<'a> {
                 // ── Basics numerics (#115) — arity 2 ────────────────────────
                 | KernelFn::BasicsMin
                 | KernelFn::BasicsMax
+                // `compare : comparable -> comparable -> Order` — arity 2 (#123)
+                | KernelFn::BasicsCompare
                 // ── end Basics numerics (#115) ──────────────────────────────
                 // ── Dict arity-2 ─────────────────────────────────────────────
                 | KernelFn::DictGet
@@ -5261,6 +5284,8 @@ impl<'a> Lowerer<'a> {
                     ("Basics", "sqrt")   => Ok(Callee::Kernel(KernelFn::BasicsSqrt)),
                     ("Basics", "min")    => Ok(Callee::Kernel(KernelFn::BasicsMin)),
                     ("Basics", "max")    => Ok(Callee::Kernel(KernelFn::BasicsMax)),
+                    // `compare : comparable -> comparable -> Order` (#123)
+                    ("Basics", "compare") => Ok(Callee::Kernel(KernelFn::BasicsCompare)),
                     // ── end Basics numerics (#115) ────────────────────────────
                     // ── Error kernels (Sky.Core.Error — minimal `Error = String`
                     //    slice, #86) ─────────────────────────────────────────
@@ -6647,6 +6672,11 @@ mod tests {
         let sql_null = interner.intern("SqlNull").unwrap();
         let set_field = interner.intern("SetField").unwrap();
         let omit_field = interner.intern("OmitField").unwrap();
+        // ── Order ADT (#123) ─────────────────────────────────────────────────
+        let order = interner.intern("Order").unwrap();
+        let lt = interner.intern("LT").unwrap();
+        let eq = interner.intern("EQ").unwrap();
+        let gt = interner.intern("GT").unwrap();
 
         // Pre-intern all kernel (qualifier, name) strings in ALL order.
         // Must happen before Lowerer borrows interner immutably.
@@ -6680,6 +6710,11 @@ mod tests {
             sql_null,
             set_field,
             omit_field,
+            // ── Order ADT (#123) ─────────────────────────────────────────────
+            order,
+            lt,
+            eq,
+            gt,
         };
         let module = canon::Module {
             name: vec![],

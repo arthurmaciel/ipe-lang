@@ -180,6 +180,7 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
             parts.push(ir_type_name(interner, ret));
             parts.join(" -> ")
         }
+        IrType::Order => "Order".to_owned(),
     }
 }
 
@@ -907,6 +908,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HttpStreamOpen => "HttpStream.open",
         KernelFn::HttpStreamForEachChunk => "HttpStream.forEachChunk",
         KernelFn::HttpStreamClose => "HttpStream.close",
+        KernelFn::BasicsCompare => "Basics.compare",
     }
 }
 
