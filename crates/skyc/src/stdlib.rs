@@ -219,6 +219,23 @@ const SKY_TEST: &str = include_str!("../stdlib/Sky/Test.sky");
 /// Unblocks `38-composite-ui-multibackend` (N0004: Std.Live.Head).
 const STD_LIVE_HEAD: &str = include_str!("../stdlib/Std/Live/Head.sky");
 
+/// `Std.Ui.Responsive` — device-class helpers for responsive layout branching.
+///
+/// Pure Sky source; no kernel calls.  Ported verbatim from
+/// `../sky/sky-stdlib/Std/Ui/Responsive.sky`.
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+/// Unblocks `37-composite-live-shop` (N0004: Std.Ui.Responsive).
+const STD_UI_RESPONSIVE: &str = include_str!("../stdlib/Std/Ui/Responsive.sky");
+
+/// `Std.Ui.Chart` — pure-Sky charting helpers (line, area, bar, sparkline, heatmap).
+///
+/// Depends on `Ui.colorCss` (kernel `UiColorCss`) to convert `Color` values to
+/// CSS strings inside SVG attributes.  Ported verbatim from
+/// `../sky/sky-stdlib/Std/Ui/Chart.sky`.
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+/// Unblocks `38-composite-ui-multibackend` (N0004: Std.Ui.Chart).
+const STD_UI_CHART: &str = include_str!("../stdlib/Std/Ui/Chart.sky");
+
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
 /// Disjoint from [`MODULES`] (parse fixtures) and from `sky_canon`'s
@@ -243,6 +260,14 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Std.Live.Head",
         source: STD_LIVE_HEAD,
+    },
+    CompiledStdModule {
+        dotted: "Std.Ui.Responsive",
+        source: STD_UI_RESPONSIVE,
+    },
+    CompiledStdModule {
+        dotted: "Std.Ui.Chart",
+        source: STD_UI_CHART,
     },
 ];
 
