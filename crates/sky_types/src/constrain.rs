@@ -239,6 +239,25 @@ struct Builtins {
     /// `"label"` — the label field of the `Ui.button` config record.
     /// Typed as `Element msg`.
     btn_f_label: Symbol,
+    // ── Std.Ui.Input type constructor + cfg field symbols (#124) ─────────────
+    /// `"Label"` — the `Label msg` type constructor from `Std.Ui.Input`.
+    /// Lowered to `IrType::Ui { ctor: UiCtor::Label, msg }`.
+    input_label_con: Symbol,
+    /// `"Placeholder"` — the `Placeholder msg` type constructor from `Std.Ui.Input`.
+    /// Lowered to `IrType::Ui { ctor: UiCtor::Placeholder, msg }`.
+    input_placeholder_con: Symbol,
+    /// `"onChange"` — the onChange field of Input text/multiline/password cfg records.
+    input_f_on_change: Symbol,
+    /// `"text"` — the text field of text/multiline/email/username/search/password cfg records.
+    input_f_text: Symbol,
+    /// `"placeholder"` — the placeholder field of text-variant cfg records.
+    input_f_placeholder: Symbol,
+    /// `"checked"` — the checked field of the checkbox cfg record.
+    input_f_checked: Symbol,
+    /// `"icon"` — the icon field of the checkbox cfg record.
+    input_f_icon: Symbol,
+    /// `"spellcheck"` — the spellcheck field of the multiline cfg record.
+    input_f_spellcheck: Symbol,
 }
 
 impl Builtins {
@@ -330,6 +349,15 @@ impl Builtins {
             // Ui.button cfg field names.
             btn_f_on_press: interner.intern("onPress")?,
             btn_f_label: interner.intern("label")?,
+            // Std.Ui.Input type constructors + cfg field names (#124).
+            input_label_con: interner.intern("Label")?,
+            input_placeholder_con: interner.intern("Placeholder")?,
+            input_f_on_change: interner.intern("onChange")?,
+            input_f_text: interner.intern("text")?,
+            input_f_placeholder: interner.intern("placeholder")?,
+            input_f_checked: interner.intern("checked")?,
+            input_f_icon: interner.intern("icon")?,
+            input_f_spellcheck: interner.intern("spellcheck")?,
         })
     }
 
@@ -2467,6 +2495,25 @@ impl<'a> Builder<'a> {
             name: self.builtins.html_con,
             args: vec![m],
         };
+        // `label_t(msg)` — `Label msg` from `Std.Ui.Input`.
+        // Lowered to `IrType::Ui { ctor: UiCtor::Label, msg }` via the `"Label"`
+        // arm in `sky_lower::ir_type_from_ty`. The type carries the module path
+        // `[input_con]` so it doesn't collide with any user `type Label`.
+        // (We use an empty module here because `ir_type_from_ty` routes all
+        // unqualified `"Label"` cons to `UiCtor::Label` regardless — the name is
+        // reserved in the kernel namespace and never appears as a user type.)
+        let label_t = |m: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.input_label_con,
+            args: vec![m],
+        };
+        // `placeholder_t(msg)` — `Placeholder msg` from `Std.Ui.Input`.
+        // Lowered to `IrType::Ui { ctor: UiCtor::Placeholder, msg }`.
+        let placeholder_t = |m: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.input_placeholder_con,
+            args: vec![m],
+        };
         // Nullary Std.Ui plain types (`Length` / `Color`) — lowered to
         // `IrType::UiPlain(UiPlain::Length | UiPlain::Color)`.
         let length = || Ty::Con {
@@ -3699,6 +3746,98 @@ impl<'a> Builder<'a> {
             K::UiDescHeading => fun(int(), description()),
             K::UiDescLabel => fun(string(), description()),
 
+            // ── Std.Ui.Input (#124) ──────────────────────────────────────────
+            //
+            // Label constructors: `List (Attribute msg) -> Element msg -> Label msg`
+            K::InputLabelAbove | K::InputLabelBelow | K::InputLabelLeft | K::InputLabelRight => {
+                fun(list(attr(var(0))), fun(elem_t(var(0)), label_t(var(0))))
+            }
+            // `Input.labelHidden : String -> Label msg`
+            K::InputLabelHidden => fun(string(), label_t(var(0))),
+            // `Input.placeholder : List (Attribute msg) -> Element msg -> Placeholder msg`
+            K::InputPlaceholder => {
+                fun(list(attr(var(0))), fun(elem_t(var(0)), placeholder_t(var(0))))
+            }
+            // `Input.text / email / username / search / currentPassword / newPassword`:
+            //   List (Attribute msg)
+            //   -> { onChange : String -> msg
+            //      , text : String
+            //      , placeholder : Maybe (Placeholder msg)
+            //      , label : Label msg
+            //      }
+            //   -> Element msg
+            K::InputText
+            | K::InputEmail
+            | K::InputUsername
+            | K::InputSearch
+            | K::InputCurrentPassword
+            | K::InputNewPassword => {
+                let cfg_rec = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.input_f_on_change, fun(string(), var(0)));
+                        m.insert(self.builtins.input_f_text, string());
+                        m.insert(
+                            self.builtins.input_f_placeholder,
+                            maybe(placeholder_t(var(0))),
+                        );
+                        m.insert(self.builtins.btn_f_label, label_t(var(0)));
+                        m
+                    },
+                    RowTail::Closed,
+                );
+                fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
+            }
+            // `Input.multiline`:
+            //   List (Attribute msg)
+            //   -> { onChange : String -> msg
+            //      , text : String
+            //      , placeholder : Maybe (Placeholder msg)
+            //      , label : Label msg
+            //      , spellcheck : Bool
+            //      }
+            //   -> Element msg
+            K::InputMultiline => {
+                let cfg_rec = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.input_f_on_change, fun(string(), var(0)));
+                        m.insert(self.builtins.input_f_text, string());
+                        m.insert(
+                            self.builtins.input_f_placeholder,
+                            maybe(placeholder_t(var(0))),
+                        );
+                        m.insert(self.builtins.btn_f_label, label_t(var(0)));
+                        m.insert(self.builtins.input_f_spellcheck, bool_ty());
+                        m
+                    },
+                    RowTail::Closed,
+                );
+                fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
+            }
+            // `Input.checkbox`:
+            //   List (Attribute msg)
+            //   -> { onChange : Bool -> msg
+            //      , icon : Bool -> Element msg
+            //      , checked : Bool
+            //      , label : Label msg
+            //      }
+            //   -> Element msg
+            K::InputCheckbox => {
+                let cfg_rec = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.input_f_on_change, fun(bool_ty(), var(0)));
+                        m.insert(self.builtins.input_f_icon, fun(bool_ty(), elem_t(var(0))));
+                        m.insert(self.builtins.input_f_checked, bool_ty());
+                        m.insert(self.builtins.btn_f_label, label_t(var(0)));
+                        m
+                    },
+                    RowTail::Closed,
+                );
+                fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
+            }
+
             // ── Json.Decode (17) — mirrors the already-relocated `Db.Decode`
             //    shapes (function-first `map`/`andThen`; `dec(a)` is the opaque
             //    `Decoder a`). Primitives are arity-0 bare decoders. ──
@@ -4924,6 +5063,21 @@ mod registry_phase_c_tests {
             K::UiDescLiveAssertive,
             K::UiDescHeading,
             K::UiDescLabel,
+            // ── Std.Ui.Input (#124) ───────────────────────────────────────────
+            K::InputLabelAbove,
+            K::InputLabelBelow,
+            K::InputLabelLeft,
+            K::InputLabelRight,
+            K::InputLabelHidden,
+            K::InputPlaceholder,
+            K::InputText,
+            K::InputMultiline,
+            K::InputEmail,
+            K::InputUsername,
+            K::InputSearch,
+            K::InputCurrentPassword,
+            K::InputNewPassword,
+            K::InputCheckbox,
         ]
     };
 

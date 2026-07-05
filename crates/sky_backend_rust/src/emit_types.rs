@@ -154,6 +154,8 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
                 UiCtor::UiAttribute => format!("sky_runtime::ui::element::Attribute<{m}>"),
                 UiCtor::HtmlAttribute => format!("sky_runtime::html::Attribute<{m}>"),
                 UiCtor::HtmlEvent => format!("sky_runtime::html::Event<{m}>"),
+                UiCtor::Label => format!("sky_runtime::ui::input::Label<{m}>"),
+                UiCtor::Placeholder => format!("sky_runtime::ui::input::Placeholder<{m}>"),
             }
         }
         IrType::UiPlain(plain) => match plain {
