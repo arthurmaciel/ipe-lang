@@ -180,7 +180,7 @@ fn synthesises_generic_struct_and_signatures() -> DResult<()> {
     );
     // `unwrap`'s param renders `RecValue<T1>` despite its source var being `b`.
     assert!(
-        out.contains("pub fn main_unwrap<T1>(r: RecValue<T1>) -> T1 {"),
+        out.contains("pub fn main_unwrap<T1: Clone>(r: RecValue<T1>) -> T1 {"),
         "unwrap signature not rendered with generic struct:\n{out}"
     );
     // Literal construction resolves to the struct name; Rust infers the arg.
