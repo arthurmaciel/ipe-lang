@@ -1,0 +1,33 @@
+module Main exposing (main)
+
+-- c05 (#130 follow-up). A `StreamWriter` handle captured by a `Task.andThen`
+-- lambda and FORWARDED as an argument (not called) — the exact shape of
+-- examples/30-sse-server-demo and 32-sse-relay.
+--
+-- Pre-fix: `clone_class(IrType::StreamWriter)` returned `NonClone`, so the
+-- forwarding capture tripped SKY-L0126 even though the runtime type is
+-- `#[derive(Clone, Copy)]` (an i64 id wrapper, server_stream.rs:38).
+--
+-- Fix: StreamWriter classifies as `CopyLeaf` — bare capture is sound.
+-- This fixture asserts skyc exit-0; the cargo/runtime layer is covered by
+-- the 30-sse-server-demo sweep entry.
+
+import Sky.Http.Server as Server
+import Sky.Http.Server.Stream as Stream
+import Sky.Core.Task as Task
+
+emitTick : Stream.StreamWriter -> Int -> Task Error ()
+emitTick writer n =
+    Stream.emit ("event: tick\ndata: " ++ String.fromInt n ++ "\n\n") writer
+
+handler : Server.Request -> Task Error Server.Response
+handler _ =
+    Stream.stream "text/event-stream"
+        (\writer ->
+            emitTick writer 1
+                |> Task.andThen (\_ -> emitTick writer 2)
+                |> Task.andThen (\_ -> Stream.emit "event: done\ndata: bye\n\n" writer)
+        )
+
+main =
+    Server.listen 8099 [ Server.get "/events" handler ]

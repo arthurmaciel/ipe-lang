@@ -1,4 +1,4 @@
-//! #130 seal — four residual CopyLeaf / depth / T4-hoist / T7-close holes from
+//! #130 seal — four residual `CopyLeaf` / depth / T4-hoist / T7-close holes from
 //! the post-#121 gate (ipe-121-postmerge-seal-round.md).
 //!
 //! Fixes:
@@ -7,7 +7,7 @@
 //!   for named composite types (`IrType::Record` / `IrType::Enum`).  Emitted
 //!   Rust structs and enums derive `Clone` but NOT `Copy`, so `CopyLeaf` was
 //!   an active wrong claim that produced E0525.
-//! * **Fix 2** — `rewrite_captured_clones` depth guard: the NonClone
+//! * **Fix 2** — `rewrite_captured_clones` depth guard: the `NonClone`
 //!   callee-position exemption fires only at `depth == 0`.  At depth > 0 the
 //!   symbol is consumed by an inner `move` closure → outer `FnOnce` → E0525.
 //! * **Fix 3 T4** — `eta_expand_partial` complex-arg hoist: non-Var supplied
@@ -119,8 +119,8 @@ fn c01_enum_capture_fix1() {
 
 /// `List.map (\dx -> translate origin dx) [1,2,3]` — `origin : Point` is an
 /// all-Int record alias.  Pre-fix: `clone_class(Record{fields:[Int,Int]})`
-/// returned `CopyLeaf` (all fields CopyLeaf); emitted Rust struct derives
-/// `Clone` but NOT `Copy` → bare capture → FnOnce → E0525 on second element.
+/// returned `CopyLeaf` (all fields `CopyLeaf`); emitted Rust struct derives
+/// `Clone` but NOT `Copy` → bare capture → `FnOnce` → `E0525` on second element.
 /// Fix 1: `clone_class_named_composite` floors to `CloneOk` for named types.
 /// Expected output: "1,5 2,5 3,5".
 #[test]
@@ -167,7 +167,7 @@ fn c02_record_capture_fix1() {
 /// `let f = mk (String.append base suffix) in f "!" ; f "?"` — the supplied
 /// arg `String.append base suffix` is a complex expression (not a bare Var).
 /// Pre-fix: the expr was inlined into the eta-lambda body; `base` and `suffix`
-/// (both String, CloneOk) were captured bare → FnOnce → E0525 on second call.
+/// (both String, `CloneOk`) were captured bare → `FnOnce` → `E0525` on second call.
 /// Fix 3 T4: hoist to `let __sky_cap_0 = <expr>` outside the lambda; lambda
 /// captures `CloneVar(__sky_cap_0)` → re-callable.
 /// Expected output: "hello! hello?".
@@ -217,7 +217,7 @@ fn c13_complex_arg_hoist_t4() {
 
 // ── c14 — nested-lambda NonClone callee gate (Fix 2) ─────────────────────────
 
-/// `composed f = \p -> (\x -> f x) p` — `f : Int -> Int` (NonClone) is used
+/// `composed f = \p -> (\x -> f x) p` — `f : Int -> Int` (`NonClone`) is used
 /// as the direct callee of `Apply` INSIDE a nested lambda (`\x -> f x`),
 /// which is at depth 1 relative to the outer lambda `\p -> ...`.
 ///
@@ -232,5 +232,41 @@ fn c14_nested_lambda_noncopy_gate() {
         "i130_nested_lambda_noncopy",
         "i130_nested_lambda_noncopy_gate",
         sky_diagnostics::SKY_L0126,
+    );
+}
+
+// ── c05 — StreamWriter capture-forward (clone_class opaque audit) ────────────
+
+/// `Stream.stream (\writer -> emitTick writer 1 |> Task.andThen (\_ ->
+/// emitTick writer 2))` — the exact shape of examples/30-sse-server-demo.
+///
+/// Pre-fix: `clone_class(IrType::StreamWriter)` said `NonClone`, so
+/// forwarding the captured handle as an argument (not calling it) tripped
+/// SKY-L0126.  The runtime type is `#[derive(Clone, Copy)]`
+/// (`server_stream.rs:38`) — the classification was an active wrong claim.
+/// Same audit flipped ServerRequest/ServerResponse/ServerRoute/ServerCookie/
+/// `HttpRequest` to `CloneOk` (all derive `Clone`).
+///
+/// skyc must exit 0.  The cargo/runtime layer is covered by the
+/// 30-sse-server-demo sweep entry (a server fixture can't run-to-exit here).
+#[test]
+fn c05_streamwriter_capture_forward() {
+    let root = repo_root();
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join("i130_streamwriter_capture")
+        .join("Main.sky");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i130_streamwriter_capture");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return; // runtime unavailable — skip silently rather than fail
+    };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "StreamWriter capture-forward must pass skyc (was SKY-L0126): {:?}",
+        built.err()
     );
 }
