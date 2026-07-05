@@ -5047,11 +5047,40 @@ impl<'a> Lowerer<'a> {
                     })
                 }
             }
-            canon::Expr_::Binop { func, lhs, rhs, .. } => Ok(Expr::BinOp {
-                op: self.binop(*func, e.span)?,
-                lhs: Box::new(self.lower_expr(lhs)?),
-                rhs: Box::new(self.lower_expr(rhs)?),
-            }),
+            canon::Expr_::Binop { func, lhs, rhs, .. } => {
+                // `++` is `Appendable a => a -> a -> a`. The type checker has
+                // already pinned the result type to `String` or `List _`;
+                // dispatch to the appropriate backend here rather than routing
+                // through `binop()` so the single function stays
+                // String-specific.
+                if self.resolve(*func)? == "append" {
+                    let lowered_lhs = self.lower_expr(lhs)?;
+                    let lowered_rhs = self.lower_expr(rhs)?;
+                    let is_list = self.region_ty(e.span).is_some_and(|ty| {
+                        matches!(ty, Ty::Con { name, args, .. }
+                            if args.len() == 1
+                                && self.interner.resolve(*name) == Some("List"))
+                    });
+                    if is_list {
+                        Ok(Expr::Call {
+                            callee: Callee::Kernel(KernelFn::ListAppend),
+                            args: vec![lowered_lhs, lowered_rhs],
+                        })
+                    } else {
+                        Ok(Expr::BinOp {
+                            op: BinOp::Append,
+                            lhs: Box::new(lowered_lhs),
+                            rhs: Box::new(lowered_rhs),
+                        })
+                    }
+                } else {
+                    Ok(Expr::BinOp {
+                        op: self.binop(*func, e.span)?,
+                        lhs: Box::new(self.lower_expr(lhs)?),
+                        rhs: Box::new(self.lower_expr(rhs)?),
+                    })
+                }
+            }
             canon::Expr_::Call(callee, args) => self.lower_call(callee, args, e.span),
             canon::Expr_::Lambda(params, body) => self.lower_lambda(params, body, e.span),
             canon::Expr_::Let(bindings, body) => self.lower_let(bindings, body),
@@ -8125,8 +8154,10 @@ impl<'a> Lowerer<'a> {
             "ge" => Ok(BinOp::Ge),
             "and" => Ok(BinOp::And),
             "or" => Ok(BinOp::Or),
-            // `++` is string append; the type checker pinned both operands to
-            // `String`, so the backend's `format!` concatenation is sound.
+            // `++` (String only) — the Binop arm in `lower_expr` intercepts
+            // "append" first and routes `List _` operands to
+            // `KernelFn::ListAppend`; this arm is only reached when the solved
+            // type is `String`.
             "append" => Ok(BinOp::Append),
             // The remaining list operator (`::` → `cons`) awaits the list type.
             // [SKY-L0101, feature: binops]
