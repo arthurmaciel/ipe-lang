@@ -1,0 +1,6 @@
+skyc: internal compiler error[SKY-I0001]: internal compiler error
+  = note: unknown type constructor `Token`
+  = note: this is a bug in Sky, please report it
+  = note: I'm not sure what went wrong here — sorry about that. This is likely a gap in the Sky Rust compiler. Please report it (with this source + `skyc --version`) at: https://codeberg.org/OWNER/sky-rust/issues
+  = note: run `skyc explain SKY-I0001` for more information
+

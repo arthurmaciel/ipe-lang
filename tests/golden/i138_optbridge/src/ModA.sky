@@ -1,0 +1,14 @@
+module ModA exposing (Token(..), makeA, lenA)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.String as String
+
+type Token = TokA String
+
+makeA : Token
+makeA = TokA "aaaa"
+
+lenA : Token -> Int
+lenA t =
+    case t of
+        TokA s -> String.length s

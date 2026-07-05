@@ -1,0 +1,8 @@
+module ModB exposing (Token(..), makeB)
+
+import Sky.Core.Prelude exposing (..)
+
+type Token = TokB String
+
+makeB : Token
+makeB = TokB "b"

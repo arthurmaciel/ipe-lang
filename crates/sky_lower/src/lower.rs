@@ -8295,19 +8295,20 @@ impl<'a> Lowerer<'a> {
         // alias head, or a constructor + catch-all) takes the FLAT refutable
         // `Match::new_flat` path, whose backstop is structural.
         // Redundancy demotion (batch-xm): SKY-T0011 is a WARNING, so arms AFTER
-        // an irrefutable catch-all (`_` / variable head) can now reach lowering.
-        // They are provably unreachable — the exhaustiveness pass already warned
-        // — so DROP them here (semantics-preserving; the Go reference compiles
-        // the same shape). Without the truncation `Match::new_flat`'s structural
+        // an irrefutable catch-all can now reach lowering. They are provably
+        // unreachable — the exhaustiveness pass already warned — so DROP them
+        // here (semantics-preserving; the Go reference compiles the same
+        // shape). Without the truncation `Match::new_flat`'s structural
         // backstop sees a non-trailing catch-all and raises a CompilerBug.
+        //
+        // #136 seal fix: use the canonical `is_irrefutable` predicate, not a
+        // hand-rolled `PAnything | PVar` match — the hand-rolled form missed
+        // `PAlias` over an irrefutable inner (`_ as w` / `v as w`), which the
+        // exhaustiveness pass treats as a catch-all, so post-alias arms
+        // survived to `Match::new_flat` and ICE'd on well-typed source.
         let live_end = branches
             .iter()
-            .position(|br| {
-                matches!(
-                    br.pat.value,
-                    canon::Pattern_::PAnything | canon::Pattern_::PVar(_)
-                )
-            })
+            .position(|br| br.pat.value.is_irrefutable())
             .map_or(branches.len(), |i| i + 1);
         // `live_end <= branches.len()` by construction; `get` keeps the
         // no-panic lint satisfied with the full slice as the impossible-miss

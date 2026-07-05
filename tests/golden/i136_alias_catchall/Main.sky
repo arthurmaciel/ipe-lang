@@ -1,0 +1,16 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.String as String
+
+type Color = Red | Green | Blue
+
+label : Color -> String
+label c =
+    case c of
+        Red -> "red"
+        other as w -> "other"
+        Blue -> "blue"
+
+main =
+    println (label Green)
