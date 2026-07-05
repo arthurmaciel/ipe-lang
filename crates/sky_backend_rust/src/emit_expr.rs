@@ -502,10 +502,26 @@ fn emit_db_call(
     }
 
     // Projection snippets.
-    // `project_params(s)` — `List SqlValue` → `Vec<SqlParam>`
+    //
+    // `project_params(s)` — `List a` → `Vec<SqlParam>`
+    //
+    // Uses `sky_runtime::db::SqlParam::from` so the projection works for ANY
+    // Sky type that implements `From<T> for SqlParam`:
+    //   • `String` / `i64` / `f64` / `bool` — `From` impls live in the runtime
+    //     (`sky_runtime::db`).
+    //   • `StdDbSqlValue` (generated) — `From` impl emitted by
+    //     `sky_backend_rust::project::emit_db_projection_impls`.
+    // This mirrors `exec : Db -> String -> List a -> Task Error Int` (polymorphic
+    // `List a`, not fixed to `List SqlValue`).
     let project_params = |s: &str| {
+        // Empty-list fast path: `Vec::new()` has no elements, so Rust cannot
+        // infer which `From<T> for SqlParam` impl to use — the turbofish form
+        // names the element type explicitly and skips the map/collect entirely.
+        if s == "Vec::new()" {
+            return "Vec::<sky_runtime::db::SqlParam>::new()".to_string();
+        }
         format!(
-            "({s}).into_iter().map(|__p| __p.into_sql_param())\
+            "({s}).into_iter().map(sky_runtime::db::SqlParam::from)\
              .collect::<Vec<_>>()"
         )
     };
@@ -517,6 +533,8 @@ fn emit_db_call(
         )
     };
     // `project_where(s)` — `List (String, SqlValue)` → `Vec<(String, SqlParam)>`
+    // `SqlValue` elements here are always the concrete generated type (not
+    // polymorphic), so we keep the explicit `into_sql_param()` call.
     let project_where = |s: &str| {
         format!(
             "({s}).into_iter().map(|(__k, __v)| (__k, __v.into_sql_param()))\

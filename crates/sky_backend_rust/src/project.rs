@@ -1019,6 +1019,11 @@ fn emit_db_projection_impls(ctx: &EmitCtx) -> DResult<String> {
     Ok(format!(
         "\
 impl {sv} {{
+    /// Convert this `SqlValue` into the runtime-nameable `SqlParam`.
+    /// Used by `into_field_param` and by legacy call sites that name
+    /// this method directly.  New call sites should prefer the `From`
+    /// impl below so the emitter can use the uniform `SqlParam::from`
+    /// projection for polymorphic `List a` params.
     pub fn into_sql_param(self) -> sky_runtime::db::SqlParam {{
         match self {{
             Self::SqlString(v) => sky_runtime::db::SqlParam::Text(v),
@@ -1031,6 +1036,15 @@ impl {sv} {{
             Self::SqlMoney(v) => sky_runtime::db::SqlParam::Text(v),
             Self::SqlNull(_) => sky_runtime::db::SqlParam::Null,
         }}
+    }}
+}}
+/// Allow `SqlParam::from(sql_value)` so the emitter can use the same
+/// `sky_runtime::db::SqlParam::from` projection for ALL element types in
+/// the polymorphic `Db.exec`/`query` params list (`List a` where `a` may
+/// be `String`, `Int`, `Float`, `Bool`, or `SqlValue`).
+impl From<{sv}> for sky_runtime::db::SqlParam {{
+    fn from(v: {sv}) -> Self {{
+        v.into_sql_param()
     }}
 }}
 impl {sf} {{
