@@ -10,6 +10,7 @@ module Sky.Core.Task exposing
     , mapError, onError
     , fromResult, andThenResult
     , sequence, parallel
+    , lazy
     , run
     )
 
@@ -60,6 +61,12 @@ sequence = Ffi.kernel "Task_sequence"
 
 parallel : List (Task Error a) -> Task Error (List a)
 parallel = Ffi.kernel "Task_parallel"
+
+
+-- ── Deferred evaluation ──────────────────────────────────────────────────────
+
+lazy : (() -> Task Error a) -> Task Error a
+lazy = Ffi.kernel "Task_lazy"
 
 
 -- ── Execution ────────────────────────────────────────────────────────────────
