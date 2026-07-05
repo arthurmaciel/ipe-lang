@@ -117,6 +117,7 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Int(_) => TokenKind::Int,
         Tok::Float(_) => TokenKind::Float,
         Tok::Str(_) => TokenKind::Str,
+        Tok::TripleStr(_) => TokenKind::Str,
         Tok::Char(_) => TokenKind::Char,
     }
 }
@@ -1037,6 +1038,7 @@ impl<'a> Parser<'a> {
                 | Tok::Int(_)
                 | Tok::Float(_)
                 | Tok::Str(_)
+                | Tok::TripleStr(_)
                 | Tok::Char(_)
                 | Tok::Ident(_)
         )
@@ -1138,6 +1140,10 @@ impl<'a> Parser<'a> {
             Tok::Int(n) => Ok(Located::new(tok.span, Expr_::Int(*n))),
             Tok::Float(f) => Ok(Located::new(tok.span, Expr_::Float(*f))),
             Tok::Str(s) => Ok(Located::new(tok.span, Expr_::Str(s.clone()))),
+            // Triple-quoted strings carry raw content; the canonicaliser desugars
+            // `{{expr}}` interpolation at name-resolution time. Mirrors the Haskell
+            // parser's `MultiLine str -> return (Src.MultilineStr str)` arm.
+            Tok::TripleStr(s) => Ok(Located::new(tok.span, Expr_::MultilineStr(s.clone()))),
             Tok::Char(c) => Ok(Located::new(tok.span, Expr_::Char(c.clone()))),
             Tok::Minus => self.parse_negative_literal(tok.span, threshold, depth),
             Tok::Ident(text) => {
@@ -1989,6 +1995,9 @@ impl<'a> Parser<'a> {
             // `Tok::Float` falls through to the fail-closed catch-all below.
             Tok::Int(n) => Ok(Located::new(tok.span, Pattern_::PInt(*n))),
             Tok::Str(s) => Ok(Located::new(tok.span, Pattern_::PStr(s.clone()))),
+            // Triple-quoted strings are valid in patterns as raw-content string
+            // literals, mirroring the Haskell `MultiLine str -> return (Src.PStr str)`.
+            Tok::TripleStr(s) => Ok(Located::new(tok.span, Pattern_::PStr(s.clone()))),
             Tok::Char(c) => Ok(Located::new(tok.span, Pattern_::PChar(c.clone()))),
             // A negative integer literal pattern `-3`. The `-` lexes as
             // [`Tok::Minus`]; the digit must follow immediately. Anything else
@@ -2124,6 +2133,7 @@ impl<'a> Parser<'a> {
                     | Tok::Ident(_)
                     | Tok::Int(_)
                     | Tok::Str(_)
+                    | Tok::TripleStr(_)
                     | Tok::Char(_)
                     | Tok::Minus)
             )
