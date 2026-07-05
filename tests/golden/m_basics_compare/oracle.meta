@@ -1,0 +1,6 @@
+# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
+main_sky_sha256 = 7db40c39d42105c39de527b42f7288784dbde2fd9b7f2f0044be6212e4e67162
+go_sky_version = sky dev
+exit_code = 0
+oracle_divergence = true
+divergence_reason = divergence: Sky's `compare` returns an untyped Int (-1, 0, 1); the Order ADT (LT/EQ/GT) does not exist in the Go backend. Sky-Rust introduces Order as a first-class ADT backed by SkyOrder (repr(u8) enum), allowing exhaustive case dispatch. This fixture is Rust-only. Divergence from Sky, rationale: Elm-conformance (Elm's compare returns Order).

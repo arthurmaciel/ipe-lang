@@ -847,6 +847,10 @@ impl<'a> EmitCtx<'a> {
         match self.interner.resolve(ty) {
             Some("Maybe") => Some("SkyMaybe"),
             Some("Result") => Some("SkyResult"),
+            // `Order` is backed by `SkyOrder` (#123) — the `#[repr(u8)]` enum
+            // from the runtime crate, in scope via `pub use sky_runtime::*`.
+            // Constructor emission: `SkyOrder::LT` / `SkyOrder::EQ` / `SkyOrder::GT`.
+            Some("Order") => Some("SkyOrder"),
             _ => None,
         }
     }
@@ -964,7 +968,9 @@ fn collect_record_shapes(
         // M7: nullary plain types (`Length`, `Color`, …) and the opaque live
         // request handle carry no record shapes of their own.
         | IrType::UiPlain(_)
-        | IrType::LiveReq => {}
+        | IrType::LiveReq
+        // `Order` (LT/EQ/GT) is a primitive leaf — no record shape.
+        | IrType::Order => {}
         // `LiveRoute page` is page-parametric — descend in case the page type
         // carries a nested record shape.
         IrType::LiveRoute(page) => {
@@ -1075,7 +1081,9 @@ fn type_reaches_enum(
         // M7: nullary plain types and the opaque live request handle are
         // pointer-sized — they cannot form an infinite-size cycle.
         | IrType::UiPlain(_)
-        | IrType::LiveReq => false,
+        | IrType::LiveReq
+        // `Order` is a primitive value — no cycle risk.
+        | IrType::Order => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::LiveRoute(page) => type_reaches_enum(page, target, enums, visited),
@@ -1122,7 +1130,9 @@ fn contains_generic(ty: &IrType) -> bool {
         // M7: nullary plain types and the opaque live request handle are
         // monomorphic.
         | IrType::UiPlain(_)
-        | IrType::LiveReq => false,
+        | IrType::LiveReq
+        // `Order` is monomorphic — no generic parameters.
+        | IrType::Order => false,
         // `LiveRoute page` is parametric on `page`; check if it carries a
         // generic.
         IrType::LiveRoute(page) => contains_generic(page),
@@ -1197,7 +1207,9 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         // M7: nullary plain types and the opaque live request handle
         // contribute no generics.
         | IrType::UiPlain(_)
-        | IrType::LiveReq => {}
+        | IrType::LiveReq
+        // `Order` is monomorphic — no generics to collect.
+        | IrType::Order => {}
         // `LiveRoute page` may carry generic parameters through `page`.
         IrType::LiveRoute(page) => collect_generics(page, out),
         // M7: `Ui { ctor, msg }` may carry generic parameters through `msg`.
@@ -1464,7 +1476,9 @@ fn match_template(
         // M7: nullary plain types (`Length`, `Color`, …) and the opaque live
         // request handle are monomorphic — must equal exactly.
         | IrType::UiPlain(_)
-        | IrType::LiveReq => {
+        | IrType::LiveReq
+        // `Order` is a monomorphic leaf — must equal exactly.
+        | IrType::Order => {
             if template == concrete {
                 Ok(())
             } else {

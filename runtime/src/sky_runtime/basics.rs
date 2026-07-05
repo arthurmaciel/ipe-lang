@@ -22,6 +22,38 @@ pub fn basics_mod_by(divisor: i64, n: i64) -> i64 {
     if r < 0 { r.wrapping_add(divisor) } else { r }
 }
 
+/// The result of Sky's `Basics.compare` — a typed three-way comparison.
+///
+/// Sanctioned divergence from the Sky/Go backend: Go's `Basics_compareT`
+/// returns `-1 / 0 / 1` as a plain `int`.  The Rust backend returns a typed
+/// enum so pattern-match on `LT / EQ / GT` is sound and exhaustive without
+/// an extra range-check.  See `docs/divergences-from-sky.md §B-compare`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[repr(u8)]
+pub enum SkyOrder {
+    LT = 0,
+    EQ = 1,
+    GT = 2,
+}
+
+/// Sky `compare : comparable -> comparable -> Order`.
+///
+/// Mirrors Go's `Basics_compareT` semantics: `LT` when `a < b`, `GT` when
+/// `a > b`, `EQ` otherwise.  The `PartialOrd` bound is correct here: Sky's
+/// `comparable` covers `Int`, `Float`, `String`, `Char`, `Bool` — all of
+/// which implement `PartialOrd` in Rust.  NaN-producing operations (`Float`)
+/// follow Rust's `PartialOrd` convention (NaN is unordered); Sky does not
+/// expose a `Float` NaN literal so this is sound in practice.
+pub fn basics_compare<T: PartialOrd>(a: T, b: T) -> SkyOrder {
+    if a < b {
+        SkyOrder::LT
+    } else if a > b {
+        SkyOrder::GT
+    } else {
+        SkyOrder::EQ
+    }
+}
+
 /// Sky `fst : (a, b) -> a` / `snd : (a, b) -> b`. Pure in stdlib, but the
 /// Prelude re-export lowers as a `VarKernel "Basics" "fst"`, so the Rust
 /// backend routes it to a runtime kernel. Tuples lower to Rust tuples.

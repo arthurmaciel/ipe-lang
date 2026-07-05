@@ -645,6 +645,18 @@ pub enum IrType {
     /// (an empty `routes = []` literal's `Vec::<…>::new()` turbofish, or a
     /// let-bound route table's fn signature).
     LiveRoute(Box<Self>),
+    /// The built-in `Order` type — the result of `Basics.compare`.
+    ///
+    /// Renders as `sky_runtime::SkyOrder` (the `#[repr(u8)]` enum exposed from
+    /// the runtime's `basics` module and re-exported via `pub use basics::*`).
+    /// Constructors `LT / EQ / GT` emit as `sky_runtime::SkyOrder::LT` etc.
+    /// via the `builtin_runtime_enum` path in the backend (no synthetic
+    /// `EnumDef` is injected — the enum lives entirely in the runtime crate).
+    ///
+    /// Sanctioned divergence from Sky/Go: Go's `Basics_compareT` returns an
+    /// `int` (-1/0/1).  The Rust backend uses a typed enum for sound exhaustive
+    /// pattern matching without a range-check.
+    Order,
 }
 
 /// Tag enum for the five message-parametric `Std.Ui` / `Std.Html` types.
@@ -745,6 +757,8 @@ pub fn ir_type_is_derivable(
         | IrType::Unit
         | IrType::Bytes
         | IrType::Json
+        // `SkyOrder` derives Clone + Copy + PartialEq + Eq + Debug — fully derivable.
+        | IrType::Order
         | IrType::Generic(_)
         | IrType::UiPlain(_) => true,
         // The fully-derivable Std.Ui / Std.Html carriers vs the two Clone-only
@@ -845,7 +859,9 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::Unit
         | IrType::Bytes
         | IrType::Json
-        | IrType::Generic(_) => true,
+        | IrType::Generic(_)
+        // `Order` (LT/EQ/GT) is a plain no-payload enum; SkyOrder derives serde.
+        | IrType::Order => true,
         // All non-serde leaves collapse to `false`:
         //   * `UiPlain` value types (`Length`/`Color`/… → `ui::element::*`) and
         //     every `Ui` carrier (`Html`/`Element`/`Attribute`) derive only

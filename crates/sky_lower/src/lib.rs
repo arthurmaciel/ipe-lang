@@ -110,6 +110,11 @@ pub fn lower(
         sqlfield: interner.intern("SqlField")?,
         set_field: interner.intern("SetField")?,
         omit_field: interner.intern("OmitField")?,
+        // ── Order ADT (#123) ─────────────────────────────────────────────────
+        order: interner.intern("Order")?,
+        lt: interner.intern("LT")?,
+        eq: interner.intern("EQ")?,
+        gt: interner.intern("GT")?,
     };
     lower::Lowerer::new(m, types, &*interner, eta_params, param_binders, &builtins).run()
 }
