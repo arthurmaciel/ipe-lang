@@ -1,0 +1,9 @@
+module Main exposing (main)
+
+main =
+    println
+        (case compare 1 2 of
+            LT -> "LT"
+            EQ -> "EQ"
+            GT -> "GT"
+        )
