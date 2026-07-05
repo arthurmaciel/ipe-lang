@@ -212,6 +212,17 @@ struct TypeCtx<'a> {
     /// the dep's path. An absent entry means the name is a builtin (empty home)
     /// or a free type variable — `canonicalise_type` falls through to `Type::Var`.
     type_home_map: &'a BTreeMap<Symbol, Vec<Symbol>>,
+    /// Maps each import qualifier (the short name used in `Q.TypeName` type
+    /// annotations) to the full dep-module path.  Built from the module's
+    /// `import` declarations in [`canonicalise_module_with_origin`].
+    ///
+    /// When a `TType(qualifier, segments, args)` node has a non-empty qualifier,
+    /// this map is consulted FIRST.  On a hit, the dep path becomes the `home`
+    /// for the resulting `Con` node — so `Counter.Msg` correctly gets
+    /// `home = ["Counter"]` regardless of whether the current module also
+    /// defines a local `type Msg`.  On a miss (kernel / stdlib qualifier) the
+    /// lookup falls back to `type_home_map` as before.
+    qualifier_paths: &'a BTreeMap<Symbol, Vec<Symbol>>,
     aliases: &'a BTreeMap<Symbol, AliasDef>,
     interner: &'a Interner,
     /// Span of the enclosing value annotation, used as the location for an
@@ -243,12 +254,15 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
     // (empty here) with the module's own aliases.
     let mut type_home_map: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
     let extra_aliases: BTreeMap<Symbol, AliasDef> = BTreeMap::new();
+    // Single-module has no deps, so no qualifiers to map.
+    let qualifier_paths: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
     // The bare single-module entry is always ordinary USER source: the trust tag
     // can only be raised via `canonicalise_module_with_origin`.
     canonicalise_with_env(
         m,
         &mut env,
         &mut type_home_map,
+        &qualifier_paths,
         extra_aliases,
         ModuleOrigin::User,
         interner,
@@ -296,6 +310,7 @@ pub fn canonicalise_module(
 /// Same set as [`canonicalise_module`], plus a fail-closed
 /// [`Diagnostic::CompilerBug`] when an [`ModuleOrigin::EmbeddedStdlib`] module has
 /// an un-annotated top-level binding.
+#[allow(clippy::too_many_lines)] // qualifier_paths pass added ~20 lines; refactor tracked in #todo
 pub fn canonicalise_module_with_origin(
     m: &src::Module,
     expected_path: &[Symbol],
@@ -407,11 +422,38 @@ pub fn canonicalise_module_with_origin(
         )?;
     }
 
+    // Build qualifier → dep-path map so `TType(qualifier, …)` annotations in
+    // type sigs resolve `home` from the dep path, not from the unqualified
+    // `type_home_map`.  Example: `import Counter` with no `exposing` clause
+    // adds no entry to `type_home_map`, so without this map `Counter.Msg`
+    // would look up "Msg" and find the LOCAL `type Msg` instead of Counter's.
+    //
+    // Qualifier = explicit `as Alias` if present, else last segment of the
+    // module path — mirrors `inject_dep_exports`'s `env.qual_vars` logic.
+    let mut qualifier_paths: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
+    for import in &m.imports {
+        let dep_path = &import.name.value;
+        // Skip stdlib kernel imports (not in `deps`).
+        if dep_path
+            .first()
+            .copied()
+            .is_some_and(|s| s == sky_sym || s == std_sym)
+            && !deps.contains_key(dep_path)
+        {
+            continue;
+        }
+        let qualifier = import
+            .alias
+            .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
+        qualifier_paths.insert(qualifier, dep_path.clone());
+    }
+
     let canon_mod =
         canonicalise_with_env(
             m,
             &mut env,
             &mut type_home_map,
+            &qualifier_paths,
             injected_aliases,
             origin,
             interner,
@@ -755,6 +797,7 @@ fn canonicalise_with_env(
     m: &src::Module,
     env: &mut Env,
     type_home_map: &mut BTreeMap<Symbol, Vec<Symbol>>,
+    qualifier_paths: &BTreeMap<Symbol, Vec<Symbol>>,
     extra_aliases: BTreeMap<Symbol, AliasDef>,
     origin: ModuleOrigin,
     interner: &mut Interner,
@@ -848,6 +891,7 @@ fn canonicalise_with_env(
             &u.value,
             env,
             type_home_map,
+            qualifier_paths,
             &aliases,
             interner,
         )?);
@@ -864,6 +908,7 @@ fn canonicalise_with_env(
         &home,
         env,
         type_home_map,
+        qualifier_paths,
         &aliases,
         &seen_ctors,
         interner,
@@ -915,6 +960,7 @@ fn canonicalise_with_env(
             &v.value,
             env,
             type_home_map,
+            qualifier_paths,
             &aliases,
             interner,
         )?);
@@ -1053,11 +1099,13 @@ fn field_type_nonderivable(interner: &Interner, t: &canon::Type) -> bool {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // qualifier_paths added to thread context; refactor tracked
 fn synthesize_record_alias_ctors(
     m: &src::Module,
     home: &[Symbol],
     env: &Env,
     type_home_map: &BTreeMap<Symbol, Vec<Symbol>>,
+    qualifier_paths: &BTreeMap<Symbol, Vec<Symbol>>,
     aliases: &BTreeMap<Symbol, AliasDef>,
     seen_ctors: &BTreeMap<Symbol, Span>,
     interner: &Interner,
@@ -1080,6 +1128,7 @@ fn synthesize_record_alias_ctors(
         let ctx = TypeCtx {
             env,
             type_home_map,
+            qualifier_paths,
             aliases,
             interner,
             ann_span: a.value.body.span,
@@ -1660,6 +1709,7 @@ fn canonicalise_union(
     u: &src::Union,
     env: &Env,
     type_home_map: &BTreeMap<Symbol, Vec<Symbol>>,
+    qualifier_paths: &BTreeMap<Symbol, Vec<Symbol>>,
     aliases: &BTreeMap<Symbol, AliasDef>,
     interner: &Interner,
 ) -> DResult<canon::Union> {
@@ -1672,6 +1722,7 @@ fn canonicalise_union(
         let ctx = TypeCtx {
             env,
             type_home_map,
+            qualifier_paths,
             aliases,
             interner,
             ann_span: c.span,
@@ -1715,6 +1766,7 @@ fn canonicalise_value(
     val: &src::Value,
     env: &Env,
     type_home_map: &BTreeMap<Symbol, Vec<Symbol>>,
+    qualifier_paths: &BTreeMap<Symbol, Vec<Symbol>>,
     aliases: &BTreeMap<Symbol, AliasDef>,
     interner: &mut Interner,
 ) -> DResult<canon::Def> {
@@ -1743,6 +1795,7 @@ fn canonicalise_value(
             let ctx = TypeCtx {
                 env,
                 type_home_map,
+                qualifier_paths,
                 aliases,
                 interner,
                 ann_span: ann.span,
@@ -2512,10 +2565,30 @@ fn canonicalise_type(
                 visited.pop();
                 return Ok(expanded);
             }
-            // Types in `type_home_map` are either local unions (home = this
-            // module) or imported types (home = dep module). Builtins and free
+            // Qualified reference (e.g. `Counter.Msg`): look up the qualifier
+            // in `qualifier_paths` to get the dep module's full path as the
+            // canonical `home`.  This overrides any same-named entry in
+            // `type_home_map` that would incorrectly point at the LOCAL module
+            // (e.g. when Main also defines `type Msg`).  Stdlib / kernel
+            // qualifiers are absent from `qualifier_paths` and fall through to
+            // `type_home_map` as before.
+            //
+            // Unqualified reference: `type_home_map` is the authoritative source
+            // (local unions + explicitly-exposed dep types).  Builtins and free
             // type variables are absent from the map → empty home.
-            let home = ctx.type_home_map.get(&name).cloned().unwrap_or_default();
+            let home = if qualifier_str.is_empty() {
+                // Unqualified: look up in type_home_map (local unions + exposed dep types).
+                // Builtins and free type variables are absent → empty home.
+                ctx.type_home_map.get(&name).cloned().unwrap_or_default()
+            } else {
+                // Qualified (e.g. `Counter.Msg`): use the dep module's full path from
+                // `qualifier_paths`.  On a miss (stdlib / kernel qualifier) fall back
+                // to type_home_map.
+                ctx.qualifier_paths
+                    .get(qualifier)
+                    .cloned()
+                    .unwrap_or_else(|| ctx.type_home_map.get(&name).cloned().unwrap_or_default())
+            };
             Ok(canon::Type::Con {
                 home,
                 name,

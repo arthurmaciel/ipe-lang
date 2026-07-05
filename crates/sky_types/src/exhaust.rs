@@ -325,12 +325,19 @@ fn check_param_irrefutable(pat: &canon::Pattern) -> DResult<()> {
 /// Check every `case` in `module` for exhaustiveness + redundancy, and every
 /// **parameter / binder** pattern for irrefutability (SKY-T0015).
 ///
+/// Redundant-branch findings ([`TypeError::RedundantCaseBranch`], SKY-T0011)
+/// are pushed onto `warnings` instead of being returned as errors — they are
+/// severity-Warning and must not abort compilation.
+///
 /// # Errors
 /// * [`TypeError::RefutablePatternParameter`] when a param / binder is refutable.
-/// * [`TypeError::RedundantCaseBranch`] when an arm covers no new value.
 /// * [`TypeError::NonExhaustiveCase`] when the arms miss a value.
 /// * [`Diagnostic::CompilerBug`] if a constructor symbol cannot be resolved.
-pub fn check(module: &canon::Module, interner: &mut Interner) -> DResult<()> {
+pub fn check(
+    module: &canon::Module,
+    interner: &mut Interner,
+    warnings: &mut Vec<Diagnostic>,
+) -> DResult<()> {
     let sigs = Sigs::build(module, interner)?;
     for def in &module.defs {
         let (patterns, body) = match def {
@@ -341,14 +348,19 @@ pub fn check(module: &canon::Module, interner: &mut Interner) -> DResult<()> {
         for p in patterns {
             check_param_irrefutable(p)?;
         }
-        check_expr(body, &sigs, interner)?;
+        check_expr(body, &sigs, interner, warnings)?;
     }
     Ok(())
 }
 
 /// Recursively check a single expression (and its sub-expressions) for `case`
 /// defects. The recursion depth is bounded by the parser's nesting cap.
-fn check_expr(e: &canon::Expr, sigs: &Sigs, interner: &Interner) -> DResult<()> {
+fn check_expr(
+    e: &canon::Expr,
+    sigs: &Sigs,
+    interner: &Interner,
+    warnings: &mut Vec<Diagnostic>,
+) -> DResult<()> {
     match &e.value {
         canon::Expr_::Int(_)
         | canon::Expr_::Float(_)
@@ -360,21 +372,21 @@ fn check_expr(e: &canon::Expr, sigs: &Sigs, interner: &Interner) -> DResult<()> 
         | canon::Expr_::VarKernel { .. }
         | canon::Expr_::VarCtor { .. } => Ok(()),
         canon::Expr_::Call(callee, args) => {
-            check_expr(callee, sigs, interner)?;
+            check_expr(callee, sigs, interner, warnings)?;
             for a in args {
-                check_expr(a, sigs, interner)?;
+                check_expr(a, sigs, interner, warnings)?;
             }
             Ok(())
         }
         canon::Expr_::Binop { lhs, rhs, .. } => {
-            check_expr(lhs, sigs, interner)?;
-            check_expr(rhs, sigs, interner)
+            check_expr(lhs, sigs, interner, warnings)?;
+            check_expr(rhs, sigs, interner, warnings)
         }
         canon::Expr_::Case(scrut, branches) => {
-            check_case(scrut, branches, sigs, interner)?;
-            check_expr(scrut, sigs, interner)?;
+            check_case(scrut, branches, sigs, interner, warnings)?;
+            check_expr(scrut, sigs, interner, warnings)?;
             for br in branches {
-                check_expr(&br.body, sigs, interner)?;
+                check_expr(&br.body, sigs, interner, warnings)?;
             }
             Ok(())
         }
@@ -386,30 +398,30 @@ fn check_expr(e: &canon::Expr, sigs: &Sigs, interner: &Interner) -> DResult<()> 
             // whose params are swept by the Lambda arm below.)
             for b in bindings {
                 check_param_irrefutable(&b.pat)?;
-                check_expr(&b.body, sigs, interner)?;
+                check_expr(&b.body, sigs, interner, warnings)?;
             }
-            check_expr(body, sigs, interner)
+            check_expr(body, sigs, interner, warnings)
         }
         canon::Expr_::If(branches, else_expr) => {
             for (cond, body) in branches {
-                check_expr(cond, sigs, interner)?;
-                check_expr(body, sigs, interner)?;
+                check_expr(cond, sigs, interner, warnings)?;
+                check_expr(body, sigs, interner, warnings)?;
             }
-            check_expr(else_expr, sigs, interner)
+            check_expr(else_expr, sigs, interner, warnings)
         }
         canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
             for elem in elems {
-                check_expr(elem, sigs, interner)?;
+                check_expr(elem, sigs, interner, warnings)?;
             }
             Ok(())
         }
         canon::Expr_::Cons(head, tail) => {
-            check_expr(head, sigs, interner)?;
-            check_expr(tail, sigs, interner)
+            check_expr(head, sigs, interner, warnings)?;
+            check_expr(tail, sigs, interner, warnings)
         }
         canon::Expr_::Record(fields) => {
             for (_, value) in fields {
-                check_expr(value, sigs, interner)?;
+                check_expr(value, sigs, interner, warnings)?;
             }
             Ok(())
         }
@@ -420,13 +432,13 @@ fn check_expr(e: &canon::Expr, sigs: &Sigs, interner: &Interner) -> DResult<()> 
             for p in params {
                 check_param_irrefutable(p)?;
             }
-            check_expr(body, sigs, interner)
+            check_expr(body, sigs, interner, warnings)
         }
-        canon::Expr_::Access(record, _) => check_expr(record, sigs, interner),
+        canon::Expr_::Access(record, _) => check_expr(record, sigs, interner, warnings),
         canon::Expr_::Update(base, fields) => {
-            check_expr(base, sigs, interner)?;
+            check_expr(base, sigs, interner, warnings)?;
             for (_, value) in fields {
-                check_expr(value, sigs, interner)?;
+                check_expr(value, sigs, interner, warnings)?;
             }
             Ok(())
         }
@@ -437,11 +449,15 @@ fn check_expr(e: &canon::Expr, sigs: &Sigs, interner: &Interner) -> DResult<()> 
 /// ones), then exhaustiveness (the wildcard row useful against the whole arm
 /// matrix). A `case` mentioning a constructor outside this module's unions is
 /// skipped — its signature is unavailable, so it cannot be judged soundly here.
+///
+/// Redundant-branch findings are pushed onto `warnings` (SKY-T0011 is a
+/// Warning-severity diagnostic that must not abort compilation).
 fn check_case(
     scrut: &canon::Expr,
     branches: &[canon::CaseBranch],
     sigs: &Sigs,
     interner: &Interner,
+    warnings: &mut Vec<Diagnostic>,
 ) -> DResult<()> {
     if branches
         .iter()
@@ -468,7 +484,8 @@ fn check_case(
             canon::Pattern_::PTuple(_) | canon::Pattern_::PRecord(_)
         );
         if !is_product && useful(&prior, &q, sigs, 1).is_empty() {
-            return Err(Diagnostic::Type {
+            // SKY-T0011 is Severity::Warning: collect it but do not abort.
+            warnings.push(Diagnostic::Type {
                 span: br.pat.span,
                 msg: TypeError::RedundantCaseBranch {
                     constructor: arm_label(&br.pat.value, interner)?,

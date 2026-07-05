@@ -1,0 +1,34 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.String as String
+import Counter
+
+-- Main defines its own `type Msg`, shadowing `Counter.Msg` in the
+-- unqualified scope.  The qualified annotation on `wrap` must still
+-- resolve `Counter.Msg` to Counter's home ([\"Counter\"]), not Main's
+-- ([\"Main\"]).  Without the qualifier_paths fix this would emit
+-- SKY-T0001 because the canonicaliser looked up `type_home_map[\"Msg\"]`
+-- which returned [\"Main\"] (the local type).
+type Msg
+    = DoCount Counter.Msg
+
+-- The annotation uses the qualified type Counter.Msg — this is the
+-- exact pattern the qualifier_paths fix targets.
+wrap : Counter.Msg -> Msg
+wrap m =
+    DoCount m
+
+main =
+    let
+        -- Use `Counter.initial` (qualified value access, no constructors needed).
+        counterMsg =
+            Counter.initial
+
+        wrapped =
+            wrap counterMsg
+
+        result =
+            Counter.apply Counter.initial 0
+    in
+        println (String.fromInt result)
