@@ -147,6 +147,13 @@ pub enum Expr_ {
     /// downstream stages see the runtime string verbatim. Mirrors the Haskell
     /// compiler's `Src.Str`.
     Str(String),
+    /// A triple-quoted string `"""..."""`. The carried [`String`] is the RAW
+    /// content — the lexer does NOT resolve escape sequences or `{{expr}}`
+    /// interpolation markers. The canonicaliser desugars these into a `++` chain
+    /// of string literals and `Basics.toString`-wrapped expressions, mirroring
+    /// the Haskell compiler's `Src.MultilineStr` → `desugarMultiline` path in
+    /// `Sky.Canonicalise.Expression`.
+    MultilineStr(String),
     /// A character literal `'a'`. The carried [`String`] is the source character
     /// text — a single grapheme for an ordinary char, or a backslash-escape pair
     /// (`\n`, `\\`) for an escaped one — matching the Haskell compiler's
