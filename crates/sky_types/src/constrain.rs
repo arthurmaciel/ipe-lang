@@ -1201,15 +1201,16 @@ impl<'a> Builder<'a> {
                 self.bool_var()
             }
             BinopClass::Append => {
-                // `++` is `String -> String -> String`: both operands and the
-                // result are pinned to `String`. A non-String operand (a
-                // would-be `List`) fails to unify with `String` and surfaces as
-                // a type error rather than reaching the backend.
-                let ls = self.string_var()?;
-                self.eq(lhs.span, lv, ls);
-                let rs = self.string_var()?;
-                self.eq(rhs.span, rv, rs);
-                self.string_var()
+                // `++` is `Appendable a => a -> a -> a`: both operands and the
+                // result share one super-typed variable carrying the appendable
+                // obligation. The unifier pins it to `String` or `List _` at
+                // the head; a non-appendable operand (Int, Bool, record, …)
+                // fails at the pin and surfaces as SKY-T0014 before reaching
+                // the backend.
+                let s = self.super_var(TyBounds::appendable(), lhs.span)?;
+                self.eq(lhs.span, lv, s);
+                self.eq(rhs.span, rv, s);
+                Ok(s)
             }
             BinopClass::Poly => {
                 // `a -> a -> a`: operands and result share one type.
