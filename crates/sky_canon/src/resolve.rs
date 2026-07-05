@@ -99,6 +99,52 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "LiveReq",
 ];
 
+/// Extra built-in type names that are handled by the lowerer's explicit arms
+/// (`sky_lower::ir_type_from_canon`) but are NOT listed in
+/// [`RESERVED_BUILTIN_TYPES`] (and therefore may NOT be user-defined).
+///
+/// These names must receive the empty-home sentinel (`Vec::new()`) from
+/// `canonicalise_type` just like the reserved builtins — omitting them would
+/// cause `canonicalise_type` to emit [`NameError::TypeNotFound`] for a
+/// legitimate builtin annotation such as `relay : Order` or `ws : WebSocketServer`.
+///
+/// The names below are absent from `RESERVED_BUILTIN_TYPES` because they are
+/// either:
+/// * Nullary Std.Ui/Sky.Live opaque names whose lowerer arm sits BELOW the
+///   `enum_variants` guard (so a user `type Color` wins by its real home) — and
+///   therefore can never be shadowed in a user annotation either; OR
+/// * Additional opaque kernel types added after the original reservation list
+///   was drawn up.
+///
+/// Keeping this list in sync with `ir_type_from_canon`'s explicit arms is the
+/// only invariant. Any name handled by an explicit arm with `home = []` that
+/// is NOT in `RESERVED_BUILTIN_TYPES` belongs here.
+const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
+    // Three-way comparison result (`lt`/`eq`/`gt`). In the lowerer since #123.
+    "Order",
+    // Std.Ui plain types — lowerer guard is BELOW `enum_variants` so user ADTs
+    // of the same name win via their real home; but annotations that name them
+    // without a program-level definition still need the empty-home sentinel.
+    "Color",
+    "Length",
+    "HAlign",
+    "VAlign",
+    "Location",
+    "PseudoClass",
+    "Description",
+    "LayoutContext",
+    "LiveReq",
+    // Sky.Live / Sky.Http.Server / Sky.Http.Server.WebSocket opaque types.
+    "LiveRoute",
+    "StreamWriter",
+    "HttpRequest",
+    "WebSocketServer",
+    "WebSocketServerCfg",
+    // Std.Ui.Input parametric label/placeholder types (#124).
+    "Label",
+    "Placeholder",
+];
+
 /// The subset of [`RESERVED_BUILTIN_TYPES`] that a trusted
 /// [`ModuleOrigin::EmbeddedStdlib`] module is permitted to DEFINE, while a
 /// [`ModuleOrigin::User`] module stays rejected (SKY-N0026).
@@ -2462,6 +2508,41 @@ fn resolve_op_func(op: Symbol, interner: &mut Interner) -> DResult<Symbol> {
 /// number of type arguments that differs from its declared parameter count; the
 /// span is the enclosing annotation (the type AST carries no inner spans).
 /// [`Diagnostic::CompilerBug`] if a name symbol is not interned.
+/// Resolve the `home` path for an **unqualified** type constructor `name`.
+///
+/// Resolution order:
+/// 1. `type_home_map` — user-defined ADTs and explicitly-imported dep types.
+/// 2. `RESERVED_BUILTIN_TYPES` / `EXTRA_BUILTIN_TYPE_NAMES` — known builtin
+///    names that the lowerer handles by explicit arm; they receive the
+///    empty-home sentinel (`Vec::new()`).
+/// 3. Anything else: emit `TypeNotFound` / `SKY-N0002` with a did-you-mean
+///    suggestion list.  This replaces the former `unwrap_or_default()` silent
+///    fallback and the downstream `enum_variants` unique-match heuristic
+///    (removed in `sky_lower`) that previously ICE'd with `SKY-I0001` on
+///    ambiguous or absent names.
+#[allow(clippy::redundant_else)] // cascading early-returns need else for clarity
+fn resolve_unqualified_type_home(name: Symbol, ctx: &TypeCtx) -> DResult<Vec<Symbol>> {
+    if let Some(h) = ctx.type_home_map.get(&name) {
+        return Ok(h.clone());
+    }
+    let name_s = ctx.interner.resolve(name).unwrap_or("");
+    if RESERVED_BUILTIN_TYPES.contains(&name_s) || EXTRA_BUILTIN_TYPE_NAMES.contains(&name_s) {
+        // Empty-home sentinel: the lowerer's per-name explicit arm resolves it.
+        return Ok(Vec::new());
+    }
+    // Unknown type — fail closed at canon time so this never reaches the
+    // lowerer as an empty-home Con (former ICE path, SKY-I0001).
+    let candidates = ctx.type_home_map.keys().chain(ctx.aliases.keys()).copied();
+    let sugg = suggestions(name, candidates, ctx.interner);
+    Err(Diagnostic::Name {
+        span: ctx.ann_span,
+        msg: NameError::TypeNotFound {
+            name: name_s.into(),
+            suggestions: sugg,
+        },
+    })
+}
+
 fn canonicalise_type(
     t: &src::TypeAnnotation,
     ctx: &TypeCtx,
@@ -2565,25 +2646,13 @@ fn canonicalise_type(
                 visited.pop();
                 return Ok(expanded);
             }
-            // Qualified reference (e.g. `Counter.Msg`): look up the qualifier
-            // in `qualifier_paths` to get the dep module's full path as the
-            // canonical `home`.  This overrides any same-named entry in
-            // `type_home_map` that would incorrectly point at the LOCAL module
-            // (e.g. when Main also defines `type Msg`).  Stdlib / kernel
-            // qualifiers are absent from `qualifier_paths` and fall through to
-            // `type_home_map` as before.
-            //
-            // Unqualified reference: `type_home_map` is the authoritative source
-            // (local unions + explicitly-exposed dep types).  Builtins and free
-            // type variables are absent from the map → empty home.
+            // Qualified reference (e.g. `Counter.Msg`): use `qualifier_paths`
+            // for the dep module's full home path.  Unqualified: delegate to
+            // `resolve_unqualified_type_home` which fails closed with SKY-N0002
+            // for unknown names (builtins get the empty-home sentinel).
             let home = if qualifier_str.is_empty() {
-                // Unqualified: look up in type_home_map (local unions + exposed dep types).
-                // Builtins and free type variables are absent → empty home.
-                ctx.type_home_map.get(&name).cloned().unwrap_or_default()
+                resolve_unqualified_type_home(name, ctx)?
             } else {
-                // Qualified (e.g. `Counter.Msg`): use the dep module's full path from
-                // `qualifier_paths`.  On a miss (stdlib / kernel qualifier) fall back
-                // to type_home_map.
                 ctx.qualifier_paths
                     .get(qualifier)
                     .cloned()

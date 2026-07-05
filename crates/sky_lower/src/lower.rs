@@ -3687,35 +3687,18 @@ impl<'a> Lowerer<'a> {
                     })
                 }
                 other => {
-                    // The type has `home = []` but is not a known builtin.
-                    // This happens when a module references a user-defined type in
-                    // its annotation without explicitly importing the defining
-                    // module — the Haskell compiler accepts this via looser scoping.
-                    // Match that behaviour: scan `enum_variants` for a unique entry
-                    // with this name (any home).  If exactly one exists, use it.
-                    // If zero or many exist, fall through to the invariant-violation
-                    // ICE (which is still the right outcome for genuinely unknown
-                    // or ambiguous names).
-                    let candidates: Vec<_> = self
-                        .enum_variants
-                        .keys()
-                        .filter(|(_, sym)| *sym == *name)
-                        .collect();
-                    if let [single] = candidates.as_slice() {
-                        let resolved_home = single.0.clone();
-                        let mut ir_args = Vec::with_capacity(args.len());
-                        for a in args {
-                            ir_args.push(self.ir_type_from_canon(a, generics)?);
-                        }
-                        return Ok(IrType::Enum {
-                            home: resolved_home,
-                            name: *name,
-                            args: ir_args,
-                        });
-                    }
+                    // Every type reaching here has `home = []` but is NOT a
+                    // known builtin.  `sky_canon::canonicalise_type` now emits
+                    // SKY-N0002 (`TypeNotFound`) for any unknown unqualified type
+                    // at compile time, so this arm is an invariant-violation ICE —
+                    // it can no longer be triggered by valid user code.
                     Err(bug(
                         "sky_lower::ir_type_from_canon",
-                        format!("unknown type constructor `{other}`"),
+                        format!(
+                            "type constructor `{other}` with empty home reached the \
+                             lowerer — should have been caught by canon TypeNotFound \
+                             (SKY-N0002)"
+                        ),
                     ))
                 }
             },
@@ -4372,30 +4355,19 @@ impl<'a> Lowerer<'a> {
                 // a builtin or a declared union, so an unknown one here is an
                 // invariant violation, not user error.
                 other => {
-                    // Solver-side counterpart of the `ir_type_from_canon` fallback:
-                    // a `Ty::Con { module: [] }` can arise when an annotation used a
-                    // type without importing its defining module (the Haskell compiler
-                    // accepts this); try a unique-match by name across all homes.
-                    let candidates: Vec<_> = self
-                        .enum_variants
-                        .keys()
-                        .filter(|(_, sym)| *sym == *name)
-                        .collect();
-                    if let [single] = candidates.as_slice() {
-                        let resolved_home = single.0.clone();
-                        let mut ir_args = Vec::with_capacity(args.len());
-                        for a in args {
-                            ir_args.push(self.ir_type_from_ty(a, span)?);
-                        }
-                        return Ok(IrType::Enum {
-                            home: resolved_home,
-                            name: *name,
-                            args: ir_args,
-                        });
-                    }
+                    // Solver-side counterpart of `ir_type_from_canon`.  The HM
+                    // solver propagates `module` from the canonical `home` set by
+                    // `canonicalise_type`, so `module = []` on a non-builtin Con
+                    // here means the annotation had an unknown type — which canon
+                    // now rejects with SKY-N0002 before the solver runs.  This arm
+                    // is therefore an invariant-violation ICE.
                     Err(bug(
                         "sky_lower::ir_type_from_ty",
-                        format!("unknown type constructor `{other}`"),
+                        format!(
+                            "type constructor `{other}` with empty home reached the \
+                             lowerer — should have been caught by canon TypeNotFound \
+                             (SKY-N0002)"
+                        ),
                     ))
                 }
             },
