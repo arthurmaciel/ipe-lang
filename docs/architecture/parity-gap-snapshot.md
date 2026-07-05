@@ -54,7 +54,7 @@
 
 ### (b) Counts
 
-**14/35 OK** (+33-websocket-echo — 12 Ws kernels merged, cargo-sealed). 21/22 skyc-clear, cargo-blocked on #104 E0382 move class (lane running); 17/10 on cross-module ADT identity (lane running).
+**16/35 OK** (+21, +22 — Tui onKey pin + #104 last-use clone rewrite; both cargo-sealed). Advanced-not-cleared: 28+37 → SKY-N0003, 38 → SKY-L0108 (post-Chart/Responsive next blockers); 17/10 cross-module ADT lane in flight at pause.
 
 | Status | Count | Examples |
 |---|---|---|
