@@ -8196,10 +8196,10 @@ impl<'a> Lowerer<'a> {
                         // where each `Var(name)` lowers to a bare identifier that
                         // moves the value.
                         let acc = {
+                            // batch-xm rekeyed `types.regions` to `(home, span)`;
+                            // `region_ty` builds the composite key from current_home.
                             let ty_opt = self
-                                .types
-                                .regions
-                                .get(&b.body.span)
+                                .region_ty(b.body.span)
                                 .and_then(|ty| self.ir_type_from_ty(ty, b.body.span).ok());
                             if let Some(ref ir_ty) = ty_opt {
                                 if matches!(clone_class(ir_ty), CloneClass::CloneOk) {
