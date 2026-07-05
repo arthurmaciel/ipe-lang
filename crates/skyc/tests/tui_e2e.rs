@@ -1,8 +1,16 @@
 //! End-to-end tests for `Std.Tui` / `Sky.Tui` — `Tui.app`, `Ui.column`,
 //! `Ui.el`, `Ui.text`, and `String.fromInt`.
 //!
-//! All tests are gated on `SKY_E2E=1`.  Without it they return early so the
-//! default `cargo test` stays fast.
+//! Non-E2E tests (no `SKY_E2E` required):
+//! - `tui_onkey_record_typechecks` — skyc-level regression for the `onKey :
+//!   KeyEvent -> Msg` record scheme fix (T0001); verifies both `Tui.app` and
+//!   `Tui.program` accept a single-argument record-typed key handler and that
+//!   the emitter generates the bridging wrapper closure.
+//!
+//! E2E tests (gated on `SKY_E2E=1`):
+//! - `tui_counter_build_only` — full skyc + cargo build with `Tui.app` and
+//!   a `KeyEvent -> Msg` handler (the pre-fix `String -> String -> Msg` curried
+//!   shape is no longer valid under the updated scheme).
 //!
 //! ## Architecture
 //!
@@ -32,26 +40,29 @@
 //! SKY_E2E=1 cargo test tui_e2e
 //! ```
 
-/// A minimal Sky.Tui counter app exercising the Phase-1c wiring.
+/// A minimal `Tui.app` counter exercising the updated Phase-1c scheme.
 ///
-/// Kernels exercised:
-/// - `Tui.app`      — Phase-1c: constrain scheme + 5-field cfg
-/// - `Ui.column`    — vertical layout
-/// - `Ui.el`        — generic element container
-/// - `Ui.text`      — text leaf node
-/// - `String.fromInt` — displays the counter value
-/// - `Cmd.none` / `Sub.none` — baseline TEA primitives
+/// `onKey` is a SINGLE-argument record handler — `KeyEvent -> Msg` — matching
+/// the Haskell reference scheme (`any -> msg`).  The emitter generates the
+/// bridging closure:
+///
+/// ```text
+/// |kind: String, value: String| Main_on_key(RecKindValue { kind, value })
+/// ```
+///
+/// The curried `String -> String -> Msg` shape is no longer valid under the
+/// updated scheme; it would unify `var(1)` (the msg type variable) with
+/// `String -> Msg` which conflicts with its use in `update`/`subscriptions`.
 ///
 /// Note: `view` returns `Element Msg` (NOT wrapped in `Ui.layout` → `Html Msg`
 /// like Sky.Live).  The Tui runtime renders the Element tree directly to ANSI
 /// cells; there is no HTML step.
-///
-/// Note: `onKey _kind _value = NoOp` is the flat `String -> String -> Msg`
-/// handler required by the runtime's `FOnKey: Fn(String, String) -> Msg` bound.
 const SKY_TUI_COUNTER: &str = r"module Main exposing (main)
 
 import Std.Tui as Tui
 import Std.Ui as Ui
+
+type alias KeyEvent = { kind : String, value : String }
 
 type Msg = Increment | Decrement | NoOp
 
@@ -80,8 +91,8 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
-onKey : String -> String -> Msg
-onKey _kind _value =
+onKey : KeyEvent -> Msg
+onKey _ =
     NoOp
 
 main =
@@ -93,6 +104,58 @@ main =
         , onKey = onKey
         }
 ";
+
+/// Minimal `Tui.program` source exercising `onKey : KeyEvent -> Msg` (record
+/// handler) and `view : Model -> String` (the Tui.program–specific view shape).
+// Note: `r#"..."#` is needed because the Sky source contains `""` (an empty
+// string literal) which would terminate a plain `r"..."` raw string early.
+//
+// Unlike `SKY_TUI_COUNTER`, this program does NOT pipe through `Task.run`
+// at the `main` level — `Task.run : Task Error a -> a` keeps `a` polymorphic
+// when `main` has no type annotation, causing SKY-L0102.  `Tui.program` already
+// returns `Task Unit`, which is a concrete type the module entry accepts
+// directly.
+const SKY_TUI_PROGRAM_ONKEY_RECORD: &str = r#"module Main exposing (main)
+
+import Std.Tui as Tui
+
+type alias KeyEvent = { kind : String, value : String }
+
+type Msg = NoOp
+
+type alias Model = { dummy : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _ =
+    ( { dummy = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        NoOp ->
+            ( model, Cmd.none )
+
+view : Model -> String
+view _ =
+    ""
+
+subscriptions : Model -> Sub Msg
+subscriptions _ =
+    Sub.none
+
+onKey : KeyEvent -> Msg
+onKey _ =
+    NoOp
+
+main =
+    Tui.program
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onKey = onKey
+        }
+"#;
 
 /// Shared error type for E2E helpers.
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -125,6 +188,82 @@ fn compile_and_build(test_name: &str, sky_source: &str) -> Result<std::path::Pat
     Ok(std::path::PathBuf::from(exe))
 }
 
+/// **Regression for T0001 / examples 21–22**: both `Tui.app` and `Tui.program`
+/// must accept `onKey : KeyEvent -> Msg` where `KeyEvent = { kind : String,
+/// value : String }` (a SINGLE-argument record handler).
+///
+/// Before the fix, both schemes typed `onKey` as `String -> String -> Msg`
+/// (two curried String arguments).  User code in the examples used the
+/// record-alias shape, which caused `SKY-T0001` at the `Tui.program` /
+/// `Tui.app` call site.
+///
+/// After the fix, both schemes use an UNCONSTRAINED type variable (`var(2)`)
+/// for the key-event argument, matching the Haskell reference's `any -> msg`.
+/// The emitter generates a bridging wrapper:
+///
+/// ```text
+/// |kind: String, value: String| Main_on_key(RecKindValue { kind, value })
+/// ```
+///
+/// This test runs WITHOUT `SKY_E2E` (skyc-level only — no cargo build), so it
+/// is always live in CI.
+#[test]
+fn tui_onkey_record_typechecks() {
+    // ── helper: write Sky source to a temp file, run skyc::build, check ok ──
+    fn compile_ok(label: &str, source: &str) -> String {
+        let sky_dir = std::env::temp_dir().join(format!("tui_onkey_{label}_sky"));
+        let _ = std::fs::remove_dir_all(&sky_dir);
+        std::fs::create_dir_all(&sky_dir)
+            .unwrap_or_else(|e| panic!("{label}: cannot create temp dir: {e}"));
+
+        let entry = sky_dir.join("Main.sky");
+        std::fs::write(&entry, source)
+            .unwrap_or_else(|e| panic!("{label}: cannot write Main.sky: {e}"));
+
+        let out_dir = std::env::temp_dir().join(format!("tui_onkey_{label}_emitted"));
+        let _ = std::fs::remove_dir_all(&out_dir);
+
+        let runtime = skyc::resolve_runtime()
+            .unwrap_or_else(|e| panic!("{label}: runtime unavailable: {e}"));
+
+        skyc::build(&entry, &out_dir, &runtime)
+            .unwrap_or_else(|e| panic!("{label}: skyc build failed (T0001 regression?): {e}"));
+
+        // Return emitted main.rs text for structural assertions.
+        std::fs::read_to_string(out_dir.join("src").join("main.rs"))
+            .unwrap_or_else(|_| String::new())
+    }
+
+    // ── 1. Tui.app with `onKey : KeyEvent -> Msg` ────────────────────────────
+    let app_rs = compile_ok("tui_app", SKY_TUI_COUNTER);
+
+    // The emitter must produce the bridging wrapper closure.
+    assert!(
+        app_rs.contains("|kind: String, value: String|"),
+        "Tui.app emitted Rust must contain the `|kind: String, value: String|` \
+         wrapper closure (onKey record bridge); got:\n{app_rs}"
+    );
+    // The record struct `RecKindValue` must be referenced inside the wrapper.
+    assert!(
+        app_rs.contains("RecKindValue"),
+        "Tui.app emitted Rust must reference `RecKindValue` struct in the wrapper; \
+         got:\n{app_rs}"
+    );
+
+    // ── 2. Tui.program with `onKey : KeyEvent -> Msg` ────────────────────────
+    let prog_rs = compile_ok("tui_program", SKY_TUI_PROGRAM_ONKEY_RECORD);
+
+    assert!(
+        prog_rs.contains("|kind: String, value: String|"),
+        "Tui.program emitted Rust must contain the `|kind: String, value: String|` \
+         wrapper closure; got:\n{prog_rs}"
+    );
+    assert!(
+        prog_rs.contains("RecKindValue"),
+        "Tui.program emitted Rust must reference `RecKindValue` struct; got:\n{prog_rs}"
+    );
+}
+
 /// Compile-only: the Sky.Tui counter emits a Cargo project with the `"tui"`
 /// feature in the default feature list, `crossterm` and `unicode-width` deps,
 /// and `sky_runtime::tui::tui_app_ui` in the `main` function.
@@ -132,12 +271,12 @@ fn compile_and_build(test_name: &str, sky_source: &str) -> Result<std::path::Pat
 /// This is a BUILD-ONLY test — it does not spawn the binary (Tui requires a
 /// real TTY).  A successful `cargo build` is the assertion:
 ///
-/// * Phase-1c constrain: `Tui.app` correctly types the 5-field cfg
-///   (`init/update/view/subscriptions/onKey`).
+/// * Phase-1c constrain: `Tui.app` correctly types the 5-field cfg with a
+///   record-typed `onKey : KeyEvent -> Msg` handler.
 /// * Phase-1c lower: the cfg record literal bypasses SKY-L0107 (same exemption
 ///   as `Live.app`).
 /// * Phase-1c emit: `emit_tui_call` delegates to `tui_app_ui(…)` with the five
-///   handler arguments correctly emitted.
+///   handler arguments correctly emitted, including the `|kind, value|` wrapper.
 /// * Phase-1c manifest: `tui_cargo_toml` adds `"tui"` to default features,
 ///   `crossterm` + `unicode-width` deps, and `"sync"` to tokio.
 ///
