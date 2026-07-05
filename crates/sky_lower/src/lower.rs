@@ -6708,6 +6708,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiWrappedRow
                 // `Ui.grid : List (Attribute msg) -> List (Element msg) -> Element msg`
                 | KernelFn::UiGrid
+                // `Ui.paragraph : List (Attribute msg) -> List (Element msg) -> Element msg`
+                | KernelFn::UiParagraph
+                // `Ui.textColumn : List (Attribute msg) -> List (Element msg) -> Element msg`
+                | KernelFn::UiTextColumn
                 // `Ui.button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } -> Element msg`
                 | KernelFn::UiButton
                 // `Ui.paddingXY : Int -> Int -> Attribute msg`
@@ -6828,6 +6832,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlScript
                 // `Html.body : List (Attribute msg) -> List (Html msg) -> Html msg`
                 | KernelFn::HtmlBody
+                // `Html.title : List (Attribute msg) -> List (Html msg) -> Html msg`
+                | KernelFn::HtmlTitle
                 // `Live.route : String -> page -> LiveRoute` (#106: `page` is a
                 // bare polymorphic value — nullary ctor OR `String -> Page`)
                 | KernelFn::LiveRoute
@@ -7497,6 +7503,8 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "column") => Ok(Callee::Kernel(KernelFn::UiColumn)),
                     ("Ui", "wrappedRow") => Ok(Callee::Kernel(KernelFn::UiWrappedRow)),
                     ("Ui", "grid") => Ok(Callee::Kernel(KernelFn::UiGrid)),
+                    ("Ui", "paragraph") => Ok(Callee::Kernel(KernelFn::UiParagraph)),
+                    ("Ui", "textColumn") => Ok(Callee::Kernel(KernelFn::UiTextColumn)),
                     ("Ui", "button") => Ok(Callee::Kernel(KernelFn::UiButton)),
                     // ── M7: Std.Ui attribute builders ─────────────────────────
                     ("Ui", "spacing") => Ok(Callee::Kernel(KernelFn::UiSpacing)),
@@ -7555,8 +7563,7 @@ impl<'a> Lowerer<'a> {
                     ("Html", "styleNode") => Ok(Callee::Kernel(KernelFn::HtmlStyleNode)),
                     (
                         "Html",
-                        "node" | "voidNode" | "doctype" | "titleNode" | "htmlNode" | "headNode"
-                        | "title",
+                        "node" | "voidNode" | "doctype" | "titleNode" | "htmlNode" | "headNode",
                     ) => Ok(Callee::Kernel(KernelFn::HtmlNode)),
                     ("Html", "div") => Ok(Callee::Kernel(KernelFn::HtmlDiv)),
                     ("Html", "span") => Ok(Callee::Kernel(KernelFn::HtmlSpan)),
@@ -7618,6 +7625,7 @@ impl<'a> Lowerer<'a> {
                     ("Html", "meter") => Ok(Callee::Kernel(KernelFn::HtmlMeter)),
                     ("Html", "script") => Ok(Callee::Kernel(KernelFn::HtmlScript)),
                     ("Html", "body") => Ok(Callee::Kernel(KernelFn::HtmlBody)),
+                    ("Html", "title") => Ok(Callee::Kernel(KernelFn::HtmlTitle)),
                     ("Html", "br") => Ok(Callee::Kernel(KernelFn::HtmlBr)),
                     ("Html", "hr") => Ok(Callee::Kernel(KernelFn::HtmlHr)),
                     ("Html", "meta") => Ok(Callee::Kernel(KernelFn::HtmlMeta)),

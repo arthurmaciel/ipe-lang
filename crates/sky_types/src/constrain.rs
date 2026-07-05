@@ -3431,7 +3431,12 @@ impl<'a> Builder<'a> {
                 fun(cfg_rec, fun(elem_t(var(0)), html_t(var(0))))
             }
             K::UiEl => fun(list(attr(var(0))), fun(elem_t(var(0)), elem_t(var(0)))),
-            K::UiColumn | K::UiRow | K::UiWrappedRow | K::UiGrid => fun(
+            K::UiColumn
+            | K::UiRow
+            | K::UiWrappedRow
+            | K::UiGrid
+            | K::UiParagraph
+            | K::UiTextColumn => fun(
                 list(attr(var(0))),
                 fun(list(elem_t(var(0))), elem_t(var(0))),
             ),
@@ -3928,7 +3933,7 @@ impl<'a> Builder<'a> {
 
             // Std.Html container nodes (arity 2 — attrs, children; tag baked).
             K::HtmlDiv | K::HtmlSpan | K::HtmlA | K::HtmlButton | K::HtmlP
-            | K::HtmlH1 | K::HtmlH2 | K::HtmlH3 | K::HtmlH4 | K::HtmlH5 | K::HtmlH6 | K::HtmlNav | K::HtmlSection | K::HtmlArticle | K::HtmlHeader | K::HtmlFooter | K::HtmlMain | K::HtmlAside | K::HtmlUl | K::HtmlOl | K::HtmlLi | K::HtmlTable | K::HtmlThead | K::HtmlTbody | K::HtmlTfoot | K::HtmlTr | K::HtmlTh | K::HtmlTd | K::HtmlTextarea | K::HtmlSelect | K::HtmlOption | K::HtmlLabel | K::HtmlForm | K::HtmlFieldset | K::HtmlLegend | K::HtmlPre | K::HtmlCode | K::HtmlStrong | K::HtmlEm | K::HtmlSmall | K::HtmlBlockquote | K::HtmlFigure | K::HtmlFigcaption | K::HtmlDetails | K::HtmlSummary | K::HtmlDialog | K::HtmlVideo | K::HtmlAudio | K::HtmlCanvas | K::HtmlIframe | K::HtmlProgress | K::HtmlMeter | K::HtmlScript | K::HtmlBody => fun(
+            | K::HtmlH1 | K::HtmlH2 | K::HtmlH3 | K::HtmlH4 | K::HtmlH5 | K::HtmlH6 | K::HtmlNav | K::HtmlSection | K::HtmlArticle | K::HtmlHeader | K::HtmlFooter | K::HtmlMain | K::HtmlAside | K::HtmlUl | K::HtmlOl | K::HtmlLi | K::HtmlTable | K::HtmlThead | K::HtmlTbody | K::HtmlTfoot | K::HtmlTr | K::HtmlTh | K::HtmlTd | K::HtmlTextarea | K::HtmlSelect | K::HtmlOption | K::HtmlLabel | K::HtmlForm | K::HtmlFieldset | K::HtmlLegend | K::HtmlPre | K::HtmlCode | K::HtmlStrong | K::HtmlEm | K::HtmlSmall | K::HtmlBlockquote | K::HtmlFigure | K::HtmlFigcaption | K::HtmlDetails | K::HtmlSummary | K::HtmlDialog | K::HtmlVideo | K::HtmlAudio | K::HtmlCanvas | K::HtmlIframe | K::HtmlProgress | K::HtmlMeter | K::HtmlScript | K::HtmlBody | K::HtmlTitle => fun(
                 list(html_attr(var(0))),
                 fun(list(html_t(var(0))), html_t(var(0))),
             ),
@@ -5150,6 +5155,8 @@ mod registry_phase_c_tests {
             K::UiNone,
             K::UiText,
             K::UiHtml,
+            K::UiParagraph,
+            K::UiTextColumn,
             K::UiSpacing,
             K::UiPadding,
             K::UiPaddingXY,
@@ -5235,6 +5242,7 @@ mod registry_phase_c_tests {
             K::HtmlMeter,
             K::HtmlScript,
             K::HtmlBody,
+            K::HtmlTitle,
             K::HtmlBr,
             K::HtmlHr,
             K::HtmlMeta,
