@@ -70,6 +70,7 @@ impl<'a> GenericScope<'a> {
 /// Render an IR type to its Rust spelling. `generics` is the enclosing
 /// function's generic scope (empty at program level), used to render
 /// [`IrType::Generic`] as its deterministic Rust generic name.
+#[allow(clippy::too_many_lines)]
 pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResult<String> {
     Ok(match ty {
         IrType::Int => "i64".to_owned(),
