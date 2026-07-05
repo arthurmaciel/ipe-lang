@@ -16,6 +16,7 @@ module Sky.Core.Math exposing
     , mod, remainder
     , pi, e, phi, sqrt2
     , inf, nan
+    , isNaN
     )
 
 
@@ -201,6 +202,11 @@ inf = Ffi.kernel "Math_inf"
 
 
 -- Not-a-Number. `nan == nan` is False (NaN ≠ NaN by IEEE 754);
--- guard via `Math.isNaN` if added in a later release.
+-- use `Math.isNaN` to test for NaN.
 nan : Float
 nan = Ffi.kernel "Math_nan"
+
+
+-- Returns `True` if the argument is NaN (IEEE 754).
+isNaN : Float -> Bool
+isNaN = Ffi.kernel "Math_isNaN"

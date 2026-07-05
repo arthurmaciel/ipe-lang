@@ -34,6 +34,11 @@ pub fn math_nan() -> f64 {
     f64::NAN
 }
 
+/// Returns `true` if `x` is NaN (IEEE 754).  Sky `Math.isNaN : Float -> Bool`.
+pub fn math_is_nan(x: f64) -> bool {
+    x.is_nan()
+}
+
 /// Saturates `i64::MIN` to `i64::MAX` (no-panic rule: `-i64::MIN` is not representable).
 pub fn math_abs(x: i64) -> i64 {
     x.checked_abs().unwrap_or(i64::MAX)
@@ -324,6 +329,14 @@ mod tests {
         {
             assert!(n != n);
         }
+    }
+
+    #[test]
+    fn test_math_is_nan() {
+        assert!(math_is_nan(f64::NAN));
+        assert!(!math_is_nan(0.0));
+        assert!(!math_is_nan(f64::INFINITY));
+        assert!(!math_is_nan(1.0));
     }
 
     #[test]

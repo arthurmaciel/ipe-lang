@@ -399,6 +399,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::MathSqrt2 => "math_sqrt2",
         KernelFn::MathInf => "math_inf",
         KernelFn::MathNan => "math_nan",
+        KernelFn::MathIsNaN => "math_is_nan",
         // ── Math arity-1 (Int → Int) ─────────────────────────────────────────
         KernelFn::MathAbs => "math_abs",
         // ── Math arity-1 (Float → Float) ────────────────────────────────────
