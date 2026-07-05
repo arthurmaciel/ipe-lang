@@ -54,7 +54,7 @@
 
 ### (b) Counts
 
-**17/35 OK** (+10-live-component — #139 poly-tvar map + Access-clone; cargo-sealed). Lanes in flight: #141 (28/37/38 round-2), #140 (17 codegen clusters). Types/canon surface hardened: #136 review closed, #138 total resolution (SKY-N0002 + did-you-mean).
+**18/35 OK** (+17-skymon — #137 deps + #140 TaskSeqSync/case-arm-T5/Access-walk; 45 cargo errors -> 0, sealed). Lane in flight: #144/#145/#146 (diagnostics file-attribution, wildcard text, Ui.Lazy). Queued: #143 Appendable ++ (38), #135, #125, #99, 18/00/02/27/31 tail.
 
 | Status | Count | Examples |
 |---|---|---|
