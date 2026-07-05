@@ -886,6 +886,35 @@ pub enum StdlibKernel {
     UiDescLiveAssertive, // Description (arity 0)
     UiDescHeading,       // Int -> Description (arity 1)
     UiDescLabel,         // String -> Description (arity 1)
+    // ── Std.Ui.Input (#124) ──────────────────────────────────────────────────
+    /// `Input.labelAbove : List (Attribute msg) -> Element msg -> Label msg`
+    InputLabelAbove,
+    /// `Input.labelBelow : List (Attribute msg) -> Element msg -> Label msg`
+    InputLabelBelow,
+    /// `Input.labelLeft : List (Attribute msg) -> Element msg -> Label msg`
+    InputLabelLeft,
+    /// `Input.labelRight : List (Attribute msg) -> Element msg -> Label msg`
+    InputLabelRight,
+    /// `Input.labelHidden : String -> Label msg`
+    InputLabelHidden,
+    /// `Input.placeholder : List (Attribute msg) -> Element msg -> Placeholder msg`
+    InputPlaceholder,
+    /// `Input.text : List (Attribute msg) -> { onChange, text, placeholder, label } -> Element msg`
+    InputText,
+    /// `Input.multiline : List (Attribute msg) -> { onChange, text, placeholder, label, spellcheck } -> Element msg`
+    InputMultiline,
+    /// `Input.email : List (Attribute msg) -> { onChange, text, placeholder, label } -> Element msg`
+    InputEmail,
+    /// `Input.username : List (Attribute msg) -> { onChange, text, placeholder, label } -> Element msg`
+    InputUsername,
+    /// `Input.search : List (Attribute msg) -> { onChange, text, placeholder, label } -> Element msg`
+    InputSearch,
+    /// `Input.currentPassword : List (Attribute msg) -> { onChange, text, placeholder, label } -> Element msg`
+    InputCurrentPassword,
+    /// `Input.newPassword : List (Attribute msg) -> { onChange, text, placeholder, label } -> Element msg`
+    InputNewPassword,
+    /// `Input.checkbox : List (Attribute msg) -> { onChange, icon, checked, label } -> Element msg`
+    InputCheckbox,
 }
 
 impl StdlibKernel {
@@ -1795,6 +1824,22 @@ impl StdlibKernel {
             }
             Self::UiDescHeading => d("Ui", "descHeading", 1, Ui, "ui_desc_heading_"),
             Self::UiDescLabel => d("Ui", "descLabel", 1, Ui, "ui_desc_label_"),
+            // ── Std.Ui.Input (#124) ───────────────────────────────────────────
+            Self::InputLabelAbove => d("Input", "labelAbove", 2, Ui, "input_label_above_"),
+            Self::InputLabelBelow => d("Input", "labelBelow", 2, Ui, "input_label_below_"),
+            Self::InputLabelLeft => d("Input", "labelLeft", 2, Ui, "input_label_left_"),
+            Self::InputLabelRight => d("Input", "labelRight", 2, Ui, "input_label_right_"),
+            Self::InputLabelHidden => d("Input", "labelHidden", 1, Ui, "input_label_hidden_"),
+            Self::InputPlaceholder => d("Input", "placeholder", 2, Ui, "input_placeholder_"),
+            // Record-arg kernels: arity 2 (attrs + cfg record).
+            Self::InputText => d("Input", "text", 2, Ui, "input_text_"),
+            Self::InputMultiline => d("Input", "multiline", 2, Ui, "input_multiline_"),
+            Self::InputEmail => d("Input", "email", 2, Ui, "input_email_"),
+            Self::InputUsername => d("Input", "username", 2, Ui, "input_username_"),
+            Self::InputSearch => d("Input", "search", 2, Ui, "input_search_"),
+            Self::InputCurrentPassword => d("Input", "currentPassword", 2, Ui, "input_current_password_"),
+            Self::InputNewPassword => d("Input", "newPassword", 2, Ui, "input_new_password_"),
+            Self::InputCheckbox => d("Input", "checkbox", 2, Ui, "input_checkbox_"),
         }
     }
 
@@ -2523,6 +2568,21 @@ impl StdlibKernel {
         Self::UiDescLiveAssertive,
         Self::UiDescHeading,
         Self::UiDescLabel,
+        // ── Std.Ui.Input (#124) ───────────────────────────────────────────────
+        Self::InputLabelAbove,
+        Self::InputLabelBelow,
+        Self::InputLabelLeft,
+        Self::InputLabelRight,
+        Self::InputLabelHidden,
+        Self::InputPlaceholder,
+        Self::InputText,
+        Self::InputMultiline,
+        Self::InputEmail,
+        Self::InputUsername,
+        Self::InputSearch,
+        Self::InputCurrentPassword,
+        Self::InputNewPassword,
+        Self::InputCheckbox,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────
@@ -2901,6 +2961,21 @@ impl StdlibKernel {
                 | Self::UiDescLiveAssertive
                 | Self::UiDescHeading
                 | Self::UiDescLabel
+                // ── Std.Ui.Input (#124) ───────────────────────────────────────
+                | Self::InputLabelAbove
+                | Self::InputLabelBelow
+                | Self::InputLabelLeft
+                | Self::InputLabelRight
+                | Self::InputLabelHidden
+                | Self::InputPlaceholder
+                | Self::InputText
+                | Self::InputMultiline
+                | Self::InputEmail
+                | Self::InputUsername
+                | Self::InputSearch
+                | Self::InputCurrentPassword
+                | Self::InputNewPassword
+                | Self::InputCheckbox
         )
     }
 
