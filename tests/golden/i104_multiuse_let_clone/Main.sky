@@ -1,0 +1,20 @@
+module Main exposing (main)
+
+-- #104 seal: a `CloneOk` let-binding (`s : String`) used more than once in
+-- its scope.  Without T5, `string_length(s)` moves `s` in emitted Rust; the
+-- `if`-branches reuse the already-moved value, producing E0382.
+--
+-- T5 fix: `rewrite_multiuse_clones` inserts `.clone()` on all but the last
+-- occurrence (DFS order).  The last bare `Var(s)` is the final consume.
+--
+-- Expected output: "07"
+
+
+pad2 : Int -> String
+pad2 n =
+    let s = String.fromInt n
+    in if String.length s < 2 then "0" ++ s else s
+
+
+main =
+    println (pad2 7)
