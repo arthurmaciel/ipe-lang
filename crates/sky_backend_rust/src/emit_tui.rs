@@ -148,6 +148,16 @@ fn emit_tui_inner(
         )?;
     }
 
+    // #94 seal: gate the Msg type against `tui_app`'s Clone+Send bound.
+    // Same derivable predicate as Live — Msg is never persisted.
+    if let Some(msg_ty) = crate::emit_model_gate::msg_ty_of_update(update_e) {
+        crate::emit_model_gate::check_admissible_msg(
+            ctx,
+            msg_ty,
+            sky_diagnostics::AppShape::Tui,
+        )?;
+    }
+
     let init_s = emit_tui_fn(ctx, init_e, indent, child, generics)?;
     let update_s = emit_tui_fn(ctx, update_e, indent, child, generics)?;
     let view_s = emit_tui_fn(ctx, view_e, indent, child, generics)?;
