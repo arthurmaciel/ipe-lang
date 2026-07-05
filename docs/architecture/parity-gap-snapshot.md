@@ -40,9 +40,9 @@
 | 27-multi-session-chat | 1 | SKY-N0005 | `` `Time` has no member `timeString` `` | L1b | **Advanced** — was N0005 Sub.subscribeTopic; subscribeTopic added, Time.timeString now the gate |
 | 28-streaming-chat | 1 | SKY-N0005 | `` `HttpStream` has no member `chunks` `` | L1b | Unchanged |
 | 29-webview-threejs-spike | 1 | SKY-T0001 | `` `Html.node`: expected a, found Html b `` | L3 | Unchanged |
-| 30-sse-server-demo | 1 | SKY-L0126 | `non-Clone capture in a closure is not yet supported` | L4 | **Advanced** — was L0108 Stream.stream; stream kernel added, non-Clone capture now the gate |
+| 30-sse-server-demo | 0 | — | — | — | **OK** (77d70cd: StreamWriter reclassified CopyLeaf; skyc + cargo verified) |
 | 31-webview-stopwatch-ui | 1 | SKY-T0001 | `` `Ui.layout`: expected a, found Html Main.Msg `` | L3 | **Advanced** — was L0108 Ui.button; Ui.button added, Ui.layout return-type now the gate |
-| 32-sse-relay | 1 | SKY-L0126 | `non-Clone capture in a closure is not yet supported` | L4 | **Advanced** — was L0108 ServerStream.stream; stream kernel added, non-Clone capture now the gate |
+| 32-sse-relay | 0 | — | — | — | **OK** (77d70cd: StreamWriter reclassified CopyLeaf; skyc + cargo verified) |
 | 33-websocket-echo | 1 | SKY-N0004 | `` unknown module `Ws` `` | L1a | Unchanged |
 | 34-multi-tier-console | **0** | — | — | OK | |
 | 37-composite-live-shop | 1 | SKY-N0004 | `` unknown module `Responsive` `` | L1a | Unchanged |
@@ -54,7 +54,7 @@
 
 ### (b) Counts
 
-**9/35 OK** (up from 6/35 at `10611cb`, +3).
+**11/35 OK** (up from 9/35 at `16468d3`, +2: 30-sse-server-demo, 32-sse-relay — StreamWriter clone-class fix, 77d70cd).
 
 | Status | Count | Examples |
 |---|---|---|
