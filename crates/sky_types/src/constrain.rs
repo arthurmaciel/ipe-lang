@@ -3112,19 +3112,29 @@ impl<'a> Builder<'a> {
             K::DbOpen => fun(string(), fun(string(), task(db()))),
             K::DbClose => fun(db(), task_unit()),
             K::DbExecRaw => fun(db(), fun(string(), task(int()))),
-            K::DbExec => fun(db(), fun(string(), fun(list(sqlvalue()), task(int())))),
+            // `exec`/`query`/`queryDecode` accept `List a` (polymorphic) — any
+            // Sky type that can be bound as a SQL parameter: `List String`,
+            // `List Int`, `List Float`, `List Bool`, or `List SqlValue` (typed
+            // mixed-type binding introduced in v0.16.26).  The emitter routes all
+            // three to `db_exec_params` / `db_query_params` /
+            // `db_query_decode_params`, converting elements via
+            // `sky_runtime::db::SqlParam::from` which is implemented for every
+            // Sky-primitive type as well as for the generated `StdDbSqlValue`.
+            K::DbExec => fun(db(), fun(string(), fun(list(var(0)), task(int())))),
             K::DbQuery => fun(
                 db(),
                 fun(
                     string(),
-                    fun(list(sqlvalue()), task(list(dict(string(), string())))),
+                    fun(list(var(0)), task(list(dict(string(), string())))),
                 ),
             ),
             K::DbQueryDecode => fun(
                 db(),
                 fun(
                     string(),
-                    fun(list(sqlvalue()), fun(dec(var(0)), task(list(var(0))))),
+                    // var(1) = element type of the params list (unconstrained);
+                    // var(0) = decoder result type.
+                    fun(list(var(1)), fun(dec(var(0)), task(list(var(0))))),
                 ),
             ),
             K::DbGetString | K::DbGetField => {

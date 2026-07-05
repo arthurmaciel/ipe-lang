@@ -1677,6 +1677,47 @@ pub enum SqlParam {
     Null,
 }
 
+// ── `From<T> for SqlParam` — primitive Sky types ────────────────────────────
+//
+// These impls let the emitter use `sky_runtime::db::SqlParam::from` as a
+// uniform projection function for the polymorphic `exec`/`query` params list
+// (`List a` where `a` may be `String`, `Int`, `Float`, `Bool`, or `SqlValue`).
+// The generated `StdDbSqlValue` type gets a parallel `From` impl emitted by
+// `sky_backend_rust::project::emit_db_projection_impls`, delegating to the
+// existing `into_sql_param` inherent method.
+//
+// Go parity: Go's `database/sql` driver accepts `any` and type-switches at
+// runtime; here the conversion is statically resolved by the Rust type system.
+
+impl From<String> for SqlParam {
+    /// Bind a Sky `String` parameter as SQL TEXT.
+    fn from(s: String) -> Self {
+        SqlParam::Text(s)
+    }
+}
+
+impl From<i64> for SqlParam {
+    /// Bind a Sky `Int` parameter as SQL INTEGER.
+    fn from(i: i64) -> Self {
+        SqlParam::Int(i)
+    }
+}
+
+impl From<f64> for SqlParam {
+    /// Bind a Sky `Float` parameter as SQL REAL.
+    fn from(f: f64) -> Self {
+        SqlParam::Float(f)
+    }
+}
+
+impl From<bool> for SqlParam {
+    /// Bind a Sky `Bool` parameter as SQL INTEGER (0 / 1), matching SQLite
+    /// convention.
+    fn from(b: bool) -> Self {
+        SqlParam::Bool(b)
+    }
+}
+
 /// Validate an SQL identifier (table or column name).
 /// Allows ASCII alphanumeric characters, underscore, and dot.
 /// Rejects empty strings and anything outside that character set.
