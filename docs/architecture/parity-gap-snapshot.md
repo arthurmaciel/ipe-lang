@@ -54,7 +54,7 @@
 
 ### (b) Counts
 
-**16/35 OK** (+21, +22 — Tui onKey pin + #104 last-use clone rewrite; both cargo-sealed). Advanced-not-cleared: 28+37 → SKY-N0003, 38 → SKY-L0108 (post-Chart/Responsive next blockers); 17/10 cross-module ADT lane in flight at pause.
+**16/35 OK.** batch-xm merged: 17/10 cleared T0001 (cross-module nominal identity) but stopped at NEW emit-layer blockers — 17: sqlx/PgPool+LiveReq deps gap (#137); 10: E0308 in emitted project. T0011 now a WARNING (Go parity) with unreachable-arm truncation at lowering; policy review = #136.
 
 | Status | Count | Examples |
 |---|---|---|
