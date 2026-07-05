@@ -887,3 +887,44 @@ pub fn ui_desc_heading_(n: i64) -> Description {
 pub fn ui_desc_label_(s: String) -> Description {
     Description::DescLabel(s)
 }
+
+/// `Ui.paragraph : List (Attribute msg) -> List (Element msg) -> Element msg`
+///
+/// Mirrors `paragraph` in `Std/Ui.sky`: a `<p>`-tagged node carrying
+/// `DescParagraph` plus the `__paragraph` marker (matching `paragraphMarker`),
+/// so text children wrap as inline flow.
+pub fn ui_paragraph_<M: Clone>(
+    attrs: Vec<Attribute<M>>,
+    children: Vec<Element<M>>,
+) -> Element<M> {
+    let mut full = Vec::with_capacity(attrs.len() + 1);
+    full.push(Attribute::AttrStyle(
+        "__paragraph".to_owned(),
+        "true".to_owned(),
+    ));
+    full.extend(attrs);
+    Element::TaggedNode("p".to_owned(), Description::DescParagraph, full, children)
+}
+
+/// `Ui.textColumn : List (Attribute msg) -> List (Element msg) -> Element msg`
+///
+/// Mirrors `textColumn` in `Std/Ui.sky`: a `<section>`-tagged block container
+/// with the `__textcolumn` marker (matching `textColumnMarker`), keeping each
+/// paragraph child on its own line with normal text flow.
+pub fn ui_text_column_<M: Clone>(
+    attrs: Vec<Attribute<M>>,
+    children: Vec<Element<M>>,
+) -> Element<M> {
+    let mut full = Vec::with_capacity(attrs.len() + 1);
+    full.push(Attribute::AttrStyle(
+        "__textcolumn".to_owned(),
+        "true".to_owned(),
+    ));
+    full.extend(attrs);
+    Element::TaggedNode(
+        "section".to_owned(),
+        Description::NoDescription,
+        full,
+        children,
+    )
+}
