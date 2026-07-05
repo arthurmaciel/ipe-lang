@@ -568,6 +568,19 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // same runtime function.
         KernelFn::TaskRun | KernelFn::TaskPerform => "task_run",
         KernelFn::TaskLazy => "task_lazy",
+        // ── Task retry surface — special-case emitter intercepts; names here
+        // are only reached when the special-case path falls through (never in
+        // practice, but needed for exhaustiveness).
+        KernelFn::TaskRetryWith => "task_retry_with",
+        KernelFn::TaskLinearBackoff => "task_linear_backoff",
+        KernelFn::TaskExponentialBackoff => "task_exponential_backoff",
+        KernelFn::TaskWithJitter => "task_with_jitter",
+        KernelFn::TaskRetryOn => "task_retry_on",
+        KernelFn::TaskWithRetryOn => "task_with_retry_on",
+        KernelFn::TaskDefaultRetryPolicy => "task_default_retry_policy",
+        KernelFn::TaskWithMaxAttempts => "task_with_max_attempts",
+        KernelFn::TaskWithBaseMs => "task_with_base_ms",
+        KernelFn::TaskWithKind => "task_with_kind",
         // ── Io kernels (M5a) ──────────────────────────────────────────────────
         KernelFn::IoReadLine => "io_read_line",
         KernelFn::IoWriteStdout => "io_write_stdout",

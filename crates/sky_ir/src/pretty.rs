@@ -511,6 +511,17 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::TaskRun => "Task.run",
         KernelFn::TaskPerform => "Task.perform",
         KernelFn::TaskLazy => "Task.lazy",
+        // ── Task retry surface (M5a) ──────────────────────────────────────────
+        KernelFn::TaskRetryWith => "Task.retryWith",
+        KernelFn::TaskLinearBackoff => "Task.linearBackoff",
+        KernelFn::TaskExponentialBackoff => "Task.exponentialBackoff",
+        KernelFn::TaskWithJitter => "Task.withJitter",
+        KernelFn::TaskRetryOn => "Task.retryOn",
+        KernelFn::TaskWithRetryOn => "Task.withRetryOn",
+        KernelFn::TaskDefaultRetryPolicy => "Task.defaultRetryPolicy",
+        KernelFn::TaskWithMaxAttempts => "Task.withMaxAttempts",
+        KernelFn::TaskWithBaseMs => "Task.withBaseMs",
+        KernelFn::TaskWithKind => "Task.withKind",
         // ── Io kernels (M5a) ──────────────────────────────────────────────────
         KernelFn::IoReadLine => "Io.readLine",
         KernelFn::IoWriteStdout => "Io.writeStdout",

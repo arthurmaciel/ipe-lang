@@ -267,6 +267,17 @@ struct Builtins {
     eq: Symbol,
     /// `"GT"` — the GT constructor of the Order ADT (greater-than).
     gt: Symbol,
+    // ── Task.RetryPolicy field name symbols (M5a retry surface) ──────────────
+    /// `"maxAttempts"` — maximum number of attempts in `RetryPolicy e`.
+    retry_f_max_attempts: Symbol,
+    /// `"baseMs"` — base delay in milliseconds in `RetryPolicy e`.
+    retry_f_base_ms: Symbol,
+    /// `"jitter"` — enable jitter flag in `RetryPolicy e`.
+    retry_f_jitter: Symbol,
+    /// `"kind"` — delay kind (0=linear, 1=exponential) in `RetryPolicy e`.
+    retry_f_kind: Symbol,
+    /// `"shouldRetry"` — predicate field `e -> Bool` in `RetryPolicy e`.
+    retry_f_should_retry: Symbol,
 }
 
 impl Builtins {
@@ -372,6 +383,12 @@ impl Builtins {
             lt: interner.intern("LT")?,
             eq: interner.intern("EQ")?,
             gt: interner.intern("GT")?,
+            // ── Task.RetryPolicy field names (M5a retry surface) ─────────────
+            retry_f_max_attempts: interner.intern("maxAttempts")?,
+            retry_f_base_ms: interner.intern("baseMs")?,
+            retry_f_jitter: interner.intern("jitter")?,
+            retry_f_kind: interner.intern("kind")?,
+            retry_f_should_retry: interner.intern("shouldRetry")?,
         })
     }
 
@@ -2655,6 +2672,20 @@ impl<'a> Builder<'a> {
             req_fields.insert(self.builtins.http_f_url, string());
             Ty::Record(req_fields, RowTail::Closed)
         };
+        // `RetryPolicy e = { baseMs : Int, jitter : Bool, kind : Int,
+        //                    maxAttempts : Int, shouldRetry : e -> Bool }`
+        // Fields sorted alphabetically (BTreeMap order) — this matches the
+        // Rust struct `RecBaseMsJitterKindMaxAttemptsShouldRetry<T1>` that
+        // the backend emits for this record type.
+        let retry_policy = |e: Ty| {
+            let mut rp_fields = BTreeMap::new();
+            rp_fields.insert(self.builtins.retry_f_base_ms, int());
+            rp_fields.insert(self.builtins.retry_f_jitter, bool_ty());
+            rp_fields.insert(self.builtins.retry_f_kind, int());
+            rp_fields.insert(self.builtins.retry_f_max_attempts, int());
+            rp_fields.insert(self.builtins.retry_f_should_retry, fun(e, bool_ty()));
+            Ty::Record(rp_fields, RowTail::Closed)
+        };
         Some(match k {
             // ── String ──
             K::StringFromInt => fun(int(), string()),
@@ -2990,6 +3021,27 @@ impl<'a> Builder<'a> {
             K::TaskPerform => fun(task(var(0)), result(var(1), var(0))),
             // `Task.lazy : (() -> Task e a) -> Task e a`
             K::TaskLazy => fun(fun(Ty::Unit, task(var(0))), task(var(0))),
+            // ── Task retry surface (M5a) ────────────────────────────────────
+            // `linearBackoff : Int -> Int -> RetryPolicy e`
+            K::TaskLinearBackoff => fun(int(), fun(int(), retry_policy(var(0)))),
+            // `exponentialBackoff : Int -> Int -> RetryPolicy e`
+            K::TaskExponentialBackoff => fun(int(), fun(int(), retry_policy(var(0)))),
+            // `withJitter : RetryPolicy e -> RetryPolicy e`
+            K::TaskWithJitter => fun(retry_policy(var(0)), retry_policy(var(0))),
+            // `retryOn / withRetryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e`
+            K::TaskRetryOn | K::TaskWithRetryOn => {
+                fun(fun(var(0), bool_ty()), fun(retry_policy(var(0)), retry_policy(var(0))))
+            }
+            // `defaultRetryPolicy : RetryPolicy e`
+            K::TaskDefaultRetryPolicy => retry_policy(var(0)),
+            // `withMaxAttempts / withBaseMs / withKind : Int -> RetryPolicy e -> RetryPolicy e`
+            K::TaskWithMaxAttempts | K::TaskWithBaseMs | K::TaskWithKind => {
+                fun(int(), fun(retry_policy(var(0)), retry_policy(var(0))))
+            }
+            // `retryWith : RetryPolicy Error -> Task Error a -> Task Error a`
+            K::TaskRetryWith => {
+                fun(retry_policy(error_ty()), fun(task(var(0)), task(var(0))))
+            }
 
             // ── Io / File / System: String -> Task () ──
             K::IoWriteStdout
@@ -4492,6 +4544,16 @@ mod registry_phase_c_tests {
             K::TaskRun,
             K::TaskPerform,
             K::TaskLazy,
+            K::TaskRetryWith,
+            K::TaskLinearBackoff,
+            K::TaskExponentialBackoff,
+            K::TaskWithJitter,
+            K::TaskRetryOn,
+            K::TaskWithRetryOn,
+            K::TaskDefaultRetryPolicy,
+            K::TaskWithMaxAttempts,
+            K::TaskWithBaseMs,
+            K::TaskWithKind,
             // Io (3)
             K::IoReadLine,
             K::IoWriteStdout,
