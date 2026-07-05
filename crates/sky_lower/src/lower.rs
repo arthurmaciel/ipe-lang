@@ -2393,6 +2393,21 @@ pub struct Lowerer<'a> {
     /// builder recorded.  Interior mutability so `lower_def` can update it through
     /// the shared `&self` reference that the lowering walk uses.
     current_home: std::cell::RefCell<Vec<Symbol>>,
+    /// Reverse map from union-find representative id to annotation variable
+    /// symbol for the typed def currently being lowered.  Populated by
+    /// [`Self::lower_def`] from [`SolvedTypes::poly_var_map`] before recursing
+    /// into the body; cleared (restored to empty) afterward.
+    ///
+    /// Used by [`Self::ir_type_from_ty_ui_msg`] to distinguish a `Ty::Var` that
+    /// represents an enclosing generic type parameter (→ `IrType::Generic(sym)`)
+    /// from a `Ty::Var` that is a truly unconstrained, message-free UI subtree
+    /// placeholder (→ `IrType::Unit`, which emits `Html<()>` / `Attribute<()>`).
+    ///
+    /// Without this distinction every `Ty::Var` in a UI msg position was mapped
+    /// to `IrType::Unit`, causing E0308 (`Attribute<()>` vs `Attribute<T1>`) in
+    /// the Rust emitted for polymorphic functions such as
+    /// `view : (Msg -> parentMsg) -> Counter -> Html parentMsg`.
+    current_poly_tvars: std::cell::RefCell<BTreeMap<u32, Symbol>>,
 }
 
 /// The interned symbols of the built-in `Maybe` / `Result` types and their
@@ -2636,6 +2651,7 @@ impl<'a> Lowerer<'a> {
             param_binders,
             param_cursor: Cell::new(0),
             current_home: std::cell::RefCell::new(Vec::new()),
+            current_poly_tvars: std::cell::RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -3071,11 +3087,33 @@ impl<'a> Lowerer<'a> {
                 // the annotation type and handles both 0-parameter and N-parameter
                 // bindings correctly.
                 let (params, prologue, ret) = self.split_typed_sig(ty, patterns, free_vars)?;
+                // Install the binding's generic type-variable map so
+                // `ir_type_from_ty_ui_msg` can distinguish a `Ty::Var` that is an
+                // enclosing generic (→ `IrType::Generic`) from one that is a
+                // message-free UI subtree placeholder (→ `IrType::Unit`).  The map
+                // is cleared (restored to empty) after the body is lowered, so
+                // nested annotated lambdas only see their own outer binding's map —
+                // lambdas are not `Def::Typed`, so there is no inner install that
+                // would conflict.
+                let poly_key = (def.home().to_vec(), name);
+                let saved_poly_tvars = {
+                    let poly = self
+                        .types
+                        .poly_var_map
+                        .get(&poly_key)
+                        .cloned()
+                        .unwrap_or_default();
+                    let mut slot = self.current_poly_tvars.borrow_mut();
+                    let saved = slot.clone();
+                    *slot = poly;
+                    saved
+                };
                 // A tuple-destructuring parameter binds its synthetic name to the
                 // tuple, then the body opens it with a `Destructure`. Fold the
                 // prologue OUTERMOST-first (reverse) so the first parameter's
                 // destructure is the outermost binding, matching source order.
                 let mut lowered_body = self.lower_expr(body)?;
+                *self.current_poly_tvars.borrow_mut() = saved_poly_tvars;
                 for (binder_sym, binder_pat) in prologue.into_iter().rev() {
                     lowered_body = Expr::Destructure {
                         binder: binder_pat,
@@ -4472,9 +4510,33 @@ impl<'a> Lowerer<'a> {
     /// `Html<JsonVal>` which conflicts with the typed callee's `Html<MainMsg>`.
     fn ir_type_from_ty_ui_msg(&self, t: &Ty, span: Span) -> DResult<IrType> {
         match t {
-            // A free type variable in msg position is a message-free subtree.
-            // Unit is the Rust conventional placeholder (`Html<()>`).
-            Ty::Var(_) => Ok(IrType::Unit),
+            // A type variable in msg position is either:
+            //
+            //   (a) an enclosing annotated function's generic type parameter —
+            //       e.g. `parentMsg` in `view : (Msg -> parentMsg) -> Counter ->
+            //       Html parentMsg`.  Region types inside the body carry this as
+            //       `Ty::Var(uf_rep)` where `uf_rep` is the union-find
+            //       representative of the rigid (skolem) created for `parentMsg`.
+            //       → emit `IrType::Generic(sym)` so the backend produces
+            //       `Attribute<T1>` rather than `Attribute<()>`, avoiding E0308.
+            //
+            //   (b) a truly unconstrained, message-free subtree — e.g. the element
+            //       type of `[]` when the list's msg was never pinned to a concrete
+            //       type.
+            //       → emit `IrType::Unit` (Rust conventional `Html<()>`).
+            //
+            // `current_poly_tvars` (populated by `lower_def` for each `Def::Typed`
+            // before it recurses into the body, and restored afterward) maps
+            // uf_rep → annotation var symbol for the current enclosing function.
+            // An empty map (unannotated or non-polymorphic context) always falls
+            // through to `IrType::Unit`.
+            Ty::Var(v) => {
+                if let Some(&sym) = self.current_poly_tvars.borrow().get(v) {
+                    Ok(IrType::Generic(sym))
+                } else {
+                    Ok(IrType::Unit)
+                }
+            }
             // All other forms delegate to the strict helper — a concrete `Msg`
             // type becomes `IrType::Enum(Msg)`, `()` becomes `IrType::Unit`, etc.
             _ => self.ir_type_from_ty(t, span),
@@ -8630,6 +8692,7 @@ mod tests {
             regions: BTreeMap::new(),
             bounds: BTreeMap::new(),
             warnings: Vec::new(),
+            poly_var_map: BTreeMap::new(),
         };
 
         // Immutable borrow of interner starts here — no more intern() calls.

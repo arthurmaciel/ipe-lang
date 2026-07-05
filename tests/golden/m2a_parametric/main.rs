@@ -235,13 +235,13 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     sky_runtime::http_client::http_parse_query(raw)
 }
 
-pub fn main_identity<T1>(x: T1) -> T1 {
+pub fn main_identity<T1: Clone>(x: T1) -> T1 {
     x
 }
-pub fn main_const<T1, T2>(x: T1, y: T2) -> T1 {
+pub fn main_const<T1: Clone, T2: Clone>(x: T1, y: T2) -> T1 {
     x
 }
-pub fn main_apply<T1, T2>(f: Box<dyn Fn(T1) -> T2 + Send + 'static>, x: T1) -> T2 {
+pub fn main_apply<T1: Clone, T2: Clone>(f: Box<dyn Fn(T1) -> T2 + Send + 'static>, x: T1) -> T2 {
     (f)(x)
 }
 pub fn sky_main() -> SkyTask<()> {
