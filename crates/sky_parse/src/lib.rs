@@ -1852,7 +1852,7 @@ mod tests {
         assert_eq!(toks.len(), 1, "must produce exactly one token");
         assert_eq!(
             toks.first().map(|t| t.kind.clone()),
-            Some(Tok::Str(r#"<div class="card"></div>"#.to_owned())),
+            Some(Tok::TripleStr(r#"<div class="card"></div>"#.to_owned())),
             "content including embedded quote is preserved verbatim"
         );
     }
@@ -1868,7 +1868,7 @@ mod tests {
         assert_eq!(toks.len(), 1);
         assert_eq!(
             toks.first().map(|t| t.kind.clone()),
-            Some(Tok::Str("before\"\"after".to_owned())),
+            Some(Tok::TripleStr("before\"\"after".to_owned())),
         );
     }
 
@@ -1883,7 +1883,7 @@ mod tests {
         assert_eq!(toks.len(), 1);
         assert_eq!(
             toks.first().map(|t| t.kind.clone()),
-            Some(Tok::Str("hello {{name}}!".to_owned())),
+            Some(Tok::TripleStr("hello {{name}}!".to_owned())),
         );
     }
 
@@ -1897,7 +1897,7 @@ mod tests {
         assert_eq!(toks.len(), 1);
         assert_eq!(
             toks.first().map(|t| t.kind.clone()),
-            Some(Tok::Str(r"price: \{{amount}}".to_owned())),
+            Some(Tok::TripleStr(r"price: \{{amount}}".to_owned())),
         );
     }
 
@@ -1912,7 +1912,7 @@ mod tests {
         assert_eq!(toks.len(), 1);
         assert_eq!(
             toks.first().map(|t| t.kind.clone()),
-            Some(Tok::Str("a\\\\b".to_owned())),
+            Some(Tok::TripleStr("a\\\\b".to_owned())),
         );
     }
 
@@ -1925,7 +1925,7 @@ mod tests {
         assert_eq!(toks.len(), 1);
         assert_eq!(
             toks.first().map(|t| t.kind.clone()),
-            Some(Tok::Str("line one\nline two\nline three".to_owned())),
+            Some(Tok::TripleStr("line one\nline two\nline three".to_owned())),
         );
     }
 
@@ -1967,7 +1967,7 @@ mod tests {
         assert_eq!(toks.len(), 1);
         assert_eq!(
             toks.first().map(|t| t.kind.clone()),
-            Some(Tok::Str(String::new()))
+            Some(Tok::TripleStr(String::new()))
         );
     }
 
