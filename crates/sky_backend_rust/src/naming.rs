@@ -236,6 +236,7 @@ pub fn record_struct_name(field_names: &[String]) -> String {
 #[allow(clippy::too_many_lines)]
 pub const fn kernel_name(k: KernelFn) -> &'static str {
     match k {
+        KernelFn::BasicsCompare => "basics_compare",
         KernelFn::StringFromInt => "string_from_int",
         KernelFn::StringFromFloat => "string_from_float",
         // ── String arity-1 ──────────────────────────────────────────────────

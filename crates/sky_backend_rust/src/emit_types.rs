@@ -73,6 +73,7 @@ impl<'a> GenericScope<'a> {
 #[allow(clippy::too_many_lines)]
 pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResult<String> {
     Ok(match ty {
+        IrType::Order => "sky_runtime::basics::SkyOrder".to_owned(),
         IrType::Int => "i64".to_owned(),
         IrType::Float => "f64".to_owned(),
         IrType::Bool => "bool".to_owned(),
