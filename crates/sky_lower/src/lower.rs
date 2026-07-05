@@ -202,9 +202,23 @@ fn embeds_nonderivable_function(interner: &Interner, ty: &Ty) -> bool {
         Ty::Con { args, .. } => args
             .iter()
             .any(|a| ty_contains_fun(a) || embeds_nonderivable_function(interner, a)),
-        Ty::Record(fields, _) => fields
-            .values()
-            .any(|f| ty_contains_fun(f) || embeds_nonderivable_function(interner, f)),
+        Ty::Record(fields, _) => {
+            // Exempt the anonymous `RetryPolicy e` record — a kernel-managed type
+            // whose emitter writes a dedicated non-derivable Rust struct.  Identified
+            // by the presence of a `shouldRetry` key: no other stdlib or user record
+            // carries that name.  A user who literally writes `{ shouldRetry = \_ ->
+            // True, … }` still trips `reject_function_valued_field` at the field-value
+            // level before reaching this path (record literals skip this gate).
+            if fields
+                .keys()
+                .any(|k| interner.resolve(*k) == Some("shouldRetry"))
+            {
+                return false;
+            }
+            fields
+                .values()
+                .any(|f| ty_contains_fun(f) || embeds_nonderivable_function(interner, f))
+        }
     }
 }
 
@@ -2532,7 +2546,18 @@ impl<'a> Lowerer<'a> {
                     // consumed structurally by `emit_live_app_inner` (never
                     // materialised as a runtime value), so its IR struct is
                     // not needed.
-                    if !ir_contains_fun(&ir) && !out.contains(&ir) {
+                    //
+                    // EXCEPTION — `RetryPolicy e`: this anonymous record (identified
+                    // by a `shouldRetry` field) IS materialised as a runtime value
+                    // passed to `task_retry_with`.  Its Rust struct is emitted by
+                    // `emit_task_retry_call` and MUST be registered here despite
+                    // carrying a function-typed field.  The backend emits the struct
+                    // with `shouldRetry: Box<dyn Fn(…) -> …>` and skips the `Clone`
+                    // / `PartialEq` derives for that field.
+                    let is_retry_policy = fields
+                        .keys()
+                        .any(|k| self.interner.resolve(*k) == Some("shouldRetry"));
+                    if (!ir_contains_fun(&ir) || is_retry_policy) && !out.contains(&ir) {
                         out.push(ir);
                     }
                 }
@@ -5124,7 +5149,9 @@ impl<'a> Lowerer<'a> {
                 // ── Error nullary constructors (#86) : `Error` ────────────────
                 | KernelFn::ErrorTimeout
                 | KernelFn::ErrorNotFound
-                | KernelFn::ErrorPermissionDenied,
+                | KernelFn::ErrorPermissionDenied
+                // ── Task.defaultRetryPolicy — arity 0 ────────────────────────
+                | KernelFn::TaskDefaultRetryPolicy,
             ) => Ok(0),
             Callee::Kernel(
                 KernelFn::StringFromInt
@@ -5271,6 +5298,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TaskRun
                 | KernelFn::TaskPerform
                 | KernelFn::TaskLazy
+                // ── Task.withJitter — arity 1 ────────────────────────────────
+                | KernelFn::TaskWithJitter
                 // ── Io arity-1 (M5a) ──────────────────────────────────────────
                 | KernelFn::IoReadLine
                 | KernelFn::IoWriteStdout
@@ -5475,6 +5504,15 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TaskMapError
                 | KernelFn::TaskOnError
                 | KernelFn::TaskAndThenResult
+                // ── Task retry surface arity-2 ────────────────────────────────
+                | KernelFn::TaskRetryWith
+                | KernelFn::TaskLinearBackoff
+                | KernelFn::TaskExponentialBackoff
+                | KernelFn::TaskRetryOn
+                | KernelFn::TaskWithRetryOn
+                | KernelFn::TaskWithMaxAttempts
+                | KernelFn::TaskWithBaseMs
+                | KernelFn::TaskWithKind
                 // ── System arity-2 (M5a) ──────────────────────────────────────
                 | KernelFn::SystemGetenvOr
                 | KernelFn::SystemSetenv
@@ -6541,6 +6579,23 @@ impl<'a> Lowerer<'a> {
                     ("Task", "run") => Ok(Callee::Kernel(KernelFn::TaskRun)),
                     ("Task", "perform") => Ok(Callee::Kernel(KernelFn::TaskPerform)),
                     ("Task", "lazy") => Ok(Callee::Kernel(KernelFn::TaskLazy)),
+                    // ── Task retry surface (M5a) ──────────────────────────────
+                    ("Task", "retryWith") => Ok(Callee::Kernel(KernelFn::TaskRetryWith)),
+                    ("Task", "linearBackoff") => Ok(Callee::Kernel(KernelFn::TaskLinearBackoff)),
+                    ("Task", "exponentialBackoff") => {
+                        Ok(Callee::Kernel(KernelFn::TaskExponentialBackoff))
+                    }
+                    ("Task", "withJitter") => Ok(Callee::Kernel(KernelFn::TaskWithJitter)),
+                    ("Task", "retryOn") => Ok(Callee::Kernel(KernelFn::TaskRetryOn)),
+                    ("Task", "withRetryOn") => Ok(Callee::Kernel(KernelFn::TaskWithRetryOn)),
+                    ("Task", "defaultRetryPolicy") => {
+                        Ok(Callee::Kernel(KernelFn::TaskDefaultRetryPolicy))
+                    }
+                    ("Task", "withMaxAttempts") => {
+                        Ok(Callee::Kernel(KernelFn::TaskWithMaxAttempts))
+                    }
+                    ("Task", "withBaseMs") => Ok(Callee::Kernel(KernelFn::TaskWithBaseMs)),
+                    ("Task", "withKind") => Ok(Callee::Kernel(KernelFn::TaskWithKind)),
                     // ── Io kernels (M5a) ──────────────────────────────────────
                     ("Io", "readLine") => Ok(Callee::Kernel(KernelFn::IoReadLine)),
                     ("Io", "writeStdout") => Ok(Callee::Kernel(KernelFn::IoWriteStdout)),

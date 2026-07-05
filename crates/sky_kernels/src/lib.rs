@@ -455,6 +455,35 @@ pub enum StdlibKernel {
     TaskPerform,
     /// `Task.lazy : (() -> Task e a) -> Task e a` — deferred task creation.
     TaskLazy,
+    // ── Task retry surface (M5a retryWith) ──────────────────────────────────
+    /// `Task.retryWith : RetryPolicy Error -> Task Error a -> Task Error a`
+    /// Runs the task retrying per policy on failure.
+    TaskRetryWith,
+    /// `Task.linearBackoff : Int -> Int -> RetryPolicy e`
+    /// Constant-delay policy; kind=0.
+    TaskLinearBackoff,
+    /// `Task.exponentialBackoff : Int -> Int -> RetryPolicy e`
+    /// Exponential back-off policy; kind=1.
+    TaskExponentialBackoff,
+    /// `Task.withJitter : RetryPolicy e -> RetryPolicy e`
+    /// Enables random jitter on the policy.
+    TaskWithJitter,
+    /// `Task.retryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e`
+    /// Sets the shouldRetry predicate.
+    TaskRetryOn,
+    /// `Task.withRetryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e`
+    /// Alias for retryOn.
+    TaskWithRetryOn,
+    /// `Task.defaultRetryPolicy : RetryPolicy e`
+    /// 3 attempts, 500 ms exponential, no jitter, retry-all.
+    TaskDefaultRetryPolicy,
+    /// `Task.withMaxAttempts : Int -> RetryPolicy e -> RetryPolicy e`
+    TaskWithMaxAttempts,
+    /// `Task.withBaseMs : Int -> RetryPolicy e -> RetryPolicy e`
+    TaskWithBaseMs,
+    /// `Task.withKind : Int -> RetryPolicy e -> RetryPolicy e`
+    /// 0 = linear, 1 = exponential.
+    TaskWithKind,
     // ── Io ──────────────────────────────────────────────────────────────────
     IoReadLine,
     IoWriteStdout,
@@ -1352,6 +1381,23 @@ impl StdlibKernel {
             Self::TaskRun => d("Task", "run", 1, Pure, "task_run"),
             Self::TaskPerform => d("Task", "perform", 1, Pure, "task_run"),
             Self::TaskLazy => d("Task", "lazy", 1, Pure, "task_lazy"),
+            // ── Task retry surface (special-case emitter in emit_expr.rs) ───
+            Self::TaskRetryWith => d("Task", "retryWith", 2, Pure, "task_retry_with"),
+            Self::TaskLinearBackoff => d("Task", "linearBackoff", 2, Pure, "task_linear_backoff"),
+            Self::TaskExponentialBackoff => {
+                d("Task", "exponentialBackoff", 2, Pure, "task_exponential_backoff")
+            }
+            Self::TaskWithJitter => d("Task", "withJitter", 1, Pure, "task_with_jitter"),
+            Self::TaskRetryOn => d("Task", "retryOn", 2, Pure, "task_retry_on"),
+            Self::TaskWithRetryOn => d("Task", "withRetryOn", 2, Pure, "task_with_retry_on"),
+            Self::TaskDefaultRetryPolicy => {
+                d("Task", "defaultRetryPolicy", 0, Pure, "task_default_retry_policy")
+            }
+            Self::TaskWithMaxAttempts => {
+                d("Task", "withMaxAttempts", 2, Pure, "task_with_max_attempts")
+            }
+            Self::TaskWithBaseMs => d("Task", "withBaseMs", 2, Pure, "task_with_base_ms"),
+            Self::TaskWithKind => d("Task", "withKind", 2, Pure, "task_with_kind"),
             // ── Io ──────────────────────────────────────────────────────────
             Self::IoReadLine => d("Io", "readLine", 0, Pure, "io_read_line"),
             Self::IoWriteStdout => d("Io", "writeStdout", 1, Pure, "io_write_stdout"),
@@ -2182,6 +2228,16 @@ impl StdlibKernel {
         Self::TaskRun,
         Self::TaskPerform,
         Self::TaskLazy,
+        Self::TaskRetryWith,
+        Self::TaskLinearBackoff,
+        Self::TaskExponentialBackoff,
+        Self::TaskWithJitter,
+        Self::TaskRetryOn,
+        Self::TaskWithRetryOn,
+        Self::TaskDefaultRetryPolicy,
+        Self::TaskWithMaxAttempts,
+        Self::TaskWithBaseMs,
+        Self::TaskWithKind,
         // Io
         Self::IoReadLine,
         Self::IoWriteStdout,
