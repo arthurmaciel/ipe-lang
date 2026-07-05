@@ -718,6 +718,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiWhite => "Ui.white",
         KernelFn::UiBlack => "Ui.black",
         KernelFn::UiTransparent => "Ui.transparent",
+        KernelFn::UiColorCss => "Ui.colorCss",
         // ── M7: Background / Border / Font sub-modules ───────────────────────
         KernelFn::BackgroundColor => "Background.color",
         KernelFn::BackgroundImage => "Background.image",
@@ -931,6 +932,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HttpStreamOpen => "HttpStream.open",
         KernelFn::HttpStreamForEachChunk => "HttpStream.forEachChunk",
         KernelFn::HttpStreamClose => "HttpStream.close",
+        KernelFn::HttpStreamChunks => "HttpStream.chunks",
         // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
         KernelFn::WsDefaultCfg => "Ws.defaultCfg",
         KernelFn::WsWithOnConnect => "Ws.withOnConnect",
