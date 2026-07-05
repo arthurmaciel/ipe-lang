@@ -199,17 +199,26 @@ const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub 
 /// `live/mod.rs` is gated by the `live` Cargo feature in the runtime source;
 /// this addition wires the `live` module (and its public re-exports `live_app`,
 /// `live_app_routed`, `live_render_static`, `live::route::Route`,
-/// `sub_subscribe_topic`) into the module namespace so the generated `main.rs`
-/// can call them.
+/// `sub_subscribe_topic`, `LiveReq`) into the module namespace so the generated
+/// `main.rs` can call them.
 ///
 /// `sub_subscribe_topic` is the `Sub.subscribeTopic` runtime kernel (M5d); it
 /// lives in `live/pubsub.rs` because it needs the session-aware broker.
+///
+/// `LiveReq` MUST be re-exported here (transitive-closure invariant). The
+/// runtime's `db.rs` module contains a `#[cfg(feature = "live")] impl SkyRow for
+/// super::LiveReq` block — `super::LiveReq` means `sky_runtime::LiveReq`. In the
+/// real runtime source `mod.rs` uses `pub use live::*;` which surfaces `LiveReq`
+/// (via `live/mod.rs`'s own `pub use req::*;`), but the emitted project uses a
+/// selective export list.  Without `LiveReq` here, any program that uses BOTH Db
+/// and Live kernels fails with E0412 (`LiveReq in super` not found) at
+/// `db.rs:impl SkyRow for super::LiveReq`.
 ///
 /// The `route` sub-module is referenced by path (`sky_runtime::live::route::Route`)
 /// not via `pub use live::*;` (to avoid surfacing the internal `store` / `req`
 /// internals in the top-level namespace).
 const RUNTIME_MOD_RS_LIVE_APPEND: &str = "#[cfg(feature = \"live\")]\npub mod live;\n\
-     #[cfg(feature = \"live\")]\npub use live::{live_app, live_app_routed, live_render_static, sub_subscribe_topic};\n";
+     #[cfg(feature = \"live\")]\npub use live::{live_app, live_app_routed, live_render_static, sub_subscribe_topic, LiveReq};\n";
 
 /// The `SkyCmd<M>` and `SkySub<M>` project-level type aliases emitted when the
 /// program uses TEA kernels. Placed immediately after `runtime_bindings()` (the
@@ -719,6 +728,24 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
     // golden emits `net`+`sync` for the HTTP server, so add the two missing features.
     const TOKIO_NET_SYNC_FEATURES: &str = "\"time\", \"net\", \"sync\"]";
     const TOKIO_LIVE_FEATURES: &str = "\"time\", \"net\", \"sync\", \"signal\", \"process\"]";
+    // Transitive-closure invariant (#137): the runtime's `live/store.rs` defines
+    // `PostgresStore` gated on `#[cfg(feature = "db")]`, which uses `sqlx::PgPool`.
+    // `sqlx::PgPool` requires the `postgres` sqlx feature.  When a program uses
+    // BOTH Db and Live, `db_cargo_toml` has already injected the sqlx dep with
+    // `["runtime-tokio-rustls", "sqlite"]`; this step extends it with `"postgres"`
+    // so that the `PostgresStore` code compiles.
+    //
+    // `SQLX_SQLITE_FEATURES` uniquely identifies the sqlx dep written by
+    // `db_cargo_toml` — `runtime-tokio-rustls` is a sqlx-specific feature, so
+    // this pattern never collides with another dep's feature list.
+    //
+    // Fail-open (no CompilerBug guard): when the program uses Live but NOT Db, the
+    // sqlx dep is absent from the manifest and the `replacen` is a no-op, which is
+    // correct — a Live-only program does not need the `postgres` feature.
+    const SQLX_SQLITE_FEATURES: &str =
+        "features = [\"runtime-tokio-rustls\", \"sqlite\"]";
+    const SQLX_POSTGRES_FEATURES: &str =
+        "features = [\"runtime-tokio-rustls\", \"sqlite\", \"postgres\"]";
     // Versions + names from the SSOT; these three are bare `name = "ver"` deps.
     let live_deps = format!(
         "{} = \"{}\"\n{} = \"{}\"\n{} = \"{}\"\n\n",
@@ -778,6 +805,13 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
     result.push_str(step1.get(..anchor_pos).unwrap_or(""));
     result.push_str(&live_deps);
     result.push_str(step1.get(anchor_pos..).unwrap_or(""));
+
+    // Step 3 — extend the sqlx dep with the `postgres` feature when the
+    // program also uses Db (db_cargo_toml ran before live_cargo_toml and
+    // injected the sqlite-only sqlx dep; we promote it here so the live
+    // session-store's `PostgresStore` — which references `sqlx::PgPool` — can
+    // compile).  No-op when sqlx is absent (Live-only, no Db).
+    let result = result.replacen(SQLX_SQLITE_FEATURES, SQLX_POSTGRES_FEATURES, 1);
     Ok(result)
 }
 
@@ -1066,7 +1100,9 @@ impl {sf} {{
 
 #[cfg(test)]
 mod tests {
-    use super::{CARGO_TOML, db_cargo_toml, server_cargo_toml};
+    use super::{
+        CARGO_TOML, RUNTIME_MOD_RS_LIVE_APPEND, db_cargo_toml, live_cargo_toml, server_cargo_toml,
+    };
     use crate::crate_specs;
 
     /// Helper: extract the `default = [...]` line from a manifest string.
@@ -1166,6 +1202,88 @@ mod tests {
                 crate_specs::AXUM.version
             )),
             "server manifest must emit SSOT axum version:\n{srv}"
+        );
+    }
+
+    // ── #137 seal tests: Db+Live closure ─────────────────────────────────────
+
+    /// `live_cargo_toml` on a DB+Server base manifest must extend the sqlx dep
+    /// with the `"postgres"` feature.
+    ///
+    /// Root cause: `live/store.rs`'s `PostgresStore` references `sqlx::PgPool`
+    /// gated on `#[cfg(feature = "db")]`.  The runtime's own `Cargo.toml` has
+    /// `["runtime-tokio-rustls", "sqlite", "postgres"]`; the emitted project must
+    /// match.  Without this, a Db+Live program passes `skyc` then fails `cargo
+    /// build` with E0433 (`use of undeclared crate or module sqlx` in
+    /// `PgPool::connect`).
+    ///
+    /// Note: in `emit_program` the call chain is always
+    /// `db_cargo_toml → server_cargo_toml → live_cargo_toml` when a program
+    /// uses Db AND Live. `live_cargo_toml` expects the tokio `"net"/"sync"`
+    /// features already present from `server_cargo_toml`, so the test must mirror
+    /// that composition order.
+    #[test]
+    fn live_db_toml_includes_postgres() {
+        let db_base = db_cargo_toml().expect("db_cargo_toml must succeed");
+        // server_cargo_toml always runs before live_cargo_toml when uses_live is
+        // true (see emit_program).  It adds the tokio net+sync features that
+        // live_cargo_toml's anchor requires.
+        let server_base =
+            server_cargo_toml(&db_base).expect("server_cargo_toml on db base must succeed");
+        let out =
+            live_cargo_toml(&server_base).expect("live_cargo_toml on db+server base must succeed");
+        // The sqlx line must carry the postgres feature.
+        let sqlx_line = out
+            .lines()
+            .find(|l| l.trim_start().starts_with(crate_specs::SQLX.name))
+            .expect("sqlx dep must be present in a db+live manifest");
+        assert!(
+            sqlx_line.contains("\"postgres\""),
+            "sqlx dep must include the postgres feature (E0433 fix): {sqlx_line}"
+        );
+        // Regression: sqlite must still be present.
+        assert!(
+            sqlx_line.contains("\"sqlite\""),
+            "sqlx dep must still include the sqlite feature (no regression): {sqlx_line}"
+        );
+        // Regression: the live feature must be in the default list.
+        let def_line = out
+            .lines()
+            .find(|l| l.starts_with("default = ["))
+            .expect("manifest must contain a default = [...] line");
+        assert!(
+            def_line.contains(r#""live""#),
+            "live feature must be in the default list: {def_line}"
+        );
+    }
+
+    /// `live_cargo_toml` on a LIVE-ONLY (non-db) base manifest must NOT add a
+    /// postgres dep (no sqlx line exists, no-op replace).
+    #[test]
+    fn live_only_toml_no_postgres() {
+        let server_base = server_cargo_toml(CARGO_TOML).expect("server_cargo_toml must succeed");
+        let out = live_cargo_toml(&server_base).expect("live_cargo_toml on non-db base must succeed");
+        assert!(
+            !out.contains("\"postgres\""),
+            "a Live-only (no Db) manifest must NOT contain the postgres feature: {out}"
+        );
+    }
+
+    /// `RUNTIME_MOD_RS_LIVE_APPEND` must re-export `LiveReq` from the `live`
+    /// module.
+    ///
+    /// Root cause: `db.rs` has `#[cfg(feature = "live")] impl SkyRow for
+    /// super::LiveReq` — `super::LiveReq` means `sky_runtime::LiveReq`.  The
+    /// runtime source's `mod.rs` uses `pub use live::*;` which surfaces `LiveReq`
+    /// (via `live/mod.rs`'s `pub use req::*;`).  The emitted project uses a
+    /// selective export list; without `LiveReq` a Db+Live program fails with E0412.
+    #[test]
+    fn live_mod_rs_exports_live_req() {
+        assert!(
+            RUNTIME_MOD_RS_LIVE_APPEND.contains("LiveReq"),
+            "RUNTIME_MOD_RS_LIVE_APPEND must re-export LiveReq from the live module (E0412 fix): \
+             {}",
+            RUNTIME_MOD_RS_LIVE_APPEND
         );
     }
 }
