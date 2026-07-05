@@ -58,6 +58,16 @@ fn super_concrete_ok(interner: &Interner, bounds: TyBounds, flat: &FlatType) -> 
     };
     let number_ok = matches!(prim, Some("Int" | "Float"));
     let ord_ok = matches!(prim, Some("Int" | "Float" | "Char" | "String" | "Bool"));
+    // `++` accepts `String` (bare scalar) or `List _` (one type arg). The `prim`
+    // path already covers `String`; `List` must be checked separately because it
+    // carries one argument and the `args.is_empty()` guard above excludes it.
+    let appendable_ok = matches!(prim, Some("String"))
+        || matches!(flat,
+            FlatType::Con { module, name, args }
+                if module.is_empty()
+                    && args.len() == 1
+                    && interner.resolve(*name) == Some("List")
+        );
     // A `Set` element / `Dict` key obligation is a Sky `comparable` — the same
     // scalar set ordering admits. `Float` passes here (it IS `comparable` in
     // Sky, so the typing follows Sky), and the Rust-backend reality that `f64`
@@ -66,6 +76,7 @@ fn super_concrete_ok(interner: &Interner, bounds: TyBounds, flat: &FlatType) -> 
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
         && (!bounds.has_comparable_key() || ord_ok)
+        && (!bounds.has_append() || appendable_ok)
 }
 
 /// Unify the types of variables `a` and `b` in place.
