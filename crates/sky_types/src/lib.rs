@@ -66,15 +66,24 @@ pub struct SolvedTypes {
     /// path and the bare name; looking up by bare name alone is unsound when
     /// cross-module defs share a name.
     pub env: BTreeMap<(Vec<Symbol>, Symbol), Ty>,
-    /// Type of each sub-expression source region, keyed by its [`Span`]. Drives
-    /// type-directed lowering.
-    pub regions: BTreeMap<Span, Ty>,
+    /// Type of each sub-expression source region, keyed by `(home_module_path,
+    /// Span)`. Drives type-directed lowering.
+    ///
+    /// The home path discriminant prevents span collisions after `link::link`
+    /// merges N source modules into a single flat def list: two different files
+    /// can independently contain expressions at the same byte-offset span.  A
+    /// bare-`Span` key silently overwrote earlier entries, causing SKY-I0001.
+    pub regions: BTreeMap<(Vec<Symbol>, Span), Ty>,
     /// Super-type obligations of each typed binding's generic variables: binding
     /// name → (annotation variable symbol → its [`TyBounds`]). Only variables the
     /// body actually constrained appear; a structurally-parametric variable is
     /// absent (its bound is empty). The lowerer turns each obligation into the
     /// matching Rust trait bound on the emitted generic parameter.
     pub bounds: BTreeMap<Symbol, BTreeMap<Symbol, TyBounds>>,
+    /// Non-fatal diagnostics collected during type-checking (e.g. SKY-T0011
+    /// `RedundantCaseBranch`). These are [`Severity::Warning`] findings: callers
+    /// MUST print them but MUST NOT treat them as compilation failures.
+    pub warnings: Vec<Diagnostic>,
 }
 
 /// Infer the types of a canonical module.
@@ -133,7 +142,10 @@ fn infer_with_budget(
     // End-of-checking exhaustiveness + redundancy pass. Running it here — after
     // the solver settles — makes the lowerer's `Match::new` exhaustiveness
     // contract a genuinely unreachable compiler-bug case.
-    exhaust::check(m, interner)?;
+    // Redundant-branch warnings (SKY-T0011) are collected rather than returned
+    // as errors — they are Severity::Warning and must not abort compilation.
+    let mut exhaust_warnings: Vec<Diagnostic> = Vec::new();
+    exhaust::check(m, interner, &mut exhaust_warnings)?;
 
     // Numeric defaulting: a `Number` variable the program never pinned to a
     // concrete type resolves to `Int` (an untyped `\a b -> a + b` is `Int`, not
@@ -210,8 +222,8 @@ fn infer_with_budget(
 
     // Read back every region's resolved type.
     let mut regions = BTreeMap::new();
-    for (span, var) in generated.regions {
-        regions.insert(span, zonk(&mut uf, budget, var)?);
+    for ((home, span), var) in generated.regions {
+        regions.insert((home, span), zonk(&mut uf, budget, var)?);
     }
 
     // `env` = annotation types of typed bindings (exact) + read-back of every
@@ -225,6 +237,7 @@ fn infer_with_budget(
         env,
         regions,
         bounds,
+        warnings: exhaust_warnings,
     })
 }
 
@@ -388,28 +401,82 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
 /// is checked against the field's real type); a record without the field — or a
 /// base that is not a record at all — is a [`TypeError::NoSuchField`] blamed at
 /// the access span.
+///
+/// # Ordering / fixpoint pass
+///
+/// Field accesses can depend on each other: `m.status` is only resolvable after
+/// `model.monitors` has been resolved (which then unifies `m` with `Monitor`
+/// via `List.filter`'s element-type propagation). A single left-to-right pass
+/// over the access list would fail whenever a dependent access appears before its
+/// provider. The function therefore iterates to a fixpoint: each pass processes
+/// every access whose record variable has already settled to a concrete record;
+/// `Flex` vars are deferred for the next pass. The loop terminates because each
+/// pass that makes progress resolves at least one access, strictly shrinking the
+/// pending set. When a full pass makes no progress, the remaining accesses carry
+/// record variables that genuinely could not be pinned — reported as errors.
 fn resolve_field_accesses(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
     interner: &Interner,
     accesses: &[FieldAccess],
 ) -> DResult<()> {
-    for fa in accesses {
-        let root = uf.find(fa.record)?;
-        let field_var = match uf.content(root)? {
-            Content::Structure(FlatType::Record(fields, _ext)) => fields.get(&fa.field).copied(),
-            _ => None,
-        };
-        match field_var {
-            Some(v) => unify(uf, budget, interner, fa.span, fa.result, v)?,
-            None => {
+    // References to accesses not yet discharged. Using references avoids
+    // collecting indices and the `clippy::indexing_slicing` lint on `accesses[i]`.
+    let mut pending: Vec<&FieldAccess> = accesses.iter().collect();
+    loop {
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let mut next_pending: Vec<&FieldAccess> = Vec::new();
+        let mut made_progress = false;
+        for fa in &pending {
+            let root = uf.find(fa.record)?;
+            // `uf.content()` returns an owned clone; the borrow ends before
+            // `unify` is called, avoiding a simultaneous mutable borrow.
+            //
+            // `field_state` encoding:
+            //   `None`         → record var is still `Flex` — defer to next pass.
+            //   `Some(Some(v))`→ record is a record type and has the field.
+            //   `Some(None)`   → record is resolved but does not have the field
+            //                    (or is not a record at all) — immediate error.
+            let field_state: Option<Option<VarId>> = match uf.content(root)? {
+                Content::Structure(FlatType::Record(fields, _ext)) => {
+                    Some(fields.get(&fa.field).copied())
+                }
+                Content::Flex => None, // not settled yet — defer
+                _ => Some(None),       // rigid / super / non-record structure — error
+            };
+            match field_state {
+                None => {
+                    next_pending.push(fa);
+                }
+                Some(Some(v)) => {
+                    made_progress = true;
+                    unify(uf, budget, interner, fa.span, fa.result, v)?;
+                }
+                Some(None) => {
+                    return Err(no_such_field(
+                        uf, budget, interner, fa.record, fa.field, fa.span,
+                    ));
+                }
+            }
+        }
+        pending = next_pending;
+        if !made_progress {
+            // No access was dischargeable this pass — record vars that stayed
+            // `Flex` after the full solve cannot be pinned to a record type.
+            // `pending.first()` is `None` only when pending is empty; the loop
+            // body above would have returned `Ok(())` in that case, so if we
+            // reach here with `!made_progress` AND `pending` is non-empty,
+            // `first()` will succeed. An empty `pending` produces no error here
+            // and the next loop iteration exits via the top `is_empty()` check.
+            if let Some(fa) = pending.first() {
                 return Err(no_such_field(
                     uf, budget, interner, fa.record, fa.field, fa.span,
                 ));
             }
         }
     }
-    Ok(())
 }
 
 /// Discharge every deferred record update (`{ base | field = value, ... }`).
@@ -783,7 +850,7 @@ mod tests {
             matches!(main_def, Some(canon::Def::Untyped { .. })),
             "main is untyped"
         );
-        let Some(canon::Def::Untyped { body, .. }) = main_def else {
+        let Some(canon::Def::Untyped { body, home: main_home, .. }) = main_def else {
             return;
         };
 
@@ -793,7 +860,7 @@ mod tests {
         let Some((_println, outer_args)) = outer else {
             return;
         };
-        let println_region = solved.regions.get(&body.span);
+        let println_region = solved.regions.get(&(main_home.clone(), body.span));
         assert!(
             matches!(
                 println_region,
@@ -815,7 +882,7 @@ mod tests {
         assert_eq!(
             solved
                 .regions
-                .get(&from_int_call.span)
+                .get(&(main_home.clone(), from_int_call.span))
                 .and_then(|t| ty_con_name(t, &i))
                 .as_deref(),
             Some("String")
@@ -829,7 +896,7 @@ mod tests {
         assert_eq!(
             solved
                 .regions
-                .get(&update_call.span)
+                .get(&(main_home.clone(), update_call.span))
                 .and_then(|t| ty_con_name(t, &i))
                 .as_deref(),
             Some("Int")
@@ -853,7 +920,7 @@ mod tests {
             matches!(update_def, Some(canon::Def::Typed { .. })),
             "update is typed"
         );
-        let Some(canon::Def::Typed { body, .. }) = update_def else {
+        let Some(canon::Def::Typed { body, home: update_home, .. }) = update_def else {
             return;
         };
         assert!(
@@ -868,7 +935,7 @@ mod tests {
         assert_eq!(
             solved
                 .regions
-                .get(&scrut.span)
+                .get(&(update_home.clone(), scrut.span))
                 .and_then(|t| ty_con_name(t, &i))
                 .as_deref(),
             Some("Msg")
@@ -885,7 +952,7 @@ mod tests {
         assert_eq!(
             solved
                 .regions
-                .get(&first.body.span)
+                .get(&(update_home.clone(), first.body.span))
                 .and_then(|t| ty_con_name(t, &i))
                 .as_deref(),
             Some("Int")
@@ -1215,7 +1282,9 @@ mod tests {
     #[test]
     fn redundant_case_branch_names_constructor() {
         // `Increment` is matched twice; the case is otherwise exhaustive, so the
-        // redundancy is the only finding.
+        // redundancy is the only finding.  SKY-T0011 is Severity::Warning —
+        // `infer` must return `Ok` with the warning in `types.warnings`, NOT
+        // return `Err`.  The compiler must not fail with exit 1 for a warning.
         let src = "module Main exposing (main)\n\
                    import Sky.Core.Prelude exposing (..)\n\
                    type Msg = Increment | Decrement\n\
@@ -1227,24 +1296,31 @@ mod tests {
             return;
         };
         let r = infer(&m, &mut i);
+        let types = r.expect("redundant branch is a warning (SKY-T0011), not an error");
+        assert_eq!(
+            types.warnings.len(),
+            1,
+            "expected exactly one warning, got {:?}",
+            types.warnings
+        );
+        let warning = types.warnings.first().expect("len==1 asserted above");
         assert!(
             matches!(
-                r,
-                Err(Diagnostic::Type {
+                warning,
+                Diagnostic::Type {
                     msg: TypeError::RedundantCaseBranch { .. },
                     ..
-                })
+                }
             ),
-            "expected RedundantCaseBranch, got {r:?}"
+            "expected RedundantCaseBranch warning, got {warning:?}"
         );
-        let Err(Diagnostic::Type {
+        if let Diagnostic::Type {
             msg: TypeError::RedundantCaseBranch { constructor },
             ..
-        }) = r
-        else {
-            return;
-        };
-        assert_eq!(&*constructor, "Increment");
+        } = warning
+        {
+            assert_eq!(&**constructor, "Increment");
+        }
     }
 
     #[test]
@@ -1291,7 +1367,9 @@ mod tests {
         // later, deeper `Som (Som y)` arm covers no new value. The redundancy
         // finding is computed over the same nested matrix as exhaustiveness, so it
         // must fire even when the useless arm is more specific than the arm that
-        // subsumes it — reported as SKY-T0011 naming the top-level `Som`.
+        // subsumes it — reported as SKY-T0011 (Warning) naming the top-level `Som`.
+        // SKY-T0011 is Severity::Warning — infer must return Ok with the warning in
+        // types.warnings, NOT return Err.
         let src = "module Main exposing (main)\n\
                    import Sky.Core.Prelude exposing (..)\n\
                    type Opt a = Som a | Non\n\
@@ -1303,24 +1381,31 @@ mod tests {
             return;
         };
         let r = infer(&m, &mut i);
+        let types = r.expect("redundant branch is a warning (SKY-T0011), not an error");
+        assert_eq!(
+            types.warnings.len(),
+            1,
+            "expected exactly one warning, got {:?}",
+            types.warnings
+        );
+        let warning = types.warnings.first().expect("len==1 asserted above");
         assert!(
             matches!(
-                r,
-                Err(Diagnostic::Type {
+                warning,
+                Diagnostic::Type {
                     msg: TypeError::RedundantCaseBranch { .. },
                     ..
-                })
+                }
             ),
-            "expected RedundantCaseBranch, got {r:?}"
+            "expected RedundantCaseBranch warning, got {warning:?}"
         );
-        let Err(Diagnostic::Type {
+        if let Diagnostic::Type {
             msg: TypeError::RedundantCaseBranch { constructor },
             ..
-        }) = r
-        else {
-            return;
-        };
-        assert_eq!(&*constructor, "Som", "names the subsuming top-level ctor");
+        } = warning
+        {
+            assert_eq!(&**constructor, "Som", "names the subsuming top-level ctor");
+        }
     }
 
     #[test]
