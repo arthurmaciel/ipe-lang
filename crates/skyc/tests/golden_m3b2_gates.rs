@@ -78,12 +78,31 @@ fn non_exhaustive_nested_case_is_sky_t0010() {
     );
 }
 
+/// `SKY-T0011` (redundant case branch) is a WARNING since batch-xm: the Go
+/// reference COMPILES redundant-arm shapes (examples 17/10 carry them), so a
+/// hard error was stricter-than-reference and blocked parity. The build must
+/// now SUCCEED — the warning goes to stderr via the collected-warnings channel.
+/// Severity policy under adversarial review as task #136.
 #[test]
-fn redundant_nested_arm_is_sky_t0011() {
-    assert_gate(
-        "m3b2_gate_redundant_nested",
-        "m3b2_gate_redundant_nested_emit",
-        sky_diagnostics::SKY_T0011,
+fn redundant_nested_arm_is_sky_t0011_warning_build_succeeds() {
+    let root = repo_root();
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join("m3b2_gate_redundant_nested")
+        .join("Main.sky");
+    let out =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m3b2_gate_redundant_nested_emit");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "redundant case branch must WARN (SKY-T0011) and build, got: {:?}",
+        built.err()
     );
 }
 
