@@ -3618,6 +3618,14 @@ impl<'a> Lowerer<'a> {
                 }
                 // Sky.Live opaque types in annotations (mirrors `ir_type_from_ty`).
                 "LiveReq" => Ok(IrType::LiveReq),
+                // `StreamId` / `ChunkEvent` — builtin-registered Http.Stream ADTs
+                // (no synthetic EnumDef injection, so not in enum_variants).
+                // Mirrors the `ir_type_from_ty` arms added for these types.
+                "StreamId" | "ChunkEvent" => Ok(IrType::Enum {
+                    home: ModPath(Vec::new()),
+                    name: *name,
+                    args: Vec::new(),
+                }),
                 // `StreamWriter` — opaque server-side stream writer handle (#111).
                 // Mirrors `ir_type_from_ty`'s "StreamWriter" arm.
                 "StreamWriter" => Ok(IrType::StreamWriter),
@@ -4133,9 +4141,11 @@ impl<'a> Lowerer<'a> {
                 // typed SQL parameters (M5b-db). Resolved as `IrType::Enum` so the
                 // backend emits the generated `StdDbSqlValue` / `StdDbSqlField`
                 // Rust enum name at use sites.
-                "SqlValue" | "SqlField" => Ok(IrType::Enum {
-                    // Prelude built-in: empty home, matching the synthetic EnumDef
-                    // and the `Expr::Ctor` home (#100).
+                // `StreamId` / `ChunkEvent` — builtin-registered Http.Stream ADTs.
+                // Not compiled from source; constructors pre-registered in
+                // `install_builtin_ctors`. All four map to `IrType::Enum` with an
+                // empty home, matching the synthetic EnumDef and `Expr::Ctor` home.
+                "SqlValue" | "SqlField" | "StreamId" | "ChunkEvent" => Ok(IrType::Enum {
                     home: ModPath(Vec::new()),
                     name: *name,
                     args: Vec::new(),
@@ -6483,6 +6493,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FontLineThrough
                 | KernelFn::FontAlignLeft
                 | KernelFn::FontAlignRight
+                | KernelFn::FontAlignCenter
                 | KernelFn::FontCenter
                 | KernelFn::FontJustify
                 // Font string constants (nullary, return String)
@@ -6657,6 +6668,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlAttrMultiple
                 | KernelFn::HtmlAttrSelected
                 | KernelFn::HtmlAttrAutofocus
+                | KernelFn::HtmlAttrAutocomplete
                 // ── #76 Tier 1 — arity 1 ────────────────────────────────────
                 | KernelFn::UiAspectRatio
                 | KernelFn::UiName
@@ -7659,6 +7671,7 @@ impl<'a> Lowerer<'a> {
                     ("Attr", "multiple") => Ok(Callee::Kernel(KernelFn::HtmlAttrMultiple)),
                     ("Attr", "selected") => Ok(Callee::Kernel(KernelFn::HtmlAttrSelected)),
                     ("Attr", "autofocus") => Ok(Callee::Kernel(KernelFn::HtmlAttrAutofocus)),
+                    ("Attr", "autocomplete") => Ok(Callee::Kernel(KernelFn::HtmlAttrAutocomplete)),
                     ("Attr", "attribute") => Ok(Callee::Kernel(KernelFn::HtmlAttribute)),
                     ("Attr", "boolAttribute") => Ok(Callee::Kernel(KernelFn::HtmlBoolAttribute)),
                     ("Attr", "noAttr") => Ok(Callee::Kernel(KernelFn::HtmlNoAttr)),
@@ -7739,6 +7752,7 @@ impl<'a> Lowerer<'a> {
                     ("Font", "wordSpacing") => Ok(Callee::Kernel(KernelFn::FontWordSpacing)),
                     ("Font", "alignLeft") => Ok(Callee::Kernel(KernelFn::FontAlignLeft)),
                     ("Font", "alignRight") => Ok(Callee::Kernel(KernelFn::FontAlignRight)),
+                    ("Font", "alignCenter") => Ok(Callee::Kernel(KernelFn::FontAlignCenter)),
                     ("Font", "center") => Ok(Callee::Kernel(KernelFn::FontCenter)),
                     ("Font", "justify") => Ok(Callee::Kernel(KernelFn::FontJustify)),
                     ("Font", "sansSerif") => Ok(Callee::Kernel(KernelFn::FontSansSerif)),
