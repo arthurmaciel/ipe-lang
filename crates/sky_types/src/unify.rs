@@ -227,14 +227,27 @@ fn unify_flat(
                 args: as2,
             },
         ) => {
-            if m1 != m2 || n1 != n2 || as1.len() != as2.len() {
+            // An empty module path (`module = []`) is used both for
+            // kernel/builtin types and for user-defined type names that appear
+            // in a module without a corresponding import (the canonicaliser
+            // falls back to `unwrap_or_default()` → `[]` for unknown names).
+            // Two `Con` nodes unify when they have the same name and arity; a
+            // module conflict is only fatal when *both* sides carry a non-empty,
+            // differing path.  Whichever side carries the more specific
+            // (non-empty) path wins as the canonical representation — this
+            // matches the Haskell oracle's behaviour.
+            let modules_compat = m1 == m2 || m1.is_empty() || m2.is_empty();
+            if !modules_compat || n1 != n2 || as1.len() != as2.len() {
                 return Err(mismatch(uf, budget, interner, span, ra, rb));
             }
+            // Prefer the non-empty (more specific) module path as canonical.
+            // m1 and m2 are not used after this expression; move them directly.
+            let canonical_module = if m1.is_empty() { m2 } else { m1 };
             uf.union(
                 ra,
                 rb,
                 Content::Structure(FlatType::Con {
-                    module: m1,
+                    module: canonical_module,
                     name: n1,
                     args: as1.clone(),
                 }),
