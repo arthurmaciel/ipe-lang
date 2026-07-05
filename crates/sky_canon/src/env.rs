@@ -996,6 +996,7 @@ impl Env {
                     "white",
                     "black",
                     "transparent",
+                    "colorCss",
                     // ── Other ────────────────────────────────────────────────
                     "paragraph",
                     "textColumn",
@@ -1296,7 +1297,7 @@ impl Env {
             // Sky.Http.Server.Stream — server-side streaming HTTP (fail-closed).
             ("Stream", &["stream", "emit", "finish", "withContentType"]),
             // Sky.Core.Http.Stream — client-side HTTP streaming (fail-closed).
-            ("HttpStream", &["open", "forEachChunk", "close"]),
+            ("HttpStream", &["open", "forEachChunk", "close", "chunks"]),
             // #127: Sky.Http.Server.WebSocket (12 kernels, fully wired).
             (
                 "Ws",
