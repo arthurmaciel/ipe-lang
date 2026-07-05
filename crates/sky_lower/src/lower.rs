@@ -314,6 +314,539 @@ fn ir_contains_fun(ty: &IrType) -> bool {
     }
 }
 
+// ── Capture-clone classification (#121) ──────────────────────────────────────
+//
+// Classifies an `IrType` for the capture-clone rewrite that makes closures
+// `Fn` (not `FnOnce`). Rules:
+//   CopyLeaf  — scalar types that are `Copy`; reads are bare moves (copies).
+//   CloneOk   — types that derive `Clone` in the runtime; reads inside closures
+//               must use `{name}.clone()` so the closure is re-callable.
+//   NonClone  — types that do NOT implement `Clone` (functions, tasks, decoders,
+//               server opaques, …); capturing one in a non-callee position is
+//               a SKY-L0125 diagnostic.
+//
+// This is conservative: when unsure → `NonClone` (fail-closed, never a
+// silent cargo failure).
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CloneClass {
+    CopyLeaf,
+    CloneOk,
+    NonClone,
+}
+
+fn clone_class(t: &IrType) -> CloneClass {
+    match t {
+        // Scalars — primitive Copy types.
+        IrType::Int | IrType::Float | IrType::Bool | IrType::Char | IrType::Unit | IrType::Order => {
+            CloneClass::CopyLeaf
+        }
+        // Runtime-verified Clone types.
+        // Str(String), Bytes(Vec<u8>), Json(serde_json::Value), Db(Arc-backed),
+        // UiPlain (element.rs derives Clone), LiveReq (req.rs derives Clone).
+        IrType::Str | IrType::Bytes | IrType::Json | IrType::Db | IrType::UiPlain(_) | IrType::LiveReq => {
+            CloneClass::CloneOk
+        }
+        // Non-Clone: function-typed, task, decoder, Cmd, Sub, server opaques.
+        // Also Generic(_) until T5 (which injects `T: Clone`).
+        IrType::Fun(_, _)
+        | IrType::Task(_)
+        | IrType::Decoder(_)
+        | IrType::Cmd(_)
+        | IrType::Sub(_)
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::StreamWriter
+        | IrType::HttpRequest
+        | IrType::Generic(_) => CloneClass::NonClone,
+        // Composite: CloneOk iff all components are CloneOk (no NonClone part).
+        IrType::Maybe(elem) | IrType::List(elem) | IrType::Set(elem) => {
+            clone_class_composite(std::iter::once(elem.as_ref()))
+        }
+        IrType::Result(e, a) | IrType::Dict(e, a) => {
+            clone_class_composite([e.as_ref(), a.as_ref()].into_iter())
+        }
+        IrType::Tuple(elems) => clone_class_composite(elems.iter()),
+        IrType::Record(fields) => clone_class_composite(fields.values()),
+        IrType::Enum { args, .. } => clone_class_composite(args.iter()),
+        // Ui{msg} / LiveRoute(page) — recurse on the message/page type-param.
+        IrType::Ui { msg, .. } => clone_class_composite(std::iter::once(msg.as_ref())),
+        IrType::LiveRoute(page) => clone_class_composite(std::iter::once(page.as_ref())),
+    }
+}
+
+fn clone_class_composite<'a>(parts: impl Iterator<Item = &'a IrType>) -> CloneClass {
+    let mut any_clone_ok = false;
+    for p in parts {
+        match clone_class(p) {
+            CloneClass::NonClone => return CloneClass::NonClone,
+            CloneClass::CloneOk => any_clone_ok = true,
+            CloneClass::CopyLeaf => {}
+        }
+    }
+    if any_clone_ok {
+        CloneClass::CloneOk
+    } else {
+        CloneClass::CopyLeaf
+    }
+}
+
+// ── Capture-clone rewrite helpers, T3 (#121) ─────────────────────────────────
+//
+// Three helpers drive the capture-clone rewrite that makes closures `Fn`
+// (not `FnOnce`):
+//
+//   (a) `canon_collect_pat_binds` — collect all VarLocal-binding symbols from
+//       a canon pattern (to build the outer-bound set before the free-variable
+//       walk).
+//   (b) `canon_collect_free_locals` — recursively walk a canon expression
+//       collecting VarLocal occurrences free relative to `bound`; shadows from
+//       let / case / inner-lambda binders are handled.
+//   (c) `rewrite_captured_clones` — given a lowered IR body and the classified
+//       capture sets, replace `Var` reads of `CloneOk` captures with
+//       `CloneVar` (`.clone()`) and return SKY-L0125 for `NonClone` captures
+//       outside direct callee position.
+//
+// `Lowerer::captured_locals` drives (a)+(b) and returns the classified
+// capture list consumed by (c).
+
+/// Collect all symbols bound by `pat` into `bound`.
+fn canon_collect_pat_binds(pat: &canon::Pattern, bound: &mut BTreeSet<Symbol>) {
+    match &pat.value {
+        canon::Pattern_::PVar(s) => {
+            bound.insert(*s);
+        }
+        canon::Pattern_::PAnything
+        | canon::Pattern_::PInt(_)
+        | canon::Pattern_::PBool(_)
+        | canon::Pattern_::PChar(_)
+        | canon::Pattern_::PStr(_) => {}
+        canon::Pattern_::PCtor { args, .. } => {
+            for a in args {
+                canon_collect_pat_binds(a, bound);
+            }
+        }
+        canon::Pattern_::PTuple(elems) | canon::Pattern_::PList(elems) => {
+            for e in elems {
+                canon_collect_pat_binds(e, bound);
+            }
+        }
+        canon::Pattern_::PRecord(fields) => {
+            for f in fields {
+                bound.insert(f.value);
+            }
+        }
+        canon::Pattern_::PAlias(inner, alias) => {
+            canon_collect_pat_binds(inner, bound);
+            bound.insert(alias.value);
+        }
+        canon::Pattern_::PCons(head, tail) => {
+            canon_collect_pat_binds(head, bound);
+            canon_collect_pat_binds(tail, bound);
+        }
+    }
+}
+
+/// Walk `expr` collecting `VarLocal` symbols free relative to `bound`.
+/// Records each free symbol's first-seen use-site span (for region-type
+/// lookup by [`Lowerer::captured_locals`]).
+///
+/// Shadow discipline: `Let` bindings accumulate names sequentially before the
+/// continuation body; `Case` arm patterns shadow inside that arm; inner
+/// `Lambda` params shadow inside that lambda body.
+fn canon_collect_free_locals(
+    free: &mut BTreeMap<Symbol, Span>,
+    bound: &BTreeSet<Symbol>,
+    expr: &canon::Expr,
+) {
+    match &expr.value {
+        canon::Expr_::VarLocal(s) => {
+            if !bound.contains(s) {
+                free.entry(*s).or_insert(expr.span);
+            }
+        }
+        canon::Expr_::Let(bindings, body) => {
+            let mut inner = bound.clone();
+            for b in bindings {
+                canon_collect_free_locals(free, &inner, &b.body);
+                canon_collect_pat_binds(&b.pat, &mut inner);
+            }
+            canon_collect_free_locals(free, &inner, body);
+        }
+        canon::Expr_::Lambda(params, body) => {
+            let mut inner = bound.clone();
+            for p in params {
+                canon_collect_pat_binds(p, &mut inner);
+            }
+            canon_collect_free_locals(free, &inner, body);
+        }
+        canon::Expr_::Case(scrut, arms) => {
+            canon_collect_free_locals(free, bound, scrut);
+            for arm in arms {
+                let mut arm_bound = bound.clone();
+                canon_collect_pat_binds(&arm.pat, &mut arm_bound);
+                canon_collect_free_locals(free, &arm_bound, &arm.body);
+            }
+        }
+        canon::Expr_::Call(callee, args) => {
+            canon_collect_free_locals(free, bound, callee);
+            for a in args {
+                canon_collect_free_locals(free, bound, a);
+            }
+        }
+        canon::Expr_::Binop { lhs, rhs, .. } => {
+            canon_collect_free_locals(free, bound, lhs);
+            canon_collect_free_locals(free, bound, rhs);
+        }
+        canon::Expr_::If(branches, else_) => {
+            for (cond, then) in branches {
+                canon_collect_free_locals(free, bound, cond);
+                canon_collect_free_locals(free, bound, then);
+            }
+            canon_collect_free_locals(free, bound, else_);
+        }
+        canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
+            for e in elems {
+                canon_collect_free_locals(free, bound, e);
+            }
+        }
+        canon::Expr_::Cons(h, t) => {
+            canon_collect_free_locals(free, bound, h);
+            canon_collect_free_locals(free, bound, t);
+        }
+        canon::Expr_::Record(fields) => {
+            for (_, v) in fields {
+                canon_collect_free_locals(free, bound, v);
+            }
+        }
+        canon::Expr_::Access(rec, _) => canon_collect_free_locals(free, bound, rec),
+        canon::Expr_::Update(base, fields) => {
+            canon_collect_free_locals(free, bound, base);
+            for (_, v) in fields {
+                canon_collect_free_locals(free, bound, v);
+            }
+        }
+        // Non-local-variable leaves — no free locals.
+        canon::Expr_::VarTopLevel { .. }
+        | canon::Expr_::VarKernel { .. }
+        | canon::Expr_::VarCtor { .. }
+        | canon::Expr_::Int(_)
+        | canon::Expr_::Float(_)
+        | canon::Expr_::Str(_)
+        | canon::Expr_::Char(_)
+        | canon::Expr_::Unit => {}
+    }
+}
+
+/// Does `pat` bind ANY symbol in `set`?
+#[inline]
+fn pat_binds_any_in(pat: &Pat, set: &BTreeSet<Symbol>) -> bool {
+    set.iter().any(|&s| pat_binds_symbol(pat, s))
+}
+
+/// Rewrite a lowered IR expression — the body of a `move` closure — to make
+/// the closure `Fn` (not `FnOnce`) by inserting `.clone()` calls on captures
+/// that are not `Copy`:
+///
+/// * `Var(s)` where `s ∈ clone_set` → `CloneVar(s)` (runtime `.clone()`)
+/// * `Var(s)` where `s ∈ noncl_set` AND `s` is the DIRECT callee of an
+///   `Apply` → kept bare (`Fn::call` borrows the receiver — verified green)
+/// * `Var(s)` where `s ∈ noncl_set` elsewhere → `Err(SKY-L0125)`
+/// * all others → unchanged (not captured, or `CopyLeaf`)
+///
+/// Shadow discipline mirrors [`rewrite_var_to_apply`]: `Let` / `Destructure`
+/// / `Lambda` / `Match`-arm patterns rebind and remove the symbol from the
+/// active sets inside the shadowed sub-expression.
+#[allow(clippy::too_many_lines)]
+fn rewrite_captured_clones(
+    clone_set: &BTreeSet<Symbol>,
+    noncl_set: &BTreeSet<Symbol>,
+    lambda_span: Span,
+    expr: Expr,
+) -> DResult<Expr> {
+    if clone_set.is_empty() && noncl_set.is_empty() {
+        return Ok(expr);
+    }
+    match expr {
+        Expr::Var(s) => {
+            if clone_set.contains(&s) {
+                Ok(Expr::CloneVar(s))
+            } else if noncl_set.contains(&s) {
+                Err(unsupported(lambda_span, Feature::NonCloneCapture))
+            } else {
+                Ok(Expr::Var(s))
+            }
+        }
+        // Leaves that are never local captures.
+        Expr::CloneVar(_)
+        | Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => Ok(expr),
+        // Apply: a `Var(s)` in DIRECT func position where `s ∈ noncl_set`
+        // is allowed bare (Rust's `Fn::call` borrows `&self`).
+        Expr::Apply { func, args } => {
+            let new_func = Box::new(match *func {
+                Expr::Var(s) if noncl_set.contains(&s) => Expr::Var(s),
+                other => rewrite_captured_clones(clone_set, noncl_set, lambda_span, other)?,
+            });
+            let new_args = args
+                .into_iter()
+                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a))
+                .collect::<DResult<Vec<_>>>()?;
+            Ok(Expr::Apply { func: new_func, args: new_args })
+        }
+        Expr::BinOp { op, lhs, rhs } => Ok(Expr::BinOp {
+            op,
+            lhs: Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *lhs)?),
+            rhs: Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *rhs)?),
+        }),
+        Expr::Let { name, value, body } => {
+            let new_value =
+                Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *value)?);
+            if clone_set.contains(&name) || noncl_set.contains(&name) {
+                let inner_clone: BTreeSet<Symbol> =
+                    clone_set.iter().copied().filter(|&s| s != name).collect();
+                let inner_noncl: BTreeSet<Symbol> =
+                    noncl_set.iter().copied().filter(|&s| s != name).collect();
+                Ok(Expr::Let {
+                    name,
+                    value: new_value,
+                    body: Box::new(rewrite_captured_clones(
+                        &inner_clone,
+                        &inner_noncl,
+                        lambda_span,
+                        *body,
+                    )?),
+                })
+            } else {
+                Ok(Expr::Let {
+                    name,
+                    value: new_value,
+                    body: Box::new(rewrite_captured_clones(
+                        clone_set,
+                        noncl_set,
+                        lambda_span,
+                        *body,
+                    )?),
+                })
+            }
+        }
+        Expr::Destructure { binder, value, body } => {
+            let new_value =
+                Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *value)?);
+            if pat_binds_any_in(&binder, clone_set) || pat_binds_any_in(&binder, noncl_set) {
+                let inner_clone: BTreeSet<Symbol> = clone_set
+                    .iter()
+                    .copied()
+                    .filter(|&s| !pat_binds_symbol(&binder, s))
+                    .collect();
+                let inner_noncl: BTreeSet<Symbol> = noncl_set
+                    .iter()
+                    .copied()
+                    .filter(|&s| !pat_binds_symbol(&binder, s))
+                    .collect();
+                Ok(Expr::Destructure {
+                    binder,
+                    value: new_value,
+                    body: Box::new(rewrite_captured_clones(
+                        &inner_clone,
+                        &inner_noncl,
+                        lambda_span,
+                        *body,
+                    )?),
+                })
+            } else {
+                Ok(Expr::Destructure {
+                    binder,
+                    value: new_value,
+                    body: Box::new(rewrite_captured_clones(
+                        clone_set,
+                        noncl_set,
+                        lambda_span,
+                        *body,
+                    )?),
+                })
+            }
+        }
+        // Lambda: its own params shadow for the body.
+        Expr::Lambda { params, ret, body } => {
+            let param_names: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
+            let inner_clone: BTreeSet<Symbol> =
+                clone_set.iter().copied().filter(|s| !param_names.contains(s)).collect();
+            let inner_noncl: BTreeSet<Symbol> =
+                noncl_set.iter().copied().filter(|s| !param_names.contains(s)).collect();
+            Ok(Expr::Lambda {
+                params,
+                ret,
+                body: Box::new(rewrite_captured_clones(
+                    &inner_clone,
+                    &inner_noncl,
+                    lambda_span,
+                    *body,
+                )?),
+            })
+        }
+        Expr::Match(m) => {
+            let (scrutinee, arms) = m.into_parts();
+            let new_scrutinee = Box::new(rewrite_captured_clones(
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *scrutinee,
+            )?);
+            let new_arms = arms
+                .into_iter()
+                .map(|arm| {
+                    let new_body =
+                        if pat_binds_any_in(&arm.pat, clone_set)
+                            || pat_binds_any_in(&arm.pat, noncl_set)
+                        {
+                            let inner_clone: BTreeSet<Symbol> = clone_set
+                                .iter()
+                                .copied()
+                                .filter(|&s| !pat_binds_symbol(&arm.pat, s))
+                                .collect();
+                            let inner_noncl: BTreeSet<Symbol> = noncl_set
+                                .iter()
+                                .copied()
+                                .filter(|&s| !pat_binds_symbol(&arm.pat, s))
+                                .collect();
+                            rewrite_captured_clones(
+                                &inner_clone,
+                                &inner_noncl,
+                                lambda_span,
+                                arm.body,
+                            )?
+                        } else {
+                            rewrite_captured_clones(
+                                clone_set,
+                                noncl_set,
+                                lambda_span,
+                                arm.body,
+                            )?
+                        };
+                    Ok(Arm { pat: arm.pat, body: new_body })
+                })
+                .collect::<DResult<Vec<_>>>()?;
+            Ok(Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms)))
+        }
+        Expr::If { cond, then_, else_ } => Ok(Expr::If {
+            cond: Box::new(rewrite_captured_clones(
+                clone_set, noncl_set, lambda_span, *cond,
+            )?),
+            then_: Box::new(rewrite_captured_clones(
+                clone_set, noncl_set, lambda_span, *then_,
+            )?),
+            else_: Box::new(rewrite_captured_clones(
+                clone_set, noncl_set, lambda_span, *else_,
+            )?),
+        }),
+        Expr::Call { callee, args } => Ok(Expr::Call {
+            callee,
+            args: args
+                .into_iter()
+                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a))
+                .collect::<DResult<Vec<_>>>()?,
+        }),
+        Expr::Tuple(items) => Ok(Expr::Tuple(
+            items
+                .into_iter()
+                .map(|e| rewrite_captured_clones(clone_set, noncl_set, lambda_span, e))
+                .collect::<DResult<Vec<_>>>()?,
+        )),
+        Expr::List { elem, items } => Ok(Expr::List {
+            elem,
+            items: items
+                .into_iter()
+                .map(|e| rewrite_captured_clones(clone_set, noncl_set, lambda_span, e))
+                .collect::<DResult<Vec<_>>>()?,
+        }),
+        Expr::Cons { head, tail } => Ok(Expr::Cons {
+            head: Box::new(rewrite_captured_clones(
+                clone_set, noncl_set, lambda_span, *head,
+            )?),
+            tail: Box::new(rewrite_captured_clones(
+                clone_set, noncl_set, lambda_span, *tail,
+            )?),
+        }),
+        Expr::Record(fields) => Ok(Expr::Record(
+            fields
+                .into_iter()
+                .map(|(sym, e)| {
+                    rewrite_captured_clones(clone_set, noncl_set, lambda_span, e)
+                        .map(|e| (sym, e))
+                })
+                .collect::<DResult<Vec<_>>>()?,
+        )),
+        Expr::Access { record, field } => Ok(Expr::Access {
+            record: Box::new(rewrite_captured_clones(
+                clone_set, noncl_set, lambda_span, *record,
+            )?),
+            field,
+        }),
+        Expr::Update { record, fields } => Ok(Expr::Update {
+            record: Box::new(rewrite_captured_clones(
+                clone_set, noncl_set, lambda_span, *record,
+            )?),
+            fields: fields
+                .into_iter()
+                .map(|(sym, e)| {
+                    rewrite_captured_clones(clone_set, noncl_set, lambda_span, e)
+                        .map(|e| (sym, e))
+                })
+                .collect::<DResult<Vec<_>>>()?,
+        }),
+        Expr::TaskSeq { effect, rest } => Ok(Expr::TaskSeq {
+            effect: Box::new(rewrite_captured_clones(
+                clone_set, noncl_set, lambda_span, *effect,
+            )?),
+            rest: Box::new(rewrite_captured_clones(
+                clone_set, noncl_set, lambda_span, *rest,
+            )?),
+        }),
+        Expr::Ctor { home, ty, variant, args } => Ok(Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args: args
+                .into_iter()
+                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a))
+                .collect::<DResult<Vec<_>>>()?,
+        }),
+        // TailLoop/TailRecur are produced by a post-lower TCO pass that runs
+        // AFTER lower_lambda — they cannot appear inside a lambda body at this
+        // point. Handle defensively: TailLoop params shadow; TailRecur recurse.
+        Expr::TailLoop { params, body } => {
+            let param_names: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
+            let inner_clone: BTreeSet<Symbol> =
+                clone_set.iter().copied().filter(|s| !param_names.contains(s)).collect();
+            let inner_noncl: BTreeSet<Symbol> =
+                noncl_set.iter().copied().filter(|s| !param_names.contains(s)).collect();
+            Ok(Expr::TailLoop {
+                params,
+                body: Box::new(rewrite_captured_clones(
+                    &inner_clone,
+                    &inner_noncl,
+                    lambda_span,
+                    *body,
+                )?),
+            })
+        }
+        Expr::TailRecur { args } => Ok(Expr::TailRecur {
+            args: args
+                .into_iter()
+                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a))
+                .collect::<DResult<Vec<_>>>()?,
+        }),
+    }
+}
+
 // ── TCO (#49): tail-recursion detection + rewrite ────────────────────────────
 //
 // Mirrors the reference implementation (`Sky.Build.TailCallOpt`:
@@ -469,7 +1002,8 @@ fn count_self_calls(
         | Expr::Str(_)
         | Expr::Char(_)
         | Expr::Unit
-        | Expr::Var(_) => {}
+        | Expr::Var(_)
+        | Expr::CloneVar(_) => {}
         // The TCO nodes are not yet produced when analysis runs (the rewrite is
         // the sole producer and runs AFTER analysis), but the walk stays explicit
         // and total: a `TailLoop` body is tail (`TailRecur` is merged into the
@@ -617,6 +1151,7 @@ fn expr_uses_db_kernel(expr: &Expr) -> bool {
         | Expr::Str(_)
         | Expr::Char(_)
         | Expr::Unit
+        | Expr::CloneVar(_)
         | Expr::Var(_) => false,
     }
 }
@@ -683,6 +1218,7 @@ fn expr_uses_tea_kernel(expr: &Expr) -> bool {
         | Expr::Str(_)
         | Expr::Char(_)
         | Expr::Unit
+        | Expr::CloneVar(_)
         | Expr::Var(_) => false,
     }
 }
@@ -755,6 +1291,7 @@ fn expr_uses_server_kernel(expr: &Expr) -> bool {
         | Expr::Str(_)
         | Expr::Char(_)
         | Expr::Unit
+        | Expr::CloneVar(_)
         | Expr::Var(_) => false,
     }
 }
@@ -809,6 +1346,7 @@ fn expr_uses_ui_kernel(expr: &Expr) -> bool {
         | Expr::Str(_)
         | Expr::Char(_)
         | Expr::Unit
+        | Expr::CloneVar(_)
         | Expr::Var(_) => false,
     }
 }
@@ -863,6 +1401,7 @@ fn expr_uses_css_kernel(expr: &Expr) -> bool {
         | Expr::Str(_)
         | Expr::Char(_)
         | Expr::Unit
+        | Expr::CloneVar(_)
         | Expr::Var(_) => false,
     }
 }
@@ -920,6 +1459,7 @@ fn expr_uses_auth_kernel(expr: &Expr) -> bool {
         | Expr::Str(_)
         | Expr::Char(_)
         | Expr::Unit
+        | Expr::CloneVar(_)
         | Expr::Var(_) => false,
     }
 }
@@ -970,6 +1510,7 @@ fn expr_uses_live_kernel(expr: &Expr) -> bool {
         | Expr::Str(_)
         | Expr::Char(_)
         | Expr::Unit
+        | Expr::CloneVar(_)
         | Expr::Var(_) => false,
     }
 }
@@ -1016,6 +1557,7 @@ fn expr_uses_tui_kernel(expr: &Expr) -> bool {
         | Expr::Str(_)
         | Expr::Char(_)
         | Expr::Unit
+        | Expr::CloneVar(_)
         | Expr::Var(_) => false,
     }
 }
@@ -1073,6 +1615,7 @@ fn expr_uses_webview_kernel(expr: &Expr) -> bool {
         | Expr::Str(_)
         | Expr::Char(_)
         | Expr::Unit
+        | Expr::CloneVar(_)
         | Expr::Var(_) => false,
     }
 }
@@ -1141,6 +1684,7 @@ fn rewrite_var_to_apply(target: Symbol, expr: Expr) -> Expr {
             args: vec![],
         },
         Expr::Var(_)
+        | Expr::CloneVar(_)
         | Expr::Int(_)
         | Expr::Float(_)
         | Expr::Bool(_)
@@ -1318,6 +1862,15 @@ pub struct Lowerer<'a> {
     /// across sites without shadowing; [`Interner::fresh_symbols`] guarantees no
     /// entry aliases a user identifier.
     eta_params: Vec<Symbol>,
+    /// Pre-minted, collision-free names for capturing a supplied argument
+    /// expression in an eta-expand-partial hoist (T4/#121). When a supplied arg
+    /// is not a literal or bare `Var`, it is hoisted to
+    /// `let __sky_cap_i = <arg> in <lambda>` so it evaluates once even though
+    /// the lambda is called multiple times. Sized identically to `eta_params`
+    /// (widest arity); position `i` names the i-th hoisted capture.
+    // Complex-arg hoisting (non-Var supplied args) is deferred; field reserved for T4 completion.
+    #[allow(dead_code)]
+    cap_params: Vec<Symbol>,
     /// Pre-minted, collision-free binder names for a tuple-destructuring
     /// function parameter. A parameter pattern `(a, b)` has no single name, so
     /// the lowerer gives the parameter a synthetic name from this pool (position
@@ -1481,6 +2034,7 @@ impl<'a> Lowerer<'a> {
         types: &'a SolvedTypes,
         interner: &'a Interner,
         eta_params: Vec<Symbol>,
+        cap_params: Vec<Symbol>,
         param_binders: Vec<Symbol>,
         builtins: &'a BuiltinCtors,
     ) -> Self {
@@ -1580,6 +2134,7 @@ impl<'a> Lowerer<'a> {
             enum_variants,
             ctor_arity,
             eta_params,
+            cap_params,
             param_binders,
             param_cursor: Cell::new(0),
         }
@@ -2629,6 +3184,38 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Collect the captured local variables for a closure body (T3, #121).
+    ///
+    /// Walks `canon_body` collecting every `VarLocal` free relative to
+    /// `lambda_param_pats` (all flattened param patterns of the enclosing
+    /// closure). For each captured symbol, looks up its use-site region type
+    /// via [`Self::ir_type_from_ty`] to classify it by [`clone_class`].
+    /// Returns `(symbol, ir_type_option)` pairs; `None` means the region type
+    /// was unavailable (treated as bare / copy by the caller — safe default,
+    /// no `CloneVar` inserted, no SKY-L0125).
+    fn captured_locals(
+        &self,
+        lambda_param_pats: &[&canon::Pattern],
+        canon_body: &canon::Expr,
+    ) -> Vec<(Symbol, Option<IrType>)> {
+        let mut outer_bound = BTreeSet::new();
+        for &p in lambda_param_pats {
+            canon_collect_pat_binds(p, &mut outer_bound);
+        }
+        let mut free: BTreeMap<Symbol, Span> = BTreeMap::new();
+        canon_collect_free_locals(&mut free, &outer_bound, canon_body);
+        free.into_iter()
+            .map(|(sym, span)| {
+                let ty = self
+                    .types
+                    .regions
+                    .get(&span)
+                    .and_then(|ty| self.ir_type_from_ty(ty, span).ok());
+                (sym, ty)
+            })
+            .collect()
+    }
+
     /// Lower an anonymous function `\p0 p1 ... -> body` into [`Expr::Lambda`].
     ///
     /// The lambda's solved region type is a curried arrow `T0 -> T1 -> … -> R`.
@@ -2667,7 +3254,11 @@ impl<'a> Lowerer<'a> {
         // still supply a parameter type.
         let mut cur_params: &[canon::Pattern] = params;
         let mut cur_body: &canon::Expr = body;
+        // T3 (#121): accumulate all flattened canon param patterns to build
+        // the outer-bound set for the capture-clone free-variable walk.
+        let mut all_param_pats: Vec<&canon::Pattern> = Vec::new();
         loop {
+            all_param_pats.extend(cur_params.iter());
             for pat in cur_params {
                 let Ty::Fun(arg, rest) = cur else {
                     // The lambda's inferred type has fewer arrows than it has
@@ -2707,6 +3298,26 @@ impl<'a> Lowerer<'a> {
         }
         let ret = self.ir_type_from_ty(cur, span)?;
         let mut body = self.lower_expr(cur_body)?;
+        // T3 (#121): Capture-clone rewrite — classify free locals captured
+        // by this closure and replace CloneOk reads with `.clone()`, emitting
+        // SKY-L0125 for NonClone captures outside callee position.
+        {
+            let captures = self.captured_locals(&all_param_pats, cur_body);
+            let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
+            let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
+            for (sym, ir_ty) in captures {
+                match ir_ty.as_ref().map(clone_class) {
+                    Some(CloneClass::CloneOk) => {
+                        clone_set.insert(sym);
+                    }
+                    Some(CloneClass::NonClone) => {
+                        noncl_set.insert(sym);
+                    }
+                    Some(CloneClass::CopyLeaf) | None => {}
+                }
+            }
+            body = rewrite_captured_clones(&clone_set, &noncl_set, span, body)?;
+        }
         // Fold each destructuring param's `Destructure` around the body,
         // OUTERMOST-first (reverse of source order) so the first parameter's
         // destructure is the outermost binding — identical to the def-head
@@ -3552,6 +4163,30 @@ impl<'a> Lowerer<'a> {
                 } else {
                     self.ir_type_from_ty(ty, e.span)?
                 };
+                // T6 (#121): arity-exact invariant — when def-arity is less
+                // than the flattened `Fun` param count at this reify site, the
+                // callee is curried and cannot be boxed directly into
+                // `Box<dyn Fn(T0,T1,…)->R>` (Rust would reject it with E0593).
+                // Emit an eta-adapter Lambda that expands the closure to the
+                // expected full arity: `|eta_0,…,eta_{N-1}| (f(eta_0,…,eta_{k-1}))(eta_k,…)`.
+                // A def-arity GREATER than the flattened count is a compiler bug
+                // (the solver should have caught it), surfaced here as a bug()
+                // rather than emitting broken Rust.
+                // Kernels are arity-exact by construction; the adapter never fires
+                // for them (their `callee_arity` matches their native signature).
+                if let IrType::Fun(params, ret) = &ty_ir {
+                    let def_arity = self.callee_arity(&callee)?;
+                    if def_arity < params.len() {
+                        return self.eta_adapt_funcvalue(callee, params, ret, e.span);
+                    }
+                    if def_arity > params.len() {
+                        return Err(bug(
+                            "sky_lower::lower_expr",
+                            "def-arity exceeds the reference's flattened arity — the type-checker should have caught this",
+                        ));
+                    }
+                    // def_arity == params.len(): arity-exact, emit FuncValue as before.
+                }
                 if let fun @ IrType::Fun(_, _) = ty_ir {
                     Ok(Expr::FuncValue { callee, ty: fun })
                 } else {
@@ -4148,6 +4783,27 @@ impl<'a> Lowerer<'a> {
         // The missing parameters are argument positions `supplied..arity`.
         let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
         let mut call_args = lowered_args;
+        // T4 (#121): the supplied args are captured inside the emitted closure.
+        // A non-Copy CloneOk arg (e.g. a String-typed var) must be cloned on
+        // each call so the closure is `Fn` (re-callable), not `FnOnce`.
+        // Replace `Var(sym)` reads whose slot type is `CloneOk` with
+        // `CloneVar(sym)`; emit SKY-L0125 for `NonClone` captured args
+        // (function/task values cannot be cloned, and at this point they are
+        // not in direct callee position).
+        for (call_arg, slot_ty) in call_args.iter_mut().take(supplied).zip(arg_tys.iter().take(supplied))
+        {
+            if let Expr::Var(sym) = *call_arg {
+                let ir = self.ir_type_from_ty(slot_ty, call_span).ok();
+                match ir.as_ref().map(clone_class) {
+                    Some(CloneClass::CloneOk) => *call_arg = Expr::CloneVar(sym),
+                    Some(CloneClass::NonClone) => {
+                        return Err(unsupported(call_span, Feature::NonCloneCapture));
+                    }
+                    Some(CloneClass::CopyLeaf) | None => {} // bare Var unchanged
+                }
+            }
+            // Non-Var supplied args: complex-expr hoist (cap_params pool) deferred.
+        }
         for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
             // Reuse pool slot `offset`: each eta-lambda is its own scope, so the
             // i-th synthesised param can share a name across sites without
@@ -4171,6 +4827,87 @@ impl<'a> Lowerer<'a> {
         Ok(Expr::Lambda {
             params,
             ret,
+            body: Box::new(body),
+        })
+    }
+
+    /// T6 (#121): emit an eta-adapter `Lambda` when a callee's def-arity is
+    /// less than the flattened `IrType::Fun` param count at its reify site.
+    ///
+    /// The invariant this enforces: every `Expr::FuncValue`'s callee has a
+    /// def-arity equal to its `Fun` param count.  When def-arity `k < N`, the
+    /// callee is curried — its `k` declared params return an inner closure —
+    /// but the reference slot expects a flat `Box<dyn Fn(T0,…,T_{N-1})->R>`.
+    /// Rust rejects the mismatch with E0593; the eta-adapter makes it exact.
+    ///
+    /// The adapter for `mk` (def-arity k=1, `Fun([Str, Str], Page)`):
+    /// ```text
+    /// Lambda {
+    ///     params: [(eta_0, Str), (eta_1, Str)], ret: Page,
+    ///     body:   Apply { func: Call(mk, [eta_0]), args: [eta_1] }
+    /// }
+    /// ```
+    /// The backend renders this as:
+    /// ```text
+    /// Box::new(move |eta_0: String, eta_1: String| -> MainPage {
+    ///     (main_mk(eta_0))(eta_1)
+    /// })
+    /// ```
+    ///
+    /// A def-arity of 0 uses `Call(callee, [])` as the `Apply.func`:
+    /// ```text
+    /// Lambda { params: [(eta_0, T0)], ret: R,
+    ///          body: Apply { func: Call(callee, []), args: [eta_0] } }
+    /// ```
+    fn eta_adapt_funcvalue(
+        &self,
+        callee: Callee,
+        params: &[IrType],
+        ret: &IrType,
+        _span: Span,
+    ) -> DResult<Expr> {
+        let def_arity = self.callee_arity(&callee)?;
+        let n = params.len();
+        debug_assert!(
+            def_arity < n,
+            "eta_adapt_funcvalue called on an arity-exact callee (def_arity={def_arity}, n={n})"
+        );
+        // Allocate N eta params from the pool (one slot per param position).
+        // Each eta-lambda is its own closure scope, so the same pool entries can
+        // be reused positionally across sites without name collision.
+        let mut eta_syms: Vec<Symbol> = Vec::with_capacity(n);
+        for offset in 0..n {
+            let sym = *self.eta_params.get(offset).ok_or_else(|| {
+                bug(
+                    "sky_lower::eta_adapt_funcvalue",
+                    "eta-parameter pool smaller than the full function arity",
+                )
+            })?;
+            eta_syms.push(sym);
+        }
+        // Typed lambda params: (sym, type) for all N positions.
+        let lam_params: Vec<(Symbol, IrType)> = eta_syms
+            .iter()
+            .zip(params.iter())
+            .map(|(&sym, ty)| (sym, ty.clone()))
+            .collect();
+        // Direct args: the first `def_arity` eta params go to the inner Call.
+        let direct_args: Vec<Expr> = eta_syms.iter().take(def_arity).map(|&s| Expr::Var(s)).collect();
+        // Inner Call: `callee(eta_0, …, eta_{k-1})` — returns the inner closure.
+        let inner_call = Expr::Call {
+            callee,
+            args: direct_args,
+        };
+        // Apply: pass the remaining eta params to the returned closure.
+        // `def_arity == 0` ⇒ `apply_args == eta_syms[0..]` (all params).
+        let apply_args: Vec<Expr> = eta_syms.iter().skip(def_arity).map(|&s| Expr::Var(s)).collect();
+        let body = Expr::Apply {
+            func: Box::new(inner_call),
+            args: apply_args,
+        };
+        Ok(Expr::Lambda {
+            params: lam_params,
+            ret: ret.clone(),
             body: Box::new(body),
         })
     }
@@ -6460,10 +7197,32 @@ impl<'a> Lowerer<'a> {
                     // rewrite every `Var(name)` read in the body to
                     // `Apply(Var(name), [])` (emitted as `(d)()`).
                     if let Some(dec_ty) = self.decoder_ir_type(b.body.span) {
+                        // T3 (#121): apply capture-clone rewrite to the thunk
+                        // body before wrapping. The thunk has zero params so
+                        // all free VarLocals in b.body are outer captures.
+                        // CloneOk captures must `.clone()` to keep the thunk
+                        // `Fn`; NonClone captures in callee position are fine.
+                        let thunk_body = {
+                            let captures = self.captured_locals(&[], &b.body);
+                            let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
+                            let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
+                            for (sym, ir_ty) in captures {
+                                match ir_ty.as_ref().map(clone_class) {
+                                    Some(CloneClass::CloneOk) => {
+                                        clone_set.insert(sym);
+                                    }
+                                    Some(CloneClass::NonClone) => {
+                                        noncl_set.insert(sym);
+                                    }
+                                    Some(CloneClass::CopyLeaf) | None => {}
+                                }
+                            }
+                            rewrite_captured_clones(&clone_set, &noncl_set, b.body.span, value)?
+                        };
                         let thunk = Expr::Lambda {
                             params: vec![],
                             ret: dec_ty,
-                            body: Box::new(value),
+                            body: Box::new(thunk_body),
                         };
                         let thunked_body = rewrite_var_to_apply(*name, acc);
                         Expr::Let {
@@ -6886,7 +7645,7 @@ mod tests {
         };
 
         // Immutable borrow of interner starts here — no more intern() calls.
-        let lowerer = Lowerer::new(&module, &types, &interner, vec![], vec![], &builtins);
+        let lowerer = Lowerer::new(&module, &types, &interner, vec![], vec![], vec![], &builtins);
 
         // ── Test loop ────────────────────────────────────────────────────────
         let mut covered: usize = 0;

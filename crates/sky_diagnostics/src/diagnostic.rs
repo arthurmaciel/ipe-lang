@@ -14,7 +14,7 @@ use crate::code::{
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
     SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118, SKY_L0119, SKY_L0120, SKY_L0121,
-    SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0200,
+    SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0126, SKY_L0200,
     SKY_N0001,
     SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
     SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_P0001,
@@ -569,6 +569,10 @@ pub enum Feature {
     /// fields to read. Inline the record until non-literal cfg lowering lands.
     /// [SKY-L0119]
     LetBoundAppCfg,
+    /// A function/task/decoder value captured by a closure can only be
+    /// called, not forwarded; bind the result outside the closure or wrap
+    /// the forwarding in a named top-level function. [SKY-L0125]
+    NonCloneCapture,
 }
 
 /// The app shape whose entry point rejected an inadmissible Model. Drives the
@@ -985,6 +989,7 @@ const fn feature_code(f: Feature) -> Code {
         Feature::FloatKeyedCollection => SKY_L0117,
         Feature::RoutedLiveApp => SKY_L0118,
         Feature::LetBoundAppCfg => SKY_L0119,
+        Feature::NonCloneCapture => SKY_L0126,
     }
 }
 
