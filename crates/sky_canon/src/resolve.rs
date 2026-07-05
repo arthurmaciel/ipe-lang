@@ -81,6 +81,8 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "Sub",
     "SqlValue",
     "SqlField",
+    "StreamId",
+    "ChunkEvent",
     "Request",
     "Response",
     "Route",
