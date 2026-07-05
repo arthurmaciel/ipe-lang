@@ -84,6 +84,24 @@ pub struct SolvedTypes {
     /// `RedundantCaseBranch`). These are [`Severity::Warning`] findings: callers
     /// MUST print them but MUST NOT treat them as compilation failures.
     pub warnings: Vec<Diagnostic>,
+    /// Per-typed-binding map from union-find representative id to annotation
+    /// variable symbol, keyed by `(home, def_name)`.
+    ///
+    /// After solving, every annotation type variable for a `Def::Typed` binding
+    /// is represented as a `Ty::Var(u32)` in the zonked region types, where the
+    /// `u32` is the union-find representative of the rigid (skolem) that was
+    /// used while checking the binding's body.  This map records that
+    /// correspondence so the lowerer can tell apart a "this `Ty::Var` is a
+    /// generic type parameter of the enclosing function" from a "this `Ty::Var`
+    /// is a truly unconstrained, message-free subtree placeholder".
+    ///
+    /// Concretely: `Attribute<T1>` in `view : (Msg -> parentMsg) -> Counter ->
+    /// Html parentMsg` is an attribute list whose element type resolves to
+    /// `Ty::Con { Attribute, [Ty::Var(rep)] }` in the region map.  Without this
+    /// map the lowerer fell back to `IrType::Unit` (the `Attribute<()>` path),
+    /// producing E0308 in the emitted Rust.  With it, the lowerer emits
+    /// `IrType::Generic(parentMsg_sym)` → `Attribute<T1>`.
+    pub poly_var_map: BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<u32, Symbol>>,
 }
 
 /// Infer the types of a canonical module.
@@ -199,10 +217,22 @@ fn infer_with_budget(
     // Recover each typed binding's generic-variable super-type obligations from
     // the skolems its body constrained. A variable the body never constrained
     // stays a plain rigid (no obligation, absent from the map).
+    //
+    // Also build `poly_var_map`: the reverse mapping from union-find representative
+    // id → annotation var symbol, keyed by `(home, def_name)`.  The lowerer uses
+    // this to distinguish "this `Ty::Var` is a generic type parameter of the
+    // enclosing function" from "this `Ty::Var` is a message-free UI subtree
+    // placeholder" when lowering attribute-list element types inside polymorphic
+    // functions.
     let mut bounds: BTreeMap<Symbol, BTreeMap<Symbol, TyBounds>> = BTreeMap::new();
-    for (def_name, var_rigids) in &generated.typed_rigids {
+    let mut poly_var_map: BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<u32, Symbol>> =
+        BTreeMap::new();
+    for ((home, def_name), var_rigids) in &generated.typed_rigids {
         let mut var_bounds = BTreeMap::new();
+        let mut rep_to_sym: BTreeMap<u32, Symbol> = BTreeMap::new();
         for (var_sym, rigid) in var_rigids {
+            let rep = uf.find(*rigid)?;
+            rep_to_sym.insert(rep, *var_sym);
             if let Content::Super { bounds: b, .. } = uf.content(*rigid)?
                 && !b.is_empty()
             {
@@ -211,6 +241,9 @@ fn infer_with_budget(
         }
         if !var_bounds.is_empty() {
             bounds.insert(*def_name, var_bounds);
+        }
+        if !rep_to_sym.is_empty() {
+            poly_var_map.insert((home.clone(), *def_name), rep_to_sym);
         }
     }
 
@@ -238,6 +271,7 @@ fn infer_with_budget(
         regions,
         bounds,
         warnings: exhaust_warnings,
+        poly_var_map,
     })
 }
 

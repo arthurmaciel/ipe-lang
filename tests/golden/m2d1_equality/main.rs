@@ -235,10 +235,10 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     sky_runtime::http_client::http_parse_query(raw)
 }
 
-pub fn main_eq2<T1: PartialEq>(p: T1, q: T1) -> bool {
+pub fn main_eq2<T1: PartialEq + Clone>(p: T1, q: T1) -> bool {
     (p == q)
 }
-pub fn main_ne2<T1: PartialEq>(p: T1, q: T1) -> bool {
+pub fn main_ne2<T1: PartialEq + Clone>(p: T1, q: T1) -> bool {
     (p != q)
 }
 pub fn main_eq_bool(x: bool, y: bool) -> bool {

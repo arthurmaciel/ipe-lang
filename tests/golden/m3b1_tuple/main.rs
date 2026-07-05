@@ -235,10 +235,10 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     sky_runtime::http_client::http_parse_query(raw)
 }
 
-pub fn main_fst<T1, T2>(arg_0: (T1, T2)) -> T1 {
+pub fn main_fst<T1: Clone, T2: Clone>(arg_0: (T1, T2)) -> T1 {
     ({ let (a, b) = arg_0; a })
 }
-pub fn main_snd<T1, T2>(arg_1: (T1, T2)) -> T2 {
+pub fn main_snd<T1: Clone, T2: Clone>(arg_1: (T1, T2)) -> T2 {
     ({ let (a, b) = arg_1; b })
 }
 pub fn main_pair_sum() -> i64 {
