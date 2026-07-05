@@ -55,11 +55,27 @@ fn non_exhaustive_int_case_is_sky_t0010() {
     );
 }
 
+/// `SKY-T0011` is a WARNING since batch-xm (Go-reference parity — see the
+/// matching note in `golden_m3b2_gates`; severity policy under review as
+/// task #136). The build must SUCCEED.
 #[test]
-fn redundant_branch_after_catch_all_is_sky_t0011() {
-    assert_gate(
-        "m3b3_gate_redundant",
-        "m3b3_gate_redundant_emit",
-        sky_diagnostics::SKY_T0011,
+fn redundant_branch_after_catch_all_is_sky_t0011_warning_build_succeeds() {
+    let root = repo_root();
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join("m3b3_gate_redundant")
+        .join("Main.sky");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m3b3_gate_redundant_emit");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "redundant branch after catch-all must WARN (SKY-T0011) and build, got: {:?}",
+        built.err()
     );
 }
