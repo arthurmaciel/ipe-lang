@@ -216,9 +216,13 @@ struct Builtins {
     live_f_not_found: Symbol,
     // ── Tui cfg record field name symbols (Phase-1c) ─────────────────────────────
     /// `"onKey"` — the onKey field of the `Tui.app` / `Tui.program` config record.
-    /// Flat `String -> String -> Msg` — byte-matches the runtime bound
-    /// `FOnKey: Fn(String, String) -> Msg`.
+    /// Typed `{ kind : String, value : String } -> msg`; the backend bridges the
+    /// record handler onto the runtime bound `FOnKey: Fn(String, String) -> Msg`.
     tui_f_on_key: Symbol,
+    /// `"kind"` — field of the pinned `KeyEvent` record in the `onKey` scheme.
+    tui_f_key_kind: Symbol,
+    /// `"value"` — field of the pinned `KeyEvent` record in the `onKey` scheme.
+    tui_f_key_value: Symbol,
     // ── Webview cfg record field name symbols (Phase-1d) ─────────────────────────
     /// `"window"` — the window field of the `Webview.app` config record.
     /// Typed as a closed record `{ title : String, size : (Int, Int) }`.
@@ -349,6 +353,8 @@ impl Builtins {
             live_f_not_found: interner.intern("notFound")?,
             // Phase-1c: Tui cfg field names.
             tui_f_on_key: interner.intern("onKey")?,
+            tui_f_key_kind: interner.intern("kind")?,
+            tui_f_key_value: interner.intern("value")?,
             // Phase-1d: Webview cfg field names.
             webview_f_window: interner.intern("window")?,
             webview_f_title: interner.intern("title")?,
@@ -3468,9 +3474,27 @@ impl<'a> Builder<'a> {
             // Variable assignment:
             //   var(0) = model
             //   var(1) = msg
-            //   var(2) = key_event  (unconstrained — user chooses the record shape)
             //   var(3) = appExt     (open-row tail, absorbs guard/canvasWidth/…)
+            //
+            // `onKey`'s parameter is PINNED to the closed record
+            // `{ kind : String, value : String }` (the KeyEvent shape). The
+            // Haskell reference types it `any -> msg` and Go fails at RUNTIME
+            // when the handler param isn't the KeyEvent shape; we fail at
+            // compile time instead (same sanctioned tightening as the Model /
+            // Msg admissibility gates). An unconstrained var here was an
+            // exit-0-then-cargo-fail hole: `onKey : String -> Msg` type-checked
+            // but the emitted 1-arg fn broke the runtime's
+            // `FOnKey: Fn(String, String) -> Msg` bound (E0593).
             K::TuiApp => {
+                let key_event = Ty::Record(
+                    {
+                        let mut k = BTreeMap::new();
+                        k.insert(self.builtins.tui_f_key_kind, string());
+                        k.insert(self.builtins.tui_f_key_value, string());
+                        k
+                    },
+                    RowTail::Closed,
+                );
                 let tup = tuple2(var(0), cmd(var(1)));
                 let cfg_rec = Ty::Record(
                     {
@@ -3479,10 +3503,8 @@ impl<'a> Builder<'a> {
                         m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
                         m.insert(self.builtins.live_f_view, fun(var(0), elem_t(var(1))));
                         m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
-                        // onKey : key_event -> msg
-                        // var(2) is unconstrained so that `onKey : { kind, value } -> Msg`
-                        // (or any other key-record alias) unifies without forcing String.
-                        m.insert(self.builtins.tui_f_on_key, fun(var(2), var(1)));
+                        // onKey : { kind : String, value : String } -> msg (pinned).
+                        m.insert(self.builtins.tui_f_on_key, fun(key_event, var(1)));
                         m
                     },
                     // Open row: absorbs optional fields (guard, canvasWidth, canvasHeight, …).
@@ -3491,6 +3513,15 @@ impl<'a> Builder<'a> {
                 fun(cfg_rec, task_unit())
             }
             K::TuiProgram => {
+                let key_event = Ty::Record(
+                    {
+                        let mut k = BTreeMap::new();
+                        k.insert(self.builtins.tui_f_key_kind, string());
+                        k.insert(self.builtins.tui_f_key_value, string());
+                        k
+                    },
+                    RowTail::Closed,
+                );
                 let tup = tuple2(var(0), cmd(var(1)));
                 let cfg_rec = Ty::Record(
                     {
@@ -3499,8 +3530,9 @@ impl<'a> Builder<'a> {
                         m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
                         m.insert(self.builtins.live_f_view, fun(var(0), string()));
                         m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
-                        // onKey : key_event -> msg  (matches Haskell `any -> msg`)
-                        m.insert(self.builtins.tui_f_on_key, fun(var(2), var(1)));
+                        // onKey : { kind : String, value : String } -> msg (pinned —
+                        // see the `K::TuiApp` comment above for the seal rationale).
+                        m.insert(self.builtins.tui_f_on_key, fun(key_event, var(1)));
                         m
                     },
                     // Open row: absorbs optional fields (guard, canvasWidth, canvasHeight, …).

@@ -242,14 +242,35 @@ fn emit_tui_on_key(
     child: u16,
     generics: GenericScope,
 ) -> DResult<String> {
-    // Only wrap named function references whose first parameter is a record.
-    // Lambdas / local vars fall through to the standard emitter.
+    // Named function reference whose first parameter is a record: direct
+    // (unboxed) wrapper around the callee name.
     if let Expr::FuncValue { callee, ty } = e
         && let IrType::Fun(params, _ret) = ty
         && let Some(IrType::Record(rec_fields)) = params.first()
     {
         return emit_on_key_record_wrapper(ctx, callee, rec_fields);
     }
+    // Lambda whose first parameter is a record: bind the emitted closure and
+    // apply it inside the flat wrapper. The `TuiApp` / `TuiProgram` schemes pin
+    // `onKey`'s parameter to the closed `{ kind : String, value : String }`
+    // record, so a well-typed lambda always lands here — leaving it unwrapped
+    // was an exit-0-then-cargo-fail hole (the 1-arg closure broke the
+    // runtime's `FOnKey: Fn(String, String) -> Msg` bound with `E0593`).
+    if let Expr::Lambda { params, .. } = e
+        && let Some((_, IrType::Record(rec_fields))) = params.first()
+    {
+        let inner = emit_tui_fn(ctx, e, indent, child, generics)?;
+        let (struct_name, init_body) = on_key_struct_literal(ctx, rec_fields)?;
+        return Ok(format!(
+            "{{ let __sky_on_key = {inner}; \
+             move |kind: String, value: String| \
+             __sky_on_key({struct_name} {{ {init_body} }}) }}"
+        ));
+    }
+    // Residual (local var / other fn-typed exprs): plain emission; `cargo`
+    // validates compatibility. Reaching here with a record-typed handler value
+    // is only possible via a let-bound binding (see the #48 let-bound-cfg gate
+    // family).
     emit_tui_fn(ctx, e, indent, child, generics)
 }
 
@@ -272,6 +293,20 @@ fn emit_on_key_record_wrapper(
     callee: &Callee,
     rec_fields: &BTreeMap<sky_intern::Symbol, IrType>,
 ) -> DResult<String> {
+    let (struct_name, init_body) = on_key_struct_literal(ctx, rec_fields)?;
+    let fn_name = callee_name(ctx, callee)?;
+    Ok(format!(
+        "|kind: String, value: String| {fn_name}({struct_name} {{ {init_body} }})"
+    ))
+}
+
+/// Resolve the `KeyEvent` record shape to its generated Rust struct name plus
+/// the struct-literal body mapping the flat runtime `(kind, value)` params
+/// (shared by the named-function and lambda wrapper paths).
+fn on_key_struct_literal(
+    ctx: &EmitCtx,
+    rec_fields: &BTreeMap<sky_intern::Symbol, IrType>,
+) -> DResult<(String, String)> {
     // Resolve all field symbols to (name, IrType) pairs and sort by name so
     // the struct literal matches the pre-pass order used by record_name_for_literal.
     let mut fields: Vec<(String, &IrType)> = rec_fields
@@ -307,11 +342,7 @@ fn emit_on_key_record_wrapper(
         init_parts.push(part);
     }
 
-    let fn_name = callee_name(ctx, callee)?;
-    let init_body = init_parts.join(", ");
-    Ok(format!(
-        "|kind: String, value: String| {fn_name}({struct_name} {{ {init_body} }})"
-    ))
+    Ok((struct_name.to_owned(), init_parts.join(", ")))
 }
 
 /// Emit a cfg-field expression for a Tui app-entry kernel.
