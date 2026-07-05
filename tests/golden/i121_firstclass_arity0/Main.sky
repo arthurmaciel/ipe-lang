@@ -1,0 +1,34 @@
+module Main exposing (main)
+
+-- F2 (#121 seal). `handler : String -> Page` is a NULLARY def (def-arity 0):
+-- no explicit parameter pattern, just `handler = mkPage "hello"`.
+-- At the reify site `applyF handler`, the slot type is `Fun([Str], Page)` but
+-- def-arity is 0 — T6 emits the adapter `\eta_0 -> (main_handler())(eta_0)`.
+
+
+type Page
+    = Home String String
+
+
+mkPage : String -> String -> Page
+mkPage a b =
+    Home a b
+
+
+-- def-arity 0: the value of `handler` is the result of `mkPage "hello"`,
+-- which is itself `String -> Page`.
+handler : String -> Page
+handler =
+    mkPage "hello"
+
+
+applyF : (String -> Page) -> String -> Page
+applyF f s =
+    f s
+
+
+main =
+    let p = applyF handler "world" in
+    case p of
+        Home a b ->
+            println (a ++ " " ++ b)

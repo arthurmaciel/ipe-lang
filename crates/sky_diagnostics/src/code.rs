@@ -215,6 +215,8 @@ pub const SKY_L0124: Code = Code("SKY-L0124");
 /// `Clone + Send + Sync + Debug + 'static` bound — converts a
 /// would-be `cargo` trait-bound failure into a fail-closed `skyc` error.
 pub const SKY_L0125: Code = Code("SKY-L0125");
+/// a non-Clone, non-callee-position capture inside a closure
+pub const SKY_L0126: Code = Code("SKY-L0126");
 /// expression nests too deeply for the backend
 pub const SKY_L0200: Code = Code("SKY-L0200");
 
@@ -325,6 +327,7 @@ pub fn title(c: Code) -> &'static str {
         SKY_L0123 => "`Live.route` page builder is not a constructor, lambda, or named function",
         SKY_L0124 => "`Live.app` routes list is non-empty but Model has no `page` field",
         SKY_L0125 => "app Msg is not admissible for this app shape",
+        SKY_L0126 => "non-Clone capture in a closure is not yet supported",
         SKY_L0200 => "expression nests too deeply for the backend",
         SKY_I0001 => "internal compiler error",
         SKY_I0010 => "intern: unresolved symbol",
@@ -426,6 +429,7 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         SKY_L0123 => Some(include_str!("../explain/SKY-L0123.md")),
         SKY_L0124 => Some(include_str!("../explain/SKY-L0124.md")),
         SKY_L0125 => Some(include_str!("../explain/SKY-L0125.md")),
+        SKY_L0126 => Some(include_str!("../explain/SKY-L0126.md")),
         SKY_L0200 => Some(include_str!("../explain/SKY-L0200.md")),
         SKY_I0001 => Some(include_str!("../explain/SKY-I0001.md")),
         SKY_I0010 => Some(include_str!("../explain/SKY-I0010.md")),
@@ -457,14 +461,14 @@ mod tests {
         SKY_L0101,
         SKY_L0102, SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110,
         SKY_L0111, SKY_L0112, SKY_L0113, SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118,
-        SKY_L0119, SKY_L0120, SKY_L0121, SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0200, SKY_I0001,
-        SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101,
+        SKY_L0119, SKY_L0120, SKY_L0121, SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0126, SKY_L0200,
+        SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101,
         SKY_I0102, SKY_I0103, SKY_I0200, SKY_I0201, SKY_I0202, SKY_I0203,
     ];
 
     #[test]
-    fn taxonomy_has_eighty_four_codes() {
-        assert_eq!(ALL.len(), 84);
+    fn taxonomy_has_eighty_five_codes() {
+        assert_eq!(ALL.len(), 85);
     }
 
     #[test]
@@ -482,7 +486,7 @@ mod tests {
             assert!(s.starts_with("SKY-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 84);
+        assert_eq!(seen.len(), 85);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.

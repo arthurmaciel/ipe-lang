@@ -1,0 +1,21 @@
+module Main exposing (main)
+
+-- F4 (#121 seal). A lambda captures a non-`Copy` local.
+-- `prefix : String` (CloneOk) is captured by `\x -> String.append prefix x`.
+-- T3 rewrites `Var(prefix)` in the closure body to `CloneVar(prefix)` so the
+-- closure is `Fn` (re-usable per `List.map` element), not `FnOnce` (E0525).
+--
+-- F11 shadow-control is embedded: `tag` rebinds `prefix` as a count string.
+-- The lambda must capture the PARAMETER prefix ("sky-"), not the shadow ("2").
+-- Correct output (`sky-one,sky-two[2]`) proves the shadow-discipline holds.
+
+
+tag : String -> List String -> String
+tag prefix items =
+    let mapped = List.map (\x -> String.append prefix x) items in
+    let prefix = String.fromInt (List.length items) in
+    String.join "," mapped ++ "[" ++ prefix ++ "]"
+
+
+main =
+    println (tag "sky-" [ "one", "two" ])

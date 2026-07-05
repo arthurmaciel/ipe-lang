@@ -3290,6 +3290,7 @@ pub fn emit_expr_at(
         // The unit value renders as the Rust unit expression `()`.
         Expr::Unit => Ok("()".to_owned()),
         Expr::Var(sym) => ctx.emit_ident(*sym),
+        Expr::CloneVar(sym) => Ok(format!("{}.clone()", ctx.emit_ident(*sym)?)),
         Expr::Ctor { home, ty, variant, args } => {
             emit_ctor(ctx, home, *ty, *variant, args, indent, depth, generics)
         }
