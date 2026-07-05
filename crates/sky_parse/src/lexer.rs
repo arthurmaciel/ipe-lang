@@ -101,6 +101,12 @@ pub enum Tok {
     /// UNESCAPED value (escape sequences such as `\n` / `\"` are resolved here),
     /// so downstream stages see the runtime string verbatim.
     Str(String),
+    /// A triple-quoted string literal `"""..."""`. The carried [`String`] is the
+    /// RAW content — escape sequences (`\n`, `\\`) and `{{expr}}` interpolation
+    /// markers are NOT resolved here; the canonicaliser handles them downstream,
+    /// mirroring `Sky.Parse.String.findTripleClose` which performs no escape
+    /// resolution. Mirrors the Haskell compiler's `Src.MultilineStr`.
+    TripleStr(String),
     /// A character literal `'a'`. The carried [`String`] is the single UNESCAPED
     /// character's text (exactly one `char`), so `'\n'` carries a one-character
     /// newline string. The backend renders it as a Rust `char` literal.
@@ -488,7 +494,7 @@ fn lex_triple_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
                     lx.advance(); // consume first `"`  of `"""`
                     lx.advance(); // consume second `"` of `"""`
                     lx.advance(); // consume third `"`  of `"""`
-                    return Ok(Tok::Str(value));
+                    return Ok(Tok::TripleStr(value));
                 }
                 // Not a closing triple — this `"` is literal content.
                 value.push('"');

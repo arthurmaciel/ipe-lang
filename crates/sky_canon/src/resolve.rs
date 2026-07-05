@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use sky_diagnostics::{DResult, Diagnostic, Located, NameError, Span};
 use sky_intern::{Interner, Symbol};
+use sky_kernels::StdlibKernel;
 use sky_syntax as src;
 
 use crate::ast as canon;
@@ -1884,6 +1885,10 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
         src::Expr_::Int(n) => canon::Expr_::Int(*n),
         src::Expr_::Float(f) => canon::Expr_::Float(*f),
         src::Expr_::Str(s) => canon::Expr_::Str(s.clone()),
+        // Triple-quoted strings: desugar `{{expr}}` interpolation into a `++`
+        // chain at canonicalise time. Mirrors `Sky.Canonicalise.Expression.hs`
+        // line 42 (`Src.MultilineStr s -> desugarMultiline env s`).
+        src::Expr_::MultilineStr(s) => desugar_multiline(s, span, env, interner)?,
         src::Expr_::Char(c) => canon::Expr_::Char(c.clone()),
         src::Expr_::Unit => canon::Expr_::Unit,
         src::Expr_::VarLocal(name) => resolve_var(*name, span, env, interner)?,
@@ -2599,6 +2604,279 @@ fn levenshtein(a: &str, b: &str) -> usize {
 /// so we cannot hardcode it). Used only on the unreachable unnamed-type path.
 const fn name_zero() -> Symbol {
     Symbol::from_raw(0)
+}
+
+// ── Triple-quoted string interpolation desugar ────────────────────────────────
+//
+// Faithful Rust port of `Sky.Canonicalise.Expression.desugarMultiline` /
+// `splitInterpolation` / `chunkToExpr` / `resolveInterpolationRef`.
+//
+// Entry point: `desugar_multiline(raw, span, env, interner)` — called from
+// `canonicalise_expr` when it sees `src::Expr_::MultilineStr`.
+//
+// The raw string is split into alternating `Lit` / `Interp` chunks, each
+// expression chunk is wrapped in `Basics.toString`, and the whole list is
+// folded left into a `++` (String.append) binop chain.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A parsed chunk from a triple-quoted string.
+enum Chunk {
+    /// A literal string segment (no interpolation).
+    Lit(String),
+    /// An interpolation body — the raw text between `{{` and `}}`.
+    Interp(String),
+}
+
+/// Split a raw triple-quoted string body into alternating literal / expression
+/// chunks. Direct Rust port of `Sky.Canonicalise.Expression.splitInterpolation`.
+///
+/// Escape grammar (spec from upstream `splitInterpolation` comments):
+///   `\{{`  → literal `{{`  (no interpolation consumed)
+///   `\\`   → literal `\`
+///   `\X`   → literal `\X` for any other `X` (verbatim pass-through)
+/// An unclosed `{{` (no matching `}}`) is treated as literal content.
+fn split_interpolation(raw: &str) -> Vec<Chunk> {
+    let chars: Vec<char> = raw.chars().collect();
+    let mut result: Vec<Chunk> = Vec::new();
+    let mut acc = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c0 = chars[i];
+        let c1 = chars.get(i + 1).copied();
+        let c2 = chars.get(i + 2).copied();
+        match (c0, c1, c2) {
+            // `\{{` → emit literal `{{`, skip 3 chars.
+            ('\\', Some('{'), Some('{')) => {
+                acc.push_str("{{");
+                i += 3;
+            }
+            // `\\` → emit literal `\`, skip 2 chars.
+            ('\\', Some('\\'), _) => {
+                acc.push('\\');
+                i += 2;
+            }
+            // `{{` → start an interpolation. Flush accumulated literal first.
+            ('{', Some('{'), _) => {
+                if !acc.is_empty() {
+                    result.push(Chunk::Lit(std::mem::take(&mut acc)));
+                }
+                i += 2;
+                // Collect the body up to the matching `}}`.
+                let mut body = String::new();
+                let mut closed = false;
+                while i < chars.len() {
+                    if chars[i] == '}' && chars.get(i + 1).copied() == Some('}') {
+                        i += 2;
+                        closed = true;
+                        break;
+                    }
+                    body.push(chars[i]);
+                    i += 1;
+                }
+                if closed {
+                    result.push(Chunk::Interp(body));
+                } else {
+                    // Unclosed `{{` — treat entire `{{body` as literal content.
+                    acc.push_str("{{");
+                    acc.push_str(&body);
+                }
+            }
+            // Any other character — copy verbatim.
+            _ => {
+                acc.push(c0);
+                i += 1;
+            }
+        }
+    }
+    if !acc.is_empty() {
+        result.push(Chunk::Lit(acc));
+    }
+    result
+}
+
+/// Convert a `Chunk` to a canonical expression.
+/// Port of `Sky.Canonicalise.Expression.chunkToExpr`.
+///
+/// `Lit` → `Expr_::Str`.
+/// `Interp` → resolve the body as a simple ref, then wrap in `Basics.toString`.
+fn chunk_to_expr(
+    chunk: Chunk,
+    span: Span,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<canon::Expr> {
+    match chunk {
+        Chunk::Lit(s) => Ok(Located::new(span, canon::Expr_::Str(s))),
+        Chunk::Interp(body) => {
+            // Trim leading/trailing whitespace, matching the Haskell
+            // `dropWhile (== ' ') (reverse (dropWhile …))`.
+            let trimmed = body.trim();
+            let resolved = resolve_interp_ref(trimmed, span, env, interner)?;
+            // Wrap in Basics.toString.
+            let mod_sym = interner.intern("Basics")?;
+            let fn_sym = interner.intern("toString")?;
+            let stringify = Located::new(
+                span,
+                canon::Expr_::VarKernel {
+                    id: Some(StdlibKernel::BasicsToString),
+                    module: mod_sym,
+                    name: fn_sym,
+                },
+            );
+            Ok(Located::new(
+                span,
+                canon::Expr_::Call(Box::new(stringify), vec![resolved]),
+            ))
+        }
+    }
+}
+
+/// Resolve a simple interpolation reference.
+/// Port of `Sky.Canonicalise.Expression.resolveInterpolationRef`.
+///
+/// Handles four shapes:
+///   `foo`          — bare identifier → local var (or kernel if in scope)
+///   `record.field` — field access → `Access(VarLocal(record), field)`
+///   `Module.func`  — qualified name → `VarKernel` (if known) or literal fallback
+///   `func arg`     — single function call → `Call(resolve(func), [resolve(arg)])`
+/// Anything more complex falls back to a literal `{{...}}` string (clear signal
+/// to the developer that only simple expressions are interpolable).
+fn resolve_interp_ref(
+    s: &str,
+    span: Span,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<canon::Expr> {
+    // Check for `func arg` (a single space separates them).
+    if let Some(space_pos) = s.find(' ') {
+        let func_str = &s[..space_pos];
+        let arg_str = s[space_pos + 1..].trim();
+        if !func_str.is_empty() && !arg_str.is_empty() {
+            let func_expr = resolve_interp_ref(func_str, span, env, interner)?;
+            let arg_expr = resolve_interp_ref(arg_str, span, env, interner)?;
+            return Ok(Located::new(
+                span,
+                canon::Expr_::Call(Box::new(func_expr), vec![arg_expr]),
+            ));
+        }
+    }
+    resolve_simple_interp_ref(s, span, env, interner)
+}
+
+/// Inner resolver for an interpolation reference without a space (no call form).
+/// Port of `resolveSimpleRef` inside `resolveInterpolationRef`.
+fn resolve_simple_interp_ref(
+    s: &str,
+    span: Span,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<canon::Expr> {
+    if let Some(dot_pos) = s.find('.') {
+        let first = &s[..dot_pos];
+        let rest = &s[dot_pos + 1..];
+        if first.is_empty() || rest.is_empty() {
+            // Degenerate `.foo` or `foo.` — literal fallback.
+            return Ok(Located::new(
+                span,
+                canon::Expr_::Str(format!("{{{{{s}}}}}")),
+            ));
+        }
+        let first_char = first.chars().next().unwrap_or('_');
+        if first_char.is_uppercase() {
+            // Qualified reference `Module.func`.
+            let qual_sym = interner.intern(first)?;
+            // Look up the qualifier in the current environment.
+            if let Some(members) = env.qual_vars.get(&qual_sym) {
+                let name_sym = interner.intern(rest)?;
+                if let Some(home) = members.get(&name_sym) {
+                    return Ok(Located::new(span, var_home_to_expr(name_sym, home)));
+                }
+            }
+            // Unknown module or member — literal fallback (clear signal to dev).
+            return Ok(Located::new(
+                span,
+                canon::Expr_::Str(format!("{{{{{s}}}}}")),
+            ));
+        }
+        // Lowercase `record.field` → `Access(VarLocal(record), field)`.
+        let rec_sym = interner.intern(first)?;
+        let field_sym = interner.intern(rest)?;
+        return Ok(Located::new(
+            span,
+            canon::Expr_::Access(
+                Box::new(Located::new(span, canon::Expr_::VarLocal(rec_sym))),
+                field_sym,
+            ),
+        ));
+    }
+    // Bare identifier — look up in vars, then wildcard tier (mirrors
+    // `resolve_wildcard_var` but treats ambiguity as VarLocal rather
+    // than a hard error, since interpolation refs are best-effort).
+    let sym = interner.intern(s)?;
+    let expr = if let Some(h) = env.vars.get(&sym) {
+        var_home_to_expr(sym, h)
+    } else if let Some(origins) =
+        env.wildcard_vars.get(&sym).filter(|o| !o.is_empty())
+    {
+        if origins.len() == 1 {
+            if let Some(origin) = origins.values().next() {
+                var_home_to_expr(sym, &origin.home)
+            } else {
+                canon::Expr_::VarLocal(sym)
+            }
+        } else {
+            // Ambiguous wildcard — fall back to VarLocal; the type
+            // checker will catch genuine errors later.
+            canon::Expr_::VarLocal(sym)
+        }
+    } else {
+        canon::Expr_::VarLocal(sym)
+    };
+    Ok(Located::new(span, expr))
+}
+
+/// Desugar a triple-quoted string into a `++`-chained canonical expression.
+/// Entry point from `canonicalise_expr`. Port of
+/// `Sky.Canonicalise.Expression.desugarMultiline`.
+fn desugar_multiline(
+    raw: &str,
+    span: Span,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<canon::Expr_> {
+    let chunks = split_interpolation(raw);
+    // Build one canonical expression per chunk.
+    let mut parts: Vec<canon::Expr> = Vec::with_capacity(chunks.len());
+    for chunk in chunks {
+        parts.push(chunk_to_expr(chunk, span, env, interner)?);
+    }
+    match parts.len() {
+        0 => Ok(canon::Expr_::Str(String::new())),
+        1 => Ok(parts.remove(0).value),
+        _ => {
+            // Left-fold into a `++` chain: ((a ++ b) ++ c) ++ …
+            let mut iter = parts.into_iter();
+            let first = iter.next().expect("len >= 2, so first exists");
+            let op_sym = interner.intern("++")?;
+            let home_sym = interner.intern("Basics")?;
+            let func_sym = interner.intern("append")?;
+            let mut acc = first;
+            for part in iter {
+                let merged_span = Span::new(acc.span.lo, part.span.hi);
+                acc = Located::new(
+                    merged_span,
+                    canon::Expr_::Binop {
+                        op: op_sym,
+                        home: home_sym,
+                        func: func_sym,
+                        lhs: Box::new(acc),
+                        rhs: Box::new(part),
+                    },
+                );
+            }
+            Ok(acc.value)
+        }
+    }
 }
 
 #[cfg(test)]
