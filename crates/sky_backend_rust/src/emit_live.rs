@@ -325,6 +325,18 @@ fn emit_live_app_inner(
         )?;
     }
 
+    // #94 seal: gate the Msg type against `live_app`'s Clone+Send+Sync+Debug
+    // bound. The predicate is ir_type_is_derivable (NOT serde) — Msg is never
+    // persisted, so Html-carrying Msg is accepted. A Cmd/Sub/Task/function in
+    // Msg would cargo-fail; the gate makes it a fail-closed SKY-L0122 error.
+    if let Some(msg_ty) = crate::emit_model_gate::msg_ty_of_update(update_e) {
+        crate::emit_model_gate::check_admissible_msg(
+            ctx,
+            msg_ty,
+            sky_diagnostics::AppShape::Live,
+        )?;
+    }
+
     let init_s = emit_live_fn(ctx, init_e, indent, child, generics)?;
     let update_s = emit_live_fn(ctx, update_e, indent, child, generics)?;
     let view_s = emit_live_fn(ctx, view_e, indent, child, generics)?;

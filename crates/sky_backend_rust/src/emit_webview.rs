@@ -131,6 +131,16 @@ fn emit_webview_app_inner(
         )?;
     }
 
+    // #94 seal: gate the Msg type against `webview_app`'s Clone+Send bound.
+    // Same derivable predicate as Live/Tui — Msg is never persisted.
+    if let Some(msg_ty) = crate::emit_model_gate::msg_ty_of_update(update_e) {
+        crate::emit_model_gate::check_admissible_msg(
+            ctx,
+            msg_ty,
+            sky_diagnostics::AppShape::Webview,
+        )?;
+    }
+
     // ── G4 gate 1: `window` must be an inline record literal ─────────────────
     // Unreachable for well-typed source: a let-bound `window` is rejected at lower
     // with SKY-L0119 (Feature::LetBoundAppCfg); this guard is a defensive invariant.

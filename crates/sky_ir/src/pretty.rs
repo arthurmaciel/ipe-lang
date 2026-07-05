@@ -907,6 +907,22 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HttpStreamOpen => "HttpStream.open",
         KernelFn::HttpStreamForEachChunk => "HttpStream.forEachChunk",
         KernelFn::HttpStreamClose => "HttpStream.close",
+        // ── Std.Ui.Input (#124) ──────────────────────────────────────────────
+        KernelFn::InputLabelAbove => "Input.labelAbove",
+        KernelFn::InputLabelBelow => "Input.labelBelow",
+        KernelFn::InputLabelLeft => "Input.labelLeft",
+        KernelFn::InputLabelRight => "Input.labelRight",
+        KernelFn::InputLabelHidden => "Input.labelHidden",
+        KernelFn::InputPlaceholder => "Input.placeholder",
+        KernelFn::InputText => "Input.text",
+        KernelFn::InputMultiline => "Input.multiline",
+        KernelFn::InputEmail => "Input.email",
+        KernelFn::InputUsername => "Input.username",
+        KernelFn::InputSearch => "Input.search",
+        KernelFn::InputCurrentPassword => "Input.currentPassword",
+        KernelFn::InputNewPassword => "Input.newPassword",
+        KernelFn::InputCheckbox => "Input.checkbox",
+        KernelFn::BasicsCompare => "Basics.compare",
     }
 }
 
