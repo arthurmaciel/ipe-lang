@@ -1335,7 +1335,7 @@ mod tests {
     // Regression: PAnything (wildcard lambda param with unconstrained Ty::Var)
     // -----------------------------------------------------------------------
 
-    /// Regression for `SKY-L0102` (Feature::Polymorphism) on wildcard `_`
+    /// Regression for `SKY-L0102` (`Feature::Polymorphism`) on wildcard `_`
     /// lambda parameters.
     ///
     /// Before the fix, `lower_lambda` called `ir_type_from_ty` on the `_`
