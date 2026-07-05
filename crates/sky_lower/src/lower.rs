@@ -1019,9 +1019,6 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
             lambda_body_refs_sym(sym, head) || lambda_body_refs_sym(sym, tail)
         }
         Expr::Record(fields) => fields.iter().any(|(_, e)| lambda_body_refs_sym(sym, e)),
-        // Access.record is a borrow position (field access borrows or copies the
-        // parent record) — the parent is not captured by-value from outside.
-        Expr::Access { .. } => false,
         // Update.record is wrapped in `.clone()` by emit_update (borrow, not move).
         // Only the field value expressions are consuming captures.
         Expr::Update { fields, .. } => {
@@ -1032,7 +1029,11 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
             lambda_body_refs_sym(sym, effect) || lambda_body_refs_sym(sym, rest)
         }
         Expr::TailRecur { args } => args.iter().any(|a| lambda_body_refs_sym(sym, a)),
-        Expr::Int(_)
+        // `Access` joins the literal leaves: field access borrows/copies the
+        // parent record, so it is never a by-value capture (see the matching
+        // comment on the `count_var_uses` leaf group).
+        Expr::Access { .. }
+        | Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
@@ -1059,9 +1060,8 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
 ///   further (inner uses are the Lambda's own business).
 fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
     match expr {
-        Expr::Var(s) => usize::from(*s == sym),
-        // Pre-pass `CloneVar` at the outer scope level — treat like `Var`.
-        Expr::CloneVar(s) => usize::from(*s == sym),
+        // A pre-pass `CloneVar` at the outer scope counts like a bare `Var`.
+        Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
         Expr::Lambda { body, .. } => usize::from(lambda_body_refs_sym(sym, body)),
         Expr::Let { name, value, body } => {
             let in_value = count_var_uses(sym, value);
@@ -1111,10 +1111,6 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
         Expr::Record(fields) => {
             fields.iter().map(|(_, e)| count_var_uses(sym, e)).sum()
         }
-        // `Access.record` — field access borrows the parent record in emitted
-        // Rust (or copies a `Copy` field).  The parent is not consumed, so don't
-        // count occurrences of `sym` inside the record sub-expression.
-        Expr::Access { .. } => 0,
         // `Update.record` — `emit_update` wraps it as `(record).clone()`, which
         // BORROWS the record (`.clone()` takes `&self`).  `sym` is NOT moved here.
         // Only the new FIELD VALUES (fields.values) are consuming positions.
@@ -1133,7 +1129,11 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
             }
         }
         Expr::TailRecur { args } => args.iter().map(|a| count_var_uses(sym, a)).sum(),
-        Expr::Int(_)
+        // `Access` joins the literal leaves: field access borrows the parent
+        // record in emitted Rust (or copies a `Copy` field) — the parent is not
+        // consumed, so occurrences of `sym` under it don't count.
+        Expr::Access { .. }
+        | Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
@@ -3010,6 +3010,7 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // grew past 100 with the T5 multi-use-clone pre-pass (#104)
     fn lower_def(&self, def: &canon::Def) -> DResult<Func> {
         let name = def.name().value;
         let id = *self
