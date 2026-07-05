@@ -453,6 +453,9 @@ fn lower_label(msg: &LowerError) -> String {
         LowerError::InadmissibleAppModel { app, field, leaf } => {
             crate::diagnostic::inadmissible_model_message(*app, field, *leaf)
         }
+        LowerError::InadmissibleAppMsg { app, field, leaf } => {
+            crate::diagnostic::inadmissible_msg_message(*app, field, *leaf)
+        }
         LowerError::BackendNestingTooDeep { limit } => {
             format!("nested past the backend limit of {limit}")
         }

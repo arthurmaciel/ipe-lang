@@ -1,0 +1,404 @@
+//! #94 seal regression: the `Std.Live` / `Std.Tui` / `Std.Webview` app-entry
+//! Msg-admissibility gate.
+//!
+//! `live_app` bounds its Msg `Clone + Send + Sync + Debug + 'static`;
+//! `tui_app` / `webview_app` bound it `Clone + Send + 'static`. Before the
+//! gate, a Msg storing a non-admissible value (`Cmd` / `Sub` / `Task` /
+//! `Decoder` / `Db` / a function) made `skyc` exit 0 and then `cargo build`
+//! fail on the missing trait bound. The gate converts that into a fail-closed
+//! `SKY-L0125` diagnostic.
+//!
+//! KEY ASYMMETRY: `Html`-carrying Msg MUST be ACCEPTED. The predicate is
+//! `ir_type_is_derivable` (NOT serde) — `Html` derives Clone+Debug+PartialEq
+//! and is therefore admissible in a Msg, unlike in a `Sky.Live` Model (where
+//! serde is required). This fixture is the critical acceptance case.
+//!
+//! These tests are COMPILE-ONLY (they run the `skyc` pipeline + write the
+//! project, but never invoke `cargo`), so they are fast and NOT gated on
+//! `SKY_E2E`.
+
+type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+/// Compile `source` through `skyc::build`, returning the pipeline result.
+fn compile(test_name: &str, source: &str) -> Result<Result<(), skyc::CliError>, BoxError> {
+    let sky_dir = std::env::temp_dir().join(format!("msg_adm_{test_name}_sky"));
+    let _ = std::fs::remove_dir_all(&sky_dir);
+    std::fs::create_dir_all(&sky_dir)?;
+    let entry = sky_dir.join("Main.sky");
+    std::fs::write(&entry, source)?;
+
+    let out_dir = std::env::temp_dir().join(format!("msg_adm_{test_name}_out"));
+    let _ = std::fs::remove_dir_all(&out_dir);
+
+    let runtime = skyc::resolve_runtime().map_err(|e| -> BoxError { format!("{e:?}").into() })?;
+    Ok(skyc::build(&entry, &out_dir, &runtime))
+}
+
+/// Assert compilation failed with the given diagnostic code.
+fn assert_rejected_with(
+    test_name: &str,
+    source: &str,
+    expected_code: &str,
+) -> Result<(), BoxError> {
+    match compile(test_name, source)? {
+        Ok(()) => Err(format!("{test_name}: expected {expected_code}, but skyc succeeded").into()),
+        Err(skyc::CliError::Pipeline { diag, .. }) => {
+            assert_eq!(
+                diag.code().as_str(),
+                expected_code,
+                "{test_name}: wrong diagnostic code"
+            );
+            Ok(())
+        }
+        Err(other) => {
+            Err(format!("{test_name}: expected {expected_code}, got {other:?}").into())
+        }
+    }
+}
+
+/// Assert compilation succeeded (skyc-0).
+fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
+    match compile(test_name, source)? {
+        Ok(()) => Ok(()),
+        Err(e) => Err(format!("{test_name}: expected skyc success, got {e:?}").into()),
+    }
+}
+
+// ── Rejection fixtures ────────────────────────────────────────────────────────
+
+/// `Sky.Live` app: Msg variant carries a `Cmd`. Must be rejected with SKY-L0125.
+const LIVE_CMD_MSG: &str = r"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg
+    = Tick
+    | WithEffect (Cmd Msg)
+
+type alias Model = { count : Int }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Tick ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+        WithEffect _ ->
+            ( model, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout [] (Ui.text (String.fromInt model.count))
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Tick
+        }
+";
+
+/// `Sky.Live` app: Msg variant carries a function. Rejected by the pre-existing
+/// Gate 2 (`ir_contains_fun` in `lower_enum`, `SKY-L0114`) which fires before the
+/// #94 Msg gate. The important thing is that such programs are rejected; the
+/// code is `L0114` not `L0125` because function-in-constructor is a separate,
+/// earlier constraint.
+const LIVE_FN_MSG: &str = r"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg
+    = Noop
+    | SetHandler (Int -> String)
+
+type alias Model = { count : Int }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Noop ->
+            ( model, Cmd.none )
+        SetHandler _ ->
+            ( model, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout [] (Ui.text (String.fromInt model.count))
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Noop
+        }
+";
+
+/// `Sky.Live` app: `update` is an inline lambda; Msg carries a `Cmd`.
+/// Exercises the `fn_param_ty` Lambda recovery path for Msg (#94).
+const LIVE_LAMBDA_UPDATE_CMD_MSG: &str = r"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg
+    = Tick
+    | WithEffect (Cmd Msg)
+
+type alias Model = { count : Int }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout [] (Ui.text (String.fromInt model.count))
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init
+        , update = \msg model ->
+            case msg of
+                Tick -> ( { model | count = model.count + 1 }, Cmd.none )
+                WithEffect _ -> ( model, Cmd.none )
+        , view = view
+        , subscriptions = subscriptions
+        , routes = [], notFound = Tick
+        }
+";
+
+/// `Sky.Tui` app: Msg variant carries a `Cmd`. Must be rejected with SKY-L0125.
+const TUI_CMD_MSG: &str = r"module Main exposing (main)
+
+import Std.Tui as Tui
+import Std.Ui as Ui
+
+type Msg
+    = Increment
+    | NoOp
+    | WithEffect (Cmd Msg)
+
+type alias Model = { count : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+        NoOp ->
+            ( model, Cmd.none )
+        WithEffect _ ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view model =
+    Ui.column [] [ Ui.el [] (Ui.text (String.fromInt model.count)) ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onKey : String -> String -> Msg
+onKey _kind _value =
+    NoOp
+
+main =
+    Tui.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onKey = onKey
+        }
+";
+
+/// `Sky.Tui` app: Msg variant carries a function. Rejected by Gate 2
+/// (SKY-L0114) before the #94 Msg gate, same as `LIVE_FN_MSG`.
+const TUI_FN_MSG: &str = r"module Main exposing (main)
+
+import Std.Tui as Tui
+import Std.Ui as Ui
+
+type Msg
+    = NoOp
+    | SetHandler (Int -> String)
+
+type alias Model = { count : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        NoOp ->
+            ( model, Cmd.none )
+        SetHandler _ ->
+            ( model, Cmd.none )
+
+view : Model -> Element Msg
+view model =
+    Ui.column [] [ Ui.el [] (Ui.text (String.fromInt model.count)) ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+onKey : String -> String -> Msg
+onKey _kind _value =
+    NoOp
+
+main =
+    Tui.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onKey = onKey
+        }
+";
+
+// ── Acceptance fixtures ───────────────────────────────────────────────────────
+
+/// CRITICAL asymmetry fixture: `Sky.Live` Msg carries `Html Msg`.
+/// `Html` derives Clone+Debug+PartialEq (derivable) but is NOT serde.
+/// The Msg gate uses derivable (not serde), so this MUST be ACCEPTED (skyc-0).
+/// If the gate incorrectly used serde, this would be rejected — breaking the
+/// invariant that Msg and Model use different admissibility predicates.
+const LIVE_HTML_MSG: &str = r"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg
+    = Noop
+    | CachedView (Html Msg)
+
+type alias Model = { count : Int }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Noop ->
+            ( model, Cmd.none )
+        CachedView _ ->
+            ( model, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout [] (Ui.text (String.fromInt model.count))
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Noop
+        }
+";
+
+/// Plain-data Msg + `Sky.Live` app — the normal happy path. Must be accepted.
+const LIVE_PLAIN_MSG: &str = r"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg
+    = Increment
+    | Reset
+    | SetLabel String
+
+type alias Model = { count : Int }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+        Reset ->
+            ( { model | count = 0 }, Cmd.none )
+        SetLabel _ ->
+            ( model, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout [] (Ui.text (String.fromInt model.count))
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Reset
+        }
+";
+
+// ── Test functions ────────────────────────────────────────────────────────────
+
+#[test]
+fn live_msg_with_cmd_is_rejected() -> Result<(), BoxError> {
+    assert_rejected_with("live_cmd_msg", LIVE_CMD_MSG, "SKY-L0125")
+}
+
+#[test]
+fn live_msg_with_fn_is_rejected() -> Result<(), BoxError> {
+    // Gate 2 (L0114) fires before the #94 Msg gate for function-type payloads.
+    assert_rejected_with("live_fn_msg", LIVE_FN_MSG, "SKY-L0114")
+}
+
+#[test]
+fn live_lambda_update_with_cmd_msg_is_rejected() -> Result<(), BoxError> {
+    assert_rejected_with("live_lambda_update_cmd_msg", LIVE_LAMBDA_UPDATE_CMD_MSG, "SKY-L0125")
+}
+
+#[test]
+fn tui_msg_with_cmd_is_rejected() -> Result<(), BoxError> {
+    assert_rejected_with("tui_cmd_msg", TUI_CMD_MSG, "SKY-L0125")
+}
+
+#[test]
+fn tui_msg_with_fn_is_rejected() -> Result<(), BoxError> {
+    // Gate 2 (L0114) fires before the #94 Msg gate for function-type payloads.
+    assert_rejected_with("tui_fn_msg", TUI_FN_MSG, "SKY-L0114")
+}
+
+/// THE CRITICAL ASYMMETRY TEST: Html in Msg must be ACCEPTED (derivable, not serde).
+#[test]
+fn live_html_msg_is_accepted() -> Result<(), BoxError> {
+    assert_accepted("live_html_msg", LIVE_HTML_MSG)
+}
+
+#[test]
+fn live_plain_msg_is_accepted() -> Result<(), BoxError> {
+    assert_accepted("live_plain_msg", LIVE_PLAIN_MSG)
+}
