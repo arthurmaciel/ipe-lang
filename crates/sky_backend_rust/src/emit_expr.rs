@@ -3793,9 +3793,18 @@ pub fn emit_expr_at(
             // Field access `<record>.<field>`. The base is parenthesised so a
             // record literal in record position (`{ ... }.field`) is never
             // misparsed; the field ident is keyword-mangled to match the struct.
+            //
+            // `.clone()` is emitted unconditionally: in Rust, accessing a
+            // non-Copy struct field in value context MOVES that field out of the
+            // struct, leaving it partially moved. Subsequent uses of the struct
+            // (or the same field) then fail to compile (E0382). All user-defined
+            // Sky record fields are Clone (records + enums all `#[derive(Clone)]`),
+            // so `.clone()` resolves the partial-move without changing semantics
+            // (Sky values are immutable; the clone IS the value from the Sky
+            // program's perspective). For Copy fields the clone is a no-op copy.
             let base = emit_expr_at(ctx, record, indent, child, generics)?;
             let field = ctx.emit_ident(*field)?;
-            Ok(format!("({base}).{field}"))
+            Ok(format!("({base}).{field}.clone()"))
         }
         Expr::Update { record, fields } => {
             emit_update(ctx, record, fields, indent, depth, generics)
@@ -3832,6 +3841,18 @@ pub fn emit_expr_at(
             Ok(format!(
                 "task_and_then({effect_s}, Box::new(move |_| {{ {rest_s} }}))"
             ))
+        }
+        // Sync variant of TaskSeq: blocks on `effect` (discarding the result),
+        // then evaluates `rest` in the same sync context. Used when a
+        // `let _ = <task>` binding appears inside a non-Task (sync) function,
+        // e.g. a helper that returns Vec<Row> or () but still wants to fire a
+        // logging side-effect. `task_run` is the blocking scheduler entry point
+        // in sky_runtime (`pub fn task_run<E,A>(task: SkyTask<E,A>) -> SkyResult<E,A>`).
+        Expr::TaskSeqSync { effect, rest } => {
+            let child = depth + 1;
+            let effect_s = emit_expr_at(ctx, effect, indent, child, generics)?;
+            let rest_s = emit_expr_at(ctx, rest, indent, child, generics)?;
+            Ok(format!("{{ let _ = task_run({effect_s}); {rest_s} }}"))
         }
         // TCO nodes are produced by the lowerer's rewrite and consumed by
         // `emit_func` / `emit_expr_tail`; reaching one on the ordinary value-emit

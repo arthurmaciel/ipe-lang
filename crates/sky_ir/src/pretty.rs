@@ -1317,6 +1317,9 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
         Expr::TaskSeq { effect, rest } => {
             write_task_seq(out, effect, rest, interner, level);
         }
+        Expr::TaskSeqSync { effect, rest } => {
+            write_task_seq_sync(out, effect, rest, interner, level);
+        }
         Expr::TailLoop { params, body } => {
             write_tail_loop(out, params, body, interner, level);
         }
@@ -1361,6 +1364,22 @@ fn write_tail_loop(
 /// 100-line limit clippy enforces.
 fn write_task_seq(out: &mut String, effect: &Expr, rest: &Expr, interner: &Interner, level: usize) {
     line(out, level, "TaskSeq");
+    line(out, level + 1, "effect:");
+    write_expr(out, effect, interner, level + 2);
+    line(out, level + 1, "rest:");
+    write_expr(out, rest, interner, level + 2);
+}
+
+/// Render a [`Expr::TaskSeqSync`] node: identical layout to [`write_task_seq`]
+/// but labelled `TaskSeqSync` to distinguish it in IR dumps.
+fn write_task_seq_sync(
+    out: &mut String,
+    effect: &Expr,
+    rest: &Expr,
+    interner: &Interner,
+    level: usize,
+) {
+    line(out, level, "TaskSeqSync");
     line(out, level + 1, "effect:");
     write_expr(out, effect, interner, level + 2);
     line(out, level + 1, "rest:");

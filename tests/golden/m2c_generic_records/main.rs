@@ -248,7 +248,7 @@ pub fn main_wrap<T1>(x: T1) -> RecValue<T1> {
     RecValue { value: x }
 }
 pub fn main_unwrap<T1>(r: RecValue<T1>) -> T1 {
-    (r).value
+    (r).value.clone()
 }
 pub fn sky_main() -> SkyTask<()> {
     log_println(string_from_int(main_unwrap(main_wrap(42))))
