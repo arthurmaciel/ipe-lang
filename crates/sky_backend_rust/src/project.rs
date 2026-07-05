@@ -493,11 +493,16 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // `ui/render.rs` / `live/style_inject.rs` import `css_safety` at the
         // top level — it must be declared first. The single guard de-duplicates:
         // a program using both emits `pub mod css_safety;` exactly once (E0428).
-        if ctx.uses_ui || ctx.uses_css {
+        // Transitive closure: the `tui` runtime module unconditionally imports
+        // `super::ui` (tui/app.rs, tui/layout.rs) and `super::html`
+        // (tui/focus.rs), so a String-view Tui program (`uses_tui` without
+        // `uses_ui`) still needs the css/ui/html appends — same invariant as
+        // the `http_header` leaf above.
+        if ctx.uses_ui || ctx.uses_css || ctx.uses_tui {
             mod_rs.push_str(RUNTIME_MOD_RS_CSS_APPEND);
         }
-        // M7: Std.Ui / Std.Html render kernels.
-        if ctx.uses_ui {
+        // M7: Std.Ui / Std.Html render kernels (+ Tui transitive dep).
+        if ctx.uses_ui || ctx.uses_tui {
             mod_rs.push_str(RUNTIME_MOD_RS_UI_APPEND);
         }
         // Phase-1b: Std.Live / Sky.Live app-entry kernels.
