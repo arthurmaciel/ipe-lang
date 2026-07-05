@@ -546,6 +546,8 @@ impl Env {
                     "sqrt2",
                     "inf",
                     "nan",
+                    // arity-1 Float→Bool
+                    "isNaN",
                     // arity-1 Int→Int
                     "abs",
                     // arity-1 Float→Float
