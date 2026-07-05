@@ -14,7 +14,7 @@ use crate::code::{
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
     SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118, SKY_L0119, SKY_L0120, SKY_L0121,
-    SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0200,
+    SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0200,
     SKY_N0001,
     SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
     SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_P0001,
@@ -635,6 +635,18 @@ pub enum LowerError {
         field: Box<str>,
         leaf: ModelLeaf,
     },
+    /// A `Live`/`Tui`/`Webview` app-entry Msg type whose Rust rendering does
+    /// not satisfy the runtime bound the entry requires (`Live`/`Tui`/`Webview`
+    /// all need `Clone + Send + 'static`; `Live` additionally needs `Sync +
+    /// Debug`). The predicate used is `ir_type_is_derivable` (NOT serde), so
+    /// `Html`/`Element`/`Color`-carrying Msg variants are accepted (they derive
+    /// `Clone + Debug + PartialEq`). Converts a would-be `cargo` trait-bound
+    /// failure into a fail-closed `skyc` error. [SKY-L0122]
+    InadmissibleAppMsg {
+        app: AppShape,
+        field: Box<str>,
+        leaf: ModelLeaf,
+    },
     /// Expression nesting exceeded the backend's bounded emit depth. [SKY-L0200]
     BackendNestingTooDeep { limit: u16 },
     /// `JsonDec.succeed` / `Db.Decode.succeed` constructor has more than 10
@@ -942,6 +954,7 @@ const fn lower_code(msg: &LowerError) -> Code {
     match msg {
         LowerError::Unsupported(f) => feature_code(*f),
         LowerError::InadmissibleAppModel { .. } => SKY_L0120,
+        LowerError::InadmissibleAppMsg { .. } => SKY_L0125,
         LowerError::BackendNestingTooDeep { .. } => SKY_L0200,
         LowerError::DecodeSucceedArityTooHigh { .. } => SKY_L0121,
         LowerError::RouteParamCountMismatch { .. } => SKY_L0122,
@@ -1119,6 +1132,40 @@ pub fn inadmissible_model_message(app: AppShape, field: &str, leaf: ModelLeaf) -
     }
 }
 
+/// The human message for [`LowerError::InadmissibleAppMsg`], shared by the
+/// `note:` help line (span-free path) and the render caret label (when a span is
+/// present). Names the offending variant/field, the leaf kind, and the required
+/// trait. Mirrors [`inadmissible_model_message`] but uses the Msg wording.
+#[must_use]
+pub fn inadmissible_msg_message(app: AppShape, field: &str, leaf: ModelLeaf) -> String {
+    let shape = match app {
+        AppShape::Live => "Sky.Live",
+        AppShape::Tui => "Sky.Tui",
+        AppShape::Webview => "Sky.Webview",
+        AppShape::Cli => "Sky.Cli",
+    };
+    let leaf_phrase = match leaf {
+        ModelLeaf::Function => "a function",
+        ModelLeaf::Command => "a command (`Cmd`)",
+        ModelLeaf::Subscription => "a subscription (`Sub`)",
+        ModelLeaf::Task => "a task (`Task`)",
+        ModelLeaf::Decoder => "a decoder (`Decoder`)",
+        ModelLeaf::Handle => "an opaque handle (`Db` / server / live request)",
+        ModelLeaf::ViewValue => "a view value (`Html` / `Element` / `Color`)",
+    };
+    if field.is_empty() {
+        format!(
+            "a {shape} Msg must be clonable and sendable, but this Msg is {leaf_phrase}, \
+             which is not — keep only plain data in Msg variants"
+        )
+    } else {
+        format!(
+            "a {shape} Msg must be clonable and sendable, but its variant/field `{field}` \
+             is {leaf_phrase}, which is not — keep only plain data in Msg variants"
+        )
+    }
+}
+
 fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
     match msg {
         LowerError::Unsupported(Feature::UntypedFunctions) => {
@@ -1130,6 +1177,10 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
         // label at [`crate::render`] only renders when a snippet is present.
         LowerError::InadmissibleAppModel { app, field, leaf } => vec![HelpLine::Note(
             inadmissible_model_message(*app, field, *leaf).into_boxed_str(),
+        )],
+        // Same span-free note pattern as the Model gate.
+        LowerError::InadmissibleAppMsg { app, field, leaf } => vec![HelpLine::Note(
+            inadmissible_msg_message(*app, field, *leaf).into_boxed_str(),
         )],
         LowerError::BackendNestingTooDeep { .. } => {
             vec![HelpLine::Hint(Hint::NestingBoundDeliberate)]

@@ -72,6 +72,59 @@ pub fn model_ty_of_view(view_e: &Expr) -> Option<&IrType> {
     fn_param_ty(view_e, 0)
 }
 
+/// Extract the Msg type from an app cfg's `update` field expression.
+///
+/// `update : Msg -> Model -> (Model, Cmd Msg)` is either a named function
+/// reference ([`Expr::FuncValue`]) or an inline lambda ([`Expr::Lambda`]);
+/// the Msg is the **first** parameter type in both shapes (see [`fn_param_ty`]).
+///
+/// Returns `None` when the Msg type cannot be recovered structurally (the
+/// field is neither a function reference nor a lambda). Callers treat `None`
+/// as "cannot prove inadmissible" and skip the gate — fail-open residual, same
+/// as [`model_ty_of_view`].
+#[must_use]
+pub fn msg_ty_of_update(update_e: &Expr) -> Option<&IrType> {
+    fn_param_ty(update_e, 0)
+}
+
+/// Gate the Msg type of an app entry against the runtime's derivable bound.
+///
+/// All three app shapes (`Live`, `Tui`, `Webview`) require their Msg to be
+/// clonable and sendable. The compiler derives `Clone + Debug + PartialEq` for
+/// any "derivable" type, which covers the `Send + Sync + Debug + 'static`
+/// required by `live_app` and `Clone + Send + 'static` required by `tui_app` /
+/// `webview_app`. The predicate used is always [`ir_type_is_derivable`] (NOT
+/// serde) — Msg is never persisted, so `Html`-carrying Msg variants are
+/// **accepted** (Html derives Clone+Debug+PartialEq) while Cmd/Sub/Task/
+/// Decoder/function-carrying variants are rejected.
+///
+/// On failure returns [`Diagnostic::Lower`] carrying [`LowerError::
+/// InadmissibleAppMsg`] (`SKY-L0125`) with the offending variant/field and leaf
+/// kind. The IR carries no spans at emit, so the span is [`Span::DUMMY`] and
+/// the message is self-contained.
+pub fn check_admissible_msg(ctx: &EmitCtx, msg_ty: &IrType, app: AppShape) -> DResult<()> {
+    // Msg admissibility is always derivable (Clone + Debug + PartialEq),
+    // regardless of the app shape. Live needs Send+Sync+Debug+'static;
+    // Tui/Webview need Clone+Send+'static. The derivable predicate is strictly
+    // stronger than "Clone only" and covers both. Crucially, this is NOT serde,
+    // so Html-carrying Msg (derivable but not serde) is accepted here.
+    let ok = ir_type_is_derivable(msg_ty, &|home, name| ctx.enum_is_derivable(home, name));
+    if ok {
+        return Ok(());
+    }
+
+    // Inadmissible: traverse with Tui shape (uses derivable, correct for Msg).
+    let (field, leaf) = blame(ctx, msg_ty, AppShape::Tui);
+    Err(Diagnostic::Lower {
+        span: Span::DUMMY,
+        msg: LowerError::InadmissibleAppMsg {
+            app,
+            field: field.into_boxed_str(),
+            leaf,
+        },
+    })
+}
+
 /// Gate the Model type of an app entry against the runtime bound `app` requires.
 ///
 /// * [`AppShape::Live`] → the Model must satisfy [`ir_type_is_serde`] (which
