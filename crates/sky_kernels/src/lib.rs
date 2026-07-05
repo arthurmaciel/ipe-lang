@@ -2728,6 +2728,7 @@ impl StdlibKernel {
                 | Self::HtmlTextNode
                 | Self::HtmlRawNode
                 | Self::HtmlNode
+                | Self::HtmlStyleNode
                 | Self::HtmlDiv
                 | Self::HtmlSpan
                 | Self::HtmlA
