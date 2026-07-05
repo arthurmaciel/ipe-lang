@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+-- c13 (#130 seal). Partial application where the SUPPLIED ARG is a complex
+-- expression (not a bare Var), and the resulting partial is called twice.
+--
+-- Pre-fix: `eta_expand_partial` only rewrote bare `Var` supplied args.
+-- A complex expression (here `String.append base suffix`) was left as-is
+-- in `call_args`, so its free variables (`base`, `suffix` — both String,
+-- CloneOk) were captured bare (by move) inside the emitted eta-lambda.
+-- On the first call, they were moved; the second call encountered a
+-- dangling binding → E0525.
+--
+-- Fix 3 T4 (#130): hoist the complex expression to
+--   `let __sky_cap_0 = String.append base suffix`
+-- OUTSIDE the lambda.  The lambda body uses `CloneVar(__sky_cap_0)`,
+-- making it `Fn` (re-callable).
+
+mk : String -> String -> String
+mk a b =
+    String.append a b
+
+main =
+    let base = "he" in
+    let suffix = "llo" in
+    let f = mk (String.append base suffix) in
+    let r1 = f "!" in
+    let r2 = f "?" in
+    println (r1 ++ " " ++ r2)

@@ -1,0 +1,27 @@
+module Main exposing (main)
+
+-- c01 (#130 seal). A user-defined enum (no payload fields) is captured by
+-- a `List.map` lambda and used on every element.
+--
+-- Pre-fix: `clone_class(Enum { args: [] })` returned `CopyLeaf` via
+-- `clone_class_composite` over an empty iterator.  Rust enums the compiler
+-- emits derive `Clone,Debug,PartialEq` but NEVER `Copy`, so the bare
+-- capture moved the enum into the lambda on the first call → FnOnce → E0525
+-- on any second use (e.g. a second List.map call or a direct second call).
+--
+-- Fix 1 (#130): `clone_class_named_composite` floors `CopyLeaf` → `CloneOk`
+-- for named composite types.  The lambda emits `CloneVar(color)` → re-callable.
+
+type Color = Red | Green | Blue
+
+colorName : Color -> String
+colorName c =
+    case c of
+        Red   -> "red"
+        Green -> "green"
+        Blue  -> "blue"
+
+main =
+    let color = Green in
+    let names = List.map (\_ -> colorName color) [ 1, 2, 3 ] in
+    println (String.join "," names)

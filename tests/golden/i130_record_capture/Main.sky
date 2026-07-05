@@ -1,0 +1,24 @@
+module Main exposing (main)
+
+-- c02 (#130 seal). An all-Int record alias is captured by a `List.map`
+-- lambda on each element.
+--
+-- Pre-fix: `clone_class(Record { fields: [Int, Int] })` returned `CopyLeaf`
+-- because every field is `CopyLeaf`.  The emitted Rust struct derives
+-- `Clone,Debug,PartialEq` but NOT `Copy`, so the bare capture moved the
+-- record into the lambda on the first element → FnOnce → E0525 on the
+-- second element.
+--
+-- Fix 1 (#130): `clone_class_named_composite` floors `CopyLeaf` → `CloneOk`
+-- for named composite types.  The lambda emits `CloneVar(origin)` → re-callable.
+
+type alias Point = { x : Int, y : Int }
+
+translate : Point -> Int -> String
+translate p dx =
+    String.fromInt (p.x + dx) ++ "," ++ String.fromInt p.y
+
+main =
+    let origin = { x = 0, y = 5 } in
+    let results = List.map (\dx -> translate origin dx) [ 1, 2, 3 ] in
+    println (String.join " " results)
