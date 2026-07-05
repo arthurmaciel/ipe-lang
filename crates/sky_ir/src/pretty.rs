@@ -358,6 +358,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::MathSqrt2 => "Math.sqrt2",
         KernelFn::MathInf => "Math.inf",
         KernelFn::MathNan => "Math.nan",
+        KernelFn::MathIsNaN => "Math.isNaN",
         // ── Math arity-1 (Int → Int) ─────────────────────────────────────────
         KernelFn::MathAbs => "Math.abs",
         // ── Math arity-1 (Float → Float) ────────────────────────────────────
