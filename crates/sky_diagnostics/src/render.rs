@@ -653,6 +653,11 @@ const fn feature_label(f: Feature) -> &'static str {
              `window.size` tuple, must be written inline as a record/tuple literal, \
              not a let-bound variable [feature: let-bound-app-cfg]"
         }
+        Feature::NonCloneCapture => {
+            "a function/task/decoder value captured by a closure can only be called, \
+             not forwarded; bind the result outside the closure or wrap the forwarding \
+             in a named top-level function [feature: non-clone-capture]"
+        }
     }
 }
 
