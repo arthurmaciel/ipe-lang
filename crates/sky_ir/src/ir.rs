@@ -948,6 +948,11 @@ pub enum Expr {
     /// tuple invariant forbids (arity ≥ 2): the empty product is this `Unit`.
     Unit,
     Var(Symbol),
+    /// A read of a CAPTURED binder inside a closure body that must not consume
+    /// the capture: renders as `{ident}.clone()`. Produced only by the lowerer's
+    /// capture-clone rewrite (`lower_lambda` / `eta_expand_partial` / Fix-C thunk);
+    /// never for `Copy`-classed or function-typed captures.
+    CloneVar(Symbol),
     /// A constructor application `Variant arg0 arg1 …` (a nullary constructor
     /// `Variant` has an empty `args`).
     ///
