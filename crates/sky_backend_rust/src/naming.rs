@@ -836,6 +836,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::FontWordSpacing => "ui_font_word_spacing_",
         KernelFn::FontAlignLeft => "ui_font_align_left_",
         KernelFn::FontAlignRight => "ui_font_align_right_",
+        KernelFn::FontAlignCenter => "ui_font_align_center_",
         KernelFn::FontCenter => "ui_font_center_",
         KernelFn::FontJustify => "ui_font_justify_",
         KernelFn::FontSansSerif => "ui_font_sans_serif_",
@@ -973,6 +974,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         | KernelFn::HtmlAttrFor
         | KernelFn::HtmlAttrStyle
         | KernelFn::HtmlAttrTitle
+        | KernelFn::HtmlAttrAutocomplete
         | KernelFn::HtmlAttribute => "html_named_attr_",
         KernelFn::HtmlAttrChecked
         | KernelFn::HtmlAttrDisabled

@@ -3861,6 +3861,7 @@ impl<'a> Builder<'a> {
             | K::FontLineThrough
             | K::FontAlignLeft
             | K::FontAlignRight
+            | K::FontAlignCenter
             | K::FontCenter
             | K::FontJustify => attr(var(0)),
 
@@ -3960,7 +3961,8 @@ impl<'a> Builder<'a> {
             | K::HtmlAttrType
             | K::HtmlAttrFor
             | K::HtmlAttrStyle
-            | K::HtmlAttrTitle => fun(string(), html_attr(var(0))),
+            | K::HtmlAttrTitle
+            | K::HtmlAttrAutocomplete => fun(string(), html_attr(var(0))),
             // Bool fixed-key: `Bool -> Std.Html.Attribute msg`.
             K::HtmlAttrChecked
             | K::HtmlAttrDisabled
@@ -5274,6 +5276,7 @@ mod registry_phase_c_tests {
             K::HtmlAttrMultiple,
             K::HtmlAttrSelected,
             K::HtmlAttrAutofocus,
+            K::HtmlAttrAutocomplete,
             K::HtmlAttribute,
             K::HtmlBoolAttribute,
             K::HtmlNoAttr,
@@ -5327,6 +5330,7 @@ mod registry_phase_c_tests {
             K::FontWordSpacing,
             K::FontAlignLeft,
             K::FontAlignRight,
+            K::FontAlignCenter,
             K::FontCenter,
             K::FontJustify,
             K::FontSansSerif,
