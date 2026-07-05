@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+-- F5 (#121 seal) — CONTROL. A lambda captures a function-typed local in
+-- CALLEE position (it calls `f`, not forwards it).
+--
+-- `f : Int -> Int` is NonClone, but NonClone-in-callee-position stays as a
+-- bare `Var` (T3 rule 3).  This fixture MUST be GREEN today and stay green
+-- after the fix — no clone, no diagnostic.  A regression here means T3 is
+-- incorrectly cloning or emitting L0125 for callee-position captures.
+
+
+add : Int -> Int -> Int
+add a b =
+    a + b
+
+
+main =
+    let xs = [ 1, 2, 3 ] in
+    let f = add 1 in
+    let result = List.map (\x -> f x) xs in
+    let strs = List.map String.fromInt result in
+    println (String.join ", " strs)

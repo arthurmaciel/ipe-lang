@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+-- F6 (#121 seal) — GATE. A lambda FORWARDS (not calls) a function-typed local.
+-- `f : Int -> Int` is NonClone.  In `\x -> applyTwice f x`, `f` is an
+-- ARGUMENT to `applyTwice` (non-callee position).
+-- T3 rule 4: NonClone not in callee position → SKY-L0125 at compile time.
+-- This must never reach cargo (was a silent cargo-fail before the fix).
+
+
+applyTwice : (Int -> Int) -> Int -> Int
+applyTwice g x =
+    g (g x)
+
+
+-- `f` is captured from outside and forwarded to `applyTwice` — non-callee.
+compose : (Int -> Int) -> (Int -> Int)
+compose f =
+    \x -> applyTwice f x
+
+
+main =
+    println "unreachable"

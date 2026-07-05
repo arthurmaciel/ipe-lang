@@ -69,6 +69,8 @@ pub fn lower(
     const MAX_CALLEE_ARITY: usize = 16;
     let eta_params =
         interner.fresh_symbols("eta_", lower::max_def_arity(m).max(MAX_CALLEE_ARITY))?;
+    let cap_params =
+        interner.fresh_symbols("cap_", lower::max_def_arity(m).max(MAX_CALLEE_ARITY))?;
     // A destructuring parameter (tuple / record / alias / wildcard) has no single
     // source name; the lowerer gives it a synthetic binder from this pool and
     // (for the destructuring shapes) prepends a `Destructure` to the body. Sized
@@ -116,7 +118,7 @@ pub fn lower(
         eq: interner.intern("EQ")?,
         gt: interner.intern("GT")?,
     };
-    lower::Lowerer::new(m, types, &*interner, eta_params, param_binders, &builtins).run()
+    lower::Lowerer::new(m, types, &*interner, eta_params, cap_params, param_binders, &builtins).run()
 }
 
 #[cfg(test)]

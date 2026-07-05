@@ -1,0 +1,25 @@
+module Main exposing (main)
+
+-- F8 (#121 seal). Three-arrow curried fn: `mk3 : String -> Int -> Bool -> String`
+-- with def-arity 1 (single pattern `a`).  The slot type `Fun([Str, Int, Bool], Str)`
+-- has 3 params; T6 emits ONE `Apply` wrapping a `Call(mk3, [eta_0])`:
+--   `\eta_0 eta_1 eta_2 -> (main_mk3(eta_0))(eta_1, eta_2)`
+-- rather than the wrong `main_mk3(eta_0, eta_1, eta_2)` (E0593).
+-- Both `let g = mk3` and `apply3 mk3` exercise the two first-class reify sites.
+
+
+mk3 : String -> Int -> Bool -> String
+mk3 a =
+    \b -> \c -> a ++ ":" ++ String.fromInt b ++ ":" ++ (if c then "T" else "F")
+
+
+apply3 : (String -> Int -> Bool -> String) -> String
+apply3 f =
+    f "hello" 42 True
+
+
+main =
+    let g = mk3 in
+    let r1 = g "sky" 7 False in
+    let r2 = apply3 mk3 in
+    println (r1 ++ " " ++ r2)

@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+-- F9 (#121 seal, #89 Fix-C boundary). A decoder thunk is built from a
+-- non-`Copy` local (`field : String`).  The thunk is used TWICE — without the
+-- Fix-C T3 rewrite, `field` is moved into the `move || ...` closure on the
+-- first decode, leaving it unavailable for the second → E0525.
+-- T3 applied to the thunk body rewrites `Var(field)` → `CloneVar(field)` so
+-- the thunk is `Fn` (re-callable) and both decodes succeed.
+
+import Sky.Core.Json.Decode as JsonDec
+
+
+main =
+    let field = "name" in
+    let d = JsonDec.field field JsonDec.string in
+    let r1 = JsonDec.decodeString d "{\"name\":\"alice\"}" in
+    let r2 = JsonDec.decodeString d "{\"name\":\"bob\"}" in
+    case r1 of
+        Ok a ->
+            case r2 of
+                Ok b ->
+                    println (a ++ "," ++ b)
+
+                Err _ ->
+                    println "err2"
+
+        Err _ ->
+            println "err1"

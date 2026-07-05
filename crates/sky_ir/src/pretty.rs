@@ -1187,6 +1187,7 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
         Expr::Char(c) => line(out, level, &format!("Char '{c}'")),
         Expr::Unit => line(out, level, "Unit"),
         Expr::Var(sym) => line(out, level, &format!("Var {}", sym_name(interner, *sym))),
+        Expr::CloneVar(sym) => line(out, level, &format!("CloneVar {}", sym_name(interner, *sym))),
         Expr::Ctor { ty, variant, args, .. } => {
             line(
                 out,
