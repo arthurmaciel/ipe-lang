@@ -3844,6 +3844,18 @@ pub fn emit_expr_at(
                 "task_and_then({effect_s}, Box::new(move |_| {{ {rest_s} }}))"
             ))
         }
+        // Sync variant of TaskSeq: blocks on `effect` (discarding the result),
+        // then evaluates `rest` in the same sync context. Used when a
+        // `let _ = <task>` binding appears inside a non-Task (sync) function,
+        // e.g. a helper that returns Vec<Row> or () but still wants to fire a
+        // logging side-effect. `task_run` is the blocking scheduler entry point
+        // in sky_runtime (`pub fn task_run<E,A>(task: SkyTask<E,A>) -> SkyResult<E,A>`).
+        Expr::TaskSeqSync { effect, rest } => {
+            let child = depth + 1;
+            let effect_s = emit_expr_at(ctx, effect, indent, child, generics)?;
+            let rest_s = emit_expr_at(ctx, rest, indent, child, generics)?;
+            Ok(format!("{{ let _ = task_run({effect_s}); {rest_s} }}"))
+        }
         // TCO nodes are produced by the lowerer's rewrite and consumed by
         // `emit_func` / `emit_expr_tail`; reaching one on the ordinary value-emit
         // path means the rewrite left a jump/loop outside a tail context — a
