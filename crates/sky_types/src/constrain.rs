@@ -2758,6 +2758,8 @@ impl<'a> Builder<'a> {
             // ── Math (min / max stay on the obligation path — NOT migrated) ──
             // Constants — bare Float values (arity 0).
             K::MathPi | K::MathE | K::MathPhi | K::MathSqrt2 | K::MathInf | K::MathNan => float(),
+            // isNaN : Float -> Bool.
+            K::MathIsNaN => fun(float(), bool_ty()),
             // abs : Int -> Int.
             K::MathAbs => fun(int(), int()),
             // Arity-1 Float -> Float.
@@ -4382,13 +4384,14 @@ mod registry_phase_c_tests {
             K::ListMember,
             K::ListRange,
             K::ListReverse,
-            // Math including min/max base (37)
+            // Math including min/max base (38)
             K::MathPi,
             K::MathE,
             K::MathPhi,
             K::MathSqrt2,
             K::MathInf,
             K::MathNan,
+            K::MathIsNaN,
             K::MathAbs,
             K::MathSqrt,
             K::MathCbrt,
