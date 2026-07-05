@@ -2510,6 +2510,31 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::LiveRoute(Box::new(page)))
                 }
+                // ── Std.Ui.Input parametric types (#124) ──────────────────────────
+                "Label" if args.len() == 1 => {
+                    let msg = self.ir_type_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_canon",
+                                "Label applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Ui { ctor: UiCtor::Label, msg: Box::new(msg) })
+                }
+                "Placeholder" if args.len() == 1 => {
+                    let msg = self.ir_type_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_canon",
+                                "Placeholder applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Ui { ctor: UiCtor::Placeholder, msg: Box::new(msg) })
+                }
                 _ if self
                     .enum_variants
                     .contains_key(&(ModPath(home.clone()), *name)) =>
@@ -2977,6 +3002,41 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::Ui {
                         ctor: UiCtor::HtmlEvent,
+                        msg: Box::new(msg),
+                    })
+                }
+                // ── Std.Ui.Input parametric types (#124) ───────────────────────
+                // `Label msg` and `Placeholder msg` are kernel-reserved type
+                // names produced by `constrain`'s `label_t` / `placeholder_t`
+                // helper closures.  They are NOT user ADTs, so they precede the
+                // `enum_variants` guard below.
+                "Label" if args.len() == 1 => {
+                    let msg = self.ir_type_from_ty_ui_msg(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_ty",
+                                "Label applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::Label,
+                        msg: Box::new(msg),
+                    })
+                }
+                "Placeholder" if args.len() == 1 => {
+                    let msg = self.ir_type_from_ty_ui_msg(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_ty",
+                                "Placeholder applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::Placeholder,
                         msg: Box::new(msg),
                     })
                 }
@@ -4918,7 +4978,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiInput
                 | KernelFn::UiDescribe
                 | KernelFn::UiDescHeading
-                | KernelFn::UiDescLabel,
+                | KernelFn::UiDescLabel
+                // ── Std.Ui.Input (#124) — arity-1 constructors ───────────────────
+                // `Input.labelHidden : String -> Label msg`
+                | KernelFn::InputLabelHidden,
             ) => Ok(1),
             // Arity 2: `Ui.layout attrs elem`, `Ui.layoutWith cfg elem`,
             //          `Live.route path ctor`, `Live.renderStatic cfg path`.
@@ -5066,9 +5129,36 @@ impl<'a> Lowerer<'a> {
                 // #76: generic `Attr.attribute k v` / `Attr.boolAttribute k b`.
                 | KernelFn::HtmlAttribute
                 | KernelFn::HtmlBoolAttribute
-                // ── #76 Tier 1 — arity 2 ────────────────────────────────────
+                // -- #76 Tier 1 -- arity 2
                 | KernelFn::UiAspectRatioWH
-                | KernelFn::UiHtmlAttribute,
+                | KernelFn::UiHtmlAttribute
+                // ── Std.Ui.Input (#124) — arity-2 constructors ───────────────────
+                // `Input.labelAbove : List (Attribute msg) -> Element msg -> Label msg`
+                | KernelFn::InputLabelAbove
+                // `Input.labelBelow : List (Attribute msg) -> Element msg -> Label msg`
+                | KernelFn::InputLabelBelow
+                // `Input.labelLeft : List (Attribute msg) -> Element msg -> Label msg`
+                | KernelFn::InputLabelLeft
+                // `Input.labelRight : List (Attribute msg) -> Element msg -> Label msg`
+                | KernelFn::InputLabelRight
+                // `Input.placeholder : List (Attribute msg) -> Element msg -> Placeholder msg`
+                | KernelFn::InputPlaceholder
+                // `Input.text : List (Attribute msg) -> { ... } -> Element msg`
+                | KernelFn::InputText
+                // `Input.multiline : List (Attribute msg) -> { ..., spellcheck : Bool } -> Element msg`
+                | KernelFn::InputMultiline
+                // `Input.email : List (Attribute msg) -> { ... } -> Element msg`
+                | KernelFn::InputEmail
+                // `Input.username : List (Attribute msg) -> { ... } -> Element msg`
+                | KernelFn::InputUsername
+                // `Input.search : List (Attribute msg) -> { ... } -> Element msg`
+                | KernelFn::InputSearch
+                // `Input.currentPassword : List (Attribute msg) -> { ... } -> Element msg`
+                | KernelFn::InputCurrentPassword
+                // `Input.newPassword : List (Attribute msg) -> { ... } -> Element msg`
+                | KernelFn::InputNewPassword
+                // `Input.checkbox : List (Attribute msg) -> { onChange : Bool -> msg, ... } -> Element msg`
+                | KernelFn::InputCheckbox,
             ) => Ok(2),
             // Arity 3: `Ui.rgb r g b`, `Html.node tag attrs children`.
             Callee::Kernel(
@@ -5930,6 +6020,23 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Ui", "descHeading") => Ok(Callee::Kernel(KernelFn::UiDescHeading)),
                     ("Ui", "descLabel") => Ok(Callee::Kernel(KernelFn::UiDescLabel)),
+                    // ── Std.Ui.Input (#124) ───────────────────────────────────
+                    ("Input", "labelAbove") => Ok(Callee::Kernel(KernelFn::InputLabelAbove)),
+                    ("Input", "labelBelow") => Ok(Callee::Kernel(KernelFn::InputLabelBelow)),
+                    ("Input", "labelLeft") => Ok(Callee::Kernel(KernelFn::InputLabelLeft)),
+                    ("Input", "labelRight") => Ok(Callee::Kernel(KernelFn::InputLabelRight)),
+                    ("Input", "labelHidden") => Ok(Callee::Kernel(KernelFn::InputLabelHidden)),
+                    ("Input", "placeholder") => Ok(Callee::Kernel(KernelFn::InputPlaceholder)),
+                    ("Input", "text") => Ok(Callee::Kernel(KernelFn::InputText)),
+                    ("Input", "multiline") => Ok(Callee::Kernel(KernelFn::InputMultiline)),
+                    ("Input", "email") => Ok(Callee::Kernel(KernelFn::InputEmail)),
+                    ("Input", "username") => Ok(Callee::Kernel(KernelFn::InputUsername)),
+                    ("Input", "search") => Ok(Callee::Kernel(KernelFn::InputSearch)),
+                    ("Input", "currentPassword") => {
+                        Ok(Callee::Kernel(KernelFn::InputCurrentPassword))
+                    }
+                    ("Input", "newPassword") => Ok(Callee::Kernel(KernelFn::InputNewPassword)),
+                    ("Input", "checkbox") => Ok(Callee::Kernel(KernelFn::InputCheckbox)),
                     // ── M7: Std.Live / Sky.Live app-entry kernels ─────────────
                     ("Live", "app") => Ok(Callee::Kernel(KernelFn::LiveApp)),
                     ("Live", "appRouted") => Ok(Callee::Kernel(KernelFn::LiveAppRouted)),
