@@ -963,6 +963,9 @@ fn collect_record_shapes(
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — no record shape.
         | IrType::HttpRequest
+        // #127: `WsHandle` / `WsServerCfg` are opaque handles — no record shape.
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
         // A generic type variable carries no concrete record shape of its own.
         | IrType::Generic(_)
         // M7: nullary plain types (`Length`, `Color`, …) and the opaque live
@@ -1076,6 +1079,9 @@ fn type_reaches_enum(
         | IrType::StreamWriter
         // `HttpRequest` is a pointer-sized opaque handle — no size cycle.
         | IrType::HttpRequest
+        // #127: `WsHandle` / `WsServerCfg` are opaque handles — no size cycle.
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
         | IrType::Fun(_, _)
         | IrType::Generic(_)
         // M7: nullary plain types and the opaque live request handle are
@@ -1127,6 +1133,9 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::StreamWriter
         // `HttpRequest` is monomorphic — no generic parameters.
         | IrType::HttpRequest
+        // #127: `WsHandle` / `WsServerCfg` are monomorphic — no generic parameters.
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
         // M7: nullary plain types and the opaque live request handle are
         // monomorphic.
         | IrType::UiPlain(_)
@@ -1204,6 +1213,9 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::StreamWriter
         // `HttpRequest` is monomorphic — no generics to collect.
         | IrType::HttpRequest
+        // #127: `WsHandle` / `WsServerCfg` are monomorphic — no generics to collect.
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
         // M7: nullary plain types and the opaque live request handle
         // contribute no generics.
         | IrType::UiPlain(_)
@@ -1473,6 +1485,9 @@ fn match_template(
         | IrType::StreamWriter
         // `HttpRequest` is a monomorphic opaque handle.
         | IrType::HttpRequest
+        // #127: `WsHandle` / `WsServerCfg` are monomorphic opaque handles.
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
         // M7: nullary plain types (`Length`, `Color`, …) and the opaque live
         // request handle are monomorphic — must equal exactly.
         | IrType::UiPlain(_)
