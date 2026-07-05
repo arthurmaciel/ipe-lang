@@ -1,0 +1,38 @@
+module Main exposing (main)
+
+import Std.Html exposing (..)
+import Std.Html.Attributes exposing (..)
+import Std.Html.Events exposing (onClick)
+import Sky.Core.String as String
+
+
+-- i139 regression: polymorphic function with attribute lists.
+--
+-- Pre-fix: IrType::Ui { msg } inside a typed-polymorphic function lowered
+-- `msg` to IrType::Unit, emitting Attribute<()> instead of Attribute<T1>
+-- — E0308 ×4 at cargo build.
+--
+-- The attribute lists [class ..., onClick (toMsg Inc)] must emit
+-- Vec<sky_runtime::html::Attribute<T1>>, not Attribute<()>.
+
+type InnerMsg
+    = Inc
+    | Dec
+
+
+type Outer
+    = Wrap InnerMsg
+
+
+counterView : (InnerMsg -> parentMsg) -> Int -> Html parentMsg
+counterView toMsg n =
+    div
+        [ class "counter" ]
+        [ button [ onClick (toMsg Inc), class "btn" ] [ text "+" ]
+        , span [ class "count" ] [ text (String.fromInt n) ]
+        , button [ onClick (toMsg Dec), class "btn" ] [ text "-" ]
+        ]
+
+
+main =
+    println (render (counterView Wrap 0))

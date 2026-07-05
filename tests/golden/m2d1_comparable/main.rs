@@ -235,7 +235,7 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     sky_runtime::http_client::http_parse_query(raw)
 }
 
-pub fn main_max_of<T1: PartialOrd + Copy>(p: T1, q: T1) -> T1 {
+pub fn main_max_of<T1: PartialOrd + Copy + Clone>(p: T1, q: T1) -> T1 {
     (if (p > q) { p } else { q })
 }
 pub fn sky_main() -> SkyTask<()> {

@@ -641,6 +641,8 @@ pub enum StdlibKernel {
     UiColumn,
     UiWrappedRow,
     UiGrid,
+    UiParagraph,
+    UiTextColumn,
     UiButton, // (List Attr, { onPress : Maybe msg, label : Element msg }) → Element msg
     // ── M7: Std.Ui attribute builders ────────────────────────────────────────
     UiSpacing,
@@ -1601,6 +1603,8 @@ impl StdlibKernel {
             Self::UiColumn => d("Ui", "column", 2, Ui, "ui_column_"),
             Self::UiWrappedRow => d("Ui", "wrappedRow", 2, Ui, "ui_wrapped_row_"),
             Self::UiGrid => d("Ui", "grid", 2, Ui, "ui_grid_"),
+            Self::UiParagraph => d("Ui", "paragraph", 2, Ui, "ui_paragraph_"),
+            Self::UiTextColumn => d("Ui", "textColumn", 2, Ui, "ui_text_column_"),
             Self::UiButton => d("Ui", "button", 2, Ui, "ui_button_"),
             // ── M7: Std.Ui attribute builders ────────────────────────────────
             Self::UiSpacing => d("Ui", "spacing", 1, Ui, "ui_spacing_"),
@@ -2426,6 +2430,8 @@ impl StdlibKernel {
         Self::UiColumn,
         Self::UiWrappedRow,
         Self::UiGrid,
+        Self::UiParagraph,
+        Self::UiTextColumn,
         Self::UiButton,
         // M7: Ui attribute builders
         Self::UiSpacing,
@@ -2896,6 +2902,8 @@ impl StdlibKernel {
                 | Self::UiColumn
                 | Self::UiWrappedRow
                 | Self::UiGrid
+                | Self::UiParagraph
+                | Self::UiTextColumn
                 | Self::UiButton
                 | Self::UiSpacing
                 | Self::UiPadding

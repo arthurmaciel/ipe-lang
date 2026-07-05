@@ -235,7 +235,7 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     sky_runtime::http_client::http_parse_query(raw)
 }
 
-pub fn main_double<T1: ::core::ops::Add<Output = T1> + Copy>(x: T1) -> T1 {
+pub fn main_double<T1: ::core::ops::Add<Output = T1> + Copy + Clone>(x: T1) -> T1 {
     (x + x)
 }
 pub fn main_double_float(x: f64) -> f64 {

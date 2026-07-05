@@ -685,6 +685,8 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiColumn => "Ui.column",
         KernelFn::UiWrappedRow => "Ui.wrappedRow",
         KernelFn::UiGrid => "Ui.grid",
+        KernelFn::UiParagraph => "Ui.paragraph",
+        KernelFn::UiTextColumn => "Ui.textColumn",
         KernelFn::UiButton => "Ui.button",
         // ── M7: Std.Ui attribute builders ────────────────────────────────────
         KernelFn::UiSpacing => "Ui.spacing",
