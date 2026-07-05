@@ -1,0 +1,16 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.String as String
+import ModA exposing (lenA)
+import ModB exposing (makeB)
+
+-- relay param unqualified `Token` -> home=[]; feeds ModA.lenA (ModA.Token)
+-- while caller supplies a ModB.Token. If inference bridges via [] and
+-- lowering uses ModA's layout on ModB's value -> silent wrong emit / UB.
+relay : Token -> Int
+relay t =
+    lenA t
+
+main =
+    println (String.fromInt (relay makeB))
