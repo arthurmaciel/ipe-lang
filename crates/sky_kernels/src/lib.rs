@@ -793,6 +793,7 @@ pub enum StdlibKernel {
     HtmlAttrMultiple,
     HtmlAttrSelected,
     HtmlAttrAutofocus,
+    HtmlAttrAutocomplete, // `autocomplete : String -> Attribute msg`
     // Generic attribute builders + identity.
     HtmlAttribute,     // `attribute : String -> String -> Attribute msg`
     HtmlBoolAttribute, // `boolAttribute : String -> Bool -> Attribute msg`
@@ -874,9 +875,10 @@ pub enum StdlibKernel {
     FontLetterSpacing, // Float → Attr (AttrFontLetterSpacing)
     FontWordSpacing,   // Float → Attr (AttrFontWordSpacing)
     // Font namespace — text alignment (nullary)
-    FontAlignLeft,  // nullary (AttrFontAlign("left"))
-    FontAlignRight, // nullary (AttrFontAlign("right"))
-    FontCenter,     // nullary (AttrFontAlign("center"))
+    FontAlignLeft,   // nullary (AttrFontAlign("left"))
+    FontAlignRight,  // nullary (AttrFontAlign("right"))
+    FontAlignCenter, // nullary (AttrFontAlign("center")) — distinct from FontCenter
+    FontCenter,      // nullary (AttrFontAlign("center"))
     FontJustify,    // nullary (AttrFontAlign("justify"))
     // Font namespace — string constants (nullary → String, NOT Attribute)
     FontSansSerif, // String constant "sans-serif"
@@ -1753,6 +1755,7 @@ impl StdlibKernel {
             Self::HtmlAttrMultiple => d("Attr", "multiple", 1, Ui, "html_bool_named_attr_"),
             Self::HtmlAttrSelected => d("Attr", "selected", 1, Ui, "html_bool_named_attr_"),
             Self::HtmlAttrAutofocus => d("Attr", "autofocus", 1, Ui, "html_bool_named_attr_"),
+            Self::HtmlAttrAutocomplete => d("Attr", "autocomplete", 1, Ui, "html_named_attr_"),
             Self::HtmlAttribute => d("Attr", "attribute", 2, Ui, "html_named_attr_"),
             Self::HtmlBoolAttribute => d("Attr", "boolAttribute", 2, Ui, "html_bool_named_attr_"),
             Self::HtmlNoAttr => d("Attr", "noAttr", 0, Ui, "html_no_attr_"),
@@ -1847,6 +1850,7 @@ impl StdlibKernel {
             Self::FontWordSpacing => d("Font", "wordSpacing", 1, Ui, "ui_font_word_spacing_"),
             Self::FontAlignLeft => d("Font", "alignLeft", 0, Ui, "ui_font_align_left_"),
             Self::FontAlignRight => d("Font", "alignRight", 0, Ui, "ui_font_align_right_"),
+            Self::FontAlignCenter => d("Font", "alignCenter", 0, Ui, "ui_font_align_center_"),
             Self::FontCenter => d("Font", "center", 0, Ui, "ui_font_center_"),
             Self::FontJustify => d("Font", "justify", 0, Ui, "ui_font_justify_"),
             Self::FontSansSerif => d("Font", "sansSerif", 0, Ui, "ui_font_sans_serif_"),
@@ -2573,6 +2577,7 @@ impl StdlibKernel {
         Self::HtmlAttrMultiple,
         Self::HtmlAttrSelected,
         Self::HtmlAttrAutofocus,
+        Self::HtmlAttrAutocomplete,
         Self::HtmlAttribute,
         Self::HtmlBoolAttribute,
         Self::HtmlNoAttr,
@@ -2651,6 +2656,7 @@ impl StdlibKernel {
         Self::FontWordSpacing,
         Self::FontAlignLeft,
         Self::FontAlignRight,
+        Self::FontAlignCenter,
         Self::FontCenter,
         Self::FontJustify,
         Self::FontSansSerif,
@@ -3039,6 +3045,7 @@ impl StdlibKernel {
                 | Self::HtmlAttrMultiple
                 | Self::HtmlAttrSelected
                 | Self::HtmlAttrAutofocus
+                | Self::HtmlAttrAutocomplete
                 | Self::HtmlAttribute
                 | Self::HtmlBoolAttribute
                 | Self::HtmlNoAttr
@@ -3097,6 +3104,7 @@ impl StdlibKernel {
                 | Self::FontWordSpacing
                 | Self::FontAlignLeft
                 | Self::FontAlignRight
+                | Self::FontAlignCenter
                 | Self::FontCenter
                 | Self::FontJustify
                 | Self::FontSansSerif
@@ -3209,6 +3217,7 @@ impl StdlibKernel {
                 | Self::HtmlAttrFor
                 | Self::HtmlAttrStyle
                 | Self::HtmlAttrTitle
+                | Self::HtmlAttrAutocomplete
         )
     }
 
@@ -3255,6 +3264,7 @@ impl StdlibKernel {
             Self::HtmlAttrMultiple => "multiple",
             Self::HtmlAttrSelected => "selected",
             Self::HtmlAttrAutofocus => "autofocus",
+            Self::HtmlAttrAutocomplete => "autocomplete",
             _ => return None,
         })
     }
