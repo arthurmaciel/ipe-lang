@@ -191,8 +191,10 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
-onKey : String -> String -> Msg
-onKey _kind _value =
+type alias KeyEvent = { kind : String, value : String }
+
+onKey : KeyEvent -> Msg
+onKey _event =
     NoOp
 
 main =
@@ -231,8 +233,10 @@ subscriptions : Model -> Sub Msg
 subscriptions _model =
     Sub.none
 
-onKey : String -> String -> Msg
-onKey _kind _value =
+type alias KeyEvent = { kind : String, value : String }
+
+onKey : KeyEvent -> Msg
+onKey _event =
     NoOp
 
 main =
