@@ -8294,6 +8294,23 @@ impl<'a> Lowerer<'a> {
         // set. Any other mix (literal heads, a wildcard / variable catch-all, an
         // alias head, or a constructor + catch-all) takes the FLAT refutable
         // `Match::new_flat` path, whose backstop is structural.
+        // Redundancy demotion (batch-xm): SKY-T0011 is a WARNING, so arms AFTER
+        // an irrefutable catch-all (`_` / variable head) can now reach lowering.
+        // They are provably unreachable — the exhaustiveness pass already warned
+        // — so DROP them here (semantics-preserving; the Go reference compiles
+        // the same shape). Without the truncation `Match::new_flat`'s structural
+        // backstop sees a non-trailing catch-all and raises a CompilerBug.
+        let live_end = branches
+            .iter()
+            .position(|br| {
+                matches!(
+                    br.pat.value,
+                    canon::Pattern_::PAnything | canon::Pattern_::PVar(_)
+                )
+            })
+            .map_or(branches.len(), |i| i + 1);
+        let branches = &branches[..live_end];
+
         let all_ctor = branches
             .iter()
             .all(|br| matches!(br.pat.value, canon::Pattern_::PCtor { .. }));
