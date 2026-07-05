@@ -18,7 +18,7 @@
 | **Std.Auth** (9 kernels) | ✅ 9 variants (committed) | ✅ `auth.rs` (complete) | ✅ WD | ✅ WD | ❌ `return None` | ✅ committed | ✅ standard path via naming | **12-skyvote** |
 | **ServerStream** (4 kernels) | ✅ 4 variants (committed) | ✅ `server_stream.rs` | ✅ WD | ✅ WD | ❌ `return None` | ✅ committed | ✅ standard path | **30-sse-server-demo** |
 | **HttpStream** (3 kernels) | ✅ 3 variants (committed) | ✅ `http_stream.rs` | ✅ WD | ✅ WD | ❌ `return None` | ✅ committed | ✅ standard path | **32-sse-relay** |
-| **ServerWebSocket** (5 kernels) | ❌ missing | ❌ `ws_server.rs` missing | ❌ missing | ❌ missing | ❌ missing | ❌ missing | ❌ missing | **33-websocket-echo** |
+| **ServerWebSocket** (12 kernels) | ✅ 12 `Ws*` variants (task #127) | ✅ adapters in `server.rs:1059+` (task #127) | ✅ (task #127) | ✅ (task #127) | ✅ (task #127) | ✅ (task #127) | ✅ (task #127) | **33-websocket-echo** ✅ |
 
 **WD** = working-tree only (committed to disk, not `git add`-ed); the
 lower.rs / constrain.rs / emit_model_gate.rs hunks are entangled with
@@ -475,19 +475,22 @@ A1  Land WD changes as #111 commit (lower_callee + constrain CliProgram
 A2  Add get_scheme arms for Auth/Stream/HttpStream (constrain.rs)
       ← unblocks ex 12, 30, 32 (combined with A1)
         ↓
-A3  ws_server.rs runtime (new file, 300–450 lines)
+A3  ws_server.rs runtime (new file, 300–450 lines)  ← SUPERSEDED: runtime
+    already existed in server.rs:711-1057; task #127 added ~100-line
+    adapters after line 1057 instead. See websocket-server-design.md §1.
         ↓
-A4  KernelFn variants for WsServer* in sky_kernels (5 variants)
+A4  KernelFn variants — 12 Ws* variants  ← DONE (task #127)
         ↓
-A5  lower_callee + callee_arity arms for WsServer*
+A5  lower_callee + callee_arity arms for Ws*  ← DONE (task #127)
         ↓
-A6  get_scheme arms for WsServer* (complex cfg callback shape)
+A6  get_scheme arms for Ws* (complex cfg callback shape)  ← DONE (task #127)
         ↓
-A7  naming.rs arms for WsServer*
+A7  naming.rs arms for Ws*  ← DONE (task #127)
         ↓
-A8  server.rs sentinel dispatch for WebSocket upgrade
+A8  server.rs sentinel — no change needed; task-local upgrade already
+    wired (server.rs:782-787, method_router:617-619)  ← DONE (existing)
         ↓
-DONE  ex 33 (websocket-echo) unblocked
+DONE  ex 33 (websocket-echo) unblocked  ← DONE (task #127)
 ```
 
 A1–A2 are independent of A3–A8 and can land immediately after #108
@@ -532,7 +535,7 @@ design.
 | Std.Auth (ex 12) | S — 9 `get_scheme` arms | ✅ unblocked |
 | ServerStream (ex 30) | S — 4 `get_scheme` arms | ✅ unblocked |
 | HttpStream (ex 32) | XS — 3 `get_scheme` arms | ✅ unblocked |
-| ServerWebSocket (ex 33) | XL — full new runtime module | blocked until A3–A8 |
+| ServerWebSocket (ex 33) | L — runtime existed; 12-kernel wiring (task #127) | ✅ **shipped** (see `websocket-server-design.md`) |
 
 **Examples 20, 12, 30, 32 can be unblocked in a single focused
 session** (A1 + A2). Example 33 is a multi-session effort requiring
@@ -567,6 +570,7 @@ runtime/src/sky_runtime/server.rs      — sentinel dispatch (needs A8)
 - `examples/32-sse-relay/src/Main.sky` — `HttpStream.open/forEachChunk` relay
 - `examples/33-websocket-echo/src/Main.sky` — `Ws.upgrade/sendToClient`
 - `sky-stdlib/Sky/Http/Server/WebSocket.sky` — full `WebSocketServerCfg` shape
+- `docs/architecture/websocket-server-design.md` — full design for task #127 (12 kernels, D2/D4/D5 divergences, e2e spec)
 - `sky-stdlib/Std/Auth.sky` — Auth kernel bindings
 - `crates/sky_backend_rust/src/emit_cli.rs` — Cli.program emit design
 - `runtime/src/sky_runtime/ws_client.rs` — registry pattern reference

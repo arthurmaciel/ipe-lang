@@ -104,6 +104,8 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Sky", "Auth"], "Auth"),
     (&["Sky", "Http", "Server", "Stream"], "Stream"),
     (&["Sky", "Core", "Http", "Stream"], "HttpStream"),
+    // #127: Sky.Http.Server.WebSocket (12 kernels).
+    (&["Sky", "Http", "Server", "WebSocket"], "Ws"),
 ];
 
 /// Where a (possibly qualified) variable resolves to.
@@ -1295,6 +1297,24 @@ impl Env {
             ("Stream", &["stream", "emit", "finish", "withContentType"]),
             // Sky.Core.Http.Stream — client-side HTTP streaming (fail-closed).
             ("HttpStream", &["open", "forEachChunk", "close"]),
+            // #127: Sky.Http.Server.WebSocket (12 kernels, fully wired).
+            (
+                "Ws",
+                &[
+                    "defaultCfg",
+                    "withOnConnect",
+                    "withOnMessage",
+                    "withOnClose",
+                    "withOnError",
+                    "withMaxMessageBytes",
+                    "withOriginPatterns",
+                    "upgrade",
+                    "sendToClient",
+                    "sendBinaryToClient",
+                    "broadcast",
+                    "closeClient",
+                ],
+            ),
         ];
 
         // ── M7: Per-qualifier function name aliases ───────────────────────────
@@ -1349,6 +1369,8 @@ impl Env {
             ("Sky.Auth", "Auth"),
             ("Sky.Http.Server.Stream", "Stream"),
             ("Sky.Core.Http.Stream", "HttpStream"),
+            // #127: Sky.Http.Server.WebSocket alias.
+            ("Sky.Http.Server.WebSocket", "Ws"),
             // #124: Std.Ui.Input sub-module.
             ("Std.Ui.Input", "Input"),
         ];

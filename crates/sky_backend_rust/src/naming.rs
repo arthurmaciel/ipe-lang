@@ -1028,6 +1028,19 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HttpStreamOpen => "http_stream_open",
         KernelFn::HttpStreamForEachChunk => "http_stream_for_each_chunk",
         KernelFn::HttpStreamClose => "http_stream_close",
+        // ── #127: Sky.Http.Server.WebSocket runtime function names (server.rs) ─
+        KernelFn::WsDefaultCfg => "ws_server_default_cfg",
+        KernelFn::WsWithOnConnect => "ws_server_with_on_connect",
+        KernelFn::WsWithOnMessage => "ws_server_with_on_message",
+        KernelFn::WsWithOnClose => "ws_server_with_on_close",
+        KernelFn::WsWithOnError => "ws_server_with_on_error",
+        KernelFn::WsWithMaxMessageBytes => "ws_server_with_max_message_bytes",
+        KernelFn::WsWithOriginPatterns => "ws_server_with_origin_patterns",
+        KernelFn::WsUpgrade => "server_web_socket_upgrade",
+        KernelFn::WsSendToClient => "ws_server_send_to_client",
+        KernelFn::WsSendBinaryToClient => "ws_server_send_binary_to_client",
+        KernelFn::WsBroadcast => "ws_server_broadcast",
+        KernelFn::WsCloseClient => "ws_server_close_client",
     }
 }
 

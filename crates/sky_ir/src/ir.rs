@@ -603,6 +603,21 @@ pub enum IrType {
     /// that pass the value to `http_stream_open` / `http_request` kernels see
     /// the correct runtime type.  Never stored in a Sky.Live Model.
     HttpRequest,
+    // ── #127: Sky.Http.Server.WebSocket opaque type handles ──────────────────
+    /// `WebSocketServer` — opaque per-peer WebSocket handle.  Renders as
+    /// `WsHandle`.
+    ///
+    /// Passed to every `WsServerCfg` callback as the first argument; also
+    /// accepted by `Ws.sendToClient` / `Ws.sendBinaryToClient` /
+    /// `Ws.broadcast` / `Ws.closeClient`.  Never stored in a Sky.Live Model.
+    WebSocketServer,
+    /// `WebSocketServerCfg` — opaque WebSocket server configuration.  Renders
+    /// as `WsServerCfg<SkyError>`.
+    ///
+    /// Constructed by `Ws.defaultCfg` and threaded through the `Ws.with*`
+    /// builder chain; consumed by `Ws.upgrade`.  Phantom `msg` type parameter
+    /// dropped (D2 — see docs/architecture/websocket-server-design.md).
+    WebSocketServerCfg,
     // ── M7: Std.Ui / Std.Html parametric types ──────────────────────────────
     /// A parametric `Std.Ui` or `Std.Html` type — one that carries a message type
     /// parameter `msg`.  The `ctor` field identifies which of the five
@@ -729,7 +744,8 @@ pub enum UiPlain {
 /// * the opaque server / live handles [`IrType::ServerRequest`] /
 ///   [`IrType::ServerResponse`] / [`IrType::ServerRoute`] /
 ///   [`IrType::ServerCookie`] / [`IrType::StreamWriter`] /
-///   [`IrType::HttpRequest`] / [`IrType::LiveReq`] / [`IrType::LiveRoute`]
+///   [`IrType::HttpRequest`] / [`IrType::WebSocketServer`] /
+///   [`IrType::WebSocketServerCfg`] / [`IrType::LiveReq`] / [`IrType::LiveRoute`]
 ///   (each lacks at least `PartialEq`).
 /// * the two `Clone`-only `Std.Html` carriers [`UiCtor::HtmlAttribute`] /
 ///   [`UiCtor::HtmlEvent`] (they hold `Arc<dyn Fn>` event handlers).
@@ -795,6 +811,9 @@ pub fn ir_type_is_derivable(
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — not fully derivable.
         | IrType::HttpRequest
+        // #127: `WsHandle` / `WsServerCfg` are opaque handles — not fully derivable.
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
         | IrType::LiveReq
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
@@ -896,6 +915,9 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle; not serde.
         | IrType::HttpRequest
+        // #127: `WsHandle` / `WsServerCfg` are opaque handles; not serde.
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
         | IrType::LiveReq
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
