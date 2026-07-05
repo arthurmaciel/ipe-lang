@@ -494,3 +494,50 @@ Disposition: filed (2026-06-30). Brainstorm post-core. The "is this magic good?"
 judgement is the crux — lean toward the LSP route if the magic proves
 surprising. Connects to the parse-don't-validate principle and the
 namespace/identity rethink ([[post-completion-rename-and-namespace]]).
+
+## Idea — CI patch queue over the upstream examples corpus (departure-proof regression sweep) ✅
+
+**Problem.** The examples sweep (35 upstream examples + Go-oracle equivalence)
+is our best regression corpus, but every surface departure breaks it by
+definition: dropping `Task.run`/`Task.perform` (#128), multiline-string margin
+stripping (#133), the eventual rename, and any future syntax change make the
+pristine upstream sources uncompilable — exactly when we most need the sweep
+as a safety net.
+
+**Proposal (user, 2026-07-05).** Keep the examples byte-identical to upstream
+and carry a **patch queue** in-repo that CI applies before build/run/perf:
+
+```
+tests/example-patches/
+  20-cli-counter/0001-drop-trailing-task-run.patch
+  07-todo-cli/0001-margin-strip-multiline.patch
+  …
+scripts/examples-sweep.sh --patched   # rsync example → tmp, apply patches, build
+```
+
+* **Unpatched = upstream.** The tree keeps a clean provenance story; syncing a
+  new upstream release is `git subtree`-style copy + patch rebase, never a
+  hand-merge of forked sources.
+* **Patch-apply failure is a feature** — it fires precisely when upstream
+  changed the lines we diverge on, forcing a conscious rebase instead of
+  silent drift. The sweep stays green-everywhere as a hard gate.
+* **Go-only examples become reachable**: an example that upstream ships only
+  for a Go-specific FFI surface gets an adaptation patch (or a full
+  replacement file in the same queue) so Ipê can build/run/perf it — widening
+  the corpus instead of skipping rows.
+* **Oracle policy per patch class**: output-neutral departures (`Task.run`
+  drop) keep byte-equivalence against the Go oracle running the UNpatched
+  source; output-changing departures (margin stripping alters string
+  literals) record an `oracle_divergence + reason` per the sanctioned-
+  divergence policy — the patch file itself is the natural place to carry the
+  annotation (header comment).
+* **Codemod synergy**: mechanical departures should ship with a `skyc fix`
+  auto-migration; CI can GENERATE those patches by running the migrator over
+  pristine sources and diffing. The queue then doubles as an end-to-end test
+  of the user-facing migration tool — if the migrator can't produce a working
+  patch for our own corpus, it isn't ready for users' code.
+
+**Disposition: accepted (2026-07-05), execute at Tier-3 start** — first
+consumer is #128/#133; wire `--patched` mode into the sweep + CI (#37) when
+the first departure lands. Until then the queue is empty and the sweep runs
+pristine.
