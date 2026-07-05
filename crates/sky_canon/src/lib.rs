@@ -2179,10 +2179,15 @@ mod tests {
         // `#[derive(…)]` struct over the wrapper and skyc-0 then cargo-101 (the
         // seal hole). The struct-derivability gate now DECLINES synthesis, so
         // merely NAMING the alias builds clean and no dangling ctor value exists.
+        // Use only builtin type args (`Int`, `Error`) so the test is not
+        // sensitive to whether an undefined user ADT (`Msg`) compiles.
+        // #138: unknown unqualified type names now fail closed with SKY-N0002;
+        // the test's intent (no ctor for opaque-field alias) does not depend on
+        // the specific type argument — `Cmd Int` tests the same gate as `Cmd Msg`.
         for (decl, field_ty) in [
             ("Dec", "Decoder Int"),
-            ("Ev", "Cmd Msg"),
-            ("Sb", "Sub Msg"),
+            ("Ev", "Cmd Int"),
+            ("Sb", "Sub Int"),
             ("Tk", "Task Error Int"),
         ] {
             let mut i = Interner::new();
