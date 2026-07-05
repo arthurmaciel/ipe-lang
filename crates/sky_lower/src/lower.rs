@@ -387,12 +387,17 @@ fn clone_class(t: &IrType) -> CloneClass {
         | IrType::Cmd(_)
         | IrType::Sub(_)
         | IrType::Generic(_) => CloneClass::NonClone,
-        // Composite: CloneOk iff all components are CloneOk (no NonClone part).
+        // Composite: CloneOk iff all components CloneOk (no NonClone part).
+        // `Maybe`, `List`, `Set`, `Result`, `Dict` are NAMED Rust types
+        // (`SkyMaybe<T>`, `Vec<T>`, `BTreeSet<T>`, `SkyResult<E,A>`,
+        // `HashMap<K,V>`) — they never implement `Copy` even when every element
+        // is `Copy`. Use `clone_class_named_composite` to floor `CopyLeaf` → `CloneOk`
+        // so T5 inserts `.clone()` for multi-use bindings (e.g. `Vec<i64>`).
         IrType::Maybe(elem) | IrType::List(elem) | IrType::Set(elem) => {
-            clone_class_composite(std::iter::once(elem.as_ref()))
+            clone_class_named_composite(std::iter::once(elem.as_ref()))
         }
         IrType::Result(e, a) | IrType::Dict(e, a) => {
-            clone_class_composite([e.as_ref(), a.as_ref()].into_iter())
+            clone_class_named_composite([e.as_ref(), a.as_ref()].into_iter())
         }
         IrType::Tuple(elems) => clone_class_composite(elems.iter()),
         // Named types: emitted Rust struct/enum derives `Clone` but NOT `Copy`.
@@ -883,6 +888,14 @@ fn rewrite_captured_clones(
                 clone_set, noncl_set, lambda_span, *rest, depth,
             )?),
         }),
+        Expr::TaskSeqSync { effect, rest } => Ok(Expr::TaskSeqSync {
+            effect: Box::new(rewrite_captured_clones(
+                clone_set, noncl_set, lambda_span, *effect, depth,
+            )?),
+            rest: Box::new(rewrite_captured_clones(
+                clone_set, noncl_set, lambda_span, *rest, depth,
+            )?),
+        }),
         Expr::Ctor { home, ty, variant, args } => Ok(Expr::Ctor {
             home,
             ty,
@@ -1025,21 +1038,124 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
             fields.iter().any(|(_, e)| lambda_body_refs_sym(sym, e))
         }
         Expr::Ctor { args, .. } => args.iter().any(|a| lambda_body_refs_sym(sym, a)),
-        Expr::TaskSeq { effect, rest } => {
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             lambda_body_refs_sym(sym, effect) || lambda_body_refs_sym(sym, rest)
         }
         Expr::TailRecur { args } => args.iter().any(|a| lambda_body_refs_sym(sym, a)),
-        // `Access` joins the literal leaves: field access borrows/copies the
-        // parent record, so it is never a by-value capture (see the matching
-        // comment on the `count_var_uses` leaf group).
-        Expr::Access { .. }
-        | Expr::Int(_)
+        // `Access.record` is borrowed by the emitted `(record).field.clone()` —
+        // a borrow of `record`, not a move.  The lambda still needs to capture
+        // `sym` if `sym` is the record expression, so we recurse.
+        Expr::Access { record, .. } => lambda_body_refs_sym(sym, record),
+        Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => false,
+    }
+}
+
+// ── T5 helpers for case-arm bound variables ──────────────────────────────────
+
+/// Collect every [`Symbol`] bound by a `case` arm's canon [`Pattern_`] at any
+/// depth.  These symbols become locally-owned (after the backend's
+/// `list_binder_rebinds` prologue or a `PCtor` destructure) and may need `.clone()`
+/// if they appear multiple times in the arm body.
+fn collect_arm_pat_pvars(pat: &canon::Pattern_) -> Vec<Symbol> {
+    let mut out = Vec::new();
+    collect_pvars_inner(pat, &mut out);
+    out
+}
+
+fn collect_pvars_inner(pat: &canon::Pattern_, out: &mut Vec<Symbol>) {
+    match pat {
+        canon::Pattern_::PVar(s) => out.push(*s),
+        canon::Pattern_::PAlias(inner, name) => {
+            out.push(name.value);
+            collect_pvars_inner(&inner.value, out);
+        }
+        canon::Pattern_::PCons(head, tail) => {
+            collect_pvars_inner(&head.value, out);
+            collect_pvars_inner(&tail.value, out);
+        }
+        canon::Pattern_::PList(pats) | canon::Pattern_::PTuple(pats) => {
+            for p in pats {
+                collect_pvars_inner(&p.value, out);
+            }
+        }
+        canon::Pattern_::PCtor { args, .. } => {
+            for p in args {
+                collect_pvars_inner(&p.value, out);
+            }
+        }
+        canon::Pattern_::PRecord(fields) => {
+            for f in fields {
+                out.push(f.value);
+            }
+        }
+        // Leaf patterns: no bindings.
+        canon::Pattern_::PAnything
+        | canon::Pattern_::PInt(_)
+        | canon::Pattern_::PBool(_)
+        | canon::Pattern_::PChar(_)
+        | canon::Pattern_::PStr(_) => {}
+    }
+}
+
+/// Walk a canon expression tree in pre-order and return the span of the FIRST
+/// [`canon::Expr_::VarLocal`] occurrence of `sym`.  Returns `None` if `sym` is
+/// not referenced.  The returned span can be keyed into [`Lowerer::region_ty`]
+/// to recover the HM type that the solver assigned to that use site, which in
+/// turn drives the T5 clone-class decision for arm-bound variables.
+fn find_first_varlocal_span(sym: Symbol, body: &canon::Expr) -> Option<Span> {
+    match &body.value {
+        canon::Expr_::VarLocal(s) if *s == sym => Some(body.span),
+        // Atomic leaves — no sub-expressions.
+        canon::Expr_::VarLocal(_)
+        | canon::Expr_::VarTopLevel { .. }
+        | canon::Expr_::VarKernel { .. }
+        | canon::Expr_::VarCtor { .. }
+        | canon::Expr_::Int(_)
+        | canon::Expr_::Float(_)
+        | canon::Expr_::Str(_)
+        | canon::Expr_::Char(_)
+        | canon::Expr_::Unit => None,
+        // Compound forms — recurse left-to-right.
+        canon::Expr_::Call(f, args) => find_first_varlocal_span(sym, f)
+            .or_else(|| args.iter().find_map(|a| find_first_varlocal_span(sym, a))),
+        canon::Expr_::Binop { lhs, rhs, .. } => find_first_varlocal_span(sym, lhs)
+            .or_else(|| find_first_varlocal_span(sym, rhs)),
+        canon::Expr_::Let(bindings, body) => {
+            for lb in bindings {
+                if let Some(s) = find_first_varlocal_span(sym, &lb.body) {
+                    return Some(s);
+                }
+            }
+            find_first_varlocal_span(sym, body)
+        }
+        canon::Expr_::If(branches, else_) => branches
+            .iter()
+            .find_map(|(c, t)| {
+                find_first_varlocal_span(sym, c)
+                    .or_else(|| find_first_varlocal_span(sym, t))
+            })
+            .or_else(|| find_first_varlocal_span(sym, else_)),
+        canon::Expr_::Case(scrut, arms) => find_first_varlocal_span(sym, scrut)
+            .or_else(|| arms.iter().find_map(|a| find_first_varlocal_span(sym, &a.body))),
+        canon::Expr_::Tuple(items) | canon::Expr_::List(items) => {
+            items.iter().find_map(|e| find_first_varlocal_span(sym, e))
+        }
+        canon::Expr_::Cons(h, t) => find_first_varlocal_span(sym, h)
+            .or_else(|| find_first_varlocal_span(sym, t)),
+        canon::Expr_::Lambda(_, e) | canon::Expr_::Access(e, _) => {
+            find_first_varlocal_span(sym, e)
+        }
+        canon::Expr_::Record(fields) => {
+            fields.iter().find_map(|(_, e)| find_first_varlocal_span(sym, e))
+        }
+        canon::Expr_::Update(base, fields) => find_first_varlocal_span(sym, base)
+            .or_else(|| fields.iter().find_map(|(_, e)| find_first_varlocal_span(sym, e))),
     }
 }
 
@@ -1118,7 +1234,7 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
             fields.iter().map(|(_, e)| count_var_uses(sym, e)).sum::<usize>()
         }
         Expr::Ctor { args, .. } => args.iter().map(|a| count_var_uses(sym, a)).sum(),
-        Expr::TaskSeq { effect, rest } => {
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             count_var_uses(sym, effect) + count_var_uses(sym, rest)
         }
         Expr::TailLoop { params, body } => {
@@ -1129,11 +1245,13 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
             }
         }
         Expr::TailRecur { args } => args.iter().map(|a| count_var_uses(sym, a)).sum(),
-        // `Access` joins the literal leaves: field access borrows the parent
-        // record in emitted Rust (or copies a `Copy` field) — the parent is not
-        // consumed, so occurrences of `sym` under it don't count.
-        Expr::Access { .. }
-        | Expr::Int(_)
+        // `Access.record` emits as `(record).field.clone()` — a borrow of
+        // `record`, not a move.  We still COUNT the use so that T5 knows a
+        // consuming sibling (bare Var) is not the final use and must be
+        // cloned.  The rewrite pass handles the Access arm separately (the
+        // inner VarLocal is left as a borrow-position, not turned into a move).
+        Expr::Access { record, .. } => count_var_uses(sym, record),
+        Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
@@ -1295,10 +1413,16 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
                 .map(|(k, v)| (k, rewrite_multiuse_clones(sym, remaining, v)))
                 .collect(),
         ),
-        // `Access.record` is a borrow position in emitted Rust (field access
-        // does not move the parent record for Copy fields; non-Copy fields use
-        // `.clone()` upstream).  Leave it bare — do NOT rewrite.
-        Expr::Access { record, field } => Expr::Access { record, field },
+        // `Access.record` emits as `(record).field.clone()` — the record is
+        // BORROWED by the method call, not moved.  We still recurse so that
+        // the `remaining` counter advances correctly (count_var_uses counts
+        // Access-under-record uses).  A VarLocal found here becomes CloneVar
+        // unless it is the last overall use, in which case it stays bare (the
+        // borrow keeps the original value alive for subsequent uses).
+        Expr::Access { record, field } => Expr::Access {
+            record: Box::new(rewrite_multiuse_clones(sym, remaining, *record)),
+            field,
+        },
         // `Update.record` is always wrapped in `(record).clone()` by `emit_update`
         // (a borrow via `Clone::clone(&self)`).  Only the field VALUES are consuming
         // positions; leave `record` bare.
@@ -1319,6 +1443,10 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
                 .collect(),
         },
         Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
+            effect: Box::new(rewrite_multiuse_clones(sym, remaining, *effect)),
+            rest: Box::new(rewrite_multiuse_clones(sym, remaining, *rest)),
+        },
+        Expr::TaskSeqSync { effect, rest } => Expr::TaskSeqSync {
             effect: Box::new(rewrite_multiuse_clones(sym, remaining, *effect)),
             rest: Box::new(rewrite_multiuse_clones(sym, remaining, *rest)),
         },
@@ -1484,7 +1612,7 @@ fn count_self_calls(
         }
         // Task recursion excluded in v1: BOTH sub-terms non-tail (a Task-recursive
         // fn is simply not TCO'd = today's behaviour, no regression).
-        Expr::TaskSeq { effect, rest } => {
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             count_self_calls(self_id, arity, effect, false, tail, non_tail);
             count_self_calls(self_id, arity, rest, false, tail, non_tail);
         }
@@ -1635,7 +1763,9 @@ fn expr_uses_db_kernel(expr: &Expr) -> bool {
             expr_uses_db_kernel(record) || fields.iter().any(|(_, v)| expr_uses_db_kernel(v))
         }
         Expr::BinOp { lhs, rhs, .. } => expr_uses_db_kernel(lhs) || expr_uses_db_kernel(rhs),
-        Expr::TaskSeq { effect, rest } => expr_uses_db_kernel(effect) || expr_uses_db_kernel(rest),
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            expr_uses_db_kernel(effect) || expr_uses_db_kernel(rest)
+        }
         // A `TailRecur` (a TCO jump) carries its next-iteration args like a `Ctor`.
         Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_db_kernel),
         // Leaf expressions that cannot contain a kernel call.
@@ -1703,7 +1833,7 @@ fn expr_uses_tea_kernel(expr: &Expr) -> bool {
         Expr::Apply { func, args } => {
             expr_uses_tea_kernel(func) || args.iter().any(expr_uses_tea_kernel)
         }
-        Expr::TaskSeq { effect, rest } => {
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             expr_uses_tea_kernel(effect) || expr_uses_tea_kernel(rest)
         }
         Expr::Int(_)
@@ -1776,7 +1906,7 @@ fn expr_uses_server_kernel(expr: &Expr) -> bool {
         Expr::Apply { func, args } => {
             expr_uses_server_kernel(func) || args.iter().any(expr_uses_server_kernel)
         }
-        Expr::TaskSeq { effect, rest } => {
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             expr_uses_server_kernel(effect) || expr_uses_server_kernel(rest)
         }
         Expr::Int(_)
@@ -1833,7 +1963,9 @@ fn expr_uses_ui_kernel(expr: &Expr) -> bool {
         Expr::BinOp { lhs, rhs, .. } => expr_uses_ui_kernel(lhs) || expr_uses_ui_kernel(rhs),
         Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_ui_kernel),
         Expr::Cons { head, tail } => expr_uses_ui_kernel(head) || expr_uses_ui_kernel(tail),
-        Expr::TaskSeq { effect, rest } => expr_uses_ui_kernel(effect) || expr_uses_ui_kernel(rest),
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            expr_uses_ui_kernel(effect) || expr_uses_ui_kernel(rest)
+        }
         Expr::Int(_)
         | Expr::Float(_)
         | Expr::Bool(_)
@@ -1886,7 +2018,7 @@ fn expr_uses_css_kernel(expr: &Expr) -> bool {
             args.iter().any(expr_uses_css_kernel)
         }
         Expr::Cons { head, tail } => expr_uses_css_kernel(head) || expr_uses_css_kernel(tail),
-        Expr::TaskSeq { effect, rest } => {
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             expr_uses_css_kernel(effect) || expr_uses_css_kernel(rest)
         }
         Expr::Int(_)
@@ -1944,7 +2076,7 @@ fn expr_uses_auth_kernel(expr: &Expr) -> bool {
             args.iter().any(expr_uses_auth_kernel)
         }
         Expr::Cons { head, tail } => expr_uses_auth_kernel(head) || expr_uses_auth_kernel(tail),
-        Expr::TaskSeq { effect, rest } => {
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             expr_uses_auth_kernel(effect) || expr_uses_auth_kernel(rest)
         }
         Expr::Int(_)
@@ -1995,7 +2127,7 @@ fn expr_uses_live_kernel(expr: &Expr) -> bool {
             args.iter().any(expr_uses_live_kernel)
         }
         Expr::Cons { head, tail } => expr_uses_live_kernel(head) || expr_uses_live_kernel(tail),
-        Expr::TaskSeq { effect, rest } => {
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             expr_uses_live_kernel(effect) || expr_uses_live_kernel(rest)
         }
         Expr::Int(_)
@@ -2042,7 +2174,7 @@ fn expr_uses_tui_kernel(expr: &Expr) -> bool {
         Expr::BinOp { lhs, rhs, .. } => expr_uses_tui_kernel(lhs) || expr_uses_tui_kernel(rhs),
         Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_tui_kernel),
         Expr::Cons { head, tail } => expr_uses_tui_kernel(head) || expr_uses_tui_kernel(tail),
-        Expr::TaskSeq { effect, rest } => {
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             expr_uses_tui_kernel(effect) || expr_uses_tui_kernel(rest)
         }
         Expr::Int(_)
@@ -2100,7 +2232,7 @@ fn expr_uses_webview_kernel(expr: &Expr) -> bool {
         Expr::Cons { head, tail } => {
             expr_uses_webview_kernel(head) || expr_uses_webview_kernel(tail)
         }
-        Expr::TaskSeq { effect, rest } => {
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             expr_uses_webview_kernel(effect) || expr_uses_webview_kernel(rest)
         }
         Expr::Int(_)
@@ -2295,6 +2427,10 @@ fn rewrite_var_to_apply(target: Symbol, expr: Expr) -> Expr {
             effect: Box::new(rewrite_var_to_apply(target, *effect)),
             rest: Box::new(rewrite_var_to_apply(target, *rest)),
         },
+        Expr::TaskSeqSync { effect, rest } => Expr::TaskSeqSync {
+            effect: Box::new(rewrite_var_to_apply(target, *effect)),
+            rest: Box::new(rewrite_var_to_apply(target, *rest)),
+        },
         Expr::Ctor { home, ty, variant, args } => Expr::Ctor {
             home,
             ty,
@@ -2408,6 +2544,15 @@ pub struct Lowerer<'a> {
     /// the Rust emitted for polymorphic functions such as
     /// `view : (Msg -> parentMsg) -> Counter -> Html parentMsg`.
     current_poly_tvars: std::cell::RefCell<BTreeMap<u32, Symbol>>,
+    /// Whether the function (def or lambda) currently being lowered has a Task
+    /// return type. Set to `true` when `lower_def` / `lower_lambda` detects that
+    /// the inferred return type is `IrType::Task(_)`; reset to `false` on entry to
+    /// each new def/lambda scope and restored on exit (save/set/restore pattern).
+    /// Read by `lower_let`'s `PAnything` arm to choose between `Expr::TaskSeq`
+    /// (async context — emit `task_and_then(...)`) and `Expr::TaskSeqSync`
+    /// (sync context — emit `{ let _ = task_run(...); rest }`).  Interior
+    /// mutability so the lowering walk stays over a shared `&self`.
+    fn_is_async: Cell<bool>,
 }
 
 /// The interned symbols of the built-in `Maybe` / `Result` types and their
@@ -2652,6 +2797,7 @@ impl<'a> Lowerer<'a> {
             param_cursor: Cell::new(0),
             current_home: std::cell::RefCell::new(Vec::new()),
             current_poly_tvars: std::cell::RefCell::new(BTreeMap::new()),
+            fn_is_async: Cell::new(false),
         }
     }
 
@@ -3112,8 +3258,13 @@ impl<'a> Lowerer<'a> {
                 // tuple, then the body opens it with a `Destructure`. Fold the
                 // prologue OUTERMOST-first (reverse) so the first parameter's
                 // destructure is the outermost binding, matching source order.
+                // Save/set/restore fn_is_async so nested lambdas/defs see the
+                // correct async context for their own scope.
+                let prev_async = self.fn_is_async.get();
+                self.fn_is_async.set(matches!(ret, IrType::Task(_)));
                 let mut lowered_body = self.lower_expr(body)?;
                 *self.current_poly_tvars.borrow_mut() = saved_poly_tvars;
+                self.fn_is_async.set(prev_async);
                 for (binder_sym, binder_pat) in prologue.into_iter().rev() {
                     lowered_body = Expr::Destructure {
                         binder: binder_pat,
@@ -3184,7 +3335,11 @@ impl<'a> Lowerer<'a> {
                     // unsound `any`-shaped parameters — fail-closed by design.
                     let (params, prologue, ret) =
                         self.split_unannotated_sig(solved_ty, patterns, sig_span)?;
+                    // Save/set/restore fn_is_async (same rationale as Typed path).
+                    let prev_async = self.fn_is_async.get();
+                    self.fn_is_async.set(matches!(ret, IrType::Task(_)));
                     let mut lowered_body = self.lower_expr(body)?;
+                    self.fn_is_async.set(prev_async);
                     // Fold destructuring prologues outermost-first (reverse)
                     // so the first parameter's destructure is the outer binding.
                     for (binder_sym, binder_pat) in prologue.into_iter().rev() {
@@ -3225,6 +3380,11 @@ impl<'a> Lowerer<'a> {
                     });
                 }
                 let ret = self.ir_type_from_ty(solved_ty, sig_span)?;
+                // Save/set/restore fn_is_async for the 0-param (value-binding) path.
+                let prev_async = self.fn_is_async.get();
+                self.fn_is_async.set(matches!(ret, IrType::Task(_)));
+                let lowered_body = self.lower_expr(body)?;
+                self.fn_is_async.set(prev_async);
                 Ok(Func {
                     id,
                     name,
@@ -3232,7 +3392,7 @@ impl<'a> Lowerer<'a> {
                     type_params: Vec::new(),
                     params: Vec::new(),
                     ret,
-                    body: self.lower_expr(body)?,
+                    body: lowered_body,
                 })
             }
         }
@@ -3929,7 +4089,13 @@ impl<'a> Lowerer<'a> {
             }
         }
         let ret = self.ir_type_from_ty(cur, span)?;
+        // Save/set/restore fn_is_async so `lower_let`'s PAnything arm chooses
+        // TaskSeqSync vs TaskSeq based on THIS lambda's return type, not the
+        // enclosing def's.
+        let prev_async = self.fn_is_async.get();
+        self.fn_is_async.set(matches!(ret, IrType::Task(_)));
         let mut body = self.lower_expr(cur_body)?;
+        self.fn_is_async.set(prev_async);
         // T3 (#121): Capture-clone rewrite — classify free locals captured
         // by this closure and replace CloneOk reads with `.clone()`, emitting
         // SKY-L0125 for NonClone captures outside callee position.
@@ -8281,14 +8447,31 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 // F1 (auto-force): `let _ = <task>` — if the discarded value is
-                // Task-typed, sequence it via `TaskSeq` so the future is awaited
-                // rather than silently dropped. Non-Task wildcards keep the plain
+                // Task-typed, sequence it so the future is awaited rather than
+                // silently dropped. Non-Task wildcards keep the plain
                 // `Destructure(Wildcard, …)` form (which lowers to `let _ = …;`).
+                //
+                // Context matters:
+                //   • Async function (returns Task): emit `TaskSeq` which lowers
+                //     to `task_and_then(effect, |_| rest)` — the whole chain is a
+                //     Task value.
+                //   • Sync function (non-Task return): emit `TaskSeqSync` which
+                //     lowers to `{ let _ = task_run(effect); rest }` — blocks on
+                //     the task and discards the result, then continues with rest
+                //     in a non-Task context.  This avoids E0308 (type mismatch:
+                //     expected Vec<...> / () / Db, found SkyTask<...>).
                 canon::Pattern_::PAnything => {
                     if self.is_task_typed(b.body.span) {
-                        Expr::TaskSeq {
-                            effect: Box::new(value),
-                            rest: Box::new(acc),
+                        if self.fn_is_async.get() {
+                            Expr::TaskSeq {
+                                effect: Box::new(value),
+                                rest: Box::new(acc),
+                            }
+                        } else {
+                            Expr::TaskSeqSync {
+                                effect: Box::new(value),
+                                rest: Box::new(acc),
+                            }
                         }
                     } else {
                         Expr::Destructure {
@@ -8378,10 +8561,46 @@ impl<'a> Lowerer<'a> {
         let arms = branches
             .iter()
             .map(|br| {
-                Ok(Arm {
-                    pat: Self::lower_arm_pat(&br.pat)?,
-                    body: self.lower_expr(&br.body)?,
-                })
+                let arm_pat = Self::lower_arm_pat(&br.pat)?;
+                let mut arm_body = self.lower_expr(&br.body)?;
+
+                // T5 for arm-bound variables.  Each symbol the canon pattern
+                // introduces is owned in the arm body (after the backend's
+                // `rebind_clone` / `rebind_to_vec` prologue, or after a PCtor
+                // destructure).  When a symbol is used more than once, Rust's
+                // move semantics would reject the second use (E0382).  Insert
+                // `.clone()` for all but the syntactically-last occurrence,
+                // exactly as T5 does for function parameters and let-bindings.
+                //
+                // Type source: the solver records a type for EVERY `VarLocal`
+                // use-site.  The first use-site of `sym` in the canon arm body
+                // carries the HM type that `ir_type_from_ty` then maps to an
+                // IR type.  We skip symbols where the type is unavailable or
+                // does not need cloning (`CopyLeaf` = Rust `Copy` scalars,
+                // `NonClone` = function-typed / Cmd / Sub — these should not
+                // appear in arm patterns in practice).
+                for sym in collect_arm_pat_pvars(&br.pat.value) {
+                    let n = count_var_uses(sym, &arm_body);
+                    // `ir_type_from_ty` can legitimately fail for
+                    // unsupported / not-yet-modelled types — treat
+                    // any error as "skip T5 for this symbol".
+                    if n > 1
+                        && let Some(span) =
+                            find_first_varlocal_span(sym, &br.body)
+                        && let Some(ty) = self.region_ty(span)
+                        && let Ok(ir_ty) = self.ir_type_from_ty(ty, span)
+                        && matches!(clone_class(&ir_ty), CloneClass::CloneOk)
+                    {
+                        let mut remaining = n;
+                        arm_body = rewrite_multiuse_clones(
+                            sym,
+                            &mut remaining,
+                            arm_body,
+                        );
+                    }
+                }
+
+                Ok(Arm { pat: arm_pat, body: arm_body })
             })
             .collect::<DResult<Vec<_>>>()?;
 
