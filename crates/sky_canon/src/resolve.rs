@@ -2812,24 +2812,21 @@ fn resolve_simple_interp_ref(
     // `resolve_wildcard_var` but treats ambiguity as VarLocal rather
     // than a hard error, since interpolation refs are best-effort).
     let sym = interner.intern(s)?;
-    let expr = if let Some(h) = env.vars.get(&sym) {
-        var_home_to_expr(sym, h)
-    } else if let Some(origins) =
-        env.wildcard_vars.get(&sym).filter(|o| !o.is_empty())
-    {
-        if origins.len() == 1 {
-            if let Some(origin) = origins.values().next() {
+    let expr = match (
+        env.vars.get(&sym),
+        env.wildcard_vars.get(&sym).filter(|o| !o.is_empty()),
+    ) {
+        (Some(h), _) => var_home_to_expr(sym, h),
+        // Unambiguous wildcard import — resolve to its one origin.
+        (None, Some(origins)) if origins.len() == 1 => origins
+            .values()
+            .next()
+            .map_or(canon::Expr_::VarLocal(sym), |origin| {
                 var_home_to_expr(sym, &origin.home)
-            } else {
-                canon::Expr_::VarLocal(sym)
-            }
-        } else {
-            // Ambiguous wildcard — fall back to VarLocal; the type
-            // checker will catch genuine errors later.
-            canon::Expr_::VarLocal(sym)
-        }
-    } else {
-        canon::Expr_::VarLocal(sym)
+            }),
+        // Ambiguous wildcard or unknown — fall back to VarLocal; the type
+        // checker will catch genuine errors later.
+        _ => canon::Expr_::VarLocal(sym),
     };
     Ok(Located::new(span, expr))
 }
@@ -2855,7 +2852,10 @@ fn desugar_multiline(
         _ => {
             // Left-fold into a `++` chain: ((a ++ b) ++ c) ++ …
             let mut iter = parts.into_iter();
-            let first = iter.next().expect("len >= 2, so first exists");
+            let Some(first) = iter.next() else {
+                // Unreachable: the match arm guards len >= 2.
+                return Ok(canon::Expr_::Str(String::new()));
+            };
             let op_sym = interner.intern("++")?;
             let home_sym = interner.intern("Basics")?;
             let func_sym = interner.intern("append")?;
