@@ -37,12 +37,11 @@ special case.)
   means later tasks are **never started** (their effects don't fire). Use
   when the *effects'* order matters even though the *values* are independent
   (e.g. two appends to one log).
-- **`parallel2..5`** — spawn all, await all; latency = max, not sum.
+- **`parallelDo`** — spawn all binds, await all; latency = max, not sum.
   Fail-fast with **sibling abort** (same discipline as `Task.parallel`,
-  #65); when several fail, the **leftmost** error is reported (positional —
-  deterministic across runs, chronological would not be). Signature mirrors
-  `map2..5` exactly — the families differ in the execution bit only; the
-  tuple form is derivable (`parallel2 Tuple.pair ta tb`).
+  #65); when several fail, the **leftmost** (first-written) error is
+  reported — deterministic. Binds are outer-scoped (independence
+  unrepresentable); tail is pure and auto-wrapped.
 - **`sequence` / `parallel`** — the homogeneous counterparts of the same
   two rows; `parallel` carries the #65 sibling-abort semantics.
 
@@ -52,7 +51,7 @@ special case.)
 |---|---|
 | steps that feed each other | `do` / `andThen` |
 | independent steps, effect order matters | `map2..5` (or `do`) |
-| independent steps, want max-latency win | `parallel2..5` |
+| independent steps, want max-latency win | `parallelDo` |
 | a list of same-typed tasks, ordered effects | `sequence` |
 | a list of same-typed tasks, concurrent | `parallel` |
 
@@ -68,16 +67,39 @@ two forms, both rejected:
   the outside world. Implicit parallelisation would silently race
   log-before-charge-shaped code that reads as sequential. Effect order in a
   `do` block must be exactly reading order, always.
-- **Explicit** (`parallel do` where binds may NOT reference earlier binds,
-  all run concurrently). Sound but redundant: it is `parallel2..N` with
-  named binds instead of positional arguments — new syntax + a strange
-  "`do` where `<-` can't be used like `do`" teaching burden, for a shape
-  (heterogeneous concurrent arity > 5) the corpus doesn't exhibit. Revisit
-  only if real programs outgrow `parallel5`.
+- **Explicit — ACCEPTED as `parallelDo` (revised 2026-07-05),** replacing
+  the `parallel2..5` function family. The construct is sound because
+  independence is a SCOPING rule, not a lint: bind RHSs elaborate in the
+  *outer* scope only, so binds are not in scope for each other —
+  referencing a sibling bind is an ordinary unknown-name error. Dependency
+  is unrepresentable, not detected. All binds/bare lines must be
+  Task-typed and run concurrently (spawn all / await all; fail-fast +
+  sibling abort, leftmost error — the `Task.parallel` discipline); the
+  **tail must be pure** (auto-`Task.succeed`-wrapped) — a Task tail would
+  smuggle a sequential step into the block; nest `parallelDo` inside `do`
+  for dependent follow-up. Advantages over `parallel2..5`: named binds
+  instead of positional lambda args, no arity cliff, and it rides the
+  Idea-7 block machinery (same parser shape, new keyword + scoping +
+  spawn/join desugar).
+
+```elm
+do
+    combined <- parallelDo
+        profile <- Http.get "/api/me"
+        notes   <- Http.get "/api/notifications"
+        { profile = profile, notifications = notes }
+    render combined
+
+parallelDo          -- hardcoded homogeneous, discard results
+    fetchThumbnail1
+    fetchThumbnail2
+    ()
+```
 
 The rule that survives: **`do` is the sequential column, spelled top-to-
-bottom; concurrency is always an explicit combinator (`parallel`,
-`parallel2..5`).** One glance tells you the execution model.
+bottom; concurrency is always explicit — the `parallelDo` keyword or the
+list combinator `Task.parallel`.** One glance tells you the execution
+model.
 
 ## Contract notes
 
@@ -175,24 +197,28 @@ Task-only), and (c) the terser spelling at arity 2-3.
 *Why not `parallel2`:* the **effects** interact through the outside world
 (log-before-charge, FK order) — concurrency would race them.
 
-### `Task.parallel2..5` — independent values AND independent effects
+### `parallelDo` — independent values AND independent effects
 
 ```elm
 -- 1. Dashboard first paint: profile and notifications come from different
 --    services; total latency = max, not sum.
-Task.parallel2 (\profile notes -> { profile = profile, notifications = notes })
-    (Http.get "/api/me")
-    (Http.get "/api/notifications")
+parallelDo
+    profile <- Http.get "/api/me"
+    notes   <- Http.get "/api/notifications"
+    { profile = profile, notifications = notes }
 
 -- 2. Price comparison: quote two suppliers simultaneously.
-Task.parallel2 (\a b -> ( a, b ))
-    (Http.get supplierA)
-    (Http.get supplierB)
+parallelDo
+    a <- Http.get supplierA
+    b <- Http.get supplierB
+    ( a, b )
 ```
 
-*Why not `map2`:* nothing orders these effects — sequential wastes a full
-round-trip. *Why not `parallel` (list):* the two results have different
-types; a `List` can't hold them.
+*Why not `map2`/`do`:* nothing orders these effects — sequential wastes a
+full round-trip. *Why not `parallel` (list):* the two results have
+different types; a `List` can't hold them. Binds cannot reference each
+other (outer-scoped) — writing `notes`' request in terms of `profile` is an
+unknown-name error, which is the construct's soundness.
 
 ### `Task.sequence` — a same-typed batch whose ORDER matters
 
@@ -243,5 +269,5 @@ Task.parallel (List.map healthCheck serviceUrls)
 ```
 
 *Why not `sequence`:* no effect depends on another — serial would multiply
-latency by N. *Why not `parallel2..5`:* one element type, dynamic length —
-the list shape is the natural fit.
+latency by N. *Why not `parallelDo`:* fine for a known handful (see its section), but a
+runtime-built list needs the combinator.
