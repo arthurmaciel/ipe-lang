@@ -5168,8 +5168,7 @@ mod registry_phase_c_tests {
             K::UiNone,
             K::UiText,
             K::UiHtml,
-            K::UiParagraph,
-            K::UiTextColumn,
+            // UiParagraph / UiTextColumn live in RELOCATED (hole XOR relocation).
             K::UiSpacing,
             K::UiPadding,
             K::UiPaddingXY,
