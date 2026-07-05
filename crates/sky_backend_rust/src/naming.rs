@@ -502,14 +502,14 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::JsonDecAt => "decode_at",
         KernelFn::JsonDecIndex => "decode_index",
         KernelFn::JsonDecList => "decode_list",
-        KernelFn::JsonDecMap => "decode_map",
-        KernelFn::JsonDecAndThen => "decode_and_then",
+        KernelFn::JsonDecMap | KernelFn::DbDecMap => "decode_map",
+        KernelFn::JsonDecAndThen | KernelFn::DbDecAndThen => "decode_and_then",
         KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed => "decode_succeed",
-        KernelFn::JsonDecFail => "decode_fail",
+        KernelFn::JsonDecFail | KernelFn::DbDecFail => "decode_fail",
         KernelFn::JsonDecOneOf => "decode_one_of",
-        KernelFn::JsonDecMap2 => "decode_map2",
-        KernelFn::JsonDecMap3 => "decode_map3",
-        KernelFn::JsonDecMap4 => "decode_map4",
+        KernelFn::JsonDecMap2 | KernelFn::DbDecMap2 => "decode_map2",
+        KernelFn::JsonDecMap3 | KernelFn::DbDecMap3 => "decode_map3",
+        KernelFn::JsonDecMap4 | KernelFn::DbDecMap4 => "decode_map4",
         // ── JsonDecP pipeline kernels (M4h) ──────────────────────────────────
         KernelFn::JsonDecPRequired => "decode_pipeline_required",
         KernelFn::JsonDecPOptional => "decode_pipeline_optional",
@@ -657,12 +657,9 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::DbDecFloat => "db_decode_float",
         KernelFn::DbDecBool => "db_decode_bool",
         KernelFn::DbDecNullable => "db_decode_nullable",
-        KernelFn::DbDecMap => "db_decode_map",
-        KernelFn::DbDecAndThen => "db_decode_and_then",
-        KernelFn::DbDecFail => "db_decode_fail",
-        KernelFn::DbDecMap2 => "db_decode_map2",
-        KernelFn::DbDecMap3 => "db_decode_map3",
-        KernelFn::DbDecMap4 => "db_decode_map4",
+        // DbDecMap / DbDecAndThen / DbDecFail / DbDecMap2/3/4 share the same
+        // runtime function as their JsonDec* counterparts; the arms are merged
+        // into the JsonDec* section above to satisfy clippy::match_same_arms.
         KernelFn::DbDecRequired => "db_decode_required",
         KernelFn::DbDecOptional => "db_decode_optional",
         // ── M5c: TEA Cmd / Sub / Time kernels (wired) ────────────────────────
