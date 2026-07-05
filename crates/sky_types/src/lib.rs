@@ -131,16 +131,20 @@ fn infer_with_budget(
 
     solve(&mut uf, budget, interner, &generated.constraints)?;
 
-    // Discharge deferred record field accesses now the record types are settled
-    // (closed records carry no row variable, so this cannot run during the main
-    // solve — see [`FieldAccess`]). Done before the region read-back so each
-    // access's result variable reflects the field's type.
-    resolve_field_accesses(&mut uf, budget, interner, &generated.field_accesses)?;
-
-    // Discharge deferred record updates the same way: each updated field must
-    // exist in the (now-settled) base record's type, and its new value must
-    // unify with that field's type.
-    resolve_record_updates(&mut uf, budget, interner, &generated.record_updates)?;
+    // Discharge deferred field accesses and record updates in a joint fixpoint.
+    // These two passes must interleave because a record update can pin the
+    // element type of a field that a downstream field access needs (e.g.
+    // `{ model | history = snapshots }` pins `model.history : List Snapshot`,
+    // enabling `snap.ok` to resolve in the next pass).  Running them sequentially
+    // would leave element types Flex when field accesses are processed, causing
+    // a false SKY-T0012.  See [`resolve_deferred`] for the full algorithm.
+    resolve_deferred(
+        &mut uf,
+        budget,
+        interner,
+        &generated.field_accesses,
+        &generated.record_updates,
+    )?;
 
     // Per-route page witnesses (#108 round 4): each `Live.route pattern ctor`
     // relates its builder argument's settled type to the route's page type —
@@ -469,31 +473,69 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
 /// pass that makes progress resolves at least one access, strictly shrinking the
 /// pending set. When a full pass makes no progress, the remaining accesses carry
 /// record variables that genuinely could not be pinned — reported as errors.
-fn resolve_field_accesses(
+/// Discharge deferred field accesses and record updates in a joint fixpoint.
+///
+/// ## Why a joint loop is required
+///
+/// Field accesses (`snap.ok`) and record updates (`{ model | history = snapshots }`)
+/// can form dependency chains where a record update pins the element type of a
+/// list field that a downstream field access then needs.  Running the two passes
+/// sequentially breaks this: if field accesses run first the element type is still
+/// `Flex`, `snap.ok` stalls, and a false [`TypeError::NoSuchField`] (SKY-T0012)
+/// is reported.
+///
+/// Concrete example (example 18 `job-queue`):
+/// * `init` produces `{ …, history = [] }` — `history : List[v_flex]`.
+/// * `HistoryLoaded (Ok snapshots)` arm does `{ model | history = snapshots }` where
+///   `snapshots : List Snapshot` — this **record update** pins `v_flex = Snapshot`.
+/// * `viewSnapshot snap = … snap.ok …` — this **field access** needs `v_flex` to
+///   be settled to `Snapshot` before it can resolve.
+///
+/// ## Algorithm
+///
+/// Each iteration processes ALL pending field accesses and ALL pending record
+/// updates:
+/// * If the base var is `Flex` → defer to the next iteration.
+/// * If the base is a settled record that has the field → discharge (call [`unify`]);
+///   mark `made_progress = true`.
+/// * If the base is a settled record that is **missing** the field, or is not a
+///   record at all → return an immediate [`TypeError::NoSuchField`].
+///
+/// The loop terminates when both pending lists are empty (success) or when an
+/// entire iteration makes no progress while items remain (stuck — emit the first
+/// item as the error).
+fn resolve_deferred(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
     interner: &Interner,
     accesses: &[FieldAccess],
+    updates: &[RecordUpdate],
 ) -> DResult<()> {
-    // References to accesses not yet discharged. Using references avoids
-    // collecting indices and the `clippy::indexing_slicing` lint on `accesses[i]`.
-    let mut pending: Vec<&FieldAccess> = accesses.iter().collect();
+    // References avoid collecting indices and the `clippy::indexing_slicing`
+    // lint on `accesses[i]` / `updates[i]`.
+    let mut pending_fa: Vec<&FieldAccess> = accesses.iter().collect();
+    let mut pending_ru: Vec<&RecordUpdate> = updates.iter().collect();
+
     loop {
-        if pending.is_empty() {
+        if pending_fa.is_empty() && pending_ru.is_empty() {
             return Ok(());
         }
-        let mut next_pending: Vec<&FieldAccess> = Vec::new();
+
+        let mut next_fa: Vec<&FieldAccess> = Vec::new();
+        let mut next_ru: Vec<&RecordUpdate> = Vec::new();
         let mut made_progress = false;
-        for fa in &pending {
+
+        // ── Field accesses ────────────────────────────────────────────────────
+        for fa in &pending_fa {
             let root = uf.find(fa.record)?;
             // `uf.content()` returns an owned clone; the borrow ends before
             // `unify` is called, avoiding a simultaneous mutable borrow.
             //
             // `field_state` encoding:
-            //   `None`         → record var is still `Flex` — defer to next pass.
-            //   `Some(Some(v))`→ record is a record type and has the field.
-            //   `Some(None)`   → record is resolved but does not have the field
-            //                    (or is not a record at all) — immediate error.
+            //   `None`          → record var is still `Flex` — defer to next pass.
+            //   `Some(Some(v))` → record is a record type and has the field.
+            //   `Some(None)`    → record is resolved but does not have the field
+            //                     (or is not a record at all) — immediate error.
             let field_state: Option<Option<VarId>> = match uf.content(root)? {
                 Content::Structure(FlatType::Record(fields, _ext)) => {
                     Some(fields.get(&fa.field).copied())
@@ -503,7 +545,7 @@ fn resolve_field_accesses(
             };
             match field_state {
                 None => {
-                    next_pending.push(fa);
+                    next_fa.push(fa);
                 }
                 Some(Some(v)) => {
                     made_progress = true;
@@ -516,57 +558,71 @@ fn resolve_field_accesses(
                 }
             }
         }
-        pending = next_pending;
+        pending_fa = next_fa;
+
+        // ── Record updates ────────────────────────────────────────────────────
+        for ru in &pending_ru {
+            let root = uf.find(ru.record)?;
+            // Clone the field map before any `unify` call (same borrow discipline
+            // as the field-access arm above).
+            match uf.content(root)? {
+                Content::Structure(FlatType::Record(fields, _ext)) => {
+                    made_progress = true;
+                    for (field, value_var) in &ru.fields {
+                        match fields.get(field).copied() {
+                            Some(field_var) => {
+                                unify(uf, budget, interner, ru.span, *value_var, field_var)?;
+                            }
+                            None => {
+                                return Err(no_such_field(
+                                    uf, budget, interner, ru.record, *field, ru.span,
+                                ));
+                            }
+                        }
+                    }
+                }
+                Content::Flex => {
+                    // Base not settled yet — defer, just as field accesses do.
+                    next_ru.push(ru);
+                }
+                _ => {
+                    // Not a record and not Flex — error on the first updated
+                    // field (mirrors the pre-fix behaviour of the single-pass
+                    // `resolve_record_updates`).
+                    if let Some((field, _)) = ru.fields.first() {
+                        return Err(no_such_field(
+                            uf, budget, interner, ru.record, *field, ru.span,
+                        ));
+                    }
+                    // Empty update on a non-record base: degenerate; treat as
+                    // discharged so we don't stall the loop on it.
+                    made_progress = true;
+                }
+            }
+        }
+        pending_ru = next_ru;
+
         if !made_progress {
-            // No access was dischargeable this pass — record vars that stayed
-            // `Flex` after the full solve cannot be pinned to a record type.
-            // `pending.first()` is `None` only when pending is empty; the loop
-            // body above would have returned `Ok(())` in that case, so if we
-            // reach here with `!made_progress` AND `pending` is non-empty,
-            // `first()` will succeed. An empty `pending` produces no error here
-            // and the next loop iteration exits via the top `is_empty()` check.
-            if let Some(fa) = pending.first() {
+            // Nothing was discharged this pass — the remaining items are stuck
+            // (their base vars are `Flex` and cannot be pinned to any record
+            // type).  Report the first stuck item as the error.
+            // `pending_fa.first()` / `pending_ru.first()` are `None` only when
+            // the respective list is empty; we are guaranteed at least one is
+            // non-empty because the outer `is_empty()` check did not return.
+            if let Some(fa) = pending_fa.first() {
                 return Err(no_such_field(
                     uf, budget, interner, fa.record, fa.field, fa.span,
                 ));
             }
-        }
-    }
-}
-
-/// Discharge every deferred record update (`{ base | field = value, ... }`).
-///
-/// By the time this runs the base record's type has settled. For each updated
-/// field, the field's type is read from the base record and unified with the new
-/// value's type — so changing a field to a value of the wrong type is a normal
-/// [`unify`] mismatch, blamed at the update span. A field absent from the base —
-/// or a base that is not a record at all — is a [`TypeError::NoSuchField`].
-fn resolve_record_updates(
-    uf: &mut UnionFind<Content>,
-    budget: &mut Budget,
-    interner: &Interner,
-    updates: &[RecordUpdate],
-) -> DResult<()> {
-    for ru in updates {
-        let root = uf.find(ru.record)?;
-        // Clone the field map so the base's descriptor is not borrowed across the
-        // `unify` calls below (which mutate the arena).
-        let base_fields = match uf.content(root)? {
-            Content::Structure(FlatType::Record(fields, _ext)) => fields,
-            _ => BTreeMap::new(),
-        };
-        for (field, value_var) in &ru.fields {
-            match base_fields.get(field).copied() {
-                Some(field_var) => unify(uf, budget, interner, ru.span, *value_var, field_var)?,
-                None => {
-                    return Err(no_such_field(
-                        uf, budget, interner, ru.record, *field, ru.span,
-                    ));
-                }
+            if let Some(ru) = pending_ru.first()
+                && let Some((field, _)) = ru.fields.first()
+            {
+                return Err(no_such_field(
+                    uf, budget, interner, ru.record, *field, ru.span,
+                ));
             }
         }
     }
-    Ok(())
 }
 
 /// Discharge every deferred per-route page witness (#108 round 4).
@@ -670,10 +726,9 @@ fn resolve_routed_live_checks(
 }
 
 /// Build the [`TypeError::NoSuchField`] (SKY-T0012) for a field that is absent
-/// from the (settled) record type, or whose base is not a record. Shared by the
-/// field-access ([`resolve_field_accesses`]) and record-update
-/// ([`resolve_record_updates`]) resolution passes; the record type is zonked +
-/// rendered here so the reporter needs no arena access.
+/// from the (settled) record type, or whose base is not a record.  Shared by
+/// all arms of the joint fixpoint in [`resolve_deferred`]; the record type is
+/// zonked + rendered here so the reporter needs no arena access.
 fn no_such_field(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
@@ -828,6 +883,47 @@ mod tests {
         assert!(
             solved.is_ok(),
             "record-type alias must expand + typecheck: {solved:?}"
+        );
+    }
+
+    #[test]
+    fn field_access_after_record_update_dep_chain_typechecks() {
+        // Regression for SKY-T0012 (example 18 `job-queue` shape).
+        //
+        // Pattern: a record `{{ items = [] }}` has a Flex list-element type.
+        // `setItems xs model = {{ model | items = xs }}` is a record update that
+        // pins the element type to `Item` when called with a `List Item` argument.
+        // `getSum` accesses `x.value` on each element via `List.foldl`.
+        // When `setItems` and `getSum` share the SAME model via `main`, the field
+        // access `x.value` must resolve after the record update in the joint
+        // fixpoint — NOT emit SKY-T0012.
+        //
+        // The old sequential approach ran `resolve_field_accesses` to completion
+        // before `resolve_record_updates`, so `x.value` saw a Flex element type
+        // and stalled with a false T0012.
+        let src = concat!(
+            "module Main exposing (main)\n",
+            "\n",
+            "import Sky.Core.List as List\n",
+            "\n",
+            "type alias Item = { value : Int }\n",
+            "\n",
+            "setItems xs model = { model | items = xs }\n",
+            "\n",
+            "getSum model =\n",
+            "    List.foldl (\\x acc -> x.value + acc) 0 model.items\n",
+            "\n",
+            "main =\n",
+            "    let\n",
+            "        item = { value = 5 }\n",
+            "        m = { items = [] }\n",
+            "    in\n",
+            "        getSum (setItems [item] m)\n",
+        );
+        let (solved, ..) = infer_src(src);
+        assert!(
+            solved.is_ok(),
+            "field access after record-update dep chain must typecheck: {solved:?}"
         );
     }
 
