@@ -916,6 +916,425 @@ fn rewrite_captured_clones(
     }
 }
 
+// ── Multi-use-clone rewrite, T5 (#104 / #112) ────────────────────────────────
+//
+// A `CloneOk` local used more than once in a BY-VALUE consuming position causes
+// the Rust backend to emit bare identifier moves for each occurrence.  In Rust,
+// only the FIRST move is valid; subsequent reads of a moved value are E0382.
+//
+// Fix: when a `let`-binding or function parameter of `CloneOk` type is used
+// N > 1 times in its scope, insert `.clone()` on all but the syntactically LAST
+// occurrence (DFS left-to-right order).  The last occurrence stays bare — it
+// is the "real" final consume.  Over-cloning is acceptable (conservatism);
+// a precision pass can follow once the correctness seal holds.
+//
+// Sub-class #112 — Lambda captures that are also used after the closure:
+// A `move` closure captures a `CloneOk` local by value (moving it) even when
+// the lambda body only ever reads a `.clone()` of it (T3).  If the same local
+// is referenced again AFTER the lambda creation, Rust sees E0382 because the
+// move already happened.
+//
+// Fix: when a Lambda expression that move-captures `sym` is NOT the last use,
+// pre-clone `sym` before it:
+//   `let sym = sym.clone() in Lambda { body still using CloneVar(sym) }`
+// The inner rebinding shadows the outer `sym`; the `move` closure captures the
+// CLONE (inner sym); the outer `sym` remains alive for subsequent uses.
+//
+// Three helpers implement this:
+//   `lambda_body_refs_sym` — does a Lambda body reference `sym` (directly or
+//       via nested lambdas, respecting inner-lambda-param shadowing)?
+//   `count_var_uses`       — count consuming occurrences of `sym` in expr,
+//       counting a Lambda whose body refs sym as one occurrence.
+//   `rewrite_multiuse_clones` — DFS rewrite; `remaining` starts at the count,
+//       decrements per occurrence; last occurrence (remaining==1) stays bare.
+
+/// Returns `true` when `expr` references `sym` as a live (non-shadowed) local
+/// at any depth, treating nested lambdas as transparent — descending into their
+/// bodies unless one of their parameters re-binds `sym`.
+///
+/// Used to decide whether a `move` closure whose body is `expr` will capture
+/// `sym` from the enclosing scope: if this returns `true`, the outer `move`
+/// closure moves `sym` in.
+fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) => *s == sym,
+        // Nested lambda: descend unless it shadows `sym` via a parameter.
+        // A nested `move` closure that captures `sym` causes the outer closure
+        // to capture `sym` too.
+        Expr::Lambda { params, body, .. } => {
+            if params.iter().any(|(s, _)| *s == sym) {
+                false // sym shadowed by inner lambda param
+            } else {
+                lambda_body_refs_sym(sym, body)
+            }
+        }
+        Expr::Let { name, value, body } => {
+            lambda_body_refs_sym(sym, value)
+                || if *name == sym { false } else { lambda_body_refs_sym(sym, body) }
+        }
+        Expr::Destructure { binder, value, body } => {
+            lambda_body_refs_sym(sym, value)
+                || if pat_binds_symbol(binder, sym) {
+                    false
+                } else {
+                    lambda_body_refs_sym(sym, body)
+                }
+        }
+        Expr::Match(m) => {
+            lambda_body_refs_sym(sym, m.scrutinee())
+                || m.arms().iter().any(|arm| {
+                    !pat_binds_symbol(&arm.pat, sym)
+                        && lambda_body_refs_sym(sym, &arm.body)
+                })
+        }
+        Expr::TailLoop { params, body } => {
+            if params.iter().any(|(s, _)| *s == sym) {
+                false
+            } else {
+                lambda_body_refs_sym(sym, body)
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            lambda_body_refs_sym(sym, lhs) || lambda_body_refs_sym(sym, rhs)
+        }
+        Expr::If { cond, then_, else_ } => {
+            lambda_body_refs_sym(sym, cond)
+                || lambda_body_refs_sym(sym, then_)
+                || lambda_body_refs_sym(sym, else_)
+        }
+        Expr::Call { args, .. } => args.iter().any(|a| lambda_body_refs_sym(sym, a)),
+        Expr::Apply { func, args } => {
+            lambda_body_refs_sym(sym, func)
+                || args.iter().any(|a| lambda_body_refs_sym(sym, a))
+        }
+        Expr::Tuple(items) => items.iter().any(|e| lambda_body_refs_sym(sym, e)),
+        Expr::List { items, .. } => items.iter().any(|e| lambda_body_refs_sym(sym, e)),
+        Expr::Cons { head, tail } => {
+            lambda_body_refs_sym(sym, head) || lambda_body_refs_sym(sym, tail)
+        }
+        Expr::Record(fields) => fields.iter().any(|(_, e)| lambda_body_refs_sym(sym, e)),
+        // Access.record is a borrow position (field access borrows or copies the
+        // parent record) — the parent is not captured by-value from outside.
+        Expr::Access { .. } => false,
+        // Update.record is wrapped in `.clone()` by emit_update (borrow, not move).
+        // Only the field value expressions are consuming captures.
+        Expr::Update { fields, .. } => {
+            fields.iter().any(|(_, e)| lambda_body_refs_sym(sym, e))
+        }
+        Expr::Ctor { args, .. } => args.iter().any(|a| lambda_body_refs_sym(sym, a)),
+        Expr::TaskSeq { effect, rest } => {
+            lambda_body_refs_sym(sym, effect) || lambda_body_refs_sym(sym, rest)
+        }
+        Expr::TailRecur { args } => args.iter().any(|a| lambda_body_refs_sym(sym, a)),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => false,
+    }
+}
+
+/// Count the number of times `sym` is consumed (moved in emitted Rust) by
+/// `expr`.  A `Lambda` whose body references `sym` (via `lambda_body_refs_sym`)
+/// counts as one consuming occurrence — the `move` closure captures `sym` by
+/// value at creation time regardless of how many times the body clones it
+/// internally.  Direct `Var(sym)` / `CloneVar(sym)` reads outside lambdas each
+/// count once.
+///
+/// Shadow discipline:
+/// * `Let { name == sym, value, body }` — recurse `value` (outer scope), skip
+///   `body` (shadowed).
+/// * `Destructure { binder binds sym, body }` — skip `body`.
+/// * `Match` arm whose pattern binds `sym` — skip that arm's body.
+/// * `TailLoop` whose params include `sym` — skip `body`.
+/// * `Lambda` — counted as 0 or 1 via `lambda_body_refs_sym`; do NOT recurse
+///   further (inner uses are the Lambda's own business).
+fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
+    match expr {
+        Expr::Var(s) => usize::from(*s == sym),
+        // Pre-pass `CloneVar` at the outer scope level — treat like `Var`.
+        Expr::CloneVar(s) => usize::from(*s == sym),
+        Expr::Lambda { body, .. } => usize::from(lambda_body_refs_sym(sym, body)),
+        Expr::Let { name, value, body } => {
+            let in_value = count_var_uses(sym, value);
+            let in_body =
+                if *name == sym { 0 } else { count_var_uses(sym, body) };
+            in_value + in_body
+        }
+        Expr::Destructure { binder, value, body } => {
+            let in_value = count_var_uses(sym, value);
+            let in_body =
+                if pat_binds_symbol(binder, sym) { 0 } else { count_var_uses(sym, body) };
+            in_value + in_body
+        }
+        Expr::If { cond, then_, else_ } => {
+            count_var_uses(sym, cond)
+                + count_var_uses(sym, then_)
+                + count_var_uses(sym, else_)
+        }
+        Expr::Match(m) => {
+            let in_scrut = count_var_uses(sym, m.scrutinee());
+            let in_arms: usize = m
+                .arms()
+                .iter()
+                .map(|arm| {
+                    if pat_binds_symbol(&arm.pat, sym) {
+                        0
+                    } else {
+                        count_var_uses(sym, &arm.body)
+                    }
+                })
+                .sum();
+            in_scrut + in_arms
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            count_var_uses(sym, lhs) + count_var_uses(sym, rhs)
+        }
+        Expr::Call { args, .. } => args.iter().map(|a| count_var_uses(sym, a)).sum(),
+        Expr::Apply { func, args } => {
+            count_var_uses(sym, func)
+                + args.iter().map(|a| count_var_uses(sym, a)).sum::<usize>()
+        }
+        Expr::Tuple(items) => items.iter().map(|e| count_var_uses(sym, e)).sum(),
+        Expr::List { items, .. } => items.iter().map(|e| count_var_uses(sym, e)).sum(),
+        Expr::Cons { head, tail } => {
+            count_var_uses(sym, head) + count_var_uses(sym, tail)
+        }
+        Expr::Record(fields) => {
+            fields.iter().map(|(_, e)| count_var_uses(sym, e)).sum()
+        }
+        // `Access.record` — field access borrows the parent record in emitted
+        // Rust (or copies a `Copy` field).  The parent is not consumed, so don't
+        // count occurrences of `sym` inside the record sub-expression.
+        Expr::Access { .. } => 0,
+        // `Update.record` — `emit_update` wraps it as `(record).clone()`, which
+        // BORROWS the record (`.clone()` takes `&self`).  `sym` is NOT moved here.
+        // Only the new FIELD VALUES (fields.values) are consuming positions.
+        Expr::Update { fields, .. } => {
+            fields.iter().map(|(_, e)| count_var_uses(sym, e)).sum::<usize>()
+        }
+        Expr::Ctor { args, .. } => args.iter().map(|a| count_var_uses(sym, a)).sum(),
+        Expr::TaskSeq { effect, rest } => {
+            count_var_uses(sym, effect) + count_var_uses(sym, rest)
+        }
+        Expr::TailLoop { params, body } => {
+            if params.iter().any(|(s, _)| *s == sym) {
+                0
+            } else {
+                count_var_uses(sym, body)
+            }
+        }
+        Expr::TailRecur { args } => args.iter().map(|a| count_var_uses(sym, a)).sum(),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => 0,
+    }
+}
+
+/// Rewrite `Var(sym)` / `Lambda`-captures of `sym` in DFS left-to-right order
+/// so that all but the syntactically last occurrence are `.clone()`d.
+///
+/// `remaining` starts at `count_var_uses(sym, expr)`.  Each consuming
+/// occurrence decrements it; when `remaining > 1` the occurrence is non-last
+/// and is rewritten:
+/// * bare `Var(sym)` → `CloneVar(sym)`;
+/// * Lambda whose body refs sym → `Let { name: sym, value: CloneVar(sym), body: Lambda }`.
+///   The pre-clone rebinding captures the CLONE into the closure while the
+///   OUTER `sym` remains alive for subsequent uses.
+///
+/// When `remaining == 1` (the last occurrence), the node is kept bare.
+///
+/// Shadow discipline and Lambda-body descent mirror `count_var_uses`.
+#[allow(clippy::too_many_lines)]
+fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Expr {
+    if *remaining == 0 {
+        return expr;
+    }
+    match expr {
+        Expr::Var(s) if s == sym => {
+            if *remaining > 1 {
+                *remaining -= 1;
+                Expr::CloneVar(s)
+            } else {
+                *remaining -= 1;
+                Expr::Var(s)
+            }
+        }
+        // Pre-existing CloneVar at the outer scope: treat like Var — always
+        // leave as CloneVar (it already borrows; no further action needed).
+        Expr::CloneVar(s) if s == sym => {
+            *remaining -= 1;
+            Expr::CloneVar(s)
+        }
+        // Lambda: if it move-captures `sym`, consume one `remaining` slot.
+        // When NOT the last use, wrap in a pre-clone Let so the closure
+        // captures the clone and the outer `sym` stays alive.
+        Expr::Lambda { params, ret, body } => {
+            if lambda_body_refs_sym(sym, &body) {
+                if *remaining > 1 {
+                    *remaining -= 1;
+                    // Pre-clone: `let sym = sym.clone() in Lambda { … }`.
+                    // The inner rebinding `sym` shadows the outer; the `move`
+                    // closure inside captures the inner sym (the clone).
+                    Expr::Let {
+                        name: sym,
+                        value: Box::new(Expr::CloneVar(sym)),
+                        body: Box::new(Expr::Lambda { params, ret, body }),
+                    }
+                } else {
+                    *remaining -= 1;
+                    Expr::Lambda { params, ret, body }
+                }
+            } else {
+                Expr::Lambda { params, ret, body }
+            }
+        }
+        // Non-`sym` Var / CloneVar and all atomic leaves — pass through.
+        Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => expr,
+        Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
+            op,
+            lhs: Box::new(rewrite_multiuse_clones(sym, remaining, *lhs)),
+            rhs: Box::new(rewrite_multiuse_clones(sym, remaining, *rhs)),
+        },
+        Expr::If { cond, then_, else_ } => Expr::If {
+            cond: Box::new(rewrite_multiuse_clones(sym, remaining, *cond)),
+            then_: Box::new(rewrite_multiuse_clones(sym, remaining, *then_)),
+            else_: Box::new(rewrite_multiuse_clones(sym, remaining, *else_)),
+        },
+        // `value` is in the outer scope; `body` is shadowed if `name == sym`.
+        Expr::Let { name, value, body } => {
+            let new_value = Box::new(rewrite_multiuse_clones(sym, remaining, *value));
+            let new_body = if name == sym {
+                body
+            } else {
+                Box::new(rewrite_multiuse_clones(sym, remaining, *body))
+            };
+            Expr::Let { name, value: new_value, body: new_body }
+        }
+        Expr::Destructure { binder, value, body } => {
+            let new_value = Box::new(rewrite_multiuse_clones(sym, remaining, *value));
+            let new_body = if pat_binds_symbol(&binder, sym) {
+                body
+            } else {
+                Box::new(rewrite_multiuse_clones(sym, remaining, *body))
+            };
+            Expr::Destructure { binder, value: new_value, body: new_body }
+        }
+        Expr::Match(m) => {
+            let (scrutinee, arms) = m.into_parts();
+            let new_scrutinee =
+                Box::new(rewrite_multiuse_clones(sym, remaining, *scrutinee));
+            let new_arms = arms
+                .into_iter()
+                .map(|arm| {
+                    let new_body = if pat_binds_symbol(&arm.pat, sym) {
+                        arm.body
+                    } else {
+                        rewrite_multiuse_clones(sym, remaining, arm.body)
+                    };
+                    Arm { pat: arm.pat, body: new_body }
+                })
+                .collect();
+            Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms))
+        }
+        Expr::Call { callee, args } => Expr::Call {
+            callee,
+            args: args
+                .into_iter()
+                .map(|a| rewrite_multiuse_clones(sym, remaining, a))
+                .collect(),
+        },
+        Expr::Apply { func, args } => {
+            let new_func = Box::new(rewrite_multiuse_clones(sym, remaining, *func));
+            let new_args = args
+                .into_iter()
+                .map(|a| rewrite_multiuse_clones(sym, remaining, a))
+                .collect();
+            Expr::Apply { func: new_func, args: new_args }
+        }
+        Expr::Tuple(items) => Expr::Tuple(
+            items
+                .into_iter()
+                .map(|e| rewrite_multiuse_clones(sym, remaining, e))
+                .collect(),
+        ),
+        Expr::List { elem, items } => Expr::List {
+            elem,
+            items: items
+                .into_iter()
+                .map(|e| rewrite_multiuse_clones(sym, remaining, e))
+                .collect(),
+        },
+        Expr::Cons { head, tail } => Expr::Cons {
+            head: Box::new(rewrite_multiuse_clones(sym, remaining, *head)),
+            tail: Box::new(rewrite_multiuse_clones(sym, remaining, *tail)),
+        },
+        Expr::Record(fields) => Expr::Record(
+            fields
+                .into_iter()
+                .map(|(k, v)| (k, rewrite_multiuse_clones(sym, remaining, v)))
+                .collect(),
+        ),
+        // `Access.record` is a borrow position in emitted Rust (field access
+        // does not move the parent record for Copy fields; non-Copy fields use
+        // `.clone()` upstream).  Leave it bare — do NOT rewrite.
+        Expr::Access { record, field } => Expr::Access { record, field },
+        // `Update.record` is always wrapped in `(record).clone()` by `emit_update`
+        // (a borrow via `Clone::clone(&self)`).  Only the field VALUES are consuming
+        // positions; leave `record` bare.
+        Expr::Update { record, fields } => Expr::Update {
+            record,
+            fields: fields
+                .into_iter()
+                .map(|(k, v)| (k, rewrite_multiuse_clones(sym, remaining, v)))
+                .collect(),
+        },
+        Expr::Ctor { home, ty, variant, args } => Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args: args
+                .into_iter()
+                .map(|a| rewrite_multiuse_clones(sym, remaining, a))
+                .collect(),
+        },
+        Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
+            effect: Box::new(rewrite_multiuse_clones(sym, remaining, *effect)),
+            rest: Box::new(rewrite_multiuse_clones(sym, remaining, *rest)),
+        },
+        Expr::TailLoop { params, body } => {
+            if params.iter().any(|(s, _)| *s == sym) {
+                Expr::TailLoop { params, body } // sym shadowed by loop var
+            } else {
+                Expr::TailLoop {
+                    params,
+                    body: Box::new(rewrite_multiuse_clones(sym, remaining, *body)),
+                }
+            }
+        }
+        Expr::TailRecur { args } => Expr::TailRecur {
+            args: args
+                .into_iter()
+                .map(|a| rewrite_multiuse_clones(sym, remaining, a))
+                .collect(),
+        },
+    }
+}
+
 // ── TCO (#49): tail-recursion detection + rewrite ────────────────────────────
 //
 // Mirrors the reference implementation (`Sky.Build.TailCallOpt`:
@@ -2291,12 +2710,16 @@ impl<'a> Lowerer<'a> {
         let uses_server = funcs.iter().any(|f| expr_uses_server_kernel(&f.body));
 
         // M7: detect Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview usage.
-        let (uses_ui, uses_live, uses_tui, uses_webview) = (
-            funcs.iter().any(|f| expr_uses_ui_kernel(&f.body)),
-            funcs.iter().any(|f| expr_uses_live_kernel(&f.body)),
-            funcs.iter().any(|f| expr_uses_tui_kernel(&f.body)),
-            funcs.iter().any(|f| expr_uses_webview_kernel(&f.body)),
-        );
+        // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import
+        // `super::super::ui` and `super::super::html` unconditionally, so
+        // `uses_ui` must be true whenever `uses_tui` is true — even when the
+        // Sky source only calls `Ui.column`/`Ui.el`/`Ui.text` (kernels that
+        // trigger `uses_tui`) and never calls `Ui.layout`/`Ui.layoutWith`
+        // (kernels that trigger `uses_ui`).
+        let uses_tui = funcs.iter().any(|f| expr_uses_tui_kernel(&f.body));
+        let uses_ui = funcs.iter().any(|f| expr_uses_ui_kernel(&f.body)) || uses_tui;
+        let uses_live = funcs.iter().any(|f| expr_uses_live_kernel(&f.body));
+        let uses_webview = funcs.iter().any(|f| expr_uses_webview_kernel(&f.body));
 
         // #47: detect Std.Css (Sky.Core.CssSafety) leaf-kernel usage. Independent
         // of `uses_ui` — a pure-Std.Css program uses no render kernel.
@@ -2636,6 +3059,21 @@ impl<'a> Lowerer<'a> {
                     .iter()
                     .map(|v| (*v, Self::bounds_for(var_bounds, *v)))
                     .collect();
+                // T5 (#104 / #112): multi-use-clone rewrite for CloneOk params.
+                // When a function parameter of `CloneOk` type (e.g. String) is used
+                // N > 1 times in the body, all but the syntactically last occurrence
+                // must clone — otherwise Rust emits E0382 (use of moved value).
+                // Run BEFORE TCO so the loop-rewrite sees already-correct clone nodes.
+                for (sym, ir_ty) in &params {
+                    if matches!(clone_class(ir_ty), CloneClass::CloneOk) {
+                        let n = count_var_uses(*sym, &lowered_body);
+                        if n > 1 {
+                            let mut remaining = n;
+                            lowered_body =
+                                rewrite_multiuse_clones(*sym, &mut remaining, lowered_body);
+                        }
+                    }
+                }
                 // TCO: if every self-call is a tail call, rewrite the body to a
                 // loop so the Rust stack stays flat (mirrors Sky's TailCallOpt).
                 // Self-recursion only, keyed on `FuncId`; Task-recursion excluded
@@ -2685,6 +3123,18 @@ impl<'a> Lowerer<'a> {
                             value: Box::new(Expr::Var(binder_sym)),
                             body: Box::new(lowered_body),
                         };
+                    }
+                    // T5 (#104 / #112): same param multi-use-clone pass as the
+                    // Typed path above (see comment there for rationale).
+                    for (sym, ir_ty) in &params {
+                        if matches!(clone_class(ir_ty), CloneClass::CloneOk) {
+                            let n = count_var_uses(*sym, &lowered_body);
+                            if n > 1 {
+                                let mut remaining = n;
+                                lowered_body =
+                                    rewrite_multiuse_clones(*sym, &mut remaining, lowered_body);
+                            }
+                        }
                     }
                     // No source-level type variables → no type_params (the
                     // function is monomorphic).  TCO still applies.
@@ -7559,6 +8009,35 @@ impl<'a> Lowerer<'a> {
                             body: Box::new(thunked_body),
                         }
                     } else {
+                        // T5 (#104 / #112): multi-use-clone rewrite for CloneOk
+                        // let-bindings.  When the bound value is of `CloneOk` type
+                        // (e.g. String) and the body references it more than once,
+                        // rewrite all but the last occurrence to `CloneVar(name)`.
+                        // This prevents E0382 (use of moved value) in emitted Rust
+                        // where each `Var(name)` lowers to a bare identifier that
+                        // moves the value.
+                        let acc = {
+                            let ty_opt = self
+                                .types
+                                .regions
+                                .get(&b.body.span)
+                                .and_then(|ty| self.ir_type_from_ty(ty, b.body.span).ok());
+                            if let Some(ref ir_ty) = ty_opt {
+                                if matches!(clone_class(ir_ty), CloneClass::CloneOk) {
+                                    let n = count_var_uses(*name, &acc);
+                                    if n > 1 {
+                                        let mut remaining = n;
+                                        rewrite_multiuse_clones(*name, &mut remaining, acc)
+                                    } else {
+                                        acc
+                                    }
+                                } else {
+                                    acc
+                                }
+                            } else {
+                                acc
+                            }
+                        };
                         Expr::Let {
                             name: *name,
                             value: Box::new(value),
