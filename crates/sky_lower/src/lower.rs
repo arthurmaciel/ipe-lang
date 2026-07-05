@@ -347,19 +347,25 @@ fn clone_class(t: &IrType) -> CloneClass {
         IrType::Str | IrType::Bytes | IrType::Json | IrType::Db | IrType::UiPlain(_) | IrType::LiveReq => {
             CloneClass::CloneOk
         }
-        // Non-Clone: function-typed, task, decoder, Cmd, Sub, server opaques.
+        // Runtime-verified Clone server/http opaques (audited 2026-07-05):
+        // ServerRequest/ServerResponse/ServerCookie (server.rs:33/50/59),
+        // ServerRoute (server.rs:136), HttpRequest (http_client.rs:64) all
+        // `#[derive(Clone, …)]`.
+        IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::HttpRequest => CloneClass::CloneOk,
+        // StreamWriter is `#[derive(Clone, Copy)]` — an i64 id wrapper
+        // (server_stream.rs:38). Bare capture is sound.
+        IrType::StreamWriter => CloneClass::CopyLeaf,
+        // Non-Clone: function-typed, task, decoder, Cmd, Sub.
         // Also Generic(_) until T5 (which injects `T: Clone`).
         IrType::Fun(_, _)
         | IrType::Task(_)
         | IrType::Decoder(_)
         | IrType::Cmd(_)
         | IrType::Sub(_)
-        | IrType::ServerRequest
-        | IrType::ServerResponse
-        | IrType::ServerRoute
-        | IrType::ServerCookie
-        | IrType::StreamWriter
-        | IrType::HttpRequest
         | IrType::Generic(_) => CloneClass::NonClone,
         // Composite: CloneOk iff all components are CloneOk (no NonClone part).
         IrType::Maybe(elem) | IrType::List(elem) | IrType::Set(elem) => {
@@ -4848,22 +4854,30 @@ impl<'a> Lowerer<'a> {
         // as NonClone — conservative fail-close rather than silent bare capture.
         let mut hoisted: Vec<(Symbol, Expr)> = Vec::new();
         let mut cap_cursor = 0usize;
-        for i in 0..supplied {
-            let slot_ty = arg_tys[i];
-            let ir = self.ir_type_from_ty(slot_ty, call_span).ok();
-            if let Expr::Var(sym) = call_args[i] {
-                match ir.as_ref().map(clone_class) {
-                    Some(CloneClass::CloneOk) => call_args[i] = Expr::CloneVar(sym),
-                    Some(CloneClass::NonClone) => {
-                        return Err(unsupported(call_span, Feature::NonCloneCapture));
-                    }
+        // ir_type_from_ty needs `&mut self`, so classify every supplied slot
+        // BEFORE the iter_mut borrow of call_args.
+        let slot_classes: Vec<Option<CloneClass>> = arg_tys
+            .iter()
+            .take(supplied)
+            .map(|slot_ty| {
+                self.ir_type_from_ty(slot_ty, call_span)
+                    .ok()
+                    .as_ref()
+                    .map(clone_class)
+            })
+            .collect();
+        for (arg, cls) in call_args.iter_mut().zip(slot_classes) {
+            if let Expr::Var(sym) = *arg {
+                match cls {
+                    Some(CloneClass::CloneOk) => *arg = Expr::CloneVar(sym),
                     Some(CloneClass::CopyLeaf) => {} // bare Var unchanged — Copy
-                    None => {
-                        // T7 (#130): unknown type on a bare Var — conservatively
-                        // fail-close (SKY-L0126) instead of silently leaving the Var
-                        // bare.  The slot type is genuinely indeterminate (polymorphic
-                        // or a failed `ir_type_from_ty`), so we cannot prove the Var is
-                        // Copy-safe; a NonClone value would produce E0525 at cargo.
+                    // NonClone: a captured non-Clone value can't be re-forwarded.
+                    // None — T7 (#130): unknown type on a bare Var — conservatively
+                    // fail-close (SKY-L0126) instead of silently leaving the Var
+                    // bare.  The slot type is genuinely indeterminate (polymorphic
+                    // or a failed `ir_type_from_ty`), so we cannot prove the Var is
+                    // Copy-safe; a NonClone value would produce E0525 at cargo.
+                    Some(CloneClass::NonClone) | None => {
                         return Err(unsupported(call_span, Feature::NonCloneCapture));
                     }
                 }
@@ -4888,7 +4902,7 @@ impl<'a> Lowerer<'a> {
                 //
                 // None (unknown / polymorphic slot): inline as-is for the same
                 // reason as NonClone above.
-                match ir.as_ref().map(clone_class) {
+                match cls {
                     Some(CloneClass::CloneOk) => {
                         let cap_sym = *self.cap_params.get(cap_cursor).ok_or_else(|| {
                             bug(
@@ -4897,12 +4911,11 @@ impl<'a> Lowerer<'a> {
                             )
                         })?;
                         cap_cursor += 1;
-                        let original =
-                            std::mem::replace(&mut call_args[i], Expr::CloneVar(cap_sym));
+                        let original = std::mem::replace(arg, Expr::CloneVar(cap_sym));
                         hoisted.push((cap_sym, original));
                     }
                     // CopyLeaf, NonClone, or unknown: inline as-is.
-                    Some(CloneClass::CopyLeaf) | Some(CloneClass::NonClone) | None => {}
+                    Some(CloneClass::CopyLeaf | CloneClass::NonClone) | None => {}
                 }
             }
         }
