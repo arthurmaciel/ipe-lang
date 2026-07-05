@@ -56,6 +56,29 @@ special case.)
 | a list of same-typed tasks, ordered effects | `sequence` |
 | a list of same-typed tasks, concurrent | `parallel` |
 
+## Considered and rejected: a "parallel do"
+
+A `do`-like block with concurrent semantics was considered (2026-07-05) in
+two forms, both rejected:
+
+- **Implicit** (Haskell `ApplicativeDo` / Haxl style — the compiler
+  analyses binds and runs data-independent ones concurrently). Rejected as
+  UNSOUND under this table's own contract: *data independence ≠ effect
+  independence*, and the compiler cannot see effects that interact through
+  the outside world. Implicit parallelisation would silently race
+  log-before-charge-shaped code that reads as sequential. Effect order in a
+  `do` block must be exactly reading order, always.
+- **Explicit** (`parallel do` where binds may NOT reference earlier binds,
+  all run concurrently). Sound but redundant: it is `parallel2..N` with
+  named binds instead of positional arguments — new syntax + a strange
+  "`do` where `<-` can't be used like `do`" teaching burden, for a shape
+  (heterogeneous concurrent arity > 5) the corpus doesn't exhibit. Revisit
+  only if real programs outgrow `parallel5`.
+
+The rule that survives: **`do` is the sequential column, spelled top-to-
+bottom; concurrency is always an explicit combinator (`parallel`,
+`parallel2..5`).** One glance tells you the execution model.
+
 ## Contract notes
 
 - **Data independence ≠ effect independence.** The compiler cannot verify
@@ -185,6 +208,20 @@ Task.sequence (List.map runMigration pendingMigrations)
 --    stored (server-side cursor advances on read).
 Task.sequence (List.map importPage pageNumbers)
 ```
+
+`do` expresses the FIXED-length case directly:
+
+```elm
+do
+    a <- migrationA
+    b <- migrationB
+    c <- migrationC
+    [ a, b, c ]
+```
+
+What `do` cannot do is a **runtime-built** list — `pendingMigrations` has a
+length no `do` block can spell. Dynamic length is `sequence`'s unique
+capability; for a known handful of tasks, `do` and `sequence` are taste.
 
 *Why not `parallel`:* order is the whole point (migration 3 assumes 2 ran;
 the cursor moves). *Why not `map2..5`:* the batch is list-shaped and
