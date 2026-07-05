@@ -391,6 +391,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::BasicsSqrt | KernelFn::MathSqrt => "math_sqrt",
         KernelFn::BasicsMin  | KernelFn::MathMin  => "math_min",
         KernelFn::BasicsMax  | KernelFn::MathMax  => "math_max",
+        KernelFn::BasicsCompare => "basics_compare",
         // ── Math constants ───────────────────────────────────────────────────
         KernelFn::MathPi => "math_pi",
         KernelFn::MathE => "math_e",
@@ -987,6 +988,21 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HttpStreamOpen => "http_stream_open",
         KernelFn::HttpStreamForEachChunk => "http_stream_for_each_chunk",
         KernelFn::HttpStreamClose => "http_stream_close",
+        // ── #124: Std.Ui.Input label + placeholder + field kernels ───────────
+        KernelFn::InputLabelAbove => "input_label_above_",
+        KernelFn::InputLabelBelow => "input_label_below_",
+        KernelFn::InputLabelLeft => "input_label_left_",
+        KernelFn::InputLabelRight => "input_label_right_",
+        KernelFn::InputLabelHidden => "input_label_hidden_",
+        KernelFn::InputPlaceholder => "input_placeholder_",
+        KernelFn::InputText => "input_text_",
+        KernelFn::InputMultiline => "input_multiline_",
+        KernelFn::InputEmail => "input_email_",
+        KernelFn::InputUsername => "input_username_",
+        KernelFn::InputSearch => "input_search_",
+        KernelFn::InputCurrentPassword => "input_current_password_",
+        KernelFn::InputNewPassword => "input_new_password_",
+        KernelFn::InputCheckbox => "input_checkbox_",
     }
 }
 

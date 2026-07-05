@@ -239,6 +239,9 @@ struct Builtins {
     /// `"label"` — the label field of the `Ui.button` config record.
     /// Typed as `Element msg`.
     btn_f_label: Symbol,
+    // ── Order ADT (#123) ─────────────────────────────────────────────────────
+    /// `"Order"` — the type constructor for three-way comparison results.
+    order: Symbol,
 }
 
 impl Builtins {
@@ -330,6 +333,8 @@ impl Builtins {
             // Ui.button cfg field names.
             btn_f_on_press: interner.intern("onPress")?,
             btn_f_label: interner.intern("label")?,
+            // ── Order ADT (#123) ─────────────────────────────────────────────
+            order: interner.intern("Order")?,
         })
     }
 
@@ -1648,6 +1653,7 @@ impl<'a> Builder<'a> {
     ///   `Hash + Eq + Ord` (Dict) onto its annotation skolem (see `bounds_for`).
     ///   This is also more conservative than Sky's runtime, which keys a Set /
     ///   Dict on a stringified value.
+    #[allow(clippy::too_many_lines)]
     fn constrain_var_kernel(
         &mut self,
         id: Option<StdlibKernel>,
@@ -1703,6 +1709,19 @@ impl<'a> Builder<'a> {
             if matches!(k, StdlibKernel::BasicsMin | StdlibKernel::BasicsMax) {
                 let s = self.super_var(TyBounds::ord(), span)?;
                 let inner = self.structure(FlatType::Fun(s, s))?;
+                return self.structure(FlatType::Fun(s, inner));
+            }
+            // `compare : comparable a => a -> a -> Order` (#123). Direct-build
+            // (not stdlib_scheme + tie): both argument positions share one
+            // Ord-bounded super-var; the return is the monomorphic Order type.
+            if matches!(k, StdlibKernel::BasicsCompare) {
+                let s = self.super_var(TyBounds::ord(), span)?;
+                let order_var = self.structure(FlatType::Con {
+                    module: Vec::new(),
+                    name: self.builtins.order,
+                    args: Vec::new(),
+                })?;
+                let inner = self.structure(FlatType::Fun(s, order_var))?;
                 return self.structure(FlatType::Fun(s, inner));
             }
             // ── end Basics numerics (#115) ────────────────────────────────────
@@ -2441,6 +2460,12 @@ impl<'a> Builder<'a> {
             name: self.builtins.stream_writer,
             args: Vec::new(),
         };
+        // `Order` is a zero-argument constructor (#123).
+        let order = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.order,
+            args: Vec::new(),
+        };
         let attr = |m: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.attribute,
@@ -2634,6 +2659,9 @@ impl<'a> Builder<'a> {
             // min / max: `comparable a => a -> a -> a`. BASE scheme only (bounded
             // scheme is direct-built in constrain_var_kernel, same as MathMin/MathMax).
             K::BasicsMin | K::BasicsMax => fun(var(0), fun(var(0), var(0))),
+            // `compare`: base scheme (production hits the direct-build in
+            // constrain_var_kernel; this arm exists for the totality gate).
+            K::BasicsCompare => fun(var(0), fun(var(0), order())),
             // ── end Basics numerics (#115) ────────────────────────────────────
 
             // ── Math (min / max stay on the obligation path — NOT migrated) ──
@@ -3911,6 +3939,23 @@ impl<'a> Builder<'a> {
             K::HttpStreamForEachChunk => fun(int(), fun(fun(string(), task_unit()), task_unit())),
             // closeRaw : Int -> Task Error ()
             K::HttpStreamClose => fun(int(), task_unit()),
+
+            // ── Std.Ui.Input (#124) — not yet migrated to the parse-once
+            // registry; fall back to the legacy symbol-keyed kernel_ty table.
+            K::InputLabelAbove
+            | K::InputLabelBelow
+            | K::InputLabelLeft
+            | K::InputLabelRight
+            | K::InputLabelHidden
+            | K::InputPlaceholder
+            | K::InputText
+            | K::InputMultiline
+            | K::InputEmail
+            | K::InputUsername
+            | K::InputSearch
+            | K::InputCurrentPassword
+            | K::InputNewPassword
+            | K::InputCheckbox => return None,
         })
     }
 }
@@ -4660,6 +4705,7 @@ mod registry_phase_c_tests {
             K::BasicsSqrt,
             K::BasicsMin,
             K::BasicsMax,
+            K::BasicsCompare,
             // ── end Basics numerics (#115) ──────────────────────────────────
             // Result combinators newly wired (holes post-seal; `withDefault` /
             // `map` are the RELOCATED pair, these two are first-schemed).

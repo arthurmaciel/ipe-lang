@@ -4424,6 +4424,8 @@ impl<'a> Lowerer<'a> {
                 // ── Basics numerics (#115) — arity 2 ────────────────────────
                 | KernelFn::BasicsMin
                 | KernelFn::BasicsMax
+                // `compare : comparable -> comparable -> Order` — arity 2 (#123)
+                | KernelFn::BasicsCompare
                 // ── end Basics numerics (#115) ──────────────────────────────
                 // ── Dict arity-2 ─────────────────────────────────────────────
                 | KernelFn::DictGet
@@ -5109,6 +5111,31 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::AuthLogin
                 | KernelFn::AuthSetRole,
             ) => Ok(3),
+            // ── Std.Ui.Input (#124) — not yet wired with lower arms; arity
+            // still required so callee_arity doesn't panic on a call that
+            // reaches this path before hitting SKY-L0108 in the qualifier.
+            Callee::Kernel(
+                // `Input.labelHidden : String -> Label msg`
+                KernelFn::InputLabelHidden,
+            ) => Ok(1),
+            Callee::Kernel(
+                // `Input.labelAbove/Below/Left/Right : List Attr -> Element -> Label`
+                KernelFn::InputLabelAbove
+                | KernelFn::InputLabelBelow
+                | KernelFn::InputLabelLeft
+                | KernelFn::InputLabelRight
+                // `Input.placeholder : List Attr -> String -> Placeholder msg`
+                | KernelFn::InputPlaceholder
+                // `Input.{text,multiline,...} : List Attr -> Cfg -> Element msg`
+                | KernelFn::InputText
+                | KernelFn::InputMultiline
+                | KernelFn::InputEmail
+                | KernelFn::InputUsername
+                | KernelFn::InputSearch
+                | KernelFn::InputCurrentPassword
+                | KernelFn::InputNewPassword
+                | KernelFn::InputCheckbox,
+            ) => Ok(2),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -5261,6 +5288,8 @@ impl<'a> Lowerer<'a> {
                     ("Basics", "sqrt")   => Ok(Callee::Kernel(KernelFn::BasicsSqrt)),
                     ("Basics", "min")    => Ok(Callee::Kernel(KernelFn::BasicsMin)),
                     ("Basics", "max")    => Ok(Callee::Kernel(KernelFn::BasicsMax)),
+                    // `compare : comparable -> comparable -> Order` (#123)
+                    ("Basics", "compare") => Ok(Callee::Kernel(KernelFn::BasicsCompare)),
                     // ── end Basics numerics (#115) ────────────────────────────
                     // ── Error kernels (Sky.Core.Error — minimal `Error = String`
                     //    slice, #86) ─────────────────────────────────────────
@@ -5973,6 +6002,23 @@ impl<'a> Lowerer<'a> {
                         Ok(Callee::Kernel(KernelFn::HttpStreamForEachChunk))
                     }
                     ("HttpStream", "close") => Ok(Callee::Kernel(KernelFn::HttpStreamClose)),
+                    // ── #124: Std.Ui.Input — label + placeholder + field kernels ──
+                    ("Input", "labelAbove") => Ok(Callee::Kernel(KernelFn::InputLabelAbove)),
+                    ("Input", "labelBelow") => Ok(Callee::Kernel(KernelFn::InputLabelBelow)),
+                    ("Input", "labelLeft") => Ok(Callee::Kernel(KernelFn::InputLabelLeft)),
+                    ("Input", "labelRight") => Ok(Callee::Kernel(KernelFn::InputLabelRight)),
+                    ("Input", "labelHidden") => Ok(Callee::Kernel(KernelFn::InputLabelHidden)),
+                    ("Input", "placeholder") => Ok(Callee::Kernel(KernelFn::InputPlaceholder)),
+                    ("Input", "text") => Ok(Callee::Kernel(KernelFn::InputText)),
+                    ("Input", "multiline") => Ok(Callee::Kernel(KernelFn::InputMultiline)),
+                    ("Input", "email") => Ok(Callee::Kernel(KernelFn::InputEmail)),
+                    ("Input", "username") => Ok(Callee::Kernel(KernelFn::InputUsername)),
+                    ("Input", "search") => Ok(Callee::Kernel(KernelFn::InputSearch)),
+                    ("Input", "currentPassword") => {
+                        Ok(Callee::Kernel(KernelFn::InputCurrentPassword))
+                    }
+                    ("Input", "newPassword") => Ok(Callee::Kernel(KernelFn::InputNewPassword)),
+                    ("Input", "checkbox") => Ok(Callee::Kernel(KernelFn::InputCheckbox)),
                     // A kernel beyond the wired set.
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),
