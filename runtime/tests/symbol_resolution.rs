@@ -25,6 +25,18 @@ use std::path::PathBuf;
 /// `callee_name()` path, OR defined in the generated-code epilogue rather
 /// than the runtime.  See module-level docs for per-entry rationale.
 const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
+    // ── Dead: emit_task_retry_call (#134) constructs RetryPolicy / ShouldRetry
+    //         values inline for the builder variants; only task_retry_with has
+    //         a real runtime fn. These name strings are never emitted. ────────
+    "task_default_retry_policy",
+    "task_exponential_backoff",
+    "task_linear_backoff",
+    "task_retry_on",
+    "task_with_base_ms",
+    "task_with_jitter",
+    "task_with_kind",
+    "task_with_max_attempts",
+    "task_with_retry_on",
     // ── Dead: emit_ui_call intercepts HtmlAttrTabindex and emits
     //         html_named_attr_("tabindex", …) instead of this name. ──────────
     "html_attr_tabindex_",
