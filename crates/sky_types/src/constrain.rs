@@ -3436,7 +3436,37 @@ impl<'a> Builder<'a> {
             K::LiveRoute => fun(string(), fun(var(1), live_route(var(0)))),
             K::LiveRenderStatic => fun(fun(var(0), html_t(var(1))), fun(var(0), task_unit())),
 
-            // ── Std.Tui app-entry (already schemed in kernel_ty) ──
+            // ── Std.Tui app-entry ──────────────────────────────────────────────
+            //
+            // Haskell reference (`Sky/Type/Constrain/Expression.hs`):
+            //
+            //   Tui.app   – 4 required fields; `onKey` optional via open row.
+            //               view : model -> any  (Element for Std.Ui, String for
+            //               raw ANSI; Haskell uses `any` wildcard).
+            //   Tui.program – 5 required fields including `onKey : any -> msg`.
+            //               `any` means the key-event type is UNCONSTRAINED —
+            //               the user's `KeyEvent = { kind, value }` record alias
+            //               unifies freely.  view : model -> String.
+            //
+            // Rust-port divergence (see docs/divergences-from-sky.md):
+            //
+            //   `onKey` is REQUIRED in both `TuiApp` and `TuiProgram` because the
+            //   Rust runtime's `tui_app_ui` / `tui_app` entry takes a concrete
+            //   `FOnKey: Fn(String, String) -> Msg` bound (no `Option` form), so
+            //   we cannot fabricate a `Msg` when the handler is absent.  When the
+            //   Rust runtime gains an `Option<FOnKey>` overload, `TuiApp` can be
+            //   relaxed to match the Haskell open-row (optional) spec.
+            //
+            //   `view` for `TuiApp` is typed `model -> Element msg` (not the
+            //   Haskell `model -> any`) because `tui_app_ui` takes
+            //   `FView: Fn(Model) -> Element<Msg>`.  A `TuiApp` with a String view
+            //   should use `TuiProgram` instead.
+            //
+            // Variable assignment:
+            //   var(0) = model
+            //   var(1) = msg
+            //   var(2) = key_event  (unconstrained — user chooses the record shape)
+            //   var(3) = appExt     (open-row tail, absorbs guard/canvasWidth/…)
             K::TuiApp => {
                 let tup = tuple2(var(0), cmd(var(1)));
                 let cfg_rec = Ty::Record(
@@ -3446,13 +3476,14 @@ impl<'a> Builder<'a> {
                         m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
                         m.insert(self.builtins.live_f_view, fun(var(0), elem_t(var(1))));
                         m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
-                        m.insert(
-                            self.builtins.tui_f_on_key,
-                            fun(string(), fun(string(), var(1))),
-                        );
+                        // onKey : key_event -> msg
+                        // var(2) is unconstrained so that `onKey : { kind, value } -> Msg`
+                        // (or any other key-record alias) unifies without forcing String.
+                        m.insert(self.builtins.tui_f_on_key, fun(var(2), var(1)));
                         m
                     },
-                    RowTail::Closed,
+                    // Open row: absorbs optional fields (guard, canvasWidth, canvasHeight, …).
+                    RowTail::Open(3),
                 );
                 fun(cfg_rec, task_unit())
             }
@@ -3465,13 +3496,12 @@ impl<'a> Builder<'a> {
                         m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
                         m.insert(self.builtins.live_f_view, fun(var(0), string()));
                         m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
-                        m.insert(
-                            self.builtins.tui_f_on_key,
-                            fun(string(), fun(string(), var(1))),
-                        );
+                        // onKey : key_event -> msg  (matches Haskell `any -> msg`)
+                        m.insert(self.builtins.tui_f_on_key, fun(var(2), var(1)));
                         m
                     },
-                    RowTail::Closed,
+                    // Open row: absorbs optional fields (guard, canvasWidth, canvasHeight, …).
+                    RowTail::Open(3),
                 );
                 fun(cfg_rec, task_unit())
             }
