@@ -71,6 +71,22 @@ impl Config {
     }
 }
 
+/// Mirror of `runtime/tests/symbol_resolution.rs::KNOWN_DEAD_OR_EPILOGUE` —
+/// naming strings that never reach `callee_name()` (emit intercepts inline)
+/// or live in the generated-code preamble, not the runtime library.
+const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
+    "html_attr_tabindex_",
+    "http_default_request",
+    "http_with_method",
+    "http_with_body",
+    "http_with_header",
+    "http_with_timeout",
+    "live_route",
+    "sky_cli_program_",
+    "ui_layout_with",
+    "list_map_consume",
+];
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut our_dir: Option<PathBuf> = None;
@@ -177,7 +193,10 @@ impl Row {
 
         // Only flag MISMATCH (bugs) for wired variants.
         if self.in_all {
-            if !self.runtime_sym.is_empty() && !self.runtime_sym_exists {
+            if !self.runtime_sym.is_empty()
+                && !self.runtime_sym_exists
+                && !KNOWN_DEAD_OR_EPILOGUE.contains(&self.runtime_sym.as_str())
+            {
                 issues.push("runtime_sym_missing");
             }
             if !self.has_lower_arm {
