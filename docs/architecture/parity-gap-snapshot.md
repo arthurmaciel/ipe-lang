@@ -54,7 +54,7 @@
 
 ### (b) Counts
 
-**11/35 OK** (up from 9/35 at `16468d3`, +2: 30-sse-server-demo, 32-sse-relay — StreamWriter clone-class fix, 77d70cd).
+**13/35 OK** (up from 11/35: +14-task-demo, +20-cli-counter — L0102 wildcard-param fix, e1ff465; both cargo-sealed). 21/22 skyc-clear but cargo-blocked on the #104 E0382 move class (lane running); 17/10 on cross-module ADT identity (lane running); 33 on WebSocket wiring (lane running).
 
 | Status | Count | Examples |
 |---|---|---|
