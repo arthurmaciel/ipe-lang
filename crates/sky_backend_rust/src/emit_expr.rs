@@ -4922,6 +4922,39 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
 /// at indentation level 1; the closing brace sits at column 0.
 pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     let name = ctx.func_name(func.id)?.to_owned();
+
+    // ── Entry-point Task.run elision ──────────────────────────────────────────
+    // When `sky_main` is `main = someTask |> Task.run`, the lowerer sets:
+    //   func.body = Call(TaskRun | TaskPerform, [inner_task])
+    //   func.ret  = IrType::Result(IrType::Error, A)
+    //
+    // The Rust epilogue calls `block_on(sky_main())`, which requires `sky_main`
+    // to return `SkyTask<A>` (an unevaluated future), NOT `SkyResult<E, A>`.
+    // Elide the outer `task_run(...)` wrapper: use the inner task expression as
+    // the body and convert the return type from `Result(Error, A)` to `Task(A)`.
+    let (body_expr, elided_ret): (&Expr, Option<IrType>) = if name == "sky_main" {
+        if let Expr::Call {
+            callee: Callee::Kernel(k),
+            args,
+        } = &func.body
+        {
+            if matches!(k, KernelFn::TaskRun | KernelFn::TaskPerform) && args.len() == 1 {
+                if let IrType::Result(_, ok_ty) = &func.ret {
+                    (&args[0], Some(IrType::Task(ok_ty.clone())))
+                } else {
+                    (&func.body, None)
+                }
+            } else {
+                (&func.body, None)
+            }
+        } else {
+            (&func.body, None)
+        }
+    } else {
+        (&func.body, None)
+    };
+    let ret_ty: &IrType = elided_ret.as_ref().unwrap_or(&func.ret);
+
     // The generic scope resolves an `IrType::Generic` to its positional Rust
     // name; only the variable symbols participate, so project them out of the
     // `(Symbol, BoundSet)` pairs.
@@ -4958,7 +4991,7 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
             render_type(ctx, ty, generics)?
         ));
     }
-    let ret = render_type(ctx, &func.ret, generics)?;
+    let ret = render_type(ctx, ret_ty, generics)?;
 
     // Phase-1a: M is inferred bottom-up from concrete element/attrs types
     // propagated by the region-type–sourced lowerer.  The old ui_msg_string /
@@ -4971,7 +5004,7 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // falls through), so it unifies with any `-> R` — no `break value`. A
     // non-`TailLoop` body (the common case) routes to the ordinary value emitter,
     // which is exhaustive and fail-closed for any stray TCO node.
-    let body = match &func.body {
+    let body = match body_expr {
         Expr::TailLoop {
             params: loop_params,
             body: loop_body,
@@ -4989,7 +5022,7 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
             let inner = emit_expr_tail(ctx, loop_body, 2, 1, generics, loop_params)?;
             format!("{shadows}loop {{\n{inner}\n    }}")
         }
-        _ => emit_expr(ctx, &func.body, 1, generics)?,
+        _ => emit_expr(ctx, body_expr, 1, generics)?,
     };
     Ok(format!(
         "pub fn {name}{generic_clause}({}) -> {ret} {{\n    {body}\n}}\n",
