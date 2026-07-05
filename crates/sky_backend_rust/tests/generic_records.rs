@@ -175,7 +175,7 @@ fn synthesises_generic_struct_and_signatures() -> DResult<()> {
     );
     // `wrap` renders the struct at its own generic.
     assert!(
-        out.contains("pub fn main_wrap<T1>(x: T1) -> RecValue<T1> {"),
+        out.contains("pub fn main_wrap<T1: Clone>(x: T1) -> RecValue<T1> {"),
         "wrap signature not rendered with generic struct:\n{out}"
     );
     // `unwrap`'s param renders `RecValue<T1>` despite its source var being `b`.
@@ -291,7 +291,7 @@ fn two_type_parameter_record() -> DResult<()> {
         "two-parameter SkyStringify impl missing or wrong:\n{out}"
     );
     assert!(
-        out.contains("pub fn main_pair<T1, T2>(x: T1, y: T2) -> RecFirstSecond<T1, T2> {"),
+        out.contains("pub fn main_pair<T1: Clone, T2: Clone>(x: T1, y: T2) -> RecFirstSecond<T1, T2> {"),
         "two-parameter signature not rendered:\n{out}"
     );
     Ok(())
