@@ -76,19 +76,37 @@ row exists and why the neighbouring row would be wrong.
 
 ### `do` / `andThen` — the value flows
 
+With `andThen` alone, dependent chains nest into pyramids:
+
 ```elm
 -- 1. Auth: the profile fetch NEEDS the token from login.
+Auth.login creds
+    |> Task.andThen (\token ->
+        Http.get ("/api/me?token=" ++ token))
+
+-- 2. Boot: the DB connect NEEDS the URL parsed from config.
+File.readFile "app.toml"
+    |> Task.andThen (\cfg ->
+        Db.connect (dbUrlFrom cfg))
+```
+
+`do` is sugar over exactly these — same semantics, flat instead of nested:
+
+```elm
 do
     token   <- Auth.login creds
     profile <- Http.get ("/api/me?token=" ++ token)
     profile
 
--- 2. Boot: the DB connect NEEDS the URL parsed from config.
 do
     cfg  <- File.readFile "app.toml"
     conn <- Db.connect (dbUrlFrom cfg)
     conn
 ```
+
+Two steps barely differ; at three or more the pyramid grows one lambda +
+indent level per step while `do` stays flat — that gap is `do`'s whole
+reason to exist.
 
 *Why not `map2`:* impossible — the second task cannot even be constructed
 without the first one's result. Value dependence is the boundary.
@@ -109,10 +127,30 @@ Task.map2 (\_ _ -> uid)
     (Db.exec conn "INSERT INTO settings (user_id) VALUES (?)" [ SqlString uid ])
 ```
 
-*Why not `do`:* no value flows between the steps — `do` would work but
-states a dependency that doesn't exist. *Why not `parallel2`:* the
-**effects** interact through the outside world (log-before-charge, FK
-order) — concurrency would race them.
+`do` expresses the same programs — a discarded bind is exactly
+"independent value, ordered effect":
+
+```elm
+do
+    Log.infoWith "charge.start" [ "order", orderId ]   -- bare line: run + discard
+    receipt <- Payments.charge card amount
+    receipt
+
+do
+    Db.exec conn "INSERT INTO users (id, name) VALUES (?, ?)" [ SqlString uid, SqlString name ]
+    Db.exec conn "INSERT INTO settings (user_id) VALUES (?)" [ SqlString uid ]
+    uid
+```
+
+(`_ <- task` is the equivalent explicit form of the bare discard line.)
+
+So `map2..5` is not the *only* home of this row — `do` subsumes it for
+Task. `map2..5` earns its keep as: (a) an **expression** (composes in
+pipelines, needs no statement block), (b) the **uniform cross-type family**
+(`Maybe.map2` / `Result.map2` / `Decoder.map2` have no `do` — `do` is
+Task-only), and (c) the terser spelling at arity 2-3.
+*Why not `parallel2`:* the **effects** interact through the outside world
+(log-before-charge, FK order) — concurrency would race them.
 
 ### `Task.parallel2..5` — independent values AND independent effects
 
@@ -136,11 +174,14 @@ types; a `List` can't hold them.
 ### `Task.sequence` — a same-typed batch whose ORDER matters
 
 ```elm
--- 1. DB migrations: same type (each `Task Error ()`), strictly in order,
---    length varies per release.
+-- 1. Three known migrations, strictly in order.
+Task.sequence [ migrationA, migrationB, migrationC ]
+
+-- 2. DB migrations at scale: same type (each `Task Error ()`), strictly in
+--    order, length varies per release.
 Task.sequence (List.map runMigration pendingMigrations)
 
--- 2. Paginated import: page N+1's request must not fire until page N is
+-- 3. Paginated import: page N+1's request must not fire until page N is
 --    stored (server-side cursor advances on read).
 Task.sequence (List.map importPage pageNumbers)
 ```
@@ -152,11 +193,14 @@ dynamic-length, not a fixed small arity.
 ### `Task.parallel` — a same-typed batch, order-free
 
 ```elm
--- 1. Fan-out fetch: 50 product thumbnails, no ordering constraint,
+-- 1. Three known fetches, concurrently.
+Task.parallel [ fetchThumbnail1, fetchThumbnail2, fetchThumbnail3 ]
+
+-- 2. Fan-out fetch at scale: 50 product thumbnails, no ordering constraint,
 --    latency = slowest single fetch.
 Task.parallel (List.map fetchThumbnail productIds)
 
--- 2. Health checks: probe every service endpoint at once; first failure
+-- 3. Health checks: probe every service endpoint at once; first failure
 --    aborts the remaining probes (#65 sibling-abort).
 Task.parallel (List.map healthCheck serviceUrls)
 ```
