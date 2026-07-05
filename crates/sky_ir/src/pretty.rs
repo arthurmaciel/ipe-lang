@@ -119,6 +119,9 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::StreamWriter => "StreamWriter".to_owned(),
         // #111: HTTP request handle (opaque, structural record folded to this variant).
         IrType::HttpRequest => "HttpRequest".to_owned(),
+        // #127: Sky.Http.Server.WebSocket opaque handles.
+        IrType::WebSocketServer => "WebSocketServer".to_owned(),
+        IrType::WebSocketServerCfg => "WebSocketServerCfg".to_owned(),
         // M7 Std.Ui / Std.Html parametric types.
         IrType::Ui { ctor, msg } => {
             let ctor_name = match ctor {
@@ -928,6 +931,19 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HttpStreamOpen => "HttpStream.open",
         KernelFn::HttpStreamForEachChunk => "HttpStream.forEachChunk",
         KernelFn::HttpStreamClose => "HttpStream.close",
+        // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+        KernelFn::WsDefaultCfg => "Ws.defaultCfg",
+        KernelFn::WsWithOnConnect => "Ws.withOnConnect",
+        KernelFn::WsWithOnMessage => "Ws.withOnMessage",
+        KernelFn::WsWithOnClose => "Ws.withOnClose",
+        KernelFn::WsWithOnError => "Ws.withOnError",
+        KernelFn::WsWithMaxMessageBytes => "Ws.withMaxMessageBytes",
+        KernelFn::WsWithOriginPatterns => "Ws.withOriginPatterns",
+        KernelFn::WsUpgrade => "Ws.upgrade",
+        KernelFn::WsSendToClient => "Ws.sendToClient",
+        KernelFn::WsSendBinaryToClient => "Ws.sendBinaryToClient",
+        KernelFn::WsBroadcast => "Ws.broadcast",
+        KernelFn::WsCloseClient => "Ws.closeClient",
         // ── Std.Ui.Input (#124) ───────────────────────────────────────────────
         KernelFn::InputLabelAbove => "Input.labelAbove",
         KernelFn::InputLabelBelow => "Input.labelBelow",

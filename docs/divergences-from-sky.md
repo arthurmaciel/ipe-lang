@@ -271,6 +271,52 @@ runtime (each either matches Go or is more correct):
 both match Go exactly and are therefore *not* divergences from Sky. Recorded here
 only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
 
+### B18 — `Ws.sendBinaryToClient` takes `Vec<u8>`, not `String`
+- **Differs:** Sky defines `type alias Bytes = String`, so the Go reference's
+  `sendBinaryToClient` / `sendBinary` take a `String` (raw bytes in a Go string;
+  cost-free alias). ipê's `Bytes` is a distinct `Vec<u8>` primitive (B2), so
+  `Ws.sendBinaryToClient` takes `Bytes` (`Vec<u8>`) — no lossy UTF-8 hop.
+  Programs that pass binary data through `sendBinaryToClient` work correctly on
+  ipê; the same program on the Go reference relies on Go's transparent
+  `string` ↔ `[]byte` relationship.
+- **Go-oracle relationship:** Go succeeds; binary frames are representationally
+  different (`String` vs `Vec<u8>`). For ASCII-range payloads, output is
+  identical. For non-UTF-8 binary payloads, ipê is the correct implementation
+  (no silent corruption).
+- **Rationale:** B2 consequence (`Bytes` = distinct `Vec<u8>` primitive — lossless
+  byte model). **Sanctioned:** yes (`divergence:`).
+
+### B19 — WS server `sendToClient` / `broadcast` are bounded fail-fast (D4)
+- **Differs:** Go's reference WS server (`runtime-go/rt/server_websocket.go`)
+  blocks up to ~30 s on a full write buffer before returning an error. ipê's
+  `ws_loop` uses a `tokio::sync::mpsc::channel` of capacity
+  `SKY_WS_SEND_BUFFER` (default 256 frames) with `try_send`: when the queue is
+  full the send returns `Err` immediately without blocking. Frames from a slow
+  or dead consumer are dropped rather than causing handler-task pileup.
+- **Go-oracle relationship:** Go succeeds; error timing and behavior on a slow
+  peer differ.
+- **Rationale:** security/soundness — a blocking send behind one slow peer can
+  pile up goroutines/tasks (memory exhaustion), while a bounded fail-fast
+  channel keeps back-pressure explicit and configurable. The 256-frame default
+  (overridable via `SKY_WS_SEND_BUFFER`) is sufficient for all non-streaming
+  uses. If Go's 30 s blocking semantic is required, change 3 lines in the
+  adapters to `tx.send_timeout(out, Duration::from_secs(30))`.
+  **Sanctioned:** yes (`divergence:`).
+
+### B20 — `ws_loop` does not send Ping heartbeat frames (pending H1)
+- **Differs:** Go's reference WS server sends a Ping frame every 30 s with a
+  10 s timeout (`runtime-go/rt/server_websocket.go`, `wsDefaultPingInterval
+  = 30s`). ipê's `ws_loop` has no Ping `select!` arm — dead peers linger in the
+  registry until TCP gives up. The upstream Rust runtime
+  (`../sky/runtime-rust/ws_loop`) also lacks pings; both Rust runtimes share
+  this gap.
+- **Go-oracle relationship:** Go implements liveness; ipê does not yet.
+- **Rationale:** follow-on hardening (H1, ~15 lines — a third `select!` arm
+  with `tokio::time::interval(Duration::from_secs(30))`). Not 33-blocking
+  (example 33 runs correctly without heartbeats; TCP closes the socket on dead
+  peers eventually). Tracked. **Sanctioned:** yes (`divergence:`), pending H1
+  close.
+
 ---
 
 ## 3. Architectural divergences (compiler + runtime structure)
@@ -461,6 +507,30 @@ Sky in its own explain page. *Verified:* `code.rs:192-194`,
 `explain/SKY-L0117.md`. Total-order `Float` set/dict (e.g. via an
 ordered-float wrapper) is a tracked future enhancement.
 
+### A18 — `WsServerCfg` phantom `msg` type var dropped (D2)
+Sky's `Sky.Http.Server.WebSocket` stdlib source declares
+`WebSocketServerCfg msg` with a phantom `msg` type variable reserved for
+hypothetical future `Sub` integration (the phantom never reaches the runtime).
+ipê types the cfg as a **nullary** opaque constructor: `IrType::WebSocketServerCfg`
+renders `WsServerCfg<SkyError>` directly, with `E = SkyError = String` pinned at
+the emit site. The runtime struct `WsServerCfg<E>` remains generic over `E`;
+ipê merely instantiates it monomorphically.
+
+Effect: a type annotation `Ws.WebSocketServerCfg Msg` compiles on the reference
+(phantom var accepted) but fails arity on ipê (`WebSocketServerCfg` is declared
+with 0 type args). Example 33 and all known callers never annotate the cfg type
+directly, so this is annotation-only in practice.
+
+*Rationale:* the phantom `msg` var is an artefact of the upstream Go TEA
+architecture where `WebSocketServerCfg msg` was future-proofed for a Sub-based
+WS subscription tier. ipê's kernel-only module has no Sub-tier for the server-side
+WS surface; a phantom var would widen the type to parametric with nothing to
+unify against (a soundness hazard). Dropping it matches `IrType::Db`,
+`IrType::StreamWriter`, and the other nullary opaque handles.
+*Verified:* `crates/sky_ir/src/ir.rs` (`WebSocketServerCfg` variant, no type params);
+`crates/sky_backend_rust/src/emit_types.rs` (`WsServerCfg<SkyError>` render).
+*Sanctioned:* yes (`divergence:`).
+
 ---
 
 ## 4. Stdlib / surface divergences
@@ -513,19 +583,24 @@ API-shape review):
 | Msg admissibility | dynamic (no compile-time gate) | static `SKY-L0121` gate (designed; pending impl) | Rust static trait bounds (seal) |
 | App cfg argument | any expression (let-bound variable OK) | must be an inline record literal (`SKY-L0119`) | Backend reads fields at lower time; no runtime reflection |
 | `Float` as `Set`/`Dict` key | accepted (Go `interface{}` comparison) | rejected `SKY-L0117` | `f64` lacks `Ord`/`Hash` in Rust |
+| WS `sendBinaryToClient` arg type | `String` (Bytes alias) | `Vec<u8>` (distinct `Bytes` primitive) | B2 consequence; lossless binary frames |
+| WS send semantics | blocks ~30 s on full write buffer | bounded `try_send`; `Err` on full queue (B19) | Bounded fail-fast; no handler-task pileup |
+| WS Ping heartbeat | 30 s Ping + 10 s timeout | not yet implemented (B20, pending H1) | Follow-on hardening; not 33-blocking |
+| `WsServerCfg` type params | `WebSocketServerCfg msg` (phantom var) | nullary opaque — `WsServerCfg<SkyError>` (A18) | Sub-tier phantom not needed; nullary is sounder |
 
 ---
 
 ## Counts
 
-- **Behavioral divergences:** 17 classes (B1–B17). B16 (#104 true last-use) and
-  B17 (#99 alias bind) are newly filed — pending fixture goldens. B3 RETIRED
-  (task #55a) per inline note. Sanctioned/recorded goldens: 42 carry a marker
-  (`Math` 4, `Bytes` 5, `Encoding` 1, `Jwt` 5, `Db` 11, `Ui` 6, `Cmd`/`Sub` 3,
-  `Uuid` 2, plus Go-failure kind-1 shapes and Money/case/toFloat sanctioned
-  entries). B16/B17 goldens pending.
-- **Architectural divergences:** 17 (A1–A17). A8 and A13 are reference-ahead on
-  completeness. A15–A17 are newly added this pass.
+- **Behavioral divergences:** 20 classes (B1–B20). B16 (#104 true last-use) and
+  B17 (#99 alias bind) are pending fixture goldens. B3 RETIRED (task #55a) per
+  inline note. B18–B20 are WS-server entries added with task #127. Sanctioned/
+  recorded goldens: 42 carry a marker (`Math` 4, `Bytes` 5, `Encoding` 1, `Jwt` 5,
+  `Db` 11, `Ui` 6, `Cmd`/`Sub` 3, `Uuid` 2, plus Go-failure kind-1 shapes and
+  Money/case/toFloat sanctioned entries). B16/B17 goldens pending; B20 pending H1.
+- **Architectural divergences:** 18 (A1–A18). A8 and A13 are reference-ahead on
+  completeness. A15–A17 are seal-gate entries. A18 is the WS phantom-`msg`
+  type-var entry added with task #127.
 - **Stdlib/surface divergences:** 4 API-shape + 4 front-end capability gaps +
   2 new gate-forced surface constraints (SKY-L0119, SKY-L0117).
 

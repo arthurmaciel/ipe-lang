@@ -150,6 +150,12 @@ struct Builtins {
     /// `Stream.stream` callback and consumed by `Stream.emit` /
     /// `Stream.finish` / `Stream.withContentType`.
     stream_writer: Symbol,
+    // ── #127: Sky.Http.Server.WebSocket opaque type constructor symbols ────────
+    /// `"WebSocketServer"` — the opaque per-peer WebSocket handle (`WsHandle`).
+    ws_server: Symbol,
+    /// `"WebSocketServerCfg"` — the opaque WebSocket server configuration
+    /// (`WsServerCfg<SkyError>`).
+    ws_server_cfg: Symbol,
     // ── M7: Std.Ui / Std.Html parametric type constructor symbols ─────────────
     /// `"Attribute"` — Std.Ui attribute type constructor `Attribute msg`.
     ///
@@ -343,6 +349,9 @@ impl Builtins {
             server_cookie: interner.intern("Cookie")?,
             // #111: Sky.Http.Server.Stream opaque handle.
             stream_writer: interner.intern("StreamWriter")?,
+            // #127: Sky.Http.Server.WebSocket opaque handles.
+            ws_server: interner.intern("WebSocketServer")?,
+            ws_server_cfg: interner.intern("WebSocketServerCfg")?,
             // M7: Std.Ui / Std.Html parametric type constructor symbols.
             attribute: interner.intern("Attribute")?,
             element: interner.intern("Element")?,
@@ -2561,6 +2570,21 @@ impl<'a> Builder<'a> {
             name: self.builtins.stream_writer,
             args: Vec::new(),
         };
+        // #127: `wsh()` — the opaque `WsHandle` per-peer handle.
+        // Used as the first arg of every WsServerCfg callback and as the
+        // target of `sendToClient` / `sendBinaryToClient` / `broadcast` / `closeClient`.
+        let wsh = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.ws_server,
+            args: Vec::new(),
+        };
+        // #127: `wscfg()` — the opaque `WsServerCfg<SkyError>` configuration type.
+        // Built by `Ws.defaultCfg` and threaded through the builder chain.
+        let wscfg = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.ws_server_cfg,
+            args: Vec::new(),
+        };
         let attr = |m: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.attribute,
@@ -4259,6 +4283,37 @@ impl<'a> Builder<'a> {
             K::HttpStreamForEachChunk => fun(int(), fun(fun(string(), task_unit()), task_unit())),
             // closeRaw : Int -> Task Error ()
             K::HttpStreamClose => fun(int(), task_unit()),
+
+            // ── #127: Sky.Http.Server.WebSocket (12 kernels) ────────────────────
+            // defaultCfg : WebSocketServerCfg
+            // Arity-0: the return type IS the scheme (no `fun` wrapper).
+            K::WsDefaultCfg => wscfg(),
+            // withOnConnect : (WebSocketServer -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg
+            K::WsWithOnConnect => fun(fun(wsh(), task_unit()), fun(wscfg(), wscfg())),
+            // withOnMessage : (WebSocketServer -> String -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg
+            K::WsWithOnMessage => {
+                fun(fun(wsh(), fun(string(), task_unit())), fun(wscfg(), wscfg()))
+            }
+            // withOnClose : (WebSocketServer -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg
+            K::WsWithOnClose => fun(fun(wsh(), task_unit()), fun(wscfg(), wscfg())),
+            // withOnError : (WebSocketServer -> Error -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg
+            K::WsWithOnError => {
+                fun(fun(wsh(), fun(error_ty(), task_unit())), fun(wscfg(), wscfg()))
+            }
+            // withMaxMessageBytes : Int -> WebSocketServerCfg -> WebSocketServerCfg
+            K::WsWithMaxMessageBytes => fun(int(), fun(wscfg(), wscfg())),
+            // withOriginPatterns : List String -> WebSocketServerCfg -> WebSocketServerCfg
+            K::WsWithOriginPatterns => fun(list(string()), fun(wscfg(), wscfg())),
+            // upgrade : Request -> WebSocketServerCfg -> Task Error Response
+            K::WsUpgrade => fun(req(), fun(wscfg(), task(resp()))),
+            // sendToClient : WebSocketServer -> String -> Task Error ()
+            K::WsSendToClient => fun(wsh(), fun(string(), task_unit())),
+            // sendBinaryToClient : WebSocketServer -> Bytes -> Task Error ()
+            K::WsSendBinaryToClient => fun(wsh(), fun(bytes(), task_unit())),
+            // broadcast : List WebSocketServer -> String -> Task Error ()
+            K::WsBroadcast => fun(list(wsh()), fun(string(), task_unit())),
+            // closeClient : WebSocketServer -> Task Error ()
+            K::WsCloseClient => fun(wsh(), task_unit()),
         })
     }
 }
@@ -5269,6 +5324,19 @@ mod registry_phase_c_tests {
             K::HttpStreamOpen,
             K::HttpStreamForEachChunk,
             K::HttpStreamClose,
+            // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+            K::WsDefaultCfg,
+            K::WsWithOnConnect,
+            K::WsWithOnMessage,
+            K::WsWithOnClose,
+            K::WsWithOnError,
+            K::WsWithMaxMessageBytes,
+            K::WsWithOriginPatterns,
+            K::WsUpgrade,
+            K::WsSendToClient,
+            K::WsSendBinaryToClient,
+            K::WsBroadcast,
+            K::WsCloseClient,
             // ── Std.Ui.Region (#117) — all 8 landmark/live-region attrs ──
             K::RegionMainContent,
             K::RegionNavigation,
