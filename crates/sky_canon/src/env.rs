@@ -726,12 +726,13 @@ impl Env {
                     "parallel",
                     "run",
                     "perform",
+                    "lazy",
                 ],
             ),
             // `Sky.Core.Io` — I/O effects (M5a).
             ("Io", &["readLine", "writeStdout", "writeStderr"]),
             // `Sky.Core.Time` — time effects (M5a) + M5c TEA tick subscription.
-            ("Time", &["now", "sleep", "unixMillis", "every"]),
+            ("Time", &["now", "sleep", "unixMillis", "every", "timeString"]),
             // `Sky.Core.System` — system effects (M5a).
             (
                 "System",
@@ -951,6 +952,9 @@ impl Env {
                     "aspectRatioWH",
                     "square",
                     "widescreen",
+                    "cinemascope",
+                    "name",
+                    "style",
                     "onPseudo",
                     "hover",
                     "focus",
