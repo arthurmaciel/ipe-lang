@@ -1641,6 +1641,36 @@ fn emit_ui_call(
             )))
         }
 
+        // `Ui.paragraph : List (Attribute msg) -> List (Element msg) -> Element msg`
+        KernelFn::UiParagraph => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiParagraph",
+                    detail: format!("Ui.paragraph requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_paragraph_({attrs}, {children})"
+            )))
+        }
+
+        // `Ui.textColumn : List (Attribute msg) -> List (Element msg) -> Element msg`
+        KernelFn::UiTextColumn => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiTextColumn",
+                    detail: format!("Ui.textColumn requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_text_column_({attrs}, {children})"
+            )))
+        }
+
         // `Ui.button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } -> Element msg`
         //
         // Emits: `sky_runtime::ui::helpers::ui_button_(attrs, on_press, label)`

@@ -225,6 +225,10 @@ impl Env {
         // Db ADTs (M5b-db).
         let sqlvalue = interner.intern("SqlValue")?;
         let sqlfield = interner.intern("SqlField")?;
+        // Sky.Core.Http.Stream ADT (HttpStream kernel qualifier — not a compiled
+        // source module, so its constructors are never registered via
+        // `build_module_exports`; they must be pre-registered here instead).
+        let chunkev = interner.intern("ChunkEvent")?;
         // (constructor name, owning built-in type, index within the type, arity).
         for (name, type_name, index, arity) in [
             ("True", bool_, 0, 0),
@@ -248,6 +252,13 @@ impl Env {
             // ── SqlField variants (M5b-db) ────────────────────────────────────
             ("SetField", sqlfield, 0, 1), // SetField : SqlValue -> SqlField
             ("OmitField", sqlfield, 1, 0), // OmitField : SqlField (nullary)
+            // ── ChunkEvent variants (Sky.Core.Http.Stream) ───────────────────
+            // Chunk : String -> ChunkEvent
+            ("Chunk", chunkev, 0, 1),
+            // Done : ChunkEvent
+            ("Done", chunkev, 1, 0),
+            // Errored : Error -> ChunkEvent
+            ("Errored", chunkev, 2, 1),
         ] {
             let name = interner.intern(name)?;
             self.ctors.insert(
