@@ -674,6 +674,8 @@ pub enum StdlibKernel {
     UiWhite,
     UiBlack,
     UiTransparent,
+    /// `Ui.colorCss color` — convert a `Color` to its CSS string representation.
+    UiColorCss,
     // ── M7: Background / Border / Font sub-modules ───────────────────────────
     BackgroundColor,
     BackgroundImage,
@@ -908,6 +910,9 @@ pub enum StdlibKernel {
     HttpStreamOpen,
     HttpStreamForEachChunk,
     HttpStreamClose,
+    /// `Http.Stream.chunks sid toMsg` — subscribes to stream chunks; returns `Sub msg`.
+    /// Classified as TEA (not server) because it returns `SkySub<M>`.
+    HttpStreamChunks,
     // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
     WsDefaultCfg,           // WebSocketServerCfg (arity 0)
     WsWithOnConnect,        // (WebSocketServer -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
@@ -1629,6 +1634,7 @@ impl StdlibKernel {
             Self::UiWhite => d("Ui", "white", 0, Ui, "ui_white_"),
             Self::UiBlack => d("Ui", "black", 0, Ui, "ui_black_"),
             Self::UiTransparent => d("Ui", "transparent", 0, Ui, "ui_transparent_"),
+            Self::UiColorCss => d("Ui", "colorCss", 1, Ui, "ui_color_css_"),
             // ── M7: Background / Border / Font sub-modules ───────────────────
             Self::BackgroundColor => d("Background", "color", 1, Ui, "ui_background_color_"),
             Self::BackgroundImage => d("Background", "image", 1, Ui, "ui_background_image_"),
@@ -1877,6 +1883,7 @@ impl StdlibKernel {
                 d("HttpStream", "forEachChunk", 2, Pure, "http_stream_for_each_chunk")
             }
             Self::HttpStreamClose => d("HttpStream", "close", 1, Pure, "http_stream_close"),
+            Self::HttpStreamChunks => d("HttpStream", "chunks", 2, Pure, "sub_subscribe_stream"),
             // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
             Self::WsDefaultCfg => d("Ws", "defaultCfg", 0, Server, "ws_server_default_cfg"),
             Self::WsWithOnConnect => d("Ws", "withOnConnect", 2, Server, "ws_server_with_on_connect"),
@@ -2452,6 +2459,7 @@ impl StdlibKernel {
         Self::UiWhite,
         Self::UiBlack,
         Self::UiTransparent,
+        Self::UiColorCss,
         // M7: Background / Border / Font
         Self::BackgroundColor,
         Self::BackgroundImage,
@@ -2663,6 +2671,7 @@ impl StdlibKernel {
         Self::HttpStreamOpen,
         Self::HttpStreamForEachChunk,
         Self::HttpStreamClose,
+        Self::HttpStreamChunks,
         // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
         Self::WsDefaultCfg,
         Self::WsWithOnConnect,
@@ -2781,6 +2790,7 @@ impl StdlibKernel {
                 | Self::SubSubscribeTopic
                 | Self::PubSubPublish
                 | Self::PubSubPublishNoEcho
+                | Self::HttpStreamChunks
         )
     }
 
@@ -2916,6 +2926,7 @@ impl StdlibKernel {
                 | Self::UiWhite
                 | Self::UiBlack
                 | Self::UiTransparent
+                | Self::UiColorCss
                 | Self::BackgroundColor
                 | Self::BackgroundImage
                 | Self::BorderWidth
