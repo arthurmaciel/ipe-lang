@@ -510,6 +510,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::TaskParallel => "Task.parallel",
         KernelFn::TaskRun => "Task.run",
         KernelFn::TaskPerform => "Task.perform",
+        KernelFn::TaskLazy => "Task.lazy",
         // ── Io kernels (M5a) ──────────────────────────────────────────────────
         KernelFn::IoReadLine => "Io.readLine",
         KernelFn::IoWriteStdout => "Io.writeStdout",
@@ -518,6 +519,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::TimeNow => "Time.now",
         KernelFn::TimeSleep => "Time.sleep",
         KernelFn::TimeUnixMillis => "Time.unixMillis",
+        KernelFn::TimeTimeString => "Time.timeString",
         // ── System kernels (M5a) ──────────────────────────────────────────────
         KernelFn::SystemArgs => "System.args",
         KernelFn::SystemGetenv => "System.getenv",
@@ -716,9 +718,12 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         // ── #76 Tier 1 ───────────────────────────────────────────────────────
         KernelFn::UiSquare => "Ui.square",
         KernelFn::UiWidescreen => "Ui.widescreen",
+        KernelFn::UiCinemascope => "Ui.cinemascope",
         KernelFn::UiAspectRatio => "Ui.aspectRatio",
         KernelFn::UiAspectRatioWH => "Ui.aspectRatioWH",
         KernelFn::UiHtmlAttribute => "Ui.htmlAttribute",
+        KernelFn::UiName => "Ui.name",
+        KernelFn::UiStyle => "Ui.style",
         KernelFn::BackgroundHoverColor => "Background.hoverColor",
         KernelFn::BackgroundFocusColor => "Background.focusColor",
         KernelFn::BackgroundActiveColor => "Background.activeColor",
