@@ -68,3 +68,99 @@ special case.)
 - `Task.run` / `Task.perform` (runners, not combinators) are slated for
   removal post-parity (#128) — Tasks are run by the boundary (`main`,
   handler return, `Cmd.perform`), never by user code.
+
+## Examples — the disjoint point of each row
+
+Each row gets two real-use-case examples; each pair shows exactly why its
+row exists and why the neighbouring row would be wrong.
+
+### `do` / `andThen` — the value flows
+
+```elm
+-- 1. Auth: the profile fetch NEEDS the token from login.
+do
+    token   <- Auth.login creds
+    profile <- Http.get ("/api/me?token=" ++ token)
+    profile
+
+-- 2. Boot: the DB connect NEEDS the URL parsed from config.
+do
+    cfg  <- File.readFile "app.toml"
+    conn <- Db.connect (dbUrlFrom cfg)
+    conn
+```
+
+*Why not `map2`:* impossible — the second task cannot even be constructed
+without the first one's result. Value dependence is the boundary.
+
+### `Task.map2..5` — independent values, but the EFFECTS must stay ordered
+
+```elm
+-- 1. Audit-then-act: the charge must not fire before the audit line is
+--    durably written; the charge does not use the log's result.
+Task.map2 (\_ receipt -> receipt)
+    (Log.infoWith "charge.start" [ "order", orderId ])
+    (Payments.charge card amount)
+
+-- 2. FK ordering: settings row must come after the user row exists;
+--    both statements are fully known up front.
+Task.map2 (\_ _ -> uid)
+    (Db.exec conn "INSERT INTO users (id, name) VALUES (?, ?)" [ SqlString uid, SqlString name ])
+    (Db.exec conn "INSERT INTO settings (user_id) VALUES (?)" [ SqlString uid ])
+```
+
+*Why not `do`:* no value flows between the steps — `do` would work but
+states a dependency that doesn't exist. *Why not `parallel2`:* the
+**effects** interact through the outside world (log-before-charge, FK
+order) — concurrency would race them.
+
+### `Task.parallel2..5` — independent values AND independent effects
+
+```elm
+-- 1. Dashboard first paint: profile and notifications come from different
+--    services; total latency = max, not sum.
+Task.parallel2 (\profile notes -> { profile = profile, notifications = notes })
+    (Http.get "/api/me")
+    (Http.get "/api/notifications")
+
+-- 2. Price comparison: quote two suppliers simultaneously.
+Task.parallel2 (\a b -> ( a, b ))
+    (Http.get supplierA)
+    (Http.get supplierB)
+```
+
+*Why not `map2`:* nothing orders these effects — sequential wastes a full
+round-trip. *Why not `parallel` (list):* the two results have different
+types; a `List` can't hold them.
+
+### `Task.sequence` — a same-typed batch whose ORDER matters
+
+```elm
+-- 1. DB migrations: same type (each `Task Error ()`), strictly in order,
+--    length varies per release.
+Task.sequence (List.map runMigration pendingMigrations)
+
+-- 2. Paginated import: page N+1's request must not fire until page N is
+--    stored (server-side cursor advances on read).
+Task.sequence (List.map importPage pageNumbers)
+```
+
+*Why not `parallel`:* order is the whole point (migration 3 assumes 2 ran;
+the cursor moves). *Why not `map2..5`:* the batch is list-shaped and
+dynamic-length, not a fixed small arity.
+
+### `Task.parallel` — a same-typed batch, order-free
+
+```elm
+-- 1. Fan-out fetch: 50 product thumbnails, no ordering constraint,
+--    latency = slowest single fetch.
+Task.parallel (List.map fetchThumbnail productIds)
+
+-- 2. Health checks: probe every service endpoint at once; first failure
+--    aborts the remaining probes (#65 sibling-abort).
+Task.parallel (List.map healthCheck serviceUrls)
+```
+
+*Why not `sequence`:* no effect depends on another — serial would multiply
+latency by N. *Why not `parallel2..5`:* one element type, dynamic length —
+the list shape is the natural fit.
