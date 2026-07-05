@@ -1,125 +1,125 @@
 variant	qualifier	member	arity	class	in_all	has_decl	has_scheme	in_first_schemed	in_canon_qual	has_lower_arm	runtime_sym	runtime_sym_exists	ref_runtime_sym_exists	in_ref_stdlib	status
-LogPrintln	Log	println	1	Pure	Y	Y	Y	N	Y	Y	log_println	Y	N	N	OK
-LogInfo	Log	info	1	Pure	Y	Y	Y	Y	Y	Y	log_info	Y	N	N	OK
-LogDebug	Log	debug	1	Pure	Y	Y	Y	Y	Y	Y	log_debug	Y	N	N	OK
-LogWarn	Log	warn	1	Pure	Y	Y	Y	Y	Y	Y	log_warn	Y	N	N	OK
-LogError	Log	error	1	Pure	Y	Y	Y	Y	Y	Y	log_error	Y	N	N	OK
-LogInfoWith	Log	infoWith	2	Pure	Y	Y	Y	Y	Y	Y	log_info_with	Y	N	N	OK
-LogDebugWith	Log	debugWith	2	Pure	Y	Y	Y	Y	Y	Y	log_debug_with	Y	N	N	OK
-LogWarnWith	Log	warnWith	2	Pure	Y	Y	Y	Y	Y	Y	log_warn_with	Y	N	N	OK
-LogErrorWith	Log	errorWith	2	Pure	Y	Y	Y	Y	Y	Y	log_error_with	Y	N	N	OK
-StringFromInt	String	fromInt	1	Pure	Y	Y	Y	N	Y	Y	string_from_int	Y	N	N	OK
-StringFromFloat	String	fromFloat	1	Pure	Y	Y	Y	N	Y	Y	string_from_float	Y	N	N	OK
-StringLength	String	length	1	Pure	Y	Y	Y	Y	Y	Y	string_length	Y	N	N	OK
-StringIsEmpty	String	isEmpty	1	Pure	Y	Y	Y	Y	Y	Y	string_is_empty	Y	N	N	OK
-StringReverse	String	reverse	1	Pure	Y	Y	Y	Y	Y	Y	string_reverse	Y	N	N	OK
-StringToUpper	String	toUpper	1	Pure	Y	Y	Y	Y	Y	Y	string_to_upper	Y	N	N	OK
-StringToLower	String	toLower	1	Pure	Y	Y	Y	Y	Y	Y	string_to_lower	Y	N	N	OK
-StringCasefold	String	casefold	1	Pure	Y	Y	Y	Y	Y	Y	string_casefold	Y	N	N	OK
-StringTrim	String	trim	1	Pure	Y	Y	Y	Y	Y	Y	string_trim	Y	N	N	OK
-StringTrimStart	String	trimStart	1	Pure	Y	Y	Y	Y	Y	Y	string_trim_start	Y	N	N	OK
-StringTrimEnd	String	trimEnd	1	Pure	Y	Y	Y	Y	Y	Y	string_trim_end	Y	N	N	OK
-StringToInt	String	toInt	1	Pure	Y	Y	Y	Y	Y	Y	string_to_int	Y	N	N	OK
-StringToFloat	String	toFloat	1	Pure	Y	Y	Y	Y	Y	Y	string_to_float	Y	N	N	OK
-StringFromChar	String	fromChar	1	Pure	Y	Y	Y	Y	Y	Y	string_from_char	Y	N	N	OK
-StringFromList	String	fromList	1	Pure	Y	Y	Y	Y	Y	Y	string_from_list	Y	N	N	OK
-StringConcat	String	concat	1	Pure	Y	Y	Y	Y	Y	Y	string_concat	Y	N	N	OK
-StringWords	String	words	1	Pure	Y	Y	Y	Y	Y	Y	string_words	Y	N	N	OK
-StringLines	String	lines	1	Pure	Y	Y	Y	Y	Y	Y	string_lines	Y	N	N	OK
-StringToList	String	toList	1	Pure	Y	Y	Y	Y	Y	Y	string_to_list	Y	N	N	OK
-StringIsEmail	String	isEmail	1	Pure	Y	Y	Y	Y	Y	Y	string_is_email	Y	N	N	OK
-StringIsUrl	String	isUrl	1	Pure	Y	Y	Y	Y	Y	Y	string_is_url	Y	N	N	OK
-StringAppend	String	append	2	Pure	Y	Y	Y	Y	Y	Y	string_append	Y	N	N	OK
-StringContains	String	contains	2	Pure	Y	Y	Y	Y	Y	Y	string_contains	Y	N	N	OK
-StringStartsWith	String	startsWith	2	Pure	Y	Y	Y	Y	Y	Y	string_starts_with	Y	N	N	OK
-StringEndsWith	String	endsWith	2	Pure	Y	Y	Y	Y	Y	Y	string_ends_with	Y	N	N	OK
-StringEqualFold	String	equalFold	2	Pure	Y	Y	Y	Y	Y	Y	string_equal_fold	Y	N	N	OK
-StringJoin	String	join	2	Pure	Y	Y	Y	Y	Y	Y	string_join	Y	N	N	OK
-StringSplit	String	split	2	Pure	Y	Y	Y	Y	Y	Y	string_split	Y	N	N	OK
-StringRepeat	String	repeat	2	Pure	Y	Y	Y	Y	Y	Y	string_repeat	Y	N	N	OK
-StringDropLeft	String	dropLeft	2	Pure	Y	Y	Y	Y	Y	Y	string_drop_left	Y	N	N	OK
-StringDropRight	String	dropRight	2	Pure	Y	Y	Y	Y	Y	Y	string_drop_right	Y	N	N	OK
-StringReplace	String	replace	3	Pure	Y	Y	Y	Y	Y	Y	string_replace	Y	N	N	OK
-StringSlice	String	slice	3	Pure	Y	Y	Y	Y	Y	Y	string_slice	Y	N	N	OK
-StringPadLeft	String	padLeft	3	Pure	Y	Y	Y	Y	Y	Y	string_pad_left	Y	N	N	OK
-StringPadRight	String	padRight	3	Pure	Y	Y	Y	Y	Y	Y	string_pad_right	Y	N	N	OK
-StringContainsIn	String	containsIn	2	Pure	Y	Y	Y	Y	Y	Y	string_contains_in	Y	N	N	OK
+LogPrintln	Log	println	1	Pure	Y	Y	Y	N	Y	Y	log_println	Y	Y	Y	OK
+LogInfo	Log	info	1	Pure	Y	Y	Y	Y	Y	Y	log_info	Y	Y	Y	OK
+LogDebug	Log	debug	1	Pure	Y	Y	Y	Y	Y	Y	log_debug	Y	Y	Y	OK
+LogWarn	Log	warn	1	Pure	Y	Y	Y	Y	Y	Y	log_warn	Y	Y	Y	OK
+LogError	Log	error	1	Pure	Y	Y	Y	Y	Y	Y	log_error	Y	Y	Y	OK
+LogInfoWith	Log	infoWith	2	Pure	Y	Y	Y	Y	Y	Y	log_info_with	Y	Y	Y	OK
+LogDebugWith	Log	debugWith	2	Pure	Y	Y	Y	Y	Y	Y	log_debug_with	Y	Y	Y	OK
+LogWarnWith	Log	warnWith	2	Pure	Y	Y	Y	Y	Y	Y	log_warn_with	Y	Y	Y	OK
+LogErrorWith	Log	errorWith	2	Pure	Y	Y	Y	Y	Y	Y	log_error_with	Y	Y	Y	OK
+StringFromInt	String	fromInt	1	Pure	Y	Y	Y	N	Y	Y	string_from_int	Y	Y	Y	OK
+StringFromFloat	String	fromFloat	1	Pure	Y	Y	Y	N	Y	Y	string_from_float	Y	Y	Y	OK
+StringLength	String	length	1	Pure	Y	Y	Y	Y	Y	Y	string_length	Y	Y	Y	OK
+StringIsEmpty	String	isEmpty	1	Pure	Y	Y	Y	Y	Y	Y	string_is_empty	Y	Y	Y	OK
+StringReverse	String	reverse	1	Pure	Y	Y	Y	Y	Y	Y	string_reverse	Y	Y	Y	OK
+StringToUpper	String	toUpper	1	Pure	Y	Y	Y	Y	Y	Y	string_to_upper	Y	Y	Y	OK
+StringToLower	String	toLower	1	Pure	Y	Y	Y	Y	Y	Y	string_to_lower	Y	Y	Y	OK
+StringCasefold	String	casefold	1	Pure	Y	Y	Y	Y	Y	Y	string_casefold	Y	Y	Y	OK
+StringTrim	String	trim	1	Pure	Y	Y	Y	Y	Y	Y	string_trim	Y	Y	Y	OK
+StringTrimStart	String	trimStart	1	Pure	Y	Y	Y	Y	Y	Y	string_trim_start	Y	Y	Y	OK
+StringTrimEnd	String	trimEnd	1	Pure	Y	Y	Y	Y	Y	Y	string_trim_end	Y	Y	Y	OK
+StringToInt	String	toInt	1	Pure	Y	Y	Y	Y	Y	Y	string_to_int	Y	Y	Y	OK
+StringToFloat	String	toFloat	1	Pure	Y	Y	Y	Y	Y	Y	string_to_float	Y	Y	Y	OK
+StringFromChar	String	fromChar	1	Pure	Y	Y	Y	Y	Y	Y	string_from_char	Y	Y	Y	OK
+StringFromList	String	fromList	1	Pure	Y	Y	Y	Y	Y	Y	string_from_list	Y	Y	Y	OK
+StringConcat	String	concat	1	Pure	Y	Y	Y	Y	Y	Y	string_concat	Y	Y	Y	OK
+StringWords	String	words	1	Pure	Y	Y	Y	Y	Y	Y	string_words	Y	Y	Y	OK
+StringLines	String	lines	1	Pure	Y	Y	Y	Y	Y	Y	string_lines	Y	Y	Y	OK
+StringToList	String	toList	1	Pure	Y	Y	Y	Y	Y	Y	string_to_list	Y	Y	Y	OK
+StringIsEmail	String	isEmail	1	Pure	Y	Y	Y	Y	Y	Y	string_is_email	Y	Y	Y	OK
+StringIsUrl	String	isUrl	1	Pure	Y	Y	Y	Y	Y	Y	string_is_url	Y	Y	Y	OK
+StringAppend	String	append	2	Pure	Y	Y	Y	Y	Y	Y	string_append	Y	Y	Y	OK
+StringContains	String	contains	2	Pure	Y	Y	Y	Y	Y	Y	string_contains	Y	Y	Y	OK
+StringStartsWith	String	startsWith	2	Pure	Y	Y	Y	Y	Y	Y	string_starts_with	Y	Y	Y	OK
+StringEndsWith	String	endsWith	2	Pure	Y	Y	Y	Y	Y	Y	string_ends_with	Y	Y	Y	OK
+StringEqualFold	String	equalFold	2	Pure	Y	Y	Y	Y	Y	Y	string_equal_fold	Y	Y	Y	OK
+StringJoin	String	join	2	Pure	Y	Y	Y	Y	Y	Y	string_join	Y	Y	Y	OK
+StringSplit	String	split	2	Pure	Y	Y	Y	Y	Y	Y	string_split	Y	Y	Y	OK
+StringRepeat	String	repeat	2	Pure	Y	Y	Y	Y	Y	Y	string_repeat	Y	Y	Y	OK
+StringDropLeft	String	dropLeft	2	Pure	Y	Y	Y	Y	Y	Y	string_drop_left	Y	Y	Y	OK
+StringDropRight	String	dropRight	2	Pure	Y	Y	Y	Y	Y	Y	string_drop_right	Y	Y	Y	OK
+StringReplace	String	replace	3	Pure	Y	Y	Y	Y	Y	Y	string_replace	Y	Y	Y	OK
+StringSlice	String	slice	3	Pure	Y	Y	Y	Y	Y	Y	string_slice	Y	Y	Y	OK
+StringPadLeft	String	padLeft	3	Pure	Y	Y	Y	Y	Y	Y	string_pad_left	Y	Y	Y	OK
+StringPadRight	String	padRight	3	Pure	Y	Y	Y	Y	Y	Y	string_pad_right	Y	Y	Y	OK
+StringContainsIn	String	containsIn	2	Pure	Y	Y	Y	Y	Y	Y	string_contains_in	Y	N	Y	OK
 StringStartsWithIn					Y	N	Y	Y	N	Y	string_starts_with_in	Y	N	N	OK
-StringEndsWithIn	String	endsWithIn	2	Pure	Y	Y	Y	Y	Y	Y	string_ends_with_in	Y	N	N	OK
-CharIsAlpha	Char	isAlpha	1	Pure	Y	Y	Y	Y	Y	Y	char_is_alpha	Y	N	N	OK
-CharIsDigit	Char	isDigit	1	Pure	Y	Y	Y	Y	Y	Y	char_is_digit	Y	N	N	OK
-CharIsLower	Char	isLower	1	Pure	Y	Y	Y	Y	Y	Y	char_is_lower	Y	N	N	OK
-CharIsUpper	Char	isUpper	1	Pure	Y	Y	Y	Y	Y	Y	char_is_upper	Y	N	N	OK
-CharToLower	Char	toLower	1	Pure	Y	Y	Y	Y	Y	Y	char_to_lower	Y	N	N	OK
-CharToUpper	Char	toUpper	1	Pure	Y	Y	Y	Y	Y	Y	char_to_upper	Y	N	N	OK
-CharToCode	Char	toCode	1	Pure	Y	Y	Y	Y	Y	Y	char_to_code	Y	N	N	OK
-CharFromCode	Char	fromCode	1	Pure	Y	Y	Y	Y	Y	Y	char_from_code	Y	N	N	OK
-ListMap	List	map	2	Pure	Y	Y	Y	N	Y	Y	list_map_consume	N	N	N	MISMATCH:runtime_sym_missing
-ListFilter	List	filter	2	Pure	Y	Y	Y	N	Y	Y	list_filter	Y	N	N	OK
-ListFoldl	List	foldl	3	Pure	Y	Y	Y	N	Y	Y	list_foldl	Y	N	N	OK
-ListFoldr	List	foldr	3	Pure	Y	Y	Y	N	Y	Y	list_foldr	Y	N	N	OK
-ListLength	List	length	1	Pure	Y	Y	Y	N	Y	Y	list_length	Y	N	N	OK
-ListHead	List	head	1	Pure	Y	Y	Y	N	Y	Y	list_head	Y	N	N	OK
-ListTail	List	tail	1	Pure	Y	Y	Y	N	Y	Y	list_tail	Y	N	N	OK
-ListMember	List	member	2	Pure	Y	Y	Y	N	Y	Y	list_member	Y	N	N	OK
-ListRange	List	range	2	Pure	Y	Y	Y	N	Y	Y	list_range	Y	N	N	OK
-ListReverse	List	reverse	1	Pure	Y	Y	Y	N	Y	Y	list_reverse	Y	N	N	OK
+StringEndsWithIn	String	endsWithIn	2	Pure	Y	Y	Y	Y	Y	Y	string_ends_with_in	Y	N	Y	OK
+CharIsAlpha	Char	isAlpha	1	Pure	Y	Y	Y	Y	Y	Y	char_is_alpha	Y	Y	Y	OK
+CharIsDigit	Char	isDigit	1	Pure	Y	Y	Y	Y	Y	Y	char_is_digit	Y	Y	Y	OK
+CharIsLower	Char	isLower	1	Pure	Y	Y	Y	Y	Y	Y	char_is_lower	Y	Y	Y	OK
+CharIsUpper	Char	isUpper	1	Pure	Y	Y	Y	Y	Y	Y	char_is_upper	Y	Y	Y	OK
+CharToLower	Char	toLower	1	Pure	Y	Y	Y	Y	Y	Y	char_to_lower	Y	Y	Y	OK
+CharToUpper	Char	toUpper	1	Pure	Y	Y	Y	Y	Y	Y	char_to_upper	Y	Y	Y	OK
+CharToCode	Char	toCode	1	Pure	Y	Y	Y	Y	Y	Y	char_to_code	Y	Y	Y	OK
+CharFromCode	Char	fromCode	1	Pure	Y	Y	Y	Y	Y	Y	char_from_code	Y	Y	Y	OK
+ListMap	List	map	2	Pure	Y	Y	Y	N	Y	Y	list_map_consume	N	N	N	OK
+ListFilter	List	filter	2	Pure	Y	Y	Y	N	Y	Y	list_filter	Y	Y	N	OK
+ListFoldl	List	foldl	3	Pure	Y	Y	Y	N	Y	Y	list_foldl	Y	Y	N	OK
+ListFoldr	List	foldr	3	Pure	Y	Y	Y	N	Y	Y	list_foldr	Y	Y	N	OK
+ListLength	List	length	1	Pure	Y	Y	Y	N	Y	Y	list_length	Y	Y	N	OK
+ListHead	List	head	1	Pure	Y	Y	Y	N	Y	Y	list_head	Y	Y	N	OK
+ListTail	List	tail	1	Pure	Y	Y	Y	N	Y	Y	list_tail	Y	Y	N	OK
+ListMember	List	member	2	Pure	Y	Y	Y	N	Y	Y	list_member	Y	Y	N	OK
+ListRange	List	range	2	Pure	Y	Y	Y	N	Y	Y	list_range	Y	Y	N	OK
+ListReverse	List	reverse	1	Pure	Y	Y	Y	N	Y	Y	list_reverse	Y	Y	N	OK
 ListAppend	List	append	2	Pure	Y	Y	Y	Y	Y	Y	list_append	Y	N	N	OK
 ListConcat	List	concat	1	Pure	Y	Y	Y	Y	Y	Y	list_concat	Y	N	N	OK
 ListTake	List	take	2	Pure	Y	Y	Y	Y	Y	Y	list_take	Y	N	N	OK
-ListDrop	List	drop	2	Pure	Y	Y	Y	Y	Y	Y	list_drop	Y	N	N	OK
-ListZip	List	zip	2	Pure	Y	Y	Y	Y	Y	Y	list_zip	Y	N	N	OK
-ListCons	List	cons	2	Pure	Y	Y	Y	Y	Y	Y	sky_list_cons	Y	N	N	OK
+ListDrop	List	drop	2	Pure	Y	Y	Y	Y	Y	Y	list_drop	Y	Y	N	OK
+ListZip	List	zip	2	Pure	Y	Y	Y	Y	Y	Y	list_zip	Y	Y	N	OK
+ListCons	List	cons	2	Pure	Y	Y	Y	Y	Y	Y	sky_list_cons	Y	Y	N	OK
 ListIsEmpty	List	isEmpty	1	Pure	Y	Y	Y	Y	Y	Y	list_is_empty	Y	N	N	OK
-ListConcatMap	List	concatMap	2	Pure	Y	Y	Y	Y	Y	Y	list_concat_map	Y	N	N	OK
-ListIndexedMap	List	indexedMap	2	Pure	Y	Y	Y	Y	Y	Y	list_indexed_map	Y	N	N	OK
-ListAny	List	any	2	Pure	Y	Y	Y	Y	Y	Y	list_any	Y	N	N	OK
-ListAll	List	all	2	Pure	Y	Y	Y	Y	Y	Y	list_all	Y	N	N	OK
+ListConcatMap	List	concatMap	2	Pure	Y	Y	Y	Y	Y	Y	list_concat_map	Y	Y	N	OK
+ListIndexedMap	List	indexedMap	2	Pure	Y	Y	Y	Y	Y	Y	list_indexed_map	Y	Y	N	OK
+ListAny	List	any	2	Pure	Y	Y	Y	Y	Y	Y	list_any	Y	Y	N	OK
+ListAll	List	all	2	Pure	Y	Y	Y	Y	Y	Y	list_all	Y	Y	N	OK
 ListFind	List	find	2	Pure	Y	Y	Y	Y	Y	Y	list_find	Y	N	N	OK
-ListFilterMap	List	filterMap	2	Pure	Y	Y	Y	Y	Y	Y	list_filter_map	Y	N	N	OK
-ListSortBy	List	sortBy	2	Pure	Y	Y	Y	Y	Y	Y	list_sort_by	Y	N	N	OK
+ListFilterMap	List	filterMap	2	Pure	Y	Y	Y	Y	Y	Y	list_filter_map	Y	Y	N	OK
+ListSortBy	List	sortBy	2	Pure	Y	Y	Y	Y	Y	Y	list_sort_by	Y	Y	N	OK
 BasicsNot	Basics	not	1	Pure	Y	Y	Y	Y	Y	Y	basics_not	Y	N	N	OK
-BasicsIdentity	Basics	identity	1	Pure	Y	Y	Y	Y	Y	Y	basics_identity	Y	N	N	OK
-BasicsAlways	Basics	always	2	Pure	Y	Y	Y	Y	Y	Y	basics_always	Y	N	N	OK
-BasicsFst	Basics	fst	1	Pure	Y	Y	Y	Y	Y	Y	basics_fst	Y	N	N	OK
-BasicsSnd	Basics	snd	1	Pure	Y	Y	Y	Y	Y	Y	basics_snd	Y	N	N	OK
-BasicsModBy	Basics	modBy	2	Pure	Y	Y	Y	Y	Y	Y	basics_mod_by	Y	N	N	OK
-BasicsToString	Basics	toString	1	Pure	Y	Y	Y	Y	Y	Y	basics_to_string	Y	N	N	OK
+BasicsIdentity	Basics	identity	1	Pure	Y	Y	Y	Y	Y	Y	basics_identity	Y	Y	N	OK
+BasicsAlways	Basics	always	2	Pure	Y	Y	Y	Y	Y	Y	basics_always	Y	Y	N	OK
+BasicsFst	Basics	fst	1	Pure	Y	Y	Y	Y	Y	Y	basics_fst	Y	Y	N	OK
+BasicsSnd	Basics	snd	1	Pure	Y	Y	Y	Y	Y	Y	basics_snd	Y	Y	N	OK
+BasicsModBy	Basics	modBy	2	Pure	Y	Y	Y	Y	Y	Y	basics_mod_by	Y	Y	N	OK
+BasicsToString	Basics	toString	1	Pure	Y	Y	Y	Y	Y	Y	basics_to_string	Y	Y	N	OK
 BasicsClamp	Basics	clamp	3	Pure	Y	Y	Y	Y	Y	Y	basics_clamp	Y	N	N	OK
 BasicsNegate	Basics	negate	1	Pure	Y	Y	Y	Y	Y	Y	basics_negate	Y	N	N	OK
 BasicsAbs	Basics	abs	1	Pure	Y	Y	Y	Y	Y	Y	basics_abs	Y	N	N	OK
-BasicsSqrt	Basics	sqrt	1	Pure	Y	Y	Y	Y	Y	Y	math_sqrt	Y	N	N	OK
-BasicsMin	Basics	min	2	Pure	Y	Y	Y	Y	Y	Y	math_min	Y	N	N	OK
-BasicsMax	Basics	max	2	Pure	Y	Y	Y	Y	Y	Y	math_max	Y	N	N	OK
-ErrorUnexpected	Error	unexpected	1	Pure	Y	Y	Y	Y	Y	Y		N	N	N	OK
+BasicsSqrt	Basics	sqrt	1	Pure	Y	Y	Y	Y	Y	Y	math_sqrt	Y	Y	N	OK
+BasicsMin	Basics	min	2	Pure	Y	Y	Y	Y	Y	Y	math_min	Y	Y	N	OK
+BasicsMax	Basics	max	2	Pure	Y	Y	Y	Y	Y	Y	math_max	Y	Y	N	OK
+ErrorUnexpected	Error	unexpected	1	Pure	Y	Y	Y	Y	Y	Y		N	N	Y	OK
 ErrorInvalidInput					Y	N	Y	Y	N	Y		N	N	N	OK
-ErrorIo	Error	io	1	Pure	Y	Y	Y	Y	Y	Y		N	N	N	OK
-ErrorNetwork	Error	network	1	Pure	Y	Y	Y	Y	Y	Y		N	N	N	OK
-ErrorFfi	Error	ffi	1	Pure	Y	Y	Y	Y	Y	Y		N	N	N	OK
-ErrorDecode	Error	decode	1	Pure	Y	Y	Y	Y	Y	Y		N	N	N	OK
-ErrorConflict	Error	conflict	1	Pure	Y	Y	Y	Y	Y	Y		N	N	N	OK
-ErrorUnavailable	Error	unavailable	1	Pure	Y	Y	Y	Y	Y	Y	sky_error_from_message	Y	N	N	OK
-ErrorTimeout	Error	timeout	0	Pure	Y	Y	Y	Y	Y	Y	sky_error_timeout	Y	N	N	OK
-ErrorNotFound	Error	notFound	0	Pure	Y	Y	Y	Y	Y	Y	sky_error_not_found	Y	N	N	OK
+ErrorIo	Error	io	1	Pure	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+ErrorNetwork	Error	network	1	Pure	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+ErrorFfi	Error	ffi	1	Pure	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+ErrorDecode	Error	decode	1	Pure	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+ErrorConflict	Error	conflict	1	Pure	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+ErrorUnavailable	Error	unavailable	1	Pure	Y	Y	Y	Y	Y	Y	sky_error_from_message	Y	N	Y	OK
+ErrorTimeout	Error	timeout	0	Pure	Y	Y	Y	Y	Y	Y	sky_error_timeout	Y	N	Y	OK
+ErrorNotFound	Error	notFound	0	Pure	Y	Y	Y	Y	Y	Y	sky_error_not_found	Y	N	Y	OK
 ErrorPermissionDenied					Y	N	Y	Y	N	Y	sky_error_permission_denied	Y	N	N	OK
-ErrorToString	Error	toString	1	Pure	Y	Y	Y	Y	Y	Y	basics_error_to_string	Y	N	N	OK
+ErrorToString	Error	toString	1	Pure	Y	Y	Y	Y	Y	Y	basics_error_to_string	Y	Y	Y	OK
 ErrorWithMessage					Y	N	Y	Y	N	Y	sky_error_with_message	Y	N	N	OK
 CssSafetySafeValue	CssSafety	safeValue	1	Pure	Y	Y	Y	Y	Y	Y	safe_value	Y	N	N	OK
 CssSafetySafePropName					Y	N	Y	Y	N	Y	safe_prop_name	Y	N	N	OK
 CssSafetySafeSelector					Y	N	Y	Y	N	Y	safe_selector	Y	N	N	OK
 CssSafetyStripStyleClose					Y	N	Y	Y	N	Y	strip_style_close_kernel	Y	N	N	OK
-MaybeWithDefault	Maybe	withDefault	2	Pure	Y	Y	Y	N	Y	Y	maybe_with_default	Y	N	N	OK
-MaybeMap	Maybe	map	2	Pure	Y	Y	Y	N	Y	Y	sky_maybe_map	Y	N	N	OK
-MaybeAndThen	Maybe	andThen	2	Pure	Y	Y	Y	N	Y	Y	sky_maybe_and_then	Y	N	N	OK
+MaybeWithDefault	Maybe	withDefault	2	Pure	Y	Y	Y	N	Y	Y	maybe_with_default	Y	Y	N	OK
+MaybeMap	Maybe	map	2	Pure	Y	Y	Y	N	Y	Y	sky_maybe_map	Y	Y	N	OK
+MaybeAndThen	Maybe	andThen	2	Pure	Y	Y	Y	N	Y	Y	sky_maybe_and_then	Y	Y	N	OK
 MaybeMap2	Maybe	map2	3	Pure	Y	Y	Y	Y	Y	Y	maybe_map2	Y	N	N	OK
 MaybeMap3	Maybe	map3	4	Pure	Y	Y	Y	Y	Y	Y	maybe_map3	Y	N	N	OK
 MaybeMap4	Maybe	map4	5	Pure	Y	Y	Y	Y	Y	Y	maybe_map4	Y	N	N	OK
 MaybeMap5	Maybe	map5	6	Pure	Y	Y	Y	Y	Y	Y	maybe_map5	Y	N	N	OK
 MaybeAndMap	Maybe	andMap	2	Pure	Y	Y	Y	Y	Y	Y	maybe_and_map	Y	N	N	OK
 MaybeCombine	Maybe	combine	1	Pure	Y	Y	Y	Y	Y	Y	maybe_combine	Y	N	N	OK
-ResultWithDefault	Result	withDefault	2	Pure	Y	Y	Y	N	Y	Y	result_with_default	Y	N	N	OK
-ResultMap	Result	map	2	Pure	Y	Y	Y	N	Y	Y	sky_result_map	Y	N	N	OK
-ResultAndThen	Result	andThen	2	Pure	Y	Y	Y	Y	Y	Y	sky_result_and_then	Y	N	N	OK
+ResultWithDefault	Result	withDefault	2	Pure	Y	Y	Y	N	Y	Y	result_with_default	Y	Y	N	OK
+ResultMap	Result	map	2	Pure	Y	Y	Y	N	Y	Y	sky_result_map	Y	Y	N	OK
+ResultAndThen	Result	andThen	2	Pure	Y	Y	Y	Y	Y	Y	sky_result_and_then	Y	Y	N	OK
 ResultMapError	Result	mapError	2	Pure	Y	Y	Y	Y	Y	Y	sky_result_map_error	Y	N	N	OK
 ResultMap2	Result	map2	3	Pure	Y	Y	Y	Y	Y	Y	result_map2	Y	N	N	OK
 ResultMap3	Result	map3	4	Pure	Y	Y	Y	Y	Y	Y	result_map3	Y	N	N	OK
@@ -127,521 +127,521 @@ ResultMap4	Result	map4	5	Pure	Y	Y	Y	Y	Y	Y	result_map4	Y	N	N	OK
 ResultMap5	Result	map5	6	Pure	Y	Y	Y	Y	Y	Y	result_map5	Y	N	N	OK
 ResultAndMap	Result	andMap	2	Pure	Y	Y	Y	Y	Y	Y	result_and_map	Y	N	N	OK
 ResultCombine	Result	combine	1	Pure	Y	Y	Y	Y	Y	Y	result_combine	Y	N	N	OK
-ResultTraverse	Result	traverse	2	Pure	Y	Y	Y	Y	Y	Y	result_traverse	Y	N	N	OK
-ResultOkDefault	_internal_	okDefault	1	Pure	Y	Y	Y	Y	N	Y	ok_res	Y	N	N	OK
-MathMin	Math	min	2	Pure	Y	Y	Y	N	Y	Y	math_min	Y	N	N	OK
-MathMax	Math	max	2	Pure	Y	Y	Y	N	Y	Y	math_max	Y	N	N	OK
-MathPi	Math	pi	0	Pure	Y	Y	Y	N	Y	Y	math_pi	Y	N	N	OK
-MathE	Math	e	0	Pure	Y	Y	Y	N	Y	Y	math_e	Y	N	N	OK
-MathPhi	Math	phi	0	Pure	Y	Y	Y	N	Y	Y	math_phi	Y	N	N	OK
-MathSqrt2	Math	sqrt2	0	Pure	Y	Y	Y	N	Y	Y	math_sqrt2	Y	N	N	OK
-MathInf	Math	inf	0	Pure	Y	Y	Y	N	Y	Y	math_inf	Y	N	N	OK
-MathNan	Math	nan	0	Pure	Y	Y	Y	N	Y	Y	math_nan	Y	N	N	OK
-MathAbs	Math	abs	1	Pure	Y	Y	Y	N	Y	Y	math_abs	Y	N	N	OK
-MathSqrt	Math	sqrt	1	Pure	Y	Y	Y	N	Y	Y	math_sqrt	Y	N	N	OK
-MathCbrt	Math	cbrt	1	Pure	Y	Y	Y	N	Y	Y	math_cbrt	Y	N	N	OK
-MathExp	Math	exp	1	Pure	Y	Y	Y	N	Y	Y	math_exp	Y	N	N	OK
-MathExp2	Math	exp2	1	Pure	Y	Y	Y	N	Y	Y	math_exp2	Y	N	N	OK
-MathLog	Math	log	1	Pure	Y	Y	Y	N	Y	Y	math_log	Y	N	N	OK
-MathLog2	Math	log2	1	Pure	Y	Y	Y	N	Y	Y	math_log2	Y	N	N	OK
-MathLog10	Math	log10	1	Pure	Y	Y	Y	N	Y	Y	math_log10	Y	N	N	OK
-MathSin	Math	sin	1	Pure	Y	Y	Y	N	Y	Y	math_sin	Y	N	N	OK
-MathCos	Math	cos	1	Pure	Y	Y	Y	N	Y	Y	math_cos	Y	N	N	OK
-MathTan	Math	tan	1	Pure	Y	Y	Y	N	Y	Y	math_tan	Y	N	N	OK
-MathAsin	Math	asin	1	Pure	Y	Y	Y	N	Y	Y	math_asin	Y	N	N	OK
-MathAcos	Math	acos	1	Pure	Y	Y	Y	N	Y	Y	math_acos	Y	N	N	OK
-MathAtan	Math	atan	1	Pure	Y	Y	Y	N	Y	Y	math_atan	Y	N	N	OK
-MathSinh	Math	sinh	1	Pure	Y	Y	Y	N	Y	Y	math_sinh	Y	N	N	OK
-MathCosh	Math	cosh	1	Pure	Y	Y	Y	N	Y	Y	math_cosh	Y	N	N	OK
-MathTanh	Math	tanh	1	Pure	Y	Y	Y	N	Y	Y	math_tanh	Y	N	N	OK
-MathAsinh	Math	asinh	1	Pure	Y	Y	Y	N	Y	Y	math_asinh	Y	N	N	OK
-MathAcosh	Math	acosh	1	Pure	Y	Y	Y	N	Y	Y	math_acosh	Y	N	N	OK
-MathAtanh	Math	atanh	1	Pure	Y	Y	Y	N	Y	Y	math_atanh	Y	N	N	OK
-MathFloor	Math	floor	1	Pure	Y	Y	Y	N	Y	Y	math_floor	Y	N	N	OK
-MathCeil	Math	ceil	1	Pure	Y	Y	Y	N	Y	Y	math_ceil	Y	N	N	OK
-MathRound	Math	round	1	Pure	Y	Y	Y	N	Y	Y	math_round	Y	N	N	OK
-MathTrunc	Math	trunc	1	Pure	Y	Y	Y	N	Y	Y	math_trunc	Y	N	N	OK
-MathPow	Math	pow	2	Pure	Y	Y	Y	N	Y	Y	math_pow	Y	N	N	OK
-MathHypot	Math	hypot	2	Pure	Y	Y	Y	N	Y	Y	math_hypot	Y	N	N	OK
-MathAtan2	Math	atan2	2	Pure	Y	Y	Y	N	Y	Y	math_atan2	Y	N	N	OK
-MathMod	Math	mod	2	Pure	Y	Y	Y	N	Y	Y	math_mod	Y	N	N	OK
-MathRemainder	Math	remainder	2	Pure	Y	Y	Y	N	Y	Y	math_remainder	Y	N	N	OK
-DictEmpty	Dict	empty	0	Pure	Y	Y	Y	N	Y	Y	dict_empty	Y	N	N	OK
-DictIsEmpty	Dict	isEmpty	1	Pure	Y	Y	Y	N	Y	Y	dict_is_empty	Y	N	N	OK
-DictSize	Dict	size	1	Pure	Y	Y	Y	N	Y	Y	dict_size	Y	N	N	OK
-DictKeys	Dict	keys	1	Pure	Y	Y	Y	N	Y	Y	dict_keys	Y	N	N	OK
-DictValues	Dict	values	1	Pure	Y	Y	Y	N	Y	Y	dict_values	Y	N	N	OK
-DictToList	Dict	toList	1	Pure	Y	Y	Y	N	Y	Y	dict_to_list	Y	N	N	OK
-DictFromList	Dict	fromList	1	Pure	Y	Y	Y	N	Y	Y	dict_from_list	Y	N	N	OK
-DictGet	Dict	get	2	Pure	Y	Y	Y	N	Y	Y	dict_get	Y	N	N	OK
-DictMember	Dict	member	2	Pure	Y	Y	Y	N	Y	Y	dict_member	Y	N	N	OK
-DictRemove	Dict	remove	2	Pure	Y	Y	Y	N	Y	Y	dict_remove	Y	N	N	OK
-DictUnion	Dict	union	2	Pure	Y	Y	Y	N	Y	Y	dict_union	Y	N	N	OK
-DictMap	Dict	map	2	Pure	Y	Y	Y	N	Y	Y	dict_map	Y	N	N	OK
-DictInsert	Dict	insert	3	Pure	Y	Y	Y	N	Y	Y	dict_insert	Y	N	N	OK
-DictFoldl	Dict	foldl	3	Pure	Y	Y	Y	N	Y	Y	dict_foldl	Y	N	N	OK
-SetEmpty	Set	empty	0	Pure	Y	Y	Y	N	Y	Y	set_empty	Y	N	N	OK
-SetSize	Set	size	1	Pure	Y	Y	Y	N	Y	Y	set_size	Y	N	N	OK
-SetToList	Set	toList	1	Pure	Y	Y	Y	N	Y	Y	set_to_list	Y	N	N	OK
-SetFromList	Set	fromList	1	Pure	Y	Y	Y	N	Y	Y	set_from_list	Y	N	N	OK
-SetMember	Set	member	2	Pure	Y	Y	Y	N	Y	Y	set_member	Y	N	N	OK
-SetInsert	Set	insert	2	Pure	Y	Y	Y	N	Y	Y	set_insert	Y	N	N	OK
-SetRemove	Set	remove	2	Pure	Y	Y	Y	N	Y	Y	set_remove	Y	N	N	OK
-SetUnion	Set	union	2	Pure	Y	Y	Y	N	Y	Y	set_union	Y	N	N	OK
-SetIntersect	Set	intersect	2	Pure	Y	Y	Y	N	Y	Y	set_intersect	Y	N	N	OK
-SetDiff	Set	diff	2	Pure	Y	Y	Y	N	Y	Y	set_diff	Y	N	N	OK
-BytesEmpty	Bytes	empty	0	Pure	Y	Y	Y	N	Y	Y	bytes_empty	Y	N	N	OK
-BytesLength	Bytes	length	1	Pure	Y	Y	Y	N	Y	Y	bytes_length	Y	N	N	OK
-BytesIsEmpty	Bytes	isEmpty	1	Pure	Y	Y	Y	N	Y	Y	bytes_is_empty	Y	N	N	OK
-BytesFromString	Bytes	fromString	1	Pure	Y	Y	Y	N	Y	Y	bytes_from_string	Y	N	N	OK
-BytesToString	Bytes	toString	1	Pure	Y	Y	Y	N	Y	Y	bytes_to_string	Y	N	N	OK
-BytesFromHex	Bytes	fromHex	1	Pure	Y	Y	Y	N	Y	Y	bytes_from_hex	Y	N	N	OK
-BytesToHex	Bytes	toHex	1	Pure	Y	Y	Y	N	Y	Y	bytes_to_hex	Y	N	N	OK
-BytesFromBase64	Bytes	fromBase64	1	Pure	Y	Y	Y	N	Y	Y	bytes_from_base64	Y	N	N	OK
-BytesToBase64	Bytes	toBase64	1	Pure	Y	Y	Y	N	Y	Y	bytes_to_base64	Y	N	N	OK
-BytesAppend	Bytes	append	2	Pure	Y	Y	Y	N	Y	Y	bytes_append	Y	N	N	OK
-BytesSlice	Bytes	slice	3	Pure	Y	Y	Y	N	Y	Y	bytes_slice	Y	N	N	OK
-EncodingBase64Encode	Encoding	base64Encode	1	Pure	Y	Y	Y	Y	Y	Y	base64_encode	Y	N	N	OK
-EncodingBase64Decode					Y	N	Y	Y	N	Y	sky_base64_decode	Y	N	N	OK
-EncodingUrlEncode	Encoding	urlEncode	1	Pure	Y	Y	Y	Y	Y	Y	url_encode	Y	N	N	OK
-EncodingUrlDecode	Encoding	urlDecode	1	Pure	Y	Y	Y	Y	Y	Y	sky_url_decode	Y	N	N	OK
-EncodingHexEncode	Encoding	hexEncode	1	Pure	Y	Y	Y	Y	Y	Y	encoding_hex_encode	Y	N	N	OK
-EncodingHexDecode					Y	N	Y	Y	N	Y	sky_encoding_hex_decode	Y	N	N	OK
-JsonEncString	JsonEnc	string	1	Pure	Y	Y	Y	Y	Y	Y	json_enc_string	Y	N	N	OK
-JsonEncInt	JsonEnc	int	1	Pure	Y	Y	Y	Y	Y	Y	json_enc_int	Y	N	N	OK
-JsonEncFloat	JsonEnc	float	1	Pure	Y	Y	Y	Y	Y	Y	json_enc_float	Y	N	N	OK
-JsonEncBool	JsonEnc	bool	1	Pure	Y	Y	Y	Y	Y	Y	json_enc_bool	Y	N	N	OK
-JsonEncNull	JsonEnc	null	0	Pure	Y	Y	Y	Y	Y	Y	json_enc_null	Y	N	N	OK
-JsonEncList	JsonEnc	list	2	Pure	Y	Y	Y	Y	Y	Y	json_enc_list	Y	N	N	OK
-JsonEncObject	JsonEnc	object	1	Pure	Y	Y	Y	Y	Y	Y	json_enc_object	Y	N	N	OK
-JsonEncEncode	JsonEnc	encode	2	Pure	Y	Y	Y	Y	Y	Y	json_enc_encode	Y	N	N	OK
-JsonDecString	JsonDec	string	0	Pure	Y	Y	Y	Y	Y	Y	json_decode_string	Y	N	N	OK
-JsonDecInt	JsonDec	int	0	Pure	Y	Y	Y	Y	Y	Y	json_decode_int	Y	N	N	OK
-JsonDecFloat	JsonDec	float	0	Pure	Y	Y	Y	Y	Y	Y	json_decode_float	Y	N	N	OK
-JsonDecBool	JsonDec	bool	0	Pure	Y	Y	Y	Y	Y	Y	json_decode_bool	Y	N	N	OK
-JsonDecDecodeString					Y	N	Y	Y	N	Y	decode_from_json_string	Y	N	N	OK
-JsonDecField	JsonDec	field	2	Pure	Y	Y	Y	Y	Y	Y	decode_field	Y	N	N	OK
-JsonDecAt	JsonDec	at	2	Pure	Y	Y	Y	Y	Y	Y	decode_at	Y	N	N	OK
-JsonDecIndex	JsonDec	index	2	Pure	Y	Y	Y	Y	Y	Y	decode_index	Y	N	N	OK
-JsonDecList	JsonDec	list	1	Pure	Y	Y	Y	Y	Y	Y	decode_list	Y	N	N	OK
-JsonDecMap	JsonDec	map	2	Pure	Y	Y	Y	Y	Y	Y	decode_map	Y	N	N	OK
-JsonDecAndThen	JsonDec	andThen	2	Pure	Y	Y	Y	Y	Y	Y	decode_and_then	Y	N	N	OK
-JsonDecSucceed	JsonDec	succeed	1	Pure	Y	Y	Y	Y	Y	Y	decode_succeed	Y	N	N	OK
-JsonDecFail	JsonDec	fail	1	Pure	Y	Y	Y	Y	Y	Y	decode_fail	Y	N	N	OK
-JsonDecOneOf	JsonDec	oneOf	1	Pure	Y	Y	Y	Y	Y	Y	decode_one_of	Y	N	N	OK
-JsonDecMap2	JsonDec	map2	3	Pure	Y	Y	Y	Y	Y	Y	decode_map2	Y	N	N	OK
-JsonDecMap3	JsonDec	map3	4	Pure	Y	Y	Y	Y	Y	Y	decode_map3	Y	N	N	OK
-JsonDecMap4	JsonDec	map4	5	Pure	Y	Y	Y	Y	Y	Y	decode_map4	Y	N	N	OK
-JsonDecPRequired					Y	N	Y	Y	N	Y	decode_pipeline_required	Y	N	N	OK
-JsonDecPOptional					Y	N	Y	Y	N	Y	decode_pipeline_optional	Y	N	N	OK
-JsonDecPCustom	JsonDecP	custom	2	Pure	Y	Y	Y	Y	Y	Y	decode_pipeline_custom	Y	N	N	OK
-JsonDecPRequiredAt					Y	N	Y	Y	N	Y	decode_pipeline_required_at	Y	N	N	OK
-CryptoSha256	Crypto	sha256	1	Pure	Y	Y	Y	Y	Y	Y	crypto_sha256	Y	N	N	OK
-CryptoSha512	Crypto	sha512	1	Pure	Y	Y	Y	Y	Y	Y	crypto_sha512	Y	N	N	OK
-CryptoSha1	Crypto	sha1	1	Pure	Y	Y	Y	Y	Y	Y	crypto_sha1	Y	N	N	OK
-CryptoMd5	Crypto	md5	1	Pure	Y	Y	Y	Y	Y	Y	crypto_md5	Y	N	N	OK
-CryptoHmacSha256	Crypto	hmacSha256	2	Pure	Y	Y	Y	Y	Y	Y	crypto_hmac_sha256	Y	N	N	OK
-CryptoHmacSha512	Crypto	hmacSha512	2	Pure	Y	Y	Y	Y	Y	Y	crypto_hmac_sha512	Y	N	N	OK
+ResultTraverse	Result	traverse	2	Pure	Y	Y	Y	Y	Y	Y	result_traverse	Y	Y	N	OK
+ResultOkDefault	_internal_	okDefault	1	Pure	Y	Y	Y	Y	N	Y	ok_res	Y	Y	N	OK
+MathMin	Math	min	2	Pure	Y	Y	Y	N	Y	Y	math_min	Y	Y	Y	OK
+MathMax	Math	max	2	Pure	Y	Y	Y	N	Y	Y	math_max	Y	Y	Y	OK
+MathPi	Math	pi	0	Pure	Y	Y	Y	N	Y	Y	math_pi	Y	Y	Y	OK
+MathE	Math	e	0	Pure	Y	Y	Y	N	Y	Y	math_e	Y	Y	Y	OK
+MathPhi	Math	phi	0	Pure	Y	Y	Y	N	Y	Y	math_phi	Y	Y	Y	OK
+MathSqrt2	Math	sqrt2	0	Pure	Y	Y	Y	N	Y	Y	math_sqrt2	Y	Y	Y	OK
+MathInf	Math	inf	0	Pure	Y	Y	Y	N	Y	Y	math_inf	Y	Y	Y	OK
+MathNan	Math	nan	0	Pure	Y	Y	Y	N	Y	Y	math_nan	Y	Y	Y	OK
+MathAbs	Math	abs	1	Pure	Y	Y	Y	N	Y	Y	math_abs	Y	Y	Y	OK
+MathSqrt	Math	sqrt	1	Pure	Y	Y	Y	N	Y	Y	math_sqrt	Y	Y	Y	OK
+MathCbrt	Math	cbrt	1	Pure	Y	Y	Y	N	Y	Y	math_cbrt	Y	Y	Y	OK
+MathExp	Math	exp	1	Pure	Y	Y	Y	N	Y	Y	math_exp	Y	Y	Y	OK
+MathExp2	Math	exp2	1	Pure	Y	Y	Y	N	Y	Y	math_exp2	Y	Y	Y	OK
+MathLog	Math	log	1	Pure	Y	Y	Y	N	Y	Y	math_log	Y	Y	Y	OK
+MathLog2	Math	log2	1	Pure	Y	Y	Y	N	Y	Y	math_log2	Y	Y	Y	OK
+MathLog10	Math	log10	1	Pure	Y	Y	Y	N	Y	Y	math_log10	Y	Y	Y	OK
+MathSin	Math	sin	1	Pure	Y	Y	Y	N	Y	Y	math_sin	Y	Y	Y	OK
+MathCos	Math	cos	1	Pure	Y	Y	Y	N	Y	Y	math_cos	Y	Y	Y	OK
+MathTan	Math	tan	1	Pure	Y	Y	Y	N	Y	Y	math_tan	Y	Y	Y	OK
+MathAsin	Math	asin	1	Pure	Y	Y	Y	N	Y	Y	math_asin	Y	Y	Y	OK
+MathAcos	Math	acos	1	Pure	Y	Y	Y	N	Y	Y	math_acos	Y	Y	Y	OK
+MathAtan	Math	atan	1	Pure	Y	Y	Y	N	Y	Y	math_atan	Y	Y	Y	OK
+MathSinh	Math	sinh	1	Pure	Y	Y	Y	N	Y	Y	math_sinh	Y	Y	Y	OK
+MathCosh	Math	cosh	1	Pure	Y	Y	Y	N	Y	Y	math_cosh	Y	Y	Y	OK
+MathTanh	Math	tanh	1	Pure	Y	Y	Y	N	Y	Y	math_tanh	Y	Y	Y	OK
+MathAsinh	Math	asinh	1	Pure	Y	Y	Y	N	Y	Y	math_asinh	Y	Y	Y	OK
+MathAcosh	Math	acosh	1	Pure	Y	Y	Y	N	Y	Y	math_acosh	Y	Y	Y	OK
+MathAtanh	Math	atanh	1	Pure	Y	Y	Y	N	Y	Y	math_atanh	Y	Y	Y	OK
+MathFloor	Math	floor	1	Pure	Y	Y	Y	N	Y	Y	math_floor	Y	Y	Y	OK
+MathCeil	Math	ceil	1	Pure	Y	Y	Y	N	Y	Y	math_ceil	Y	Y	Y	OK
+MathRound	Math	round	1	Pure	Y	Y	Y	N	Y	Y	math_round	Y	Y	Y	OK
+MathTrunc	Math	trunc	1	Pure	Y	Y	Y	N	Y	Y	math_trunc	Y	Y	Y	OK
+MathPow	Math	pow	2	Pure	Y	Y	Y	N	Y	Y	math_pow	Y	Y	Y	OK
+MathHypot	Math	hypot	2	Pure	Y	Y	Y	N	Y	Y	math_hypot	Y	Y	Y	OK
+MathAtan2	Math	atan2	2	Pure	Y	Y	Y	N	Y	Y	math_atan2	Y	Y	Y	OK
+MathMod	Math	mod	2	Pure	Y	Y	Y	N	Y	Y	math_mod	Y	Y	Y	OK
+MathRemainder	Math	remainder	2	Pure	Y	Y	Y	N	Y	Y	math_remainder	Y	Y	Y	OK
+DictEmpty	Dict	empty	0	Pure	Y	Y	Y	N	Y	Y	dict_empty	Y	Y	Y	OK
+DictIsEmpty	Dict	isEmpty	1	Pure	Y	Y	Y	N	Y	Y	dict_is_empty	Y	Y	Y	OK
+DictSize	Dict	size	1	Pure	Y	Y	Y	N	Y	Y	dict_size	Y	Y	Y	OK
+DictKeys	Dict	keys	1	Pure	Y	Y	Y	N	Y	Y	dict_keys	Y	Y	Y	OK
+DictValues	Dict	values	1	Pure	Y	Y	Y	N	Y	Y	dict_values	Y	Y	Y	OK
+DictToList	Dict	toList	1	Pure	Y	Y	Y	N	Y	Y	dict_to_list	Y	Y	Y	OK
+DictFromList	Dict	fromList	1	Pure	Y	Y	Y	N	Y	Y	dict_from_list	Y	Y	Y	OK
+DictGet	Dict	get	2	Pure	Y	Y	Y	N	Y	Y	dict_get	Y	Y	Y	OK
+DictMember	Dict	member	2	Pure	Y	Y	Y	N	Y	Y	dict_member	Y	Y	Y	OK
+DictRemove	Dict	remove	2	Pure	Y	Y	Y	N	Y	Y	dict_remove	Y	Y	Y	OK
+DictUnion	Dict	union	2	Pure	Y	Y	Y	N	Y	Y	dict_union	Y	Y	Y	OK
+DictMap	Dict	map	2	Pure	Y	Y	Y	N	Y	Y	dict_map	Y	Y	Y	OK
+DictInsert	Dict	insert	3	Pure	Y	Y	Y	N	Y	Y	dict_insert	Y	Y	Y	OK
+DictFoldl	Dict	foldl	3	Pure	Y	Y	Y	N	Y	Y	dict_foldl	Y	Y	Y	OK
+SetEmpty	Set	empty	0	Pure	Y	Y	Y	N	Y	Y	set_empty	Y	Y	Y	OK
+SetSize	Set	size	1	Pure	Y	Y	Y	N	Y	Y	set_size	Y	Y	Y	OK
+SetToList	Set	toList	1	Pure	Y	Y	Y	N	Y	Y	set_to_list	Y	Y	Y	OK
+SetFromList	Set	fromList	1	Pure	Y	Y	Y	N	Y	Y	set_from_list	Y	Y	Y	OK
+SetMember	Set	member	2	Pure	Y	Y	Y	N	Y	Y	set_member	Y	Y	Y	OK
+SetInsert	Set	insert	2	Pure	Y	Y	Y	N	Y	Y	set_insert	Y	Y	Y	OK
+SetRemove	Set	remove	2	Pure	Y	Y	Y	N	Y	Y	set_remove	Y	Y	Y	OK
+SetUnion	Set	union	2	Pure	Y	Y	Y	N	Y	Y	set_union	Y	Y	Y	OK
+SetIntersect	Set	intersect	2	Pure	Y	Y	Y	N	Y	Y	set_intersect	Y	Y	Y	OK
+SetDiff	Set	diff	2	Pure	Y	Y	Y	N	Y	Y	set_diff	Y	Y	Y	OK
+BytesEmpty	Bytes	empty	0	Pure	Y	Y	Y	N	Y	Y	bytes_empty	Y	Y	Y	OK
+BytesLength	Bytes	length	1	Pure	Y	Y	Y	N	Y	Y	bytes_length	Y	Y	Y	OK
+BytesIsEmpty	Bytes	isEmpty	1	Pure	Y	Y	Y	N	Y	Y	bytes_is_empty	Y	Y	Y	OK
+BytesFromString	Bytes	fromString	1	Pure	Y	Y	Y	N	Y	Y	bytes_from_string	Y	Y	Y	OK
+BytesToString	Bytes	toString	1	Pure	Y	Y	Y	N	Y	Y	bytes_to_string	Y	Y	Y	OK
+BytesFromHex	Bytes	fromHex	1	Pure	Y	Y	Y	N	Y	Y	bytes_from_hex	Y	Y	Y	OK
+BytesToHex	Bytes	toHex	1	Pure	Y	Y	Y	N	Y	Y	bytes_to_hex	Y	Y	Y	OK
+BytesFromBase64	Bytes	fromBase64	1	Pure	Y	Y	Y	N	Y	Y	bytes_from_base64	Y	Y	Y	OK
+BytesToBase64	Bytes	toBase64	1	Pure	Y	Y	Y	N	Y	Y	bytes_to_base64	Y	Y	Y	OK
+BytesAppend	Bytes	append	2	Pure	Y	Y	Y	N	Y	Y	bytes_append	Y	Y	Y	OK
+BytesSlice	Bytes	slice	3	Pure	Y	Y	Y	N	Y	Y	bytes_slice	Y	Y	Y	OK
+EncodingBase64Encode	Encoding	base64Encode	1	Pure	Y	Y	Y	Y	Y	Y	base64_encode	Y	Y	Y	OK
+EncodingBase64Decode					Y	N	Y	Y	N	Y	sky_base64_decode	Y	Y	N	OK
+EncodingUrlEncode	Encoding	urlEncode	1	Pure	Y	Y	Y	Y	Y	Y	url_encode	Y	Y	Y	OK
+EncodingUrlDecode	Encoding	urlDecode	1	Pure	Y	Y	Y	Y	Y	Y	sky_url_decode	Y	Y	Y	OK
+EncodingHexEncode	Encoding	hexEncode	1	Pure	Y	Y	Y	Y	Y	Y	encoding_hex_encode	Y	Y	Y	OK
+EncodingHexDecode					Y	N	Y	Y	N	Y	sky_encoding_hex_decode	Y	Y	N	OK
+JsonEncString	JsonEnc	string	1	Pure	Y	Y	Y	Y	Y	Y	json_enc_string	Y	Y	Y	OK
+JsonEncInt	JsonEnc	int	1	Pure	Y	Y	Y	Y	Y	Y	json_enc_int	Y	Y	Y	OK
+JsonEncFloat	JsonEnc	float	1	Pure	Y	Y	Y	Y	Y	Y	json_enc_float	Y	Y	Y	OK
+JsonEncBool	JsonEnc	bool	1	Pure	Y	Y	Y	Y	Y	Y	json_enc_bool	Y	Y	Y	OK
+JsonEncNull	JsonEnc	null	0	Pure	Y	Y	Y	Y	Y	Y	json_enc_null	Y	Y	Y	OK
+JsonEncList	JsonEnc	list	2	Pure	Y	Y	Y	Y	Y	Y	json_enc_list	Y	Y	Y	OK
+JsonEncObject	JsonEnc	object	1	Pure	Y	Y	Y	Y	Y	Y	json_enc_object	Y	Y	Y	OK
+JsonEncEncode	JsonEnc	encode	2	Pure	Y	Y	Y	Y	Y	Y	json_enc_encode	Y	Y	Y	OK
+JsonDecString	JsonDec	string	0	Pure	Y	Y	Y	Y	Y	Y	json_decode_string	Y	Y	Y	OK
+JsonDecInt	JsonDec	int	0	Pure	Y	Y	Y	Y	Y	Y	json_decode_int	Y	Y	Y	OK
+JsonDecFloat	JsonDec	float	0	Pure	Y	Y	Y	Y	Y	Y	json_decode_float	Y	Y	Y	OK
+JsonDecBool	JsonDec	bool	0	Pure	Y	Y	Y	Y	Y	Y	json_decode_bool	Y	Y	Y	OK
+JsonDecDecodeString					Y	N	Y	Y	N	Y	decode_from_json_string	Y	Y	N	OK
+JsonDecField	JsonDec	field	2	Pure	Y	Y	Y	Y	Y	Y	decode_field	Y	Y	Y	OK
+JsonDecAt	JsonDec	at	2	Pure	Y	Y	Y	Y	Y	Y	decode_at	Y	Y	Y	OK
+JsonDecIndex	JsonDec	index	2	Pure	Y	Y	Y	Y	Y	Y	decode_index	Y	Y	Y	OK
+JsonDecList	JsonDec	list	1	Pure	Y	Y	Y	Y	Y	Y	decode_list	Y	Y	Y	OK
+JsonDecMap	JsonDec	map	2	Pure	Y	Y	Y	Y	Y	Y	decode_map	Y	Y	Y	OK
+JsonDecAndThen	JsonDec	andThen	2	Pure	Y	Y	Y	Y	Y	Y	decode_and_then	Y	Y	Y	OK
+JsonDecSucceed	JsonDec	succeed	1	Pure	Y	Y	Y	Y	Y	Y	decode_succeed	Y	Y	Y	OK
+JsonDecFail	JsonDec	fail	1	Pure	Y	Y	Y	Y	Y	Y	decode_fail	Y	Y	Y	OK
+JsonDecOneOf	JsonDec	oneOf	1	Pure	Y	Y	Y	Y	Y	Y	decode_one_of	Y	Y	Y	OK
+JsonDecMap2	JsonDec	map2	3	Pure	Y	Y	Y	Y	Y	Y	decode_map2	Y	Y	Y	OK
+JsonDecMap3	JsonDec	map3	4	Pure	Y	Y	Y	Y	Y	Y	decode_map3	Y	Y	Y	OK
+JsonDecMap4	JsonDec	map4	5	Pure	Y	Y	Y	Y	Y	Y	decode_map4	Y	Y	Y	OK
+JsonDecPRequired					Y	N	Y	Y	N	Y	decode_pipeline_required	Y	Y	N	OK
+JsonDecPOptional					Y	N	Y	Y	N	Y	decode_pipeline_optional	Y	Y	N	OK
+JsonDecPCustom	JsonDecP	custom	2	Pure	Y	Y	Y	Y	Y	Y	decode_pipeline_custom	Y	Y	Y	OK
+JsonDecPRequiredAt					Y	N	Y	Y	N	Y	decode_pipeline_required_at	Y	Y	N	OK
+CryptoSha256	Crypto	sha256	1	Pure	Y	Y	Y	Y	Y	Y	crypto_sha256	Y	Y	Y	OK
+CryptoSha512	Crypto	sha512	1	Pure	Y	Y	Y	Y	Y	Y	crypto_sha512	Y	Y	Y	OK
+CryptoSha1	Crypto	sha1	1	Pure	Y	Y	Y	Y	Y	Y	crypto_sha1	Y	Y	Y	OK
+CryptoMd5	Crypto	md5	1	Pure	Y	Y	Y	Y	Y	Y	crypto_md5	Y	Y	Y	OK
+CryptoHmacSha256	Crypto	hmacSha256	2	Pure	Y	Y	Y	Y	Y	Y	crypto_hmac_sha256	Y	Y	Y	OK
+CryptoHmacSha512	Crypto	hmacSha512	2	Pure	Y	Y	Y	Y	Y	Y	crypto_hmac_sha512	Y	Y	Y	OK
 CryptoRsaSha256Sign					Y	N	Y	Y	N	Y	sky_crypto_rsa_sha256_sign	Y	N	N	OK
-CryptoRsaSha256Verify					Y	N	Y	Y	N	Y	crypto_rsa_sha256_verify	Y	N	N	OK
-CryptoConstantTimeEqual					Y	N	Y	Y	N	Y	crypto_constant_time_equal	Y	N	N	OK
+CryptoRsaSha256Verify					Y	N	Y	Y	N	Y	crypto_rsa_sha256_verify	Y	Y	N	OK
+CryptoConstantTimeEqual					Y	N	Y	Y	N	Y	crypto_constant_time_equal	Y	Y	N	OK
 CryptoAesGcmEncrypt					Y	N	Y	Y	N	Y	sky_aes_gcm_encrypt	Y	N	N	OK
 CryptoAesGcmDecrypt					Y	N	Y	Y	N	Y	sky_aes_gcm_decrypt	Y	N	N	OK
 CryptoChacha20Encrypt					Y	N	Y	Y	N	Y	sky_chacha20_encrypt	Y	N	N	OK
 CryptoChacha20Decrypt					Y	N	Y	Y	N	Y	sky_chacha20_decrypt	Y	N	N	OK
-CryptoAesKeyFromPassword					Y	N	Y	Y	N	Y	crypto_aes_key_from_password	Y	N	N	OK
-CryptoChachaKeyFromPassword					Y	N	Y	Y	N	Y	crypto_chacha_key_from_password	Y	N	N	OK
-CryptoRandomBytes	Crypto	randomBytes	1	Pure	Y	Y	Y	Y	Y	Y	crypto_random_bytes	Y	N	N	OK
-CryptoRandomToken	Crypto	randomToken	1	Pure	Y	Y	Y	Y	Y	Y	crypto_random_token	Y	N	N	OK
-UuidV4	Uuid	v4	1	Pure	Y	Y	Y	Y	Y	Y	uuid_v4	Y	N	N	OK
-UuidV7	Uuid	v7	1	Pure	Y	Y	Y	Y	Y	Y	uuid_v7	Y	N	N	OK
-UuidParse	Uuid	parse	1	Pure	Y	Y	Y	Y	Y	Y	uuid_parse	Y	N	N	OK
+CryptoAesKeyFromPassword					Y	N	Y	Y	N	Y	crypto_aes_key_from_password	Y	Y	N	OK
+CryptoChachaKeyFromPassword					Y	N	Y	Y	N	Y	crypto_chacha_key_from_password	Y	Y	N	OK
+CryptoRandomBytes	Crypto	randomBytes	1	Pure	Y	Y	Y	Y	Y	Y	crypto_random_bytes	Y	Y	Y	OK
+CryptoRandomToken	Crypto	randomToken	1	Pure	Y	Y	Y	Y	Y	Y	crypto_random_token	Y	Y	Y	OK
+UuidV4	Uuid	v4	1	Pure	Y	Y	Y	Y	Y	Y	uuid_v4	Y	Y	Y	OK
+UuidV7	Uuid	v7	1	Pure	Y	Y	Y	Y	Y	Y	uuid_v7	Y	Y	Y	OK
+UuidParse	Uuid	parse	1	Pure	Y	Y	Y	Y	Y	Y	uuid_parse	Y	Y	Y	OK
 JwtEncodeHs256	Jwt	encodeHs256	2	Pure	Y	Y	Y	Y	Y	Y	sky_jwt_encode_hs256	Y	N	N	OK
 JwtDecodeHs256	Jwt	decodeHs256	2	Pure	Y	Y	Y	Y	Y	Y	sky_jwt_decode_hs256	Y	N	N	OK
 JwtEncodeRs256	Jwt	encodeRs256	2	Pure	Y	Y	Y	Y	Y	Y	sky_jwt_encode_rs256	Y	N	N	OK
 JwtDecodeRs256	Jwt	decodeRs256	2	Pure	Y	Y	Y	Y	Y	Y	sky_jwt_decode_rs256	Y	N	N	OK
-TaskSucceed	Task	succeed	1	Pure	Y	Y	Y	N	Y	Y	task_succeed	Y	N	N	OK
-TaskFail	Task	fail	1	Pure	Y	Y	Y	N	Y	Y	task_fail	Y	N	N	OK
-TaskMap	Task	map	2	Pure	Y	Y	Y	N	Y	Y	task_map	Y	N	N	OK
-TaskAndThen	Task	andThen	2	Pure	Y	Y	Y	N	Y	Y	task_and_then	Y	N	N	OK
-TaskMapError	Task	mapError	2	Pure	Y	Y	Y	N	Y	Y	task_map_error	Y	N	N	OK
-TaskOnError	Task	onError	2	Pure	Y	Y	Y	N	Y	Y	task_on_error	Y	N	N	OK
-TaskFromResult	Task	fromResult	1	Pure	Y	Y	Y	N	Y	Y	task_from_result	Y	N	N	OK
-TaskAndThenResult	Task	andThenResult	2	Pure	Y	Y	Y	N	Y	Y	task_and_then_result	Y	N	N	OK
-TaskSequence	Task	sequence	1	Pure	Y	Y	Y	N	Y	Y	task_sequence	Y	N	N	OK
-TaskParallel	Task	parallel	1	Pure	Y	Y	Y	N	Y	Y	task_parallel	Y	N	N	OK
-TaskRun	Task	run	1	Pure	Y	Y	Y	N	Y	Y	task_run	Y	N	N	OK
-TaskPerform	Task	perform	1	Pure	Y	Y	Y	N	Y	Y	task_run	Y	N	N	OK
-IoReadLine	Io	readLine	0	Pure	Y	Y	Y	N	Y	Y	io_read_line	Y	N	N	OK
-IoWriteStdout	Io	writeStdout	1	Pure	Y	Y	Y	N	Y	Y	io_write_stdout	Y	N	N	OK
-IoWriteStderr	Io	writeStderr	1	Pure	Y	Y	Y	N	Y	Y	io_write_stderr	Y	N	N	OK
-TimeNow	Time	now	0	Pure	Y	Y	Y	N	Y	Y	time_now	Y	N	N	OK
-TimeSleep	Time	sleep	1	Pure	Y	Y	Y	N	Y	Y	time_sleep	Y	N	N	OK
-TimeUnixMillis	Time	unixMillis	0	Pure	Y	Y	Y	N	Y	Y	time_unix_millis	Y	N	N	OK
-SystemArgs	System	args	0	Pure	Y	Y	Y	N	Y	Y	system_args	Y	N	N	OK
-SystemGetenv	System	getenv	1	Pure	Y	Y	Y	N	Y	Y	system_getenv	Y	N	N	OK
-SystemGetenvOr	System	getenvOr	2	Pure	Y	Y	Y	N	Y	Y	system_getenv_or	Y	N	N	OK
-SystemGetArg	System	getArg	1	Pure	Y	Y	Y	N	Y	Y	system_get_arg	Y	N	N	OK
-SystemGetenvInt	System	getenvInt	2	Pure	Y	Y	Y	N	Y	Y	system_getenv_int	Y	N	N	OK
-SystemGetenvBool	System	getenvBool	2	Pure	Y	Y	Y	N	Y	Y	system_getenv_bool	Y	N	N	OK
-SystemSetenv	System	setenv	2	Pure	Y	Y	Y	N	Y	Y	system_setenv	Y	N	N	OK
-SystemUnsetenv	System	unsetenv	1	Pure	Y	Y	Y	N	Y	Y	system_unsetenv	Y	N	N	OK
-SystemCwd	System	cwd	0	Pure	Y	Y	Y	N	Y	Y	system_cwd	Y	N	N	OK
-SystemLoadEnv	System	loadEnv	0	Pure	Y	Y	Y	N	Y	Y	system_load_env	Y	N	N	OK
-SystemExit	System	exit	1	Pure	Y	Y	Y	N	Y	Y	system_exit	Y	N	N	OK
-RandomInt	Random	int	2	Pure	Y	Y	Y	N	Y	Y	random_int	Y	N	N	OK
-RandomFloat	Random	float	0	Pure	Y	Y	Y	N	Y	Y	random_float	Y	N	N	OK
-RandomChoice	Random	choice	1	Pure	Y	Y	Y	N	Y	Y	random_choice	Y	N	N	OK
-FileReadFile	File	readFile	1	Pure	Y	Y	Y	N	Y	Y	file_read_file	Y	N	N	OK
-FileWriteFile	File	writeFile	2	Pure	Y	Y	Y	N	Y	Y	file_write_file	Y	N	N	OK
-FileExists	File	exists	1	Pure	Y	Y	Y	N	Y	Y	file_exists	Y	N	N	OK
-FileRemove	File	remove	1	Pure	Y	Y	Y	N	Y	Y	file_remove	Y	N	N	OK
-FileMkdirAll	File	mkdirAll	1	Pure	Y	Y	Y	N	Y	Y	file_mkdir_all	Y	N	N	OK
-FileReadFileLimit	File	readFileLimit	2	Pure	Y	Y	Y	N	Y	Y	file_read_file_limit	Y	N	N	OK
-FileReadFileBytes	File	readFileBytes	1	Pure	Y	Y	Y	N	Y	Y	file_read_file_bytes	Y	N	N	OK
-FileAppend	File	append	2	Pure	Y	Y	Y	N	Y	Y	file_append	Y	N	N	OK
-FileReadDir	File	readDir	1	Pure	Y	Y	Y	N	Y	Y	file_read_dir	Y	N	N	OK
-FileIsDir	File	isDir	1	Pure	Y	Y	Y	N	Y	Y	file_is_dir	Y	N	N	OK
-FileTempFile	File	tempFile	1	Pure	Y	Y	Y	N	Y	Y	file_temp_file	Y	N	N	OK
-FileTempDir	File	tempDir	1	Pure	Y	Y	Y	N	Y	Y	file_temp_dir	Y	N	N	OK
-FileCopy	File	copy	2	Pure	Y	Y	Y	N	Y	Y	file_copy	Y	N	N	OK
-FileRename	File	rename	2	Pure	Y	Y	Y	N	Y	Y	file_rename	Y	N	N	OK
-FileDelete	File	delete	1	Pure	Y	Y	Y	N	Y	Y	file_delete	Y	N	N	OK
-HttpGet	Http	get	1	Pure	Y	Y	Y	N	Y	Y	http_get	Y	N	N	OK
-HttpPost	Http	post	2	Pure	Y	Y	Y	N	Y	Y	http_post	Y	N	N	OK
-HttpRequest	Http	request	1	Pure	Y	Y	Y	N	Y	Y	http_request	Y	N	N	OK
-HttpParseQuery	Http	parseQuery	1	Pure	Y	Y	Y	N	Y	Y	http_parse_query	Y	N	N	OK
-HttpDefaultRequest					Y	N	Y	N	N	Y	http_default_request	N	N	N	MISMATCH:runtime_sym_missing
-HttpWithMethod	Http	withMethod	2	Pure	Y	Y	Y	N	Y	Y	http_with_method	N	N	N	MISMATCH:runtime_sym_missing
-HttpWithTimeout	Http	withTimeout	2	Pure	Y	Y	Y	N	Y	Y	http_with_timeout	N	N	N	MISMATCH:runtime_sym_missing
-HttpWithBody	Http	withBody	2	Pure	Y	Y	Y	N	Y	Y	http_with_body	N	N	N	MISMATCH:runtime_sym_missing
-HttpWithHeader	Http	withHeader	3	Pure	Y	Y	Y	N	Y	Y	http_with_header	N	N	N	MISMATCH:runtime_sym_missing
-DbConnect	Db	connect	1	Db	Y	Y	Y	N	Y	Y	db_connect	Y	N	N	OK
-DbOpen	Db	open	1	Db	Y	Y	Y	N	Y	Y	db_open	Y	N	N	OK
-DbClose	Db	close	1	Db	Y	Y	Y	N	Y	Y	db_close	Y	N	N	OK
-DbExecRaw	Db	execRaw	3	Db	Y	Y	Y	N	Y	Y	db_exec_raw	Y	N	N	OK
-DbExec	Db	exec	3	Db	Y	Y	Y	N	Y	Y	db_exec_params	Y	N	N	OK
-DbQuery	Db	query	3	Db	Y	Y	Y	N	Y	Y	db_query_params	Y	N	N	OK
-DbQueryDecode	Db	queryDecode	4	Db	Y	Y	Y	N	Y	Y	db_query_decode_params	Y	N	N	OK
-DbGetString	Db	getString	2	Db	Y	Y	Y	N	Y	Y	db_get_string	Y	N	N	OK
-DbGetInt	Db	getInt	2	Db	Y	Y	Y	N	Y	Y	db_get_int	Y	N	N	OK
-DbGetBool	Db	getBool	2	Db	Y	Y	Y	N	Y	Y	db_get_bool	Y	N	N	OK
-DbGetField	Db	getField	2	Db	Y	Y	Y	N	Y	Y	db_get_field	Y	N	N	OK
-DbInsertRow	Db	insertRow	3	Db	Y	Y	Y	N	Y	Y	db_insert_row	Y	N	N	OK
-DbGetById	Db	getById	2	Db	Y	Y	Y	N	Y	Y	db_get_by_id	Y	N	N	OK
-DbUpdateById	Db	updateById	3	Db	Y	Y	Y	N	Y	Y	db_update_by_id	Y	N	N	OK
-DbDeleteById	Db	deleteById	2	Db	Y	Y	Y	N	Y	Y	db_delete_by_id	Y	N	N	OK
-DbFindOneByField	Db	findOneByField	3	Db	Y	Y	Y	N	Y	Y	db_find_one_by_field	Y	N	N	OK
-DbFindManyByField	Db	findManyByField	3	Db	Y	Y	Y	N	Y	Y	db_find_many_by_field	Y	N	N	OK
-DbFindByConditions	Db	findByConditions	3	Db	Y	Y	Y	N	Y	Y	db_find_by_conditions	Y	N	N	OK
-DbUnsafeFindWhere	Db	unsafeFindWhere	3	Db	Y	Y	Y	N	Y	Y	db_unsafe_find_where	Y	N	N	OK
-DbInsertFields	Db	insertFields	3	Db	Y	Y	Y	N	Y	Y	db_insert_fields	Y	N	N	OK
-DbUpdateFields	Db	updateFields	4	Db	Y	Y	Y	N	Y	Y	db_update_fields	Y	N	N	OK
-DbInsertFieldsReturning					Y	N	Y	N	N	Y	db_insert_fields_returning	Y	N	N	OK
-DbWithTransaction	Db	withTransaction	2	Db	Y	Y	Y	N	Y	Y	db_with_transaction	Y	N	N	OK
-DbMigrate	Db	migrate	2	Db	Y	Y	Y	N	Y	Y	db_migrate_apply	Y	N	N	OK
-DbDecString	Db.Decode	string	1	Db	Y	Y	Y	N	Y	Y	db_decode_string	Y	N	N	OK
-DbDecInt	Db.Decode	int	1	Db	Y	Y	Y	N	Y	Y	db_decode_int	Y	N	N	OK
-DbDecFloat	Db.Decode	float	1	Db	Y	Y	Y	N	Y	Y	db_decode_float	Y	N	N	OK
-DbDecBool	Db.Decode	bool	1	Db	Y	Y	Y	N	Y	Y	db_decode_bool	Y	N	N	OK
-DbDecNullable	Db.Decode	nullable	1	Db	Y	Y	Y	N	Y	Y	db_decode_nullable	Y	N	N	OK
-DbDecMap	Db.Decode	map	2	Db	Y	Y	Y	N	Y	Y	db_decode_map	N	N	N	MISMATCH:runtime_sym_missing
-DbDecAndThen	Db.Decode	andThen	2	Db	Y	Y	Y	N	Y	Y	db_decode_and_then	N	N	N	MISMATCH:runtime_sym_missing
-DbDecSucceed	Db.Decode	succeed	1	Db	Y	Y	Y	N	Y	Y	decode_succeed	Y	N	N	OK
-DbDecFail	Db.Decode	fail	1	Db	Y	Y	Y	N	Y	Y	db_decode_fail	N	N	N	MISMATCH:runtime_sym_missing
-DbDecMap2	Db.Decode	map2	3	Db	Y	Y	Y	N	Y	Y	db_decode_map2	N	N	N	MISMATCH:runtime_sym_missing
-DbDecMap3	Db.Decode	map3	4	Db	Y	Y	Y	N	Y	Y	db_decode_map3	N	N	N	MISMATCH:runtime_sym_missing
-DbDecMap4	Db.Decode	map4	5	Db	Y	Y	Y	N	Y	Y	db_decode_map4	N	N	N	MISMATCH:runtime_sym_missing
-DbDecRequired	Db.Decode	required	3	Db	Y	Y	Y	N	Y	Y	db_decode_required	Y	N	N	OK
-DbDecOptional	Db.Decode	optional	4	Db	Y	Y	Y	N	Y	Y	db_decode_optional	Y	N	N	OK
-CmdNone	Cmd	none	0	Tea	Y	Y	Y	N	Y	Y	cmd_none	Y	N	N	OK
-CmdBatch	Cmd	batch	1	Tea	Y	Y	Y	N	Y	Y	cmd_batch	Y	N	N	OK
-CmdPerform	Cmd	perform	2	Tea	Y	Y	Y	N	Y	Y	cmd_perform	Y	N	N	OK
-SubNone	Sub	none	0	Tea	Y	Y	Y	N	Y	Y	sub_none	Y	N	N	OK
-SubBatch	Sub	batch	1	Tea	Y	Y	Y	N	Y	Y	sub_batch	Y	N	N	OK
-SubEvery	Sub	every	2	Tea	Y	Y	Y	N	Y	Y	sub_every	Y	N	N	OK
-TimeEvery	Time	every	2	Tea	Y	Y	Y	N	Y	Y	time_every	Y	N	N	OK
-CmdPublish	Cmd	publish	1	Tea	N	Y	N	N	N	Y	cmd_publish	Y	N	N	BACKLOG
-CmdPublishNoEcho	Cmd	publishNoEcho	1	Tea	N	Y	N	N	N	Y	cmd_publish_no_echo	Y	N	N	BACKLOG
-SubSubscribeTopic	Sub	subscribeTopic	2	Tea	Y	Y	Y	N	Y	Y	sub_subscribe_topic	Y	N	N	OK
-PubSubPublish	PubSub	publish	1	Tea	Y	Y	N	N	N	Y	pubsub_publish	Y	N	N	OK
-PubSubPublishNoEcho					Y	N	N	N	N	Y	pubsub_publish_no_echo	Y	N	N	OK
-ServerGet	Server	get	2	Server	Y	Y	Y	N	Y	Y	server_get	Y	N	N	OK
-ServerPost	Server	post	2	Server	Y	Y	Y	N	Y	Y	server_post	Y	N	N	OK
-ServerPut	Server	put	2	Server	Y	Y	Y	N	Y	Y	server_put	Y	N	N	OK
-ServerDelete	Server	delete	2	Server	Y	Y	Y	N	Y	Y	server_delete	Y	N	N	OK
-ServerAny	Server	any	2	Server	Y	Y	Y	N	Y	Y	server_any	Y	N	N	OK
-ServerApi	Server	api	2	Server	Y	Y	Y	N	Y	Y	server_api	Y	N	N	OK
-ServerStatic	Server	static	2	Server	Y	Y	Y	N	Y	Y	server_static	Y	N	N	OK
-ServerListen	Server	listen	2	Server	Y	Y	Y	N	Y	Y	server_listen	Y	N	N	OK
-ServerText	Server	text	1	Server	Y	Y	Y	N	Y	Y	server_text	Y	N	N	OK
-ServerJson	Server	json	1	Server	Y	Y	Y	N	Y	Y	server_json	Y	N	N	OK
-ServerHtml	Server	html	1	Server	Y	Y	Y	N	Y	Y	server_html	Y	N	N	OK
-ServerWithStatus	Server	withStatus	2	Server	Y	Y	Y	N	Y	Y	server_with_status	Y	N	N	OK
-ServerWithHeader	Server	withHeader	3	Server	Y	Y	Y	N	Y	Y	server_with_header	Y	N	N	OK
-ServerRedirect	Server	redirect	1	Server	Y	Y	Y	N	Y	Y	server_redirect	Y	N	N	OK
-ServerParam	Server	param	2	Server	Y	Y	Y	N	Y	Y	server_param	Y	N	N	OK
-ServerQueryParam	Server	queryParam	2	Server	Y	Y	Y	N	Y	Y	server_query_param	Y	N	N	OK
-ServerHeader	Server	header	2	Server	Y	Y	Y	N	Y	Y	server_header	Y	N	N	OK
-ServerGetCookie	Server	getCookie	2	Server	Y	Y	Y	N	Y	Y	server_get_cookie	Y	N	N	OK
+TaskSucceed	Task	succeed	1	Pure	Y	Y	Y	N	Y	Y	task_succeed	Y	Y	Y	OK
+TaskFail	Task	fail	1	Pure	Y	Y	Y	N	Y	Y	task_fail	Y	Y	Y	OK
+TaskMap	Task	map	2	Pure	Y	Y	Y	N	Y	Y	task_map	Y	Y	Y	OK
+TaskAndThen	Task	andThen	2	Pure	Y	Y	Y	N	Y	Y	task_and_then	Y	Y	Y	OK
+TaskMapError	Task	mapError	2	Pure	Y	Y	Y	N	Y	Y	task_map_error	Y	Y	Y	OK
+TaskOnError	Task	onError	2	Pure	Y	Y	Y	N	Y	Y	task_on_error	Y	Y	Y	OK
+TaskFromResult	Task	fromResult	1	Pure	Y	Y	Y	N	Y	Y	task_from_result	Y	Y	Y	OK
+TaskAndThenResult	Task	andThenResult	2	Pure	Y	Y	Y	N	Y	Y	task_and_then_result	Y	Y	Y	OK
+TaskSequence	Task	sequence	1	Pure	Y	Y	Y	N	Y	Y	task_sequence	Y	Y	Y	OK
+TaskParallel	Task	parallel	1	Pure	Y	Y	Y	N	Y	Y	task_parallel	Y	Y	Y	OK
+TaskRun	Task	run	1	Pure	Y	Y	Y	N	Y	Y	task_run	Y	Y	Y	OK
+TaskPerform	Task	perform	1	Pure	Y	Y	Y	N	Y	Y	task_run	Y	Y	Y	OK
+IoReadLine	Io	readLine	0	Pure	Y	Y	Y	N	Y	Y	io_read_line	Y	Y	Y	OK
+IoWriteStdout	Io	writeStdout	1	Pure	Y	Y	Y	N	Y	Y	io_write_stdout	Y	Y	Y	OK
+IoWriteStderr	Io	writeStderr	1	Pure	Y	Y	Y	N	Y	Y	io_write_stderr	Y	Y	Y	OK
+TimeNow	Time	now	0	Pure	Y	Y	Y	N	Y	Y	time_now	Y	Y	Y	OK
+TimeSleep	Time	sleep	1	Pure	Y	Y	Y	N	Y	Y	time_sleep	Y	Y	Y	OK
+TimeUnixMillis	Time	unixMillis	0	Pure	Y	Y	Y	N	Y	Y	time_unix_millis	Y	Y	Y	OK
+SystemArgs	System	args	0	Pure	Y	Y	Y	N	Y	Y	system_args	Y	Y	Y	OK
+SystemGetenv	System	getenv	1	Pure	Y	Y	Y	N	Y	Y	system_getenv	Y	Y	Y	OK
+SystemGetenvOr	System	getenvOr	2	Pure	Y	Y	Y	N	Y	Y	system_getenv_or	Y	Y	Y	OK
+SystemGetArg	System	getArg	1	Pure	Y	Y	Y	N	Y	Y	system_get_arg	Y	Y	Y	OK
+SystemGetenvInt	System	getenvInt	2	Pure	Y	Y	Y	N	Y	Y	system_getenv_int	Y	Y	Y	OK
+SystemGetenvBool	System	getenvBool	2	Pure	Y	Y	Y	N	Y	Y	system_getenv_bool	Y	Y	Y	OK
+SystemSetenv	System	setenv	2	Pure	Y	Y	Y	N	Y	Y	system_setenv	Y	Y	Y	OK
+SystemUnsetenv	System	unsetenv	1	Pure	Y	Y	Y	N	Y	Y	system_unsetenv	Y	Y	Y	OK
+SystemCwd	System	cwd	0	Pure	Y	Y	Y	N	Y	Y	system_cwd	Y	Y	Y	OK
+SystemLoadEnv	System	loadEnv	0	Pure	Y	Y	Y	N	Y	Y	system_load_env	Y	Y	Y	OK
+SystemExit	System	exit	1	Pure	Y	Y	Y	N	Y	Y	system_exit	Y	Y	Y	OK
+RandomInt	Random	int	2	Pure	Y	Y	Y	N	Y	Y	random_int	Y	Y	Y	OK
+RandomFloat	Random	float	0	Pure	Y	Y	Y	N	Y	Y	random_float	Y	Y	Y	OK
+RandomChoice	Random	choice	1	Pure	Y	Y	Y	N	Y	Y	random_choice	Y	Y	Y	OK
+FileReadFile	File	readFile	1	Pure	Y	Y	Y	N	Y	Y	file_read_file	Y	Y	Y	OK
+FileWriteFile	File	writeFile	2	Pure	Y	Y	Y	N	Y	Y	file_write_file	Y	Y	Y	OK
+FileExists	File	exists	1	Pure	Y	Y	Y	N	Y	Y	file_exists	Y	Y	Y	OK
+FileRemove	File	remove	1	Pure	Y	Y	Y	N	Y	Y	file_remove	Y	Y	Y	OK
+FileMkdirAll	File	mkdirAll	1	Pure	Y	Y	Y	N	Y	Y	file_mkdir_all	Y	Y	Y	OK
+FileReadFileLimit	File	readFileLimit	2	Pure	Y	Y	Y	N	Y	Y	file_read_file_limit	Y	Y	Y	OK
+FileReadFileBytes	File	readFileBytes	1	Pure	Y	Y	Y	N	Y	Y	file_read_file_bytes	Y	Y	Y	OK
+FileAppend	File	append	2	Pure	Y	Y	Y	N	Y	Y	file_append	Y	Y	Y	OK
+FileReadDir	File	readDir	1	Pure	Y	Y	Y	N	Y	Y	file_read_dir	Y	Y	Y	OK
+FileIsDir	File	isDir	1	Pure	Y	Y	Y	N	Y	Y	file_is_dir	Y	Y	Y	OK
+FileTempFile	File	tempFile	1	Pure	Y	Y	Y	N	Y	Y	file_temp_file	Y	Y	Y	OK
+FileTempDir	File	tempDir	1	Pure	Y	Y	Y	N	Y	Y	file_temp_dir	Y	Y	Y	OK
+FileCopy	File	copy	2	Pure	Y	Y	Y	N	Y	Y	file_copy	Y	Y	Y	OK
+FileRename	File	rename	2	Pure	Y	Y	Y	N	Y	Y	file_rename	Y	Y	Y	OK
+FileDelete	File	delete	1	Pure	Y	Y	Y	N	Y	Y	file_delete	Y	Y	N	OK
+HttpGet	Http	get	1	Pure	Y	Y	Y	N	Y	Y	http_get	Y	Y	Y	OK
+HttpPost	Http	post	2	Pure	Y	Y	Y	N	Y	Y	http_post	Y	Y	Y	OK
+HttpRequest	Http	request	1	Pure	Y	Y	Y	N	Y	Y	http_request	Y	Y	Y	OK
+HttpParseQuery	Http	parseQuery	1	Pure	Y	Y	Y	N	Y	Y	http_parse_query	Y	Y	Y	OK
+HttpDefaultRequest					Y	N	Y	N	N	Y	http_default_request	N	N	N	OK
+HttpWithMethod	Http	withMethod	2	Pure	Y	Y	Y	N	Y	Y	http_with_method	N	N	Y	OK
+HttpWithTimeout	Http	withTimeout	2	Pure	Y	Y	Y	N	Y	Y	http_with_timeout	N	N	Y	OK
+HttpWithBody	Http	withBody	2	Pure	Y	Y	Y	N	Y	Y	http_with_body	N	N	Y	OK
+HttpWithHeader	Http	withHeader	3	Pure	Y	Y	Y	N	Y	Y	http_with_header	N	N	Y	OK
+DbConnect	Db	connect	1	Db	Y	Y	Y	N	Y	Y	db_connect	Y	Y	Y	OK
+DbOpen	Db	open	1	Db	Y	Y	Y	N	Y	Y	db_open	Y	Y	Y	OK
+DbClose	Db	close	1	Db	Y	Y	Y	N	Y	Y	db_close	Y	Y	Y	OK
+DbExecRaw	Db	execRaw	3	Db	Y	Y	Y	N	Y	Y	db_exec_raw	Y	Y	Y	OK
+DbExec	Db	exec	3	Db	Y	Y	Y	N	Y	Y	db_exec_params	Y	Y	Y	OK
+DbQuery	Db	query	3	Db	Y	Y	Y	N	Y	Y	db_query_params	Y	Y	Y	OK
+DbQueryDecode	Db	queryDecode	4	Db	Y	Y	Y	N	Y	Y	db_query_decode_params	Y	Y	Y	OK
+DbGetString	Db	getString	2	Db	Y	Y	Y	N	Y	Y	db_get_string	Y	Y	Y	OK
+DbGetInt	Db	getInt	2	Db	Y	Y	Y	N	Y	Y	db_get_int	Y	Y	Y	OK
+DbGetBool	Db	getBool	2	Db	Y	Y	Y	N	Y	Y	db_get_bool	Y	Y	Y	OK
+DbGetField	Db	getField	2	Db	Y	Y	Y	N	Y	Y	db_get_field	Y	Y	Y	OK
+DbInsertRow	Db	insertRow	3	Db	Y	Y	Y	N	Y	Y	db_insert_row	Y	Y	Y	OK
+DbGetById	Db	getById	2	Db	Y	Y	Y	N	Y	Y	db_get_by_id	Y	Y	Y	OK
+DbUpdateById	Db	updateById	3	Db	Y	Y	Y	N	Y	Y	db_update_by_id	Y	Y	Y	OK
+DbDeleteById	Db	deleteById	2	Db	Y	Y	Y	N	Y	Y	db_delete_by_id	Y	Y	Y	OK
+DbFindOneByField	Db	findOneByField	3	Db	Y	Y	Y	N	Y	Y	db_find_one_by_field	Y	Y	Y	OK
+DbFindManyByField	Db	findManyByField	3	Db	Y	Y	Y	N	Y	Y	db_find_many_by_field	Y	Y	Y	OK
+DbFindByConditions	Db	findByConditions	3	Db	Y	Y	Y	N	Y	Y	db_find_by_conditions	Y	Y	Y	OK
+DbUnsafeFindWhere	Db	unsafeFindWhere	3	Db	Y	Y	Y	N	Y	Y	db_unsafe_find_where	Y	Y	Y	OK
+DbInsertFields	Db	insertFields	3	Db	Y	Y	Y	N	Y	Y	db_insert_fields	Y	Y	Y	OK
+DbUpdateFields	Db	updateFields	4	Db	Y	Y	Y	N	Y	Y	db_update_fields	Y	Y	Y	OK
+DbInsertFieldsReturning					Y	N	Y	N	N	Y	db_insert_fields_returning	Y	Y	N	OK
+DbWithTransaction	Db	withTransaction	2	Db	Y	Y	Y	N	Y	Y	db_with_transaction	Y	Y	Y	OK
+DbMigrate	Db	migrate	2	Db	Y	Y	Y	N	Y	Y	db_migrate_apply	Y	Y	Y	OK
+DbDecString	Db.Decode	string	1	Db	Y	Y	Y	N	Y	Y	db_decode_string	Y	Y	Y	OK
+DbDecInt	Db.Decode	int	1	Db	Y	Y	Y	N	Y	Y	db_decode_int	Y	Y	Y	OK
+DbDecFloat	Db.Decode	float	1	Db	Y	Y	Y	N	Y	Y	db_decode_float	Y	Y	Y	OK
+DbDecBool	Db.Decode	bool	1	Db	Y	Y	Y	N	Y	Y	db_decode_bool	Y	Y	Y	OK
+DbDecNullable	Db.Decode	nullable	1	Db	Y	Y	Y	N	Y	Y	db_decode_nullable	Y	Y	Y	OK
+DbDecMap	Db.Decode	map	2	Db	Y	Y	Y	N	Y	Y	decode_map	Y	Y	Y	OK
+DbDecAndThen	Db.Decode	andThen	2	Db	Y	Y	Y	N	Y	Y	decode_and_then	Y	Y	Y	OK
+DbDecSucceed	Db.Decode	succeed	1	Db	Y	Y	Y	N	Y	Y	decode_succeed	Y	Y	Y	OK
+DbDecFail	Db.Decode	fail	1	Db	Y	Y	Y	N	Y	Y	decode_fail	Y	Y	Y	OK
+DbDecMap2	Db.Decode	map2	3	Db	Y	Y	Y	N	Y	Y	decode_map2	Y	Y	Y	OK
+DbDecMap3	Db.Decode	map3	4	Db	Y	Y	Y	N	Y	Y	decode_map3	Y	Y	Y	OK
+DbDecMap4	Db.Decode	map4	5	Db	Y	Y	Y	N	Y	Y	decode_map4	Y	Y	Y	OK
+DbDecRequired	Db.Decode	required	3	Db	Y	Y	Y	N	Y	Y	db_decode_required	Y	Y	Y	OK
+DbDecOptional	Db.Decode	optional	4	Db	Y	Y	Y	N	Y	Y	db_decode_optional	Y	Y	Y	OK
+CmdNone	Cmd	none	0	Tea	Y	Y	Y	N	Y	Y	cmd_none	Y	Y	Y	OK
+CmdBatch	Cmd	batch	1	Tea	Y	Y	Y	N	Y	Y	cmd_batch	Y	Y	Y	OK
+CmdPerform	Cmd	perform	2	Tea	Y	Y	Y	N	Y	Y	cmd_perform	Y	Y	Y	OK
+SubNone	Sub	none	0	Tea	Y	Y	Y	N	Y	Y	sub_none	Y	Y	Y	OK
+SubBatch	Sub	batch	1	Tea	Y	Y	Y	N	Y	Y	sub_batch	Y	Y	Y	OK
+SubEvery	Sub	every	2	Tea	Y	Y	Y	N	Y	Y	sub_every	Y	Y	Y	OK
+TimeEvery	Time	every	2	Tea	Y	Y	Y	N	Y	Y	time_every	Y	Y	Y	OK
+CmdPublish	Cmd	publish	1	Tea	N	Y	N	N	N	Y	cmd_publish	Y	Y	Y	BACKLOG
+CmdPublishNoEcho	Cmd	publishNoEcho	1	Tea	N	Y	N	N	N	Y	cmd_publish_no_echo	Y	Y	Y	BACKLOG
+SubSubscribeTopic	Sub	subscribeTopic	2	Tea	Y	Y	Y	N	Y	Y	sub_subscribe_topic	Y	Y	Y	OK
+PubSubPublish	PubSub	publish	1	Tea	Y	Y	N	N	N	Y	pubsub_publish	Y	Y	N	OK
+PubSubPublishNoEcho					Y	N	N	N	N	Y	pubsub_publish_no_echo	Y	Y	N	OK
+ServerGet	Server	get	2	Server	Y	Y	Y	N	Y	Y	server_get	Y	Y	Y	OK
+ServerPost	Server	post	2	Server	Y	Y	Y	N	Y	Y	server_post	Y	Y	Y	OK
+ServerPut	Server	put	2	Server	Y	Y	Y	N	Y	Y	server_put	Y	Y	Y	OK
+ServerDelete	Server	delete	2	Server	Y	Y	Y	N	Y	Y	server_delete	Y	Y	Y	OK
+ServerAny	Server	any	2	Server	Y	Y	Y	N	Y	Y	server_any	Y	Y	Y	OK
+ServerApi	Server	api	2	Server	Y	Y	Y	N	Y	Y	server_api	Y	Y	Y	OK
+ServerStatic	Server	static	2	Server	Y	Y	Y	N	Y	Y	server_static	Y	Y	Y	OK
+ServerListen	Server	listen	2	Server	Y	Y	Y	N	Y	Y	server_listen	Y	Y	Y	OK
+ServerText	Server	text	1	Server	Y	Y	Y	N	Y	Y	server_text	Y	Y	Y	OK
+ServerJson	Server	json	1	Server	Y	Y	Y	N	Y	Y	server_json	Y	Y	Y	OK
+ServerHtml	Server	html	1	Server	Y	Y	Y	N	Y	Y	server_html	Y	Y	Y	OK
+ServerWithStatus	Server	withStatus	2	Server	Y	Y	Y	N	Y	Y	server_with_status	Y	Y	Y	OK
+ServerWithHeader	Server	withHeader	3	Server	Y	Y	Y	N	Y	Y	server_with_header	Y	Y	Y	OK
+ServerRedirect	Server	redirect	1	Server	Y	Y	Y	N	Y	Y	server_redirect	Y	Y	Y	OK
+ServerParam	Server	param	2	Server	Y	Y	Y	N	Y	Y	server_param	Y	Y	Y	OK
+ServerQueryParam	Server	queryParam	2	Server	Y	Y	Y	N	Y	Y	server_query_param	Y	Y	Y	OK
+ServerHeader	Server	header	2	Server	Y	Y	Y	N	Y	Y	server_header	Y	Y	Y	OK
+ServerGetCookie	Server	getCookie	2	Server	Y	Y	Y	N	Y	Y	server_get_cookie	Y	Y	Y	OK
 ServerBody	Server	body	1	Server	Y	Y	Y	N	Y	Y	server_body	Y	N	N	OK
 ServerPath	Server	path	1	Server	Y	Y	Y	N	Y	Y	server_path	Y	N	N	OK
 ServerMethod	Server	method	1	Server	Y	Y	Y	N	Y	Y	server_method	Y	N	N	OK
-ServerCookieNew	Server	cookie	1	Server	Y	Y	Y	N	Y	Y	server_cookie	Y	N	N	OK
-ServerWithCookie	Server	withCookie	2	Server	Y	Y	Y	N	Y	Y	server_with_cookie	Y	N	N	OK
-MiddlewareWithCors					Y	N	Y	N	N	Y	middleware_with_cors	Y	N	N	OK
-MiddlewareWithLogging					Y	N	Y	N	N	Y	middleware_with_logging	Y	N	N	OK
-MiddlewareWithBasicAuth					Y	N	Y	N	N	Y	middleware_with_basic_auth	Y	N	N	OK
-MiddlewareWithRateLimit					Y	N	Y	N	N	Y	middleware_with_rate_limit	Y	N	N	OK
-RateLimitAllow	RateLimit	allow	2	Server	Y	Y	Y	N	Y	Y	rate_limit_allow	Y	N	N	OK
-UiLayout	Ui	layout	2	Ui	Y	Y	Y	N	Y	Y	ui_layout	Y	N	N	OK
-UiLayoutWith	Ui	layoutWith	2	Ui	Y	Y	Y	N	Y	Y	ui_layout_with	N	N	N	MISMATCH:runtime_sym_missing
-HtmlRender	Html	render	1	Ui	Y	Y	Y	Y	Y	Y	html_render_	Y	N	N	OK
-HtmlEscapeText	Html	escapeHtml	1	Ui	Y	Y	Y	Y	Y	Y	html_escape_text_	Y	N	N	OK
-HtmlEscapeAttr	Html	escapeAttr	1	Ui	Y	Y	Y	Y	Y	Y	html_escape_attr_	Y	N	N	OK
-HtmlAttrToString	Html	attrToString	1	Ui	Y	Y	Y	Y	Y	Y	html_attr_to_string_	Y	N	N	OK
-UiNone	Ui	none	0	Ui	Y	Y	Y	Y	Y	Y	ui_none_	Y	N	N	OK
-UiText	Ui	text	1	Ui	Y	Y	Y	Y	Y	Y	ui_text_	Y	N	N	OK
-UiHtml	Ui	html	1	Ui	Y	Y	Y	Y	Y	Y	ui_html_	Y	N	N	OK
-UiEl	Ui	el	2	Ui	Y	Y	Y	N	Y	Y	ui_el_	Y	N	N	OK
-UiRow	Ui	row	2	Ui	Y	Y	Y	N	Y	Y	ui_row_	Y	N	N	OK
-UiColumn	Ui	column	2	Ui	Y	Y	Y	N	Y	Y	ui_column_	Y	N	N	OK
-UiWrappedRow	Ui	wrappedRow	2	Ui	Y	Y	Y	N	Y	Y	ui_wrapped_row_	Y	N	N	OK
-UiGrid	Ui	grid	2	Ui	Y	Y	Y	N	Y	Y	ui_grid_	Y	N	N	OK
-UiButton	Ui	button	2	Ui	Y	Y	Y	N	Y	Y	ui_button_	Y	N	N	OK
-UiSpacing	Ui	spacing	1	Ui	Y	Y	Y	Y	Y	Y	ui_spacing_	Y	N	N	OK
-UiPadding	Ui	padding	1	Ui	Y	Y	Y	Y	Y	Y	ui_padding_	Y	N	N	OK
-UiPaddingXY	Ui	paddingXY	2	Ui	Y	Y	Y	Y	Y	Y	ui_padding_xy_	Y	N	N	OK
-UiWidth	Ui	width	1	Ui	Y	Y	Y	Y	Y	Y	ui_width_	Y	N	N	OK
-UiHeight	Ui	height	1	Ui	Y	Y	Y	Y	Y	Y	ui_height_	Y	N	N	OK
-UiCenterX	Ui	centerX	0	Ui	Y	Y	Y	Y	Y	Y	ui_center_x_	Y	N	N	OK
-UiCenterY	Ui	centerY	0	Ui	Y	Y	Y	Y	Y	Y	ui_center_y_	Y	N	N	OK
-UiAlignLeft	Ui	alignLeft	0	Ui	Y	Y	Y	Y	Y	Y	ui_align_left_	Y	N	N	OK
-UiAlignRight	Ui	alignRight	0	Ui	Y	Y	Y	Y	Y	Y	ui_align_right_	Y	N	N	OK
-UiAlignTop	Ui	alignTop	0	Ui	Y	Y	Y	Y	Y	Y	ui_align_top_	Y	N	N	OK
-UiAlignBottom	Ui	alignBottom	0	Ui	Y	Y	Y	Y	Y	Y	ui_align_bottom_	Y	N	N	OK
-UiPointer	Ui	pointer	0	Ui	Y	Y	Y	Y	Y	Y	ui_pointer_	Y	N	N	OK
-UiClip	Ui	clip	0	Ui	Y	Y	Y	Y	Y	Y	ui_clip_	Y	N	N	OK
-UiScrollbars	Ui	scrollbars	0	Ui	Y	Y	Y	Y	Y	Y	ui_scrollbars_	Y	N	N	OK
-UiGridColumns	Ui	gridColumns	1	Ui	Y	Y	Y	Y	Y	Y	ui_grid_columns_	Y	N	N	OK
-UiPx	Ui	px	1	Ui	Y	Y	Y	Y	Y	Y	ui_px_	Y	N	N	OK
-UiFill	Ui	fill	0	Ui	Y	Y	Y	Y	Y	Y	ui_fill_	Y	N	N	OK
+ServerCookieNew	Server	cookie	1	Server	Y	Y	Y	N	Y	Y	server_cookie	Y	Y	Y	OK
+ServerWithCookie	Server	withCookie	2	Server	Y	Y	Y	N	Y	Y	server_with_cookie	Y	Y	Y	OK
+MiddlewareWithCors					Y	N	Y	N	N	Y	middleware_with_cors	Y	Y	N	OK
+MiddlewareWithLogging					Y	N	Y	N	N	Y	middleware_with_logging	Y	Y	N	OK
+MiddlewareWithBasicAuth					Y	N	Y	N	N	Y	middleware_with_basic_auth	Y	Y	N	OK
+MiddlewareWithRateLimit					Y	N	Y	N	N	Y	middleware_with_rate_limit	Y	Y	N	OK
+RateLimitAllow	RateLimit	allow	2	Server	Y	Y	Y	N	Y	Y	rate_limit_allow	Y	Y	Y	OK
+UiLayout	Ui	layout	2	Ui	Y	Y	Y	N	Y	Y	ui_layout	Y	N	Y	OK
+UiLayoutWith	Ui	layoutWith	2	Ui	Y	Y	Y	N	Y	Y	ui_layout_with	N	N	Y	OK
+HtmlRender	Html	render	1	Ui	Y	Y	Y	Y	Y	Y	html_render_	Y	Y	Y	OK
+HtmlEscapeText	Html	escapeHtml	1	Ui	Y	Y	Y	Y	Y	Y	html_escape_text_	Y	Y	Y	OK
+HtmlEscapeAttr	Html	escapeAttr	1	Ui	Y	Y	Y	Y	Y	Y	html_escape_attr_	Y	Y	Y	OK
+HtmlAttrToString	Html	attrToString	1	Ui	Y	Y	Y	Y	Y	Y	html_attr_to_string_	Y	Y	Y	OK
+UiNone	Ui	none	0	Ui	Y	Y	Y	Y	Y	Y	ui_none_	Y	N	Y	OK
+UiText	Ui	text	1	Ui	Y	Y	Y	Y	Y	Y	ui_text_	Y	N	Y	OK
+UiHtml	Ui	html	1	Ui	Y	Y	Y	Y	Y	Y	ui_html_	Y	N	Y	OK
+UiEl	Ui	el	2	Ui	Y	Y	Y	N	Y	Y	ui_el_	Y	N	Y	OK
+UiRow	Ui	row	2	Ui	Y	Y	Y	N	Y	Y	ui_row_	Y	N	Y	OK
+UiColumn	Ui	column	2	Ui	Y	Y	Y	N	Y	Y	ui_column_	Y	N	Y	OK
+UiWrappedRow	Ui	wrappedRow	2	Ui	Y	Y	Y	N	Y	Y	ui_wrapped_row_	Y	N	Y	OK
+UiGrid	Ui	grid	2	Ui	Y	Y	Y	N	Y	Y	ui_grid_	Y	N	Y	OK
+UiButton	Ui	button	2	Ui	Y	Y	Y	N	Y	Y	ui_button_	Y	N	Y	OK
+UiSpacing	Ui	spacing	1	Ui	Y	Y	Y	Y	Y	Y	ui_spacing_	Y	N	Y	OK
+UiPadding	Ui	padding	1	Ui	Y	Y	Y	Y	Y	Y	ui_padding_	Y	N	Y	OK
+UiPaddingXY	Ui	paddingXY	2	Ui	Y	Y	Y	Y	Y	Y	ui_padding_xy_	Y	N	Y	OK
+UiWidth	Ui	width	1	Ui	Y	Y	Y	Y	Y	Y	ui_width_	Y	N	Y	OK
+UiHeight	Ui	height	1	Ui	Y	Y	Y	Y	Y	Y	ui_height_	Y	N	Y	OK
+UiCenterX	Ui	centerX	0	Ui	Y	Y	Y	Y	Y	Y	ui_center_x_	Y	N	Y	OK
+UiCenterY	Ui	centerY	0	Ui	Y	Y	Y	Y	Y	Y	ui_center_y_	Y	N	Y	OK
+UiAlignLeft	Ui	alignLeft	0	Ui	Y	Y	Y	Y	Y	Y	ui_align_left_	Y	N	Y	OK
+UiAlignRight	Ui	alignRight	0	Ui	Y	Y	Y	Y	Y	Y	ui_align_right_	Y	N	Y	OK
+UiAlignTop	Ui	alignTop	0	Ui	Y	Y	Y	Y	Y	Y	ui_align_top_	Y	N	Y	OK
+UiAlignBottom	Ui	alignBottom	0	Ui	Y	Y	Y	Y	Y	Y	ui_align_bottom_	Y	N	Y	OK
+UiPointer	Ui	pointer	0	Ui	Y	Y	Y	Y	Y	Y	ui_pointer_	Y	N	Y	OK
+UiClip	Ui	clip	0	Ui	Y	Y	Y	Y	Y	Y	ui_clip_	Y	N	Y	OK
+UiScrollbars	Ui	scrollbars	0	Ui	Y	Y	Y	Y	Y	Y	ui_scrollbars_	Y	N	Y	OK
+UiGridColumns	Ui	gridColumns	1	Ui	Y	Y	Y	Y	Y	Y	ui_grid_columns_	Y	N	Y	OK
+UiPx	Ui	px	1	Ui	Y	Y	Y	Y	Y	Y	ui_px_	Y	N	Y	OK
+UiFill	Ui	fill	0	Ui	Y	Y	Y	Y	Y	Y	ui_fill_	Y	N	Y	OK
 UiContent	Ui	content	0	Ui	Y	Y	Y	Y	Y	Y	ui_content_	Y	N	N	OK
-UiShrink	Ui	shrink	0	Ui	Y	Y	Y	Y	Y	Y	ui_shrink_	Y	N	N	OK
-UiFillPortion	Ui	fillPortion	1	Ui	Y	Y	Y	Y	Y	Y	ui_fill_portion_	Y	N	N	OK
-UiVh	Ui	vh	1	Ui	Y	Y	Y	Y	Y	Y	ui_vh_	Y	N	N	OK
-UiVw	Ui	vw	1	Ui	Y	Y	Y	Y	Y	Y	ui_vw_	Y	N	N	OK
-UiMinimum	Ui	minimum	2	Ui	Y	Y	Y	Y	Y	Y	ui_minimum_	Y	N	N	OK
-UiMaximum	Ui	maximum	2	Ui	Y	Y	Y	Y	Y	Y	ui_maximum_	Y	N	N	OK
-UiRgb	Ui	rgb	3	Ui	Y	Y	Y	Y	Y	Y	ui_rgb_	Y	N	N	OK
-UiRgba	Ui	rgba	4	Ui	Y	Y	Y	Y	Y	Y	ui_rgba_	Y	N	N	OK
-UiWhite	Ui	white	0	Ui	Y	Y	Y	Y	Y	Y	ui_white_	Y	N	N	OK
-UiBlack	Ui	black	0	Ui	Y	Y	Y	Y	Y	Y	ui_black_	Y	N	N	OK
-UiTransparent	Ui	transparent	0	Ui	Y	Y	Y	Y	Y	Y	ui_transparent_	Y	N	N	OK
-BackgroundColor	Background	color	1	Ui	Y	Y	Y	Y	Y	Y	ui_background_color_	Y	N	N	OK
-BackgroundImage	Background	image	1	Ui	Y	Y	Y	Y	Y	Y	ui_background_image_	Y	N	N	OK
-BorderWidth	Border	width	1	Ui	Y	Y	Y	Y	Y	Y	ui_border_width_	Y	N	N	OK
-BorderRounded	Border	rounded	1	Ui	Y	Y	Y	Y	Y	Y	ui_border_rounded_	Y	N	N	OK
-BorderColor	Border	color	1	Ui	Y	Y	Y	Y	Y	Y	ui_border_color_	Y	N	N	OK
-FontSize	Font	size	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_size_	Y	N	N	OK
-FontColor	Font	color	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_color_	Y	N	N	OK
-FontFamily	Font	family	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_family_	Y	N	N	OK
-FontBold	Font	bold	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_bold_	Y	N	N	OK
-FontItalic	Font	italic	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_italic_	Y	N	N	OK
-HtmlTextNode	Html	text	1	Ui	Y	Y	Y	Y	Y	Y	html_text_node_	Y	N	N	OK
-HtmlRawNode	Html	raw	1	Ui	Y	Y	Y	Y	Y	Y	html_raw_node_	Y	N	N	OK
-HtmlNode	Html	node	3	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlStyleNode	Html	styleNode	2	Ui	Y	Y	Y	N	Y	Y	html_style_node_	Y	N	N	OK
-HtmlDiv	Html	div	2	Ui	Y	Y	Y	Y	Y	Y	html_div_	Y	N	N	OK
-HtmlSpan	Html	span	2	Ui	Y	Y	Y	Y	Y	Y	html_span_	Y	N	N	OK
-HtmlA	Html	a	2	Ui	Y	Y	Y	Y	Y	Y	html_a_	Y	N	N	OK
-HtmlButton	Html	button	2	Ui	Y	Y	Y	Y	Y	Y	html_button_	Y	N	N	OK
-HtmlP	Html	p	2	Ui	Y	Y	Y	Y	Y	Y	html_p_	Y	N	N	OK
-HtmlInput	Html	input	1	Ui	Y	Y	Y	Y	Y	Y	html_input_	Y	N	N	OK
-HtmlImg	Html	img	1	Ui	Y	Y	Y	Y	Y	Y	html_img_	Y	N	N	OK
-HtmlH1	Html	h1	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlH2	Html	h2	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlH3	Html	h3	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlH4	Html	h4	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlH5	Html	h5	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlH6	Html	h6	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlNav	Html	nav	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlSection	Html	section	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlArticle	Html	article	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlHeader	Html	header	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlFooter	Html	footer	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlMain	Html	main	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAside	Html	aside	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlUl	Html	ul	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlOl	Html	ol	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlLi	Html	li	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlTable	Html	table	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlThead	Html	thead	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlTbody	Html	tbody	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlTfoot	Html	tfoot	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlTr	Html	tr	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlTh	Html	th	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlTd	Html	td	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlTextarea	Html	textarea	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlSelect	Html	select	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlOption	Html	option	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlLabel	Html	label	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlForm	Html	form	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlFieldset	Html	fieldset	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlLegend	Html	legend	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlPre	Html	pre	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlCode	Html	code	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlStrong	Html	strong	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlEm	Html	em	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlSmall	Html	small	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlBlockquote	Html	blockquote	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlFigure	Html	figure	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlFigcaption	Html	figcaption	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlDetails	Html	details	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlSummary	Html	summary	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlDialog	Html	dialog	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlVideo	Html	video	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAudio	Html	audio	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlCanvas	Html	canvas	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlIframe	Html	iframe	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlProgress	Html	progress	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlMeter	Html	meter	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlScript	Html	script	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlBody	Html	body	2	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlBr	Html	br	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlHr	Html	hr	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlMeta	Html	meta	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlLink	Html	link	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlArea	Html	area	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlBase	Html	base	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlCol	Html	col	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlEmbed	Html	embed	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlSource	Html	source	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlTrack	Html	track	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlWbr	Html	wbr	1	Ui	Y	Y	Y	Y	Y	Y	html_node_	Y	N	N	OK
-HtmlAttrClass	Attr	class	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrId	Attr	id	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrHref	Attr	href	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrSrc	Attr	src	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrAlt	Attr	alt	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrValue	Attr	value	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrName	Attr	name	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrPlaceholder	Attr	placeholder	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrType	Attr	type_	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
+UiShrink	Ui	shrink	0	Ui	Y	Y	Y	Y	Y	Y	ui_shrink_	Y	N	Y	OK
+UiFillPortion	Ui	fillPortion	1	Ui	Y	Y	Y	Y	Y	Y	ui_fill_portion_	Y	N	Y	OK
+UiVh	Ui	vh	1	Ui	Y	Y	Y	Y	Y	Y	ui_vh_	Y	N	Y	OK
+UiVw	Ui	vw	1	Ui	Y	Y	Y	Y	Y	Y	ui_vw_	Y	N	Y	OK
+UiMinimum	Ui	minimum	2	Ui	Y	Y	Y	Y	Y	Y	ui_minimum_	Y	N	Y	OK
+UiMaximum	Ui	maximum	2	Ui	Y	Y	Y	Y	Y	Y	ui_maximum_	Y	N	Y	OK
+UiRgb	Ui	rgb	3	Ui	Y	Y	Y	Y	Y	Y	ui_rgb_	Y	N	Y	OK
+UiRgba	Ui	rgba	4	Ui	Y	Y	Y	Y	Y	Y	ui_rgba_	Y	N	Y	OK
+UiWhite	Ui	white	0	Ui	Y	Y	Y	Y	Y	Y	ui_white_	Y	N	Y	OK
+UiBlack	Ui	black	0	Ui	Y	Y	Y	Y	Y	Y	ui_black_	Y	N	Y	OK
+UiTransparent	Ui	transparent	0	Ui	Y	Y	Y	Y	Y	Y	ui_transparent_	Y	N	Y	OK
+BackgroundColor	Background	color	1	Ui	Y	Y	Y	Y	Y	Y	ui_background_color_	Y	N	Y	OK
+BackgroundImage	Background	image	1	Ui	Y	Y	Y	Y	Y	Y	ui_background_image_	Y	N	Y	OK
+BorderWidth	Border	width	1	Ui	Y	Y	Y	Y	Y	Y	ui_border_width_	Y	N	Y	OK
+BorderRounded	Border	rounded	1	Ui	Y	Y	Y	Y	Y	Y	ui_border_rounded_	Y	N	Y	OK
+BorderColor	Border	color	1	Ui	Y	Y	Y	Y	Y	Y	ui_border_color_	Y	N	Y	OK
+FontSize	Font	size	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_size_	Y	N	Y	OK
+FontColor	Font	color	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_color_	Y	N	Y	OK
+FontFamily	Font	family	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_family_	Y	N	Y	OK
+FontBold	Font	bold	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_bold_	Y	N	Y	OK
+FontItalic	Font	italic	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_italic_	Y	N	Y	OK
+HtmlTextNode	Html	text	1	Ui	Y	Y	Y	Y	Y	Y	html_text_node_	Y	N	Y	OK
+HtmlRawNode	Html	raw	1	Ui	Y	Y	Y	Y	Y	Y	html_raw_node_	Y	N	Y	OK
+HtmlNode	Html	node	3	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlStyleNode	Html	styleNode	2	Ui	Y	Y	Y	N	Y	Y	html_style_node_	Y	N	Y	OK
+HtmlDiv	Html	div	2	Ui	Y	Y	Y	Y	Y	Y	html_div_	Y	N	Y	OK
+HtmlSpan	Html	span	2	Ui	Y	Y	Y	Y	Y	Y	html_span_	Y	N	Y	OK
+HtmlA	Html	a	2	Ui	Y	Y	Y	Y	Y	Y	html_a_	Y	N	Y	OK
+HtmlButton	Html	button	2	Ui	Y	Y	Y	Y	Y	Y	html_button_	Y	N	Y	OK
+HtmlP	Html	p	2	Ui	Y	Y	Y	Y	Y	Y	html_p_	Y	N	Y	OK
+HtmlInput	Html	input	1	Ui	Y	Y	Y	Y	Y	Y	html_input_	Y	N	Y	OK
+HtmlImg	Html	img	1	Ui	Y	Y	Y	Y	Y	Y	html_img_	Y	N	Y	OK
+HtmlH1	Html	h1	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlH2	Html	h2	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlH3	Html	h3	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlH4	Html	h4	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlH5	Html	h5	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlH6	Html	h6	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlNav	Html	nav	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlSection	Html	section	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlArticle	Html	article	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlHeader	Html	header	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlFooter	Html	footer	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlMain	Html	main	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAside	Html	aside	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlUl	Html	ul	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlOl	Html	ol	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlLi	Html	li	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlTable	Html	table	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlThead	Html	thead	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlTbody	Html	tbody	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlTfoot	Html	tfoot	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlTr	Html	tr	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlTh	Html	th	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlTd	Html	td	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlTextarea	Html	textarea	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlSelect	Html	select	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlOption	Html	option	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlLabel	Html	label	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlForm	Html	form	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlFieldset	Html	fieldset	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlLegend	Html	legend	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlPre	Html	pre	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlCode	Html	code	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlStrong	Html	strong	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlEm	Html	em	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlSmall	Html	small	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlBlockquote	Html	blockquote	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlFigure	Html	figure	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlFigcaption	Html	figcaption	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlDetails	Html	details	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlSummary	Html	summary	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlDialog	Html	dialog	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlVideo	Html	video	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAudio	Html	audio	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlCanvas	Html	canvas	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlIframe	Html	iframe	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlProgress	Html	progress	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlMeter	Html	meter	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlScript	Html	script	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlBody	Html	body	2	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlBr	Html	br	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlHr	Html	hr	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlMeta	Html	meta	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlLink	Html	link	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlArea	Html	area	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlBase	Html	base	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlCol	Html	col	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlEmbed	Html	embed	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlSource	Html	source	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlTrack	Html	track	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlWbr	Html	wbr	1	Ui	Y	Y	Y	Y	Y	Y	html_node_	Y	N	Y	OK
+HtmlAttrClass	Attr	class	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrId	Attr	id	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrHref	Attr	href	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrSrc	Attr	src	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrAlt	Attr	alt	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrValue	Attr	value	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrName	Attr	name	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrPlaceholder	Attr	placeholder	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrType	Attr	type_	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
 HtmlAttrFor	Attr	for_	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrStyle	Attr	style	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrTitle	Attr	title	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrChecked	Attr	checked	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrDisabled	Attr	disabled	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrReadonly	Attr	readonly	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrRequired	Attr	required	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrMultiple	Attr	multiple	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrSelected	Attr	selected	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttrAutofocus	Attr	autofocus	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlAttribute	Attr	attribute	2	Ui	Y	Y	Y	Y	Y	Y	html_named_attr_	Y	N	N	OK
-HtmlBoolAttribute	Attr	boolAttribute	2	Ui	Y	Y	Y	Y	Y	Y	html_bool_named_attr_	Y	N	N	OK
+HtmlAttrStyle	Attr	style	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrTitle	Attr	title	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrChecked	Attr	checked	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrDisabled	Attr	disabled	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrReadonly	Attr	readonly	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrRequired	Attr	required	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrMultiple	Attr	multiple	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrSelected	Attr	selected	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttrAutofocus	Attr	autofocus	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlAttribute	Attr	attribute	2	Ui	Y	Y	Y	Y	Y	Y	html_named_attr_	Y	N	Y	OK
+HtmlBoolAttribute	Attr	boolAttribute	2	Ui	Y	Y	Y	Y	Y	Y	html_bool_named_attr_	Y	N	Y	OK
 HtmlNoAttr	Attr	noAttr	0	Ui	Y	Y	Y	Y	Y	Y	html_no_attr_	Y	N	N	OK
-LiveApp	Live	app	1	Live	Y	Y	Y	N	Y	Y	live_app	Y	N	N	OK
-LiveAppRouted	Live	appRouted	1	Live	Y	Y	N	N	Y	Y	live_app_routed	Y	N	N	OK
-LiveRoute	Live	route	2	Live	Y	Y	Y	N	Y	Y	live_route	N	N	N	MISMATCH:runtime_sym_missing
-LiveRenderStatic	Live	renderStatic	1	Live	Y	Y	Y	N	Y	Y	live_render_static	Y	N	N	OK
-TuiProgram	Tui	program	1	Tui	Y	Y	Y	N	Y	Y	tui_app	Y	N	N	OK
-TuiApp	Tui	app	1	Tui	Y	Y	Y	N	Y	Y	tui_app_ui	Y	N	N	OK
-WebviewApp	Webview	app	1	Webview	Y	Y	Y	N	Y	Y	webview_app	Y	N	N	OK
-UiOnClick	Ui	onClick	1	Ui	Y	Y	Y	N	Y	Y	ui_on_click_	Y	N	N	OK
-UiOnFocus	Ui	onFocus	1	Ui	Y	Y	Y	N	Y	Y	ui_on_focus_	Y	N	N	OK
+LiveApp	Live	app	1	Live	Y	Y	Y	N	Y	Y	live_app	Y	Y	N	OK
+LiveAppRouted	Live	appRouted	1	Live	Y	Y	N	N	Y	Y	live_app_routed	Y	Y	N	OK
+LiveRoute	Live	route	2	Live	Y	Y	Y	N	Y	Y	live_route	N	N	N	OK
+LiveRenderStatic	Live	renderStatic	1	Live	Y	Y	Y	N	Y	Y	live_render_static	Y	Y	N	OK
+TuiProgram	Tui	program	1	Tui	Y	Y	Y	N	Y	Y	tui_app	Y	Y	N	OK
+TuiApp	Tui	app	1	Tui	Y	Y	Y	N	Y	Y	tui_app_ui	Y	Y	N	OK
+WebviewApp	Webview	app	1	Webview	Y	Y	Y	N	Y	Y	webview_app	Y	Y	Y	OK
+UiOnClick	Ui	onClick	1	Ui	Y	Y	Y	N	Y	Y	ui_on_click_	Y	N	Y	OK
+UiOnFocus	Ui	onFocus	1	Ui	Y	Y	Y	N	Y	Y	ui_on_focus_	Y	N	Y	OK
 UiOnBlur	Ui	onBlur	1	Ui	Y	Y	Y	N	Y	Y	ui_on_blur_	Y	N	N	OK
-UiOnMouseOver	Ui	onMouseOver	1	Ui	Y	Y	Y	N	Y	Y	ui_on_mouse_over_	Y	N	N	OK
-UiOnMouseOut	Ui	onMouseOut	1	Ui	Y	Y	Y	N	Y	Y	ui_on_mouse_out_	Y	N	N	OK
-UiOnInput	Ui	onInput	1	Ui	Y	Y	Y	N	Y	Y	ui_on_input_	Y	N	N	OK
-UiOnChange	Ui	onChange	1	Ui	Y	Y	Y	N	Y	Y	ui_on_change_	Y	N	N	OK
-UiOnKeyDown	Ui	onKeyDown	1	Ui	Y	Y	Y	N	Y	Y	ui_on_key_down_	Y	N	N	OK
+UiOnMouseOver	Ui	onMouseOver	1	Ui	Y	Y	Y	N	Y	Y	ui_on_mouse_over_	Y	N	Y	OK
+UiOnMouseOut	Ui	onMouseOut	1	Ui	Y	Y	Y	N	Y	Y	ui_on_mouse_out_	Y	N	Y	OK
+UiOnInput	Ui	onInput	1	Ui	Y	Y	Y	N	Y	Y	ui_on_input_	Y	N	Y	OK
+UiOnChange	Ui	onChange	1	Ui	Y	Y	Y	N	Y	Y	ui_on_change_	Y	N	Y	OK
+UiOnKeyDown	Ui	onKeyDown	1	Ui	Y	Y	Y	N	Y	Y	ui_on_key_down_	Y	N	Y	OK
 UiOnKeyUp	Ui	onKeyUp	1	Ui	Y	Y	Y	N	Y	Y	ui_on_key_up_	Y	N	N	OK
 UiOnBool	Ui	onBool	1	Ui	Y	Y	Y	N	Y	Y	ui_on_bool_	Y	N	N	OK
-HtmlOnClick	Event	onClick	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlOnFocus	Event	onFocus	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlOnBlur	Event	onBlur	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlOnMouseOver	Event	onMouseOver	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlOnMouseOut	Event	onMouseOut	1	Ui	Y	Y	Y	Y	Y	Y	html_on_msg_	Y	N	N	OK
-HtmlOnSubmit	Event	onSubmit	1	Ui	Y	Y	Y	Y	Y	Y	html_on_raw_	Y	N	N	OK
-HtmlOnInput	Event	onInput	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlOnChange	Event	onChange	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlOnKeyDown	Event	onKeyDown	1	Ui	Y	Y	Y	Y	Y	Y		N	N	N	OK
-HtmlOnKeyUp	Event	onKeyUp	1	Ui	Y	Y	Y	Y	Y	Y	html_on_string_	Y	N	N	OK
+HtmlOnClick	Event	onClick	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlOnFocus	Event	onFocus	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlOnBlur	Event	onBlur	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlOnMouseOver	Event	onMouseOver	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlOnMouseOut	Event	onMouseOut	1	Ui	Y	Y	Y	Y	Y	Y	html_on_msg_	Y	N	Y	OK
+HtmlOnSubmit	Event	onSubmit	1	Ui	Y	Y	Y	Y	Y	Y	html_on_raw_	Y	N	Y	OK
+HtmlOnInput	Event	onInput	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlOnChange	Event	onChange	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlOnKeyDown	Event	onKeyDown	1	Ui	Y	Y	Y	Y	Y	Y		N	N	Y	OK
+HtmlOnKeyUp	Event	onKeyUp	1	Ui	Y	Y	Y	Y	Y	Y	html_on_string_	Y	N	Y	OK
 HtmlOnBool	Event	onBool	1	Ui	Y	Y	Y	Y	Y	Y	html_on_bool_	Y	N	N	OK
-UiSquare	Ui	square	0	Ui	Y	Y	Y	Y	Y	Y	ui_square_	Y	N	N	OK
-UiWidescreen	Ui	widescreen	0	Ui	Y	Y	Y	Y	Y	Y	ui_widescreen_	Y	N	N	OK
-UiAspectRatio	Ui	aspectRatio	1	Ui	Y	Y	Y	Y	Y	Y	ui_aspect_ratio_	Y	N	N	OK
-UiAspectRatioWH	Ui	aspectRatioWH	2	Ui	Y	Y	Y	Y	Y	Y	ui_aspect_ratio_wh_	Y	N	N	OK
-UiHtmlAttribute	Ui	htmlAttribute	2	Ui	Y	Y	Y	Y	Y	Y	ui_html_attribute_	Y	N	N	OK
+UiSquare	Ui	square	0	Ui	Y	Y	Y	Y	Y	Y	ui_square_	Y	N	Y	OK
+UiWidescreen	Ui	widescreen	0	Ui	Y	Y	Y	Y	Y	Y	ui_widescreen_	Y	N	Y	OK
+UiAspectRatio	Ui	aspectRatio	1	Ui	Y	Y	Y	Y	Y	Y	ui_aspect_ratio_	Y	N	Y	OK
+UiAspectRatioWH	Ui	aspectRatioWH	2	Ui	Y	Y	Y	Y	Y	Y	ui_aspect_ratio_wh_	Y	N	Y	OK
+UiHtmlAttribute	Ui	htmlAttribute	2	Ui	Y	Y	Y	Y	Y	Y	ui_html_attribute_	Y	N	Y	OK
 BackgroundHoverColor					Y	N	Y	Y	N	Y	ui_bg_hover_color_	Y	N	N	OK
 BackgroundFocusColor					Y	N	Y	Y	N	Y	ui_bg_focus_color_	Y	N	N	OK
 BackgroundActiveColor					Y	N	Y	Y	N	Y	ui_bg_active_color_	Y	N	N	OK
 BackgroundDisabledColor					Y	N	Y	Y	N	Y	ui_bg_disabled_color_	Y	N	N	OK
-BorderSolid	Border	solid	0	Ui	Y	Y	Y	Y	Y	Y	ui_border_solid_	Y	N	N	OK
-BorderDashed	Border	dashed	0	Ui	Y	Y	Y	Y	Y	Y	ui_border_dashed_	Y	N	N	OK
-BorderDotted	Border	dotted	0	Ui	Y	Y	Y	Y	Y	Y	ui_border_dotted_	Y	N	N	OK
+BorderSolid	Border	solid	0	Ui	Y	Y	Y	Y	Y	Y	ui_border_solid_	Y	N	Y	OK
+BorderDashed	Border	dashed	0	Ui	Y	Y	Y	Y	Y	Y	ui_border_dashed_	Y	N	Y	OK
+BorderDotted	Border	dotted	0	Ui	Y	Y	Y	Y	Y	Y	ui_border_dotted_	Y	N	Y	OK
 BorderHoverColor					Y	N	Y	Y	N	Y	ui_border_hover_color_	Y	N	N	OK
 BorderFocusColor					Y	N	Y	Y	N	Y	ui_border_focus_color_	Y	N	N	OK
 BorderActiveColor					Y	N	Y	Y	N	Y	ui_border_active_color_	Y	N	N	OK
-BorderHoverWidth	Border	hoverWidth	1	Ui	Y	Y	Y	Y	Y	Y	ui_border_hover_width_	Y	N	N	OK
+BorderHoverWidth	Border	hoverWidth	1	Ui	Y	Y	Y	Y	Y	Y	ui_border_hover_width_	Y	N	Y	OK
 BorderHoverRounded					Y	N	Y	Y	N	Y	ui_border_hover_rounded_	Y	N	N	OK
-FontWeight	Font	weight	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_weight_	Y	N	N	OK
-FontSemiBold	Font	semiBold	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_semi_bold_	Y	N	N	OK
-FontRegular	Font	regular	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_regular_	Y	N	N	OK
-FontLight	Font	light	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_light_	Y	N	N	OK
-FontExtraBold	Font	extraBold	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_extra_bold_	Y	N	N	OK
-FontBlack	Font	black	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_black_	Y	N	N	OK
-FontUnderline	Font	underline	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_underline_	Y	N	N	OK
-FontNoDecoration	Font	noDecoration	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_no_decoration_	Y	N	N	OK
-FontLineThrough	Font	lineThrough	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_line_through_	Y	N	N	OK
-FontLetterSpacing	Font	letterSpacing	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_letter_spacing_	Y	N	N	OK
-FontWordSpacing	Font	wordSpacing	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_word_spacing_	Y	N	N	OK
-FontAlignLeft	Font	alignLeft	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_align_left_	Y	N	N	OK
-FontAlignRight	Font	alignRight	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_align_right_	Y	N	N	OK
-FontCenter	Font	center	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_center_	Y	N	N	OK
-FontJustify	Font	justify	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_justify_	Y	N	N	OK
-FontSansSerif	Font	sansSerif	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_sans_serif_	Y	N	N	OK
-FontSerif	Font	serif	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_serif_	Y	N	N	OK
-FontMonospace	Font	monospace	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_monospace_	Y	N	N	OK
-FontHoverColor	Font	hoverColor	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_hover_color_	Y	N	N	OK
-FontFocusColor	Font	focusColor	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_focus_color_	Y	N	N	OK
-FontActiveColor	Font	activeColor	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_active_color_	Y	N	N	OK
-FontDisabledColor	Font	disabledColor	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_disabled_color_	Y	N	N	OK
-FontHoverSize	Font	hoverSize	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_hover_size_	Y	N	N	OK
-HtmlAttrTabindex	Attr	tabindex	1	Ui	Y	Y	Y	Y	Y	Y	html_attr_tabindex_	N	N	N	MISMATCH:runtime_sym_missing
-CliProgram	Cli	program	1	KernelClass	Y	Y	Y	Y	Y	Y	sky_cli_program_	N	N	N	MISMATCH:runtime_sym_missing
-AuthHashPassword	Auth	hashPassword	1	Pure	Y	Y	Y	Y	Y	Y	auth_hash_password	Y	N	N	OK
-AuthHashPasswordCost					Y	N	Y	Y	N	Y	auth_hash_password_cost	Y	N	N	OK
-AuthVerifyPassword	Auth	verifyPassword	2	Pure	Y	Y	Y	Y	Y	Y	auth_verify_password	Y	N	N	OK
-AuthPasswordStrength					Y	N	Y	Y	N	Y	auth_password_strength	Y	N	N	OK
-AuthSignToken	Auth	signToken	3	Pure	Y	Y	Y	Y	Y	Y	auth_sign_token	Y	N	N	OK
-AuthVerifyToken	Auth	verifyToken	2	Pure	Y	Y	Y	Y	Y	Y	auth_verify_token	Y	N	N	OK
-AuthRegister	Auth	register	3	Pure	Y	Y	Y	Y	Y	Y	auth_register	Y	N	N	OK
-AuthLogin	Auth	login	3	Pure	Y	Y	Y	Y	Y	Y	auth_login	Y	N	N	OK
-AuthSetRole	Auth	setRole	3	Pure	Y	Y	Y	Y	Y	Y	auth_set_role	Y	N	N	OK
-StreamStream	Stream	stream	2	Server	Y	Y	Y	Y	Y	Y	server_stream_stream	Y	N	N	OK
-StreamEmit	Stream	emit	2	Server	Y	Y	Y	Y	Y	Y	server_stream_emit	Y	N	N	OK
-StreamFinish	Stream	finish	1	Server	Y	Y	Y	Y	Y	Y	server_stream_finish	Y	N	N	OK
-StreamWithContentType					Y	N	Y	Y	N	Y	server_stream_with_content_type	Y	N	N	OK
-HttpStreamOpen	HttpStream	open	1	Pure	Y	Y	Y	Y	Y	Y	http_stream_open	Y	N	N	OK
-HttpStreamForEachChunk					Y	N	Y	Y	N	Y	http_stream_for_each_chunk	Y	N	N	OK
-HttpStreamClose	HttpStream	close	1	Pure	Y	Y	Y	Y	Y	Y	http_stream_close	Y	N	N	OK
-RegionMainContent	Region	mainContent	0	Ui	Y	Y	Y	Y	Y	Y	ui_region_main_content_	Y	N	N	OK
-RegionNavigation	Region	navigation	0	Ui	Y	Y	Y	Y	Y	Y	ui_region_navigation_	Y	N	N	OK
-RegionFooter	Region	footer	0	Ui	Y	Y	Y	Y	Y	Y	ui_region_footer_	Y	N	N	OK
-RegionAside	Region	aside	0	Ui	Y	Y	Y	Y	Y	Y	ui_region_aside_	Y	N	N	OK
-RegionHeading	Region	heading	1	Ui	Y	Y	Y	Y	Y	Y	ui_region_heading_	Y	N	N	OK
-RegionLabel	Region	label	1	Ui	Y	Y	Y	Y	Y	Y	ui_region_label_	Y	N	N	OK
-RegionAnnounce	Region	announce	0	Ui	Y	Y	Y	Y	Y	Y	ui_region_announce_	Y	N	N	OK
+FontWeight	Font	weight	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_weight_	Y	N	Y	OK
+FontSemiBold	Font	semiBold	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_semi_bold_	Y	N	Y	OK
+FontRegular	Font	regular	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_regular_	Y	N	Y	OK
+FontLight	Font	light	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_light_	Y	N	Y	OK
+FontExtraBold	Font	extraBold	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_extra_bold_	Y	N	Y	OK
+FontBlack	Font	black	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_black_	Y	N	Y	OK
+FontUnderline	Font	underline	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_underline_	Y	N	Y	OK
+FontNoDecoration	Font	noDecoration	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_no_decoration_	Y	N	Y	OK
+FontLineThrough	Font	lineThrough	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_line_through_	Y	N	Y	OK
+FontLetterSpacing	Font	letterSpacing	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_letter_spacing_	Y	N	Y	OK
+FontWordSpacing	Font	wordSpacing	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_word_spacing_	Y	N	Y	OK
+FontAlignLeft	Font	alignLeft	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_align_left_	Y	N	Y	OK
+FontAlignRight	Font	alignRight	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_align_right_	Y	N	Y	OK
+FontCenter	Font	center	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_center_	Y	N	Y	OK
+FontJustify	Font	justify	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_justify_	Y	N	Y	OK
+FontSansSerif	Font	sansSerif	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_sans_serif_	Y	N	Y	OK
+FontSerif	Font	serif	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_serif_	Y	N	Y	OK
+FontMonospace	Font	monospace	0	Ui	Y	Y	Y	Y	Y	Y	ui_font_monospace_	Y	N	Y	OK
+FontHoverColor	Font	hoverColor	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_hover_color_	Y	N	Y	OK
+FontFocusColor	Font	focusColor	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_focus_color_	Y	N	Y	OK
+FontActiveColor	Font	activeColor	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_active_color_	Y	N	Y	OK
+FontDisabledColor	Font	disabledColor	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_disabled_color_	Y	N	Y	OK
+FontHoverSize	Font	hoverSize	1	Ui	Y	Y	Y	Y	Y	Y	ui_font_hover_size_	Y	N	Y	OK
+HtmlAttrTabindex	Attr	tabindex	1	Ui	Y	Y	Y	Y	Y	Y	html_attr_tabindex_	N	N	Y	OK
+CliProgram	Cli	program	1	KernelClass	Y	Y	Y	Y	Y	Y	sky_cli_program_	N	N	N	OK
+AuthHashPassword	Auth	hashPassword	1	Pure	Y	Y	Y	Y	Y	Y	auth_hash_password	Y	Y	Y	OK
+AuthHashPasswordCost					Y	N	Y	Y	N	Y	auth_hash_password_cost	Y	Y	N	OK
+AuthVerifyPassword	Auth	verifyPassword	2	Pure	Y	Y	Y	Y	Y	Y	auth_verify_password	Y	Y	Y	OK
+AuthPasswordStrength					Y	N	Y	Y	N	Y	auth_password_strength	Y	Y	N	OK
+AuthSignToken	Auth	signToken	3	Pure	Y	Y	Y	Y	Y	Y	auth_sign_token	Y	Y	Y	OK
+AuthVerifyToken	Auth	verifyToken	2	Pure	Y	Y	Y	Y	Y	Y	auth_verify_token	Y	Y	Y	OK
+AuthRegister	Auth	register	3	Pure	Y	Y	Y	Y	Y	Y	auth_register	Y	Y	Y	OK
+AuthLogin	Auth	login	3	Pure	Y	Y	Y	Y	Y	Y	auth_login	Y	Y	Y	OK
+AuthSetRole	Auth	setRole	3	Pure	Y	Y	Y	Y	Y	Y	auth_set_role	Y	Y	Y	OK
+StreamStream	Stream	stream	2	Server	Y	Y	Y	Y	Y	Y	server_stream_stream	Y	Y	N	OK
+StreamEmit	Stream	emit	2	Server	Y	Y	Y	Y	Y	Y	server_stream_emit	Y	Y	N	OK
+StreamFinish	Stream	finish	1	Server	Y	Y	Y	Y	Y	Y	server_stream_finish	Y	Y	N	OK
+StreamWithContentType					Y	N	Y	Y	N	Y	server_stream_with_content_type	Y	Y	N	OK
+HttpStreamOpen	HttpStream	open	1	Pure	Y	Y	Y	Y	Y	Y	http_stream_open	Y	Y	N	OK
+HttpStreamForEachChunk					Y	N	Y	Y	N	Y	http_stream_for_each_chunk	Y	Y	N	OK
+HttpStreamClose	HttpStream	close	1	Pure	Y	Y	Y	Y	Y	Y	http_stream_close	Y	Y	N	OK
+RegionMainContent	Region	mainContent	0	Ui	Y	Y	Y	Y	Y	Y	ui_region_main_content_	Y	N	Y	OK
+RegionNavigation	Region	navigation	0	Ui	Y	Y	Y	Y	Y	Y	ui_region_navigation_	Y	N	Y	OK
+RegionFooter	Region	footer	0	Ui	Y	Y	Y	Y	Y	Y	ui_region_footer_	Y	N	Y	OK
+RegionAside	Region	aside	0	Ui	Y	Y	Y	Y	Y	Y	ui_region_aside_	Y	N	Y	OK
+RegionHeading	Region	heading	1	Ui	Y	Y	Y	Y	Y	Y	ui_region_heading_	Y	N	Y	OK
+RegionLabel	Region	label	1	Ui	Y	Y	Y	Y	Y	Y	ui_region_label_	Y	N	Y	OK
+RegionAnnounce	Region	announce	0	Ui	Y	Y	Y	Y	Y	Y	ui_region_announce_	Y	N	Y	OK
 RegionAnnounceUrgently					Y	N	Y	Y	N	Y	ui_region_announce_urgently_	Y	N	N	OK
-UiInput	Ui	input	1	Ui	Y	Y	Y	Y	Y	Y	ui_input_	Y	N	N	OK
-UiDescribe	Ui	describe	1	Ui	Y	Y	Y	Y	Y	Y	ui_describe_	Y	N	N	OK
-UiDescMain	Ui	descMain	0	Ui	Y	Y	Y	Y	Y	Y	ui_desc_main_	Y	N	N	OK
-UiDescNavigation	Ui	descNavigation	0	Ui	Y	Y	Y	Y	Y	Y	ui_desc_navigation_	Y	N	N	OK
-UiDescContentInfo	Ui	descContentInfo	0	Ui	Y	Y	Y	Y	Y	Y	ui_desc_content_info_	Y	N	N	OK
+UiInput	Ui	input	1	Ui	Y	Y	Y	Y	Y	Y	ui_input_	Y	N	Y	OK
+UiDescribe	Ui	describe	1	Ui	Y	Y	Y	Y	Y	Y	ui_describe_	Y	N	Y	OK
+UiDescMain	Ui	descMain	0	Ui	Y	Y	Y	Y	Y	Y	ui_desc_main_	Y	N	Y	OK
+UiDescNavigation	Ui	descNavigation	0	Ui	Y	Y	Y	Y	Y	Y	ui_desc_navigation_	Y	N	Y	OK
+UiDescContentInfo	Ui	descContentInfo	0	Ui	Y	Y	Y	Y	Y	Y	ui_desc_content_info_	Y	N	Y	OK
 UiDescComplementary					Y	N	Y	Y	N	Y	ui_desc_complementary_	Y	N	N	OK
-UiDescLivePolite	Ui	descLivePolite	0	Ui	Y	Y	Y	Y	Y	Y	ui_desc_live_polite_	Y	N	N	OK
+UiDescLivePolite	Ui	descLivePolite	0	Ui	Y	Y	Y	Y	Y	Y	ui_desc_live_polite_	Y	N	Y	OK
 UiDescLiveAssertive					Y	N	Y	Y	N	Y	ui_desc_live_assertive_	Y	N	N	OK
-UiDescHeading	Ui	descHeading	1	Ui	Y	Y	Y	Y	Y	Y	ui_desc_heading_	Y	N	N	OK
-UiDescLabel	Ui	descLabel	1	Ui	Y	Y	Y	Y	Y	Y	ui_desc_label_	Y	N	N	OK
+UiDescHeading	Ui	descHeading	1	Ui	Y	Y	Y	Y	Y	Y	ui_desc_heading_	Y	N	Y	OK
+UiDescLabel	Ui	descLabel	1	Ui	Y	Y	Y	Y	Y	Y	ui_desc_label_	Y	N	Y	OK

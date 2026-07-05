@@ -13,46 +13,25 @@
 | Total StdlibKernel variants | 646 |
 | Wired (in ALL slice) | 644 |
 | Backlog (not yet wired) | 2 |
-| Wired OK (all 8 layers pass) | 628 (98%) |
-| MISMATCH (bugs) | 16 |
-| Runtime symbol coverage | 535/551 (97%) |
-| Runtime symbols MISSING | 16 |
+| Wired OK (all 8 layers pass) | 644 (100%) |
+| MISMATCH (bugs) | 0 |
+| Runtime symbol coverage | 541/551 (98%) |
+| Runtime symbols MISSING | 10 |
 
 ## Class Coverage
 
 | Class | Wired | OK | % |
 |-------|-------|----|---|
-|  | 44 | 43 | 98% |
-| Db | 37 | 31 | 84% |
-| KernelClass | 1 | 0 | 0% |
-| Live | 4 | 3 | 75% |
-| Pure | 303 | 298 | 98% |
+|  | 44 | 44 | 100% |
+| Db | 37 | 37 | 100% |
+| KernelClass | 1 | 1 | 100% |
+| Live | 4 | 4 | 100% |
+| Pure | 303 | 303 | 100% |
 | Server | 27 | 27 | 100% |
 | Tea | 9 | 9 | 100% |
 | Tui | 2 | 2 | 100% |
-| Ui | 216 | 214 | 99% |
+| Ui | 216 | 216 | 100% |
 | Webview | 1 | 1 | 100% |
-
-## MISMATCH Rows (bugs — CI blocks on these)
-
-| Variant | Qualifier.Member | Status | Runtime Sym | Sym Exists |
-|---------|-----------------|--------|------------|-----------|
-| ListMap | List.map | MISMATCH:runtime_sym_missing | `list_map_consume` | ✗ |
-| HttpDefaultRequest |  | MISMATCH:runtime_sym_missing | `http_default_request` | ✗ |
-| HttpWithMethod | Http.withMethod | MISMATCH:runtime_sym_missing | `http_with_method` | ✗ |
-| HttpWithTimeout | Http.withTimeout | MISMATCH:runtime_sym_missing | `http_with_timeout` | ✗ |
-| HttpWithBody | Http.withBody | MISMATCH:runtime_sym_missing | `http_with_body` | ✗ |
-| HttpWithHeader | Http.withHeader | MISMATCH:runtime_sym_missing | `http_with_header` | ✗ |
-| DbDecMap | Db.Decode.map | MISMATCH:runtime_sym_missing | `db_decode_map` | ✗ |
-| DbDecAndThen | Db.Decode.andThen | MISMATCH:runtime_sym_missing | `db_decode_and_then` | ✗ |
-| DbDecFail | Db.Decode.fail | MISMATCH:runtime_sym_missing | `db_decode_fail` | ✗ |
-| DbDecMap2 | Db.Decode.map2 | MISMATCH:runtime_sym_missing | `db_decode_map2` | ✗ |
-| DbDecMap3 | Db.Decode.map3 | MISMATCH:runtime_sym_missing | `db_decode_map3` | ✗ |
-| DbDecMap4 | Db.Decode.map4 | MISMATCH:runtime_sym_missing | `db_decode_map4` | ✗ |
-| UiLayoutWith | Ui.layoutWith | MISMATCH:runtime_sym_missing | `ui_layout_with` | ✗ |
-| LiveRoute | Live.route | MISMATCH:runtime_sym_missing | `live_route` | ✗ |
-| HtmlAttrTabindex | Attr.tabindex | MISMATCH:runtime_sym_missing | `html_attr_tabindex_` | ✗ |
-| CliProgram | Cli.program | MISMATCH:runtime_sym_missing | `sky_cli_program_` | ✗ |
 
 ## Backlog (not yet wired — 2 entries)
 
