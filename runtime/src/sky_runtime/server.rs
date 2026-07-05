@@ -1056,6 +1056,213 @@ pub fn server_web_socket_close_client<E: From<String> + Send + 'static>(id: i64)
     })
 }
 
+// ─── Sky.Http.Server.WebSocket adapters (#127) ────────────────────────────
+//
+// Kernel-callable entry points (D3: handle-taking wrappers + cfg builders).
+// The i64 family above is the registry API kept for upstream-sync; these
+// adapters sit in front of it.
+//
+// Design decisions (docs/architecture/websocket-server-design.md):
+//   D2 — WsServerCfg is monomorphic (pins E = SkyError, drops phantom msg).
+//   D3 — kernels take WsHandle, not i64; adapters unwrap.
+//   D4 — bounded fail-fast `try_send` (SKY_WS_SEND_BUFFER=256 default).
+
+/// `Ws.defaultCfg` — no-op callbacks, `maxMessageBytes = 0` (→ 1 MiB in
+/// `ws_loop`), empty `originPatterns` (dev: allow-all; production: 403 on
+/// `upgrade`).
+pub fn ws_server_default_cfg<E: From<String> + Send + 'static>() -> WsServerCfg<E> {
+    WsServerCfg {
+        onConnect: Arc::new(|_| Box::pin(async { ok_res(()) })),
+        onMessage: Arc::new(|_, _| Box::pin(async { ok_res(()) })),
+        onClose: Arc::new(|_| Box::pin(async { ok_res(()) })),
+        onError: Arc::new(|_, _| Box::pin(async { ok_res(()) })),
+        maxMessageBytes: 0,
+        originPatterns: Vec::new(),
+    }
+}
+
+/// `Ws.withOnConnect` — replace the `onConnect` callback.
+///
+/// Accepts `Arc<dyn Fn(WsHandle) -> SkyTask<E, ()> + Send + Sync + 'static>` directly
+/// because stable Rust does not implement `Fn<Args>` for `Arc<dyn Fn<Args>>` — the
+/// emitter always pre-wraps the function in `Arc::new`, so the adapter stores it as-is.
+pub fn ws_server_with_on_connect<E>(
+    cb: Arc<dyn Fn(WsHandle) -> SkyTask<E, ()> + Send + Sync + 'static>,
+    cfg: WsServerCfg<E>,
+) -> WsServerCfg<E>
+where
+    E: From<String> + Send + 'static,
+{
+    WsServerCfg {
+        onConnect: cb,
+        ..cfg
+    }
+}
+
+/// `Ws.withOnMessage` — replace the `onMessage` callback.
+///
+/// The callback is uncurried (two args: `WsHandle` and `String`) to match
+/// the `dict_foldl` uncurried precedent (see design doc §3).
+///
+/// Accepts `Arc<dyn Fn(...)>` directly — see `ws_server_with_on_connect` for rationale.
+pub fn ws_server_with_on_message<E>(
+    cb: Arc<dyn Fn(WsHandle, String) -> SkyTask<E, ()> + Send + Sync + 'static>,
+    cfg: WsServerCfg<E>,
+) -> WsServerCfg<E>
+where
+    E: From<String> + Send + 'static,
+{
+    WsServerCfg {
+        onMessage: cb,
+        ..cfg
+    }
+}
+
+/// `Ws.withOnClose` — replace the `onClose` callback.
+///
+/// Accepts `Arc<dyn Fn(...)>` directly — see `ws_server_with_on_connect` for rationale.
+pub fn ws_server_with_on_close<E>(
+    cb: Arc<dyn Fn(WsHandle) -> SkyTask<E, ()> + Send + Sync + 'static>,
+    cfg: WsServerCfg<E>,
+) -> WsServerCfg<E>
+where
+    E: From<String> + Send + 'static,
+{
+    WsServerCfg {
+        onClose: cb,
+        ..cfg
+    }
+}
+
+/// `Ws.withOnError` — replace the `onError` callback.
+///
+/// Accepts `Arc<dyn Fn(...)>` directly — see `ws_server_with_on_connect` for rationale.
+pub fn ws_server_with_on_error<E>(
+    cb: Arc<dyn Fn(WsHandle, E) -> SkyTask<E, ()> + Send + Sync + 'static>,
+    cfg: WsServerCfg<E>,
+) -> WsServerCfg<E>
+where
+    E: From<String> + Send + 'static,
+{
+    WsServerCfg {
+        onError: cb,
+        ..cfg
+    }
+}
+
+/// `Ws.withMaxMessageBytes` — set per-message size cap (0 → 1 MiB default
+/// in `ws_loop`).
+pub fn ws_server_with_max_message_bytes<E: From<String> + Send + 'static>(
+    n: i64,
+    cfg: WsServerCfg<E>,
+) -> WsServerCfg<E> {
+    WsServerCfg {
+        maxMessageBytes: n,
+        ..cfg
+    }
+}
+
+/// `Ws.withOriginPatterns` — set the origin allowlist.  Empty list = dev
+/// allow-all; production mode with an empty list causes `upgrade` to return
+/// 403 (see `server_web_socket_upgrade`).
+pub fn ws_server_with_origin_patterns<E: From<String> + Send + 'static>(
+    ps: Vec<String>,
+    cfg: WsServerCfg<E>,
+) -> WsServerCfg<E> {
+    WsServerCfg {
+        originPatterns: ps,
+        ..cfg
+    }
+}
+
+/// `Ws.sendToClient` — send a text frame.  D3: unwraps `WsHandle` before
+/// delegating to the i64 registry family.
+pub fn ws_server_send_to_client<E: From<String> + Send + 'static>(
+    h: WsHandle,
+    msg: String,
+) -> SkyTask<E, ()> {
+    let WsHandle::WebSocketServer(id) = h;
+    server_web_socket_send_to_client(id, msg)
+}
+
+/// `Ws.sendBinaryToClient` — send a binary frame.  `Bytes = Vec<u8>` (skyc
+/// divergence: upstream Sky uses `Bytes = String`; see divergences doc §D2).
+pub fn ws_server_send_binary_to_client<E: From<String> + Send + 'static>(
+    h: WsHandle,
+    data: Vec<u8>,
+) -> SkyTask<E, ()> {
+    let WsHandle::WebSocketServer(id) = h;
+    server_web_socket_send_binary_to_client(id, data)
+}
+
+/// `Ws.broadcast` — best-effort text broadcast.  D3: unwraps each handle.
+pub fn ws_server_broadcast<E: From<String> + Send + 'static>(
+    hs: Vec<WsHandle>,
+    msg: String,
+) -> SkyTask<E, ()> {
+    let ids: Vec<i64> = hs
+        .into_iter()
+        .map(|WsHandle::WebSocketServer(id)| id)
+        .collect();
+    server_web_socket_broadcast(ids, msg)
+}
+
+/// `Ws.closeClient` — close a peer connection.  D3; idempotent.
+pub fn ws_server_close_client<E: From<String> + Send + 'static>(h: WsHandle) -> SkyTask<E, ()> {
+    let WsHandle::WebSocketServer(id) = h;
+    server_web_socket_close_client(id)
+}
+
+#[cfg(test)]
+mod ws_adapter_tests {
+    use super::*;
+
+    #[test]
+    fn default_cfg_max_message_bytes_is_zero() {
+        // 0 → ws_loop applies the 1 MiB default; NOT a hard limit of 0.
+        let cfg = ws_server_default_cfg::<String>();
+        assert_eq!(cfg.maxMessageBytes, 0);
+    }
+
+    #[test]
+    fn default_cfg_origin_patterns_empty() {
+        let cfg = ws_server_default_cfg::<String>();
+        assert!(cfg.originPatterns.is_empty());
+    }
+
+    #[test]
+    fn with_max_message_bytes_sets_field() {
+        let cfg = ws_server_default_cfg::<String>();
+        let cfg2 = ws_server_with_max_message_bytes(4096, cfg);
+        assert_eq!(cfg2.maxMessageBytes, 4096);
+    }
+
+    #[test]
+    fn with_origin_patterns_sets_field() {
+        let cfg = ws_server_default_cfg::<String>();
+        let cfg2 = ws_server_with_origin_patterns(vec!["https://example.com".into()], cfg);
+        assert_eq!(cfg2.originPatterns, vec!["https://example.com"]);
+    }
+
+    #[test]
+    fn broadcast_empty_list_produces_empty_ids() {
+        // The empty-list fast-path in server_web_socket_broadcast returns Ok(()).
+        let hs: Vec<WsHandle> = Vec::new();
+        let ids: Vec<i64> = hs
+            .into_iter()
+            .map(|WsHandle::WebSocketServer(id)| id)
+            .collect();
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn handle_unwrap_roundtrip() {
+        let h = WsHandle::WebSocketServer(99);
+        let WsHandle::WebSocketServer(id) = h;
+        assert_eq!(id, 99);
+    }
+}
+
 // ─── Sky.Http.Middleware + Sky.Http.RateLimit ─────────────────────────────
 //
 // A Handler is `Fn(ServerRequest) -> SkyTask<E, ServerResponse>`. Each `with*`

@@ -145,6 +145,9 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::StreamWriter => "StreamWriter".to_owned(),
         // #111: HTTP request handle — re-exported from sky_runtime::http.
         IrType::HttpRequest => "HttpRequest".to_owned(),
+        // #127: Sky.Http.Server.WebSocket opaque handles.
+        IrType::WebSocketServer => "WsHandle".to_owned(),
+        IrType::WebSocketServerCfg => "WsServerCfg<SkyError>".to_owned(),
         // M7 Std.Ui / Std.Html parametric types.  Use fully-qualified Rust paths
         // (T2 soundness: `Attribute` exists in BOTH Std.Ui and Std.Html namespaces;
         // qualified paths keep them unambiguous and prevent glob-import shadowing).
@@ -198,6 +201,27 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
                 && matches!(ret.as_ref(), IrType::Task(inner) if matches!(inner.as_ref(), IrType::ServerResponse)) =>
         {
             "ServerHandler<SkyError>".to_owned()
+        }
+        // WsServerCfg callback fields store Arc<dyn Fn + Send + Sync>; emit the
+        // matching type so the WS adapter functions compile.  The two shapes are:
+        //   onConnect / onClose  →  Fn(WsHandle) -> SkyTask<()>
+        //   onMessage  / onError →  Fn(WsHandle, String) -> SkyTask<()>
+        // This arm MUST appear before the generic `Fun` arm so it takes priority.
+        IrType::Fun(params, ret)
+            if matches!(
+                params.as_slice(),
+                [IrType::WebSocketServer] | [IrType::WebSocketServer, IrType::Str]
+            ) && matches!(ret.as_ref(), IrType::Task(inner) if matches!(inner.as_ref(), IrType::Unit)) =>
+        {
+            let mut parts = Vec::with_capacity(params.len());
+            for param in params {
+                parts.push(render_type(ctx, param, generics)?);
+            }
+            let ret_ty = render_type(ctx, ret, generics)?;
+            format!(
+                "Arc<dyn Fn({}) -> {ret_ty} + Send + Sync + 'static>",
+                parts.join(", ")
+            )
         }
         IrType::Fun(params, ret) => {
             // A first-class function value is a boxed trait object
