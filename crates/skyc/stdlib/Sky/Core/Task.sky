@@ -12,6 +12,13 @@ module Sky.Core.Task exposing
     , sequence, parallel
     , lazy
     , run
+    , RetryPolicy
+    , linearBackoff, exponentialBackoff
+    , withJitter
+    , retryOn, withRetryOn
+    , defaultRetryPolicy
+    , withMaxAttempts, withBaseMs, withKind
+    , retryWith
     )
 
 
@@ -73,3 +80,65 @@ lazy = Ffi.kernel "Task_lazy"
 
 run : Task Error a -> Result Error a
 run = Ffi.kernel "Task_run"
+
+
+-- ── Retry policy ─────────────────────────────────────────────────────────────
+
+-- | Retry configuration for `retryWith`.
+-- Fields:
+--   maxAttempts  — maximum number of attempts (including the first).
+--   baseMs       — base delay between attempts in milliseconds.
+--   jitter       — if True, add randomised jitter to each delay.
+--   kind         — 0 = linear (constant delay), 1 = exponential (base * 2^(attempt-1)).
+--   shouldRetry  — predicate; True means retry on this error.
+type alias RetryPolicy e =
+    { maxAttempts : Int
+    , baseMs : Int
+    , jitter : Bool
+    , kind : Int
+    , shouldRetry : e -> Bool
+    }
+
+-- | `linearBackoff maxAttempts delayMs` — linear (constant) delay policy,
+-- retries on all errors.
+linearBackoff : Int -> Int -> RetryPolicy e
+linearBackoff = Ffi.kernel "Task_linearBackoff"
+
+-- | `exponentialBackoff maxAttempts baseMs` — exponential back-off policy,
+-- retries on all errors.
+exponentialBackoff : Int -> Int -> RetryPolicy e
+exponentialBackoff = Ffi.kernel "Task_exponentialBackoff"
+
+-- | `withJitter policy` — enable random jitter on the policy's delays.
+withJitter : RetryPolicy e -> RetryPolicy e
+withJitter = Ffi.kernel "Task_withJitter"
+
+-- | `retryOn pred policy` — replace the shouldRetry predicate.
+retryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e
+retryOn = Ffi.kernel "Task_retryOn"
+
+-- | Alias for `retryOn` — same semantics, more pipeline-friendly name.
+withRetryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e
+withRetryOn = Ffi.kernel "Task_withRetryOn"
+
+-- | Default retry policy: 3 attempts, 500 ms exponential back-off, no jitter,
+-- retry on all errors.
+defaultRetryPolicy : RetryPolicy e
+defaultRetryPolicy = Ffi.kernel "Task_defaultRetryPolicy"
+
+-- | `withMaxAttempts n policy` — set the maximum number of attempts.
+withMaxAttempts : Int -> RetryPolicy e -> RetryPolicy e
+withMaxAttempts = Ffi.kernel "Task_withMaxAttempts"
+
+-- | `withBaseMs ms policy` — set the base delay in milliseconds.
+withBaseMs : Int -> RetryPolicy e -> RetryPolicy e
+withBaseMs = Ffi.kernel "Task_withBaseMs"
+
+-- | `withKind k policy` — set the delay kind: 0 = linear, 1 = exponential.
+withKind : Int -> RetryPolicy e -> RetryPolicy e
+withKind = Ffi.kernel "Task_withKind"
+
+-- | `retryWith policy task` — run `task`, retrying according to `policy`
+-- when it fails.
+retryWith : RetryPolicy Error -> Task Error a -> Task Error a
+retryWith = Ffi.kernel "Task_retryWith"
