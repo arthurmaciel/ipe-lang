@@ -2640,8 +2640,7 @@ fn split_interpolation(raw: &str) -> Vec<Chunk> {
     let mut result: Vec<Chunk> = Vec::new();
     let mut acc = String::new();
     let mut i = 0;
-    while i < chars.len() {
-        let c0 = chars[i];
+    while let Some(&c0) = chars.get(i) {
         let c1 = chars.get(i + 1).copied();
         let c2 = chars.get(i + 2).copied();
         match (c0, c1, c2) {
@@ -2664,13 +2663,13 @@ fn split_interpolation(raw: &str) -> Vec<Chunk> {
                 // Collect the body up to the matching `}}`.
                 let mut body = String::new();
                 let mut closed = false;
-                while i < chars.len() {
-                    if chars[i] == '}' && chars.get(i + 1).copied() == Some('}') {
+                while let Some(&bc) = chars.get(i) {
+                    if bc == '}' && chars.get(i + 1).copied() == Some('}') {
                         i += 2;
                         closed = true;
                         break;
                     }
-                    body.push(chars[i]);
+                    body.push(bc);
                     i += 1;
                 }
                 if closed {

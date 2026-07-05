@@ -116,8 +116,7 @@ const fn tok_kind(t: &Tok) -> TokenKind {
         Tok::Ident(_) => TokenKind::Ident,
         Tok::Int(_) => TokenKind::Int,
         Tok::Float(_) => TokenKind::Float,
-        Tok::Str(_) => TokenKind::Str,
-        Tok::TripleStr(_) => TokenKind::Str,
+        Tok::Str(_) | Tok::TripleStr(_) => TokenKind::Str,
         Tok::Char(_) => TokenKind::Char,
     }
 }
@@ -1994,10 +1993,9 @@ impl<'a> Parser<'a> {
             // is unsound to match on (Rust forbids float patterns), so a
             // `Tok::Float` falls through to the fail-closed catch-all below.
             Tok::Int(n) => Ok(Located::new(tok.span, Pattern_::PInt(*n))),
-            Tok::Str(s) => Ok(Located::new(tok.span, Pattern_::PStr(s.clone()))),
-            // Triple-quoted strings are valid in patterns as raw-content string
-            // literals, mirroring the Haskell `MultiLine str -> return (Src.PStr str)`.
-            Tok::TripleStr(s) => Ok(Located::new(tok.span, Pattern_::PStr(s.clone()))),
+            Tok::Str(s) | Tok::TripleStr(s) => {
+                Ok(Located::new(tok.span, Pattern_::PStr(s.clone())))
+            }
             Tok::Char(c) => Ok(Located::new(tok.span, Pattern_::PChar(c.clone()))),
             // A negative integer literal pattern `-3`. The `-` lexes as
             // [`Tok::Minus`]; the digit must follow immediately. Anything else
