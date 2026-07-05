@@ -4932,24 +4932,16 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // to return `SkyTask<A>` (an unevaluated future), NOT `SkyResult<E, A>`.
     // Elide the outer `task_run(...)` wrapper: use the inner task expression as
     // the body and convert the return type from `Result(Error, A)` to `Task(A)`.
-    let (body_expr, elided_ret): (&Expr, Option<IrType>) = if name == "sky_main" {
-        if let Expr::Call {
+    let (body_expr, elided_ret): (&Expr, Option<IrType>) = if name == "sky_main"
+        && let Expr::Call {
             callee: Callee::Kernel(k),
             args,
         } = &func.body
-        {
-            if matches!(k, KernelFn::TaskRun | KernelFn::TaskPerform) && args.len() == 1 {
-                if let IrType::Result(_, ok_ty) = &func.ret {
-                    (&args[0], Some(IrType::Task(ok_ty.clone())))
-                } else {
-                    (&func.body, None)
-                }
-            } else {
-                (&func.body, None)
-            }
-        } else {
-            (&func.body, None)
-        }
+        && matches!(k, KernelFn::TaskRun | KernelFn::TaskPerform)
+        && let [inner] = args.as_slice()
+        && let IrType::Result(_, ok_ty) = &func.ret
+    {
+        (inner, Some(IrType::Task(ok_ty.clone())))
     } else {
         (&func.body, None)
     };
