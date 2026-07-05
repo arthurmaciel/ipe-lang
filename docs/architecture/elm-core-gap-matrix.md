@@ -263,7 +263,7 @@ semantics; the Go/Rust `unicode.ToLower` result is naturally a `String`).
 | `List.map5` | `(a -> b -> c -> d -> e -> result) -> List a -> List b -> List c -> List d -> List e -> List result` | `MISSING` | |
 | `List.sort` | `List comparable -> List comparable` | `MISSING` | unkeyed sort; common |
 | `List.sortBy` | `(a -> comparable) -> List a -> List a` | `same-name` | added #132 |
-| `List.sortWith` | `(a -> a -> Order) -> List a -> List a` | `MISSING` | blocked on `Order` type |
+| `List.sortWith` | `(a -> a -> Order) -> List a -> List a` | `MISSING` | UNBLOCKED — `Order` ADT + `Basics.compare` shipped (#123); plain port now |
 | `List.isEmpty` | `List a -> Bool` | `same-name` | |
 | `List.head` | `List a -> Maybe a` | `same-name` | |
 | `List.tail` | `List a -> Maybe (List a)` | `same-name` | |
@@ -599,7 +599,7 @@ Rarely critical but often needed for idiomatic Elm ports.
 | Member | Elm sig | Notes |
 |---|---|---|
 | `List.unzip` | `List (a, b) -> (List a, List b)` | fold-based |
-| `List.sortWith` | `(a -> a -> Order) -> List a -> List a` | blocked on `Order` type |
+| `List.sortWith` | `(a -> a -> Order) -> List a -> List a` | UNBLOCKED — `Order` shipped (#123) |
 | `List.map3`/`map4`/`map5` | (parallel N-list map) | may use `map2` + `andMap` |
 
 ### Batch D — Dict traversal (high impact)
@@ -723,7 +723,7 @@ Enables composing sub-components with different Msg types in the TEA update loop
 | `Sub.map` | `(a -> msg) -> Sub a -> Sub msg` | same |
 
 ### Deferred / blocked items
-- **`List.sortWith`** — blocked on `Order` type / `Basics.compare` returning `LT`/`EQ`/`GT`
+- **`List.sortWith`** — UNBLOCKED: `Order` ADT (LT|EQ|GT) + `Basics.compare` shipped in #123; plain port
 - **`List.map3`/`map4`/`map5`** — can wait until `map2` lands (same pattern)
 - **`Array`** — no planned implementation; use `List`
 - **`Bitwise`** — no planned implementation; use FFI for bit-manipulation needs
