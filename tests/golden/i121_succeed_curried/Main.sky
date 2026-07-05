@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+-- F7 (#121 seal, #89 boundary). `mkPair : String -> (Int -> String)` has
+-- def-arity 1.  Used in a JsonDec.succeed pipeline: the slot type for
+-- `mkPair` inside `curry2` is `Fun([Str, Int], Str)` (flattened) but
+-- def-arity is 1 → E0593 inside the `curry2` bound before the fix.
+-- T6 emits the eta-adapter so the slot type and def-arity agree.
+
+import Sky.Core.Json.Decode as JsonDec
+import Sky.Core.Json.Decode.Pipeline as Pipe
+
+
+mkPair : String -> (Int -> String)
+mkPair prefix =
+    \n -> prefix ++ ":" ++ String.fromInt n
+
+
+decoder : JsonDec.Decoder String
+decoder =
+    JsonDec.succeed mkPair
+        |> Pipe.required "k" JsonDec.string
+        |> Pipe.required "v" JsonDec.int
+
+
+main =
+    case JsonDec.decodeString decoder "{\"k\":\"val\",\"v\":99}" of
+        Ok s ->
+            println s
+
+        Err _ ->
+            println "decode-error"

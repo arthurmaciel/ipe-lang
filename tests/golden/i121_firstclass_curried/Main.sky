@@ -1,0 +1,46 @@
+module Main exposing (main)
+
+-- F1 (#121 seal). `mk : String -> (String -> Page)` has def-arity 1.
+-- At two first-class reify sites the slot type is `Fun([Str, Str], Page)` —
+-- T6 emits an eta-adapter.  The closure body `\t -> Home s t` captures `s`
+-- (String, CloneOk) — T3 rewrites to `.clone()` so the closure is `Fn`.
+-- F11 (shadow control) is woven in: `tag` rebinds `label` locally so the
+-- lambda's capture refers to the PARAMETER, not the inner binding.
+
+
+type Page
+    = Home String String
+
+
+-- def-arity 1; type flattens to Fun([Str, Str], Page).
+mk : String -> (String -> Page)
+mk s =
+    \t -> Home s t
+
+
+apply2 : (String -> String -> Page) -> Page
+apply2 f =
+    f "hello" "world"
+
+
+pageStr : Page -> String
+pageStr p =
+    case p of
+        Home a b ->
+            a ++ " " ++ b
+
+
+-- F11: `label` is rebound inside `tag`; the lambda captures the *parameter*,
+-- not the shadow.  Correct output proves T3's shadow-discipline is intact.
+tag : String -> List String -> String
+tag label items =
+    let tagged = List.map (\x -> label ++ x) items in
+    let label = String.fromInt (List.length items) in
+    String.join "," tagged ++ "[" ++ label ++ "]"
+
+
+main =
+    let g = mk in
+    let p1 = g "first" "second" in
+    let p2 = apply2 mk in
+    println (pageStr p1 ++ "|" ++ pageStr p2 ++ "|" ++ tag "sky-" [ "a", "b" ])
