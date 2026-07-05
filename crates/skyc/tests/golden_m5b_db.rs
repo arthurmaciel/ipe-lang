@@ -245,3 +245,50 @@ fn db_unsafe_find_where() {
 fn db_sql_decimal_money() {
     assert_runs_and_matches_oracle("m5b_db_sql_decimal_money");
 }
+
+// ── Polymorphic params — T0001 regression ────────────────────────────────────
+
+/// SKY-T0001 regression: `Db.exec`/`Db.query` accept `List a` (polymorphic),
+/// so `List Int`, `List String`, and mixed `List SqlValue` all compile without
+/// a type-mismatch error.
+///
+/// The fixture exercises three call shapes in one `Db.withTransaction`:
+///
+/// * `Db.exec … [1]`                     — `List Int`   (regression for #18-job-queue)
+/// * `Db.exec … ["hello"]`               — `List String` (regression for #17-skymon)
+/// * `Db.exec … [SqlNull …, SqlInt 42, SqlBool True]` — mixed `List SqlValue`
+///
+/// Compile-only assertion: `skyc::build` must succeed (no `SKY-T0001`).
+/// E2E assertion (gated on `SKY_E2E=1`): binary prints `"3"` — three rows
+/// inserted and queried back.
+///
+/// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
+#[test]
+fn db_poly_params_compiles() {
+    let root = repo_root();
+    let dir = golden_dir(&root, "m5b_db_poly_params");
+    let entry = dir.join("Main.sky");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m5b_db_poly_params");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
+    let Ok(runtime) = runtime else { return };
+
+    // Core assertion: `skyc::build` succeeds — no SKY-T0001 for any param-list shape.
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "SKY-T0001 regression: `Db.exec` with `List Int` / `List String` / mixed \
+         `List SqlValue` must compile without a type-mismatch error; got: {:?}",
+        built.err()
+    );
+}
+
+/// E2E extension of [`db_poly_params_compiles`]: build the emitted Cargo project,
+/// run it, and assert the binary prints `"3"` (three rows inserted and read back).
+/// Gated on `SKY_E2E=1`.
+#[test]
+fn db_poly_params_e2e() {
+    assert_runs_and_matches_oracle("m5b_db_poly_params");
+}
