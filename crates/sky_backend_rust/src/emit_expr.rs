@@ -1165,6 +1165,10 @@ fn emit_tea_call(
         // gated). The payload type T is resolved by Rust's type inference from
         // the matching `cmd_publish` call site; no boxing required here.
         KernelFn::SubSubscribeTopic => Ok(None),
+        // `Http.Stream.chunks : Int -> (ChunkEvent -> msg) -> Sub msg`
+        // Uses the same generic N-arg emit path as SubSubscribeTopic.
+        // The runtime symbol `sub_subscribe_stream` is defined in http_stream.rs.
+        KernelFn::HttpStreamChunks => Ok(None),
         // ── M6 reserved: NOT emittable yet ───────────────────────────────────────
         // If a program somehow reaches one of these kernels through lower_callee
         // routing, that is a compiler invariant violation — hard error.
@@ -1913,6 +1917,19 @@ fn emit_ui_call(
         KernelFn::UiTransparent => Ok(Some(
             "sky_runtime::ui::helpers::ui_transparent_()".to_owned(),
         )),
+        // `Ui.colorCss : Color -> String` (arity 1)
+        KernelFn::UiColorCss => {
+            let [c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiColorCss",
+                    detail: format!("Ui.colorCss requires 1 argument, got {}", args.len()),
+                });
+            };
+            let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_color_css_({c})"
+            )))
+        }
 
         // ── Background sub-module ─────────────────────────────────────────────
 

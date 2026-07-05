@@ -4142,6 +4142,8 @@ impl<'a> Builder<'a> {
             K::UiRgb => fun(int(), fun(int(), fun(int(), color()))),
             K::UiRgba => fun(int(), fun(int(), fun(int(), fun(float(), color())))),
             K::UiWhite | K::UiBlack | K::UiTransparent => color(),
+            // colorCss : Color -> String
+            K::UiColorCss => fun(color(), string()),
 
             // ── Sky.Core.Json.Encode (8) — the `JsonEnc.*` encoders. `Value =
             //    any` maps to `IrType::Json` (`JsonVal`) via the `"Value"` arm in
@@ -4283,6 +4285,9 @@ impl<'a> Builder<'a> {
             K::HttpStreamForEachChunk => fun(int(), fun(fun(string(), task_unit()), task_unit())),
             // closeRaw : Int -> Task Error ()
             K::HttpStreamClose => fun(int(), task_unit()),
+            // chunks : Int -> (ChunkEvent -> msg) -> Sub msg
+            // ChunkEvent is opaque from the runtime; modelled as `var(0)`.
+            K::HttpStreamChunks => fun(int(), fun(fun(var(0), var(1)), sub(var(1)))),
 
             // ── #127: Sky.Http.Server.WebSocket (12 kernels) ────────────────────
             // defaultCfg : WebSocketServerCfg
@@ -5003,12 +5008,13 @@ mod registry_phase_c_tests {
             K::UiVw,
             K::UiMinimum,
             K::UiMaximum,
-            // Std.Ui Color builders (5) — result type `Color`
+            // Std.Ui Color builders (6) — result type `Color`
             K::UiRgb,
             K::UiRgba,
             K::UiWhite,
             K::UiBlack,
             K::UiTransparent,
+            K::UiColorCss,
             // Sky.Core.Json.Encode (8) — `Value` positions map to `IrType::Json`
             K::JsonEncString,
             K::JsonEncInt,
@@ -5320,10 +5326,11 @@ mod registry_phase_c_tests {
             K::StreamEmit,
             K::StreamFinish,
             K::StreamWithContentType,
-            // ── #111: Sky.Core.Http.Stream (3 kernels) ───────────────────────────
+            // ── #111: Sky.Core.Http.Stream (4 kernels) ───────────────────────────
             K::HttpStreamOpen,
             K::HttpStreamForEachChunk,
             K::HttpStreamClose,
+            K::HttpStreamChunks,
             // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
             K::WsDefaultCfg,
             K::WsWithOnConnect,
