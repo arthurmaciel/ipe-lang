@@ -615,6 +615,8 @@ pub enum IrType {
     /// | `UiCtor::UiAttribute`    | `sky_runtime::ui::element::Attribute<M>`     |
     /// | `UiCtor::HtmlAttribute`  | `sky_runtime::html::Attribute<M>`            |
     /// | `UiCtor::HtmlEvent`      | `sky_runtime::html::Event<M>`                |
+    /// | `UiCtor::Label`          | `sky_runtime::ui::input::Label<M>`           |
+    /// | `UiCtor::Placeholder`    | `sky_runtime::ui::input::Placeholder<M>`     |
     Ui {
         ctor: UiCtor,
         msg: Box<Self>,
@@ -647,11 +649,11 @@ pub enum IrType {
     LiveRoute(Box<Self>),
 }
 
-/// Tag enum for the five message-parametric `Std.Ui` / `Std.Html` types.
+/// Tag enum for the message-parametric `Std.Ui` / `Std.Html` types.
 ///
 /// Used inside [`IrType::Ui`] to select the correct Rust path at emission time.
-/// The set is closed (five variants) and intentionally small to keep the pattern
-/// match exhaustive without a catch-all.
+/// The set is intentionally small to keep the pattern match exhaustive without a
+/// catch-all.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UiCtor {
     /// `Html msg` — a rendered HTML tree (`sky_runtime::html::Html<M>`).
@@ -666,6 +668,11 @@ pub enum UiCtor {
     /// `Event msg` from `Std.Html.Events` —
     /// an HTML event handler (`sky_runtime::html::Event<M>`).
     HtmlEvent,
+    /// `Label msg` — a `Std.Ui.Input` label descriptor (`sky_runtime::ui::input::Label<M>`).
+    Label,
+    /// `Placeholder msg` — a `Std.Ui.Input` placeholder descriptor
+    /// (`sky_runtime::ui::input::Placeholder<M>`).
+    Placeholder,
 }
 
 /// Tag enum for the nullary (non-message-parametric) `Std.Ui` types.
@@ -752,7 +759,11 @@ pub fn ir_type_is_derivable(
         IrType::Ui { ctor, msg } => {
             matches!(
                 ctor,
-                UiCtor::Html | UiCtor::Element | UiCtor::UiAttribute
+                UiCtor::Html
+                    | UiCtor::Element
+                    | UiCtor::UiAttribute
+                    | UiCtor::Label
+                    | UiCtor::Placeholder
             ) && ir_type_is_derivable(msg, enum_derivable)
         }
         // Non-derivable opaque leaves (each lacks ≥1 of Clone / Debug / PartialEq).

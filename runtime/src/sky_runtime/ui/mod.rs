@@ -13,3 +13,6 @@ pub mod render;
 /// function corresponds to a `KernelFn` variant in `sky_ir` and is named
 /// with the `naming.rs` trailing-underscore convention.
 pub mod helpers;
+
+/// `Std.Ui.Input` kernel helpers — typed form controls (Task #124).
+pub mod input;
