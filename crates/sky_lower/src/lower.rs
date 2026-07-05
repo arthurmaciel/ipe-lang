@@ -3348,7 +3348,20 @@ impl<'a> Lowerer<'a> {
                         "lambda type has fewer arrows than parameters",
                     ));
                 };
-                let ir_ty = self.ir_type_from_ty(arg, pat.span)?;
+                // A wildcard `_` (`PAnything`) parameter is never read, so its
+                // concrete Rust type is irrelevant to correctness.  When the
+                // solver leaves the argument type as a free `Ty::Var` — the
+                // common case for callbacks like `\_ -> Task.succeed x` after
+                // `Task.fail` (which never produces a value) or `\_ -> NoOp`
+                // after `System.exit` (which diverges) — map the free variable
+                // to `IrType::Json` (`JsonVal` / `any`) instead of raising
+                // `SKY-L0102`.  This matches the Haskell reference:
+                // `Can.PAnything -> (GoIr.GoParam "_" "any", [])`.
+                let ir_ty = if matches!(&pat.value, canon::Pattern_::PAnything) {
+                    self.ir_type_from_ty_json(arg, pat.span)?
+                } else {
+                    self.ir_type_from_ty(arg, pat.span)?
+                };
                 // Same shared path as the def-head params (see `lower_param`): a
                 // plain-var param contributes its name; a destructuring param
                 // takes a fresh binder + a `Destructure` prologue.
@@ -3962,7 +3975,17 @@ impl<'a> Lowerer<'a> {
     ///
     /// Used for JSON-kernel argument / return / list-element positions where
     /// `Value = any` legitimately leaves a bare type variable after HM solving.
-    /// All other type forms delegate to the strict [`ir_type_from_ty`].
+    /// Also used for wildcard `_` (`PAnything`) lambda parameters: the
+    /// parameter is never read, so any type that compiles is sound.  When the
+    /// solver leaves the argument type as a free `Ty::Var` — or a compound
+    /// type containing a free `Ty::Var` (e.g. `Result Error a` in a
+    /// `Cmd.perform` callback) — this helper recurses into every compound
+    /// type arm and maps each `Ty::Var` leaf to [`IrType::Json`] rather than
+    /// failing with [`Feature::Polymorphism`] (SKY-L0102).
+    // The match has one arm per compound builtin — each arm adds ~4 lines;
+    // pushing past clippy's 100-line ceiling is unavoidable without splitting
+    // on an arbitrary boundary.  The allow is narrow: only this function.
+    #[allow(clippy::too_many_lines)]
     fn ir_type_from_ty_json(&self, t: &Ty, span: Span) -> DResult<IrType> {
         match t {
             // The key difference: `Ty::Var` in a JSON context is `JsonVal`.
@@ -3986,7 +4009,114 @@ impl<'a> Lowerer<'a> {
                 let ret = self.ir_type_from_ty_json(cur, span)?;
                 Ok(IrType::Fun(params, Box::new(ret)))
             }
-            // For all other type forms, delegate to the strict helper.
+            // Compound constructor types — recurse so that an embedded
+            // `Ty::Var` in e.g. `Result Error a` maps to `IrType::Json`
+            // rather than falling through to the strict `ir_type_from_ty`.
+            // Scalar constructors (Int, Float, Bool, …) have no type args and
+            // fall through to `ir_type_from_ty` unchanged.
+            Ty::Con { name, args, .. } if !args.is_empty() => {
+                match self.resolve(*name)? {
+                    "Maybe" if args.len() == 1 => {
+                        let elem = self.ir_type_from_ty_json(
+                            args.first().ok_or_else(maybe_arg_bug)?,
+                            span,
+                        )?;
+                        Ok(IrType::Maybe(Box::new(elem)))
+                    }
+                    "Result" if args.len() == 2 => {
+                        let err = self.ir_type_from_ty_json(
+                            args.first().ok_or_else(result_arg_bug)?,
+                            span,
+                        )?;
+                        let ok = self.ir_type_from_ty_json(
+                            args.get(1).ok_or_else(result_arg_bug)?,
+                            span,
+                        )?;
+                        Ok(IrType::Result(Box::new(err), Box::new(ok)))
+                    }
+                    "List" if args.len() == 1 => {
+                        let elem = self.ir_type_from_ty_json(
+                            args.first().ok_or_else(list_arg_bug)?,
+                            span,
+                        )?;
+                        Ok(IrType::List(Box::new(elem)))
+                    }
+                    "Task" if args.len() == 1 => {
+                        let inner = self.ir_type_from_ty_json(
+                            args.first().ok_or_else(task_arg_bug)?,
+                            span,
+                        )?;
+                        Ok(IrType::Task(Box::new(inner)))
+                    }
+                    "Cmd" if args.len() == 1 => {
+                        let inner = self.ir_type_from_ty_json(
+                            args.first().ok_or_else(|| {
+                                bug(
+                                    "sky_lower::ir_type_from_ty_json",
+                                    "Cmd applied without its message type",
+                                )
+                            })?,
+                            span,
+                        )?;
+                        Ok(IrType::Cmd(Box::new(inner)))
+                    }
+                    "Sub" if args.len() == 1 => {
+                        let inner = self.ir_type_from_ty_json(
+                            args.first().ok_or_else(|| {
+                                bug(
+                                    "sky_lower::ir_type_from_ty_json",
+                                    "Sub applied without its message type",
+                                )
+                            })?,
+                            span,
+                        )?;
+                        Ok(IrType::Sub(Box::new(inner)))
+                    }
+                    "Set" if args.len() == 1 => {
+                        let elem = self.ir_type_from_ty_json(
+                            args.first().ok_or_else(set_arg_bug)?,
+                            span,
+                        )?;
+                        if matches!(elem, IrType::Float) {
+                            return Err(unsupported(span, Feature::FloatKeyedCollection));
+                        }
+                        Ok(IrType::Set(Box::new(elem)))
+                    }
+                    "Dict" if args.len() == 2 => {
+                        let k = self.ir_type_from_ty_json(
+                            args.first().ok_or_else(dict_arg_bug)?,
+                            span,
+                        )?;
+                        let v = self.ir_type_from_ty_json(
+                            args.get(1).ok_or_else(dict_arg_bug)?,
+                            span,
+                        )?;
+                        if matches!(k, IrType::Float) {
+                            return Err(unsupported(span, Feature::FloatKeyedCollection));
+                        }
+                        Ok(IrType::Dict(Box::new(k), Box::new(v)))
+                    }
+                    "Decoder" if args.len() == 1 => {
+                        let inner = self.ir_type_from_ty_json(
+                            args.first().ok_or_else(|| {
+                                bug(
+                                    "sky_lower::ir_type_from_ty_json",
+                                    "Decoder applied without its element type",
+                                )
+                            })?,
+                            span,
+                        )?;
+                        Ok(IrType::Decoder(Box::new(inner)))
+                    }
+                    // All other compound constructors (user enum types with
+                    // type args, opaque types, etc.) delegate to the strict
+                    // helper — only the known builtins above can embed a free
+                    // type variable in a `PAnything` / JSON callback position.
+                    _ => self.ir_type_from_ty(t, span),
+                }
+            }
+            // For all other type forms (scalar constructors with no args,
+            // opaque types, etc.), delegate to the strict helper.
             _ => self.ir_type_from_ty(t, span),
         }
     }
@@ -4955,7 +5085,15 @@ impl<'a> Lowerer<'a> {
                     "eta-parameter pool smaller than the partial-application gap",
                 )
             })?;
-            let ir = self.ir_type_from_ty(arg_ty, call_span)?;
+            // Use the JSON-friendly variant so that a free `Ty::Var` in the
+            // missing-arg slot — the common case for diverging / always-failing
+            // tasks passed to `Task.andThen` or `Cmd.perform` where the result
+            // type `a` is never constrained — maps to `IrType::Json` (`JsonVal`)
+            // instead of raising SKY-L0102.  The eta-param is only a closure
+            // binder forwarded verbatim to the full kernel call; its concrete
+            // Rust type is unified by the compiler from the call site, so
+            // `JsonVal` is a sound stand-in for any unconstrained `Ty::Var`.
+            let ir = self.ir_type_from_ty_json(arg_ty, call_span)?;
             params.push((sym, ir));
             call_args.push(Expr::Var(sym));
         }
