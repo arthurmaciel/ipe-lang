@@ -698,8 +698,17 @@ pub struct Builder<'a> {
     uf: &'a mut UnionFind<Content>,
     interner: &'a Interner,
     builtins: Builtins,
-    /// Resolved type per source region (filled with vars, read back post-solve).
-    regions: BTreeMap<Span, VarId>,
+    /// Resolved type per source region, keyed by `(home_module_path, Span)`.
+    ///
+    /// The home path discriminant prevents span collisions after `link::link`
+    /// merges N source modules into a single flat def list: two different files
+    /// may independently contain expressions at the same byte-offset span.  The
+    /// bare-`Span` key (pre-fix) silently overwrote earlier entries, causing the
+    /// lowerer to read the wrong type and produce SKY-I0001.
+    regions: BTreeMap<(Vec<Symbol>, Span), VarId>,
+    /// Home module path of the def currently being constrained.  Set at the
+    /// start of each `constrain_def` call; read by every `regions.insert`.
+    current_home: Vec<Symbol>,
     /// Equality constraints to be discharged by the solver.
     constraints: Vec<Constraint>,
     /// Annotation-derived types of every top-level binding, for cross-binding
@@ -887,7 +896,9 @@ pub struct RouteWitnessCheck {
 
 /// The output of constraint generation, consumed by the solver + read-back.
 pub struct Generated {
-    pub regions: BTreeMap<Span, VarId>,
+    /// Resolved type per source region, keyed by `(home_module_path, Span)`.
+    /// See [`Builder::regions`] for the rationale.
+    pub regions: BTreeMap<(Vec<Symbol>, Span), VarId>,
     pub constraints: Vec<Constraint>,
     pub top_level: BTreeMap<(Vec<Symbol>, Symbol), Ty>,
     pub untyped: BTreeMap<(Vec<Symbol>, Symbol), VarId>,
@@ -921,6 +932,7 @@ impl<'a> Builder<'a> {
             interner,
             builtins,
             regions: BTreeMap::new(),
+            current_home: Vec::new(),
             constraints: Vec::new(),
             top_level: BTreeMap::new(), // (home, name) → Ty
             untyped: BTreeMap::new(),   // (home, name) → VarId
@@ -1372,6 +1384,10 @@ impl<'a> Builder<'a> {
     // ── the walk ────────────────────────────────────────────────────────────
 
     fn constrain_def(&mut self, def: &canon::Def) -> DResult<()> {
+        // Track which source module this def belongs to so every `regions.insert`
+        // in the sub-expression walk uses `(home, span)` as the key, preventing
+        // cross-module span collisions after `link::link` merges dep modules.
+        self.current_home = def.home().to_vec();
         match def {
             canon::Def::Typed {
                 name,
@@ -1408,9 +1424,10 @@ impl<'a> Builder<'a> {
                     self.constrain_pattern(&mut local, pat, arg_var)?;
                     // Record the param pattern's region so the lowerer can read the
                     // solved param type (record-param field-set completion, SKY-T0015
-                    // path). Cheap + additive; a param span never collides with an
-                    // expression span.
-                    self.regions.insert(pat.span, arg_var);
+                    // path). Keyed by `(current_home, pat.span)` to prevent collisions
+                    // across dep modules (see `Builder::regions` doc comment).
+                    self.regions
+                        .insert((self.current_home.clone(), pat.span), arg_var);
                     cursor = rest;
                 }
                 let ret_ty = self.normalize_annotation_ty(from_canon(cursor), name.span)?;
@@ -1441,7 +1458,8 @@ impl<'a> Builder<'a> {
                 for pat in patterns {
                     let v = self.flex()?;
                     self.constrain_pattern(&mut local, pat, v)?;
-                    self.regions.insert(pat.span, v);
+                    self.regions
+                        .insert((self.current_home.clone(), pat.span), v);
                     param_vars.push(v);
                 }
                 let body_var = self.constrain_expr(&local, body)?;
@@ -2086,7 +2104,7 @@ impl<'a> Builder<'a> {
                 self.constrain_update(local, base, fields, span)?
             }
         };
-        self.regions.insert(span, var);
+        self.regions.insert((self.current_home.clone(), span), var);
         Ok(var)
     }
 
@@ -2108,8 +2126,10 @@ impl<'a> Builder<'a> {
             self.constrain_pattern(&mut lam_local, p, v)?;
             // Record each lambda param's region so the lowerer can source a
             // record-param's complete field set from its solved type (one path
-            // shared with the typed-def sites).
-            self.regions.insert(p.span, v);
+            // shared with the typed-def sites).  Keyed by `(current_home, span)`
+            // to prevent cross-module span collisions.
+            self.regions
+                .insert((self.current_home.clone(), p.span), v);
             param_vars.push(v);
         }
         let mut arrow = self.constrain_expr(&lam_local, body)?;
@@ -4527,6 +4547,7 @@ impl<'a> Builder<'a> {
             interner,
             builtins,
             regions: BTreeMap::new(),
+            current_home: Vec::new(),
             constraints: Vec::new(),
             top_level: BTreeMap::new(),
             untyped: BTreeMap::new(),

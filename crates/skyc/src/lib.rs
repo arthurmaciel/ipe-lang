@@ -441,6 +441,11 @@ fn compile_modules(
         sky_canon::link::link(entry_name, canon_modules, &interner).map_err(&pipeline_err)?;
 
     let types = sky_types::infer(&linked, &mut interner).map_err(&pipeline_err)?;
+    // Print non-fatal warnings (e.g. SKY-T0011 RedundantCaseBranch) to stderr.
+    // These are Severity::Warning: the build continues and exit code stays 0.
+    for w in &types.warnings {
+        eprintln!("{}", render(w, &entry_src_path.to_string_lossy(), &entry_src));
+    }
     let program = sky_lower::lower(&linked, &types, &mut interner).map_err(&pipeline_err)?;
     let emitted = RustBackend::new(&interner)
         .emit(&program)

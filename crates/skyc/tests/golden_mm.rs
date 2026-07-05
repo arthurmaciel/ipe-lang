@@ -102,6 +102,23 @@ fn mm_diamond_emits_byte_identical_main_rs() {
 }
 
 // ---------------------------------------------------------------------------
+// Positive: mm_qualtype_local_shadow — Main defines local `type Msg` AND
+// references `Counter.Msg` in a qualified annotation.  Exercises the
+// `qualifier_paths` fix: without it the canonicaliser resolved `Counter.Msg`
+// to Main's home (`["Main"]`) instead of Counter's (`["Counter"]`), causing
+// a SKY-T0001 type-mismatch at the unification site.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mm_qualtype_local_shadow_compiles() {
+    let fixture = golden_dir("mm_qualtype_local_shadow");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("mm_qualtype_local_shadow");
+    let _ = std::fs::remove_dir_all(&out);
+    let res = skyc::build_project(&fixture.join("sky.toml"), &out, &runtime());
+    assert!(res.is_ok(), "build_project failed: {:?}", res.err());
+}
+
+// ---------------------------------------------------------------------------
 // Negative helpers
 // ---------------------------------------------------------------------------
 
