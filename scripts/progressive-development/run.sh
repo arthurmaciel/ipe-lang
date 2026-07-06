@@ -32,7 +32,7 @@ MAX_ITERS="${PROGDEV_MAX_ITERS:-20}"
 MIN_FREE_GB="${PROGDEV_MIN_FREE_GB:-15}"
 ITER_TIMEOUT="${PROGDEV_ITER_TIMEOUT:-5400}"
 COOLDOWN="${PROGDEV_COOLDOWN:-20}"
-STREAM="${PROGDEV_STREAM:-}"    # 1 = stream every step live to the iter-log (watch.sh / tail -f)
+STREAM="${PROGDEV_STREAM:-1}"   # DEFAULT ON (watch.sh renders); PROGDEV_STREAM=0 to disable
 GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
 STOP_FILE="progressive-development.stop"
 PROMPT_FILE="scripts/progressive-development/prompt.md"
@@ -120,7 +120,7 @@ for i in $(seq 1 "$MAX_ITERS"); do
     # The full iteration output goes to a per-iteration log so a no-verdict /
     # failed run is diagnosable (the --once test proved this is essential).
     iterlog="docs/architecture/progressive-development-iter-$i.log"
-    if [ -n "$STREAM" ]; then
+    if [ "$STREAM" != 0 ]; then
         # LIVE mode: stream-json + verbose writes every step (reasoning, tool
         # calls, gate output) to the iter-log AS IT HAPPENS. Watch it with
         # `scripts/progressive-development/watch.sh` or `tail -f $iterlog | jq`.
