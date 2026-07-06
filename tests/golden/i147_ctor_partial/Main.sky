@@ -1,0 +1,21 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.List as List
+import Sky.Core.String as String
+
+-- A2 (#147 seal). `Tagged : String -> Int -> Item` (arity 2).
+-- `Tagged "item"` partially applies one arg, returning `Int -> Item`.
+-- The captured `"item"` (String, CloneOk) exercises the T4/#130 clone path.
+-- Expected output: "item:10, item:20, item:30"
+
+type Item = Tagged String Int
+
+showItem : Item -> String
+showItem i =
+    case i of
+        Tagged s n -> s ++ ":" ++ String.fromInt n
+
+main =
+    let tag = Tagged "item" in
+    let items = List.map tag [10, 20, 30] in
+    println (String.join ", " (List.map showItem items))
