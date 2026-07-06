@@ -360,3 +360,36 @@ pub fn input_checkbox_<M: Clone + Send + Sync + 'static>(
     let row_el = ui_row_(row_attrs, vec![check_input, icon_el]);
     wrap_with_label(label, layout_attrs, row_el)
 }
+
+/// `Input.slider`
+///
+/// Renders an `<input type="range">` with a label and oninput handler.
+/// All numeric attributes (`value`, `min`, `max`, `step`) are passed as
+/// `String` — the DOM's `<input type="range">` wire format; the caller parses
+/// to a numeric type as needed.
+///
+/// The `onChange` callback receives the `String` representation of the current
+/// slider position (fired on every `oninput` event while the user drags).
+pub fn input_slider_<M: Clone + Send + Sync + 'static>(
+    attrs: Vec<Attribute<M>>,
+    on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
+    value: String,
+    min: String,
+    max: String,
+    step: String,
+    label: Label<M>,
+) -> Element<M> {
+    let (layout_attrs, control_attrs) = split_layout_attrs(attrs);
+    let mut base_attrs: Vec<Attribute<M>> = vec![
+        ui_html_attribute_("type".into(), "range".into()),
+        ui_html_attribute_("value".into(), value),
+        ui_html_attribute_("min".into(), min),
+        ui_html_attribute_("max".into(), max),
+        ui_html_attribute_("step".into(), step),
+        ui_on_input_(on_change),
+    ];
+    base_attrs.extend(control_attrs);
+    base_attrs.extend(implicit_fill_if_hoisted(&layout_attrs));
+    let input_el = ui_input_(base_attrs);
+    wrap_with_label(label, layout_attrs, input_el)
+}

@@ -980,6 +980,8 @@ pub enum StdlibKernel {
     InputNewPassword,
     /// `Input.checkbox : List (Attribute msg) -> { onChange, icon, checked, label } -> Element msg`
     InputCheckbox,
+    /// `Input.slider : List (Attribute msg) -> { onChange, value, min, max, step, label } -> Element msg`
+    InputSlider,
     // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────────
     /// `Lazy.lazy : (a -> Element msg) -> a -> Element msg`
     ///
@@ -1970,7 +1972,8 @@ impl StdlibKernel {
             Self::InputCurrentPassword => d("Input", "currentPassword", 2, Ui, "input_current_password_"),
             Self::InputNewPassword => d("Input", "newPassword", 2, Ui, "input_new_password_"),
             Self::InputCheckbox => d("Input", "checkbox", 2, Ui, "input_checkbox_"),
-            // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────
+            Self::InputSlider => d("Input", "slider", 2, Ui, "input_slider_"),
+            // ── Std.Ui.Lazy (#146) ─────────────────────────────────────��──────
             Self::LazyLazy  => d("Lazy", "lazy",  2, Ui, "lazy_lazy_"),
             Self::LazyLazy2 => d("Lazy", "lazy2", 3, Ui, "lazy_lazy2_"),
             Self::LazyLazy3 => d("Lazy", "lazy3", 4, Ui, "lazy_lazy3_"),
@@ -2756,6 +2759,7 @@ impl StdlibKernel {
         Self::InputCurrentPassword,
         Self::InputNewPassword,
         Self::InputCheckbox,
+        Self::InputSlider,
         // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────
         Self::LazyLazy,
         Self::LazyLazy2,
@@ -3178,6 +3182,7 @@ impl StdlibKernel {
                 | Self::InputCurrentPassword
                 | Self::InputNewPassword
                 | Self::InputCheckbox
+                | Self::InputSlider
                 // ── Std.Ui.Lazy (#146) ────────────────────────────────────────
                 | Self::LazyLazy
                 | Self::LazyLazy2

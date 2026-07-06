@@ -275,6 +275,20 @@ struct Builtins {
     input_f_icon: Symbol,
     /// `"spellcheck"` — the spellcheck field of the multiline cfg record.
     input_f_spellcheck: Symbol,
+    /// `"value"` — the value field of the slider cfg record (current value as String).
+    input_f_value: Symbol,
+    /// `"min"` — the min field of the slider cfg record.
+    input_f_min: Symbol,
+    /// `"max"` — the max field of the slider cfg record.
+    input_f_max: Symbol,
+    /// `"step"` — the step field of the slider cfg record.
+    input_f_step: Symbol,
+    // ── Sky.Core.Http.Stream opaque StreamId type constructor ─────────────────
+    /// `"StreamId"` — the opaque stream identifier type constructor from
+    /// `Sky.Core.Http.Stream`. Backed by `sky_runtime::http_stream::SkyStreamId`.
+    /// No synthetic `EnumDef` is injected; the backend handles it via a special
+    /// case in `enum_name` that maps the symbol to the runtime struct.
+    stream_id: Symbol,
     // ── Order ADT (#123) ─────────────────────────────────────────────────────
     /// `"Order"` — the type constructor for three-way comparison results.
     order: Symbol,
@@ -298,6 +312,7 @@ struct Builtins {
 }
 
 impl Builtins {
+    #[allow(clippy::too_many_lines)] // declarative intern table — each field listed explicitly for exhaustiveness
     fn new(interner: &mut Interner) -> DResult<Self> {
         Ok(Self {
             int: interner.intern("Int")?,
@@ -400,6 +415,13 @@ impl Builtins {
             input_f_checked: interner.intern("checked")?,
             input_f_icon: interner.intern("icon")?,
             input_f_spellcheck: interner.intern("spellcheck")?,
+            // Std.Ui.Input.slider cfg fields (#148).
+            input_f_value: interner.intern("value")?,
+            input_f_min: interner.intern("min")?,
+            input_f_max: interner.intern("max")?,
+            input_f_step: interner.intern("step")?,
+            // Sky.Core.Http.Stream: StreamId opaque handle type (#148).
+            stream_id: interner.intern("StreamId")?,
             // ── Order ADT (#123) ─────────────────────────────────────────────
             order: interner.intern("Order")?,
             lt: interner.intern("LT")?,
@@ -2612,6 +2634,16 @@ impl<'a> Builder<'a> {
             name: self.builtins.stream_writer,
             args: Vec::new(),
         };
+        // #148: `stream_id()` — the opaque `StreamId` handle from
+        // `Sky.Core.Http.Stream`. Backed at runtime by
+        // `sky_runtime::http_stream::SkyStreamId` (a newtype over `i64`).
+        // Used as the return type of `HttpStream.open` and the first argument
+        // of `forEachChunk`, `close`, and `chunks`.
+        let stream_id = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.stream_id,
+            args: Vec::new(),
+        };
         // #127: `wsh()` — the opaque `WsHandle` per-peer handle.
         // Used as the first arg of every WsServerCfg callback and as the
         // target of `sendToClient` / `sendBinaryToClient` / `broadcast` / `closeClient`.
@@ -4120,6 +4152,37 @@ impl<'a> Builder<'a> {
                 fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
             }
 
+            // `Input.slider`:
+            //   List (Attribute msg)
+            //   -> { onChange : String -> msg
+            //      , value   : String
+            //      , min     : String
+            //      , max     : String
+            //      , step    : String
+            //      , label   : Label msg
+            //      }
+            //   -> Element msg
+            //
+            // All numeric values are passed as `String` (matching the DOM's
+            // `<input type="range">` wire format); the user parses to a numeric
+            // type as needed.
+            K::InputSlider => {
+                let cfg_rec = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.input_f_on_change, fun(string(), var(0)));
+                        m.insert(self.builtins.input_f_value, string());
+                        m.insert(self.builtins.input_f_min, string());
+                        m.insert(self.builtins.input_f_max, string());
+                        m.insert(self.builtins.input_f_step, string());
+                        m.insert(self.builtins.btn_f_label, label_t(var(0)));
+                        m
+                    },
+                    RowTail::Closed,
+                );
+                fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
+            }
+
             // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────
             // lazy  : (a -> Element msg) -> a -> Element msg
             K::LazyLazy => fun(
@@ -4354,16 +4417,22 @@ impl<'a> Builder<'a> {
             // withContentType : String -> StreamWriter -> Task Error ()
             K::StreamWithContentType => fun(string(), fun(sw(), task_unit())),
 
-            // ── #111: Sky.Core.Http.Stream (3 kernels) ──────────────────────────
-            // openRaw : HttpRequest -> Task Error Int
-            K::HttpStreamOpen => fun(http_request(), task(int())),
-            // forEachChunkRaw : Int -> (String -> Task Error ()) -> Task Error ()
-            K::HttpStreamForEachChunk => fun(int(), fun(fun(string(), task_unit()), task_unit())),
-            // closeRaw : Int -> Task Error ()
-            K::HttpStreamClose => fun(int(), task_unit()),
-            // chunks : Int -> (ChunkEvent -> msg) -> Sub msg
+            // ── #111: Sky.Core.Http.Stream (4 kernels) ──────────────────────────
+            // open : HttpRequest -> Task Error StreamId
+            //
+            // Returns an opaque `StreamId` handle wrapping the raw i64 stream
+            // registry key.  Previously typed as `Task Error Int`; fixed in #148
+            // to match upstream `Sky.Core.Http.Stream.open`'s declared return type.
+            K::HttpStreamOpen => fun(http_request(), task(stream_id())),
+            // forEachChunk : StreamId -> (String -> Task Error ()) -> Task Error ()
+            K::HttpStreamForEachChunk => {
+                fun(stream_id(), fun(fun(string(), task_unit()), task_unit()))
+            }
+            // close : StreamId -> Task Error ()
+            K::HttpStreamClose => fun(stream_id(), task_unit()),
+            // chunks : StreamId -> (ChunkEvent -> msg) -> Sub msg
             // ChunkEvent is opaque from the runtime; modelled as `var(0)`.
-            K::HttpStreamChunks => fun(int(), fun(fun(var(0), var(1)), sub(var(1)))),
+            K::HttpStreamChunks => fun(stream_id(), fun(fun(var(0), var(1)), sub(var(1)))),
 
             // ── #127: Sky.Http.Server.WebSocket (12 kernels) ────────────────────
             // defaultCfg : WebSocketServerCfg
@@ -5462,6 +5531,7 @@ mod registry_phase_c_tests {
             K::InputCurrentPassword,
             K::InputNewPassword,
             K::InputCheckbox,
+            K::InputSlider,
             // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────
             K::LazyLazy,
             K::LazyLazy2,

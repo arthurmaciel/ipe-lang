@@ -1,0 +1,33 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Http as Http
+import Sky.Core.Http.Stream as HttpStream exposing (StreamId)
+import Sky.Core.Task as Task
+import Sky.Core.Error as Error exposing (Error)
+import Std.Log exposing (println)
+
+
+-- i148 regression: HttpStream.open must return Task Error StreamId
+-- (not Task Error Int — the pre-fix incorrect scheme).
+-- A binding annotated Result Error StreamId must accept the Task.run result
+-- without SKY-T0001.
+
+handleOpen : Result Error StreamId -> String
+handleOpen res =
+    case res of
+        Ok _ ->
+            "opened"
+
+        Err _ ->
+            "failed"
+
+
+main =
+    let
+        req = Http.defaultRequest "http://localhost:1"
+        -- Task.run : Task Error a -> Result Error a
+        -- So result : Result Error StreamId
+        result = Task.run (HttpStream.open req)
+    in
+        Task.run (println (handleOpen result))
