@@ -4878,6 +4878,24 @@ impl<'a> Builder<'a> {
                 }, RowTail::Closed);
                 fun(rec_arg, attr(var(0)))
             }
+
+            // ── Border.innerShadow ────────────────────────────────────────────────
+            // innerShadow : { offsetX : Int, offsetY : Int, blur : Int, spread : Int,
+            //                 color : Color } -> Attribute msg
+            // Same record shape as Border.shadow but INSET; reuses the shadow field
+            // symbols.
+            K::BorderInnerShadow => {
+                let rec_arg = Ty::Record({
+                    let mut m = BTreeMap::new();
+                    m.insert(self.builtins.shadow_f_offset_x, int());
+                    m.insert(self.builtins.shadow_f_offset_y, int());
+                    m.insert(self.builtins.shadow_f_blur, int());
+                    m.insert(self.builtins.shadow_f_spread, int());
+                    m.insert(self.builtins.shadow_f_color, color());
+                    m
+                }, RowTail::Closed);
+                fun(rec_arg, attr(var(0)))
+            }
         })
     }
 }
@@ -6006,6 +6024,7 @@ mod registry_phase_c_tests {
             K::UiLink,
             K::BorderWidthEach,
             K::BorderShadow,
+            K::BorderInnerShadow,
             // ── Std.Ui.Keyed (column + row) ──────────────────────────────────
             K::KeyedColumn,
             K::KeyedRow,
