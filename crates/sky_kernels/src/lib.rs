@@ -934,8 +934,9 @@ pub enum StdlibKernel {
     FontActiveColor,
     FontDisabledColor,
     FontHoverSize, // Int → Attr pseudo
-    // Html.Attributes — tabindex
+    // Html.Attributes — tabindex, rows
     HtmlAttrTabindex, // Int → HtmlAttr
+    HtmlAttrRows,     // Int → HtmlAttr  (<textarea rows="N">)
     // ── #111: Effect stdlib modules ────────────────────────────────────────
     // Std.Cli / Sky.Cli — line-oriented TEA app-entry (fully wired).
     CliProgram,
@@ -1047,6 +1048,93 @@ pub enum StdlibKernel {
     LazyLazy4,
     /// `Lazy.lazy5 : (a -> b -> c -> d -> e -> Element msg) -> a -> b -> c -> d -> e -> Element msg` (eager)
     LazyLazy5,
+    // ── Std.Ui.Keyed — sky-key for diff identity ─────────────────────────
+    /// `Keyed.column : List (Attribute msg) -> List (String, Element msg) -> Element msg`
+    KeyedColumn,
+    /// `Keyed.row : List (Attribute msg) -> List (String, Element msg) -> Element msg`
+    KeyedRow,
+
+    // ── Std.Decimal — arbitrary-precision decimal arithmetic ──────────────
+    /// `Decimal.zero : Decimal`
+    DecZero,
+    /// `Decimal.one : Decimal`
+    DecOne,
+    /// `Decimal.oneHundred : Decimal`
+    DecOneHundred,
+    /// `Decimal.fromString : String -> Result Error Decimal`
+    DecFromString,
+    /// `Decimal.fromInt : Int -> Decimal`
+    DecFromInt,
+    /// `Decimal.fromFloat : Float -> Decimal`
+    DecFromFloat,
+    /// `Decimal.fromMinor : Int -> Int -> Decimal`
+    DecFromMinor,
+    /// `Decimal.toString : Decimal -> String`
+    DecToString,
+    /// `Decimal.toStringFixed : Int -> Decimal -> String`
+    DecToStringFixed,
+    /// `Decimal.toFloat : Decimal -> Float`
+    DecToFloat,
+    /// `Decimal.toInt : Decimal -> Int`
+    DecToInt,
+    /// `Decimal.toMinor : Int -> Decimal -> Int`
+    DecToMinor,
+    /// `Decimal.add : Decimal -> Decimal -> Decimal`
+    DecAdd,
+    /// `Decimal.sub : Decimal -> Decimal -> Decimal`
+    DecSub,
+    /// `Decimal.mul : Decimal -> Decimal -> Decimal`
+    DecMul,
+    /// `Decimal.div : Decimal -> Decimal -> Result Error Decimal`
+    DecDiv,
+    /// `Decimal.mod : Decimal -> Decimal -> Result Error Decimal`
+    DecMod,
+    /// `Decimal.neg : Decimal -> Decimal`
+    DecNeg,
+    /// `Decimal.abs : Decimal -> Decimal`
+    DecAbs,
+    /// `Decimal.floor : Decimal -> Decimal`
+    DecFloor,
+    /// `Decimal.ceil : Decimal -> Decimal`
+    DecCeil,
+    /// `Decimal.round : Int -> Decimal -> Decimal`
+    DecRound,
+    /// `Decimal.roundHalfUp : Int -> Decimal -> Decimal`
+    DecRoundHalfUp,
+    /// `Decimal.truncate : Int -> Decimal -> Decimal`
+    DecTruncate,
+    /// `Decimal.compare : Decimal -> Decimal -> Int`
+    DecCompare,
+    /// `Decimal.eq : Decimal -> Decimal -> Bool`
+    DecEq,
+    /// `Decimal.neq : Decimal -> Decimal -> Bool`
+    DecNeq,
+    /// `Decimal.lt : Decimal -> Decimal -> Bool`
+    DecLt,
+    /// `Decimal.lte : Decimal -> Decimal -> Bool`
+    DecLte,
+    /// `Decimal.gt : Decimal -> Decimal -> Bool`
+    DecGt,
+    /// `Decimal.gte : Decimal -> Decimal -> Bool`
+    DecGte,
+    /// `Decimal.min : Decimal -> Decimal -> Decimal`
+    DecMin,
+    /// `Decimal.max : Decimal -> Decimal -> Decimal`
+    DecMax,
+    /// `Decimal.isZero : Decimal -> Bool`
+    DecIsZero,
+    /// `Decimal.isPositive : Decimal -> Bool`
+    DecIsPositive,
+    /// `Decimal.isNegative : Decimal -> Bool`
+    DecIsNegative,
+    /// `Decimal.percentOf : Decimal -> Decimal -> Decimal`
+    DecPercentOf,
+    /// `Decimal.addPercent : Decimal -> Decimal -> Decimal`
+    DecAddPercent,
+    /// `Decimal.subPercent : Decimal -> Decimal -> Decimal`
+    DecSubPercent,
+    /// `Decimal.formatWith : String -> String -> Int -> Decimal -> String`
+    DecFormatWith,
 }
 
 impl StdlibKernel {
@@ -1955,6 +2043,7 @@ impl StdlibKernel {
             Self::FontHoverSize => d("Font", "hoverSize", 1, Ui, "ui_font_hover_size_"),
             // Html.Attributes
             Self::HtmlAttrTabindex => d("Attr", "tabindex", 1, Ui, "html_attr_tabindex_"),
+            Self::HtmlAttrRows => d("Attr", "rows", 1, Ui, "html_attr_rows_"),
             // ── #111: Effect stdlib modules ────────────────────────────────────
             // Std.Cli / Sky.Cli app-entry (fully wired, Phase 1).
             Self::CliProgram => d("Cli", "program", 1, KernelClass::Cli, "cli_program"),
@@ -2057,6 +2146,50 @@ impl StdlibKernel {
             Self::LazyLazy3 => d("Lazy", "lazy3", 4, Ui, "lazy_lazy3_"),
             Self::LazyLazy4 => d("Lazy", "lazy4", 5, Ui, "lazy_lazy4_"),
             Self::LazyLazy5 => d("Lazy", "lazy5", 6, Ui, "lazy_lazy5_"),
+            // ── Std.Ui.Keyed ────────────────────────────────────────────────
+            Self::KeyedColumn => d("Keyed", "column", 2, Ui, "keyed_column_"),
+            Self::KeyedRow    => d("Keyed", "row",    2, Ui, "keyed_row_"),
+            // ── Std.Decimal — arbitrary-precision decimal arithmetic ──────────
+            Self::DecZero        => d("Decimal", "zero",        0, Pure, "decimal_zero"),
+            Self::DecOne         => d("Decimal", "one",         0, Pure, "decimal_one"),
+            Self::DecOneHundred  => d("Decimal", "oneHundred",  0, Pure, "decimal_one_hundred"),
+            Self::DecFromString  => d("Decimal", "fromString",  1, Pure, "decimal_from_string"),
+            Self::DecFromInt     => d("Decimal", "fromInt",     1, Pure, "decimal_from_int"),
+            Self::DecFromFloat   => d("Decimal", "fromFloat",   1, Pure, "decimal_from_float"),
+            Self::DecFromMinor   => d("Decimal", "fromMinor",   2, Pure, "decimal_from_minor"),
+            Self::DecToString    => d("Decimal", "toString",    1, Pure, "decimal_to_string"),
+            Self::DecToStringFixed => d("Decimal", "toStringFixed", 2, Pure, "decimal_to_string_fixed"),
+            Self::DecToFloat     => d("Decimal", "toFloat",     1, Pure, "decimal_to_float"),
+            Self::DecToInt       => d("Decimal", "toInt",       1, Pure, "decimal_to_int"),
+            Self::DecToMinor     => d("Decimal", "toMinor",     2, Pure, "decimal_to_minor"),
+            Self::DecAdd         => d("Decimal", "add",         2, Pure, "decimal_add"),
+            Self::DecSub         => d("Decimal", "sub",         2, Pure, "decimal_sub"),
+            Self::DecMul         => d("Decimal", "mul",         2, Pure, "decimal_mul"),
+            Self::DecDiv         => d("Decimal", "div",         2, Pure, "decimal_div"),
+            Self::DecMod         => d("Decimal", "mod",         2, Pure, "decimal_mod"),
+            Self::DecNeg         => d("Decimal", "neg",         1, Pure, "decimal_neg"),
+            Self::DecAbs         => d("Decimal", "abs",         1, Pure, "decimal_abs"),
+            Self::DecFloor       => d("Decimal", "floor",       1, Pure, "decimal_floor"),
+            Self::DecCeil        => d("Decimal", "ceil",        1, Pure, "decimal_ceil"),
+            Self::DecRound       => d("Decimal", "round",       2, Pure, "decimal_round"),
+            Self::DecRoundHalfUp => d("Decimal", "roundHalfUp", 2, Pure, "decimal_round_half_up"),
+            Self::DecTruncate    => d("Decimal", "truncate",    2, Pure, "decimal_truncate"),
+            Self::DecCompare     => d("Decimal", "compare",     2, Pure, "decimal_compare"),
+            Self::DecEq          => d("Decimal", "eq",          2, Pure, "decimal_eq"),
+            Self::DecNeq         => d("Decimal", "neq",         2, Pure, "decimal_neq"),
+            Self::DecLt          => d("Decimal", "lt",          2, Pure, "decimal_lt"),
+            Self::DecLte         => d("Decimal", "lte",         2, Pure, "decimal_lte"),
+            Self::DecGt          => d("Decimal", "gt",          2, Pure, "decimal_gt"),
+            Self::DecGte         => d("Decimal", "gte",         2, Pure, "decimal_gte"),
+            Self::DecMin         => d("Decimal", "min",         2, Pure, "decimal_min"),
+            Self::DecMax         => d("Decimal", "max",         2, Pure, "decimal_max"),
+            Self::DecIsZero      => d("Decimal", "isZero",      1, Pure, "decimal_is_zero"),
+            Self::DecIsPositive  => d("Decimal", "isPositive",  1, Pure, "decimal_is_positive"),
+            Self::DecIsNegative  => d("Decimal", "isNegative",  1, Pure, "decimal_is_negative"),
+            Self::DecPercentOf   => d("Decimal", "percentOf",   2, Pure, "decimal_percent_of"),
+            Self::DecAddPercent  => d("Decimal", "addPercent",  2, Pure, "decimal_add_percent"),
+            Self::DecSubPercent  => d("Decimal", "subPercent",  2, Pure, "decimal_sub_percent"),
+            Self::DecFormatWith  => d("Decimal", "formatWith",  4, Pure, "decimal_format_with"),
         }
     }
 
@@ -2793,6 +2926,7 @@ impl StdlibKernel {
         Self::FontDisabledColor,
         Self::FontHoverSize,
         Self::HtmlAttrTabindex,
+        Self::HtmlAttrRows,
         // ── #111: Effect stdlib modules ────────────────────────────────────────
         Self::CliProgram,
         Self::AuthHashPassword,
@@ -2870,6 +3004,50 @@ impl StdlibKernel {
         Self::LazyLazy3,
         Self::LazyLazy4,
         Self::LazyLazy5,
+        // ── Std.Ui.Keyed ──────────────────────────────────────────────────────
+        Self::KeyedColumn,
+        Self::KeyedRow,
+        // ── Std.Decimal ───────────────────────────────────────────────────────
+        Self::DecZero,
+        Self::DecOne,
+        Self::DecOneHundred,
+        Self::DecFromString,
+        Self::DecFromInt,
+        Self::DecFromFloat,
+        Self::DecFromMinor,
+        Self::DecToString,
+        Self::DecToStringFixed,
+        Self::DecToFloat,
+        Self::DecToInt,
+        Self::DecToMinor,
+        Self::DecAdd,
+        Self::DecSub,
+        Self::DecMul,
+        Self::DecDiv,
+        Self::DecMod,
+        Self::DecNeg,
+        Self::DecAbs,
+        Self::DecFloor,
+        Self::DecCeil,
+        Self::DecRound,
+        Self::DecRoundHalfUp,
+        Self::DecTruncate,
+        Self::DecCompare,
+        Self::DecEq,
+        Self::DecNeq,
+        Self::DecLt,
+        Self::DecLte,
+        Self::DecGt,
+        Self::DecGte,
+        Self::DecMin,
+        Self::DecMax,
+        Self::DecIsZero,
+        Self::DecIsPositive,
+        Self::DecIsNegative,
+        Self::DecPercentOf,
+        Self::DecAddPercent,
+        Self::DecSubPercent,
+        Self::DecFormatWith,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────
@@ -3261,6 +3439,7 @@ impl StdlibKernel {
                 | Self::FontDisabledColor
                 | Self::FontHoverSize
                 | Self::HtmlAttrTabindex
+                | Self::HtmlAttrRows
                 // ── Std.Ui.Region (#117) ──────────────────────────────────────
                 | Self::RegionMainContent
                 | Self::RegionNavigation
@@ -3306,6 +3485,9 @@ impl StdlibKernel {
                 | Self::LazyLazy3
                 | Self::LazyLazy4
                 | Self::LazyLazy5
+                // ── Std.Ui.Keyed ────────────────────────────────────────────
+                | Self::KeyedColumn
+                | Self::KeyedRow
         )
     }
 

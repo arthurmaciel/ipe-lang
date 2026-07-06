@@ -260,7 +260,9 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::LiveReq
         | IrType::LiveRoute(_)
         // `Order` is a plain three-variant data enum — an admissible leaf.
+        // `Decimal` is a Copy newtype — an admissible leaf.
         | IrType::Order
+        | IrType::Decimal
         | IrType::Int
         | IrType::Float
         | IrType::Bool

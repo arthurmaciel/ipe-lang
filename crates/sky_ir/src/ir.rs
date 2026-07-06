@@ -675,6 +675,14 @@ pub enum IrType {
     /// `int` (-1/0/1).  The Rust backend uses a typed enum for sound exhaustive
     /// pattern matching without a range-check.
     Order,
+
+    /// `Std.Decimal` — arbitrary-precision decimal arithmetic.
+    ///
+    /// Renders as `sky_runtime::decimal::Decimal` (newtype around
+    /// `rust_decimal::Decimal`).  Carries Copy + serde semantics; used as
+    /// a field type in record structs and as a direct call-argument / return
+    /// value for all `Decimal.*` kernels.
+    Decimal,
 }
 
 /// Tag enum for the message-parametric `Std.Ui` / `Std.Html` types.
@@ -785,7 +793,9 @@ pub fn ir_type_is_derivable(
         | IrType::Bytes
         | IrType::Json
         // `SkyOrder` derives Clone + Copy + PartialEq + Eq + Debug — fully derivable.
+        // `Decimal` derives Clone + Copy + PartialEq + Eq + Debug — fully derivable.
         | IrType::Order
+        | IrType::Decimal
         | IrType::Generic(_)
         | IrType::UiPlain(_) => true,
         // The fully-derivable Std.Ui / Std.Html carriers vs the two Clone-only
@@ -896,7 +906,9 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::Json
         | IrType::Generic(_)
         // `Order` (LT/EQ/GT) is a plain no-payload enum; SkyOrder derives serde.
-        | IrType::Order => true,
+        // `Decimal` is a Copy newtype; rust_decimal supports serde via feature.
+        | IrType::Order
+        | IrType::Decimal => true,
         // All non-serde leaves collapse to `false`:
         //   * `UiPlain` value types (`Length`/`Color`/… → `ui::element::*`) and
         //     every `Ui` carrier (`Html`/`Element`/`Attribute`) derive only
