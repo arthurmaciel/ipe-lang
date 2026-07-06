@@ -537,6 +537,8 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::TimeSleep => "Time.sleep",
         KernelFn::TimeUnixMillis => "Time.unixMillis",
         KernelFn::TimeTimeString => "Time.timeString",
+        KernelFn::TimeIsLeapYear => "Time.isLeapYear",
+        KernelFn::TimeDaysInMonth => "Time.daysInMonth",
         // ── System kernels (M5a) ──────────────────────────────────────────────
         KernelFn::SystemArgs => "System.args",
         KernelFn::SystemGetenv => "System.getenv",

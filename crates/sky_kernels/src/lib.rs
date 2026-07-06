@@ -520,6 +520,10 @@ pub enum StdlibKernel {
     TimeSleep,
     TimeUnixMillis,
     TimeTimeString,
+    // `Std.Time` pure calendar helpers (no I/O). Reference:
+    // `Ffi.callPure "Time_isLeapYear"` / `"Time_daysInMonth"`.
+    TimeIsLeapYear,
+    TimeDaysInMonth,
     // ── System ──────────────────────────────────────────────────────────────
     SystemArgs,
     SystemGetenv,
@@ -1624,6 +1628,8 @@ impl StdlibKernel {
             Self::TimeSleep => d("Time", "sleep", 1, Pure, "time_sleep"),
             Self::TimeUnixMillis => d("Time", "unixMillis", 0, Pure, "time_unix_millis"),
             Self::TimeTimeString => d("Time", "timeString", 1, Pure, "time_time_string"),
+            Self::TimeIsLeapYear => d("Time", "isLeapYear", 1, Pure, "time_is_leap_year"),
+            Self::TimeDaysInMonth => d("Time", "daysInMonth", 2, Pure, "time_days_in_month"),
             // ── System ──────────────────────────────────────────────────────
             Self::SystemArgs => d("System", "args", 0, Pure, "system_args"),
             Self::SystemGetenv => d("System", "getenv", 1, Pure, "system_getenv"),
@@ -2579,6 +2585,8 @@ impl StdlibKernel {
         Self::TimeSleep,
         Self::TimeUnixMillis,
         Self::TimeTimeString,
+        Self::TimeIsLeapYear,
+        Self::TimeDaysInMonth,
         // System
         Self::SystemArgs,
         Self::SystemGetenv,
