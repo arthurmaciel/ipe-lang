@@ -70,3 +70,19 @@ fn ex17_skymon_exits_zero() {
 fn ex10_live_component_exits_zero() {
     assert_skyc_exit0("ex10_live_component", "examples/10-live-component/src/Main.sky");
 }
+
+/// Example 19 (skyforum) — 8-module Sky.Live app.
+///
+/// Regression for the `FontFamily` scheme bug: `constrain.rs` declared
+/// `K::FontFamily => fun(list(string()), attr(var(0)))` but the Sky API is
+/// `Font.family : String -> Attribute msg`.  The wrong `List String` scheme
+/// leaked a phantom `String = List String` constraint into the merged solve,
+/// which surfaced as a spurious SKY-T0001 ("expected String, found List String")
+/// at the `::` cons site in `State.sky:158` — a completely unrelated line
+/// whose span happened to be where the UF solver first detected the conflict.
+/// Fixed by correcting the scheme to `fun(string(), attr(var(0)))` and changing
+/// the runtime helper from `Vec<String>` to `String`.
+#[test]
+fn ex19_skyforum_exits_zero() {
+    assert_skyc_exit0("ex19_skyforum", "examples/19-skyforum/src/Main.sky");
+}
