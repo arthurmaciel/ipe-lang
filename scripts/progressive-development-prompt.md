@@ -5,6 +5,11 @@ burndown of the Ipê (Sky→Rust) compiler backlog. You have no memory of prior
 iterations — all durable state is on disk. Do exactly one unit of work, prove
 it, commit it or discard it, and exit. The next iteration starts fresh.
 
+Your full contract — the six principles, the two rules, the seal
+(no exit-0-then-cargo-fail), the boundary, and the gate — is the project memory
+already loaded into your context (it is the lean `progressive-development-context.md`
+placed as this checkout's `CLAUDE.md`). Obey it.
+
 ## Prime invariant (the pawl)
 **The tree only moves forward through a green gate.** You either land ONE
 backlog item as a green, committed increment, or you leave the tree exactly as
