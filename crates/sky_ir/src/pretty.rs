@@ -736,6 +736,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::BorderWidthEach => "Border.widthEach",
         KernelFn::BorderShadow => "Border.shadow",
         KernelFn::BorderGlow => "Border.glow",
+        KernelFn::BorderInnerShadow => "Border.innerShadow",
         KernelFn::FontSize => "Font.size",
         KernelFn::FontColor => "Font.color",
         KernelFn::FontFamily => "Font.family",
