@@ -282,6 +282,7 @@ pub enum ModuleOrigin {
 /// non-parametric alias). `body` is the right-hand-side annotation, kept in
 /// source form so each use site can substitute its own arguments for `params`
 /// and then expand — no later stage ever observes the alias name.
+#[derive(Clone)]
 struct AliasDef {
     params: Vec<Symbol>,
     body: src::TypeAnnotation,
@@ -295,6 +296,14 @@ struct AliasDef {
     /// module's own context (the default `ctx` argument to
     /// `canonicalise_type`).
     dep_scope_types: Option<BTreeMap<Symbol, Vec<Symbol>>>,
+    /// When this alias was injected from a dep module, the dep module's
+    /// complete alias scope at the time of canonicalisation.  Paired with
+    /// `dep_scope_types` so that when we build the `alt_ctx` for body
+    /// expansion, we can also merge in the dep's aliases — making alias-typed
+    /// fields (e.g. `board : Dict Int Piece` where `Piece` is a record alias
+    /// from `Chess.Piece`) visible without the importing module having to
+    /// re-import those transitive aliases itself.
+    dep_scope_aliases: Option<BTreeMap<Symbol, crate::ExportedAlias>>,
 }
 
 /// The immutable context threaded through [`canonicalise_type`]. Bundling the
@@ -544,6 +553,15 @@ pub fn canonicalise_module_with_origin(
         qualifier_paths.insert(qualifier, dep_path.clone());
     }
 
+    // Snapshot injected aliases (params + body only) so we can include them in
+    // `scope_aliases` after `injected_aliases` is moved into `canonicalise_with_env`.
+    let injected_alias_snapshot: Vec<(Symbol, crate::ExportedAlias)> = injected_aliases
+        .iter()
+        .map(|(&name, def)| {
+            (name, crate::ExportedAlias { params: def.params.clone(), body: def.body.clone() })
+        })
+        .collect();
+
     let canon_mod =
         canonicalise_with_env(
             m,
@@ -599,6 +617,27 @@ pub fn canonicalise_module_with_origin(
     // this module's alias bodies (see `AliasDef::dep_scope_types`).
     let mut exports = build_module_exports(&home, m, &env, &synth_ctor_names);
     exports.scope_types = type_home_map;
+
+    // Build the full alias scope: own local aliases + all injected dep aliases.
+    // Importers use this via `AliasDef::dep_scope_aliases` when expanding alias
+    // bodies that reference alias-typed fields from this module's dep scope
+    // (e.g. `board : Dict Int Piece` where `Piece` is a record-alias from a
+    // transitively imported module not directly imported by the importer).
+    let mut scope_aliases: BTreeMap<Symbol, crate::ExportedAlias> = BTreeMap::new();
+    for a in &m.aliases {
+        scope_aliases.insert(
+            a.value.name.value,
+            crate::ExportedAlias {
+                params: a.value.vars.iter().map(|v| v.value).collect(),
+                body: a.value.body.value.clone(),
+            },
+        );
+    }
+    for (name, ea) in injected_alias_snapshot {
+        scope_aliases.entry(name).or_insert(ea);
+    }
+    exports.scope_aliases = scope_aliases;
+
     Ok((canon_mod, exports))
 }
 
@@ -978,6 +1017,7 @@ fn canonicalise_with_env(
                 params: a.value.vars.iter().map(|v| v.value).collect(),
                 body: a.value.body.value.clone(),
                 dep_scope_types: None,
+                dep_scope_aliases: None,
             },
         );
     }
@@ -1440,6 +1480,7 @@ fn inject_dep_exports(
                         params: ea.params.clone(),
                         body: ea.body.clone(),
                         dep_scope_types: Some(dep.scope_types.clone()),
+                        dep_scope_aliases: Some(dep.scope_aliases.clone()),
                     });
             }
         }
@@ -1515,6 +1556,7 @@ fn inject_dep_exports(
                                     params: ea.params.clone(),
                                     body: ea.body.clone(),
                                     dep_scope_types: Some(dep.scope_types.clone()),
+                                    dep_scope_aliases: Some(dep.scope_aliases.clone()),
                                 });
                             // A record alias also exports a value-level
                             // auto-constructor under the same name (#82); when the
@@ -1547,6 +1589,18 @@ fn inject_dep_exports(
     let qual_map = env.qual_vars.entry(qualifier).or_default();
     for &v in &dep.values {
         qual_map.insert(v, VarHome::TopLevel(dep_path.clone()));
+    }
+    // Register qualified constructors so `Alias.CtorName` resolves correctly.
+    // Needed for compiled-source ADTs (e.g. `Money.USD` from `import Std.Money
+    // as Money`) where constructors are not stdlib kernels and never enter
+    // `qual_vars`.  We register ALL ctors from this dep regardless of the
+    // user's `exposing (...)` clause — qualified access does not require the
+    // name to be in the exposing list (only unqualified access does).
+    if !dep.ctors.is_empty() {
+        let qual_ctor_map = env.qual_ctors.entry(qualifier).or_default();
+        for (ctor_sym, ctor_home) in &dep.ctors {
+            qual_ctor_map.entry(*ctor_sym).or_insert_with(|| ctor_home.clone());
+        }
     }
 
     Ok(())
@@ -2341,16 +2395,41 @@ fn resolve_qual_var(
             name,
         }),
         Some(VarHome::Local) => Ok(canon::Expr_::VarLocal(name)),
-        // The qualifier resolves but the member is absent: suggest from this
-        // module's members.
-        None => Err(Diagnostic::Name {
-            span,
-            msg: NameError::NoSuchMember {
-                module: name_str(interner, qualifier)?,
-                member: name_str(interner, name)?,
-                suggestions: suggestions(name, members.keys().copied(), interner),
-            },
-        }),
+        // The qualifier resolves via qual_vars but the member is not a value.
+        // Check qual_ctors — needed for compiled-source ADT constructors accessed
+        // as `Alias.CtorName` (e.g. `Money.USD`, `Money.EUR`).
+        None => {
+            if let Some(ctor_map) = env.qual_ctors.get(&qualifier)
+                && let Some(ch) = ctor_map.get(&name)
+            {
+                return Ok(canon::Expr_::VarCtor {
+                    home: ch.home.clone(),
+                    type_name: ch.type_name,
+                    name: ch.name,
+                    index: ch.index,
+                });
+            }
+            Err(Diagnostic::Name {
+                span,
+                msg: NameError::NoSuchMember {
+                    module: name_str(interner, qualifier)?,
+                    member: name_str(interner, name)?,
+                    suggestions: suggestions(
+                        name,
+                        members
+                            .keys()
+                            .chain(
+                                env.qual_ctors
+                                    .get(&qualifier)
+                                    .iter()
+                                    .flat_map(|m| m.keys()),
+                            )
+                            .copied(),
+                        interner,
+                    ),
+                },
+            })
+        }
     }
 }
 
@@ -2605,6 +2684,7 @@ fn resolve_unqualified_type_home(name: Symbol, ctx: &TypeCtx) -> DResult<Vec<Sym
     })
 }
 
+#[allow(clippy::too_many_lines)] // exhaustive type-annotation walker; scope-alias merge pushed it over 100
 fn canonicalise_type(
     t: &src::TypeAnnotation,
     ctx: &TypeCtx,
@@ -2710,11 +2790,31 @@ fn canonicalise_type(
                 // `Piece` came from Chess.Piece which is NOT imported by the
                 // importing module) still resolve correctly.
                 let expanded = if let Some(dep_scope) = &alias.dep_scope_types {
+                    // Merge the dep module's alias scope into the current
+                    // aliases so alias-typed fields in the body (e.g. `Piece`
+                    // from Chess.Piece when expanding `Model` from State) are
+                    // visible even if the importing module never imported them
+                    // directly.  Lower priority: existing ctx aliases win.
+                    let merged_aliases_opt: Option<BTreeMap<Symbol, AliasDef>> =
+                        alias.dep_scope_aliases.as_ref().map(|dep_aliases| {
+                            let mut m = ctx.aliases.clone();
+                            for (name, ea) in dep_aliases {
+                                m.entry(*name).or_insert_with(|| AliasDef {
+                                    params: ea.params.clone(),
+                                    body: ea.body.clone(),
+                                    dep_scope_types: alias.dep_scope_types.clone(),
+                                    dep_scope_aliases: None,
+                                });
+                            }
+                            m
+                        });
+                    let aliases_ref: &BTreeMap<Symbol, AliasDef> =
+                        merged_aliases_opt.as_ref().map_or(ctx.aliases, |m| m);
                     let alt_ctx = TypeCtx {
                         type_home_map: dep_scope,
                         env: ctx.env,
                         qualifier_paths: ctx.qualifier_paths,
-                        aliases: ctx.aliases,
+                        aliases: aliases_ref,
                         interner: ctx.interner,
                         ann_span: ctx.ann_span,
                     };
