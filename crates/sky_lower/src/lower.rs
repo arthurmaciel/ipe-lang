@@ -9599,6 +9599,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
+        | IrType::Decimal
         | IrType::LiveReq => {}
     }
 }
