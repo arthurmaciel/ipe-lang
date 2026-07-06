@@ -331,6 +331,22 @@ pub fn ui_border_width_each_<M>(top: i64, right: i64, bottom: i64, left: i64) ->
     Attribute::AttrBorderWidthEach(top, right, bottom, left)
 }
 
+/// `Border.shadow : { offsetX : Int, offsetY : Int, blur : Int, spread : Int, color : Color } -> Attribute msg`
+///
+/// Mirrors the reference (`Std.Ui.Border.shadow` → `borderShadow`) which renders
+/// the CSS `box-shadow: <ox>px <oy>px <blur>px <spread>px <colour>;` shape. Uses
+/// the dedicated `AttrBorderShadow` runtime variant (rendered in `render.rs`) so
+/// the colour flows through the same `color_css` boundary as `Border.color`.
+pub fn ui_border_shadow_<M>(
+    horiz: i64,
+    vert: i64,
+    blur: i64,
+    spread: i64,
+    c: Color,
+) -> Attribute<M> {
+    Attribute::AttrBorderShadow(horiz, vert, blur, spread, c)
+}
+
 // ── Font sub-module ───────────────────────────────────────────────────────────
 
 /// `Font.size : Int -> Attribute msg`

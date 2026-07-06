@@ -7389,6 +7389,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::BorderColor
                 // `Border.widthEach : { top : Int, right : Int, bottom : Int, left : Int } -> Attribute msg`
                 | KernelFn::BorderWidthEach
+                // `Border.shadow : { offsetX, offsetY, blur, spread : Int, color : Color } -> Attribute msg`
+                | KernelFn::BorderShadow
                 // ── M7: Font — arity 1 ───────────────────────────────────────
                 // `Font.size : Int -> Attribute msg`
                 | KernelFn::FontSize
@@ -8515,6 +8517,7 @@ impl<'a> Lowerer<'a> {
                     ("Border", "rounded") => Ok(Callee::Kernel(KernelFn::BorderRounded)),
                     ("Border", "color") => Ok(Callee::Kernel(KernelFn::BorderColor)),
                     ("Border", "widthEach") => Ok(Callee::Kernel(KernelFn::BorderWidthEach)),
+                    ("Border", "shadow") => Ok(Callee::Kernel(KernelFn::BorderShadow)),
                     // ── M7: Font sub-module ───────────────────────────────────
                     ("Font", "size") => Ok(Callee::Kernel(KernelFn::FontSize)),
                     ("Font", "color") => Ok(Callee::Kernel(KernelFn::FontColor)),
