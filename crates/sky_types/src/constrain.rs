@@ -3546,10 +3546,20 @@ impl<'a> Builder<'a> {
             | K::UiWrappedRow
             | K::UiGrid
             | K::UiParagraph
-            | K::UiTextColumn => fun(
+            | K::UiTextColumn
+            // `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
+            | K::UiForm => fun(
                 list(attr(var(0))),
                 fun(list(elem_t(var(0))), elem_t(var(0))),
             ),
+            // ── M7: Std.Ui nearby attribute builders ─────────────────────────────
+            // `Ui.above/below/onLeft/onRight/inFront/behind : Element msg -> Attribute msg`
+            K::UiAbove
+            | K::UiBelow
+            | K::UiOnLeft
+            | K::UiOnRight
+            | K::UiInFront
+            | K::UiBehind => fun(elem_t(var(0)), attr(var(0))),
             K::UiButton => {
                 let cfg_rec = Ty::Record({
                     let mut m = BTreeMap::new();
@@ -3566,6 +3576,9 @@ impl<'a> Builder<'a> {
                 fun(fun(string(), var(0)), attr(var(0)))
             }
             K::UiOnBool => fun(fun(bool_ty(), var(0)), attr(var(0))),
+            // `Ui.onSubmit : (a -> msg) -> Attribute msg`
+            // var(1) = the form-data record type (decoupled from var(0) = msg)
+            K::UiOnSubmit => fun(fun(var(1), var(0)), attr(var(0))),
 
             // ── #107: Std.Html.Events builders — produce `Std.Html.Attribute
             // msg` (`html_attr`), matching the `Std.Html.Attributes` builders
@@ -4016,9 +4029,9 @@ impl<'a> Builder<'a> {
             | K::FontActiveColor
             | K::FontDisabledColor => fun(color(), attr(var(0))),
 
-            // Attribute builders — String / List String arg.
+            // Attribute builders — String arg.
             K::BackgroundImage => fun(string(), attr(var(0))),
-            K::FontFamily => fun(list(string()), attr(var(0))),
+            K::FontFamily => fun(string(), attr(var(0))),
 
             // Std.Ui — two Int args (arity 2).
             K::UiPaddingXY => fun(int(), fun(int(), attr(var(0)))),
@@ -5105,6 +5118,13 @@ mod registry_phase_c_tests {
             K::UiGrid,
             K::UiParagraph,
             K::UiTextColumn,
+            K::UiForm,
+            K::UiAbove,
+            K::UiBelow,
+            K::UiOnLeft,
+            K::UiOnRight,
+            K::UiInFront,
+            K::UiBehind,
             K::UiButton,
             K::UiOnClick,
             K::UiOnFocus,
@@ -5116,6 +5136,7 @@ mod registry_phase_c_tests {
             K::UiOnKeyDown,
             K::UiOnKeyUp,
             K::UiOnBool,
+            K::UiOnSubmit,
             // Std.Live app-entry (3)
             K::LiveApp,
             K::LiveRoute,

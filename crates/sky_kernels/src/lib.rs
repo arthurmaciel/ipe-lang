@@ -644,6 +644,21 @@ pub enum StdlibKernel {
     UiTextColumn,
     UiButton, // (List Attr, { onPress : Maybe msg, label : Element msg }) → Element msg
     UiLink, // (List Attr, { url : String, label : Element msg }) → Element msg
+    /// `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
+    UiForm,
+    // ── M7: Std.Ui nearby attribute builders (absolute-positioned overlays) ──
+    /// `Ui.above : Element msg -> Attribute msg`
+    UiAbove,
+    /// `Ui.below : Element msg -> Attribute msg`
+    UiBelow,
+    /// `Ui.onLeft : Element msg -> Attribute msg`
+    UiOnLeft,
+    /// `Ui.onRight : Element msg -> Attribute msg`
+    UiOnRight,
+    /// `Ui.inFront : Element msg -> Attribute msg`
+    UiInFront,
+    /// `Ui.behind : Element msg -> Attribute msg`
+    UiBehind,
     // ── M7: Std.Ui attribute builders ────────────────────────────────────────
     UiSpacing,
     UiPadding,
@@ -820,6 +835,7 @@ pub enum StdlibKernel {
     UiOnKeyDown,
     UiOnKeyUp,
     UiOnBool,
+    UiOnSubmit,   // (a -> msg) -> Attribute msg  — form submit
     // ── #107: Std.Html.Events builders — produce `Std.Html.Attribute msg`
     // (`html_attr`), so they unify with `Std.Html.Attributes` builders and the
     // element builders' `List (Std.Html.Attribute msg)` slot. Distinct from the
@@ -1634,6 +1650,14 @@ impl StdlibKernel {
             Self::UiTextColumn => d("Ui", "textColumn", 2, Ui, "ui_text_column_"),
             Self::UiButton => d("Ui", "button", 2, Ui, "ui_button_"),
             Self::UiLink => d("Ui", "link", 2, Ui, "ui_link_"),
+            Self::UiForm => d("Ui", "form", 2, Ui, "ui_form_"),
+            // ── M7: Std.Ui nearby attribute builders ───────────────────────
+            Self::UiAbove => d("Ui", "above", 1, Ui, "ui_above_"),
+            Self::UiBelow => d("Ui", "below", 1, Ui, "ui_below_"),
+            Self::UiOnLeft => d("Ui", "onLeft", 1, Ui, "ui_on_left_"),
+            Self::UiOnRight => d("Ui", "onRight", 1, Ui, "ui_on_right_"),
+            Self::UiInFront => d("Ui", "inFront", 1, Ui, "ui_in_front_"),
+            Self::UiBehind => d("Ui", "behind", 1, Ui, "ui_behind_"),
             // ── M7: Std.Ui attribute builders ────────────────────────────────
             Self::UiSpacing => d("Ui", "spacing", 1, Ui, "ui_spacing_"),
             Self::UiPadding => d("Ui", "padding", 1, Ui, "ui_padding_"),
@@ -1806,6 +1830,7 @@ impl StdlibKernel {
             Self::UiOnKeyDown => d("Ui", "onKeyDown", 1, Ui, "ui_on_key_down_"),
             Self::UiOnKeyUp => d("Ui", "onKeyUp", 1, Ui, "ui_on_key_up_"),
             Self::UiOnBool => d("Ui", "onBool", 1, Ui, "ui_on_bool_"),
+            Self::UiOnSubmit => d("Ui", "onSubmit", 1, Ui, "ui_on_submit_"),
             // ── #107: Std.Html.Events builders (qualifier "Event" — matches the
             // `QUALIFIERS` table in env.rs). Each produces `html::Attribute<M>`
             // via a dedicated runtime constructor (family `Ui` so emit routes
@@ -2474,6 +2499,14 @@ impl StdlibKernel {
         Self::UiTextColumn,
         Self::UiButton,
         Self::UiLink,
+        Self::UiForm,
+        // M7: Ui nearby attribute builders
+        Self::UiAbove,
+        Self::UiBelow,
+        Self::UiOnLeft,
+        Self::UiOnRight,
+        Self::UiInFront,
+        Self::UiBehind,
         // M7: Ui attribute builders
         Self::UiSpacing,
         Self::UiPadding,
@@ -2646,6 +2679,7 @@ impl StdlibKernel {
         Self::UiOnKeyDown,
         Self::UiOnKeyUp,
         Self::UiOnBool,
+        Self::UiOnSubmit,
         // #107: Std.Html.Events builders (produce html_attr)
         Self::HtmlOnClick,
         Self::HtmlOnFocus,
@@ -2961,6 +2995,13 @@ impl StdlibKernel {
                 | Self::UiTextColumn
                 | Self::UiButton
                 | Self::UiLink
+                | Self::UiForm
+                | Self::UiAbove
+                | Self::UiBelow
+                | Self::UiOnLeft
+                | Self::UiOnRight
+                | Self::UiInFront
+                | Self::UiBehind
                 | Self::UiSpacing
                 | Self::UiPadding
                 | Self::UiPaddingXY
@@ -3107,6 +3148,7 @@ impl StdlibKernel {
                 | Self::UiOnKeyDown
                 | Self::UiOnKeyUp
                 | Self::UiOnBool
+                | Self::UiOnSubmit
                 | Self::HtmlOnClick
                 | Self::HtmlOnFocus
                 | Self::HtmlOnBlur

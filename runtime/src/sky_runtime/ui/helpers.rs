@@ -8,7 +8,7 @@
 //! match the `naming.rs` convention for kernel helpers (e.g. `ui_column_`)
 //! and to avoid shadowing the runtime's own `element` type names.
 
-use super::element::{Attribute, Color, Description, Element, HAlign, Length, PseudoClass, VAlign};
+use super::element::{Attribute, Color, Description, Element, HAlign, Length, Location, PseudoClass, VAlign};
 use crate::sky_runtime::core::SkyMaybe;
 use crate::sky_runtime::html::Html;
 
@@ -345,9 +345,9 @@ pub fn ui_font_color_<M>(c: Color) -> Attribute<M> {
 
 /// `Font.family : List String -> Attribute msg`
 ///
-/// Joins the family list with `", "` — CSS `font-family` value format.
-pub fn ui_font_family_<M>(families: Vec<String>) -> Attribute<M> {
-    Attribute::AttrFontFamily(families.join(", "))
+/// Passes the font-family CSS value string through as-is.
+pub fn ui_font_family_<M>(family: String) -> Attribute<M> {
+    Attribute::AttrFontFamily(family)
 }
 
 /// `Font.bold : Attribute msg`
@@ -955,4 +955,65 @@ pub fn ui_text_column_<M: Clone>(
         full,
         children,
     )
+}
+
+// ── Form ─────────────────────────────────────────────────────────────────────
+
+/// `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
+pub fn ui_form_<M: Clone>(
+    attrs: Vec<Attribute<M>>,
+    children: Vec<Element<M>>,
+) -> Element<M> {
+    Element::TaggedNode(
+        "form".to_owned(),
+        Description::NoDescription,
+        attrs,
+        children,
+    )
+}
+
+/// `Ui.onSubmit : (a -> msg) -> Attribute msg`
+///
+/// Stores the handler type-erased as `Event::OnRaw("submit", Arc<dyn Any>)`.
+/// The Sky.Live dispatch layer downcasts + JSON-decodes form data into the
+/// typed record at runtime, matching the Go backend's `json.Unmarshal` path.
+/// `A: Any + Send + Sync` is always satisfied by emitted Sky function types
+/// (they are `'static` enum constructors or pure closures with no borrows).
+pub fn ui_on_submit_<M, A: std::any::Any + Send + Sync>(f: A) -> Attribute<M> {
+    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnRaw(
+        "submit".into(),
+        std::sync::Arc::new(f),
+    )))
+}
+
+// ── Nearby attribute builders ────────────────────────────────────────────────
+
+/// `Ui.above : Element msg -> Attribute msg`
+pub fn ui_above_<M: Clone>(elem: Element<M>) -> Attribute<M> {
+    Attribute::AttrNearby(Location::Above, elem)
+}
+
+/// `Ui.below : Element msg -> Attribute msg`
+pub fn ui_below_<M: Clone>(elem: Element<M>) -> Attribute<M> {
+    Attribute::AttrNearby(Location::Below, elem)
+}
+
+/// `Ui.onLeft : Element msg -> Attribute msg`
+pub fn ui_on_left_<M: Clone>(elem: Element<M>) -> Attribute<M> {
+    Attribute::AttrNearby(Location::OnLeft, elem)
+}
+
+/// `Ui.onRight : Element msg -> Attribute msg`
+pub fn ui_on_right_<M: Clone>(elem: Element<M>) -> Attribute<M> {
+    Attribute::AttrNearby(Location::OnRight, elem)
+}
+
+/// `Ui.inFront : Element msg -> Attribute msg`
+pub fn ui_in_front_<M: Clone>(elem: Element<M>) -> Attribute<M> {
+    Attribute::AttrNearby(Location::InFront, elem)
+}
+
+/// `Ui.behind : Element msg -> Attribute msg`
+pub fn ui_behind_<M: Clone>(elem: Element<M>) -> Attribute<M> {
+    Attribute::AttrNearby(Location::Behind, elem)
 }

@@ -757,8 +757,15 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiGrid => "ui_grid_",
         KernelFn::UiParagraph => "ui_paragraph_",
         KernelFn::UiTextColumn => "ui_text_column_",
+        KernelFn::UiForm => "ui_form_",
         KernelFn::UiButton => "ui_button_",
         KernelFn::UiLink => "ui_link_",
+        KernelFn::UiAbove => "ui_above_",
+        KernelFn::UiBelow => "ui_below_",
+        KernelFn::UiOnLeft => "ui_on_left_",
+        KernelFn::UiOnRight => "ui_on_right_",
+        KernelFn::UiInFront => "ui_in_front_",
+        KernelFn::UiBehind => "ui_behind_",
         // ── M7: Std.Ui attribute builders ────────────────────────────────────
         KernelFn::UiSpacing => "ui_spacing_",
         KernelFn::UiPadding => "ui_padding_",
@@ -1002,6 +1009,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiOnKeyDown => "ui_on_key_down_",
         KernelFn::UiOnKeyUp => "ui_on_key_up_",
         KernelFn::UiOnBool => "ui_on_bool_",
+        KernelFn::UiOnSubmit => "ui_on_submit_",
         // #107: Std.Html.Events builders — emitted via the dedicated
         // `emit_ui_call` arm (`html_event_shape().is_some()`), so this generic
         // name map is not consulted at emit time; the arms are here to keep the
