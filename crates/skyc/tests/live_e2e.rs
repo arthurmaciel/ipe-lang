@@ -729,3 +729,100 @@ fn live_routed_app_build_only() -> Result<(), BoxError> {
     let _exe = compile_and_build("live_routed_build_only", SKY_LIVE_ROUTED)?;
     Ok(())
 }
+
+/// M5e seal — BUILD-ONLY: a Sky.Live app that uses `Cmd.publish` and
+/// `Sub.subscribeTopic` must compile end-to-end without a `CompilerBug`
+/// diagnostic.
+///
+/// Kernels exercised:
+/// - `Cmd.publish : String -> Dict String String -> Cmd msg`  (M5e wired)
+/// - `Sub.subscribeTopic : String -> (Dict String String -> msg) -> Sub msg`
+///   (M5d wired — exercised here as the natural pair to `Cmd.publish`)
+///
+/// A successful `skyc` + `cargo build` is the assertion.  Before the M5e wiring
+/// the compiler emitted a `CompilerBug` diagnostic when it encountered
+/// `Cmd.publish` or `Cmd.publishNoEcho` — exit-0 was structurally impossible.
+///
+/// The app structure mirrors `examples/27-multi-session-chat` at its simplest:
+/// one pub/sub topic `"chat"`, a `BroadcastMsg` that carries the payload dict,
+/// and an `update` arm that publishes then clears the pending message.
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+const SKY_PUBSUB_LIVE: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg
+    = BroadcastMsg (Dict String String)
+    | TypeMsg String
+
+type alias Model =
+    { pending : String
+    , received : List String
+    }
+
+chatTopic : String
+chatTopic =
+    "chat"
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { pending = "", received = [] }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        TypeMsg s ->
+            ( { model | pending = s }, Cmd.none )
+
+        BroadcastMsg payload ->
+            let
+                text =
+                    Maybe.withDefault "" (Dict.get "text" payload)
+            in
+            ( { model | received = model.received ++ [ text ] }
+            , Cmd.none
+            )
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.subscribeTopic chatTopic BroadcastMsg
+
+sendMessage : Model -> Cmd Msg
+sendMessage model =
+    let
+        payload =
+            Dict.fromList [ ( "text", model.pending ) ]
+    in
+    Cmd.publish chatTopic payload
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (Ui.column []
+            [ Ui.text (String.fromInt (List.length model.received))
+            ])
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = TypeMsg ""
+        }
+"#;
+
+#[test]
+fn live_pubsub_cmd_publish_and_sub_subscribe_topic_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build("live_pubsub_build_only", SKY_PUBSUB_LIVE)?;
+    Ok(())
+}

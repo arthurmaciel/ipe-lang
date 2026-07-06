@@ -3212,6 +3212,13 @@ impl<'a> Builder<'a> {
                 fun(fun(result(error_ty(), var(0)), var(1)), cmd(var(1))),
             ),
 
+            // ── Cmd.publish / Cmd.publishNoEcho (M5e) ──
+            // `Cmd.publish : String -> Dict String String -> Cmd msg`
+            // var(0) = msg type variable.
+            K::CmdPublish => fun(string(), fun(dict(string(), string()), cmd(var(0)))),
+            // `Cmd.publishNoEcho : String -> Dict String String -> Cmd msg`
+            K::CmdPublishNoEcho => fun(string(), fun(dict(string(), string()), cmd(var(0)))),
+
             // ── Sub ──
             K::SubNone => sub(var(0)),
             K::SubBatch => fun(list(sub(var(0))), sub(var(0))),
@@ -4369,19 +4376,15 @@ impl<'a> Builder<'a> {
             // `stdlib_scheme_total_over_reachable`, the REACHABLE_BUT_UNLOWERED
             // disjointness guard). Do NOT add a bare `_` back — it reopens F1.
             //
-            //  * `Cmd.publish` / `Cmd.publishNoEcho` / `PubSub.*` —
-            //    M6-reserved enum variants that are ABSENT from `StdlibKernel::ALL`
-            //    entirely (their qualifiers are wired but these specific members are
-            //    not registered), so canon can never mint a `VarKernel` for them.
-            //    Unreachable by construction; named here only to keep this match
-            //    wildcard-free. They join `ALL` + get a scheme when M6 pub/sub lands.
-            //  * `Sub.subscribeTopic` is wired (M5d) and has its type above;
-            //    this arm no longer covers it.
+            //  * `PubSub.publish` / `publishNoEcho` — KNOWN_UNBACKED in ALL but
+            //    unreachable (qualifier "PubSub" absent from canon `qual_vars`).
+            //    Named here to keep this match wildcard-free. Get a scheme when
+            //    "PubSub" qualifier lands in M6.
+            //  * `Sub.subscribeTopic` / `Cmd.publish` / `Cmd.publishNoEcho` are
+            //    wired (M5d / M5e) and have their types above; not in this arm.
             K::PubSubPublish
             | K::PubSubPublishNoEcho
-            | K::LiveAppRouted
-            | K::CmdPublish
-            | K::CmdPublishNoEcho => return None,
+            | K::LiveAppRouted => return None,
 
             // ── #111: Std.Auth (9 kernels) ──────────────────────────────────────
             // hashPassword : String -> Result Error String
@@ -5538,6 +5541,12 @@ mod registry_phase_c_tests {
             K::LazyLazy3,
             K::LazyLazy4,
             K::LazyLazy5,
+            // ── TEA pub/sub M5e: Cmd.publish / Cmd.publishNoEcho ──────────────
+            // Genuine holes — no legacy `kernel_ty` arm, newly schemed in M5e.
+            // `"publish"` / `"publishNoEcho"` are now registered in canon
+            // QUALIFIERS ("Cmd" entry) and wired through lower + emit.
+            K::CmdPublish,
+            K::CmdPublishNoEcho,
         ]
     };
 
