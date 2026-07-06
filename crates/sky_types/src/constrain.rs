@@ -1091,8 +1091,41 @@ impl<'a> Builder<'a> {
             // `link::link` merges them into a single flat def list.
             let home_key = def.home().to_vec();
             match def {
-                canon::Def::Typed { name, ty, .. } => {
-                    let normalized = builder.normalize_annotation_ty(from_canon(ty), name.span)?;
+                canon::Def::Typed { name, ty, patterns, .. } => {
+                    let raw = from_canon(ty);
+                    // ex15: a binding annotated `Handler` is really
+                    // `Request -> Task Response` at call sites.  The internal
+                    // constrain_def pass already expands Handler for the body so
+                    // `req` gets type `Request`; here we must also expand for the
+                    // top_level table so callers (e.g. Server.get) unify correctly.
+                    let expanded = if let Ty::Con { name: tname, args, .. } = &raw {
+                        if *tname == builder.builtins.handler
+                            && args.is_empty()
+                            && !patterns.is_empty()
+                        {
+                            Ty::Fun(
+                                Box::new(Ty::Con {
+                                    module: Vec::new(),
+                                    name: builder.builtins.server_request,
+                                    args: Vec::new(),
+                                }),
+                                Box::new(Ty::Con {
+                                    module: Vec::new(),
+                                    name: builder.builtins.task,
+                                    args: vec![Ty::Con {
+                                        module: Vec::new(),
+                                        name: builder.builtins.server_response,
+                                        args: Vec::new(),
+                                    }],
+                                }),
+                            )
+                        } else {
+                            raw
+                        }
+                    } else {
+                        raw
+                    };
+                    let normalized = builder.normalize_annotation_ty(expanded, name.span)?;
                     builder.top_level.insert((home_key, name.value), normalized);
                 }
                 canon::Def::Untyped { name, .. } => {
@@ -3460,7 +3493,7 @@ impl<'a> Builder<'a> {
             K::DbGetBool => fun(string(), fun(dict(string(), string()), bool_ty())),
             K::DbInsertRow => fun(
                 db(),
-                fun(string(), fun(list(tuple2(string(), string())), task(int()))),
+                fun(string(), fun(dict(string(), string()), task(int()))),
             ),
             K::DbGetById => fun(
                 db(),
@@ -3473,7 +3506,7 @@ impl<'a> Builder<'a> {
                 db(),
                 fun(
                     string(),
-                    fun(string(), fun(list(tuple2(string(), string())), task(int()))),
+                    fun(string(), fun(dict(string(), string()), task(int()))),
                 ),
             ),
             K::DbDeleteById => fun(db(), fun(string(), fun(string(), task(int())))),
