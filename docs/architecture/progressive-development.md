@@ -14,8 +14,8 @@ is possible by construction.
 ## Files
 | File | Role |
 |---|---|
-| `scripts/progressive-development.sh` | the loop = OUTER safety harness (disk/mem/budget/iteration-cap/kill-switch/single-writer) |
-| `scripts/progressive-development-prompt.md` | the per-iteration playbook the fresh agent executes (pick → fix → gate → land-or-discard → log) |
+| `scripts/progressive-development/run.sh` | the loop = OUTER safety harness (disk/mem/budget/iteration-cap/kill-switch/single-writer) |
+| `scripts/progressive-development/prompt.md` | the per-iteration playbook the fresh agent executes (pick → fix → gate → land-or-discard → log) |
 | `docs/architecture/backlog.md` | the work list; only **sweep-front** / **[progdev-safe]** items are eligible |
 | `docs/architecture/progressive-development-log.md` | append-only per-iteration outcomes + attempt counts (created on first run) |
 | `docs/architecture/progressive-development-escalations.md` | items the loop refused (excluded class) + fix sketches (created on first run) |
@@ -33,8 +33,8 @@ is possible by construction.
 ## Operating it
 ```bash
 # 0. mem-guard must be running; tree clean; on master (or your base).
-scripts/progressive-development.sh --once          # validate ONE iteration, inspect the branch
-scripts/progressive-development.sh                 # run the loop (default 20 iters)
+scripts/progressive-development/run.sh --once          # validate ONE iteration, inspect the branch
+scripts/progressive-development/run.sh                 # run the loop (default 20 iters)
 touch progressive-development.stop                 # stop after the current iteration
 # review the run, then fast-forward:
 git switch master && git merge --ff-only progressive-development/run-<ts>
@@ -73,11 +73,11 @@ fixed part** if `F` is large and N is high: a 25k-token `F` over 50 iterations i
    so a prompt instruction to "ignore CLAUDE.md" is futile (the tokens are already
    billed) AND counter-productive (naming the file can trigger a wasteful re-`Read`).
    The only real fix is to change *what loads*, and the Claude CLI has flags for
-   exactly this. `progressive-development.sh` invokes each iteration as:
+   exactly this. `run.sh` invokes each iteration as:
    ```
    claude --safe-mode --permission-mode auto \
-          --append-system-prompt-file scripts/progressive-development-context.md \
-          -p "$(cat scripts/progressive-development-prompt.md)"
+          --append-system-prompt-file scripts/progressive-development/context.md \
+          -p "$(cat scripts/progressive-development/prompt.md)"
    ```
    (`--permission-mode auto` — not `acceptEdits`: the latter auto-approves only
    file edits, so the iteration would stall on the first `cargo`/`git` bash call
@@ -91,7 +91,7 @@ fixed part** if `F` is large and N is high: a 25k-token `F` over 50 iterations i
      still drops CLAUDE.md + hooks + auto-memory — but requires `ANTHROPIC_API_KEY`;
      override via `PROGDEV_CLAUDE_ARGS` if you auth that way.)
    - **`--append-system-prompt-file`** injects the lean contract
-     (`progressive-development-context.md`, ~1–2k tokens: six principles, two
+     (`context.md`, ~1–2k tokens: six principles, two
      rules, the seal, boundary, gate) as the *only* project instruction.
    Hooks-off is a bonus: the stop-hook can't interfere with the loop. The iteration
    then pulls the ~5% of project detail it needs by *reading specific files as tool
@@ -101,7 +101,7 @@ fixed part** if `F` is large and N is high: a 25k-token `F` over 50 iterations i
 
 2. **Keep the fixed prefix byte-stable and iterate fast to ride the prompt cache.**
    Anthropic's prompt cache keys on an exact prefix with a **5-minute TTL**. If the
-   preamble (`progressive-development-prompt.md` + whatever system content) is identical each
+   preamble (`prompt.md` + whatever system content) is identical each
    iteration AND iterations start < 5 min apart, the fixed part is served at ~10%
    across *separate* invocations — turning cold reloads back into warm reads. Hence
    `PROGDEV_COOLDOWN` defaults to 20s (well under the TTL), not minutes.
