@@ -58,28 +58,28 @@ if ! ( set -o noclobber; echo "$$" > "$LOCK" ) 2>/dev/null; then
 fi
 trap 'rm -f "$LOCK"; log "loop exit"' EXIT
 
-# ── isolated worktree with a LEAN CLAUDE.md ──────────────────────────────────
-# The fix for the giant-CLAUDE.md cost: an auto-loaded CLAUDE.md CANNOT be
-# "ignored" by a prompt instruction — it is already in the fresh agent's context
-# before it acts. So we change WHAT loads: run each `claude -p` in a dedicated
-# worktree whose CLAUDE.md file IS the lean contract. `skip-worktree` keeps the
-# swap invisible to git (never committed → branch stays clean for a ff-merge),
-# and we re-apply it after every iteration in case a red `git reset --hard`
-# reverted it. The main checkout's CLAUDE.md is never touched.
-REPO_ROOT="$(pwd)"
-CONTEXT="$REPO_ROOT/scripts/progressive-development-context.md"
-STOP_PATH="$REPO_ROOT/$STOP_FILE"
+# ── suppress CLAUDE.md via the CLI, inject the lean contract ─────────────────
+# An auto-loaded CLAUDE.md CANNOT be "ignored" by a prompt instruction — it is
+# in the fresh agent's context before it acts. So we stop it loading at the CLI:
+#   --safe-mode  disables CLAUDE.md + skills + hooks (keeps normal OAuth/keychain
+#                auth) — the robust default for a subscription login.
+#   --bare       leaner (keeps skills, disables hooks + CLAUDE.md + auto-memory)
+#                but needs ANTHROPIC_API_KEY (OAuth/keychain are not read).
+# Either way the lean contract is injected with --append-system-prompt-file, and
+# hooks-off means the stop-hook can't interfere with the loop. Override the whole
+# flag set with PROGDEV_CLAUDE_ARGS. --permission-mode acceptEdits lets the
+# iteration run tools unattended (see the guardrails — that is why they exist).
+CONTEXT="$(pwd)/scripts/progressive-development-context.md"
 [ -f "$CONTEXT" ] || die "missing lean contract $CONTEXT"
+CLAUDE_ARGS="${PROGDEV_CLAUDE_ARGS:---safe-mode --permission-mode acceptEdits}"
+STOP_PATH="$(pwd)/$STOP_FILE"
+
+# ── dedicated branch (human fast-forwards to master after reviewing the run) ─
 BRANCH="${PROGDEV_BRANCH:-progressive-development/run-${PROGDEV_TS:-manual}}"
 BASE="$(git rev-parse --abbrev-ref HEAD)"
-WT="$REPO_ROOT/.progressive-development-worktree"
-git worktree add --quiet "$WT" -b "$BRANCH" || die "cannot create worktree $WT on $BRANCH"
-apply_lean() { cp "$CONTEXT" "$WT/CLAUDE.md"; git -C "$WT" update-index --skip-worktree CLAUDE.md 2>/dev/null || true; }
-apply_lean
-trap 'cd "$REPO_ROOT"; git worktree remove --force "$WT" 2>/dev/null; git worktree prune; rm -f "$LOCK"; log "loop exit (branch $BRANCH kept for review)"' EXIT
-cd "$WT" || die "cannot enter worktree $WT"
+git switch -c "$BRANCH" 2>/dev/null || git switch "$BRANCH" || die "cannot create branch $BRANCH"
 mkdir -p "$(dirname "$LOG")"; touch "$LOG" "$ESC"
-log "progressive-development start: worktree=$WT branch=$BRANCH base=$BASE lean-CLAUDE=on max_iters=$MAX_ITERS gate=$GATE_TARGET"
+log "progressive-development start: branch=$BRANCH base=$BASE claude_args='$CLAUDE_ARGS' max_iters=$MAX_ITERS gate=$GATE_TARGET"
 
 # ── the loop ───────────────────────────────────────────────────────────────
 landed=0
@@ -90,9 +90,9 @@ for i in $(seq 1 "$MAX_ITERS"); do
     [ "${free_gb:-0}" -lt "$MIN_FREE_GB" ] && { log "low disk (${free_gb}G < ${MIN_FREE_GB}G) — abort loop"; break; }
     pgrep -f mem-guard.sh >/dev/null || { log "mem-guard died — abort loop"; break; }
 
-    apply_lean   # re-assert the lean CLAUDE.md (a prior red reset --hard may have reverted it)
     log "── iteration $i/$MAX_ITERS ──"
-    out="$(timeout "$ITER_TIMEOUT" claude -p "$(cat scripts/progressive-development-prompt.md)" 2>&1)"; rc=$?
+    # shellcheck disable=SC2086  # CLAUDE_ARGS is intentionally word-split
+    out="$(timeout "$ITER_TIMEOUT" claude $CLAUDE_ARGS --append-system-prompt-file "$CONTEXT" -p "$(cat "$PROMPT_FILE")" 2>&1)"; rc=$?
     # Surface the iteration's own last status line + reason to the loop log.
     verdict="$(printf '%s\n' "$out" | grep -oE 'PROGDEV: (LANDED|FAILED|ESCALATED|ABORT|DRY)[^\n]*' | tail -1)"
     log "iteration $i verdict: ${verdict:-<none> (rc=$rc)}"
@@ -105,13 +105,13 @@ for i in $(seq 1 "$MAX_ITERS"); do
     esac
 
     # Belt-and-braces: the tree must be clean between iterations (the pawl).
-    # CLAUDE.md is skip-worktree so the lean swap never shows here.
     [ -z "$(git status --porcelain)" ] || { log "tree dirty after iteration — a red iteration didn't reset; stopping"; break; }
 
     [ "$ONCE" -eq 1 ] && { log "--once: single iteration done"; break; }
     sleep "$COOLDOWN"
 done
 
-log "progressive-development done: $landed landed on $BRANCH."
+git switch "$BASE" 2>/dev/null || true   # restore the checkout to its starting branch
+log "progressive-development done: $landed landed on $BRANCH (checkout restored to $BASE)."
 log "  review:  git log --oneline $BASE..$BRANCH"
-log "  land:    git switch $BASE && git merge --ff-only $BRANCH   (lean CLAUDE.md was skip-worktree, never committed)"
+log "  land:    git merge --ff-only $BRANCH   (CLAUDE.md never loaded — branch has only work commits)"
