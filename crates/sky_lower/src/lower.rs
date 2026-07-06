@@ -3345,6 +3345,49 @@ impl<'a> Lowerer<'a> {
                 // the annotation type and handles both 0-parameter and N-parameter
                 // bindings correctly.
                 let (params, prologue, ret) = self.split_typed_sig(ty, patterns, free_vars)?;
+                // Wildcard-`any` return-type fix: `view : Model -> any` makes
+                // `any` appear in `free_vars` (the canon free-var collector treats
+                // it uniformly alongside genuine type parameters).  But `any` is NOT
+                // a real type parameter — it is a return-type wildcard whose concrete
+                // type is resolved by the HM solver from the body.  When
+                // `split_typed_sig` returns `IrType::Generic(any_sym)` for the
+                // return position, substitute the body's solved concrete type from
+                // `self.types.regions` instead.  Without this substitution the
+                // emitted Rust function gains a spurious `<T1: Clone>` generic
+                // parameter and a `-> T1` return type that the body cannot satisfy
+                // (E0308).
+                //
+                // Why regions, not env? `SolvedTypes::env` for TYPED bindings
+                // stores the annotation type verbatim (`generated.top_level`), which
+                // still has `Ty::Var(any_sym)` in the return position — the any UV
+                // was never zonked back there.  `self.types.regions[(home, body.span)]`
+                // is the body expression's solved type, which IS the concrete return
+                // type after solving.
+                //
+                // The analogous gate in the Haskell compiler: `Instantiate.fromAnnotation`
+                // filters `"any"` out before treating free vars as polymorphic;
+                // `buildEnv` gives each `any` occurrence a fresh flex UV that the body
+                // constrains to a concrete type.  The Rust port must do the same.
+                let ret = if let IrType::Generic(sym) = ret {
+                    if self.interner.resolve(sym).as_deref() == Some("any") {
+                        // The body's region type is the concrete return type.
+                        let body_ty = self
+                            .types
+                            .regions
+                            .get(&(def.home().to_vec(), body.span))
+                            .ok_or_else(|| {
+                                bug(
+                                    "sky_lower::lower_def",
+                                    "no region type for body of `any`-annotated binding",
+                                )
+                            })?;
+                        self.ir_type_from_ty(body_ty, sig_span)?
+                    } else {
+                        IrType::Generic(sym)
+                    }
+                } else {
+                    ret
+                };
                 // Install the binding's generic type-variable map so
                 // `ir_type_from_ty_ui_msg` can distinguish a `Ty::Var` that is an
                 // enclosing generic (→ `IrType::Generic`) from one that is a
@@ -3387,9 +3430,14 @@ impl<'a> Lowerer<'a> {
                 // Each quantified variable carries the Rust trait bound its
                 // body-imposed super-type obligations require (empty for a
                 // structurally-parametric variable — a bare `T{n}`).
+                //
+                // `any` is excluded: it is a wildcard, not a real type parameter
+                // (its return type was resolved concretely above).  Including it
+                // would emit a spurious `<T_any: Clone>` generic on the function.
                 let var_bounds = self.types.bounds.get(&name);
                 let type_params = free_vars
                     .iter()
+                    .filter(|&&v| self.interner.resolve(v).as_deref() != Some("any"))
                     .map(|v| (*v, Self::bounds_for(var_bounds, *v)))
                     .collect();
                 // T5 (#104 / #112): multi-use-clone rewrite for CloneOk params.
@@ -7158,6 +7206,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiHeight
                 // `Ui.gridColumns : Int -> Attribute msg`
                 | KernelFn::UiGridColumns
+                // ── M7: Std.Ui nearby attribute builders — arity 1 ───────────
+                // `Ui.above/below/onLeft/onRight/inFront/behind : Element msg -> Attribute msg`
+                | KernelFn::UiAbove
+                | KernelFn::UiBelow
+                | KernelFn::UiOnLeft
+                | KernelFn::UiOnRight
+                | KernelFn::UiInFront
+                | KernelFn::UiBehind
                 // ── M7: Ui Length builders — arity 1 ─────────────────────────
                 // `Ui.px : Int -> Length`
                 | KernelFn::UiPx
@@ -7241,6 +7297,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiOnKeyUp
                 // `Event.onBool : (Bool -> msg) -> Attribute msg`
                 | KernelFn::UiOnBool
+                // `Ui.onSubmit : (a -> msg) -> Attribute msg`
+                | KernelFn::UiOnSubmit
                 // ── #107: Std.Html.Events builders — arity 1 (all shapes) ────
                 | KernelFn::HtmlOnClick
                 | KernelFn::HtmlOnFocus
@@ -7343,6 +7401,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiParagraph
                 // `Ui.textColumn : List (Attribute msg) -> List (Element msg) -> Element msg`
                 | KernelFn::UiTextColumn
+                // `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
+                | KernelFn::UiForm
                 // `Ui.button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } -> Element msg`
                 | KernelFn::UiButton
                 // `Ui.link : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg`
@@ -8179,8 +8239,16 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "grid") => Ok(Callee::Kernel(KernelFn::UiGrid)),
                     ("Ui", "paragraph") => Ok(Callee::Kernel(KernelFn::UiParagraph)),
                     ("Ui", "textColumn") => Ok(Callee::Kernel(KernelFn::UiTextColumn)),
+                    ("Ui", "form") => Ok(Callee::Kernel(KernelFn::UiForm)),
                     ("Ui", "button") => Ok(Callee::Kernel(KernelFn::UiButton)),
                     ("Ui", "link") => Ok(Callee::Kernel(KernelFn::UiLink)),
+                    // ── M7: Std.Ui nearby attribute builders ───────────────────
+                    ("Ui", "above") => Ok(Callee::Kernel(KernelFn::UiAbove)),
+                    ("Ui", "below") => Ok(Callee::Kernel(KernelFn::UiBelow)),
+                    ("Ui", "onLeft") => Ok(Callee::Kernel(KernelFn::UiOnLeft)),
+                    ("Ui", "onRight") => Ok(Callee::Kernel(KernelFn::UiOnRight)),
+                    ("Ui", "inFront") => Ok(Callee::Kernel(KernelFn::UiInFront)),
+                    ("Ui", "behind") => Ok(Callee::Kernel(KernelFn::UiBehind)),
                     // ── M7: Std.Ui attribute builders ─────────────────────────
                     ("Ui", "spacing") => Ok(Callee::Kernel(KernelFn::UiSpacing)),
                     ("Ui", "padding") => Ok(Callee::Kernel(KernelFn::UiPadding)),
@@ -8357,6 +8425,7 @@ impl<'a> Lowerer<'a> {
                         // onBool : (Bool -> msg) -> Attribute msg — Bool-carrying closure
                         Ok(Callee::Kernel(KernelFn::UiOnBool))
                     }
+                    ("Ui", "onSubmit") => Ok(Callee::Kernel(KernelFn::UiOnSubmit)),
                     // ── #107: Std.Html.Events builders (Event qualifier) — produce
                     // the `Std.Html.Attribute` variant so they compose with the
                     // Std.Html element + attribute builders. Same fallback note
