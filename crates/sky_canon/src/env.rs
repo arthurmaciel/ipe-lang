@@ -1134,6 +1134,7 @@ impl Env {
                     "currentPassword",
                     "newPassword",
                     "checkbox",
+                    "slider",
                 ],
             ),
             // ── #146: Std.Ui.Lazy sub-module ─────────────────────────────────────
