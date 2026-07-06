@@ -52,7 +52,7 @@ lane_claude_args=(--safe-mode --permission-mode auto --model "$AUTHOR_MODEL"
 # PROGDEV_STREAM=1 → lanes emit stream-json so watch.sh renders each step LIVE.
 # Safe: the orchestrator decides land/skip from git commits, never from lane
 # stdout, so changing the lane's output format doesn't affect integration.
-[ -n "${PROGDEV_STREAM:-}" ] && lane_claude_args+=(--verbose --output-format stream-json)
+[ "${PROGDEV_STREAM:-1}" != 0 ] && lane_claude_args+=(--verbose --output-format stream-json)   # default ON
 
 # ── preconditions ────────────────────────────────────────────────────────────
 command -v claude >/dev/null || die "claude CLI not found"

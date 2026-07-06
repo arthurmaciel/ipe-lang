@@ -53,7 +53,22 @@ if [ -z "$logf" ]; then
     echo "(no activity log yet — is a tool running?  pgrep -f progressive-development/)"; exit 0
 fi
 
-printf '── following %s  (Ctrl-C to stop) ──\n' "$logf"
+# Label + INDENT the stream by its source, so the process tree is visible: the
+# master (autopilot/run heartbeat) is on terminal 1; here each line is tagged +
+# indented by depth — guardian/triage/audit are subordinates (autopilot agents),
+# and a lane (orchestrate → lane, itself under autopilot) is deeper still.
+base="$(basename "$logf")"
+case "$base" in
+    progressive-development-lane-*) tag="lane ${base//[^0-9]/}"; ind="        " ;;  # sub-sub
+    progressive-development-iter-*) tag="iter ${base//[^0-9]/}"; ind="    "     ;;  # sub (run.sh)
+    autopilot-guardian-*)           tag="guardian";              ind="    "     ;;  # sub (autopilot agent)
+    autopilot-triage-*)             tag="triage";                ind="    "     ;;
+    autopilot-audit-*)              tag="audit";                 ind="    "     ;;
+    autopilot-reconcile-*)          tag="reconcile";             ind="        " ;;
+    *)                              tag="${base%.log}";          ind="    "     ;;
+esac
+printf '── following %s  as ↳[%s]  (indent = subordinate depth; Ctrl-C to stop) ──\n' "$base" "$tag"
+render() { sed "s/^/${ind}↳[${tag}] /"; }
 if command -v jq >/dev/null 2>&1 && head -c1 "$logf" 2>/dev/null | grep -q '{'; then
     tail -n +1 -f "$logf" | jq -Rr 'fromjson?
       | if .type=="assistant" then (.message.content[]? |
@@ -65,7 +80,7 @@ if command -v jq >/dev/null 2>&1 && head -c1 "$logf" 2>/dev/null | grep -q '{'; 
                 | if type=="array" then (map(.text // (.|tostring)) | join(" ")) else tostring end)[0:160])
             else empty end)
         elif .type=="result" then "✅ " + ((.result // .subtype // "done") | tostring)
-        else empty end'
+        else empty end' | render
 else
-    tail -n +1 -f "$logf"
+    tail -n +1 -f "$logf" | render
 fi
