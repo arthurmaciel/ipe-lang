@@ -7566,6 +7566,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiLink
                 // `Ui.paddingXY : Int -> Int -> Attribute msg`
                 | KernelFn::UiPaddingXY
+                // `Border.glow : Int -> Color -> Attribute msg`
+                | KernelFn::BorderGlow
                 // `Ui.minimum : Int -> Length -> Length`
                 | KernelFn::UiMinimum
                 // `Ui.maximum : Int -> Length -> Length`
@@ -8518,6 +8520,7 @@ impl<'a> Lowerer<'a> {
                     ("Border", "color") => Ok(Callee::Kernel(KernelFn::BorderColor)),
                     ("Border", "widthEach") => Ok(Callee::Kernel(KernelFn::BorderWidthEach)),
                     ("Border", "shadow") => Ok(Callee::Kernel(KernelFn::BorderShadow)),
+                    ("Border", "glow") => Ok(Callee::Kernel(KernelFn::BorderGlow)),
                     // ── M7: Font sub-module ───────────────────────────────────
                     ("Font", "size") => Ok(Callee::Kernel(KernelFn::FontSize)),
                     ("Font", "color") => Ok(Callee::Kernel(KernelFn::FontColor)),
