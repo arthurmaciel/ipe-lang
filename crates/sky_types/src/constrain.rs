@@ -331,6 +331,17 @@ struct Builtins {
     edge_f_bottom: Symbol,
     /// `"left"` — left edge field.
     edge_f_left: Symbol,
+    // ── Border.shadow record field name symbols ──────────────────────────────
+    /// `"offsetX"` — horizontal offset field of `Border.shadow { offsetX, … }`.
+    shadow_f_offset_x: Symbol,
+    /// `"offsetY"` — vertical offset field.
+    shadow_f_offset_y: Symbol,
+    /// `"blur"` — blur radius field.
+    shadow_f_blur: Symbol,
+    /// `"spread"` — spread field.
+    shadow_f_spread: Symbol,
+    /// `"color"` — shadow colour field.
+    shadow_f_color: Symbol,
     // ── JWT builder opaque type constructor symbols (D-00) ────────────────────
     /// `"Claims"` — opaque JWT claims builder object.  Backed at runtime by
     /// `serde_json::Value` (a JSON object accumulator).  Used as the input /
@@ -481,6 +492,12 @@ impl Builtins {
             edge_f_right: interner.intern("right")?,
             edge_f_bottom: interner.intern("bottom")?,
             edge_f_left: interner.intern("left")?,
+            // ── Border.shadow record field names ─────────────────────────────────
+            shadow_f_offset_x: interner.intern("offsetX")?,
+            shadow_f_offset_y: interner.intern("offsetY")?,
+            shadow_f_blur: interner.intern("blur")?,
+            shadow_f_spread: interner.intern("spread")?,
+            shadow_f_color: interner.intern("color")?,
             // ── JWT builder opaque type constructor symbols (D-00) ──────────────
             jwt_claims: interner.intern("Claims")?,
             jwt_algorithm: interner.intern("Algorithm")?,
@@ -4845,6 +4862,22 @@ impl<'a> Builder<'a> {
                 }, RowTail::Closed);
                 fun(rec_arg, attr(var(0)))
             }
+
+            // ── Border.shadow ────────────────────────────────────────────────────
+            // shadow : { offsetX : Int, offsetY : Int, blur : Int, spread : Int,
+            //            color : Color } -> Attribute msg
+            K::BorderShadow => {
+                let rec_arg = Ty::Record({
+                    let mut m = BTreeMap::new();
+                    m.insert(self.builtins.shadow_f_offset_x, int());
+                    m.insert(self.builtins.shadow_f_offset_y, int());
+                    m.insert(self.builtins.shadow_f_blur, int());
+                    m.insert(self.builtins.shadow_f_spread, int());
+                    m.insert(self.builtins.shadow_f_color, color());
+                    m
+                }, RowTail::Closed);
+                fun(rec_arg, attr(var(0)))
+            }
         })
     }
 }
@@ -5972,6 +6005,7 @@ mod registry_phase_c_tests {
             // New kernels with no legacy `kernel_ty` entry — pure holes.
             K::UiLink,
             K::BorderWidthEach,
+            K::BorderShadow,
             // ── Std.Ui.Keyed (column + row) ──────────────────────────────────
             K::KeyedColumn,
             K::KeyedRow,
