@@ -441,6 +441,10 @@ fn type_label(msg: &TypeError) -> Option<String> {
         TypeError::RefutablePatternParameter => {
             Some("this parameter pattern can fail to match".to_string())
         }
+        TypeError::RoutedAppMissingPageField { route_count } => Some(format!(
+            "{route_count} route(s) declared but the Model has no `page` field — \
+             routing is disabled and the routes are ignored"
+        )),
         TypeError::Mismatch | TypeError::BudgetExceeded | TypeError::StepBudgetExceeded { .. } => {
             None
         }
