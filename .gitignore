@@ -14,3 +14,5 @@ tools/oracle/bin/
 /progressive-development.stop
 /.progressive-development.lock
 docs/architecture/progressive-development-iter-*.log
+docs/architecture/progressive-development-log.md
+docs/architecture/progressive-development-escalations.md
