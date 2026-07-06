@@ -315,7 +315,9 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::UiPlain(_)
         | IrType::LiveReq
         // `Order` (LT/EQ/GT) is a primitive leaf — no embedded function.
-        | IrType::Order => false,
+        // `Decimal` is a Copy newtype — no embedded function.
+        | IrType::Order
+        | IrType::Decimal => false,
         // `LiveRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Sky `Fn`).
         IrType::LiveRoute(page) => ir_contains_fun(page),
@@ -355,7 +357,8 @@ enum CloneClass {
 fn clone_class(t: &IrType) -> CloneClass {
     match t {
         // Scalars — primitive Copy types.
-        IrType::Int | IrType::Float | IrType::Bool | IrType::Char | IrType::Unit | IrType::Order => {
+        // `Decimal` is `#[derive(Copy)]` — treat as CopyLeaf.
+        IrType::Int | IrType::Float | IrType::Bool | IrType::Char | IrType::Unit | IrType::Order | IrType::Decimal => {
             CloneClass::CopyLeaf
         }
         // Runtime-verified Clone types.
@@ -3894,6 +3897,9 @@ impl<'a> Lowerer<'a> {
                 // `Order` is the built-in three-way comparison result type (#123).
                 // Backed by `sky_runtime::SkyOrder` (repr(u8) enum: LT/EQ/GT).
                 "Order" => Ok(IrType::Order),
+                // `Decimal` is the Std.Decimal arbitrary-precision type.
+                // Backed by `sky_runtime::decimal::Decimal` (rust_decimal newtype).
+                "Decimal" => Ok(IrType::Decimal),
                 // `Error` is Sky's fixed error-channel type, backed by `SkyError =
                 // String` in the runtime.  Merged with `String` here since they
                 // share the same IR representation (`IrType::Str`).
@@ -4162,6 +4168,20 @@ impl<'a> Lowerer<'a> {
                 // `Algorithm` — JWT signing algorithm descriptor encoded as a
                 // `String` ("HS256:<secret>" or "RS256:<pem>").
                 "Algorithm" => Ok(IrType::Str),
+                // ── M7: Nullary Std.Ui plain types (no message parameter) ─────
+                // Mirror of the `ir_type_from_ty` arms below.  Reached when a
+                // type annotation writes `Color`, `Length`, etc. at a position
+                // where canon emits a `Con { home: [], name, args: [] }` node —
+                // i.e. the genuine opaque Std.Ui builtin, not a user-defined
+                // enum (the `enum_variants` guard above fires first for those).
+                "Length" => Ok(IrType::UiPlain(UiPlain::Length)),
+                "Color" => Ok(IrType::UiPlain(UiPlain::Color)),
+                "HAlign" => Ok(IrType::UiPlain(UiPlain::HAlign)),
+                "VAlign" => Ok(IrType::UiPlain(UiPlain::VAlign)),
+                "Location" => Ok(IrType::UiPlain(UiPlain::Location)),
+                "PseudoClass" => Ok(IrType::UiPlain(UiPlain::PseudoClass)),
+                "Description" => Ok(IrType::UiPlain(UiPlain::Description)),
+                "LayoutContext" => Ok(IrType::UiPlain(UiPlain::LayoutContext)),
                 other => {
                     // Every type reaching here has `home = []` but is NOT a
                     // known builtin.  `sky_canon::canonicalise_type` now emits
@@ -4487,6 +4507,9 @@ impl<'a> Lowerer<'a> {
                 // `Order` is the built-in three-way comparison result type (#123).
                 // Backed by `sky_runtime::SkyOrder` (repr(u8) enum: LT/EQ/GT).
                 "Order" => Ok(IrType::Order),
+                // `Decimal` is the Std.Decimal arbitrary-precision type.
+                // Backed by `sky_runtime::decimal::Decimal` (rust_decimal newtype).
+                "Decimal" => Ok(IrType::Decimal),
                 // `Error` is Sky's fixed error-channel type, backed by `SkyError =
                 // String` in the runtime.  Lambda parameters typed as `Error` (e.g.
                 // the `e` in `\e -> ...` when `onError`/`mapError` pins the handler)
@@ -7440,6 +7463,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FontDisabledColor
                 | KernelFn::FontHoverSize
                 | KernelFn::HtmlAttrTabindex
+                | KernelFn::HtmlAttrRows
                 // ── Std.Ui.Region (#117) — arity-1 attrs ─────────────────────────
                 | KernelFn::RegionHeading
                 | KernelFn::RegionLabel
@@ -7705,6 +7729,8 @@ impl<'a> Lowerer<'a> {
             // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────
             // lazy  : (a -> Element msg) -> a -> Element msg          — arity 2
             Callee::Kernel(KernelFn::LazyLazy) => Ok(2),
+            // Keyed.column/row : List Attr -> List (String, Element) -> Element — arity 2
+            Callee::Kernel(KernelFn::KeyedColumn | KernelFn::KeyedRow) => Ok(2),
             // lazy2 : (a -> b -> Element msg) -> a -> b -> …          — arity 3
             Callee::Kernel(KernelFn::LazyLazy2) => Ok(3),
             // lazy3 : (a -> b -> c -> Element msg) -> …               — arity 4
@@ -7713,6 +7739,57 @@ impl<'a> Lowerer<'a> {
             Callee::Kernel(KernelFn::LazyLazy4) => Ok(5),
             // lazy5 : (a -> b -> c -> d -> e -> Element msg) -> …     — arity 6
             Callee::Kernel(KernelFn::LazyLazy5) => Ok(6),
+            // ── Std.Decimal — arity 0 ────────────────────────────────────────
+            Callee::Kernel(
+                KernelFn::DecZero
+                | KernelFn::DecOne
+                | KernelFn::DecOneHundred,
+            ) => Ok(0),
+            // ── Std.Decimal — arity 1 ────────────────────────────────────────
+            Callee::Kernel(
+                KernelFn::DecFromString
+                | KernelFn::DecFromInt
+                | KernelFn::DecFromFloat
+                | KernelFn::DecToString
+                | KernelFn::DecToFloat
+                | KernelFn::DecToInt
+                | KernelFn::DecNeg
+                | KernelFn::DecAbs
+                | KernelFn::DecFloor
+                | KernelFn::DecCeil
+                | KernelFn::DecIsZero
+                | KernelFn::DecIsPositive
+                | KernelFn::DecIsNegative,
+            ) => Ok(1),
+            // ── Std.Decimal — arity 2 ────────────────────────────────────────
+            Callee::Kernel(
+                KernelFn::DecFromMinor
+                | KernelFn::DecToStringFixed
+                | KernelFn::DecToMinor
+                | KernelFn::DecAdd
+                | KernelFn::DecSub
+                | KernelFn::DecMul
+                | KernelFn::DecDiv
+                | KernelFn::DecMod
+                | KernelFn::DecRound
+                | KernelFn::DecRoundHalfUp
+                | KernelFn::DecTruncate
+                | KernelFn::DecCompare
+                | KernelFn::DecEq
+                | KernelFn::DecNeq
+                | KernelFn::DecLt
+                | KernelFn::DecLte
+                | KernelFn::DecGt
+                | KernelFn::DecGte
+                | KernelFn::DecMin
+                | KernelFn::DecMax
+                | KernelFn::DecPercentOf
+                | KernelFn::DecAddPercent
+                | KernelFn::DecSubPercent,
+            ) => Ok(2),
+            // ── Std.Decimal — arity 4 ────────────────────────────────────────
+            // `Decimal.formatWith : String -> String -> Int -> Decimal -> String`
+            Callee::Kernel(KernelFn::DecFormatWith) => Ok(4),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -8570,6 +8647,7 @@ impl<'a> Lowerer<'a> {
                     ("Font", "disabledColor") => Ok(Callee::Kernel(KernelFn::FontDisabledColor)),
                     ("Font", "hoverSize") => Ok(Callee::Kernel(KernelFn::FontHoverSize)),
                     ("Attr", "tabindex") => Ok(Callee::Kernel(KernelFn::HtmlAttrTabindex)),
+                    ("Attr", "rows")     => Ok(Callee::Kernel(KernelFn::HtmlAttrRows)),
                     // ── #117: Std.Ui.Region sub-module ───────────────────────
                     ("Region", "mainContent") => {
                         Ok(Callee::Kernel(KernelFn::RegionMainContent))
@@ -8625,6 +8703,9 @@ impl<'a> Lowerer<'a> {
                     ("Lazy", "lazy3") => Ok(Callee::Kernel(KernelFn::LazyLazy3)),
                     ("Lazy", "lazy4") => Ok(Callee::Kernel(KernelFn::LazyLazy4)),
                     ("Lazy", "lazy5") => Ok(Callee::Kernel(KernelFn::LazyLazy5)),
+                    // ── Std.Ui.Keyed ──────────────────────────────────────────
+                    ("Keyed", "column") => Ok(Callee::Kernel(KernelFn::KeyedColumn)),
+                    ("Keyed", "row")    => Ok(Callee::Kernel(KernelFn::KeyedRow)),
                     // ── M7: Std.Live / Sky.Live app-entry kernels ─────────────
                     ("Live", "app") => Ok(Callee::Kernel(KernelFn::LiveApp)),
                     ("Live", "appRouted") => Ok(Callee::Kernel(KernelFn::LiveAppRouted)),
@@ -8688,6 +8769,47 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Ws", "broadcast") => Ok(Callee::Kernel(KernelFn::WsBroadcast)),
                     ("Ws", "closeClient") => Ok(Callee::Kernel(KernelFn::WsCloseClient)),
+                    // ── Std.Decimal ───────────────────────────────────────────
+                    ("Decimal", "zero")        => Ok(Callee::Kernel(KernelFn::DecZero)),
+                    ("Decimal", "one")         => Ok(Callee::Kernel(KernelFn::DecOne)),
+                    ("Decimal", "oneHundred")  => Ok(Callee::Kernel(KernelFn::DecOneHundred)),
+                    ("Decimal", "fromString")  => Ok(Callee::Kernel(KernelFn::DecFromString)),
+                    ("Decimal", "fromInt")     => Ok(Callee::Kernel(KernelFn::DecFromInt)),
+                    ("Decimal", "fromFloat")   => Ok(Callee::Kernel(KernelFn::DecFromFloat)),
+                    ("Decimal", "fromMinor")   => Ok(Callee::Kernel(KernelFn::DecFromMinor)),
+                    ("Decimal", "toString")    => Ok(Callee::Kernel(KernelFn::DecToString)),
+                    ("Decimal", "toStringFixed") => Ok(Callee::Kernel(KernelFn::DecToStringFixed)),
+                    ("Decimal", "toFloat")     => Ok(Callee::Kernel(KernelFn::DecToFloat)),
+                    ("Decimal", "toInt")       => Ok(Callee::Kernel(KernelFn::DecToInt)),
+                    ("Decimal", "toMinor")     => Ok(Callee::Kernel(KernelFn::DecToMinor)),
+                    ("Decimal", "add")         => Ok(Callee::Kernel(KernelFn::DecAdd)),
+                    ("Decimal", "sub")         => Ok(Callee::Kernel(KernelFn::DecSub)),
+                    ("Decimal", "mul")         => Ok(Callee::Kernel(KernelFn::DecMul)),
+                    ("Decimal", "div")         => Ok(Callee::Kernel(KernelFn::DecDiv)),
+                    ("Decimal", "mod")         => Ok(Callee::Kernel(KernelFn::DecMod)),
+                    ("Decimal", "neg")         => Ok(Callee::Kernel(KernelFn::DecNeg)),
+                    ("Decimal", "abs")         => Ok(Callee::Kernel(KernelFn::DecAbs)),
+                    ("Decimal", "floor")       => Ok(Callee::Kernel(KernelFn::DecFloor)),
+                    ("Decimal", "ceil")        => Ok(Callee::Kernel(KernelFn::DecCeil)),
+                    ("Decimal", "round")       => Ok(Callee::Kernel(KernelFn::DecRound)),
+                    ("Decimal", "roundHalfUp") => Ok(Callee::Kernel(KernelFn::DecRoundHalfUp)),
+                    ("Decimal", "truncate")    => Ok(Callee::Kernel(KernelFn::DecTruncate)),
+                    ("Decimal", "compare")     => Ok(Callee::Kernel(KernelFn::DecCompare)),
+                    ("Decimal", "eq")          => Ok(Callee::Kernel(KernelFn::DecEq)),
+                    ("Decimal", "neq")         => Ok(Callee::Kernel(KernelFn::DecNeq)),
+                    ("Decimal", "lt")          => Ok(Callee::Kernel(KernelFn::DecLt)),
+                    ("Decimal", "lte")         => Ok(Callee::Kernel(KernelFn::DecLte)),
+                    ("Decimal", "gt")          => Ok(Callee::Kernel(KernelFn::DecGt)),
+                    ("Decimal", "gte")         => Ok(Callee::Kernel(KernelFn::DecGte)),
+                    ("Decimal", "min")         => Ok(Callee::Kernel(KernelFn::DecMin)),
+                    ("Decimal", "max")         => Ok(Callee::Kernel(KernelFn::DecMax)),
+                    ("Decimal", "isZero")      => Ok(Callee::Kernel(KernelFn::DecIsZero)),
+                    ("Decimal", "isPositive")  => Ok(Callee::Kernel(KernelFn::DecIsPositive)),
+                    ("Decimal", "isNegative")  => Ok(Callee::Kernel(KernelFn::DecIsNegative)),
+                    ("Decimal", "percentOf")   => Ok(Callee::Kernel(KernelFn::DecPercentOf)),
+                    ("Decimal", "addPercent")  => Ok(Callee::Kernel(KernelFn::DecAddPercent)),
+                    ("Decimal", "subPercent")  => Ok(Callee::Kernel(KernelFn::DecSubPercent)),
+                    ("Decimal", "formatWith")  => Ok(Callee::Kernel(KernelFn::DecFormatWith)),
                     // A kernel beyond the wired set.
                     // [SKY-L0108, feature: kernels]
                     (_, _) => Err(unsupported(callee.span, Feature::Kernels)),
