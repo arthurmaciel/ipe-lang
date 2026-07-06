@@ -820,4 +820,62 @@ mod tests {
             v.ret
         );
     }
+
+    /// Regression for Bug-28: `init : any -> Model` (any in PARAM position).
+    ///
+    /// The batch-any19 fix previously filtered the `any` symbol from
+    /// `type_params`, causing the backend's `GenericScope::rust_name` to ICE
+    /// (SKY-I0001) because `params` still held `IrType::Generic(any_sym)` while
+    /// `type_params` was empty.
+    ///
+    /// The principled fix computes `type_params` from the structurally-used
+    /// `IrType::Generic` set of the solved `params + ret`.  For `any` in param
+    /// position the generic is structurally present → included in `type_params`.
+    #[test]
+    fn any_in_param_position_lowers_without_ice() {
+        // `wrap : any -> Int` — `any` is in parameter position.
+        // Before Bug-28 fix this would ICE (SKY-I0001 / CompilerBug via the
+        // backend's GenericScope::rust_name); with the fix it must lower.
+        let opt = lower_func(
+            "module Main exposing (wrap)\nwrap : any -> Int\nwrap _ =\n    42\n",
+            "wrap",
+        );
+        assert!(
+            opt.is_some(),
+            "wrap : any -> Int must lower without ICE (Bug-28 regression)"
+        );
+        let Some((func, i)) = opt else { return };
+
+        // Exactly one type_param, named "any".
+        assert_eq!(
+            func.type_params.len(),
+            1,
+            "type_params must have exactly one entry (the `any` symbol), got {:?}",
+            func.type_params
+                .iter()
+                .map(|(s, _)| i.resolve(*s))
+                .collect::<Vec<_>>()
+        );
+        let Some((any_sym, _)) = func.type_params.first() else {
+            return;
+        };
+        assert_eq!(
+            i.resolve(*any_sym),
+            Some("any"),
+            "the single type_param must be named \"any\""
+        );
+
+        // The parameter's IrType is Generic(any_sym).
+        assert_eq!(func.params.len(), 1, "one parameter");
+        let Some((_, param_ty)) = func.params.first() else {
+            return;
+        };
+        assert!(
+            matches!(param_ty, IrType::Generic(s) if *s == *any_sym),
+            "param type must be Generic(any_sym), got {param_ty:?}"
+        );
+
+        // Return type is Int (the annotation's explicit return).
+        assert_eq!(func.ret, IrType::Int, "return type must be Int");
+    }
 }

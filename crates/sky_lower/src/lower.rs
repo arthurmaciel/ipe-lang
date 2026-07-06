@@ -3345,6 +3345,74 @@ impl<'a> Lowerer<'a> {
                 // the annotation type and handles both 0-parameter and N-parameter
                 // bindings correctly.
                 let (params, prologue, ret) = self.split_typed_sig(ty, patterns, free_vars)?;
+                // Bug-29 fix: `view : Model -> any` where the body region is a UI
+                // type `Html<Ty::Var(uv)>`.  We need to inject `(uv_rep →
+                // any_sym)` into the poly_tvars map so that
+                // `ir_type_from_ty_ui_msg(Ty::Var(uv))` returns
+                // `IrType::Generic(any_sym)` (→ `Html<T0>`) instead of
+                // `IrType::Unit` (→ `Html<()>`).  Without this, the emitted
+                // function returns `Html<()>` which mismatches `webview_app`'s
+                // `FView: Fn(Model) -> Html<Msg>` bound (E0271).
+                //
+                // Detection: if the annotation return is `IrType::Generic(sym)`
+                // where `sym` resolves to "any" AND the body region is a
+                // `Ty::Con` with exactly one arg that is a bare `Ty::Var`,
+                // record `(uv_rep, any_sym)` for injection in the poly_tvars
+                // installation block below.
+                //
+                // The injection is performed in the poly_tvars installation
+                // block (next) so that the `ir_type_from_ty(body_ty)` call in
+                // the any-ret fix (after the installation) already runs with the
+                // correct current_poly_tvars.
+                let any_ui_msg_injection: Option<(u32, Symbol)> =
+                    if let IrType::Generic(sym) = &ret {
+                        if self.interner.resolve(*sym) == Some("any") {
+                            self.types
+                                .regions
+                                .get(&(def.home().to_vec(), body.span))
+                                .and_then(|body_ty| {
+                                    let Ty::Con { args, .. } = body_ty else {
+                                        return None;
+                                    };
+                                    let Some(Ty::Var(uv)) = args.first() else {
+                                        return None;
+                                    };
+                                    Some((*uv, *sym))
+                                })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                // Install the binding's generic type-variable map so
+                // `ir_type_from_ty_ui_msg` can distinguish a `Ty::Var` that is an
+                // enclosing generic (→ `IrType::Generic`) from one that is a
+                // message-free UI subtree placeholder (→ `IrType::Unit`).  The map
+                // is cleared (restored to empty) after the body is lowered, so
+                // nested annotated lambdas only see their own outer binding's map —
+                // lambdas are not `Def::Typed`, so there is no inner install that
+                // would conflict.
+                //
+                // Bug-29: `any_ui_msg_injection` may augment the map with a UI
+                // msg UV → any_sym mapping so the subsequent `ir_type_from_ty`
+                // call produces `IrType::Generic(any_sym)` instead of Unit.
+                let poly_key = (def.home().to_vec(), name);
+                let saved_poly_tvars = {
+                    let mut poly = self
+                        .types
+                        .poly_var_map
+                        .get(&poly_key)
+                        .cloned()
+                        .unwrap_or_default();
+                    if let Some((uv_rep, any_sym)) = any_ui_msg_injection {
+                        poly.insert(uv_rep, any_sym);
+                    }
+                    let mut slot = self.current_poly_tvars.borrow_mut();
+                    let saved = slot.clone();
+                    *slot = poly;
+                    saved
+                };
                 // Wildcard-`any` return-type fix: `view : Model -> any` makes
                 // `any` appear in `free_vars` (the canon free-var collector treats
                 // it uniformly alongside genuine type parameters).  But `any` is NOT
@@ -3356,6 +3424,12 @@ impl<'a> Lowerer<'a> {
                 // emitted Rust function gains a spurious `<T1: Clone>` generic
                 // parameter and a `-> T1` return type that the body cannot satisfy
                 // (E0308).
+                //
+                // This block runs AFTER the poly_tvars installation above so that
+                // `ir_type_from_ty(body_ty)` — specifically its
+                // `ir_type_from_ty_ui_msg` sub-call for UI msg slots — already
+                // sees the Bug-29-injected mapping and produces
+                // `IrType::Generic(any_sym)` instead of `IrType::Unit`.
                 //
                 // Why regions, not env? `SolvedTypes::env` for TYPED bindings
                 // stores the annotation type verbatim (`generated.top_level`), which
@@ -3388,27 +3462,6 @@ impl<'a> Lowerer<'a> {
                 } else {
                     ret
                 };
-                // Install the binding's generic type-variable map so
-                // `ir_type_from_ty_ui_msg` can distinguish a `Ty::Var` that is an
-                // enclosing generic (→ `IrType::Generic`) from one that is a
-                // message-free UI subtree placeholder (→ `IrType::Unit`).  The map
-                // is cleared (restored to empty) after the body is lowered, so
-                // nested annotated lambdas only see their own outer binding's map —
-                // lambdas are not `Def::Typed`, so there is no inner install that
-                // would conflict.
-                let poly_key = (def.home().to_vec(), name);
-                let saved_poly_tvars = {
-                    let poly = self
-                        .types
-                        .poly_var_map
-                        .get(&poly_key)
-                        .cloned()
-                        .unwrap_or_default();
-                    let mut slot = self.current_poly_tvars.borrow_mut();
-                    let saved = slot.clone();
-                    *slot = poly;
-                    saved
-                };
                 // A tuple-destructuring parameter binds its synthetic name to the
                 // tuple, then the body opens it with a `Destructure`. Fold the
                 // prologue OUTERMOST-first (reverse) so the first parameter's
@@ -3431,13 +3484,33 @@ impl<'a> Lowerer<'a> {
                 // body-imposed super-type obligations require (empty for a
                 // structurally-parametric variable — a bare `T{n}`).
                 //
-                // `any` is excluded: it is a wildcard, not a real type parameter
-                // (its return type was resolved concretely above).  Including it
-                // would emit a spurious `<T_any: Clone>` generic on the function.
+                // Bug-28 fix (`init : any -> (Model, Cmd Msg)`): `any` in PARAM
+                // position is a legitimate type parameter — `IrType::Generic(any_sym)`
+                // appears in `params` and must be in `type_params` so the backend
+                // can map it to a Rust generic `T{n}`.  The old filter
+                // (`resolve(v) != "any"`) was correct for RETURN-position `any`
+                // (resolved away above) but over-removed `any_sym` when `any` is
+                // structurally used in `params`.
+                //
+                // Principled rule: include `v` in `type_params` iff
+                // `IrType::Generic(v)` structurally appears in the RESOLVED
+                // `params` or `ret`.  This naturally:
+                //   - INCLUDES `any_sym` when `any` is in param position (Generic stays).
+                //   - EXCLUDES `any_sym` when `any` is in return position (resolved away).
+                //   - INCLUDES `any_sym` when `any` is the injected UI msg generic
+                //     (`view : Model -> any`, Bug-29) because `ret = Html<Generic(any_sym)>`.
+                let used_generics: BTreeSet<Symbol> = {
+                    let mut s = BTreeSet::new();
+                    for (_, ty) in &params {
+                        collect_ir_generic_syms(ty, &mut s);
+                    }
+                    collect_ir_generic_syms(&ret, &mut s);
+                    s
+                };
                 let var_bounds = self.types.bounds.get(&name);
                 let type_params = free_vars
                     .iter()
-                    .filter(|&&v| self.interner.resolve(v) != Some("any"))
+                    .filter(|&&v| used_generics.contains(&v))
                     .map(|v| (*v, Self::bounds_for(var_bounds, *v)))
                     .collect();
                 // T5 (#104 / #112): multi-use-clone rewrite for CloneOk params.
@@ -9327,6 +9400,87 @@ impl<'a> Lowerer<'a> {
     }
 }
 
+/// Recursively collect every [`IrType::Generic`] symbol that appears
+/// structurally in `ty`.
+///
+/// Used by [`lower_def`]'s `Def::Typed` arm to compute the set of type
+/// parameters that are actually referenced in the resolved `params` and `ret`
+/// of a [`Func`] — the principled definition of [`Func::type_params`].
+///
+/// This fixes Bug-28 (`init : any -> (Model, Cmd Msg)`): `any` in PARAM
+/// position leaves `IrType::Generic(any_sym)` in `params`, so `any_sym`
+/// appears in `used_generics` and therefore in `type_params`.  The old blind
+/// filter (`resolve(v) != "any"`) over-removed `any_sym` even when it was
+/// structurally necessary.
+///
+/// See the Bug-28 / Bug-29 fix comments in [`lower_def`] for full motivation.
+fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
+    match ty {
+        IrType::Generic(sym) => {
+            out.insert(*sym);
+        }
+        IrType::Task(inner)
+        | IrType::Maybe(inner)
+        | IrType::List(inner)
+        | IrType::Set(inner)
+        | IrType::Cmd(inner)
+        | IrType::Sub(inner)
+        | IrType::Decoder(inner)
+        | IrType::LiveRoute(inner) => {
+            collect_ir_generic_syms(inner, out);
+        }
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            collect_ir_generic_syms(a, out);
+            collect_ir_generic_syms(b, out);
+        }
+        IrType::Enum { args, .. } => {
+            for a in args {
+                collect_ir_generic_syms(a, out);
+            }
+        }
+        IrType::Tuple(elems) => {
+            for e in elems {
+                collect_ir_generic_syms(e, out);
+            }
+        }
+        IrType::Record(fields) => {
+            for v in fields.values() {
+                collect_ir_generic_syms(v, out);
+            }
+        }
+        IrType::Fun(params, ret) => {
+            for p in params {
+                collect_ir_generic_syms(p, out);
+            }
+            collect_ir_generic_syms(ret, out);
+        }
+        IrType::Ui { msg, .. } => {
+            collect_ir_generic_syms(msg, out);
+        }
+        // Leaf types — carry no nested IrType.
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::Db
+        | IrType::Order
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::StreamWriter
+        | IrType::HttpRequest
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
+        | IrType::UiPlain(_)
+        | IrType::LiveReq => {}
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -9566,3 +9720,4 @@ mod tests {
         );
     }
 }
+
