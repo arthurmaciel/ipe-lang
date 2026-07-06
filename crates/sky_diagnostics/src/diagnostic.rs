@@ -14,7 +14,7 @@ use crate::code::{
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
     SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118, SKY_L0119, SKY_L0120, SKY_L0121,
-    SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0126, SKY_L0200,
+    SKY_L0122, SKY_L0123, SKY_L0125, SKY_L0126, SKY_L0200,
     SKY_N0001,
     SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
     SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_P0001,
@@ -682,13 +682,6 @@ pub enum LowerError {
         /// Short display name of the unsupported IR type.
         type_name: Box<str>,
     },
-    /// `Live.app` carries a non-empty `routes` list but the Model type has no
-    /// `page` field. The compiler would silently ignore the routes and emit a
-    /// non-routed `live_app`, discarding the routing logic entirely. [SKY-L0124]
-    RoutedAppMissingPageField {
-        /// How many routes were declared.
-        route_count: usize,
-    },
 }
 
 // ===========================================================================
@@ -964,7 +957,6 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::RouteParamCountMismatch { .. } => SKY_L0122,
         LowerError::RouteBuilderUnsupportedShape
         | LowerError::RouteParamUnsupportedType { .. } => SKY_L0123,
-        LowerError::RoutedAppMissingPageField { .. } => SKY_L0124,
     }
 }
 
@@ -1227,15 +1219,6 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
                  decoded from a URL `:param` string. Change the field type to `String`, \
                  `Int`, `Float`, or `Bool`, or use a nullary constructor for routes \
                  without `:param` segments."
-            )
-            .into_boxed_str(),
-        )],
-        LowerError::RoutedAppMissingPageField { route_count } => vec![HelpLine::Note(
-            format!(
-                "the `routes` list has {route_count} route(s) but the Model has no \
-                 `page` field. Add a `page : Page` field to the Model record, where \
-                 `Page` is the ADT whose constructors appear as route destinations, \
-                 or remove the `routes` list if routing is not needed."
             )
             .into_boxed_str(),
         )],
