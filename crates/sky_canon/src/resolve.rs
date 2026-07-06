@@ -164,6 +164,10 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
 const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
     // `Request -> Task Error Response` alias from Sky.Http.Server (#576).
     "Handler",
+    // `Html msg` — the top-level rendered HTML node type from Std.Html / Std.Ui.
+    // Needed so `viewFoo : Model -> Html Msg` annotations typecheck without
+    // `import Std.Html exposing (Html)`.
+    "Html",
     // Opaque JSON value type (`Value = any` in Sky). The lowerer handles this
     // via an explicit arm placed after the `enum_variants` guard — so a user
     // `type Value` still wins, but a bare annotation compiles.
