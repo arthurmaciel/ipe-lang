@@ -600,6 +600,29 @@ mod tests {
     }
 
     #[test]
+    fn border_inner_shadow_renders_inset_box_shadow() {
+        // `Border.innerShadow { offsetX = 0, offsetY = 1, blur = 2, spread = 0,
+        //   color = Ui.rgb 0 0 0 }` must render the INSET CSS box-shadow shape,
+        // routing the colour through the same `color_css` boundary as
+        // `Border.color`. Exercises the `ui_border_inner_shadow_` helper end to
+        // end — identical to `Border.shadow` but prefixed with `inset`.
+        let attrs = vec![super::super::helpers::ui_border_inner_shadow_(
+            0,
+            1,
+            2,
+            0,
+            Color::Rgba(0, 0, 0, 1.0),
+        )];
+        let elem: Element<TestMsg> = Element::Empty;
+        let html = ui_layout(attrs, elem);
+        let s = render_html(&html);
+        assert!(
+            s.contains("box-shadow:inset 0px 1px 2px 0px rgba(0,0,0,1)"),
+            "inset box-shadow missing/malformed: {s}"
+        );
+    }
+
+    #[test]
     fn nearby_overlay_renders() {
         let overlay: Element<TestMsg> = Element::Text("tooltip".to_owned());
         let attrs = vec![Attribute::AttrNearby(Location::Above, overlay)];
