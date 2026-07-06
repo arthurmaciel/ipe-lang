@@ -2653,6 +2653,22 @@ pub struct BuiltinCtors {
     pub lt: Symbol,
     pub eq: Symbol,
     pub gt: Symbol,
+    // ── Error / ErrorKind ADTs (E-12, #152) ──────────────────────────────────
+    // `Error` has one constructor also named `Error` (arity 2).
+    // `ErrorKind` has 11 nullary constructors.
+    pub error: Symbol,
+    pub errorkind: Symbol,
+    pub ek_io: Symbol,
+    pub ek_network: Symbol,
+    pub ek_ffi: Symbol,
+    pub ek_decode: Symbol,
+    pub ek_timeout: Symbol,
+    pub ek_not_found: Symbol,
+    pub ek_permission_denied: Symbol,
+    pub ek_invalid_input: Symbol,
+    pub ek_conflict: Symbol,
+    pub ek_unavailable: Symbol,
+    pub ek_unexpected: Symbol,
 }
 
 /// The widest parameter-pattern count across the module's top-level bindings —
@@ -2743,6 +2759,7 @@ pub fn count_destructure_param_sites(m: &canon::Module) -> usize {
 }
 
 impl<'a> Lowerer<'a> {
+    #[allow(clippy::too_many_lines)] // Error/ErrorKind ADT seeding (E-12/#152) pushed it over 100
     pub fn new(
         m: &'a canon::Module,
         types: &'a SolvedTypes,
@@ -2837,7 +2854,46 @@ impl<'a> Lowerer<'a> {
         );
         ctor_arity.insert((prelude_home.clone(), builtins.lt), 0);
         ctor_arity.insert((prelude_home.clone(), builtins.eq), 0);
-        ctor_arity.insert((prelude_home, builtins.gt), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.gt), 0);
+        // ── Error / ErrorKind ADTs (E-12, #152) ─────────────────────────────────
+        // `Error` is a single-constructor ADT: `Error ErrorKind ErrorInfo`.
+        // `ErrorKind` has 11 nullary variants.
+        // Both are Prelude built-ins — no user `type` declaration in Sky source.
+        // Seeding them here lets `case e of Error kind info ->` validate and lower
+        // past the `Match::new` enum-cover check, following the same pattern as
+        // `Maybe` / `Result` / `SqlValue` / `Order` above.
+        enum_variants.insert(
+            (prelude_home.clone(), builtins.error),
+            vec![builtins.error], // sole constructor has the same name as the type
+        );
+        ctor_arity.insert((prelude_home.clone(), builtins.error), 2); // Error(ErrorKind, ErrorInfo)
+        enum_variants.insert(
+            (prelude_home.clone(), builtins.errorkind),
+            vec![
+                builtins.ek_io,
+                builtins.ek_network,
+                builtins.ek_ffi,
+                builtins.ek_decode,
+                builtins.ek_timeout,
+                builtins.ek_not_found,
+                builtins.ek_permission_denied,
+                builtins.ek_invalid_input,
+                builtins.ek_conflict,
+                builtins.ek_unavailable,
+                builtins.ek_unexpected,
+            ],
+        );
+        ctor_arity.insert((prelude_home.clone(), builtins.ek_io), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.ek_network), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.ek_ffi), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.ek_decode), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.ek_timeout), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.ek_not_found), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.ek_permission_denied), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.ek_invalid_input), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.ek_conflict), 0);
+        ctor_arity.insert((prelude_home.clone(), builtins.ek_unavailable), 0);
+        ctor_arity.insert((prelude_home, builtins.ek_unexpected), 0); // final move
 
         Self {
             m,
@@ -3967,7 +4023,24 @@ impl<'a> Lowerer<'a> {
                 // `"Value"` case — both paths must map to `IrType::Json` for
                 // consistency. Added by #138 to support bare `Value` annotations
                 // on user functions (kernel-implicit Prelude type, #576).
-                "Value" => Ok(IrType::Json),
+                // `Claims` (D-00) maps to the same opaque JSON accumulator.
+                "Value" | "Claims" => Ok(IrType::Json),
+                // ── Kernel-implicit opaque server / Sky.Live types (#152) ────────
+                // These names are registered in `KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES`
+                // in sky_canon so they pass N0002 without an explicit import.
+                // They all carry zero type arguments at the annotation level.
+                // `Handler` / `Middleware` — Sky.Http.Server function aliases.
+                // `Session` / `Store` — Sky.Live session-management opaques.
+                // `VNode` — Sky.Live virtual-DOM node.
+                // All map to `IrType::Json` (universal opaque serde_json::Value) so
+                // they can flow through the runtime without a dedicated Rust struct.
+                "Handler" | "Middleware" | "Session" | "Store" | "VNode" => {
+                    Ok(IrType::Json)
+                }
+                // ── JWT builder types (#152 / D-00) ─────────────────────────────
+                // `Algorithm` — JWT signing algorithm descriptor encoded as a
+                // `String` ("HS256:<secret>" or "RS256:<pem>").
+                "Algorithm" => Ok(IrType::Str),
                 other => {
                     // Every type reaching here has `home = []` but is NOT a
                     // known builtin.  `sky_canon::canonicalise_type` now emits
@@ -4298,8 +4371,18 @@ impl<'a> Lowerer<'a> {
                 // the `e` in `\e -> ...` when `onError`/`mapError` pins the handler)
                 // must lower to `IrType::Str`.  Merged with `String` since they share
                 // the same IR representation.
-                "String" | "Error" => Ok(IrType::Str),
+                // `Algorithm` (D-00) shares the same `String` IR representation.
+                "String" | "Error" | "Algorithm" => Ok(IrType::Str),
                 "Char" => Ok(IrType::Char),
+                // ── Kernel-implicit opaque server / Sky.Live types (#152) ────────
+                // Mirror of the `ir_type_from_canon` arms added at the same
+                // time: these are the HM-solved-type counterparts that fire when
+                // the type is propagated via the region map rather than read from
+                // a user annotation.
+                // `Claims` (D-00) maps to the same opaque JSON accumulator.
+                "Handler" | "Middleware" | "Session" | "Store" | "VNode" | "Claims" => {
+                    Ok(IrType::Json)
+                }
                 // `Bytes` is a built-in distinct primitive (Vec<u8> on Rust).
                 // Divergence from Sky: Sky aliases Bytes = String.
                 "Bytes" => Ok(IrType::Bytes),
@@ -6406,7 +6489,9 @@ impl<'a> Lowerer<'a> {
                 // ── Task.defaultRetryPolicy — arity 0 ────────────────────────
                 | KernelFn::TaskDefaultRetryPolicy
                 // ── #127: Sky.Http.Server.WebSocket arity-0 ──────────────────
-                | KernelFn::WsDefaultCfg,
+                | KernelFn::WsDefaultCfg
+                // ── Jwt builder: claims arity-0 (D-00, #152) ─────────────────
+                | KernelFn::JwtClaims,
             ) => Ok(0),
             Callee::Kernel(
                 KernelFn::StringFromInt
@@ -6647,7 +6732,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CssSafetySafeValue
                 | KernelFn::CssSafetySafePropName
                 | KernelFn::CssSafetySafeSelector
-                | KernelFn::CssSafetyStripStyleClose,
+                | KernelFn::CssSafetyStripStyleClose
+                // ── Jwt builder arity-1 (D-00, #152) ─────────────────────────
+                // `hs256 : String -> Algorithm`
+                // `rs256 : String -> Algorithm`
+                | KernelFn::JwtHs256
+                | KernelFn::JwtRs256,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::StringAppend
@@ -6753,6 +6843,16 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JwtDecodeHs256
                 | KernelFn::JwtEncodeRs256
                 | KernelFn::JwtDecodeRs256
+                // ── Jwt builder arity-2 (D-00, #152) ──────────────────────────
+                | KernelFn::JwtSubject
+                | KernelFn::JwtIssuer
+                | KernelFn::JwtAudience
+                | KernelFn::JwtExpiresAt
+                | KernelFn::JwtNotBefore
+                | KernelFn::JwtIssuedAt
+                | KernelFn::JwtJwtId
+                | KernelFn::JwtEncode
+                | KernelFn::JwtDecode
                 // ── Task combinators arity-2 (M5a) ────────────────────────────
                 | KernelFn::TaskMap
                 | KernelFn::TaskAndThen
@@ -6901,7 +7001,10 @@ impl<'a> Lowerer<'a> {
                 // `Server.withHeader : String -> String -> Response -> Response`
                 | KernelFn::ServerWithHeader
                 // `Middleware.withBasicAuth : String -> String -> Handler -> Handler`
-                | KernelFn::MiddlewareWithBasicAuth,
+                | KernelFn::MiddlewareWithBasicAuth
+                // ── Jwt builder arity-3 (D-00, #152) ─────────────────────────
+                // `withClaim : String -> String -> Claims -> Claims`
+                | KernelFn::JwtWithClaim,
             ) => Ok(3),
             // ── JsonDec arity-4 (M4h) ─────────────────────────────────────────
             Callee::Kernel(
@@ -7870,6 +7973,20 @@ impl<'a> Lowerer<'a> {
                     ("Jwt", "decodeHs256") => Ok(Callee::Kernel(KernelFn::JwtDecodeHs256)),
                     ("Jwt", "encodeRs256") => Ok(Callee::Kernel(KernelFn::JwtEncodeRs256)),
                     ("Jwt", "decodeRs256") => Ok(Callee::Kernel(KernelFn::JwtDecodeRs256)),
+                    // ── Jwt builder API (D-00, #152) ──────────────────────────
+                    ("Jwt", "claims") => Ok(Callee::Kernel(KernelFn::JwtClaims)),
+                    ("Jwt", "hs256") => Ok(Callee::Kernel(KernelFn::JwtHs256)),
+                    ("Jwt", "rs256") => Ok(Callee::Kernel(KernelFn::JwtRs256)),
+                    ("Jwt", "subject") => Ok(Callee::Kernel(KernelFn::JwtSubject)),
+                    ("Jwt", "issuer") => Ok(Callee::Kernel(KernelFn::JwtIssuer)),
+                    ("Jwt", "audience") => Ok(Callee::Kernel(KernelFn::JwtAudience)),
+                    ("Jwt", "expiresAt") => Ok(Callee::Kernel(KernelFn::JwtExpiresAt)),
+                    ("Jwt", "notBefore") => Ok(Callee::Kernel(KernelFn::JwtNotBefore)),
+                    ("Jwt", "issuedAt") => Ok(Callee::Kernel(KernelFn::JwtIssuedAt)),
+                    ("Jwt", "jwtId") => Ok(Callee::Kernel(KernelFn::JwtJwtId)),
+                    ("Jwt", "withClaim") => Ok(Callee::Kernel(KernelFn::JwtWithClaim)),
+                    ("Jwt", "encode") => Ok(Callee::Kernel(KernelFn::JwtEncode)),
+                    ("Jwt", "decode") => Ok(Callee::Kernel(KernelFn::JwtDecode)),
                     // ── Task combinators (M5a) ────────────────────────────────
                     ("Task", "succeed") => Ok(Callee::Kernel(KernelFn::TaskSucceed)),
                     ("Task", "fail") => Ok(Callee::Kernel(KernelFn::TaskFail)),
@@ -9235,6 +9352,20 @@ mod tests {
         let lt = interner.intern("LT").unwrap();
         let eq = interner.intern("EQ").unwrap();
         let gt = interner.intern("GT").unwrap();
+        // ── Error / ErrorKind ADTs (E-12, #152) ─────────────────────────────
+        let error = interner.intern("Error").unwrap();
+        let errorkind = interner.intern("ErrorKind").unwrap();
+        let ek_io = interner.intern("Io").unwrap();
+        let ek_network = interner.intern("Network").unwrap();
+        let ek_ffi = interner.intern("Ffi").unwrap();
+        let ek_decode = interner.intern("Decode").unwrap();
+        let ek_timeout = interner.intern("Timeout").unwrap();
+        let ek_not_found = interner.intern("NotFound").unwrap();
+        let ek_permission_denied = interner.intern("PermissionDenied").unwrap();
+        let ek_invalid_input = interner.intern("InvalidInput").unwrap();
+        let ek_conflict = interner.intern("Conflict").unwrap();
+        let ek_unavailable = interner.intern("Unavailable").unwrap();
+        let ek_unexpected = interner.intern("Unexpected").unwrap();
 
         // Pre-intern all kernel (qualifier, name) strings in ALL order.
         // Must happen before Lowerer borrows interner immutably.
@@ -9273,6 +9404,20 @@ mod tests {
             lt,
             eq,
             gt,
+            // ── Error / ErrorKind (E-12, #152) ───────────────────────────────
+            error,
+            errorkind,
+            ek_io,
+            ek_network,
+            ek_ffi,
+            ek_decode,
+            ek_timeout,
+            ek_not_found,
+            ek_permission_denied,
+            ek_invalid_input,
+            ek_conflict,
+            ek_unavailable,
+            ek_unexpected,
         };
         let module = canon::Module {
             name: vec![],
