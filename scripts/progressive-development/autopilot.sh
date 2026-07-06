@@ -247,12 +247,13 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
         review="$(agent "$GUARDIAN_MODEL" "You are an ADVERSARIAL reviewer of a $class change on branch $gbr (diff: git diff $BASE..$gbr). REFUTE it — $(reviewer_angle "$class"). Read the diff + the added tests. If you find ANY unsoundness / behaviour change vs the ../sky reference / disguised hack, print REVIEW: REJECT <why>. Only if you cannot break it after genuine effort, print REVIEW: ACCEPT. Default to REJECT when uncertain. (The no-panic fuzzer is a hard gate below; YOUR job is the reasoning it can't do.)")"
         if printf '%s' "$review" | rg -q "REVIEW: ACCEPT"; then
             git switch "$BASE" >/dev/null 2>&1
+            gpre="$(git rev-parse HEAD)"   # pre-merge sha; a failed merge reverts HERE, never a stale HEAD
             if git merge --no-ff -m "autopilot: $class fix — $gdesc" "$gbr" >/dev/null 2>&1 \
                && ( touch runtime/tests/*.rs crates/skyc/tests/*.rs 2>/dev/null; CARGO_TARGET_DIR="$GATE_TARGET" timeout 3000 cargo test --workspace >/tmp/autopilot-gate.log 2>&1 && CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo clippy --workspace --all-targets -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
                && ( "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 ); then
                 log "guardian [$class] ACCEPTED + gate-green + fuzz-clean — landed"; mark LANDED "$class" "$gdesc"
             else
-                log "guardian [$class] failed merge/gate/fuzz — reverting"; git merge --abort 2>/dev/null; git reset --hard HEAD >/dev/null 2>&1; mark BLOCKED "$class" "$gdesc"
+                log "guardian [$class] failed merge/gate/fuzz — reverting to $gpre"; git merge --abort 2>/dev/null; git reset --hard "$gpre" >/dev/null 2>&1; mark BLOCKED "$class" "$gdesc"
             fi
         else
             log "adversarial review [$class] REJECTED — not landing (see /tmp/autopilot-guardian-c$cycle-$done_guard.log)"; mark ESCALATED "$class" "$gdesc"

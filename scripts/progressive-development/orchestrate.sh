@@ -123,6 +123,7 @@ for idx in "${!items[@]}"; do
     ahead="$(git rev-list --count "$BASE..$br" 2>/dev/null || echo 0)"
     if [ "$ahead" -eq 0 ]; then log "lane $idx: nothing committed (escalated/failed) — skip"; continue; fi
     log "lane $idx: merging $br ($ahead commit(s))"
+    pre="$(git rev-parse HEAD)"   # exact pre-merge sha — EVERY revert path returns HERE, never HEAD~1
     if ! git merge --no-ff -m "orchestrate: merge lane $idx ($br)" "$br" >/dev/null 2>&1; then
         conflicts="$(git diff --name-only --diff-filter=U | tr '\n' ' ')"
         log "lane $idx: CONFLICT in [$conflicts] — dispatching $RECONCILE_MODEL to union-reconcile"
@@ -131,8 +132,15 @@ for idx in "${!items[@]}"; do
             -p "You are resolving an in-progress git merge conflict from two PARALLEL compiler-kernel lanes in a Rust workspace. These conflicts are almost always a UNION: both lanes appended a variant to the same enum, an arm to the same match, or an entry to the same table/list. Resolve EVERY conflicted file by KEEPING BOTH sides' additions (union) — never drop either lane's work — and keep every match/enum exhaustive and alphabetically/ordinally consistent with the surroundings. Conflicted files: $conflicts . When done, \`git add -A && git commit --no-edit\`. If a conflict is NOT a clean union (genuine semantic clash), abort with \`git merge --abort\` and print RECONCILE: MANUAL <reason>." \
             >/tmp/orch-reconcile-$idx.log 2>&1
         if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
-            log "lane $idx: reconcile did NOT resolve all conflicts — aborting merge (see /tmp/orch-reconcile-$idx.log)"
-            git merge --abort 2>/dev/null; continue
+            log "lane $idx: reconcile did NOT resolve all conflicts — reverting to $pre (see /tmp/orch-reconcile-$idx.log)"
+            git merge --abort 2>/dev/null; git reset --hard "$pre" >/dev/null 2>&1; continue
+        fi
+        # A reconcile that STAGED the fix but never COMMITTED leaves HEAD at $pre with
+        # MERGE_HEAD pending. Gating that in-progress merge + a relative HEAD~1 reset is
+        # EXACTLY what ate a real commit once. Require the merge to be committed.
+        if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ] || [ "$(git rev-parse HEAD)" = "$pre" ]; then
+            log "lane $idx: reconcile left the merge UNCOMMITTED — reverting to $pre (won't gate an in-progress merge)"
+            git merge --abort 2>/dev/null; git reset --hard "$pre" >/dev/null 2>&1; continue
         fi
         log "lane $idx: reconcile succeeded"
     fi
@@ -140,8 +148,9 @@ for idx in "${!items[@]}"; do
     if run_gate; then
         log "lane $idx: GATE GREEN — kept"; merged=$((merged+1))
     else
-        log "lane $idx: GATE RED after merge — reverting (see /tmp/orch-gate.log)"
-        git reset --hard "HEAD~1" >/dev/null 2>&1
+        log "lane $idx: GATE RED after merge — reverting to pre-merge $pre (see /tmp/orch-gate.log)"
+        git merge --abort 2>/dev/null                # clear any in-progress merge state
+        git reset --hard "$pre" >/dev/null 2>&1      # exact pre-merge sha, NEVER HEAD~1
     fi
 done
 
