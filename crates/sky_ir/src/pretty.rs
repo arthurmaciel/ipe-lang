@@ -981,6 +981,20 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::LazyLazy4 => "Lazy.lazy4",
         KernelFn::LazyLazy5 => "Lazy.lazy5",
         KernelFn::BasicsCompare => "Basics.compare",
+        // ── Jwt builder API (D-00, #152) ─────────────────────────────────────
+        KernelFn::JwtClaims => "Jwt.claims",
+        KernelFn::JwtHs256 => "Jwt.hs256",
+        KernelFn::JwtRs256 => "Jwt.rs256",
+        KernelFn::JwtSubject => "Jwt.subject",
+        KernelFn::JwtIssuer => "Jwt.issuer",
+        KernelFn::JwtAudience => "Jwt.audience",
+        KernelFn::JwtExpiresAt => "Jwt.expiresAt",
+        KernelFn::JwtNotBefore => "Jwt.notBefore",
+        KernelFn::JwtIssuedAt => "Jwt.issuedAt",
+        KernelFn::JwtJwtId => "Jwt.jwtId",
+        KernelFn::JwtWithClaim => "Jwt.withClaim",
+        KernelFn::JwtEncode => "Jwt.encode",
+        KernelFn::JwtDecode => "Jwt.decode",
     }
 }
 
