@@ -206,9 +206,6 @@ pub const SKY_L0122: Code = Code("SKY-L0122");
 /// `Live.route` page builder is neither a page constructor, an inline lambda,
 /// nor a named function — the Rust backend cannot emit a type-directed closure
 pub const SKY_L0123: Code = Code("SKY-L0123");
-/// `Live.app` has a non-empty `routes` list but the Model has no `page` field;
-/// the route list would be silently ignored
-pub const SKY_L0124: Code = Code("SKY-L0124");
 /// inadmissible Msg type in a Live/Tui/Webview app.
 ///
 /// The Msg type's Rust rendering would not satisfy the runtime's
@@ -325,7 +322,6 @@ pub fn title(c: Code) -> &'static str {
         SKY_L0121 => "`JsonDec.succeed` / `Db.Decode.succeed` constructor arity exceeds 10",
         SKY_L0122 => "`Live.route` `:param` count does not match page-constructor payload count",
         SKY_L0123 => "`Live.route` page builder is not a constructor, lambda, or named function",
-        SKY_L0124 => "`Live.app` routes list is non-empty but Model has no `page` field",
         SKY_L0125 => "app Msg is not admissible for this app shape",
         SKY_L0126 => "non-Clone capture in a closure is not yet supported",
         SKY_L0200 => "expression nests too deeply for the backend",
@@ -427,7 +423,6 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         SKY_L0121 => Some(include_str!("../explain/SKY-L0121.md")),
         SKY_L0122 => Some(include_str!("../explain/SKY-L0122.md")),
         SKY_L0123 => Some(include_str!("../explain/SKY-L0123.md")),
-        SKY_L0124 => Some(include_str!("../explain/SKY-L0124.md")),
         SKY_L0125 => Some(include_str!("../explain/SKY-L0125.md")),
         SKY_L0126 => Some(include_str!("../explain/SKY-L0126.md")),
         SKY_L0200 => Some(include_str!("../explain/SKY-L0200.md")),
@@ -461,7 +456,7 @@ mod tests {
         SKY_L0101,
         SKY_L0102, SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110,
         SKY_L0111, SKY_L0112, SKY_L0113, SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118,
-        SKY_L0119, SKY_L0120, SKY_L0121, SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0126, SKY_L0200,
+        SKY_L0119, SKY_L0120, SKY_L0121, SKY_L0122, SKY_L0123, SKY_L0125, SKY_L0126, SKY_L0200,
         SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101,
         SKY_I0102, SKY_I0103, SKY_I0200, SKY_I0201, SKY_I0202, SKY_I0203,
     ];
