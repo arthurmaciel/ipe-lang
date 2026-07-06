@@ -321,6 +321,155 @@ pub fn sky_jwt_decode_rs256(key_pem: String, token: String) -> SkyResult<String,
     jwt_decode_rs256(key_pem, token)
 }
 
+// ── Builder API (D-00, #152) ─────────────────────────────────────────────────
+//
+// The Go backend exposes JWT through a builder pattern:
+//   `Jwt.encode (Jwt.hs256 secret) (Jwt.claims |> Jwt.subject "alice" |> …)`
+//
+// Here we implement the same API surface.  `Claims` is represented as a
+// `serde_json::Value` (the `IrType::Json` opaque).  `Algorithm` is encoded
+// as a `String` with a prefix: `"HS256:<secret>"` or `"RS256:<pem>"` (the
+// `IrType::Str` opaque).  The encode / decode functions parse the prefix to
+// dispatch to the appropriate flat kernel, preserving byte-for-byte parity
+// with the Go backend through the same Go-format JSON encoder used by the
+// flat `encodeHs256` / `decodeHs256` kernels above.
+
+/// `Jwt.claims : Claims` — returns an empty JSON object to start the builder
+/// chain.  Backed as `serde_json::Value::Object` (IrType::Json).
+pub fn sky_jwt_claims() -> JsonValue {
+    JsonValue::Object(serde_json::Map::new())
+}
+
+/// `Jwt.hs256 : String -> Algorithm` — builds an HS256 algorithm descriptor.
+/// The algorithm is encoded as `"HS256:<secret>"` so `sky_jwt_encode` /
+/// `sky_jwt_decode` can parse out the algorithm and the key in one pass.
+pub fn sky_jwt_hs256(secret: String) -> String {
+    format!("HS256:{}", secret)
+}
+
+/// `Jwt.rs256 : String -> Algorithm` — builds an RS256 algorithm descriptor.
+/// Encoded as `"RS256:<pem>"`.
+pub fn sky_jwt_rs256(key_pem: String) -> String {
+    format!("RS256:{}", key_pem)
+}
+
+/// Helper: insert (or overwrite) a key-value pair in a JSON object.
+/// If `claims` is not an object, a new object is created containing only this
+/// claim (defensive; the builder chain guarantees object inputs from `claims`).
+fn claims_set(claims: JsonValue, key: &str, value: JsonValue) -> JsonValue {
+    let mut map = match claims {
+        JsonValue::Object(m) => m,
+        other => {
+            // Defensive: wrap the non-object in a fresh map.  This should
+            // never happen in a well-typed builder chain.
+            let mut m = serde_json::Map::new();
+            m.insert("_value".to_string(), other);
+            m
+        }
+    };
+    map.insert(key.to_string(), value);
+    JsonValue::Object(map)
+}
+
+/// `Jwt.subject : String -> Claims -> Claims` — sets the `sub` claim.
+pub fn sky_jwt_subject(sub: String, claims: JsonValue) -> JsonValue {
+    claims_set(claims, "sub", JsonValue::String(sub))
+}
+
+/// `Jwt.issuer : String -> Claims -> Claims` — sets the `iss` claim.
+pub fn sky_jwt_issuer(iss: String, claims: JsonValue) -> JsonValue {
+    claims_set(claims, "iss", JsonValue::String(iss))
+}
+
+/// `Jwt.audience : String -> Claims -> Claims` — sets the `aud` claim.
+pub fn sky_jwt_audience(aud: String, claims: JsonValue) -> JsonValue {
+    claims_set(claims, "aud", JsonValue::String(aud))
+}
+
+/// `Jwt.expiresAt : Int -> Claims -> Claims` — sets the `exp` claim (Unix
+/// seconds).  The Sky stdlib documents `expiresAt` as accepting Unix
+/// milliseconds but the JWT spec and the Go oracle use Unix SECONDS.  The
+/// Sky stdlib's `Jwt.sky` passes the value straight through as a JSON number,
+/// so we mirror that — the caller is responsible for providing the right unit.
+pub fn sky_jwt_expires_at(exp: i64, claims: JsonValue) -> JsonValue {
+    claims_set(claims, "exp", JsonValue::Number(serde_json::Number::from(exp)))
+}
+
+/// `Jwt.notBefore : Int -> Claims -> Claims` — sets the `nbf` claim.
+pub fn sky_jwt_not_before(nbf: i64, claims: JsonValue) -> JsonValue {
+    claims_set(claims, "nbf", JsonValue::Number(serde_json::Number::from(nbf)))
+}
+
+/// `Jwt.issuedAt : Int -> Claims -> Claims` — sets the `iat` claim.
+pub fn sky_jwt_issued_at(iat: i64, claims: JsonValue) -> JsonValue {
+    claims_set(claims, "iat", JsonValue::Number(serde_json::Number::from(iat)))
+}
+
+/// `Jwt.jwtId : String -> Claims -> Claims` — sets the `jti` claim.
+pub fn sky_jwt_jwt_id(jti: String, claims: JsonValue) -> JsonValue {
+    claims_set(claims, "jti", JsonValue::String(jti))
+}
+
+/// `Jwt.withClaim : String -> String -> Claims -> Claims` — inserts an
+/// arbitrary string-valued claim.  Both key and value are strings; the value
+/// is stored as a JSON string.
+pub fn sky_jwt_with_claim(key: String, value: String, claims: JsonValue) -> JsonValue {
+    claims_set(claims, &key, JsonValue::String(value))
+}
+
+/// `Jwt.encode : Algorithm -> Claims -> Result Error String` — signs the claims
+/// using the algorithm encoded in `algorithm_descriptor`.
+/// Delegates to `jwt_encode_hs256` / `jwt_encode_rs256` after serialising the
+/// claims through the Go-parity JSON encoder (sorted keys).
+pub fn sky_jwt_encode(
+    algorithm_descriptor: String,
+    claims: JsonValue,
+) -> SkyResult<String, String> {
+    // Serialise the claims through the Go-parity encoder so the payload bytes
+    // match those produced by `Jwt.encode` in the Go backend.
+    let claims_json = super::json_enc_encode(0, claims);
+    if let Some(secret) = algorithm_descriptor.strip_prefix("HS256:") {
+        jwt_encode_hs256(secret.to_string(), claims_json)
+    } else if let Some(pem) = algorithm_descriptor.strip_prefix("RS256:") {
+        jwt_encode_rs256(pem.to_string(), claims_json)
+    } else {
+        SkyResult::Err(format!(
+            "jwt-encode: unknown algorithm descriptor (expected HS256:… or RS256:…): {}",
+            &algorithm_descriptor[..algorithm_descriptor.len().min(20)]
+        )
+        .into())
+    }
+}
+
+/// `Jwt.decode : Algorithm -> String -> Result Error Claims` — verifies the
+/// token and returns the decoded claims as a `JsonValue`.
+/// Delegates to `jwt_decode_hs256` / `jwt_decode_rs256` and re-parses the
+/// returned JSON string into a `serde_json::Value`.
+pub fn sky_jwt_decode(
+    algorithm_descriptor: String,
+    token: String,
+) -> SkyResult<String, JsonValue> {
+    let json_str_result: SkyResult<String, String> =
+        if let Some(secret) = algorithm_descriptor.strip_prefix("HS256:") {
+            jwt_decode_hs256(secret.to_string(), token)
+        } else if let Some(pem) = algorithm_descriptor.strip_prefix("RS256:") {
+            jwt_decode_rs256(pem.to_string(), token)
+        } else {
+            return SkyResult::Err(format!(
+                "jwt-decode: unknown algorithm descriptor (expected HS256:… or RS256:…): {}",
+                &algorithm_descriptor[..algorithm_descriptor.len().min(20)]
+            )
+            .into());
+        };
+    match json_str_result {
+        SkyResult::Ok(json_str) => match serde_json::from_str::<JsonValue>(&json_str) {
+            Ok(v) => SkyResult::Ok(v),
+            Err(e) => SkyResult::Err(format!("jwt-decode: claims re-parse: {}", e).into()),
+        },
+        SkyResult::Err(e) => SkyResult::Err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

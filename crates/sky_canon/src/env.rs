@@ -231,6 +231,18 @@ impl Env {
         // `build_module_exports`; they must be pre-registered here instead).
         let chunkev = interner.intern("ChunkEvent")?;
         let streamid = interner.intern("StreamId")?;
+        // Sky.Core.Error ADTs (E-12, #152).
+        //
+        // `Error` is both a type name (currently `SkyError = String` in the runtime)
+        // and a constructor `Error ErrorKind ErrorInfo` — arity 2.  Registering the
+        // constructor here fixes N0003 when a pattern `Error kind info ->` appears in
+        // user code.  `ErrorKind` is a separate ADT with 11 nullary constructors.
+        //
+        // NOTE: full Error ADT migration is PARKED; the runtime still represents
+        // `SkyError` as `String`.  These registrations advance canon past N0003;
+        // the lowerer/backend may surface a new error until the migration lands.
+        let error_type = interner.intern("Error")?;
+        let errorkind = interner.intern("ErrorKind")?;
         // (constructor name, owning built-in type, index within the type, arity).
         for (name, type_name, index, arity) in [
             ("True", bool_, 0, 0),
@@ -264,6 +276,23 @@ impl Env {
             // ── StreamId (Sky.Core.Http.Stream) ──────────────────────────────
             // StreamId : Int -> StreamId (opaque wrapper used in Stream.open return)
             ("StreamId", streamid, 0, 1),
+            // ── Error / ErrorKind (E-12, #152) ────────────────────────────────
+            // `Error : ErrorKind -> ErrorInfo -> Error` — arity 2.
+            // Registering this fixes N0003 for patterns `Error kind info ->`.
+            ("Error", error_type, 0, 2),
+            // `ErrorKind` — 11 nullary constructors (index order matches the
+            // `ErrorKind` enum order in the PARKED Error ADT design).
+            ("Io", errorkind, 0, 0),
+            ("Network", errorkind, 1, 0),
+            ("Ffi", errorkind, 2, 0),
+            ("Decode", errorkind, 3, 0),
+            ("Timeout", errorkind, 4, 0),
+            ("NotFound", errorkind, 5, 0),
+            ("PermissionDenied", errorkind, 6, 0),
+            ("InvalidInput", errorkind, 7, 0),
+            ("Conflict", errorkind, 8, 0),
+            ("Unavailable", errorkind, 9, 0),
+            ("Unexpected", errorkind, 10, 0),
         ] {
             let name = interner.intern(name)?;
             self.ctors.insert(
@@ -729,11 +758,32 @@ impl Env {
             // `Sky.Core.Uuid` — UUID generation and parsing (M5b).
             // `v4` and `v7` are arity-0 (bare value); `parse` is arity-1.
             ("Uuid", &["v4", "v7", "parse"]),
-            // `Sky.Core.Jwt` — JWT encode/decode for HS256 and RS256 (M5b).
-            // All functions take (key, payload) — arity 2.
+            // `Sky.Core.Jwt` — JWT encode/decode for HS256 and RS256 (M5b),
+            // plus builder API: claims / hs256 / rs256 / subject / issuer /
+            // audience / expiresAt / notBefore / issuedAt / jwtId / withClaim /
+            // encode / decode (D-00 / #152).
             (
                 "Jwt",
-                &["encodeHs256", "decodeHs256", "encodeRs256", "decodeRs256"],
+                &[
+                    "encodeHs256",
+                    "decodeHs256",
+                    "encodeRs256",
+                    "decodeRs256",
+                    // builder API (D-00 / #152)
+                    "claims",
+                    "hs256",
+                    "rs256",
+                    "subject",
+                    "issuer",
+                    "audience",
+                    "expiresAt",
+                    "notBefore",
+                    "issuedAt",
+                    "jwtId",
+                    "withClaim",
+                    "encode",
+                    "decode",
+                ],
             ),
             // `Sky.Core.Task` — Task combinators (M5a) + retry surface.
             (

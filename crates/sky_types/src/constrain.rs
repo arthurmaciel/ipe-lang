@@ -152,6 +152,12 @@ struct Builtins {
     server_route: Symbol,
     /// `"Cookie"` — the opaque server cookie type.
     server_cookie: Symbol,
+    /// `"Handler"` — the `Request -> Task Error Response` alias from
+    /// `Sky.Http.Server`. Pre-interned so `constrain_def` can detect a
+    /// `handler : Handler` annotation and expand it to the full arrow type
+    /// before the parameter-loop runs (fixes SKY-T0004 for handler bindings,
+    /// #152).
+    handler: Symbol,
     // ── #111: Sky.Http.Server.Stream opaque type constructor symbol ───────────
     /// `"StreamWriter"` — the opaque stream writer handle passed to the
     /// `Stream.stream` callback and consumed by `Stream.emit` /
@@ -325,6 +331,16 @@ struct Builtins {
     edge_f_bottom: Symbol,
     /// `"left"` — left edge field.
     edge_f_left: Symbol,
+    // ── JWT builder opaque type constructor symbols (D-00) ────────────────────
+    /// `"Claims"` — opaque JWT claims builder object.  Backed at runtime by
+    /// `serde_json::Value` (a JSON object accumulator).  Used as the input /
+    /// output of the `Jwt.subject`, `Jwt.issuer`, … builder chain functions
+    /// and the final `Jwt.encode` call.
+    jwt_claims: Symbol,
+    /// `"Algorithm"` — JWT signing algorithm descriptor.  Backed at runtime by
+    /// a `String` in the form `"HS256:<secret>"` or `"RS256:<pem>"`.  Built
+    /// by `Jwt.hs256` / `Jwt.rs256` and consumed by `Jwt.encode` / `Jwt.decode`.
+    jwt_algorithm: Symbol,
 }
 
 impl Builtins {
@@ -385,6 +401,7 @@ impl Builtins {
             server_response: interner.intern("Response")?,
             server_route: interner.intern("Route")?,
             server_cookie: interner.intern("Cookie")?,
+            handler: interner.intern("Handler")?,
             // #111: Sky.Http.Server.Stream opaque handle.
             stream_writer: interner.intern("StreamWriter")?,
             // #127: Sky.Http.Server.WebSocket opaque handles.
@@ -458,6 +475,9 @@ impl Builtins {
             edge_f_right: interner.intern("right")?,
             edge_f_bottom: interner.intern("bottom")?,
             edge_f_left: interner.intern("left")?,
+            // ── JWT builder opaque type constructor symbols (D-00) ──────────────
+            jwt_claims: interner.intern("Claims")?,
+            jwt_algorithm: interner.intern("Algorithm")?,
         })
     }
 
@@ -1458,6 +1478,7 @@ impl<'a> Builder<'a> {
 
     // ── the walk ────────────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_lines)] // Handler expansion block (E-12/#152) pushed it over 100
     fn constrain_def(&mut self, def: &canon::Def) -> DResult<()> {
         // Track which source module this def belongs to so every `regions.insert`
         // in the sub-expression walk uses `(home, span)` as the key, preventing
@@ -1481,9 +1502,57 @@ impl<'a> Builder<'a> {
                 // conflates `a` and `b`) are both mismatches rather than silently
                 // accepted. Per-call-site uses instead instantiate the binding's
                 // type as fresh *flex* variables (see [`Self::instantiate`]).
+                // ── Handler alias expansion (#152 / T0004 fix) ───────────────
+                // `Handler` is the stdlib alias `Request -> Task Error Response`
+                // (Sky.Http.Server).  A binding annotated as `Handler` with one
+                // parameter (e.g. `handleHome : Handler; handleHome req = …`)
+                // would fire T0004 because the annotation is a nullary `Con`, not
+                // a `Lambda`.  Expand it to the full arrow type here, before the
+                // parameter-loop runs, so the loop can peel the arrow normally.
+                //
+                // The expansion is purely canonical — it mirrors exactly what
+                // `canonicalise_type` would produce for an explicit
+                // `Request -> Task Error Response` annotation.  `handler_expansion`
+                // is kept as an owned `canon::Type` so `cursor` (a reference) can
+                // point into it when the annotation is `Handler`.
+                let handler_expansion: Option<canon::Type> = {
+                    if let canon::Type::Con { name: tname, args, .. } = ty {
+                        if *tname == self.builtins.handler && args.is_empty() && !patterns.is_empty() {
+                            let task_resp = canon::Type::Con {
+                                home: Vec::new(),
+                                name: self.builtins.task,
+                                args: vec![
+                                    canon::Type::Con {
+                                        home: Vec::new(),
+                                        name: self.builtins.error,
+                                        args: Vec::new(),
+                                    },
+                                    canon::Type::Con {
+                                        home: Vec::new(),
+                                        name: self.builtins.server_response,
+                                        args: Vec::new(),
+                                    },
+                                ],
+                            };
+                            Some(canon::Type::Lambda(
+                                Box::new(canon::Type::Con {
+                                    home: Vec::new(),
+                                    name: self.builtins.server_request,
+                                    args: Vec::new(),
+                                }),
+                                Box::new(task_resp),
+                            ))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
                 let mut rigid_vars = BTreeMap::new();
                 let mut local = BTreeMap::new();
-                let mut cursor = ty;
+                let mut cursor: &canon::Type =
+                    handler_expansion.as_ref().unwrap_or(ty);
                 for pat in patterns {
                     let (arg_ty, rest) = match cursor {
                         canon::Type::Lambda(a, b) => (a.as_ref(), b.as_ref()),
@@ -2780,6 +2849,22 @@ impl<'a> Builder<'a> {
             name: self.builtins.json_value,
             args: Vec::new(),
         };
+        // ── JWT builder opaque types (D-00) ─────────────────────────────────
+        // `claims_ty()` — opaque JWT claims accumulator.  Backed at runtime by
+        // `serde_json::Value` (maps to `IrType::Json` in the lowerer).
+        let claims_ty = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.jwt_claims,
+            args: Vec::new(),
+        };
+        // `algorithm_ty()` — JWT signing algorithm descriptor.  Backed at
+        // runtime by a `String` in the form `"HS256:<secret>"` or
+        // `"RS256:<pem>"` (maps to `IrType::Str` in the lowerer).
+        let algorithm_ty = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.jwt_algorithm,
+            args: Vec::new(),
+        };
         let live_req = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.live_req,
@@ -3908,6 +3993,27 @@ impl<'a> Builder<'a> {
             K::JwtDecodeHs256 | K::JwtDecodeRs256 | K::JwtEncodeHs256 | K::JwtEncodeRs256 => {
                 fun(string(), fun(string(), result(error_ty(), string())))
             }
+
+            // ── Jwt builder API (D-00, #152) ──────────────────────────────────
+            // `Jwt.claims : Claims` — nullary: returns an empty claims object.
+            K::JwtClaims => claims_ty(),
+            // `Jwt.hs256 : String -> Algorithm`
+            // `Jwt.rs256 : String -> Algorithm`
+            K::JwtHs256 | K::JwtRs256 => fun(string(), algorithm_ty()),
+            // `Jwt.subject / .issuer / .audience / .jwtId : String -> Claims -> Claims`
+            K::JwtSubject | K::JwtIssuer | K::JwtAudience | K::JwtJwtId => {
+                fun(string(), fun(claims_ty(), claims_ty()))
+            }
+            // `Jwt.expiresAt / .notBefore / .issuedAt : Int -> Claims -> Claims`
+            K::JwtExpiresAt | K::JwtNotBefore | K::JwtIssuedAt => {
+                fun(int(), fun(claims_ty(), claims_ty()))
+            }
+            // `Jwt.withClaim : String -> String -> Claims -> Claims`
+            K::JwtWithClaim => fun(string(), fun(string(), fun(claims_ty(), claims_ty()))),
+            // `Jwt.encode : Algorithm -> Claims -> Result Error String`
+            K::JwtEncode => fun(algorithm_ty(), fun(claims_ty(), result(error_ty(), string()))),
+            // `Jwt.decode : Algorithm -> String -> Result Error Claims`
+            K::JwtDecode => fun(algorithm_ty(), fun(string(), result(error_ty(), claims_ty()))),
 
             // ── Encoding (6 — task #55a) — the base64 / url / hex text codecs.
             //    Encoders `String -> String` (UTF-8 bytes, Go parity);
@@ -5251,6 +5357,23 @@ mod registry_phase_c_tests {
             K::JwtDecodeRs256,
             K::JwtEncodeHs256,
             K::JwtEncodeRs256,
+            // Jwt builder API (13 — D-00, #152): `claims` / `hs256` / `rs256` /
+            // `subject` / `issuer` / `audience` / `expiresAt` / `notBefore` /
+            // `issuedAt` / `jwtId` / `withClaim` / `encode` / `decode`.
+            // All genuine holes (no legacy `kernel_ty` arm).
+            K::JwtClaims,
+            K::JwtHs256,
+            K::JwtRs256,
+            K::JwtSubject,
+            K::JwtIssuer,
+            K::JwtAudience,
+            K::JwtExpiresAt,
+            K::JwtNotBefore,
+            K::JwtIssuedAt,
+            K::JwtJwtId,
+            K::JwtWithClaim,
+            K::JwtEncode,
+            K::JwtDecode,
             // Json.Decode (17)
             K::JsonDecString,
             K::JsonDecInt,

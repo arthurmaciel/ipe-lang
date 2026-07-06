@@ -117,6 +117,20 @@ pub fn lower(
         lt: interner.intern("LT")?,
         eq: interner.intern("EQ")?,
         gt: interner.intern("GT")?,
+        // ── Error / ErrorKind (E-12, #152) ────────────────────────────────────
+        error: interner.intern("Error")?,
+        errorkind: interner.intern("ErrorKind")?,
+        ek_io: interner.intern("Io")?,
+        ek_network: interner.intern("Network")?,
+        ek_ffi: interner.intern("Ffi")?,
+        ek_decode: interner.intern("Decode")?,
+        ek_timeout: interner.intern("Timeout")?,
+        ek_not_found: interner.intern("NotFound")?,
+        ek_permission_denied: interner.intern("PermissionDenied")?,
+        ek_invalid_input: interner.intern("InvalidInput")?,
+        ek_conflict: interner.intern("Conflict")?,
+        ek_unavailable: interner.intern("Unavailable")?,
+        ek_unexpected: interner.intern("Unexpected")?,
     };
     lower::Lowerer::new(m, types, &*interner, eta_params, cap_params, param_binders, &builtins).run()
 }
