@@ -40,6 +40,7 @@ MAX_CYCLES="${PROGDEV_MAX_CYCLES:-6}"
 MAX_GUARDIAN="${PROGDEV_MAX_GUARDIAN:-2}"
 FUZZ_ITERS="${PROGDEV_FUZZ_ITERS:-30}"       # no-panic fuzzer iters (measure sweep + guardian gate)
 FUZZ="scripts/fuzz-well-typed.sh"
+CONTEXT="$REPO/$HERE/context.md"             # operating contract: 6 principles + 2 rules + the seal
 GUARDIAN_MODEL="${PROGDEV_GUARDIAN_MODEL:-claude-opus-4-8}"
 GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
 QUEUE="docs/architecture/progressive-development-queue.tsv"   # <STATUS>\t<KIND>\t<desc>
@@ -49,10 +50,14 @@ LOCK=".autopilot.lock"
 
 log()  { printf '%s | autopilot | %s\n' "$(date -Is)" "$*"; }
 die()  { log "ABORT: $*"; exit 1; }
-# Opus/Sonnet dispatch with the standard safe flags + a tools allowlist.
-agent() { # <model> <allowed-extra> <prompt> ; prints output
+# Opus/Sonnet dispatch. EVERY autopilot agent (triage/audit/guardian/review) is
+# handed the operating contract via --append-system-prompt-file, so all of them
+# obey the 6 principles + 2 rules + the seal (skyc exit-0 ⟹ cargo exit-0) — the
+# contract is not optional for any tier.
+agent() { # <model> <prompt> ; prints output
     local model="$1" prompt="$2"
     claude --model "$model" --safe-mode --permission-mode auto \
+        --append-system-prompt-file "$CONTEXT" \
         --allowedTools 'Bash(cargo *)' 'Bash(git *)' 'Bash(skyc *)' 'Bash(rg *)' \
                        'Bash(cat *)' 'Bash(ls *)' 'Bash(sed *)' 'Bash(diff *)' \
                        'Bash(touch *)' 'Bash(mkdir *)' Edit Write Read Grep Glob \
@@ -61,6 +66,8 @@ agent() { # <model> <allowed-extra> <prompt> ; prints output
 
 # ── preconditions ────────────────────────────────────────────────────────────
 command -v claude >/dev/null || die "claude CLI not found"
+[ -f "$CONTEXT" ] || die "missing operating contract $CONTEXT"
+[ -x "$FUZZ" ] || die "missing/inexecutable soundness oracle $FUZZ"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "tracked changes present — commit/stash first"
 pgrep -f mem-guard.sh >/dev/null || die "mem-guard.sh not running"
@@ -90,15 +97,15 @@ mark() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$QUEUE"; }   # status kind des
 # guardian-typesystem; anything on an auth/secrets/crypto/unsafe/FFI surface →
 # guardian-security (highest stakes).
 guardian_focus() { case "$1" in
-  guardian-typesystem) printf '%s' "the HM type inferencer / solver / codegen SOUNDNESS (crates/sky_types, sky_lower, sky_backend_rust). Preserve the parametric-generic + wildcard-any gates. A fix that makes the no-panic fuzzer fail or that accepts an ill-typed program is a regression, not a fix." ;;
+  guardian-typesystem) printf '%s' "the HM type inferencer / solver / codegen SOUNDNESS (crates/sky_types, sky_lower, sky_backend_rust). Preserve the parametric-generic + wildcard-any gates. HARD BAN: NEVER introduce \`dyn Any\`, \`Box<dyn Any>\`, \`.downcast\`, or any runtime type-erasure/reflection to paper over a type — the port's guarantee is fully-typed codegen; a fix that reaches for \`Any\` is not a fix, it is a soundness hole. A fix that makes the no-panic fuzzer fail or that accepts an ill-typed program is a regression, not a fix." ;;
   guardian-runtime)    printf '%s' "the EMITTED-CODE runtime behaviour (runtime/src/sky_runtime, the emit in crates/sky_backend_rust). A well-typed program must never panic — add/repair the runtime guard or codegen so the failing case exits cleanly with a typed Error, matching the ../sky reference. Do NOT silence a panic by weakening a check." ;;
-  guardian-security)   printf '%s' "a SECURITY-sensitive surface (auth/secrets/crypto/SQL/unsafe/FFI). EXTRA RULES: secrets stay typed and are NEVER logged or fmt-stringified; constant-time compares for anything secret; no new \`unsafe\` without a written justification; parse-don't-validate; SQL as typed fragments, never string interpolation. This is the highest-stakes class — prefer a minimal, conservative, heavily-tested change and STOP+escalate rather than guess." ;;
+  guardian-security)   printf '%s' "a SECURITY-sensitive surface (auth/secrets/crypto/SQL/unsafe/FFI). EXTRA RULES: secrets stay typed and are NEVER logged or fmt-stringified; constant-time compares for anything secret; NO new \`unsafe\` — full stop (a 'justified' unsafe is still a hole; if the change seems to need unsafe, STOP and escalate, do not write it); parse-don't-validate; SQL as typed fragments, never string interpolation. This is the highest-stakes class — prefer a minimal, conservative, heavily-tested change and STOP+escalate rather than guess." ;;
   *)                   printf '%s' "the compiler internals; root-cause only." ;;
 esac; }
 reviewer_angle() { case "$1" in
-  guardian-typesystem) printf '%s' "construct a program the change now WRONGLY accepts (unsoundness) or wrongly rejects (regression); probe the parametric-generic gate + numeric/collection defaulting." ;;
+  guardian-typesystem) printf '%s' "construct a program the change now WRONGLY accepts (unsoundness) or wrongly rejects (regression); probe the parametric-generic gate + numeric/collection defaulting. AUTO-REJECT if the diff introduces ANY \`dyn Any\` / \`.downcast\` / runtime type-erasure." ;;
   guardian-runtime)    printf '%s' "find an input that still panics, or a case where the new guard changes observable behaviour vs the ../sky reference." ;;
-  guardian-security)   printf '%s' "ATTACK it, assume malice: can a secret leak via logs/errors/timing? is any compare non-constant-time? does unsafe/FFI open UB? does it weaken an existing gate or open an injection?" ;;
+  guardian-security)   printf '%s' "ATTACK it, assume malice: can a secret leak via logs/errors/timing? is any compare non-constant-time? does it weaken an existing gate or open an injection? AUTO-REJECT if the diff adds ANY new \`unsafe\`." ;;
   *)                   printf '%s' "try to find any unsoundness, behaviour change, or disguised hack." ;;
 esac; }
 
@@ -164,7 +171,7 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
         gwt="$REPO/.progressive-development-wt/guardian-$done_guard"
         rm -rf "$gwt"; git worktree add --quiet -b "$gbr" "$gwt" "$BASE" || { mark BLOCKED "$class" "$gdesc"; continue; }
         ( cd "$gwt"; MASTER_GATE_TARGET="$HOME/.cache/guardian-target" \
-            agent "$GUARDIAN_MODEL" "You are a compiler guardian specialising in $class. Root-cause and FIX this item, ROOT-CAUSE ONLY (never a hack/fixture-edit/gate-weakening). FOCUS: $(guardian_focus "$class"). Item: $gdesc . Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY reference. Gate on CARGO_TARGET_DIR=\$HOME/.cache/guardian-target (cargo test --workspace + clippy -D warnings, both green), AND the no-panic fuzzer must stay clean (\`scripts/fuzz-well-typed.sh --iters 30\`). Add a regression test. Commit on this branch. If genuinely multi-session, commit partial progress + print GUARDIAN: PARTIAL <what remains>; else GUARDIAN: DONE." ) >/tmp/autopilot-guardian-c$cycle-$done_guard.log 2>&1
+            agent "$GUARDIAN_MODEL" "You are a compiler guardian specialising in $class. Obey the operating contract in your system prompt IN FULL — the 6 principles + 2 rules + the seal (skyc exit-0 ⟹ cargo exit-0: NEVER emit codegen that type-checks but fails cargo). Root-cause and FIX this item, ROOT-CAUSE ONLY (never a hack/fixture-edit/gate-weakening). FOCUS: $(guardian_focus "$class"). Item: $gdesc . Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY reference. Gate on CARGO_TARGET_DIR=\$HOME/.cache/guardian-target (cargo test --workspace + clippy -D warnings, both green), AND the no-panic fuzzer must stay clean (\`scripts/fuzz-well-typed.sh --iters 30\`). Add a regression test. Commit on this branch. If genuinely multi-session, commit partial progress + print GUARDIAN: PARTIAL <what remains>; else GUARDIAN: DONE." ) >/tmp/autopilot-guardian-c$cycle-$done_guard.log 2>&1
         ahead="$(git rev-list --count "$BASE..$gbr" 2>/dev/null || echo 0)"
         if [ "$ahead" -eq 0 ]; then
             log "guardian [$class] made no commit — leaving for human"; mark ESCALATED "$class" "$gdesc"
