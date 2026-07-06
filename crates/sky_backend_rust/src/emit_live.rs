@@ -630,5 +630,6 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::LiveReq => "LiveReq",
         IrType::LiveRoute(_) => "LiveRoute",
         IrType::Order => "Order",
+        IrType::Decimal => "Decimal",
     }
 }

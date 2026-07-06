@@ -991,7 +991,9 @@ fn collect_record_shapes(
         | IrType::UiPlain(_)
         | IrType::LiveReq
         // `Order` (LT/EQ/GT) is a primitive leaf — no record shape.
-        | IrType::Order => {}
+        // `Decimal` is a Copy newtype — no record shape.
+        | IrType::Order
+        | IrType::Decimal => {}
         // `LiveRoute page` is page-parametric — descend in case the page type
         // carries a nested record shape.
         IrType::LiveRoute(page) => {
@@ -1107,7 +1109,9 @@ fn type_reaches_enum(
         | IrType::UiPlain(_)
         | IrType::LiveReq
         // `Order` is a primitive value — no cycle risk.
-        | IrType::Order => false,
+        // `Decimal` is a Copy newtype — no cycle risk.
+        | IrType::Order
+        | IrType::Decimal => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::LiveRoute(page) => type_reaches_enum(page, target, enums, visited),
@@ -1159,7 +1163,9 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::UiPlain(_)
         | IrType::LiveReq
         // `Order` is monomorphic — no generic parameters.
-        | IrType::Order => false,
+        // `Decimal` is monomorphic — no generic parameters.
+        | IrType::Order
+        | IrType::Decimal => false,
         // `LiveRoute page` is parametric on `page`; check if it carries a
         // generic.
         IrType::LiveRoute(page) => contains_generic(page),
@@ -1239,7 +1245,9 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::UiPlain(_)
         | IrType::LiveReq
         // `Order` is monomorphic — no generics to collect.
-        | IrType::Order => {}
+        // `Decimal` is monomorphic — no generics to collect.
+        | IrType::Order
+        | IrType::Decimal => {}
         // `LiveRoute page` may carry generic parameters through `page`.
         IrType::LiveRoute(page) => collect_generics(page, out),
         // M7: `Ui { ctor, msg }` may carry generic parameters through `msg`.
@@ -1511,7 +1519,9 @@ fn match_template(
         | IrType::UiPlain(_)
         | IrType::LiveReq
         // `Order` is a monomorphic leaf — must equal exactly.
-        | IrType::Order => {
+        // `Decimal` is a monomorphic leaf — must equal exactly.
+        | IrType::Order
+        | IrType::Decimal => {
             if template == concrete {
                 Ok(())
             } else {
