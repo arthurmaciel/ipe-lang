@@ -15,9 +15,9 @@
 #                          the queue — mechanical vs guardian; hard-exclude
 #                          security/unsafe/FFI/divergence (never mechanical)
 #   new mechanical?      → loop
-#   only guardian?       → dispatch Opus guardian (worktree) per item, then an
-#                          INDEPENDENT adversarial review + the FUZZER gate before
-#                          merging; stuck → escalate + mark BLOCKED
+#   only guardian?       → route by CLASS (type-system / runtime / security),
+#                          dispatch a class-specialised Opus guardian (worktree) +
+#                          a class-specific adversarial review + the FUZZER gate;
 #   nothing actionable?  → TERMINAL: stop, emit the landed digest for human audit
 #
 # SOUNDNESS NOTE: the gate (cargo test) is a sufficient oracle for MECHANICAL work
@@ -74,11 +74,33 @@ mkdir -p "$(dirname "$QUEUE")"; touch "$QUEUE"
 log "start: base=$BASE start=$START_SHA max_cycles=$MAX_CYCLES max_guardian=$MAX_GUARDIAN"
 
 # queue helpers (queue is append-only history; latest status per desc wins)
-pending() { # <kind> → prints PENDING descriptions of that kind, newest status wins
+pending() { # <kind> → PENDING descriptions of that exact kind (newest status wins)
     awk -F'\t' -v k="$1" '{st[$3]=$1; kd[$3]=$2}
         END{for(d in st) if(st[d]=="PENDING" && kd[d]==k) print d}' "$QUEUE"
 }
+pending_guardian() { # → PENDING guardian-* items as "<kind>\t<desc>" (any class)
+    awk -F'\t' '{st[$3]=$1; kd[$3]=$2}
+        END{for(d in st) if(st[d]=="PENDING" && kd[d] ~ /^guardian/) print kd[d]"\t"d}' "$QUEUE"
+}
 mark() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$QUEUE"; }   # status kind desc
+
+# ── per-class guardian routing (type-system / runtime / security) ────────────
+# Each guardian class gets a focused brief + a class-specific adversarial angle.
+# A fuzzer-found panic → guardian-runtime; an inferencer/soundness bug →
+# guardian-typesystem; anything on an auth/secrets/crypto/unsafe/FFI surface →
+# guardian-security (highest stakes).
+guardian_focus() { case "$1" in
+  guardian-typesystem) printf '%s' "the HM type inferencer / solver / codegen SOUNDNESS (crates/sky_types, sky_lower, sky_backend_rust). Preserve the parametric-generic + wildcard-any gates. A fix that makes the no-panic fuzzer fail or that accepts an ill-typed program is a regression, not a fix." ;;
+  guardian-runtime)    printf '%s' "the EMITTED-CODE runtime behaviour (runtime/src/sky_runtime, the emit in crates/sky_backend_rust). A well-typed program must never panic — add/repair the runtime guard or codegen so the failing case exits cleanly with a typed Error, matching the ../sky reference. Do NOT silence a panic by weakening a check." ;;
+  guardian-security)   printf '%s' "a SECURITY-sensitive surface (auth/secrets/crypto/SQL/unsafe/FFI). EXTRA RULES: secrets stay typed and are NEVER logged or fmt-stringified; constant-time compares for anything secret; no new \`unsafe\` without a written justification; parse-don't-validate; SQL as typed fragments, never string interpolation. This is the highest-stakes class — prefer a minimal, conservative, heavily-tested change and STOP+escalate rather than guess." ;;
+  *)                   printf '%s' "the compiler internals; root-cause only." ;;
+esac; }
+reviewer_angle() { case "$1" in
+  guardian-typesystem) printf '%s' "construct a program the change now WRONGLY accepts (unsoundness) or wrongly rejects (regression); probe the parametric-generic gate + numeric/collection defaulting." ;;
+  guardian-runtime)    printf '%s' "find an input that still panics, or a case where the new guard changes observable behaviour vs the ../sky reference." ;;
+  guardian-security)   printf '%s' "ATTACK it, assume malice: can a secret leak via logs/errors/timing? is any compare non-constant-time? does unsafe/FFI open UB? does it weaken an existing gate or open an injection?" ;;
+  *)                   printf '%s' "try to find any unsoundness, behaviour change, or disguised hack." ;;
+esac; }
 
 # ── the cycle ────────────────────────────────────────────────────────────────
 for cycle in $(seq 1 "$MAX_CYCLES"); do
@@ -117,48 +139,50 @@ For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <s
     else
         fdir="$(rg -o '/tmp/sky-fuzz/FAILURES/[^ ]+' /tmp/autopilot-fuzz-c$cycle.log 2>/dev/null | tail -1)"
         log "FUZZ FOUND A SOUNDNESS BUG → filing a guardian item (artifacts: ${fdir:-see /tmp/autopilot-fuzz-c$cycle.log})"
-        mark PENDING guardian "SOUNDNESS: the no-panic fuzzer built a well-typed Sky program that PANICKED at runtime — a codegen/runtime/type-system soundness bug. Repro artifacts: ${fdir:-/tmp/autopilot-fuzz-c$cycle.log} (src + emitted Rust + run.log). Root-cause it; verify the fix with $FUZZ. HIGHEST priority — this is an 'if-it-compiles-it-works' violation."
+        mark PENDING guardian-runtime "SOUNDNESS: the no-panic fuzzer built a well-typed Sky program that PANICKED at runtime — a codegen/runtime soundness bug. Repro artifacts: ${fdir:-/tmp/autopilot-fuzz-c$cycle.log} (src + emitted Rust + run.log). Root-cause it; verify the fix with $FUZZ. HIGHEST priority — this is an 'if-it-compiles-it-works' violation."
     fi
     log "triage (Opus, conservative)"
     agent "$GUARDIAN_MODEL" "You are TRIAGING the Ipê compiler backlog to refill the autonomous work queue. Read docs/architecture/remeasure-snapshot.tsv (current per-example blockers) and the repo. For each blocker NOT already resolved, decide its class and append ONE line per item to $QUEUE in the exact format '<STATUS>\t<KIND>\t<one-line description>' (tab-separated), STATUS=PENDING.
-KIND is 'mechanical' ONLY if it is a clean, reference-backed wire with no design or soundness decision: a missing kernel to wire (template exists), a module to register, or a fixture parse issue. KIND is 'guardian' for ANYTHING else. HARD RULE — never 'mechanical' if it touches: auth/secrets/crypto, \`unsafe\`/FFI, the type inferencer/soundness, or is an oracle DIVERGENCE from the ../sky reference. When UNSURE → 'guardian'. Be conservative: a wrong 'mechanical' tag lets an unattended lane hack it. Each mechanical description must be self-contained enough for a lane to execute (name the kernel/site + the reference template). Do NOT do the work; only classify + append. Print TRIAGE: <n> mechanical, <m> guardian appended." 2>&1 | tee /tmp/autopilot-triage-c$cycle.log | sed 's/^/    /'
+KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime' | 'guardian-security'. Use 'mechanical' ONLY if it is a clean, reference-backed wire with no design or soundness decision (a missing kernel to wire with an existing template, a module to register, a fixture parse issue). Otherwise pick the guardian CLASS: 'guardian-security' if it touches auth/secrets/crypto/SQL/\`unsafe\`/FFI (HARD RULE — such an item is NEVER mechanical); 'guardian-runtime' for a runtime panic / emitted-code behaviour bug / oracle DIVERGENCE in runtime output; 'guardian-typesystem' for an inferencer/solver/codegen soundness or any other type-checking bug. When UNSURE mechanical-vs-guardian → guardian (a wrong 'mechanical' tag lets an unattended lane hack it). When unsure WHICH guardian class → 'guardian-typesystem'. Each mechanical description must be self-contained enough for a lane to execute (name the kernel/site + the reference template). Do NOT do the work; only classify + append. Print TRIAGE: <n> mechanical, <m> guardian appended." 2>&1 | tee /tmp/autopilot-triage-c$cycle.log | sed 's/^/    /'
 
     mapfile -t mech2 < <(pending mechanical)
     [ "${#mech2[@]}" -gt 0 ] && { log "triage produced ${#mech2[@]} mechanical item(s) — looping"; continue; }
 
     # 3 ── guardian tier: dispatch + adversarial review ──────────────────────
-    mapfile -t guard < <(pending guardian)
+    mapfile -t guard < <(pending_guardian)   # each entry: "<guardian-class>\t<desc>"
     if [ "${#guard[@]}" -eq 0 ]; then log "no mechanical AND no guardian items — TERMINAL"; break; fi
     log "no mechanical left; ${#guard[@]} guardian item(s). Dispatching up to $MAX_GUARDIAN this run."
     done_guard=0
-    for gdesc in "${guard[@]}"; do
+    for g in "${guard[@]}"; do
         [ "$done_guard" -ge "$MAX_GUARDIAN" ] && break
         [ -f "$STOP" ] && break
+        class="${g%%$'\t'*}"; gdesc="${g#*$'\t'}"
+        [ -z "$class" ] && class="guardian-typesystem"
         done_guard=$((done_guard+1))
-        log "guardian: $gdesc"
+        log "guardian [$class]: $gdesc"
         gbr="progressive-development/guardian-c$cycle-$done_guard"
         gwt="$REPO/.progressive-development-wt/guardian-$done_guard"
-        rm -rf "$gwt"; git worktree add --quiet -b "$gbr" "$gwt" "$BASE" || { mark BLOCKED guardian "$gdesc"; continue; }
+        rm -rf "$gwt"; git worktree add --quiet -b "$gbr" "$gwt" "$BASE" || { mark BLOCKED "$class" "$gdesc"; continue; }
         ( cd "$gwt"; MASTER_GATE_TARGET="$HOME/.cache/guardian-target" \
-            agent "$GUARDIAN_MODEL" "You are a compiler guardian. Root-cause and FIX this item, ROOT-CAUSE ONLY (never a hack/fixture-edit/gate-weakening). Item: $gdesc . Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY reference. Gate on CARGO_TARGET_DIR=\$HOME/.cache/guardian-target (cargo test --workspace + clippy -D warnings, both green), AND the no-panic fuzzer must stay clean (\`scripts/fuzz-well-typed.sh --iters 30\` — a well-typed program must never panic; if your change makes it panic OR fail to build, that is a soundness regression, not a fix). Add a regression test. Commit on this branch. If it is genuinely multi-session, commit partial progress + print GUARDIAN: PARTIAL <what remains>; else GUARDIAN: DONE." ) >/tmp/autopilot-guardian-c$cycle-$done_guard.log 2>&1
+            agent "$GUARDIAN_MODEL" "You are a compiler guardian specialising in $class. Root-cause and FIX this item, ROOT-CAUSE ONLY (never a hack/fixture-edit/gate-weakening). FOCUS: $(guardian_focus "$class"). Item: $gdesc . Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY reference. Gate on CARGO_TARGET_DIR=\$HOME/.cache/guardian-target (cargo test --workspace + clippy -D warnings, both green), AND the no-panic fuzzer must stay clean (\`scripts/fuzz-well-typed.sh --iters 30\`). Add a regression test. Commit on this branch. If genuinely multi-session, commit partial progress + print GUARDIAN: PARTIAL <what remains>; else GUARDIAN: DONE." ) >/tmp/autopilot-guardian-c$cycle-$done_guard.log 2>&1
         ahead="$(git rev-list --count "$BASE..$gbr" 2>/dev/null || echo 0)"
         if [ "$ahead" -eq 0 ]; then
-            log "guardian made no commit — leaving PENDING for human"; mark ESCALATED guardian "$gdesc"
+            log "guardian [$class] made no commit — leaving for human"; mark ESCALATED "$class" "$gdesc"
             git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null; continue
         fi
-        log "guardian committed; INDEPENDENT adversarial review (Opus) — soundness oracle, not just the gate"
-        review="$(agent "$GUARDIAN_MODEL" "You are an ADVERSARIAL reviewer of a compiler type-system/soundness change on branch $gbr (diff: git diff $BASE..$gbr). Your job is to REFUTE it: try to find a program the change now WRONGLY accepts or rejects, a soundness hole, or a weakened gate. Read the diff + the added tests. If you can construct or identify ANY unsoundness or the fix is a disguised hack, print REVIEW: REJECT <why>. Only if you cannot break it after genuine effort, print REVIEW: ACCEPT. Default to REJECT when uncertain. (The no-panic fuzzer scripts/fuzz-well-typed.sh mechanically checks that well-typed programs don't panic AND is run as a hard gate below; YOUR job is the adversarial reasoning it can't do — the corner case, the leaked var, the weakened invariant.)")"
+        log "guardian [$class] committed; INDEPENDENT adversarial review — soundness-grade, not just the gate"
+        review="$(agent "$GUARDIAN_MODEL" "You are an ADVERSARIAL reviewer of a $class change on branch $gbr (diff: git diff $BASE..$gbr). REFUTE it — $(reviewer_angle "$class"). Read the diff + the added tests. If you find ANY unsoundness / behaviour change vs the ../sky reference / disguised hack, print REVIEW: REJECT <why>. Only if you cannot break it after genuine effort, print REVIEW: ACCEPT. Default to REJECT when uncertain. (The no-panic fuzzer is a hard gate below; YOUR job is the reasoning it can't do.)")"
         if printf '%s' "$review" | rg -q "REVIEW: ACCEPT"; then
             git switch "$BASE" >/dev/null 2>&1
-            if git merge --no-ff -m "autopilot: guardian fix — $gdesc" "$gbr" >/dev/null 2>&1 \
+            if git merge --no-ff -m "autopilot: $class fix — $gdesc" "$gbr" >/dev/null 2>&1 \
                && ( touch runtime/tests/*.rs crates/skyc/tests/*.rs 2>/dev/null; CARGO_TARGET_DIR="$GATE_TARGET" timeout 3000 cargo test --workspace >/tmp/autopilot-gate.log 2>&1 && CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo clippy --workspace --all-targets -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
                && ( "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 ); then
-                log "guardian fix ACCEPTED + gate-green + fuzz-clean — landed"; mark LANDED guardian "$gdesc"
+                log "guardian [$class] ACCEPTED + gate-green + fuzz-clean — landed"; mark LANDED "$class" "$gdesc"
             else
-                log "guardian fix failed merge/gate — reverting"; git merge --abort 2>/dev/null; git reset --hard HEAD >/dev/null 2>&1; mark BLOCKED guardian "$gdesc"
+                log "guardian [$class] failed merge/gate/fuzz — reverting"; git merge --abort 2>/dev/null; git reset --hard HEAD >/dev/null 2>&1; mark BLOCKED "$class" "$gdesc"
             fi
         else
-            log "adversarial review REJECTED — not landing (see /tmp/autopilot-guardian-c$cycle-$done_guard.log)"; mark ESCALATED guardian "$gdesc"
+            log "adversarial review [$class] REJECTED — not landing (see /tmp/autopilot-guardian-c$cycle-$done_guard.log)"; mark ESCALATED "$class" "$gdesc"
         fi
         git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null
     done
