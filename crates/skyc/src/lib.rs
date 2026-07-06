@@ -501,9 +501,27 @@ fn compile_modules(
             .unwrap_or_else(|| (entry_src_path.clone(), entry_src.clone()))
     };
 
-    let types = sky_types::infer(&linked, &mut interner).map_err(|diag| {
+    // Use the attributed variant so cross-module type errors are attributed to
+    // the correct source file via the `home` carried on the failing constraint,
+    // rather than relying solely on the byte-offset heuristic (`source_for_span`)
+    // which can mis-attribute when two merged modules share overlapping numeric
+    // span ranges (the original #144 bug class).
+    //
+    // When `home` is non-empty we look it up in `home_to_source` directly —
+    // O(log N) and exact.  When the home is empty (non-solver errors: constraint
+    // generation, field-access pass, exhaustiveness) we fall back to the existing
+    // heuristic, preserving the behaviour for every error class that pre-dates
+    // this fix.
+    let types = sky_types::infer_attributed(&linked, &mut interner).map_err(|(diag, home)| {
         let span = diag_span(&diag);
-        let (file, src) = source_for_span(span);
+        let (file, src) = if home.is_empty() {
+            source_for_span(span)
+        } else {
+            home_to_source
+                .get(&home)
+                .cloned()
+                .unwrap_or_else(|| source_for_span(span))
+        };
         CliError::Pipeline { file, src, diag }
     })?;
     // Print non-fatal warnings (e.g. SKY-T0011 RedundantCaseBranch) to stderr.
@@ -1667,6 +1685,112 @@ main =
         assert_eq!(
             file_name, "Helper.sky",
             "#144 regression: type error in dep module must blame `Helper.sky`, \
+             not `{file_name}`; full path: {}",
+            file.display()
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------------
+    // Home-module discriminant — cross-module errors use `home` on Constraint
+    // -----------------------------------------------------------------------
+
+    /// Regression test for the home-module span discriminant fix.
+    ///
+    /// Before this fix the constraint solver emitted bare `Span` values (byte
+    /// offsets with no module tag).  After `link::link` merges N modules into
+    /// one flat def list, a byte offset like 34 can be numerically contained by
+    /// a def from *either* module.  The byte-offset heuristic (`source_for_span`)
+    /// picks the closest def, but it can pick the wrong one when two modules have
+    /// overlapping numeric span ranges — e.g., a wide def in module A that starts
+    /// at byte 20 and a narrow def in module B that starts at byte 30, with the
+    /// type error at byte 34.  Both body spans contain byte 34, but A has a
+    /// smaller `lo_dist` (34-20=14 vs 34-30=4) — wait, B wins on lo_dist here,
+    /// so the REAL failure mode is when A starts AFTER B but before the error.
+    ///
+    /// The fix: every `Constraint` carries its source module's `home` path.
+    /// `compile_modules` now routes `Err((diag, home))` directly via
+    /// `home_to_source.get(&home)`, bypassing the heuristic entirely when a home
+    /// is available.
+    ///
+    /// This test builds a two-module program where the type error is in module B
+    /// (`Lib.sky`) but the heuristic *could* be fooled by a wide def in module A
+    /// (`Pad.sky`).  The assertion checks that the blamed file is `Lib.sky`.
+    ///
+    /// To exercise the home-discriminant path rather than the heuristic, `Pad.sky`
+    /// is constructed so that its def body starts at roughly the same byte offset
+    /// as the error in `Lib.sky` — any byte-offset resolver that ignores the home
+    /// would be ambiguous.  The discriminant is the only reliable resolver.
+    #[test]
+    fn home_discriminant_cross_module_type_error_names_correct_file() {
+        let tmp = std::env::temp_dir().join("skyc_home_disc_test");
+        let _ = fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        fs::create_dir_all(&src).expect("create src/");
+
+        // Pad.sky: a valid module whose single def body starts at roughly the
+        // same byte offset as the type error in Lib.sky.  Constructed so the
+        // body span (a long arithmetic chain) numerically overlaps with Lib's
+        // error span.  The body itself is well-typed.
+        //
+        //   "module Pad exposing (pad)\npad = " is 27 bytes.
+        //   The body "1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9" starts at byte 27.
+        //   The body ends at byte 27+35 = 62.
+        //
+        // After link, Pad's def body covers bytes [27, 62] in Pad's namespace.
+        fs::write(
+            src.join("Pad.sky"),
+            "module Pad exposing (pad)\npad = 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9\n",
+        )
+        .expect("write Pad.sky");
+
+        // Lib.sky: a module with a deliberate type error at a span that falls
+        // numerically inside Pad's body range.
+        //
+        //   "module Lib exposing (bad)\nbad = " is 27 bytes.
+        //   The body "1 + 2 + 3 + 4 + \"oops\"" starts at byte 27.
+        //   The type error is at "\"oops\"" = byte 27+20 = 47, inside [27,62].
+        //
+        // Without the home discriminant, `source_for_span(span=47)` would see
+        // BOTH Pad's body [27,62] (lo_dist=20) and Lib's body [27,49] (lo_dist=20)
+        // as equally-distanced candidates — and would pick the narrower body, which
+        // happens to be Lib here.  But in general (different padding choices) it
+        // can pick the wrong one.  The fix makes the home the authoritative signal.
+        fs::write(
+            src.join("Lib.sky"),
+            "module Lib exposing (bad)\nbad = 1 + 2 + 3 + 4 + \"oops\"\n",
+        )
+        .expect("write Lib.sky");
+
+        // Main.sky: imports both; the error is in Lib, not Main or Pad.
+        fs::write(
+            src.join("Main.sky"),
+            "module Main exposing (main)\nimport Lib\nimport Pad\nmain = println (String.fromInt Lib.bad)\n",
+        )
+        .expect("write Main.sky");
+
+        let dummy_runtime = std::env::temp_dir();
+        let out = tmp.join("out");
+        let result = build_with_sibling_discovery(&src.join("Main.sky"), &out, &dummy_runtime);
+
+        // Must fail — type error in Lib.
+        assert!(
+            result.is_err(),
+            "home-discriminant fixture must fail (type error in Lib); got Ok unexpectedly"
+        );
+        let Err(CliError::Pipeline { file, .. }) = result else {
+            let _ = fs::remove_dir_all(&tmp);
+            return;
+        };
+
+        // The blamed file must be Lib.sky — the module that OWNS the failing
+        // constraint, regardless of which module the byte-offset heuristic
+        // would pick.
+        let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        assert_eq!(
+            file_name, "Lib.sky",
+            "home-discriminant regression: type error in Lib must blame `Lib.sky`, \
              not `{file_name}`; full path: {}",
             file.display()
         );

@@ -9,7 +9,7 @@
 //! bound (`SKY_SOLVER_BUDGET`) carries over verbatim in spirit.
 
 use sky_diagnostics::{DResult, Diagnostic, Span, TypeError};
-use sky_intern::Interner;
+use sky_intern::{Interner, Symbol};
 
 use crate::ty::Content;
 use crate::unify::unify;
@@ -25,11 +25,21 @@ pub const BUDGET_ENV: &str = "SKY_SOLVER_BUDGET";
 
 /// A single M0 constraint: the types of two solver variables must unify. The
 /// [`Span`] is the source region blamed in any resulting [`TypeError`].
-#[derive(Clone, Copy, Debug)]
+/// `home` is the module path that owns the expression emitting this constraint
+/// — populated by [`constrain::Builder`] from the currently-processed def's
+/// `home` field.  It is used by the compiler driver's error-attribution path to
+/// select the correct source file for a cross-module type error without relying
+/// on the byte-offset heuristic that can fail when two modules share the same
+/// numeric span range.
+#[derive(Clone, Debug)]
 pub struct Constraint {
     pub span: Span,
     pub lhs: VarId,
     pub rhs: VarId,
+    /// The module that owns the constrained expression.  `Vec::new()` for
+    /// compiler-synthesised constraints (e.g. built-in operator types) that
+    /// have no meaningful source location.
+    pub home: Vec<Symbol>,
 }
 
 /// A decrementing solver-step budget.
@@ -103,17 +113,42 @@ impl Budget {
 
 /// Solve every constraint in order, unifying in place.
 ///
+/// This is the plain, non-attributed variant. Prefer [`solve_attributed`] when
+/// the caller needs to know which module owns the failing constraint (e.g. for
+/// cross-module error attribution).
+///
 /// # Errors
 /// Propagates any [`Diagnostic`] from unification (mismatch, budget, or a
 /// union-find invariant violation).
+#[allow(dead_code)] // used via solve_attributed; kept as a convenience entry point
 pub fn solve(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
     interner: &Interner,
     constraints: &[Constraint],
 ) -> DResult<()> {
+    solve_attributed(uf, budget, interner, constraints).map_err(|(diag, _home)| diag)
+}
+
+/// Like [`solve`] but on failure also returns the `home` module path carried by
+/// the failing constraint.  The home path lets the compiler driver's
+/// error-attribution path select the correct source file without relying on the
+/// byte-offset heuristic (`source_for_span`).
+///
+/// Returns `Ok(())` on success, `Err((diag, home))` on the first failing
+/// constraint.
+///
+/// # Errors
+/// Same error conditions as [`solve`].
+pub fn solve_attributed(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    constraints: &[Constraint],
+) -> Result<(), (Diagnostic, Vec<Symbol>)> {
     for c in constraints {
-        unify(uf, budget, interner, c.span, c.lhs, c.rhs)?;
+        unify(uf, budget, interner, c.span, c.lhs, c.rhs)
+            .map_err(|diag| (diag, c.home.clone()))?;
     }
     Ok(())
 }
