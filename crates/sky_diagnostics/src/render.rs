@@ -482,10 +482,6 @@ fn lower_label(msg: &LowerError) -> String {
             "payload field {field_index} has type `{type_name}`, which cannot be decoded \
              from a URL `:param` string"
         ),
-        LowerError::RoutedAppMissingPageField { route_count } => format!(
-            "{route_count} route(s) declared but the Model has no `page` field — the \
-             routes would be silently discarded"
-        ),
     }
 }
 
