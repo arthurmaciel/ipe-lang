@@ -61,7 +61,7 @@ Batch as ONE lane; each advances past L0108 (may reveal a next blocker).
 - **12-skyvote** — `Err`/`Errored` ctor not registered. Single.
 
 ### F — L0126 Db lambda-capture (leverage 1) — LANE RUNNING (#149)
-- **18-job-queue** — `\ts -> insertRow db ts`. #149 in flight.
+- **18-job-queue** — #149 fixed a sibling Fun-slot case but 18 STILL L0126 on the `db` capture in a let-fn lambda (region-coverage gap); tracked #151.
 
 ## Scheduled burndown (not discovered — planned)
 
