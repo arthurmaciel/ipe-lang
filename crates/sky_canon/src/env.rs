@@ -365,6 +365,7 @@ impl Env {
     /// populated and the Phase-B id fast-path can be threaded in.
     fn install_builtin_vars(&mut self, interner: &mut Interner) -> DResult<()> {
         let basics = interner.intern("Basics")?;
+        let error_sym = interner.intern("Error")?;
         let log = interner.intern("Log")?;
         for (name, module, func) in [
             ("identity", basics, "identity"),
@@ -375,7 +376,13 @@ impl Env {
             ("clamp", basics, "clamp"),
             ("fst", basics, "fst"),
             ("snd", basics, "snd"),
-            ("errorToString", basics, "errorToString"),
+            // `errorToString` is the Prelude-exposed unqualified form of
+            // `Error.toString`.  The kernel declaration uses module="Error" /
+            // func="toString", so the stdlib_index key is (Error, toString).
+            // We must register with the same key so `id` resolves to
+            // `Some(StdlibKernel::ErrorToString)` and the type-checker
+            // can look up its scheme without hitting SKY-L0108.
+            ("errorToString", error_sym, "toString"),
             ("println", log, "println"),
             // ── Basics numerics (#115) ──────────────────────────────────────
             ("negate", basics, "negate"),
