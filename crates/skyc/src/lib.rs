@@ -1706,8 +1706,8 @@ main =
     /// overlapping numeric span ranges — e.g., a wide def in module A that starts
     /// at byte 20 and a narrow def in module B that starts at byte 30, with the
     /// type error at byte 34.  Both body spans contain byte 34, but A has a
-    /// smaller `lo_dist` (34-20=14 vs 34-30=4) — wait, B wins on lo_dist here,
-    /// so the REAL failure mode is when A starts AFTER B but before the error.
+    /// closer `lo_dist` to the wrong def, so the heuristic blames the wrong file
+    /// whenever the numerically-nearest def belongs to a different module.
     ///
     /// The fix: every `Constraint` carries its source module's `home` path.
     /// `compile_modules` now routes `Err((diag, home))` directly via
