@@ -1169,19 +1169,23 @@ fn emit_tea_call(
         // Uses the same generic N-arg emit path as SubSubscribeTopic.
         // The runtime symbol `sub_subscribe_stream` is defined in http_stream.rs.
         KernelFn::HttpStreamChunks => Ok(None),
+        // ── M5e wired: Cmd.publish / Cmd.publishNoEcho ───────────────────────────
+        // `Cmd.publish : String -> Dict String String -> Cmd msg`
+        // `Cmd.publishNoEcho : String -> Dict String String -> Cmd msg`
+        // Both map to the standard N-arg emit path (runtime live/pubsub.rs).
+        KernelFn::CmdPublish | KernelFn::CmdPublishNoEcho => Ok(None),
         // ── M6 reserved: NOT emittable yet ───────────────────────────────────────
         // If a program somehow reaches one of these kernels through lower_callee
         // routing, that is a compiler invariant violation — hard error.
-        KernelFn::CmdPublish
-        | KernelFn::CmdPublishNoEcho
-        | KernelFn::PubSubPublish
-        | KernelFn::PubSubPublishNoEcho => Err(Diagnostic::CompilerBug {
-            where_: "sky_backend_rust::emit_tea_call",
-            detail: format!(
-                "M6-reserved TEA kernel {k:?} reached emit in M5c — \
-                 this callee must not be routed by lower_callee yet"
-            ),
-        }),
+        KernelFn::PubSubPublish | KernelFn::PubSubPublishNoEcho => {
+            Err(Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_tea_call",
+                detail: format!(
+                    "M6-reserved TEA kernel {k:?} reached emit — \
+                     PubSub qualifier not yet in QUALIFIERS"
+                ),
+            })
+        }
         // Any other `k.is_tea()` variant not listed above is a new wired variant
         // that needs an explicit arm.  The `is_tea()` guard at the top of this
         // function means this arm is a hard compile-time-visible gap rather than

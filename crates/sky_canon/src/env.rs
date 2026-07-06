@@ -826,12 +826,13 @@ impl Env {
                     "parseQuery",
                 ],
             ),
-            // ── M5c/M5d: TEA Cmd / Sub kernels ──────────────────────────────────
-            // `Cmd.publish*` / `PubSub.*` are NOT listed here — they will get
-            // their own qualifier entries in M6.
+            // ── M5c/M5d/M5e: TEA Cmd / Sub kernels ──────────────────────────────
+            // `Cmd.publish` / `Cmd.publishNoEcho` are wired in M5e; runtime
+            // `cmd_publish` / `cmd_publish_no_echo` exist in live/pubsub.rs.
+            // `PubSub.*` still absent — qualifier "PubSub" lands in M6.
             // `Sub.subscribeTopic` is wired (M5d): runtime `sub_subscribe_topic`
             // exists in live/pubsub.rs; emit path uses the standard N-arg route.
-            ("Cmd", &["none", "batch", "perform"]),
+            ("Cmd", &["none", "batch", "perform", "publish", "publishNoEcho"]),
             ("Sub", &["none", "batch", "every", "subscribeTopic"]),
             // ── Db kernels (M5b-db) ─────────────────────────────────────────────
             // `Std.Db` — database connection + query surface.
