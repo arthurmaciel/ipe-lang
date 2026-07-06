@@ -5868,14 +5868,23 @@ impl<'a> Lowerer<'a> {
             if let Expr::Var(sym) = *arg {
                 match cls {
                     Some(CloneClass::CloneOk) => *arg = Expr::CloneVar(sym),
-                    Some(CloneClass::CopyLeaf) => {} // bare Var unchanged — Copy
-                    // NonClone: a captured non-Clone value can't be re-forwarded.
+                    // CopyLeaf: scalar `Copy` type — bare Var is already correct;
+                    //   the eta-lambda copies it by value.
+                    // NonClone: a function/task/decoder variable forwarded as a
+                    //   HOF callback (e.g. `Task.andThen writeAll`).  The
+                    //   eta-lambda produced here is a *fresh* closure (not nested
+                    //   inside another), so moving the Var in is a plain ownership
+                    //   transfer — no E0525 (move-out-of-captured-env).  HOF
+                    //   callbacks like `task_and_then` / `cmd_perform` take
+                    //   `impl FnOnce`, so consuming the moved value once is
+                    //   correct (#149).
+                    Some(CloneClass::CopyLeaf | CloneClass::NonClone) => {}
                     // None — T7 (#130): unknown type on a bare Var — conservatively
                     // fail-close (SKY-L0126) instead of silently leaving the Var
                     // bare.  The slot type is genuinely indeterminate (polymorphic
                     // or a failed `ir_type_from_ty`), so we cannot prove the Var is
                     // Copy-safe; a NonClone value would produce E0525 at cargo.
-                    Some(CloneClass::NonClone) | None => {
+                    None => {
                         return Err(unsupported(call_span, Feature::NonCloneCapture));
                     }
                 }

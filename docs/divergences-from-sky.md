@@ -325,19 +325,17 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   adapters to `tx.send_timeout(out, Duration::from_secs(30))`.
   **Sanctioned:** yes (`divergence:`).
 
-### B20 — `ws_loop` does not send Ping heartbeat frames (pending H1)
-- **Differs:** Go's reference WS server sends a Ping frame every 30 s with a
+### ~~B20 — `ws_loop` does not send Ping heartbeat frames~~ — **CLOSED (#135)**
+- ~~**Differs:** Go's reference WS server sends a Ping frame every 30 s with a
   10 s timeout (`runtime-go/rt/server_websocket.go`, `wsDefaultPingInterval
-  = 30s`). ipê's `ws_loop` has no Ping `select!` arm — dead peers linger in the
-  registry until TCP gives up. The upstream Rust runtime
-  (`../sky/runtime-rust/ws_loop`) also lacks pings; both Rust runtimes share
-  this gap.
-- **Go-oracle relationship:** Go implements liveness; ipê does not yet.
-- **Rationale:** follow-on hardening (H1, ~15 lines — a third `select!` arm
-  with `tokio::time::interval(Duration::from_secs(30))`). Not 33-blocking
-  (example 33 runs correctly without heartbeats; TCP closes the socket on dead
-  peers eventually). Tracked. **Sanctioned:** yes (`divergence:`), pending H1
-  close.
+  = 30s`). ipê's `ws_loop` had no Ping `select!` arm — dead peers lingered in
+  the registry until TCP gave up.~~
+- **RESOLVED (#135):** `ws_loop` now has a third `select!` arm driven by
+  `tokio::time::interval(Duration::from_secs(ws_heartbeat_secs()))`.  Default
+  interval 30 s (Go parity).  Override via `SKY_WS_HEARTBEAT` (seconds, > 0).
+  axum auto-replies to incoming Pong frames.  Confirmed green in
+  `ws_adapter_tests` unit-tests.
+- **Go-oracle relationship:** parity restored — both send a Ping every 30 s.
 
 ### B21 — Unknown type names fail-closed at canon (SKY-N0002) vs deferred ICE (#138)
 - **Differs:** Sky's Haskell canonicaliser resolves an unqualified uppercase type
@@ -636,7 +634,7 @@ API-shape review):
 | `Float` as `Set`/`Dict` key | accepted (Go `interface{}` comparison) | rejected `SKY-L0117` | `f64` lacks `Ord`/`Hash` in Rust |
 | WS `sendBinaryToClient` arg type | `String` (Bytes alias) | `Vec<u8>` (distinct `Bytes` primitive) | B2 consequence; lossless binary frames |
 | WS send semantics | blocks ~30 s on full write buffer | bounded `try_send`; `Err` on full queue (B19) | Bounded fail-fast; no handler-task pileup |
-| WS Ping heartbeat | 30 s Ping + 10 s timeout | not yet implemented (B20, pending H1) | Follow-on hardening; not 33-blocking |
+| WS Ping heartbeat | 30 s Ping + 10 s timeout | 30 s Ping (B20 closed #135); `SKY_WS_HEARTBEAT` override | Parity restored; axum auto-replies Pong |
 | `WsServerCfg` type params | `WebSocketServerCfg msg` (phantom var) | nullary opaque — `WsServerCfg<SkyError>` (A18) | Sub-tier phantom not needed; nullary is sounder |
 
 ---
@@ -645,11 +643,12 @@ API-shape review):
 
 - **Behavioral divergences:** 21 classes (B1–B21). B16 (#104 true last-use) and
   B17 (#99 alias bind) are pending fixture goldens. B3 RETIRED (task #55a) per
-  inline note. B18–B20 are WS-server entries added with task #127. B21 is the
-  #138 total-resolution gate (unknown-type → SKY-N0002 not ICE). Sanctioned/
-  recorded goldens: 42 carry a marker (`Math` 4, `Bytes` 5, `Encoding` 1, `Jwt` 5,
-  `Db` 11, `Ui` 6, `Cmd`/`Sub` 3, `Uuid` 2, plus Go-failure kind-1 shapes and
-  Money/case/toFloat sanctioned entries). B16/B17 goldens pending; B20 pending H1.
+  inline note. B18–B20 are WS-server entries added with task #127. B20 CLOSED
+  (#135) — Ping heartbeat ported. B21 is the #138 total-resolution gate
+  (unknown-type → SKY-N0002 not ICE). Sanctioned/recorded goldens: 42 carry a
+  marker (`Math` 4, `Bytes` 5, `Encoding` 1, `Jwt` 5, `Db` 11, `Ui` 6,
+  `Cmd`/`Sub` 3, `Uuid` 2, plus Go-failure kind-1 shapes and Money/case/toFloat
+  sanctioned entries). B16/B17 goldens pending.
 - **Architectural divergences:** 18 (A1–A18). A8 and A13 are reference-ahead on
   completeness. A15–A17 are seal-gate entries. A18 is the WS phantom-`msg`
   type-var entry added with task #127.
