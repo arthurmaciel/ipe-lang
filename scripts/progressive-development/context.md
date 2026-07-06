@@ -41,8 +41,8 @@ Haskell/Go backend or upstream.
 ## 6. The gate (the only thing that authorises a commit)
 ```
 touch runtime/tests/*.rs crates/skyc/tests/*.rs
-CARGO_TARGET_DIR="$HOME/.cache/master-gate-target" timeout 3000 cargo test --workspace
-CARGO_TARGET_DIR="$HOME/.cache/master-gate-target" timeout 1200 cargo clippy --workspace --all-targets -- -D warnings
+CARGO_TARGET_DIR="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}" timeout 3000 cargo test --workspace
+CARGO_TARGET_DIR="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}" timeout 1200 cargo clippy --workspace --all-targets -- -D warnings
 ```
 Both exit 0. For a sweep blocker, also rebuild the example with the fresh `skyc`
 and confirm the original diagnostic is gone (note the new blocker). Green →
