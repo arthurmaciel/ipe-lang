@@ -41,6 +41,7 @@ MAX_GUARDIAN="${PROGDEV_MAX_GUARDIAN:-2}"
 FUZZ_ITERS="${PROGDEV_FUZZ_ITERS:-30}"       # no-panic fuzzer iters (measure sweep + guardian gate)
 FUZZ="scripts/fuzz-well-typed.sh"
 STREAM="${PROGDEV_STREAM:-1}"                 # DEFAULT ON (watch.sh renders it); PROGDEV_STREAM=0 to disable. Safe: logic is grep/queue-based
+WATCH="${PROGDEV_WATCH:-1}"                   # 1 = auto-launch watch.sh alongside (one terminal); 0 / --no-watch disables
 CONTEXT="$REPO/$HERE/context.md"             # operating contract: 6 principles + 2 rules + the seal
 GUARDIAN_MODEL="${PROGDEV_GUARDIAN_MODEL:-claude-opus-4-8}"
 GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
@@ -51,6 +52,42 @@ LOCK=".autopilot.lock"
 
 log()  { printf '%s | autopilot | %s\n' "$(date -Is)" "$*"; }
 die()  { log "ABORT: $*"; exit 1; }
+
+usage() {
+    cat <<'EOF'
+autopilot.sh — self-refilling autonomous development loop
+  fix → measure(remeasure + no-panic fuzzer) → triage → mechanical-burn →
+  guardian-burn → audit → repeat. Runs until only human-decision work remains,
+  then STOPS and reports. Never manufactures busy-work.
+
+Usage: scripts/progressive-development/autopilot.sh [--no-watch] [-h|--help]
+
+Flags:
+  --no-watch      don't auto-launch the live monitor (watch.sh) in this terminal
+  -h, --help      show this help and exit
+
+Env vars (defaults):
+  PROGDEV_MAX_CYCLES      (6)      hard cap on cycles
+  PROGDEV_MAX_GUARDIAN    (2)      guardian items dispatched per run
+  PROGDEV_LANES           (2)      parallel mechanical lanes (this box: 2)
+  PROGDEV_FUZZ_ITERS      (30)     no-panic fuzzer iters (measure sweep + guardian gate)
+  PROGDEV_STREAM          (1)      agents emit stream-json for the live view; 0 = plain-text logs
+  PROGDEV_WATCH           (1)      auto-launch watch.sh alongside (one terminal); 0 = don't (== --no-watch)
+  PROGDEV_AUTHOR_MODEL    (claude-sonnet-4-6)   mechanical-lane model
+  PROGDEV_GUARDIAN_MODEL  (claude-opus-4-8)     guardian / triage / audit / review model
+  PROGDEV_RECONCILE_MODEL (claude-opus-4-8)     merge-conflict reconcile model (via orchestrate.sh)
+  MASTER_GATE_TARGET      (~/.cache/master-gate-target)   isolated gate target dir
+
+Control:  touch autopilot.stop  → halt cleanly after the current cycle
+Monitor:  watch.sh runs automatically (unless --no-watch); or run it in another terminal.
+EOF
+}
+for arg in "$@"; do case "$arg" in
+    -h|--help)   usage; exit 0 ;;
+    --no-watch)  WATCH=0 ;;
+    *)           die "unknown argument: $arg (try --help)" ;;
+esac; done
+
 # Opus/Sonnet dispatch. EVERY autopilot agent (triage/audit/guardian/review) is
 # handed the operating contract via --append-system-prompt-file, so all of them
 # obey the 6 principles + 2 rules + the seal (skyc exit-0 ⟹ cargo exit-0) — the
@@ -75,7 +112,17 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
 pgrep -f mem-guard.sh >/dev/null || die "mem-guard.sh not running"
 [ -f "$STOP" ] && die "kill-switch $STOP present"
 if ! ( set -o noclobber; echo "$$" > "$LOCK" ) 2>/dev/null; then die "another autopilot holds $LOCK"; fi
-trap 'rm -f "$LOCK"; log "exit"' EXIT
+
+# One-terminal DX: auto-launch the live monitor as a child (tty only), killed on
+# exit. The heartbeat below + watch.sh's rendered agent stream interleave in this
+# terminal — distinguishable by prefix (`| autopilot |` vs indented `↳[tag]`).
+# Opt out with --no-watch / PROGDEV_WATCH=0 (headless/CI, or a separate terminal).
+watch_pid=""
+if [ "$WATCH" != 0 ] && [ -t 1 ] && [ -x "$HERE/watch.sh" ]; then
+    "$HERE/watch.sh" & watch_pid=$!
+    log "live monitor: watch.sh pid $watch_pid (one terminal; --no-watch / PROGDEV_WATCH=0 to disable)"
+fi
+trap 'rm -f "$LOCK"; [ -n "$watch_pid" ] && { kill "$watch_pid" 2>/dev/null; pkill -P "$watch_pid" 2>/dev/null; }; log "exit"' EXIT
 
 BASE="$(git rev-parse --abbrev-ref HEAD)"
 START_SHA="$(git rev-parse HEAD)"
