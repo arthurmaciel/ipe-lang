@@ -3289,6 +3289,49 @@ impl<'a> Lowerer<'a> {
                 // the annotation type and handles both 0-parameter and N-parameter
                 // bindings correctly.
                 let (params, prologue, ret) = self.split_typed_sig(ty, patterns, free_vars)?;
+                // Wildcard-`any` return-type fix: `view : Model -> any` makes
+                // `any` appear in `free_vars` (the canon free-var collector treats
+                // it uniformly alongside genuine type parameters).  But `any` is NOT
+                // a real type parameter — it is a return-type wildcard whose concrete
+                // type is resolved by the HM solver from the body.  When
+                // `split_typed_sig` returns `IrType::Generic(any_sym)` for the
+                // return position, substitute the body's solved concrete type from
+                // `self.types.regions` instead.  Without this substitution the
+                // emitted Rust function gains a spurious `<T1: Clone>` generic
+                // parameter and a `-> T1` return type that the body cannot satisfy
+                // (E0308).
+                //
+                // Why regions, not env? `SolvedTypes::env` for TYPED bindings
+                // stores the annotation type verbatim (`generated.top_level`), which
+                // still has `Ty::Var(any_sym)` in the return position — the any UV
+                // was never zonked back there.  `self.types.regions[(home, body.span)]`
+                // is the body expression's solved type, which IS the concrete return
+                // type after solving.
+                //
+                // The analogous gate in the Haskell compiler: `Instantiate.fromAnnotation`
+                // filters `"any"` out before treating free vars as polymorphic;
+                // `buildEnv` gives each `any` occurrence a fresh flex UV that the body
+                // constrains to a concrete type.  The Rust port must do the same.
+                let ret = if let IrType::Generic(sym) = ret {
+                    if self.interner.resolve(sym).as_deref() == Some("any") {
+                        // The body's region type is the concrete return type.
+                        let body_ty = self
+                            .types
+                            .regions
+                            .get(&(def.home().to_vec(), body.span))
+                            .ok_or_else(|| {
+                                bug(
+                                    "sky_lower::lower_def",
+                                    "no region type for body of `any`-annotated binding",
+                                )
+                            })?;
+                        self.ir_type_from_ty(body_ty, sig_span)?
+                    } else {
+                        IrType::Generic(sym)
+                    }
+                } else {
+                    ret
+                };
                 // Install the binding's generic type-variable map so
                 // `ir_type_from_ty_ui_msg` can distinguish a `Ty::Var` that is an
                 // enclosing generic (→ `IrType::Generic`) from one that is a
@@ -3331,9 +3374,14 @@ impl<'a> Lowerer<'a> {
                 // Each quantified variable carries the Rust trait bound its
                 // body-imposed super-type obligations require (empty for a
                 // structurally-parametric variable — a bare `T{n}`).
+                //
+                // `any` is excluded: it is a wildcard, not a real type parameter
+                // (its return type was resolved concretely above).  Including it
+                // would emit a spurious `<T_any: Clone>` generic on the function.
                 let var_bounds = self.types.bounds.get(&name);
                 let type_params = free_vars
                     .iter()
+                    .filter(|&&v| self.interner.resolve(v).as_deref() != Some("any"))
                     .map(|v| (*v, Self::bounds_for(var_bounds, *v)))
                     .collect();
                 // T5 (#104 / #112): multi-use-clone rewrite for CloneOk params.
