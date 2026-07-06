@@ -1,0 +1,30 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+import Std.Ui.Input as Input
+
+
+-- i148 regression: Input.slider must type-check and lower without SKY-N0005.
+-- The cfg record carries onChange/value/min/max/step/label.
+
+type Msg
+    = VolumeChanged String
+
+
+view : Int -> String
+view vol =
+    Html.htmlRender
+        (Ui.layout []
+            (Input.slider []
+                { onChange = VolumeChanged
+                , value = String.fromInt vol
+                , min = "0"
+                , max = "100"
+                , step = "1"
+                , label = Input.labelHidden "Volume"
+                }))
+
+
+main =
+    println (view 42)

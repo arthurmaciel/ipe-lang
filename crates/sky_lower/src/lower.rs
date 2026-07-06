@@ -5586,7 +5586,8 @@ impl<'a> Lowerer<'a> {
                     | KernelFn::InputCurrentPassword
                     | KernelFn::InputNewPassword
                     | KernelFn::InputMultiline
-                    | KernelFn::InputCheckbox,
+                    | KernelFn::InputCheckbox
+                    | KernelFn::InputSlider,
                 ) if args.len() == 2 =>
                 {
                     if let (Some(attrs_arg), Some(cfg_arg)) = (args.first(), args.get(1)) {
@@ -7113,7 +7114,9 @@ impl<'a> Lowerer<'a> {
                 // `Input.newPassword : List (Attribute msg) -> { ... } -> Element msg`
                 | KernelFn::InputNewPassword
                 // `Input.checkbox : List (Attribute msg) -> { onChange : Bool -> msg, ... } -> Element msg`
-                | KernelFn::InputCheckbox,
+                | KernelFn::InputCheckbox
+                // `Input.slider : List (Attribute msg) -> { onChange, value, min, max, step, label } -> Element msg`
+                | KernelFn::InputSlider,
             ) => Ok(2),
             // Arity 3: `Ui.rgb r g b`, `Html.node tag attrs children`.
             Callee::Kernel(
