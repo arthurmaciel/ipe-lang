@@ -54,7 +54,7 @@
 
 ### (b) Counts
 
-**18/35 OK** (+17-skymon — #137 deps + #140 TaskSeqSync/case-arm-T5/Access-walk; 45 cargo errors -> 0, sealed). Lane in flight: #144/#145/#146 (diagnostics file-attribution, wildcard text, Ui.Lazy). Queued: #143 Appendable ++ (38), #135, #125, #99, 18/00/02/27/31 tail.
+**19/35 OK** (+28-streaming-chat — #145 wildcard text + #148 StreamId + serde derives; sealed). Remaining tail: 18 (#149 lane), 37 (#150 radioRow), 38 (#150 Ui.layout family), 00/02/27/31 + smalls.
 
 | Status | Count | Examples |
 |---|---|---|
