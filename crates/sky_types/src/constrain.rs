@@ -1390,7 +1390,12 @@ impl<'a> Builder<'a> {
     }
 
     fn eq(&mut self, span: Span, lhs: VarId, rhs: VarId) {
-        self.constraints.push(Constraint { span, lhs, rhs });
+        self.constraints.push(Constraint {
+            span,
+            lhs,
+            rhs,
+            home: self.current_home.clone(),
+        });
     }
 
     // ── Ty ⇄ solver bridges ────────────────────────────────────────────────

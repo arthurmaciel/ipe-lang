@@ -46,7 +46,7 @@ use constrain::{
     Builder, FieldAccess, RecordUpdate, RoutedLiveCheck, RouteWitnessCheck, SchemeApp, zonk,
 };
 use doc::{VarNamer, ty_to_doc};
-use solve::solve;
+use solve::solve_attributed;
 use ty::{Content, FlatType};
 use unify::unify;
 use unionfind::{UnionFind, VarId};
@@ -118,6 +118,28 @@ pub fn infer(m: &canon::Module, interner: &mut Interner) -> DResult<SolvedTypes>
     infer_with_budget(m, interner, &mut budget)
 }
 
+/// Like [`infer`] but on a type-error from the constraint solver also returns
+/// the **home module path** of the failing constraint.
+///
+/// This lets the compiler driver's error-attribution path select the correct
+/// source file for a cross-module type error without relying on the
+/// byte-offset heuristic that can fail when two merged modules share the same
+/// numeric span range.
+///
+/// On a non-solver error (constraint generation, field-access pass, etc.) the
+/// returned home is `Vec::new()` and callers should fall back to the heuristic.
+///
+/// # Errors
+/// Same conditions as [`infer`]; on failure the tuple carries both the
+/// diagnostic and the failing constraint's home module path.
+pub fn infer_attributed(
+    m: &canon::Module,
+    interner: &mut Interner,
+) -> Result<SolvedTypes, (Diagnostic, Vec<Symbol>)> {
+    let mut budget = Budget::from_env();
+    infer_with_budget_attributed(m, interner, &mut budget)
+}
+
 /// Inference with an explicit solver budget. Exposed for tests that need to
 /// drive the [`sky_diagnostics::TypeError::BudgetExceeded`] path deterministically
 /// without mutating process-global environment state.
@@ -126,10 +148,32 @@ fn infer_with_budget(
     interner: &mut Interner,
     budget: &mut Budget,
 ) -> DResult<SolvedTypes> {
-    let mut uf = UnionFind::new();
-    let generated = Builder::run(&mut uf, interner, m)?;
+    infer_with_budget_attributed(m, interner, budget).map_err(|(diag, _home)| diag)
+}
 
-    solve(&mut uf, budget, interner, &generated.constraints)?;
+/// Like [`infer_with_budget`] but on a solver error also returns the failing
+/// constraint's home module path.  Non-solver errors (constraint generation,
+/// post-solve passes) return `Vec::new()` as the home.
+#[allow(clippy::too_many_lines)] // structural mirror of infer_with_budget; split would obscure flow
+fn infer_with_budget_attributed(
+    m: &canon::Module,
+    interner: &mut Interner,
+    budget: &mut Budget,
+) -> Result<SolvedTypes, (Diagnostic, Vec<Symbol>)> {
+    // Convenience: wrap a `DResult`-returning expression so `?` works inside
+    // this function whose error type is `(Diagnostic, Vec<Symbol>)`.  Non-solver
+    // errors (constraint generation, post-solve passes) carry no meaningful home,
+    // so they surface with an empty home and callers fall back to the heuristic.
+    macro_rules! lift {
+        ($e:expr) => {
+            $e.map_err(|d: Diagnostic| (d, Vec::<Symbol>::new()))?
+        };
+    }
+
+    let mut uf = UnionFind::new();
+    let generated = lift!(Builder::run(&mut uf, interner, m));
+
+    solve_attributed(&mut uf, budget, interner, &generated.constraints)?;
 
     // Discharge deferred field accesses and record updates in a joint fixpoint.
     // These two passes must interleave because a record update can pin the
@@ -141,15 +185,15 @@ fn infer_with_budget(
     // The opaque server `Request` type has a fixed field set (see
     // [`RequestFields`]); intern it once here so the immutable-borrow
     // `resolve_deferred` pass can resolve `req.<field>` accesses.
-    let req_fields = RequestFields::build(interner)?;
-    resolve_deferred(
+    let req_fields = lift!(RequestFields::build(interner));
+    lift!(resolve_deferred(
         &mut uf,
         budget,
         interner,
         &req_fields,
         &generated.field_accesses,
         &generated.record_updates,
-    )?;
+    ));
 
     // Per-route page witnesses (#108 round 4): each `Live.route pattern ctor`
     // relates its builder argument's settled type to the route's page type —
@@ -158,7 +202,12 @@ fn infer_with_budget(
     // run BEFORE `resolve_routed_live_checks` so route constructors pin the
     // page variable before the `notFound ≟ Model.page` gate reads it.  See
     // the `RouteWitnessCheck` doc comment for the full rationale.
-    resolve_route_witness_checks(&mut uf, budget, interner, &generated.route_witness_checks)?;
+    lift!(resolve_route_witness_checks(
+        &mut uf,
+        budget,
+        interner,
+        &generated.route_witness_checks
+    ));
 
     // Non-fatal diagnostics collected during the post-solve deferred passes and
     // the exhaustiveness pass. All are `Severity::Warning`: callers MUST print
@@ -172,7 +221,7 @@ fn infer_with_budget(
     // and we emit the SKY-L0124 warning (usually a mis-named `page` field). See
     // the `RoutedLiveCheck` doc comment for the full rationale.
     let has_routes = !generated.route_witness_checks.is_empty();
-    resolve_routed_live_checks(
+    lift!(resolve_routed_live_checks(
         &mut uf,
         budget,
         interner,
@@ -180,7 +229,7 @@ fn infer_with_budget(
         has_routes,
         generated.route_witness_checks.len(),
         &mut warnings,
-    )?;
+    ));
 
     // End-of-checking exhaustiveness + redundancy pass. Running it here — after
     // the solver settles — makes the lowerer's `Match::new` exhaustiveness
@@ -188,7 +237,7 @@ fn infer_with_budget(
     // Redundant-branch warnings (SKY-T0011) are collected rather than returned
     // as errors — they are Severity::Warning and must not abort compilation.
     // They join the same `warnings` sink already carrying any SKY-L0124.
-    exhaust::check(m, interner, &mut warnings)?;
+    lift!(exhaust::check(m, interner, &mut warnings));
 
     // Numeric defaulting: a `Number` variable the program never pinned to a
     // concrete type resolves to `Int` (an untyped `\a b -> a + b` is `Int`, not
@@ -196,10 +245,10 @@ fn infer_with_budget(
     // annotation skolem (rigid super) stays generic so its bound surfaces on the
     // emitted type parameter. (Ordering-only flex variables are left generic, as
     // before — they carry no numeric obligation to default.)
-    let int_sym = interner.intern("Int")?;
+    let int_sym = lift!(interner.intern("Int"));
     for (v, orig_bounds, span) in &generated.super_vars {
-        let root = uf.find(*v)?;
-        match uf.content(root)? {
+        let root = lift!(uf.find(*v));
+        match lift!(uf.content(root)) {
             // An unpinned `Number` flex defaults to `Int` — an untyped
             // `\a b -> a + b` is `Int`, not an under-determined generic.
             // Ordering / equality flexes carry no numeric default, so an unpinned
@@ -208,14 +257,14 @@ fn infer_with_budget(
                 rigid: false,
                 bounds,
             } if bounds.has_number() => {
-                uf.set_content(
+                lift!(uf.set_content(
                     root,
                     Content::Structure(FlatType::Con {
                         module: Vec::new(),
                         name: int_sym,
                         args: Vec::new(),
                     }),
-                )?;
+                ));
             }
             // An unpinned ordering / equality flex stays generic. A super var is
             // never a plain `Flex` / `Rigid` after solving (it merges as a
@@ -231,9 +280,9 @@ fn infer_with_budget(
             // compare it), failing closed with SKY-T0014 instead of emitting
             // code `cargo` rejects.
             Content::Structure(_) => {
-                let ty = zonk(&mut uf, budget, root)?;
+                let ty = lift!(zonk(&mut uf, budget, root));
                 if !concrete_super_ok(interner, *orig_bounds, &ty) {
-                    return Err(super_unsatisfied(interner, *orig_bounds, &ty, *span));
+                    return Err((super_unsatisfied(interner, *orig_bounds, &ty, *span), Vec::new()));
                 }
             }
         }
@@ -256,9 +305,9 @@ fn infer_with_budget(
         let mut var_bounds = BTreeMap::new();
         let mut rep_to_sym: BTreeMap<u32, Symbol> = BTreeMap::new();
         for (var_sym, rigid) in var_rigids {
-            let rep = uf.find(*rigid)?;
+            let rep = lift!(uf.find(*rigid));
             rep_to_sym.insert(rep, *var_sym);
-            if let Content::Super { bounds: b, .. } = uf.content(*rigid)?
+            if let Content::Super { bounds: b, .. } = lift!(uf.content(*rigid))
                 && !b.is_empty()
             {
                 var_bounds.insert(*var_sym, b);
@@ -276,19 +325,25 @@ fn infer_with_budget(
     // at a type that actually supports the operations its generic emission
     // requires. Without this, `double True` (where `double` needs Number) would
     // type-check here yet emit Rust that `cargo` rejects.
-    check_scheme_applications(&mut uf, budget, interner, &bounds, &generated.scheme_apps)?;
+    lift!(check_scheme_applications(
+        &mut uf,
+        budget,
+        interner,
+        &bounds,
+        &generated.scheme_apps
+    ));
 
     // Read back every region's resolved type.
     let mut regions = BTreeMap::new();
     for ((home, span), var) in generated.regions {
-        regions.insert((home, span), zonk(&mut uf, budget, var)?);
+        regions.insert((home, span), lift!(zonk(&mut uf, budget, var)));
     }
 
     // `env` = annotation types of typed bindings (exact) + read-back of every
     // untyped binding's inferred body type.
     let mut env = generated.top_level;
     for (name, var) in generated.untyped {
-        env.insert(name, zonk(&mut uf, budget, var)?);
+        env.insert(name, lift!(zonk(&mut uf, budget, var)));
     }
 
     Ok(SolvedTypes {
