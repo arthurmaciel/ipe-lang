@@ -79,7 +79,21 @@ trap 'rm -f "$LOCK"; log "loop exit"' EXIT
 # weaken the safety the guardrails depend on — avoid unless sandboxed.
 CONTEXT="$(pwd)/scripts/progressive-development/context.md"
 [ -f "$CONTEXT" ] || die "missing lean contract $CONTEXT"
-CLAUDE_ARGS="${PROGDEV_CLAUDE_ARGS:---safe-mode --permission-mode auto}"
+# Flag set as an ARRAY — allowlist entries like 'Bash(cargo *)' contain spaces, so
+# a word-split string would mangle them. Default = --safe-mode (no CLAUDE.md) +
+# auto approval, PLUS an explicit allowlist so the gate (cargo), git commit/reset,
+# skyc, and edits ALWAYS flow unattended. (The --once test wrote a full 8-file wire
+# but exited with no verdict and never committed — the classifier alone was the
+# suspected block on the gate/commit step; the allowlist removes that failure mode.)
+if [ -n "${PROGDEV_CLAUDE_ARGS:-}" ]; then
+    read -r -a CLAUDE_ARGS <<< "$PROGDEV_CLAUDE_ARGS"
+else
+    CLAUDE_ARGS=(--safe-mode --permission-mode auto
+        --allowedTools 'Bash(cargo *)' 'Bash(git *)' 'Bash(skyc *)' 'Bash(touch *)'
+                       'Bash(cat *)' 'Bash(ls *)' 'Bash(rg *)' 'Bash(sed *)' 'Bash(awk *)'
+                       'Bash(mkdir *)' 'Bash(cp *)' 'Bash(mv *)' 'Bash(rm *)' 'Bash(df *)'
+                       Edit Write Read Grep Glob)
+fi
 STOP_PATH="$(pwd)/$STOP_FILE"
 
 # ── dedicated branch (human fast-forwards to master after reviewing the run) ─
@@ -87,7 +101,7 @@ BRANCH="${PROGDEV_BRANCH:-progressive-development/run-${PROGDEV_TS:-manual}}"
 BASE="$(git rev-parse --abbrev-ref HEAD)"
 git switch -c "$BRANCH" 2>/dev/null || git switch "$BRANCH" || die "cannot create branch $BRANCH"
 mkdir -p "$(dirname "$LOG")"; touch "$LOG" "$ESC"
-log "progressive-development start: branch=$BRANCH base=$BASE claude_args='$CLAUDE_ARGS' max_iters=$MAX_ITERS gate=$GATE_TARGET"
+log "progressive-development start: branch=$BRANCH base=$BASE claude_args='${CLAUDE_ARGS[*]}' max_iters=$MAX_ITERS gate=$GATE_TARGET"
 
 # ── the loop ───────────────────────────────────────────────────────────────
 landed=0
@@ -99,11 +113,22 @@ for i in $(seq 1 "$MAX_ITERS"); do
     pgrep -f mem-guard.sh >/dev/null || { log "mem-guard died — abort loop"; break; }
 
     log "── iteration $i/$MAX_ITERS ──"
-    # shellcheck disable=SC2086  # CLAUDE_ARGS is intentionally word-split
-    out="$(timeout "$ITER_TIMEOUT" claude $CLAUDE_ARGS --append-system-prompt-file "$CONTEXT" -p "$(cat "$PROMPT_FILE")" 2>&1)"; rc=$?
-    # Surface the iteration's own last status line + reason to the loop log.
+    # Tee the full iteration output to a per-iteration log so a no-verdict /
+    # failed run is diagnosable (the -once test proved this is essential).
+    iterlog="docs/architecture/progressive-development-iter-$i.log"
+    out="$(timeout "$ITER_TIMEOUT" claude "${CLAUDE_ARGS[@]}" --append-system-prompt-file "$CONTEXT" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee "$iterlog")"; rc=${PIPESTATUS[0]}
     verdict="$(printf '%s\n' "$out" | grep -oE 'PROGDEV: (LANDED|FAILED|ESCALATED|ABORT|DRY)[^\n]*' | tail -1)"
-    log "iteration $i verdict: ${verdict:-<none> (rc=$rc)}"
+    log "iteration $i verdict: ${verdict:-<none> (rc=$rc)} (full output: $iterlog)"
+
+    # Enforce the pawl in the HARNESS — never trust the iteration to have reset
+    # itself. ANY non-LANDED outcome (failed / no-verdict / abort) hard-discards
+    # whatever tracked changes it left, so a dirty tree can never leak onto the
+    # branch (or, after the final switch, onto the base). This is the fix for the
+    # --once test where a no-verdict iteration's uncommitted wire reached master.
+    if [[ "$verdict" != *LANDED* ]] && [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        log "non-LANDED iteration left tracked changes — hard-resetting to hold the pawl (kept in $iterlog)"
+        git reset --hard HEAD >/dev/null 2>&1 || true
+    fi
 
     case "$verdict" in
         *LANDED*)    landed=$((landed+1)) ;;
@@ -112,8 +137,8 @@ for i in $(seq 1 "$MAX_ITERS"); do
         "")          log "iteration produced no verdict (rc=$rc) — treating as failure, stopping to avoid thrash"; break ;;
     esac
 
-    # Belt-and-braces: the tree must be clean between iterations (the pawl).
-    [ -z "$(git status --porcelain)" ] || { log "tree dirty after iteration — a red iteration didn't reset; stopping"; break; }
+    # Belt-and-braces: tracked tree must be clean between iterations (the pawl).
+    [ -z "$(git status --porcelain --untracked-files=no)" ] || { log "tree still dirty after reset — stopping"; break; }
 
     [ "$ONCE" -eq 1 ] && { log "--once: single iteration done"; break; }
     sleep "$COOLDOWN"

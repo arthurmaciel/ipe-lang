@@ -9,3 +9,8 @@ tools/oracle/bin/
 
 # agent worktrees — never commit
 .claude/worktrees/
+
+# progressive-development loop runtime artifacts
+/progressive-development.stop
+/.progressive-development.lock
+docs/architecture/progressive-development-iter-*.log
