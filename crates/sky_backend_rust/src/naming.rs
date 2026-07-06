@@ -884,6 +884,9 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::InputNewPassword => "input_new_password_",
         KernelFn::InputCheckbox => "input_checkbox_",
         KernelFn::InputSlider => "input_slider_",
+        KernelFn::InputOption => "input_option_",
+        KernelFn::InputRadio => "input_radio_",
+        KernelFn::InputRadioRow => "input_radio_row_",
         // ── M7: Html element builders ────────────────────────────────────────
         KernelFn::HtmlTextNode => "html_text_node_",
         KernelFn::HtmlRawNode => "html_raw_node_",
