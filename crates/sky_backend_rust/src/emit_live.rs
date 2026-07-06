@@ -399,24 +399,6 @@ fn emit_live_app_inner(
         )));
     }
 
-    // Item 2 (#120): guard against a non-empty `routes` list on a non-routed app.
-    //
-    // If `routed_page_field` returned None but the `routes` field is a non-empty
-    // list literal, the routes would be silently ignored — the backend would emit
-    // `live_app` (non-routed) while the user's intent was routing. Fail-closed
-    // with SKY-L0124 so the compiler tells the user to add a `page` field.
-    if let Ok(routes_e) = lookup_field(ctx, fields, "routes")
-        && let Expr::List { items, .. } = routes_e
-        && !items.is_empty()
-    {
-        return Err(Diagnostic::Lower {
-            span: Span::DUMMY,
-            msg: LowerError::RoutedAppMissingPageField {
-                route_count: items.len(),
-            },
-        });
-    }
-
     // Single-page (non-routed) path — `routes`/`notFound` are structurally
     // present in the cfg but not forwarded to the runtime entry.
     //
