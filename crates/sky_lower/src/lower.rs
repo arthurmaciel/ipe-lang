@@ -7274,7 +7274,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiDescContentInfo
                 | KernelFn::UiDescComplementary
                 | KernelFn::UiDescLivePolite
-                | KernelFn::UiDescLiveAssertive,
+                | KernelFn::UiDescLiveAssertive
+                // ── #154: Breakpoint constants — return String, arity 0 ──────
+                | KernelFn::UiMobile
+                | KernelFn::UiTablet
+                | KernelFn::UiDesktop
+                | KernelFn::UiDarkMode
+                | KernelFn::UiLightMode
+                | KernelFn::UiReducedMotion,
             ) => Ok(0),
             // Arity 1: single-argument pure serialisation / escape helpers.
             Callee::Kernel(
@@ -7358,6 +7365,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlMeta
                 // `Html.link : List (Attribute msg) -> Html msg` (void element)
                 | KernelFn::HtmlLink
+                // `Html.linkNode : List (Attribute msg) -> Html msg` (void element alias)
+                | KernelFn::HtmlLinkNode
                 // `Html.area : List (Attribute msg) -> Html msg` (void element)
                 | KernelFn::HtmlArea
                 // `Html.base : List (Attribute msg) -> Html msg` (void element)
@@ -7544,6 +7553,15 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlArticle
                 // `Html.header : List (Attribute msg) -> List (Html msg) -> Html msg`
                 | KernelFn::HtmlHeader
+                // `Html.headerNode : List (Attribute msg) -> List (Html msg) -> Html msg`
+                // (legacy compat alias — same <header> tag, arity 2)
+                | KernelFn::HtmlHeaderNode
+                // `Html.codeNode : List (Attribute msg) -> List (Html msg) -> Html msg`
+                | KernelFn::HtmlCodeNode
+                // `Html.mainNode : List (Attribute msg) -> List (Html msg) -> Html msg`
+                | KernelFn::HtmlMainNode
+                // `Html.footerNode : List (Attribute msg) -> List (Html msg) -> Html msg`
+                | KernelFn::HtmlFooterNode
                 // `Html.footer : List (Attribute msg) -> List (Html msg) -> Html msg`
                 | KernelFn::HtmlFooter
                 // `Html.main : List (Attribute msg) -> List (Html msg) -> Html msg`
@@ -7672,12 +7690,16 @@ impl<'a> Lowerer<'a> {
                 // `Input.radioRow : List (Attribute msg) -> { onChange, options, selected, label } -> Element msg`
                 | KernelFn::InputRadioRow,
             ) => Ok(2),
-            // Arity 3: `Ui.rgb r g b`, `Html.node tag attrs children`.
+            // Arity 3: `Ui.rgb r g b`, `Html.node tag attrs children`,
+            //          `Ui.breakpoint query attrs element`.
             Callee::Kernel(
                 // `Ui.rgb : Int -> Int -> Int -> Color`
                 KernelFn::UiRgb
                 // `Html.node : String -> List (Attribute msg) -> List (Html msg) -> Html msg`
-                | KernelFn::HtmlNode,
+                | KernelFn::HtmlNode
+                // `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
+                // Phase-0 passthrough — see runtime ui_breakpoint_
+                | KernelFn::UiBreakpoint,
             ) => Ok(3),
             // Arity 4: `Ui.rgba r g b a`.
             Callee::Kernel(
@@ -8480,6 +8502,11 @@ impl<'a> Lowerer<'a> {
                     ("Html", "section") => Ok(Callee::Kernel(KernelFn::HtmlSection)),
                     ("Html", "article") => Ok(Callee::Kernel(KernelFn::HtmlArticle)),
                     ("Html", "header") => Ok(Callee::Kernel(KernelFn::HtmlHeader)),
+                    ("Html", "headerNode") => Ok(Callee::Kernel(KernelFn::HtmlHeaderNode)),
+                    ("Html", "codeNode") => Ok(Callee::Kernel(KernelFn::HtmlCodeNode)),
+                    ("Html", "mainNode") => Ok(Callee::Kernel(KernelFn::HtmlMainNode)),
+                    ("Html", "footerNode") => Ok(Callee::Kernel(KernelFn::HtmlFooterNode)),
+                    ("Html", "linkNode") => Ok(Callee::Kernel(KernelFn::HtmlLinkNode)),
                     ("Html", "footer") => Ok(Callee::Kernel(KernelFn::HtmlFooter)),
                     ("Html", "main") => Ok(Callee::Kernel(KernelFn::HtmlMain)),
                     ("Html", "aside") => Ok(Callee::Kernel(KernelFn::HtmlAside)),
@@ -8600,6 +8627,14 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "htmlAttribute") => Ok(Callee::Kernel(KernelFn::UiHtmlAttribute)),
                     ("Ui", "name") => Ok(Callee::Kernel(KernelFn::UiName)),
                     ("Ui", "style") => Ok(Callee::Kernel(KernelFn::UiStyle)),
+                    // #154: Ui.breakpoint + Breakpoint constants
+                    ("Ui", "breakpoint") => Ok(Callee::Kernel(KernelFn::UiBreakpoint)),
+                    ("Ui", "mobile") => Ok(Callee::Kernel(KernelFn::UiMobile)),
+                    ("Ui", "tablet") => Ok(Callee::Kernel(KernelFn::UiTablet)),
+                    ("Ui", "desktop") => Ok(Callee::Kernel(KernelFn::UiDesktop)),
+                    ("Ui", "darkMode") => Ok(Callee::Kernel(KernelFn::UiDarkMode)),
+                    ("Ui", "lightMode") => Ok(Callee::Kernel(KernelFn::UiLightMode)),
+                    ("Ui", "reducedMotion") => Ok(Callee::Kernel(KernelFn::UiReducedMotion)),
                     ("Background", "hoverColor") => {
                         Ok(Callee::Kernel(KernelFn::BackgroundHoverColor))
                     }
@@ -8812,7 +8847,10 @@ impl<'a> Lowerer<'a> {
                     ("Decimal", "formatWith")  => Ok(Callee::Kernel(KernelFn::DecFormatWith)),
                     // A kernel beyond the wired set.
                     // [SKY-L0108, feature: kernels]
-                    (_, _) => Err(unsupported(callee.span, Feature::Kernels)),
+                    (q, m) => {
+                        let _ = (q, m);
+                        Err(unsupported(callee.span, Feature::Kernels))
+                    }
                 }
             }
             canon::Expr_::VarTopLevel { module, name } => {

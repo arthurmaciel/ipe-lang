@@ -2622,6 +2622,49 @@ fn emit_ui_call(
             )))
         }
 
+        // #154: Breakpoint constants — `Ui.mobile` / `Ui.tablet` / … : String (0-arity)
+        KernelFn::UiMobile => {
+            Ok(Some("sky_runtime::ui::helpers::ui_mobile_()".to_owned()))
+        }
+        KernelFn::UiTablet => {
+            Ok(Some("sky_runtime::ui::helpers::ui_tablet_()".to_owned()))
+        }
+        KernelFn::UiDesktop => {
+            Ok(Some("sky_runtime::ui::helpers::ui_desktop_()".to_owned()))
+        }
+        KernelFn::UiDarkMode => {
+            Ok(Some("sky_runtime::ui::helpers::ui_dark_mode_()".to_owned()))
+        }
+        KernelFn::UiLightMode => {
+            Ok(Some("sky_runtime::ui::helpers::ui_light_mode_()".to_owned()))
+        }
+        KernelFn::UiReducedMotion => {
+            Ok(Some(
+                "sky_runtime::ui::helpers::ui_reduced_motion_()".to_owned(),
+            ))
+        }
+
+        // #154: `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
+        // Phase-0: eager passthrough — breakpoint CSS media queries are not yet
+        // applied in the Rust runtime.  The element is returned unchanged.
+        KernelFn::UiBreakpoint => {
+            let [q_e, a_e, el_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiBreakpoint",
+                    detail: format!(
+                        "Ui.breakpoint requires 3 arguments, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let q = emit_expr_at(ctx, q_e, indent, child, generics)?;
+            let a = emit_expr_at(ctx, a_e, indent, child, generics)?;
+            let el = emit_expr_at(ctx, el_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_breakpoint_({q}, {a}, {el})"
+            )))
+        }
+
         // Background pseudo-class colour attrs (Color -> Attribute msg)
         KernelFn::BackgroundHoverColor => {
             let [c_e] = args else {

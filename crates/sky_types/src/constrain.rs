@@ -4195,6 +4195,25 @@ impl<'a> Builder<'a> {
             K::UiName => fun(string(), attr(var(0))),
             K::UiStyle => fun(string(), fun(string(), attr(var(0)))),
 
+            // #154: Ui.breakpoint + Breakpoint constants.
+            //
+            // Sanctioned divergence from Sky Go: `Breakpoint` is typed as
+            // `String` in the Rust port rather than as a distinct opaque type
+            // (see `docs/divergences-from-sky.md` §B-Breakpoint).  Users cannot
+            // fabricate arbitrary `Breakpoint` values because all constructors
+            // (`mobile`, `tablet`, …) are kernels whose schemes return `string()`;
+            // the only type-safety gap vs. the Go backend is that a plain `String`
+            // literal would also unify — acceptable for Phase-0.
+            //
+            // `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
+            K::UiBreakpoint => fun(
+                string(),
+                fun(list(attr(var(0))), fun(elem_t(var(0)), elem_t(var(0)))),
+            ),
+            // Breakpoint constants: all return a String (the CSS media-query string).
+            K::UiMobile | K::UiTablet | K::UiDesktop | K::UiDarkMode | K::UiLightMode
+            | K::UiReducedMotion => string(),
+
             // Std.Html leaf nodes (arity 1).
             K::HtmlTextNode | K::HtmlRawNode => fun(string(), html_t(var(0))),
 
@@ -4210,13 +4229,13 @@ impl<'a> Builder<'a> {
 
             // Std.Html container nodes (arity 2 — attrs, children; tag baked).
             K::HtmlDiv | K::HtmlSpan | K::HtmlA | K::HtmlButton | K::HtmlP
-            | K::HtmlH1 | K::HtmlH2 | K::HtmlH3 | K::HtmlH4 | K::HtmlH5 | K::HtmlH6 | K::HtmlNav | K::HtmlSection | K::HtmlArticle | K::HtmlHeader | K::HtmlFooter | K::HtmlMain | K::HtmlAside | K::HtmlUl | K::HtmlOl | K::HtmlLi | K::HtmlTable | K::HtmlThead | K::HtmlTbody | K::HtmlTfoot | K::HtmlTr | K::HtmlTh | K::HtmlTd | K::HtmlTextarea | K::HtmlSelect | K::HtmlOption | K::HtmlLabel | K::HtmlForm | K::HtmlFieldset | K::HtmlLegend | K::HtmlPre | K::HtmlCode | K::HtmlStrong | K::HtmlEm | K::HtmlSmall | K::HtmlBlockquote | K::HtmlFigure | K::HtmlFigcaption | K::HtmlDetails | K::HtmlSummary | K::HtmlDialog | K::HtmlVideo | K::HtmlAudio | K::HtmlCanvas | K::HtmlIframe | K::HtmlProgress | K::HtmlMeter | K::HtmlScript | K::HtmlBody | K::HtmlTitle => fun(
+            | K::HtmlH1 | K::HtmlH2 | K::HtmlH3 | K::HtmlH4 | K::HtmlH5 | K::HtmlH6 | K::HtmlNav | K::HtmlSection | K::HtmlArticle | K::HtmlHeader | K::HtmlHeaderNode | K::HtmlCodeNode | K::HtmlMainNode | K::HtmlFooterNode | K::HtmlFooter | K::HtmlMain | K::HtmlAside | K::HtmlUl | K::HtmlOl | K::HtmlLi | K::HtmlTable | K::HtmlThead | K::HtmlTbody | K::HtmlTfoot | K::HtmlTr | K::HtmlTh | K::HtmlTd | K::HtmlTextarea | K::HtmlSelect | K::HtmlOption | K::HtmlLabel | K::HtmlForm | K::HtmlFieldset | K::HtmlLegend | K::HtmlPre | K::HtmlCode | K::HtmlStrong | K::HtmlEm | K::HtmlSmall | K::HtmlBlockquote | K::HtmlFigure | K::HtmlFigcaption | K::HtmlDetails | K::HtmlSummary | K::HtmlDialog | K::HtmlVideo | K::HtmlAudio | K::HtmlCanvas | K::HtmlIframe | K::HtmlProgress | K::HtmlMeter | K::HtmlScript | K::HtmlBody | K::HtmlTitle => fun(
                 list(html_attr(var(0))),
                 fun(list(html_t(var(0))), html_t(var(0))),
             ),
 
             // Std.Html void nodes (arity 1 — attrs only).
-            K::HtmlInput | K::HtmlImg | K::HtmlBr | K::HtmlHr | K::HtmlMeta | K::HtmlLink | K::HtmlArea | K::HtmlBase | K::HtmlCol | K::HtmlEmbed | K::HtmlSource | K::HtmlTrack | K::HtmlWbr => fun(list(html_attr(var(0))), html_t(var(0))),
+            K::HtmlInput | K::HtmlImg | K::HtmlBr | K::HtmlHr | K::HtmlMeta | K::HtmlLink | K::HtmlLinkNode | K::HtmlArea | K::HtmlBase | K::HtmlCol | K::HtmlEmbed | K::HtmlSource | K::HtmlTrack | K::HtmlWbr => fun(list(html_attr(var(0))), html_t(var(0))),
 
             // Std.Html styleNode (arity 2 — attrs, css string; #46/#47 F7). The
             // runtime bakes `strip_style_close` on the css. RELOCATED — matches
@@ -5707,8 +5726,11 @@ mod registry_phase_c_tests {
             K::HtmlSection,
             K::HtmlArticle,
             K::HtmlHeader,
+            K::HtmlHeaderNode,
             K::HtmlFooter,
+            K::HtmlFooterNode,
             K::HtmlMain,
+            K::HtmlMainNode,
             K::HtmlAside,
             K::HtmlUl,
             K::HtmlOl,
@@ -5729,6 +5751,7 @@ mod registry_phase_c_tests {
             K::HtmlLegend,
             K::HtmlPre,
             K::HtmlCode,
+            K::HtmlCodeNode,
             K::HtmlStrong,
             K::HtmlEm,
             K::HtmlSmall,
@@ -5751,6 +5774,7 @@ mod registry_phase_c_tests {
             K::HtmlHr,
             K::HtmlMeta,
             K::HtmlLink,
+            K::HtmlLinkNode,
             K::HtmlArea,
             K::HtmlBase,
             K::HtmlCol,
@@ -5807,6 +5831,14 @@ mod registry_phase_c_tests {
             K::UiHtmlAttribute,
             K::UiName,
             K::UiStyle,
+            // #154: Breakpoint
+            K::UiBreakpoint,
+            K::UiMobile,
+            K::UiTablet,
+            K::UiDesktop,
+            K::UiDarkMode,
+            K::UiLightMode,
+            K::UiReducedMotion,
             K::BackgroundHoverColor,
             K::BackgroundFocusColor,
             K::BackgroundActiveColor,
