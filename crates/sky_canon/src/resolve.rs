@@ -147,6 +147,37 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     "Placeholder",
 ];
 
+/// Kernel-implicit Prelude type names (#576) that are globally in scope in
+/// every Sky program but are NOT declared by any compiled `.sky` source file —
+/// they are resolved by the runtime as opaque handles.
+///
+/// These names were previously absent from ALL allowlists, so bare annotations
+/// like `handleHome : Handler` failed with `TypeNotFound` / SKY-N0002 even
+/// though they are legitimate kernel builtins. Each entry receives the
+/// empty-home sentinel (`Vec::new()`) just like `RESERVED_BUILTIN_TYPES` and
+/// `EXTRA_BUILTIN_TYPE_NAMES`.
+///
+/// Note: not all of these have explicit arms in `sky_lower::ir_type_from_canon`
+/// yet (tracked as #138 follow-up for `Handler` / `Middleware` / `Session` / `Store` /
+/// `VNode`). Adding them here is the canon-level fix; lowerer arms complete the
+/// end-to-end path.
+const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
+    // `Request -> Task Error Response` alias from Sky.Http.Server (#576).
+    "Handler",
+    // Opaque JSON value type (`Value = any` in Sky). The lowerer handles this
+    // via an explicit arm placed after the `enum_variants` guard — so a user
+    // `type Value` still wins, but a bare annotation compiles.
+    "Value",
+    // `Handler -> Handler` middleware alias from Sky.Http.Middleware.
+    "Middleware",
+    // Sky.Live session object.
+    "Session",
+    // Sky.Live session store.
+    "Store",
+    // Virtual DOM node (Sky.Live diff engine).
+    "VNode",
+];
+
 /// The subset of [`RESERVED_BUILTIN_TYPES`] that a trusted
 /// [`ModuleOrigin::EmbeddedStdlib`] module is permitted to DEFINE, while a
 /// [`ModuleOrigin::User`] module stays rejected (SKY-N0026).
@@ -247,6 +278,16 @@ pub enum ModuleOrigin {
 struct AliasDef {
     params: Vec<Symbol>,
     body: src::TypeAnnotation,
+    /// When this alias was injected from a dep module, the dep module's
+    /// complete `type_home_map` at the time of canonicalisation.  Used
+    /// during body expansion to resolve type names that appear in the body
+    /// but were NOT imported by the IMPORTING module — because the body
+    /// references types from the DEP module's own deps.
+    ///
+    /// `None` for locally-declared aliases: they expand in the importing
+    /// module's own context (the default `ctx` argument to
+    /// `canonicalise_type`).
+    dep_scope_types: Option<BTreeMap<Symbol, Vec<Symbol>>>,
 }
 
 /// The immutable context threaded through [`canonicalise_type`]. Bundling the
@@ -547,7 +588,10 @@ pub fn canonicalise_module_with_origin(
     }
 
     // Build the export surface from the module's own `exposing (…)` clause.
-    let exports = build_module_exports(&home, m, &env, &synth_ctor_names);
+    // Then record the full type scope so importers can use it when expanding
+    // this module's alias bodies (see `AliasDef::dep_scope_types`).
+    let mut exports = build_module_exports(&home, m, &env, &synth_ctor_names);
+    exports.scope_types = type_home_map;
     Ok((canon_mod, exports))
 }
 
@@ -926,6 +970,7 @@ fn canonicalise_with_env(
             AliasDef {
                 params: a.value.vars.iter().map(|v| v.value).collect(),
                 body: a.value.body.value.clone(),
+                dep_scope_types: None,
             },
         );
     }
@@ -1377,13 +1422,17 @@ fn inject_dep_exports(
                     interner,
                 )?;
             }
-            // Inject all dep aliases.
+            // Inject all dep aliases, carrying the dep module's type scope so
+            // body expansion can resolve types not imported by the IMPORTING
+            // module (e.g. `Model`'s body references `Piece` from Chess.Piece
+            // which is only in State.sky's scope, not in Home.sky's).
             for (&alias_name, ea) in &dep.aliases {
                 injected_aliases
                     .entry(alias_name)
                     .or_insert_with(|| AliasDef {
                         params: ea.params.clone(),
                         body: ea.body.clone(),
+                        dep_scope_types: Some(dep.scope_types.clone()),
                     });
             }
         }
@@ -1458,6 +1507,7 @@ fn inject_dep_exports(
                                 .or_insert_with(|| AliasDef {
                                     params: ea.params.clone(),
                                     body: ea.body.clone(),
+                                    dep_scope_types: Some(dep.scope_types.clone()),
                                 });
                             // A record alias also exports a value-level
                             // auto-constructor under the same name (#82); when the
@@ -2528,7 +2578,10 @@ fn resolve_unqualified_type_home(name: Symbol, ctx: &TypeCtx) -> DResult<Vec<Sym
         return Ok(h.clone());
     }
     let name_s = ctx.interner.resolve(name).unwrap_or("");
-    if RESERVED_BUILTIN_TYPES.contains(&name_s) || EXTRA_BUILTIN_TYPE_NAMES.contains(&name_s) {
+    if RESERVED_BUILTIN_TYPES.contains(&name_s)
+        || EXTRA_BUILTIN_TYPE_NAMES.contains(&name_s)
+        || KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES.contains(&name_s)
+    {
         // Empty-home sentinel: the lowerer's per-name explicit arm resolves it.
         return Ok(Vec::new());
     }
@@ -2643,8 +2696,25 @@ fn canonicalise_type(
                 let body_subst: BTreeMap<Symbol, canon::Type> =
                     alias.params.iter().copied().zip(can_args).collect();
                 visited.push(name);
-                let expanded =
-                    canonicalise_type(&alias.body, ctx, &body_subst, free_vars, visited)?;
+                // When the alias was injected from a dep module, expand its
+                // body in the DEP's type scope rather than the importing
+                // module's scope. This lets body references to types from the
+                // dep's OWN deps (e.g. `Piece` in `Model`'s body, where
+                // `Piece` came from Chess.Piece which is NOT imported by the
+                // importing module) still resolve correctly.
+                let expanded = if let Some(dep_scope) = &alias.dep_scope_types {
+                    let alt_ctx = TypeCtx {
+                        type_home_map: dep_scope,
+                        env: ctx.env,
+                        qualifier_paths: ctx.qualifier_paths,
+                        aliases: ctx.aliases,
+                        interner: ctx.interner,
+                        ann_span: ctx.ann_span,
+                    };
+                    canonicalise_type(&alias.body, &alt_ctx, &body_subst, free_vars, visited)?
+                } else {
+                    canonicalise_type(&alias.body, ctx, &body_subst, free_vars, visited)?
+                };
                 visited.pop();
                 return Ok(expanded);
             }
