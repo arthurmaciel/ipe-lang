@@ -31,6 +31,100 @@ fn indent_of(level: usize) -> String {
     "    ".repeat(level)
 }
 
+/// Count the number of times `word` appears as a complete identifier (word-
+/// boundary on both sides) in `haystack`.
+///
+/// Used by `Expr::Let` emission to detect multi-use bindings that would cause
+/// E0382 "use of moved value" for non-`Clone` types in Rust.
+fn count_word_occurrences(haystack: &str, word: &str) -> usize {
+    if word.is_empty() {
+        return 0;
+    }
+    let is_word_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let hb = haystack.as_bytes();
+    let wb = word.as_bytes();
+    let wlen = wb.len();
+    let mut count = 0;
+    let mut i = 0;
+    while i + wlen <= hb.len() {
+        // Bounds: `i + wlen <= hb.len()` is the loop invariant, so the slice
+        // and both neighbour accesses below are always in range.
+        let slice = hb.get(i..i + wlen).unwrap_or(&[]);
+        if slice == wb {
+            let before_ok = i == 0 || hb.get(i - 1).is_none_or(|&b| !is_word_byte(b));
+            let after_ok = hb.get(i + wlen).is_none_or(|&b| !is_word_byte(b));
+            if before_ok && after_ok {
+                count += 1;
+            }
+        }
+        i += 1;
+    }
+    count
+}
+
+/// Replace every word-boundary occurrence of `word` in `haystack` with
+/// `replacement`, returning the result. Non-word occurrences (substrings of
+/// longer identifiers) are left unchanged.
+fn replace_word_all(haystack: &str, word: &str, replacement: &str) -> String {
+    if word.is_empty() {
+        return haystack.to_owned();
+    }
+    let is_word_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let hb = haystack.as_bytes();
+    let wb = word.as_bytes();
+    let wlen = wb.len();
+    let mut result = String::with_capacity(haystack.len());
+    let mut i = 0;
+    while i < hb.len() {
+        let slice = hb.get(i..i + wlen).unwrap_or(&[]);
+        if slice == wb {
+            let before_ok = i == 0 || hb.get(i - 1).is_none_or(|&b| !is_word_byte(b));
+            let after_ok = hb.get(i + wlen).is_none_or(|&b| !is_word_byte(b));
+            if before_ok && after_ok {
+                result.push_str(replacement);
+                i += wlen;
+                continue;
+            }
+        }
+        // Advance one UTF-8 character at a time to keep the byte logic correct
+        // for non-ASCII content (identifiers are ASCII-only, but string literals
+        // in the emitted body may contain arbitrary Unicode).
+        let ch = haystack.get(i..).and_then(|s| s.chars().next()).unwrap_or('\0');
+        result.push(ch);
+        i += ch.len_utf8();
+    }
+    result
+}
+
+/// Returns `true` if the expression produces a value that Rust will MOVE on
+/// first use (i.e., a non-`Clone` type), making a multi-use `let` binding
+/// cause E0382 "use of moved value".
+///
+/// The primary case is `Vec<SkyTask<A>>`: a list whose element type is or
+/// contains a task.  `SkyTask<A>` is a `Pin<Box<dyn Future …>>` — it has no
+/// `Clone` impl because polling a future to completion consumes it.  Sky's
+/// pure semantics guarantee re-evaluation is always correct, so the emitter
+/// can safely inline the value expression at every use site.
+///
+/// Plain `Clone`/`Copy` values (integers, booleans, strings, records, enums)
+/// do NOT trigger this path — their `let` bindings are preserved so the
+/// compiler can share the computation.
+fn expr_value_is_non_clone(expr: &Expr) -> bool {
+    // A list whose element is a task (or contains one) — Vec<SkyTask<A>>
+    // is move-only.  All other expression shapes produce Clone values.
+    matches!(expr, Expr::List { elem, .. } if ir_type_contains_task(elem))
+}
+
+/// Returns `true` if `ty` is or structurally contains `IrType::Task`.
+fn ir_type_contains_task(ty: &IrType) -> bool {
+    match ty {
+        IrType::Task(_) => true,
+        IrType::Maybe(inner) | IrType::List(inner) => ir_type_contains_task(inner),
+        IrType::Result(e, a) => ir_type_contains_task(e) || ir_type_contains_task(a),
+        _ => false,
+    }
+}
+
 /// The Rust spelling of a binary operator for use in infix emission.
 ///
 /// Every Sky M1-core arithmetic/comparison/boolean operator maps to the
@@ -4026,10 +4120,25 @@ pub fn emit_expr_at(
             // A `let` expression renders as a parenthesised Rust block so it
             // composes inline anywhere an expression is expected:
             // `({ let <name> = <value>; <body> })`.
-            let name = ctx.emit_ident(*name)?;
-            let value = emit_expr_at(ctx, value, indent, child, generics)?;
-            let body = emit_expr_at(ctx, body, indent, child, generics)?;
-            Ok(format!("({{ let {name} = {value}; {body} }})"))
+            let name_s = ctx.emit_ident(*name)?;
+            let value_s = emit_expr_at(ctx, value, indent, child, generics)?;
+            let body_s = emit_expr_at(ctx, body, indent, child, generics)?;
+            // `Vec<SkyTask<A>>` (a list of tasks) is non-Clone: using the binding
+            // more than once causes E0382 "use of moved value" because the first
+            // call moves the Vec.  Sky has pure/immutable semantics so re-
+            // evaluating the value at each use site is always correct — inline it
+            // when the value is a task-containing list AND the body uses the name
+            // more than once.  Plain Clone/Copy bindings (Int, Bool, records, …)
+            // keep the let form so the compiler can share the computation.
+            let multi_use = count_word_occurrences(&body_s, &name_s) > 1;
+            let needs_inline = multi_use && expr_value_is_non_clone(value);
+            if needs_inline {
+                let replacement = format!("({value_s})");
+                let inlined = replace_word_all(&body_s, &name_s, &replacement);
+                Ok(format!("({{ {inlined} }})"))
+            } else {
+                Ok(format!("({{ let {name_s} = {value_s}; {body_s} }})"))
+            }
         }
         Expr::Destructure {
             binder,
@@ -5196,6 +5305,45 @@ fn emit_apply(
     depth: u16,
     generics: GenericScope,
 ) -> DResult<String> {
+    // ── Immediately-applied lambda inlining (Bug 3a / T4) ──────────────────
+    // Pattern: `(Box::new(move |p0: T0, …| -> R { body }))(arg0, …)`
+    //
+    // Rust requires the closure inside `Box::new(…)` to implement `Fn` (not
+    // just `FnOnce`) so that `(Box::new(closure))(arg)` can call it via
+    // `Fn::call` (auto-deref path).  When the body creates an inner `move`
+    // closure that captures a non-Copy variable from the outer closure's
+    // environment (e.g. a `Box<dyn Fn>` HOF arg, or a `String` that is moved
+    // into an inner `Box::new(move |…| …)`), the outer closure becomes
+    // `FnOnce` — triggering E0525.
+    //
+    // When a lambda is *immediately applied* (`(lambda)(arg)`), the `Box::new`
+    // wrapper is unnecessary.  Inlining as:
+    //   `({ let p0: T0 = arg0; … body … })`
+    // avoids the `Fn` requirement entirely.  Semantics are identical: the args
+    // are evaluated and bound, then the body executes in the same scope.  Free
+    // variables from the outer scope are used directly — no capture, no
+    // ownership transfer.
+    if let Expr::Lambda { params, ret: _, body } = func {
+        // Sanity: arity must match arg count (lower invariant).
+        debug_assert_eq!(
+            params.len(),
+            args.len(),
+            "emit_apply: Lambda param arity ({}) != arg count ({})",
+            params.len(),
+            args.len()
+        );
+        let child = depth + 1;
+        let mut bindings = String::new();
+        for ((param, ty), arg) in params.iter().zip(args.iter()) {
+            let p = ctx.emit_ident(*param)?;
+            let t = render_type(ctx, ty, generics)?;
+            let a = emit_expr_at(ctx, arg, indent, child, generics)?;
+            // write! to String is infallible (String::write_fmt delegates to push_str).
+            let _ = write!(bindings, "let {p}: {t} = {a}; ");
+        }
+        let body_s = emit_expr_at(ctx, body, indent, child, generics)?;
+        return Ok(format!("({{ {bindings}{body_s} }})"));
+    }
     let child = depth + 1;
     let f = emit_expr_at(ctx, func, indent, child, generics)?;
     let mut parts = Vec::with_capacity(args.len());
@@ -5408,7 +5556,28 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     } else {
         (&func.body, None)
     };
-    let ret_ty: &IrType = elided_ret.as_ref().unwrap_or(&func.ret);
+
+    // ── sky_main synchronous-body wrap ────────────────────────────────────────
+    // When sky_main was NOT elided (its body is not a bare Task.run call) AND
+    // the declared return type is `()`, the function currently returns `()` but
+    // the entry-point epilogue calls `block_on(sky_main())`, which requires
+    // `sky_main` to return `SkyTask<A>`.
+    //
+    // Sky CLI programs that use synchronous `task_run()` calls (instead of
+    // building a top-level Task pipeline) fall here.  Wrap the body:
+    //   let _r = { <original body> };
+    //   task_succeed(())
+    // so sky_main returns `SkyTask<()>` — block_on sees a resolved future and
+    // the synchronous task_run() calls have already run during sky_main().
+    let sky_main_wrap = name == "sky_main" && elided_ret.is_none() && func.ret == IrType::Unit;
+    let unit_task_owned: Option<IrType> = if sky_main_wrap {
+        Some(IrType::Task(Box::new(IrType::Unit)))
+    } else {
+        None
+    };
+    let ret_ty: &IrType = unit_task_owned
+        .as_ref()
+        .unwrap_or_else(|| elided_ret.as_ref().unwrap_or(&func.ret));
 
     // The generic scope resolves an `IrType::Generic` to its positional Rust
     // name; only the variable symbols participate, so project them out of the
@@ -5422,6 +5591,14 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // cloneable (field reads emit `.clone()` to prevent partial-move errors).
     // For `Copy` types (`i64`, `bool`, …) the bound is trivially satisfied.
     // Empty for a monomorphic function.
+    //
+    // `Send + 'static` is only injected when the function returns a `SkyTask<A>`:
+    // futures require their captured values to be `Send + 'static`, but plain
+    // record/ADT-returning functions have no such requirement.  Adding the bounds
+    // unconditionally over-constrains callers of pure record-constructors (e.g.
+    // `wrap : a -> { value : a }` must accept any `Clone` type, not only ones
+    // satisfying `Send + 'static`).
+    let ret_is_task = matches!(ret_ty, IrType::Task(_));
     let generic_clause = if func.type_params.is_empty() {
         String::new()
     } else {
@@ -5431,11 +5608,26 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
             .enumerate()
             .map(|(i, (_, bounds))| {
                 let n = i.saturating_add(1);
-                // Always inject `Clone` — field reads emit `.clone()` so every
-                // generic position must satisfy `Clone`, regardless of whether
-                // the solver's BoundSet already carries it.
+                // Always inject `Clone` — field reads emit `.clone()` to prevent
+                // partial-move errors.  The solver's BoundSet may already carry it,
+                // but `with_clone()` is idempotent so this is safe.
                 let clause = render_bounds(bounds.with_clone(), n);
-                format!("T{n}{clause}")
+                // `render_bounds` returns ": Clone[+ ...]" or "".
+                // Append `Send + 'static` only when the return type is a task.
+                if ret_is_task {
+                    if clause.is_empty() {
+                        format!("T{n}: Clone + Send + 'static")
+                    } else {
+                        format!("T{n}{clause} + Send + 'static")
+                    }
+                } else {
+                    // Pure function (returns a record, ADT, scalar …): Clone suffices.
+                    if clause.is_empty() {
+                        format!("T{n}: Clone")
+                    } else {
+                        format!("T{n}{clause}")
+                    }
+                }
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -5463,25 +5655,31 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // falls through), so it unifies with any `-> R` — no `break value`. A
     // non-`TailLoop` body (the common case) routes to the ordinary value emitter,
     // which is exhaustive and fail-closed for any stray TCO node.
-    let body = match body_expr {
-        Expr::TailLoop {
-            params: loop_params,
-            body: loop_body,
-        } => {
-            let mut shadows = String::new();
-            for (param, _ty) in loop_params {
-                let p = ctx.emit_ident(*param)?;
-                write!(shadows, "let mut {p} = {p};\n    ").map_err(|e| {
-                    Diagnostic::CompilerBug {
-                        where_: "sky_backend_rust::emit_func",
-                        detail: format!("writing TCO param shadow failed: {e}"),
-                    }
-                })?;
+    let body = if sky_main_wrap {
+        // Wrap the synchronous body so sky_main returns SkyTask<()>.
+        let inner = emit_expr(ctx, body_expr, 1, generics)?;
+        format!("let _r = {{ {inner} }};\n    task_succeed(())")
+    } else {
+        match body_expr {
+            Expr::TailLoop {
+                params: loop_params,
+                body: loop_body,
+            } => {
+                let mut shadows = String::new();
+                for (param, _ty) in loop_params {
+                    let p = ctx.emit_ident(*param)?;
+                    write!(shadows, "let mut {p} = {p};\n    ").map_err(|e| {
+                        Diagnostic::CompilerBug {
+                            where_: "sky_backend_rust::emit_func",
+                            detail: format!("writing TCO param shadow failed: {e}"),
+                        }
+                    })?;
+                }
+                let inner = emit_expr_tail(ctx, loop_body, 2, 1, generics, loop_params)?;
+                format!("{shadows}loop {{\n{inner}\n    }}")
             }
-            let inner = emit_expr_tail(ctx, loop_body, 2, 1, generics, loop_params)?;
-            format!("{shadows}loop {{\n{inner}\n    }}")
+            _ => emit_expr(ctx, body_expr, 1, generics)?,
         }
-        _ => emit_expr(ctx, body_expr, 1, generics)?,
     };
     Ok(format!(
         "pub fn {name}{generic_clause}({}) -> {ret} {{\n    {body}\n}}\n",
