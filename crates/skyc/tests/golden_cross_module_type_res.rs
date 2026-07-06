@@ -73,15 +73,27 @@ fn ex10_live_component_exits_zero() {
 
 /// Example 19 (skyforum) — 8-module Sky.Live app.
 ///
-/// Regression for the `FontFamily` scheme bug: `constrain.rs` declared
-/// `K::FontFamily => fun(list(string()), attr(var(0)))` but the Sky API is
-/// `Font.family : String -> Attribute msg`.  The wrong `List String` scheme
-/// leaked a phantom `String = List String` constraint into the merged solve,
-/// which surfaced as a spurious SKY-T0001 ("expected String, found List String")
-/// at the `::` cons site in `State.sky:158` — a completely unrelated line
-/// whose span happened to be where the UF solver first detected the conflict.
-/// Fixed by correcting the scheme to `fun(string(), attr(var(0)))` and changing
-/// the runtime helper from `Vec<String>` to `String`.
+/// Two regressions covered by this test:
+///
+/// 1. **`FontFamily` scheme bug** (from prior session): `constrain.rs`
+///    declared `K::FontFamily => fun(list(string()), attr(var(0)))` but the
+///    Sky API is `Font.family : String -> Attribute msg`.  The wrong `List
+///    String` scheme leaked a phantom `String = List String` constraint into
+///    the merged solve, which surfaced as a spurious SKY-T0001 at the `::` cons
+///    site in `State.sky:158` — a completely unrelated line.  Fixed by
+///    correcting the scheme to `fun(string(), attr(var(0)))` and changing the
+///    runtime helper from `Vec<String>` to `String`.
+///
+/// 2. **Wildcard-`any` return-type** (this session): `view : Model -> any` in
+///    `Main.sky` caused the lowerer to include `any` in the function's generic
+///    type parameters and emit `-> T1` as the return type, producing Rust
+///    E0308 because the body returns `Html<StateMsg>`.  Fixed in `lower.rs`:
+///    (a) `any` is filtered out of `type_params` so no `<T_any>` generic is
+///    emitted; (b) when `split_typed_sig` returns `IrType::Generic(any_sym)`
+///    for the return position, the lowerer substitutes the body expression's
+///    solved concrete type from `self.types.regions[(home, body.span)]` instead.
+///    This mirrors the Haskell compiler's `Instantiate.fromAnnotation` gate
+///    which filters `"any"` out before treating free vars as polymorphic.
 #[test]
 fn ex19_skyforum_exits_zero() {
     assert_skyc_exit0("ex19_skyforum", "examples/19-skyforum/src/Main.sky");
