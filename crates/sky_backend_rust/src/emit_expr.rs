@@ -125,6 +125,184 @@ fn ir_type_contains_task(ty: &IrType) -> bool {
     }
 }
 
+// ── TaskSeq clone-capture helpers ────────────────────────────────────────────
+//
+// `Expr::TaskSeq` emits `task_and_then(effect_s, Box::new(move |_| { rest_s }))`.
+// Rust evaluates `effect_s` first (left-to-right), so any non-Copy variable
+// consumed in `effect_s` is moved before the closure in `rest_s` can capture it.
+// The helpers below detect shared identifiers and add `.clone()` in `effect_s`.
+
+/// Returns `true` for Rust keywords, macro names, and common runtime function
+/// names that should never receive a spurious `.clone()` call.
+fn is_rust_keyword_or_runtime(w: &str) -> bool {
+    matches!(
+        w,
+        "let"
+            | "mut"
+            | "move"
+            | "true"
+            | "false"
+            | "return"
+            | "break"
+            | "continue"
+            | "if"
+            | "else"
+            | "for"
+            | "while"
+            | "loop"
+            | "match"
+            | "in"
+            | "as"
+            | "use"
+            | "mod"
+            | "pub"
+            | "fn"
+            | "struct"
+            | "enum"
+            | "impl"
+            | "trait"
+            | "where"
+            | "type"
+            | "const"
+            | "static"
+            | "unsafe"
+            | "async"
+            | "await"
+            | "dyn"
+            | "ref"
+            | "self"
+            | "super"
+            | "crate"
+            | "extern"
+            | "vec"
+            | "format"
+            | "to_string"
+            | "clone"
+            | "into"
+            | "from"
+            | "default"
+            | "push_str"
+            | "contains"
+            | "starts_with"
+            | "ends_with"
+            | "len"
+            | "is_empty"
+            | "parse"
+            | "unwrap"
+            | "unwrap_or"
+            | "ok"
+            | "err"
+            | "map"
+            | "and_then"
+    )
+}
+
+/// Collect all unique lowercase-initial identifier words from `s` (length ≥ 2,
+/// not a Rust keyword/runtime name) into a sorted set.  These are the candidates
+/// that might be local variables captured by a `move` closure.
+fn collect_lowercase_ident_words(s: &str) -> std::collections::BTreeSet<String> {
+    use std::collections::BTreeSet;
+    let is_word_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let hb = s.as_bytes();
+    let mut seen = BTreeSet::new();
+    let mut i = 0;
+    while i < hb.len() {
+        let Some(&b) = hb.get(i) else { break };
+        if b.is_ascii_lowercase() {
+            // Ensure this is a word start, not the middle of an identifier.
+            let is_mid = i > 0 && hb.get(i.saturating_sub(1)).is_some_and(|&p| is_word_byte(p));
+            if !is_mid {
+                let start = i;
+                while hb.get(i).is_some_and(|&c| is_word_byte(c)) {
+                    i += 1;
+                }
+                if let Some(word) = hb
+                    .get(start..i)
+                    .and_then(|s| std::str::from_utf8(s).ok())
+                    .filter(|w| w.len() >= 2 && !is_rust_keyword_or_runtime(w))
+                {
+                    seen.insert(word.to_owned());
+                }
+                continue;
+            }
+        }
+        i += 1;
+    }
+    seen
+}
+
+/// Replace bare occurrences of `ident` in `s` with `ident.clone()`, skipping:
+///   - occurrences already followed by `.clone()` (no double-clone),
+///   - occurrences followed by `(` or `!(` (function/macro calls, not values),
+///   - occurrences immediately preceded by `"` or `'` (inside string literals).
+fn add_clone_to_bare_ident(s: &str, ident: &str) -> String {
+    if ident.is_empty() {
+        return s.to_owned();
+    }
+    let is_word_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let hb = s.as_bytes();
+    let ib = ident.as_bytes();
+    let ilen = ib.len();
+    let mut result = String::with_capacity(s.len() + 16);
+    let mut i = 0;
+    while i < hb.len() {
+        if hb.get(i..i + ilen) == Some(ib) {
+            let prev = if i > 0 {
+                hb.get(i.saturating_sub(1)).copied()
+            } else {
+                None
+            };
+            let before_ok = prev.is_none_or(|b| !is_word_byte(b));
+            // Skip identifiers that sit inside a string literal
+            // (immediately preceded by `"` or `'`).
+            let not_in_string_lit = prev != Some(b'"') && prev != Some(b'\'');
+            let after_ok = hb.get(i + ilen).is_none_or(|&b| !is_word_byte(b));
+            if before_ok && not_in_string_lit && after_ok {
+                let after_str = s.get(i + ilen..).unwrap_or("");
+                // Only add .clone() for bare value uses:
+                //   already-cloned → skip; function/macro call → skip; else → clone.
+                let needs_clone = !after_str.starts_with(".clone()")
+                    && !after_str.starts_with('(')
+                    && !after_str.starts_with("!(");
+                result.push_str(ident);
+                if needs_clone {
+                    result.push_str(".clone()");
+                }
+                i += ilen;
+                continue;
+            }
+        }
+        let ch = s
+            .get(i..)
+            .and_then(|ss| ss.chars().next())
+            .unwrap_or('\0');
+        result.push(ch);
+        i += ch.len_utf8();
+    }
+    result
+}
+
+/// In `effect_s`, add `.clone()` to any identifier that is also (potentially)
+/// captured free in `rest_s`, preventing E0382 "use of moved value" in
+///   `task_and_then(effect_s, Box::new(move |_| { rest_s }))`.
+///
+/// Only lowercase-initial identifiers are examined (local variable naming
+/// convention); uppercase-initial names are types or constructors and don't
+/// need cloning here.
+fn clone_captured_vars(effect_s: &str, rest_s: &str) -> String {
+    let vars = collect_lowercase_ident_words(rest_s);
+    if vars.is_empty() {
+        return effect_s.to_owned();
+    }
+    let mut out = effect_s.to_owned();
+    for var in &vars {
+        if count_word_occurrences(&out, var) > 0 {
+            out = add_clone_to_bare_ident(&out, var);
+        }
+    }
+    out
+}
+
 /// The Rust spelling of a binary operator for use in infix emission.
 ///
 /// Every Sky M1-core arithmetic/comparison/boolean operator maps to the
@@ -4316,6 +4494,11 @@ pub fn emit_expr_at(
             let child = depth + 1;
             let effect_s = emit_expr_at(ctx, effect, indent, child, generics)?;
             let rest_s = emit_expr_at(ctx, rest, indent, child, generics)?;
+            // Clone any identifier that `rest_s` (the move-closure continuation)
+            // would capture but `effect_s` already moves.  Rust evaluates function
+            // args left-to-right, so a String/record passed by value into `effect_s`
+            // is moved before the closure in the second argument is constructed.
+            let effect_s = clone_captured_vars(&effect_s, &rest_s);
             Ok(format!(
                 "task_and_then({effect_s}, Box::new(move |_| {{ {rest_s} }}))"
             ))
