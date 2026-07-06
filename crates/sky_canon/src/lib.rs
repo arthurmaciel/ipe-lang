@@ -2815,4 +2815,50 @@ mod tests {
         assert_eq!(i.resolve(name), Some("Overview"), "ctor name is `Overview`");
         assert_eq!(index, 0, "`Overview` is the first ctor");
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // #146 — Std.Ui.Lazy: module registration regression
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// `import Std.Ui.Lazy as Lazy` followed by a bare `Lazy.lazy` call must
+    /// resolve without a name error.  Before #146 the qualifier "Lazy" was
+    /// absent from `STDLIB_MODULE_QUALIFIERS` / `QUALIFIERS`, so any reference
+    /// to `Lazy.lazy` fired `NameError::ValueNotFound`.
+    #[test]
+    fn lazy_module_lazy_resolves_without_name_error() {
+        let err = canon_err(
+            "module Main exposing (main)\n\
+             import Std.Ui.Lazy as Lazy\n\
+             main = Lazy.lazy identity 0\n",
+        );
+        assert!(
+            err.is_none(),
+            "#146 regression: `Lazy.lazy` must resolve cleanly; got {err:?}"
+        );
+    }
+
+    /// All five arity variants (`lazy`..`lazy5`) must resolve.
+    #[test]
+    fn lazy_module_all_arities_resolve() {
+        // Use integer literals for extra args — bare names like `x` aren't
+        // in scope inside a minimal canon fixture and produce ValueNotFound.
+        for (name, extra_args) in [
+            ("lazy",  " 0"),
+            ("lazy2", " 0 1"),
+            ("lazy3", " 0 1 2"),
+            ("lazy4", " 0 1 2 3"),
+            ("lazy5", " 0 1 2 3 4"),
+        ] {
+            let src = format!(
+                "module Main exposing (main)\n\
+                 import Std.Ui.Lazy as Lazy\n\
+                 main = Lazy.{name} identity{extra_args}\n"
+            );
+            let err = canon_err(&src);
+            assert!(
+                err.is_none(),
+                "#146 regression: `Lazy.{name}` must resolve cleanly; got {err:?}"
+            );
+        }
+    }
 }

@@ -1048,6 +1048,12 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::WsSendBinaryToClient => "ws_server_send_binary_to_client",
         KernelFn::WsBroadcast => "ws_server_broadcast",
         KernelFn::WsCloseClient => "ws_server_close_client",
+        // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────
+        KernelFn::LazyLazy  => "lazy_lazy_",
+        KernelFn::LazyLazy2 => "lazy_lazy2_",
+        KernelFn::LazyLazy3 => "lazy_lazy3_",
+        KernelFn::LazyLazy4 => "lazy_lazy4_",
+        KernelFn::LazyLazy5 => "lazy_lazy5_",
     }
 }
 

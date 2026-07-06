@@ -7169,6 +7169,17 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::AuthLogin
                 | KernelFn::AuthSetRole,
             ) => Ok(3),
+            // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────
+            // lazy  : (a -> Element msg) -> a -> Element msg          — arity 2
+            Callee::Kernel(KernelFn::LazyLazy) => Ok(2),
+            // lazy2 : (a -> b -> Element msg) -> a -> b -> …          — arity 3
+            Callee::Kernel(KernelFn::LazyLazy2) => Ok(3),
+            // lazy3 : (a -> b -> c -> Element msg) -> …               — arity 4
+            Callee::Kernel(KernelFn::LazyLazy3) => Ok(4),
+            // lazy4 : (a -> b -> c -> d -> Element msg) -> …          — arity 5
+            Callee::Kernel(KernelFn::LazyLazy4) => Ok(5),
+            // lazy5 : (a -> b -> c -> d -> e -> Element msg) -> …     — arity 6
+            Callee::Kernel(KernelFn::LazyLazy5) => Ok(6),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -8038,6 +8049,12 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Input", "newPassword") => Ok(Callee::Kernel(KernelFn::InputNewPassword)),
                     ("Input", "checkbox") => Ok(Callee::Kernel(KernelFn::InputCheckbox)),
+                    // ── #146: Std.Ui.Lazy sub-module ──────────────────────────
+                    ("Lazy", "lazy")  => Ok(Callee::Kernel(KernelFn::LazyLazy)),
+                    ("Lazy", "lazy2") => Ok(Callee::Kernel(KernelFn::LazyLazy2)),
+                    ("Lazy", "lazy3") => Ok(Callee::Kernel(KernelFn::LazyLazy3)),
+                    ("Lazy", "lazy4") => Ok(Callee::Kernel(KernelFn::LazyLazy4)),
+                    ("Lazy", "lazy5") => Ok(Callee::Kernel(KernelFn::LazyLazy5)),
                     // ── M7: Std.Live / Sky.Live app-entry kernels ─────────────
                     ("Live", "app") => Ok(Callee::Kernel(KernelFn::LiveApp)),
                     ("Live", "appRouted") => Ok(Callee::Kernel(KernelFn::LiveAppRouted)),

@@ -966,6 +966,12 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::InputCurrentPassword => "Input.currentPassword",
         KernelFn::InputNewPassword => "Input.newPassword",
         KernelFn::InputCheckbox => "Input.checkbox",
+        // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────
+        KernelFn::LazyLazy  => "Lazy.lazy",
+        KernelFn::LazyLazy2 => "Lazy.lazy2",
+        KernelFn::LazyLazy3 => "Lazy.lazy3",
+        KernelFn::LazyLazy4 => "Lazy.lazy4",
+        KernelFn::LazyLazy5 => "Lazy.lazy5",
         KernelFn::BasicsCompare => "Basics.compare",
     }
 }

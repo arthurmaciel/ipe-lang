@@ -2379,4 +2379,87 @@ mod tests {
         let Ty::Fun(b, _) = tail.as_ref() else { return };
         assert_eq!(ty_con_name(b, &i).as_deref(), Some("Int"));
     }
+
+    /// #145 regression: `constrain_pattern` must recurse into sub-patterns of a
+    /// constructor whose scheme is not registered (e.g. an imported kernel-stdlib
+    /// ADT like `ChunkEvent`).  Before the fix, the no-scheme fallback skipped
+    /// binding arg variables into `br_local`, so the arm body's `VarLocal` lookup
+    /// fired the "unbound local" ICE (SKY-I0001).
+    ///
+    /// We exercise this directly by building a `canon::Module` with no `unions`
+    /// (so `ImportedCtor` has no scheme) and a single `case` arm:
+    ///
+    /// ```
+    /// case scrut of
+    ///     ImportedCtor x -> x   -- arm uses `x`, must not ICE
+    /// ```
+    #[test]
+    fn imported_ctor_pvar_does_not_ice() {
+        use sky_diagnostics::Span;
+
+        let mut i = Interner::new();
+        let main_sym = i.intern("Main").unwrap();
+        let f_sym = i.intern("f").unwrap();
+        let arg_sym = i.intern("scrut").unwrap();
+        let ctor_type_sym = i.intern("ImportedType").unwrap();
+        let ctor_sym = i.intern("ImportedCtor").unwrap();
+        let var_sym = i.intern("x").unwrap();
+
+        // No `unions` → `ImportedCtor` has no scheme, triggering the no-scheme
+        // fallback path in `constrain_pattern`.
+        let module = canon::Module {
+            name: vec![main_sym],
+            unions: vec![],
+            defs: vec![canon::Def::Untyped {
+                home: vec![main_sym],
+                name: sky_diagnostics::Located::new(Span::DUMMY, f_sym),
+                patterns: vec![sky_diagnostics::Located::new(
+                    Span::DUMMY,
+                    canon::Pattern_::PVar(arg_sym),
+                )],
+                body: sky_diagnostics::Located::new(
+                    Span::DUMMY,
+                    canon::Expr_::Case(
+                        Box::new(sky_diagnostics::Located::new(
+                            Span::DUMMY,
+                            canon::Expr_::VarLocal(arg_sym),
+                        )),
+                        vec![canon::CaseBranch {
+                            // Pattern: `ImportedCtor x`
+                            pat: sky_diagnostics::Located::new(
+                                Span::DUMMY,
+                                canon::Pattern_::PCtor {
+                                    home: vec![],
+                                    type_name: ctor_type_sym,
+                                    name: ctor_sym,
+                                    index: 0,
+                                    args: vec![sky_diagnostics::Located::new(
+                                        Span::DUMMY,
+                                        canon::Pattern_::PVar(var_sym),
+                                    )],
+                                },
+                            ),
+                            // Body: `x` — uses the pattern-bound variable
+                            body: sky_diagnostics::Located::new(
+                                Span::DUMMY,
+                                canon::Expr_::VarLocal(var_sym),
+                            ),
+                        }],
+                    ),
+                ),
+            }],
+        };
+
+        let result = infer(&module, &mut i);
+
+        // The result may be a type error (e.g. T0001) but must NOT be the
+        // "unbound local" compiler bug that fired before the #145 fix.
+        if let Err(sky_diagnostics::Diagnostic::CompilerBug { detail, .. }) = &result {
+            assert!(
+                !detail.contains("unbound local"),
+                "#145 regression: imported ctor PVar arg must not fire \
+                 'unbound local' ICE; detail: {detail}"
+            );
+        }
+    }
 }
