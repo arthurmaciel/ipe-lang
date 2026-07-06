@@ -19,3 +19,6 @@ pub mod input;
 
 /// `Std.Ui.Lazy` kernel helpers — eager evaluation in v1 (#146).
 pub mod lazy;
+
+/// `Std.Ui.Keyed` kernel helpers — sky-key diff identity (key discarded in v1).
+pub mod keyed;

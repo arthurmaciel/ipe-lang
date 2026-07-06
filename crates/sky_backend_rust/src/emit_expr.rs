@@ -2676,6 +2676,21 @@ fn emit_ui_call(
             )))
         }
 
+        // Html.Attributes — rows (Int → Html.Attribute msg)
+        // Used on `<textarea rows="N">`.
+        KernelFn::HtmlAttrRows => {
+            let [n_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlAttrRows",
+                    detail: format!("Attr.rows requires 1 argument, got {}", args.len()),
+                });
+            };
+            let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::html::html_named_attr_(\"rows\".to_owned(), ({n}).to_string())"
+            )))
+        }
+
         // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
 
         // `Region.mainContent : Attribute msg`
@@ -3802,6 +3817,37 @@ fn emit_ui_call(
                         ),
                     })?;
             Ok(Some(s))
+        }
+
+        // ── Std.Ui.Keyed — sky-key diff identity ─────────────────────────────
+        // `Keyed.column : List Attr -> List (String, Element msg) -> Element msg`
+        KernelFn::KeyedColumn => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::KeyedColumn",
+                    detail: format!("Keyed.column requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::keyed::keyed_column_({attrs}, {children})"
+            )))
+        }
+
+        // `Keyed.row : List Attr -> List (String, Element msg) -> Element msg`
+        KernelFn::KeyedRow => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::KeyedRow",
+                    detail: format!("Keyed.row requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::keyed::keyed_row_({attrs}, {children})"
+            )))
         }
 
         // Any is_ui/live/tui/webview/cli() variant not listed is a gap — hard error.
