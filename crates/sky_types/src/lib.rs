@@ -155,19 +155,35 @@ fn infer_with_budget(
     // the `RouteWitnessCheck` doc comment for the full rationale.
     resolve_route_witness_checks(&mut uf, budget, interner, &generated.route_witness_checks)?;
 
+    // Non-fatal diagnostics collected during the post-solve deferred passes and
+    // the exhaustiveness pass. All are `Severity::Warning`: callers MUST print
+    // them but MUST NOT treat them as compilation failures.
+    let mut warnings: Vec<Diagnostic> = Vec::new();
+
     // For routed `Live.app` calls: if the now-settled Model type has a `page`
     // field, the `notFound` type must match that field's type.  Non-routed
-    // apps (Model has no `page` field) are silently skipped.  See the
-    // `RoutedLiveCheck` doc comment for the full rationale.
-    resolve_routed_live_checks(&mut uf, budget, interner, &generated.routed_live_checks)?;
+    // apps (Model has no `page` field) are silently skipped — UNLESS the app
+    // declared a non-empty `routes` list, in which case the routes are ignored
+    // and we emit the SKY-L0124 warning (usually a mis-named `page` field). See
+    // the `RoutedLiveCheck` doc comment for the full rationale.
+    let has_routes = !generated.route_witness_checks.is_empty();
+    resolve_routed_live_checks(
+        &mut uf,
+        budget,
+        interner,
+        &generated.routed_live_checks,
+        has_routes,
+        generated.route_witness_checks.len(),
+        &mut warnings,
+    )?;
 
     // End-of-checking exhaustiveness + redundancy pass. Running it here — after
     // the solver settles — makes the lowerer's `Match::new` exhaustiveness
     // contract a genuinely unreachable compiler-bug case.
     // Redundant-branch warnings (SKY-T0011) are collected rather than returned
     // as errors — they are Severity::Warning and must not abort compilation.
-    let mut exhaust_warnings: Vec<Diagnostic> = Vec::new();
-    exhaust::check(m, interner, &mut exhaust_warnings)?;
+    // They join the same `warnings` sink already carrying any SKY-L0124.
+    exhaust::check(m, interner, &mut warnings)?;
 
     // Numeric defaulting: a `Number` variable the program never pinned to a
     // concrete type resolves to `Int` (an untyped `\a b -> a + b` is `Int`, not
@@ -274,7 +290,7 @@ fn infer_with_budget(
         env,
         regions,
         bounds,
-        warnings: exhaust_warnings,
+        warnings,
         poly_var_map,
     })
 }
@@ -691,6 +707,9 @@ fn resolve_routed_live_checks(
     budget: &mut Budget,
     interner: &Interner,
     checks: &[RoutedLiveCheck],
+    has_routes: bool,
+    route_count: usize,
+    warnings: &mut Vec<Diagnostic>,
 ) -> DResult<()> {
     for check in checks {
         // Find the settled root of the Model type variable.
@@ -719,8 +738,25 @@ fn resolve_routed_live_checks(
                 check.not_found_var,
                 page_var,
             )?;
+        } else if has_routes {
+            // Non-routed Model (no `page` field) BUT the program declared a
+            // non-empty `routes` list: the routes are forwarded to the
+            // non-routed runtime path and silently ignored. This compiles
+            // (matching the Go reference's `applyRoute` no-op), but it is
+            // almost always a mistake — usually a mis-named `page` field. Emit
+            // the SKY-L0124 warning at the `Live.app` span.
+            //
+            // `route_count` is the total number of `Live.route` references in
+            // the compile unit. In the common single-app-per-program case this
+            // equals this app's route count exactly; the rare multi-app case
+            // (only sub-apps, which are separate binaries in practice) could
+            // over-count, but the warning stays advisory — the build proceeds.
+            warnings.push(Diagnostic::Type {
+                span: check.span,
+                msg: TypeError::RoutedAppMissingPageField { route_count },
+            });
         }
-        // Non-routed (no `page` field) → silently skip.
+        // Non-routed with no routes → genuinely non-routed → silently skip.
     }
     Ok(())
 }
@@ -1472,6 +1508,111 @@ mod tests {
         {
             assert_eq!(&**constructor, "Increment");
         }
+    }
+
+    /// SKY-L0124 (#153 follow-up): a `Live.app` with a non-empty `routes` list
+    /// whose Model has NO `page` field emits a **warning**, not an error. The
+    /// program still type-checks (Go's `applyRoute` no-ops the same shape); the
+    /// warning flags the likely mis-named routed-page field.
+    ///
+    /// Exercises `resolve_routed_live_checks` directly with a hand-built
+    /// non-routed Model record (a single `count` field, no `page`) and
+    /// `has_routes = true`.
+    #[test]
+    fn routed_app_missing_page_field_is_a_warning() {
+        let mut interner = Interner::new();
+        let count_sym = interner.intern("count").expect("intern count");
+        let mut budget = Budget::unbounded();
+        let mut uf = UnionFind::new();
+
+        // Closed record `{ count : <flex> }` — no `page` field → non-routed.
+        let count_var = uf.fresh(Content::Flex).expect("fresh count var");
+        let ext = uf
+            .fresh(Content::Structure(FlatType::EmptyRecord))
+            .expect("fresh ext");
+        let mut fields = BTreeMap::new();
+        fields.insert(count_sym, count_var);
+        let model_var = uf
+            .fresh(Content::Structure(FlatType::Record(fields, ext)))
+            .expect("fresh model var");
+        let not_found_var = uf.fresh(Content::Flex).expect("fresh notFound var");
+
+        let check = RoutedLiveCheck {
+            model_var,
+            not_found_var,
+            span: Span::DUMMY,
+        };
+        let mut warnings: Vec<Diagnostic> = Vec::new();
+        resolve_routed_live_checks(
+            &mut uf,
+            &mut budget,
+            &interner,
+            &[check],
+            /* has_routes */ true,
+            /* route_count */ 2,
+            &mut warnings,
+        )
+        .expect("non-routed Model + routes is a warning, not an error");
+
+        assert_eq!(
+            warnings.len(),
+            1,
+            "expected exactly one SKY-L0124 warning, got {warnings:?}"
+        );
+        let w = warnings.first().expect("len==1 asserted above");
+        assert!(
+            matches!(
+                w,
+                Diagnostic::Type {
+                    msg: TypeError::RoutedAppMissingPageField { route_count: 2 },
+                    ..
+                }
+            ),
+            "expected RoutedAppMissingPageField {{ route_count: 2 }}, got {w:?}"
+        );
+        assert_eq!(w.severity(), sky_diagnostics::Severity::Warning);
+    }
+
+    /// The same non-routed Model with `has_routes = false` (empty `routes`)
+    /// is a genuine non-routed app and must emit NO warning.
+    #[test]
+    fn non_routed_app_without_routes_is_silent() {
+        let mut interner = Interner::new();
+        let count_sym = interner.intern("count").expect("intern count");
+        let mut budget = Budget::unbounded();
+        let mut uf = UnionFind::new();
+
+        let count_var = uf.fresh(Content::Flex).expect("fresh count var");
+        let ext = uf
+            .fresh(Content::Structure(FlatType::EmptyRecord))
+            .expect("fresh ext");
+        let mut fields = BTreeMap::new();
+        fields.insert(count_sym, count_var);
+        let model_var = uf
+            .fresh(Content::Structure(FlatType::Record(fields, ext)))
+            .expect("fresh model var");
+        let not_found_var = uf.fresh(Content::Flex).expect("fresh notFound var");
+
+        let check = RoutedLiveCheck {
+            model_var,
+            not_found_var,
+            span: Span::DUMMY,
+        };
+        let mut warnings: Vec<Diagnostic> = Vec::new();
+        resolve_routed_live_checks(
+            &mut uf,
+            &mut budget,
+            &interner,
+            &[check],
+            /* has_routes */ false,
+            /* route_count */ 0,
+            &mut warnings,
+        )
+        .expect("genuine non-routed app must type-check");
+        assert!(
+            warnings.is_empty(),
+            "empty-routes non-routed app must be silent, got {warnings:?}"
+        );
     }
 
     #[test]

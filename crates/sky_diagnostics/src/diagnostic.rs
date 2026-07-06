@@ -14,7 +14,7 @@ use crate::code::{
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
     SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118, SKY_L0119, SKY_L0120, SKY_L0121,
-    SKY_L0122, SKY_L0123, SKY_L0125, SKY_L0126, SKY_L0200,
+    SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0126, SKY_L0200,
     SKY_N0001,
     SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
     SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_P0001,
@@ -438,6 +438,15 @@ pub enum TypeError {
     NonExhaustiveCase { missing: Box<[Box<str>]> },
     /// Two arms cover the same constructor (warning). [SKY-T0011]
     RedundantCaseBranch { constructor: Box<str> },
+    /// `Live.app` carries a non-empty `routes` list but the Model type has no
+    /// `page` field, so the routes are forwarded to the non-routed path and
+    /// never update the Model (warning — the program still compiles, matching
+    /// the Go reference's silent no-op). Usually a mis-named routed-page field.
+    /// [SKY-L0124]
+    RoutedAppMissingPageField {
+        /// How many routes were declared.
+        route_count: usize,
+    },
     /// A `record.field` access whose `field` is not present in the (closed)
     /// record type `record` — or whose base is not a record at all. [SKY-T0012]
     NoSuchField { field: Box<str>, record: Box<TyDoc> },
@@ -839,7 +848,8 @@ impl Diagnostic {
         match self {
             Self::Parse { .. } | Self::Name { .. } | Self::Lower { .. } => Severity::Error,
             Self::Type { msg, .. } => match msg {
-                TypeError::RedundantCaseBranch { .. } => Severity::Warning,
+                TypeError::RedundantCaseBranch { .. }
+                | TypeError::RoutedAppMissingPageField { .. } => Severity::Warning,
                 TypeError::Mismatch
                 | TypeError::BudgetExceeded
                 | TypeError::TypeMismatch { .. }
@@ -940,6 +950,7 @@ const fn type_code(msg: &TypeError) -> Code {
         TypeError::TooManyParameters { .. } => SKY_T0004,
         TypeError::NonExhaustiveCase { .. } => SKY_T0010,
         TypeError::RedundantCaseBranch { .. } => SKY_T0011,
+        TypeError::RoutedAppMissingPageField { .. } => SKY_L0124,
         TypeError::NoSuchField { .. } => SKY_T0012,
         TypeError::CtorPatternArity { .. } => SKY_T0013,
         TypeError::SuperTypeUnsatisfied { .. } => SKY_T0014,
@@ -1083,6 +1094,17 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
         TypeError::RefutablePatternParameter => {
             vec![HelpLine::Hint(Hint::IrrefutableParameterRequired)]
         }
+        TypeError::RoutedAppMissingPageField { route_count } => vec![HelpLine::Note(
+            format!(
+                "the `routes` list has {route_count} route(s) but the Model has no \
+                 `page` field, so routing is disabled and every URL serves the same \
+                 app. The routed-page field must be named exactly `page` (of the \
+                 `Page` ADT whose constructors appear as route destinations). Rename \
+                 the field to `page`, or remove the `routes` list if routing is not \
+                 needed."
+            )
+            .into_boxed_str(),
+        )],
         TypeError::Mismatch
         | TypeError::InfiniteType { .. }
         | TypeError::TooManyParameters { .. }
