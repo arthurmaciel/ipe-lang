@@ -92,6 +92,8 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Std", "Ui", "Region"], "Region"), // #117
     (&["Std", "Ui", "Input"], "Input"),   // Task #124
     (&["Std", "Ui", "Lazy"], "Lazy"),    // #146
+    (&["Std", "Ui", "Keyed"], "Keyed"),  // sky-key diff identity
+    (&["Std", "Decimal"], "Decimal"),    // arbitrary-precision decimal arithmetic
     (&["Std", "Html"], "Html"),
     (&["Std", "Html", "Attributes"], "Attr"),
     (&["Std", "Html", "Events"], "Event"),
@@ -1203,6 +1205,11 @@ impl Env {
                 "Lazy",
                 &["lazy", "lazy2", "lazy3", "lazy4", "lazy5"],
             ),
+            // ── Std.Ui.Keyed — sky-key for diff identity ─────────────────────────
+            (
+                "Keyed",
+                &["column", "row"],
+            ),
             // ── M7: Std.Html — typed HTML element / text surface ─────────────────
             // `render` / `escapeHtml` / `escapeAttr` / `attrToString` are render
             // kernels; all element-builder names create `Html msg` values.
@@ -1333,6 +1340,7 @@ impl Env {
                     "autofocus",
                     "autocomplete",
                     "tabindex",
+                    "rows",
                     "noAttr",
                 ],
             ),
@@ -1383,6 +1391,22 @@ impl Env {
             ("Stream", &["stream", "emit", "finish", "withContentType"]),
             // Sky.Core.Http.Stream — client-side HTTP streaming (fail-closed).
             ("HttpStream", &["open", "forEachChunk", "close", "chunks"]),
+            // Std.Decimal — arbitrary-precision decimal arithmetic.
+            (
+                "Decimal",
+                &[
+                    "zero", "one", "oneHundred",
+                    "fromString", "fromInt", "fromFloat", "fromMinor",
+                    "toString", "toStringFixed", "toFloat", "toInt", "toMinor",
+                    "add", "sub", "mul", "div", "mod",
+                    "neg", "abs", "floor", "ceil",
+                    "round", "roundHalfUp", "truncate",
+                    "compare", "eq", "neq", "lt", "lte", "gt", "gte", "min", "max",
+                    "isZero", "isPositive", "isNegative",
+                    "percentOf", "addPercent", "subPercent",
+                    "formatWith",
+                ],
+            ),
             // #127: Sky.Http.Server.WebSocket (12 kernels, fully wired).
             (
                 "Ws",
@@ -1461,6 +1485,10 @@ impl Env {
             ("Std.Ui.Input", "Input"),
             // #146: Std.Ui.Lazy sub-module.
             ("Std.Ui.Lazy", "Lazy"),
+            // Std.Ui.Keyed sub-module.
+            ("Std.Ui.Keyed", "Keyed"),
+            // Std.Decimal — arbitrary-precision decimal arithmetic.
+            ("Std.Decimal", "Decimal"),
         ];
 
         // ── Phase-B: build stdlib_index FIRST so all VarHome::Kernel(id, ..)

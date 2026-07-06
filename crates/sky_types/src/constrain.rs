@@ -341,6 +341,12 @@ struct Builtins {
     /// a `String` in the form `"HS256:<secret>"` or `"RS256:<pem>"`.  Built
     /// by `Jwt.hs256` / `Jwt.rs256` and consumed by `Jwt.encode` / `Jwt.decode`.
     jwt_algorithm: Symbol,
+    // ── Std.Decimal opaque type constructor symbol ────────────────────────────
+    /// `"Decimal"` — the opaque arbitrary-precision decimal type constructor
+    /// from `Std.Decimal`.  Backed by `sky_runtime::decimal::Decimal` (wrapping
+    /// `rust_decimal::Decimal`).  Zero type arguments.  Lowered to
+    /// `IrType::Decimal` by `ir_type_from_ty` / `ir_type_from_canon`.
+    decimal: Symbol,
 }
 
 impl Builtins {
@@ -478,6 +484,8 @@ impl Builtins {
             // ── JWT builder opaque type constructor symbols (D-00) ──────────────
             jwt_claims: interner.intern("Claims")?,
             jwt_algorithm: interner.intern("Algorithm")?,
+            // ── Std.Decimal opaque type constructor ──────────────────────────────
+            decimal: interner.intern("Decimal")?,
         })
     }
 
@@ -2668,6 +2676,12 @@ impl<'a> Builder<'a> {
             name: self.builtins.order,
             args: Vec::new(),
         };
+        // `Decimal` is a zero-argument constructor (Std.Decimal).
+        let decimal = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.decimal,
+            args: Vec::new(),
+        };
         let error_ty = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.error,
@@ -4206,6 +4220,68 @@ impl<'a> Builder<'a> {
             K::HtmlNoAttr => html_attr(var(0)),
             // #76 Tier 1 — Int-keyed html attr.
             K::HtmlAttrTabindex => fun(int(), html_attr(var(0))),
+            // Textarea rows attribute — `Int -> HtmlAttribute msg`.
+            K::HtmlAttrRows => fun(int(), html_attr(var(0))),
+
+            // ── Std.Ui.Keyed ──────────────────────────────────────────────────
+            // `Keyed.column / Keyed.row : List (Attribute msg) -> List (String, Element msg) -> Element msg`
+            K::KeyedColumn
+            | K::KeyedRow => {
+                fun(
+                    list(attr(var(0))),
+                    fun(list(tuple2(string(), elem_t(var(0)))), elem_t(var(0))),
+                )
+            }
+
+            // ── Std.Decimal ───────────────────────────────────────────────────
+            // Construction.
+            K::DecZero | K::DecOne | K::DecOneHundred => decimal(),
+            K::DecFromString => fun(string(), result(error_ty(), decimal())),
+            K::DecFromInt    => fun(int(),    decimal()),
+            K::DecFromFloat  => fun(float(),  decimal()),
+            K::DecFromMinor  => fun(int(), fun(int(), decimal())),
+            // Conversion.
+            K::DecToString       => fun(decimal(), string()),
+            K::DecToStringFixed  => fun(int(), fun(decimal(), string())),
+            K::DecToFloat        => fun(decimal(), float()),
+            K::DecToInt          => fun(decimal(), int()),
+            K::DecToMinor        => fun(int(), fun(decimal(), int())),
+            // Arithmetic.
+            K::DecAdd | K::DecSub | K::DecMul => {
+                fun(decimal(), fun(decimal(), decimal()))
+            }
+            K::DecDiv | K::DecMod => {
+                fun(decimal(), fun(decimal(), result(error_ty(), decimal())))
+            }
+            K::DecNeg | K::DecAbs | K::DecFloor | K::DecCeil => {
+                fun(decimal(), decimal())
+            }
+            // Rounding.
+            K::DecRound | K::DecRoundHalfUp | K::DecTruncate => {
+                fun(int(), fun(decimal(), decimal()))
+            }
+            // Comparison.
+            K::DecCompare => fun(decimal(), fun(decimal(), int())),
+            K::DecEq
+            | K::DecNeq
+            | K::DecLt
+            | K::DecLte
+            | K::DecGt
+            | K::DecGte => fun(decimal(), fun(decimal(), bool_ty())),
+            K::DecMin | K::DecMax => fun(decimal(), fun(decimal(), decimal())),
+            // Predicates.
+            K::DecIsZero | K::DecIsPositive | K::DecIsNegative => {
+                fun(decimal(), bool_ty())
+            }
+            // Percent helpers.
+            K::DecPercentOf | K::DecAddPercent | K::DecSubPercent => {
+                fun(decimal(), fun(decimal(), decimal()))
+            }
+            // Formatting.
+            // `formatWith : String -> String -> Int -> Decimal -> String`
+            K::DecFormatWith => {
+                fun(string(), fun(string(), fun(int(), fun(decimal(), string()))))
+            }
 
             // ── Std.Ui.Region (#117) ──────────────────────────────────────────
             // Nullary region landmark attrs — `Attribute msg`.
@@ -5825,6 +5901,52 @@ mod registry_phase_c_tests {
             // New kernels with no legacy `kernel_ty` entry — pure holes.
             K::UiLink,
             K::BorderWidthEach,
+            // ── Std.Ui.Keyed (column + row) ──────────────────────────────────
+            K::KeyedColumn,
+            K::KeyedRow,
+            // ── Std.Decimal (40 kernels) ──────────────────────────────────────
+            K::DecZero,
+            K::DecOne,
+            K::DecOneHundred,
+            K::DecFromString,
+            K::DecFromInt,
+            K::DecFromFloat,
+            K::DecFromMinor,
+            K::DecToString,
+            K::DecToStringFixed,
+            K::DecToFloat,
+            K::DecToInt,
+            K::DecToMinor,
+            K::DecAdd,
+            K::DecSub,
+            K::DecMul,
+            K::DecDiv,
+            K::DecMod,
+            K::DecNeg,
+            K::DecAbs,
+            K::DecFloor,
+            K::DecCeil,
+            K::DecRound,
+            K::DecRoundHalfUp,
+            K::DecTruncate,
+            K::DecCompare,
+            K::DecEq,
+            K::DecNeq,
+            K::DecLt,
+            K::DecLte,
+            K::DecGt,
+            K::DecGte,
+            K::DecMin,
+            K::DecMax,
+            K::DecIsZero,
+            K::DecIsPositive,
+            K::DecIsNegative,
+            K::DecPercentOf,
+            K::DecAddPercent,
+            K::DecSubPercent,
+            K::DecFormatWith,
+            // ── Textarea rows attr ─────────────────────────────────────────────
+            K::HtmlAttrRows,
         ]
     };
 
