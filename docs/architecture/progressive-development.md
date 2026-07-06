@@ -40,6 +40,37 @@ touch progressive-development.stop                 # stop after the current iter
 git switch master && git merge --ff-only progressive-development/run-<ts>
 ```
 
+## Monitoring a run
+No dashboard — durable log files + git. Three surfaces:
+
+1. **Loop heartbeat (live, coarse).** `run.sh`'s stdout: `── iteration N/20 ──`,
+   each verdict (`LANDED <sha>` / `FAILED` / `ESCALATED` / reset), disk/mem
+   aborts. Run it in a terminal, or `tail -f` its stdout if backgrounded.
+2. **Landed work (durable).** Each green iteration = one commit on the run branch:
+   ```bash
+   watch -n10 'git log --oneline master..$(git branch --list "progressive-development/run-*" | tail -1 | tr -d " *")'
+   git show <sha>   # the diff of any landed item
+   ```
+3. **Per-iteration full output.** `docs/architecture/progressive-development-iter-<n>.log`
+   holds the agent's complete output for iteration N; `progressive-development-escalations.md`
+   holds what it refused.
+   - **Default (text) mode:** `claude -p` buffers, so this log only fills when the
+     iteration *ends* — a post-mortem, not a live feed.
+   - **`PROGDEV_STREAM=1`:** switches to `--output-format stream-json --verbose`, so
+     every step (reasoning, tool calls, gate output) is written to the iter-log
+     **as it happens** — a true live feed.
+
+**One-command monitor:** `scripts/progressive-development/watch.sh` prints the
+header (branch + landed commits + escalations) then follows the newest iter-log
+live, pretty-printing stream-json steps via `jq` (falls back to raw tail). Run it
+in a second terminal:
+```bash
+# terminal 1 — run with the live step feed on
+PROGDEV_STREAM=1 scripts/progressive-development/run.sh
+# terminal 2 — watch it think + see what lands
+scripts/progressive-development/watch.sh
+```
+
 ## The CLAUDE.md cost — the central economic question
 
 **The problem.** A fresh `claude -p` process auto-loads project memory at

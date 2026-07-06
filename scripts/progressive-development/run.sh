@@ -32,6 +32,7 @@ MAX_ITERS="${PROGDEV_MAX_ITERS:-20}"
 MIN_FREE_GB="${PROGDEV_MIN_FREE_GB:-15}"
 ITER_TIMEOUT="${PROGDEV_ITER_TIMEOUT:-5400}"
 COOLDOWN="${PROGDEV_COOLDOWN:-20}"
+STREAM="${PROGDEV_STREAM:-}"    # 1 = stream every step live to the iter-log (watch.sh / tail -f)
 GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
 STOP_FILE="progressive-development.stop"
 PROMPT_FILE="scripts/progressive-development/prompt.md"
@@ -116,11 +117,24 @@ for i in $(seq 1 "$MAX_ITERS"); do
     pgrep -f mem-guard.sh >/dev/null || { log "mem-guard died — abort loop"; break; }
 
     log "── iteration $i/$MAX_ITERS ──"
-    # Tee the full iteration output to a per-iteration log so a no-verdict /
-    # failed run is diagnosable (the -once test proved this is essential).
+    # The full iteration output goes to a per-iteration log so a no-verdict /
+    # failed run is diagnosable (the --once test proved this is essential).
     iterlog="docs/architecture/progressive-development-iter-$i.log"
-    out="$(timeout "$ITER_TIMEOUT" claude "${CLAUDE_ARGS[@]}" --append-system-prompt-file "$CONTEXT" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee "$iterlog")"; rc=${PIPESTATUS[0]}
-    verdict="$(printf '%s\n' "$out" | grep -oE 'PROGDEV: (LANDED|FAILED|ESCALATED|ABORT|DRY)[^\n]*' | tail -1)"
+    if [ -n "$STREAM" ]; then
+        # LIVE mode: stream-json + verbose writes every step (reasoning, tool
+        # calls, gate output) to the iter-log AS IT HAPPENS. Watch it with
+        # `scripts/progressive-development/watch.sh` or `tail -f $iterlog | jq`.
+        # Raw NDJSON in the file; verdict is grepped from the streamed text.
+        timeout "$ITER_TIMEOUT" claude "${CLAUDE_ARGS[@]}" --verbose --output-format stream-json \
+            --append-system-prompt-file "$CONTEXT" -p "$(cat "$PROMPT_FILE")" >"$iterlog" 2>&1
+        rc=$?
+        verdict="$(grep -oE 'PROGDEV: (LANDED|FAILED|ESCALATED|ABORT|DRY)[^"\\]*' "$iterlog" | tail -1)"
+    else
+        # Default (text) mode: cheaper, but claude -p buffers → the iter-log only
+        # fills when the iteration ENDS (post-mortem view, not live).
+        out="$(timeout "$ITER_TIMEOUT" claude "${CLAUDE_ARGS[@]}" --append-system-prompt-file "$CONTEXT" -p "$(cat "$PROMPT_FILE")" 2>&1 | tee "$iterlog")"; rc=${PIPESTATUS[0]}
+        verdict="$(printf '%s\n' "$out" | grep -oE 'PROGDEV: (LANDED|FAILED|ESCALATED|ABORT|DRY)[^\n]*' | tail -1)"
+    fi
     log "iteration $i verdict: ${verdict:-<none> (rc=$rc)} (full output: $iterlog)"
 
     # Enforce the pawl in the HARNESS — never trust the iteration to have reset
