@@ -173,7 +173,7 @@ fn a2_ctor_partial_multiarg_with_clone() {
 // ── A3 — ctor stored in record field then applied ─────────────────────────────
 
 /// `applyMk Wrap "hello"` — `Wrap : String -> Box` is passed as a HOF
-/// argument whose slot type is `String -> Box`.  The VarCtor path in
+/// argument whose slot type is `String -> Box`.  The `VarCtor` path in
 /// `lower_expr` eta-expands the bare ctor into a closure which the function
 /// then calls.  Expected output: `"hello"`.
 #[test]
