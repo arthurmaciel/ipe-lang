@@ -8202,6 +8202,7 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Input", "newPassword") => Ok(Callee::Kernel(KernelFn::InputNewPassword)),
                     ("Input", "checkbox") => Ok(Callee::Kernel(KernelFn::InputCheckbox)),
+                    ("Input", "slider") => Ok(Callee::Kernel(KernelFn::InputSlider)),
                     // ── #146: Std.Ui.Lazy sub-module ──────────────────────────
                     ("Lazy", "lazy")  => Ok(Callee::Kernel(KernelFn::LazyLazy)),
                     ("Lazy", "lazy2") => Ok(Callee::Kernel(KernelFn::LazyLazy2)),

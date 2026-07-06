@@ -47,7 +47,11 @@ pub struct SkyStreamId(pub i64);
 /// Variant names match the Sky constructors verbatim so codegen's match arms
 /// (`ChunkEvent::Chunk(s)` / `::Done` / `::Errored(e)`) resolve through the
 /// `pub type` alias the bridge emits.
-#[derive(Clone, Debug, PartialEq)]
+// Serde derives: a Live `Msg` may carry a `ChunkEvent` payload, and Live
+// messages round-trip through the session store (serde boundary). The derive
+// bounds require `E: Serialize/Deserialize`, which holds for both inhabitants
+// (`String` today, `SkyError` post-#85).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ChunkEvent<E> {
     Chunk(String),
     Done,
