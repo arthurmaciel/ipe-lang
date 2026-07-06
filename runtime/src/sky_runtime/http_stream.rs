@@ -36,7 +36,7 @@ use std::sync::{Mutex, OnceLock};
 ///
 /// `#[derive(Copy)]` so it can be passed by value to Task closures without
 /// cloning — matches the Sky source's usage as a plain record field.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SkyStreamId(pub i64);
 
 /// `Sky.Core.Http.Stream.ChunkEvent` — one incremental event on a stream.
