@@ -138,7 +138,7 @@ pub fn task_map_error<A: Send + 'static>(
     sky_runtime::task::task_map_error(f, t)
 }
 pub fn task_on_error<A: Send + 'static>(
-    f: Box<dyn Fn(SkyError) -> SkyTask<A> + Send + 'static>,
+    f: Box<dyn FnOnce(SkyError) -> SkyTask<A> + Send + 'static>,
     t: SkyTask<A>,
 ) -> SkyTask<A> {
     sky_runtime::task::task_on_error(f, t)
