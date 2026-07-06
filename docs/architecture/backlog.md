@@ -17,7 +17,7 @@
 
 ### [progdev-safe] — mechanical sibling kernels (template = landed `Border.shadow`, `416fd4f`)
 - **`Border.glow : Int -> Color -> Attribute msg`** — box-shadow with offset (0,0) + spread 0; user gives blur + color. CSS `box-shadow: 0px 0px <blur>px 0px <color>`. Wire like `Border.shadow` across the 8 sites (2 positional args, no record). Runtime `ui_border_glow_(blur, c)` → `AttrStyle`.
-- **`Border.innerShadow : { offsetX, offsetY, blur, spread : Int, color : Color } -> Attribute msg`** — same record as `Border.shadow` but INSET. CSS `box-shadow: inset <ox>px <oy>px <blur>px <spread>px <color>`. Wire like `Border.shadow` (reuse its 5 field symbols + record-destructure).
+- **`Border.innerShadow : { offsetX, offsetY, blur, spread : Int, color : Color } -> Attribute msg`** ✅ **LANDED** (this lane) — `BorderInnerShadow` kernel wired across all 8 sites, reusing `Border.shadow`'s 5 field symbols + record-destructure and the already-present `AttrBorderInsetShadow` runtime variant (renders `box-shadow:inset …`). Regression test `border_inner_shadow_renders_inset_box_shadow`.
   These two share the registry files (sky_kernels/constrain/lower/naming/pretty/emit_expr) → a parallel `orchestrate.sh` run WILL conflict on merge → exercises the Opus reconcile path.
 
 Wrinkle for all lanes: the shared `~/.cache/sky-rust-target` suffers cross-worktree stale-rlib thrash under concurrent builds (spurious "variant not found" for variants that exist in source). Use a per-lane `CARGO_TARGET_DIR`, or rebuild the dep chain; the merge gate is unaffected (isolated `~/.cache/master-gate-target`).
