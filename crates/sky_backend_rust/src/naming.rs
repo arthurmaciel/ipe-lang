@@ -604,6 +604,8 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::TimeSleep => "time_sleep",
         KernelFn::TimeUnixMillis => "time_unix_millis",
         KernelFn::TimeTimeString => "time_time_string",
+        KernelFn::TimeIsLeapYear => "time_is_leap_year",
+        KernelFn::TimeDaysInMonth => "time_days_in_month",
         // ── System kernels (M5a) ──────────────────────────────────────────────
         KernelFn::SystemArgs => "system_args",
         KernelFn::SystemGetenv => "system_getenv",

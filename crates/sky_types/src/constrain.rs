@@ -3347,6 +3347,10 @@ impl<'a> Builder<'a> {
             K::TimeNow | K::TimeUnixMillis => fun(Ty::Unit, task(int())),
             K::TimeSleep => fun(int(), task_unit()),
             K::TimeTimeString => fun(int(), string()),
+            // `isLeapYear : Int -> Bool`, `daysInMonth : Int -> Int -> Int`
+            // (pure calendar helpers — no Task wrap).
+            K::TimeIsLeapYear => fun(int(), bool_ty()),
+            K::TimeDaysInMonth => fun(int(), fun(int(), int())),
             K::TimeEvery => fun(int(), fun(var(0), sub(var(0)))),
 
             // ── System ──
@@ -5174,6 +5178,8 @@ mod registry_phase_c_tests {
             K::TimeUnixMillis,
             K::TimeSleep,
             K::TimeTimeString,
+            K::TimeIsLeapYear,
+            K::TimeDaysInMonth,
             K::TimeEvery,
             // System (11)
             K::SystemArgs,
