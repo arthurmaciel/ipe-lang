@@ -145,6 +145,9 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     // Std.Ui.Input parametric label/placeholder types (#124).
     "Label",
     "Placeholder",
+    // Std.Decimal opaque arbitrary-precision decimal type.
+    // Lowerer arm: `ir_type_from_canon` `"Decimal" => IrType::Decimal`.
+    "Decimal",
 ];
 
 /// Kernel-implicit Prelude type names (#576) that are globally in scope in
