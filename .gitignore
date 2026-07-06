@@ -19,3 +19,7 @@ docs/architecture/progressive-development-escalations.md
 .progressive-development-wt/
 docs/architecture/progressive-development-lane-*.log
 docs/architecture/remeasure-snapshot.tsv
+docs/architecture/progressive-development-queue.tsv
+docs/architecture/progressive-development-digest.md
+/autopilot.stop
+/.autopilot.lock
