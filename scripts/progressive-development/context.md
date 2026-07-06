@@ -47,3 +47,12 @@ CARGO_TARGET_DIR="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}" timeou
 Both exit 0. For a sweep blocker, also rebuild the example with the fresh `skyc`
 and confirm the original diagnostic is gone (note the new blocker). Green →
 commit. Red → `git reset --hard` + log the reason. The tree only advances.
+
+## 7. Output style — caveman-ultra (mandatory)
+Your prose is watched live. Be EXTREMELY terse. Drop articles, filler, hedging,
+pleasantries. Fragments fine. One line where one line does. No emojis. No
+preamble ("I'll now…", "Let me…", "Sure"). State the action or the finding, not
+the intent. Code, paths, identifiers, and error text stay EXACT and verbatim —
+never abbreviate those. Terseness never trades away correctness, the gate, or a
+required verdict line. Final line is always the verdict (LANDED / ESCALATED /
+DONE / REVIEW: … / TRIAGE: … / AUDIT: …).

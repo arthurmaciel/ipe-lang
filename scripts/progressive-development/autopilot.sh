@@ -179,7 +179,7 @@ esac; }
 for cycle in $(seq 1 "$MAX_CYCLES"); do
     [ -f "$STOP" ] && { log "kill-switch — stopping"; break; }
     pgrep -f mem-guard.sh >/dev/null || { log "mem-guard died — stopping"; break; }
-    log "════ cycle $cycle/$MAX_CYCLES ════"
+    log "cycle $cycle/$MAX_CYCLES"
 
     # 1 ── mechanical batch ──────────────────────────────────────────────────
     mapfile -t mech < <(pending mechanical)
