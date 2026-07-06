@@ -4878,6 +4878,12 @@ impl<'a> Builder<'a> {
                 }, RowTail::Closed);
                 fun(rec_arg, attr(var(0)))
             }
+
+            // ── Border.glow ──────────────────────────────────────────────────────
+            // glow : Int -> Color -> Attribute msg  (convenience box-shadow with
+            // 0,0 offset + 0 spread; user supplies blur radius + colour). Curried
+            // 2-arg — no record, unlike `Border.shadow`.
+            K::BorderGlow => fun(int(), fun(color(), attr(var(0)))),
         })
     }
 }
@@ -6006,6 +6012,7 @@ mod registry_phase_c_tests {
             K::UiLink,
             K::BorderWidthEach,
             K::BorderShadow,
+            K::BorderGlow,
             // ── Std.Ui.Keyed (column + row) ──────────────────────────────────
             K::KeyedColumn,
             K::KeyedRow,
