@@ -38,7 +38,7 @@ Wrinkle for all lanes: the shared `~/.cache/sky-rust-target` suffers cross-workt
 - **#44** Opaque `Secret` stdlib type (gates WASM hydration island + CLAUDE.md §8 secrets-are-typed).
 - **#61** `SqlFragment` param-query newtype — SQL injection = type error.
 - **#63** Port `Sky.Http.Middleware.withCsrf` (constant-time, `__Host-`, parse-once).
-- **#66** Well-typed no-panic fuzzer (soundness gate) — adopt from ../sky 9e170314.
+- **#66** ✅ **LANDED** — Well-typed no-panic fuzzer `scripts/fuzz-well-typed.sh` (6 HM-valid templates, LCG seeding, skyc→cargo→run, panic detection incl. the Ipê `[error] <Class> (ref …)` runtime format). TRUE-POSITIVE proven (`42 // 0` → DivisionByZero flagged); 30 iters clean. Wired into autopilot as the guardian soundness oracle (dual-role: measure-phase bug-finder + guardian-gate verifier).
 
 ## SEAL / correctness follow-ups (exit-0-then-cargo-fail + runtime-correctness)
 - **#99** Refutable match-arm alias over non-Copy payload double-moves — `case m of Just ((a,b) as w) -> use a,b,w` → E0382 (pre-existing, out of #96 scope).
