@@ -6793,6 +6793,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TimeSleep
                 | KernelFn::TimeUnixMillis
                 | KernelFn::TimeTimeString
+                | KernelFn::TimeIsLeapYear
                 // ── System arity-1 (M5a) ──────────────────────────────────────
                 | KernelFn::SystemArgs
                 | KernelFn::SystemGetenv
@@ -6965,6 +6966,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JsonDecMap
                 | KernelFn::JsonDecAndThen
                 | KernelFn::JsonDecPCustom
+                // ── Time arity-2 (Std.Time calendar helper) ─────────────────
+                | KernelFn::TimeDaysInMonth
                 // ── Math arity-2 (Float → Float → Float) ────────────────────
                 | KernelFn::MathPow
                 | KernelFn::MathHypot
@@ -8237,6 +8240,8 @@ impl<'a> Lowerer<'a> {
                     ("Time", "sleep") => Ok(Callee::Kernel(KernelFn::TimeSleep)),
                     ("Time", "unixMillis") => Ok(Callee::Kernel(KernelFn::TimeUnixMillis)),
                     ("Time", "timeString") => Ok(Callee::Kernel(KernelFn::TimeTimeString)),
+                    ("Time", "isLeapYear") => Ok(Callee::Kernel(KernelFn::TimeIsLeapYear)),
+                    ("Time", "daysInMonth") => Ok(Callee::Kernel(KernelFn::TimeDaysInMonth)),
                     // ── System kernels (M5a) ──────────────────────────────────
                     ("System", "args") => Ok(Callee::Kernel(KernelFn::SystemArgs)),
                     ("System", "getenv") => Ok(Callee::Kernel(KernelFn::SystemGetenv)),
