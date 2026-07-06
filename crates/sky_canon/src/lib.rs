@@ -65,6 +65,15 @@ pub struct ModuleExports {
     /// to re-import those deps themselves.  See [`AliasDef::dep_scope_types`]
     /// in `sky_canon::resolve`.
     pub scope_types: BTreeMap<Symbol, Vec<Symbol>>,
+    /// The complete set of type *aliases* in scope after this module was
+    /// canonicalised — own local aliases PLUS aliases injected from dep modules.
+    ///
+    /// Parallel to `scope_types` but for aliases.  Importing modules that
+    /// expand an alias body whose fields reference ALIAS types from THIS
+    /// module's own dep scope need access to those alias definitions — otherwise
+    /// e.g. `Piece` (a record-alias from `Chess.Piece`) would be invisible when
+    /// an importer of `State` expands `Model`'s body.
+    pub scope_aliases: BTreeMap<Symbol, ExportedAlias>,
 }
 
 /// Canonicalise a parsed module into its name-resolved canonical AST.

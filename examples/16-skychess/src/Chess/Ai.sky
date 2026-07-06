@@ -9,6 +9,7 @@ import Chess.Piece exposing (..)
 import Chess.Board as Board
 import Chess.Move as Move
 import Chess.Eval as Eval
+import State exposing (Model)
 
 
 bestMove : Dict Int Piece -> Model -> ( Int, Int )
