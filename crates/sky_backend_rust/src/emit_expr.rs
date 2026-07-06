@@ -1675,6 +1675,93 @@ fn emit_ui_call(
             )))
         }
 
+        // `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
+        KernelFn::UiForm => {
+            let [attrs_e, children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiForm",
+                    detail: format!("Ui.form requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_form_({attrs}, {children})"
+            )))
+        }
+
+        // `Ui.above : Element msg -> Attribute msg`
+        KernelFn::UiAbove => {
+            let [elem_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiAbove",
+                    detail: format!("Ui.above requires 1 argument, got {}", args.len()),
+                });
+            };
+            let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_above_({elem})")))
+        }
+
+        // `Ui.below : Element msg -> Attribute msg`
+        KernelFn::UiBelow => {
+            let [elem_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiBelow",
+                    detail: format!("Ui.below requires 1 argument, got {}", args.len()),
+                });
+            };
+            let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_below_({elem})")))
+        }
+
+        // `Ui.onLeft : Element msg -> Attribute msg`
+        KernelFn::UiOnLeft => {
+            let [elem_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnLeft",
+                    detail: format!("Ui.onLeft requires 1 argument, got {}", args.len()),
+                });
+            };
+            let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_on_left_({elem})")))
+        }
+
+        // `Ui.onRight : Element msg -> Attribute msg`
+        KernelFn::UiOnRight => {
+            let [elem_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnRight",
+                    detail: format!("Ui.onRight requires 1 argument, got {}", args.len()),
+                });
+            };
+            let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_on_right_({elem})")))
+        }
+
+        // `Ui.inFront : Element msg -> Attribute msg`
+        KernelFn::UiInFront => {
+            let [elem_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiInFront",
+                    detail: format!("Ui.inFront requires 1 argument, got {}", args.len()),
+                });
+            };
+            let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_in_front_({elem})")))
+        }
+
+        // `Ui.behind : Element msg -> Attribute msg`
+        KernelFn::UiBehind => {
+            let [elem_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiBehind",
+                    detail: format!("Ui.behind requires 1 argument, got {}", args.len()),
+                });
+            };
+            let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_behind_({elem})")))
+        }
+
         // `Ui.button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } -> Element msg`
         //
         // Emits: `sky_runtime::ui::helpers::ui_button_(attrs, on_press, label)`
@@ -2152,7 +2239,7 @@ fn emit_ui_call(
             )))
         }
 
-        // `Font.family : List String -> Attribute msg`
+        // `Font.family : String -> Attribute msg`
         KernelFn::FontFamily => {
             let [l_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -3519,6 +3606,24 @@ fn emit_ui_call(
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
             Ok(Some(format!(
                 "sky_runtime::ui::helpers::ui_on_bool_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
+            )))
+        }
+
+        // `Ui.onSubmit : (a -> msg) -> Attribute msg`
+        // The handler is type-erased into Arc<dyn Any> (OnRaw "submit") — the
+        // live dispatch layer downcasts + decodes form data at runtime, exactly
+        // as HtmlOnSubmit does.  The handler is wrapped in Arc so the closure
+        // is shared without move-out issues across the Attribute copy path.
+        KernelFn::UiOnSubmit => {
+            let [f_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnSubmit",
+                    detail: format!("Ui.onSubmit requires 1 argument, got {}", args.len()),
+                });
+            };
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_submit_({f_s})"
             )))
         }
 

@@ -7055,6 +7055,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiHeight
                 // `Ui.gridColumns : Int -> Attribute msg`
                 | KernelFn::UiGridColumns
+                // ── M7: Std.Ui nearby attribute builders — arity 1 ───────────
+                // `Ui.above/below/onLeft/onRight/inFront/behind : Element msg -> Attribute msg`
+                | KernelFn::UiAbove
+                | KernelFn::UiBelow
+                | KernelFn::UiOnLeft
+                | KernelFn::UiOnRight
+                | KernelFn::UiInFront
+                | KernelFn::UiBehind
                 // ── M7: Ui Length builders — arity 1 ─────────────────────────
                 // `Ui.px : Int -> Length`
                 | KernelFn::UiPx
@@ -7138,6 +7146,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiOnKeyUp
                 // `Event.onBool : (Bool -> msg) -> Attribute msg`
                 | KernelFn::UiOnBool
+                // `Ui.onSubmit : (a -> msg) -> Attribute msg`
+                | KernelFn::UiOnSubmit
                 // ── #107: Std.Html.Events builders — arity 1 (all shapes) ────
                 | KernelFn::HtmlOnClick
                 | KernelFn::HtmlOnFocus
@@ -7240,6 +7250,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiParagraph
                 // `Ui.textColumn : List (Attribute msg) -> List (Element msg) -> Element msg`
                 | KernelFn::UiTextColumn
+                // `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
+                | KernelFn::UiForm
                 // `Ui.button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } -> Element msg`
                 | KernelFn::UiButton
                 // `Ui.link : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg`
@@ -8062,8 +8074,16 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "grid") => Ok(Callee::Kernel(KernelFn::UiGrid)),
                     ("Ui", "paragraph") => Ok(Callee::Kernel(KernelFn::UiParagraph)),
                     ("Ui", "textColumn") => Ok(Callee::Kernel(KernelFn::UiTextColumn)),
+                    ("Ui", "form") => Ok(Callee::Kernel(KernelFn::UiForm)),
                     ("Ui", "button") => Ok(Callee::Kernel(KernelFn::UiButton)),
                     ("Ui", "link") => Ok(Callee::Kernel(KernelFn::UiLink)),
+                    // ── M7: Std.Ui nearby attribute builders ───────────────────
+                    ("Ui", "above") => Ok(Callee::Kernel(KernelFn::UiAbove)),
+                    ("Ui", "below") => Ok(Callee::Kernel(KernelFn::UiBelow)),
+                    ("Ui", "onLeft") => Ok(Callee::Kernel(KernelFn::UiOnLeft)),
+                    ("Ui", "onRight") => Ok(Callee::Kernel(KernelFn::UiOnRight)),
+                    ("Ui", "inFront") => Ok(Callee::Kernel(KernelFn::UiInFront)),
+                    ("Ui", "behind") => Ok(Callee::Kernel(KernelFn::UiBehind)),
                     // ── M7: Std.Ui attribute builders ─────────────────────────
                     ("Ui", "spacing") => Ok(Callee::Kernel(KernelFn::UiSpacing)),
                     ("Ui", "padding") => Ok(Callee::Kernel(KernelFn::UiPadding)),
@@ -8240,6 +8260,7 @@ impl<'a> Lowerer<'a> {
                         // onBool : (Bool -> msg) -> Attribute msg — Bool-carrying closure
                         Ok(Callee::Kernel(KernelFn::UiOnBool))
                     }
+                    ("Ui", "onSubmit") => Ok(Callee::Kernel(KernelFn::UiOnSubmit)),
                     // ── #107: Std.Html.Events builders (Event qualifier) — produce
                     // the `Std.Html.Attribute` variant so they compose with the
                     // Std.Html element + attribute builders. Same fallback note

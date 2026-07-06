@@ -911,6 +911,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiOnKeyDown => "Ui.onKeyDown",
         KernelFn::UiOnKeyUp => "Ui.onKeyUp",
         KernelFn::UiOnBool => "Ui.onBool",
+        KernelFn::UiOnSubmit => "Ui.onSubmit",
         // #107: Std.Html.Events builders (produce Std.Html.Attribute).
         KernelFn::HtmlOnClick => "Event.onClick",
         KernelFn::HtmlOnFocus => "Event.onFocus",
@@ -981,6 +982,14 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::LazyLazy4 => "Lazy.lazy4",
         KernelFn::LazyLazy5 => "Lazy.lazy5",
         KernelFn::BasicsCompare => "Basics.compare",
+        // ── Ui.form + Ui.nearby family ───────────────────────────────────────
+        KernelFn::UiForm => "Ui.form",
+        KernelFn::UiAbove => "Ui.above",
+        KernelFn::UiBelow => "Ui.below",
+        KernelFn::UiOnLeft => "Ui.onLeft",
+        KernelFn::UiOnRight => "Ui.onRight",
+        KernelFn::UiInFront => "Ui.inFront",
+        KernelFn::UiBehind => "Ui.behind",
     }
 }
 
