@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# ratchet.sh — gated, fresh-context autonomous burndown loop for the Ipê port.
+#
+# A ratchet-and-pawl only advances, never slips back. Each iteration spawns a
+# FRESH `claude -p` process (no accumulated conversation) that reads durable
+# state from disk (backlog + log + git), lands ONE backlog item as a green
+# committed increment, or discards its work and logs why. The tree is always at
+# a green commit between iterations. The loop itself is the OUTER safety harness
+# (disk / mem-guard / budget / iteration cap / kill-switch / single-writer);
+# the per-iteration playbook is scripts/ratchet-prompt.md.
+#
+# Usage:
+#   scripts/ratchet.sh              # run the loop with defaults
+#   scripts/ratchet.sh --once       # run a single iteration (validate first!)
+#   touch ratchet.stop              # kill-switch: clean exit after current iter
+#
+# Config (env):
+#   RATCHET_MAX_ITERS   (20)     hard cap on iterations
+#   RATCHET_MIN_FREE_GB (15)     abort if free disk drops below this
+#   RATCHET_ITER_TIMEOUT(5400)   per-iteration wall-clock ceiling (s)
+#   RATCHET_COOLDOWN    (20)     seconds between iterations (keep < 300 to hold
+#                                the prompt cache warm; see docs/architecture/ratchet.md)
+#   RATCHET_BRANCH      (auto)   branch to land commits on (default ratchet/run-<ts>)
+#   MASTER_GATE_TARGET  (~/.cache/master-gate-target)  isolated gate target dir
+#
+# NOTE: pass a timestamp in via the environment for a deterministic branch name;
+# the script stamps one if unset.
+set -uo pipefail          # NOT -e: iteration failures are handled, not fatal.
+cd "$(dirname "$0")/.."
+
+MAX_ITERS="${RATCHET_MAX_ITERS:-20}"
+MIN_FREE_GB="${RATCHET_MIN_FREE_GB:-15}"
+ITER_TIMEOUT="${RATCHET_ITER_TIMEOUT:-5400}"
+COOLDOWN="${RATCHET_COOLDOWN:-20}"
+GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
+STOP_FILE="ratchet.stop"
+PROMPT_FILE="scripts/ratchet-prompt.md"
+LOG="docs/architecture/ratchet-log.md"
+ESC="docs/architecture/ratchet-escalations.md"
+ONCE=0
+[ "${1:-}" = "--once" ] && ONCE=1
+
+log() { printf '%s | %s\n' "$(date -Is)" "$*"; }
+die() { log "ABORT: $*"; exit 1; }
+
+# ── preconditions (fail fast, before spawning anything) ────────────────────
+command -v claude >/dev/null || die "claude CLI not found"
+[ -f "$PROMPT_FILE" ] || die "missing $PROMPT_FILE"
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
+[ -z "$(git status --porcelain)" ] || die "working tree not clean — commit or stash first"
+pgrep -f mem-guard.sh >/dev/null || die "mem-guard.sh not running — start it before a ratchet run"
+[ -f "$STOP_FILE" ] && die "kill-switch $STOP_FILE present — remove it to run"
+
+# Single-writer guard: refuse to run if another ratchet holds the lock.
+LOCK=".ratchet.lock"
+if ! ( set -o noclobber; echo "$$" > "$LOCK" ) 2>/dev/null; then
+    die "another ratchet run holds $LOCK (pid $(cat "$LOCK" 2>/dev/null)) — one writer only"
+fi
+trap 'rm -f "$LOCK"; log "loop exit"' EXIT
+
+# ── dedicated branch (human fast-forwards to master after reviewing the run) ─
+BRANCH="${RATCHET_BRANCH:-ratchet/run-${RATCHET_TS:-manual}}"
+BASE="$(git rev-parse --abbrev-ref HEAD)"
+git switch -c "$BRANCH" 2>/dev/null || git switch "$BRANCH" || die "cannot create branch $BRANCH"
+mkdir -p "$(dirname "$LOG")"
+touch "$LOG" "$ESC"
+log "ratchet start: branch=$BRANCH base=$BASE max_iters=$MAX_ITERS gate=$GATE_TARGET"
+
+# ── the loop ───────────────────────────────────────────────────────────────
+landed=0
+for i in $(seq 1 "$MAX_ITERS"); do
+    [ -f "$STOP_FILE" ] && { log "kill-switch tripped — clean exit"; break; }
+
+    free_gb="$(df -BG --output=avail / | tail -1 | tr -dc '0-9')"
+    [ "${free_gb:-0}" -lt "$MIN_FREE_GB" ] && { log "low disk (${free_gb}G < ${MIN_FREE_GB}G) — abort loop"; break; }
+    pgrep -f mem-guard.sh >/dev/null || { log "mem-guard died — abort loop"; break; }
+
+    log "── iteration $i/$MAX_ITERS ──"
+    out="$(timeout "$ITER_TIMEOUT" claude -p "$(cat "$PROMPT_FILE")" 2>&1)"; rc=$?
+    # Surface the iteration's own last status line + reason to the loop log.
+    verdict="$(printf '%s\n' "$out" | grep -oE 'RATCHET: (LANDED|FAILED|ESCALATED|ABORT|DRY)[^\n]*' | tail -1)"
+    log "iteration $i verdict: ${verdict:-<none> (rc=$rc)}"
+
+    case "$verdict" in
+        *LANDED*)    landed=$((landed+1)) ;;
+        *DRY*)       log "no eligible mechanical work left — stopping"; break ;;
+        *ABORT*)     log "iteration aborted on a safety precondition — stopping"; break ;;
+        "")          log "iteration produced no verdict (rc=$rc) — treating as failure, stopping to avoid thrash"; break ;;
+    esac
+
+    # Belt-and-braces: the tree must be clean between iterations (the pawl).
+    [ -z "$(git status --porcelain)" ] || { log "tree dirty after iteration — a red iteration didn't reset; stopping"; break; }
+
+    [ "$ONCE" -eq 1 ] && { log "--once: single iteration done"; break; }
+    sleep "$COOLDOWN"
+done
+
+log "ratchet done: $landed landed on $BRANCH. Review, then: git switch $BASE && git merge --ff-only $BRANCH"
