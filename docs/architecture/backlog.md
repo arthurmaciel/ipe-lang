@@ -15,6 +15,11 @@
 
 > **Note (2026-07-06):** with `Border.shadow` landed, ex27 excluded, and ex00/ex12/ex37 escalated as the one inference bug above, the sweep front currently has **no mechanical progdev-eligible item** — a progressive-development run would now return DRY. Next mechanical work must come from unblocking the inference bug (guardian) or from other backlog sections.
 
+### [progdev-safe] — mechanical sibling kernels (template = landed `Border.shadow`, `416fd4f`)
+- **`Border.glow : Int -> Color -> Attribute msg`** — box-shadow with offset (0,0) + spread 0; user gives blur + color. CSS `box-shadow: 0px 0px <blur>px 0px <color>`. Wire like `Border.shadow` across the 8 sites (2 positional args, no record). Runtime `ui_border_glow_(blur, c)` → `AttrStyle`.
+- **`Border.innerShadow : { offsetX, offsetY, blur, spread : Int, color : Color } -> Attribute msg`** — same record as `Border.shadow` but INSET. CSS `box-shadow: inset <ox>px <oy>px <blur>px <spread>px <color>`. Wire like `Border.shadow` (reuse its 5 field symbols + record-destructure).
+  These two share the registry files (sky_kernels/constrain/lower/naming/pretty/emit_expr) → a parallel `orchestrate.sh` run WILL conflict on merge → exercises the Opus reconcile path.
+
 Wrinkle for all lanes: the shared `~/.cache/sky-rust-target` suffers cross-worktree stale-rlib thrash under concurrent builds (spurious "variant not found" for variants that exist in source). Use a per-lane `CARGO_TARGET_DIR`, or rebuild the dep chain; the merge gate is unaffected (isolated `~/.cache/master-gate-target`).
 
 ## Tier-1 — finish the parity sweep + push (ORDER: sweep-green → seal → #110 → #37 → #59 → push)
