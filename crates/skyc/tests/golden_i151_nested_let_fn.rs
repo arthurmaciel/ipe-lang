@@ -94,7 +94,7 @@ fn c01_nested_let_fn_callee_green() {
 /// `wrap : String -> Task Error a -> Task Error a` defines a let-fn `report`
 /// and forwards it to `Task.onError`.  The polymorphic `a` caused two failures:
 ///
-/// 1. T7b (slot_classes): `ir_type_from_ty(Error -> Task Error a)` failed on the
+/// 1. T7b (`slot_classes`): `ir_type_from_ty(Error -> Task Error a)` failed on the
 ///    nested `Ty::Var("a")` → `slot_class = None` → SKY-L0126.  Fixed by mapping
 ///    `Ty::Fun` failed slots to `Some(NonClone)`.
 ///

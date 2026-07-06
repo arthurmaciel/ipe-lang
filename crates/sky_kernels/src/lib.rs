@@ -438,6 +438,33 @@ pub enum StdlibKernel {
     JwtDecodeHs256,
     JwtEncodeRs256,
     JwtDecodeRs256,
+    // ── Jwt builder API (D-00, #152) ─────────────────────────────────────────
+    /// `Jwt.claims` — arity 0; returns an empty `Claims` accumulator.
+    JwtClaims,
+    /// `Jwt.hs256 : String -> Algorithm` — builds an HS256 algorithm descriptor.
+    JwtHs256,
+    /// `Jwt.rs256 : String -> Algorithm` — builds an RS256 algorithm descriptor.
+    JwtRs256,
+    /// `Jwt.subject : String -> Claims -> Claims` — sets the `sub` claim.
+    JwtSubject,
+    /// `Jwt.issuer : String -> Claims -> Claims` — sets the `iss` claim.
+    JwtIssuer,
+    /// `Jwt.audience : String -> Claims -> Claims` — sets the `aud` claim.
+    JwtAudience,
+    /// `Jwt.expiresAt : Int -> Claims -> Claims` — sets the `exp` claim (Unix ms).
+    JwtExpiresAt,
+    /// `Jwt.notBefore : Int -> Claims -> Claims` — sets the `nbf` claim (Unix ms).
+    JwtNotBefore,
+    /// `Jwt.issuedAt : Int -> Claims -> Claims` — sets the `iat` claim (Unix ms).
+    JwtIssuedAt,
+    /// `Jwt.jwtId : String -> Claims -> Claims` — sets the `jti` claim.
+    JwtJwtId,
+    /// `Jwt.withClaim : String -> String -> Claims -> Claims` — adds an arbitrary claim.
+    JwtWithClaim,
+    /// `Jwt.encode : Algorithm -> Claims -> Result Error String` — signs the claims.
+    JwtEncode,
+    /// `Jwt.decode : Algorithm -> String -> Result Error Claims` — verifies and decodes.
+    JwtDecode,
     // ── Task combinators ────────────────────────────────────────────────────
     TaskSucceed,
     TaskFail,
@@ -1414,6 +1441,20 @@ impl StdlibKernel {
             Self::JwtDecodeHs256 => d("Jwt", "decodeHs256", 2, Pure, "sky_jwt_decode_hs256"),
             Self::JwtEncodeRs256 => d("Jwt", "encodeRs256", 2, Pure, "sky_jwt_encode_rs256"),
             Self::JwtDecodeRs256 => d("Jwt", "decodeRs256", 2, Pure, "sky_jwt_decode_rs256"),
+            // ── Jwt builder API (D-00, #152) ──────────────────────────────────
+            Self::JwtClaims => d("Jwt", "claims", 0, Pure, "sky_jwt_claims"),
+            Self::JwtHs256 => d("Jwt", "hs256", 1, Pure, "sky_jwt_hs256"),
+            Self::JwtRs256 => d("Jwt", "rs256", 1, Pure, "sky_jwt_rs256"),
+            Self::JwtSubject => d("Jwt", "subject", 2, Pure, "sky_jwt_subject"),
+            Self::JwtIssuer => d("Jwt", "issuer", 2, Pure, "sky_jwt_issuer"),
+            Self::JwtAudience => d("Jwt", "audience", 2, Pure, "sky_jwt_audience"),
+            Self::JwtExpiresAt => d("Jwt", "expiresAt", 2, Pure, "sky_jwt_expires_at"),
+            Self::JwtNotBefore => d("Jwt", "notBefore", 2, Pure, "sky_jwt_not_before"),
+            Self::JwtIssuedAt => d("Jwt", "issuedAt", 2, Pure, "sky_jwt_issued_at"),
+            Self::JwtJwtId => d("Jwt", "jwtId", 2, Pure, "sky_jwt_jwt_id"),
+            Self::JwtWithClaim => d("Jwt", "withClaim", 3, Pure, "sky_jwt_with_claim"),
+            Self::JwtEncode => d("Jwt", "encode", 2, Pure, "sky_jwt_encode"),
+            Self::JwtDecode => d("Jwt", "decode", 2, Pure, "sky_jwt_decode"),
             // ── Task combinators ────────────────────────────────────────────
             Self::TaskSucceed => d("Task", "succeed", 1, Pure, "task_succeed"),
             Self::TaskFail => d("Task", "fail", 1, Pure, "task_fail"),
@@ -2295,6 +2336,20 @@ impl StdlibKernel {
         Self::JwtDecodeHs256,
         Self::JwtEncodeRs256,
         Self::JwtDecodeRs256,
+        // Jwt builder API (D-00, #152)
+        Self::JwtClaims,
+        Self::JwtHs256,
+        Self::JwtRs256,
+        Self::JwtSubject,
+        Self::JwtIssuer,
+        Self::JwtAudience,
+        Self::JwtExpiresAt,
+        Self::JwtNotBefore,
+        Self::JwtIssuedAt,
+        Self::JwtJwtId,
+        Self::JwtWithClaim,
+        Self::JwtEncode,
+        Self::JwtDecode,
         // Task
         Self::TaskSucceed,
         Self::TaskFail,
