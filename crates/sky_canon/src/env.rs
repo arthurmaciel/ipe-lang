@@ -1136,6 +1136,9 @@ impl Env {
                     "newPassword",
                     "checkbox",
                     "slider",
+                    "option",
+                    "radio",
+                    "radioRow",
                 ],
             ),
             // ── #146: Std.Ui.Lazy sub-module ─────────────────────────────────────

@@ -133,6 +133,8 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
                 // #124 Std.Ui.Input parametric label / placeholder types.
                 UiCtor::Label => "Input.Label",
                 UiCtor::Placeholder => "Input.Placeholder",
+                // #150 Std.Ui.Input radio option type.
+                UiCtor::RadioOption => "Input.RadioOption",
             };
             format!("{} {}", ctor_name, ir_type_name(interner, msg))
         }
@@ -967,6 +969,9 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::InputNewPassword => "Input.newPassword",
         KernelFn::InputCheckbox => "Input.checkbox",
         KernelFn::InputSlider => "Input.slider",
+        KernelFn::InputOption => "Input.option",
+        KernelFn::InputRadio => "Input.radio",
+        KernelFn::InputRadioRow => "Input.radioRow",
         // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────
         KernelFn::LazyLazy  => "Lazy.lazy",
         KernelFn::LazyLazy2 => "Lazy.lazy2",
