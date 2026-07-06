@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# progressive-development.sh — gated, fresh-context autonomous burndown loop for the Ipê port.
+# run.sh (scripts/progressive-development/) — gated, fresh-context autonomous burndown loop for the Ipê port.
 #
 # A ratchet-and-pawl only advances, never slips back. Each iteration spawns a
 # FRESH `claude -p` process (no accumulated conversation) that reads durable
@@ -7,11 +7,11 @@
 # committed increment, or discards its work and logs why. The tree is always at
 # a green commit between iterations. The loop itself is the OUTER safety harness
 # (disk / mem-guard / budget / iteration cap / kill-switch / single-writer);
-# the per-iteration playbook is scripts/progressive-development-prompt.md.
+# the per-iteration playbook is scripts/progressive-development/prompt.md.
 #
 # Usage:
-#   scripts/progressive-development.sh              # run the loop with defaults
-#   scripts/progressive-development.sh --once       # run a single iteration (validate first!)
+#   scripts/progressive-development/run.sh              # run the loop with defaults
+#   scripts/progressive-development/run.sh --once       # run a single iteration (validate first!)
 #   touch progressive-development.stop              # kill-switch: clean exit after current iter
 #
 # Config (env):
@@ -26,7 +26,7 @@
 # NOTE: pass a timestamp in via the environment for a deterministic branch name;
 # the script stamps one if unset.
 set -uo pipefail          # NOT -e: iteration failures are handled, not fatal.
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 MAX_ITERS="${PROGDEV_MAX_ITERS:-20}"
 MIN_FREE_GB="${PROGDEV_MIN_FREE_GB:-15}"
@@ -34,7 +34,7 @@ ITER_TIMEOUT="${PROGDEV_ITER_TIMEOUT:-5400}"
 COOLDOWN="${PROGDEV_COOLDOWN:-20}"
 GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
 STOP_FILE="progressive-development.stop"
-PROMPT_FILE="scripts/progressive-development-prompt.md"
+PROMPT_FILE="scripts/progressive-development/prompt.md"
 LOG="docs/architecture/progressive-development-log.md"
 ESC="docs/architecture/progressive-development-escalations.md"
 ONCE=0
@@ -77,7 +77,7 @@ trap 'rm -f "$LOCK"; log "loop exit"' EXIT
 #   --allowedTools 'Bash(cargo *) Bash(git *) Bash(skyc *) Edit Write Read'
 # via PROGDEV_CLAUDE_ARGS. `dontAsk`/`bypassPermissions` are more permissive but
 # weaken the safety the guardrails depend on — avoid unless sandboxed.
-CONTEXT="$(pwd)/scripts/progressive-development-context.md"
+CONTEXT="$(pwd)/scripts/progressive-development/context.md"
 [ -f "$CONTEXT" ] || die "missing lean contract $CONTEXT"
 CLAUDE_ARGS="${PROGDEV_CLAUDE_ARGS:---safe-mode --permission-mode auto}"
 STOP_PATH="$(pwd)/$STOP_FILE"
