@@ -16,3 +16,6 @@ pub mod helpers;
 
 /// `Std.Ui.Input` kernel helpers — typed form controls (Task #124).
 pub mod input;
+
+/// `Std.Ui.Lazy` kernel helpers — eager evaluation in v1 (#146).
+pub mod lazy;

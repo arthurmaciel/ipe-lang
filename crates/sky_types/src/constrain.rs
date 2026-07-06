@@ -2269,6 +2269,7 @@ impl<'a> Builder<'a> {
 
     /// Constrain a `case` arm pattern against the scrutinee's variable, binding
     /// any pattern variables into `local`.
+    #[allow(clippy::too_many_lines)]
     fn constrain_pattern(
         &mut self,
         local: &mut BTreeMap<Symbol, VarId>,
@@ -2313,10 +2314,19 @@ impl<'a> Builder<'a> {
                     }
                 } else {
                     // A constructor with no registered scheme (imported, outside the
-                    // single-module subset): fall back to the bare enum type, sound
-                    // for the nullary case.
+                    // single-module subset): fall back to the bare enum type.
+                    // We still must recurse into every argument sub-pattern so that
+                    // pattern variables (e.g. `Chunk text` where `Chunk` is an
+                    // imported ctor) get bound into `local`.  Without the recursion
+                    // the body sees `VarLocal("text")` that is absent from the local
+                    // map and fires the "unbound local" ICE (#145).  Use a fresh flex
+                    // variable per arg since the field types are unknown.
                     let ctor = self.con_var(home.clone(), *type_name, Vec::new())?;
                     self.eq(pat.span, ctor, scrut_var);
+                    for sub in args {
+                        let av = self.flex()?;
+                        self.constrain_pattern(local, sub, av)?;
+                    }
                 }
                 Ok(())
             }
@@ -4109,6 +4119,33 @@ impl<'a> Builder<'a> {
                 fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
             }
 
+            // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────
+            // lazy  : (a -> Element msg) -> a -> Element msg
+            K::LazyLazy => fun(
+                fun(var(0), elem_t(var(1))),
+                fun(var(0), elem_t(var(1))),
+            ),
+            // lazy2 : (a -> b -> Element msg) -> a -> b -> Element msg
+            K::LazyLazy2 => fun(
+                fun(var(0), fun(var(1), elem_t(var(2)))),
+                fun(var(0), fun(var(1), elem_t(var(2)))),
+            ),
+            // lazy3 : (a -> b -> c -> Element msg) -> a -> b -> c -> Element msg
+            K::LazyLazy3 => fun(
+                fun(var(0), fun(var(1), fun(var(2), elem_t(var(3))))),
+                fun(var(0), fun(var(1), fun(var(2), elem_t(var(3))))),
+            ),
+            // lazy4 : (a -> b -> c -> d -> Element msg) -> a -> b -> c -> d -> Element msg
+            K::LazyLazy4 => fun(
+                fun(var(0), fun(var(1), fun(var(2), fun(var(3), elem_t(var(4)))))),
+                fun(var(0), fun(var(1), fun(var(2), fun(var(3), elem_t(var(4)))))),
+            ),
+            // lazy5 : (a -> b -> c -> d -> e -> Element msg) -> a -> b -> c -> d -> e -> Element msg
+            K::LazyLazy5 => fun(
+                fun(var(0), fun(var(1), fun(var(2), fun(var(3), fun(var(4), elem_t(var(5))))))),
+                fun(var(0), fun(var(1), fun(var(2), fun(var(3), fun(var(4), elem_t(var(5))))))),
+            ),
+
             // ── Json.Decode (17) — mirrors the already-relocated `Db.Decode`
             //    shapes (function-first `map`/`andThen`; `dec(a)` is the opaque
             //    `Decoder a`). Primitives are arity-0 bare decoders. ──
@@ -5424,6 +5461,12 @@ mod registry_phase_c_tests {
             K::InputCurrentPassword,
             K::InputNewPassword,
             K::InputCheckbox,
+            // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────
+            K::LazyLazy,
+            K::LazyLazy2,
+            K::LazyLazy3,
+            K::LazyLazy4,
+            K::LazyLazy5,
         ]
     };
 

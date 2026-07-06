@@ -980,6 +980,21 @@ pub enum StdlibKernel {
     InputNewPassword,
     /// `Input.checkbox : List (Attribute msg) -> { onChange, icon, checked, label } -> Element msg`
     InputCheckbox,
+    // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────────
+    /// `Lazy.lazy : (a -> Element msg) -> a -> Element msg`
+    ///
+    /// **Eager in v1.** Sky's Go runtime memoises the subtree; ipê evaluates
+    /// immediately (no keyed LRU available before the TEA diff layer).  The
+    /// divergence is recorded in `docs/divergences-from-sky.md` §B-Lazy.
+    LazyLazy,
+    /// `Lazy.lazy2 : (a -> b -> Element msg) -> a -> b -> Element msg` (eager)
+    LazyLazy2,
+    /// `Lazy.lazy3 : (a -> b -> c -> Element msg) -> a -> b -> c -> Element msg` (eager)
+    LazyLazy3,
+    /// `Lazy.lazy4 : (a -> b -> c -> d -> Element msg) -> a -> b -> c -> d -> Element msg` (eager)
+    LazyLazy4,
+    /// `Lazy.lazy5 : (a -> b -> c -> d -> e -> Element msg) -> a -> b -> c -> d -> e -> Element msg` (eager)
+    LazyLazy5,
 }
 
 impl StdlibKernel {
@@ -1955,6 +1970,12 @@ impl StdlibKernel {
             Self::InputCurrentPassword => d("Input", "currentPassword", 2, Ui, "input_current_password_"),
             Self::InputNewPassword => d("Input", "newPassword", 2, Ui, "input_new_password_"),
             Self::InputCheckbox => d("Input", "checkbox", 2, Ui, "input_checkbox_"),
+            // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────
+            Self::LazyLazy  => d("Lazy", "lazy",  2, Ui, "lazy_lazy_"),
+            Self::LazyLazy2 => d("Lazy", "lazy2", 3, Ui, "lazy_lazy2_"),
+            Self::LazyLazy3 => d("Lazy", "lazy3", 4, Ui, "lazy_lazy3_"),
+            Self::LazyLazy4 => d("Lazy", "lazy4", 5, Ui, "lazy_lazy4_"),
+            Self::LazyLazy5 => d("Lazy", "lazy5", 6, Ui, "lazy_lazy5_"),
         }
     }
 
@@ -2735,6 +2756,12 @@ impl StdlibKernel {
         Self::InputCurrentPassword,
         Self::InputNewPassword,
         Self::InputCheckbox,
+        // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────
+        Self::LazyLazy,
+        Self::LazyLazy2,
+        Self::LazyLazy3,
+        Self::LazyLazy4,
+        Self::LazyLazy5,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────
@@ -3151,6 +3178,12 @@ impl StdlibKernel {
                 | Self::InputCurrentPassword
                 | Self::InputNewPassword
                 | Self::InputCheckbox
+                // ── Std.Ui.Lazy (#146) ────────────────────────────────────────
+                | Self::LazyLazy
+                | Self::LazyLazy2
+                | Self::LazyLazy3
+                | Self::LazyLazy4
+                | Self::LazyLazy5
         )
     }
 

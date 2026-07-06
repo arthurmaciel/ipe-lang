@@ -330,6 +330,7 @@ fn find_manifest_for_sky_file(sky_file: &Path) -> Option<PathBuf> {
 /// # Errors
 /// [`CliError::Pipeline`] carrying the first compiler diagnostic; [`CliError::Io`]
 /// on any filesystem failure.
+#[allow(clippy::too_many_lines)]
 fn compile_modules(
     mut sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     mut discovered: Vec<project::DiscoveredModule>,
@@ -419,8 +420,9 @@ fn compile_modules(
         canon_modules.push(canon_mod);
     }
 
-    // Link → infer → lower → emit on the merged module. Blame post-link errors on
-    // the entry file.
+    // Link → infer → lower → emit on the merged module. Blame link/lower/emit
+    // errors on the entry file; infer errors and warnings are attributed to the
+    // dep module that owns the failing span (#144).
     let entry_src_path = sources
         .get(entry_path)
         .map_or_else(|| blame_path.to_path_buf(), |(p, _)| p.clone());
@@ -440,11 +442,57 @@ fn compile_modules(
     let linked =
         sky_canon::link::link(entry_name, canon_modules, &interner).map_err(&pipeline_err)?;
 
-    let types = sky_types::infer(&linked, &mut interner).map_err(&pipeline_err)?;
+    // Build a module-home → (file, src) map used to attribute infer diagnostics
+    // to the correct dep source file (#144).  Intern each String module-path
+    // segment so the keys match the Symbol-keyed `home` fields on linked defs.
+    let mut home_to_source: BTreeMap<Vec<sky_intern::Symbol>, (PathBuf, String)> =
+        BTreeMap::new();
+    for (str_path, (file, src)) in &sources {
+        let sym_path: Result<Vec<_>, _> =
+            str_path.iter().map(|s| interner.intern(s)).collect();
+        if let Ok(sym_path) = sym_path {
+            home_to_source.insert(sym_path, (file.clone(), src.clone()));
+        }
+    }
+
+    // Given a diagnostic span, find the most tightly enclosing def in `linked`
+    // and return that def's (file, src).  Defs preserve their original `home`
+    // after link; every span in a def's body is a byte offset into that home
+    // module's source.  Falls back to the entry file when no def encloses the
+    // span (e.g. a CompilerBug with `Span::DUMMY`).
+    let source_for_span = |span: sky_diagnostics::Span| -> (PathBuf, String) {
+        if span == sky_diagnostics::Span::DUMMY {
+            return (entry_src_path.clone(), entry_src.clone());
+        }
+        let mut best: Option<(u32, &[sky_intern::Symbol])> = None;
+        for def in &linked.defs {
+            let body_span = match def {
+                sky_canon::ast::Def::Untyped { body, .. }
+                | sky_canon::ast::Def::Typed { body, .. } => body.span,
+            };
+            if body_span.lo <= span.lo && span.hi <= body_span.hi {
+                let width = body_span.hi.saturating_sub(body_span.lo);
+                if best.is_none_or(|(prev, _)| width < prev) {
+                    best = Some((width, def.home()));
+                }
+            }
+        }
+        best.and_then(|(_, home)| home_to_source.get(home))
+            .cloned()
+            .unwrap_or_else(|| (entry_src_path.clone(), entry_src.clone()))
+    };
+
+    let types = sky_types::infer(&linked, &mut interner).map_err(|diag| {
+        let span = diag_span(&diag);
+        let (file, src) = source_for_span(span);
+        CliError::Pipeline { file, src, diag }
+    })?;
     // Print non-fatal warnings (e.g. SKY-T0011 RedundantCaseBranch) to stderr.
     // These are Severity::Warning: the build continues and exit code stays 0.
     for w in &types.warnings {
-        eprintln!("{}", render(w, &entry_src_path.to_string_lossy(), &entry_src));
+        let span = diag_span(w);
+        let (w_file, w_src) = source_for_span(span);
+        eprintln!("{}", render(w, &w_file.to_string_lossy(), &w_src));
     }
     let program = sky_lower::lower(&linked, &types, &mut interner).map_err(&pipeline_err)?;
     let emitted = RustBackend::new(&interner)
@@ -1082,6 +1130,21 @@ fn io_err(path: &Path, source: std::io::Error) -> CliError {
     }
 }
 
+/// Extract the source span from a diagnostic, returning [`sky_diagnostics::Span::DUMMY`]
+/// for the span-less [`Diagnostic::CompilerBug`] variant.
+///
+/// Used by the cross-module error-attribution path in [`compile_modules`] to
+/// locate the source file that owns a diagnostic.
+const fn diag_span(d: &Diagnostic) -> sky_diagnostics::Span {
+    match d {
+        Diagnostic::Parse { span, .. }
+        | Diagnostic::Name { span, .. }
+        | Diagnostic::Type { span, .. }
+        | Diagnostic::Lower { span, .. } => *span,
+        Diagnostic::CompilerBug { .. } => sky_diagnostics::Span::DUMMY,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1527,6 +1590,68 @@ main =
             "two-module program must compile via sibling discovery: {:?}",
             result.err()
         );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------------
+    // Regression #144 — cross-module infer errors name the dep module's file
+    // -----------------------------------------------------------------------
+
+    /// When a type error originates in a dep module (`Helper.sky`), the rendered
+    /// diagnostic must cite `Helper.sky` as the file, NOT the entry `Main.sky`.
+    ///
+    /// Before the fix, `compile_modules` had a single `pipeline_err` closure that
+    /// always captured the entry file path, so dep-module errors rendered with the
+    /// wrong source snippet and an incorrect file name.
+    ///
+    /// Runtime is not reached (infer aborts first), so we pass a dummy path.
+    #[test]
+    fn infer_error_in_dep_module_names_dep_file() {
+        let tmp = std::env::temp_dir().join("skyc_144_dep_err_test");
+        let _ = fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        fs::create_dir_all(&src).expect("create src/");
+
+        // Helper.sky: deliberate type error — `1 + "oops"` mixes Int and String.
+        let helper_path = src.join("Helper.sky");
+        fs::write(
+            &helper_path,
+            "module Helper exposing (broken)\nbroken = 1 + \"oops\"\n",
+        )
+        .expect("write Helper.sky");
+
+        // Main.sky: imports Helper and uses `broken` — but the error is in Helper.
+        let main_path = src.join("Main.sky");
+        fs::write(
+            &main_path,
+            "module Main exposing (main)\nimport Helper\nmain = println (String.fromInt Helper.broken)\n",
+        )
+        .expect("write Main.sky");
+
+        // Runtime is never accessed: a type error fires at infer, before lower/emit.
+        let dummy_runtime = std::env::temp_dir();
+        let out = tmp.join("out");
+        let result = build_with_sibling_discovery(&main_path, &out, &dummy_runtime);
+
+        // Must fail — the program has a type error in Helper.
+        assert!(
+            result.is_err(),
+            "#144 fixture must fail (type error in dep); got Ok unexpectedly"
+        );
+        let Err(CliError::Pipeline { file, .. }) = result else {
+            let _ = fs::remove_dir_all(&tmp);
+            return; // any other error kind is a separate concern
+        };
+
+        // The file blamed must be Helper.sky, not Main.sky.
+        let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        assert_eq!(
+            file_name, "Helper.sky",
+            "#144 regression: type error in dep module must blame `Helper.sky`, \
+             not `{file_name}`; full path: {}",
+            file.display()
+        );
+
         let _ = fs::remove_dir_all(&tmp);
     }
 }

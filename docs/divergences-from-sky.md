@@ -35,6 +35,28 @@ succeeds correctly and ipê is deliberately more correct still; **Go-failure** =
 the reference cannot build/run the exact shape, so ipê's own output is the
 recorded reference.
 
+### B-Lazy — `Std.Ui.Lazy`: no memoisation in v1 (eager evaluation)
+- **Differs:** `Lazy.lazy f a` / `lazy2` / `lazy3` / `lazy4` / `lazy5` evaluate
+  eagerly in ipê v1 — calling `f(a)` (etc.) directly without caching. Sky's Go
+  runtime memoises the subtree using an LRU keyed on the function pointer and
+  shallow argument equality (`reflect.DeepEqual`); re-renders with identical
+  arguments short-circuit the diff layer by reusing the last `Element` value.
+- **Go-oracle relationship:** Output is byte-identical for any *first* render.
+  Repeated renders with the same arguments that would be short-circuited by the
+  Go LRU *could* differ if `f` is impure (side-effecting view functions are not
+  a supported pattern in Sky; memoisation is purely a performance optimisation
+  in the reference). In practice, for well-typed Sky code the rendered HTML is
+  always the same value regardless of caching, so observable output is
+  byte-identical.
+- **Rationale:** The TEA diff layer that would make a keyed memoisation cache
+  reachable at render time does not exist in the ipê Rust backend yet. The
+  `Std.Ui.Lazy` *module and kernels* are registered so `import Std.Ui.Lazy as
+  Lazy` compiles and `Lazy.lazy viewItem item` lowers correctly; the caching
+  optimisation is a v2 follow-on.
+- **Sanctioned:** `sanctioned:` (deliberate deferral; observable semantics
+  identical for pure view functions). Reference:
+  `runtime/src/sky_runtime/ui/lazy.rs`.
+
 ### B1 — `Math.min` / `Math.max`: Elm polymorphic comparable
 - **Differs:** ipê compares `min`/`max` arguments at the argument type (Elm's
   `a -> a -> a` comparable). `Math.min 0.4 1.3 = 0.4`, `Math.max 0.4 1.3 = 1.3`,
