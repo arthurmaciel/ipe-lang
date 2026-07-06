@@ -3369,7 +3369,7 @@ impl<'a> Lowerer<'a> {
                 // `buildEnv` gives each `any` occurrence a fresh flex UV that the body
                 // constrains to a concrete type.  The Rust port must do the same.
                 let ret = if let IrType::Generic(sym) = ret {
-                    if self.interner.resolve(sym).as_deref() == Some("any") {
+                    if self.interner.resolve(sym) == Some("any") {
                         // The body's region type is the concrete return type.
                         let body_ty = self
                             .types
@@ -3437,7 +3437,7 @@ impl<'a> Lowerer<'a> {
                 let var_bounds = self.types.bounds.get(&name);
                 let type_params = free_vars
                     .iter()
-                    .filter(|&&v| self.interner.resolve(v).as_deref() != Some("any"))
+                    .filter(|&&v| self.interner.resolve(v) != Some("any"))
                     .map(|v| (*v, Self::bounds_for(var_bounds, *v)))
                     .collect();
                 // T5 (#104 / #112): multi-use-clone rewrite for CloneOk params.
