@@ -263,6 +263,9 @@ struct Builtins {
     /// `"Placeholder"` — the `Placeholder msg` type constructor from `Std.Ui.Input`.
     /// Lowered to `IrType::Ui { ctor: UiCtor::Placeholder, msg }`.
     input_placeholder_con: Symbol,
+    /// `"RadioOption"` — the `RadioOption msg` type constructor from `Std.Ui.Input`.
+    /// Lowered to `IrType::Ui { ctor: UiCtor::RadioOption, msg }`.
+    input_radio_option_con: Symbol,
     /// `"onChange"` — the onChange field of Input text/multiline/password cfg records.
     input_f_on_change: Symbol,
     /// `"text"` — the text field of text/multiline/email/username/search/password cfg records.
@@ -283,6 +286,10 @@ struct Builtins {
     input_f_max: Symbol,
     /// `"step"` — the step field of the slider cfg record.
     input_f_step: Symbol,
+    /// `"options"` — the options field of the radio/radioRow cfg record.
+    input_f_options: Symbol,
+    /// `"selected"` — the selected field of the radio/radioRow cfg record.
+    input_f_selected: Symbol,
     // ── Sky.Core.Http.Stream opaque StreamId type constructor ─────────────────
     /// `"StreamId"` — the opaque stream identifier type constructor from
     /// `Sky.Core.Http.Stream`. Backed by `sky_runtime::http_stream::SkyStreamId`.
@@ -409,6 +416,7 @@ impl Builtins {
             // Std.Ui.Input type constructors + cfg field names (#124).
             input_label_con: interner.intern("Label")?,
             input_placeholder_con: interner.intern("Placeholder")?,
+            input_radio_option_con: interner.intern("RadioOption")?,
             input_f_on_change: interner.intern("onChange")?,
             input_f_text: interner.intern("text")?,
             input_f_placeholder: interner.intern("placeholder")?,
@@ -420,6 +428,9 @@ impl Builtins {
             input_f_min: interner.intern("min")?,
             input_f_max: interner.intern("max")?,
             input_f_step: interner.intern("step")?,
+            // Std.Ui.Input.radio / radioRow cfg fields (#150).
+            input_f_options: interner.intern("options")?,
+            input_f_selected: interner.intern("selected")?,
             // Sky.Core.Http.Stream: StreamId opaque handle type (#148).
             stream_id: interner.intern("StreamId")?,
             // ── Order ADT (#123) ─────────────────────────────────────────────
@@ -1388,6 +1399,23 @@ impl<'a> Builder<'a> {
                 self.structure(FlatType::Record(field_vars, ext))
             }
             Ty::Var(id) => {
+                // `any` is Sky's wildcard type-variable name. In annotations it
+                // means "I don't care about this type" — each occurrence is an
+                // INDEPENDENT fresh flex UV, NOT a shared rigid skolem. Sharing
+                // would force all occurrences to the same type; rigid would
+                // prevent the body from assigning a concrete type.  Mirrors the
+                // Haskell compiler's `Instantiate.fromAnnotation` filtering
+                // `"any"` out of the skolem set and `buildEnv` giving each
+                // occurrence its own fresh UF var.
+                let is_any = self
+                    .interner
+                    .resolve(sky_intern::Symbol::from_raw(*id))
+                    .is_some_and(|name| name == "any");
+                if is_any {
+                    // Fresh flex UV per occurrence — intentionally NOT inserted
+                    // into `vars` so the next occurrence also gets its own UV.
+                    return self.flex();
+                }
                 if let Some(v) = vars.get(id).copied() {
                     return Ok(v);
                 }
@@ -2702,6 +2730,13 @@ impl<'a> Builder<'a> {
         let placeholder_t = |m: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.input_placeholder_con,
+            args: vec![m],
+        };
+        // `radio_option_t(msg)` — `RadioOption msg` from `Std.Ui.Input`.
+        // Lowered to `IrType::Ui { ctor: UiCtor::RadioOption, msg }`.
+        let radio_option_t = |m: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.input_radio_option_con,
             args: vec![m],
         };
         // Nullary Std.Ui plain types (`Length` / `Color`) — lowered to
@@ -4183,6 +4218,54 @@ impl<'a> Builder<'a> {
                 fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
             }
 
+            // ── Std.Ui.Input radio group (#150) ───────────────────────────────
+            //
+            // `Input.option : String -> Element msg -> RadioOption msg`
+            K::InputOption => fun(string(), fun(elem_t(var(0)), radio_option_t(var(0)))),
+            //
+            // `Input.radio : List (Attr msg) ->
+            //   { onChange : String -> msg
+            //   , options  : List (RadioOption msg)
+            //   , selected : String
+            //   , label    : Label msg
+            //   } -> Element msg`
+            K::InputRadio => {
+                let cfg_rec = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.input_f_on_change, fun(string(), var(0)));
+                        m.insert(
+                            self.builtins.input_f_options,
+                            list(radio_option_t(var(0))),
+                        );
+                        m.insert(self.builtins.input_f_selected, string());
+                        m.insert(self.builtins.btn_f_label, label_t(var(0)));
+                        m
+                    },
+                    RowTail::Closed,
+                );
+                fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
+            }
+            //
+            // `Input.radioRow` — identical signature to `radio`.
+            K::InputRadioRow => {
+                let cfg_rec = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.input_f_on_change, fun(string(), var(0)));
+                        m.insert(
+                            self.builtins.input_f_options,
+                            list(radio_option_t(var(0))),
+                        );
+                        m.insert(self.builtins.input_f_selected, string());
+                        m.insert(self.builtins.btn_f_label, label_t(var(0)));
+                        m
+                    },
+                    RowTail::Closed,
+                );
+                fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
+            }
+
             // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────
             // lazy  : (a -> Element msg) -> a -> Element msg
             K::LazyLazy => fun(
@@ -5532,6 +5615,9 @@ mod registry_phase_c_tests {
             K::InputNewPassword,
             K::InputCheckbox,
             K::InputSlider,
+            K::InputOption,
+            K::InputRadio,
+            K::InputRadioRow,
             // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────
             K::LazyLazy,
             K::LazyLazy2,

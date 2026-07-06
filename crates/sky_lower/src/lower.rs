@@ -3878,6 +3878,18 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::Ui { ctor: UiCtor::Placeholder, msg: Box::new(msg) })
                 }
+                "RadioOption" if args.len() == 1 => {
+                    let msg = self.ir_type_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_canon",
+                                "RadioOption applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Ui { ctor: UiCtor::RadioOption, msg: Box::new(msg) })
+                }
                 _ if self
                     .enum_variants
                     .contains_key(&(ModPath(home.clone()), *name)) =>
@@ -4473,6 +4485,21 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::Ui {
                         ctor: UiCtor::Placeholder,
+                        msg: Box::new(msg),
+                    })
+                }
+                "RadioOption" if args.len() == 1 => {
+                    let msg = self.ir_type_from_ty_ui_msg(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_ty",
+                                "RadioOption applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::RadioOption,
                         msg: Box::new(msg),
                     })
                 }
@@ -5587,7 +5614,9 @@ impl<'a> Lowerer<'a> {
                     | KernelFn::InputNewPassword
                     | KernelFn::InputMultiline
                     | KernelFn::InputCheckbox
-                    | KernelFn::InputSlider,
+                    | KernelFn::InputSlider
+                    | KernelFn::InputRadio
+                    | KernelFn::InputRadioRow,
                 ) if args.len() == 2 =>
                 {
                     if let (Some(attrs_arg), Some(cfg_arg)) = (args.first(), args.get(1)) {
@@ -7266,7 +7295,13 @@ impl<'a> Lowerer<'a> {
                 // `Input.checkbox : List (Attribute msg) -> { onChange : Bool -> msg, ... } -> Element msg`
                 | KernelFn::InputCheckbox
                 // `Input.slider : List (Attribute msg) -> { onChange, value, min, max, step, label } -> Element msg`
-                | KernelFn::InputSlider,
+                | KernelFn::InputSlider
+                // `Input.option : String -> Element msg -> RadioOption msg`
+                | KernelFn::InputOption
+                // `Input.radio : List (Attribute msg) -> { onChange, options, selected, label } -> Element msg`
+                | KernelFn::InputRadio
+                // `Input.radioRow : List (Attribute msg) -> { onChange, options, selected, label } -> Element msg`
+                | KernelFn::InputRadioRow,
             ) => Ok(2),
             // Arity 3: `Ui.rgb r g b`, `Html.node tag attrs children`.
             Callee::Kernel(
@@ -8203,6 +8238,9 @@ impl<'a> Lowerer<'a> {
                     ("Input", "newPassword") => Ok(Callee::Kernel(KernelFn::InputNewPassword)),
                     ("Input", "checkbox") => Ok(Callee::Kernel(KernelFn::InputCheckbox)),
                     ("Input", "slider") => Ok(Callee::Kernel(KernelFn::InputSlider)),
+                    ("Input", "option") => Ok(Callee::Kernel(KernelFn::InputOption)),
+                    ("Input", "radio") => Ok(Callee::Kernel(KernelFn::InputRadio)),
+                    ("Input", "radioRow") => Ok(Callee::Kernel(KernelFn::InputRadioRow)),
                     // ── #146: Std.Ui.Lazy sub-module ──────────────────────────
                     ("Lazy", "lazy")  => Ok(Callee::Kernel(KernelFn::LazyLazy)),
                     ("Lazy", "lazy2") => Ok(Callee::Kernel(KernelFn::LazyLazy2)),
