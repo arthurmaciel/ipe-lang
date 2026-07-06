@@ -347,6 +347,20 @@ pub fn ui_border_shadow_<M>(
     Attribute::AttrBorderShadow(horiz, vert, blur, spread, c)
 }
 
+/// `Border.glow : Int -> Color -> Attribute msg`
+///
+/// Convenience wrapper over `box-shadow`: a shadow with `(0, 0)` offset and `0`
+/// spread, so the user supplies only a blur radius and a colour. Emits the CSS
+/// `box-shadow: 0px 0px <blur>px 0px <colour>` via the generic `AttrStyle`
+/// boundary (the colour flows through the same `color_to_css` conversion as
+/// `Border.color` / `Border.shadow`).
+pub fn ui_border_glow_<M>(blur: i64, c: Color) -> Attribute<M> {
+    Attribute::AttrStyle(
+        "box-shadow".into(),
+        format!("0px 0px {blur}px 0px {}", color_to_css(&c)),
+    )
+}
+
 // ── Font sub-module ───────────────────────────────────────────────────────────
 
 /// `Font.size : Int -> Attribute msg`
