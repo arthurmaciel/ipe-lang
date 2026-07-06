@@ -3347,7 +3347,34 @@ impl<'a> Lowerer<'a> {
                 // `split_typed_sig` — it routes through `ir_type_from_canon` for
                 // the annotation type and handles both 0-parameter and N-parameter
                 // bindings correctly.
-                let (params, prologue, ret) = self.split_typed_sig(ty, patterns, free_vars)?;
+                // `Handler` / `Middleware` are transparent stdlib function
+                // aliases (`Handler = Request -> Task Error Response`,
+                // `Middleware = Handler -> Handler`). At the annotation level they
+                // are a nullary `Con`, so `split_typed_sig` would see ZERO arrows
+                // for a handler that binds `req` and raise the "annotation has
+                // fewer arrows than parameters" ICE. The type checker has already
+                // unfolded the alias — the binding's SOLVED type in `types.env` is
+                // the full arrow chain — so split THAT instead (identical to the
+                // unannotated path). Only whole-annotation aliases are unfolded
+                // here; a `Handler` in argument position (`withCors : … -> Handler
+                // -> Handler`) still lowers via `split_typed_sig` unchanged.
+                let (params, prologue, ret) = if !patterns.is_empty()
+                    && self.annotation_is_function_alias(ty)
+                {
+                    let solved_ty = self
+                        .types
+                        .env
+                        .get(&(def.home().to_vec(), name))
+                        .ok_or_else(|| {
+                            bug(
+                                "sky_lower::lower_def",
+                                "no inferred type for function-alias binding",
+                            )
+                        })?;
+                    self.split_unannotated_sig(solved_ty, patterns, sig_span)?
+                } else {
+                    self.split_typed_sig(ty, patterns, free_vars)?
+                };
                 // Bug-29 fix: `view : Model -> any` where the body region is a UI
                 // type `Html<Ty::Var(uv)>`.  We need to inject `(uv_rep →
                 // any_sym)` into the poly_tvars map so that
@@ -3756,6 +3783,25 @@ impl<'a> Lowerer<'a> {
     /// `(synthetic, tuple Pat)` entry to `prologue`, which [`Self::lower_def`]
     /// turns into a `Destructure` wrapping the body. `prologue` is in source
     /// (parameter) order.
+    /// Is `ty` a whole-annotation reference to a transparent stdlib FUNCTION
+    /// alias (`Handler` = `Request -> Task Error Response`, `Middleware` =
+    /// `Handler -> Handler`)? Such an annotation is a nullary `Con` even though
+    /// the aliased type has arrows, so a binding `f : Handler` with parameters
+    /// must be split from its (already-unfolded) SOLVED type, not from the
+    /// annotation. Non-function opaque aliases (`Session` / `Store` / `VNode`)
+    /// are excluded — they never carry a value binding's parameters.
+    fn annotation_is_function_alias(&self, ty: &canon::Type) -> bool {
+        matches!(
+            ty,
+            canon::Type::Con { name, args, .. }
+                if args.is_empty()
+                    && matches!(
+                        self.interner.resolve(*name),
+                        Some("Handler" | "Middleware")
+                    )
+        )
+    }
+
     fn split_typed_sig(
         &self,
         ty: &canon::Type,
