@@ -3904,6 +3904,14 @@ impl<'a> Lowerer<'a> {
                         args: ir_args,
                     })
                 }
+                // The opaque JSON value type (`Value = any` in Sky). Placed AFTER
+                // the `enum_variants` guard so a user-declared `type Value = …`
+                // still resolves as its own enum (name-shadowing is allowed for
+                // non-reserved names). Mirrors the `ir_type_from_ty` arm at the
+                // `"Value"` case — both paths must map to `IrType::Json` for
+                // consistency. Added by #138 to support bare `Value` annotations
+                // on user functions (kernel-implicit Prelude type, #576).
+                "Value" => Ok(IrType::Json),
                 other => {
                     // Every type reaching here has `home = []` but is NOT a
                     // known builtin.  `sky_canon::canonicalise_type` now emits
