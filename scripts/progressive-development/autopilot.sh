@@ -88,6 +88,23 @@ for arg in "$@"; do case "$arg" in
     *)           die "unknown argument: $arg (try --help)" ;;
 esac; done
 
+# mem-guard.sh (memory kill-switch) is REQUIRED, so autopilot DISPATCHES it when
+# it isn't already up — rather than aborting on the caller. A runaway skyc /
+# cargo / rustc can pressure the host into an OOM; mem-guard is the backstop.
+# It's a host-protection daemon (other tooling relies on it too), so we start it
+# and LEAVE it running on exit — unlike watch.sh, which is autopilot-scoped.
+ensure_mem_guard() {
+    pgrep -f mem-guard.sh >/dev/null 2>&1 && return 0
+    [ -x scripts/mem-guard.sh ] || die "scripts/mem-guard.sh missing/not executable — cannot start the memory kill-switch"
+    log "mem-guard.sh not running — dispatching it (memory kill-switch)"
+    nohup ./scripts/mem-guard.sh >/tmp/mem-guard.out 2>&1 & disown
+    for _ in 1 2 3 4 5; do
+        pgrep -f mem-guard.sh >/dev/null 2>&1 && { log "mem-guard.sh up (pid $(pgrep -f mem-guard.sh | head -1))"; return 0; }
+        sleep 1
+    done
+    die "mem-guard.sh failed to start within 5s (see /tmp/mem-guard.out)"
+}
+
 # Opus/Sonnet dispatch. EVERY autopilot agent (triage/audit/guardian/review) is
 # handed the operating contract via --append-system-prompt-file, so all of them
 # obey the 6 principles + 2 rules + the seal (skyc exit-0 ⟹ cargo exit-0) — the
@@ -109,7 +126,7 @@ command -v claude >/dev/null || die "claude CLI not found"
 [ -x "$FUZZ" ] || die "missing/inexecutable soundness oracle $FUZZ"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "tracked changes present — commit/stash first"
-pgrep -f mem-guard.sh >/dev/null || die "mem-guard.sh not running"
+ensure_mem_guard
 [ -f "$STOP" ] && die "kill-switch $STOP present"
 if ! ( set -o noclobber; echo "$$" > "$LOCK" ) 2>/dev/null; then die "another autopilot holds $LOCK"; fi
 
