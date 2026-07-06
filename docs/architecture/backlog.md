@@ -7,9 +7,14 @@
 > no-deferral + §7 root-cause-only). Related: `sweep-burndown-map.md`,
 > memory `roadmap-tiers` / `security-hardening-before-push` / `endgame-example-sweep`.
 
-## In flight (lanes running 2026-07-06)
-- **#154** Misplaced-span L0108 inside compiled-source stdlib modules (37 Chart.sky:144 `Nothing ->`, 12 Roadmap.sky:55 `class`): real failing kernel mis-attributed to the wrong span.
-- **Lane V** ex00 `Stime.isLeapYear` (N0005) · ex15 `Request.body` (T0012) · ex27 SKY-L0102 poly-value.
+## Sweep front — current per-example first blockers (as of master 5b11260, 2026-07-06)
+> Landed this session: #154 (misplaced-span kernels wired), batch-U (ex00 Money/ex15 Handler/ex27 Db-scheme), batch-V (ex00 Time kernels, ex15 Request-fields+Handler-alias — ex15 now build-proven end-to-end).
+- **ex00** `00-standard-libs`: SKY-T0001 in compiled-source `Std.Money` — `fromMinor` "expected a, found Error" (pre-existing, unrelated to Time).
+- **ex12** `12-skyvote`: SKY-T0001 — `Ok _` arm at `src/Lib/Ideas.sky:148` expects `Int`, found `Float`.
+- **ex37** `37-composite-live-shop`: SKY-L0108 — `Border.shadow` at `src/View/Home.sky:173` (span now correct; kernel needs wiring — same 5-layer pattern as #154's Border/Ui work).
+- **ex27** `27-multi-session-chat`: SKY-L0102 — **erased-`any` enum-variant payload feature gap** (`MessageReceived any`). NOT a bug to hack: needs type-system + lower + backend + runtime co-design. Proposed fix (from Lane V investigation): represent bare wildcard `any` in monomorphic positions as the existing erased `IrType::Json`, exempt `any` in `lower_enum` Gate 1 (mirror the freeTypeVars/Instantiate `any` filter), and flow the erased carrier end-to-end (`Cmd.publish` concrete→erased; `Db.get*` accept erased carrier via a `SkyRow` impl for the Json carrier). Add a regression: ADT with `any` payload dispatched from `subscribeTopic`, decoded via `Db.get*`. → guardian-design item, not a mechanical lane.
+
+Wrinkle for all lanes: the shared `~/.cache/sky-rust-target` suffers cross-worktree stale-rlib thrash under concurrent builds (spurious "variant not found" for variants that exist in source). Use a per-lane `CARGO_TARGET_DIR`, or rebuild the dep chain; the merge gate is unaffected (isolated `~/.cache/master-gate-target`).
 
 ## Tier-1 — finish the parity sweep + push (ORDER: sweep-green → seal → #110 → #37 → #59 → push)
 - **#35** Port examples-sweep to skyc + run the full sweep (the source-of-truth gate).
