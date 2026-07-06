@@ -1,0 +1,36 @@
+module Main exposing (main)
+
+import Sky.Core.Task as Task
+import Sky.Core.Crypto as Crypto
+import Std.Log exposing (println)
+
+-- Minimal reproduction of the 18-job-queue withErrorReporting pattern:
+-- a polymorphic helper `wrap : String -> Task Error a -> Task Error a`
+-- that defines a let-fn `report` and forwards it to `Task.onError`.
+--
+-- Pre-fix: `eta_expand_partial` classified `Var(report)` in the partial
+-- application `Task.onError report` as slot-class `None` (because
+-- `ir_type_from_ty` failed on `Error -> Task Error a` when `a` is still
+-- a free `Ty::Var`), triggering SKY-L0126.
+--
+-- Post-fix: a `Ty::Fun` slot that fails only due to a nested type variable
+-- maps to `Some(NonClone)` — forwarding the Var is a plain ownership
+-- transfer into `impl FnOnce`, which is correct.
+
+wrap : String -> Task Error a -> Task Error a
+wrap label task =
+    let
+        report e =
+            Task.fail (Error.unexpected (label ++ " failed: " ++ Error.toString e))
+    in
+        task |> Task.onError report
+
+
+main =
+    let
+        ok =
+            wrap "test" (Task.succeed "hello")
+        _ =
+            Task.run ok
+    in
+        println "ok"
