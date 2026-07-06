@@ -6988,6 +6988,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::BorderRounded
                 // `Border.color : Color -> Attribute msg`
                 | KernelFn::BorderColor
+                // `Border.widthEach : { top : Int, right : Int, bottom : Int, left : Int } -> Attribute msg`
+                | KernelFn::BorderWidthEach
                 // ── M7: Font — arity 1 ───────────────────────────────────────
                 // `Font.size : Int -> Attribute msg`
                 | KernelFn::FontSize
@@ -7152,6 +7154,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiTextColumn
                 // `Ui.button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } -> Element msg`
                 | KernelFn::UiButton
+                // `Ui.link : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg`
+                | KernelFn::UiLink
                 // `Ui.paddingXY : Int -> Int -> Attribute msg`
                 | KernelFn::UiPaddingXY
                 // `Ui.minimum : Int -> Length -> Length`
@@ -7555,7 +7559,11 @@ impl<'a> Lowerer<'a> {
                     ("Error", "permissionDenied") => {
                         Ok(Callee::Kernel(KernelFn::ErrorPermissionDenied))
                     }
-                    ("Error", "toString") => Ok(Callee::Kernel(KernelFn::ErrorToString)),
+                    // `errorToString` is reachable from both `Basics.errorToString` (Prelude)
+                    // and `Error.toString` (qualified form) — same kernel either way.
+                    ("Basics", "errorToString") | ("Error", "toString") => {
+                        Ok(Callee::Kernel(KernelFn::ErrorToString))
+                    }
                     ("Error", "withMessage") => Ok(Callee::Kernel(KernelFn::ErrorWithMessage)),
                     // ── CssSafety kernels (Sky.Core.CssSafety — Std.Css leaf
                     //    security kernels, #47) ──────────────────────────────
@@ -7967,6 +7975,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "paragraph") => Ok(Callee::Kernel(KernelFn::UiParagraph)),
                     ("Ui", "textColumn") => Ok(Callee::Kernel(KernelFn::UiTextColumn)),
                     ("Ui", "button") => Ok(Callee::Kernel(KernelFn::UiButton)),
+                    ("Ui", "link") => Ok(Callee::Kernel(KernelFn::UiLink)),
                     // ── M7: Std.Ui attribute builders ─────────────────────────
                     ("Ui", "spacing") => Ok(Callee::Kernel(KernelFn::UiSpacing)),
                     ("Ui", "padding") => Ok(Callee::Kernel(KernelFn::UiPadding)),
@@ -8009,6 +8018,7 @@ impl<'a> Lowerer<'a> {
                     ("Border", "width") => Ok(Callee::Kernel(KernelFn::BorderWidth)),
                     ("Border", "rounded") => Ok(Callee::Kernel(KernelFn::BorderRounded)),
                     ("Border", "color") => Ok(Callee::Kernel(KernelFn::BorderColor)),
+                    ("Border", "widthEach") => Ok(Callee::Kernel(KernelFn::BorderWidthEach)),
                     // ── M7: Font sub-module ───────────────────────────────────
                     ("Font", "size") => Ok(Callee::Kernel(KernelFn::FontSize)),
                     ("Font", "color") => Ok(Callee::Kernel(KernelFn::FontColor)),

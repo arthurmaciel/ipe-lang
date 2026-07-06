@@ -690,6 +690,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiParagraph => "Ui.paragraph",
         KernelFn::UiTextColumn => "Ui.textColumn",
         KernelFn::UiButton => "Ui.button",
+        KernelFn::UiLink => "Ui.link",
         // ── M7: Std.Ui attribute builders ────────────────────────────────────
         KernelFn::UiSpacing => "Ui.spacing",
         KernelFn::UiPadding => "Ui.padding",
@@ -729,6 +730,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::BorderWidth => "Border.width",
         KernelFn::BorderRounded => "Border.rounded",
         KernelFn::BorderColor => "Border.color",
+        KernelFn::BorderWidthEach => "Border.widthEach",
         KernelFn::FontSize => "Font.size",
         KernelFn::FontColor => "Font.color",
         KernelFn::FontFamily => "Font.family",

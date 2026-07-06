@@ -1713,6 +1713,42 @@ fn emit_ui_call(
             )))
         }
 
+        // `Ui.link : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg`
+        KernelFn::UiLink => {
+            let [attrs_e, cfg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiLink",
+                    detail: format!("Ui.link requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let Expr::Record(fields) = cfg_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiLink",
+                    detail: "Ui.link cfg must be an inline record literal \
+                             in Phase 0; non-literal cfg is deferred to Phase 1"
+                        .into(),
+                });
+            };
+            let url_e = lookup_field(
+                ctx,
+                fields,
+                "url",
+                "sky_backend_rust::emit_ui_call::UiLink::url",
+            )?;
+            let label_e = lookup_field(
+                ctx,
+                fields,
+                "label",
+                "sky_backend_rust::emit_ui_call::UiLink::label",
+            )?;
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let url_s = emit_expr_at(ctx, url_e, indent, child, generics)?;
+            let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_link_({attrs_s}, {url_s}, {label_s})"
+            )))
+        }
+
         // ── Std.Ui attribute builders ─────────────────────────────────────────
 
         // `Ui.spacing : Int -> Attribute msg`
@@ -2036,6 +2072,53 @@ fn emit_ui_call(
             let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
             Ok(Some(format!(
                 "sky_runtime::ui::helpers::ui_border_color_({c})"
+            )))
+        }
+
+        // `Border.widthEach : { top : Int, right : Int, bottom : Int, left : Int } -> Attribute msg`
+        KernelFn::BorderWidthEach => {
+            let [rec_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BorderWidthEach",
+                    detail: format!("Border.widthEach requires 1 argument, got {}", args.len()),
+                });
+            };
+            let Expr::Record(fields) = rec_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BorderWidthEach",
+                    detail: "Border.widthEach arg must be an inline record literal".into(),
+                });
+            };
+            let top_e = lookup_field(
+                ctx,
+                fields,
+                "top",
+                "sky_backend_rust::emit_ui_call::BorderWidthEach::top",
+            )?;
+            let right_e = lookup_field(
+                ctx,
+                fields,
+                "right",
+                "sky_backend_rust::emit_ui_call::BorderWidthEach::right",
+            )?;
+            let bottom_e = lookup_field(
+                ctx,
+                fields,
+                "bottom",
+                "sky_backend_rust::emit_ui_call::BorderWidthEach::bottom",
+            )?;
+            let left_e = lookup_field(
+                ctx,
+                fields,
+                "left",
+                "sky_backend_rust::emit_ui_call::BorderWidthEach::left",
+            )?;
+            let top = emit_expr_at(ctx, top_e, indent, child, generics)?;
+            let right = emit_expr_at(ctx, right_e, indent, child, generics)?;
+            let bottom = emit_expr_at(ctx, bottom_e, indent, child, generics)?;
+            let left = emit_expr_at(ctx, left_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_border_width_each_({top}, {right}, {bottom}, {left})"
             )))
         }
 
