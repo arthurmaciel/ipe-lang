@@ -7846,10 +7846,14 @@ impl<'a> Lowerer<'a> {
                     ("Db.Decode", "map4") => Ok(Callee::Kernel(KernelFn::DbDecMap4)),
                     ("Db.Decode", "required") => Ok(Callee::Kernel(KernelFn::DbDecRequired)),
                     ("Db.Decode", "optional") => Ok(Callee::Kernel(KernelFn::DbDecOptional)),
-                    // ── TEA Cmd / Sub / Time kernels (M5c) ───────────────────────
+                    // ── TEA Cmd / Sub / Time kernels (M5c / M5e) ─────────────────
                     ("Cmd", "none") => Ok(Callee::Kernel(KernelFn::CmdNone)),
                     ("Cmd", "batch") => Ok(Callee::Kernel(KernelFn::CmdBatch)),
                     ("Cmd", "perform") => Ok(Callee::Kernel(KernelFn::CmdPerform)),
+                    // `Cmd.publish : String -> Dict String String -> Cmd msg` (M5e)
+                    ("Cmd", "publish") => Ok(Callee::Kernel(KernelFn::CmdPublish)),
+                    // `Cmd.publishNoEcho : String -> Dict String String -> Cmd msg` (M5e)
+                    ("Cmd", "publishNoEcho") => Ok(Callee::Kernel(KernelFn::CmdPublishNoEcho)),
                     ("Sub", "none") => Ok(Callee::Kernel(KernelFn::SubNone)),
                     ("Sub", "batch") => Ok(Callee::Kernel(KernelFn::SubBatch)),
                     ("Sub", "every") => Ok(Callee::Kernel(KernelFn::SubEvery)),
