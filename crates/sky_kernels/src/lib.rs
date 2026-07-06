@@ -762,6 +762,16 @@ pub enum StdlibKernel {
     HtmlSection,
     HtmlArticle,
     HtmlHeader,
+    /// Legacy compat alias for `Html.header` — same `<header>` tag, arity 2.
+    HtmlHeaderNode,
+    /// Legacy compat alias for `Html.code` — same `<code>` tag, arity 2.
+    HtmlCodeNode,
+    /// Legacy compat alias for `Html.main` — same `<main>` tag, arity 2.
+    HtmlMainNode,
+    /// Legacy compat alias for `Html.footer` — same `<footer>` tag, arity 2.
+    HtmlFooterNode,
+    /// Legacy compat alias for `Html.link` — same `<link>` tag, arity 1 (void).
+    HtmlLinkNode,
     HtmlFooter,
     HtmlMain,
     HtmlAside,
@@ -889,6 +899,21 @@ pub enum StdlibKernel {
     UiHtmlAttribute,  // String → String → Attr (AttrAttribute escape-hatch)
     UiName,           // String → Attr (HTML name= attribute)
     UiStyle,          // String → String → Attr (raw CSS property + value)
+    // ── #154: Breakpoint opaque constants + Ui.breakpoint wrapper ────────────
+    /// `Ui.breakpoint : Breakpoint -> List (Attribute msg) -> Element msg -> Element msg`
+    ///
+    /// Phase-0: eager passthrough — breakpoint CSS media queries are not yet
+    /// applied in the Rust runtime.  Divergence recorded in
+    /// `docs/divergences-from-sky.md` §B-Breakpoint.
+    /// `Breakpoint` is typed as `String` in the Rust port; see sanctioned
+    /// divergence note in `constrain.rs::stdlib_scheme` (`UiBreakpoint` arm).
+    UiBreakpoint,
+    UiMobile,        // Breakpoint constant: "(max-width: 767px)"
+    UiTablet,        // Breakpoint constant: "(min-width: 768px) and (max-width: 1023px)"
+    UiDesktop,       // Breakpoint constant: "(min-width: 1024px)"
+    UiDarkMode,      // Breakpoint constant: "(prefers-color-scheme: dark)"
+    UiLightMode,     // Breakpoint constant: "(prefers-color-scheme: light)"
+    UiReducedMotion, // Breakpoint constant: "(prefers-reduced-motion: reduce)"
     // Background namespace — pseudo-class colour tints
     BackgroundHoverColor,
     BackgroundFocusColor,
@@ -1860,6 +1885,11 @@ impl StdlibKernel {
             Self::HtmlSection => d("Html", "section", 2, Ui, "html_node_"),
             Self::HtmlArticle => d("Html", "article", 2, Ui, "html_node_"),
             Self::HtmlHeader => d("Html", "header", 2, Ui, "html_node_"),
+            Self::HtmlHeaderNode => d("Html", "headerNode", 2, Ui, "html_node_"),
+            Self::HtmlCodeNode => d("Html", "codeNode", 2, Ui, "html_node_"),
+            Self::HtmlMainNode => d("Html", "mainNode", 2, Ui, "html_node_"),
+            Self::HtmlFooterNode => d("Html", "footerNode", 2, Ui, "html_node_"),
+            Self::HtmlLinkNode => d("Html", "linkNode", 1, Ui, "html_node_"),
             Self::HtmlFooter => d("Html", "footer", 2, Ui, "html_node_"),
             Self::HtmlMain => d("Html", "main", 2, Ui, "html_node_"),
             Self::HtmlAside => d("Html", "aside", 2, Ui, "html_node_"),
@@ -1986,6 +2016,14 @@ impl StdlibKernel {
             Self::UiHtmlAttribute => d("Ui", "htmlAttribute", 2, Ui, "ui_html_attribute_"),
             Self::UiName => d("Ui", "name", 1, Ui, "ui_name_"),
             Self::UiStyle => d("Ui", "style", 2, Ui, "ui_style_"),
+            // #154: Breakpoint
+            Self::UiBreakpoint => d("Ui", "breakpoint", 3, Ui, "ui_breakpoint_"),
+            Self::UiMobile => d("Ui", "mobile", 0, Ui, "ui_mobile_"),
+            Self::UiTablet => d("Ui", "tablet", 0, Ui, "ui_tablet_"),
+            Self::UiDesktop => d("Ui", "desktop", 0, Ui, "ui_desktop_"),
+            Self::UiDarkMode => d("Ui", "darkMode", 0, Ui, "ui_dark_mode_"),
+            Self::UiLightMode => d("Ui", "lightMode", 0, Ui, "ui_light_mode_"),
+            Self::UiReducedMotion => d("Ui", "reducedMotion", 0, Ui, "ui_reduced_motion_"),
             // Background namespace
             Self::BackgroundHoverColor => {
                 d("Background", "hoverColor", 1, Ui, "ui_bg_hover_color_")
@@ -2762,6 +2800,11 @@ impl StdlibKernel {
         Self::HtmlSection,
         Self::HtmlArticle,
         Self::HtmlHeader,
+        Self::HtmlHeaderNode,
+        Self::HtmlCodeNode,
+        Self::HtmlMainNode,
+        Self::HtmlFooterNode,
+        Self::HtmlLinkNode,
         Self::HtmlFooter,
         Self::HtmlMain,
         Self::HtmlAside,
@@ -2889,6 +2932,13 @@ impl StdlibKernel {
         Self::UiHtmlAttribute,
         Self::UiName,
         Self::UiStyle,
+        Self::UiBreakpoint,
+        Self::UiMobile,
+        Self::UiTablet,
+        Self::UiDesktop,
+        Self::UiDarkMode,
+        Self::UiLightMode,
+        Self::UiReducedMotion,
         Self::BackgroundHoverColor,
         Self::BackgroundFocusColor,
         Self::BackgroundActiveColor,
@@ -3297,6 +3347,11 @@ impl StdlibKernel {
                 | Self::HtmlSection
                 | Self::HtmlArticle
                 | Self::HtmlHeader
+                | Self::HtmlHeaderNode
+                | Self::HtmlCodeNode
+                | Self::HtmlMainNode
+                | Self::HtmlFooterNode
+                | Self::HtmlLinkNode
                 | Self::HtmlFooter
                 | Self::HtmlMain
                 | Self::HtmlAside
@@ -3402,6 +3457,14 @@ impl StdlibKernel {
                 | Self::UiHtmlAttribute
                 | Self::UiName
                 | Self::UiStyle
+                // ── #154: Breakpoint ──────────────────────────────────────────
+                | Self::UiBreakpoint
+                | Self::UiMobile
+                | Self::UiTablet
+                | Self::UiDesktop
+                | Self::UiDarkMode
+                | Self::UiLightMode
+                | Self::UiReducedMotion
                 | Self::BackgroundHoverColor
                 | Self::BackgroundFocusColor
                 | Self::BackgroundActiveColor
@@ -3625,6 +3688,10 @@ impl StdlibKernel {
                 | Self::HtmlSection
                 | Self::HtmlArticle
                 | Self::HtmlHeader
+                | Self::HtmlHeaderNode
+                | Self::HtmlCodeNode
+                | Self::HtmlMainNode
+                | Self::HtmlFooterNode
                 | Self::HtmlFooter
                 | Self::HtmlMain
                 | Self::HtmlAside
@@ -3681,6 +3748,7 @@ impl StdlibKernel {
                 | Self::HtmlHr
                 | Self::HtmlMeta
                 | Self::HtmlLink
+                | Self::HtmlLinkNode
                 | Self::HtmlArea
                 | Self::HtmlBase
                 | Self::HtmlCol
@@ -3706,9 +3774,9 @@ impl StdlibKernel {
             Self::HtmlNav => "nav",
             Self::HtmlSection => "section",
             Self::HtmlArticle => "article",
-            Self::HtmlHeader => "header",
-            Self::HtmlFooter => "footer",
-            Self::HtmlMain => "main",
+            Self::HtmlHeader | Self::HtmlHeaderNode => "header",
+            Self::HtmlFooter | Self::HtmlFooterNode => "footer",
+            Self::HtmlMain | Self::HtmlMainNode => "main",
             Self::HtmlAside => "aside",
             Self::HtmlUl => "ul",
             Self::HtmlOl => "ol",
@@ -3728,7 +3796,7 @@ impl StdlibKernel {
             Self::HtmlFieldset => "fieldset",
             Self::HtmlLegend => "legend",
             Self::HtmlPre => "pre",
-            Self::HtmlCode => "code",
+            Self::HtmlCode | Self::HtmlCodeNode => "code",
             Self::HtmlStrong => "strong",
             Self::HtmlEm => "em",
             Self::HtmlSmall => "small",
@@ -3750,7 +3818,7 @@ impl StdlibKernel {
             Self::HtmlBr => "br",
             Self::HtmlHr => "hr",
             Self::HtmlMeta => "meta",
-            Self::HtmlLink => "link",
+            Self::HtmlLink | Self::HtmlLinkNode => "link",
             Self::HtmlArea => "area",
             Self::HtmlBase => "base",
             Self::HtmlCol => "col",
