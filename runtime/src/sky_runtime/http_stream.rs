@@ -28,6 +28,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+/// Opaque handle for an in-flight HTTP streaming response.
+///
+/// Mirrors `type StreamId = StreamId Int` from `Sky.Core.Http.Stream`.
+/// The inner `i64` is a monotonic registry key; zero is reserved ("uninitialised
+/// model field must never resolve to a real stream").
+///
+/// `#[derive(Copy)]` so it can be passed by value to Task closures without
+/// cloning — matches the Sky source's usage as a plain record field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SkyStreamId(pub i64);
+
 /// `Sky.Core.Http.Stream.ChunkEvent` — one incremental event on a stream.
 /// Bridged (via `runtimeOpaqueTypes`) so the runtime can CONSTRUCT it to hand to
 /// the user's `toMsg : ChunkEvent -> msg` callback; user code only ever
@@ -78,12 +89,17 @@ fn next_stream_id() -> i64 {
     }
 }
 
-/// Sky.Core.Http.Stream.open : HttpRequest -> Task Error Int
-/// (the Sky wrapper re-wraps the Int in `StreamId`.)
+/// `Sky.Core.Http.Stream.open : HttpRequest -> Task Error StreamId`
+///
+/// Returns a `SkyStreamId` handle wrapping the raw i64 registry key.
+/// Previously returned a raw `i64`; updated in #148 to match the upstream
+/// `Sky.Core.Http.Stream.open` declared return type.
 ///
 /// No whole-request timeout — streams may run for minutes (LLM completions);
 /// a 30s connect timeout bounds the header stage only.
-pub fn http_stream_open<E: From<String> + Send + 'static>(req: HttpRequest) -> SkyTask<E, i64> {
+pub fn http_stream_open<E: From<String> + Send + 'static>(
+    req: HttpRequest,
+) -> SkyTask<E, SkyStreamId> {
     Box::pin(async move {
         // SSRF guard (was MISSING here — this surface built its own client and
         // bypassed SKY_HTTP_DENY_PRIVATE entirely). Resolve+validate+pin + the
@@ -143,11 +159,11 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(req: HttpRequest) -> S
             }
             map.insert(id, resp);
         }
-        SkyResult::Ok(id)
+        SkyResult::Ok(SkyStreamId(id))
     })
 }
 
-/// Sky.Core.Http.Stream.forEachChunk : Int -> (String -> Task Error ()) -> Task Error ()
+/// `Sky.Core.Http.Stream.forEachChunk : StreamId -> (String -> Task Error ()) -> Task Error ()`
 ///
 /// Drains the stream synchronously from the calling task, invoking `body chunk`
 /// per chunk. Bridges the client consumer to a server producer
@@ -162,11 +178,12 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(req: HttpRequest) -> S
 /// Backpressure: `body` runs synchronously per chunk; if it blocks on a slow
 /// downstream (`Server.Stream.emit` to a bounded channel) the upstream read
 /// naturally throttles.
-pub fn http_stream_for_each_chunk<E, F>(id: i64, body: F) -> SkyTask<E, ()>
+pub fn http_stream_for_each_chunk<E, F>(sid: SkyStreamId, body: F) -> SkyTask<E, ()>
 where
     E: From<String> + Send + 'static,
     F: Fn(String) -> SkyTask<E, ()> + Send + 'static,
 {
+    let id = sid.0;
     Box::pin(async move {
         // Take ownership of the response — forEachChunk consumes it. An unknown /
         // already-drained id is a no-op (matches close's idempotent contract).
@@ -197,9 +214,10 @@ where
     })
 }
 
-/// Sky.Core.Http.Stream.close : Int -> Task Error ()
+/// `Sky.Core.Http.Stream.close : StreamId -> Task Error ()`
 /// Idempotent — closing an unknown / already-closed id is a no-op.
-pub fn http_stream_close<E: From<String> + Send + 'static>(id: i64) -> SkyTask<E, ()> {
+pub fn http_stream_close<E: From<String> + Send + 'static>(sid: SkyStreamId) -> SkyTask<E, ()> {
+    let id = sid.0;
     Box::pin(async move {
         client_streams()
             .lock()
@@ -233,12 +251,13 @@ fn chunk_subscribed() -> &'static Mutex<HashSet<i64>> {
 /// `Errored e` on a read fault. Subscribing to an unknown / already-drained id
 /// is a no-op (matches the stdlib contract). `E` is pinned to `SkyError` at the
 /// call site; `Errored` builds it via `From<String>`.
-pub fn sub_subscribe_stream<E, M, F>(id: i64, to_msg: F) -> SkySub<M>
+pub fn sub_subscribe_stream<E, M, F>(sid: SkyStreamId, to_msg: F) -> SkySub<M>
 where
     E: From<String> + Send + 'static,
     M: Send + 'static,
     F: Fn(ChunkEvent<E>) -> M + Send + Sync + 'static,
 {
+    let id = sid.0;
     SkySub::Source(Box::new(move |emit| {
         if chunk_subscribed()
             .lock()
@@ -306,7 +325,7 @@ mod tests {
             followRedirects: false,
             maxRedirects: 0,
         };
-        let r: SkyResult<String, i64> = http_stream_open(req).await;
+        let r: SkyResult<String, SkyStreamId> = http_stream_open(req).await;
         assert!(
             matches!(r, SkyResult::Err(_)),
             "invalid method must error, not downgrade to GET"

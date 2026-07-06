@@ -82,6 +82,23 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Unit => "()".to_owned(),
         IrType::Task(inner) => format!("SkyTask<{}>", render_type(ctx, inner, generics)?),
         IrType::Enum { home, name, args } => {
+            // Special-case builtin Http.Stream ADTs that are NOT registered as
+            // synthetic `EnumDef`s but appear in user type annotations (#148).
+            //
+            // `ChunkEvent` is generic over the error type (`E` = always
+            // `SkyError` in practice) — we bake the concrete type arg in here
+            // rather than propagating it through the IrType layer (the Sky
+            // user sees `ChunkEvent` as a non-generic type; the `E` channel is
+            // invisible to user code).
+            //
+            // `StreamId` is handled by the `enum_name` override in `EmitCtx`
+            // (returns `"SkyStreamId"`), so it falls through to the normal
+            // non-generic path below.
+            if home.0.is_empty() && args.is_empty()
+                && ctx.resolve_ident(*name) == Ok("ChunkEvent")
+            {
+                return Ok("ChunkEvent<SkyError>".to_owned());
+            }
             let base = ctx.enum_name(home, *name)?.to_owned();
             if args.is_empty() {
                 // A non-generic enum renders as the bare Rust type name —
