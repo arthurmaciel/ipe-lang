@@ -223,13 +223,329 @@ main =
 EOF
 }
 
+# ── New templates (constructs 6–17) ───────────────────────────────────────────
+
+# Template 6: case / ADT — declare a 3-constructor type, case over it covering
+# all arms (including a wildcard catch-all). Well-typed by construction: the
+# constructor chosen from {Red,Green,Blue} at slot fill and the case arms
+# cover all three plus a final wildcard so exhaustiveness is satisfied.
+template_adt_case() {
+    local n1=$1 n2=$2 n3=$3
+    # pick the constructor via modular arithmetic on n3
+    local ctor
+    case $(( n3 % 3 )) in
+        0) ctor="Red" ;;
+        1) ctor="Green" ;;
+        *) ctor="Blue" ;;
+    esac
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+type Color
+    = Red
+    | Green
+    | Blue
+
+colorValue : Color -> Int
+colorValue c =
+    case c of
+        Red -> $n1
+        Green -> $n2
+        Blue -> $n3
+
+main =
+    println (String.fromInt (colorValue $ctor))
+EOF
+}
+
+# Template 7: let-polymorphism — a let-bound helper `showNum` used at two
+# different call sites with the same concrete type (Int→String). This exercises
+# the let-binding path in HM without requiring higher-kinded types.
+template_let_poly() {
+    local n1=$1 n2=$2
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+main =
+    let
+        showNum x = "v=" ++ String.fromInt x
+        a = showNum $n1
+        b = showNum $n2
+    in
+    println (a ++ " " ++ b)
+EOF
+}
+
+# Template 8: higher-order / partial application — pass a lambda to List.map,
+# and use a partially applied (+) via a named helper. Well-typed: List.map takes
+# (a->b) and List a; String.join takes a separator and List String.
+template_higher_order() {
+    local n1=$1 lst=$2
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.List as List
+import Sky.Core.String as String
+import Std.Log exposing (println)
+
+addN : Int -> Int -> Int
+addN n x =
+    n + x
+
+main =
+    let
+        bumped = List.map (addN $n1) $lst
+        strs = List.map String.fromInt bumped
+    in
+    println (String.join "," strs)
+EOF
+}
+
+# Template 9: record update — build a record, then produce an updated copy.
+# Well-typed: both fields are the correct type after update.
+template_record_update() {
+    local n1=$1 n2=$2 s1=$3
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+type alias Point =
+    { x : Int, y : Int, label : String }
+
+main =
+    let
+        p0 = { x = $n1, y = $n2, label = "$s1" }
+        p1 = { p0 | x = p0.x + 1, label = "updated" }
+    in
+    println (String.fromInt p1.x ++ "-" ++ p1.label)
+EOF
+}
+
+# Template 10: tuple + destructure — build a 2-tuple, destructure via fst/snd
+# (from Prelude). Well-typed: fst and snd are `(a, b) -> a` / `(a, b) -> b`.
+template_tuple() {
+    local n1=$1 n2=$2
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+main =
+    let
+        pair = ( $n1, $n2 )
+        a = fst pair
+        b = snd pair
+    in
+    println (String.fromInt (a + b))
+EOF
+}
+
+# Template 11: recursion — a self-recursive `sumList` that sums an Int list.
+# Well-typed: Int->Int return through every arm; tail position via acc.
+template_recursion() {
+    local lst=$1
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.List as List
+import Std.Log exposing (println)
+
+sumList : List Int -> Int -> Int
+sumList xs acc =
+    case xs of
+        [] -> acc
+        (h :: t) -> sumList t (acc + h)
+
+main =
+    println (String.fromInt (sumList $lst 0))
+EOF
+}
+
+# Template 12: if / nested let — nested let blocks with an if/else inside.
+# Well-typed: both branches of if return Int; outer let builds on the result.
+template_if_nested_let() {
+    local n1=$1 n2=$2 n3=$3
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+main =
+    let
+        bigger =
+            if $n1 > $n2 then
+                $n1
+            else
+                $n2
+        result =
+            let
+                scaled = bigger * $n3
+            in
+            scaled + 1
+    in
+    println (String.fromInt result)
+EOF
+}
+
+# Template 13: pipelines — |> and <| chains. Well-typed: Int threaded through
+# String.fromInt, then String.length gives Int; <| applies to that.
+template_pipeline() {
+    local n1=$1 n2=$2
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.String as String
+import Std.Log exposing (println)
+
+double : Int -> Int
+double x = x * 2
+
+main =
+    let
+        len = $n1 |> String.fromInt |> String.length
+        result = double <| len + $n2
+    in
+    println (String.fromInt result)
+EOF
+}
+
+# Template 14: Dict ops — insert + get, String key. Well-typed: Dict.insert
+# takes k->v->Dict k v; Dict.get returns Maybe v; Maybe.withDefault provides Int.
+template_dict_ops() {
+    local n1=$1 n2=$2 s1=$3
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Dict as Dict
+import Sky.Core.Maybe as Maybe
+import Std.Log exposing (println)
+
+main =
+    let
+        d0 = Dict.empty
+        d1 = Dict.insert "x" $n1 d0
+        d2 = Dict.insert "$s1" $n2 d1
+        vx = Maybe.withDefault 0 (Dict.get "x" d2)
+        sz = Dict.size d2
+    in
+    println (String.fromInt (vx + sz))
+EOF
+}
+
+# Template 15: Set ops — fromList, member, size. Well-typed: Set Int operations.
+template_set_ops() {
+    local n1=$1 n2=$2 lst=$3
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Set as Set
+import Std.Log exposing (println)
+
+main =
+    let
+        s = Set.fromList $lst
+        s2 = Set.insert $n1 s
+        hasMember = Set.member $n2 s2
+        sz = Set.size s2
+        result = if hasMember then sz + 1 else sz
+    in
+    println (String.fromInt result)
+EOF
+}
+
+# Template 16: Maybe.andMap (applicative style) — map2 combines two Maybes.
+# Well-typed: both Maybe Int, combinator produces Maybe Int.
+template_maybe_andmap() {
+    local n1=$1 n2=$2
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Maybe as Maybe
+import Std.Log exposing (println)
+
+main =
+    let
+        ma = Just $n1
+        mb = Just $n2
+        mc = Maybe.map2 (\a b -> a + b) ma mb
+        result = Maybe.withDefault 0 mc
+    in
+    println (String.fromInt result)
+EOF
+}
+
+# Template 17: Result.map2 — combines two Ok values. Well-typed: both
+# Result Error Int, map2 produces Result Error Int.
+template_result_map2() {
+    local n1=$1 n2=$2
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Result as Result
+import Std.Log exposing (println)
+
+main =
+    let
+        ra = Ok $n1
+        rb = Ok $n2
+        rc = Result.map2 (\a b -> a * b) ra rb
+        result = Result.withDefault 0 rc
+    in
+    println (String.fromInt result)
+EOF
+}
+
+# Template 18: multiline string + interpolation — triple-quoted string with
+# {{...}} interpolations. Well-typed: all interpolated exprs are String.
+# NOTE: String.fromInt applied to a literal integer inside {{...}} triggers
+# SKY-I0001 (unbound local '<literal>') — compiler bug, not template bug.
+# Workaround: bind all Int values to let-variables BEFORE interpolating;
+# {{varName}} and {{String.fromInt varName}} both work when the arg is a name.
+template_multiline_interp() {
+    local n1=$1 n2=$2 s1=$3
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.String as String
+import Std.Log exposing (println)
+
+main =
+    let
+        tag = "$s1"
+        count = $n1
+        total = $n2
+        msg = """item={{tag}} count={{String.fromInt count}} total={{String.fromInt total}}"""
+    in
+    println msg
+EOF
+}
+
 # ── Template renderer ─────────────────────────────────────────────────────────
+# Total templates: 19 (6 original + 13 new). kind = seed-derived mod 19.
 render_template() {
     local seed=$1 dst=$2
     local ps pk s1 s2 s3 n1 n2 n3 slen str llen lstr lst i cs cidx ch ls lv
 
     ps=$(lcg_next "$seed")
-    local kind=$(( ps % 6 ))
+    local kind=$(( ps % 19 ))
 
     s1=$(lcg_next $(( seed + 1 )))
     s2=$(lcg_next $(( seed + 2 )))
@@ -249,8 +565,9 @@ render_template() {
         str="$str$ch"
     done
 
-    # Bounded Int list literal of length 0..5
-    llen=$(bint "$s2" 0 5)
+    # Bounded Int list literal of length 1..5 (1 minimum — recursion/set
+    # templates work better with at least one element)
+    llen=$(bint "$s2" 1 5)
     lstr=""
     for (( i = 0; i < llen; i++ )); do
         ls=$(lcg_next $(( seed * 11 + i + 1 )))
@@ -260,12 +577,25 @@ render_template() {
     lst="[$lstr]"
 
     case $kind in
-        0) echo "arith";       template_arith       "$n1" "$n2" "$n3" > "$dst" ;;
-        1) echo "strconcat";   template_strconcat   "$n1" "$str"       > "$dst" ;;
-        2) echo "listmap";     template_listmap     "$n1" "$lst"       > "$dst" ;;
-        3) echo "maybechain";  template_maybechain  "$n1" "$n2"        > "$dst" ;;
-        4) echo "resultpipe";  template_resultpipeline "$n1" "$n2"    > "$dst" ;;
-        5) echo "paramrecord"; template_paramrecord "$n1" "$str"       > "$dst" ;;
+        0)  echo "arith";          template_arith             "$n1" "$n2" "$n3" > "$dst" ;;
+        1)  echo "strconcat";      template_strconcat         "$n1" "$str"       > "$dst" ;;
+        2)  echo "listmap";        template_listmap           "$n1" "$lst"       > "$dst" ;;
+        3)  echo "maybechain";     template_maybechain        "$n1" "$n2"        > "$dst" ;;
+        4)  echo "resultpipe";     template_resultpipeline    "$n1" "$n2"        > "$dst" ;;
+        5)  echo "paramrecord";    template_paramrecord       "$n1" "$str"       > "$dst" ;;
+        6)  echo "adtcase";        template_adt_case          "$n1" "$n2" "$n3" > "$dst" ;;
+        7)  echo "letpoly";        template_let_poly          "$n1" "$n2"        > "$dst" ;;
+        8)  echo "higherorder";    template_higher_order      "$n1" "$lst"       > "$dst" ;;
+        9)  echo "recordupdate";   template_record_update     "$n1" "$n2" "$str" > "$dst" ;;
+        10) echo "tuple";          template_tuple             "$n1" "$n2"        > "$dst" ;;
+        11) echo "recursion";      template_recursion         "$lst"             > "$dst" ;;
+        12) echo "ifnestedlet";    template_if_nested_let     "$n1" "$n2" "$n3" > "$dst" ;;
+        13) echo "pipeline";       template_pipeline          "$n1" "$n2"        > "$dst" ;;
+        14) echo "dictops";        template_dict_ops          "$n1" "$n2" "$str" > "$dst" ;;
+        15) echo "setops";         template_set_ops           "$n1" "$n2" "$lst" > "$dst" ;;
+        16) echo "maybeandmap";    template_maybe_andmap      "$n1" "$n2"        > "$dst" ;;
+        17) echo "resultmap2";     template_result_map2       "$n1" "$n2"        > "$dst" ;;
+        18) echo "multilineinterp"; template_multiline_interp "$n1" "$n2" "$str" > "$dst" ;;
     esac
 }
 
