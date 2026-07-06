@@ -2538,6 +2538,23 @@ fn emit_ui_call(
             )))
         }
 
+        // `Border.glow : Int -> Color -> Attribute msg` — convenience box-shadow
+        // with 0,0 offset + 0 spread. Two positional args (blur Int + colour
+        // Color); no record destructure, unlike `Border.shadow`.
+        KernelFn::BorderGlow => {
+            let [blur_e, color_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BorderGlow",
+                    detail: format!("Border.glow requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let blur = emit_expr_at(ctx, blur_e, indent, child, generics)?;
+            let color = emit_expr_at(ctx, color_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_border_glow_({blur}, {color})"
+            )))
+        }
+
         // ── Font sub-module ───────────────────────────────────────────────────
 
         // `Font.size : Int -> Attribute msg`

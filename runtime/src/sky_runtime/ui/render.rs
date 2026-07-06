@@ -600,6 +600,26 @@ mod tests {
     }
 
     #[test]
+    fn border_glow_renders_box_shadow() {
+        // `Border.glow 4 (Ui.rgb 0 0 0)` is a convenience box-shadow with `(0, 0)`
+        // offset and `0` spread — only blur + colour vary. It must render the CSS
+        // `box-shadow: 0px 0px <blur>px 0px <colour>` shape via the generic
+        // `AttrStyle` boundary, routing the colour through the same conversion as
+        // `Border.color`. Exercises the `ui_border_glow_` helper end to end.
+        let attrs = vec![super::super::helpers::ui_border_glow_(
+            4,
+            Color::Rgba(0, 0, 0, 1.0),
+        )];
+        let elem: Element<TestMsg> = Element::Empty;
+        let html = ui_layout(attrs, elem);
+        let s = render_html(&html);
+        assert!(
+            s.contains("box-shadow:0px 0px 4px 0px rgba(0,0,0,1)"),
+            "box-shadow (glow) missing/malformed: {s}"
+        );
+    }
+
+    #[test]
     fn nearby_overlay_renders() {
         let overlay: Element<TestMsg> = Element::Text("tooltip".to_owned());
         let attrs = vec![Attribute::AttrNearby(Location::Above, overlay)];
