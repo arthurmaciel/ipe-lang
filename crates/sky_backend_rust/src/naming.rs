@@ -824,6 +824,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::BorderWidthEach => "ui_border_width_each_",
         KernelFn::BorderShadow => "ui_border_shadow_",
         KernelFn::BorderGlow => "ui_border_glow_",
+        KernelFn::BorderInnerShadow => "ui_border_inner_shadow_",
         KernelFn::FontSize => "ui_font_size_",
         KernelFn::FontColor => "ui_font_color_",
         KernelFn::FontFamily => "ui_font_family_",

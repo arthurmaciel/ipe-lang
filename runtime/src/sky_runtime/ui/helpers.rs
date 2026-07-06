@@ -361,6 +361,22 @@ pub fn ui_border_glow_<M>(blur: i64, c: Color) -> Attribute<M> {
     )
 }
 
+/// `Border.innerShadow : { offsetX : Int, offsetY : Int, blur : Int, spread : Int, color : Color } -> Attribute msg`
+///
+/// Same record shape as [`ui_border_shadow_`] but INSET: renders the CSS
+/// `box-shadow: inset <ox>px <oy>px <blur>px <spread>px <colour>;`. Uses the
+/// dedicated `AttrBorderInsetShadow` runtime variant (rendered in `render.rs`)
+/// so the colour flows through the same `color_css` boundary as `Border.color`.
+pub fn ui_border_inner_shadow_<M>(
+    horiz: i64,
+    vert: i64,
+    blur: i64,
+    spread: i64,
+    c: Color,
+) -> Attribute<M> {
+    Attribute::AttrBorderInsetShadow(horiz, vert, blur, spread, c)
+}
+
 // ── Font sub-module ───────────────────────────────────────────────────────────
 
 /// `Font.size : Int -> Attribute msg`

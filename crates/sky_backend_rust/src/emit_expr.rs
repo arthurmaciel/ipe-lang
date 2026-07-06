@@ -2555,6 +2555,67 @@ fn emit_ui_call(
             )))
         }
 
+        // `Border.innerShadow : { offsetX : Int, offsetY : Int, blur : Int, spread : Int, color : Color } -> Attribute msg`
+        // Same record destructure as `Border.shadow`, emitting the INSET helper.
+        KernelFn::BorderInnerShadow => {
+            let [rec_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BorderInnerShadow",
+                    detail: format!(
+                        "Border.innerShadow requires 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let Expr::Record(fields) = rec_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BorderInnerShadow",
+                    detail: "Border.innerShadow arg must be an inline record literal".into(),
+                });
+            };
+            // Distinct binding names (`horiz`/`vert` rather than `offset_x`/
+            // `offset_y`) keep clippy::similar_names quiet — the source record
+            // fields are still `offsetX`/`offsetY`.
+            let horiz_e = lookup_field(
+                ctx,
+                fields,
+                "offsetX",
+                "sky_backend_rust::emit_ui_call::BorderInnerShadow::offsetX",
+            )?;
+            let vert_e = lookup_field(
+                ctx,
+                fields,
+                "offsetY",
+                "sky_backend_rust::emit_ui_call::BorderInnerShadow::offsetY",
+            )?;
+            let blur_e = lookup_field(
+                ctx,
+                fields,
+                "blur",
+                "sky_backend_rust::emit_ui_call::BorderInnerShadow::blur",
+            )?;
+            let spread_e = lookup_field(
+                ctx,
+                fields,
+                "spread",
+                "sky_backend_rust::emit_ui_call::BorderInnerShadow::spread",
+            )?;
+            let color_e = lookup_field(
+                ctx,
+                fields,
+                "color",
+                "sky_backend_rust::emit_ui_call::BorderInnerShadow::color",
+            )?;
+            let horiz = emit_expr_at(ctx, horiz_e, indent, child, generics)?;
+            let vert = emit_expr_at(ctx, vert_e, indent, child, generics)?;
+            let blur = emit_expr_at(ctx, blur_e, indent, child, generics)?;
+            let spread = emit_expr_at(ctx, spread_e, indent, child, generics)?;
+            let color = emit_expr_at(ctx, color_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_border_inner_shadow_({horiz}, {vert}, {blur}, {spread}, {color})"
+            )))
+        }
+
         // ── Font sub-module ───────────────────────────────────────────────────
 
         // `Font.size : Int -> Attribute msg`
