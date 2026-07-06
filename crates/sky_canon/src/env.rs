@@ -827,7 +827,19 @@ impl Env {
             // `Sky.Core.Io` — I/O effects (M5a).
             ("Io", &["readLine", "writeStdout", "writeStderr"]),
             // `Sky.Core.Time` — time effects (M5a) + M5c TEA tick subscription.
-            ("Time", &["now", "sleep", "unixMillis", "every", "timeString"]),
+            (
+                "Time",
+                &[
+                    "now",
+                    "sleep",
+                    "unixMillis",
+                    "every",
+                    "timeString",
+                    // `Std.Time` pure calendar helpers (Int -> Bool / Int -> Int -> Int).
+                    "isLeapYear",
+                    "daysInMonth",
+                ],
+            ),
             // `Sky.Core.System` — system effects (M5a).
             (
                 "System",
