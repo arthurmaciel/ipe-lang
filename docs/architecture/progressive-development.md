@@ -68,24 +68,30 @@ fixed part** if `F` is large and N is high: a 25k-token `F` over 50 iterations i
 
 **What we do about it (in priority order):**
 
-1. **Replace the CLAUDE.md that loads — you cannot "ignore" it.** An auto-loaded
+1. **Stop CLAUDE.md loading at the CLI — you cannot "ignore" it.** An auto-loaded
    `CLAUDE.md` is injected into the fresh agent's system prompt *before it acts*,
    so a prompt instruction to "ignore CLAUDE.md" is futile (the tokens are already
    billed) AND counter-productive (naming the file can trigger a wasteful re-`Read`).
-   The only real fix is to change *what loads*. `progressive-development.sh` runs each
-   `claude -p` in a dedicated **git worktree whose `CLAUDE.md` file IS the lean
-   contract** (`progressive-development-context.md`, ~1–2k tokens: the six
-   principles, two rules, the seal, boundary, gate). `git update-index
-   --skip-worktree` keeps the swap invisible to git (never committed → the branch
-   ff-merges clean) and it is re-applied after every iteration in case a red
-   `reset --hard` reverted it. The main checkout's `CLAUDE.md` is never touched.
-   The iteration then pulls the ~5% of project detail it needs by *reading specific
-   files as tool calls* (backlog.md, the `../sky` reference, the crate it edits) —
-   you pay for what an item touches, not the whole manual. (Caveats: the global
-   `~/.claude/CLAUDE.md` still loads — comparatively small; consider a loop-specific
-   minimal global if you run this heavily. And a worktree builds from a fresh source
-   path, so the *first* gate is a full rebuild on the shared target — one-time
-   wall-clock, not tokens.)
+   The only real fix is to change *what loads*, and the Claude CLI has flags for
+   exactly this. `progressive-development.sh` invokes each iteration as:
+   ```
+   claude --safe-mode --permission-mode acceptEdits \
+          --append-system-prompt-file scripts/progressive-development-context.md \
+          -p "$(cat scripts/progressive-development-prompt.md)"
+   ```
+   - **`--safe-mode`** disables CLAUDE.md auto-discovery (project AND global),
+     skills, plugins, and **hooks** — while keeping normal auth (OAuth/keychain),
+     so it works with a subscription login. (`--bare` is leaner — keeps skills,
+     still drops CLAUDE.md + hooks + auto-memory — but requires `ANTHROPIC_API_KEY`;
+     override via `PROGDEV_CLAUDE_ARGS` if you auth that way.)
+   - **`--append-system-prompt-file`** injects the lean contract
+     (`progressive-development-context.md`, ~1–2k tokens: six principles, two
+     rules, the seal, boundary, gate) as the *only* project instruction.
+   Hooks-off is a bonus: the stop-hook can't interfere with the loop. The iteration
+   then pulls the ~5% of project detail it needs by *reading specific files as tool
+   calls* (backlog.md, the `../sky` reference, the crate it edits) — you pay for what
+   an item touches, not the whole manual. This runs in the main checkout (warm build
+   target), no worktree needed.
 
 2. **Keep the fixed prefix byte-stable and iterate fast to ride the prompt cache.**
    Anthropic's prompt cache keys on an exact prefix with a **5-minute TTL**. If the
