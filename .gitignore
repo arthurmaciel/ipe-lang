@@ -16,3 +16,4 @@ tools/oracle/bin/
 docs/architecture/progressive-development-iter-*.log
 docs/architecture/progressive-development-log.md
 docs/architecture/progressive-development-escalations.md
+.progressive-development-wt/

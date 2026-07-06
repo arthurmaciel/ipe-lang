@@ -733,6 +733,7 @@ pub enum StdlibKernel {
     BorderWidthEach, // { top : Int, right : Int, bottom : Int, left : Int } → Attribute msg
     BorderShadow, // { offsetX : Int, offsetY : Int, blur : Int, spread : Int, color : Color } → Attribute msg
     BorderGlow,   // Int → Color → Attribute msg (box-shadow, 0,0 offset + 0 spread; blur + colour)
+    BorderInnerShadow, // same record as BorderShadow but INSET → Attribute msg
     FontSize,
     FontColor,
     FontFamily,
@@ -1862,6 +1863,9 @@ impl StdlibKernel {
             Self::BorderWidthEach => d("Border", "widthEach", 1, Ui, "ui_border_width_each_"),
             Self::BorderShadow => d("Border", "shadow", 1, Ui, "ui_border_shadow_"),
             Self::BorderGlow => d("Border", "glow", 2, Ui, "ui_border_glow_"),
+            Self::BorderInnerShadow => {
+                d("Border", "innerShadow", 1, Ui, "ui_border_inner_shadow_")
+            }
             Self::FontSize => d("Font", "size", 1, Ui, "ui_font_size_"),
             Self::FontColor => d("Font", "color", 1, Ui, "ui_font_color_"),
             Self::FontFamily => d("Font", "family", 1, Ui, "ui_font_family_"),
@@ -2787,6 +2791,7 @@ impl StdlibKernel {
         Self::BorderWidthEach,
         Self::BorderShadow,
         Self::BorderGlow,
+        Self::BorderInnerShadow,
         Self::FontSize,
         Self::FontColor,
         Self::FontFamily,
@@ -3337,6 +3342,7 @@ impl StdlibKernel {
                 | Self::BorderWidthEach
                 | Self::BorderShadow
                 | Self::BorderGlow
+                | Self::BorderInnerShadow
                 | Self::FontSize
                 | Self::FontColor
                 | Self::FontFamily
