@@ -1017,3 +1017,60 @@ pub fn ui_in_front_<M: Clone>(elem: Element<M>) -> Attribute<M> {
 pub fn ui_behind_<M: Clone>(elem: Element<M>) -> Attribute<M> {
     Attribute::AttrNearby(Location::Behind, elem)
 }
+
+// ── #154: Breakpoint constants + wrapper ──────────────────────────────────────
+//
+// These functions support `Ui.breakpoint` and the named `Breakpoint` constants
+// (`Ui.mobile`, `Ui.tablet`, …).
+//
+// **Sanctioned divergence from Sky Go** (see docs/divergences-from-sky.md
+// §B-Breakpoint): in the Go runtime `Breakpoint` is an opaque struct that
+// carries the CSS media-query string and is consumed by the renderer to inject
+// a `<style data-sky-mq=…>` child.  In this Rust Phase-0 port we model
+// `Breakpoint` as a plain `String` (the raw CSS query) and the
+// `ui_breakpoint_` wrapper is a no-op passthrough — the element is returned
+// unchanged.  Rendering of media-query scoped styles is tracked as a Phase-1
+// item.
+
+/// `Ui.mobile : String` — CSS media query `(max-width: 767px)`.
+pub fn ui_mobile_<M>() -> String {
+    "(max-width: 767px)".to_owned()
+}
+
+/// `Ui.tablet : String` — CSS media query `(min-width: 768px) and (max-width: 1023px)`.
+pub fn ui_tablet_<M>() -> String {
+    "(min-width: 768px) and (max-width: 1023px)".to_owned()
+}
+
+/// `Ui.desktop : String` — CSS media query `(min-width: 1024px)`.
+pub fn ui_desktop_<M>() -> String {
+    "(min-width: 1024px)".to_owned()
+}
+
+/// `Ui.darkMode : String` — CSS media query `(prefers-color-scheme: dark)`.
+pub fn ui_dark_mode_<M>() -> String {
+    "(prefers-color-scheme: dark)".to_owned()
+}
+
+/// `Ui.lightMode : String` — CSS media query `(prefers-color-scheme: light)`.
+pub fn ui_light_mode_<M>() -> String {
+    "(prefers-color-scheme: light)".to_owned()
+}
+
+/// `Ui.reducedMotion : String` — CSS media query `(prefers-reduced-motion: reduce)`.
+pub fn ui_reduced_motion_<M>() -> String {
+    "(prefers-reduced-motion: reduce)".to_owned()
+}
+
+/// `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
+///
+/// Phase-0 passthrough: the `_query` and `_attrs` arguments are intentionally
+/// ignored and the element is returned unchanged.  Breakpoint-scoped CSS
+/// injection is a Phase-1 renderer feature.
+pub fn ui_breakpoint_<M>(
+    _query: String,
+    _attrs: Vec<Attribute<M>>,
+    el: Element<M>,
+) -> Element<M> {
+    el
+}
