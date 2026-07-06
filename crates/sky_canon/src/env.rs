@@ -164,6 +164,13 @@ pub struct Env {
     pub ctors: BTreeMap<Symbol, CtorHome>,
     /// Qualified variable bindings: qualifier → (name → home).
     pub qual_vars: BTreeMap<Symbol, BTreeMap<Symbol, VarHome>>,
+    /// Qualified constructor bindings: qualifier → (`ctor_name` → home).
+    ///
+    /// Populated when `import Foo as Alias` (user-module import) registers
+    /// `dep.ctors` under the alias qualifier.  Lets `Alias.CtorName` resolve
+    /// to `VarCtor` — needed for compiled-source ADTs like `Std.Money`'s
+    /// `Currency` constructors accessed as `Money.USD`, `Money.EUR`, etc.
+    pub qual_ctors: BTreeMap<Symbol, BTreeMap<Symbol, CtorHome>>,
     /// **Low-priority wildcard-exposed stdlib value members (#98).**
     ///
     /// A bare value name maps to the set of stdlib modules that flooded it into

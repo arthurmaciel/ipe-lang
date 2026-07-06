@@ -236,6 +236,16 @@ const STD_UI_RESPONSIVE: &str = include_str!("../stdlib/Std/Ui/Responsive.sky");
 /// Unblocks `38-composite-ui-multibackend` (N0004: Std.Ui.Chart).
 const STD_UI_CHART: &str = include_str!("../stdlib/Std/Ui/Chart.sky");
 
+/// `Std.Money` — currency-typed Money on `Std.Decimal` + ISO 4217 enum.
+///
+/// Compiled pure-Sky source: defines the `Money` / `Currency` ADTs and
+/// pattern-matches their own constructors.  All `Ffi.callPure` calls from
+/// the upstream Haskell stdlib have been replaced with pure Sky
+/// case-expressions / recursions.  The FX rate registry is stubbed.
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+/// Unblocks `00-standard-libs` (N0004: Std.Money).
+const STD_MONEY: &str = include_str!("../stdlib/Std/Money.sky");
+
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
 /// Disjoint from [`MODULES`] (parse fixtures) and from `sky_canon`'s
@@ -268,6 +278,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Std.Ui.Chart",
         source: STD_UI_CHART,
+    },
+    CompiledStdModule {
+        dotted: "Std.Money",
+        source: STD_MONEY,
     },
 ];
 
