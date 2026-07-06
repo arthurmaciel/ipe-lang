@@ -40,6 +40,7 @@ MAX_CYCLES="${PROGDEV_MAX_CYCLES:-6}"
 MAX_GUARDIAN="${PROGDEV_MAX_GUARDIAN:-2}"
 FUZZ_ITERS="${PROGDEV_FUZZ_ITERS:-30}"       # no-panic fuzzer iters (measure sweep + guardian gate)
 FUZZ="scripts/fuzz-well-typed.sh"
+STREAM="${PROGDEV_STREAM:-}"                  # 1 = agents emit stream-json (live watch.sh); safe (logic is grep/queue-based)
 CONTEXT="$REPO/$HERE/context.md"             # operating contract: 6 principles + 2 rules + the seal
 GUARDIAN_MODEL="${PROGDEV_GUARDIAN_MODEL:-claude-opus-4-8}"
 GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
@@ -56,8 +57,9 @@ die()  { log "ABORT: $*"; exit 1; }
 # contract is not optional for any tier.
 agent() { # <model> <prompt> ; prints output
     local model="$1" prompt="$2"
+    local stream=(); [ -n "$STREAM" ] && stream=(--verbose --output-format stream-json)
     claude --model "$model" --safe-mode --permission-mode auto \
-        --append-system-prompt-file "$CONTEXT" \
+        --append-system-prompt-file "$CONTEXT" "${stream[@]}" \
         --allowedTools 'Bash(cargo *)' 'Bash(git *)' 'Bash(skyc *)' 'Bash(rg *)' \
                        'Bash(cat *)' 'Bash(ls *)' 'Bash(sed *)' 'Bash(diff *)' \
                        'Bash(touch *)' 'Bash(mkdir *)' Edit Write Read Grep Glob \
