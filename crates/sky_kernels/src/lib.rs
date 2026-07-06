@@ -583,13 +583,12 @@ pub enum StdlibKernel {
     SubBatch,
     SubEvery,
     TimeEvery,
-    // ── TEA: pub/sub M6 reserved ────────────────────────────────────────────
-    /// `Cmd.publish` — reserved for M6; absent from [`Self::ALL`] until wired
-    /// in the canon `QUALIFIERS` table.
+    // ── TEA: pub/sub ────────────────────────────────────────────────────────
+    /// `Cmd.publish` — wired M5e; `"publish"` registered in canon `QUALIFIERS`.
     CmdPublish,
-    /// `Cmd.publishNoEcho` — reserved for M6; absent from [`Self::ALL`].
+    /// `Cmd.publishNoEcho` — wired M5e alongside `CmdPublish`.
     CmdPublishNoEcho,
-    /// `Sub.subscribeTopic` — reserved for M6; absent from [`Self::ALL`].
+    /// `Sub.subscribeTopic` — wired M5d.
     SubSubscribeTopic,
     /// `PubSub.publish` — reserved for M6; absent from [`Self::ALL`] until the
     /// `"PubSub"` qualifier is added to the canon `QUALIFIERS` table.
@@ -1991,15 +1990,11 @@ impl StdlibKernel {
     ///
     /// # Exclusions
     ///
-    /// The following variants are intentionally absent until they are registered
-    /// in the canon `QUALIFIERS` table (Phase B / M6):
-    ///
-    /// - [`Self::CmdPublish`] — `"Cmd"` qualifier is in `qual_vars` but
-    ///   `"publish"` is not yet; adding prematurely would break the tripwire.
-    /// - [`Self::CmdPublishNoEcho`] — same reason.
-    ///
-    /// When those entries are added to `QUALIFIERS`, add the variant here in
-    /// the same commit to keep the tripwire green.
+    /// `PubSubPublish` / `PubSubPublishNoEcho` are in `ALL` but use a
+    /// PubSub-qualifier skip in the parity-matrix tripwire (their qualifier is
+    /// not yet registered in `QUALIFIERS`).  No `Cmd.*` exclusions remain —
+    /// `CmdPublish` and `CmdPublishNoEcho` were wired in M5e alongside their
+    /// `QUALIFIERS` entries.
     pub const ALL: &'static [Self] = &[
         // Log
         Self::LogPrintln,
@@ -2406,6 +2401,8 @@ impl StdlibKernel {
         Self::CmdNone,
         Self::CmdBatch,
         Self::CmdPerform,
+        Self::CmdPublish,
+        Self::CmdPublishNoEcho,
         Self::SubNone,
         Self::SubBatch,
         Self::SubEvery,
