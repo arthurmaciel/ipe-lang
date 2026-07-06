@@ -656,6 +656,21 @@ fn rewrite_captured_clones(
         // At depth > 0 the symbol lives inside an inner `move` closure: the
         // inner closure would move it out of the outer env on the first call,
         // making the outer closure `FnOnce` (E0525).
+        //
+        // Args discipline (#151): a lambda that appears as a CALLBACK ARGUMENT
+        // (e.g. `task_and_then(task, \ts -> insertRow db ts)`) has already been
+        // fully processed by its own `lower_lambda` pass at depth 0, including
+        // the callee-position exemption for NonClone symbols.  Propagating
+        // `noncl_set` into arg-position lambdas here would re-examine already-
+        // handled callee sites at depth+1, where the exemption does NOT fire,
+        // spuriously emitting L0126.
+        //
+        // Lambdas in FUNC position (immediately-invoked pattern
+        // `(\x -> f x) p`) are NOT cleared: the inner lambda creation moves a
+        // NonClone value out of the outer env on every call → outer closure
+        // becomes FnOnce against a `Box<dyn Fn>` return annotation → Rust E0277
+        // (i130 c14 gate).  Those still propagate `noncl_set` via the normal
+        // `other` path into the `Lambda` arm.
         Expr::Apply { func, args } => {
             let new_func = Box::new(match *func {
                 Expr::Var(s) if noncl_set.contains(&s) && depth == 0 => Expr::Var(s),
@@ -663,7 +678,20 @@ fn rewrite_captured_clones(
             });
             let new_args = args
                 .into_iter()
-                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a, depth))
+                .map(|a| {
+                    // Clear `noncl_set` for lambda arguments — they are
+                    // already self-consistent from their own `lower_lambda`
+                    // pass.  Non-lambda expressions keep the full `noncl_set`
+                    // so forwarding a NonClone value in arg position (e.g.
+                    // `applyTwice f x` where `f` is non-callee) still fires
+                    // L0126 as expected.
+                    if matches!(&a, Expr::Lambda { .. }) {
+                        let empty = BTreeSet::new();
+                        rewrite_captured_clones(clone_set, &empty, lambda_span, a, depth)
+                    } else {
+                        rewrite_captured_clones(clone_set, noncl_set, lambda_span, a, depth)
+                    }
+                })
                 .collect::<DResult<Vec<_>>>()?;
             Ok(Expr::Apply { func: new_func, args: new_args })
         }
@@ -744,11 +772,21 @@ fn rewrite_captured_clones(
                 })
             }
         }
-        // Lambda: its own params shadow for the body.  The body is at depth+1
-        // relative to the enclosing lambda: its `move` capture steals any remaining
-        // noncl symbols from the outer env on first call, making the outer closure
-        // `FnOnce`.  Increment depth so the callee-position exemption (depth==0)
-        // does not fire inside inner lambdas.
+        // Lambda: its own params shadow for the body.
+        //
+        // `noncl_set` IS propagated into inner lambda bodies (at depth+1) so
+        // that the depth > 0 gate can fire for the immediately-invoked pattern
+        // `(\x -> f x) p` (i130 c14): that inner `\x -> f x` is in `Apply.func`
+        // position and reaches this arm via the normal `other` path.  At depth 1
+        // the callee-position exemption (`depth == 0`) does NOT fire, so
+        // `Var(f)` inside the inner body triggers L0126 — correctly preventing
+        // a `FnOnce` closure from being boxed as `Box<dyn Fn>`.
+        //
+        // The companion case — lambdas in ARGUMENT position such as
+        // `task_and_then(task, \ts -> insertRow db ts)` — is handled one level
+        // up in the `Apply` arm: arg-position lambdas receive an empty
+        // `noncl_set` before entering this arm, so `inner_noncl` below is
+        // already empty and no spurious L0126 is emitted (#151).
         Expr::Lambda { params, ret, body } => {
             let param_names: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
             let inner_clone: BTreeSet<Symbol> =
@@ -825,11 +863,29 @@ fn rewrite_captured_clones(
                 clone_set, noncl_set, lambda_span, *else_, depth,
             )?),
         }),
+        // Call: kernel / top-level function application.
+        //
+        // Same Lambda-in-args discipline as `Expr::Apply` (#151): a lambda
+        // passed as a callback to a kernel (e.g. `List.map (\m -> f m) xs` or
+        // `task_and_then(task, \ts -> insertRow db ts)`) is already fully
+        // processed by its own `lower_lambda` pass at depth 0.  Propagating
+        // `noncl_set` into it here would fire spurious L0126 at depth+1.
+        //
+        // Non-lambda args keep the full `noncl_set` so forwarding a NonClone
+        // value in arg position (e.g. `applyTwice f x` where `f` is non-callee)
+        // is still rejected.
         Expr::Call { callee, args } => Ok(Expr::Call {
             callee,
             args: args
                 .into_iter()
-                .map(|a| rewrite_captured_clones(clone_set, noncl_set, lambda_span, a, depth))
+                .map(|a| {
+                    if matches!(&a, Expr::Lambda { .. }) {
+                        let empty = BTreeSet::new();
+                        rewrite_captured_clones(clone_set, &empty, lambda_span, a, depth)
+                    } else {
+                        rewrite_captured_clones(clone_set, noncl_set, lambda_span, a, depth)
+                    }
+                })
                 .collect::<DResult<Vec<_>>>()?,
         }),
         Expr::Tuple(items) => Ok(Expr::Tuple(
@@ -4100,7 +4156,19 @@ impl<'a> Lowerer<'a> {
                 _ => break,
             }
         }
-        let ret = self.ir_type_from_ty(cur, span)?;
+        // T8 (#151 c02): use the JSON-friendly variant for the lambda return
+        // type.  When the lambda's return type is a compound type containing a
+        // free `Ty::Var` (e.g. `Task a` inside a polymorphic function like
+        // `wrap : String -> Task Error a -> Task Error a`), the strict
+        // `ir_type_from_ty` fails with SKY-L0102 (Polymorphism).
+        // `ir_type_from_ty_json` maps the free `Ty::Var` to `IrType::Json`
+        // instead — a sound stand-in since the Rust type is unified by the
+        // surrounding kernel call site.
+        //
+        // Note: lambdas whose PARAMETER types contain free `Ty::Var` still
+        // fail at the parameter step (line 4132 above) before reaching here;
+        // the json fallback only affects the return-type slot.
+        let ret = self.ir_type_from_ty_json(cur, span)?;
         // Save/set/restore fn_is_async so `lower_let`'s PAnything arm chooses
         // TaskSeqSync vs TaskSeq based on THIS lambda's return type, not the
         // enclosing def's.
@@ -5877,8 +5945,13 @@ impl<'a> Lowerer<'a> {
         // captured binding rather than re-evaluating the expression —
         // closing both the re-evaluation and the FnOnce hazard (T4).
         //
-        // T7 (#130): unknown type (`ir_type_from_ty` returns None) is treated
-        // as NonClone — conservative fail-close rather than silent bare capture.
+        // T7 (#130): unknown type (`ir_type_from_ty` returns Err) is treated
+        // conservatively: if the slot type is a top-level function arrow
+        // (`Ty::Fun`) the resolution failure is due to a nested polymorphic type
+        // variable (e.g. `Error -> Task Error a` in a `String -> Task Error a
+        // -> Task Error a` binding) — the slot is definitionally NonClone, and
+        // forwarding a Var in is a plain ownership transfer into `impl FnOnce`.
+        // Any other failed slot stays `None` → fail-close below (T7 original).
         let mut hoisted: Vec<(Symbol, Expr)> = Vec::new();
         let mut cap_cursor = 0usize;
         // ir_type_from_ty needs `&mut self`, so classify every supplied slot
@@ -5887,10 +5960,16 @@ impl<'a> Lowerer<'a> {
             .iter()
             .take(supplied)
             .map(|slot_ty| {
-                self.ir_type_from_ty(slot_ty, call_span)
-                    .ok()
-                    .as_ref()
-                    .map(clone_class)
+                match self.ir_type_from_ty(slot_ty, call_span) {
+                    Ok(ir_ty) => Some(clone_class(&ir_ty)),
+                    // T7b: ir_type_from_ty failed, but the slot's top-level type
+                    // IS a function arrow.  The failure is from a nested Ty::Var
+                    // (e.g. the polymorphic result type `a` in `Task Error a`).
+                    // A Fun slot is always NonClone — forwarding is safe.
+                    Err(_) if matches!(slot_ty, Ty::Fun(_, _)) => Some(CloneClass::NonClone),
+                    // Genuinely indeterminate slot — conservative None.
+                    Err(_) => None,
+                }
             })
             .collect();
         for (arg, cls) in call_args.iter_mut().zip(slot_classes) {
@@ -5908,11 +5987,11 @@ impl<'a> Lowerer<'a> {
                     //   `impl FnOnce`, so consuming the moved value once is
                     //   correct (#149).
                     Some(CloneClass::CopyLeaf | CloneClass::NonClone) => {}
-                    // None — T7 (#130): unknown type on a bare Var — conservatively
-                    // fail-close (SKY-L0126) instead of silently leaving the Var
-                    // bare.  The slot type is genuinely indeterminate (polymorphic
-                    // or a failed `ir_type_from_ty`), so we cannot prove the Var is
-                    // Copy-safe; a NonClone value would produce E0525 at cargo.
+                    // None — T7 (#130): the slot type is genuinely indeterminate
+                    // (a non-Fun type whose resolution failed).  Conservatively
+                    // fail-close with SKY-L0126: we cannot prove the Var is
+                    // Copy-safe, and a NonClone value would produce E0525 at cargo.
+                    // (T7b Fun-arrow case is handled in `slot_classes` above.)
                     None => {
                         return Err(unsupported(call_span, Feature::NonCloneCapture));
                     }
@@ -5978,7 +6057,16 @@ impl<'a> Lowerer<'a> {
             params.push((sym, ir));
             call_args.push(Expr::Var(sym));
         }
-        let ret = self.ir_type_from_ty(ret_ty, call_span)?;
+        // T8 (#151 c02): use the JSON-friendly variant for the lambda return
+        // type for the same reason the eta-params (above) use it: when
+        // `ret_ty` is `Task a` (a 1-arg Task) and `a` is a free `Ty::Var`
+        // (the common case for polymorphic helpers like
+        // `wrap : String -> Task Error a -> Task Error a`), the strict
+        // `ir_type_from_ty` would fail with SKY-L0102 (Polymorphism).
+        // `ir_type_from_ty_json` maps the free `Ty::Var` to `IrType::Json`
+        // instead — a sound stand-in since the eta-lambda's return slot is
+        // type-unified by the kernel signature at the call site.
+        let ret = self.ir_type_from_ty_json(ret_ty, call_span)?;
         let body = Expr::Call {
             callee: resolved,
             args: call_args,
