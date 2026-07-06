@@ -120,6 +120,24 @@ pub fn ui_button_<M: Clone>(
     )
 }
 
+/// `Ui.link : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg`
+/// Renders as `<a href=url>label</a>`.
+pub fn ui_link_<M: Clone>(
+    attrs: Vec<Attribute<M>>,
+    url: String,
+    label: Element<M>,
+) -> Element<M> {
+    let mut full = Vec::with_capacity(attrs.len() + 1);
+    full.push(Attribute::AttrAttribute("href".into(), url));
+    full.extend(attrs);
+    Element::TaggedNode(
+        "a".into(),
+        Description::NoDescription,
+        full,
+        vec![label],
+    )
+}
+
 // ── Attribute builders ────────────────────────────────────────────────────────
 
 /// `Ui.spacing : Int -> Attribute msg`
@@ -306,6 +324,11 @@ pub fn ui_border_rounded_<M>(n: i64) -> Attribute<M> {
 /// `Border.color : Color -> Attribute msg`
 pub fn ui_border_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrBorderColor(c)
+}
+
+/// `Border.widthEach : { top : Int, right : Int, bottom : Int, left : Int } -> Attribute msg`
+pub fn ui_border_width_each_<M>(top: i64, right: i64, bottom: i64, left: i64) -> Attribute<M> {
+    Attribute::AttrBorderWidthEach(top, right, bottom, left)
 }
 
 // ── Font sub-module ───────────────────────────────────────────────────────────

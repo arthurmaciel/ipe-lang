@@ -316,6 +316,15 @@ struct Builtins {
     retry_f_kind: Symbol,
     /// `"shouldRetry"` — predicate field `e -> Bool` in `RetryPolicy e`.
     retry_f_should_retry: Symbol,
+    // ── Border/padding edge field name symbols (Border.widthEach) ────────────
+    /// `"top"` — top edge field of `Border.widthEach { top, right, bottom, left }`.
+    edge_f_top: Symbol,
+    /// `"right"` — right edge field.
+    edge_f_right: Symbol,
+    /// `"bottom"` — bottom edge field.
+    edge_f_bottom: Symbol,
+    /// `"left"` — left edge field.
+    edge_f_left: Symbol,
 }
 
 impl Builtins {
@@ -444,6 +453,11 @@ impl Builtins {
             retry_f_jitter: interner.intern("jitter")?,
             retry_f_kind: interner.intern("kind")?,
             retry_f_should_retry: interner.intern("shouldRetry")?,
+            // ── Border/padding edge field names (Border.widthEach) ───────────────
+            edge_f_top: interner.intern("top")?,
+            edge_f_right: interner.intern("right")?,
+            edge_f_bottom: interner.intern("bottom")?,
+            edge_f_left: interner.intern("left")?,
         })
     }
 
@@ -4550,6 +4564,36 @@ impl<'a> Builder<'a> {
             K::WsBroadcast => fun(list(wsh()), fun(string(), task_unit())),
             // closeClient : WebSocketServer -> Task Error ()
             K::WsCloseClient => fun(wsh(), task_unit()),
+
+            // ── Ui.link ──────────────────────────────────────────────────────────
+            // link : List (Attribute msg) -> { url : String, label : Element msg }
+            //      -> Element msg
+            K::UiLink => {
+                let cfg_rec = Ty::Record({
+                    let mut m = BTreeMap::new();
+                    // `url : String`
+                    m.insert(self.builtins.http_f_url, string());
+                    // `label : Element msg`
+                    m.insert(self.builtins.btn_f_label, elem_t(var(0)));
+                    m
+                }, RowTail::Closed);
+                fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
+            }
+
+            // ── Border.widthEach ─────────────────────────────────────────────────
+            // widthEach : { top : Int, right : Int, bottom : Int, left : Int }
+            //           -> Attribute msg
+            K::BorderWidthEach => {
+                let rec_arg = Ty::Record({
+                    let mut m = BTreeMap::new();
+                    m.insert(self.builtins.edge_f_top, int());
+                    m.insert(self.builtins.edge_f_right, int());
+                    m.insert(self.builtins.edge_f_bottom, int());
+                    m.insert(self.builtins.edge_f_left, int());
+                    m
+                }, RowTail::Closed);
+                fun(rec_arg, attr(var(0)))
+            }
         })
     }
 }
@@ -5633,6 +5677,10 @@ mod registry_phase_c_tests {
             // QUALIFIERS ("Cmd" entry) and wired through lower + emit.
             K::CmdPublish,
             K::CmdPublishNoEcho,
+            // ── Ui.link + Border.widthEach (this wiring task) ─────────────────
+            // New kernels with no legacy `kernel_ty` entry — pure holes.
+            K::UiLink,
+            K::BorderWidthEach,
         ]
     };
 

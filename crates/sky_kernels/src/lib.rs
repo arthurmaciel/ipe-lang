@@ -643,6 +643,7 @@ pub enum StdlibKernel {
     UiParagraph,
     UiTextColumn,
     UiButton, // (List Attr, { onPress : Maybe msg, label : Element msg }) → Element msg
+    UiLink, // (List Attr, { url : String, label : Element msg }) → Element msg
     // ── M7: Std.Ui attribute builders ────────────────────────────────────────
     UiSpacing,
     UiPadding,
@@ -683,6 +684,7 @@ pub enum StdlibKernel {
     BorderWidth,
     BorderRounded,
     BorderColor,
+    BorderWidthEach, // { top : Int, right : Int, bottom : Int, left : Int } → Attribute msg
     FontSize,
     FontColor,
     FontFamily,
@@ -1631,6 +1633,7 @@ impl StdlibKernel {
             Self::UiParagraph => d("Ui", "paragraph", 2, Ui, "ui_paragraph_"),
             Self::UiTextColumn => d("Ui", "textColumn", 2, Ui, "ui_text_column_"),
             Self::UiButton => d("Ui", "button", 2, Ui, "ui_button_"),
+            Self::UiLink => d("Ui", "link", 2, Ui, "ui_link_"),
             // ── M7: Std.Ui attribute builders ────────────────────────────────
             Self::UiSpacing => d("Ui", "spacing", 1, Ui, "ui_spacing_"),
             Self::UiPadding => d("Ui", "padding", 1, Ui, "ui_padding_"),
@@ -1670,6 +1673,7 @@ impl StdlibKernel {
             Self::BorderWidth => d("Border", "width", 1, Ui, "ui_border_width_"),
             Self::BorderRounded => d("Border", "rounded", 1, Ui, "ui_border_rounded_"),
             Self::BorderColor => d("Border", "color", 1, Ui, "ui_border_color_"),
+            Self::BorderWidthEach => d("Border", "widthEach", 1, Ui, "ui_border_width_each_"),
             Self::FontSize => d("Font", "size", 1, Ui, "ui_font_size_"),
             Self::FontColor => d("Font", "color", 1, Ui, "ui_font_color_"),
             Self::FontFamily => d("Font", "family", 1, Ui, "ui_font_family_"),
@@ -2469,6 +2473,7 @@ impl StdlibKernel {
         Self::UiParagraph,
         Self::UiTextColumn,
         Self::UiButton,
+        Self::UiLink,
         // M7: Ui attribute builders
         Self::UiSpacing,
         Self::UiPadding,
@@ -2508,6 +2513,7 @@ impl StdlibKernel {
         Self::BorderWidth,
         Self::BorderRounded,
         Self::BorderColor,
+        Self::BorderWidthEach,
         Self::FontSize,
         Self::FontColor,
         Self::FontFamily,
@@ -2954,6 +2960,7 @@ impl StdlibKernel {
                 | Self::UiParagraph
                 | Self::UiTextColumn
                 | Self::UiButton
+                | Self::UiLink
                 | Self::UiSpacing
                 | Self::UiPadding
                 | Self::UiPaddingXY
@@ -2989,6 +2996,7 @@ impl StdlibKernel {
                 | Self::BorderWidth
                 | Self::BorderRounded
                 | Self::BorderColor
+                | Self::BorderWidthEach
                 | Self::FontSize
                 | Self::FontColor
                 | Self::FontFamily
