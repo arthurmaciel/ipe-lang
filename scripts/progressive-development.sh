@@ -67,11 +67,19 @@ trap 'rm -f "$LOCK"; log "loop exit"' EXIT
 #                but needs ANTHROPIC_API_KEY (OAuth/keychain are not read).
 # Either way the lean contract is injected with --append-system-prompt-file, and
 # hooks-off means the stop-hook can't interfere with the loop. Override the whole
-# flag set with PROGDEV_CLAUDE_ARGS. --permission-mode acceptEdits lets the
-# iteration run tools unattended (see the guardrails — that is why they exist).
+# flag set with PROGDEV_CLAUDE_ARGS.
+#
+# --permission-mode auto: the iteration runs bash/git/edits UNATTENDED via the
+# auto-approval classifier, which still gates genuinely dangerous ops. NOT
+# acceptEdits — that only auto-approves file edits and would STALL on the first
+# `cargo`/`git` bash call (no human to approve in -p mode). If `auto` proves too
+# conservative and blocks a routine command, add an allowlist, e.g. append
+#   --allowedTools 'Bash(cargo *) Bash(git *) Bash(skyc *) Edit Write Read'
+# via PROGDEV_CLAUDE_ARGS. `dontAsk`/`bypassPermissions` are more permissive but
+# weaken the safety the guardrails depend on — avoid unless sandboxed.
 CONTEXT="$(pwd)/scripts/progressive-development-context.md"
 [ -f "$CONTEXT" ] || die "missing lean contract $CONTEXT"
-CLAUDE_ARGS="${PROGDEV_CLAUDE_ARGS:---safe-mode --permission-mode acceptEdits}"
+CLAUDE_ARGS="${PROGDEV_CLAUDE_ARGS:---safe-mode --permission-mode auto}"
 STOP_PATH="$(pwd)/$STOP_FILE"
 
 # ── dedicated branch (human fast-forwards to master after reviewing the run) ─

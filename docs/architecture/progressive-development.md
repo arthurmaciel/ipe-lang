@@ -75,10 +75,16 @@ fixed part** if `F` is large and N is high: a 25k-token `F` over 50 iterations i
    The only real fix is to change *what loads*, and the Claude CLI has flags for
    exactly this. `progressive-development.sh` invokes each iteration as:
    ```
-   claude --safe-mode --permission-mode acceptEdits \
+   claude --safe-mode --permission-mode auto \
           --append-system-prompt-file scripts/progressive-development-context.md \
           -p "$(cat scripts/progressive-development-prompt.md)"
    ```
+   (`--permission-mode auto` — not `acceptEdits`: the latter auto-approves only
+   file edits, so the iteration would stall on the first `cargo`/`git` bash call
+   with no human to approve it. `auto` runs bash/git/edits unattended via the
+   auto-approval classifier while still gating dangerous ops. If it blocks a
+   routine command, append an `--allowedTools 'Bash(cargo *) Bash(git *) …'`
+   allowlist via `PROGDEV_CLAUDE_ARGS`.)
    - **`--safe-mode`** disables CLAUDE.md auto-discovery (project AND global),
      skills, plugins, and **hooks** — while keeping normal auth (OAuth/keychain),
      so it works with a subscription login. (`--bare` is leaner — keeps skills,
