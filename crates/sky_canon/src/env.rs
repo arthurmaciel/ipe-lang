@@ -91,6 +91,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Std", "Ui", "Font"], "Font"),
     (&["Std", "Ui", "Region"], "Region"), // #117
     (&["Std", "Ui", "Input"], "Input"),   // Task #124
+    (&["Std", "Ui", "Lazy"], "Lazy"),    // #146
     (&["Std", "Html"], "Html"),
     (&["Std", "Html", "Attributes"], "Attr"),
     (&["Std", "Html", "Events"], "Event"),
@@ -1135,6 +1136,11 @@ impl Env {
                     "checkbox",
                 ],
             ),
+            // ── #146: Std.Ui.Lazy sub-module ─────────────────────────────────────
+            (
+                "Lazy",
+                &["lazy", "lazy2", "lazy3", "lazy4", "lazy5"],
+            ),
             // ── M7: Std.Html — typed HTML element / text surface ─────────────────
             // `render` / `escapeHtml` / `escapeAttr` / `attrToString` are render
             // kernels; all element-builder names create `Html msg` values.
@@ -1391,6 +1397,8 @@ impl Env {
             ("Sky.Http.Server.WebSocket", "Ws"),
             // #124: Std.Ui.Input sub-module.
             ("Std.Ui.Input", "Input"),
+            // #146: Std.Ui.Lazy sub-module.
+            ("Std.Ui.Lazy", "Lazy"),
         ];
 
         // ── Phase-B: build stdlib_index FIRST so all VarHome::Kernel(id, ..)
