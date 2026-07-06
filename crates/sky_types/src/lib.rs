@@ -138,10 +138,15 @@ fn infer_with_budget(
     // enabling `snap.ok` to resolve in the next pass).  Running them sequentially
     // would leave element types Flex when field accesses are processed, causing
     // a false SKY-T0012.  See [`resolve_deferred`] for the full algorithm.
+    // The opaque server `Request` type has a fixed field set (see
+    // [`RequestFields`]); intern it once here so the immutable-borrow
+    // `resolve_deferred` pass can resolve `req.<field>` accesses.
+    let req_fields = RequestFields::build(interner)?;
     resolve_deferred(
         &mut uf,
         budget,
         interner,
+        &req_fields,
         &generated.field_accesses,
         &generated.record_updates,
     )?;
@@ -520,10 +525,96 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
 /// The loop terminates when both pending lists are empty (success) or when an
 /// entire iteration makes no progress while items remain (stuck — emit the first
 /// item as the error).
+/// The fixed field set of the opaque server `Request` type.
+///
+/// The reference models `Sky.Http.Server.Request` as a `type alias` over a
+/// closed record `{ method, path, body, headers, params, query, cookies,
+/// remoteAddr }`, so `req.body` is ordinary record-field access. The Rust port
+/// carries `Request` as an opaque nullary `Con` (it threads through kernel
+/// signatures — `Server.get`, `Server.param`, the `Handler` alias — as an
+/// opaque handle, and the lowerer maps it to `IrType::ServerRequest` backed by
+/// `runtime::ServerRequest`). Field access on that opaque `Con` would otherwise
+/// fail closed with SKY-T0012.
+///
+/// This table lets [`resolve_deferred`] resolve `req.<field>` against the known
+/// field types. The emit side needs no synthesised record: a field access
+/// lowers to `(req).<field>.clone()` (see `emit_expr` `Access`), which reads the
+/// `runtime::ServerRequest` struct directly — every field name + type here
+/// matches that struct (`String` scalars; `HashMap<String, String>` = Sky
+/// `Dict String String` for the four map fields).
+struct RequestFields {
+    /// The `"Request"` type-constructor symbol (opaque server request Con).
+    con: Symbol,
+    /// The `"String"` type-constructor symbol.
+    string: Symbol,
+    /// The `"Dict"` type-constructor symbol.
+    dict: Symbol,
+    /// field-name symbol → `true` when the field is `Dict String String`,
+    /// `false` when it is a bare `String`.
+    fields: BTreeMap<Symbol, bool>,
+}
+
+impl RequestFields {
+    /// Intern the field set once (idempotent). Called with the mutable interner
+    /// before the immutable-borrow [`resolve_deferred`] pass.
+    fn build(interner: &mut Interner) -> DResult<Self> {
+        let con = interner.intern("Request")?;
+        let string = interner.intern("String")?;
+        let dict = interner.intern("Dict")?;
+        let mut fields = BTreeMap::new();
+        // (field name, is `Dict String String`?) — matches `runtime::ServerRequest`.
+        for (name, is_dict) in [
+            ("method", false),
+            ("path", false),
+            ("body", false),
+            ("remoteAddr", false),
+            ("headers", true),
+            ("params", true),
+            ("query", true),
+            ("cookies", true),
+        ] {
+            fields.insert(interner.intern(name)?, is_dict);
+        }
+        Ok(Self {
+            con,
+            string,
+            dict,
+            fields,
+        })
+    }
+
+    /// Build the union-find variable for `field`'s type, or `None` when `field`
+    /// is not a member of `Request` (→ a genuine SKY-T0012).
+    fn field_var(&self, uf: &mut UnionFind<Content>, field: Symbol) -> DResult<Option<VarId>> {
+        let string_var = |uf: &mut UnionFind<Content>| {
+            uf.fresh(Content::Structure(FlatType::Con {
+                module: Vec::new(),
+                name: self.string,
+                args: Vec::new(),
+            }))
+        };
+        match self.fields.get(&field) {
+            None => Ok(None),
+            Some(false) => Ok(Some(string_var(uf)?)),
+            Some(true) => {
+                let k = string_var(uf)?;
+                let v = string_var(uf)?;
+                let d = uf.fresh(Content::Structure(FlatType::Con {
+                    module: Vec::new(),
+                    name: self.dict,
+                    args: vec![k, v],
+                }))?;
+                Ok(Some(d))
+            }
+        }
+    }
+}
+
 fn resolve_deferred(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
     interner: &Interner,
+    req_fields: &RequestFields,
     accesses: &[FieldAccess],
     updates: &[RecordUpdate],
 ) -> DResult<()> {
@@ -555,6 +646,17 @@ fn resolve_deferred(
             let field_state: Option<Option<VarId>> = match uf.content(root)? {
                 Content::Structure(FlatType::Record(fields, _ext)) => {
                     Some(fields.get(&fa.field).copied())
+                }
+                // The opaque server `Request` Con is not a structural record, but
+                // its field set is fixed (see [`RequestFields`]). Resolve the
+                // field against the known table so `req.body` type-checks; the
+                // emit reads `runtime::ServerRequest` directly.
+                Content::Structure(FlatType::Con {
+                    ref name,
+                    ref args,
+                    ..
+                }) if *name == req_fields.con && args.is_empty() => {
+                    Some(req_fields.field_var(uf, fa.field)?)
                 }
                 Content::Flex => None, // not settled yet — defer
                 _ => Some(None),       // rigid / super / non-record structure — error
