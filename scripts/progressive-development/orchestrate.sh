@@ -31,7 +31,8 @@ REPO="$(pwd)"
 LANES="${PROGDEV_LANES:-2}"
 ITER_TIMEOUT="${PROGDEV_ITER_TIMEOUT:-5400}"
 GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
-RECONCILE_MODEL="${PROGDEV_RECONCILE_MODEL:-claude-opus-4-8}"
+RECONCILE_MODEL="${PROGDEV_RECONCILE_MODEL:-claude-opus-4-8}"   # hard reasoning → Opus
+AUTHOR_MODEL="${PROGDEV_AUTHOR_MODEL:-claude-sonnet-4-6}"        # mechanical wiring → Sonnet (cheaper)
 CONTEXT="$REPO/scripts/progressive-development/context.md"
 PROMPT="$REPO/scripts/progressive-development/prompt.md"
 TS="${PROGDEV_TS:-manual}"
@@ -41,8 +42,9 @@ LOGDIR="docs/architecture"
 log() { printf '%s | orchestrate | %s\n' "$(date -Is)" "$*"; }
 die() { log "ABORT: $*"; exit 1; }
 
-# The lane's author-only flag: same flags as run.sh, minus the gate obligation.
-lane_claude_args=(--safe-mode --permission-mode auto
+# The lane's author-only flags: mechanical wiring → pinned to Sonnet (cheap);
+# only the reconcile agent uses Opus. Same flags as run.sh, minus the gate.
+lane_claude_args=(--safe-mode --permission-mode auto --model "$AUTHOR_MODEL"
     --allowedTools 'Bash(cargo *)' 'Bash(git *)' 'Bash(skyc *)' 'Bash(touch *)'
                    'Bash(cat *)' 'Bash(ls *)' 'Bash(rg *)' 'Bash(sed *)' 'Bash(awk *)'
                    'Bash(mkdir *)' 'Bash(cp *)' 'Bash(mv *)' 'Bash(rm *)' 'Bash(df *)'
