@@ -56,6 +56,15 @@ pub struct ModuleExports {
     pub ctors: BTreeMap<Symbol, CtorHome>,
     /// Exported type aliases by name.
     pub aliases: BTreeMap<Symbol, ExportedAlias>,
+    /// The complete set of type names in scope after this module was
+    /// canonicalised, mapped to their home module path.  Includes all types
+    /// imported from dep modules PLUS the module's own union ADTs.
+    ///
+    /// Stored here so importing modules can use it when expanding alias bodies
+    /// that reference types from this module's own dep scope — without having
+    /// to re-import those deps themselves.  See [`AliasDef::dep_scope_types`]
+    /// in `sky_canon::resolve`.
+    pub scope_types: BTreeMap<Symbol, Vec<Symbol>>,
 }
 
 /// Canonicalise a parsed module into its name-resolved canonical AST.

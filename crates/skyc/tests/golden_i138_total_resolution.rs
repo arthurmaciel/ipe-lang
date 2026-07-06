@@ -113,3 +113,15 @@ fn i138_kernel_implicit_positive_exits_zero() {
     try_build("i138_kernel_implicit_positive")
         .expect("i138_kernel_implicit_positive must compile (Request is a kernel builtin)");
 }
+
+/// `Value` is a kernel-implicit Prelude type (#576) that was missing from all
+/// three builtin allowlists (`RESERVED_BUILTIN_TYPES`, `EXTRA_BUILTIN_TYPE_NAMES`,
+/// `KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES` — newly added by #138 fix).
+/// After the fix it must receive the empty-home sentinel and compile clean.
+/// The lowerer handles `Value` via an explicit arm (`IrType::Json`) placed
+/// after the `enum_variants` guard.
+#[test]
+fn i138_kernel_implicit_value_exits_zero() {
+    try_build("i138_kernel_implicit_value")
+        .expect("i138_kernel_implicit_value must compile (Value is a kernel-implicit Prelude type)");
+}

@@ -1,0 +1,14 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+
+-- Positive control for #138 completeness regression: `Value` is a
+-- kernel-implicit Prelude type (#576) that was absent from the builtin
+-- allowlists. After the fix it receives the empty-home sentinel (like
+-- `Request`) and must compile clean. The lowerer has an explicit arm for
+-- `Value` placed after the `enum_variants` guard (IrType::Json).
+extractJson : Value -> String
+extractJson _ = "ok"
+
+main =
+    println "ok"
