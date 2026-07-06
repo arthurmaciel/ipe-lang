@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+-- #151 seal — let-fn captured in a nested anonymous lambda (callee position).
+--
+-- `process` is a let-fn of type `Int -> Int -> Int` (NonClone in the lowerer).
+-- `applyInner` captures `process` from the outer let scope and uses it via an
+-- inner anonymous lambda in callee position.
+--
+-- Pre-fix: `rewrite_captured_clones` propagated `noncl_set = {process}` into
+-- the inner lambda body at depth+1, where the callee-position exemption
+-- (`depth == 0`) did not fire → spurious SKY-L0126.
+--
+-- Post-fix: the `Expr::Lambda` arm of `rewrite_captured_clones` clears
+-- `inner_noncl` before descending, leaving inner lambda bodies to their own
+-- `lower_lambda` pass (which already processed them at depth 0).  This fixture
+-- MUST be GREEN (skyc build succeeds) after the fix.
+
+add : Int -> Int -> Int
+add a b =
+    a + b
+
+
+main =
+    let
+        process x y = add x y
+        applyInner n =
+            List.map (\m -> process n m) [ 1, 2, 3 ]
+        result =
+            applyInner 10
+    in
+    println (String.join ", " (List.map String.fromInt result))
