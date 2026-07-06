@@ -129,6 +129,38 @@ main =
         }
 ";
 
+/// #153 regression: `Live.app` with a NON-EMPTY `routes` list but Model has
+/// no `page` field.  The Go oracle (`tools/oracle/bin/sky`) compiles this fine
+/// (Go's `applyRoute` calls `RecordUpdate(model, {"Page": page})` which is a
+/// silent no-op when the `Page` field is absent).  Our #120 Item-2 gate was
+/// stricter than the reference — this shape must compile on the non-routed path.
+///
+/// Shape mirrors `examples/24-tui-kitchen-sink` (single nullary route, no
+/// `page` field in Model).
+const NON_ROUTED_LIVE_WITH_NONEMPTY_ROUTES: &str = r#"module Main exposing (main)
+import Std.Live as Live
+import Std.Ui as Ui
+type Page = MainPage
+type Msg = Increment
+type alias Model = { count : Int }
+init : a -> ( Model, Cmd Msg )
+init _req = ( { count = 0 }, Cmd.none )
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment -> ( { model | count = model.count + 1 }, Cmd.none )
+view : Model -> Html Msg
+view model = Ui.layout [] (Ui.text (String.fromInt model.count))
+subscriptions : Model -> Sub Msg
+subscriptions _model = Sub.none
+main =
+    Live.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [ Live.route "/" MainPage ]
+        , notFound = MainPage
+        }
+"#;
+
 /// Compile `source` through the skyc pipeline (no cargo). Returns `None` to
 /// skip when the embedded runtime cannot be resolved.
 fn compile_src(
@@ -401,5 +433,34 @@ fn routed_empty_routes_well_typed_cargo_builds() {
         "#108 hole 1: emitted empty-routes project must cargo-build \
          (pre-fix: E0107 missing generics for `route::Route`)\n--- cargo stderr ---\n{}",
         String::from_utf8_lossy(&build.stderr),
+    );
+}
+
+// ── #153 regression ──────────────────────────────────────────────────────────
+//
+// The Go oracle compiles a `Live.app` with non-empty `routes` but no `page`
+// field in Model — `applyRoute` calls `RecordUpdate(model, {"Page": page})`
+// which silently no-ops when `Page` is absent.  Our #120 Item-2 gate was
+// stricter than the reference and must be removed.  The non-routed path
+// (`live_app`) is emitted instead.
+
+/// #153: `Live.app` with a non-empty `routes` list but Model has no `page`
+/// field must compile on the non-routed path (mirrors `examples/24-tui-
+/// kitchen-sink` and `examples/25-sky-console`).
+///
+/// Before fix: skyc returned SKY-L0124 (gate was overly strict vs. Go oracle).
+/// After fix: skyc exits 0 and emits `live_app` (not `live_app_routed`).
+#[test]
+fn non_routed_with_nonempty_routes_compiles() {
+    let Some(result) = compile_src("non_routed_nonempty", NON_ROUTED_LIVE_WITH_NONEMPTY_ROUTES)
+    else {
+        return;
+    };
+    assert!(
+        result.is_ok(),
+        "#153 regression: Live.app with non-empty routes but no `page` field \
+         must compile on the non-routed path (Go oracle accepts this shape), \
+         got: {:?}",
+        result.err(),
     );
 }
