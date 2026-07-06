@@ -8,8 +8,8 @@
 #   ./autopilot-run.sh --no-watch [...]   any autopilot flag passes straight through
 #
 # Convenience wrapper around scripts/progressive-development/autopilot.sh so you
-# don't have to type the PROGDEV_* env prefixes. It also guarantees mem-guard.sh
-# (the memory kill-switch autopilot HARD-requires) is running before it starts.
+# don't have to type the PROGDEV_* env prefixes. (autopilot.sh itself dispatches
+# mem-guard.sh when it isn't up, so the launcher doesn't need to.)
 set -uo pipefail
 cd "$(dirname "$0")"
 
@@ -18,13 +18,6 @@ AP="scripts/progressive-development/autopilot.sh"
 
 # Pass --help / -h straight through (autopilot prints its own reference).
 case "${1:-}" in -h|--help) exec "$AP" --help ;; esac
-
-# mem-guard is a HARD precondition of autopilot — start it if it isn't up.
-if ! pgrep -f mem-guard.sh >/dev/null 2>&1; then
-    echo "autopilot-run: mem-guard.sh not running — starting it (memory kill-switch)…"
-    nohup ./scripts/mem-guard.sh >/tmp/mem-guard.out 2>&1 & disown
-    sleep 1
-fi
 
 # Cap mode: default = supervised (1/1); --full = autopilot's native caps (6/2).
 if [ "${1:-}" = "--full" ]; then
