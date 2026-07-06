@@ -2203,7 +2203,15 @@ impl<'a> Builder<'a> {
     ) -> DResult<VarId> {
         let span = e.span;
         let var = match &e.value {
-            canon::Expr_::Int(_) => self.int_var()?,
+            // An integer literal is `Number`-polymorphic (Elm/Sky `number`): it
+            // may resolve to `Int` OR `Float` depending on context, and defaults
+            // to `Int` when the program never pins it (the post-solve defaulting
+            // loop closes an unpinned `Super { Number }` to `Int`).  This lets
+            // `pct 100` — where `pct : Float -> Length` — accept the literal `100`
+            // as a `Float`, matching the reference compiler.  A *float* literal
+            // (`1.6`) is concretely `Float`, never `Int` (Elm keeps `1.6 : Float`
+            // distinct from the polymorphic `number`).
+            canon::Expr_::Int(_) => self.super_var(TyBounds::add(), span)?,
             canon::Expr_::Float(_) => self.float_var()?,
             canon::Expr_::Str(_) => self.string_var()?,
             canon::Expr_::Char(_) => self.char_var()?,

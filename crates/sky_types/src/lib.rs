@@ -2623,6 +2623,79 @@ mod tests {
         assert_eq!(ty_con_name(b, &i).as_deref(), Some("Int"));
     }
 
+    /// SKY-T0001 regression (numeric-literal polymorphism): an integer literal is
+    /// `Number`-polymorphic, so passing `100` where a `Float` is expected
+    /// type-checks — the literal resolves to `Float`.  This is the minimized
+    /// `pct 100` shape (`pct : Float -> Length`) that failed in `examples/12`,
+    /// `examples/00`, and (transitively) the cross-module link before the fix:
+    /// the literal used to be pinned to a concrete `Int` at creation and clashed
+    /// with the `Float` parameter.
+    #[test]
+    fn integer_literal_accepted_where_float_expected() {
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   toF : Float -> Float\n\
+                   toF x =\n    x\n\
+                   v : Float\n\
+                   v =\n    toF 100\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        assert!(
+            infer(&m, &mut i).is_ok(),
+            "an integer literal `100` must satisfy a `Float` parameter"
+        );
+    }
+
+    /// Companion soundness guard: a *float* literal is concretely `Float` and must
+    /// NOT satisfy an `Int` parameter (the polymorphism is one-directional —
+    /// integer literals are `number`, float literals are `Float`).
+    #[test]
+    fn float_literal_rejected_where_int_expected() {
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   toI : Int -> Int\n\
+                   toI x =\n    x\n\
+                   v : Int\n\
+                   v =\n    toI 1.5\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        assert!(
+            infer(&m, &mut i).is_err(),
+            "a float literal `1.5` must not satisfy an `Int` parameter"
+        );
+    }
+
+    /// Soundness guard preserved through the numeric-literal change: a numeric
+    /// literal added to a fully-parametric annotation skolem is still rejected.
+    /// `f : a -> a; f x = x + 1` forces the annotated-generic `a` to a concrete
+    /// number, which Elm/Sky reject.  The literal (`Super { Number, rigid:false }`)
+    /// meeting the annotation skolem (`Super { .., rigid:true }`) is a mismatch.
+    #[test]
+    fn literal_added_to_parametric_skolem_is_rejected() {
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   f : a -> a\n\
+                   f x =\n    x + 1\n\
+                   main =\n    println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        assert!(
+            matches!(
+                infer(&m, &mut i),
+                Err(Diagnostic::Type {
+                    msg: TypeError::TypeMismatch { .. },
+                    ..
+                })
+            ),
+            "adding a concrete literal to a parametric `a` must be a mismatch"
+        );
+    }
+
     /// #145 regression: `constrain_pattern` must recurse into sub-patterns of a
     /// constructor whose scheme is not registered (e.g. an imported kernel-stdlib
     /// ADT like `ChunkEvent`).  Before the fix, the no-scheme fallback skipped

@@ -128,9 +128,24 @@ pub fn unify(
         (s @ Content::Super { .. }, Content::Flex) | (Content::Flex, s @ Content::Super { .. }) => {
             uf.union(ra, rb, s)
         }
-        // Two super-typed variables merge: the survivor owes the union of both
-        // obligation sets, and is rigid if either was (an annotation skolem that
-        // meets an inferred super-flex must stay generic).
+        // Two super-typed variables meet.
+        //
+        // Same rigidity → merge, the survivor owing the union of both obligation
+        // sets.  DIFFERENT rigidity (one an annotation skolem, the other an
+        // inference flex) → mismatch, mirroring `Rigid` vs `Structure`.
+        //
+        // The rigid super is an annotation type variable the body promised to keep
+        // fully generic (surfacing its obligation as a trait bound); a super-typed
+        // *flex* is an inference variable that WILL resolve to a concrete number —
+        // most often a numeric literal (`Super { Number }`).  Letting the two merge
+        // would silently accept `f : a -> a; f x = x + 1`, where the literal `1`
+        // forces the annotated-generic `a` to a concrete numeric representation.
+        // Elm (and the Sky reference) reject exactly this: `a` was annotated fully
+        // parametric, so a body that adds a concrete literal to it is a type error.
+        // (`double : a -> a; double x = x + x` — no literal — never reaches this
+        // arm: its operand super meets the rigid `x` as `Super{flex}` vs
+        // `Content::Rigid` in the arm below, which correctly adopts the obligation
+        // as a bound.)
         (
             Content::Super {
                 rigid: r1,
@@ -140,14 +155,20 @@ pub fn unify(
                 rigid: r2,
                 bounds: b2,
             },
-        ) => uf.union(
-            ra,
-            rb,
-            Content::Super {
-                rigid: r1 || r2,
-                bounds: b1.union(b2),
-            },
-        ),
+        ) => {
+            if r1 == r2 {
+                uf.union(
+                    ra,
+                    rb,
+                    Content::Super {
+                        rigid: r1,
+                        bounds: b1.union(b2),
+                    },
+                )
+            } else {
+                Err(mismatch(uf, budget, interner, span, ra, rb))
+            }
+        }
         // A super-typed FLEX meeting a rigid skolem: the rigid adopts the
         // obligations and stays rigid, so the body's super-typed use of an
         // annotated `a` becomes a trait bound on `a` rather than a rejection.
