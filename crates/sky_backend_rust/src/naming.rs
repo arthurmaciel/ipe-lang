@@ -834,6 +834,14 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiHtmlAttribute => "ui_html_attribute_",
         KernelFn::UiName => "ui_name_",
         KernelFn::UiStyle => "ui_style_",
+        // #154: Breakpoint constants + wrapper
+        KernelFn::UiBreakpoint => "ui_breakpoint_",
+        KernelFn::UiMobile => "ui_mobile_",
+        KernelFn::UiTablet => "ui_tablet_",
+        KernelFn::UiDesktop => "ui_desktop_",
+        KernelFn::UiDarkMode => "ui_dark_mode_",
+        KernelFn::UiLightMode => "ui_light_mode_",
+        KernelFn::UiReducedMotion => "ui_reduced_motion_",
         KernelFn::BackgroundHoverColor => "ui_bg_hover_color_",
         KernelFn::BackgroundFocusColor => "ui_bg_focus_color_",
         KernelFn::BackgroundActiveColor => "ui_bg_active_color_",
@@ -936,6 +944,10 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         | KernelFn::HtmlSection
         | KernelFn::HtmlArticle
         | KernelFn::HtmlHeader
+        | KernelFn::HtmlHeaderNode
+        | KernelFn::HtmlCodeNode
+        | KernelFn::HtmlMainNode
+        | KernelFn::HtmlFooterNode
         | KernelFn::HtmlFooter
         | KernelFn::HtmlMain
         | KernelFn::HtmlAside
@@ -980,6 +992,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         | KernelFn::HtmlHr
         | KernelFn::HtmlMeta
         | KernelFn::HtmlLink
+        | KernelFn::HtmlLinkNode
         | KernelFn::HtmlArea
         | KernelFn::HtmlBase
         | KernelFn::HtmlCol

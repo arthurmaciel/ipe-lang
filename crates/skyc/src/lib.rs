@@ -460,24 +460,43 @@ fn compile_modules(
     // after link; every span in a def's body is a byte offset into that home
     // module's source.  Falls back to the entry file when no def encloses the
     // span (e.g. a CompilerBug with `Span::DUMMY`).
+    // `source_for_span` maps a compiler-internal Span (byte offsets into its
+    // *home module*'s source) to the (path, source) pair for error display.
+    //
+    // Heuristic: among all defs whose body_span *contains* the target span,
+    // prefer the one whose `body_span.lo` is *closest* to `span.lo` (i.e. the
+    // def that starts nearest to the failing expression).  Width is used as a
+    // secondary tiebreaker — narrower body wins when distances are equal.
+    //
+    // This is strictly better than the prior "narrowest body wins" approach,
+    // which could pick a short def from a *different module* (different byte
+    // namespace) that happened to be numerically narrower, producing a
+    // misattributed error location.  The closest-lo criterion naturally
+    // selects the def in the same file because same-module defs share a byte
+    // namespace; across modules, the intended def almost always has a smaller
+    // distance from its own `lo`.
     let source_for_span = |span: sky_diagnostics::Span| -> (PathBuf, String) {
         if span == sky_diagnostics::Span::DUMMY {
             return (entry_src_path.clone(), entry_src.clone());
         }
-        let mut best: Option<(u32, &[sky_intern::Symbol])> = None;
+        // (lo_dist, width, home)
+        let mut best: Option<(u32, u32, &[sky_intern::Symbol])> = None;
         for def in &linked.defs {
             let body_span = match def {
                 sky_canon::ast::Def::Untyped { body, .. }
                 | sky_canon::ast::Def::Typed { body, .. } => body.span,
             };
             if body_span.lo <= span.lo && span.hi <= body_span.hi {
+                let lo_dist = span.lo.saturating_sub(body_span.lo);
                 let width = body_span.hi.saturating_sub(body_span.lo);
-                if best.is_none_or(|(prev, _)| width < prev) {
-                    best = Some((width, def.home()));
+                if best.is_none_or(|(prev_dist, prev_w, _)| {
+                    lo_dist < prev_dist || (lo_dist == prev_dist && width < prev_w)
+                }) {
+                    best = Some((lo_dist, width, def.home()));
                 }
             }
         }
-        best.and_then(|(_, home)| home_to_source.get(home))
+        best.and_then(|(_, _, home)| home_to_source.get(home))
             .cloned()
             .unwrap_or_else(|| (entry_src_path.clone(), entry_src.clone()))
     };
