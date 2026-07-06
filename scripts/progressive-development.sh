@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ratchet.sh — gated, fresh-context autonomous burndown loop for the Ipê port.
+# progressive-development.sh — gated, fresh-context autonomous burndown loop for the Ipê port.
 #
 # A ratchet-and-pawl only advances, never slips back. Each iteration spawns a
 # FRESH `claude -p` process (no accumulated conversation) that reads durable
@@ -7,20 +7,20 @@
 # committed increment, or discards its work and logs why. The tree is always at
 # a green commit between iterations. The loop itself is the OUTER safety harness
 # (disk / mem-guard / budget / iteration cap / kill-switch / single-writer);
-# the per-iteration playbook is scripts/ratchet-prompt.md.
+# the per-iteration playbook is scripts/progressive-development-prompt.md.
 #
 # Usage:
-#   scripts/ratchet.sh              # run the loop with defaults
-#   scripts/ratchet.sh --once       # run a single iteration (validate first!)
-#   touch ratchet.stop              # kill-switch: clean exit after current iter
+#   scripts/progressive-development.sh              # run the loop with defaults
+#   scripts/progressive-development.sh --once       # run a single iteration (validate first!)
+#   touch progressive-development.stop              # kill-switch: clean exit after current iter
 #
 # Config (env):
-#   RATCHET_MAX_ITERS   (20)     hard cap on iterations
-#   RATCHET_MIN_FREE_GB (15)     abort if free disk drops below this
-#   RATCHET_ITER_TIMEOUT(5400)   per-iteration wall-clock ceiling (s)
-#   RATCHET_COOLDOWN    (20)     seconds between iterations (keep < 300 to hold
-#                                the prompt cache warm; see docs/architecture/ratchet.md)
-#   RATCHET_BRANCH      (auto)   branch to land commits on (default ratchet/run-<ts>)
+#   PROGDEV_MAX_ITERS   (20)     hard cap on iterations
+#   PROGDEV_MIN_FREE_GB (15)     abort if free disk drops below this
+#   PROGDEV_ITER_TIMEOUT(5400)   per-iteration wall-clock ceiling (s)
+#   PROGDEV_COOLDOWN    (20)     seconds between iterations (keep < 300 to hold
+#                                the prompt cache warm; see docs/architecture/progressive-development.md)
+#   PROGDEV_BRANCH      (auto)   branch to land commits on (default progressive-development/run-<ts>)
 #   MASTER_GATE_TARGET  (~/.cache/master-gate-target)  isolated gate target dir
 #
 # NOTE: pass a timestamp in via the environment for a deterministic branch name;
@@ -28,15 +28,15 @@
 set -uo pipefail          # NOT -e: iteration failures are handled, not fatal.
 cd "$(dirname "$0")/.."
 
-MAX_ITERS="${RATCHET_MAX_ITERS:-20}"
-MIN_FREE_GB="${RATCHET_MIN_FREE_GB:-15}"
-ITER_TIMEOUT="${RATCHET_ITER_TIMEOUT:-5400}"
-COOLDOWN="${RATCHET_COOLDOWN:-20}"
+MAX_ITERS="${PROGDEV_MAX_ITERS:-20}"
+MIN_FREE_GB="${PROGDEV_MIN_FREE_GB:-15}"
+ITER_TIMEOUT="${PROGDEV_ITER_TIMEOUT:-5400}"
+COOLDOWN="${PROGDEV_COOLDOWN:-20}"
 GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
-STOP_FILE="ratchet.stop"
-PROMPT_FILE="scripts/ratchet-prompt.md"
-LOG="docs/architecture/ratchet-log.md"
-ESC="docs/architecture/ratchet-escalations.md"
+STOP_FILE="progressive-development.stop"
+PROMPT_FILE="scripts/progressive-development-prompt.md"
+LOG="docs/architecture/progressive-development-log.md"
+ESC="docs/architecture/progressive-development-escalations.md"
 ONCE=0
 [ "${1:-}" = "--once" ] && ONCE=1
 
@@ -48,23 +48,23 @@ command -v claude >/dev/null || die "claude CLI not found"
 [ -f "$PROMPT_FILE" ] || die "missing $PROMPT_FILE"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
 [ -z "$(git status --porcelain)" ] || die "working tree not clean — commit or stash first"
-pgrep -f mem-guard.sh >/dev/null || die "mem-guard.sh not running — start it before a ratchet run"
+pgrep -f mem-guard.sh >/dev/null || die "mem-guard.sh not running — start it before a progressive-development run"
 [ -f "$STOP_FILE" ] && die "kill-switch $STOP_FILE present — remove it to run"
 
-# Single-writer guard: refuse to run if another ratchet holds the lock.
-LOCK=".ratchet.lock"
+# Single-writer guard: refuse to run if another progressive-development holds the lock.
+LOCK=".progressive-development.lock"
 if ! ( set -o noclobber; echo "$$" > "$LOCK" ) 2>/dev/null; then
-    die "another ratchet run holds $LOCK (pid $(cat "$LOCK" 2>/dev/null)) — one writer only"
+    die "another progressive-development run holds $LOCK (pid $(cat "$LOCK" 2>/dev/null)) — one writer only"
 fi
 trap 'rm -f "$LOCK"; log "loop exit"' EXIT
 
 # ── dedicated branch (human fast-forwards to master after reviewing the run) ─
-BRANCH="${RATCHET_BRANCH:-ratchet/run-${RATCHET_TS:-manual}}"
+BRANCH="${PROGDEV_BRANCH:-progressive-development/run-${PROGDEV_TS:-manual}}"
 BASE="$(git rev-parse --abbrev-ref HEAD)"
 git switch -c "$BRANCH" 2>/dev/null || git switch "$BRANCH" || die "cannot create branch $BRANCH"
 mkdir -p "$(dirname "$LOG")"
 touch "$LOG" "$ESC"
-log "ratchet start: branch=$BRANCH base=$BASE max_iters=$MAX_ITERS gate=$GATE_TARGET"
+log "progressive-development start: branch=$BRANCH base=$BASE max_iters=$MAX_ITERS gate=$GATE_TARGET"
 
 # ── the loop ───────────────────────────────────────────────────────────────
 landed=0
@@ -78,7 +78,7 @@ for i in $(seq 1 "$MAX_ITERS"); do
     log "── iteration $i/$MAX_ITERS ──"
     out="$(timeout "$ITER_TIMEOUT" claude -p "$(cat "$PROMPT_FILE")" 2>&1)"; rc=$?
     # Surface the iteration's own last status line + reason to the loop log.
-    verdict="$(printf '%s\n' "$out" | grep -oE 'RATCHET: (LANDED|FAILED|ESCALATED|ABORT|DRY)[^\n]*' | tail -1)"
+    verdict="$(printf '%s\n' "$out" | grep -oE 'PROGDEV: (LANDED|FAILED|ESCALATED|ABORT|DRY)[^\n]*' | tail -1)"
     log "iteration $i verdict: ${verdict:-<none> (rc=$rc)}"
 
     case "$verdict" in
@@ -95,4 +95,4 @@ for i in $(seq 1 "$MAX_ITERS"); do
     sleep "$COOLDOWN"
 done
 
-log "ratchet done: $landed landed on $BRANCH. Review, then: git switch $BASE && git merge --ff-only $BRANCH"
+log "progressive-development done: $landed landed on $BRANCH. Review, then: git switch $BASE && git merge --ff-only $BRANCH"
