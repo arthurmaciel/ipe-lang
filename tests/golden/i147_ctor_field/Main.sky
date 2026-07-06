@@ -1,0 +1,22 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A3 (#147 seal). `Wrap : String -> Box` passed as a higher-order function
+-- argument: `applyMk Wrap "hello"` — the callee slot is typed `String -> Box`.
+-- The bare VarCtor reference is eta-expanded into a closure by the VarCtor
+-- path in lower_expr, then forwarded as an Fn value.
+-- Expected output: "hello"
+
+type Box = Wrap String
+
+unwrap : Box -> String
+unwrap b =
+    case b of
+        Wrap s -> s
+
+applyMk : (String -> Box) -> String -> Box
+applyMk f s = f s
+
+main =
+    let b = applyMk Wrap "hello" in
+    println (unwrap b)

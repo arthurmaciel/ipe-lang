@@ -3,14 +3,15 @@
 //! silent cargo-failing Rust.
 //!
 //! * a constructor pattern binding the wrong number of payload fields →
-//!   SKY-T0013 (a type error),
-//! * a partially-applied payload constructor used as a function value
-//!   (`Node Leaf 1`) → SKY-L0113 (the constructor-as-function lowering gap).
+//!   SKY-T0013 (a type error).
 //!
 //! (Two `case` arms head-matching the same constructor with a refutable nested
 //! payload — `Som (Som x)` then `Som Non` — is now SUPPORTED: each arm lowers to
 //! its own Rust `match` arm in source order. Its positive regression lives in
 //! `golden_m3b4_nested` / `golden_m3b4_two_same_ctor`.)
+//!
+//! Note: the partial-ctor-application gap (formerly SKY-L0113) was closed in
+//! #147. Positive regressions live in `golden_i147_ctor_as_fn_seal`.
 //!
 //! Each is driven through the full `skyc` pipeline and asserted to produce its
 //! exact code, locking the gap so it can never regress into a worse failure mode.
@@ -62,11 +63,3 @@ fn ctor_pattern_arity_is_sky_t0013() {
     );
 }
 
-#[test]
-fn partial_ctor_application_is_sky_l0113() {
-    assert_gate(
-        "m3a_gate_partial",
-        "m3a_gate_partial_emit",
-        sky_diagnostics::SKY_L0113,
-    );
-}
