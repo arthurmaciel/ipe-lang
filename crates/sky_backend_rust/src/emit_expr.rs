@@ -2892,6 +2892,69 @@ fn emit_ui_call(
             )))
         }
 
+        // `Input.slider attrs { onChange, value, min, max, step, label }`
+        KernelFn::InputSlider => {
+            let [attrs_e, cfg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputSlider",
+                    detail: format!("Input.slider requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let Expr::Record(fields) = cfg_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputSlider",
+                    detail: "Input.slider cfg must be an inline record literal in Phase 0"
+                        .into(),
+                });
+            };
+            let on_change_e = lookup_field(
+                ctx,
+                fields,
+                "onChange",
+                "sky_backend_rust::emit_ui_call::InputSlider::onChange",
+            )?;
+            let value_e = lookup_field(
+                ctx,
+                fields,
+                "value",
+                "sky_backend_rust::emit_ui_call::InputSlider::value",
+            )?;
+            let min_e = lookup_field(
+                ctx,
+                fields,
+                "min",
+                "sky_backend_rust::emit_ui_call::InputSlider::min",
+            )?;
+            let max_e = lookup_field(
+                ctx,
+                fields,
+                "max",
+                "sky_backend_rust::emit_ui_call::InputSlider::max",
+            )?;
+            let step_e = lookup_field(
+                ctx,
+                fields,
+                "step",
+                "sky_backend_rust::emit_ui_call::InputSlider::step",
+            )?;
+            let label_e = lookup_field(
+                ctx,
+                fields,
+                "label",
+                "sky_backend_rust::emit_ui_call::InputSlider::label",
+            )?;
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let on_change_s = emit_expr_at(ctx, on_change_e, indent, child, generics)?;
+            let value_s = emit_expr_at(ctx, value_e, indent, child, generics)?;
+            let min_s = emit_expr_at(ctx, min_e, indent, child, generics)?;
+            let max_s = emit_expr_at(ctx, max_e, indent, child, generics)?;
+            let step_s = emit_expr_at(ctx, step_e, indent, child, generics)?;
+            let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::input::input_slider_({attrs_s}, {on_change_s}, {value_s}, {min_s}, {max_s}, {step_s}, {label_s})"
+            )))
+        }
+
         // ── Std.Html element builders ─────────────────────────────────────────
 
         // `Html.text : String -> Html msg`

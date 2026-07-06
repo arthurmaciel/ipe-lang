@@ -820,6 +820,15 @@ impl<'a> EmitCtx<'a> {
     }
 
     fn enum_name(&self, home: &ModPath, ty: Symbol) -> DResult<&str> {
+        // `StreamId` is a builtin opaque Http.Stream type backed by the runtime
+        // struct `SkyStreamId`.  It has no synthetic `EnumDef` injection (unlike
+        // `SqlValue`), so it is not in `enum_names`; we route it here instead.
+        // `ChunkEvent` is handled analogously via a dedicated arm in `render_type`.
+        if home.0.is_empty() && matches!(self.interner.resolve(ty), Some("StreamId")) {
+            // SAFETY: this literal has 'static lifetime; the returned &str
+            // is valid for the duration of the emit pass.
+            return Ok("SkyStreamId");
+        }
         self.enum_names
             .get(&(home.clone(), ty))
             .map(String::as_str)
@@ -851,6 +860,15 @@ impl<'a> EmitCtx<'a> {
             // from the runtime crate, in scope via `pub use sky_runtime::*`.
             // Constructor emission: `SkyOrder::LT` / `SkyOrder::EQ` / `SkyOrder::GT`.
             Some("Order") => Some("SkyOrder"),
+            // `ChunkEvent` — the builtin `Sky.Core.Http.Stream` chunk event enum
+            // backed by `sky_runtime::http_stream::ChunkEvent<SkyError>` (#148).
+            // Constructor names match Sky's verbatim: `Chunk` / `Done` / `Errored`.
+            // NOTE: This returns the bare name "ChunkEvent" (without generic args)
+            // so that pattern paths emit `ChunkEvent::Chunk(...)`, not
+            // `ChunkEvent<SkyError>::Chunk(...)` (invalid Rust syntax).
+            // Type-position rendering adds the `<SkyError>` via a special arm in
+            // `emit_types::render_type` BEFORE the general `ctx.enum_name` path.
+            Some("ChunkEvent") => Some("ChunkEvent"),
             _ => None,
         }
     }
