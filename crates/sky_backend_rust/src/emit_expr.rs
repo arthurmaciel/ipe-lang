@@ -2959,6 +2959,118 @@ fn emit_ui_call(
             )))
         }
 
+        // `Input.option value labelEl` — constructs a RadioOption
+        KernelFn::InputOption => {
+            let [value_e, label_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputOption",
+                    detail: format!("Input.option requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let value_s = emit_expr_at(ctx, value_e, indent, child, generics)?;
+            let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::input::input_option_({value_s}, {label_s})"
+            )))
+        }
+
+        // `Input.radio attrs { onChange, options, selected, label }`
+        KernelFn::InputRadio => {
+            let [attrs_e, cfg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputRadio",
+                    detail: format!("Input.radio requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let Expr::Record(fields) = cfg_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputRadio",
+                    detail: "Input.radio cfg must be an inline record literal in Phase 0".into(),
+                });
+            };
+            let on_change_e = lookup_field(
+                ctx,
+                fields,
+                "onChange",
+                "sky_backend_rust::emit_ui_call::InputRadio::onChange",
+            )?;
+            let options_e = lookup_field(
+                ctx,
+                fields,
+                "options",
+                "sky_backend_rust::emit_ui_call::InputRadio::options",
+            )?;
+            let selected_e = lookup_field(
+                ctx,
+                fields,
+                "selected",
+                "sky_backend_rust::emit_ui_call::InputRadio::selected",
+            )?;
+            let label_e = lookup_field(
+                ctx,
+                fields,
+                "label",
+                "sky_backend_rust::emit_ui_call::InputRadio::label",
+            )?;
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let on_change_s = emit_expr_at(ctx, on_change_e, indent, child, generics)?;
+            let options_s = emit_expr_at(ctx, options_e, indent, child, generics)?;
+            let selected_s = emit_expr_at(ctx, selected_e, indent, child, generics)?;
+            let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::input::input_radio_({attrs_s}, {on_change_s}, {options_s}, {selected_s}, {label_s})"
+            )))
+        }
+
+        // `Input.radioRow attrs { onChange, options, selected, label }`
+        KernelFn::InputRadioRow => {
+            let [attrs_e, cfg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputRadioRow",
+                    detail: format!("Input.radioRow requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let Expr::Record(fields) = cfg_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::InputRadioRow",
+                    detail: "Input.radioRow cfg must be an inline record literal in Phase 0"
+                        .into(),
+                });
+            };
+            let on_change_e = lookup_field(
+                ctx,
+                fields,
+                "onChange",
+                "sky_backend_rust::emit_ui_call::InputRadioRow::onChange",
+            )?;
+            let options_e = lookup_field(
+                ctx,
+                fields,
+                "options",
+                "sky_backend_rust::emit_ui_call::InputRadioRow::options",
+            )?;
+            let selected_e = lookup_field(
+                ctx,
+                fields,
+                "selected",
+                "sky_backend_rust::emit_ui_call::InputRadioRow::selected",
+            )?;
+            let label_e = lookup_field(
+                ctx,
+                fields,
+                "label",
+                "sky_backend_rust::emit_ui_call::InputRadioRow::label",
+            )?;
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let on_change_s = emit_expr_at(ctx, on_change_e, indent, child, generics)?;
+            let options_s = emit_expr_at(ctx, options_e, indent, child, generics)?;
+            let selected_s = emit_expr_at(ctx, selected_e, indent, child, generics)?;
+            let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::input::input_radio_row_({attrs_s}, {on_change_s}, {options_s}, {selected_s}, {label_s})"
+            )))
+        }
+
         // ── Std.Html element builders ─────────────────────────────────────────
 
         // `Html.text : String -> Html msg`

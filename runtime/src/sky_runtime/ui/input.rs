@@ -393,3 +393,102 @@ pub fn input_slider_<M: Clone + Send + Sync + 'static>(
     let input_el = ui_input_(base_attrs);
     wrap_with_label(label, layout_attrs, input_el)
 }
+
+// ---- Radio ------------------------------------------------------------------
+
+/// `RadioOption msg` — a single radio choice.
+///
+/// Mirrors `type RadioOption msg = RadioOption String (Element msg)` in
+/// `Std.Ui.Input`. Constructed via [`input_option_`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct RadioOption<M> {
+    /// The wire value submitted when this option is selected.
+    pub value: String,
+    /// The visible label element rendered next to the radio button.
+    pub label: Element<M>,
+}
+
+impl<M> crate::sky_runtime::stringify::SkyStringify for RadioOption<M> {
+    fn sky_show(&self) -> String {
+        format!("<RadioOption {}>", self.value)
+    }
+}
+
+/// `Input.option : String -> Element msg -> RadioOption msg`
+///
+/// Constructs a `RadioOption` from a wire value string and a label element.
+pub fn input_option_<M>(value: String, label: Element<M>) -> RadioOption<M> {
+    RadioOption { value, label }
+}
+
+/// Shared core for `radio` / `radioRow`. Renders a group of `<input
+/// type="radio">` controls. Each option is laid out according to `row_layout`:
+/// `false` → vertical column (spacing 6), `true` → horizontal row (spacing 12).
+fn radio_core_<M: Clone + Send + Sync + 'static>(
+    row_layout: bool,
+    attrs: Vec<Attribute<M>>,
+    on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
+    options: Vec<RadioOption<M>>,
+    selected: String,
+    label: Label<M>,
+) -> Element<M> {
+    let (layout_attrs, control_attrs) = split_layout_attrs(attrs);
+    let mut option_els: Vec<Element<M>> = Vec::with_capacity(options.len());
+    for opt in options {
+        let is_checked = opt.value == selected;
+        let check_val = if is_checked { "true" } else { "false" };
+        let wire_value = opt.value.clone();
+        let on_click_msg = on_change(opt.value);
+        let radio_attrs = vec![
+            ui_html_attribute_("type".into(), "radio".into()),
+            ui_html_attribute_("value".into(), wire_value),
+            ui_html_attribute_("checked".into(), check_val.into()),
+            // Use on_bool_ (the bool-valued change event on radio) to deliver
+            // the wire value. The closure ignores the Bool payload and always
+            // emits the message for THIS option — matches Sky's onClick-per-label
+            // convention from CLAUDE.md §Radio convention.
+            ui_on_bool_(Arc::new(move |_b: bool| on_click_msg.clone())),
+        ];
+        let radio_input = ui_input_(radio_attrs);
+        let option_row = ui_row_(vec![ui_spacing_(8)], vec![radio_input, opt.label]);
+        option_els.push(option_row);
+    }
+    let spacing = if row_layout { 12 } else { 6 };
+    let mut group_attrs: Vec<Attribute<M>> = vec![ui_spacing_(spacing)];
+    group_attrs.extend(control_attrs);
+    group_attrs.extend(implicit_fill_if_hoisted(&layout_attrs));
+    let group_el = if row_layout {
+        ui_row_(group_attrs, option_els)
+    } else {
+        ui_column_(group_attrs, option_els)
+    };
+    wrap_with_label(label, layout_attrs, group_el)
+}
+
+/// `Input.radio`
+///
+/// Renders a vertical column of radio buttons (spacing 6). Each option is a
+/// row of `<input type="radio">` + label element.
+pub fn input_radio_<M: Clone + Send + Sync + 'static>(
+    attrs: Vec<Attribute<M>>,
+    on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
+    options: Vec<RadioOption<M>>,
+    selected: String,
+    label: Label<M>,
+) -> Element<M> {
+    radio_core_(false, attrs, on_change, options, selected, label)
+}
+
+/// `Input.radioRow`
+///
+/// Renders a horizontal row of radio buttons (spacing 12). Identical to
+/// [`input_radio_`] but laid out with `Ui.row` instead of `Ui.column`.
+pub fn input_radio_row_<M: Clone + Send + Sync + 'static>(
+    attrs: Vec<Attribute<M>>,
+    on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
+    options: Vec<RadioOption<M>>,
+    selected: String,
+    label: Label<M>,
+) -> Element<M> {
+    radio_core_(true, attrs, on_change, options, selected, label)
+}

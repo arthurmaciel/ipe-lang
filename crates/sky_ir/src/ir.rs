@@ -632,6 +632,7 @@ pub enum IrType {
     /// | `UiCtor::HtmlEvent`      | `sky_runtime::html::Event<M>`                |
     /// | `UiCtor::Label`          | `sky_runtime::ui::input::Label<M>`           |
     /// | `UiCtor::Placeholder`    | `sky_runtime::ui::input::Placeholder<M>`     |
+    /// | `UiCtor::RadioOption`    | `sky_runtime::ui::input::RadioOption<M>`     |
     Ui {
         ctor: UiCtor,
         msg: Box<Self>,
@@ -700,6 +701,9 @@ pub enum UiCtor {
     /// `Placeholder msg` — a `Std.Ui.Input` placeholder descriptor
     /// (`sky_runtime::ui::input::Placeholder<M>`).
     Placeholder,
+    /// `RadioOption msg` — a `Std.Ui.Input` radio option descriptor
+    /// (`sky_runtime::ui::input::RadioOption<M>`).
+    RadioOption,
 }
 
 /// Tag enum for the nullary (non-message-parametric) `Std.Ui` types.
@@ -794,6 +798,7 @@ pub fn ir_type_is_derivable(
                     | UiCtor::UiAttribute
                     | UiCtor::Label
                     | UiCtor::Placeholder
+                    | UiCtor::RadioOption
             ) && ir_type_is_derivable(msg, enum_derivable)
         }
         // Non-derivable opaque leaves (each lacks ≥1 of Clone / Debug / PartialEq).

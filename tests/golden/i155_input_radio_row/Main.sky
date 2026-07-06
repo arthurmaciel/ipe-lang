@@ -1,0 +1,48 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+import Std.Ui.Input as Input
+
+
+-- i155 regression: Input.radio, Input.radioRow, and Input.option must
+-- type-check and lower without SKY-N0005.
+
+type Msg
+    = ColorSelected String
+
+
+options : List (Input.RadioOption Msg)
+options =
+    [ Input.option "red" (Ui.text "Red")
+    , Input.option "green" (Ui.text "Green")
+    , Input.option "blue" (Ui.text "Blue")
+    ]
+
+
+viewRadio : String -> String
+viewRadio selected =
+    Html.htmlRender
+        (Ui.layout []
+            (Input.radio []
+                { onChange = ColorSelected
+                , options = options
+                , selected = selected
+                , label = Input.labelAbove [] (Ui.text "Pick a color")
+                }))
+
+
+viewRadioRow : String -> String
+viewRadioRow selected =
+    Html.htmlRender
+        (Ui.layout []
+            (Input.radioRow []
+                { onChange = ColorSelected
+                , options = options
+                , selected = selected
+                , label = Input.labelAbove [] (Ui.text "Pick a color (row)")
+                }))
+
+
+main =
+    println (viewRadio "red" ++ viewRadioRow "blue")

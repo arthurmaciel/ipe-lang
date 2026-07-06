@@ -981,6 +981,12 @@ pub enum StdlibKernel {
     InputCheckbox,
     /// `Input.slider : List (Attribute msg) -> { onChange, value, min, max, step, label } -> Element msg`
     InputSlider,
+    /// `Input.option : String -> Element msg -> RadioOption msg`
+    InputOption,
+    /// `Input.radio : List (Attribute msg) -> { onChange, options, selected, label } -> Element msg`
+    InputRadio,
+    /// `Input.radioRow : List (Attribute msg) -> { onChange, options, selected, label } -> Element msg`
+    InputRadioRow,
     // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────────
     /// `Lazy.lazy : (a -> Element msg) -> a -> Element msg`
     ///
@@ -1972,6 +1978,9 @@ impl StdlibKernel {
             Self::InputNewPassword => d("Input", "newPassword", 2, Ui, "input_new_password_"),
             Self::InputCheckbox => d("Input", "checkbox", 2, Ui, "input_checkbox_"),
             Self::InputSlider => d("Input", "slider", 2, Ui, "input_slider_"),
+            Self::InputOption => d("Input", "option", 2, Ui, "input_option_"),
+            Self::InputRadio => d("Input", "radio", 2, Ui, "input_radio_"),
+            Self::InputRadioRow => d("Input", "radioRow", 2, Ui, "input_radio_row_"),
             // ── Std.Ui.Lazy (#146) ─────────────────────────────────────��──────
             Self::LazyLazy  => d("Lazy", "lazy",  2, Ui, "lazy_lazy_"),
             Self::LazyLazy2 => d("Lazy", "lazy2", 3, Ui, "lazy_lazy2_"),
@@ -2757,6 +2766,9 @@ impl StdlibKernel {
         Self::InputNewPassword,
         Self::InputCheckbox,
         Self::InputSlider,
+        Self::InputOption,
+        Self::InputRadio,
+        Self::InputRadioRow,
         // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────
         Self::LazyLazy,
         Self::LazyLazy2,
@@ -3180,6 +3192,9 @@ impl StdlibKernel {
                 | Self::InputNewPassword
                 | Self::InputCheckbox
                 | Self::InputSlider
+                | Self::InputOption
+                | Self::InputRadio
+                | Self::InputRadioRow
                 // ── Std.Ui.Lazy (#146) ────────────────────────────────────────
                 | Self::LazyLazy
                 | Self::LazyLazy2
