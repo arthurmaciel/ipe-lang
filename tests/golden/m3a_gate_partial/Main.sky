@@ -1,11 +1,18 @@
 module Main exposing (main)
 import Sky.Core.Prelude exposing (..)
 
--- A partially-applied payload constructor used as a function value — SKY-L0113.
+-- Partial ctor application: `Node Leaf 1` supplies 2 of 3 args to a ctor
+-- of arity 3, leaving one `Tree` arg still needed.  Since #147 this is
+-- SUPPORTED — the lowerer eta-expands into a closure.
+
 type Tree = Leaf | Node Tree Int Tree
 
+-- half : Tree -> (Tree -> Tree) — partially applies the first two args
 half : Tree -> (Tree -> Tree)
-half x = Node Leaf 1
+half x = Node x 1
 
 main =
-    println (String.fromInt 0)
+    let t = half Leaf Leaf in
+    case t of
+        Leaf -> println "leaf"
+        Node _ n _ -> println (String.fromInt n)

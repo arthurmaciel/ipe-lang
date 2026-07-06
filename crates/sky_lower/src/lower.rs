@@ -5673,10 +5673,10 @@ impl<'a> Lowerer<'a> {
             } => {
                 // A constructor application. M3a lowers a *saturated* construction
                 // to `Expr::Ctor`; a partial application (`Node l 1` for a
-                // three-field `Node`) is a constructor-as-function value, which
-                // awaits first-class-value support. Over-application is ruled out
-                // by type-checking (applying past the fields makes the result a
-                // non-function), so a non-equal count here is always partial.
+                // three-field `Node`) eta-expands: `|eta_k,…,eta_{N-1}| Ctor(a0,…,eta_k,…)`.
+                // Over-application is ruled out by type-checking (applying past
+                // the fields makes the result a non-function), so a non-equal
+                // count here is always partial.
                 let ctor_home = ModPath(home.clone());
                 let arity = self.ctor_arity_of(&ctor_home, *name)?;
                 if args.len() == arity {
@@ -5705,7 +5705,19 @@ impl<'a> Lowerer<'a> {
                         args: lowered_args,
                     })
                 } else {
-                    Err(unsupported(call_span, Feature::CtorAsFunction))
+                    // Partial ctor application: eta-expand into a closure that
+                    // captures the supplied args and takes the missing ones.
+                    // Applies the same T4/#130 capture-clone discipline as
+                    // `eta_expand_partial` for named-function partial application.
+                    self.eta_expand_partial_ctor(
+                        callee,
+                        ctor_home,
+                        *type_name,
+                        *name,
+                        lowered_args,
+                        arity,
+                        call_span,
+                    )
                 }
             }
             canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } => {
@@ -5943,6 +5955,144 @@ impl<'a> Lowerer<'a> {
         //   let cap_0 = expr_0 in let cap_1 = expr_1 in <lambda>
         // which evaluates the args left-to-right before the closure is built,
         // matching Sky's pure-functional semantics.
+        let result = hoisted.into_iter().rev().fold(lambda, |inner, (cap_sym, original)| {
+            Expr::Let { name: cap_sym, value: Box::new(original), body: Box::new(inner) }
+        });
+        Ok(result)
+    }
+
+    /// Eta-expand a **partially-applied constructor** into a boxed closure that
+    /// captures the supplied args and takes the remaining ones:
+    ///
+    /// ```text
+    /// Tagged n          (arity 2, 1 supplied)
+    /// ──────────────────────────────────────────
+    /// Box::new(move |eta_0: String| -> Tagged { Main_Tagged(n, eta_0) })
+    /// ```
+    ///
+    /// This is the ctor counterpart of [`Self::eta_expand_partial`] for named
+    /// functions.  The T4/#130 capture-clone discipline applies identically:
+    ///
+    /// * `Var(sym)` supplied args are rewritten to `CloneVar(sym)` when the slot
+    ///   type is `CloneOk`; left bare for `CopyLeaf`.  `NonClone` or unknown types
+    ///   surface [`Feature::NonCloneCapture`] (SKY-L0126).
+    /// * Non-`Var` complex expressions in `CloneOk` slots are hoisted to a
+    ///   `let __sky_cap_i = <expr>` binding outside the lambda so each call reads
+    ///   a captured binding (closing the re-evaluation / `FnOnce` hazard).
+    ///
+    /// The region type for the ctor is looked up at `callee.span`; it must peel
+    /// exactly `arity` arrows.  A missing region or a shallow arrow is a compiler
+    /// bug (invariant violation for well-typed input), not a missing feature.
+    #[allow(clippy::too_many_arguments)] // mirrors eta_expand_partial — same ctor decomposition pattern
+    fn eta_expand_partial_ctor(
+        &self,
+        callee: &canon::Expr,
+        ctor_home: ModPath,
+        type_name: Symbol,
+        name: Symbol,
+        lowered_args: Vec<Expr>,
+        arity: usize,
+        call_span: Span,
+    ) -> DResult<Expr> {
+        let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
+            bug(
+                "sky_lower::eta_expand_partial_ctor",
+                "no inferred type for a partially-applied constructor",
+            )
+        })?;
+        // Peel exactly `arity` arrows: collect each argument type in order,
+        // then the trailing result type R.
+        let mut cur = fn_ty;
+        let mut arg_tys: Vec<&Ty> = Vec::with_capacity(arity);
+        for _ in 0..arity {
+            let Ty::Fun(arg, rest) = cur else {
+                return Err(bug(
+                    "sky_lower::eta_expand_partial_ctor",
+                    "constructor type has fewer arrows than its arity",
+                ));
+            };
+            arg_tys.push(arg);
+            cur = rest.as_ref();
+        }
+        let ret_ty = cur;
+
+        let supplied = lowered_args.len();
+        let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
+        let mut call_args = lowered_args;
+
+        // T4 (#121/#130): classify every supplied arg slot and apply capture-clone
+        // discipline so the emitted closure is `Fn` (re-callable), not `FnOnce`.
+        let slot_classes: Vec<Option<CloneClass>> = arg_tys
+            .iter()
+            .take(supplied)
+            .map(|slot_ty| {
+                self.ir_type_from_ty(slot_ty, call_span)
+                    .ok()
+                    .as_ref()
+                    .map(clone_class)
+            })
+            .collect();
+        let mut hoisted: Vec<(Symbol, Expr)> = Vec::new();
+        let mut cap_cursor = 0usize;
+        for (arg, cls) in call_args.iter_mut().zip(slot_classes) {
+            if let Expr::Var(sym) = *arg {
+                match cls {
+                    Some(CloneClass::CloneOk) => *arg = Expr::CloneVar(sym),
+                    Some(CloneClass::CopyLeaf) => {} // bare Var — Copy, no clone
+                    // NonClone: a captured non-Clone value cannot be re-forwarded.
+                    // None: unknown type on a bare Var — conservatively fail-close
+                    // (T7/#130): cannot prove Copy-safety.
+                    Some(CloneClass::NonClone) | None => {
+                        return Err(unsupported(call_span, Feature::NonCloneCapture));
+                    }
+                }
+            } else {
+                // Non-Var complex expression: hoist CloneOk slots to a named
+                // binding outside the lambda; inline CopyLeaf / NonClone / unknown.
+                match cls {
+                    Some(CloneClass::CloneOk) => {
+                        let cap_sym = *self.cap_params.get(cap_cursor).ok_or_else(|| {
+                            bug(
+                                "sky_lower::eta_expand_partial_ctor",
+                                "cap_params pool too small for complex-arg hoist",
+                            )
+                        })?;
+                        cap_cursor += 1;
+                        let original = std::mem::replace(arg, Expr::CloneVar(cap_sym));
+                        hoisted.push((cap_sym, original));
+                    }
+                    Some(CloneClass::CopyLeaf | CloneClass::NonClone) | None => {}
+                }
+            }
+        }
+        // Build the missing parameter list from argument positions `supplied..arity`.
+        // Use the JSON-friendly variant so a free `Ty::Var` in an unconstrained
+        // slot maps to `IrType::Json` rather than raising SKY-L0102.
+        for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
+            let sym = *self.eta_params.get(offset).ok_or_else(|| {
+                bug(
+                    "sky_lower::eta_expand_partial_ctor",
+                    "eta-parameter pool smaller than the partial-application gap",
+                )
+            })?;
+            let ir = self.ir_type_from_ty_json(arg_ty, call_span)?;
+            params.push((sym, ir));
+            call_args.push(Expr::Var(sym));
+        }
+        let ret = self.ir_type_from_ty(ret_ty, call_span)?;
+        let body = Expr::Ctor {
+            home: ctor_home,
+            ty: type_name,
+            variant: name,
+            args: call_args,
+        };
+        let lambda = Expr::Lambda {
+            params,
+            ret,
+            body: Box::new(body),
+        };
+        // T4 (#130): wrap any hoisted let-bindings around the lambda.
+        // Folding in reverse preserves left-to-right evaluation order.
         let result = hoisted.into_iter().rev().fold(lambda, |inner, (cap_sym, original)| {
             Expr::Let { name: cap_sym, value: Box::new(original), body: Box::new(inner) }
         });
