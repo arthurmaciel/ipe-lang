@@ -47,7 +47,10 @@ die() { log "ABORT: $*"; exit 1; }
 command -v claude >/dev/null || die "claude CLI not found"
 [ -f "$PROMPT_FILE" ] || die "missing $PROMPT_FILE"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
-[ -z "$(git status --porcelain)" ] || die "working tree not clean — commit or stash first"
+# Only TRACKED changes block a run — untracked scratch (incl. the loop's own
+# log/escalation/iter artifacts) must not gate it (else the loop trips over its
+# own output, as the second --once test did).
+[ -z "$(git status --porcelain --untracked-files=no)" ] || die "tracked working-tree changes present — commit or stash first"
 pgrep -f mem-guard.sh >/dev/null || die "mem-guard.sh not running — start it before a progressive-development run"
 [ -f "$STOP_FILE" ] && die "kill-switch $STOP_FILE present — remove it to run"
 
