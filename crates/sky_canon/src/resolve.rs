@@ -3091,6 +3091,35 @@ fn resolve_simple_interp_ref(
     env: &Env,
     interner: &mut Interner,
 ) -> DResult<canon::Expr> {
+    // Numeric literal. A body that begins with an ASCII digit can never be an
+    // identifier (Sky identifiers never start with a digit), so it is an
+    // integer or float literal — NOT a local reference. Emitting `VarLocal`
+    // here (the fall-through below) would leak an unbound name past
+    // canonicalisation and fire the SKY-I0001 "unbound local `<n>`" ICE in
+    // `constrain`, which treats an unresolved local as a violated invariant
+    // (the resolver is supposed to have resolved every local). Recognise the
+    // literal instead, so e.g. `{{String.fromInt 54}}` lowers to
+    // `String.fromInt 54` and prints "54". This must precede the `.`-split
+    // below, else a float like `1.5` is mis-parsed as `Access(1, 5)`.
+    //
+    // Divergence from ../sky: `resolveInterpolationRef` lacks literal handling
+    // and would surface `54` as a `VarLocal` → naming error. Recognising the
+    // literal is strictly better (a well-typed program compiles instead of
+    // ICE-ing). Recorded in docs/divergences-from-sky.md.
+    if s.starts_with(|c: char| c.is_ascii_digit()) {
+        if let Ok(n) = s.parse::<i64>() {
+            return Ok(Located::new(span, canon::Expr_::Int(n)));
+        }
+        if let Ok(f) = s.parse::<f64>()
+            && f.is_finite()
+        {
+            return Ok(Located::new(span, canon::Expr_::Float(f)));
+        }
+        // Leading digit but not a valid `Int`/`Float` (e.g. `1e400`, `0xFF`,
+        // `9z`): fall back to the literal `{{...}}` string rather than emit a
+        // `VarLocal` that would ICE. Mirrors the "too complex → literal" policy.
+        return Ok(Located::new(span, canon::Expr_::Str(format!("{{{{{s}}}}}"))));
+    }
     if let Some(dot_pos) = s.find('.') {
         let first = &s[..dot_pos];
         let rest = &s[dot_pos + 1..];
