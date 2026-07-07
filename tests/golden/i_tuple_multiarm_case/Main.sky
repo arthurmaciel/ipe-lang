@@ -1,0 +1,43 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.List as List
+import Std.Log exposing (println)
+
+
+-- A MULTI-arm `case` on a LITERAL tuple whose columns are cons patterns plus a
+-- `_` catch-all — the shape example 38-composite-ui-multibackend
+-- (State.seedHistoryHelp) needs. Before the tuple-match close this was rejected
+-- fail-closed as SKY-L0115; now it lowers to a native Rust tuple `match`
+-- (`match (xs.as_slice(), ys.as_slice()) { ([a, xrest @ ..], [b, yrest @ ..]) =>
+-- …, _ => … }`), skyc-0 ⟹ cargo-0.
+zipSum : List Int -> List Int -> List Int -> List Int
+zipSum xs ys acc =
+    case ( xs, ys ) of
+
+        ( a :: xrest, b :: yrest ) ->
+            zipSum xrest yrest (acc ++ [a + b])
+
+        _ ->
+            acc
+
+
+-- A multi-arm tuple `case` with literal / variable columns and NO trailing
+-- catch-all — coverage proven upstream (SKY-T0010), accepted by the product
+-- backstop in `Match::new_flat`.
+classify : Bool -> Bool -> Int
+classify p q =
+    case ( p, q ) of
+        ( True, other ) ->
+            if other then 3 else 2
+
+        ( False, _ ) ->
+            1
+
+
+main =
+    let
+        summed = List.length (zipSum [1, 2, 3] [10, 20, 30] [])
+        c = classify True False
+    in
+        println (String.fromInt (summed + c))
