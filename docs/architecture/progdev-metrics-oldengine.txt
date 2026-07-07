@@ -1,0 +1,7 @@
+# OLD-engine baseline — run b1vi9ivn2 (current single-Opus guardian, 3 attempts, self-gate+master cargo test)
+wall-clock: 02:11:52 -> 04:31:58  (~2h20m, until manual graceful-stop; not full convergence)
+landed: 5 guardian commits; sweep 29 -> 30 PASS (net +1 example: 26-ui-showcase primitives progressing)
+agent result events: 12
+total agent cost:    $45.26
+  claude-opus-4-8: $44.46
+  claude-haiku-4-5-20251001: $0.80

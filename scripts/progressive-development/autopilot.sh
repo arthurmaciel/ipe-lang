@@ -44,10 +44,11 @@ STREAM="${PROGDEV_STREAM:-1}"                 # DEFAULT ON (watch.sh renders it)
 WATCH="${PROGDEV_WATCH:-1}"                   # 1 = auto-launch watch.sh alongside (one terminal); 0 / --no-watch disables
 CONTEXT="$REPO/$HERE/context.md"             # operating contract: 6 principles + 2 rules + the seal
 GUARDIAN_MODEL="${PROGDEV_GUARDIAN_MODEL:-claude-opus-4-8}"
+AUTHOR_MODEL="${PROGDEV_AUTHOR_MODEL:-claude-sonnet-4-6}"   # v4: Sonnet implements the Opus design
 GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
 QUEUE="docs/architecture/progressive-development-queue.tsv"   # <STATUS>\t<KIND>\t<desc>
 RESUME_DIR="docs/architecture/progressive-development-resume"  # gitignored guardian resume artifacts
-GUARDIAN_ATTEMPTS="${PROGDEV_GUARDIAN_ATTEMPTS:-3}"  # thoughtful re-attempts (each RESUMES) before human escalation
+GUARDIAN_ATTEMPTS="${PROGDEV_GUARDIAN_ATTEMPTS:-2}"  # v4: 2 resuming attempts, then phase-4 (review-dominated failures → 3rd try low-yield)
 DIGEST="docs/architecture/progressive-development-digest.md"
 STOP="autopilot.stop"
 LOCK=".autopilot.lock"
@@ -58,8 +59,19 @@ DISK_CRIT="${PROGDEV_DISK_CRIT_GB:-10}"      # graceful-stop when still below th
 # reclaimable. Bounds disk to these two + the shared dev target.
 KEEP_TARGETS="$(basename "$GATE_TARGET") $(basename "$GUARDIAN_TARGET") sky-rust-target"
 
-log()  { printf '%s | autopilot | %s\n' "$(date -Is)" "$*"; }
+log()  { printf '%s | autopilot | %s\n' "$(date +%H:%M)" "$*"; }
 die()  { log "ABORT: $*"; exit 1; }
+
+# v4 status header — current task / phase / model, rewritten on each transition.
+# watch.sh shows it fixed at top; `cat docs/architecture/progdev-status.txt` any time.
+STATUS="docs/architecture/progdev-status.txt"
+set_task() { CUR_TYPE="$1"; CUR_TASK="$(printf '%.110s' "$2")"; CUR_START="$(date +%H:%M)"; CUR_ATT="${3:-·}"; }
+phase() {  # <phase-name> <model>
+    { printf 'task    %s\n' "${CUR_TASK:-·}"
+      printf 'type    %s   attempt %s   started %s\n' "${CUR_TYPE:-·}" "${CUR_ATT:-·}" "${CUR_START:-·}"
+      printf 'phase   %-11s model %-8s now %s\n' "$1" "${2:-·}" "$(date +%H:%M)"; } > "$STATUS" 2>/dev/null
+    log "· $1 (${2:-·})"
+}
 
 usage() {
     cat <<'EOF'
@@ -222,6 +234,7 @@ resume_hint() { # <desc> → a prompt fragment if a prior attempt exists (ABSOLU
 }
 # One guardian attempt failed: save it for resume, then re-queue (PENDING) if
 # attempts remain, else ESCALATE to a human (artifact preserved).
+reason_of() { printf '%s' "$1" | "$HERE/render-stream.sh" 2>/dev/null | tr '\n' ' ' | cut -c1-600; }  # agent stream-json → readable one-liner (resume reasons/logs)
 guardian_failed() { # <class> <desc> <branch> <reason>
     save_resume "$1" "$2" "$3" "$4"
     local n=$(( $(attempts_of "$2") + 1 ))
@@ -327,32 +340,57 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
         class="${g%%$'\t'*}"; gdesc="${g#*$'\t'}"
         [ -z "$class" ] && class="guardian-typesystem"
         done_guard=$((done_guard+1))
-        log "guardian [$class]: $gdesc"
+        set_task "$class" "$gdesc" "$(( $(attempts_of "$gdesc") + 1 ))/$GUARDIAN_ATTEMPTS"
+        log "guardian [$class] · $gdesc"
         gbr="progressive-development/guardian-c$cycle-$done_guard"
         gwt="$REPO/.progressive-development-wt/guardian-$done_guard"
+        glog="/tmp/autopilot-guardian-c$cycle-$done_guard.log"
         rm -rf "$gwt"; git worktree add --quiet -b "$gbr" "$gwt" "$BASE" || { mark BLOCKED "$class" "$gdesc"; continue; }
-        ( cd "$gwt"; MASTER_GATE_TARGET="$HOME/.cache/guardian-target" \
-            agent "$GUARDIAN_MODEL" "You are a compiler guardian specialising in $class. Obey the operating contract in your system prompt IN FULL — the 6 principles + 2 rules + the seal (skyc exit-0 ⟹ cargo exit-0: NEVER emit codegen that type-checks but fails cargo). Root-cause and FIX this item, ROOT-CAUSE ONLY (never a hack/fixture-edit/gate-weakening). FOCUS: $(guardian_focus "$class"). Item: $gdesc .$(resume_hint "$gdesc") Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY reference. Gate on CARGO_TARGET_DIR=\$HOME/.cache/guardian-target (cargo test --workspace + clippy --all-targets -D warnings, both green — MATCH the master gate exactly), AND the no-panic fuzzer must stay clean (\`scripts/fuzz-well-typed.sh --iters 30\`). Add a regression test. Commit on this branch. If genuinely multi-session, commit partial progress + print GUARDIAN: PARTIAL <what remains>; else GUARDIAN: DONE." ) >/tmp/autopilot-guardian-c$cycle-$done_guard.log 2>&1
-        ahead="$(git rev-list --count "$BASE..$gbr" 2>/dev/null || echo 0)"
-        if [ "$ahead" -eq 0 ]; then
-            log "guardian [$class] made no commit"
-            guardian_failed "$class" "$gdesc" "$gbr" "made no commit. agent notes: $(tail -15 /tmp/autopilot-guardian-c$cycle-$done_guard.log 2>/dev/null | tr '\n' ' ')"
+
+        # ── v4 stage 1: Opus DESIGN (plan only, no code; early-out if unsound) ──
+        phase design opus
+        design="$(agent "$GUARDIAN_MODEL" "You are a compiler guardian DESIGNER specialising in $class. Do NOT write code. Produce a concise root-cause + fix PLAN: (a) the root cause, (b) the exact crates/files/functions to change, (c) the approach — matching the ../sky READ-ONLY reference, root-cause only, NEVER a hack/fixture-edit/gate-weakening, (d) the regression test to add. FOCUS: $(guardian_focus "$class"). Item: $gdesc .$(resume_hint "$gdesc") If there is NO sound fix (needs a human decision, genuinely multi-session, or would require a hack), print exactly 'DESIGN: ESCALATE <why>' and nothing else. Otherwise print 'DESIGN: <the plan>'.")"
+        if printf '%s' "$design" | rg -q 'DESIGN: ESCALATE'; then
+            log "guardian [$class] · design → ESCALATE"
+            guardian_failed "$class" "$gdesc" "$gbr" "design escalate: $(reason_of "$design")"
             git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null; continue
         fi
-        log "guardian [$class] committed; INDEPENDENT adversarial review — soundness-grade, not just the gate"
-        review="$(agent "$GUARDIAN_MODEL" "You are an ADVERSARIAL reviewer of a $class change on branch $gbr (diff: git diff $BASE..$gbr). REFUTE it — $(reviewer_angle "$class"). Read the diff + the added tests. If you find ANY unsoundness / behaviour change vs the ../sky reference / disguised hack, print REVIEW: REJECT <why>. Only if you cannot break it after genuine effort, print REVIEW: ACCEPT. Default to REJECT when uncertain. (The no-panic fuzzer is a hard gate below; YOUR job is the reasoning it can't do.)")"
-        if printf '%s' "$review" | rg -q "REVIEW: ACCEPT"; then
-            git switch "$BASE" >/dev/null 2>&1
-            gpre="$(git rev-parse HEAD)"   # pre-merge sha; a failed merge reverts HERE, never a stale HEAD
-            if git merge --no-ff -m "autopilot: $class fix — $gdesc" "$gbr" >/dev/null 2>&1 \
-               && ( touch runtime/tests/*.rs crates/skyc/tests/*.rs 2>/dev/null; CARGO_TARGET_DIR="$GATE_TARGET" timeout 3000 cargo test --workspace >/tmp/autopilot-gate.log 2>&1 && CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo clippy --workspace --all-targets -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
-               && ( "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 ); then
-                log "guardian [$class] ACCEPTED + gate-green + fuzz-clean — landed"; mark LANDED "$class" "$gdesc"
-            else
-                log "guardian [$class] failed merge/gate/fuzz — reverting to $gpre"; git merge --abort 2>/dev/null; git reset --hard "$gpre" >/dev/null 2>&1; guardian_failed "$class" "$gdesc" "$gbr" "merged but failed gate/fuzz. gate tail: $(tail -12 /tmp/autopilot-gate.log 2>/dev/null | tr '\n' ' ')"
-            fi
+
+        # ── v4 stage 2: Sonnet IMPL (follow the design; self-check clippy + skyc-verify, NOT the full test suite) ──
+        phase impl sonnet
+        ( cd "$gwt"; CARGO_TARGET_DIR="$GUARDIAN_TARGET" \
+          agent "$AUTHOR_MODEL" "You are the IMPLEMENTER. Follow this DESIGN exactly — do NOT redesign or deviate from it. Obey the operating contract (6 principles + 2 rules + the seal). DESIGN:
+$design
+
+Item: $gdesc . Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY. Implement the fix + the regression test the design names. SELF-CHECK (do NOT run the full workspace test suite — the integration gate runs that once): (1) 'cargo clippy --workspace --all-targets -- -D warnings' is clean; (2) 'cargo build -p skyc', then rebuild the failing example and confirm its ORIGINAL diagnostic is GONE. Iterate until BOTH pass (cap ~3 tries). Then 'git add -A && git commit'. Final line: 'IMPL: DONE' or 'IMPL: STUCK <why>'." ) >"$glog" 2>&1
+        ahead="$(git rev-list --count "$BASE..$gbr" 2>/dev/null || echo 0)"
+        if [ "$ahead" -eq 0 ]; then
+            log "guardian [$class] · impl made no commit"
+            guardian_failed "$class" "$gdesc" "$gbr" "impl no-commit. design: $(printf '%s' "$design" | tr '\n' ' ' | cut -c1-200) · notes: $(tail -10 "$glog" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
+            git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null; continue
+        fi
+
+        # ── v4 stage 3: Opus REVIEW — BEFORE the expensive gate (failures are review-dominated) ──
+        phase review opus
+        review="$(agent "$GUARDIAN_MODEL" "You are an ADVERSARIAL reviewer of a $class change on branch $gbr (diff: git diff $BASE..$gbr). REFUTE it — $(reviewer_angle "$class"). Read the diff + the added tests. If you find ANY unsoundness / behaviour change vs the ../sky reference / disguised hack, print 'REVIEW: REJECT <why>'. Only if you cannot break it after genuine effort, print 'REVIEW: ACCEPT'. Default to REJECT when uncertain.")"
+        if ! printf '%s' "$review" | rg -q 'REVIEW: ACCEPT'; then
+            log "guardian [$class] · review → REJECT"
+            guardian_failed "$class" "$gdesc" "$gbr" "review REJECT: $(reason_of "$review")"
+            git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null; continue
+        fi
+
+        # ── v4 stage 4: INTEGRATE — the ONE cargo test --workspace + clippy + fuzz ──
+        phase gate ·
+        git switch "$BASE" >/dev/null 2>&1
+        gpre="$(git rev-parse HEAD)"   # pre-merge sha; a failed gate reverts HERE, never a stale HEAD
+        if git merge --no-ff -m "autopilot: $class fix — $gdesc" "$gbr" >/dev/null 2>&1 \
+           && ( touch runtime/tests/*.rs crates/skyc/tests/*.rs 2>/dev/null; CARGO_TARGET_DIR="$GATE_TARGET" timeout 3000 cargo test --workspace >/tmp/autopilot-gate.log 2>&1 && CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo clippy --workspace --all-targets -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
+           && ( "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 ); then
+            log "guardian [$class] · LANDED (gate-green + fuzz-clean)"; mark LANDED "$class" "$gdesc"
         else
-            log "adversarial review [$class] REJECTED — not landing"; guardian_failed "$class" "$gdesc" "$gbr" "adversarial review REJECTED: $(printf '%s' "$review" | tr '\n' ' ' | cut -c1-600)"
+            log "guardian [$class] · gate RED — reverting to $gpre"
+            git merge --abort 2>/dev/null; git reset --hard "$gpre" >/dev/null 2>&1
+            guardian_failed "$class" "$gdesc" "$gbr" "gate failed after merge. tail: $(tail -12 /tmp/autopilot-gate.log 2>/dev/null | tr '\n' ' ' | cut -c1-400)"
         fi
         git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null
     done
