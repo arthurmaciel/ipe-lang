@@ -1402,6 +1402,27 @@ pub fn is_ctor_headed(pat: &Pat) -> bool {
     }
 }
 
+/// Whether a pattern is PRODUCT-SHAPED — a tuple pattern ([`Pat::Tuple`]), an
+/// irrefutable whole-tuple binder (a variable / wildcard catch-all over a tuple
+/// scrutinee), or an alias whose inner pattern is itself product-shaped. Used by
+/// [`Match::new_flat`] to recognise a multi-arm tuple `case` (whose product
+/// coverage the upstream Maranget check already proved) as a structurally-
+/// exhaustive arm set, distinct from a constructor / literal / list cover.
+#[must_use]
+pub fn is_product_shaped(pat: &Pat) -> bool {
+    match pat {
+        Pat::Tuple(_) | Pat::Wildcard | Pat::Var(_) => true,
+        Pat::Alias(inner, _) => is_product_shaped(inner),
+        Pat::Int(_)
+        | Pat::Bool(_)
+        | Pat::Char(_)
+        | Pat::Str(_)
+        | Pat::Ctor { .. }
+        | Pat::Record(_)
+        | Pat::Slice { .. } => false,
+    }
+}
+
 /// An exhaustive case analysis over an enum scrutinee.
 ///
 /// Fields are private: the sole way to obtain a `Match` is [`Match::new`],
@@ -1545,12 +1566,26 @@ impl Match {
         // is still sound here.
         let all_list_shaped = arms.iter().all(|a| is_list_shaped(&a.pat))
             && arms.iter().any(|a| matches!(a.pat, Pat::Slice { .. }));
-        if !trailing_catch_all && !bool_complete && !all_ctor_headed && !all_list_shaped {
+        // A multi-arm tuple `case`: every arm is product-shaped (a tuple pattern,
+        // an irrefutable whole-tuple binder, or an alias over those) and at least
+        // one is a genuine tuple pattern. A product type is inhabited only by its
+        // element tuples, so the upstream Maranget usefulness check (SKY-T0010)
+        // already proved coverage before lowering — an arm set in this shape with
+        // no trailing catch-all (`(True, _)` then `(False, _)`) is still sound.
+        let all_product_shaped = arms.iter().all(|a| is_product_shaped(&a.pat))
+            && arms.iter().any(|a| matches!(a.pat, Pat::Tuple(_)));
+        if !trailing_catch_all
+            && !bool_complete
+            && !all_ctor_headed
+            && !all_list_shaped
+            && !all_product_shaped
+        {
             return Err(Diagnostic::CompilerBug {
                 where_: "sky_ir::Match::new_flat",
                 detail: "flat match is not structurally exhaustive (no trailing \
                          catch-all, not a complete Bool cover, not a \
-                         constructor-headed cover, and not a list cover)"
+                         constructor-headed cover, not a list cover, and not a \
+                         tuple cover)"
                     .to_owned(),
             });
         }
