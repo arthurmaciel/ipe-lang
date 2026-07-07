@@ -19,18 +19,10 @@ AP="scripts/progressive-development/autopilot.sh"
 # Pass --help / -h straight through (autopilot prints its own reference).
 case "${1:-}" in -h|--help) exec "$AP" --help ;; esac
 
-# Cap mode: default = supervised (2 cycles / 1 guardian); --full = native (6/2).
-# 2 cycles matters on a FIRST run with an empty queue: cycle 1 is spent on
-# DISCOVERY (remeasure + fuzz + triage fills the queue), and only cycle 2 can
-# ACT on what it found — a 1-cycle run would discover and stop, looking like it
-# did nothing. Guardian stays capped at 1 (each is a heavy Opus fix + review).
-if [ "${1:-}" = "--full" ]; then
-    shift
-    echo "autopilot-run: FULL run (autopilot native caps) — watch auto-attaches; Ctrl-C stops."
-else
-    export PROGDEV_MAX_CYCLES="${PROGDEV_MAX_CYCLES:-2}"
-    export PROGDEV_MAX_GUARDIAN="${PROGDEV_MAX_GUARDIAN:-1}"
-    echo "autopilot-run: supervised run (cycles=$PROGDEV_MAX_CYCLES guardian=$PROGDEV_MAX_GUARDIAN; cycle 1 discovers, cycle 2 acts) — watch auto-attaches; Ctrl-C stops. Use --full for a longer run."
-fi
+# Runs until DONE: autopilot converges on its own when nothing tractable remains
+# (2 passes with no new findings; escalated/blocked items are suppressed so they
+# can't spin it). Override caps only if you want to via PROGDEV_MAX_GUARDIAN /
+# PROGDEV_MAX_CYCLES; touch autopilot.stop to halt after the current cycle.
+echo "autopilot-run: running until done - stops when no tractable work remains. watch auto-attaches; Ctrl-C stops."
 
 exec "$AP" "$@"
