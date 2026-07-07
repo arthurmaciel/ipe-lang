@@ -49,6 +49,12 @@ QUEUE="docs/architecture/progressive-development-queue.tsv"   # <STATUS>\t<KIND>
 DIGEST="docs/architecture/progressive-development-digest.md"
 STOP="autopilot.stop"
 LOCK=".autopilot.lock"
+GUARDIAN_TARGET="$HOME/.cache/guardian-target"
+DISK_FLOOR="${PROGDEV_DISK_FLOOR_GB:-20}"    # reclaim when free drops below this
+DISK_CRIT="${PROGDEV_DISK_CRIT_GB:-10}"      # graceful-stop when still below this after reclaim
+# The loop's ENTIRE cargo-target footprint — everything else under ~/.cache is
+# reclaimable. Bounds disk to these two + the shared dev target.
+KEEP_TARGETS="$(basename "$GATE_TARGET") $(basename "$GUARDIAN_TARGET") sky-rust-target"
 
 log()  { printf '%s | autopilot | %s\n' "$(date -Is)" "$*"; }
 die()  { log "ABORT: $*"; exit 1; }
@@ -120,6 +126,26 @@ agent() { # <model> <prompt> ; prints output
         -p "$prompt" 2>&1
 }
 
+# ── disk safety (ENOSPC mid-build corrupts git state — prevent, don't crash) ──
+disk_free_gb() { df -BG --output=avail / | tail -1 | tr -dc '0-9'; }
+reclaim_disk() {
+    log "disk reclaim (free $(disk_free_gb)G) — keeping only [$KEEP_TARGETS]"
+    for d in "$HOME"/.cache/*target*; do
+        [ -d "$d" ] || continue
+        local keep=0 k; for k in $KEEP_TARGETS; do [ "$(basename "$d")" = "$k" ] && keep=1; done
+        [ "$keep" -eq 0 ] && { log "  rm $(basename "$d") ($(du -sh "$d" 2>/dev/null | cut -f1))"; rm -rf "$d"; }
+    done
+    git worktree prune 2>/dev/null
+    rm -rf /tmp/sky-fuzz.* /tmp/sky-fuzz-neg.* /tmp/orch-*.log 2>/dev/null
+    log "  free now $(disk_free_gb)G"
+}
+# reclaim if below floor; return 1 (caller stops) if still critical afterwards.
+ensure_disk() {
+    [ "$(disk_free_gb)" -ge "$DISK_FLOOR" ] && return 0
+    log "low disk ($(disk_free_gb)G < ${DISK_FLOOR}G)"; reclaim_disk
+    [ "$(disk_free_gb)" -lt "$DISK_CRIT" ] && return 1 || return 0
+}
+
 # ── preconditions ────────────────────────────────────────────────────────────
 command -v claude >/dev/null || die "claude CLI not found"
 [ -f "$CONTEXT" ] || die "missing operating contract $CONTEXT"
@@ -127,6 +153,7 @@ command -v claude >/dev/null || die "claude CLI not found"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "tracked changes present — commit/stash first"
 ensure_mem_guard
+ensure_disk || die "disk critically low even after reclaim ($(disk_free_gb)G < ${DISK_CRIT}G) — free space and retry"
 [ -f "$STOP" ] && die "kill-switch $STOP present"
 if ! ( set -o noclobber; echo "$$" > "$LOCK" ) 2>/dev/null; then die "another autopilot holds $LOCK"; fi
 
@@ -194,6 +221,7 @@ while :; do
     cycle=$((cycle+1))
     [ -f "$STOP" ] && { log "kill-switch — stopping"; break; }
     pgrep -f mem-guard.sh >/dev/null || { log "mem-guard died — stopping"; break; }
+    ensure_disk || { log "disk still critical after reclaim ($(disk_free_gb)G) — graceful stop before any build (no mid-build ENOSPC)"; break; }
     [ "$cycle" -gt "$MAX_CYCLES" ] && { log "runaway backstop ($MAX_CYCLES cycles) — stopping; raise PROGDEV_MAX_CYCLES if legit"; break; }
 
     # convergence: did the PREVIOUS cycle make progress? (HEAD advanced, or work remains)
