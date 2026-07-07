@@ -4099,6 +4099,55 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
+                // `Attribute msg` — a Std.Ui / Std.Html attribute.  Mirrors the
+                // `ir_type_from_ty` "Attribute" arm: `Attribute` exists in BOTH
+                // `Std.Ui` and `Std.Html`, disambiguated by the `home` path
+                // (a path containing "Html" selects `HtmlAttribute`; everything
+                // else — `["Std","Ui"]`, `["Ui"]`, or empty for the
+                // builtin-injected form used by compiled-source stdlib modules
+                // like `Std.Ui.Grid` / `Std.Ui.Transition` — selects
+                // `UiAttribute`).  Without this arm an annotation such as
+                // `columns : List Track -> Attribute msg` reaches the `other =>`
+                // ICE with an empty home (SKY-I0001).
+                "Attribute" if args.len() == 1 => {
+                    let msg = self.ir_type_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_canon",
+                                "Attribute applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    let is_html = home.iter().any(|s| self.resolve(*s).ok() == Some("Html"));
+                    let ctor = if is_html {
+                        UiCtor::HtmlAttribute
+                    } else {
+                        UiCtor::UiAttribute
+                    };
+                    Ok(IrType::Ui {
+                        ctor,
+                        msg: Box::new(msg),
+                    })
+                }
+                // `Event msg` — a Std.Ui / Std.Html event handler carrier.
+                // Mirrors the `ir_type_from_ty` "Event" arm; same empty-home
+                // gap as `Attribute` for compiled-source stdlib annotations.
+                "Event" if args.len() == 1 => {
+                    let msg = self.ir_type_from_canon(
+                        args.first().ok_or_else(|| {
+                            bug(
+                                "sky_lower::ir_type_from_canon",
+                                "Event applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::HtmlEvent,
+                        msg: Box::new(msg),
+                    })
+                }
                 // Sky.Live opaque types in annotations (mirrors `ir_type_from_ty`).
                 "LiveReq" => Ok(IrType::LiveReq),
                 // `StreamId` / `ChunkEvent` — builtin-registered Http.Stream ADTs
@@ -7709,6 +7758,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiAspectRatioWH
                 | KernelFn::UiHtmlAttribute
                 | KernelFn::UiStyle
+                // `Ui.transitionRaw : String -> Bool -> Attribute msg`
+                | KernelFn::UiTransitionRaw
                 // ── Std.Ui.Input (#124) — arity-2 constructors ───────────────────
                 // `Input.labelAbove : List (Attribute msg) -> Element msg -> Label msg`
                 | KernelFn::InputLabelAbove
@@ -8687,6 +8738,9 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "htmlAttribute") => Ok(Callee::Kernel(KernelFn::UiHtmlAttribute)),
                     ("Ui", "name") => Ok(Callee::Kernel(KernelFn::UiName)),
                     ("Ui", "style") => Ok(Callee::Kernel(KernelFn::UiStyle)),
+                    ("Ui", "transitionRaw") => {
+                        Ok(Callee::Kernel(KernelFn::UiTransitionRaw))
+                    }
                     // #154: Ui.breakpoint + Breakpoint constants
                     ("Ui", "breakpoint") => Ok(Callee::Kernel(KernelFn::UiBreakpoint)),
                     ("Ui", "mobile") => Ok(Callee::Kernel(KernelFn::UiMobile)),
