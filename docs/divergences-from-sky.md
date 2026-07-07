@@ -747,3 +747,19 @@ API-shape review):
   Residual: malformed numeric captures silently degrade to `0`/`0.0`/`false`
   (same as reference's missing-capture behavior); routing to `not_found` on
   bad parse is a future refinement (not yet designed in the reference either).
+
+
+### B-ErrorToString — `errorToString : Stringify a => a -> String` (bounded polymorphic vs. universal)
+- **Differs:** Sky's Go runtime implements `errorToString` as `fmt.Sprintf("%v", v)`,
+  which accepts any value at runtime (universally polymorphic, no type-level bound).
+  ipê types `errorToString` as `Stringify a => a -> String`, routing all
+  stringification through the single `SkyStringify` trait chokepoint — the same
+  chokepoint used by `Basics.toString`.
+- **Go-oracle relationship:** Output is identical for all scalar, record, and ADT
+  values. A future `Secret` newtype that omits `SkyStringify` would fail closed
+  at type-check in ipê but would be silently rendered by Go's `fmt.Sprintf`.
+- **Rationale:** The bounded form is strictly sounder for typed-secrets safety.
+  A type withheld from the `SkyStringify` impl set (e.g. a future opaque `Secret`)
+  fails closed at type-check rather than reaching the runtime `fmt` fallback.
+  This is a deliberate divergence in the direction of greater security.
+- **Sanctioned:** yes (`sanctioned:`). Reference: `basics.rs::basics_error_to_string`.

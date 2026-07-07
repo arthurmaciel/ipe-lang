@@ -1,0 +1,11 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+addOne : Int -> Int
+addOne x =
+    x + 1
+
+main =
+    println (errorToString addOne)
