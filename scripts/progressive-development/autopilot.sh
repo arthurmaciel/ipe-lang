@@ -345,11 +345,13 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
         gbr="progressive-development/guardian-c$cycle-$done_guard"
         gwt="$REPO/.progressive-development-wt/guardian-$done_guard"
         glog="/tmp/autopilot-guardian-c$cycle-$done_guard.log"
+        dlog="/tmp/autopilot-guardian-design-c$cycle-$done_guard.log"   # tee'd so watch.sh follows the design stream live
+        rlog="/tmp/autopilot-guardian-review-c$cycle-$done_guard.log"   # tee'd so watch.sh follows the review stream live
         rm -rf "$gwt"; git worktree add --quiet -b "$gbr" "$gwt" "$BASE" || { mark BLOCKED "$class" "$gdesc"; continue; }
 
         # ── v4 stage 1: Opus DESIGN (plan only, no code; early-out if unsound) ──
         phase design opus
-        design="$(agent "$GUARDIAN_MODEL" "You are a compiler guardian DESIGNER specialising in $class. Do NOT write code. Produce a concise root-cause + fix PLAN: (a) the root cause, (b) the exact crates/files/functions to change, (c) the approach — matching the ../sky READ-ONLY reference, root-cause only, NEVER a hack/fixture-edit/gate-weakening, (d) the regression test to add. FOCUS: $(guardian_focus "$class"). Item: $gdesc .$(resume_hint "$gdesc") If there is NO sound fix (needs a human decision, genuinely multi-session, or would require a hack), print exactly 'DESIGN: ESCALATE <why>' and nothing else. Otherwise print 'DESIGN: <the plan>'.")"
+        design="$(agent "$GUARDIAN_MODEL" "You are a compiler guardian DESIGNER specialising in $class. Do NOT write code. Produce a concise root-cause + fix PLAN: (a) the root cause, (b) the exact crates/files/functions to change, (c) the approach — matching the ../sky READ-ONLY reference, root-cause only, NEVER a hack/fixture-edit/gate-weakening, (d) the regression test to add. FOCUS: $(guardian_focus "$class"). Item: $gdesc .$(resume_hint "$gdesc") If there is NO sound fix (needs a human decision, genuinely multi-session, or would require a hack), print exactly 'DESIGN: ESCALATE <why>' and nothing else. Otherwise print 'DESIGN: <the plan>'." | tee "$dlog")"
         if printf '%s' "$design" | rg -q 'DESIGN: ESCALATE'; then
             log "guardian [$class] · design → ESCALATE"
             guardian_failed "$class" "$gdesc" "$gbr" "design escalate: $(reason_of "$design")"
@@ -357,12 +359,18 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
         fi
 
         # ── v4 stage 2: Sonnet IMPL (follow the design; self-check clippy + skyc-verify, NOT the full test suite) ──
+        # The design PLAN reaches the implementer via a FILE, never argv: with
+        # PROGDEV_STREAM=1 $design holds full stream-json (many KB), and embedding
+        # it in -p blew ARG_MAX (E2BIG "Argument list too long") — the impl never
+        # launched, so every guardian item spuriously "made no commit". Extract the
+        # clean assistant text, write it OUTSIDE the worktree (so it isn't committed).
         phase impl sonnet
+        dfile="/tmp/autopilot-guardian-design-plan-c$cycle-$done_guard.md"
+        design_text="$(printf '%s' "$design" | jq -rj 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' 2>/dev/null)"
+        [ -z "$design_text" ] && design_text="$design"   # STREAM=0 (already plain text) or jq absent
+        printf '%s\n' "$design_text" > "$dfile"
         ( cd "$gwt"; CARGO_TARGET_DIR="$GUARDIAN_TARGET" \
-          agent "$AUTHOR_MODEL" "You are the IMPLEMENTER. Follow this DESIGN exactly — do NOT redesign or deviate from it. Obey the operating contract (6 principles + 2 rules + the seal). DESIGN:
-$design
-
-Item: $gdesc . Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY. Implement the fix + the regression test the design names. SELF-CHECK (do NOT run the full workspace test suite — the integration gate runs that once): (1) 'cargo clippy --workspace --all-targets -- -D warnings' is clean; (2) 'cargo build -p skyc', then rebuild the failing example and confirm its ORIGINAL diagnostic is GONE. Iterate until BOTH pass (cap ~3 tries). Then 'git add -A && git commit'. Final line: 'IMPL: DONE' or 'IMPL: STUCK <why>'." ) >"$glog" 2>&1
+          agent "$AUTHOR_MODEL" "You are the IMPLEMENTER. READ the DESIGN plan at $dfile FIRST, then follow it EXACTLY — do NOT redesign or deviate from it. Obey the operating contract (6 principles + 2 rules + the seal). Item: $gdesc . Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY. Implement the fix + the regression test the design names. SELF-CHECK (do NOT run the full workspace test suite — the integration gate runs that once): (1) 'cargo clippy --workspace --all-targets -- -D warnings' is clean; (2) 'cargo build -p skyc', then rebuild the failing example and confirm its ORIGINAL diagnostic is GONE. Iterate until BOTH pass (cap ~3 tries). Then 'git add -A && git commit'. Final line: 'IMPL: DONE' or 'IMPL: STUCK <why>'." ) >"$glog" 2>&1
         ahead="$(git rev-list --count "$BASE..$gbr" 2>/dev/null || echo 0)"
         if [ "$ahead" -eq 0 ]; then
             log "guardian [$class] · impl made no commit"
@@ -372,7 +380,7 @@ Item: $gdesc . Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY. Im
 
         # ── v4 stage 3: Opus REVIEW — BEFORE the expensive gate (failures are review-dominated) ──
         phase review opus
-        review="$(agent "$GUARDIAN_MODEL" "You are an ADVERSARIAL reviewer of a $class change on branch $gbr (diff: git diff $BASE..$gbr). REFUTE it — $(reviewer_angle "$class"). Read the diff + the added tests. If you find ANY unsoundness / behaviour change vs the ../sky reference / disguised hack, print 'REVIEW: REJECT <why>'. Only if you cannot break it after genuine effort, print 'REVIEW: ACCEPT'. Default to REJECT when uncertain.")"
+        review="$(agent "$GUARDIAN_MODEL" "You are an ADVERSARIAL reviewer of a $class change on branch $gbr (diff: git diff $BASE..$gbr). REFUTE it — $(reviewer_angle "$class"). Read the diff + the added tests. If you find ANY unsoundness / behaviour change vs the ../sky reference / disguised hack, print 'REVIEW: REJECT <why>'. Only if you cannot break it after genuine effort, print 'REVIEW: ACCEPT'. Default to REJECT when uncertain." | tee "$rlog")"
         if ! printf '%s' "$review" | rg -q 'REVIEW: ACCEPT'; then
             log "guardian [$class] · review → REJECT"
             guardian_failed "$class" "$gdesc" "$gbr" "review REJECT: $(reason_of "$review")"
