@@ -218,7 +218,7 @@ const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub 
 /// not via `pub use live::*;` (to avoid surfacing the internal `store` / `req`
 /// internals in the top-level namespace).
 const RUNTIME_MOD_RS_LIVE_APPEND: &str = "#[cfg(feature = \"live\")]\npub mod live;\n\
-     #[cfg(feature = \"live\")]\npub use live::{live_app, live_app_routed, live_render_static, sub_subscribe_topic, LiveReq};\n";
+     #[cfg(feature = \"live\")]\npub use live::{live_app, live_app_routed, live_render_static, sub_subscribe_topic, cmd_publish, cmd_publish_no_echo, LiveReq};\n";
 
 /// The `SkyCmd<M>` and `SkySub<M>` project-level type aliases emitted when the
 /// program uses TEA kernels. Placed immediately after `runtime_bindings()` (the
@@ -1282,6 +1282,24 @@ mod tests {
         assert!(
             RUNTIME_MOD_RS_LIVE_APPEND.contains("LiveReq"),
             "RUNTIME_MOD_RS_LIVE_APPEND must re-export LiveReq from the live module (E0412 fix): \
+             {RUNTIME_MOD_RS_LIVE_APPEND}"
+        );
+    }
+
+    /// `RUNTIME_MOD_RS_LIVE_APPEND` must re-export `cmd_publish` and
+    /// `cmd_publish_no_echo` so that emitted call sites (`cmd_publish(topic,
+    /// payload)`) resolve.  Without this the emitted project fails with E0425
+    /// (`cannot find function cmd_publish`) — a seal violation.
+    #[test]
+    fn live_mod_rs_exports_cmd_publish_fns() {
+        assert!(
+            RUNTIME_MOD_RS_LIVE_APPEND.contains("cmd_publish"),
+            "RUNTIME_MOD_RS_LIVE_APPEND must re-export cmd_publish (E0425 fix): \
+             {RUNTIME_MOD_RS_LIVE_APPEND}"
+        );
+        assert!(
+            RUNTIME_MOD_RS_LIVE_APPEND.contains("cmd_publish_no_echo"),
+            "RUNTIME_MOD_RS_LIVE_APPEND must re-export cmd_publish_no_echo (E0425 fix): \
              {RUNTIME_MOD_RS_LIVE_APPEND}"
         );
     }

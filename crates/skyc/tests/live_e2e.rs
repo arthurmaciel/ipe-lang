@@ -826,3 +826,87 @@ fn live_pubsub_cmd_publish_and_sub_subscribe_topic_build_only() -> Result<(), Bo
     let _exe = compile_and_build("live_pubsub_build_only", SKY_PUBSUB_LIVE)?;
     Ok(())
 }
+
+/// Regression: `Cmd.publish` / `Cmd.publishNoEcho` must accept a record payload
+/// (or any Sky value), not only `Dict String String`.
+///
+/// Before the fix the constrain scheme was `String -> Dict String String -> Cmd
+/// msg`.  Publishing `{ count : Int, name : String }` produced SKY-T0001
+/// (type mismatch at examples/37-composite-live-shop/src/Update.sky:34:38).
+/// After the fix the scheme is `String -> any -> Cmd msg` (var(1) for payload),
+/// matching the reference runtime which is generic in T.
+///
+/// This test also asserts `cargo build` succeeds — verifying the re-export
+/// (`cmd_publish`, `cmd_publish_no_echo` in `RUNTIME_MOD_RS_LIVE_APPEND`) is
+/// present; without it the emitted project would fail with E0425 (seal violation).
+const SKY_PUBSUB_RECORD_PAYLOAD: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type alias CartItem =
+    { count : Int
+    , name : String
+    }
+
+type Msg
+    = AddItem CartItem
+    | SendCart CartItem
+
+type alias Model =
+    { items : List CartItem
+    }
+
+cartTopic : String
+cartTopic =
+    "cart"
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { items = [] }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        AddItem item ->
+            ( { model | items = model.items ++ [ item ] }
+            , Cmd.batch
+                [ Cmd.publish cartTopic item
+                , Cmd.publishNoEcho cartTopic item
+                ]
+            )
+
+        SendCart item ->
+            ( model, Cmd.publish cartTopic item )
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.subscribeTopic cartTopic AddItem
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (Ui.column []
+            [ Ui.text (String.fromInt (List.length model.items))
+            ])
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = SendCart { count = 0, name = "" }
+        }
+"#;
+
+#[test]
+fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build("live_pubsub_record_payload_build_only", SKY_PUBSUB_RECORD_PAYLOAD)?;
+    Ok(())
+}
