@@ -28,7 +28,7 @@
 # at the guardian gate. Never trust the gate alone for guardian changes. The human
 # keeps a LIGHT meta-audit of the guardian tier via the digest.
 #
-# Config (env): PROGDEV_MAX_CYCLES (6) · PROGDEV_MAX_GUARDIAN (2 per run) ·
+# Config (env): PROGDEV_MAX_CYCLES (100 backstop) · PROGDEV_MAX_GUARDIAN (2/cycle) ·
 #   PROGDEV_LANES (2) · PROGDEV_AUTHOR_MODEL (sonnet) · PROGDEV_GUARDIAN_MODEL /
 #   PROGDEV_RECONCILE_MODEL (opus) · touch autopilot.stop to halt after the cycle.
 set -uo pipefail
@@ -36,7 +36,7 @@ cd "$(dirname "$0")/../.."
 REPO="$(pwd)"
 HERE="scripts/progressive-development"
 
-MAX_CYCLES="${PROGDEV_MAX_CYCLES:-6}"
+MAX_CYCLES="${PROGDEV_MAX_CYCLES:-100}"   # runaway backstop only; real stop = 2-dry-pass convergence
 MAX_GUARDIAN="${PROGDEV_MAX_GUARDIAN:-2}"
 FUZZ_ITERS="${PROGDEV_FUZZ_ITERS:-30}"       # no-panic fuzzer iters (measure sweep + guardian gate)
 FUZZ="scripts/fuzz-well-typed.sh"
@@ -67,7 +67,7 @@ Flags:
   -h, --help      show this help and exit
 
 Env vars (defaults):
-  PROGDEV_MAX_CYCLES      (6)      hard cap on cycles
+  PROGDEV_MAX_CYCLES      (100)    runaway backstop only (real stop = converge: 2 passes, no new findings)
   PROGDEV_MAX_GUARDIAN    (2)      guardian items dispatched per run
   PROGDEV_LANES           (2)      parallel mechanical lanes (this box: 2)
   PROGDEV_FUZZ_ITERS      (30)     no-panic fuzzer iters (measure sweep + guardian gate)
@@ -146,14 +146,24 @@ START_SHA="$(git rev-parse HEAD)"
 mkdir -p "$(dirname "$QUEUE")"; touch "$QUEUE"
 log "start: base=$BASE start=$START_SHA max_cycles=$MAX_CYCLES max_guardian=$MAX_GUARDIAN"
 
-# queue helpers (queue is append-only history; latest status per desc wins)
-pending() { # <kind> → PENDING descriptions of that exact kind (newest status wins)
-    awk -F'\t' -v k="$1" '{st[$3]=$1; kd[$3]=$2}
-        END{for(d in st) if(st[d]=="PENDING" && kd[d]==k) print d}' "$QUEUE"
+# queue helpers (append-only history; newest status per desc wins). SUPPRESSION:
+# an item is NOT actionable once it was ESCALATED or BLOCKED (the loop tried and
+# couldn't land it soundly — a human clears it), or once it has been ATTEMPTED
+# twice (a mechanical item that keeps failing the gate must not spin). This is
+# what lets the loop converge instead of re-triaging the same dead items forever.
+pending() { # <kind> → actionable PENDING descriptions of that kind
+    awk -F'\t' -v k="$1" '
+        { st[$3]=$1; kd[$3]=$2
+          if($1=="ESCALATED"||$1=="BLOCKED") dead[$3]=1
+          if($1=="ATTEMPTED") att[$3]++ }
+        END{for(d in st) if(st[d]=="PENDING" && kd[d]==k && !(d in dead) && att[d]<2) print d}' "$QUEUE"
 }
-pending_guardian() { # → PENDING guardian-* items as "<kind>\t<desc>" (any class)
-    awk -F'\t' '{st[$3]=$1; kd[$3]=$2}
-        END{for(d in st) if(st[d]=="PENDING" && kd[d] ~ /^guardian/) print kd[d]"\t"d}' "$QUEUE"
+pending_guardian() { # → actionable PENDING guardian-* items as "<kind>\t<desc>"
+    awk -F'\t' '
+        { st[$3]=$1; kd[$3]=$2
+          if($1=="ESCALATED"||$1=="BLOCKED") dead[$3]=1
+          if($1=="ATTEMPTED") att[$3]++ }
+        END{for(d in st) if(st[d]=="PENDING" && kd[d] ~ /^guardian/ && !(d in dead) && att[d]<2) print kd[d]"\t"d}' "$QUEUE"
 }
 mark() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$QUEUE"; }   # status kind desc
 
@@ -175,11 +185,28 @@ reviewer_angle() { case "$1" in
   *)                   printf '%s' "try to find any unsoundness, behaviour change, or disguised hack." ;;
 esac; }
 
-# ── the cycle ────────────────────────────────────────────────────────────────
-for cycle in $(seq 1 "$MAX_CYCLES"); do
+# ── the loop: run until DONE (2 passes, no new tractable findings) ────────────
+# Converged = 2 consecutive cycles where nothing landed AND nothing actionable
+# remains (all items resolved, or escalated/blocked/2x-attempted → suppressed).
+# MAX_CYCLES is a pure runaway backstop, NEVER the normal stop.
+prev_head=""; dry=0; cycle=0; last_audit=""
+while :; do
+    cycle=$((cycle+1))
     [ -f "$STOP" ] && { log "kill-switch — stopping"; break; }
     pgrep -f mem-guard.sh >/dev/null || { log "mem-guard died — stopping"; break; }
-    log "cycle $cycle/$MAX_CYCLES"
+    [ "$cycle" -gt "$MAX_CYCLES" ] && { log "runaway backstop ($MAX_CYCLES cycles) — stopping; raise PROGDEV_MAX_CYCLES if legit"; break; }
+
+    # convergence: did the PREVIOUS cycle make progress? (HEAD advanced, or work remains)
+    cur_head="$(git rev-parse HEAD)"
+    act="$({ pending mechanical; pending_guardian; } | wc -l | tr -d ' ')"
+    if [ -n "$prev_head" ] && [ "$cur_head" = "$prev_head" ] && [ "$act" -eq 0 ]; then
+        dry=$((dry+1)); log "no-progress pass $dry/2 (nothing landed, no tractable findings)"
+        [ "$dry" -ge 2 ] && { log "converged — 2 dry passes; work done or human-blocked. stopping."; break; }
+    else
+        dry=0
+    fi
+    prev_head="$cur_head"
+    log "cycle $cycle (dry=$dry, actionable=$act)"
 
     # 1 ── mechanical batch ──────────────────────────────────────────────────
     mapfile -t mech < <(pending mechanical)
@@ -192,7 +219,8 @@ for cycle in $(seq 1 "$MAX_CYCLES"); do
     fi
 
     # 2 ── no mechanical: audit what landed, then remeasure + triage ──────────
-    if [ "$(git rev-parse HEAD)" != "$START_SHA" ]; then
+    if [ "$(git rev-parse HEAD)" != "$START_SHA" ] && [ "$(git rev-parse HEAD)" != "$last_audit" ]; then
+        last_audit="$(git rev-parse HEAD)"
         log "digest audit: adversarial review of landed commits (Opus)"
         landed="$(git log --oneline "$START_SHA"..HEAD)"
         agent "$GUARDIAN_MODEL" "You are AUDITING autonomous commits for soundness. Review the diffs of these commits on the current branch and answer: did ANY of them land a HACK rather than a root-cause fix — e.g. editing a reference-identical example fixture to satisfy our type-checker, weakening/removing a gate or soundness check, adding a \`_ =>\` catch-all to dodge exhaustiveness, or a \`#[allow]\`/\`unwrap\` that hides a contract violation? Commits:
@@ -223,7 +251,7 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
 
     # 3 ── guardian tier: dispatch + adversarial review ──────────────────────
     mapfile -t guard < <(pending_guardian)   # each entry: "<guardian-class>\t<desc>"
-    if [ "${#guard[@]}" -eq 0 ]; then log "no mechanical AND no guardian items — TERMINAL"; break; fi
+    if [ "${#guard[@]}" -eq 0 ]; then log "nothing actionable this pass"; continue; fi
     log "no mechanical left; ${#guard[@]} guardian item(s). Dispatching up to $MAX_GUARDIAN this run."
     done_guard=0
     for g in "${guard[@]}"; do
@@ -261,7 +289,6 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
         git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null
     done
     git worktree prune
-    [ "$done_guard" -eq 0 ] && break   # nothing dispatched → terminal
 done
 
 # ── landed digest for the human meta-audit ───────────────────────────────────
