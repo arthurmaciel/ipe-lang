@@ -1,0 +1,53 @@
+module Main exposing (main)
+
+-- Regression: Jwt.decode : Algorithm -> Int -> String -> Result Error String
+-- Tests caller-supplied `now` expiry/nbf validation matching reference semantics.
+-- Secret is exactly 32 bytes (RFC 7518 §3.2 floor).
+
+checkWith : String -> Int -> String -> String
+checkWith key now tok =
+    case Jwt.decode (Jwt.hs256 key) now tok of
+        Ok _ ->
+            "ok"
+
+        Err _ ->
+            "err"
+
+main =
+    let
+        secret = "test-secret-key-0123456789abcdef"
+
+        wrongSecret = "wrong-secret-key-0123456789abcde"
+
+        claimsWithTime =
+            Jwt.claims |> Jwt.expiresAt 1000 |> Jwt.notBefore 100
+
+        claimsNoTime =
+            Jwt.claims
+    in
+    case Jwt.encode (Jwt.hs256 secret) claimsWithTime of
+        Err _ ->
+            println "encode-error"
+
+        Ok tok ->
+            case Jwt.encode (Jwt.hs256 secret) claimsNoTime of
+                Err _ ->
+                    println "encode-error"
+
+                Ok tokNoTime ->
+                    let
+                        r1 = checkWith secret 500 tok
+
+                        r2 = checkWith secret 1000 tok
+
+                        r3 = checkWith secret 99 tok
+
+                        r4 = checkWith secret 100 tok
+
+                        r5 = checkWith secret 999 tok
+
+                        r6 = checkWith secret 500 tokNoTime
+
+                        r7 = checkWith wrongSecret 500 tok
+                    in
+                    println (r1 ++ " " ++ r2 ++ " " ++ r3 ++ " " ++ r4 ++ " " ++ r5 ++ " " ++ r6 ++ " " ++ r7)

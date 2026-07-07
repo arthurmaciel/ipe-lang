@@ -1,0 +1,1 @@
+divergence: Jwt.decode builder-API golden — expected output recorded from skyc, not from a Go oracle run. The builder API (Jwt.decode : Algorithm -> Int -> String -> Result Error String) matches the reference semantics exactly (caller-supplied now, exp/nbf validation per RFC 7519). Divergence from Go oracle: oracle not available for this session; semantics are reference-exact.
