@@ -110,6 +110,49 @@ surface tiny.
 **Lane count is gate-bound on this box** — the serial `cargo test` caps throughput,
 so >3 lanes just builds a stale queue. The leverage is the *ordering* (§4), not width.
 
+### 3.1 Parallel guardian — parallel author, serial gate (PLANNED, flag-gated)
+
+Guardian is serial today (one item design→impl→review→gate at a time). The plan
+parallelizes **authoring only**; the gate stays serial (correct, not a limitation).
+
+**Shape** — batch N items (`GUARDIAN_LANES`, default **1** = today; opt-in 2):
+- **Phase A (parallel author):** each item runs design→impl→review concurrently,
+  each in its **own worktree + own cargo target** (`GUARDIAN_TARGET-$i`), writing
+  ACCEPT/REJECT/ESCALATE + branch to a per-item result file.
+- **Barrier:** wait for all authors.
+- **Phase B (serial gate):** gate only ACCEPTED items, one at a time — merge +
+  nextest + doctest + clippy + fuzz on the single shared `GATE_TARGET`, revert to
+  `$gpre` on RED (per-item safety unchanged).
+
+**Why the gate stays serial (not a limitation):** cargo locks the target dir,
+merges mutate one HEAD, and — Amdahl — the gate is the wall-clock floor, so
+parallelizing it buys nothing. Parallelism only helps the authoring portion.
+
+**Safety mechanisms (where the risk lives):**
+1. **Per-lane targets** added to `KEEP_TARGETS` via prefix-match so `reclaim_disk`
+   never deletes an in-use target.
+2. **Memory bound** — N concurrent `cargo build -p skyc` peak ~2–4 GB each; N=2
+   safe on the 15 GB box (mem-guard backstop). Disk = N×~10 GB → check floor
+   before spawning.
+3. **Serial worktree setup** before launching authors (no concurrent
+   `git worktree add` races).
+4. **Disjoint-crate batching** — only co-schedule items whose descs touch
+   *different* crates (parse the crate hint from the desc). This is the
+   "integration cost < serial cost" gate: same-crate items stay serial so
+   parallel impls don't collide and serial merges rarely conflict; on a merge
+   conflict, that item re-queues (`guardian_failed`), never corrupts.
+5. **Mock-test the concurrency flow** (stub `agent()` with an echo) to validate
+   launch/barrier/result-collection/serial-gate **before** any real agent spend.
+
+**Expected win:** ~2× on authoring (the 10–45 min design+impl+review overlaps);
+gate stays serial → net wall-clock **~25–40%** (depends on the author:gate ratio).
+
+**Rollout:** flag-gated (`GUARDIAN_LANES=1` default → zero risk) → mock-test →
+**supervised** first parallel run (watch one batch land) → default to 2.
+
+**Interaction with design-reuse (§2):** attempt-1 items are the parallel candidates;
+a retry (design reused) is cheap enough to keep serial if it simplifies scheduling.
+
 ---
 
 ## 4. Gate frequency — the whole point
@@ -213,6 +256,16 @@ autopilot (until 2 dry passes = converged):
 
 ## Changelog
 
+- **v5 (2026-07-07)** — filed §3.1 **parallel guardian** (parallel author, serial
+  gate; flag-gated `GUARDIAN_LANES`, mock-tested, supervised rollout). Records the
+  batch of shipped changes it builds on: guardian E2BIG fix (design→file, not argv);
+  **design-reuse on retry** (attempt-1 saves the plan, a retry reuses it + gets the
+  rejection reason — cuts the biggest cost lane); rg-shim for agents (headless
+  `claude -p` ignores PreToolUse hooks → PATH shim); persistent per-cycle **cost
+  ledger** (survives /tmp overwrite); **gate on nextest + `--doc` + nightly
+  `-Zthreads=8` + mold** (parallel frontend speeds clippy + test builds, mold speeds
+  link); clippy `--no-deps --jobs 4`, `--all-targets` dropped; nightly clippy drift
+  reconciled (2 `pedantic` fixes) so the nightly gate is clean, not permanently red.
 - **v4 (2026-07-07)** — added the status-header design (progdev-status.txt + watch.sh fixed header + heartbeat markers): task / type / start / phase / model / attempt, all script-known.
 - **v3 (2026-07-07)** — filed the per-lane failure ownership rule (clippy-p /
   skyc-verify → Sonnet iterates in-lane, cap ~3; review REJECT → re-design as a
