@@ -4228,6 +4228,11 @@ impl<'a> Builder<'a> {
             K::UiHtmlAttribute => fun(string(), fun(string(), attr(var(0)))),
             K::UiName => fun(string(), attr(var(0))),
             K::UiStyle => fun(string(), fun(string(), attr(var(0)))),
+            // `Ui.transitionRaw : String -> Bool -> Attribute msg` — the CSS
+            // transition shorthand + a respect-`prefers-reduced-motion` flag.
+            // Native surface backing `Std.Ui.Transition.attribute` /
+            // `attributeUnsafe`.
+            K::UiTransitionRaw => fun(string(), fun(bool_ty(), attr(var(0)))),
 
             // #154: Ui.breakpoint + Breakpoint constants.
             //
@@ -5907,6 +5912,7 @@ mod registry_phase_c_tests {
             K::UiHtmlAttribute,
             K::UiName,
             K::UiStyle,
+            K::UiTransitionRaw,
             // #154: Breakpoint
             K::UiBreakpoint,
             K::UiMobile,
