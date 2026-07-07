@@ -602,6 +602,20 @@ API-shape review):
   - Nested constructor-payload patterns (A13).
   - Mutual / let-rec tail-call optimization is out of scope for the current TCO
     (self-recursion only).
+- **Numeric literals in `{{...}}` interpolation** — ipê's interpolation
+  mini-parser (`resolve_simple_interp_ref`) recognises an integer/float literal
+  argument, e.g. `{{String.fromInt 54}}` lowers to `String.fromInt 54` and
+  prints `54`. Sky's `resolveInterpolationRef`
+  (`Sky/Canonicalise/Expression.hs`) has no literal case: a digit-leading body
+  becomes `Can.VarLocal "54"`, which surfaces downstream as a naming error (the
+  interpolation grammar there is names-only). ipê's `constrain` treats an
+  unresolved local as a violated invariant (SKY-I0001 ICE), so without this the
+  same program ICE'd rather than compiling. A Sky identifier can never start
+  with a digit, so recognising the literal is unambiguous and strictly better
+  (a well-typed program compiles instead of failing). **Sanctioned:** yes.
+  Reference: `resolve.rs::resolve_simple_interp_ref`; regression
+  `crates/skyc/tests/interp_literal.rs` + golden `m_interp_int_literal`.
+  Found by the no-panic fuzzer (`multilineinterp` template).
 
 ---
 
