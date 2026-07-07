@@ -7094,7 +7094,6 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JwtIssuedAt
                 | KernelFn::JwtJwtId
                 | KernelFn::JwtEncode
-                | KernelFn::JwtDecode
                 // ── Task combinators arity-2 (M5a) ────────────────────────────
                 | KernelFn::TaskMap
                 | KernelFn::TaskAndThen
@@ -7246,7 +7245,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MiddlewareWithBasicAuth
                 // ── Jwt builder arity-3 (D-00, #152) ─────────────────────────
                 // `withClaim : String -> String -> Claims -> Claims`
-                | KernelFn::JwtWithClaim,
+                | KernelFn::JwtWithClaim
+                // `Jwt.decode : Algorithm -> Int -> String -> Result Error String`
+                | KernelFn::JwtDecode,
             ) => Ok(3),
             // ── JsonDec arity-4 (M4h) ─────────────────────────────────────────
             Callee::Kernel(
