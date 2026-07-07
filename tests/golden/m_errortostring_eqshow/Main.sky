@@ -1,0 +1,14 @@
+module Main exposing (main, eqShow)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+eqShow : a -> a -> String
+eqShow x y =
+    if x == y then
+        errorToString x
+    else
+        errorToString y
+
+main =
+    println (eqShow 42 42)
