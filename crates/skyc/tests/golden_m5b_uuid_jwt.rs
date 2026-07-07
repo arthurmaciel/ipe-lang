@@ -239,3 +239,20 @@ fn jwt_hs256_bytes() {
 fn jwt_rs256_bytes() {
     assert_token_byte_identical_to_go("m5b_jwt_rs256_bytes", GO_RS256_TOKEN);
 }
+
+// ── JWT builder-API Jwt.decode with caller-supplied now ───────────────────────
+
+/// Regression: `Jwt.decode : Algorithm -> Int -> String -> Result Error String`.
+/// Exercises caller-supplied `now` boundary semantics against RFC 7519 exp/nbf:
+///   r1: now=500, exp=1000, nbf=100  → ok  (valid window)
+///   r2: now=1000, exp=1000          → err (expired: now >= exp)
+///   r3: now=99, nbf=100             → err (not yet valid: now < nbf)
+///   r4: now=100, nbf=100            → ok  (boundary: now == nbf → accept)
+///   r5: now=999, exp=1000           → ok  (boundary: now < exp → accept)
+///   r6: now=500, no exp/nbf         → ok  (absent claims accepted)
+///   r7: wrong-key, now=500          → err (invalid signature)
+/// Output: `"ok err err ok ok ok err"`.
+#[test]
+fn jwt_decode_now() {
+    assert_runs_and_matches_oracle("m_jwt_decode_now");
+}

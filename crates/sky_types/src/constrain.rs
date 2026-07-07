@@ -4120,8 +4120,8 @@ impl<'a> Builder<'a> {
             K::JwtWithClaim => fun(string(), fun(string(), fun(claims_ty(), claims_ty()))),
             // `Jwt.encode : Algorithm -> Claims -> Result Error String`
             K::JwtEncode => fun(algorithm_ty(), fun(claims_ty(), result(error_ty(), string()))),
-            // `Jwt.decode : Algorithm -> String -> Result Error Claims`
-            K::JwtDecode => fun(algorithm_ty(), fun(string(), result(error_ty(), claims_ty()))),
+            // `Jwt.decode : Algorithm -> Int -> String -> Result Error String`
+            K::JwtDecode => fun(algorithm_ty(), fun(int(), fun(string(), result(error_ty(), string())))),
 
             // ── Encoding (6 — task #55a) — the base64 / url / hex text codecs.
             //    Encoders `String -> String` (UTF-8 bytes, Go parity);
