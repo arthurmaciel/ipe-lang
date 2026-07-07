@@ -3442,11 +3442,11 @@ impl<'a> Builder<'a> {
             ),
 
             // ── Cmd.publish / Cmd.publishNoEcho (M5e) ──
-            // `Cmd.publish : String -> Dict String String -> Cmd msg`
-            // var(0) = msg type variable.
-            K::CmdPublish => fun(string(), fun(dict(string(), string()), cmd(var(0)))),
-            // `Cmd.publishNoEcho : String -> Dict String String -> Cmd msg`
-            K::CmdPublishNoEcho => fun(string(), fun(dict(string(), string()), cmd(var(0)))),
+            // `Cmd.publish : String -> any -> Cmd msg`
+            // var(0) = msg type variable, var(1) = payload (polymorphic, like runtime T).
+            K::CmdPublish => fun(string(), fun(var(1), cmd(var(0)))),
+            // `Cmd.publishNoEcho : String -> any -> Cmd msg`
+            K::CmdPublishNoEcho => fun(string(), fun(var(1), cmd(var(0)))),
 
             // ── Sub ──
             K::SubNone => sub(var(0)),
