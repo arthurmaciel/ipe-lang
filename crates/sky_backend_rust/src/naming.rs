@@ -839,6 +839,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiHtmlAttribute => "ui_html_attribute_",
         KernelFn::UiName => "ui_name_",
         KernelFn::UiStyle => "ui_style_",
+        KernelFn::UiTransitionRaw => "ui_transition_raw_",
         // #154: Breakpoint constants + wrapper
         KernelFn::UiBreakpoint => "ui_breakpoint_",
         KernelFn::UiMobile => "ui_mobile_",
