@@ -2074,7 +2074,7 @@ impl<'a> Builder<'a> {
             // (not stdlib_scheme + tie): only the argument position is bounded.
             // This is the shared lever for the whole Stringify-bounded family
             // (Log.*With / Debug.toString) — wire those the same way.
-            if matches!(k, StdlibKernel::BasicsToString) {
+            if matches!(k, StdlibKernel::BasicsToString | StdlibKernel::ErrorToString) {
                 let s = self.super_var(TyBounds::show(), span)?;
                 let string_ty = self.string_var()?;
                 return self.structure(FlatType::Fun(s, string_ty));
@@ -4725,7 +4725,7 @@ impl<'a> Builder<'a> {
             | K::ErrorConflict
             | K::ErrorUnavailable => fun(string(), error_ty()),
             K::ErrorTimeout | K::ErrorNotFound | K::ErrorPermissionDenied => error_ty(),
-            K::ErrorToString => fun(error_ty(), string()),
+            K::ErrorToString => fun(var(0), string()),
             K::ErrorWithMessage => fun(string(), fun(error_ty(), error_ty())),
 
             // ── Sky.Core.CssSafety (4 — Std.Css leaf security kernels, #47) ──
