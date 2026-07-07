@@ -1,0 +1,9 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Dep exposing (bad)
+
+main =
+    println
+        (String.fromInt
+            (bad + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0))
