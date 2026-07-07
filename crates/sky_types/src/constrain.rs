@@ -910,6 +910,14 @@ pub struct FieldAccess {
     pub result: VarId,
     /// The access expression's source span, for blame.
     pub span: Span,
+    /// The home module path of the def this access lives in. After `link::link`
+    /// merges modules, a bare byte-offset span cannot identify the source file;
+    /// the home lets a post-solve error (SKY-T0012) attribute to the correct
+    /// module instead of the byte-offset heuristic's best guess (which can pick
+    /// a numerically-closer def in a *different* file — the #144 span-collision
+    /// class, here surfacing as an `info.message` error blamed on an unrelated
+    /// `class` call in another module).
+    pub home: Vec<Symbol>,
 }
 
 /// A deferred record-update obligation `{ base | field = value, ... }`.
@@ -927,6 +935,9 @@ pub struct RecordUpdate {
     pub fields: Vec<(Symbol, VarId)>,
     /// The update expression's source span, for blame.
     pub span: Span,
+    /// The home module path of the def this update lives in — see
+    /// [`FieldAccess::home`].
+    pub home: Vec<Symbol>,
 }
 
 /// A deferred post-solve check for routed `Live.app` configurations.
@@ -2395,6 +2406,7 @@ impl<'a> Builder<'a> {
             field,
             result,
             span,
+            home: self.current_home.clone(),
         });
         Ok(result)
     }
@@ -2423,6 +2435,7 @@ impl<'a> Builder<'a> {
             record: record_var,
             fields: field_vars,
             span,
+            home: self.current_home.clone(),
         });
         Ok(record_var)
     }
@@ -2568,6 +2581,7 @@ impl<'a> Builder<'a> {
                         field: f.value,
                         result,
                         span: f.span,
+                        home: self.current_home.clone(),
                     });
                     local.insert(f.value, result);
                 }
