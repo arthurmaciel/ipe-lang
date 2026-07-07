@@ -58,6 +58,8 @@ DISK_CRIT="${PROGDEV_DISK_CRIT_GB:-10}"      # graceful-stop when still below th
 # The loop's ENTIRE cargo-target footprint — everything else under ~/.cache is
 # reclaimable. Bounds disk to these two + the shared dev target.
 KEEP_TARGETS="$(basename "$GATE_TARGET") $(basename "$GUARDIAN_TARGET") sky-rust-target"
+LEDGER="docs/architecture/progdev-cost-ledger.tsv"   # persistent per-cycle agent-cost ledger (survives /tmp overwrite across runs)
+SHIMDIR="/tmp/autopilot-shims"                        # rg-enforcement: grep/egrep/fgrep shims prepended to the agent PATH
 
 log()  { printf '%s | autopilot | %s\n' "$(date +%H:%M)" "$*"; }
 die()  { log "ABORT: $*"; exit 1; }
@@ -132,7 +134,10 @@ ensure_mem_guard() {
 agent() { # <model> <prompt> ; prints output
     local model="$1" prompt="$2"
     local stream=(); [ "$STREAM" != 0 ] && stream=(--verbose --output-format stream-json)
-    claude --model "$model" --safe-mode --permission-mode auto \
+    # rg enforcement: headless `claude -p` IGNORES PreToolUse hooks (verified), so
+    # the interactive rg hook doesn't reach agents. Shadow grep/egrep/fgrep with a
+    # PATH shim instead (git grep still works — it doesn't exec the grep binary).
+    PATH="$SHIMDIR:$PATH" claude --model "$model" --safe-mode --permission-mode auto \
         --append-system-prompt-file "$CONTEXT" "${stream[@]}" \
         --allowedTools 'Bash(cargo *)' 'Bash(git *)' 'Bash(skyc *)' 'Bash(rg *)' \
                        'Bash(cat *)' 'Bash(ls *)' 'Bash(sed *)' 'Bash(diff *)' \
@@ -171,6 +176,13 @@ command -v claude >/dev/null || die "claude CLI not found"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git repo"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "tracked changes present — commit/stash first"
 ensure_mem_guard
+# rg-enforcement shims for agents (grep→error+exit; git grep unaffected).
+mkdir -p "$SHIMDIR"
+for _g in grep egrep fgrep; do
+    printf '#!/usr/bin/env bash\necho "grep is disabled for autopilot agents — use rg (ripgrep): rg -n PATTERN / rg -l / rg -c." >&2\nexit 2\n' > "$SHIMDIR/$_g"
+    chmod +x "$SHIMDIR/$_g"
+done
+mkdir -p "$(dirname "$LEDGER")"; [ -f "$LEDGER" ] || printf 'stamp\trun\tcycle\tcum_cost\n' > "$LEDGER"
 ensure_disk || die "disk critically low even after reclaim ($(disk_free_gb)G < ${DISK_CRIT}G) — free space and retry"
 [ -f "$STOP" ] && die "kill-switch $STOP present"
 if ! ( set -o noclobber; echo "$$" > "$LOCK" ) 2>/dev/null; then die "another autopilot holds $LOCK"; fi
@@ -349,32 +361,43 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
         rlog="/tmp/autopilot-guardian-review-c$cycle-$done_guard.log"   # tee'd so watch.sh follows the review stream live
         rm -rf "$gwt"; git worktree add --quiet -b "$gbr" "$gwt" "$BASE" || { mark BLOCKED "$class" "$gdesc"; continue; }
 
-        # ── v4 stage 1: Opus DESIGN (plan only, no code; early-out if unsound) ──
-        phase design opus
-        design="$(agent "$GUARDIAN_MODEL" "You are a compiler guardian DESIGNER specialising in $class. Do NOT write code. Produce a concise root-cause + fix PLAN: (a) the root cause, (b) the exact crates/files/functions to change, (c) the approach — matching the ../sky READ-ONLY reference, root-cause only, NEVER a hack/fixture-edit/gate-weakening, (d) the regression test to add. FOCUS: $(guardian_focus "$class"). Item: $gdesc .$(resume_hint "$gdesc") If there is NO sound fix (needs a human decision, genuinely multi-session, or would require a hack), print exactly 'DESIGN: ESCALATE <why>' and nothing else. Otherwise print 'DESIGN: <the plan>'." | tee "$dlog")"
-        if printf '%s' "$design" | rg -q 'DESIGN: ESCALATE'; then
-            log "guardian [$class] · design → ESCALATE"
-            guardian_failed "$class" "$gdesc" "$gbr" "design escalate: $(reason_of "$design")"
-            git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null; continue
+        # ── v4 stage 1: DESIGN — Opus on the FIRST attempt; REUSED from the saved
+        # plan on a RETRY. A REVIEW: REJECT usually means the impl was wrong, not the
+        # plan, and re-designing every attempt was the single biggest cost lane. On a
+        # retry the impl gets the rejection reason (resume_hint) so it fixes the
+        # specific defect against the SAME plan. (If the plan itself was wrong, the
+        # 2nd attempt escalates anyway — bounded at GUARDIAN_ATTEMPTS.)
+        dplan="$RESUME_DIR/$(slug_of "$gdesc").design.md"
+        dfile="/tmp/autopilot-guardian-design-plan-c$cycle-$done_guard.md"
+        datt="$(( $(attempts_of "$gdesc") + 1 ))"
+        if [ "$datt" -ge 2 ] && [ -s "$dplan" ]; then
+            phase design reused
+            log "guardian [$class] · design REUSED (attempt $datt — impl refines the prior plan against the rejection)"
+            design_text="$(cat "$dplan")"; cp -f "$dplan" "$dfile"; : > "$dlog"
+        else
+            phase design opus
+            design="$(agent "$GUARDIAN_MODEL" "You are a compiler guardian DESIGNER specialising in $class. Do NOT write code. Produce a concise root-cause + fix PLAN: (a) the root cause, (b) the exact crates/files/functions to change, (c) the approach — matching the ../sky READ-ONLY reference, root-cause only, NEVER a hack/fixture-edit/gate-weakening, (d) the regression test to add. FOCUS: $(guardian_focus "$class"). Item: $gdesc .$(resume_hint "$gdesc") If there is NO sound fix (needs a human decision, genuinely multi-session, or would require a hack), print exactly 'DESIGN: ESCALATE <why>' and nothing else. Otherwise print 'DESIGN: <the plan>'." | tee "$dlog")"
+            if printf '%s' "$design" | rg -q 'DESIGN: ESCALATE'; then
+                log "guardian [$class] · design → ESCALATE"
+                guardian_failed "$class" "$gdesc" "$gbr" "design escalate: $(reason_of "$design")"
+                git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null; continue
+            fi
+            design_text="$(printf '%s' "$design" | jq -rj 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' 2>/dev/null)"
+            [ -z "$design_text" ] && design_text="$design"   # STREAM=0 (already plain text) or jq absent
+            mkdir -p "$RESUME_DIR"; printf '%s\n' "$design_text" > "$dplan"   # persist so a retry REUSES it
+            printf '%s\n' "$design_text" > "$dfile"
         fi
 
-        # ── v4 stage 2: Sonnet IMPL (follow the design; self-check clippy + skyc-verify, NOT the full test suite) ──
-        # The design PLAN reaches the implementer via a FILE, never argv: with
-        # PROGDEV_STREAM=1 $design holds full stream-json (many KB), and embedding
-        # it in -p blew ARG_MAX (E2BIG "Argument list too long") — the impl never
-        # launched, so every guardian item spuriously "made no commit". Extract the
-        # clean assistant text, write it OUTSIDE the worktree (so it isn't committed).
+        # ── v4 stage 2: Sonnet IMPL — follows the plan FILE ($dfile), never argv
+        # (PROGDEV_STREAM=1 $design is many-KB stream-json → ARG_MAX E2BIG). On a
+        # retry resume_hint points impl at the prior diff + why it was rejected.
         phase impl sonnet
-        dfile="/tmp/autopilot-guardian-design-plan-c$cycle-$done_guard.md"
-        design_text="$(printf '%s' "$design" | jq -rj 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' 2>/dev/null)"
-        [ -z "$design_text" ] && design_text="$design"   # STREAM=0 (already plain text) or jq absent
-        printf '%s\n' "$design_text" > "$dfile"
         ( cd "$gwt"; CARGO_TARGET_DIR="$GUARDIAN_TARGET" \
-          agent "$AUTHOR_MODEL" "You are the IMPLEMENTER. READ the DESIGN plan at $dfile FIRST, then follow it EXACTLY — do NOT redesign or deviate from it. Obey the operating contract (6 principles + 2 rules + the seal). Item: $gdesc . Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY. Implement the fix + the regression test the design names. SELF-CHECK (do NOT run the full workspace test suite — the integration gate runs that once): (1) 'cargo clippy --workspace --all-targets -- -D warnings' is clean; (2) 'cargo build -p skyc', then rebuild the failing example and confirm its ORIGINAL diagnostic is GONE. Iterate until BOTH pass (cap ~3 tries). Then 'git add -A && git commit'. Final line: 'IMPL: DONE' or 'IMPL: STUCK <why>'." ) >"$glog" 2>&1
+          agent "$AUTHOR_MODEL" "You are the IMPLEMENTER. READ the DESIGN plan at $dfile FIRST, then follow it EXACTLY — do NOT redesign or deviate from it. Obey the operating contract (6 principles + 2 rules + the seal). Item: $gdesc .$(resume_hint "$gdesc") Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY. Implement the fix + the regression test the design names. SELF-CHECK (do NOT run the full workspace test suite — the integration gate runs that once): (1) 'cargo clippy --workspace --all-targets -- -D warnings' is clean; (2) 'cargo build -p skyc', then rebuild the failing example and confirm its ORIGINAL diagnostic is GONE. Iterate until BOTH pass (cap ~3 tries). Then 'git add -A && git commit'. Final line: 'IMPL: DONE' or 'IMPL: STUCK <why>'." ) >"$glog" 2>&1
         ahead="$(git rev-list --count "$BASE..$gbr" 2>/dev/null || echo 0)"
         if [ "$ahead" -eq 0 ]; then
             log "guardian [$class] · impl made no commit"
-            guardian_failed "$class" "$gdesc" "$gbr" "impl no-commit. design: $(printf '%s' "$design" | tr '\n' ' ' | cut -c1-200) · notes: $(tail -10 "$glog" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
+            guardian_failed "$class" "$gdesc" "$gbr" "impl no-commit. design: $(printf '%s' "$design_text" | tr '\n' ' ' | cut -c1-200) · notes: $(tail -10 "$glog" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
             git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null; continue
         fi
 
@@ -403,6 +426,13 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
         git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null
     done
     git worktree prune
+    # persistent per-cycle cost ledger — cumulative agent $ from this run's logs,
+    # recorded each cycle so a later run's /tmp overwrite can't erase the trend.
+    { printf '%s\t%s\tc%s\t' "$(date +%FT%H:%M)" "${START_SHA:0:7}" "$cycle"
+      for f in /tmp/autopilot-guardian-*.log /tmp/autopilot-triage-*.log /tmp/autopilot-audit-*.log; do
+          [ -f "$f" ] && rg '"type":"result"' "$f" 2>/dev/null | tail -1
+      done | jq -rs '([.[] | .total_cost_usd // 0] | add // 0) | "$" + ((.*100|floor)/100|tostring)'
+    } >> "$LEDGER" 2>/dev/null || true
 done
 
 # ── landed digest for the human meta-audit ───────────────────────────────────
