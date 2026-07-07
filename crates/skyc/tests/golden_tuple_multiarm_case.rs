@@ -1,0 +1,98 @@
+//! Multi-arm tuple `case` — the tuple-pattern gap close.
+//!
+//! A `case` on a LITERAL tuple with more than one arm (or a refutable column)
+//! used to fail-closed as SKY-L0115 (the "tuple pattern not supported here yet"
+//! product gap). It now lowers to a native Rust tuple `match`, matching each
+//! column against its own slice / `&str` coercion:
+//!
+//! ```text
+//! match (xs.as_slice(), ys.as_slice()) {
+//!     ([a, xrest @ ..], [b, yrest @ ..]) => …,
+//!     _ => …,
+//! }
+//! ```
+//!
+//! This is the blocker `38-composite-ui-multibackend` hit at
+//! `State.seedHistoryHelp` (`case ( offsets, flags ) of ( i :: ix, b :: bs ) ->
+//! … ; _ -> …`). Coverage is proven UPSTREAM by the SKY-T0010 usefulness check
+//! (product patterns decompose to `Head::Tuple`), so the backend never sees a
+//! non-exhaustive tuple `case`; the fix is purely additive — a variable-scrutinee
+//! or record product `case` stays fail-closed as SKY-L0115 (the m3b1/m3b2 gates).
+//!
+//! Gate check (fast, always): `skyc build` succeeds — no SKY-L0115.
+//! Green check (`SKY_E2E=1`): the emitted Rust cargo-builds AND runs, proving the
+//! seal (skyc-0 ⟹ cargo-0) for the new tuple-match codegen.
+//!
+//! ```text
+//! SKY_E2E=1 cargo test -p skyc --test golden_tuple_multiarm_case
+//! ```
+
+use std::path::{Path, PathBuf};
+
+mod support;
+
+fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+fn fixture_entry() -> PathBuf {
+    repo_root()
+        .join("tests")
+        .join("golden")
+        .join("i_tuple_multiarm_case")
+        .join("Main.sky")
+}
+
+/// Fast gate: a multi-arm LITERAL-tuple `case` builds cleanly — the SKY-L0115
+/// product gap is closed for this shape.
+#[test]
+fn multi_arm_tuple_case_builds() {
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tuple_multiarm_gate");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return; // runtime unavailable — skip silently rather than fail
+    };
+    let built = skyc::build(&fixture_entry(), &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "multi-arm tuple `case` must build (SKY-L0115 close); got {:?}",
+        built.err()
+    );
+}
+
+/// Seal: the emitted Rust cargo-builds and runs. `zipSum [1,2,3] [10,20,30] []`
+/// is `[11, 22, 33]` (length 3); `classify True False` is `2`; sum is `5`.
+#[test]
+fn multi_arm_tuple_case_cargo_builds_and_runs() {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+
+    let out = std::env::temp_dir().join("skyc_tuple_multiarm_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve for E2E");
+    let Ok(runtime) = runtime else { return };
+
+    let built = skyc::build(&fixture_entry(), &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "skyc build must succeed for i_tuple_multiarm_case: {:?}",
+        built.err()
+    );
+
+    let outcome = support::build_and_run_emitted("i_tuple_multiarm_case", &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "emitted tuple-match program must exit 0"
+    );
+    assert!(
+        outcome.stdout.contains('5'),
+        "expected '5' (3 + 2); got:\n{}",
+        outcome.stdout
+    );
+}
