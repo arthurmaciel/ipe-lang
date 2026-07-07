@@ -246,6 +246,19 @@ const STD_UI_CHART: &str = include_str!("../stdlib/Std/Ui/Chart.sky");
 /// Unblocks `26-ui-showcase` (SKY-N0004: Std.Ui.Grid — Grid.columns/fr/px).
 const STD_UI_GRID: &str = include_str!("../stdlib/Std/Ui/Grid.sky");
 
+/// `Std.Ui.Transition` — typed CSS transition `Step`/`Easing` ADTs +
+/// `attribute`/`attributeUnsafe` builders.
+///
+/// Pure-Sky; the `transitionRaw` primitive is a native `Std.Ui` kernel
+/// (`KernelFn::UiTransitionRaw`) that constructs `AttrTransition shorthand
+/// respect`, rendered by `runtime/src/sky_runtime/ui/render.rs`.  Ported from
+/// `../sky/sky-stdlib/Std/Ui/Transition.sky`; the reference's
+/// `import Std.Ui exposing (transitionRaw)` is qualified to `Ui.transitionRaw`
+/// (mirrors the `Std.Ui.Grid` port's `Ui.style` call).
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+/// Unblocks `26-ui-showcase` (SKY-N0004: Std.Ui.Transition).
+const STD_UI_TRANSITION: &str = include_str!("../stdlib/Std/Ui/Transition.sky");
+
 /// `Std.Money` — currency-typed Money on `Std.Decimal` + ISO 4217 enum.
 ///
 /// Compiled pure-Sky source: defines the `Money` / `Currency` ADTs and
@@ -292,6 +305,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Std.Ui.Grid",
         source: STD_UI_GRID,
+    },
+    CompiledStdModule {
+        dotted: "Std.Ui.Transition",
+        source: STD_UI_TRANSITION,
     },
     CompiledStdModule {
         dotted: "Std.Money",

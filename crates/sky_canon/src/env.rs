@@ -1063,6 +1063,7 @@ impl Env {
                     "cinemascope",
                     "name",
                     "style",
+                    "transitionRaw",
                     "onPseudo",
                     "hover",
                     "focus",

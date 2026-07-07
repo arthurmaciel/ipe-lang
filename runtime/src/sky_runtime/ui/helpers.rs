@@ -624,6 +624,16 @@ pub fn ui_style_<M>(property: String, value: String) -> Attribute<M> {
     Attribute::AttrStyle(property, value)
 }
 
+/// `Ui.transitionRaw : String -> Bool -> Attribute msg` — the CSS `transition`
+/// shorthand (built by `Std.Ui.Transition.buildShorthand`) plus a
+/// respect-`prefers-reduced-motion` flag. `respect = True` (via
+/// `Transition.attribute`) auto-gates the rule behind
+/// `@media (prefers-reduced-motion: no-preference)` in the live style-injection
+/// pass; `False` (via `attributeUnsafe`) fires unconditionally.
+pub fn ui_transition_raw_<M>(shorthand: String, respect: bool) -> Attribute<M> {
+    Attribute::AttrTransition(shorthand, respect)
+}
+
 /// `Ui.aspectRatio : Float -> Attribute msg`
 pub fn ui_aspect_ratio_<M>(r: f64) -> Attribute<M> {
     Attribute::AttrStyle("aspect-ratio".into(), format!("{r}"))
