@@ -46,6 +46,8 @@ CONTEXT="$REPO/$HERE/context.md"             # operating contract: 6 principles 
 GUARDIAN_MODEL="${PROGDEV_GUARDIAN_MODEL:-claude-opus-4-8}"
 GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
 QUEUE="docs/architecture/progressive-development-queue.tsv"   # <STATUS>\t<KIND>\t<desc>
+RESUME_DIR="docs/architecture/progressive-development-resume"  # gitignored guardian resume artifacts
+GUARDIAN_ATTEMPTS="${PROGDEV_GUARDIAN_ATTEMPTS:-3}"  # thoughtful re-attempts (each RESUMES) before human escalation
 DIGEST="docs/architecture/progressive-development-digest.md"
 STOP="autopilot.stop"
 LOCK=".autopilot.lock"
@@ -173,26 +175,59 @@ START_SHA="$(git rev-parse HEAD)"
 mkdir -p "$(dirname "$QUEUE")"; touch "$QUEUE"
 log "start: base=$BASE start=$START_SHA max_cycles=$MAX_CYCLES max_guardian=$MAX_GUARDIAN"
 
-# queue helpers (append-only history; newest status per desc wins). SUPPRESSION:
-# an item is NOT actionable once it was ESCALATED or BLOCKED (the loop tried and
-# couldn't land it soundly — a human clears it), or once it has been ATTEMPTED
-# twice (a mechanical item that keeps failing the gate must not spin). This is
-# what lets the loop converge instead of re-triaging the same dead items forever.
-pending() { # <kind> → actionable PENDING descriptions of that kind
+# queue helpers (append-only history; newest status per desc wins). Actionability:
+# a MECHANICAL item is dropped after 2 attempts (it must not spin the loop). A
+# GUARDIAN item gets up to GUARDIAN_ATTEMPTS *thoughtful* tries — each one RESUMES
+# from the prior attempt's saved artifact rather than restarting cold — and is
+# ESCALATED to a human only after exhausting them. ESCALATED = final (suppressed).
+# This is what lets the loop converge while still giving hard items a real effort.
+pending() { # mechanical: 2 attempts, then suppressed
     awk -F'\t' -v k="$1" '
         { st[$3]=$1; kd[$3]=$2
           if($1=="ESCALATED"||$1=="BLOCKED") dead[$3]=1
           if($1=="ATTEMPTED") att[$3]++ }
         END{for(d in st) if(st[d]=="PENDING" && kd[d]==k && !(d in dead) && att[d]<2) print d}' "$QUEUE"
 }
-pending_guardian() { # → actionable PENDING guardian-* items as "<kind>\t<desc>"
-    awk -F'\t' '
+pending_guardian() { # guardian: up to GUARDIAN_ATTEMPTS resuming tries, then ESCALATED
+    awk -F'\t' -v maxa="$GUARDIAN_ATTEMPTS" '
         { st[$3]=$1; kd[$3]=$2
-          if($1=="ESCALATED"||$1=="BLOCKED") dead[$3]=1
-          if($1=="ATTEMPTED") att[$3]++ }
-        END{for(d in st) if(st[d]=="PENDING" && kd[d] ~ /^guardian/ && !(d in dead) && att[d]<2) print kd[d]"\t"d}' "$QUEUE"
+          if($1=="ESCALATED") dead[$3]=1
+          if($1=="ATTEMPTED"||$1=="BLOCKED") att[$3]++ }
+        END{for(d in st) if(st[d]=="PENDING" && kd[d] ~ /^guardian/ && !(d in dead) && att[d]<maxa) print kd[d]"\t"d}' "$QUEUE"
 }
 mark() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$QUEUE"; }   # status kind desc
+attempts_of() { awk -F'\t' -v d="$1" '$3==d && ($1=="ATTEMPTED"||$1=="BLOCKED"){n++} END{print n+0}' "$QUEUE"; }
+slug_of()     { printf '%s' "$1" | tr -cs 'A-Za-z0-9' '-' | sed 's/^-//;s/-*$//' | cut -c1-64; }
+# Save what a guardian attempt tried (diff + why it didn't land) so the NEXT
+# attempt resumes instead of restarting cold. Gitignored → survives git reset.
+save_resume() { # <class> <desc> <branch> <reason>
+    mkdir -p "$RESUME_DIR"
+    local f="$RESUME_DIR/$(slug_of "$2").md"
+    { echo "# Resume: $2"
+      echo "class=$1  attempts_used=$(( $(attempts_of "$2") + 1 ))/$GUARDIAN_ATTEMPTS  saved=$(date -Is)"
+      echo; echo "## Why the last attempt did not land"; printf '%s\n' "$4" | head -40
+      echo; echo "## Prior attempt diff (a STARTING point — the reviewer may have refuted it; do NOT blindly re-apply)"
+      echo '```diff'; git diff "$BASE".."$3" 2>/dev/null | head -500; echo '```'
+    } > "$f"
+    log "  resume saved → $f"
+}
+resume_hint() { # <desc> → a prompt fragment if a prior attempt exists (ABSOLUTE path:
+    # the guardian runs in a worktree, but the artifact is gitignored in the main checkout)
+    local f="$RESUME_DIR/$(slug_of "$1").md"
+    [ -f "$f" ] && printf ' A PRIOR ATTEMPT exists at %s — READ it (its diff + why it failed) and CONTINUE from there; do NOT restart cold and do NOT repeat a refuted approach.' "$REPO/$f"
+}
+# One guardian attempt failed: save it for resume, then re-queue (PENDING) if
+# attempts remain, else ESCALATE to a human (artifact preserved).
+guardian_failed() { # <class> <desc> <branch> <reason>
+    save_resume "$1" "$2" "$3" "$4"
+    local n=$(( $(attempts_of "$2") + 1 ))
+    mark ATTEMPTED "$1" "$2"
+    if [ "$n" -ge "$GUARDIAN_ATTEMPTS" ]; then
+        mark ESCALATED "$1" "$2"; log "guardian [$1] exhausted $GUARDIAN_ATTEMPTS attempts — ESCALATED to human (resume at $RESUME_DIR/$(slug_of "$2").md)"
+    else
+        mark PENDING "$1" "$2"; log "guardian [$1] attempt $n/$GUARDIAN_ATTEMPTS failed — re-queued to RESUME next pass"
+    fi
+}   # status kind desc
 
 # ── per-class guardian routing (type-system / runtime / security) ────────────
 # Each guardian class gets a focused brief + a class-specific adversarial angle.
@@ -293,10 +328,11 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
         gwt="$REPO/.progressive-development-wt/guardian-$done_guard"
         rm -rf "$gwt"; git worktree add --quiet -b "$gbr" "$gwt" "$BASE" || { mark BLOCKED "$class" "$gdesc"; continue; }
         ( cd "$gwt"; MASTER_GATE_TARGET="$HOME/.cache/guardian-target" \
-            agent "$GUARDIAN_MODEL" "You are a compiler guardian specialising in $class. Obey the operating contract in your system prompt IN FULL — the 6 principles + 2 rules + the seal (skyc exit-0 ⟹ cargo exit-0: NEVER emit codegen that type-checks but fails cargo). Root-cause and FIX this item, ROOT-CAUSE ONLY (never a hack/fixture-edit/gate-weakening). FOCUS: $(guardian_focus "$class"). Item: $gdesc . Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY reference. Gate on CARGO_TARGET_DIR=\$HOME/.cache/guardian-target (cargo test --workspace + clippy --all-targets -D warnings, both green — MATCH the master gate exactly), AND the no-panic fuzzer must stay clean (\`scripts/fuzz-well-typed.sh --iters 30\`). Add a regression test. Commit on this branch. If genuinely multi-session, commit partial progress + print GUARDIAN: PARTIAL <what remains>; else GUARDIAN: DONE." ) >/tmp/autopilot-guardian-c$cycle-$done_guard.log 2>&1
+            agent "$GUARDIAN_MODEL" "You are a compiler guardian specialising in $class. Obey the operating contract in your system prompt IN FULL — the 6 principles + 2 rules + the seal (skyc exit-0 ⟹ cargo exit-0: NEVER emit codegen that type-checks but fails cargo). Root-cause and FIX this item, ROOT-CAUSE ONLY (never a hack/fixture-edit/gate-weakening). FOCUS: $(guardian_focus "$class"). Item: $gdesc .$(resume_hint "$gdesc") Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY reference. Gate on CARGO_TARGET_DIR=\$HOME/.cache/guardian-target (cargo test --workspace + clippy --all-targets -D warnings, both green — MATCH the master gate exactly), AND the no-panic fuzzer must stay clean (\`scripts/fuzz-well-typed.sh --iters 30\`). Add a regression test. Commit on this branch. If genuinely multi-session, commit partial progress + print GUARDIAN: PARTIAL <what remains>; else GUARDIAN: DONE." ) >/tmp/autopilot-guardian-c$cycle-$done_guard.log 2>&1
         ahead="$(git rev-list --count "$BASE..$gbr" 2>/dev/null || echo 0)"
         if [ "$ahead" -eq 0 ]; then
-            log "guardian [$class] made no commit — leaving for human"; mark ESCALATED "$class" "$gdesc"
+            log "guardian [$class] made no commit"
+            guardian_failed "$class" "$gdesc" "$gbr" "made no commit. agent notes: $(tail -15 /tmp/autopilot-guardian-c$cycle-$done_guard.log 2>/dev/null | tr '\n' ' ')"
             git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null; continue
         fi
         log "guardian [$class] committed; INDEPENDENT adversarial review — soundness-grade, not just the gate"
@@ -309,10 +345,10 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
                && ( "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 ); then
                 log "guardian [$class] ACCEPTED + gate-green + fuzz-clean — landed"; mark LANDED "$class" "$gdesc"
             else
-                log "guardian [$class] failed merge/gate/fuzz — reverting to $gpre"; git merge --abort 2>/dev/null; git reset --hard "$gpre" >/dev/null 2>&1; mark BLOCKED "$class" "$gdesc"
+                log "guardian [$class] failed merge/gate/fuzz — reverting to $gpre"; git merge --abort 2>/dev/null; git reset --hard "$gpre" >/dev/null 2>&1; guardian_failed "$class" "$gdesc" "$gbr" "merged but failed gate/fuzz. gate tail: $(tail -12 /tmp/autopilot-gate.log 2>/dev/null | tr '\n' ' ')"
             fi
         else
-            log "adversarial review [$class] REJECTED — not landing (see /tmp/autopilot-guardian-c$cycle-$done_guard.log)"; mark ESCALATED "$class" "$gdesc"
+            log "adversarial review [$class] REJECTED — not landing"; guardian_failed "$class" "$gdesc" "$gbr" "adversarial review REJECTED: $(printf '%s' "$review" | tr '\n' ' ' | cut -c1-600)"
         fi
         git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null
     done
