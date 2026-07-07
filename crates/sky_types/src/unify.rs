@@ -156,12 +156,22 @@ pub fn unify(
                 bounds: b2,
             },
         ) => {
-            if r1 == r2 {
+            // Number (`+ - *`) and Append (`++`) require the variable to resolve
+            // to a concrete type at monomorphisation / lowering. Letting either
+            // cross onto a rigid annotation var would pin an annotation-generic
+            // to a concrete representation — the exact unsoundness we guard
+            // against. All other obligations (Eq, Ord, Stringify, comparable-key)
+            // lower as pure generic trait bounds, always valid Rust, so they may
+            // accumulate across rigidity and survive as trait bounds on the param.
+            let concrete_dispatch = b1.has_number() || b2.has_number()
+                || b1.has_append() || b2.has_append();
+            let can_union = (r1 == r2) || !concrete_dispatch;
+            if can_union {
                 uf.union(
                     ra,
                     rb,
                     Content::Super {
-                        rigid: r1,
+                        rigid: r1 || r2,
                         bounds: b1.union(b2),
                     },
                 )
@@ -559,5 +569,95 @@ fn infinite_type(
             var: var_name,
             ty: Box::new(structure_doc),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sky_diagnostics::Span;
+    use sky_intern::Interner;
+
+    use super::*;
+    use crate::solve::Budget;
+    use crate::ty::TyBounds;
+    use crate::unionfind::UnionFind;
+
+    fn super_var(uf: &mut UnionFind<Content>, rigid: bool, bounds: TyBounds) -> VarId {
+        uf.fresh(Content::Super { rigid, bounds }).expect("fresh var")
+    }
+
+    fn do_unify(
+        uf: &mut UnionFind<Content>,
+        a: VarId,
+        b: VarId,
+    ) -> Result<(), sky_diagnostics::Diagnostic> {
+        let mut budget = Budget::unbounded();
+        let interner = Interner::new();
+        unify(uf, &mut budget, &interner, Span::DUMMY, a, b)
+    }
+
+    /// Eq (rigid) ∪ Stringify (flex) — both are pure trait-bound obligations,
+    /// so cross-rigidity union is allowed. Result: rigid:true, bounds = Eq|SHOW.
+    #[test]
+    fn super_super_eq_rigid_stringify_flex_unions() {
+        let mut uf = UnionFind::new();
+        let a = super_var(&mut uf, true, TyBounds::eq());
+        let b = super_var(&mut uf, false, TyBounds::show());
+        assert!(do_unify(&mut uf, a, b).is_ok(), "Eq+Stringify should union");
+        let rep = uf.find(a).expect("find");
+        let content = uf.content(rep).expect("content");
+        assert_eq!(
+            content,
+            Content::Super {
+                rigid: true,
+                bounds: TyBounds::eq().union(TyBounds::show()),
+            },
+            "merged content must be rigid with Eq|SHOW"
+        );
+    }
+
+    /// Add (rigid) ∪ Add (flex) — Add is a concrete-dispatch (Number) obligation.
+    /// Cross-rigidity merge is forbidden: result is MISMATCH.
+    #[test]
+    fn super_super_number_rigid_number_flex_mismatch() {
+        let mut uf = UnionFind::new();
+        let a = super_var(&mut uf, true, TyBounds::add());
+        let b = super_var(&mut uf, false, TyBounds::add());
+        assert!(
+            do_unify(&mut uf, a, b).is_err(),
+            "Add rigid+flex cross-rigidity must mismatch"
+        );
+    }
+
+    /// Append (rigid) ∪ Eq (flex) — Append is a concrete-dispatch obligation.
+    /// Even though Eq is not, Append on EITHER side blocks cross-rigidity union.
+    #[test]
+    fn super_super_append_rigid_eq_flex_mismatch() {
+        let mut uf = UnionFind::new();
+        let a = super_var(&mut uf, true, TyBounds::appendable());
+        let b = super_var(&mut uf, false, TyBounds::eq());
+        assert!(
+            do_unify(&mut uf, a, b).is_err(),
+            "Append (rigid) ∪ Eq (flex) must mismatch"
+        );
+    }
+
+    /// Eq (flex) ∪ Ord (flex) — same rigidity, always unioned regardless of
+    /// bounds. Result: flex with Eq|Ord.
+    #[test]
+    fn super_super_same_rigidity_always_unions() {
+        let mut uf = UnionFind::new();
+        let a = super_var(&mut uf, false, TyBounds::eq());
+        let b = super_var(&mut uf, false, TyBounds::ord());
+        assert!(do_unify(&mut uf, a, b).is_ok(), "same-rigidity must always union");
+        let rep = uf.find(a).expect("find");
+        let content = uf.content(rep).expect("content");
+        assert_eq!(
+            content,
+            Content::Super {
+                rigid: false,
+                bounds: TyBounds::eq().union(TyBounds::ord()),
+            },
+        );
     }
 }
