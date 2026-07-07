@@ -3046,6 +3046,9 @@ fn emit_ui_call(
         KernelFn::FontAlignRight => Ok(Some(
             "sky_runtime::ui::helpers::ui_font_align_right_()".to_owned(),
         )),
+        KernelFn::FontAlignCenter => Ok(Some(
+            "sky_runtime::ui::helpers::ui_font_align_center_()".to_owned(),
+        )),
         KernelFn::FontCenter => Ok(Some(
             "sky_runtime::ui::helpers::ui_font_center_()".to_owned(),
         )),
