@@ -259,6 +259,12 @@ const STD_UI_GRID: &str = include_str!("../stdlib/Std/Ui/Grid.sky");
 /// Unblocks `26-ui-showcase` (SKY-N0004: Std.Ui.Transition).
 const STD_UI_TRANSITION: &str = include_str!("../stdlib/Std/Ui/Transition.sky");
 
+/// `Std.Ui.Transform` — typed CSS transform / opacity helpers for `Ui.animate`
+/// keyframes (issue #378). Pure Sky; uses only `Sky.Core.*` internals — no
+/// native primitive needed. Not in `STDLIB_MODULE_QUALIFIERS` so disjointness
+/// invariant holds. Unblocks `26-ui-showcase` (SKY-N0004: Std.Ui.Transform).
+const STD_UI_TRANSFORM: &str = include_str!("../stdlib/Std/Ui/Transform.sky");
+
 /// `Std.Money` — currency-typed Money on `Std.Decimal` + ISO 4217 enum.
 ///
 /// Compiled pure-Sky source: defines the `Money` / `Currency` ADTs and
@@ -309,6 +315,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Std.Ui.Transition",
         source: STD_UI_TRANSITION,
+    },
+    CompiledStdModule {
+        dotted: "Std.Ui.Transform",
+        source: STD_UI_TRANSFORM,
     },
     CompiledStdModule {
         dotted: "Std.Money",
