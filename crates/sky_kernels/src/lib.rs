@@ -906,6 +906,7 @@ pub enum StdlibKernel {
     UiHtmlAttribute,  // String → String → Attr (AttrAttribute escape-hatch)
     UiName,           // String → Attr (HTML name= attribute)
     UiStyle,          // String → String → Attr (raw CSS property + value)
+    UiTransitionRaw,  // String → Bool → Attr (CSS transition shorthand + respect-reduced-motion flag)
     // ── #154: Breakpoint opaque constants + Ui.breakpoint wrapper ────────────
     /// `Ui.breakpoint : Breakpoint -> List (Attribute msg) -> Element msg -> Element msg`
     ///
@@ -2030,6 +2031,9 @@ impl StdlibKernel {
             Self::UiHtmlAttribute => d("Ui", "htmlAttribute", 2, Ui, "ui_html_attribute_"),
             Self::UiName => d("Ui", "name", 1, Ui, "ui_name_"),
             Self::UiStyle => d("Ui", "style", 2, Ui, "ui_style_"),
+            Self::UiTransitionRaw => {
+                d("Ui", "transitionRaw", 2, Ui, "ui_transition_raw_")
+            }
             // #154: Breakpoint
             Self::UiBreakpoint => d("Ui", "breakpoint", 3, Ui, "ui_breakpoint_"),
             Self::UiMobile => d("Ui", "mobile", 0, Ui, "ui_mobile_"),
@@ -2951,6 +2955,7 @@ impl StdlibKernel {
         Self::UiHtmlAttribute,
         Self::UiName,
         Self::UiStyle,
+        Self::UiTransitionRaw,
         Self::UiBreakpoint,
         Self::UiMobile,
         Self::UiTablet,
@@ -3479,6 +3484,7 @@ impl StdlibKernel {
                 | Self::UiHtmlAttribute
                 | Self::UiName
                 | Self::UiStyle
+                | Self::UiTransitionRaw
                 // ── #154: Breakpoint ──────────────────────────────────────────
                 | Self::UiBreakpoint
                 | Self::UiMobile

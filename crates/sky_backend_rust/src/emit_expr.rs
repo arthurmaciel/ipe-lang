@@ -2707,6 +2707,24 @@ fn emit_ui_call(
             )))
         }
 
+        // `Ui.transitionRaw : String -> Bool -> Attribute msg`
+        KernelFn::UiTransitionRaw => {
+            let [s_e, respect_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiTransitionRaw",
+                    detail: format!(
+                        "Ui.transitionRaw requires 2 arguments, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
+            let respect = emit_expr_at(ctx, respect_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_transition_raw_({s}, {respect})"
+            )))
+        }
+
         // `Ui.aspectRatio : Float -> Attribute msg`
         KernelFn::UiAspectRatio => {
             let [r_e] = args else {
