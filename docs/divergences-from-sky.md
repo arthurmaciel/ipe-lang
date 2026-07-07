@@ -763,3 +763,27 @@ API-shape review):
   fails closed at type-check rather than reaching the runtime `fmt` fallback.
   This is a deliberate divergence in the direction of greater security.
 - **Sanctioned:** yes (`sanctioned:`). Reference: `basics.rs::basics_error_to_string`.
+
+
+### B-JwtDecode — `Jwt.decode` now matches reference: `Algorithm -> Int -> String -> Result Error String`
+- **Converged:** The port's `Jwt.decode` previously diverged from the reference by
+  dropping the `now : Int` parameter and delegating expiry validation to
+  `jsonwebtoken`'s wall-clock `SystemTime::now()`. The reference
+  (`sky-stdlib/Sky/Core/Jwt.sky`) declares `decode : Algorithm -> Int -> String ->
+  Result Error String`, where `now` is a caller-supplied Unix-epoch second and
+  validation is deterministic. The port now matches this signature exactly.
+- **Go-oracle relationship:** Semantics are reference-exact: `now >= exp` → expired,
+  `now < nbf` → not yet valid, absent claims → accept. The `Algorithm` descriptor
+  opaque type and token byte format are unchanged; HMAC/RSA signature verification
+  remains constant-time.
+- **Rationale:** The old 2-arg form was a security defect (auth-bypass class):
+  an expired token could be accepted or rejected depending on when the process
+  called the function, rather than on the caller's explicit, auditable `now` value.
+  The 3-arg reference form is deterministic, testable, and correct.
+- **Interim flat kernels:** `Jwt.encodeHs256` / `Jwt.decodeHs256` / `Jwt.encodeRs256` /
+  `Jwt.decodeRs256` remain a Rust-backend M5b wall-clock interim surface
+  (separate item, pre-existing, unrelated to this fix).
+- **Reference:** `crates/sky_types/src/constrain.rs::K::JwtDecode`,
+  `crates/sky_kernels/src/lib.rs::JwtDecode`, `crates/sky_lower/src/lower.rs`,
+  `runtime/src/sky_runtime/jwt.rs::sky_jwt_decode`. Regression:
+  `tests/golden/m_jwt_decode_now/`.
