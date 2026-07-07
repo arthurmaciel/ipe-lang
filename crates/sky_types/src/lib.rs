@@ -186,14 +186,19 @@ fn infer_with_budget_attributed(
     // [`RequestFields`]); intern it once here so the immutable-borrow
     // `resolve_deferred` pass can resolve `req.<field>` accesses.
     let req_fields = lift!(RequestFields::build(interner));
-    lift!(resolve_deferred(
+    // Unlike the other post-solve passes, `resolve_deferred` returns the failing
+    // field-access / record-update's `home` module path so a SKY-T0012 attributes
+    // to the source file that actually owns the access — not the byte-offset
+    // heuristic's best guess, which mis-blamed `info.message` in one module on a
+    // `class` call in another (12-skyvote regression).
+    resolve_deferred(
         &mut uf,
         budget,
         interner,
         &req_fields,
         &generated.field_accesses,
         &generated.record_updates,
-    ));
+    )?;
 
     // Per-route page witnesses (#108 round 4): each `Live.route pattern ctor`
     // relates its builder argument's settled type to the route's page type —
@@ -672,7 +677,18 @@ fn resolve_deferred(
     req_fields: &RequestFields,
     accesses: &[FieldAccess],
     updates: &[RecordUpdate],
-) -> DResult<()> {
+) -> Result<(), (Diagnostic, Vec<Symbol>)> {
+    // Incidental union-find failures (`find` / `content` / `unify` / the
+    // `Request` field lookup) carry no user-facing home — they are compiler
+    // bugs, not source-attributed type errors — so they surface with an empty
+    // home and the caller falls back to the byte-offset heuristic.  Only a
+    // genuine SKY-T0012 (built below with the failing item's `home`) attributes
+    // to a specific module.
+    macro_rules! lift {
+        ($e:expr) => {
+            $e.map_err(|d: Diagnostic| (d, Vec::<Symbol>::new()))?
+        };
+    }
     // References avoid collecting indices and the `clippy::indexing_slicing`
     // lint on `accesses[i]` / `updates[i]`.
     let mut pending_fa: Vec<&FieldAccess> = accesses.iter().collect();
@@ -689,7 +705,7 @@ fn resolve_deferred(
 
         // ── Field accesses ────────────────────────────────────────────────────
         for fa in &pending_fa {
-            let root = uf.find(fa.record)?;
+            let root = lift!(uf.find(fa.record));
             // `uf.content()` returns an owned clone; the borrow ends before
             // `unify` is called, avoiding a simultaneous mutable borrow.
             //
@@ -698,7 +714,7 @@ fn resolve_deferred(
             //   `Some(Some(v))` → record is a record type and has the field.
             //   `Some(None)`    → record is resolved but does not have the field
             //                     (or is not a record at all) — immediate error.
-            let field_state: Option<Option<VarId>> = match uf.content(root)? {
+            let field_state: Option<Option<VarId>> = match lift!(uf.content(root)) {
                 Content::Structure(FlatType::Record(fields, _ext)) => {
                     Some(fields.get(&fa.field).copied())
                 }
@@ -711,7 +727,7 @@ fn resolve_deferred(
                     ref args,
                     ..
                 }) if *name == req_fields.con && args.is_empty() => {
-                    Some(req_fields.field_var(uf, fa.field)?)
+                    Some(lift!(req_fields.field_var(uf, fa.field)))
                 }
                 Content::Flex => None, // not settled yet — defer
                 _ => Some(None),       // rigid / super / non-record structure — error
@@ -722,11 +738,12 @@ fn resolve_deferred(
                 }
                 Some(Some(v)) => {
                     made_progress = true;
-                    unify(uf, budget, interner, fa.span, fa.result, v)?;
+                    lift!(unify(uf, budget, interner, fa.span, fa.result, v));
                 }
                 Some(None) => {
-                    return Err(no_such_field(
-                        uf, budget, interner, fa.record, fa.field, fa.span,
+                    return Err((
+                        no_such_field(uf, budget, interner, fa.record, fa.field, fa.span),
+                        fa.home.clone(),
                     ));
                 }
             }
@@ -735,20 +752,23 @@ fn resolve_deferred(
 
         // ── Record updates ────────────────────────────────────────────────────
         for ru in &pending_ru {
-            let root = uf.find(ru.record)?;
+            let root = lift!(uf.find(ru.record));
             // Clone the field map before any `unify` call (same borrow discipline
             // as the field-access arm above).
-            match uf.content(root)? {
+            match lift!(uf.content(root)) {
                 Content::Structure(FlatType::Record(fields, _ext)) => {
                     made_progress = true;
                     for (field, value_var) in &ru.fields {
                         match fields.get(field).copied() {
                             Some(field_var) => {
-                                unify(uf, budget, interner, ru.span, *value_var, field_var)?;
+                                lift!(unify(uf, budget, interner, ru.span, *value_var, field_var));
                             }
                             None => {
-                                return Err(no_such_field(
-                                    uf, budget, interner, ru.record, *field, ru.span,
+                                return Err((
+                                    no_such_field(
+                                        uf, budget, interner, ru.record, *field, ru.span,
+                                    ),
+                                    ru.home.clone(),
                                 ));
                             }
                         }
@@ -763,8 +783,9 @@ fn resolve_deferred(
                     // field (mirrors the pre-fix behaviour of the single-pass
                     // `resolve_record_updates`).
                     if let Some((field, _)) = ru.fields.first() {
-                        return Err(no_such_field(
-                            uf, budget, interner, ru.record, *field, ru.span,
+                        return Err((
+                            no_such_field(uf, budget, interner, ru.record, *field, ru.span),
+                            ru.home.clone(),
                         ));
                     }
                     // Empty update on a non-record base: degenerate; treat as
@@ -783,15 +804,17 @@ fn resolve_deferred(
             // the respective list is empty; we are guaranteed at least one is
             // non-empty because the outer `is_empty()` check did not return.
             if let Some(fa) = pending_fa.first() {
-                return Err(no_such_field(
-                    uf, budget, interner, fa.record, fa.field, fa.span,
+                return Err((
+                    no_such_field(uf, budget, interner, fa.record, fa.field, fa.span),
+                    fa.home.clone(),
                 ));
             }
             if let Some(ru) = pending_ru.first()
                 && let Some((field, _)) = ru.fields.first()
             {
-                return Err(no_such_field(
-                    uf, budget, interner, ru.record, *field, ru.span,
+                return Err((
+                    no_such_field(uf, budget, interner, ru.record, *field, ru.span),
+                    ru.home.clone(),
                 ));
             }
         }
