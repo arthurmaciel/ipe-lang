@@ -57,7 +57,13 @@ tag_for() {
 }
 
 TAIL_PID=""
-stop_tail() { [ -n "$TAIL_PID" ] && { kill "$TAIL_PID" 2>/dev/null; pkill -P "$TAIL_PID" 2>/dev/null; }; TAIL_PID=""; }
+# Kill the follow pipeline. The `tail` is a GRANDCHILD (watch → subshell → tail),
+# so killing the subshell orphans it; also reap the tail by its exact logfile arg.
+stop_tail() {
+    [ -n "$TAIL_PID" ] && { kill "$TAIL_PID" 2>/dev/null; pkill -P "$TAIL_PID" 2>/dev/null; }
+    [ -n "${cur:-}" ] && pkill -f "tail -n 20 -f ${cur}" 2>/dev/null
+    TAIL_PID=""
+}
 trap 'stop_tail; exit 0' INT TERM EXIT
 
 follow() {
