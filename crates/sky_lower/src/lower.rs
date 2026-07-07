@@ -7945,7 +7945,7 @@ impl<'a> Lowerer<'a> {
     fn result_error_unresolved(&self, span: Span) -> bool {
         match self.region_ty(span) {
             Some(Ty::Con { name, args, .. }) => {
-                self.resolve(*name).map(|n| n == "Result").unwrap_or(false)
+                self.resolve(*name).is_ok_and(|n| n == "Result")
                     && matches!(args.first(), Some(Ty::Var(_)))
             }
             _ => false,
