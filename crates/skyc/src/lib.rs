@@ -531,10 +531,23 @@ fn compile_modules(
         let (w_file, w_src) = source_for_span(span);
         eprintln!("{}", render(w, &w_file.to_string_lossy(), &w_src));
     }
-    let program = sky_lower::lower(&linked, &types, &mut interner).map_err(&pipeline_err)?;
+    // Attribute lower / backend diagnostics to the source file that OWNS the
+    // failing span, not blindly to the entry file. After link, every module's
+    // defs keep their original `home` byte-namespace, so a bare `pipeline_err`
+    // (which always blames the entry file) mis-renders a dep-module diagnostic
+    // against the entry file at a coincidental byte offset — e.g. a State.sky
+    // SKY-L0115 shown at an unrelated Main.sky line. `source_for_span` maps the
+    // span back to its owning def's file, the same heuristic already used for
+    // constraint-gen / exhaustiveness type errors.
+    let span_attributed_err = |diag: sky_diagnostics::Diagnostic| {
+        let (file, src) = source_for_span(diag_span(&diag));
+        CliError::Pipeline { file, src, diag }
+    };
+    let program =
+        sky_lower::lower(&linked, &types, &mut interner).map_err(span_attributed_err)?;
     let emitted = RustBackend::new(&interner)
         .emit(&program)
-        .map_err(&pipeline_err)?;
+        .map_err(span_attributed_err)?;
 
     // Vendor the runtime module tree FIRST, then write the emitted files. The
     // backend emits a trimmed `sky_runtime/mod.rs` + `config.rs`; writing the

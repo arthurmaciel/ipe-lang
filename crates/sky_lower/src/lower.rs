@@ -9180,6 +9180,90 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Can this MULTI-arm product `case` lower to a native Rust tuple `match`?
+    ///
+    /// The backend emits a tuple `match` by matching a tuple built column-by-
+    /// column from the scrutinee's element expressions (`match (e0.as_slice(),
+    /// e1) { … }`), so the supported shape is deliberately narrow and every
+    /// accepted program is SOUND (skyc-0 ⟹ cargo-0):
+    ///
+    /// * the scrutinee is a literal tuple `( e0, e1, … )` — the backend needs the
+    ///   element expressions to apply the per-column slice/`&str` coercions
+    ///   without evaluating the scrutinee twice;
+    /// * every arm head is a tuple of the scrutinee's arity, or a `_` wildcard
+    ///   catch-all (a whole-value variable / alias binder over a coerced tuple
+    ///   would see the wrong element types, so it stays fail-closed); and
+    /// * a column matched by a cons / list sub-pattern that BINDS a value must
+    ///   have a CONCRETE (`Clone`) element type — a still-generic element would
+    ///   make the backend's owned-rebind (`.clone()` / `.to_vec()`) emit Rust
+    ///   that fails `cargo` (the same SKY-L0102 gate the flat list path applies).
+    ///
+    /// Returns `Ok(true)` to proceed (the caller falls through to the general
+    /// flat-`match` lowering), `Ok(false)` for an unsupported product shape (the
+    /// caller raises SKY-L0115), or `Err` for the polymorphic-element gate
+    /// (SKY-L0102) — a precise diagnostic rather than the generic product gap.
+    fn tuple_case_supported(
+        &self,
+        scrut: &canon::Expr,
+        branches: &[canon::CaseBranch],
+    ) -> DResult<bool> {
+        let canon::Expr_::Tuple(elems) = &scrut.value else {
+            return Ok(false);
+        };
+        let arity = elems.len();
+        // Every arm is a tuple of the scrutinee's arity, or an irrefutable `_`
+        // catch-all. A bare variable / alias whole-tuple binder is rejected: in a
+        // coerced-column `match` it would bind the wrong (per-column-coerced)
+        // tuple type.
+        for br in branches {
+            match &br.pat.value {
+                canon::Pattern_::PTuple(cols) if cols.len() == arity => {
+                    // A nested tuple column would need its OWN per-column slice /
+                    // `&str` coercion, which the backend applies only at the top
+                    // level; leave nested products fail-closed for now.
+                    if cols
+                        .iter()
+                        .any(|c| matches!(c.value, canon::Pattern_::PTuple(_)))
+                    {
+                        return Ok(false);
+                    }
+                }
+                canon::Pattern_::PAnything => {}
+                _ => return Ok(false),
+            }
+        }
+        // Per-column polymorphic-element gate: a column bound by a cons / list
+        // sub-pattern needs a concrete element type so the backend's owned
+        // rebind resolves. Mirrors the flat list `case` guard, applied per tuple
+        // column against that column's scrutinee element type.
+        for (col, elem) in elems.iter().enumerate() {
+            let col_binds_list = branches.iter().any(|br| {
+                let canon::Pattern_::PTuple(cols) = &br.pat.value else {
+                    return false;
+                };
+                cols.get(col).is_some_and(|c| {
+                    matches!(
+                        c.value,
+                        canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _)
+                    ) && Self::pat_binds_canon_value(&c.value)
+                })
+            });
+            if col_binds_list && matches!(self.list_elem_ir(elem.span)?, IrType::Generic(_)) {
+                return Err(unsupported(elem.span, Feature::Polymorphism));
+            }
+        }
+        Ok(true)
+    }
+
+    /// Does this canonical arm pattern BIND at least one value (a variable /
+    /// alias, or any binder nested inside a tuple / cons / list / ctor / record)?
+    /// A purely structural pattern (wildcards / literals only) binds nothing, so
+    /// a list column matched by `[] -> … ; _ :: _ -> …` needs no owned rebind and
+    /// escapes the polymorphic-element gate.
+    fn pat_binds_canon_value(pat: &canon::Pattern_) -> bool {
+        !collect_arm_pat_pvars(pat).is_empty()
+    }
+
     /// Build a [`Pat::Record`] from a field-pun record pattern and the scrutinee's
     /// solved record type. The pattern names a subset of the record's fields
     /// (`{ x }` on a `{ x, y }` record is legal); the COMPLETE field set is
@@ -9395,18 +9479,30 @@ impl<'a> Lowerer<'a> {
         // enum match. Exactly one such arm (`case (1, 2) of (a, b) -> …`,
         // `case r of { x, y } -> …`, `case p of (a, b) as whole -> …`) lowers
         // to a `Destructure` binding rather than an `Expr::Match`. The head is
-        // a destructure even under one or more `as` aliases. More than one arm
-        // would need product exhaustiveness, the tuple-pattern gap (SKY-L0115).
+        // a destructure even under one or more `as` aliases.
         if Self::is_destructure_head(&first.pat.value) {
-            if branches.len() != 1 {
+            if branches.len() == 1 {
+                let binder = self.lower_binder_pat(&first.pat, scrut)?;
+                return Ok(Expr::Destructure {
+                    binder,
+                    value: Box::new(scrutinee),
+                    body: Box::new(self.lower_expr(&first.body)?),
+                });
+            }
+            // A MULTI-arm product `case`. A tuple scrutinee whose arms are tuple
+            // heads plus (optionally) a `_` catch-all lowers to a native Rust
+            // tuple `match` — Rust's own pattern-match compiler resolves the
+            // product discrimination, so no bespoke exhaustiveness lowering is
+            // needed (SKY-T0010 already proved coverage before lowering). The
+            // supported-shape and per-column soundness gates are in
+            // `tuple_case_supported`; when they pass, control falls through to the
+            // general flat-`match` path below, which lowers each tuple arm head
+            // via `lower_arm_pat` and routes through `Match::new_flat`. Every
+            // other product shape (a record head, a non-literal-tuple scrutinee,
+            // a whole-value catch-all binder) stays the tuple-pattern gap.
+            if !self.tuple_case_supported(scrut, branches)? {
                 return Err(unsupported(first.pat.span, Feature::TuplePatternMatch));
             }
-            let binder = self.lower_binder_pat(&first.pat, scrut)?;
-            return Ok(Expr::Destructure {
-                binder,
-                value: Box::new(scrutinee),
-                body: Box::new(self.lower_expr(&first.body)?),
-            });
         }
         // Each Sky `case` arm becomes its OWN Rust `match` arm, in source order.
         // Several arms may head-match the SAME top-level constructor and
@@ -9578,9 +9674,24 @@ impl<'a> Lowerer<'a> {
                     args: sub,
                 })
             }
-            canon::Pattern_::PTuple(_) | canon::Pattern_::PRecord(_) => {
-                Err(unsupported(p.span, Feature::TuplePatternMatch))
+            // A tuple case-arm head lowers element-by-element to [`Pat::Tuple`], so
+            // a multi-arm product `case` (`case (xs, ys) of (a :: as, b :: bs) ->
+            // … ; _ -> …`) becomes a native Rust tuple `match`. Each element
+            // recurses through this same refutable arm lowerer, so a column may be
+            // a variable / wildcard / literal / constructor / cons / nested tuple.
+            // The scrutinee-shape and per-column soundness gates live in
+            // [`Self::tuple_case_supported`]; reaching here means those passed.
+            canon::Pattern_::PTuple(elems) => {
+                let subs = elems
+                    .iter()
+                    .map(Self::lower_arm_pat)
+                    .collect::<DResult<Vec<_>>>()?;
+                Ok(Pat::Tuple(subs))
             }
+            // A record case-arm head in a multi-arm `case` still needs the
+            // scrutinee's record type to recover the complete field set; the
+            // multi-arm record shape remains the tuple-pattern gap (SKY-L0115).
+            canon::Pattern_::PRecord(_) => Err(unsupported(p.span, Feature::TuplePatternMatch)),
             // A list (`[a, b]`) or cons (`x :: xs`) case-arm head flattens to the
             // slice-shaped IR [`Pat::Slice`] (M4a).
             canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => Self::lower_list_arm_pat(p),

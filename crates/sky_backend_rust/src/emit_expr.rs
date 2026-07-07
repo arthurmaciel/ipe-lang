@@ -8,7 +8,7 @@ use core::fmt::Write as _;
 
 use sky_diagnostics::{DResult, Diagnostic, LowerError, Span};
 use sky_intern::Symbol;
-use sky_ir::{BinOp, BoundSet, Callee, Expr, Func, IrType, KernelFn, Match, ModPath, Pat};
+use sky_ir::{Arm, BinOp, BoundSet, Callee, Expr, Func, IrType, KernelFn, Match, ModPath, Pat};
 
 use crate::EmitCtx;
 use crate::emit_types::{GenericScope, render_type};
@@ -4921,12 +4921,12 @@ fn emit_match(
     generics: GenericScope,
 ) -> DResult<String> {
     let child = depth + 1;
-    let (scrut, str_mode, list_mode) = emit_match_scrutinee(ctx, m, indent, depth, generics)?;
+    let (scrut, mode) = emit_match_scrutinee(ctx, m, indent, depth, generics)?;
     let arm_indent = indent_of(indent + 1);
     let close_indent = indent_of(indent);
     let mut arms = Vec::with_capacity(m.arms().len());
     for arm in m.arms() {
-        let (pat, prelude) = emit_arm_head(ctx, &arm.pat, str_mode, list_mode)?;
+        let (pat, prelude) = emit_arm_head(ctx, &arm.pat, &mode)?;
         let body = emit_expr_at(ctx, &arm.body, indent + 1, child, generics)?;
         let arm_body = if prelude.is_empty() {
             body
@@ -4948,14 +4948,108 @@ fn emit_match(
 /// the native Rust slice patterns `[]` / `[a, b]` / `[x, rest @ ..]` apply — a
 /// `Pat::Slice` head is the signal. Shared by the value-context (`emit_match`)
 /// and tail-context (`emit_expr_tail`) match emitters so the two agree exactly.
+/// How a `match` scrutinee is coerced for pattern matching. A WHOLE scrutinee is
+/// matched as `&str` (string `case`) or `&[T]` (list `case`) or as-is; a TUPLE
+/// scrutinee (a multi-arm product `case`) is matched column-by-column, each
+/// column carrying its own string / list coercion.
+enum ScrutMode {
+    Whole { str_mode: bool, list_mode: bool },
+    Tuple(Vec<ColMode>),
+}
+
+/// The per-column coercion flags of a tuple-scrutinee `match`. A column is
+/// matched as `&[T]` when some arm slices it (`… , x :: xs , …`) and as `&str`
+/// when some arm matches it against a string literal.
+#[derive(Clone, Copy)]
+struct ColMode {
+    str_mode: bool,
+    list_mode: bool,
+}
+
+/// The arity of a tuple-scrutinee `match` — the element count of the first arm
+/// whose head is a [`Pat::Tuple`], or `None` when no arm is a tuple pattern (the
+/// whole-scrutinee shapes). The lowerer only builds a tuple-headed arm from a
+/// literal-tuple scrutinee of the SAME arity, so this drives the tuple path.
+fn tuple_arm_arity(arms: &[Arm]) -> Option<usize> {
+    arms.iter().find_map(|a| match &a.pat {
+        Pat::Tuple(elems) => Some(elems.len()),
+        _ => None,
+    })
+}
+
+/// Compute the per-column coercion flags of a tuple-scrutinee `match`: a column
+/// is in list mode when some arm slices it, and in string mode when some arm
+/// matches it against a string literal. (A column is never both — the scrutinee
+/// element has a single type the checker pinned.)
+fn tuple_col_modes(arms: &[Arm], arity: usize) -> Vec<ColMode> {
+    let mut cols = vec![
+        ColMode {
+            str_mode: false,
+            list_mode: false,
+        };
+        arity
+    ];
+    for arm in arms {
+        if let Pat::Tuple(elems) = &arm.pat {
+            for (c, sub) in elems.iter().enumerate() {
+                if let Some(col) = cols.get_mut(c) {
+                    if matches!(sub, Pat::Str(_)) {
+                        col.str_mode = true;
+                    }
+                    if matches!(sub, Pat::Slice { .. }) {
+                        col.list_mode = true;
+                    }
+                }
+            }
+        }
+    }
+    cols
+}
+
 fn emit_match_scrutinee(
     ctx: &EmitCtx,
     m: &Match,
     indent: usize,
     depth: u16,
     generics: GenericScope,
-) -> DResult<(String, bool, bool)> {
+) -> DResult<(String, ScrutMode)> {
     let child = depth + 1;
+    // TUPLE mode: a multi-arm product `case`. The lowerer guarantees the
+    // scrutinee is a literal tuple of the arm arity, so the scrutinee is built
+    // column-by-column with each column's own slice / `&str` coercion — the only
+    // sound way to match `[a, rest @ ..]` (needs `&[T]`) against a `Vec` element.
+    if let Some(arity) = tuple_arm_arity(m.arms()) {
+        let Expr::Tuple(elems) = m.scrutinee() else {
+            return Err(Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_match_scrutinee",
+                detail: "tuple-headed match without a literal-tuple scrutinee".to_owned(),
+            });
+        };
+        if elems.len() != arity {
+            return Err(Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_match_scrutinee",
+                detail: format!(
+                    "tuple match scrutinee has {} elements but arms have arity {arity}",
+                    elems.len()
+                ),
+            });
+        }
+        let cols = tuple_col_modes(m.arms(), arity);
+        let mut parts = Vec::with_capacity(arity);
+        for (elem, col) in elems.iter().zip(&cols) {
+            let e = emit_expr_at(ctx, elem, indent, child, generics)?;
+            let e = if col.str_mode {
+                format!("({e}).as_str()")
+            } else if col.list_mode {
+                format!("({e}).as_slice()")
+            } else {
+                e
+            };
+            parts.push(e);
+        }
+        return Ok((format!("({})", parts.join(", ")), ScrutMode::Tuple(cols)));
+    }
+
     let scrut_expr = emit_expr_at(ctx, m.scrutinee(), indent, child, generics)?;
     let str_mode = m.arms().iter().any(|a| matches!(a.pat, Pat::Str(_)));
     let list_mode = m.arms().iter().any(|a| matches!(a.pat, Pat::Slice { .. }));
@@ -4966,7 +5060,7 @@ fn emit_match_scrutinee(
     } else {
         scrut_expr
     };
-    Ok((scrut, str_mode, list_mode))
+    Ok((scrut, ScrutMode::Whole { str_mode, list_mode }))
 }
 
 /// Render one match-arm head to its Rust pattern plus any leading rebind/unbox
@@ -4975,7 +5069,18 @@ fn emit_match_scrutinee(
 /// variable / alias / slice — goes through `render_pat` (total over the whole
 /// set), with a `String`/slice binder rebind prelude in string/list mode. Shared
 /// by the value-context and tail-context match emitters.
-fn emit_arm_head(
+fn emit_arm_head(ctx: &EmitCtx, pat: &Pat, mode: &ScrutMode) -> DResult<(String, String)> {
+    match mode {
+        ScrutMode::Whole {
+            str_mode,
+            list_mode,
+        } => emit_whole_arm_head(ctx, pat, *str_mode, *list_mode),
+        ScrutMode::Tuple(cols) => emit_tuple_arm_head(ctx, pat, cols),
+    }
+}
+
+/// Render a WHOLE-scrutinee arm head (the string / list / plain shapes).
+fn emit_whole_arm_head(
     ctx: &EmitCtx,
     pat: &Pat,
     str_mode: bool,
@@ -4992,6 +5097,39 @@ fn emit_arm_head(
             String::new()
         };
         Ok((render_pat(ctx, pat)?, prelude))
+    }
+}
+
+/// Render a TUPLE-scrutinee arm head — a `(c0, c1, …)` tuple pattern or a `_`
+/// catch-all — plus any per-column binder-rebind prelude. Each column renders
+/// against its own coercion: a list column's binders rebind from `&T` / `&[T]`
+/// to owned `T` / `Vec<T>`; a string column's binders rebind from `&str` to
+/// `String`; a constructor column reuses the whole-scrutinee constructor path
+/// (so a cyclic self-edge payload binder is unboxed). The lowerer only produces
+/// a tuple or wildcard head here (`tuple_case_supported`), so a whole-value
+/// variable / alias binder — which would see the wrong per-column-coerced type —
+/// is an internal invariant violation, surfaced as a `CompilerBug`.
+fn emit_tuple_arm_head(ctx: &EmitCtx, pat: &Pat, cols: &[ColMode]) -> DResult<(String, String)> {
+    match pat {
+        Pat::Tuple(elems) => {
+            let mut rendered = Vec::with_capacity(elems.len());
+            let mut prelude = String::new();
+            for (c, sub) in elems.iter().enumerate() {
+                let col = cols.get(c).copied().unwrap_or(ColMode {
+                    str_mode: false,
+                    list_mode: false,
+                });
+                let (rp, pre) = emit_whole_arm_head(ctx, sub, col.str_mode, col.list_mode)?;
+                rendered.push(rp);
+                prelude.push_str(&pre);
+            }
+            Ok((format!("({})", rendered.join(", ")), prelude))
+        }
+        Pat::Wildcard => Ok(("_".to_owned(), String::new())),
+        _ => Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_tuple_arm_head",
+            detail: "tuple-scrutinee match arm head is neither a tuple nor a wildcard".to_owned(),
+        }),
     }
 }
 
@@ -5623,13 +5761,12 @@ fn emit_expr_tail(
             ))
         }
         Expr::Match(m) => {
-            let (scrut, str_mode, list_mode) =
-                emit_match_scrutinee(ctx, m, indent, depth, generics)?;
+            let (scrut, mode) = emit_match_scrutinee(ctx, m, indent, depth, generics)?;
             let arm_indent = indent_of(indent + 1);
             let close_indent = indent_of(indent);
             let mut arms = Vec::with_capacity(m.arms().len());
             for arm in m.arms() {
-                let (patstr, prelude) = emit_arm_head(ctx, &arm.pat, str_mode, list_mode)?;
+                let (patstr, prelude) = emit_arm_head(ctx, &arm.pat, &mode)?;
                 // The arm body is a STATEMENT sequence ending in return/continue;
                 // any binder-rebind prelude precedes it inside the arm's block.
                 let body =
