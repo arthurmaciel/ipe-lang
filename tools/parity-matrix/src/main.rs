@@ -891,11 +891,10 @@ fn scan_canon_qualifiers(src: &str) -> HashSet<(String, String)> {
                         State::InTuple if current_qual.is_empty() => {
                             current_qual = s;
                         }
-                        State::InMembers => {
-                            if !current_qual.is_empty() && !s.is_empty() {
+                        State::InMembers
+                            if !current_qual.is_empty() && !s.is_empty() => {
                                 set.insert((current_qual.clone(), s));
                             }
-                        }
                         _ => {}
                     }
                 }

@@ -410,19 +410,25 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
             git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null; continue
         fi
 
-        # ── v4 stage 4: INTEGRATE — the ONE nextest + doctests + clippy + fuzz ──
+        # ── v4 stage 4: INTEGRATE — nextest + doctests + clippy + fuzz, on NIGHTLY ──
         # nextest run replaces `cargo test` (faster scheduler + better isolation) but
-        # does NOT run doctests → a `--doc` pass follows. clippy: --no-deps (skip dep
-        # lints) + --jobs 4 (check-only is lighter than codegen, beats the jobs=2
-        # codegen OOM cap when the gate runs alone). Link step uses mold.
+        # does NOT run doctests → a `--doc` pass follows. Whole gate runs on nightly
+        # with RUSTFLAGS="mold link + -Zthreads=8" (parallel rustc frontend — which IS
+        # clippy — so it speeds clippy AND the test builds; mold speeds the link).
+        # GRF replaces the config's rustflags (must re-include mold). clippy dropped
+        # --all-targets (tests already run via nextest) + --no-deps + --jobs 4.
+        # NOTE: gate is nightly; impl self-checks are stable — a nightly-only lint on
+        # agent code can red a gate (rare drift), then re-queues. GATE_TARGET rebuilds
+        # once on the stable→nightly switch, then stays nightly.
+        GRF="-C link-arg=-fuse-ld=mold -Zthreads=8"
         phase gate ·
         git switch "$BASE" >/dev/null 2>&1
         gpre="$(git rev-parse HEAD)"   # pre-merge sha; a failed gate reverts HERE, never a stale HEAD
         if git merge --no-ff -m "autopilot: $class fix — $gdesc" "$gbr" >/dev/null 2>&1 \
            && ( touch runtime/tests/*.rs crates/skyc/tests/*.rs 2>/dev/null; \
-                CARGO_TARGET_DIR="$GATE_TARGET" timeout 3000 cargo nextest run --workspace >/tmp/autopilot-gate.log 2>&1 \
-                && CARGO_TARGET_DIR="$GATE_TARGET" timeout 600 cargo test --workspace --doc >>/tmp/autopilot-gate.log 2>&1 \
-                && CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo clippy --workspace --all-targets --no-deps --jobs 4 -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
+                RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 3000 cargo +nightly nextest run --workspace >/tmp/autopilot-gate.log 2>&1 \
+                && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 600 cargo +nightly test --workspace --doc >>/tmp/autopilot-gate.log 2>&1 \
+                && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly clippy --workspace --no-deps --jobs 4 -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
            && ( "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 ); then
             log "guardian [$class] · LANDED (gate-green + fuzz-clean)"; mark LANDED "$class" "$gdesc"
         else
