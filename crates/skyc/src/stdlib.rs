@@ -236,6 +236,16 @@ const STD_UI_RESPONSIVE: &str = include_str!("../stdlib/Std/Ui/Responsive.sky");
 /// Unblocks `38-composite-ui-multibackend` (N0004: Std.Ui.Chart).
 const STD_UI_CHART: &str = include_str!("../stdlib/Std/Ui/Chart.sky");
 
+/// `Std.Ui.Grid` — typed CSS-grid track ADT + `columns`/`rows`/`tracks` builders.
+///
+/// Pure-Sky; uses `Ui.style` (kernel `UiStyle`) to emit `AttrStyle("__gridTracks", …)`,
+/// which the runtime at `tui/layout.rs` already parses.  Ported from
+/// `../sky/sky-stdlib/Std/Ui/Grid.sky`; `gridTracksRaw` replaced by a direct
+/// `Ui.style "__gridTracks"` call (same semantic, no new kernel required).
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+/// Unblocks `26-ui-showcase` (SKY-N0004: Std.Ui.Grid — Grid.columns/fr/px).
+const STD_UI_GRID: &str = include_str!("../stdlib/Std/Ui/Grid.sky");
+
 /// `Std.Money` — currency-typed Money on `Std.Decimal` + ISO 4217 enum.
 ///
 /// Compiled pure-Sky source: defines the `Money` / `Currency` ADTs and
@@ -278,6 +288,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Std.Ui.Chart",
         source: STD_UI_CHART,
+    },
+    CompiledStdModule {
+        dotted: "Std.Ui.Grid",
+        source: STD_UI_GRID,
     },
     CompiledStdModule {
         dotted: "Std.Money",
