@@ -127,6 +127,10 @@ agent() { # <model> <prompt> ; prints output
                        'Bash(touch *)' 'Bash(mkdir *)' Edit Write Read Grep Glob \
         -p "$prompt" 2>&1
 }
+# Render an agent's tee'd output to the heartbeat so it stays HUMAN-READABLE
+# (raw stream-json would otherwise flood stdout when no watch.sh is attached).
+# The LOG file still gets the raw json for watch.sh; this only shapes stdout.
+show_agent() { if [ "$STREAM" != 0 ]; then "$HERE/render-stream.sh" "$1"; else sed "s/^/  [$1] /"; fi; }
 
 # ── disk safety (ENOSPC mid-build corrupts git state — prevent, don't crash) ──
 disk_free_gb() { df -BG --output=avail / | tail -1 | tr -dc '0-9'; }
@@ -288,7 +292,7 @@ while :; do
         landed="$(git log --oneline "$START_SHA"..HEAD)"
         agent "$GUARDIAN_MODEL" "You are AUDITING autonomous commits for soundness. Review the diffs of these commits on the current branch and answer: did ANY of them land a HACK rather than a root-cause fix — e.g. editing a reference-identical example fixture to satisfy our type-checker, weakening/removing a gate or soundness check, adding a \`_ =>\` catch-all to dodge exhaustiveness, or a \`#[allow]\`/\`unwrap\` that hides a contract violation? Commits:
 $landed
-For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <sha> <why> and STOP (do not fix). If all are genuine root-cause work, print AUDIT: CLEAN. Be adversarial; err toward flagging." | tee /tmp/autopilot-audit-c$cycle.log | sed 's/^/    /'
+For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <sha> <why> and STOP (do not fix). If all are genuine root-cause work, print AUDIT: CLEAN. Be adversarial; err toward flagging." | tee /tmp/autopilot-audit-c$cycle.log | show_agent audit
         if rg -q "AUDIT: VIOLATION" /tmp/autopilot-audit-c$cycle.log; then
             log "AUDIT FLAGGED A VIOLATION — stopping for human review (see /tmp/autopilot-audit-c$cycle.log)"; break
         fi
@@ -307,7 +311,7 @@ For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <s
     fi
     log "triage (Opus, conservative)"
     agent "$GUARDIAN_MODEL" "You are TRIAGING the Ipê compiler backlog to refill the autonomous work queue. Read docs/architecture/remeasure-snapshot.tsv (current per-example blockers) and the repo. For each blocker NOT already resolved, decide its class and append ONE line per item to $QUEUE in the exact format '<STATUS>\t<KIND>\t<one-line description>' (tab-separated), STATUS=PENDING.
-KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime' | 'guardian-security'. Use 'mechanical' ONLY if it is a clean, reference-backed wire with no design or soundness decision (a missing kernel to wire with an existing template, a module to register, a fixture parse issue). Otherwise pick the guardian CLASS: 'guardian-security' if it touches auth/secrets/crypto/SQL/\`unsafe\`/FFI (HARD RULE — such an item is NEVER mechanical); 'guardian-runtime' for a runtime panic / emitted-code behaviour bug / oracle DIVERGENCE in runtime output; 'guardian-typesystem' for an inferencer/solver/codegen soundness or any other type-checking bug. When UNSURE mechanical-vs-guardian → guardian (a wrong 'mechanical' tag lets an unattended lane hack it). When unsure WHICH guardian class → 'guardian-typesystem'. Each mechanical description must be self-contained enough for a lane to execute (name the kernel/site + the reference template). Do NOT do the work; only classify + append. Print TRIAGE: <n> mechanical, <m> guardian appended." 2>&1 | tee /tmp/autopilot-triage-c$cycle.log | sed 's/^/    /'
+KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime' | 'guardian-security'. Use 'mechanical' ONLY if it is a clean, reference-backed wire with no design or soundness decision (a missing kernel to wire with an existing template, a module to register, a fixture parse issue). Otherwise pick the guardian CLASS: 'guardian-security' if it touches auth/secrets/crypto/SQL/\`unsafe\`/FFI (HARD RULE — such an item is NEVER mechanical); 'guardian-runtime' for a runtime panic / emitted-code behaviour bug / oracle DIVERGENCE in runtime output; 'guardian-typesystem' for an inferencer/solver/codegen soundness or any other type-checking bug. When UNSURE mechanical-vs-guardian → guardian (a wrong 'mechanical' tag lets an unattended lane hack it). When unsure WHICH guardian class → 'guardian-typesystem'. Each mechanical description must be self-contained enough for a lane to execute (name the kernel/site + the reference template). Do NOT do the work; only classify + append. Print TRIAGE: <n> mechanical, <m> guardian appended." 2>&1 | tee /tmp/autopilot-triage-c$cycle.log | show_agent triage
 
     mapfile -t mech2 < <(pending mechanical)
     [ "${#mech2[@]}" -gt 0 ] && { log "triage produced ${#mech2[@]} mechanical item(s) — looping"; continue; }
