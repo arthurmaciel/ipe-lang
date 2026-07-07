@@ -1591,7 +1591,7 @@ impl StdlibKernel {
             Self::JwtJwtId => d("Jwt", "jwtId", 2, Pure, "sky_jwt_jwt_id"),
             Self::JwtWithClaim => d("Jwt", "withClaim", 3, Pure, "sky_jwt_with_claim"),
             Self::JwtEncode => d("Jwt", "encode", 2, Pure, "sky_jwt_encode"),
-            Self::JwtDecode => d("Jwt", "decode", 2, Pure, "sky_jwt_decode"),
+            Self::JwtDecode => d("Jwt", "decode", 3, Pure, "sky_jwt_decode"),
             // ── Task combinators ────────────────────────────────────────────
             Self::TaskSucceed => d("Task", "succeed", 1, Pure, "task_succeed"),
             Self::TaskFail => d("Task", "fail", 1, Pure, "task_fail"),

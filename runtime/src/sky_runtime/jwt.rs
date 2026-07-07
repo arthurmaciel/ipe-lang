@@ -441,33 +441,92 @@ pub fn sky_jwt_encode(
     }
 }
 
-/// `Jwt.decode : Algorithm -> String -> Result Error Claims` — verifies the
-/// token and returns the decoded claims as a `JsonValue`.
-/// Delegates to `jwt_decode_hs256` / `jwt_decode_rs256` and re-parses the
-/// returned JSON string into a `serde_json::Value`.
+/// `Jwt.decode : Algorithm -> Int -> String -> Result Error String`
+///
+/// Verifies the JWT signature and applies caller-supplied `now` (Unix seconds)
+/// for exp/nbf validation, matching the reference `Sky.Core.Jwt.decode` contract:
+///   pastClaim:   now >= exp  → Err "Jwt.decode: token has expired"
+///   futureClaim: now <  nbf  → Err "Jwt.decode: token is not yet valid"
+///   absent claim              → accept (optional)
+/// Returns the raw payload JSON string (base64url-decoded middle segment).
+/// No wall-clock access; deterministic on `now`.
 pub fn sky_jwt_decode(
     algorithm_descriptor: String,
+    now: i64,
     token: String,
-) -> SkyResult<String, JsonValue> {
-    let json_str_result: SkyResult<String, String> =
-        if let Some(secret) = algorithm_descriptor.strip_prefix("HS256:") {
-            jwt_decode_hs256(secret.to_string(), token)
-        } else if let Some(pem) = algorithm_descriptor.strip_prefix("RS256:") {
-            jwt_decode_rs256(pem.to_string(), token)
-        } else {
-            return SkyResult::Err(format!(
-                "jwt-decode: unknown algorithm descriptor (expected HS256:… or RS256:…): {}",
-                &algorithm_descriptor[..algorithm_descriptor.len().min(20)]
-            )
-            .into());
-        };
-    match json_str_result {
-        SkyResult::Ok(json_str) => match serde_json::from_str::<JsonValue>(&json_str) {
-            Ok(v) => SkyResult::Ok(v),
-            Err(e) => SkyResult::Err(format!("jwt-decode: claims re-parse: {}", e).into()),
-        },
-        SkyResult::Err(e) => SkyResult::Err(e),
+) -> SkyResult<String, String> {
+    // 1. Split token into three segments.
+    let parts: Vec<&str> = token.splitn(3, '.').collect();
+    if parts.len() != 3 {
+        return SkyResult::Err("jwt-decode: malformed token (expected 3 segments)".into());
     }
+
+    // 2. Verify the signature only — disable jsonwebtoken's built-in time checks.
+    //    We apply reference-exact time validation manually below.
+    if let Some(secret) = algorithm_descriptor.strip_prefix("HS256:") {
+        if secret.len() < 32 {
+            return SkyResult::Err(
+                "jwt-decode: HS256 secret must be at least 32 bytes (RFC 7518 §3.2)".into(),
+            );
+        }
+        let key = DecodingKey::from_secret(secret.as_bytes());
+        let mut val = Validation::new(Algorithm::HS256);
+        val.validate_exp = false;
+        val.validate_nbf = false;
+        val.required_spec_claims = HashSet::new();
+        val.validate_aud = false;
+        if decode::<JsonValue>(&token, &key, &val).is_err() {
+            return SkyResult::Err("jwt-decode: invalid signature".into());
+        }
+    } else if let Some(pem) = algorithm_descriptor.strip_prefix("RS256:") {
+        let key = match DecodingKey::from_rsa_pem(pem.as_bytes()) {
+            Ok(k) => k,
+            Err(_) => return SkyResult::Err("jwt-decode: invalid RS256 public key".into()),
+        };
+        let mut val = Validation::new(Algorithm::RS256);
+        val.validate_exp = false;
+        val.validate_nbf = false;
+        val.required_spec_claims = HashSet::new();
+        val.validate_aud = false;
+        if decode::<JsonValue>(&token, &key, &val).is_err() {
+            return SkyResult::Err("jwt-decode: invalid signature".into());
+        }
+    } else {
+        return SkyResult::Err(format!(
+            "jwt-decode: unknown algorithm descriptor (expected HS256:… or RS256:…): {}",
+            &algorithm_descriptor[..algorithm_descriptor.len().min(20)]
+        )
+        .into());
+    }
+
+    // 3. Extract payload JSON via base64url-decode (parse, don't validate).
+    let payload_bytes = match URL_SAFE_NO_PAD.decode(parts[1].as_bytes()) {
+        Ok(b) => b,
+        Err(_) => return SkyResult::Err("jwt-decode: payload base64url decode failed".into()),
+    };
+    let payload_json = match String::from_utf8(payload_bytes) {
+        Ok(s) => s,
+        Err(_) => return SkyResult::Err("jwt-decode: payload is not valid UTF-8".into()),
+    };
+
+    // 4. Manual time validation matching reference semantics exactly.
+    let claims_val: JsonValue =
+        serde_json::from_str(&payload_json).unwrap_or(JsonValue::Null);
+
+    if let Some(exp) = claims_val.get("exp").and_then(|v| v.as_i64()) {
+        // pastClaim: now >= exp  → expired
+        if now >= exp {
+            return SkyResult::Err("Jwt.decode: token has expired".into());
+        }
+    }
+    if let Some(nbf) = claims_val.get("nbf").and_then(|v| v.as_i64()) {
+        // futureClaim: now < nbf  → not yet valid
+        if now < nbf {
+            return SkyResult::Err("Jwt.decode: token is not yet valid".into());
+        }
+    }
+
+    SkyResult::Ok(payload_json)
 }
 
 #[cfg(test)]
@@ -768,5 +827,105 @@ mod tests {
             matches!(decoded, SkyResult::Err(_)),
             "an RS256 token with nbf 300s in the future must be rejected (no leeway, matching Go)"
         );
+    }
+
+    // ── sky_jwt_decode (3-arg builder-API) unit tests ─────────────────────────
+
+    fn make_token_with_time(exp: Option<i64>, nbf: Option<i64>) -> String {
+        let secret = "test-secret-key-0123456789abcdef".to_string();
+        let mut parts = vec![r#""sub":"x""#.to_string()];
+        if let Some(e) = exp {
+            parts.push(format!(r#""exp":{}"#, e));
+        }
+        if let Some(n) = nbf {
+            parts.push(format!(r#""nbf":{}"#, n));
+        }
+        let claims = format!("{{{}}}", parts.join(","));
+        match jwt_encode_hs256::<String>(secret, claims) {
+            SkyResult::Ok(t) => t,
+            SkyResult::Err(e) => panic!("encode: {}", e),
+        }
+    }
+
+    /// now=500, exp=1000, nbf=100 → Ok (valid window).
+    #[test]
+    fn sky_jwt_decode_valid_window() {
+        let tok = make_token_with_time(Some(1000), Some(100));
+        let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
+        assert!(
+            matches!(sky_jwt_decode(desc, 500, tok), SkyResult::Ok(_)),
+            "now=500 inside [nbf=100, exp=1000) must succeed"
+        );
+    }
+
+    /// now=1000 >= exp=1000 → Err (expired; boundary: >= not >).
+    #[test]
+    fn sky_jwt_decode_expired_at_boundary() {
+        let tok = make_token_with_time(Some(1000), None);
+        let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
+        assert!(
+            matches!(sky_jwt_decode(desc, 1000, tok), SkyResult::Err(_)),
+            "now==exp must be rejected (now >= exp semantics)"
+        );
+    }
+
+    /// now=99 < nbf=100 → Err (not yet valid).
+    #[test]
+    fn sky_jwt_decode_nbf_future() {
+        let tok = make_token_with_time(None, Some(100));
+        let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
+        assert!(
+            matches!(sky_jwt_decode(desc, 99, tok), SkyResult::Err(_)),
+            "now=99 < nbf=100 must be rejected"
+        );
+    }
+
+    /// now=100 == nbf=100 → Ok (boundary: now < nbf is false → accept).
+    #[test]
+    fn sky_jwt_decode_nbf_at_boundary() {
+        let tok = make_token_with_time(Some(1000), Some(100));
+        let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
+        assert!(
+            matches!(sky_jwt_decode(desc, 100, tok), SkyResult::Ok(_)),
+            "now==nbf must be accepted (now < nbf is false)"
+        );
+    }
+
+    /// Token with no exp/nbf → Ok for any now.
+    #[test]
+    fn sky_jwt_decode_no_time_claims() {
+        let tok = make_token_with_time(None, None);
+        let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
+        assert!(
+            matches!(sky_jwt_decode(desc, 9999999999, tok), SkyResult::Ok(_)),
+            "token without exp/nbf must be accepted regardless of now"
+        );
+    }
+
+    /// Wrong key → Err (invalid signature, constant-time path).
+    #[test]
+    fn sky_jwt_decode_wrong_key() {
+        let tok = make_token_with_time(Some(9999999999), None);
+        let desc = "HS256:wrong-secret-key-0123456789abcde".to_string();
+        assert!(
+            matches!(sky_jwt_decode(desc, 500, tok), SkyResult::Err(_)),
+            "wrong key must be rejected"
+        );
+    }
+
+    /// Return value is the payload JSON string (verified base64url-decode).
+    #[test]
+    fn sky_jwt_decode_returns_payload_json() {
+        let tok = make_token_with_time(Some(9999999999), None);
+        let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
+        match sky_jwt_decode(desc, 500, tok) {
+            SkyResult::Ok(payload) => {
+                assert!(
+                    payload.contains("\"sub\"") || payload.contains("\"exp\""),
+                    "payload must be the decoded claims JSON: {payload}"
+                );
+            }
+            SkyResult::Err(e) => panic!("unexpected err: {e}"),
+        }
     }
 }
