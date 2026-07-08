@@ -4321,6 +4321,91 @@ fn emit_ui_call(
             )))
         }
 
+        // ── Std.Ui.Lazy — deferred subtree helpers ───────────────────────────
+        // Each variant carries (f, a..e) — f is a function-valued Sky expr;
+        // we eta-wrap it so any callable shape (fn item, Box<dyn Fn>, closure)
+        // is accepted by the `impl Fn` bound without Arc overhead.
+        // Arg order MUST match the runtime signature; a swap is a silent bug.
+        KernelFn::LazyLazy => {
+            let [f_e, a_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::LazyLazy",
+                    detail: format!("Lazy.lazy requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let a_s = emit_expr_at(ctx, a_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::lazy::lazy_lazy_(move |_a| ({f_s})(_a), {a_s})"
+            )))
+        }
+
+        KernelFn::LazyLazy2 => {
+            let [f_e, a_e, b_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::LazyLazy2",
+                    detail: format!("Lazy.lazy2 requires 3 arguments, got {}", args.len()),
+                });
+            };
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let a_s = emit_expr_at(ctx, a_e, indent, child, generics)?;
+            let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::lazy::lazy_lazy2_(move |_a, _b| ({f_s})(_a, _b), {a_s}, {b_s})"
+            )))
+        }
+
+        KernelFn::LazyLazy3 => {
+            let [f_e, a_e, b_e, c_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::LazyLazy3",
+                    detail: format!("Lazy.lazy3 requires 4 arguments, got {}", args.len()),
+                });
+            };
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let a_s = emit_expr_at(ctx, a_e, indent, child, generics)?;
+            let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
+            let c_s = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::lazy::lazy_lazy3_(move |_a, _b, _c| ({f_s})(_a, _b, _c), {a_s}, {b_s}, {c_s})"
+            )))
+        }
+
+        KernelFn::LazyLazy4 => {
+            let [f_e, a_e, b_e, c_e, d_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::LazyLazy4",
+                    detail: format!("Lazy.lazy4 requires 5 arguments, got {}", args.len()),
+                });
+            };
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let a_s = emit_expr_at(ctx, a_e, indent, child, generics)?;
+            let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
+            let c_s = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            let d_s = emit_expr_at(ctx, d_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::lazy::lazy_lazy4_(move |_a, _b, _c, _d| ({f_s})(_a, _b, _c, _d), {a_s}, {b_s}, {c_s}, {d_s})"
+            )))
+        }
+
+        KernelFn::LazyLazy5 => {
+            let [f_e, a_e, b_e, c_e, d_e, e_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::LazyLazy5",
+                    detail: format!("Lazy.lazy5 requires 6 arguments, got {}", args.len()),
+                });
+            };
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let a_s = emit_expr_at(ctx, a_e, indent, child, generics)?;
+            let b_s = emit_expr_at(ctx, b_e, indent, child, generics)?;
+            let c_s = emit_expr_at(ctx, c_e, indent, child, generics)?;
+            let d_s = emit_expr_at(ctx, d_e, indent, child, generics)?;
+            let e_s = emit_expr_at(ctx, e_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::lazy::lazy_lazy5_(move |_a, _b, _c, _d, _e| ({f_s})(_a, _b, _c, _d, _e), {a_s}, {b_s}, {c_s}, {d_s}, {e_s})"
+            )))
+        }
+
         // Any is_ui/live/tui/webview/cli() variant not listed is a gap — hard error.
         _ => Err(Diagnostic::CompilerBug {
             where_: "sky_backend_rust::emit_ui_call",
