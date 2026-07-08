@@ -27,3 +27,6 @@ docs/architecture/progdev-status.txt
 .claude/settings.local.json
 docs/architecture/progdev-cost-ledger.tsv
 /.ipe-index/
+
+# ipe-index standalone crate build artifacts
+/tools/ipe-index/target/
