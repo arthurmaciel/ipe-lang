@@ -247,14 +247,6 @@ pub fn cmd_wakeup(db: &str) -> Result<()> {
     cmd_roles(db)
 }
 
-/// Look up `"file:line"` for `name` restricted to `lang`, excluding test/example files.
-#[allow(dead_code)] // retained for the future incremental-update path
-fn lookup_sym_loc_from_store_lang(s: &Store, name: &str, lang: &str) -> Result<Option<String>> {
-    let hits = s.symbols_named_in_lang(name, lang)?;
-    Ok(hits.into_iter()
-        .map(|(file, line, _)| format!("{file}:{line}"))
-        .next())
-}
 
 /// Resolution pass: for every import edge, try to resolve `dst` to a canonical
 /// file path within the repo. Updates `edges.resolved` in a single transaction.

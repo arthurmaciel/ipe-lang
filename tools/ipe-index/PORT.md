@@ -69,9 +69,18 @@ reference, used as-is) and `ipe-index`. After: drop `skydex`; `ipe-index` only,
 re-pointed at Sky Haskell+Go as the reference. See memory
 `sky-rust-is-ipe-ancestor-not-upstream`.
 
-## Deferred (v2, off critical path)
+## v2 (shipped)
 
-- Per-repo incremental `update` from git diff (`walk::changed` +
-  `reconcile_from_store` scaffolding retained, `#[allow(dead_code)]`). v1 does a
-  full reindex — bounded ~1-2 s.
-- Rust `impl` block target capture; Haskell equation-def lines (only sigs indexed).
+- **Incremental `update`** — per-repo `last_sha:<tag>..HEAD` git diff, re-extract
+  only changed files, re-reconcile parity over the merged store. Falls back to a
+  full `index` when the DB is absent or a repo has no recorded sha. Verified
+  **zero drift** vs a fresh full index (identical file/symbol/kernel counts).
+- **Rust `impl`-target capture** — `impl Foo` / `impl Trait for Foo` (incl.
+  `impl Vec<T>`) stored as kind `impl` so `locate Foo` surfaces impl sites.
+- **Haskell equation defs** — top-level `name args… =` / `name = …` bindings,
+  deduped against the signature line (signed fns recorded once at their sig;
+  unsigned fns at their first clause). Keyword + `==`/`::` guarded.
+- Regression tests: `haskell_dedups_sig_and_equations`,
+  `haskell_rejects_keywords_and_comparisons`, `rust_captures_impl_target`.
+
+Usage manual: `README.md`.
