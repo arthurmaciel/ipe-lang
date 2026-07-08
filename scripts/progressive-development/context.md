@@ -69,3 +69,14 @@ variables (`a`, `msg`) become Rust generics (`fn f<T>`), rustc-monomorphized at
 compile time. NEVER `dyn Any`/`.downcast`/type-erasure. A generic emitted where
 concrete was possible passes a mechanical gate but can ship a silent runtime bug
 (e.g. `Broker<T>` keyed by `TypeId` needs publisher+subscriber same concrete `T`).
+
+## skydex — code-relation index (use before rg on the reference)
+
+`skydex` on PATH indexes the ../sky READ-ONLY reference. Query it FIRST for
+reference relations (faster than rg, gives cross-lang routes):
+- `skydex locate <sym>` — occurrences + kernel parity route (Sky→Haskell→Go→Rust impl paths).
+- `skydex rdeps <mod>` / `skydex deps <mod>` — reverse/forward module deps.
+- `skydex covers <kernel>` — fixtures/examples covering a kernel.
+- `skydex parity` — Go-vs-Rust kernel parity gaps.
+Use it to find "what does the reference do for X" (e.g. the anyCarrierField class).
+Falls to `rg` if no hit. Our OWN port (crates/) is NOT indexed — rg it.
