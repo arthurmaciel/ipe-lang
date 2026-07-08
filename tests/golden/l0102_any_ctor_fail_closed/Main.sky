@@ -1,0 +1,25 @@
+module Main exposing (main)
+
+-- SKY-L0102 fail-closed regression: using an `any`-ctor payload as a String
+-- must be rejected at type-check time (SKY-T0001), never silently cargo-fail.
+--
+-- The solver pins `BroadcastMsg any` to Dict String String.
+-- Passing the payload to `String.length : String -> Int` gives
+-- Dict String String ≠ String → SKY-T0001.
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+type Msg
+    = BroadcastMsg any
+    | Ignored
+
+-- Uses payload directly as a String — must fail with SKY-T0001.
+handleMsg : Msg -> Int
+handleMsg msg =
+    case msg of
+        BroadcastMsg payload -> String.length payload
+        Ignored              -> 0
+
+main =
+    println (String.fromInt (handleMsg Ignored))
