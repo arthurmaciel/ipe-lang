@@ -72,7 +72,6 @@ pub fn tracked(repo: &str) -> Result<Vec<Tracked>> {
 }
 
 /// Changed/added + deleted paths between `since` sha and HEAD (for incremental update).
-#[allow(dead_code)] // retained for the future per-repo incremental-update path
 pub fn changed(repo: &str, since: &str) -> Result<(Vec<Tracked>, Vec<String>)> {
     // `since` is interpolated into a positional commit-range token
     // (`{since}..HEAD`). Reject anything that git could parse as an option

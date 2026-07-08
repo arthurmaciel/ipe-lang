@@ -50,6 +50,8 @@ fn lang_grammar(path: &str, lang: Lang) -> Option<(tree_sitter::Language, &'stat
              (static_item name:(identifier)@def) \
              (macro_definition name:(identifier)@def) \
              (mod_item name:(identifier)@def) \
+             (impl_item type:(type_identifier)@impldef) \
+             (impl_item type:(generic_type (type_identifier)@impldef)) \
              (use_declaration argument:(_)@imp)")),
         Lang::Go => Some((tree_sitter_go::language(),
             "(function_declaration name:(identifier)@def) \
@@ -149,6 +151,7 @@ pub fn extract(store: &Store, path: &str, lang: Lang, src: &str) -> Result<()> {
     let query = Query::new(&grammar, query_src)?;
     let def_idx = query.capture_index_for_name("def");
     let imp_idx = query.capture_index_for_name("imp");
+    let impl_idx = query.capture_index_for_name("impldef");
     let mut cur = QueryCursor::new();
     for m in cur.matches(&query, tree.root_node(), src.as_bytes()) {
         for cap in m.captures {
@@ -157,6 +160,10 @@ pub fn extract(store: &Store, path: &str, lang: Lang, src: &str) -> Result<()> {
             let col  = cap.node.start_position().column as i64 + 1;
             if Some(cap.index) == def_idx {
                 store.put_symbol(path, text, "def", line, col)?;
+            } else if Some(cap.index) == impl_idx {
+                // The type an `impl` block is FOR — stored as kind `impl` so
+                // `locate <Type>` surfaces its impl sites alongside its def.
+                store.put_symbol(path, text, "impl", line, col)?;
             } else if Some(cap.index) == imp_idx {
                 let target = text.trim_matches(|c| c == '"' || c == '\'');
                 // For Rust, expand grouped use paths: `a::{b, c}` → `a::b`, `a::c`.
