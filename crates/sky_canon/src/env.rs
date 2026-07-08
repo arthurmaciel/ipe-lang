@@ -1064,6 +1064,7 @@ impl Env {
                     "name",
                     "style",
                     "transitionRaw",
+                    "gridTracksRaw",
                     "onPseudo",
                     "hover",
                     "focus",

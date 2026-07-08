@@ -2725,6 +2725,24 @@ fn emit_ui_call(
             )))
         }
 
+        // `Ui.gridTracksRaw : String -> String -> Attribute msg`
+        KernelFn::UiGridTracksRaw => {
+            let [cols_e, rows_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiGridTracksRaw",
+                    detail: format!(
+                        "Ui.gridTracksRaw requires 2 arguments, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let cols = emit_expr_at(ctx, cols_e, indent, child, generics)?;
+            let rows = emit_expr_at(ctx, rows_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_grid_tracks_raw_({cols}, {rows})"
+            )))
+        }
+
         // `Ui.aspectRatio : Float -> Attribute msg`
         KernelFn::UiAspectRatio => {
             let [r_e] = args else {

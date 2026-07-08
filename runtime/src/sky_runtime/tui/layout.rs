@@ -656,11 +656,10 @@ fn walk_attrs<M>(attrs: &[Attribute<M>], inherited: Style) -> Walked {
             Attribute::AttrStyle(k, _) if k == "__row" => w.dir = Dir::Row,
             Attribute::AttrStyle(k, _) if k == "__col" => w.dir = Dir::Column,
             Attribute::AttrStyle(k, _) if k == "__grid" => w.is_grid = true,
-            // Std.Ui.Grid.columns/tracks → "grid-template-columns|grid-template-rows".
+            // Std.Ui.Grid.columns/tracks → native AttrGridTracks(cols, rows).
             // Parse the column tracks; a non-empty parse turns this into an explicit
             // grid (audit #13). repeat()/minmax() → empty → auto-flow fallback.
-            Attribute::AttrStyle(k, v) if k == "__gridTracks" => {
-                let cols = v.split('|').next().unwrap_or("");
+            Attribute::AttrGridTracks(cols, _rows) => {
                 let tracks = parse_grid_tracks(cols);
                 if !tracks.is_empty() {
                     w.is_grid = true;

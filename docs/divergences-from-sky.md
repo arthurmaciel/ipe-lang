@@ -817,3 +817,21 @@ API-shape review):
   `crates/sky_kernels/src/lib.rs::JwtDecode`, `crates/sky_lower/src/lower.rs`,
   `runtime/src/sky_runtime/jwt.rs::sky_jwt_decode`. Regression:
   `tests/golden/m_jwt_decode_now/`.
+
+
+### B-GridTracksRaw — `Ui.gridTracksRaw` native kernel vs reference sentinel `AttrStyle "__gridTracks"`
+- **Reference:** `../sky/sky-stdlib/Std/Ui/Grid.sky` implements `tracks`/`columns`/`rows`
+  as `AttrStyle "__gridTracks" (cols ++ "|" ++ rows)` — a pure-Sky sentinel consumed
+  by the reference renderer's `findGridTemplate` (Ui.sky:2539) before raw-style emission.
+- **Port:** Uses a native `Ui.gridTracksRaw : String -> String -> Attribute msg` kernel
+  (`KernelFn::UiGridTracksRaw`) that constructs a typed `Attribute::AttrGridTracks(cols, rows)`
+  variant. The web renderer emits `grid-template-columns:{cols}` / `grid-template-rows:{rows}`
+  directly; the TUI layout parser reads `AttrGridTracks` directly (no `split('|')`).
+- **Why strictly better:** The Rust web renderer's `SafeCssPropertyName` gate rejects
+  underscore keys (`[A-Za-z0-9-]` charset) BY DESIGN — the sentinel `__gridTracks` was
+  silently dropped, so grid-template CSS never reached web HTML. The typed carrier bypasses
+  the property-name gate entirely (fixed literal property names; values still gated via
+  `SafeCssValue`). Growing the sentinel allowlist would be the wrong fix.
+- **Sanctioned:** yes. Reference: `crates/sky_kernels/src/lib.rs::UiGridTracksRaw`,
+  `runtime/src/sky_runtime/ui/element.rs::AttrGridTracks`,
+  `runtime/src/sky_runtime/ui/render.rs`. Regression: `crates/skyc/tests/golden_stdui_grid_seal.rs`.
