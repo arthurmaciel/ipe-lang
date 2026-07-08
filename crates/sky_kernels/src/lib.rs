@@ -907,6 +907,7 @@ pub enum StdlibKernel {
     UiName,           // String → Attr (HTML name= attribute)
     UiStyle,          // String → String → Attr (raw CSS property + value)
     UiTransitionRaw,  // String → Bool → Attr (CSS transition shorthand + respect-reduced-motion flag)
+    UiGridTracksRaw,  // String → String → Attr (grid-template-columns + grid-template-rows)
     // ── #154: Breakpoint opaque constants + Ui.breakpoint wrapper ────────────
     /// `Ui.breakpoint : Breakpoint -> List (Attribute msg) -> Element msg -> Element msg`
     ///
@@ -2034,6 +2035,9 @@ impl StdlibKernel {
             Self::UiTransitionRaw => {
                 d("Ui", "transitionRaw", 2, Ui, "ui_transition_raw_")
             }
+            Self::UiGridTracksRaw => {
+                d("Ui", "gridTracksRaw", 2, Ui, "ui_grid_tracks_raw_")
+            }
             // #154: Breakpoint
             Self::UiBreakpoint => d("Ui", "breakpoint", 3, Ui, "ui_breakpoint_"),
             Self::UiMobile => d("Ui", "mobile", 0, Ui, "ui_mobile_"),
@@ -2956,6 +2960,7 @@ impl StdlibKernel {
         Self::UiName,
         Self::UiStyle,
         Self::UiTransitionRaw,
+        Self::UiGridTracksRaw,
         Self::UiBreakpoint,
         Self::UiMobile,
         Self::UiTablet,
@@ -3485,6 +3490,7 @@ impl StdlibKernel {
                 | Self::UiName
                 | Self::UiStyle
                 | Self::UiTransitionRaw
+                | Self::UiGridTracksRaw
                 // ── #154: Breakpoint ──────────────────────────────────────────
                 | Self::UiBreakpoint
                 | Self::UiMobile

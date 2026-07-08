@@ -147,6 +147,7 @@ pub enum Attribute<M> {
     AttrOverflow(String, String),
     AttrPseudoRule(PseudoClass, String),
     AttrTransition(String, bool),
+    AttrGridTracks(String, String),
     AttrAnimation(String, String, String, bool),
 }
 

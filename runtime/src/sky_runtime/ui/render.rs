@@ -125,6 +125,9 @@ fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                         parts.push("flex-direction:row".to_owned());
                         parts.push("flex-wrap:wrap".to_owned());
                     }
+                    "__grid" => {
+                        parts.push("display:grid".to_owned());
+                    }
                     _ => {
                         // User-supplied CSS key+value.
                         // `SafeCssPropertyName` gates the key (charset policy);
@@ -232,6 +235,19 @@ fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
             }
             Attribute::AttrTransition(t, _respect_reduced) => {
                 parts.push(format!("transition:{t}"));
+            }
+            Attribute::AttrGridTracks(cols, rows) => {
+                // Fixed property names; user-supplied values go through SafeCssValue.
+                if !cols.is_empty() {
+                    if let Some(pv) = SafeCssValue::parse(cols) {
+                        parts.push(format!("grid-template-columns:{}", pv.as_str()));
+                    }
+                }
+                if !rows.is_empty() {
+                    if let Some(pv) = SafeCssValue::parse(rows) {
+                        parts.push(format!("grid-template-rows:{}", pv.as_str()));
+                    }
+                }
             }
             Attribute::AttrAnimation(name, spec, keyframes, _respect) => {
                 // Emit animation name + spec; keyframes require a <style> block
