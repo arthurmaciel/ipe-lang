@@ -238,10 +238,11 @@ const STD_UI_CHART: &str = include_str!("../stdlib/Std/Ui/Chart.sky");
 
 /// `Std.Ui.Grid` — typed CSS-grid track ADT + `columns`/`rows`/`tracks` builders.
 ///
-/// Pure-Sky; uses `Ui.style` (kernel `UiStyle`) to emit `AttrStyle("__gridTracks", …)`,
-/// which the runtime at `tui/layout.rs` already parses.  Ported from
-/// `../sky/sky-stdlib/Std/Ui/Grid.sky`; `gridTracksRaw` replaced by a direct
-/// `Ui.style "__gridTracks"` call (same semantic, no new kernel required).
+/// Pure-Sky; uses the native `Ui.gridTracksRaw` kernel (`KernelFn::UiGridTracksRaw`)
+/// that constructs `AttrGridTracks(cols, rows)`, rendered as `grid-template-columns`/
+/// `grid-template-rows` by the web renderer and parsed by `tui/layout.rs`.
+/// Ported from `../sky/sky-stdlib/Std/Ui/Grid.sky`; divergence recorded in
+/// `docs/divergences-from-sky.md` (typed carrier vs reference's sentinel approach).
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 /// Unblocks `26-ui-showcase` (SKY-N0004: Std.Ui.Grid — Grid.columns/fr/px).
 const STD_UI_GRID: &str = include_str!("../stdlib/Std/Ui/Grid.sky");

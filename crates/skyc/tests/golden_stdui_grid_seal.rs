@@ -1,0 +1,129 @@
+//! Seal gate for the native `Ui.gridTracksRaw` primitive and the compiled
+//! `Std.Ui.Grid` module (26-ui-showcase: `__gridTracks` sentinel silently
+//! dropped by the web renderer's `SafeCssPropertyName` gate).
+//!
+//! `Std.Ui.Grid.columns`/`rows`/`tracks` are pure-Sky wrappers over the native
+//! `Ui.gridTracksRaw : String -> String -> Attribute msg` kernel
+//! (`KernelFn::UiGridTracksRaw`), which constructs `AttrGridTracks(cols, rows)`.
+//! This test proves the whole seam:
+//!   * `import Std.Ui.Grid` resolves (no SKY-N0004 regression);
+//!   * `gridTracksRaw` type-checks as `String -> String -> Attribute msg`;
+//!   * the emit lowers both `Grid.columns` and `Grid.tracks` to
+//!     `ui_grid_tracks_raw_(…)` — NO `__gridTracks` sentinel in emitted Rust;
+//!   * (`SKY_E2E`) the emitted Cargo project builds AND rendered web HTML carries
+//!     `grid-template-columns:`, `grid-template-rows:`, and `display:grid` —
+//!     the mandated web-HTML grid-template assertion (the seal).
+
+use std::path::PathBuf;
+
+mod support;
+
+#[allow(clippy::expect_used)]
+fn runtime() -> PathBuf {
+    skyc::resolve_runtime().expect("runtime must resolve for grid seal test")
+}
+
+/// A minimal Std.Ui program exercising BOTH grid entry points:
+/// `Grid.columns` (cols only, rows = "") and `Grid.tracks` (both axes).
+const MAIN_SKY: &str = r#"module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+import Std.Ui.Grid as Grid
+
+
+main =
+    println
+        (Html.htmlRender
+            (Ui.layout []
+                (Ui.column []
+                    [ Ui.grid
+                        [ Grid.columns [ Grid.fr 1, Grid.px 200, Grid.fr 1 ] ]
+                        [ Ui.text "cols-only" ]
+                    , Ui.grid
+                        [ Grid.tracks
+                            [ Grid.fr 1, Grid.fr 2 ]
+                            [ Grid.auto, Grid.px 100 ]
+                        ]
+                        [ Ui.text "both-axes" ]
+                    ])))
+"#;
+
+#[allow(clippy::expect_used)]
+fn build_grid_project() -> (PathBuf, Result<(), skyc::CliError>) {
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("stdui_grid_seal");
+    let _ = std::fs::remove_dir_all(&out);
+    let src = out.join("src");
+    std::fs::create_dir_all(&src).expect("mk grid test project dirs");
+    let entry = src.join("Main.sky");
+    std::fs::write(&entry, MAIN_SKY).expect("write Main.sky");
+    let emit = out.join("emit");
+    let res = skyc::build(&entry, &emit, &runtime());
+    (emit, res)
+}
+
+/// `Std.Ui.Grid` resolves (no SKY-N0004), type-checks, and the emit lowers
+/// both `Grid.columns` and `Grid.tracks` to `ui_grid_tracks_raw_` — with NO
+/// `__gridTracks` sentinel leaking into the emitted Rust.
+#[test]
+#[allow(clippy::expect_used)]
+fn grid_module_resolves_and_emits_kernel() {
+    let (emit, res) = build_grid_project();
+    assert!(
+        res.is_ok(),
+        "skyc build with `import Std.Ui.Grid` must succeed \
+         (native gridTracksRaw + compiled module): {:?}",
+        res.err()
+    );
+
+    let emitted = std::fs::read_to_string(emit.join("src").join("main.rs"))
+        .expect("emitted main.rs must exist");
+
+    // Both entry points lower through the native kernel helper.
+    let calls = emitted.matches("ui_grid_tracks_raw_(").count();
+    assert!(
+        calls >= 2,
+        "emitted Rust must carry BOTH gridTracksRaw helper calls (got {calls}):\n{emitted}"
+    );
+
+    // The old __gridTracks sentinel must be gone — it was silently dropped by
+    // SafeCssPropertyName. The typed AttrGridTracks carrier replaces it.
+    assert!(
+        !emitted.contains("__gridTracks"),
+        "emitted Rust must NOT contain the __gridTracks sentinel:\n{emitted}"
+    );
+}
+
+/// The GREEN GATE: under `SKY_E2E=1` the emitted Cargo project builds and runs,
+/// rendering `grid-template-columns:`, `grid-template-rows:`, and `display:grid`
+/// in the HTML output — the seal, end to end.
+#[test]
+fn grid_e2e_builds_and_renders_grid_css() {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    let (emit, res) = build_grid_project();
+    assert!(res.is_ok(), "grid E2E build must succeed: {:?}", res.err());
+
+    let outcome = support::build_and_run_emitted("stdui_grid_seal", &emit);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "emitted grid binary must exit 0 (the seal)"
+    );
+    assert!(
+        outcome.stdout.contains("display:grid"),
+        "rendered HTML must carry display:grid:\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("grid-template-columns:"),
+        "rendered HTML must carry grid-template-columns:\n{}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("grid-template-rows:"),
+        "rendered HTML must carry grid-template-rows (from Grid.tracks call):\n{}",
+        outcome.stdout
+    );
+}

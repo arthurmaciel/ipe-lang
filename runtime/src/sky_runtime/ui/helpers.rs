@@ -634,6 +634,12 @@ pub fn ui_transition_raw_<M>(shorthand: String, respect: bool) -> Attribute<M> {
     Attribute::AttrTransition(shorthand, respect)
 }
 
+/// `Ui.gridTracksRaw : String -> String -> Attribute msg` — CSS grid-template-columns
+/// (first arg) and grid-template-rows (second arg).  Pass `""` for either axis to skip it.
+pub fn ui_grid_tracks_raw_<M>(cols: String, rows: String) -> Attribute<M> {
+    Attribute::AttrGridTracks(cols, rows)
+}
+
 /// `Ui.aspectRatio : Float -> Attribute msg`
 pub fn ui_aspect_ratio_<M>(r: f64) -> Attribute<M> {
     Attribute::AttrStyle("aspect-ratio".into(), format!("{r}"))
