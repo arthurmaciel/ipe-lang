@@ -3193,9 +3193,17 @@ impl<'a> Lowerer<'a> {
             for arg in &ctor.args {
                 // Gate 1: every field type variable must be one the union
                 // quantifies, so it resolves to a Rust generic by position.
+                // Exception: `any` wildcard is the pub/sub wire-carrier pin
+                // (Dict String String) — excluded from the bound check,
+                // mirroring the reference's `(/= "any") freeVars` filter
+                // (DeclaredArityHelperSpec.hs:43). `ir_type_from_canon` maps
+                // it to the concrete IrType::Dict(Str, Str) below.
                 let mut vars = BTreeSet::new();
                 collect_type_vars(arg, &mut vars);
-                if !vars.iter().all(|v| type_params.contains(v)) {
+                if !vars.iter().all(|v| {
+                    type_params.contains(v)
+                        || self.interner.resolve(*v).is_some_and(|n| n == "any")
+                }) {
                     return Err(unsupported(ctor.span, Feature::Polymorphism));
                 }
                 let ir = self.ir_type_from_canon(arg, &type_params)?;
@@ -4313,7 +4321,17 @@ impl<'a> Lowerer<'a> {
             // construction, so a variable absent from `generics` here means canon
             // failed to collect the binding's complete free-variable set — a
             // violated invariant, not a user-reachable feature gap.
+            //
+            // Exception: `any` wildcard in a union-ctor field (e.g.
+            // `| CartTopicReceived any`) is the pub/sub wire carrier, pinned to
+            // `Dict String String` by the solver (constrain.rs `pin_any_in_ty`).
+            // The gate-1 check in `lower_enum` already skips these vars; here we
+            // emit the matching concrete IR type so the emitted Rust is a
+            // `HashMap<String, String>` field — no free generic, no `dyn Any`.
             canon::Type::Var(v) => {
+                if self.interner.resolve(*v).is_some_and(|n| n == "any") && !generics.contains(v) {
+                    return Ok(IrType::Dict(Box::new(IrType::Str), Box::new(IrType::Str)));
+                }
                 if generics.contains(v) {
                     Ok(IrType::Generic(*v))
                 } else {

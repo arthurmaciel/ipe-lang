@@ -749,6 +749,36 @@ API-shape review):
   bad parse is a future refinement (not yet designed in the reference either).
 
 
+### B-AnyCtorPayload — `any` ctor payload field → `Dict String String` (pub/sub wire carrier)
+- **Differs:** Sky's `any` wildcard as a union-constructor payload field (e.g.
+  `| MessageReceived any`, `| CartTopicReceived any`) is carried at the Go
+  runtime as a dynamic `interface{}` value — universally polymorphic, no static
+  type constraint. The Rust backend cannot emit a `dyn Any` field (banned by the
+  concrete-over-generic contract: no `dyn Any`/`.downcast`/type-erasure) and
+  cannot emit an unconstrained Rust generic (the union's `Clone + Debug +
+  PartialEq + Serialize + DeserializeOwned` derives must hold for every field).
+  ipê pins the `any` wildcard to `Dict String String` (`HashMap<String, String>`
+  in the emitted Rust) — the sole concrete carrier that satisfies all derives and
+  the `Broker` type parameter.  The pub/sub broker is typed per concrete payload
+  (see A18-adjacent: `Broker<HashMap<String,String>>` for `any`-ctor programs);
+  publisher and subscriber must agree on the concrete type at compile time.
+- **Go-oracle relationship:** Go succeeds and carries the payload as `any` /
+  `interface{}`; ipê carries it as `Dict String String`.  For real-world pub/sub
+  programs (examples 27 and 37) the publisher encodes a record into
+  `payloadDict : Dict String String` and the subscriber decodes with
+  `Db.getString`; the round-trip is semantically equivalent.  Programs that
+  use the payload directly as a non-Dict type (e.g. passing it to
+  `String.length`) are now rejected at type-check with SKY-T0001 — a
+  correctness gain over Go's silent runtime failure.
+- **Rationale:** concrete-over-generic contract + `Clone/Debug/PartialEq` seal.
+  The `any` wildcard has exactly one concrete lowering in pub/sub payload
+  position; `Dict String String` is that carrier.  A Rust generic would need the
+  publisher and subscriber to agree on `TypeId` at runtime (silent non-delivery
+  risk); `dyn Any` is a hard ban.
+- **Sanctioned:** yes (`divergence:`). Reference: `constrain.rs::pin_any_in_ty`,
+  `lower.rs::lower_enum` Gate 1, `lower.rs::ir_type_from_canon` Var arm.
+  Regression: `golden_l0102_any_ctor_payload`.
+
 ### B-ErrorToString — `errorToString : Stringify a => a -> String` (bounded polymorphic vs. universal)
 - **Differs:** Sky's Go runtime implements `errorToString` as `fmt.Sprintf("%v", v)`,
   which accepts any value at runtime (universally polymorphic, no type-level bound).
