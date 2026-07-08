@@ -80,3 +80,12 @@ reference relations (faster than rg, gives cross-lang routes):
 - `skydex parity` — Go-vs-Rust kernel parity gaps.
 Use it to find "what does the reference do for X" (e.g. the anyCarrierField class).
 Falls to `rg` if no hit. Our OWN port (crates/) is NOT indexed — rg it.
+
+## ipe-index — OUR Rust def index (use before rg on crates/runtime)
+
+`ipe-index` on PATH indexes THIS project's Rust (crates/ runtime/ tools/).
+- `ipe-index def <sym>`  — definition site(s): file:line kind (one answer, not every text hit).
+- `ipe-index refs <sym>` — all word occurrences (rg-backed).
+- `ipe-index kind <fn|struct|enum|trait|type|impl|macro>` — list defs of a kind.
+Query it FIRST to find where our own code defines X. skydex = reference; rg = fallback.
+Rebuilt at loop start (reflects landed fixes).
