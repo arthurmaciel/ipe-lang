@@ -44,7 +44,8 @@ STREAM="${PROGDEV_STREAM:-1}"                 # DEFAULT ON (watch.sh renders it)
 WATCH="${PROGDEV_WATCH:-1}"                   # 1 = auto-launch watch.sh alongside (one terminal); 0 / --no-watch disables
 CONTEXT="$REPO/$HERE/context.md"             # operating contract: 6 principles + 2 rules + the seal
 GUARDIAN_MODEL="${PROGDEV_GUARDIAN_MODEL:-claude-opus-4-8}"
-AUTHOR_MODEL="${PROGDEV_AUTHOR_MODEL:-claude-sonnet-4-6}"   # v4: Sonnet implements the Opus design
+AUTHOR_MODEL="${PROGDEV_AUTHOR_MODEL:-claude-sonnet-4-6}"   # Sonnet implements the design
+DESIGN_MODEL="${PROGDEV_DESIGN_MODEL:-claude-fable-5}"      # v5: Fable designs — out-reasoned Opus on 27 (found the Dict-carrier TypeId soundness fix Opus missed); Sonnet implements
 GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
 QUEUE="docs/architecture/progressive-development-queue.tsv"   # <STATUS>\t<KIND>\t<desc>
 RESUME_DIR="docs/architecture/progressive-development-resume"  # gitignored guardian resume artifacts
@@ -375,8 +376,8 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
             log "guardian [$class] · design REUSED (attempt $datt — impl refines the prior plan against the rejection)"
             design_text="$(cat "$dplan")"; cp -f "$dplan" "$dfile"; : > "$dlog"
         else
-            phase design opus
-            design="$(agent "$GUARDIAN_MODEL" "You are a compiler guardian DESIGNER specialising in $class. Do NOT write code. Produce a concise root-cause + fix PLAN: (a) the root cause, (b) the exact crates/files/functions to change, (c) the approach — matching the ../sky READ-ONLY reference, root-cause only, NEVER a hack/fixture-edit/gate-weakening, (d) the regression test to add. FOCUS: $(guardian_focus "$class"). Item: $gdesc .$(resume_hint "$gdesc") If there is NO sound fix (needs a human decision, genuinely multi-session, or would require a hack), print exactly 'DESIGN: ESCALATE <why>' and nothing else. Otherwise print 'DESIGN: <the plan>'." | tee "$dlog")"
+            phase design fable
+            design="$(agent "$DESIGN_MODEL" "You are a compiler guardian DESIGNER specialising in $class. Do NOT write code. Produce a concise root-cause + fix PLAN: (a) the root cause, (b) the exact crates/files/functions to change, (c) the approach — matching the ../sky READ-ONLY reference, root-cause only, NEVER a hack/fixture-edit/gate-weakening, (d) the regression test to add. FOCUS: $(guardian_focus "$class"). Item: $gdesc .$(resume_hint "$gdesc") If there is NO sound fix (needs a human decision, genuinely multi-session, or would require a hack), print exactly 'DESIGN: ESCALATE <why>' and nothing else. Otherwise print 'DESIGN: <the plan>'." | tee "$dlog")"
             if printf '%s' "$design" | rg -q 'DESIGN: ESCALATE'; then
                 log "guardian [$class] · design → ESCALATE"
                 guardian_failed "$class" "$gdesc" "$gbr" "design escalate: $(reason_of "$design")"

@@ -56,3 +56,16 @@ the intent. Code, paths, identifiers, and error text stay EXACT and verbatim —
 never abbreviate those. Terseness never trades away correctness, the gate, or a
 required verdict line. Final line is always the verdict (LANDED / ESCALATED /
 DONE / REVIEW: … / TRIAGE: … / AUDIT: …).
+
+## Codegen principle — concrete over generic (verified on 27-multi-session-chat)
+
+When the Rust backend can emit a CONCRETE (monomorphized) type instead of a
+GENERIC one, ALWAYS emit concrete. Wildcard `any` is NOT polymorphism — it has
+exactly ONE concrete lowering (opaque carrier: `IrType::Json`/`JsonVal`, or
+`Dict String String`/`HashMap<String,String>` in pub/sub payload position).
+Emit that concrete carrier at EVERY position (enum field, pattern binder,
+fn/decoder param, Db row arg, eta lambda param, return). ONLY genuine named type
+variables (`a`, `msg`) become Rust generics (`fn f<T>`), rustc-monomorphized at
+compile time. NEVER `dyn Any`/`.downcast`/type-erasure. A generic emitted where
+concrete was possible passes a mechanical gate but can ship a silent runtime bug
+(e.g. `Broker<T>` keyed by `TypeId` needs publisher+subscriber same concrete `T`).
