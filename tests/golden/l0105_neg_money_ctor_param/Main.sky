@@ -1,0 +1,14 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- Negative regression: `amount (Money d _) = d` is a refutable param on a
+-- single-constructor union — must still be rejected as SKY-T0015.
+-- Proves the fix to Std/Money.sky did not relax the irrefutability rule.
+
+type Money = Money Int String
+
+amount : Money -> Int
+amount (Money d _) = d
+
+main =
+    println (String.fromInt (amount (Money 42 "USD")))

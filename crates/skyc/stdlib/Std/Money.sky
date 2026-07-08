@@ -82,13 +82,17 @@ zeroOf m =
 -- ─── Accessors ────────────────────────────────────────────────────
 
 amount : Money -> Decimal
-amount (Money d _) =
-    d
+amount m =
+    case m of
+        Money d _ ->
+            d
 
 
 currency : Money -> Currency
-currency (Money _ c) =
-    c
+currency m =
+    case m of
+        Money _ c ->
+            c
 
 
 currencyCode : Currency -> String
