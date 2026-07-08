@@ -140,7 +140,7 @@ agent() { # <model> <prompt> ; prints output
     # PATH shim instead (git grep still works — it doesn't exec the grep binary).
     PATH="$SHIMDIR:$PATH" claude --model "$model" --safe-mode --permission-mode auto \
         --append-system-prompt-file "$CONTEXT" "${stream[@]}" \
-        --allowedTools 'Bash(cargo *)' 'Bash(git *)' 'Bash(skyc *)' 'Bash(rg *)' \
+        --allowedTools 'Bash(cargo *)' 'Bash(git *)' 'Bash(skyc *)' 'Bash(rg *)' 'Bash(skydex *)' \
                        'Bash(cat *)' 'Bash(ls *)' 'Bash(sed *)' 'Bash(diff *)' \
                        'Bash(touch *)' 'Bash(mkdir *)' Edit Write Read Grep Glob \
         -p "$prompt" 2>&1
@@ -183,6 +183,13 @@ for _g in grep egrep fgrep; do
     printf '#!/usr/bin/env bash\necho "grep is disabled for autopilot agents — use rg (ripgrep): rg -n PATTERN / rg -l / rg -c." >&2\nexit 2\n' > "$SHIMDIR/$_g"
     chmod +x "$SHIMDIR/$_g"
 done
+# skydex wrapper on the agent PATH: code-relation index over the ../sky READ-ONLY
+# reference (Sky↔Haskell↔Go↔Rust routes; parity/rdeps/deps/covers/locate). Runs
+# from ../sky where .skydex/index.db lives; read-only ref → never stale.
+if [ -x "$REPO/../sky/tools/skydex/target/release/skydex" ]; then
+    printf '#!/usr/bin/env bash\ncd "%s/../sky" && exec ./tools/skydex/target/release/skydex "$@"\n' "$REPO" > "$SHIMDIR/skydex"
+    chmod +x "$SHIMDIR/skydex"
+fi
 mkdir -p "$(dirname "$LEDGER")"; [ -f "$LEDGER" ] || printf 'stamp\trun\tcycle\tcum_cost\n' > "$LEDGER"
 ensure_disk || die "disk critically low even after reclaim ($(disk_free_gb)G < ${DISK_CRIT}G) — free space and retry"
 [ -f "$STOP" ] && die "kill-switch $STOP present"
