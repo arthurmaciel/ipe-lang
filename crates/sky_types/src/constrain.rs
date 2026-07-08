@@ -4305,6 +4305,10 @@ impl<'a> Builder<'a> {
             // Native surface backing `Std.Ui.Transition.attribute` /
             // `attributeUnsafe`.
             K::UiTransitionRaw => fun(string(), fun(bool_ty(), attr(var(0)))),
+            // `Ui.gridTracksRaw : String -> String -> Attribute msg` — CSS
+            // grid-template-columns (first arg) and grid-template-rows (second arg).
+            // Native surface backing `Std.Ui.Grid.columns`/`rows`/`tracks`.
+            K::UiGridTracksRaw => fun(string(), fun(string(), attr(var(0)))),
 
             // #154: Ui.breakpoint + Breakpoint constants.
             //
@@ -5985,6 +5989,7 @@ mod registry_phase_c_tests {
             K::UiName,
             K::UiStyle,
             K::UiTransitionRaw,
+            K::UiGridTracksRaw,
             // #154: Breakpoint
             K::UiBreakpoint,
             K::UiMobile,

@@ -7779,6 +7779,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiStyle
                 // `Ui.transitionRaw : String -> Bool -> Attribute msg`
                 | KernelFn::UiTransitionRaw
+                // `Ui.gridTracksRaw : String -> String -> Attribute msg`
+                | KernelFn::UiGridTracksRaw
                 // ── Std.Ui.Input (#124) — arity-2 constructors ───────────────────
                 // `Input.labelAbove : List (Attribute msg) -> Element msg -> Label msg`
                 | KernelFn::InputLabelAbove
@@ -8759,6 +8761,9 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "style") => Ok(Callee::Kernel(KernelFn::UiStyle)),
                     ("Ui", "transitionRaw") => {
                         Ok(Callee::Kernel(KernelFn::UiTransitionRaw))
+                    }
+                    ("Ui", "gridTracksRaw") => {
+                        Ok(Callee::Kernel(KernelFn::UiGridTracksRaw))
                     }
                     // #154: Ui.breakpoint + Breakpoint constants
                     ("Ui", "breakpoint") => Ok(Callee::Kernel(KernelFn::UiBreakpoint)),
