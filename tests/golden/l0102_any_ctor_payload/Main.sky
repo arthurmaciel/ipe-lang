@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+-- SKY-L0102 regression: `any` as a union-constructor payload field.
+--
+-- Pre-fix: `lower_enum` Gate 1 collected the `any` Ty::Var, found it absent
+-- from `union.vars`, and raised Feature::Polymorphism (SKY-L0102).
+--
+-- Post-fix: `any` is the pub/sub wire-carrier pin (Dict String String).
+-- The solver substitutes it in the CtorScheme; the lowerer skips it in Gate 1
+-- and emits IrType::Dict(Str, Str) in ir_type_from_canon.
+--
+-- Seal: skyc exit 0 AND cargo build green.
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+type Msg
+    = BroadcastMsg any
+    | Ignored
+
+handleMsg : Msg -> String
+handleMsg msg =
+    case msg of
+        BroadcastMsg _ -> "received"
+        Ignored        -> "ignored"
+
+main =
+    println (handleMsg Ignored)

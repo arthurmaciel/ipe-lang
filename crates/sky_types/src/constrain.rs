@@ -28,6 +28,46 @@ use crate::unionfind::{UnionFind, VarId};
 /// `where_` tag for any `CompilerBug` raised during constraint generation.
 const STAGE: &str = "sky_types::constrain";
 
+/// Recursively replace every `Ty::Var(v)` where `v` resolves to the `"any"`
+/// wildcard AND `v` is NOT one of the union's declared type parameters with
+/// `Dict String String` — the concrete pub/sub wire carrier.
+///
+/// Mirrors the reference's `any`-wildcard semantics for union-ctor field types:
+/// the Haskell/Go backend carries `any` payloads as dynamic `interface{}`; the
+/// Rust backend pins them to `Dict String String`, the sole concrete carrier that
+/// satisfies `Clone + Debug + PartialEq + Serialize + DeserializeOwned`.
+fn pin_any_in_ty(ty: Ty, union_vars: &[Symbol], interner: &Interner, dict: Symbol, string: Symbol) -> Ty {
+    match ty {
+        Ty::Var(v) => {
+            let is_any = interner.resolve(Symbol::from_raw(v)).is_some_and(|n| n == "any");
+            let is_declared = union_vars.iter().any(|uv| uv.as_raw() == v);
+            if is_any && !is_declared {
+                let mk_str = || Ty::Con { module: Vec::new(), name: string, args: Vec::new() };
+                Ty::Con { module: Vec::new(), name: dict, args: vec![mk_str(), mk_str()] }
+            } else {
+                Ty::Var(v)
+            }
+        }
+        Ty::Fun(a, b) => Ty::Fun(
+            Box::new(pin_any_in_ty(*a, union_vars, interner, dict, string)),
+            Box::new(pin_any_in_ty(*b, union_vars, interner, dict, string)),
+        ),
+        Ty::Con { module, name, args } => Ty::Con {
+            module,
+            name,
+            args: args.into_iter().map(|a| pin_any_in_ty(a, union_vars, interner, dict, string)).collect(),
+        },
+        Ty::Unit => Ty::Unit,
+        Ty::Tuple(elems) => Ty::Tuple(
+            elems.into_iter().map(|e| pin_any_in_ty(e, union_vars, interner, dict, string)).collect(),
+        ),
+        Ty::Record(fields, tail) => Ty::Record(
+            fields.into_iter().map(|(k, v)| (k, pin_any_in_ty(v, union_vars, interner, dict, string))).collect(),
+            tail,
+        ),
+    }
+}
+
 /// Per-binding polymorphic-variable entry: maps `(home_module, def_name)` to
 /// the annotation-variable → rigid-VarId map for that definition.
 ///
@@ -1034,6 +1074,7 @@ impl<'a> Builder<'a> {
     /// [`Diagnostic::CompilerBug`] on an internal invariant violation (e.g. an
     /// arity mismatch between a binding's pattern count and its annotation, or
     /// an unbound local — both ruled out by canonicalisation).
+    #[allow(clippy::too_many_lines)] // declarative registration loops — every case listed explicitly for safety
     pub fn run(
         uf: &'a mut UnionFind<Content>,
         interner: &'a mut Interner,
@@ -1087,8 +1128,25 @@ impl<'a> Builder<'a> {
                 name: union.name,
                 args: union.vars.iter().map(|v| Ty::Var(v.as_raw())).collect(),
             };
+            // Pre-compute once per union (Copy types, no borrow conflict with
+            // builder.ctors below).
+            let dict_sym = builder.builtins.dict;
+            let string_sym = builder.builtins.string;
             for ctor in &union.ctors {
-                let arg_tys = ctor.args.iter().map(from_canon).collect();
+                let mut arg_tys = Vec::with_capacity(ctor.args.len());
+                for ct in &ctor.args {
+                    // Pin `any` wildcard fields to Dict String String so every
+                    // instantiation site (pattern binder, ctor-as-value,
+                    // Sub.subscribeTopic) sees the concrete carrier, never a
+                    // free Ty::Var that the lowerer would reject (SKY-L0102).
+                    arg_tys.push(pin_any_in_ty(
+                        from_canon(ct),
+                        &union.vars,
+                        builder.interner,
+                        dict_sym,
+                        string_sym,
+                    ));
+                }
                 builder.ctors.insert(
                     ctor.name,
                     CtorScheme {
