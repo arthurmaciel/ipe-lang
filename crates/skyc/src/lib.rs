@@ -496,6 +496,23 @@ fn compile_modules(
                 }
             }
         }
+        // Union ctor spans live in the union's home byte-namespace, outside any
+        // def body — without this they fall back to the entry file and render
+        // at a coincidental byte offset in Main.sky (the misattribution class
+        // for SKY-L0102 / SKY-L0114 and other `lower_enum` errors).
+        for union in &linked.unions {
+            for ctor in &union.ctors {
+                if ctor.span.lo <= span.lo && span.hi <= ctor.span.hi {
+                    let lo_dist = span.lo.saturating_sub(ctor.span.lo);
+                    let width = ctor.span.hi.saturating_sub(ctor.span.lo);
+                    if best.is_none_or(|(prev_dist, prev_w, _)| {
+                        lo_dist < prev_dist || (lo_dist == prev_dist && width < prev_w)
+                    }) {
+                        best = Some((lo_dist, width, union.home.as_slice()));
+                    }
+                }
+            }
+        }
         best.and_then(|(_, _, home)| home_to_source.get(home))
             .cloned()
             .unwrap_or_else(|| (entry_src_path.clone(), entry_src.clone()))
