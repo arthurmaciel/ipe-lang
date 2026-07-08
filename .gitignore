@@ -26,3 +26,4 @@ docs/architecture/progressive-development-*.log
 docs/architecture/progdev-status.txt
 .claude/settings.local.json
 docs/architecture/progdev-cost-ledger.tsv
+/.ipe-index/

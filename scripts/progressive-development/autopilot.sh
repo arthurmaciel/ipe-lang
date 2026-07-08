@@ -140,7 +140,7 @@ agent() { # <model> <prompt> ; prints output
     # PATH shim instead (git grep still works — it doesn't exec the grep binary).
     PATH="$SHIMDIR:$PATH" claude --model "$model" --safe-mode --permission-mode auto \
         --append-system-prompt-file "$CONTEXT" "${stream[@]}" \
-        --allowedTools 'Bash(cargo *)' 'Bash(git *)' 'Bash(skyc *)' 'Bash(rg *)' 'Bash(skydex *)' \
+        --allowedTools 'Bash(cargo *)' 'Bash(git *)' 'Bash(skyc *)' 'Bash(rg *)' 'Bash(skydex *)' 'Bash(ipe-index *)' \
                        'Bash(cat *)' 'Bash(ls *)' 'Bash(sed *)' 'Bash(diff *)' \
                        'Bash(touch *)' 'Bash(mkdir *)' Edit Write Read Grep Glob \
         -p "$prompt" 2>&1
@@ -189,6 +189,13 @@ done
 if [ -x "$REPO/../sky/tools/skydex/target/release/skydex" ]; then
     printf '#!/usr/bin/env bash\ncd "%s/../sky" && exec ./tools/skydex/target/release/skydex "$@"\n' "$REPO" > "$SHIMDIR/skydex"
     chmod +x "$SHIMDIR/skydex"
+fi
+# ipe-index on the agent PATH: OUR project's Rust def index (def/refs/kind) — agents
+# query "where is X defined" instead of sifting rg text hits. Rebuild each run so
+# it reflects landed fixes (sqlite, ~1s). Complements skydex (reference) / rg (fallback).
+if [ -x "$REPO/scripts/ipe-index" ]; then
+    ln -sf "$REPO/scripts/ipe-index" "$SHIMDIR/ipe-index"
+    "$REPO/scripts/ipe-index" build >/dev/null 2>&1 &
 fi
 mkdir -p "$(dirname "$LEDGER")"; [ -f "$LEDGER" ] || printf 'stamp\trun\tcycle\tcum_cost\n' > "$LEDGER"
 ensure_disk || die "disk critically low even after reclaim ($(disk_free_gb)G < ${DISK_CRIT}G) — free space and retry"
