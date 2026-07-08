@@ -33,7 +33,6 @@ impl Store {
     pub fn put_edge(&self, src:&str, dst:&str, kind:&str) -> Result<()> {
         self.conn.execute("INSERT OR IGNORE INTO edges(src,dst,kind) VALUES (?,?,?)", rusqlite::params![src,dst,kind])?; Ok(())
     }
-    #[allow(dead_code)] // future incremental-update path
     pub fn drop_file(&self, path:&str) -> Result<()> {
         self.conn.execute("DELETE FROM files WHERE path=?", [path])?;
         self.conn.execute("DELETE FROM symbols WHERE file=?", [path])?;
@@ -43,7 +42,6 @@ impl Store {
     pub fn set_meta(&self, k:&str, v:&str) -> Result<()> {
         self.conn.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", [k,v])?; Ok(())
     }
-    #[allow(dead_code)] // future incremental-update path
     pub fn get_meta(&self, k:&str) -> Result<Option<String>> {
         Ok(self.conn.query_row("SELECT v FROM meta WHERE k=?", [k], |r| r.get(0)).ok())
     }

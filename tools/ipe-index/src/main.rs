@@ -31,8 +31,9 @@ enum Cmd {
         #[arg(long, default_value = ".ipe-index/index.db")]
         db: String,
     },
-    /// Refresh the index. Full reindex of every configured repo (bounded + cheap;
-    /// the tagged multi-repo layout makes per-repo incremental diffing moot for v1).
+    /// Incrementally refresh the index: per-repo `last_sha..HEAD` git diff,
+    /// re-extract only changed files, re-reconcile parity. Falls back to a full
+    /// `index` when the DB is absent or a repo has no recorded sha.
     Update {
         #[arg(long, default_values_t = default_repos())]
         repo: Vec<String>,
@@ -244,19 +245,136 @@ fn lookup_sym_loc_lang(store: &store::Store, name: &str, lang: &str) -> Result<O
         .next())
 }
 
-/// Entry for `update`: a full reindex of every configured repo. The tagged
-/// multi-repo layout makes per-repo incremental git-diffing moot for v1 (a full
-/// rebuild of both repos is bounded and cheap — ~1-2 s), and it keeps the parity
-/// reconcile correct without re-deriving cross-repo kernel sets from a diff.
-pub fn cmd_index_pub(repo_specs: &[String], db: &str) -> Result<()> {
-    cmd_index(repo_specs, db)
+/// Read a repo-tagged path (`"sky:src/Sky/Foo.hs"`) off disk by mapping the tag
+/// back to its repo root. Returns `None` for an unknown tag or unreadable file.
+fn read_tagged(repos: &[(String, String)], tagged: &str) -> Option<String> {
+    let (tag, rel) = model::split_tag(tagged);
+    let root = repos.iter().find(|(t, _)| t == tag).map(|(_, r)| r.as_str())?;
+    read_capped(root, rel)
 }
+
+/// Rebuild the `kernels` table from the CURRENT store + disk state (used after an
+/// incremental `update`, where a per-file diff can't know the whole-repo parity
+/// picture). Go/Rust def names come from the already-updated `symbols` table;
+/// the (small) Sky `Ffi.kernel` decl set + `Kernel.hs` routes are re-read from
+/// disk. Clears the table first so a removed kernel doesn't linger.
+fn reconcile_from_store(store: &store::Store, repos: &[(String, String)]) -> Result<()> {
+    let mut go_fns: HashSet<String> = HashSet::new();
+    let mut rust_fns: HashSet<String> = HashSet::new();
+    {
+        let mut st = store.conn.prepare(
+            "SELECT s.name, f.lang FROM symbols s JOIN files f ON s.file=f.path WHERE s.kind='def'",
+        )?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (name, lang) = row?;
+            if lang == "go" { go_fns.insert(name); }
+            else if lang == "rs" { rust_fns.insert(name); }
+        }
+    }
+    // Sky Ffi.kernel decls — re-scan the small stdlib-sky file set from disk.
+    let stdlib_paths: Vec<String> = {
+        let mut st = store.conn.prepare(
+            "SELECT path FROM files WHERE role IN ('stdlib-sky','ipe-stdlib-sky')",
+        )?;
+        let v = st.query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        v
+    };
+    let mut sky_kernel_decls: HashSet<String> = HashSet::new();
+    for tagged in &stdlib_paths {
+        if let Some(src) = read_tagged(repos, tagged) {
+            for k in extract::sky::scan_sky(&src).kernels { sky_kernel_decls.insert(k); }
+        }
+    }
+    // Kernel.hs route sources from disk.
+    let kernel_paths: Vec<String> = {
+        let mut st = store.conn.prepare("SELECT path FROM files WHERE path LIKE '%Kernel.hs'")?;
+        let v = st.query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        v
+    };
+    let mut kernel_hs_sources: Vec<(String, String)> = Vec::new();
+    for tagged in kernel_paths {
+        if let Some(src) = read_tagged(repos, &tagged) {
+            kernel_hs_sources.push((tagged, src));
+        }
+    }
+    // Rebuild from scratch (stale rows must not linger across an update).
+    store.conn.execute("DELETE FROM kernels", [])?;
+    let pairs: Vec<(&str, &str)> = kernel_hs_sources.iter().map(|(p, s)| (p.as_str(), s.as_str())).collect();
+    let routes = parity::parse_routes_with_locs(&pairs);
+    for k in parity::reconcile_with_locs(&routes, &go_fns, &rust_fns, &sky_kernel_decls) {
+        let go_impl_loc = if k.go_impl { lookup_sym_loc_lang(store, &k.name.replace('.', "_"), "go")? } else { None };
+        let rust_impl_loc = if k.rust_impl { lookup_sym_loc_lang(store, &k.rust_fn, "rs")? } else { None };
+        store.conn.execute(
+            "INSERT OR REPLACE INTO kernels VALUES (?,?,?,?,?,?,?,?,?)",
+            rusqlite::params![
+                k.name, k.sky_decl as i64, k.rust_fn, k.hs_route_loc.as_deref(),
+                k.go_impl as i64, k.rust_impl as i64, go_impl_loc, rust_impl_loc, k.parity
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// Incremental refresh: for each repo, diff `last_sha:<tag>..HEAD`, re-extract
+/// only the changed files, then re-reconcile parity over the merged store. Falls
+/// back to a full `index` when the DB is absent or a repo has no recorded sha.
+fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
+    if !std::path::Path::new(db).exists() {
+        return cmd_index(repo_specs, db);
+    }
+    let repos: Vec<(String, String)> = repo_specs.iter()
+        .map(|s| parse_repo(s))
+        .collect::<Result<_>>()?;
+    let store = store::Store::open(db)?;
+    // Any repo without a recorded sha can't be diffed → full rebuild.
+    for (tag, _) in &repos {
+        if store.get_meta(&format!("last_sha:{tag}"))?.is_none() {
+            drop(store);
+            return cmd_index(repo_specs, db);
+        }
+    }
+    store.begin()?;
+    let mut changed_count = 0usize;
+    for (tag, root) in &repos {
+        let since = store.get_meta(&format!("last_sha:{tag}"))?.unwrap_or_default();
+        let (ups, dels) = walk::changed(root, &since)?;
+        for d in &dels {
+            store.drop_file(&format!("{tag}:{d}"))?;
+        }
+        for f in &ups {
+            let tagged = format!("{tag}:{}", f.path);
+            store.drop_file(&tagged)?;
+            let Some(src) = read_capped(root, &f.path) else { continue };
+            let role = model::role_of(&tagged);
+            store.put_file(&tagged, f.lang.as_str(), role.as_str(), src.len() as i64, "")?;
+            extract::extract_file(&store, &tagged, f.lang, &src)?;
+            pipeline::record_stage(&store, &tagged)?;
+            if role == model::Role::Fixture || role == model::Role::Example {
+                coverage::record_coverage(&store, &tagged, &src)?;
+            }
+        }
+        if let Ok(sha) = walk::head_sha(root) {
+            store.set_meta(&format!("last_sha:{tag}"), &sha)?;
+        }
+        changed_count += ups.len() + dels.len();
+    }
+    // Parity is a whole-repo property → re-reconcile from the merged store.
+    reconcile_from_store(&store, &repos)?;
+    query::resolve_edges(&store, ".")?;
+    store.commit()?;
+    eprintln!("ipe-index: updated {changed_count} changed path(s) across {} repo(s)", repos.len());
+    Ok(())
+}
+
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Index { repo, db } => cmd_index(&repo, &db),
-        Cmd::Update { repo, db } => cmd_index_pub(&repo, &db),
+        Cmd::Update { repo, db } => cmd_update(&repo, &db),
         Cmd::Parity { db, gaps } => query::cmd_parity(&db, gaps),
         Cmd::Deps { module, db } => query::cmd_deps(&db, &module),
         Cmd::Roles { db } => query::cmd_roles(&db),
