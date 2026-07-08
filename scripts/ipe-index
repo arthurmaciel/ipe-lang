@@ -1,117 +1,27 @@
-#!/usr/bin/env python3
-"""ipe-index — lightweight sqlite code-relation index for the Ipê project.
-
-Poor-man's skydex for OUR repo: agents query DEFINITIONS instead of scanning +
-guessing with rg ("where is X defined" -> one answer, not every text match).
-
-v0: Rust defs (crates/ runtime/ tools/). EXTENSIBLE — add DEFS tables for
-Haskell/Go/Sky (../sky), JS (Live artifacts), Bash. Cross-lang parity routes
-(skydex's advanced feature) are future work.
-
-Commands:
-  ipe-index build         (re)build the index (fast; rg-free, pure-python scan)
-  ipe-index def  <sym>    definition site(s): file:line  kind
-  ipe-index refs <sym>    all word-boundary occurrences (rg-backed)
-  ipe-index kind <kind>   list all defs of a kind (fn|struct|enum|trait|type|impl|macro)
-
-Update: re-run `ipe-index build` (cheap). Wire a post-commit git hook later.
-sqlite WAL -> concurrent readers safe; single writer per build (your intuition).
-DB at .ipe-index/index.db (override IPE_INDEX_DB). .ipe-index/ is gitignored.
-"""
-import os, re, sys, sqlite3, subprocess, pathlib
-
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-DB = os.environ.get("IPE_INDEX_DB", str(ROOT / ".ipe-index" / "index.db"))
-ROOTS = ["crates", "runtime", "tools"]
-
-RUST_DEFS = [
-    (re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+|const\s+|unsafe\s+|extern\s+\"[^\"]*\"\s+)*fn\s+([A-Za-z_]\w*)"), "fn"),
-    (re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+([A-Za-z_]\w*)"), "struct"),
-    (re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?enum\s+([A-Za-z_]\w*)"), "enum"),
-    (re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?trait\s+([A-Za-z_]\w*)"), "trait"),
-    (re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?type\s+([A-Za-z_]\w*)"), "type"),
-    (re.compile(r"^\s*macro_rules!\s+([A-Za-z_]\w*)"), "macro"),
-    (re.compile(r"^\s*impl(?:<[^>]*>)?\s+(?:[A-Za-z_][\w:<>, ]*\s+for\s+)?([A-Za-z_]\w*)"), "impl"),
-]
-
-
-def connect():
-    os.makedirs(os.path.dirname(DB), exist_ok=True)
-    con = sqlite3.connect(DB)
-    con.execute("PRAGMA journal_mode=WAL")
-    return con
-
-
-def build():
-    con = connect()
-    con.execute("DROP TABLE IF EXISTS sym")
-    con.execute("CREATE TABLE sym(name TEXT, kind TEXT, lang TEXT, file TEXT, line INT)")
-    con.execute("CREATE INDEX i_name ON sym(name)")
-    con.execute("CREATE INDEX i_kind ON sym(kind)")
-    rows = []
-    for r in ROOTS:
-        base = ROOT / r
-        if not base.exists():
-            continue
-        for p in base.rglob("*.rs"):
-            if "target" in p.parts:
-                continue
-            try:
-                txt = p.read_text(errors="ignore")
-            except OSError:
-                continue
-            rel = str(p.relative_to(ROOT))
-            for i, line in enumerate(txt.splitlines(), 1):
-                for rx, kind in RUST_DEFS:
-                    m = rx.match(line)
-                    if m:
-                        rows.append((m.group(1), kind, "rust", rel, i))
-                        break
-    con.executemany("INSERT INTO sym VALUES (?,?,?,?,?)", rows)
-    con.commit()
-    print(f"ipe-index: {len(rows)} rust defs across {ROOTS} -> {DB}")
-
-
-def q_def(name):
-    con = connect()
-    got = False
-    for kind, file, line in con.execute(
-        "SELECT kind,file,line FROM sym WHERE name=? ORDER BY kind,file", (name,)
-    ):
-        print(f"{file}:{line}  {kind}  {name}")
-        got = True
-    if not got:
-        print(f"(no def indexed for '{name}'; try: ipe-index refs {name})")
-
-
-def q_kind(kind):
-    con = connect()
-    for name, file, line in con.execute(
-        "SELECT name,file,line FROM sym WHERE kind=? ORDER BY name", (kind,)
-    ):
-        print(f"{file}:{line}  {name}")
-
-
-def q_refs(name):
-    subprocess.run(["rg", "-n", "--no-heading", "-w", name, *ROOTS], cwd=ROOT)
-
-
-def main():
-    a = sys.argv[1:]
-    if not a:
-        print(__doc__)
-        return
-    if a[0] == "build":
-        build()
-    elif a[0] == "def" and len(a) > 1:
-        q_def(a[1])
-    elif a[0] == "kind" and len(a) > 1:
-        q_kind(a[1])
-    elif a[0] == "refs" and len(a) > 1:
-        q_refs(a[1])
-    else:
-        print("usage: ipe-index build | def <sym> | kind <kind> | refs <sym>")
-
-
-if __name__ == "__main__":
-    main()
+#!/usr/bin/env bash
+# ipe-index — thin wrapper execing the Rust binary (tools/ipe-index).
+#
+# The Rust port supersedes the Python v0 that used to live here. It indexes BOTH
+# repos into one sqlite DB (path-prefixed by repo tag):
+#   * ipe:  this repo   — Rust compiler (crates/), runtime (runtime/), tooling (tools/)
+#   * sky:  ../sky       — Haskell compiler (src/Sky/), Go backend+runtime (runtime-go/),
+#                          Sky stdlib (sky-stdlib/), and the Rust ancestor (runtime-rust/)
+# Languages: Rust, Go, TypeScript/JS (tree-sitter) + Sky + Haskell + Bash.
+#
+# Commands (run `ipe-index` with no args for the full list):
+#   index               (re)build the index from scratch across both repos
+#   update              full reindex (alias of index for v1)
+#   locate <name>       every def site of a symbol (file:line:col), both repos
+#   parity [--gaps]     cross-repo kernel parity: Sky-Go impls vs Ipê-Rust impls
+#   roles | pipeline | wakeup | deps <m> | rdeps <m> | covers <k>
+#
+# DB defaults to .ipe-index/index.db (gitignored). Agents: prefer this over rg
+# for "where is X defined / who imports Y / which kernels still need a Rust impl".
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN="$REPO/tools/ipe-index/target/release/ipe-index"
+if [ ! -x "$BIN" ]; then
+    echo "ipe-index: building the Rust binary (first run)…" >&2
+    ( cd "$REPO/tools/ipe-index" && CARGO_TARGET_DIR=target cargo build --release >&2 )
+fi
+exec "$BIN" "$@"
