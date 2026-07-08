@@ -109,3 +109,75 @@ fn bare_list_lambda_param_is_parse_rejected() {
         sky_diagnostics::SKY_P0001,
     );
 }
+
+/// Negative regression for Std/Money.sky fix: a single-ctor union param
+/// `amount (Money d _) = d` must still be rejected as SKY-T0015.
+/// Proves the stdlib fix did not relax the irrefutability rule.
+#[test]
+fn single_ctor_union_def_param_is_sky_t0015() {
+    assert_gate(
+        "l0105_neg_money_ctor_param",
+        "l0105_neg_money_ctor_param_emit",
+        sky_diagnostics::SKY_T0015,
+    );
+}
+
+/// Positive regression: single-ctor union accessor via `case` compiles clean.
+/// Guards the seal: skyc exit-0 → emitted Rust cargo-builds without error.
+#[test]
+fn single_ctor_case_accessor_compiles() {
+    let root = repo_root();
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join("money_ctor_accessor_case")
+        .join("Main.sky");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("money_ctor_accessor_case_emit");
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "single-ctor case accessor must compile: {:?}",
+        built.err()
+    );
+}
+
+/// Seal remeasure: building examples/00-standard-libs must NOT produce SKY-T0015
+/// on Std/Money or Sky/Test after the Std/Money.sky accessor fix.
+#[test]
+fn standard_libs_sky_t0015_money_blocker_gone() {
+    let root = repo_root();
+    let manifest = root
+        .join("examples")
+        .join("00-standard-libs")
+        .join("sky.toml");
+    if !manifest.exists() {
+        return;
+    }
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("00_standard_libs_t0015_gate");
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+    let result = skyc::build_project(&manifest, &out, &runtime);
+    match &result {
+        Err(skyc::CliError::Pipeline { diag, .. }) => {
+            let msg = format!("{diag:?}");
+            assert!(
+                !msg.contains("SKY-T0015") || (!msg.contains("Money") && !msg.contains("Test.sky")),
+                "SKY-T0015 from Std/Money/Sky.Test must be gone after accessor fix; got: {msg}"
+            );
+        }
+        Ok(()) => {}
+        Err(other) => {
+            let msg = format!("{other:?}");
+            assert!(
+                !msg.contains("SKY-T0015") || (!msg.contains("Money") && !msg.contains("Test.sky")),
+                "SKY-T0015 from Std/Money/Sky.Test must be gone after accessor fix; got: {msg}"
+            );
+        }
+    }
+}
