@@ -1,0 +1,11 @@
+module Dep exposing (Box)
+
+-- SKY-L0114 misattribution regression fixture.
+-- A function-bearing union constructor cannot satisfy the enum's derives
+-- (Clone/Debug/PartialEq/SkyStringify), raising SKY-L0114.
+-- The diagnostic span is ctor.span — which lives in Dep's byte-namespace.
+-- Pre-fix: source_for_span found no enclosing def body → fell back to
+-- entry file (Main.sky). Post-fix: ctor span is scanned and attributed
+-- correctly to Dep.sky.
+
+type Box = Mk (Int -> Int)
