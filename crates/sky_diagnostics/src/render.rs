@@ -391,6 +391,9 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::ReservedBuiltinType { name } => {
             Some(format!("`{name}` is a built-in type name"))
         }
+        NameError::DuplicateQualifier { qualifier, .. } => {
+            Some(format!("qualifier `{qualifier}` already claimed by another import"))
+        }
         NameError::Unknown => None,
     }
 }
