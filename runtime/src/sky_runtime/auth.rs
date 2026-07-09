@@ -495,6 +495,59 @@ mod tests {
         assert!(matches!(token, SkyResult::Err(_)));
     }
 
+    fn now_unix() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64
+    }
+
+    // AUD-02 regression: mirror `jwt.rs`'s `test_hs256_expired_token_rejected`
+    // boundary test for the `Auth` surface. `auth_sign_token` always computes
+    // `exp = now + expiry_seconds` with `expiry_seconds >= 0` enforced, so a
+    // past-`exp` token can't be minted through the public API — encode one
+    // directly (same HS256 + JSON-claims shape `auth_sign_token` uses
+    // internally) to exercise `auth_verify_token`'s `leeway = 0` guard.
+    #[test]
+    fn test_auth_verify_token_expired_30s_ago_rejected() {
+        let secret = "a-test-secret-of-32-bytes-padding".to_string();
+        let claims = serde_json::json!({ "sub": "x", "exp": now_unix() - 30 });
+        let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+        let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
+        let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
+        let verified: SkyResult<String, HashMap<String, String>> =
+            auth_verify_token(secret, token);
+        assert!(
+            matches!(verified, SkyResult::Err(_)),
+            "an Auth token expired 30s ago must be rejected (no clock-skew leeway)"
+        );
+    }
+
+    // AUD-02 regression: claims containing an `aud` key must round-trip
+    // through sign-then-verify. Pre-fix, `Validation`'s default
+    // `validate_aud = true` rejected ANY token merely carrying an `aud`
+    // claim (no expected-audience argument exists on this generic decoder),
+    // breaking a clean roundtrip of aud-bearing claims.
+    #[test]
+    fn test_auth_verify_token_accepts_aud_bearing_claims() {
+        let secret = "a-test-secret-of-32-bytes-padding".to_string();
+        let mut claims = HashMap::new();
+        claims.insert("sub".to_string(), "user-123".to_string());
+        claims.insert("aud".to_string(), "my-service".to_string());
+        let token: SkyResult<String, String> = auth_sign_token(secret.clone(), claims, 3600);
+        let t = match token {
+            SkyResult::Ok(t) => t,
+            SkyResult::Err(e) => panic!("sign: {e}"),
+        };
+        let verified: SkyResult<String, HashMap<String, String>> = auth_verify_token(secret, t);
+        match verified {
+            SkyResult::Ok(m) => {
+                assert_eq!(m.get("aud").map(String::as_str), Some("my-service"));
+            }
+            SkyResult::Err(e) => panic!("verify must accept aud-bearing claims: {e}"),
+        }
+    }
+
     #[tokio::test]
     async fn test_email_normalized_case_insensitive() {
         let pool = match DbPool::connect("sqlite::memory:").await {

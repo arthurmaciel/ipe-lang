@@ -123,12 +123,12 @@ mod tests {
     #[test]
     fn gzip_roundtrip() {
         let orig = b"hello, sky - gzip round-trip with some length to compress".to_vec();
-        let z: SkyResult<Vec<u8>, String> = task_run(compression_gzip(orig.clone()));
+        let z: SkyResult<String, Vec<u8>> = task_run(compression_gzip(orig.clone()));
         let comp = match z {
             SkyResult::Ok(c) => c,
             _ => panic!("gzip failed"),
         };
-        let back: SkyResult<Vec<u8>, String> = task_run(compression_gunzip(comp));
+        let back: SkyResult<String, Vec<u8>> = task_run(compression_gunzip(comp));
         assert!(matches!(back, SkyResult::Ok(ref b) if *b == orig));
     }
 
@@ -137,42 +137,42 @@ mod tests {
         // High bytes (> 127) that are not valid UTF-8 must round-trip without
         // truncation — the old Latin-1 bridge would silently corrupt these.
         let orig: Vec<u8> = (0u8..=255u8).collect();
-        let z: SkyResult<Vec<u8>, String> = task_run(compression_gzip(orig.clone()));
+        let z: SkyResult<String, Vec<u8>> = task_run(compression_gzip(orig.clone()));
         let comp = match z {
             SkyResult::Ok(c) => c,
             _ => panic!("gzip binary failed"),
         };
-        let back: SkyResult<Vec<u8>, String> = task_run(compression_gunzip(comp));
+        let back: SkyResult<String, Vec<u8>> = task_run(compression_gunzip(comp));
         assert!(matches!(back, SkyResult::Ok(ref b) if *b == orig));
     }
 
     #[test]
     fn zstd_roundtrip() {
         let orig = b"zstd payload zstd payload zstd payload".to_vec();
-        let z: SkyResult<Vec<u8>, String> = task_run(compression_zstd_compress(orig.clone()));
+        let z: SkyResult<String, Vec<u8>> = task_run(compression_zstd_compress(orig.clone()));
         let comp = match z {
             SkyResult::Ok(c) => c,
             _ => panic!("zstd failed"),
         };
-        let back: SkyResult<Vec<u8>, String> = task_run(compression_zstd_decompress(comp));
+        let back: SkyResult<String, Vec<u8>> = task_run(compression_zstd_decompress(comp));
         assert!(matches!(back, SkyResult::Ok(ref b) if *b == orig));
     }
 
     #[test]
     fn zstd_roundtrip_binary() {
         let orig: Vec<u8> = (0u8..=255u8).collect();
-        let z: SkyResult<Vec<u8>, String> = task_run(compression_zstd_compress(orig.clone()));
+        let z: SkyResult<String, Vec<u8>> = task_run(compression_zstd_compress(orig.clone()));
         let comp = match z {
             SkyResult::Ok(c) => c,
             _ => panic!("zstd binary failed"),
         };
-        let back: SkyResult<Vec<u8>, String> = task_run(compression_zstd_decompress(comp));
+        let back: SkyResult<String, Vec<u8>> = task_run(compression_zstd_decompress(comp));
         assert!(matches!(back, SkyResult::Ok(ref b) if *b == orig));
     }
 
     #[test]
     fn gunzip_rejects_garbage() {
-        let bad: SkyResult<Vec<u8>, String> =
+        let bad: SkyResult<String, Vec<u8>> =
             task_run(compression_gunzip(b"not a gzip stream".to_vec()));
         assert!(matches!(bad, SkyResult::Err(_)));
     }
@@ -184,7 +184,7 @@ mod tests {
     fn gunzip_rejects_decompression_bomb() {
         // Build a gzip of 34 bytes (> 16-byte cap we will set).
         let plain = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 34 bytes
-        let compressed: SkyResult<Vec<u8>, String> = task_run(compression_gzip(plain.to_vec()));
+        let compressed: SkyResult<String, Vec<u8>> = task_run(compression_gzip(plain.to_vec()));
         let comp = match compressed {
             SkyResult::Ok(c) => c,
             _ => panic!("gzip failed"),
@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn zstd_rejects_decompression_bomb() {
         let plain = b"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"; // 34 bytes
-        let compressed: SkyResult<Vec<u8>, String> =
+        let compressed: SkyResult<String, Vec<u8>> =
             task_run(compression_zstd_compress(plain.to_vec()));
         let comp = match compressed {
             SkyResult::Ok(c) => c,
