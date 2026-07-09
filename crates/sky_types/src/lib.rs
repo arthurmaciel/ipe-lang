@@ -2561,6 +2561,42 @@ mod tests {
         );
     }
 
+    /// Regression for AUD-06 (seal): `Auth.signToken` claims pinned to
+    /// `Dict String String`, not flexible `var(0)`. `var(0)` unified with
+    /// anything (a record literal included), so skyc accepted a program the
+    /// generated project's `HashMap<String,String>`-pinned wrapper could not
+    /// build (exit-0-then-cargo-fail). A `Dict.fromList [...]` literal claims
+    /// argument must still type-check clean; a record literal must now be
+    /// REJECTED at type-check (SKY-T0001-class), not silently accepted.
+    #[test]
+    fn auth_sign_token_claims_pinned_to_dict_string_string() {
+        let ok_src = "module Main exposing (main)\n\
+             import Sky.Core.Prelude exposing (..)\n\
+             import Std.Auth as Auth\n\
+             main =\n    Auth.signToken \"s\" (Dict.fromList [(\"sub\", \"x\")]) 3600\n";
+        let Some((m, mut i)) = canon_src(ok_src) else {
+            return;
+        };
+        assert!(
+            infer(&m, &mut i).is_ok(),
+            "Auth.signToken with a Dict String String claims literal must type-check clean"
+        );
+
+        let bad_src = "module Main exposing (main)\n\
+             import Sky.Core.Prelude exposing (..)\n\
+             import Std.Auth as Auth\n\
+             main =\n    Auth.signToken \"s\" { sub = \"x\" } 3600\n";
+        let Some((m2, mut i2)) = canon_src(bad_src) else {
+            return;
+        };
+        assert!(
+            infer(&m2, &mut i2).is_err(),
+            "Auth.signToken with a RECORD literal claims argument must now be \
+             REJECTED (pre-fix: var(0) unified with anything, accepting a \
+             shape the emitted HashMap<String,String>-pinned wrapper cannot build)"
+        );
+    }
+
     /// Documents the M2a limitation: an *un*annotated polymorphic binding is
     /// monomorphic at its use sites (no rank-based generalisation yet), so using
     /// it at two different concrete types in one module is a sound rejection. The
