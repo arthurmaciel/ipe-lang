@@ -31,71 +31,6 @@ fn indent_of(level: usize) -> String {
     "    ".repeat(level)
 }
 
-/// Count the number of times `word` appears as a complete identifier (word-
-/// boundary on both sides) in `haystack`.
-///
-/// Used by `Expr::Let` emission to detect multi-use bindings that would cause
-/// E0382 "use of moved value" for non-`Clone` types in Rust.
-fn count_word_occurrences(haystack: &str, word: &str) -> usize {
-    if word.is_empty() {
-        return 0;
-    }
-    let is_word_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let hb = haystack.as_bytes();
-    let wb = word.as_bytes();
-    let wlen = wb.len();
-    let mut count = 0;
-    let mut i = 0;
-    while i + wlen <= hb.len() {
-        // Bounds: `i + wlen <= hb.len()` is the loop invariant, so the slice
-        // and both neighbour accesses below are always in range.
-        let slice = hb.get(i..i + wlen).unwrap_or(&[]);
-        if slice == wb {
-            let before_ok = i == 0 || hb.get(i - 1).is_none_or(|&b| !is_word_byte(b));
-            let after_ok = hb.get(i + wlen).is_none_or(|&b| !is_word_byte(b));
-            if before_ok && after_ok {
-                count += 1;
-            }
-        }
-        i += 1;
-    }
-    count
-}
-
-/// Replace every word-boundary occurrence of `word` in `haystack` with
-/// `replacement`, returning the result. Non-word occurrences (substrings of
-/// longer identifiers) are left unchanged.
-fn replace_word_all(haystack: &str, word: &str, replacement: &str) -> String {
-    if word.is_empty() {
-        return haystack.to_owned();
-    }
-    let is_word_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let hb = haystack.as_bytes();
-    let wb = word.as_bytes();
-    let wlen = wb.len();
-    let mut result = String::with_capacity(haystack.len());
-    let mut i = 0;
-    while i < hb.len() {
-        let slice = hb.get(i..i + wlen).unwrap_or(&[]);
-        if slice == wb {
-            let before_ok = i == 0 || hb.get(i - 1).is_none_or(|&b| !is_word_byte(b));
-            let after_ok = hb.get(i + wlen).is_none_or(|&b| !is_word_byte(b));
-            if before_ok && after_ok {
-                result.push_str(replacement);
-                i += wlen;
-                continue;
-            }
-        }
-        // Advance one UTF-8 character at a time to keep the byte logic correct
-        // for non-ASCII content (identifiers are ASCII-only, but string literals
-        // in the emitted body may contain arbitrary Unicode).
-        let ch = haystack.get(i..).and_then(|s| s.chars().next()).unwrap_or('\0');
-        result.push(ch);
-        i += ch.len_utf8();
-    }
-    result
-}
-
 /// Returns `true` if the expression produces a value that Rust will MOVE on
 /// first use (i.e., a non-`Clone` type), making a multi-use `let` binding
 /// cause E0382 "use of moved value".
@@ -109,10 +44,678 @@ fn replace_word_all(haystack: &str, word: &str, replacement: &str) -> String {
 /// Plain `Clone`/`Copy` values (integers, booleans, strings, records, enums)
 /// do NOT trigger this path — their `let` bindings are preserved so the
 /// compiler can share the computation.
+///
+/// Recurses into `Tuple`/`Record` LITERALS so a directly-constructed
+/// `(tasks, n)` or `{ tasks = ..., n = ... }` whose task-list is nested one
+/// level down is also caught — a purely structural widening of the AUD-04
+/// audit's narrower `Expr::List`-only check (#B4). A `let`-bound value that
+/// is task-typed only through its declared TYPE (e.g. a `Call` to a
+/// Task-returning helper, or a `Var` reference to an already-task-typed
+/// binding) is NOT detected here — that needs a real type-of-expression
+/// recovery pass this backend does not have; filed as a residual gap rather
+/// than guessed at (see AUD-04 follow-up in backlog.md).
 fn expr_value_is_non_clone(expr: &Expr) -> bool {
-    // A list whose element is a task (or contains one) — Vec<SkyTask<A>>
-    // is move-only.  All other expression shapes produce Clone values.
-    matches!(expr, Expr::List { elem, .. } if ir_type_contains_task(elem))
+    match expr {
+        // A list whose element is a task (or contains one) — Vec<SkyTask<A>>
+        // is move-only.
+        Expr::List { elem, .. } => ir_type_contains_task(elem),
+        Expr::Tuple(items) => items.iter().any(expr_value_is_non_clone),
+        Expr::Record(fields) => fields.iter().any(|(_, e)| expr_value_is_non_clone(e)),
+        _ => false,
+    }
+}
+
+/// Collect every symbol a pattern binds (recursively) into `out`. Mirrors
+/// `sky_lower::pat_binds_symbol`'s traversal shape but gathers the full bound
+/// set in one pass rather than testing membership of one target.
+fn pat_bound_symbols(pat: &Pat, out: &mut std::collections::BTreeSet<Symbol>) {
+    match pat {
+        Pat::Var(s) => {
+            out.insert(*s);
+        }
+        Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => {}
+        Pat::Alias(inner, s) => {
+            out.insert(*s);
+            pat_bound_symbols(inner, out);
+        }
+        Pat::Ctor { args, .. } => {
+            for p in args {
+                pat_bound_symbols(p, out);
+            }
+        }
+        Pat::Tuple(elems) => {
+            for p in elems {
+                pat_bound_symbols(p, out);
+            }
+        }
+        Pat::Record(fields) => {
+            for (_, p) in fields {
+                pat_bound_symbols(p, out);
+            }
+        }
+        Pat::Slice { prefix, rest } => {
+            for p in prefix {
+                pat_bound_symbols(p, out);
+            }
+            if let Some(p) = rest {
+                pat_bound_symbols(p, out);
+            }
+        }
+    }
+}
+
+/// Exhaustive, binder-aware free-variable collector over the typed IR
+/// `Expr` tree — replaces the AUD-04 textual `clone_captured_vars` /
+/// `replace_word_all` passes, which operated on ALREADY-EMITTED Rust source
+/// text with no string-literal-state tracking (a captured-variable word
+/// appearing mid string literal, or matching a record field name, would get
+/// corrupted). Operating on the IR instead means a string literal is an
+/// opaque `Expr::Str` leaf and a record field name is a `Symbol` in a
+/// `(Symbol, Expr)` pair — neither is ever mistaken for a `Var` occurrence.
+///
+/// Every binder (`Let`/`Destructure`/`Lambda`/`TailLoop`/`Match` arm
+/// patterns) removes its bound name(s) from the free set of the scope it
+/// introduces, exactly mirroring `sky_lower::rewrite_var_to_apply`'s
+/// shadow-aware recursion shape.
+fn free_vars(expr: &Expr) -> std::collections::BTreeSet<Symbol> {
+    let mut out = std::collections::BTreeSet::new();
+    collect_free_vars(expr, &mut out);
+    out
+}
+
+#[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
+fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSet<Symbol>) {
+    match expr {
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => {}
+        Expr::Var(s) | Expr::CloneVar(s) => {
+            out.insert(*s);
+        }
+        Expr::Ctor { args, .. } | Expr::Call { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                collect_free_vars(a, out);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_free_vars(lhs, out);
+            collect_free_vars(rhs, out);
+        }
+        Expr::Let { name, value, body } => {
+            collect_free_vars(value, out);
+            let mut body_free = std::collections::BTreeSet::new();
+            collect_free_vars(body, &mut body_free);
+            body_free.remove(name);
+            out.extend(body_free);
+        }
+        Expr::Destructure { binder, value, body } => {
+            collect_free_vars(value, out);
+            let mut bound = std::collections::BTreeSet::new();
+            pat_bound_symbols(binder, &mut bound);
+            let mut body_free = std::collections::BTreeSet::new();
+            collect_free_vars(body, &mut body_free);
+            for b in &bound {
+                body_free.remove(b);
+            }
+            out.extend(body_free);
+        }
+        Expr::If { cond, then_, else_ } => {
+            collect_free_vars(cond, out);
+            collect_free_vars(then_, out);
+            collect_free_vars(else_, out);
+        }
+        Expr::Match(m) => {
+            collect_free_vars(m.scrutinee(), out);
+            for arm in m.arms() {
+                let mut bound = std::collections::BTreeSet::new();
+                pat_bound_symbols(&arm.pat, &mut bound);
+                let mut body_free = std::collections::BTreeSet::new();
+                collect_free_vars(&arm.body, &mut body_free);
+                for b in &bound {
+                    body_free.remove(b);
+                }
+                out.extend(body_free);
+            }
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            for e in items {
+                collect_free_vars(e, out);
+            }
+        }
+        Expr::Cons { head, tail } => {
+            collect_free_vars(head, out);
+            collect_free_vars(tail, out);
+        }
+        Expr::Record(fields) => {
+            for (_, e) in fields {
+                collect_free_vars(e, out);
+            }
+        }
+        Expr::Access { record, .. } => collect_free_vars(record, out),
+        Expr::Update { record, fields } => {
+            collect_free_vars(record, out);
+            for (_, e) in fields {
+                collect_free_vars(e, out);
+            }
+        }
+        Expr::Lambda { params, body, .. } | Expr::TailLoop { params, body } => {
+            let mut body_free = std::collections::BTreeSet::new();
+            collect_free_vars(body, &mut body_free);
+            for (s, _) in params {
+                body_free.remove(s);
+            }
+            out.extend(body_free);
+        }
+        Expr::Apply { func, args } => {
+            collect_free_vars(func, out);
+            for a in args {
+                collect_free_vars(a, out);
+            }
+        }
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            collect_free_vars(effect, out);
+            collect_free_vars(rest, out);
+        }
+    }
+}
+
+/// Shadow-aware IR rewrite: replace every FREE occurrence of `Expr::Var(target)`
+/// in `expr` with `Expr::CloneVar(target)`, stopping recursion into any subtree
+/// where a binder rebinds `target` (that occurrence is a different binding, not
+/// the captured one). Structurally identical shadow-skip shape to
+/// `sky_lower::rewrite_var_to_apply` — the one existing precedent for a
+/// single-target IR substitution in this codebase — with a `CloneVar` leaf
+/// action instead of an `Apply` wrap.
+///
+/// Cloning a `Copy` value (Int/Bool/…) compiles to a bitwise copy — harmless —
+/// so this never needs a Copy/non-Copy type check to stay sound; it only ever
+/// clones a variable that a caller determined is genuinely captured (see
+/// `clone_targets_in_expr`).
+#[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
+fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
+    match expr {
+        Expr::Var(s) if s == target => Expr::CloneVar(s),
+        Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => expr,
+        Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
+            op,
+            lhs: Box::new(clone_free_target(*lhs, target)),
+            rhs: Box::new(clone_free_target(*rhs, target)),
+        },
+        Expr::Let { name, value, body } => {
+            let new_value = Box::new(clone_free_target(*value, target));
+            let new_body = if name == target {
+                body
+            } else {
+                Box::new(clone_free_target(*body, target))
+            };
+            Expr::Let {
+                name,
+                value: new_value,
+                body: new_body,
+            }
+        }
+        Expr::Destructure { binder, value, body } => {
+            let new_value = Box::new(clone_free_target(*value, target));
+            let new_body = if pat_binds_target(&binder, target) {
+                body
+            } else {
+                Box::new(clone_free_target(*body, target))
+            };
+            Expr::Destructure {
+                binder,
+                value: new_value,
+                body: new_body,
+            }
+        }
+        Expr::If { cond, then_, else_ } => Expr::If {
+            cond: Box::new(clone_free_target(*cond, target)),
+            then_: Box::new(clone_free_target(*then_, target)),
+            else_: Box::new(clone_free_target(*else_, target)),
+        },
+        Expr::Match(m) => {
+            let (scrutinee, arms) = m.into_parts();
+            let new_scrutinee = Box::new(clone_free_target(*scrutinee, target));
+            let new_arms = arms
+                .into_iter()
+                .map(|arm| {
+                    let new_body = if pat_binds_target(&arm.pat, target) {
+                        arm.body
+                    } else {
+                        clone_free_target(arm.body, target)
+                    };
+                    Arm {
+                        pat: arm.pat,
+                        body: new_body,
+                    }
+                })
+                .collect();
+            Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms))
+        }
+        Expr::Call { callee, args } => Expr::Call {
+            callee,
+            args: args
+                .into_iter()
+                .map(|a| clone_free_target(a, target))
+                .collect(),
+        },
+        Expr::Tuple(items) => Expr::Tuple(
+            items
+                .into_iter()
+                .map(|e| clone_free_target(e, target))
+                .collect(),
+        ),
+        Expr::List { elem, items } => Expr::List {
+            elem,
+            items: items
+                .into_iter()
+                .map(|e| clone_free_target(e, target))
+                .collect(),
+        },
+        Expr::Cons { head, tail } => Expr::Cons {
+            head: Box::new(clone_free_target(*head, target)),
+            tail: Box::new(clone_free_target(*tail, target)),
+        },
+        Expr::Record(fields) => Expr::Record(
+            fields
+                .into_iter()
+                .map(|(s, e)| (s, clone_free_target(e, target)))
+                .collect(),
+        ),
+        Expr::Access { record, field } => Expr::Access {
+            record: Box::new(clone_free_target(*record, target)),
+            field,
+        },
+        Expr::Update { record, fields } => Expr::Update {
+            record: Box::new(clone_free_target(*record, target)),
+            fields: fields
+                .into_iter()
+                .map(|(s, e)| (s, clone_free_target(e, target)))
+                .collect(),
+        },
+        Expr::Lambda { params, ret, body } => {
+            let new_body = if params.iter().any(|(s, _)| *s == target) {
+                body
+            } else {
+                Box::new(clone_free_target(*body, target))
+            };
+            Expr::Lambda {
+                params,
+                ret,
+                body: new_body,
+            }
+        }
+        Expr::Apply { func, args } => Expr::Apply {
+            func: Box::new(clone_free_target(*func, target)),
+            args: args
+                .into_iter()
+                .map(|a| clone_free_target(a, target))
+                .collect(),
+        },
+        Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
+            effect: Box::new(clone_free_target(*effect, target)),
+            rest: Box::new(clone_free_target(*rest, target)),
+        },
+        Expr::TaskSeqSync { effect, rest } => Expr::TaskSeqSync {
+            effect: Box::new(clone_free_target(*effect, target)),
+            rest: Box::new(clone_free_target(*rest, target)),
+        },
+        Expr::Ctor { home, ty, variant, args } => Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args: args
+                .into_iter()
+                .map(|a| clone_free_target(a, target))
+                .collect(),
+        },
+        Expr::TailLoop { params, body } => {
+            let new_body = if params.iter().any(|(s, _)| *s == target) {
+                body
+            } else {
+                Box::new(clone_free_target(*body, target))
+            };
+            Expr::TailLoop {
+                params,
+                body: new_body,
+            }
+        }
+        Expr::TailRecur { args } => Expr::TailRecur {
+            args: args
+                .into_iter()
+                .map(|a| clone_free_target(a, target))
+                .collect(),
+        },
+    }
+}
+
+/// `Pat` version of the shadow check used by [`clone_free_target`] /
+/// [`substitute_var`]: does this irrefutable/refutable binder pattern bind
+/// `target`? Local twin of `sky_lower::pat_binds_symbol` (same shape) — kept
+/// in this crate rather than shared because `sky_backend_rust` does not
+/// depend on `sky_lower` (IR flows one way: lower produces it, backends
+/// consume it).
+fn pat_binds_target(pat: &Pat, target: Symbol) -> bool {
+    match pat {
+        Pat::Var(s) => *s == target,
+        Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => false,
+        Pat::Alias(inner, s) => *s == target || pat_binds_target(inner, target),
+        Pat::Ctor { args, .. } => args.iter().any(|p| pat_binds_target(p, target)),
+        Pat::Tuple(elems) => elems.iter().any(|p| pat_binds_target(p, target)),
+        Pat::Record(fields) => fields.iter().any(|(_, p)| pat_binds_target(p, target)),
+        Pat::Slice { prefix, rest } => {
+            prefix.iter().any(|p| pat_binds_target(p, target))
+                || rest.as_deref().is_some_and(|p| pat_binds_target(p, target))
+        }
+    }
+}
+
+/// Fold [`clone_free_target`] over every symbol in `targets`. Each fold step
+/// only ever rewrites bare `Var` occurrences into `CloneVar` — the passes
+/// don't interfere with each other regardless of order (a `CloneVar` leaf is
+/// never re-matched by a later target's pass).
+fn clone_targets_in_expr(expr: Expr, targets: &std::collections::BTreeSet<Symbol>) -> Expr {
+    targets
+        .iter()
+        .fold(expr, |e, &t| clone_free_target(e, t))
+}
+
+/// Shadow-aware scan of `expr` for a `let`-bound `target`'s free occurrences,
+/// used to gate [`Expr::Let`]'s multi-use inline decision. Returns
+/// `(var_count, has_clonevar)`:
+///
+/// * `var_count` — number of free `Expr::Var(target)` reads. Replaces the
+///   AUD-04 textual `count_word_occurrences(&body_s, &name_s)`, which counted
+///   matches inside ALREADY-RENDERED text (so a match inside a string literal
+///   or a record field name inflated the count and could trigger a corrupting
+///   inline). Counting over the IR instead only ever sees genuine `Var` reads.
+/// * `has_clonevar` — `true` if a free `Expr::CloneVar(target)` occurs (a
+///   lambda capture-clone site the lowerer already emitted for this same
+///   binding). [`Expr`] has no node for "clone of an arbitrary expression",
+///   so [`substitute_var`] cannot cleanly substitute through a `CloneVar`
+///   leaf; when this is `true`, `Expr::Let`'s emitter skips inlining and
+///   keeps the plain `let` form — always correct, just not move-optimized
+///   for that one binding.
+fn scan_free_target(expr: &Expr, target: Symbol) -> (usize, bool) {
+    let mut count = 0usize;
+    let mut has_clonevar = false;
+    scan_free_target_into(expr, target, &mut count, &mut has_clonevar);
+    (count, has_clonevar)
+}
+
+#[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
+fn scan_free_target_into(expr: &Expr, target: Symbol, count: &mut usize, has_clonevar: &mut bool) {
+    match expr {
+        Expr::Var(s) => {
+            if *s == target {
+                *count += 1;
+            }
+        }
+        Expr::CloneVar(s) => {
+            if *s == target {
+                *has_clonevar = true;
+            }
+        }
+        Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::Str(_) | Expr::Char(_)
+        | Expr::Unit | Expr::FuncValue { .. } => {}
+        Expr::Ctor { args, .. } | Expr::Call { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                scan_free_target_into(a, target, count, has_clonevar);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            scan_free_target_into(lhs, target, count, has_clonevar);
+            scan_free_target_into(rhs, target, count, has_clonevar);
+        }
+        Expr::Let { name, value, body } => {
+            scan_free_target_into(value, target, count, has_clonevar);
+            if *name != target {
+                scan_free_target_into(body, target, count, has_clonevar);
+            }
+        }
+        Expr::Destructure { binder, value, body } => {
+            scan_free_target_into(value, target, count, has_clonevar);
+            if !pat_binds_target(binder, target) {
+                scan_free_target_into(body, target, count, has_clonevar);
+            }
+        }
+        Expr::If { cond, then_, else_ } => {
+            scan_free_target_into(cond, target, count, has_clonevar);
+            scan_free_target_into(then_, target, count, has_clonevar);
+            scan_free_target_into(else_, target, count, has_clonevar);
+        }
+        Expr::Match(m) => {
+            scan_free_target_into(m.scrutinee(), target, count, has_clonevar);
+            for arm in m.arms() {
+                if !pat_binds_target(&arm.pat, target) {
+                    scan_free_target_into(&arm.body, target, count, has_clonevar);
+                }
+            }
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            for e in items {
+                scan_free_target_into(e, target, count, has_clonevar);
+            }
+        }
+        Expr::Cons { head, tail } => {
+            scan_free_target_into(head, target, count, has_clonevar);
+            scan_free_target_into(tail, target, count, has_clonevar);
+        }
+        Expr::Record(fields) => {
+            for (_, e) in fields {
+                scan_free_target_into(e, target, count, has_clonevar);
+            }
+        }
+        Expr::Access { record, .. } => scan_free_target_into(record, target, count, has_clonevar),
+        Expr::Update { record, fields } => {
+            scan_free_target_into(record, target, count, has_clonevar);
+            for (_, e) in fields {
+                scan_free_target_into(e, target, count, has_clonevar);
+            }
+        }
+        Expr::Lambda { params, body, .. } | Expr::TailLoop { params, body } => {
+            if !params.iter().any(|(s, _)| *s == target) {
+                scan_free_target_into(body, target, count, has_clonevar);
+            }
+        }
+        Expr::Apply { func, args } => {
+            scan_free_target_into(func, target, count, has_clonevar);
+            for a in args {
+                scan_free_target_into(a, target, count, has_clonevar);
+            }
+        }
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            scan_free_target_into(effect, target, count, has_clonevar);
+            scan_free_target_into(rest, target, count, has_clonevar);
+        }
+    }
+}
+
+/// Shadow-aware IR substitution: replace every FREE occurrence of
+/// `Expr::Var(target)` in `body` with a clone of `replacement`, stopping
+/// recursion into any subtree where a binder rebinds `target`. Replaces the
+/// AUD-04 textual `replace_word_all(&body_s, &name_s, &replacement)`, which
+/// pattern-matched the RENDERED Rust source by word-boundary only — so a
+/// captured-variable word appearing mid string literal (`"the count is"` →
+/// `"the count.clone() is"`) or matching a record field name
+/// (`RecCount { count: n }` → `RecCount { count.clone(): n }`, invalid Rust)
+/// got corrupted. Operating on the IR instead only ever touches genuine
+/// `Var` leaf nodes — a string literal is an opaque `Expr::Str`, a record
+/// field name is a `Symbol` key never matched against `Expr::Var`.
+#[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
+fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
+    match expr {
+        Expr::Var(s) if s == target => replacement.clone(),
+        Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => expr,
+        Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
+            op,
+            lhs: Box::new(substitute_var(*lhs, target, replacement)),
+            rhs: Box::new(substitute_var(*rhs, target, replacement)),
+        },
+        Expr::Let { name, value, body } => {
+            let new_value = Box::new(substitute_var(*value, target, replacement));
+            let new_body = if name == target {
+                body
+            } else {
+                Box::new(substitute_var(*body, target, replacement))
+            };
+            Expr::Let {
+                name,
+                value: new_value,
+                body: new_body,
+            }
+        }
+        Expr::Destructure { binder, value, body } => {
+            let new_value = Box::new(substitute_var(*value, target, replacement));
+            let new_body = if pat_binds_target(&binder, target) {
+                body
+            } else {
+                Box::new(substitute_var(*body, target, replacement))
+            };
+            Expr::Destructure {
+                binder,
+                value: new_value,
+                body: new_body,
+            }
+        }
+        Expr::If { cond, then_, else_ } => Expr::If {
+            cond: Box::new(substitute_var(*cond, target, replacement)),
+            then_: Box::new(substitute_var(*then_, target, replacement)),
+            else_: Box::new(substitute_var(*else_, target, replacement)),
+        },
+        Expr::Match(m) => {
+            let (scrutinee, arms) = m.into_parts();
+            let new_scrutinee = Box::new(substitute_var(*scrutinee, target, replacement));
+            let new_arms = arms
+                .into_iter()
+                .map(|arm| {
+                    let new_body = if pat_binds_target(&arm.pat, target) {
+                        arm.body
+                    } else {
+                        substitute_var(arm.body, target, replacement)
+                    };
+                    Arm {
+                        pat: arm.pat,
+                        body: new_body,
+                    }
+                })
+                .collect();
+            Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms))
+        }
+        Expr::Call { callee, args } => Expr::Call {
+            callee,
+            args: args
+                .into_iter()
+                .map(|a| substitute_var(a, target, replacement))
+                .collect(),
+        },
+        Expr::Tuple(items) => Expr::Tuple(
+            items
+                .into_iter()
+                .map(|e| substitute_var(e, target, replacement))
+                .collect(),
+        ),
+        Expr::List { elem, items } => Expr::List {
+            elem,
+            items: items
+                .into_iter()
+                .map(|e| substitute_var(e, target, replacement))
+                .collect(),
+        },
+        Expr::Cons { head, tail } => Expr::Cons {
+            head: Box::new(substitute_var(*head, target, replacement)),
+            tail: Box::new(substitute_var(*tail, target, replacement)),
+        },
+        Expr::Record(fields) => Expr::Record(
+            fields
+                .into_iter()
+                .map(|(s, e)| (s, substitute_var(e, target, replacement)))
+                .collect(),
+        ),
+        Expr::Access { record, field } => Expr::Access {
+            record: Box::new(substitute_var(*record, target, replacement)),
+            field,
+        },
+        Expr::Update { record, fields } => Expr::Update {
+            record: Box::new(substitute_var(*record, target, replacement)),
+            fields: fields
+                .into_iter()
+                .map(|(s, e)| (s, substitute_var(e, target, replacement)))
+                .collect(),
+        },
+        Expr::Lambda { params, ret, body } => {
+            let new_body = if params.iter().any(|(s, _)| *s == target) {
+                body
+            } else {
+                Box::new(substitute_var(*body, target, replacement))
+            };
+            Expr::Lambda {
+                params,
+                ret,
+                body: new_body,
+            }
+        }
+        Expr::Apply { func, args } => Expr::Apply {
+            func: Box::new(substitute_var(*func, target, replacement)),
+            args: args
+                .into_iter()
+                .map(|a| substitute_var(a, target, replacement))
+                .collect(),
+        },
+        Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
+            effect: Box::new(substitute_var(*effect, target, replacement)),
+            rest: Box::new(substitute_var(*rest, target, replacement)),
+        },
+        Expr::TaskSeqSync { effect, rest } => Expr::TaskSeqSync {
+            effect: Box::new(substitute_var(*effect, target, replacement)),
+            rest: Box::new(substitute_var(*rest, target, replacement)),
+        },
+        Expr::Ctor { home, ty, variant, args } => Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args: args
+                .into_iter()
+                .map(|a| substitute_var(a, target, replacement))
+                .collect(),
+        },
+        Expr::TailLoop { params, body } => {
+            let new_body = if params.iter().any(|(s, _)| *s == target) {
+                body
+            } else {
+                Box::new(substitute_var(*body, target, replacement))
+            };
+            Expr::TailLoop {
+                params,
+                body: new_body,
+            }
+        }
+        Expr::TailRecur { args } => Expr::TailRecur {
+            args: args
+                .into_iter()
+                .map(|a| substitute_var(a, target, replacement))
+                .collect(),
+        },
+    }
 }
 
 /// Returns `true` if `ty` is or structurally contains `IrType::Task`.
@@ -123,184 +726,6 @@ fn ir_type_contains_task(ty: &IrType) -> bool {
         IrType::Result(e, a) => ir_type_contains_task(e) || ir_type_contains_task(a),
         _ => false,
     }
-}
-
-// ── TaskSeq clone-capture helpers ────────────────────────────────────────────
-//
-// `Expr::TaskSeq` emits `task_and_then(effect_s, Box::new(move |_| { rest_s }))`.
-// Rust evaluates `effect_s` first (left-to-right), so any non-Copy variable
-// consumed in `effect_s` is moved before the closure in `rest_s` can capture it.
-// The helpers below detect shared identifiers and add `.clone()` in `effect_s`.
-
-/// Returns `true` for Rust keywords, macro names, and common runtime function
-/// names that should never receive a spurious `.clone()` call.
-fn is_rust_keyword_or_runtime(w: &str) -> bool {
-    matches!(
-        w,
-        "let"
-            | "mut"
-            | "move"
-            | "true"
-            | "false"
-            | "return"
-            | "break"
-            | "continue"
-            | "if"
-            | "else"
-            | "for"
-            | "while"
-            | "loop"
-            | "match"
-            | "in"
-            | "as"
-            | "use"
-            | "mod"
-            | "pub"
-            | "fn"
-            | "struct"
-            | "enum"
-            | "impl"
-            | "trait"
-            | "where"
-            | "type"
-            | "const"
-            | "static"
-            | "unsafe"
-            | "async"
-            | "await"
-            | "dyn"
-            | "ref"
-            | "self"
-            | "super"
-            | "crate"
-            | "extern"
-            | "vec"
-            | "format"
-            | "to_string"
-            | "clone"
-            | "into"
-            | "from"
-            | "default"
-            | "push_str"
-            | "contains"
-            | "starts_with"
-            | "ends_with"
-            | "len"
-            | "is_empty"
-            | "parse"
-            | "unwrap"
-            | "unwrap_or"
-            | "ok"
-            | "err"
-            | "map"
-            | "and_then"
-    )
-}
-
-/// Collect all unique lowercase-initial identifier words from `s` (length ≥ 2,
-/// not a Rust keyword/runtime name) into a sorted set.  These are the candidates
-/// that might be local variables captured by a `move` closure.
-fn collect_lowercase_ident_words(s: &str) -> std::collections::BTreeSet<String> {
-    use std::collections::BTreeSet;
-    let is_word_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let hb = s.as_bytes();
-    let mut seen = BTreeSet::new();
-    let mut i = 0;
-    while i < hb.len() {
-        let Some(&b) = hb.get(i) else { break };
-        if b.is_ascii_lowercase() {
-            // Ensure this is a word start, not the middle of an identifier.
-            let is_mid = i > 0 && hb.get(i.saturating_sub(1)).is_some_and(|&p| is_word_byte(p));
-            if !is_mid {
-                let start = i;
-                while hb.get(i).is_some_and(|&c| is_word_byte(c)) {
-                    i += 1;
-                }
-                if let Some(word) = hb
-                    .get(start..i)
-                    .and_then(|s| std::str::from_utf8(s).ok())
-                    .filter(|w| w.len() >= 2 && !is_rust_keyword_or_runtime(w))
-                {
-                    seen.insert(word.to_owned());
-                }
-                continue;
-            }
-        }
-        i += 1;
-    }
-    seen
-}
-
-/// Replace bare occurrences of `ident` in `s` with `ident.clone()`, skipping:
-///   - occurrences already followed by `.clone()` (no double-clone),
-///   - occurrences followed by `(` or `!(` (function/macro calls, not values),
-///   - occurrences immediately preceded by `"` or `'` (inside string literals).
-fn add_clone_to_bare_ident(s: &str, ident: &str) -> String {
-    if ident.is_empty() {
-        return s.to_owned();
-    }
-    let is_word_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let hb = s.as_bytes();
-    let ib = ident.as_bytes();
-    let ilen = ib.len();
-    let mut result = String::with_capacity(s.len() + 16);
-    let mut i = 0;
-    while i < hb.len() {
-        if hb.get(i..i + ilen) == Some(ib) {
-            let prev = if i > 0 {
-                hb.get(i.saturating_sub(1)).copied()
-            } else {
-                None
-            };
-            let before_ok = prev.is_none_or(|b| !is_word_byte(b));
-            // Skip identifiers that sit inside a string literal
-            // (immediately preceded by `"` or `'`).
-            let not_in_string_lit = prev != Some(b'"') && prev != Some(b'\'');
-            let after_ok = hb.get(i + ilen).is_none_or(|&b| !is_word_byte(b));
-            if before_ok && not_in_string_lit && after_ok {
-                let after_str = s.get(i + ilen..).unwrap_or("");
-                // Only add .clone() for bare value uses:
-                //   already-cloned → skip; function/macro call → skip; else → clone.
-                let needs_clone = !after_str.starts_with(".clone()")
-                    && !after_str.starts_with('(')
-                    && !after_str.starts_with("!(");
-                result.push_str(ident);
-                if needs_clone {
-                    result.push_str(".clone()");
-                }
-                i += ilen;
-                continue;
-            }
-        }
-        let ch = s
-            .get(i..)
-            .and_then(|ss| ss.chars().next())
-            .unwrap_or('\0');
-        result.push(ch);
-        i += ch.len_utf8();
-    }
-    result
-}
-
-/// In `effect_s`, add `.clone()` to any identifier that is also (potentially)
-/// captured free in `rest_s`, preventing E0382 "use of moved value" in
-///   `task_and_then(effect_s, Box::new(move |_| { rest_s }))`.
-///
-/// Only lowercase-initial identifiers are examined (local variable naming
-/// convention); uppercase-initial names are types or constructors and don't
-/// need cloning here.
-fn clone_captured_vars(effect_s: &str, rest_s: &str) -> String {
-    let vars = collect_lowercase_ident_words(rest_s);
-    if vars.is_empty() {
-        return effect_s.to_owned();
-    }
-    let mut out = effect_s.to_owned();
-    for var in &vars {
-        if count_word_occurrences(&out, var) > 0 {
-            out = add_clone_to_bare_ident(&out, var);
-        }
-    }
-    out
 }
 
 /// The Rust spelling of a binary operator for use in infix emission.
@@ -4646,9 +5071,7 @@ pub fn emit_expr_at(
             // A `let` expression renders as a parenthesised Rust block so it
             // composes inline anywhere an expression is expected:
             // `({ let <name> = <value>; <body> })`.
-            let name_s = ctx.emit_ident(*name)?;
-            let value_s = emit_expr_at(ctx, value, indent, child, generics)?;
-            let body_s = emit_expr_at(ctx, body, indent, child, generics)?;
+            //
             // `Vec<SkyTask<A>>` (a list of tasks) is non-Clone: using the binding
             // more than once causes E0382 "use of moved value" because the first
             // call moves the Vec.  Sky has pure/immutable semantics so re-
@@ -4656,13 +5079,23 @@ pub fn emit_expr_at(
             // when the value is a task-containing list AND the body uses the name
             // more than once.  Plain Clone/Copy bindings (Int, Bool, records, …)
             // keep the let form so the compiler can share the computation.
-            let multi_use = count_word_occurrences(&body_s, &name_s) > 1;
-            let needs_inline = multi_use && expr_value_is_non_clone(value);
+            //
+            // AUD-04: the multi-use count and the inline substitution both
+            // operate on the IR (`scan_free_target` / `substitute_var`), not on
+            // rendered Rust text — see those functions' doc comments for why
+            // the old text-level passes could corrupt a string literal or a
+            // record field name that happened to spell the same identifier.
+            let (occurrences, has_clonevar) = scan_free_target(body, *name);
+            let needs_inline =
+                occurrences > 1 && expr_value_is_non_clone(value) && !has_clonevar;
             if needs_inline {
-                let replacement = format!("({value_s})");
-                let inlined = replace_word_all(&body_s, &name_s, &replacement);
-                Ok(format!("({{ {inlined} }})"))
+                let inlined_body = substitute_var((**body).clone(), *name, value);
+                let inlined_s = emit_expr_at(ctx, &inlined_body, indent, child, generics)?;
+                Ok(format!("({{ {inlined_s} }})"))
             } else {
+                let name_s = ctx.emit_ident(*name)?;
+                let value_s = emit_expr_at(ctx, value, indent, child, generics)?;
+                let body_s = emit_expr_at(ctx, body, indent, child, generics)?;
                 Ok(format!("({{ let {name_s} = {value_s}; {body_s} }})"))
             }
         }
@@ -4840,13 +5273,22 @@ pub fn emit_expr_at(
         // effect type or non-unit rest type.
         Expr::TaskSeq { effect, rest } => {
             let child = depth + 1;
-            let effect_s = emit_expr_at(ctx, effect, indent, child, generics)?;
+            // Clone any identifier that `rest` (the move-closure continuation)
+            // would capture but `effect` already moves.  Rust evaluates function
+            // args left-to-right, so a String/record passed by value into
+            // `effect_s` is moved before the closure in the second argument is
+            // constructed.
+            //
+            // AUD-04: this rewrite runs on the IR, BEFORE `effect` is emitted to
+            // text — `free_vars`/`clone_targets_in_expr` only ever touch genuine
+            // `Var` nodes, so a captured-variable word inside a string literal or
+            // a record field name in `effect` can never be corrupted (the prior
+            // text-level `clone_captured_vars` pass matched on rendered source
+            // and could rewrite either).
+            let rest_captures = free_vars(rest);
+            let effect_rw = clone_targets_in_expr((**effect).clone(), &rest_captures);
+            let effect_s = emit_expr_at(ctx, &effect_rw, indent, child, generics)?;
             let rest_s = emit_expr_at(ctx, rest, indent, child, generics)?;
-            // Clone any identifier that `rest_s` (the move-closure continuation)
-            // would capture but `effect_s` already moves.  Rust evaluates function
-            // args left-to-right, so a String/record passed by value into `effect_s`
-            // is moved before the closure in the second argument is constructed.
-            let effect_s = clone_captured_vars(&effect_s, &rest_s);
             Ok(format!(
                 "task_and_then({effect_s}, Box::new(move |_| {{ {rest_s} }}))"
             ))
@@ -4857,9 +5299,18 @@ pub fn emit_expr_at(
         // e.g. a helper that returns Vec<Row> or () but still wants to fire a
         // logging side-effect. `task_run` is the blocking scheduler entry point
         // in sky_runtime (`pub fn task_run<E,A>(task: SkyTask<E,A>) -> SkyResult<E,A>`).
+        //
+        // AUD-04: `effect` and `rest` share ONE scope here (no closure), but
+        // `effect`'s own evaluation can still move a variable `rest` needs next
+        // (`let _ = Io.writeStdout msg in msg` moves `msg` into `writeStdout`,
+        // then `rest` reads it again) — the same left-to-right move hazard as
+        // `TaskSeq`, so it gets the identical IR-level clone-capture rewrite.
+        // Pre-AUD-04 this arm had NO clone-capture handling at all.
         Expr::TaskSeqSync { effect, rest } => {
             let child = depth + 1;
-            let effect_s = emit_expr_at(ctx, effect, indent, child, generics)?;
+            let rest_captures = free_vars(rest);
+            let effect_rw = clone_targets_in_expr((**effect).clone(), &rest_captures);
+            let effect_s = emit_expr_at(ctx, &effect_rw, indent, child, generics)?;
             let rest_s = emit_expr_at(ctx, rest, indent, child, generics)?;
             Ok(format!("{{ let _ = task_run({effect_s}); {rest_s} }}"))
         }
