@@ -1960,6 +1960,34 @@ mod tests {
     }
 
     /// An empty triple-quoted string `""""""` is valid and yields an empty string.
+    // Regression: AUD-11 — dotted Access chains must be bounded by MAX_DEPTH.
+    // A token with >MAX_DEPTH dot-segments caused unbounded stack nesting via
+    // ident_expr's rest loop; a postfix dot followed by such a token did the
+    // same via parse_atom_postfix's split loop.
+    #[test]
+    fn dotted_ident_exceeding_max_depth_is_p0003() {
+        // `y.a.a.a...` (300k .a segments) lexes as ONE Ident token and is
+        // lowered via ident_expr's rest loop — the primary attack surface.
+        let src = format!("{HDR}x = y{}", ".a".repeat(300_000));
+        assert_eq!(
+            err_code(&src),
+            "SKY-P0003",
+            "deeply nested dotted ident must be rejected, not panic"
+        );
+    }
+
+    #[test]
+    fn postfix_dot_exceeding_max_depth_is_p0003() {
+        // `(y).a.a.a...` → RParen + Dot + Ident("a.a.a...") — exercised via
+        // parse_atom_postfix's segment loop, the second guard site.
+        let src = format!("{HDR}x = (y){}", ".a".repeat(300_000));
+        assert_eq!(
+            err_code(&src),
+            "SKY-P0003",
+            "deeply nested postfix dot chain must be rejected, not panic"
+        );
+    }
+
     #[test]
     fn empty_triple_string_lexes_to_empty_str() {
         use lexer::{Tok, lex};
