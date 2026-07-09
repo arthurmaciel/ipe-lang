@@ -913,6 +913,13 @@ pub struct Builder<'a> {
 /// settles, the concrete type this use pinned each variable to can be read back
 /// and checked against the binding's super-type obligations.
 pub struct SchemeApp {
+    /// The referenced binding's HOME module path (AUD-05 seal fix) — paired
+    /// with `name` so the use-site soundness check
+    /// ([`super::check_scheme_applications`]) looks up the bound set of the
+    /// binding actually referenced, not a same-named binding from a different
+    /// module (matches the `(home, name)` key shape `SolvedTypes::env` /
+    /// `SolvedTypes::regions` already use for the identical reason).
+    pub home: Vec<Symbol>,
     /// The referenced binding's name.
     pub name: Symbol,
     /// Scheme type-variable raw id → the fresh variable it instantiated to here.
@@ -1998,7 +2005,12 @@ impl<'a> Builder<'a> {
         let key = (module.to_vec(), name);
         if let Some(ty) = self.top_level.get(&key).cloned() {
             let (var, vars) = self.instantiate_tracked(&ty)?;
-            self.scheme_apps.push(SchemeApp { name, vars, span });
+            self.scheme_apps.push(SchemeApp {
+                home: module.to_vec(),
+                name,
+                vars,
+                span,
+            });
             Ok(var)
         } else if let Some(v) = self.untyped.get(&key).copied() {
             Ok(v)
