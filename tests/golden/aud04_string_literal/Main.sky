@@ -1,0 +1,25 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.String as String
+import Std.Log exposing (println)
+
+
+-- AUD-04 witness 1 (string-literal corruption).
+--
+-- `count` is captured free in `rest` (the second `String.fromInt count`
+-- print) and the auto-forced `effect` prints a STRING LITERAL that happens
+-- to contain the substring "count" as its own word ("the count is").
+--
+-- The pre-fix textual `clone_captured_vars` pass scanned the RENDERED
+-- `effect_s` for the bare word "count" and added `.clone()` wherever it
+-- word-boundary-matched — including inside the string literal's escaped
+-- text, corrupting the printed message to "the count.clone() is" while
+-- still compiling cleanly (a silent wrong-output bug, not a build failure).
+--
+-- Expected output: exactly "the count is" on the first line, "3" on the
+-- second (count is still usable after the effect).
+main =
+    let count = 3 in
+    let _ = println "the count is" in
+    println (String.fromInt count)
