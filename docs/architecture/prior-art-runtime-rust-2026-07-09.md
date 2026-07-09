@@ -94,6 +94,57 @@
 - "Self-oracle" / "db-without-live build" (#34 sub-items) — no OLD-repo
   precedent; likely new-repo-specific test-infra concerns, not a runtime gap.
 
+## Part 2 — Haskell-side Rust-backend wiring (`../sky/src/Sky/Generate/Rust/`, `../sky/src/Sky/Build/Rust/`)
+
+Not code-portable (that side is Haskell, ours is all-Rust) but two findings
+are direct blueprints for still-open items in this campaign:
+
+1. **AUD-08 (name-collision guard) has a ready blueprint.** The Haskell
+   backend hit the identical non-injective-snake-case collision
+   (`Std.Ui.borderRounded` and `Std.Ui.Border.rounded` both mangle to
+   `std_ui_border_rounded`) and fixed it with a precomputed
+   `(modPrefix,name) → renamed` map built once per program, consulted at
+   BOTH def-site and call-site (`Naming.hs:14-33`, `rustFnName`). Write
+   AUD-08's fix against this exact shape: compute the collision set once,
+   rename only the colliders, leave everyone else on the default path.
+2. **AUD-09's `emit_expr.rs:4794`/`:4849` clone/textual-surgery items are a
+   known-bad pattern the Haskell backend never fell into**, and the reason
+   why is directly actionable: it never emits Rust text and then rewrites
+   it. Clone/Copy status is decided in an `EmitCtx` threaded through a single
+   top-down AST walk (`Builder/Types.hs:447-448`, consumed at
+   `ExprEmitter.hs:784-813`) — computed BEFORE printing, not patched after.
+   This is the same lesson our own AUD-04 fix already applied (killing
+   `add_clone_to_bare_ident`'s textual pass for an IR-level rewrite) —
+   independent confirmation the approach is right. Frame any further
+   `emit_expr.rs` textual-surgery cleanup (the residual O(n²)
+   unconditional-`.clone()` item, etc.) the same way: move the decision into
+   the emission context, not another string-safety patch.
+3. **Their own retired approach is a cautionary tale for backlog #53**
+   (typed-token-AST vs string concatenation): `Sky.Build.Rust.FfiCall`
+   (`FfiCall.hs:1-27`) replaced a `{param}`/`{argN}` string-hole-substitution
+   FFI wrapper generator with a typed `Call` ADT + `FromJSON`-validated
+   parse, specifically because the string-hole gate ("is every hole
+   filled?") could still let a hole go unfilled or a type-param land where a
+   value-arg belonged — silently, with no Sky diagnostic, straight to a
+   cargo-fail. Confirms #53 is worth doing, not just a style preference.
+4. **Two "silent effect loss" bugs were both closed by replacing a
+   usage-heuristic gate with a real-type check** — worth applying as a
+   review lens across the Non-blocking-hardening ledger: `sky_main`'s
+   Task-vs-`()` return type was originally decided by "does this program
+   *call* `Task.run` anywhere" (a syntactic scan) rather than the actual tail
+   expression's type, and a program that both called `Task.run` inline AND
+   had a Task-typed tail expression silently dropped the tail effect (future
+   built, never awaited). Fixed by deriving the decision structurally
+   (`mainReturnsTask`) instead. Any NEW-repo codegen decision still gated on
+   "does this program *use* X" (syntactic) rather than "what IS the type
+   here" is the same bug shape waiting to happen.
+5. **`skydex parity --gaps`** (OLD-repo-only index, prebuilt, ran in
+   seconds): 24 rows, mostly dead orphan-route table entries + 7
+   `rust-only`/1 `go-only` OLD-repo stdlib-surface gaps — none of it
+   actionable for this campaign (pure OLD-repo Go/Rust bookkeeping), but it
+   corroborated every file:line citation above against a live index rather
+   than a guess.
+
 ## Method note
 
 Full search was scoped to `../sky/runtime-rust/src/sky_runtime/` plus its
