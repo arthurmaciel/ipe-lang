@@ -17,7 +17,8 @@ use crate::code::{
     SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0126, SKY_L0200,
     SKY_N0001,
     SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
-    SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_P0001,
+    SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_N0027,
+    SKY_P0001,
     SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015,
     SKY_P0016, SKY_P0017, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041,
     SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004,
@@ -403,6 +404,15 @@ pub enum NameError {
     /// miscompile with no diagnostic; it is rejected at the declaration instead.
     /// [SKY-N0026]
     ReservedBuiltinType { name: Box<str> },
+    /// Two `import` statements register the same qualifier (an explicit
+    /// `as Alias`, or two module paths sharing a last segment) against
+    /// DIFFERENT dep modules — `Utils.format` / `Http.get` would otherwise
+    /// silently resolve to whichever import came last in source order, with
+    /// no diagnostic. Re-importing the SAME dep module under the same
+    /// qualifier (a diamond dependency) is NOT an error — only a genuine
+    /// clash between two distinct dep modules is. `first` is the earlier
+    /// import's span. [SKY-N0027]
+    DuplicateQualifier { qualifier: Box<str>, first: Span },
 }
 
 /// Errors raised during type inference / checking.
@@ -939,6 +949,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::AmbiguousImport { .. } => SKY_N0024,
         NameError::ReservedNamespace { .. } => SKY_N0025,
         NameError::ReservedBuiltinType { .. } => SKY_N0026,
+        NameError::DuplicateQualifier { .. } => SKY_N0027,
     }
 }
 
@@ -1062,7 +1073,8 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::NameNotExposed { suggestions, .. } => did_you_mean(suggestions, span),
         NameError::DuplicateValue { first, .. }
         | NameError::DuplicateConstructor { first, .. }
-        | NameError::DuplicateType { first, .. } => vec![HelpLine::SecondarySpan {
+        | NameError::DuplicateType { first, .. }
+        | NameError::DuplicateQualifier { first, .. } => vec![HelpLine::SecondarySpan {
             span: *first,
             role: SpanRole::FirstDefinition,
         }],
