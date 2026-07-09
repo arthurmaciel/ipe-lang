@@ -436,8 +436,7 @@ pub fn sky_jwt_encode(
         SkyResult::Err(format!(
             "jwt-encode: unknown algorithm descriptor (expected HS256:… or RS256:…): {}",
             &algorithm_descriptor[..algorithm_descriptor.len().min(20)]
-        )
-        .into())
+        ))
     }
 }
 
@@ -495,12 +494,16 @@ pub fn sky_jwt_decode(
         return SkyResult::Err(format!(
             "jwt-decode: unknown algorithm descriptor (expected HS256:… or RS256:…): {}",
             &algorithm_descriptor[..algorithm_descriptor.len().min(20)]
-        )
-        .into());
+        ));
     }
 
     // 3. Extract payload JSON via base64url-decode (parse, don't validate).
-    let payload_bytes = match URL_SAFE_NO_PAD.decode(parts[1].as_bytes()) {
+    // `parts.len() != 3` already returned above, but never index even when
+    // provably safe — `.get` keeps this fail-closed instead of panicking.
+    let Some(payload_segment) = parts.get(1) else {
+        return SkyResult::Err("jwt-decode: malformed token (expected 3 segments)".into());
+    };
+    let payload_bytes = match URL_SAFE_NO_PAD.decode(payload_segment.as_bytes()) {
         Ok(b) => b,
         Err(_) => return SkyResult::Err("jwt-decode: payload base64url decode failed".into()),
     };
