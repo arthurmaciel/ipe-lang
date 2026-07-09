@@ -502,9 +502,22 @@ pub enum IrType {
     /// A `Generic` is only ever in scope inside a function that quantifies it;
     /// it never appears in a program-level position (enum / record-struct
     /// declaration). Constrained type variables (those needing a Rust trait
-    /// bound — `Number` / `Comparable` / `Appendable`) and the wildcard `any`
-    /// are NOT representable here: they are rejected at lowering (M2c) so every
-    /// `Generic` the backend sees is a true parametric pass-through.
+    /// bound — `Number` / `Comparable` / `Appendable`) are NOT representable
+    /// here: they are rejected at lowering (M2c).
+    ///
+    /// The wildcard `any` is a SEPARATE case, not genuine polymorphism: the
+    /// checker gives every `any` occurrence in an annotation its own fresh flex
+    /// UV ("fresh flex UV per occurrence" — `sky_types::constrain`), so two
+    /// `any` params in one signature can be pinned to two DIFFERENT concrete
+    /// types by the body. `split_typed_sig` (AUD-01 seal fix) resolves each
+    /// param-position `any` from the def's solved env type, per occurrence, to
+    /// its concrete `IrType` whenever that solved type is available — a shared
+    /// `Generic(any_sym)` here would collapse distinct occurrences onto ONE
+    /// Rust generic (exit-0-then-cargo-fail). A `Generic` carrying the interned
+    /// `"any"` symbol therefore still appears ONLY as the fallback when the
+    /// solved type genuinely could not be resolved (should not occur for a
+    /// well-formed `Def::Typed` post-solve) — it is not the steady-state
+    /// representation the way it is for a genuine type parameter.
     Generic(Symbol),
     /// The built-in `Dict k v` associative map type, carrying its key type then
     /// its value type. Renders as the runtime's `HashMap<K, V>` (backed by
