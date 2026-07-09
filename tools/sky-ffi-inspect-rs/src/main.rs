@@ -503,6 +503,13 @@ fn main() {
             "--audit" => {
                 audit = true;
             }
+            // AUD-10: explicit opt-in required before any dependency with a
+            // build script / proc-macro is allowed to run `cargo +nightly
+            // rustdoc` (build scripts + proc-macro expansion execute
+            // arbitrary code at compile time). See `check_build_consent`.
+            "--allow-build-scripts" => {
+                ALLOW_BUILD_SCRIPTS.with(|c| c.set(true));
+            }
             "--manifest" => {
                 i += 1;
                 if i < raw_args.len() {
@@ -553,7 +560,7 @@ fn main() {
 
     if crate_args.is_empty() && manifest_path.is_none() {
         eprintln!(
-            "Usage: sky-ffi-inspect-rs [--features f1,f2] [--git URL [--rev R | --branch B | --tag T]] <crate-name> [crate-name...]"
+            "Usage: sky-ffi-inspect-rs [--features f1,f2] [--git URL [--rev R | --branch B | --tag T]] [--allow-build-scripts] <crate-name> [crate-name...]"
         );
         eprintln!(
             "   or: sky-ffi-inspect-rs --manifest <crates.json>  (multi-crate, per-crate git/features — WALL-G cross-crate index)"
@@ -952,6 +959,11 @@ edition = "2021"
     // Fetch first (uses cargo cache — fast on repeated calls)
     fetch_dep(&manifest_str)?;
 
+    // AUD-10: consent gate BEFORE rustdoc — see `check_build_consent`'s doc
+    // comment for why this must run here and not after.
+    let allow_build_scripts = ALLOW_BUILD_SCRIPTS.with(std::cell::Cell::get);
+    check_build_consent(&manifest_str, allow_build_scripts)?;
+
     // WALL-B (#75): resolve the identifier→(canonical name, exact version) map for
     // every crate in this probe (direct + transitive) from the now-resolved
     // Cargo.lock. Done once per crate inspect; fail-soft (empty on any error).
@@ -1279,6 +1291,155 @@ fn find_rustdoc_json(doc_dir: &PathBuf, safe_name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// AUD-10 (interim mitigation): a package from `cargo metadata` that carries
+/// a build script or is itself a proc-macro crate — the two shapes whose
+/// compilation runs arbitrary code (`build.rs` / proc-macro expansion) with
+/// the current user's full privileges. Full sandboxing (landlock/seccomp,
+/// rootless container) is the tracked, larger fix (see
+/// `docs/architecture/backlog.md` Tier-2 FFI); this type only supports the
+/// audit's own named interim mitigation: naming every offender so a caller
+/// must explicitly opt in via `--allow-build-scripts` rather than firing
+/// silently.
+#[derive(Debug)]
+struct BuildConsentOffender {
+    package: String,
+    reason: &'static str,
+}
+
+/// Walk `cargo metadata`'s package graph (transitive — the default scope of
+/// `packages`) for every package with a `custom-build` target (a `build.rs`)
+/// or a `proc-macro` target. Both compile-time-execute arbitrary code from
+/// the crate name this tool was handed — the exact untrusted input
+/// `inspect_crate` consumes (`main.rs:832`, `AUD-10`).
+///
+/// Runs `--offline` — `fetch_dep` has already populated the cache by the
+/// time this is called, so no extra network round-trip. Fail-soft: any
+/// `cargo metadata` error returns an empty list (never blocks on a transient
+/// metadata failure; `run_rustdoc`'s own later steps will surface a real
+/// problem with a clearer message).
+fn find_build_consent_offenders(manifest_str: &str) -> Vec<BuildConsentOffender> {
+    let output = match Command::new("cargo")
+        .args([
+            "metadata",
+            "--offline",
+            "--format-version",
+            "1",
+            "--quiet",
+            "--manifest-path",
+            manifest_str,
+        ])
+        .output()
+    {
+        Ok(o) if o.status.success() => o.stdout,
+        _ => return Vec::new(),
+    };
+    let meta: serde_json::Value = match serde_json::from_slice(&output) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    offenders_from_metadata(&meta)
+}
+
+/// The PURE extraction half of [`find_build_consent_offenders`] — given a
+/// parsed `cargo metadata` JSON value, find every package carrying a
+/// `custom-build` target (a `build.rs`) or a `proc-macro` target. Split out
+/// so it is unit-testable without shelling out to cargo, mirroring
+/// `transitive_deps_from_metadata`'s split for the same reason.
+fn offenders_from_metadata(meta: &serde_json::Value) -> Vec<BuildConsentOffender> {
+    let Some(packages) = meta["packages"].as_array() else {
+        return Vec::new();
+    };
+
+    let mut offenders = Vec::new();
+    for pkg in packages {
+        let Some(pkg_name) = pkg["name"].as_str() else {
+            continue;
+        };
+        let Some(targets) = pkg["targets"].as_array() else {
+            continue;
+        };
+        let has_kind = |wanted: &str| {
+            targets.iter().any(|t| {
+                t["kind"]
+                    .as_array()
+                    .is_some_and(|ks| ks.iter().any(|k| k.as_str() == Some(wanted)))
+            })
+        };
+        if has_kind("custom-build") {
+            offenders.push(BuildConsentOffender {
+                package: pkg_name.to_string(),
+                reason: "build script (build.rs)",
+            });
+        } else if has_kind("proc-macro") {
+            offenders.push(BuildConsentOffender {
+                package: pkg_name.to_string(),
+                reason: "proc-macro crate",
+            });
+        }
+    }
+    offenders.sort_by(|a, b| a.package.cmp(&b.package));
+    offenders
+}
+
+/// AUD-10 gate: called right after `fetch_dep` succeeds and before the first
+/// `cargo +nightly rustdoc` invocation (rustdoc runs AFTER macro expansion,
+/// so build scripts and proc-macros in the dependency graph already executed
+/// by the time rustdoc's JSON comes back — this must run before that, not
+/// after).
+///
+/// `allow_build_scripts = false` (the default): any offender REFUSES with a
+/// loud, specific error naming every one + whether it's a build-script or
+/// proc-macro + the exact flag to opt in. `allow_build_scripts = true`:
+/// proceeds, but still prints a loud provenance warning naming the packages
+/// — a consent gate, not a technical sandbox, so the warning is load-bearing
+/// (the operator must actually see what they're consenting to).
+fn check_build_consent(manifest_str: &str, allow_build_scripts: bool) -> Result<(), String> {
+    let offenders = find_build_consent_offenders(manifest_str);
+    match build_consent_decision(&offenders, allow_build_scripts) {
+        Ok(None) => Ok(()),
+        Ok(Some(warning)) => {
+            eprintln!("{warning}");
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The PURE decision half of [`check_build_consent`] — given the offender
+/// list and whether `--allow-build-scripts` was passed, decide: `Ok(None)`
+/// (no offenders, proceed silently), `Ok(Some(warning))` (offenders present,
+/// flag set — proceed, caller must print `warning`), or `Err(message)`
+/// (offenders present, flag absent — refuse). Split out so the gating logic
+/// is unit-testable without shelling out to cargo.
+fn build_consent_decision(
+    offenders: &[BuildConsentOffender],
+    allow_build_scripts: bool,
+) -> Result<Option<String>, String> {
+    if offenders.is_empty() {
+        return Ok(None);
+    }
+    let listing: Vec<String> = offenders
+        .iter()
+        .map(|o| format!("  - {} ({})", o.package, o.reason))
+        .collect();
+    if allow_build_scripts {
+        return Ok(Some(format!(
+            "[sky-ffi] WARNING: --allow-build-scripts is set — the following \
+             dependencies will execute arbitrary code at compile time \
+             (build script / proc-macro expansion) with your user privileges:\n{}",
+            listing.join("\n")
+        )));
+    }
+    Err(format!(
+        "refusing to inspect: the following dependencies execute arbitrary code \
+         at compile time (build script / proc-macro expansion), which would run \
+         with your user privileges before rustdoc ever sees them:\n{}\n\
+         Pass --allow-build-scripts to proceed anyway (you will see a warning \
+         naming these same packages first).",
+        listing.join("\n")
+    ))
 }
 
 fn fetch_dep(manifest_str: &str) -> Result<(), String> {
@@ -3729,6 +3890,11 @@ fn make_enum_extract(
 // is byte-identical with or without the flag.
 thread_local! {
     static TAIL_AUDIT_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    // AUD-10: mirrors TAIL_AUDIT_ENABLED's pattern for a global CLI flag consulted
+    // deep in the `inspect_crate` -> `run_rustdoc` -> `check_build_consent` call
+    // chain, without threading a new parameter through every call site (including
+    // the multi-crate `--manifest` fan-out).
+    static ALLOW_BUILD_SCRIPTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static TAIL_AUDIT_DROPS: std::cell::RefCell<Vec<(String, bool, String)>> =
         const { std::cell::RefCell::new(Vec::new()) };
     // Wall #3 coverage: per-symbol generic-stub drops (always recorded — the
@@ -11932,6 +12098,80 @@ mod tests {
     fn transitive_deps_empty_on_missing_packages_key() {
         let deps = transitive_deps_from_metadata(&serde_json::json!({}));
         assert!(deps.is_empty());
+    }
+
+    // ── AUD-10: build-script / proc-macro consent gate ──────────────────────
+
+    fn aud10_fixture_meta() -> serde_json::Value {
+        serde_json::json!({
+            "packages": [
+                { "name": "openssl-sys", "version": "0.9.100",
+                  "targets": [
+                      { "name": "build-script-build", "kind": ["custom-build"] },
+                      { "name": "openssl-sys", "kind": ["lib"] }
+                  ] },
+                { "name": "serde_derive", "version": "1.0.200",
+                  "targets": [ { "name": "serde_derive", "kind": ["proc-macro"] } ] },
+                { "name": "equivalent", "version": "1.0.2",
+                  "targets": [ { "name": "equivalent", "kind": ["lib"] } ] }
+            ]
+        })
+    }
+
+    #[test]
+    fn offenders_from_metadata_finds_build_script_and_proc_macro_not_plain_lib() {
+        let offenders = offenders_from_metadata(&aud10_fixture_meta());
+        assert_eq!(offenders.len(), 2, "offenders: {offenders:?}");
+        // Sorted by package name.
+        assert_eq!(offenders[0].package, "openssl-sys");
+        assert_eq!(offenders[0].reason, "build script (build.rs)");
+        assert_eq!(offenders[1].package, "serde_derive");
+        assert_eq!(offenders[1].reason, "proc-macro crate");
+    }
+
+    #[test]
+    fn offenders_from_metadata_empty_for_plain_lib_only_graph() {
+        let meta = serde_json::json!({
+            "packages": [
+                { "name": "equivalent", "version": "1.0.2",
+                  "targets": [ { "name": "equivalent", "kind": ["lib"] } ] }
+            ]
+        });
+        assert!(offenders_from_metadata(&meta).is_empty());
+    }
+
+    #[test]
+    fn build_consent_decision_refuses_without_flag_naming_every_offender() {
+        let offenders = offenders_from_metadata(&aud10_fixture_meta());
+        let result = build_consent_decision(&offenders, false);
+        let Err(msg) = result else {
+            panic!("expected refusal without --allow-build-scripts, got: {result:?}");
+        };
+        assert!(msg.contains("openssl-sys"), "must name openssl-sys: {msg}");
+        assert!(msg.contains("serde_derive"), "must name serde_derive: {msg}");
+        assert!(
+            msg.contains("--allow-build-scripts"),
+            "must name the opt-in flag: {msg}"
+        );
+    }
+
+    #[test]
+    fn build_consent_decision_proceeds_with_warning_when_flag_set() {
+        let offenders = offenders_from_metadata(&aud10_fixture_meta());
+        let result = build_consent_decision(&offenders, true);
+        let Ok(Some(warning)) = result else {
+            panic!("expected Ok(Some(warning)) with --allow-build-scripts, got: {result:?}");
+        };
+        assert!(warning.contains("openssl-sys"));
+        assert!(warning.contains("serde_derive"));
+        assert!(warning.contains("WARNING"));
+    }
+
+    #[test]
+    fn build_consent_decision_clean_graph_proceeds_silently_either_way() {
+        let offenders: Vec<BuildConsentOffender> = Vec::new();
+        assert_eq!(build_consent_decision(&offenders, false), Ok(None));
+        assert_eq!(build_consent_decision(&offenders, true), Ok(None));
     }
 
     fn path(name: &str) -> serde_json::Value {

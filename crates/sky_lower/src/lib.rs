@@ -81,6 +81,15 @@ pub fn lower(
     // Minted through the same owned `&mut Interner`.
     let param_binders =
         interner.fresh_symbols("arg_", lower::count_destructure_param_sites(m))?;
+    // AUD-01 seal fix: one fresh symbol per bare `any`-in-param-position
+    // occurrence, so `split_typed_sig` never shares the single interned
+    // `"any"` Symbol across two occurrences the checker independently pinned
+    // to different concrete types. The count (an immutable borrow of
+    // `interner`) is computed in its OWN statement, ahead of and separate
+    // from the `fresh_symbols` mutable-mint call — the two borrows would
+    // otherwise conflict within one expression.
+    let any_param_site_count = lower::count_any_param_sites(m, interner);
+    let any_param_binders = interner.fresh_symbols("anyp_", any_param_site_count)?;
     // The built-in `Maybe` / `Result` types + constructors are Prelude
     // built-ins (no `type` declaration), so the lowerer needs their symbols to
     // seed the variant-set / arity tables it would otherwise read from
@@ -132,7 +141,19 @@ pub fn lower(
         ek_unavailable: interner.intern("Unavailable")?,
         ek_unexpected: interner.intern("Unexpected")?,
     };
-    lower::Lowerer::new(m, types, &*interner, eta_params, cap_params, param_binders, &builtins).run()
+    lower::Lowerer::new(
+        m,
+        types,
+        &*interner,
+        lower::SymbolPools {
+            eta_params,
+            cap_params,
+            param_binders,
+            any_param_binders,
+        },
+        &builtins,
+    )
+    .run()
 }
 
 #[cfg(test)]
@@ -831,6 +852,17 @@ mod tests {
     /// The principled fix computes `type_params` from the structurally-used
     /// `IrType::Generic` set of the solved `params + ret`.  For `any` in param
     /// position the generic is structurally present → included in `type_params`.
+    ///
+    /// AUD-01 note: a SINGLE `any`-in-param occurrence now ALSO goes through
+    /// the per-occurrence fresh-symbol substitution (`split_typed_sig`) — a
+    /// lone occurrence isn't the AUD-01 bug (nothing to collide with), but the
+    /// substitution applies uniformly regardless of occurrence count, so the
+    /// `type_param`'s symbol is a synthetic `anyp_N` name here, not the
+    /// literal `"any"` interned symbol. The backend renders `Generic` by
+    /// TYPE-PARAM POSITION, not spelling (see `sky_ir::ir`'s `Generic` doc
+    /// comment), so this is not a behavior change worth asserting against —
+    /// only that exactly one `type_param` exists and the param's `IrType`
+    /// matches it.
     #[test]
     fn any_in_param_position_lowers_without_ice() {
         // `wrap : any -> Int` — `any` is in parameter position.
@@ -846,11 +878,11 @@ mod tests {
         );
         let Some((func, i)) = opt else { return };
 
-        // Exactly one type_param, named "any".
+        // Exactly one type_param.
         assert_eq!(
             func.type_params.len(),
             1,
-            "type_params must have exactly one entry (the `any` symbol), got {:?}",
+            "type_params must have exactly one entry, got {:?}",
             func.type_params
                 .iter()
                 .map(|(s, _)| i.resolve(*s))
@@ -859,11 +891,6 @@ mod tests {
         let Some((any_sym, _)) = func.type_params.first() else {
             return;
         };
-        assert_eq!(
-            i.resolve(*any_sym),
-            Some("any"),
-            "the single type_param must be named \"any\""
-        );
 
         // The parameter's IrType is Generic(any_sym).
         assert_eq!(func.params.len(), 1, "one parameter");
@@ -876,6 +903,74 @@ mod tests {
         );
 
         // Return type is Int (the annotation's explicit return).
+        assert_eq!(func.ret, IrType::Int, "return type must be Int");
+    }
+
+    /// Regression for AUD-01 (seal): TWO `any` occurrences in one param-position
+    /// annotation must lower to TWO DISTINCT `Generic` symbols, each declared
+    /// in `type_params` — not collapse onto one shared `Generic(any_sym)`.
+    ///
+    /// The checker gives every `any` occurrence a fresh flex UV per occurrence
+    /// (`sky_types::constrain`), so `f : any -> any -> Int` called `f "x" 3` is
+    /// well-typed and `skyc` accepts it. Pre-fix, BOTH params lowered to the
+    /// SAME `IrType::Generic(any_sym)` (the interned `"any"` Symbol is shared),
+    /// so the backend emitted `fn main_f<T1>(a: T1, b: T1) -> i64` — a call
+    /// passing a `String` and an `Int` at the two positions failed `cargo build`
+    /// with E0308 despite `skyc` having accepted the program
+    /// (exit-0-then-cargo-fail). Post-fix, `split_typed_sig` gives each
+    /// occurrence its OWN fresh symbol from `any_param_binders`, and
+    /// `type_params` includes both (unioned in alongside `free_vars`) — the
+    /// backend renders `IrType::Generic` by TYPE-PARAM POSITION, not by symbol
+    /// spelling, so two distinct symbols is sufficient for two distinct Rust
+    /// generics (`fn f<T1, T2>(a: T1, b: T2)`), each independently
+    /// monomorphized at the call site by rustc.
+    #[test]
+    fn any_params_get_distinct_generics_not_a_shared_one() {
+        let opt = lower_func(
+            "module Main exposing (f)\nf : any -> any -> Int\nf _ _ =\n    0\n",
+            "f",
+        );
+        assert!(
+            opt.is_some(),
+            "f : any -> any -> Int (two `any` occurrences) must lower"
+        );
+        let Some((func, i)) = opt else { return };
+
+        assert_eq!(func.params.len(), 2, "two parameters");
+        let (Some((_, a_ty)), Some((_, b_ty))) = (func.params.first(), func.params.get(1)) else {
+            return;
+        };
+
+        // Both params ARE Generic (this is legitimate structural polymorphism
+        // once each occurrence is independent) — but with DISTINCT symbols.
+        let (IrType::Generic(a_sym), IrType::Generic(b_sym)) = (a_ty, b_ty) else {
+            assert!(
+                false_marker(),
+                "both params must be IrType::Generic, got a={a_ty:?} b={b_ty:?}"
+            );
+            return;
+        };
+        assert_ne!(
+            a_sym, b_sym,
+            "the two `any` occurrences must NOT share one Generic symbol — \
+             a shared symbol is exactly the AUD-01 bug (fn f<T1>(a:T1,b:T1))"
+        );
+
+        // Both fresh symbols must be DECLARED in `type_params` — an emitted
+        // Generic with no matching type_params entry is an undeclared Rust
+        // generic (invalid emission), the failure mode the type_params-union
+        // fix (alongside the fresh-symbol fix) closes.
+        let declared: Vec<_> = func.type_params.iter().map(|(s, _)| *s).collect();
+        assert!(
+            declared.contains(a_sym),
+            "param `a`'s Generic symbol must be declared in type_params, got {:?}",
+            declared.iter().map(|s| i.resolve(*s)).collect::<Vec<_>>()
+        );
+        assert!(
+            declared.contains(b_sym),
+            "param `b`'s Generic symbol must be declared in type_params, got {:?}",
+            declared.iter().map(|s| i.resolve(*s)).collect::<Vec<_>>()
+        );
         assert_eq!(func.ret, IrType::Int, "return type must be Int");
     }
 }

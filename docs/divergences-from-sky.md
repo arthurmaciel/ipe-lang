@@ -779,6 +779,30 @@ API-shape review):
   `lower.rs::lower_enum` Gate 1, `lower.rs::ir_type_from_canon` Var arm.
   Regression: `golden_l0102_any_ctor_payload`.
 
+### B-AuthClaims — `Std.Auth.signToken`/`verifyToken` claims pinned to `Dict String String`
+- **Differs:** Go's `Auth.signToken : String -> a -> Int -> Result Error String`
+  / `verifyToken : String -> String -> Result Error a` type the claims argument
+  and return as a fully polymorphic `a` — any Go value marshals through
+  `interface{}`/`encoding/json`. ipê pins `a` to `Dict String String`
+  (`HashMap<String, String>` in the emitted Rust).
+- **Go-oracle relationship:** Go succeeds for any claims shape (record, map,
+  scalar); ipê accepts only a `Dict String String` claims argument (and returns
+  the same on verify). A well-typed Sky program passing a record literal or
+  other non-Dict shape as claims is now REJECTED at type-check (SKY-T0001-class)
+  instead of silently miscompiling — the AUD-06 seal fix this entry documents
+  closed an exit-0-then-cargo-fail hole where `var(0)` unified with anything
+  while the emitted runtime wrapper (`AUTH_WRAPPERS` in
+  `sky_backend_rust::project`, `runtime/src/sky_runtime/auth.rs`) was already
+  hard-pinned to `HashMap<String, String>` with no coercion inserted at
+  lowering.
+- **Rationale:** concrete-over-generic contract — `var(0)` here was never
+  genuine polymorphism (no per-call-site re-instantiation is exercised; the
+  runtime wrapper has exactly one concrete shape), so pinning it concretely at
+  the type-scheme level is the correct fix, matching the same pattern as
+  `B-AnyCtorPayload` above.
+- **Sanctioned:** yes (`divergence:`). Reference:
+  `constrain.rs::K::AuthSignToken` / `K::AuthVerifyToken` kernel schemes.
+
 ### B-ErrorToString — `errorToString : Stringify a => a -> String` (bounded polymorphic vs. universal)
 - **Differs:** Sky's Go runtime implements `errorToString` as `fmt.Sprintf("%v", v)`,
   which accepts any value at runtime (universally polymorphic, no type-level bound).

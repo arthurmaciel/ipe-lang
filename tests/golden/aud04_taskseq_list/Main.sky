@@ -1,0 +1,34 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.List as List
+import Sky.Core.String as String
+import Sky.Core.Task as Task
+import Std.Log as Log exposing (println)
+
+
+-- AUD-04 witness 3 (multi-use Task-list let-inlining, near a colliding
+-- string literal).
+--
+-- `tasks : List (Task Error String)` is non-Clone (SkyTask has no Clone
+-- impl), so the backend inlines the `let tasks = [...]` binding at both
+-- `List.length tasks` use sites rather than sharing it via a Rust `let`
+-- (a shared binding would move `tasks` into the first call and leave the
+-- second a use-after-move). The auto-forced effect right after the binding
+-- logs the string "run tasks" — which contains the bound name "tasks" as
+-- its own word. The pre-fix textual
+-- `replace_word_all(&body_s, "tasks", replacement)` pass matched that
+-- occurrence too (it operates on rendered text with no string-literal
+-- awareness) and would have substituted the list literal INTO the log
+-- message string, corrupting it. (Both uses are plain function arguments,
+-- not closure captures, so this fixture stays clear of the separate,
+-- pre-existing `Feature::NonCloneCapture` lambda-capture gate.)
+--
+-- Expected: clean `cargo build`, and the final print is exactly "4" (2 + 2)
+-- — the log message and the two `tasks` uses never cross-contaminate.
+main =
+    let tasks = [ Task.succeed "a", Task.succeed "b" ] in
+    let _ = Log.info "run tasks" in
+    let n1 = List.length tasks in
+    let n2 = List.length tasks in
+    println (String.fromInt (n1 + n2))
