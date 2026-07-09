@@ -1,5 +1,5 @@
 // DB kernel functions — generic over E and over backend.
-// Uses DbPool, DbRow, SKY_DB_URL, db_last_insert_id, db_format_sql from
+// Uses DbPool, DbRow, sky_db_url, db_last_insert_id, db_format_sql from
 // config.rs (generated at build time per sky.toml [database] driver).
 use super::json::{Decoder, JsonVal, decode_and_map, decode_err_str, decode_field, decode_ok};
 use super::*;
@@ -644,7 +644,7 @@ async fn connect_cached<E: Send + From<String> + 'static>(url: String) -> SkyRes
 }
 
 pub fn db_connect<E: Send + From<String> + 'static>(_unit: ()) -> SkyTask<E, Db> {
-    Box::pin(connect_cached(SKY_DB_URL.to_string()))
+    Box::pin(connect_cached(sky_db_url()))
 }
 
 /// `Db.open : String -> String -> Task Error Db` (driver, path). The compiled
@@ -2974,5 +2974,73 @@ mod tests {
             matches!(ok, SkyResult::Ok(1)),
             "scoped update should affect 1 row: {ok:?}"
         );
+    }
+
+    // AUD-07 (a): when DATABASE_URL is absent, sky_db_url() returns the sqlite
+    // file default — never the hardcoded "sqlite::memory:" that caused silent
+    // data loss on every Db.connect() call.
+    #[test]
+    fn sky_db_url_fallback_is_sqlite_file() {
+        if crate::sky_runtime::system::read_env_var("DATABASE_URL").is_ok() {
+            // DATABASE_URL already set; test (b) covers the env-read path.
+            return;
+        }
+        let url = crate::sky_runtime::config::sky_db_url();
+        assert!(
+            !url.contains(":memory:"),
+            "default URL must not be in-memory: {url}"
+        );
+        assert!(
+            url.contains("sky.db"),
+            "default URL must reference a named file: {url}"
+        );
+    }
+
+    // AUD-07 (b): with DATABASE_URL set, sky_db_url() returns it verbatim.
+    #[test]
+    fn sky_db_url_reads_database_url_env() {
+        use crate::sky_runtime::system::{locked_remove_var, locked_set_var};
+        locked_set_var("DATABASE_URL", "postgres://ci-host/testdb_aud07");
+        let url = crate::sky_runtime::config::sky_db_url();
+        locked_remove_var("DATABASE_URL");
+        assert_eq!(url, "postgres://ci-host/testdb_aud07");
+    }
+
+    // AUD-07 (c): two sequential connect_cached calls with the same file URL
+    // observe the same database — data written via one pool is visible via the
+    // other. Proves the old sqlite::memory: per-call-fresh-db bug is closed.
+    #[tokio::test]
+    async fn sky_db_url_shared_connection_sees_same_data() {
+        use crate::sky_runtime::system::{locked_remove_var, locked_set_var};
+        let tmp = format!("/tmp/sky_aud07_shared_{}.db", std::process::id());
+        let url = format!("sqlite://{}?mode=rwc", tmp);
+        locked_set_var("DATABASE_URL", &url);
+        let resolved = crate::sky_runtime::config::sky_db_url();
+        locked_remove_var("DATABASE_URL");
+
+        let conn1 = connect_cached::<String>(resolved.clone()).await;
+        let conn2 = connect_cached::<String>(resolved).await;
+        let pool1 = match conn1 {
+            SkyResult::Ok(p) => p,
+            SkyResult::Err(e) => panic!("connect1 failed: {e}"),
+        };
+        let pool2 = match conn2 {
+            SkyResult::Ok(p) => p,
+            SkyResult::Err(e) => panic!("connect2 failed: {e}"),
+        };
+        sqlx::query("CREATE TABLE IF NOT EXISTS aud07_t (v INTEGER NOT NULL)")
+            .execute(&pool1)
+            .await
+            .expect("create table");
+        sqlx::query("INSERT INTO aud07_t VALUES (99)")
+            .execute(&pool1)
+            .await
+            .expect("insert");
+        let (v,): (i64,) = sqlx::query_as("SELECT v FROM aud07_t")
+            .fetch_one(&pool2)
+            .await
+            .expect("select");
+        assert_eq!(v, 99, "data written via pool1 must be visible via pool2");
+        let _ = std::fs::remove_file(&tmp);
     }
 }
