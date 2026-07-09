@@ -3624,7 +3624,9 @@ impl<'a> Lowerer<'a> {
                     collect_ir_generic_syms(&ret, &mut s);
                     s
                 };
-                let var_bounds = self.types.bounds.get(&name);
+                // (AUD-05) keyed by (home, name) — see the `bounds` field doc
+                // on `SolvedTypes` for why a bare-name lookup is unsound here.
+                let var_bounds = self.types.bounds.get(&(def.home().to_vec(), name));
                 // AUD-01 seal fix: `any_syms_minted` holds every fresh symbol
                 // `split_typed_sig` handed out for a per-occurrence `any`
                 // param-position substitution — these are, by construction,
