@@ -81,16 +81,45 @@ type DbDatabase = <DbRow as sqlx::Row>::Database;
 /// OPEN transaction to the pool for the next checkout to inherit.
 type TxnConn = std::sync::Arc<tokio::sync::Mutex<sqlx::Transaction<'static, DbDatabase>>>;
 
-tokio::task_local! {
-    /// Present (Some) for the dynamic extent of a `withTransaction` body — holds
-    /// the dedicated connection BEGIN/COMMIT/ROLLBACK ran on.
-    static TXN_CONN: Option<TxnConn>;
+// A stable identity for a `Db` (pool) value. `Db` stays a bare `sqlx::Pool`
+// alias (no newtype, no change to any of the 70+ existing call sites) — but
+// `Pool::connect_options()` hands back a clone of an `Arc` that the pool
+// allocated ONCE at build time and every `Pool::clone()` shares. Two clones of
+// the SAME pool therefore return `Arc`s that are `ptr_eq`; two DIFFERENT pools
+// (even ones connected to the same URL via two separate `.connect()` calls
+// that didn't go through `connect_cached`) get distinct allocations. This
+// gives genuine pool identity with zero blast radius on the public `Db` type.
+type PoolIdentity = std::sync::Arc<<<DbDatabase as sqlx::Database>::Connection as sqlx::Connection>::Options>;
+
+fn pool_identity(pool: &Db) -> PoolIdentity {
+    pool.connect_options()
 }
 
-/// Read the active transaction connection for the current task, if any.
-/// Total: returns `None` outside a `withTransaction` scope (task-local unset).
-fn current_txn_conn() -> Option<TxnConn> {
-    TXN_CONN.try_with(|c| c.clone()).ok().flatten()
+tokio::task_local! {
+    /// Present (Some) for the dynamic extent of a `withTransaction` body — holds
+    /// the identity of the pool the transaction was opened on, plus the
+    /// dedicated connection BEGIN/COMMIT/ROLLBACK ran on. The identity is
+    /// load-bearing: routing (below) and the nesting gate in
+    /// `db_with_transaction` both consult it so that a DB op or a nested
+    /// `withTransaction` call against a DIFFERENT `Db` handle never gets
+    /// silently executed against this transaction's connection (AUD-03).
+    static TXN_CONN: Option<(PoolIdentity, TxnConn)>;
+}
+
+/// Read the active transaction connection for the current task, but ONLY when
+/// it was opened on the SAME pool as `pool` — a transaction active for a
+/// different `Db` handle must never receive this pool's operations. Total:
+/// returns `None` outside a `withTransaction` scope, or when the active
+/// transaction belongs to a different pool (both cases fall through to
+/// running directly against `pool`, exactly like "no transaction active").
+fn current_txn_conn_for(pool: &Db) -> Option<TxnConn> {
+    let active = TXN_CONN.try_with(|c| c.clone()).ok().flatten()?;
+    let (owner, conn) = active;
+    if std::sync::Arc::ptr_eq(&owner, &pool_identity(pool)) {
+        Some(conn)
+    } else {
+        None
+    }
 }
 
 // The query type produced by `sqlx::query(&sql)` for the configured backend.
@@ -104,7 +133,7 @@ async fn exec_routed<'q>(
     pool: &Db,
     query: DbQuery<'q>,
 ) -> Result<<DbDatabase as sqlx::Database>::QueryResult, sqlx::Error> {
-    match current_txn_conn() {
+    match current_txn_conn_for(pool) {
         Some(conn) => {
             let mut guard = conn.lock().await;
             query.execute(&mut **guard).await
@@ -115,7 +144,7 @@ async fn exec_routed<'q>(
 
 /// `fetch_all` routed through the active transaction connection when present.
 async fn fetch_all_routed<'q>(pool: &Db, query: DbQuery<'q>) -> Result<Vec<DbRow>, sqlx::Error> {
-    match current_txn_conn() {
+    match current_txn_conn_for(pool) {
         Some(conn) => {
             let mut guard = conn.lock().await;
             query.fetch_all(&mut **guard).await
@@ -129,7 +158,7 @@ async fn fetch_optional_routed<'q>(
     pool: &Db,
     query: DbQuery<'q>,
 ) -> Result<Option<DbRow>, sqlx::Error> {
-    match current_txn_conn() {
+    match current_txn_conn_for(pool) {
         Some(conn) => {
             let mut guard = conn.lock().await;
             query.fetch_optional(&mut **guard).await
@@ -140,7 +169,7 @@ async fn fetch_optional_routed<'q>(
 
 /// `fetch_one` routed through the active transaction connection when present.
 async fn fetch_one_routed<'q>(pool: &Db, query: DbQuery<'q>) -> Result<DbRow, sqlx::Error> {
-    match current_txn_conn() {
+    match current_txn_conn_for(pool) {
         Some(conn) => {
             let mut guard = conn.lock().await;
             query.fetch_one(&mut **guard).await
@@ -1564,14 +1593,27 @@ pub fn db_get_by_id_decode<E: Send + From<String> + 'static, A: Send + 'static>(
 /// transaction's atomicity; an inner `Err` does not roll back independently). A
 /// true SAVEPOINT-per-nesting is the ideal future refinement; flattening is the
 /// simplest correct behaviour and never deadlocks.
+///
+/// **Nesting is gated on pool identity (AUD-03 fix).** Flattening is only
+/// correct when the nested call reuses the SAME pool as the active
+/// transaction — flattening a call for a DIFFERENT `Db` handle onto it would
+/// silently execute that pool's operations against the wrong physical
+/// connection (cross-database data corruption). `current_txn_conn_for(&conn)`
+/// returns `None` when the active transaction belongs to a different pool, so
+/// that case falls through to the code below and opens its OWN independent
+/// transaction on `conn` — nested correctly via `TXN_CONN.scope`'s normal
+/// task-local shadow/restore (the outer transaction's task-local value is
+/// restored once this inner scope's future completes), not by any manual
+/// stack bookkeeping.
 pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
     conn: Db,
     body: impl FnOnce(Db) -> SkyTask<E, A> + Send + 'static,
 ) -> SkyTask<E, A> {
     Box::pin(async move {
-        // Nested: already inside a transaction on this task → flatten onto the
-        // existing connection (no second acquire, no nested BEGIN, no deadlock).
-        if current_txn_conn().is_some() {
+        // Nested on the SAME pool: flatten onto the existing connection (no
+        // second acquire, no nested BEGIN, no deadlock). A nested call on a
+        // DIFFERENT pool falls through and opens its own transaction below.
+        if current_txn_conn_for(&conn).is_some() {
             return body(conn).await;
         }
 
@@ -1589,9 +1631,10 @@ pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
         // `tx_conn`. The body still receives the pool by value (its `Db` arg) —
         // the routing happens via the task-local, not the arg.
         let pool_for_body = conn.clone();
+        let owner = pool_identity(&conn);
         let outcome = TXN_CONN
             .scope(
-                Some(tx_conn.clone()),
+                Some((owner, tx_conn.clone())),
                 async move { body(pool_for_body).await },
             )
             .await;
@@ -2590,6 +2633,139 @@ mod tests {
 
         db.close().await;
         let _ = std::fs::remove_file(&path);
+    }
+
+    // AUD-03 regression: a nested `withTransaction` call for a DIFFERENT `Db`
+    // handle must open its OWN independent transaction, never flatten onto an
+    // outer transaction opened on a different pool (which would silently
+    // execute the nested pool's operations against the wrong physical
+    // connection — cross-database data corruption). Both tests below FAIL
+    // under the pre-fix code (which flattened on ANY active transaction
+    // regardless of pool identity) and pass once nesting is gated on
+    // `current_txn_conn_for`'s pool-identity check.
+    #[tokio::test]
+    async fn test_with_transaction_cross_pool_nested_targets_correct_db() {
+        let (db_a, path_a) = fresh_file_db(5).await;
+        let (db_b, path_b) = fresh_file_db(5).await;
+        let db_b_for_inner = db_b.clone();
+
+        let r: SkyResult<String, i64> = db_with_transaction(db_a.clone(), move |c_a| {
+            let db_b_inner = db_b_for_inner.clone();
+            Box::pin(async move {
+                let mut row_a = HashMap::new();
+                row_a.insert("title".to_string(), "in-a".to_string());
+                let _: SkyResult<String, i64> = db_insert_row(c_a, "todos".into(), row_a).await;
+
+                // Nested withTransaction on a DIFFERENT pool — must open its
+                // own transaction on db_b, not flatten onto db_a's.
+                db_with_transaction(db_b_inner, |c_b| {
+                    Box::pin(async move {
+                        let mut row_b = HashMap::new();
+                        row_b.insert("title".to_string(), "in-b".to_string());
+                        db_insert_row(c_b, "todos".into(), row_b).await
+                    })
+                })
+                .await
+            })
+        })
+        .await;
+        assert!(matches!(r, SkyResult::Ok(_)), "outer+nested commit Ok");
+
+        // The dbB row must land in dbB, NOT dbA.
+        let a_has_b_row: SkyResult<String, Vec<HashMap<String, String>>> =
+            db_find_many_by_field(db_a.clone(), "todos".into(), "title".into(), "in-b".into())
+                .await;
+        assert!(
+            matches!(a_has_b_row, SkyResult::Ok(ref v) if v.is_empty()),
+            "dbA must NOT contain dbB's row"
+        );
+
+        let b_has_b_row: SkyResult<String, Vec<HashMap<String, String>>> =
+            db_find_many_by_field(db_b.clone(), "todos".into(), "title".into(), "in-b".into())
+                .await;
+        assert!(
+            matches!(b_has_b_row, SkyResult::Ok(ref v) if v.len() == 1),
+            "dbB must contain its own row"
+        );
+
+        let a_has_a_row: SkyResult<String, Vec<HashMap<String, String>>> =
+            db_find_many_by_field(db_a.clone(), "todos".into(), "title".into(), "in-a".into())
+                .await;
+        assert!(
+            matches!(a_has_a_row, SkyResult::Ok(ref v) if v.len() == 1),
+            "dbA must contain its own row"
+        );
+
+        db_a.close().await;
+        db_b.close().await;
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+    }
+
+    #[tokio::test]
+    async fn test_with_transaction_cross_pool_nested_rollback_independent() {
+        let (db_a, path_a) = fresh_file_db(5).await;
+        let (db_b, path_b) = fresh_file_db(5).await;
+        let db_b_for_inner = db_b.clone();
+
+        let r: SkyResult<String, i64> = db_with_transaction(db_a.clone(), move |c_a| {
+            let db_b_inner = db_b_for_inner.clone();
+            Box::pin(async move {
+                let mut row_a = HashMap::new();
+                row_a.insert("title".to_string(), "a-commits".to_string());
+                let _: SkyResult<String, i64> = db_insert_row(c_a, "todos".into(), row_a).await;
+
+                // Inner transaction on a DIFFERENT pool fails and rolls back —
+                // must NOT roll back the outer dbA transaction.
+                let inner: SkyResult<String, i64> = db_with_transaction(db_b_inner, |c_b| {
+                    Box::pin(async move {
+                        let mut row_b = HashMap::new();
+                        row_b.insert("title".to_string(), "b-rolls-back".to_string());
+                        let _: SkyResult<String, i64> =
+                            db_insert_row(c_b, "todos".into(), row_b).await;
+                        SkyResult::<String, i64>::Err("inner fails deliberately".to_string())
+                    })
+                })
+                .await;
+                assert!(matches!(inner, SkyResult::Err(_)), "inner reports its own error");
+
+                SkyResult::Ok(0i64)
+            })
+        })
+        .await;
+        assert!(
+            matches!(r, SkyResult::Ok(_)),
+            "outer commit Ok despite inner rollback"
+        );
+
+        let a_row: SkyResult<String, Vec<HashMap<String, String>>> = db_find_many_by_field(
+            db_a.clone(),
+            "todos".into(),
+            "title".into(),
+            "a-commits".into(),
+        )
+        .await;
+        assert!(
+            matches!(a_row, SkyResult::Ok(ref v) if v.len() == 1),
+            "dbA row committed"
+        );
+
+        let b_row: SkyResult<String, Vec<HashMap<String, String>>> = db_find_many_by_field(
+            db_b.clone(),
+            "todos".into(),
+            "title".into(),
+            "b-rolls-back".into(),
+        )
+        .await;
+        assert!(
+            matches!(b_row, SkyResult::Ok(ref v) if v.is_empty()),
+            "dbB row rolled back independently"
+        );
+
+        db_a.close().await;
+        db_b.close().await;
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
     }
 
     #[tokio::test]
