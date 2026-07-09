@@ -74,12 +74,18 @@ pub struct SolvedTypes {
     /// can independently contain expressions at the same byte-offset span.  A
     /// bare-`Span` key silently overwrote earlier entries, causing SKY-I0001.
     pub regions: BTreeMap<(Vec<Symbol>, Span), Ty>,
-    /// Super-type obligations of each typed binding's generic variables: binding
-    /// name → (annotation variable symbol → its [`TyBounds`]). Only variables the
-    /// body actually constrained appear; a structurally-parametric variable is
-    /// absent (its bound is empty). The lowerer turns each obligation into the
-    /// matching Rust trait bound on the emitted generic parameter.
-    pub bounds: BTreeMap<Symbol, BTreeMap<Symbol, TyBounds>>,
+    /// Super-type obligations of each typed binding's generic variables, keyed
+    /// by `(home, def_name)` — NOT bare `def_name` (AUD-05 seal fix): two
+    /// modules can each declare a same-named generic binding with DIFFERENT
+    /// obligations (`Lib.scale : a -> a -> a` needing `Add` vs `Main.scale :
+    /// a -> a -> a` needing nothing), matching the key shape [`Self::env`] /
+    /// [`Self::regions`] already use for the identical cross-module-collision
+    /// reason. Value: annotation variable symbol → its [`TyBounds`]. Only
+    /// variables the body actually constrained appear; a structurally-
+    /// parametric variable is absent (its bound is empty). The lowerer turns
+    /// each obligation into the matching Rust trait bound on the emitted
+    /// generic parameter.
+    pub bounds: BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<Symbol, TyBounds>>,
     /// Non-fatal diagnostics collected during type-checking (e.g. SKY-T0011
     /// `RedundantCaseBranch`). These are [`Severity::Warning`] findings: callers
     /// MUST print them but MUST NOT treat them as compilation failures.
@@ -307,7 +313,7 @@ fn infer_with_budget_attributed(
     // enclosing function" from "this `Ty::Var` is a message-free UI subtree
     // placeholder" when lowering attribute-list element types inside polymorphic
     // functions.
-    let mut bounds: BTreeMap<Symbol, BTreeMap<Symbol, TyBounds>> = BTreeMap::new();
+    let mut bounds: BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<Symbol, TyBounds>> = BTreeMap::new();
     let mut poly_var_map: BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<u32, Symbol>> =
         BTreeMap::new();
     for ((home, def_name), var_rigids) in &generated.typed_rigids {
@@ -323,7 +329,7 @@ fn infer_with_budget_attributed(
             }
         }
         if !var_bounds.is_empty() {
-            bounds.insert(*def_name, var_bounds);
+            bounds.insert((home.clone(), *def_name), var_bounds);
         }
         if !rep_to_sym.is_empty() {
             poly_var_map.insert((home.clone(), *def_name), rep_to_sym);
@@ -379,11 +385,14 @@ fn check_scheme_applications(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
     interner: &Interner,
-    bounds: &BTreeMap<Symbol, BTreeMap<Symbol, TyBounds>>,
+    bounds: &BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<Symbol, TyBounds>>,
     apps: &[SchemeApp],
 ) -> DResult<()> {
     for app in apps {
-        let Some(var_bounds) = bounds.get(&app.name) else {
+        // (AUD-05) keyed by (home, name) — a bare-name lookup would check a
+        // same-named binding from a DIFFERENT module's obligations, both
+        // false-accepting a violation and false-rejecting a clean use.
+        let Some(var_bounds) = bounds.get(&(app.home.clone(), app.name)) else {
             continue;
         };
         for (var_sym, b) in var_bounds {
@@ -2556,6 +2565,42 @@ mod tests {
         );
     }
 
+    /// Regression for AUD-06 (seal): `Auth.signToken` claims pinned to
+    /// `Dict String String`, not flexible `var(0)`. `var(0)` unified with
+    /// anything (a record literal included), so skyc accepted a program the
+    /// generated project's `HashMap<String,String>`-pinned wrapper could not
+    /// build (exit-0-then-cargo-fail). A `Dict.fromList [...]` literal claims
+    /// argument must still type-check clean; a record literal must now be
+    /// REJECTED at type-check (SKY-T0001-class), not silently accepted.
+    #[test]
+    fn auth_sign_token_claims_pinned_to_dict_string_string() {
+        let ok_src = "module Main exposing (main)\n\
+             import Sky.Core.Prelude exposing (..)\n\
+             import Std.Auth as Auth\n\
+             main =\n    Auth.signToken \"s\" (Dict.fromList [(\"sub\", \"x\")]) 3600\n";
+        let Some((m, mut i)) = canon_src(ok_src) else {
+            return;
+        };
+        assert!(
+            infer(&m, &mut i).is_ok(),
+            "Auth.signToken with a Dict String String claims literal must type-check clean"
+        );
+
+        let bad_src = "module Main exposing (main)\n\
+             import Sky.Core.Prelude exposing (..)\n\
+             import Std.Auth as Auth\n\
+             main =\n    Auth.signToken \"s\" { sub = \"x\" } 3600\n";
+        let Some((m2, mut i2)) = canon_src(bad_src) else {
+            return;
+        };
+        assert!(
+            infer(&m2, &mut i2).is_err(),
+            "Auth.signToken with a RECORD literal claims argument must now be \
+             REJECTED (pre-fix: var(0) unified with anything, accepting a \
+             shape the emitted HashMap<String,String>-pinned wrapper cannot build)"
+        );
+    }
+
     /// Documents the M2a limitation: an *un*annotated polymorphic binding is
     /// monomorphic at its use sites (no rank-based generalisation yet), so using
     /// it at two different concrete types in one module is a sound rejection. The
@@ -2584,7 +2629,16 @@ mod tests {
     /// `None` if the binding recorded no obligated variable.
     fn sole_bound(solved: &SolvedTypes, i: &mut Interner, binding: &str) -> Option<TyBounds> {
         let sym = i.intern(binding).ok()?;
-        solved.bounds.get(&sym)?.values().next().copied()
+        // `bounds` is keyed by (home, name) (AUD-05); these tests use a single
+        // module, so find by name component regardless of home.
+        solved
+            .bounds
+            .iter()
+            .find(|((_, name), _)| *name == sym)?
+            .1
+            .values()
+            .next()
+            .copied()
     }
 
     /// `double : a -> a; double x = x + x` constrains `a` numerically (no literal

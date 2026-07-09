@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Io as Io
+import Std.Log exposing (println)
+
+
+-- AUD-04 witness 4 (TaskSeqSync use-after-move — the one AUD-04 site with
+-- NO prior clone-capture handling at all).
+--
+-- `helper` is a plain `String -> String` (sync, non-Task) function whose
+-- body auto-forces the discarded `Io.writeStdout msg` effect, then returns
+-- `msg` again. `writeStdout : String -> Task Error ()` takes its argument
+-- BY VALUE, so without cloning `msg` into the effect, Rust would move it
+-- there and the trailing `msg` read would be E0382 "use of moved value".
+-- `Expr::TaskSeqSync` pre-fix had no clone-capture rewrite at all (unlike
+-- `Expr::TaskSeq`, which at least tried, buggily, at the text level).
+--
+-- Expected: clean `cargo build`, and `msg` survives the effect — the
+-- printed line is exactly "hello-msg".
+helper : String -> String
+helper msg =
+    let _ = Io.writeStdout msg in
+    msg
+
+
+main =
+    println (helper "hello-msg")

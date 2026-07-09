@@ -913,6 +913,13 @@ pub struct Builder<'a> {
 /// settles, the concrete type this use pinned each variable to can be read back
 /// and checked against the binding's super-type obligations.
 pub struct SchemeApp {
+    /// The referenced binding's HOME module path (AUD-05 seal fix) — paired
+    /// with `name` so the use-site soundness check
+    /// ([`super::check_scheme_applications`]) looks up the bound set of the
+    /// binding actually referenced, not a same-named binding from a different
+    /// module (matches the `(home, name)` key shape `SolvedTypes::env` /
+    /// `SolvedTypes::regions` already use for the identical reason).
+    pub home: Vec<Symbol>,
     /// The referenced binding's name.
     pub name: Symbol,
     /// Scheme type-variable raw id → the fresh variable it instantiated to here.
@@ -1998,7 +2005,12 @@ impl<'a> Builder<'a> {
         let key = (module.to_vec(), name);
         if let Some(ty) = self.top_level.get(&key).cloned() {
             let (var, vars) = self.instantiate_tracked(&ty)?;
-            self.scheme_apps.push(SchemeApp { name, vars, span });
+            self.scheme_apps.push(SchemeApp {
+                home: module.to_vec(),
+                name,
+                vars,
+                span,
+            });
             Ok(var)
         } else if let Some(v) = self.untyped.get(&key).copied() {
             Ok(v)
@@ -4854,12 +4866,23 @@ impl<'a> Builder<'a> {
             K::AuthVerifyPassword => fun(string(), fun(string(), result(error_ty(), bool_ty()))),
             // passwordStrength : String -> Result Error String
             K::AuthPasswordStrength => fun(string(), result(error_ty(), string())),
-            // signToken : String -> a -> Int -> Result Error String
-            // var(0) = claims dict (polymorphic — Dict String String at runtime)
-            K::AuthSignToken => fun(string(), fun(var(0), fun(int(), result(error_ty(), string())))),
-            // verifyToken : String -> String -> Result Error a
-            // var(0) = claims dict (polymorphic — Dict String String at runtime)
-            K::AuthVerifyToken => fun(string(), fun(string(), result(error_ty(), var(0)))),
+            // signToken : String -> Dict String String -> Int -> Result Error String
+            // AUD-06 (seal): claims used to be flex `var(0)` — unifies with ANY
+            // type, so skyc accepted a record/Int/whatever as claims while the
+            // emitted wrapper is pinned to `HashMap<String,String>`
+            // (project.rs AUTH_WRAPPERS + runtime/auth.rs), no coercion at
+            // lowering → cargo fail on any non-Dict claims (exit-0-then-cargo-
+            // fail). Pinned concrete per the concrete-over-generic rule — this
+            // was never genuine polymorphism, just an unpinned wildcard.
+            // Diverges from Go's polymorphic `a`; see divergences-from-sky.md.
+            K::AuthSignToken => fun(
+                string(),
+                fun(dict(string(), string()), fun(int(), result(error_ty(), string()))),
+            ),
+            // verifyToken : String -> String -> Result Error (Dict String String)
+            K::AuthVerifyToken => {
+                fun(string(), fun(string(), result(error_ty(), dict(string(), string()))))
+            }
             // register : Db -> String -> String -> Task Error Int
             K::AuthRegister => fun(db(), fun(string(), fun(string(), task(int())))),
             // login : Db -> String -> String -> Task Error Int
