@@ -180,8 +180,28 @@ pub fn auth_verify_token<E: From<String>>(
                 .into(),
         );
     }
+    // AUD-02 (security): jsonwebtoken's Validation::new leaves `leeway = 60`
+    // by default — Auth.verifyToken was accepting tokens up to 60s PAST their
+    // `exp` (and 60s before `nbf`), an attacker-replayable expired-token
+    // window, and diverging from Go's zero-skew `now >= exp` oracle. The
+    // sibling `Jwt.decode` path (jwt.rs) already closed this exact gap with a
+    // documented fix; mirror it exactly rather than re-deriving it.
+    if crate::jwt::exp_is_zero(&token) {
+        return SkyResult::Err(
+            "auth.verifyToken: token has expired".to_string().into(),
+        );
+    }
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
     let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+    // Go's oracle rejects at `now >= exp` with zero clock skew. jsonwebtoken's
+    // native boundary with leeway = 0 is `exp < now` (accepts at the exact
+    // instant now == exp); reject_tokens_expiring_in_less_than = 1 shifts the
+    // reject condition to `exp - 1 < now` (≡ `now >= exp`), restoring parity.
+    // The `exp == 0` underflow that subtraction would hit is guarded above.
+    // nbf parity needs no shift (already identical at leeway 0). See jwt.rs's
+    // longer comment on this exact mechanism.
+    validation.leeway = 0;
+    validation.reject_tokens_expiring_in_less_than = 1;
     validation.validate_exp = true;
     // Enforce the standard not-before window too. jsonwebtoken defaults
     // validate_nbf = false, so a token carrying a future `nbf` (e.g. a
@@ -189,6 +209,13 @@ pub fn auth_verify_token<E: From<String>>(
     // would otherwise be accepted before its valid-from time. Matches the
     // documented Sky.Core.Jwt contract (signature + exp + nbf checked).
     validation.validate_nbf = true;
+    // Auth.signToken accepts arbitrary claims (including an `aud` key) with
+    // no expected-audience argument on this generic decoder. jsonwebtoken's
+    // default `validate_aud = true` would then REJECT any token that merely
+    // CARRIES an `aud` claim (InvalidAudience) — breaking a clean
+    // sign-then-verify roundtrip of aud-bearing claims. Mirrors jwt.rs's
+    // identical rationale.
+    validation.validate_aud = false;
     let parsed = match jsonwebtoken::decode::<serde_json::Value>(&token, &key, &validation) {
         Ok(d) => d,
         Err(e) => return SkyResult::Err(format!("jwt verify: {}", e).into()),
