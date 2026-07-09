@@ -82,7 +82,7 @@ fn payload_json(claims_json: &str) -> Result<String, String> {
 /// rejects it; we detect that case here and short-circuit to the same rejection
 /// before the subtraction can run. Reading the unverified payload is safe: the
 /// only action taken is the conservative one (reject).
-fn exp_is_zero(token: &str) -> bool {
+pub(crate) fn exp_is_zero(token: &str) -> bool {
     let mut parts = token.split('.');
     let payload = match (parts.next(), parts.next()) {
         (Some(_header), Some(payload)) => payload,
