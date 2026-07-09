@@ -1106,7 +1106,10 @@ impl<'a> Parser<'a> {
             };
             // `a.b.c` after a dot lexes as one dotted identifier; each segment is a
             // separate field access on the running expression.
-            for seg in text.split('.') {
+            for (seg_count, seg) in (0_u32..).zip(text.split('.')) {
+                if seg_count > MAX_DEPTH {
+                    return Err(self.too_deep(Construct::Expression));
+                }
                 let field = Located::new(tok.span, self.interner.intern(seg)?);
                 let span = Self::span_merge(expr.span, tok.span);
                 expr = Located::new(span, Expr_::Access(Box::new(expr), field));
@@ -1412,7 +1415,10 @@ impl<'a> Parser<'a> {
         }
         // Lower-case head: a local var with a chain of field accesses.
         let mut expr = Located::new(span, Expr_::VarLocal(self.interner.intern(first)?));
-        for seg in rest {
+        for (seg_count, seg) in (0_u32..).zip(rest.into_iter()) {
+            if seg_count > MAX_DEPTH {
+                return Err(self.too_deep(Construct::Expression));
+            }
             let field = Located::new(span, self.interner.intern(seg)?);
             expr = Located::new(span, Expr_::Access(Box::new(expr), field));
         }
