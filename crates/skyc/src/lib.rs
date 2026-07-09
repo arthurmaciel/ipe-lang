@@ -27,87 +27,10 @@ use std::path::{Path, PathBuf};
 use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{
-    Applicability, Code, Diagnostic, HelpLine, Suggestion, explain_page, render, title,
+    ALL_CODES, Applicability, Diagnostic, HelpLine, Suggestion, explain_page, render, title,
 };
 use sky_intern::Interner;
 
-/// Every shipped taxonomy code, built from the crate's public constants.
-///
-/// `sky_diagnostics::Code` has a private field — it cannot be forged from a
-/// user-supplied string — so `skyc explain` resolves a code by scanning this
-/// authoritative list and comparing [`Code::as_str`]. The list mirrors the
-/// taxonomy in `sky_diagnostics::code`; the `explain`/`index` tests fail loudly
-/// if it drifts (count + page-presence checks).
-const ALL_CODES: &[Code] = &[
-    sky_diagnostics::SKY_P0001,
-    sky_diagnostics::SKY_P0002,
-    sky_diagnostics::SKY_P0003,
-    sky_diagnostics::SKY_P0010,
-    sky_diagnostics::SKY_P0011,
-    sky_diagnostics::SKY_P0012,
-    sky_diagnostics::SKY_P0013,
-    sky_diagnostics::SKY_P0014,
-    sky_diagnostics::SKY_P0015,
-    sky_diagnostics::SKY_P0020,
-    sky_diagnostics::SKY_P0021,
-    sky_diagnostics::SKY_P0030,
-    sky_diagnostics::SKY_P0031,
-    sky_diagnostics::SKY_P0040,
-    sky_diagnostics::SKY_P0041,
-    sky_diagnostics::SKY_P0050,
-    sky_diagnostics::SKY_P0060,
-    sky_diagnostics::SKY_P0061,
-    sky_diagnostics::SKY_P0062,
-    sky_diagnostics::SKY_N0001,
-    sky_diagnostics::SKY_N0002,
-    sky_diagnostics::SKY_N0003,
-    sky_diagnostics::SKY_N0004,
-    sky_diagnostics::SKY_N0005,
-    sky_diagnostics::SKY_N0010,
-    sky_diagnostics::SKY_N0011,
-    sky_diagnostics::SKY_N0012,
-    sky_diagnostics::SKY_N0013,
-    sky_diagnostics::SKY_N0020,
-    sky_diagnostics::SKY_N0021,
-    sky_diagnostics::SKY_N0022,
-    sky_diagnostics::SKY_N0023,
-    sky_diagnostics::SKY_N0024,
-    sky_diagnostics::SKY_N0025,
-    sky_diagnostics::SKY_T0001,
-    sky_diagnostics::SKY_T0002,
-    sky_diagnostics::SKY_T0003,
-    sky_diagnostics::SKY_T0004,
-    sky_diagnostics::SKY_T0010,
-    sky_diagnostics::SKY_T0011,
-    sky_diagnostics::SKY_T0012,
-    sky_diagnostics::SKY_T0013,
-    sky_diagnostics::SKY_L0100,
-    sky_diagnostics::SKY_L0101,
-    sky_diagnostics::SKY_L0102,
-    sky_diagnostics::SKY_L0103,
-    sky_diagnostics::SKY_L0104,
-    sky_diagnostics::SKY_L0105,
-    sky_diagnostics::SKY_L0106,
-    sky_diagnostics::SKY_L0107,
-    sky_diagnostics::SKY_L0108,
-    sky_diagnostics::SKY_L0110,
-    sky_diagnostics::SKY_L0111,
-    sky_diagnostics::SKY_L0112,
-    sky_diagnostics::SKY_L0113,
-    sky_diagnostics::SKY_L0118,
-    sky_diagnostics::SKY_L0200,
-    sky_diagnostics::SKY_I0001,
-    sky_diagnostics::SKY_I0010,
-    sky_diagnostics::SKY_I0011,
-    sky_diagnostics::SKY_I0100,
-    sky_diagnostics::SKY_I0101,
-    sky_diagnostics::SKY_I0102,
-    sky_diagnostics::SKY_I0103,
-    sky_diagnostics::SKY_I0200,
-    sky_diagnostics::SKY_I0201,
-    sky_diagnostics::SKY_I0202,
-    sky_diagnostics::SKY_I0203,
-];
 
 /// A driver-level error. Distinct from a compiler [`Diagnostic`]: it also covers
 /// filesystem failures and command-line misuse, neither of which is a property
@@ -1228,6 +1151,21 @@ mod tests {
             .join("Main.sky")
     }
 
+    /// Drift-closed proof: every entry in `ALL_CODES` resolves via `explain_lookup`.
+    /// If any code is in the taxonomy but missing from `ALL_CODES` this test fails.
+    #[test]
+    fn all_taxonomy_codes_resolve_via_explain_lookup() {
+        for &c in ALL_CODES {
+            let result = explain_lookup(c.as_str());
+            assert!(
+                result.is_ok(),
+                "{} is in ALL_CODES but explain_lookup returned: {:?}",
+                c.as_str(),
+                result.err()
+            );
+        }
+    }
+
     #[test]
     fn explain_resolves_a_known_code() {
         let page = explain_lookup("SKY-T0001");
@@ -1246,9 +1184,22 @@ mod tests {
     }
 
     #[test]
-    fn explain_rejects_unknown_code_with_suggestions() {
-        // One digit off SKY-T0013 / SKY-T0010..12 — close enough to suggest.
+    fn explain_resolves_sky_t0014() {
+        // SKY-T0014 was previously absent from the hand-mirror and returned
+        // UnknownCode. After replacing the mirror with ALL_CODES from
+        // sky_diagnostics, it must resolve successfully.
         let result = explain_lookup("SKY-T0014");
+        assert!(
+            result.is_ok(),
+            "SKY-T0014 must resolve via ALL_CODES: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn explain_rejects_unknown_code_with_suggestions() {
+        // Genuinely unknown code, close to SKY-T0013 — must yield did-you-mean.
+        let result = explain_lookup("SKY-T0099");
         assert!(
             matches!(&result, Err(CliError::UnknownCode { .. })),
             "unknown code must error, got: {result:?}"
@@ -1279,7 +1230,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 68, "taxonomy is 68 codes");
+        assert_eq!(ALL_CODES.len(), 85, "taxonomy is 85 codes");
         assert!(
             index.contains("SKY-T0001  type mismatch"),
             "index pairs code with title"
