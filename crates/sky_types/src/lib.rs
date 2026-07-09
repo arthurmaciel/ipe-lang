@@ -262,6 +262,10 @@ fn infer_with_budget_attributed(
                 rigid: false,
                 bounds,
             } if bounds.has_number() => {
+                let int_ty = Ty::Con { module: Vec::new(), name: int_sym, args: Vec::new() };
+                if !concrete_super_ok(interner, bounds, &int_ty) {
+                    return Err((super_unsatisfied(interner, bounds, &int_ty, *span), Vec::new()));
+                }
                 lift!(uf.set_content(
                     root,
                     Content::Structure(FlatType::Con {
