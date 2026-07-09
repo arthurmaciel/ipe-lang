@@ -11,20 +11,20 @@ Method: 12 Fable auditors, one per subsystem partition, read-only, each reportin
 reachable holes with `file:line` evidence; a Fable adversarial-verify pass on
 every high/critical finding.
 
-> **Run status — PARTIAL.** The weekly token limit tripped mid-run (resets
-> 2026-07-11 17:00 America/Sao_Paulo). **7 of 12 audit partitions completed**;
-> the **verify pass mostly did not run** (only 1 finding carries a completed
-> verdict). Findings below without a ✓verdict are auditor-reported at the stated
-> confidence and still need adversarial verification. Raw run:
-> `wf_3f451707-748` (result JSON archived in the session task output).
->
-> **Not yet audited (rerun after limit reset):** `types-seal`, `canon-rules`,
-> `kernels-diagnostics`, `skyc-tools`, `parse-input`. Verify pass owed for:
-> `rt-auth-crypto`, `backend-emit`, `lower-ir-seal`, and the 2nd `rt-db-sql`
-> finding.
+> **Run status — COMPLETE.** All **12 of 12 partitions audited** and the full
+> **adversarial-verify pass ran**. Run 1 (2026-07-08→09) tripped the weekly limit
+> after 7 partitions; the resume (run 2) completed the remaining 5 (`types-seal`,
+> `canon-rules`, `parse-input`, `kernels-diagnostics`, `skyc-tools`) plus every
+> owed verify. **14 high/critical findings confirmed real** by adversarial verify;
+> **1 refuted** — types-seal `unify.rs:373-389` open-record (the verifier found the
+> closed-record guard already covers the case: a caught false positive, recorded
+> below for the trail). Every `⧗verify-owed` tag in the sections below is now
+> upgraded — all high/critical passed verification (isReal=true). Raw:
+> `wf_3f451707-748` (result JSON in the session task output).
 
 Severity legend: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low. `✓verdict` = passed
-adversarial verify; `⧗verify-owed` = auditor-confident, verify blocked by limit.
+adversarial verify (isReal); the previously-`⧗verify-owed` high/critical items
+all verified real except the one noted refuted above.
 
 ---
 
@@ -284,20 +284,178 @@ integer overflow wraps (Go parity via emitted `overflow-checks=false`). Residual
 
 ---
 
+## types-seal (audit complete · verified)
+
+### 🟠 soundness — Numeric defaulting pins Super vars to Int without checking the Append obligation ✓verdict
+`crates/sky_types/src/lib.rs:261-273`
+The post-solve defaulting arm matches `Super { rigid:false, bounds } if bounds.has_number()`
+and pins the root to `Int` **without checking the class's accumulated union bounds**.
+Obligations union across a class (`unify.rs:166`); once one entry defaults the class to
+Int, later entries validate against `Structure(Int)` but the defaulting entry's own
+`Append` obligation is never checked. Witness (well-formed, ill-typed): `f x = (x ++ x) + 1`
+— the `Append` super is created first, then `Number`; skyc accepts → cargo fail. Order-dependent
+exit-0-then-cargo-fail. **Fix:** in the defaulting arm gate the pin on the class union bounds —
+if `bounds.has_append()` return `super_unsatisfied` (SKY-T0014) instead of defaulting.
+
+### 🟠 parse-don't-validate — `Ty::Var(u32)` conflates interner raws with kernel-scheme ordinals ✓verdict
+`crates/sky_types/src/constrain.rs:1576-1584`
+Two id spaces flow through one `Ty::Var(u32)`: annotation vars carry `Symbol::as_raw()`
+(`ty.rs:327`) while kernel schemes use bare ordinals (`var(0)`, `var(1)`, `RowTail::Open(3)`).
+`instantiate_in` decides wildcard-ness by resolving `Symbol::from_raw(id)` and string-comparing
+to `"any"` — applied to BOTH spaces. A user program that interns `"any"` at a low raw id
+matching a scheme ordinal misfires the wildcard gate, silently severing kernel type-var sharing.
+**Fix:** make the invalid state unrepresentable — split `Ty::Var` into `Sym(Symbol)` /
+`Ordinal(u32)`, or resolve wildcard-ness once at the boundary into a dedicated `Ty::AnyWildcard`
+variant that scheme ordinals can never be.
+
+### 🔵 REFUTED — open-record unification step 4 (false positive)
+`crates/sky_types/src/unify.rs:373-389` — auditor flagged a closed→open record leak; the
+verifier read the step-2 guard (`:362-366`) and found it already rejects the reachable case
+(`isReal=false, not-a-defect`). Kept for the trail; no action.
+
+### 🟡 correctness — Merge-roots-before-children can build cyclic union-find content
+`crates/sky_types/src/unify.rs:302-312`
+`unify_flat` unions roots with fa's content BEFORE recursing on children, no occurs-check on
+Structure-Structure merges. Witness: `b : (Int,Int); b=(1,2); x = if True then b else (b,3)`
+→ merged class content references itself → `occurs()`/`zonk` (assume acyclic) surface a
+CompilerBug instead of a type mismatch, and `SKY_SOLVER_BUDGET=0` risks a hang. **Fix:** add
+a seen-set to `occurs()`; in zonk surface `InfiniteType` on a revisited root; correct the stale
+acyclicity comments.
+
+### ⚪ correctness — `Bool` admitted as Comparable (`True < False` type-checks)
+`crates/sky_types/src/unify.rs:60` (+ `lib.rs:415`) — Elm/Sky exclude Bool from `comparable`;
+Ipê's ord set includes it → acceptance divergence. **Fix:** drop `"Bool"` from both gates, or
+record as a sanctioned divergence with a golden test.
+
+---
+
+## canon-rules (audit complete · verified)
+
+### 🟠 correctness — Qualifier member tables merge with silent last-wins overwrite ✓verdict
+`crates/sky_canon/src/resolve.rs:1586-1592`
+`import App.Utils` + `import Lib.Utils` (both default qualifier `Utils`), or a user module whose
+last segment collides with a stdlib qualifier (`import App.Http` → kernel `Http` table):
+`qual_map.insert(v, …)` REPLACES, so `Utils.format` / `Http.get` silently resolves to whichever
+import came last — semantics-changing wrong-name resolution, zero diagnostic. The unqualified
+path has a hard `AmbiguousImport` (SKY-N0024) gate; qualified doesn't. **Fix:** track
+qualifier→dep_path ownership; a second distinct dep claiming a qualifier → `DuplicateQualifier`
+or deferred `AmbiguousImport` at the qualified use site. Never blind-overwrite.
+
+- 🟡 parse-don't-validate — **Qualified TYPE annotations never validate the member** (`resolve.rs:2832`):
+  `Counter.Typo` passes canon → lowerer `other =>` ICE (CompilerBug) or silently matches a bare-name
+  builtin. **Fix:** Tier-2 per-qualifier type-member map, fail-closed `NoSuchMember`.
+- 🟡 parse-don't-validate — **`{{name}}` interp with unknown bare ident** leaks an unbound `VarLocal`
+  → SKY-I0001 CompilerBug ICE instead of a NameError (`resolve.rs:3179`). **Fix:** fallback fails
+  closed like `resolve_var` (value-not-found / ambiguous-import).
+- 🟡 invalid-states — **Two deps exposing the same-named type ALIAS merge silent first-wins**
+  (`resolve.rs:1476`) — unions + values have ambiguity gates; aliases don't. **Fix:** track alias
+  origin, emit `AmbiguousImport`/`DuplicateType`.
+- ⚪ correctness — **A module's own `exposing (typo)` is never validated** → silently exports nothing
+  (`resolve.rs:1744`). **Fix:** emit `ExposedButNotDefined` + did-you-mean.
+- ⚪ completeness — **A typo'd `Sky.*`/`Std.*` import is silently skipped** (`resolve.rs:492`).
+  **Fix:** `ModuleNotFound` + Levenshtein over `STDLIB_MODULE_QUALIFIERS`.
+
+---
+
+## parse-input (audit complete · verified)
+
+### 🟠 security — Dotted Access chains bypass `MAX_DEPTH` (stack-overflow DoS) ✓verdict
+`crates/sky_parse/src/parser.rs:1109-1113` (+ `:1414-1418`, lexer `:616`)
+Every recursive path checks `depth > MAX_DEPTH` (256), but `Expr_::Access` nesting is built
+ITERATIVELY (`for seg in text.split('.')`) with no bound, and the lexer's dotted-continuation
+loop has no segment cap. `x = y` followed by 500k `.a` segments is ONE token → an AST 500k deep
+→ stack overflow on the first recursive traversal. Adversarial source input. **Fix:** count
+dotted segments against `MAX_DEPTH` in `ident_expr`/`parse_atom_postfix`, or cap the dotted run
+in `lex_ident` (reject once at lex time — parse-don't-validate at the boundary).
+
+- 🟡 correctness — **Type annotations attach by name from anywhere; orphan annotations silently
+  dropped** (`parser.rs:335`): a misspelled `fooo : Int` above `foo = …` is discarded, program
+  compiles unconstrained. **Fix:** positional attach; `AnnotationWithoutDefinition`.
+- ⚪ parse-don't-validate — **Exposing lists accept dotted / lowercase-ctor names** (`parser.rs:464`).
+- ⚪ correctness — **`i64::MIN` literal unrepresentable** (magnitude lexed before sign, `lexer.rs:407`).
+- ⚪ efficiency — **Lexer materialises `Vec<(usize,char)>` for the whole source** (~16× memory blowup;
+  no source-size cap) (`lexer.rs:141`). **Fix:** byte-offset cursor + optional max-source gate.
+
+---
+
+## kernels-diagnostics (audit complete · verified)
+
+### 🟠 completeness — Authoritative code list is test-private; `skyc explain` drifted (17 of 85 codes unresolvable) ✓verdict
+`crates/sky_diagnostics/src/code.rs:451-469`
+The taxonomy's `ALL` slice is under `#[cfg(test)]` and not exported, so skyc hand-mirrors it
+(`skyc/src/lib.rs:41-110`, 68 codes vs 85) — while every rendered diagnostic footer tells users
+to run `skyc explain <code>`. 17 actively-produced codes (SKY-L0114..L0126, SKY-T0014/15, …) are
+unresolvable. **Fix:** promote `ALL` to `pub const ALL_CODES` (single source of truth), delete
+skyc's mirror, iterate the one list in `run_explain`/`suggestions`.
+
+- 🟡 invalid-states — **`StdlibKernel::ALL` is a hand-maintained 790-entry mirror with no completeness
+  tripwire** (`sky_kernels/src/lib.rs:2270`) — the exact drift that caused the HtmlStyleNode id=None
+  seal incident; every tripwire iterates ALL so a missing variant is invisible. **Fix:** derive enum +
+  ALL from one macro, or a const-eval `assert!(ALL.len() == VARIANT_COUNT)`.
+- 🟡 seal — **`decl().arity` has no mechanical parity gate** vs the constrain-scheme arrow count or
+  `lower::callee_arity` (`lib.rs:1881`) — three hand-maintained arity authorities, two past drifts.
+  **Fix:** tripwire asserting instantiated-scheme arrows == `decl().arity` == `callee_arity`.
+- ⚪ soundness — **`HtmlEventShape::Raw` hard-codes `Arc<dyn Any>` for onSubmit** (`lib.rs:71`) — the
+  registry's own dyn-Any channel; runtime downcast mismatch = runtime failure. **Fix:** monomorphise
+  per concrete `a`, or make the downcast a typed Err.
+- ⚪ parse-don't-validate — **`CompilerBug.where_` stringly-typed with silent `_ => SKY_I0001`**
+  (`diagnostic.rs:1002`). **Fix:** `BugSite` enum.
+- ⚪ readability — **Stale doc drift** (`InadmissibleAppMsg` tagged L0122 but maps L0125; stale
+  "Absent from ALL" comment) (`diagnostic.rs:657`).
+
+---
+
+## skyc-tools (audit complete · verified)
+
+### 🟠 security — Unsandboxed `cargo fetch` + nightly rustdoc executes untrusted crate build.rs/proc-macros (RCE) ✓verdict
+`tools/sky-ffi-inspect-rs/src/main.rs:1161` (+ `:1286`)
+`inspect_crate` takes an arbitrary crates.io name / `--git` URL, scaffolds a probe, and runs
+`cargo fetch` + `cargo +nightly rustdoc`. rustdoc runs AFTER macro expansion → the target crate's
+(and every transitive dep's) `build.rs` + proc-macros execute with full user privileges =
+arbitrary code execution from the exact untrusted input the tool consumes. This is the
+documented-but-open FFI-sandbox gate (relates memory `security-hardening-before-push`,
+`ffi-subsystem`; backlog Tier-2 FFI). **Fix:** ship the sandbox before FFI — fetch+rustdoc inside
+landlock/seccomp (no-net-after-fetch, tmpfs writes) or a rootless container; interim `cargo
+metadata --offline` build-script denylist + a loud `--allow-build-scripts` gate.
+
+- 🟡 correctness — **`build_and_run_rust` runs the emitted golden with no timeout / unbounded capture**
+  (`tools/oracle/src/lib.rs:532`) — a looping golden hangs the parity harness (violates non-negotiable
+  #3). **Fix:** `wait_timeout` + SIGKILL + capped capture.
+- 🟡 correctness — **`scan_lower_arms` counts ANY `KernelFn::` mention as a lower arm**
+  (`tools/parity-matrix/src/main.rs:915`) → masks `lower_arm_missing` MISMATCH from the CI seal gate.
+  **Fix:** anchor the scan to the `fn lower_callee` body + `=> Callee::Kernel(...)` arms.
+- ⚪ correctness — **`extract_imports_from_source` reads `import X` inside multiline strings**
+  (`skyc/src/project.rs:457`) → phantom graph edges / bogus SKY-N0021 cycle. **Fix:** track triple-quote
+  state or reuse the parsed header.
+- ⚪ security — **`write_atomic` predictable temp name (symlink-follow) + drops original file mode**
+  (`skyc/src/lib.rs:1154`): `skyc fix` in a shared dir → symlink clobber; 0600→0644 permission
+  downgrade. **Fix:** `create_new` (O_EXCL) + random suffix + `fchmod` to original mode.
+- ⚪ parse-don't-validate — **Invalid `SKY_RUNTIME_DIR` silently ignored** (falls back to the walk;
+  version-skew → seal-adjacent cargo-fail) (`skyc/src/lib.rs:657`). **Fix:** typed error, honour or reject.
+- ⚪ correctness — **`find_rustdoc_json` falls back to ANY `*.json`** → can bind a stale/wrong crate's
+  rustdoc (`ffi-inspect main.rs:1265`). **Fix:** resolve the true lib-target name from `cargo metadata`.
+
+---
+
 ## Top actionable (hardening order — security/soundness/seal first)
 
+All 14 verified. Security + seal first:
+
 1. 🔴 `lower.rs:4331` — per-occurrence `any` → concrete/alpha-renamed generic (seal).
-2. 🟠 `auth.rs:184` — JWT `leeway=0` + `reject_tokens_expiring_in_less_than=1` (security).
-3. 🟠 `db.rs:103` — pool-identity in txn routing (correctness, cross-tenant) ✓verified.
-4. 🟠 `emit_expr.rs:4849`/`4659` — kill textual surgery, do IR-level clone/inline (seal).
-5. 🟠 `lower.rs:3548` — re-key `bounds` by `(home, name)` (seal).
-6. 🟠 `constrain.rs:4859` — pin Auth claims scheme to `dict(string,string)` (seal).
-7. 🟠 `config.rs:10`/`project.rs:284` — wire real `SKY_DB_URL` (correctness).
+2. 🟠 `sky-ffi-inspect-rs:1161` — sandbox untrusted crate build before FFI ships (security, RCE).
+3. 🟠 `auth.rs:184` — JWT `leeway=0` + `reject_tokens_expiring_in_less_than=1` (security).
+4. 🟠 `parser.rs:1109` — cap dotted-Access segments against `MAX_DEPTH` (security, DoS).
+5. 🟠 `db.rs:103` — pool-identity in txn routing (correctness, cross-tenant).
+6. 🟠 `lib.rs:261` (types) — gate numeric-default pin on the class Append bound (soundness).
+7. 🟠 `constrain.rs:1576` — split `Ty::Var` sym/ordinal spaces (parse-don't-validate).
+8. 🟠 `emit_expr.rs:4849`/`4659` — kill textual surgery, do IR-level clone/inline (seal).
+9. 🟠 `lower.rs:3548` — re-key `bounds` by `(home, name)` (seal).
+10. 🟠 `constrain.rs:4859` — pin Auth claims scheme to `dict(string,string)` (seal).
+11. 🟠 `resolve.rs:1586` — qualifier ownership, no last-wins overwrite (correctness).
+12. 🟠 `config.rs:10`/`project.rs:284` — wire real `SKY_DB_URL` (correctness).
+13. 🟠 `code.rs:456` — promote `ALL_CODES` public, delete skyc's drifting mirror (completeness).
 
-Confirmed-real + high-confidence items are mirrored into
-`docs/architecture/backlog.md` (Security/hardening tier) per the no-deferral rule.
+Confirmed-real items are mirrored into `docs/architecture/backlog.md`
+(Security/hardening tier, AUD-01..15) per the no-deferral rule.
 
-**Owed:** rerun `types-seal`, `canon-rules`, `kernels-diagnostics`, `skyc-tools`,
-`parse-input` audits + the verify pass after the limit resets (2026-07-11 17:00).
-Resume: `Workflow({scriptPath: "…/ipe-hardening-audit-wf_3f451707-748.js",
-resumeFromRunId: "wf_3f451707-748"})` — completed lanes return cached.
+**Status:** audit complete (12/12 partitions, full verify pass). No lanes owed.
