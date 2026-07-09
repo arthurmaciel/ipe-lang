@@ -7,14 +7,19 @@ pub type DbPool = sqlx::sqlite::SqlitePool;
 #[cfg(feature = "db")]
 pub type DbRow = sqlx::sqlite::SqliteRow;
 #[cfg(feature = "db")]
-pub const SKY_DB_URL: &str = "sqlite::memory:";
+pub fn sky_db_url() -> String {
+    crate::sky_runtime::system::read_env_var("DATABASE_URL")
+        .unwrap_or_else(|_| "sqlite://sky.db?mode=rwc".to_string())
+}
 
 #[cfg(not(feature = "db"))]
 pub type DbPool = ();
 #[cfg(not(feature = "db"))]
 pub type DbRow = ();
 #[cfg(not(feature = "db"))]
-pub const SKY_DB_URL: &str = "";
+pub fn sky_db_url() -> String {
+    String::new()
+}
 
 // Backend-portability helpers. In generated projects these are
 // REPLACED by Project.hs's per-driver impls (sqlite/mysql/postgres). The
