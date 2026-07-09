@@ -1,0 +1,35 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.String as String
+import Std.Log as Log exposing (println)
+
+
+type alias RecCount =
+    { count : Int }
+
+
+fieldOf : RecCount -> Int
+fieldOf r =
+    r.count
+
+
+-- AUD-04 witness 2 (record-field-name corruption — the "seal breach" case).
+--
+-- `count` is captured free in `rest` (`println (String.fromInt count)`) and
+-- the auto-forced `effect` constructs a record LITERAL whose field is named
+-- `count` too — same identifier text, unrelated binding.
+--
+-- The pre-fix textual pass rendered `effect_s` to Rust first
+-- (`RecCount_R { count: 99 }`), then scanned it for the bare word "count"
+-- and unconditionally appended `.clone()` — including onto the STRUCT
+-- FIELD NAME (`count:` -> `count.clone():`), which is not valid Rust syntax
+-- in field-key position. That was a genuine seal breach: a well-typed Sky
+-- program that failed `cargo build`.
+--
+-- Expected output: "99" then "3" (both the record's field read and the
+-- captured `count` binding survive unmolested).
+main =
+    let count = 3 in
+    let _ = Log.info (String.fromInt (fieldOf { count = 99 })) in
+    println (String.fromInt count)

@@ -2582,6 +2582,19 @@ pub struct Lowerer<'a> {
     /// advances; overrun fails closed as a [`bug`] (never an index panic). Interior
     /// mutability so the lowering walk stays over a shared `&self`.
     param_cursor: Cell<usize>,
+    /// Fresh symbols for the per-occurrence `any`-in-param-position seal fix
+    /// (AUD-01). Sized by [`count_any_param_sites`], pre-interned through the
+    /// owned `&mut Interner` before this immutably-borrowed `Lowerer` is
+    /// constructed (the interner is frozen by lowering time — a symbol cannot
+    /// be minted from inside `&self`). Each bare param-position `any`
+    /// occurrence in `split_typed_sig` gets ONE of these instead of sharing the
+    /// single interned `"any"` Symbol, so two `any` params pinned by the body
+    /// to two DIFFERENT concrete types emit as two DISTINCT Rust generics
+    /// (`fn f<T1, T2>(a:T1, b:T2)`) rather than colliding onto one shared `T1`.
+    any_param_binders: Vec<Symbol>,
+    /// Monotonic cursor into [`Self::any_param_binders`], mirroring
+    /// [`Self::param_cursor`]'s shape exactly.
+    any_param_cursor: Cell<usize>,
     /// Home module path of the def currently being lowered.  Set at the start of
     /// each [`Self::lower_def`] call; read by [`Self::region_ty`] to key the
     /// region map as `(home, span)` — matching the discriminant the constraint
@@ -2761,17 +2774,83 @@ pub fn count_destructure_param_sites(m: &canon::Module) -> usize {
         .sum()
 }
 
+/// Count every bare `any`-wildcard occurrence in PARAM position across every
+/// [`canon::Def::Typed`] annotation in the module — the pre-sizing pass for
+/// [`Lowerer::any_param_binders`] (AUD-01 seal fix: each occurrence needs its
+/// OWN fresh symbol so it doesn't collapse onto every other `any` occurrence's
+/// shared interned Symbol; see [`Lowerer::split_typed_sig`]).
+///
+/// Only `any` can appear as a bare param-position type variable without being
+/// quantified by the def (a genuine type parameter is fine to share — only
+/// `any` gets a fresh flex UV per occurrence in the checker). Only walks the
+/// PARAM positions of the top-level annotation's arrow chain — the return
+/// position is handled separately (the existing region-based return-`any`
+/// substitution) and lambdas never carry their own annotation in Sky, so no
+/// body/lambda recursion is needed here (unlike
+/// [`count_destructure_param_sites`]).
+///
+/// Over-counting is harmless (a few unused interned symbols); under-counting
+/// would let [`Lowerer::fresh_any_param_symbol`]'s cursor overrun, which fails
+/// closed as a [`bug`] — never an index panic, never a silent reuse.
+pub fn count_any_param_sites(m: &canon::Module, interner: &Interner) -> usize {
+    fn is_any_var(t: &canon::Type, interner: &Interner) -> bool {
+        matches!(t, canon::Type::Var(v) if interner.resolve(*v) == Some("any"))
+    }
+    m.defs
+        .iter()
+        .map(|d| {
+            let canon::Def::Typed { ty, .. } = d else {
+                return 0;
+            };
+            let mut cur = ty;
+            let mut n = 0;
+            while let canon::Type::Lambda(arg, rest) = cur {
+                if is_any_var(arg, interner) {
+                    n += 1;
+                }
+                cur = rest.as_ref();
+            }
+            n
+        })
+        .sum()
+}
+
+/// Every pre-minted, collision-free synthetic-symbol pool [`Lowerer::new`]
+/// needs — bundled into one argument so the constructor stays under
+/// clippy's arg-count ceiling. Each field is documented at its matching
+/// [`Lowerer`] struct field (the pools are stored flat there; this type
+/// exists only to keep `new`'s signature small, not as an ongoing grouping).
+pub struct SymbolPools {
+    pub eta_params: Vec<Symbol>,
+    pub cap_params: Vec<Symbol>,
+    pub param_binders: Vec<Symbol>,
+    pub any_param_binders: Vec<Symbol>,
+}
+
+/// `(params, prologue, ret, any_syms_minted)` — [`Lowerer::split_typed_sig`]'s
+/// return shape, named so the signature stays under clippy's type-complexity
+/// ceiling. `any_syms_minted` (AUD-01 seal fix) lists every fresh symbol
+/// handed out by [`Lowerer::fresh_any_param_symbol`] for THIS call — the
+/// caller must union these into whatever set gates `type_params` (they are
+/// NOT in [`canon::Def::Typed::free_vars`], since they didn't exist at canon
+/// time), or the backend would reference an undeclared Rust generic.
+type TypedSigParts = (Vec<IrParam>, Vec<ParamPrologue>, IrType, Vec<Symbol>);
+
 impl<'a> Lowerer<'a> {
     #[allow(clippy::too_many_lines)] // Error/ErrorKind ADT seeding (E-12/#152) pushed it over 100
     pub fn new(
         m: &'a canon::Module,
         types: &'a SolvedTypes,
         interner: &'a Interner,
-        eta_params: Vec<Symbol>,
-        cap_params: Vec<Symbol>,
-        param_binders: Vec<Symbol>,
+        pools: SymbolPools,
         builtins: &'a BuiltinCtors,
     ) -> Self {
+        let SymbolPools {
+            eta_params,
+            cap_params,
+            param_binders,
+            any_param_binders,
+        } = pools;
         let mut func_ids = BTreeMap::new();
         for (idx, def) in m.defs.iter().enumerate() {
             let id = FuncId::from_raw(u32::try_from(idx).unwrap_or(u32::MAX));
@@ -2910,6 +2989,8 @@ impl<'a> Lowerer<'a> {
             cap_params,
             param_binders,
             param_cursor: Cell::new(0),
+            any_param_binders,
+            any_param_cursor: Cell::new(0),
             current_home: std::cell::RefCell::new(Vec::new()),
             current_poly_tvars: std::cell::RefCell::new(BTreeMap::new()),
             fn_is_async: Cell::new(false),
@@ -2931,6 +3012,23 @@ impl<'a> Lowerer<'a> {
             )
         })?;
         self.param_cursor.set(i + 1);
+        Ok(sym)
+    }
+
+    /// Hand out the next globally-unique fresh symbol from
+    /// [`Self::any_param_binders`] for the per-occurrence `any`-in-param-
+    /// position seal fix (AUD-01). Mirrors [`Self::fresh_param_binder`]
+    /// exactly; sized by [`count_any_param_sites`], so an overrun is an
+    /// internal invariant violation, never an index panic.
+    fn fresh_any_param_symbol(&self) -> DResult<Symbol> {
+        let i = self.any_param_cursor.get();
+        let sym = *self.any_param_binders.get(i).ok_or_else(|| {
+            bug(
+                "sky_lower::fresh_any_param_symbol",
+                "any-param-position fresh-symbol pool exhausted",
+            )
+        })?;
+        self.any_param_cursor.set(i + 1);
         Ok(sym)
     }
 
@@ -3366,7 +3464,7 @@ impl<'a> Lowerer<'a> {
                 // unannotated path). Only whole-annotation aliases are unfolded
                 // here; a `Handler` in argument position (`withCors : … -> Handler
                 // -> Handler`) still lowers via `split_typed_sig` unchanged.
-                let (params, prologue, ret) = if !patterns.is_empty()
+                let (params, prologue, ret, any_syms_minted) = if !patterns.is_empty()
                     && self.annotation_is_function_alias(ty)
                 {
                     let solved_ty = self
@@ -3379,7 +3477,12 @@ impl<'a> Lowerer<'a> {
                                 "no inferred type for function-alias binding",
                             )
                         })?;
-                    self.split_unannotated_sig(solved_ty, patterns, sig_span)?
+                    // The solved-type path never encounters a bare `any`-wildcard
+                    // Generic (a solved type is either concrete or a free
+                    // `Ty::Var`, never carrying the annotation-only `any` marker)
+                    // — nothing minted here.
+                    let (p, pr, r) = self.split_unannotated_sig(solved_ty, patterns, sig_span)?;
+                    (p, pr, r, Vec::new())
                 } else {
                     self.split_typed_sig(ty, patterns, free_vars)?
                 };
@@ -3545,11 +3648,26 @@ impl<'a> Lowerer<'a> {
                     collect_ir_generic_syms(&ret, &mut s);
                     s
                 };
-                let var_bounds = self.types.bounds.get(&name);
+                // (AUD-05) keyed by (home, name) — see the `bounds` field doc
+                // on `SolvedTypes` for why a bare-name lookup is unsound here.
+                let var_bounds = self.types.bounds.get(&(def.home().to_vec(), name));
+                // AUD-01 seal fix: `any_syms_minted` holds every fresh symbol
+                // `split_typed_sig` handed out for a per-occurrence `any`
+                // param-position substitution — these are, by construction,
+                // NOT in `free_vars` (canon never saw them; they're minted at
+                // lowering time) but DO structurally appear in `params`
+                // (`used_generics` already contains them). Without this union
+                // each would silently drop out of `type_params` while still
+                // being referenced in the emitted signature — an undeclared
+                // Rust generic, worse than the bug this fix closes. Each is
+                // trivially unbounded (`bounds_for` returns `UNBOUNDED` on a
+                // missing `var_bounds` entry, which every fresh symbol has).
                 let type_params = free_vars
                     .iter()
-                    .filter(|&&v| used_generics.contains(&v))
-                    .map(|v| (*v, Self::bounds_for(var_bounds, *v)))
+                    .copied()
+                    .filter(|v| used_generics.contains(v))
+                    .chain(any_syms_minted.iter().copied())
+                    .map(|v| (v, Self::bounds_for(var_bounds, v)))
                     .collect();
                 // T5 (#104 / #112): multi-use-clone rewrite for CloneOk params.
                 // When a function parameter of `CloneOk` type (e.g. String) is used
@@ -3815,10 +3933,11 @@ impl<'a> Lowerer<'a> {
         ty: &canon::Type,
         patterns: &[canon::Pattern],
         generics: &[Symbol],
-    ) -> DResult<(Vec<IrParam>, Vec<ParamPrologue>, IrType)> {
+    ) -> DResult<TypedSigParts> {
         let mut cur = ty;
         let mut params = Vec::with_capacity(patterns.len());
         let mut prologue = Vec::new();
+        let mut any_syms_minted = Vec::new();
         for pat in patterns {
             let canon::Type::Lambda(arg, rest) = cur else {
                 // More parameter patterns than the annotation has arrows. The
@@ -3832,7 +3951,33 @@ impl<'a> Lowerer<'a> {
                     "annotation has fewer arrows than parameters",
                 ));
             };
-            let ir_ty = self.ir_type_from_canon(arg, generics)?;
+            let mut ir_ty = self.ir_type_from_canon(arg, generics)?;
+            // Per-occurrence `any` seal fix (AUD-01): a bare param-position `any`
+            // lowers to `IrType::Generic(any_sym)` above — the SAME interned
+            // Symbol for EVERY occurrence, so `f : any -> any -> Int` emits
+            // `fn f<T1>(a:T1,b:T1)`, and a well-typed call `f "x" 3` (the checker
+            // gives each `any` occurrence its own fresh flex UV, so this program
+            // IS well-typed) fails cargo E0308 (exit-0-then-cargo-fail).
+            //
+            // Fix: give THIS occurrence a distinct fresh symbol from the
+            // `any_param_binders` pool (pre-sized by `count_any_param_sites`,
+            // pre-interned in `sky_lower::lower` alongside `param_binders` — the
+            // interner is frozen by this point in the pipeline, so a symbol
+            // cannot be minted here). The backend renders `IrType::Generic` by
+            // the variable's POSITION in `Func::type_params`, not by the
+            // symbol's spelling (see the `Generic` doc comment in
+            // `sky_ir::ir`), so a fresh, distinctly-named symbol per occurrence
+            // is sufficient — no concrete-type resolution needed, and each
+            // occurrence behaves exactly like genuine independent polymorphism
+            // (which is precisely what the checker's fresh-UV-per-occurrence
+            // semantics already grants it).
+            if let IrType::Generic(sym) = ir_ty
+                && self.interner.resolve(sym) == Some("any")
+            {
+                let fresh = self.fresh_any_param_symbol()?;
+                any_syms_minted.push(fresh);
+                ir_ty = IrType::Generic(fresh);
+            }
             // One shared path for every parameter shape (see `lower_param`): a
             // plain-var param contributes its name directly; a tuple / record /
             // alias / wildcard param takes a fresh synthetic binder and (for the
@@ -3845,7 +3990,12 @@ impl<'a> Lowerer<'a> {
             cur = rest.as_ref();
         }
         // The trailing type is the return type.
-        Ok((params, prologue, self.ir_type_from_canon(cur, generics)?))
+        Ok((
+            params,
+            prologue,
+            self.ir_type_from_canon(cur, generics)?,
+            any_syms_minted,
+        ))
     }
 
     /// Lower ONE binding-position parameter pattern (a function-def head param or
@@ -9903,7 +10053,7 @@ mod tests {
     use sky_ir::{Callee, KernelFn};
     use sky_types::SolvedTypes;
 
-    use super::{BuiltinCtors, Lowerer};
+    use super::{BuiltinCtors, Lowerer, SymbolPools};
 
     // ── Registry-only allowlist ──────────────────────────────────────────────
     //
@@ -10066,7 +10216,18 @@ mod tests {
         };
 
         // Immutable borrow of interner starts here — no more intern() calls.
-        let lowerer = Lowerer::new(&module, &types, &interner, vec![], vec![], vec![], &builtins);
+        let lowerer = Lowerer::new(
+            &module,
+            &types,
+            &interner,
+            SymbolPools {
+                eta_params: vec![],
+                cap_params: vec![],
+                param_binders: vec![],
+                any_param_binders: vec![],
+            },
+            &builtins,
+        );
 
         // ── Test loop ────────────────────────────────────────────────────────
         let mut covered: usize = 0;
