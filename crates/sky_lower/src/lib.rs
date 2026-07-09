@@ -88,7 +88,7 @@ pub fn lower(
     // `interner`) is computed in its OWN statement, ahead of and separate
     // from the `fresh_symbols` mutable-mint call — the two borrows would
     // otherwise conflict within one expression.
-    let any_param_site_count = lower::count_any_param_sites(m, &interner);
+    let any_param_site_count = lower::count_any_param_sites(m, interner);
     let any_param_binders = interner.fresh_symbols("anyp_", any_param_site_count)?;
     // The built-in `Maybe` / `Result` types + constructors are Prelude
     // built-ins (no `type` declaration), so the lowerer needs their symbols to
@@ -145,10 +145,12 @@ pub fn lower(
         m,
         types,
         &*interner,
-        eta_params,
-        cap_params,
-        param_binders,
-        any_param_binders,
+        lower::SymbolPools {
+            eta_params,
+            cap_params,
+            param_binders,
+            any_param_binders,
+        },
         &builtins,
     )
     .run()
@@ -855,11 +857,12 @@ mod tests {
     /// the per-occurrence fresh-symbol substitution (`split_typed_sig`) — a
     /// lone occurrence isn't the AUD-01 bug (nothing to collide with), but the
     /// substitution applies uniformly regardless of occurrence count, so the
-    /// type_param's symbol is a synthetic `anyp_N` name here, not the literal
-    /// `"any"` interned symbol. The backend renders `Generic` by TYPE-PARAM
-    /// POSITION, not spelling (see `sky_ir::ir`'s `Generic` doc comment), so
-    /// this is not a behavior change worth asserting against — only that
-    /// exactly one type_param exists and the param's `IrType` matches it.
+    /// `type_param`'s symbol is a synthetic `anyp_N` name here, not the
+    /// literal `"any"` interned symbol. The backend renders `Generic` by
+    /// TYPE-PARAM POSITION, not spelling (see `sky_ir::ir`'s `Generic` doc
+    /// comment), so this is not a behavior change worth asserting against —
+    /// only that exactly one `type_param` exists and the param's `IrType`
+    /// matches it.
     #[test]
     fn any_in_param_position_lowers_without_ice() {
         // `wrap : any -> Int` — `any` is in parameter position.
@@ -941,7 +944,11 @@ mod tests {
         // Both params ARE Generic (this is legitimate structural polymorphism
         // once each occurrence is independent) — but with DISTINCT symbols.
         let (IrType::Generic(a_sym), IrType::Generic(b_sym)) = (a_ty, b_ty) else {
-            panic!("both params must be IrType::Generic, got a={a_ty:?} b={b_ty:?}");
+            assert!(
+                false_marker(),
+                "both params must be IrType::Generic, got a={a_ty:?} b={b_ty:?}"
+            );
+            return;
         };
         assert_ne!(
             a_sym, b_sym,

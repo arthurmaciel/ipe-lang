@@ -2815,18 +2815,42 @@ pub fn count_any_param_sites(m: &canon::Module, interner: &Interner) -> usize {
         .sum()
 }
 
+/// Every pre-minted, collision-free synthetic-symbol pool [`Lowerer::new`]
+/// needs — bundled into one argument so the constructor stays under
+/// clippy's arg-count ceiling. Each field is documented at its matching
+/// [`Lowerer`] struct field (the pools are stored flat there; this type
+/// exists only to keep `new`'s signature small, not as an ongoing grouping).
+pub struct SymbolPools {
+    pub eta_params: Vec<Symbol>,
+    pub cap_params: Vec<Symbol>,
+    pub param_binders: Vec<Symbol>,
+    pub any_param_binders: Vec<Symbol>,
+}
+
+/// `(params, prologue, ret, any_syms_minted)` — [`Lowerer::split_typed_sig`]'s
+/// return shape, named so the signature stays under clippy's type-complexity
+/// ceiling. `any_syms_minted` (AUD-01 seal fix) lists every fresh symbol
+/// handed out by [`Lowerer::fresh_any_param_symbol`] for THIS call — the
+/// caller must union these into whatever set gates `type_params` (they are
+/// NOT in [`canon::Def::Typed::free_vars`], since they didn't exist at canon
+/// time), or the backend would reference an undeclared Rust generic.
+type TypedSigParts = (Vec<IrParam>, Vec<ParamPrologue>, IrType, Vec<Symbol>);
+
 impl<'a> Lowerer<'a> {
     #[allow(clippy::too_many_lines)] // Error/ErrorKind ADT seeding (E-12/#152) pushed it over 100
     pub fn new(
         m: &'a canon::Module,
         types: &'a SolvedTypes,
         interner: &'a Interner,
-        eta_params: Vec<Symbol>,
-        cap_params: Vec<Symbol>,
-        param_binders: Vec<Symbol>,
-        any_param_binders: Vec<Symbol>,
+        pools: SymbolPools,
         builtins: &'a BuiltinCtors,
     ) -> Self {
+        let SymbolPools {
+            eta_params,
+            cap_params,
+            param_binders,
+            any_param_binders,
+        } = pools;
         let mut func_ids = BTreeMap::new();
         for (idx, def) in m.defs.iter().enumerate() {
             let id = FuncId::from_raw(u32::try_from(idx).unwrap_or(u32::MAX));
@@ -3904,18 +3928,12 @@ impl<'a> Lowerer<'a> {
         )
     }
 
-    /// Returns `(params, prologue, ret, any_syms_minted)`. `any_syms_minted`
-    /// (AUD-01 seal fix) lists every fresh symbol handed out by
-    /// [`Self::fresh_any_param_symbol`] for THIS call — the caller must union
-    /// these into whatever set gates `type_params` (they are NOT in
-    /// [`canon::Def::Typed::free_vars`], since they didn't exist at canon
-    /// time), or the backend would reference an undeclared Rust generic.
     fn split_typed_sig(
         &self,
         ty: &canon::Type,
         patterns: &[canon::Pattern],
         generics: &[Symbol],
-    ) -> DResult<(Vec<IrParam>, Vec<ParamPrologue>, IrType, Vec<Symbol>)> {
+    ) -> DResult<TypedSigParts> {
         let mut cur = ty;
         let mut params = Vec::with_capacity(patterns.len());
         let mut prologue = Vec::new();
@@ -3953,12 +3971,12 @@ impl<'a> Lowerer<'a> {
             // occurrence behaves exactly like genuine independent polymorphism
             // (which is precisely what the checker's fresh-UV-per-occurrence
             // semantics already grants it).
-            if let IrType::Generic(sym) = ir_ty {
-                if self.interner.resolve(sym) == Some("any") {
-                    let fresh = self.fresh_any_param_symbol()?;
-                    any_syms_minted.push(fresh);
-                    ir_ty = IrType::Generic(fresh);
-                }
+            if let IrType::Generic(sym) = ir_ty
+                && self.interner.resolve(sym) == Some("any")
+            {
+                let fresh = self.fresh_any_param_symbol()?;
+                any_syms_minted.push(fresh);
+                ir_ty = IrType::Generic(fresh);
             }
             // One shared path for every parameter shape (see `lower_param`): a
             // plain-var param contributes its name directly; a tuple / record /
@@ -10035,7 +10053,7 @@ mod tests {
     use sky_ir::{Callee, KernelFn};
     use sky_types::SolvedTypes;
 
-    use super::{BuiltinCtors, Lowerer};
+    use super::{BuiltinCtors, Lowerer, SymbolPools};
 
     // ── Registry-only allowlist ──────────────────────────────────────────────
     //
@@ -10199,7 +10217,16 @@ mod tests {
 
         // Immutable borrow of interner starts here — no more intern() calls.
         let lowerer = Lowerer::new(
-            &module, &types, &interner, vec![], vec![], vec![], vec![], &builtins,
+            &module,
+            &types,
+            &interner,
+            SymbolPools {
+                eta_params: vec![],
+                cap_params: vec![],
+                param_binders: vec![],
+                any_param_binders: vec![],
+            },
+            &builtins,
         );
 
         // ── Test loop ────────────────────────────────────────────────────────
