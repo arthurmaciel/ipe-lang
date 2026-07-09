@@ -536,6 +536,10 @@ pub fn canonicalise_module_with_origin(
     // Qualifier = explicit `as Alias` if present, else last segment of the
     // module path — mirrors `inject_dep_exports`'s `env.qual_vars` logic.
     let mut qualifier_paths: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
+    // AUD-14: track each qualifier's FIRST-seen import span so a genuine clash
+    // (below) can point back to it, mirroring `DuplicateValue`/`DuplicateType`'s
+    // `first` field convention.
+    let mut qualifier_first_span: BTreeMap<Symbol, Span> = BTreeMap::new();
     for import in &m.imports {
         let dep_path = &import.name.value;
         // Skip stdlib kernel imports (not in `deps`).
@@ -550,7 +554,33 @@ pub fn canonicalise_module_with_origin(
         let qualifier = import
             .alias
             .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
+        // AUD-14: `import App.Utils` + `import Lib.Utils` (both default to the
+        // qualifier `Utils`), or an explicit `as` alias reused across two
+        // distinct dep modules, previously overwrote silently here — every
+        // `Utils.format` call downstream then resolved to whichever import
+        // came LAST in source order, with no diagnostic. Re-importing the
+        // SAME dep module under the same qualifier (a diamond dependency)
+        // stays a no-op, matching `inject_dep_type`'s identical-re-injection
+        // rule; only a clash between two DIFFERENT dep modules is rejected.
+        if let Some(existing_path) = qualifier_paths.get(&qualifier) {
+            if existing_path != dep_path {
+                let qualifier_s = name_str(interner, qualifier)?;
+                let first = qualifier_first_span
+                    .get(&qualifier)
+                    .copied()
+                    .unwrap_or(import.name.span);
+                return Err(Diagnostic::Name {
+                    span: import.name.span,
+                    msg: NameError::DuplicateQualifier {
+                        qualifier: qualifier_s,
+                        first,
+                    },
+                });
+            }
+            continue;
+        }
         qualifier_paths.insert(qualifier, dep_path.clone());
+        qualifier_first_span.insert(qualifier, import.name.span);
     }
 
     // Snapshot injected aliases (params + body only) so we can include them in
