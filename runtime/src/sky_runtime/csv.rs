@@ -8,7 +8,40 @@
 //! record constructor resolve straight onto these `pub` fields.
 
 use super::*;
-use std::future::ready;
+
+// ── #129: shared blocking-pool helper ───────────────────────────────────────
+//
+// `csv_parse_stream_from_file` does a blocking `std::fs::File::open` +
+// incremental CSV read (up to `SKY_CSV_MAX_ROWS`, default 10M rows, with NO
+// byte cap) inline. Pre-fix that work ran EAGERLY, before `Box::pin` was even
+// constructed — i.e. calling the kernel function itself blocked the caller,
+// not just polling the returned future. Offload to tokio's blocking pool so
+// a large/slow file can't stall the tokio worker thread. This module is
+// gated on the raw `csv` Cargo feature (`#[cfg(feature = "csv")]` in
+// `mod.rs`), NOT the composite `csv_kernel = ["csv", "tokio"]` feature, so
+// `tokio` is not guaranteed present — same constraint `file.rs` documents
+// for its own `run_blocking` helper (see
+// `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md` §2.2).
+#[cfg(feature = "tokio")]
+async fn run_blocking<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(r) => r,
+        Err(_) => Err("background csv task panicked".to_string()),
+    }
+}
+
+#[cfg(not(feature = "tokio"))]
+async fn run_blocking<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    f()
+}
 
 /// Runtime representation of the Sky `Std.Csv.Csv` record. Field names + types
 /// must match the Sky alias exactly (List String -> Vec<String>, etc.).
@@ -158,45 +191,52 @@ pub fn csv_encode_with_delimiter(delim: String, doc: CsvDoc) -> String {
     encode_delim(&doc, byte)
 }
 
+fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, String> {
+    // Stream rows from a BufReader<File> rather than slurping the whole file
+    // into a String first — the csv reader pulls records incrementally, so a
+    // large/untrusted file no longer forces a full-file in-memory copy.
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut rdr = ::csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .from_reader(std::io::BufReader::new(file));
+    // Row cap: although rows stream in, they all accumulate in `out`, so an
+    // untrusted huge file is still an unbounded allocation. Bound it
+    // (SKY_CSV_MAX_ROWS, default 10M) → Err rather than OOM.
+    let max_rows: usize = crate::sky_runtime::system::read_env_var("SKY_CSV_MAX_ROWS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(10_000_000);
+    let mut out = Vec::new();
+    for rec in rdr.records() {
+        let r = rec.map_err(|e| e.to_string())?;
+        if out.len() >= max_rows {
+            return Err(format!(
+                "exceeds row cap of {} (raise SKY_CSV_MAX_ROWS)",
+                max_rows
+            ));
+        }
+        out.push(r.iter().map(|s| s.to_string()).collect());
+    }
+    Ok(out)
+}
+
 /// Csv.parseStreamFromFile : String -> Task Error (List (List String))
 /// Returns every row (including the header).
+///
+/// #129: file I/O + incremental CSV parsing (up to `SKY_CSV_MAX_ROWS`, no
+/// byte cap) is offloaded to tokio's blocking pool via `run_blocking` — see
+/// the module-level doc comment on `run_blocking` above.
 pub fn csv_parse_stream_from_file<E: From<String> + Send + 'static>(
     path: String,
 ) -> SkyTask<E, Vec<Vec<String>>> {
-    let result = (|| -> Result<Vec<Vec<String>>, String> {
-        // Stream rows from a BufReader<File> rather than slurping the whole file
-        // into a String first — the csv reader pulls records incrementally, so a
-        // large/untrusted file no longer forces a full-file in-memory copy.
-        let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-        let mut rdr = ::csv::ReaderBuilder::new()
-            .has_headers(false)
-            .flexible(true)
-            .from_reader(std::io::BufReader::new(file));
-        // Row cap: although rows stream in, they all accumulate in `out`, so an
-        // untrusted huge file is still an unbounded allocation. Bound it
-        // (SKY_CSV_MAX_ROWS, default 10M) → Err rather than OOM.
-        let max_rows: usize = crate::sky_runtime::system::read_env_var("SKY_CSV_MAX_ROWS")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|n| *n > 0)
-            .unwrap_or(10_000_000);
-        let mut out = Vec::new();
-        for rec in rdr.records() {
-            let r = rec.map_err(|e| e.to_string())?;
-            if out.len() >= max_rows {
-                return Err(format!(
-                    "exceeds row cap of {} (raise SKY_CSV_MAX_ROWS)",
-                    max_rows
-                ));
-            }
-            out.push(r.iter().map(|s| s.to_string()).collect());
+    Box::pin(async move {
+        match run_blocking(move || csv_parse_stream_from_file_sync(&path)).await {
+            Ok(v) => ok_res(v),
+            Err(e) => SkyResult::Err(format!("Csv.parseStreamFromFile: {}", e).into()),
         }
-        Ok(out)
-    })();
-    Box::pin(ready(match result {
-        Ok(v) => ok_res(v),
-        Err(e) => SkyResult::Err(format!("Csv.parseStreamFromFile: {}", e).into()),
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -238,5 +278,126 @@ mod tests {
             rows: vec![vec!["a,b".into()]],
         };
         assert_eq!(csv_encode(doc), "x\n\"a,b\"\n");
+    }
+
+    fn block<T>(fut: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(fut)
+    }
+
+    /// Functional correctness (independent of whether `run_blocking` takes
+    /// the real `spawn_blocking` path or the no-tokio-feature fallback —
+    /// both paths must return the same rows).
+    #[test]
+    fn parse_stream_from_file_reads_all_rows() {
+        let p = std::env::temp_dir().join(format!("sky_csv_stream_{}.csv", std::process::id()));
+        std::fs::write(&p, "a,b\n1,2\n3,4\n").unwrap();
+        let res: SkyResult<String, Vec<Vec<String>>> =
+            block(csv_parse_stream_from_file(p.to_string_lossy().into_owned()));
+        let _ = std::fs::remove_file(&p);
+        match res {
+            SkyResult::Ok(rows) => {
+                assert_eq!(
+                    rows,
+                    vec![
+                        vec!["a".to_string(), "b".to_string()],
+                        vec!["1".to_string(), "2".to_string()],
+                        vec!["3".to_string(), "4".to_string()],
+                    ]
+                );
+            }
+            SkyResult::Err(e) => panic!("unexpected Err: {e}"),
+        }
+    }
+
+    #[test]
+    fn parse_stream_from_file_missing_file_errs() {
+        let res: SkyResult<String, Vec<Vec<String>>> = block(csv_parse_stream_from_file(
+            "/nonexistent/sky/csv/path/does-not-exist.csv".to_string(),
+        ));
+        assert!(matches!(res, SkyResult::Err(_)));
+    }
+
+    #[test]
+    fn parse_stream_from_file_respects_row_cap() {
+        let p =
+            std::env::temp_dir().join(format!("sky_csv_stream_cap_{}.csv", std::process::id()));
+        std::fs::write(&p, "a\n1\n2\n3\n4\n5\n").unwrap();
+        std::env::set_var("SKY_CSV_MAX_ROWS", "2");
+        let res: SkyResult<String, Vec<Vec<String>>> =
+            block(csv_parse_stream_from_file(p.to_string_lossy().into_owned()));
+        std::env::remove_var("SKY_CSV_MAX_ROWS");
+        let _ = std::fs::remove_file(&p);
+        assert!(
+            matches!(res, SkyResult::Err(_)),
+            "6-row file under a 2-row cap must Err"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "tokio"))]
+mod stream_from_file_spawn_blocking_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// #129 regression: on a SINGLE-WORKER (current_thread) runtime, the
+    /// blocking file read + CSV parse inside `csv_parse_stream_from_file`
+    /// would starve every other task on that runtime until it completes
+    /// (worse still, pre-fix this work ran EAGERLY before the returned
+    /// future was even polled — see the module-level doc comment on
+    /// `run_blocking` above). This proves the work is offloaded to tokio's
+    /// blocking-thread pool: a concurrently-spawned cheap ticker task must
+    /// make progress (ticks > 0) WHILE the parse is in flight.
+    ///
+    /// Pre-fix this is NOT a flaky race: the ticker makes EXACTLY zero
+    /// progress deterministically, because the worker thread never yields
+    /// back to the executor until the parse completes.
+    #[test]
+    fn csv_parse_stream_from_file_does_not_starve_concurrent_async_work() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let p = std::env::temp_dir().join(format!(
+            "sky_csv_spawn_blocking_probe_{}.csv",
+            std::process::id()
+        ));
+        // A large CSV file so the read + parse takes measurable wall time.
+        {
+            let mut content = String::from("a,b\n");
+            for i in 0..500_000 {
+                content.push_str(&format!("{},{}\n", i, i * 2));
+            }
+            std::fs::write(&p, content).unwrap();
+        }
+        let path = p.to_string_lossy().into_owned();
+
+        let ticks = rt.block_on(async move {
+            let counter = Arc::new(AtomicU64::new(0));
+            let counter2 = counter.clone();
+            let ticker = tokio::spawn(async move {
+                loop {
+                    counter2.fetch_add(1, Ordering::Relaxed);
+                    tokio::task::yield_now().await;
+                }
+            });
+            let parse_fut: SkyTask<String, Vec<Vec<String>>> = csv_parse_stream_from_file(path);
+            let _res: SkyResult<String, Vec<Vec<String>>> = parse_fut.await;
+            ticker.abort();
+            counter.load(Ordering::Relaxed)
+        });
+
+        let _ = std::fs::remove_file(&p);
+
+        assert!(
+            ticks > 0,
+            "concurrent ticker task made ZERO progress while csv_parse_stream_from_file ran — \
+             the blocking read+parse is starving the single-threaded executor \
+             (spawn_blocking missing or not taking effect)"
+        );
     }
 }
