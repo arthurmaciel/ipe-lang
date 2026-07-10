@@ -337,18 +337,19 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // `math_max<T:PartialOrd>`. No new runtime symbol needed.
         // These arms are merged with their Math.* counterparts below.
         // ── end Basics numerics (#115) ──────────────────────────────────────
-        // ── Error kernels (Sky.Core.Error — minimal `Error = String` slice, #86) ─
-        // The eight message constructors share ONE identity runtime symbol: with
-        // `SkyError = String`, `String -> Error` is the identity. `toString`
-        // reuses the existing `errorToString` runtime (`basics_error_to_string`).
-        KernelFn::ErrorUnexpected
-        | KernelFn::ErrorInvalidInput
-        | KernelFn::ErrorIo
-        | KernelFn::ErrorNetwork
-        | KernelFn::ErrorFfi
-        | KernelFn::ErrorDecode
-        | KernelFn::ErrorConflict
-        | KernelFn::ErrorUnavailable => "sky_error_from_message",
+        // ── Error kernels (Sky.Core.Error — real Error/ErrorKind ADT, #85/#160) ──
+        // Each message constructor classifies its own `ErrorKind` at
+        // construction (`sky_runtime::error::SkyError`, no longer a shared
+        // string-identity). `toString` reuses the existing `errorToString`
+        // runtime (`basics_error_to_string`).
+        KernelFn::ErrorUnexpected => "sky_error_unexpected",
+        KernelFn::ErrorInvalidInput => "sky_error_invalid_input",
+        KernelFn::ErrorIo => "sky_error_io",
+        KernelFn::ErrorNetwork => "sky_error_network",
+        KernelFn::ErrorFfi => "sky_error_ffi",
+        KernelFn::ErrorDecode => "sky_error_decode",
+        KernelFn::ErrorConflict => "sky_error_conflict",
+        KernelFn::ErrorUnavailable => "sky_error_unavailable",
         // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf kernels, #47) ──────
         // The bare runtime fn names, re-exported at the `sky_runtime` root via
         // `pub use css::*`. `safe_value`/`safe_prop_name`/`safe_selector` return
@@ -362,6 +363,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::ErrorPermissionDenied => "sky_error_permission_denied",
         KernelFn::ErrorToString => "basics_error_to_string",
         KernelFn::ErrorWithMessage => "sky_error_with_message",
+        KernelFn::ErrorIsRetryable => "sky_error_is_retryable",
         KernelFn::MaybeWithDefault => "maybe_with_default",
         KernelFn::MaybeMap => "sky_maybe_map",
         KernelFn::MaybeAndThen => "sky_maybe_and_then",
