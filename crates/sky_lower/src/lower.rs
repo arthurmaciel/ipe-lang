@@ -320,7 +320,9 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::Order
         | IrType::Decimal
         | IrType::ErrorKind
-        | IrType::Error => false,
+        | IrType::Error
+        // `SqlFragment` is an opaque query-building value — no embedded function.
+        | IrType::SqlFragment => false,
         // `LiveRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Sky `Fn`).
         IrType::LiveRoute(page) => ir_contains_fun(page),
@@ -368,7 +370,9 @@ fn clone_class(t: &IrType) -> CloneClass {
         // Str(String), Bytes(Vec<u8>), Json(serde_json::Value), Db(Arc-backed),
         // UiPlain (element.rs derives Clone), LiveReq (req.rs derives Clone).
         // Error: SkyError derives Clone (not Copy — carries a heap `String`).
-        IrType::Str | IrType::Bytes | IrType::Json | IrType::Db | IrType::UiPlain(_) | IrType::LiveReq | IrType::Error => {
+        // `SqlFragment` is `#[derive(Clone, PartialEq)]` (no Copy — carries a
+        // heap-allocated `String` + `Vec<SqlParam>`).
+        IrType::Str | IrType::Bytes | IrType::Json | IrType::Db | IrType::UiPlain(_) | IrType::LiveReq | IrType::Error | IrType::SqlFragment => {
             CloneClass::CloneOk
         }
         // Runtime-verified Clone server/http opaques (audited 2026-07-05):
@@ -4108,6 +4112,9 @@ impl<'a> Lowerer<'a> {
                 // `Decimal` is the Std.Decimal arbitrary-precision type.
                 // Backed by `sky_runtime::decimal::Decimal` (rust_decimal newtype).
                 "Decimal" => Ok(IrType::Decimal),
+                // `SqlFragment` is `Std.Db.Sql`'s opaque WHERE-fragment type
+                // (backlog #61). Backed by `sky_runtime::db::SqlFragment`.
+                "SqlFragment" => Ok(IrType::SqlFragment),
                 "String" => Ok(IrType::Str),
                 // `Error` is Sky's fixed error-channel type — backed by the real
                 // `sky_runtime::error::SkyError` ADT (backlog #85/#160), no
@@ -4779,6 +4786,9 @@ impl<'a> Lowerer<'a> {
                 // `Decimal` is the Std.Decimal arbitrary-precision type.
                 // Backed by `sky_runtime::decimal::Decimal` (rust_decimal newtype).
                 "Decimal" => Ok(IrType::Decimal),
+                // `SqlFragment` is `Std.Db.Sql`'s opaque WHERE-fragment type
+                // (backlog #61). Backed by `sky_runtime::db::SqlFragment`.
+                "SqlFragment" => Ok(IrType::SqlFragment),
                 // `Algorithm` (D-00) shares the `String` IR representation.
                 "String" | "Algorithm" => Ok(IrType::Str),
                 // `Error` — backed by the real `sky_runtime::error::SkyError` ADT
@@ -7444,9 +7454,6 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbFindOneByField
                 // `DbFindManyByField : Db -> String -> String -> String -> Task Error (List Row)`
                 | KernelFn::DbFindManyByField
-                // `DbUnsafeFindWhere : Db -> String -> String -> List String -> Task Error (List Row)`. Arity 4.
-                // The List String provides parameterized SQL bindings (? placeholders) — injection-safe.
-                | KernelFn::DbUnsafeFindWhere
                 // `DbUpdateFields : Db -> String -> List (String, SqlValue) -> List (String, SqlField) -> Task Error Int`
                 | KernelFn::DbUpdateFields
                 // ── Db.Decode arity-4 (M5b-db) ────────────────────────────────
@@ -8100,6 +8107,41 @@ impl<'a> Lowerer<'a> {
             // ── Std.Decimal — arity 4 ────────────────────────────────────────
             // `Decimal.formatWith : String -> String -> Int -> Decimal -> String`
             Callee::Kernel(KernelFn::DecFormatWith) => Ok(4),
+            // ── Std.Db.Sql — SqlFragment builder, arity 1 (backlog #61) ──────
+            // `column : String -> SqlFragment`, `param : SqlValue -> SqlFragment`,
+            // `int`/`string`/`float`/`bool : _ -> SqlFragment` (sugar over
+            // `param`), `not`/`isNull`/`isNotNull : SqlFragment -> SqlFragment`.
+            Callee::Kernel(
+                KernelFn::SqlColumn
+                | KernelFn::SqlParam
+                | KernelFn::SqlInt
+                | KernelFn::SqlString
+                | KernelFn::SqlFloat
+                | KernelFn::SqlBool
+                | KernelFn::SqlNot
+                | KernelFn::SqlIsNull
+                | KernelFn::SqlIsNotNull,
+            ) => Ok(1),
+            // ── Std.Db.Sql — SqlFragment builder, arity 2 ─────────────────────
+            // `eq`/`ne`/`gt`/`lt`/`gte`/`lte`/`and`/`or : SqlFragment -> SqlFragment -> SqlFragment`,
+            // `inList : SqlFragment -> List SqlValue -> SqlFragment`,
+            // `like : SqlFragment -> String -> SqlFragment`.
+            Callee::Kernel(
+                KernelFn::SqlEq
+                | KernelFn::SqlNe
+                | KernelFn::SqlGt
+                | KernelFn::SqlLt
+                | KernelFn::SqlGte
+                | KernelFn::SqlLte
+                | KernelFn::SqlAnd
+                | KernelFn::SqlOr
+                | KernelFn::SqlInList
+                | KernelFn::SqlLike,
+            ) => Ok(2),
+            // ── Db.findWhere / Db.deleteWhere — arity 3 (backlog #61) ─────────
+            // `findWhere : Db -> String -> SqlFragment -> Task Error (List Row)`
+            // `deleteWhere : Db -> String -> SqlFragment -> Task Error Int`
+            Callee::Kernel(KernelFn::DbFindWhere | KernelFn::DbDeleteWhere) => Ok(3),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -8611,7 +8653,6 @@ impl<'a> Lowerer<'a> {
                     ("Db", "findOneByField") => Ok(Callee::Kernel(KernelFn::DbFindOneByField)),
                     ("Db", "findManyByField") => Ok(Callee::Kernel(KernelFn::DbFindManyByField)),
                     ("Db", "findByConditions") => Ok(Callee::Kernel(KernelFn::DbFindByConditions)),
-                    ("Db", "unsafeFindWhere") => Ok(Callee::Kernel(KernelFn::DbUnsafeFindWhere)),
                     ("Db", "insertFields") => Ok(Callee::Kernel(KernelFn::DbInsertFields)),
                     ("Db", "updateFields") => Ok(Callee::Kernel(KernelFn::DbUpdateFields)),
                     ("Db", "insertFieldsReturning") => {
@@ -10052,7 +10093,8 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::WebSocketServerCfg
         | IrType::UiPlain(_)
         | IrType::Decimal
-        | IrType::LiveReq => {}
+        | IrType::LiveReq
+        | IrType::SqlFragment => {}
     }
 }
 

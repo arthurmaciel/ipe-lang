@@ -1,0 +1,6 @@
+# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
+main_sky_sha256 = 7ad43181181d975abddd6e22ba1233e117cba64e13ab1d8b892fd0e73531f8c1
+go_sky_version = unknown
+exit_code = 0
+oracle_divergence = true
+divergence_reason = sanctioned: this program uses Db.open + Db.withTransaction + Db.exec (SqlValue params) + Db.findWhere (backlog #61 — the SqlFragment-typed replacement for the removed Db.unsafeFindWhere) — the Go backend and ipê share the Sky stdlib surface but the Go reference emits Go+SQLite binaries while ipê emits Rust+sqlx; the SQLite in-memory behaviour and row-type representation differ enough that a shared Main.sky cannot run on both backends. ipê's output is recorded as the correct reference. `Db.findWhere` itself has no Go counterpart (it is an ipê-only addition), so this divergence is structural, not incidental. The typed Sql.column/Sql.int/Sql.gt combinator channel is exercised here to prove the WHERE clause can only be built through parameterized combinators — never a hand-built string.

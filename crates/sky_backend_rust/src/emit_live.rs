@@ -615,5 +615,6 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::Decimal => "Decimal",
         IrType::ErrorKind => "ErrorKind",
         IrType::Error => "Error",
+        IrType::SqlFragment => "SqlFragment",
     }
 }

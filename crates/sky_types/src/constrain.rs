@@ -179,6 +179,9 @@ struct Builtins {
     sqlvalue: Symbol,
     /// `"SqlField"` — the sum type for PATCH-style field-set / field-omit SQL params.
     sqlfield: Symbol,
+    /// `"SqlFragment"` — `Std.Db.Sql`'s opaque, parameterized WHERE-fragment
+    /// type (backlog #61).
+    sqlfragment: Symbol,
     // ── SqlValue constructor name symbols ─────────────────────────────────────
     sql_string: Symbol,
     sql_int: Symbol,
@@ -473,6 +476,7 @@ impl Builtins {
             db: interner.intern("Db")?,
             sqlvalue: interner.intern("SqlValue")?,
             sqlfield: interner.intern("SqlField")?,
+            sqlfragment: interner.intern("SqlFragment")?,
             sql_string: interner.intern("SqlString")?,
             sql_int: interner.intern("SqlInt")?,
             sql_float: interner.intern("SqlFloat")?,
@@ -3025,6 +3029,12 @@ impl<'a> Builder<'a> {
             name: self.builtins.sqlfield,
             args: Vec::new(),
         };
+        // `SqlFragment` — `Std.Db.Sql`'s opaque WHERE-fragment type (#61).
+        let sqlfragment = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.sqlfragment,
+            args: Vec::new(),
+        };
         let req = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.server_request,
@@ -3805,16 +3815,18 @@ impl<'a> Builder<'a> {
                     ),
                 ),
             ),
-            K::DbUnsafeFindWhere => fun(
+            // `Db.findWhere : Db -> String -> SqlFragment -> Task (List Row)`
+            // — the `SqlFragment`-typed replacement for the removed
+            // `unsafeFindWhere` (backlog #61). A caller can never pass a raw
+            // `String` WHERE clause here: only the `Sql.*` combinators below
+            // produce a `SqlFragment`, so a naive string-concatenated WHERE
+            // clause is a SKY-T0001 type mismatch, not a runtime risk.
+            K::DbFindWhere => fun(
                 db(),
-                fun(
-                    string(),
-                    fun(
-                        string(),
-                        fun(list(string()), task(list(dict(string(), string())))),
-                    ),
-                ),
+                fun(string(), fun(sqlfragment(), task(list(dict(string(), string()))))),
             ),
+            // `Db.deleteWhere : Db -> String -> SqlFragment -> Task Int`
+            K::DbDeleteWhere => fun(db(), fun(string(), fun(sqlfragment(), task(int())))),
             K::DbInsertFields => fun(
                 db(),
                 fun(
@@ -5176,6 +5188,38 @@ impl<'a> Builder<'a> {
                 }, RowTail::Closed);
                 fun(rec_arg, attr(var(0)))
             }
+
+            // ── Std.Db.Sql — SqlFragment builder (backlog #61) ───────────────
+            //
+            // `Sql.column : String -> SqlFragment` — validated column/table
+            // reference (dot-accepting, so `users.id` is legal).
+            K::SqlColumn => fun(string(), sqlfragment()),
+            // `Sql.param : SqlValue -> SqlFragment` — binds a single `?`.
+            K::SqlParam => fun(sqlvalue(), sqlfragment()),
+            // `int` / `string` / `float` / `bool` are Sky-level type
+            // narrowings of `param` (sugar — see the kernel decl doc): same
+            // shape, scalar argument instead of the `SqlValue` ADT.
+            K::SqlInt => fun(int(), sqlfragment()),
+            K::SqlString => fun(string(), sqlfragment()),
+            K::SqlFloat => fun(float(), sqlfragment()),
+            K::SqlBool => fun(bool_ty(), sqlfragment()),
+            // `eq/ne/gt/lt/gte/lte/and/or : SqlFragment -> SqlFragment -> SqlFragment`
+            K::SqlEq
+            | K::SqlNe
+            | K::SqlGt
+            | K::SqlLt
+            | K::SqlGte
+            | K::SqlLte
+            | K::SqlAnd
+            | K::SqlOr => fun(sqlfragment(), fun(sqlfragment(), sqlfragment())),
+            // `not/isNull/isNotNull : SqlFragment -> SqlFragment`
+            K::SqlNot | K::SqlIsNull | K::SqlIsNotNull => fun(sqlfragment(), sqlfragment()),
+            // `inList : SqlFragment -> List SqlValue -> SqlFragment` — `[]`
+            // emits `(1 = 0)` at the runtime combinator, not a type-level case.
+            K::SqlInList => fun(sqlfragment(), fun(list(sqlvalue()), sqlfragment())),
+            // `like : SqlFragment -> String -> SqlFragment` — the pattern is
+            // always a bound param.
+            K::SqlLike => fun(sqlfragment(), fun(string(), sqlfragment())),
         })
     }
 }
@@ -5618,7 +5662,9 @@ mod registry_phase_c_tests {
             K::ServerMethod,
             K::ServerCookieNew,
             K::ServerWithCookie,
-            // Db (23)
+            // Db (22 — `unsafeFindWhere` removed by backlog #61; its
+            // replacements `findWhere`/`deleteWhere` are FIRST_SCHEMED below,
+            // never having existed in the legacy `kernel_ty` table)
             K::DbConnect,
             K::DbOpen,
             K::DbClose,
@@ -5637,7 +5683,6 @@ mod registry_phase_c_tests {
             K::DbFindOneByField,
             K::DbFindManyByField,
             K::DbFindByConditions,
-            K::DbUnsafeFindWhere,
             K::DbInsertFields,
             K::DbUpdateFields,
             K::DbInsertFieldsReturning,
@@ -6360,6 +6405,28 @@ mod registry_phase_c_tests {
             K::DecFormatWith,
             // ── Textarea rows attr ─────────────────────────────────────────────
             K::HtmlAttrRows,
+            // ── Std.Db.Sql — SqlFragment builder (backlog #61; 19) ──────────────
+            K::SqlColumn,
+            K::SqlParam,
+            K::SqlInt,
+            K::SqlString,
+            K::SqlFloat,
+            K::SqlBool,
+            K::SqlEq,
+            K::SqlNe,
+            K::SqlGt,
+            K::SqlLt,
+            K::SqlGte,
+            K::SqlLte,
+            K::SqlAnd,
+            K::SqlOr,
+            K::SqlNot,
+            K::SqlIsNull,
+            K::SqlIsNotNull,
+            K::SqlInList,
+            K::SqlLike,
+            K::DbFindWhere,
+            K::DbDeleteWhere,
         ]
     };
 

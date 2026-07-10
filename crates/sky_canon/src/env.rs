@@ -83,6 +83,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Std", "Sub"], "Sub"),
     (&["Std", "Db"], "Db"),
     (&["Std", "Db", "Decode"], "Db.Decode"),
+    (&["Std", "Db", "Sql"], "Sql"), // backlog #61 — SqlFragment builder
     (&["Std", "Time"], "Time"),
     (&["Std", "System"], "System"),
     (&["Std", "Ui"], "Ui"),
@@ -940,12 +941,26 @@ impl Env {
                     "findOneByField",
                     "findManyByField",
                     "findByConditions",
-                    "unsafeFindWhere",
+                    "findWhere",
+                    "deleteWhere",
                     "insertFields",
                     "updateFields",
                     "insertFieldsReturning",
                     "withTransaction",
                     "migrate",
+                ],
+            ),
+            // `Std.Db.Sql` — typed, parameterized WHERE-fragment builder
+            // (backlog #61). Replaces the removed `Db.unsafeFindWhere` raw-
+            // string escape hatch: a `SqlFragment` can only be built through
+            // these combinators, so a naive string-concatenated WHERE clause
+            // is a type error (`String` where `SqlFragment` is expected) at
+            // `Db.findWhere` / `Db.deleteWhere`, not a runtime injection risk.
+            (
+                "Sql",
+                &[
+                    "column", "param", "int", "string", "float", "bool", "eq", "ne", "gt", "lt",
+                    "gte", "lte", "and", "or", "not", "isNull", "isNotNull", "inList", "like",
                 ],
             ),
             // `Std.Db.Decode` — row decoder combinators (M5b-db).
