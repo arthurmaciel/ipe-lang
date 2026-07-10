@@ -41,6 +41,7 @@ main =
 /// Write a minimal project (`sky.toml` + `src/Main.sky`) under a fresh temp
 /// dir, with the given `[database]` section spliced in verbatim (empty string
 /// → no section at all, i.e. the default driver).
+#[allow(clippy::expect_used)]
 fn write_project(test_name: &str, database_section: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("skyc_pg_reachability_{test_name}"));
     let _ = fs::remove_dir_all(&dir);
