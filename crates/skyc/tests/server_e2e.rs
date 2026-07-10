@@ -268,6 +268,112 @@ main =
         (Db.open "sqlite" (System.getenvOr "DATABASE_URL" "sqlite::memory:"))
 "#;
 
+/// Sky server exercising `Middleware.withCsrf` end-to-end (#63b).  Mirrors
+/// `tests/golden/m6_middleware_csrf/Main.sky` but adds a `GET /action` route
+/// (also wrapped in `Middleware.withCsrf`) so a real HTTP client can mint the
+/// double-submit cookie via a safe-method request before probing the
+/// CSRF-protected `POST /action`.
+const SKY_CSRF_PROGRAM: &str = r#"module Main exposing (main)
+
+import Sky.Http.Server as Server
+import Sky.Http.Middleware as Middleware
+
+handle : Server.Request -> Task Error Server.Response
+handle _req =
+    Task.succeed (Server.text "ok")
+
+main =
+    let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "SKY_SERVER_PORT" "8080"))
+    in
+    Server.listen port
+        [ Server.get "/action" (Middleware.withCsrf handle)
+        , Server.post "/action" (Middleware.withCsrf handle)
+        ]
+"#;
+
+/// A parsed raw HTTP/1.1 response: status code, headers (lower-cased names,
+/// duplicates preserved in arrival order — `Set-Cookie` legitimately repeats
+/// per RFC 6265 §4.1, which forbids comma-folding it into one line), and
+/// body.
+struct RawResponse {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: String,
+}
+
+/// Send a raw, fully-formed HTTP/1.1 `request` (including the terminating
+/// `\r\n\r\n` and any body) to `addr` and parse the full response: status
+/// line, headers, and body.
+///
+/// Used by the CSRF tests, which need to read the `Set-Cookie` response
+/// header (to capture the minted double-submit token) and the response
+/// status code (200 vs 403) — the body-only `http_get`/`http_post` helpers
+/// above are insufficient for that.
+///
+/// # Errors
+///
+/// Returns an error if the connection, write, or read fails, or if the
+/// response cannot be parsed as a well-formed HTTP/1.1 message.
+fn send_raw_request(test_name: &str, addr: &str, request: &str) -> Result<RawResponse, BoxError> {
+    let mut stream = TcpStream::connect(addr).map_err(|e| -> BoxError {
+        format!("{test_name}: cannot connect to server: {e}").into()
+    })?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|e| -> BoxError { format!("{test_name}: set_read_timeout failed: {e}").into() })?;
+
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| -> BoxError { format!("{test_name}: write failed: {e}").into() })?;
+
+    let mut buf = Vec::with_capacity(4096);
+    stream
+        .read_to_end(&mut buf)
+        .map_err(|e| -> BoxError { format!("{test_name}: read failed: {e}").into() })?;
+
+    let response = String::from_utf8_lossy(&buf).into_owned();
+    let sep = response.find("\r\n\r\n").ok_or_else(|| -> BoxError {
+        format!("{test_name}: no header/body separator in response\n--- raw ---\n{response}").into()
+    })?;
+    let head = response.get(..sep).ok_or_else(|| -> BoxError {
+        format!("{test_name}: cannot slice response head").into()
+    })?;
+    let body = response.get(sep + 4..).unwrap_or("").to_owned();
+
+    let mut lines = head.split("\r\n");
+    let status_line = lines.next().unwrap_or("");
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .ok_or_else(|| -> BoxError {
+            format!("{test_name}: cannot parse status code from status line: {status_line:?}").into()
+        })?;
+
+    let headers = lines
+        .filter_map(|l| {
+            l.split_once(':')
+                .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
+        })
+        .collect();
+
+    Ok(RawResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
+/// Extract the bare `value` out of a `Set-Cookie` header value of shape
+/// `"<name>=<value>; Path=/; ..."`, matching on `name`.  Returns `None` if
+/// the header does not start with `<name>=`.
+fn cookie_token_value(set_cookie: &str, name: &str) -> Option<String> {
+    let prefix = format!("{name}=");
+    let rest = set_cookie.strip_prefix(prefix.as_str())?;
+    let value = rest.split(';').next().unwrap_or(rest);
+    Some(value.to_string())
+}
+
 /// Send a raw HTTP/1.1 GET request on `stream` and return the full response
 /// body (everything after the blank-header separator `\r\n\r\n`).
 ///
@@ -511,5 +617,174 @@ fn server_and_db_compose() -> Result<(), BoxError> {
 
     // compile_and_build already does skyc + cargo build; success is the proof.
     let _exe = compile_and_build("server_and_db_compose", SKY_SERVER_AND_DB_PROGRAM)?;
+    Ok(())
+}
+
+/// #63b — real HTTP-level proof that `Middleware.withCsrf` rejects a forged
+/// cross-site-style POST that carries neither the double-submit cookie nor
+/// the `X-Csrf-Token` header.
+///
+/// This closes the gap left by #63's landing: `golden_m6_middleware_csrf.rs`
+/// only proves `skyc`/`cargo build` succeed (compile-level), and
+/// `server.rs`'s in-process unit tests call `middleware_with_csrf` directly
+/// as a bare Rust function — bypassing the full kernel-registry dispatch
+/// chain (canon → constrain → lower → naming → pretty → emit, the 12 sites
+/// listed in the fix spec's §1.2 table). This test proves the chain end to
+/// end: Sky source → `skyc` → emitted Rust → the actual served binary's
+/// real behavior over a real TCP connection.
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, or HTTP error as a test error.
+#[test]
+fn csrf_forged_post_without_token_rejected() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+    let test_name = "csrf_forged_post_without_token_rejected";
+
+    let exe = compile_and_build(test_name, SKY_CSRF_PROGRAM)?;
+    let port = pick_ephemeral_port()?;
+    let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
+    let addr = format!("127.0.0.1:{port}");
+
+    let request =
+        "POST /action HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let resp = send_raw_request(test_name, &addr, request)?;
+
+    assert_eq!(
+        resp.status, 403,
+        "{test_name}: forged POST with no cookie and no X-Csrf-Token header must be rejected\n--- body ---\n{}",
+        resp.body
+    );
+    Ok(())
+}
+
+/// #63b — real HTTP-level proof that `Middleware.withCsrf` rejects a POST
+/// that carries the double-submit cookie (minted by a prior GET) but an
+/// `X-Csrf-Token` header that is either missing or does not match the
+/// cookie's value.
+///
+/// Simulates an attacker page that can trigger a simple cross-origin POST
+/// (the cookie rides along automatically) but cannot read the victim-origin
+/// cookie to forge a matching custom header without a CORS preflight allow.
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, or HTTP error as a test error.
+#[test]
+fn csrf_post_with_cookie_but_mismatched_header_rejected() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+    let test_name = "csrf_post_with_cookie_but_mismatched_header_rejected";
+
+    let exe = compile_and_build(test_name, SKY_CSRF_PROGRAM)?;
+    let port = pick_ephemeral_port()?;
+    let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
+    let addr = format!("127.0.0.1:{port}");
+
+    // GET is a "safe" method: `Middleware.withCsrf` skips the check and
+    // mints a fresh double-submit cookie via a `Set-Cookie` response header.
+    let get_req = "GET /action HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    let get_resp = send_raw_request(test_name, &addr, get_req)?;
+    assert_eq!(
+        get_resp.status, 200,
+        "{test_name}: GET must mint the cookie and succeed\n--- body ---\n{}",
+        get_resp.body
+    );
+    let set_cookie = get_resp
+        .headers
+        .iter()
+        .find(|(k, _)| k == "set-cookie")
+        .map(|(_, v)| v.clone())
+        .ok_or_else(|| -> BoxError {
+            format!("{test_name}: GET response missing a Set-Cookie header").into()
+        })?;
+    let token = cookie_token_value(&set_cookie, "sky_csrf").ok_or_else(|| -> BoxError {
+        format!("{test_name}: cannot parse sky_csrf cookie value from {set_cookie:?}").into()
+    })?;
+
+    // Cookie present, header value present but WRONG (well-formed 64-hex, so
+    // this exercises the mismatch branch specifically, not the
+    // malformed-token branch).
+    let wrong_token = "0".repeat(64);
+    let post_mismatched = format!(
+        "POST /action HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: sky_csrf={token}\r\nX-Csrf-Token: {wrong_token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    let resp_mismatched = send_raw_request(test_name, &addr, &post_mismatched)?;
+    assert_eq!(
+        resp_mismatched.status, 403,
+        "{test_name}: POST with cookie but a mismatched X-Csrf-Token header must be rejected\n--- body ---\n{}",
+        resp_mismatched.body
+    );
+
+    // Cookie present, header entirely MISSING.
+    let post_missing_header = format!(
+        "POST /action HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: sky_csrf={token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    let resp_missing_header = send_raw_request(test_name, &addr, &post_missing_header)?;
+    assert_eq!(
+        resp_missing_header.status, 403,
+        "{test_name}: POST with cookie but no X-Csrf-Token header must be rejected\n--- body ---\n{}",
+        resp_missing_header.body
+    );
+
+    Ok(())
+}
+
+/// #63b — real HTTP-level proof of the legitimate flow: a GET mints the
+/// double-submit cookie, and a same-origin-style POST that echoes the
+/// cookie's value in the `X-Csrf-Token` header is allowed through to the
+/// wrapped handler.
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, or HTTP error as a test error.
+#[test]
+fn csrf_legit_post_with_matching_token_allowed() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+    let test_name = "csrf_legit_post_with_matching_token_allowed";
+
+    let exe = compile_and_build(test_name, SKY_CSRF_PROGRAM)?;
+    let port = pick_ephemeral_port()?;
+    let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
+    let addr = format!("127.0.0.1:{port}");
+
+    let get_req = "GET /action HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    let get_resp = send_raw_request(test_name, &addr, get_req)?;
+    assert_eq!(
+        get_resp.status, 200,
+        "{test_name}: GET must mint the cookie and succeed\n--- body ---\n{}",
+        get_resp.body
+    );
+    let set_cookie = get_resp
+        .headers
+        .iter()
+        .find(|(k, _)| k == "set-cookie")
+        .map(|(_, v)| v.clone())
+        .ok_or_else(|| -> BoxError {
+            format!("{test_name}: GET response missing a Set-Cookie header").into()
+        })?;
+    let token = cookie_token_value(&set_cookie, "sky_csrf").ok_or_else(|| -> BoxError {
+        format!("{test_name}: cannot parse sky_csrf cookie value from {set_cookie:?}").into()
+    })?;
+
+    let post_req = format!(
+        "POST /action HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: sky_csrf={token}\r\nX-Csrf-Token: {token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    let post_resp = send_raw_request(test_name, &addr, &post_req)?;
+    assert_eq!(
+        post_resp.status, 200,
+        "{test_name}: legit POST echoing the cookie value in X-Csrf-Token must be allowed\n--- body ---\n{}",
+        post_resp.body
+    );
+    assert_eq!(
+        post_resp.body, "ok",
+        "{test_name}: response body must be the wrapped handler's own response"
+    );
+
     Ok(())
 }
