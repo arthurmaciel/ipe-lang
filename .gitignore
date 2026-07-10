@@ -30,3 +30,5 @@ docs/architecture/progdev-cost-ledger.tsv
 
 # ipe-index standalone crate build artifacts
 /tools/ipe-index/target/
+.claude
+skills-lock.json
