@@ -255,6 +255,10 @@ impl Env {
         // the lowerer/backend may surface a new error until the migration lands.
         let error_type = interner.intern("Error")?;
         let errorkind = interner.intern("ErrorKind")?;
+        // `ErrorDetails` — the 5-variant enrichment union carried optionally on
+        // `ErrorInfo.details : Maybe ErrorDetails` (backlog #85 follow-up, same
+        // registration recipe as `ErrorKind`).
+        let errordetails = interner.intern("ErrorDetails")?;
         // (constructor name, owning built-in type, index within the type, arity).
         for (name, type_name, index, arity) in [
             ("True", bool_, 0, 0),
@@ -305,6 +309,20 @@ impl Env {
             ("Conflict", errorkind, 8, 0),
             ("Unavailable", errorkind, 9, 0),
             ("Unexpected", errorkind, 10, 0),
+            // ── ErrorDetails variants (backlog #85 follow-up) ─────────────────
+            // `FfiPanic : PanicInfo -> ErrorDetails`
+            // `TypeMismatch : TypeInfo -> ErrorDetails`
+            // `HttpStatus : Int -> ErrorDetails`
+            // `JsonDecode : String -> ErrorDetails`
+            // `Custom : String -> ErrorDetails`
+            // Index order matches `sky_types::constrain`'s ctor scheme
+            // registration and `runtime/src/sky_runtime/error.rs`'s
+            // `SkyErrorDetails` enum — DO NOT reorder.
+            ("FfiPanic", errordetails, 0, 1),
+            ("TypeMismatch", errordetails, 1, 1),
+            ("HttpStatus", errordetails, 2, 1),
+            ("JsonDecode", errordetails, 3, 1),
+            ("Custom", errordetails, 4, 1),
         ] {
             let name = interner.intern(name)?;
             self.ctors.insert(
@@ -549,9 +567,9 @@ impl Env {
             ),
             // `Sky.Core.Error` — the real `Error ErrorKind ErrorInfo` ADT (backlog
             // #85/#160). Message constructors + nullary constructors + `toString`
-            // render + `withMessage` modifier + `isRetryable` classification.
-            // `ErrorInfo` this pass carries only `message` — the rich
-            // `ErrorDetails` union is an explicit, filed follow-up.
+            // render + `withMessage` modifier + `isRetryable` classification +
+            // `withDetails` modifier (backlog #85 follow-up — attaches the
+            // `ErrorDetails` union to `ErrorInfo.details : Maybe ErrorDetails`).
             (
                 "Error",
                 &[
@@ -569,6 +587,7 @@ impl Env {
                     "toString",
                     "withMessage",
                     "isRetryable",
+                    "withDetails",
                 ],
             ),
             // `Sky.Core.CssSafety` — the four Std.Css leaf security kernels (#47):

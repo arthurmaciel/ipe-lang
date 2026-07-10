@@ -931,6 +931,11 @@ impl<'a> EmitCtx<'a> {
             // `Order`/`SkyOrder`). Constructor emission: `SkyErrorKind::Io` /
             // `::Network` / etc.
             Some("ErrorKind") => Some("SkyErrorKind"),
+            // `ErrorDetails` is backed by `SkyErrorDetails` (backlog #85
+            // follow-up). Constructor names match Sky source verbatim:
+            // `FfiPanic` / `TypeMismatch` / `HttpStatus` / `JsonDecode` /
+            // `Custom`.
+            Some("ErrorDetails") => Some("SkyErrorDetails"),
             _ => None,
         }
     }
@@ -1058,6 +1063,7 @@ fn collect_record_shapes(
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
+        | IrType::ErrorDetails
         // `SqlFragment` (backlog #61) is an opaque query-building value — no
         // record shape.
         // `Secret` (backlog #44) is an opaque sealed string wrapper — no
@@ -1184,6 +1190,7 @@ fn type_reaches_enum(
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
+        | IrType::ErrorDetails
         // `SqlFragment` (backlog #61) is a heap-backed struct (String +
         // Vec<SqlParam>) — no size-cycle risk.
         // `Secret` (backlog #44) is a heap-backed newtype (String) — no
@@ -1246,6 +1253,7 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
+        | IrType::ErrorDetails
         // `SqlFragment` (backlog #61) is monomorphic — no generic parameters.
         // `Secret` (backlog #44) is monomorphic — no generic parameters.
         | IrType::SqlFragment
@@ -1334,6 +1342,7 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
+        | IrType::ErrorDetails
         // `SqlFragment` (backlog #61) is monomorphic — no generics to collect.
         // `Secret` (backlog #44) is monomorphic — no generics to collect.
         | IrType::SqlFragment
@@ -1614,6 +1623,7 @@ fn match_template(
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
+        | IrType::ErrorDetails
         // `SqlFragment` (backlog #61) is a monomorphic opaque leaf.
         // `Secret` (backlog #44) is a monomorphic opaque leaf.
         | IrType::SqlFragment

@@ -254,19 +254,28 @@ fn closed_superset_is_sky_t0001() {
 }
 
 // ---------------------------------------------------------------------------
-// row_poly_two_supersets_neg — P6, the class-1 coupling tripwire. Reject,
-// SKY-T0001. Compile-time only, no gate.
+// row_poly_two_supersets_neg — P6. Reject, SKY-T0001. Compile-time only, no
+// gate.
 // ---------------------------------------------------------------------------
 
 /// An unannotated LET-BOUND getter called with two DIFFERENT superset
 /// shapes (`{ name, age }` then `{ name, id }`) is rejected as SKY-T0001 —
-/// neither compiler let-generalizes over record rows. THIS is the tripwire
-/// the class-1 "Boundary Scheme Promotion" work must respect: see
+/// neither compiler let-generalizes over record rows. This rejection comes
+/// from `unify.rs`'s ordinary closed-record-mismatch rule, via the
+/// `Expr_::Let` no-let-polymorphism path (`constrain.rs`) — it does NOT
+/// exercise `promote_untyped_boundaries`/Boundary Scheme Promotion, which
+/// only generalizes MODULE-level bindings, not local `let`s. Do not read
+/// this fixture as a regression gate for the class-1 cross-module
+/// generalization mechanism (confirmed by independent review, 2026-07-10 —
+/// no cross-module two-superset fixture exists in this repo today; a real
+/// class-1 coupling tripwire would need one). It DOES still pin the correct
+/// no-let-poly-over-rows invariant described above: flipping this fixture
+/// to accept without adding per-record-shape callee monomorphisation to the
+/// backend would reintroduce the A7 exact-key miss as an ICE (best case) or
+/// a seal-violating emitted-code type error. See
 /// docs/architecture/row-poly-subset-superset-design.md "Coupling
-/// tripwire" — flipping this fixture to accept without adding
-/// per-record-shape callee monomorphisation to the backend reintroduces the
-/// A7 exact-key miss as an ICE (best case) or a seal-violating emitted-code
-/// type error.
+/// tripwire" for the ORIGINAL (broader) framing of that risk — the fixture
+/// here covers only the local-let-binding instance of it.
 #[test]
 fn two_different_supersets_is_sky_t0001() {
     let name = "row_poly_two_supersets_neg";
