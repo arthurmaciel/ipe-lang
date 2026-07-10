@@ -22,7 +22,7 @@ use sky_kernels::StdlibKernel;
 
 use crate::doc::{VarNamer, canon_type_to_doc, ty_to_doc};
 use crate::solve::{Budget, Constraint};
-use crate::ty::{Content, FlatType, RowTail, Ty, TyBounds, from_canon};
+use crate::ty::{Content, FlatType, RowTail, Ty, TyBounds, from_canon, is_solver_var, tag_solver_var};
 use crate::unionfind::{UnionFind, VarId};
 
 /// `where_` tag for any `CompilerBug` raised during constraint generation.
@@ -1580,10 +1580,15 @@ impl<'a> Builder<'a> {
                 // Haskell compiler's `Instantiate.fromAnnotation` filtering
                 // `"any"` out of the skolem set and `buildEnv` giving each
                 // occurrence its own fresh UF var.
-                let is_any = self
-                    .interner
-                    .resolve(sky_intern::Symbol::from_raw(*id))
-                    .is_some_and(|name| name == "any");
+                // AUD-13: a solver-representative id (tagged by `zonk`) is
+                // structurally never an annotation symbol — skip the
+                // interner resolution entirely rather than risk a spurious
+                // numeric collision with the interned "any" string.
+                let is_any = !is_solver_var(*id)
+                    && self
+                        .interner
+                        .resolve(sky_intern::Symbol::from_raw(*id))
+                        .is_some_and(|name| name == "any");
                 if is_any {
                     // Fresh flex UV per occurrence — intentionally NOT inserted
                     // into `vars` so the next occurrence also gets its own UV.
@@ -5087,7 +5092,11 @@ pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DRe
                     // variable; its obligations are read separately when
                     // generalising — see [`crate::SolvedTypes::bounds`].)
                     Content::Flex | Content::Rigid | Content::Super { .. } => {
-                        results.push(Ty::Var(root));
+                        // AUD-13: tag so this solver-representative id can
+                        // never be mistaken for an annotation-symbol raw by
+                        // `instantiate_in`'s wildcard-`"any"` check if this
+                        // zonked `Ty` is ever fed back through it.
+                        results.push(Ty::Var(tag_solver_var(root)));
                     }
                     Content::Structure(FlatType::Unit) => results.push(Ty::Unit),
                     Content::Structure(FlatType::Fun(a, b)) => {
@@ -6459,6 +6468,87 @@ mod registry_phase_c_tests {
         assert_eq!(
             Builder::kernel_scheme_or_unsupported(Some(a.clone()), Some(b), span),
             Ok(a),
+        );
+    }
+}
+
+#[cfg(test)]
+mod aud13_solver_var_tag_tests {
+    use super::{Builder, Builtins, Content, Interner, Ty, UnionFind};
+    use crate::ty::tag_solver_var;
+    use std::collections::BTreeMap;
+
+    fn make_builder(interner: &mut Interner) -> Builtins {
+        Builtins::new(interner).expect("Builtins::new must not fail in tests")
+    }
+
+    /// AUD-13 regression: `instantiate_in`'s wildcard-`"any"` check must not
+    /// misfire on a solver-representative id that happens to numerically
+    /// equal the interned raw of the string `"any"`. Constructs the exact
+    /// collision by reusing `any`'s own raw, tagged as solver-space —
+    /// `zonk` (see `constrain.rs`'s `Content::Flex | Rigid | Super` arm)
+    /// tags every surviving `VarId` this way before it can ever reach
+    /// `instantiate_in` again.
+    #[test]
+    fn tagged_solver_var_sharing_any_raw_is_not_treated_as_wildcard_any() {
+        let mut interner = Interner::new();
+        let any_sym = interner
+            .intern("any")
+            .expect("interning \"any\" must not fail");
+        let any_raw = any_sym.as_raw();
+
+        let builtins = make_builder(&mut interner);
+        let mut uf = UnionFind::<Content>::new();
+        let mut builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+
+        // Tagged: the SAME raw as `any`'s interned symbol, but marked
+        // solver-space. Two references through one `vars` map must resolve
+        // to the SAME variable (ordinary shared-var behavior) — if the tag
+        // were ignored, the wildcard-`any` path would instead mint a FRESH
+        // flex var per occurrence.
+        let tagged = Ty::Var(tag_solver_var(any_raw));
+        let mut vars = BTreeMap::new();
+        let first = builder
+            .instantiate_in(&tagged, &mut vars, false)
+            .expect("instantiate_in must not fail");
+        let second = builder
+            .instantiate_in(&tagged, &mut vars, false)
+            .expect("instantiate_in must not fail");
+        assert_eq!(
+            first, second,
+            "a tagged solver-var raw sharing any's numeric value must still \
+             share ONE variable across occurrences, proving it was NOT \
+             routed through the wildcard-any fresh-per-occurrence path",
+        );
+    }
+
+    /// Control: the SAME raw value, untagged, is genuine annotation-space
+    /// `"any"` and must keep its documented wildcard semantics — each
+    /// occurrence gets an independent fresh flex variable.
+    #[test]
+    fn untagged_any_raw_still_gets_wildcard_semantics() {
+        let mut interner = Interner::new();
+        let any_sym = interner
+            .intern("any")
+            .expect("interning \"any\" must not fail");
+        let any_raw = any_sym.as_raw();
+
+        let builtins = make_builder(&mut interner);
+        let mut uf = UnionFind::<Content>::new();
+        let mut builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+
+        let untagged = Ty::Var(any_raw);
+        let mut vars = BTreeMap::new();
+        let first = builder
+            .instantiate_in(&untagged, &mut vars, false)
+            .expect("instantiate_in must not fail");
+        let second = builder
+            .instantiate_in(&untagged, &mut vars, false)
+            .expect("instantiate_in must not fail");
+        assert_ne!(
+            first, second,
+            "untagged \"any\" must keep independent-fresh-var-per-occurrence \
+             wildcard semantics",
         );
     }
 }
