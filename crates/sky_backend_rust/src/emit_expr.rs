@@ -2220,6 +2220,21 @@ fn emit_ui_call(
             Ok(Some(format!("sky_runtime::html::render_html(&{html_s})")))
         }
 
+        // `Html.toString : Html msg -> String` — alias of `Html.render` (#76).
+        KernelFn::HtmlToString => {
+            let [html_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlToString",
+                    detail: format!(
+                        "Html.toString requires exactly 1 argument, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let html_s = emit_expr_at(ctx, html_e, indent, child, generics)?;
+            Ok(Some(format!("sky_runtime::html::render_html(&{html_s})")))
+        }
+
         // `Html.escapeText : String -> String`
         //
         // Emits: `sky_runtime::html::html_escape_text_(s)` (takes owned String).
@@ -2568,6 +2583,42 @@ fn emit_ui_call(
             )))
         }
 
+        // `Ui.image : List (Attribute msg) -> { src : String, description : String } -> Element msg` (#76)
+        KernelFn::UiImage => {
+            let [attrs_e, cfg_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiImage",
+                    detail: format!("Ui.image requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let Expr::Record(fields) = cfg_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiImage",
+                    detail: "Ui.image cfg must be an inline record literal \
+                             in Phase 0; non-literal cfg is deferred to Phase 1"
+                        .into(),
+                });
+            };
+            let src_e = lookup_field(
+                ctx,
+                fields,
+                "src",
+                "sky_backend_rust::emit_ui_call::UiImage::src",
+            )?;
+            let description_e = lookup_field(
+                ctx,
+                fields,
+                "description",
+                "sky_backend_rust::emit_ui_call::UiImage::description",
+            )?;
+            let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            let src_s = emit_expr_at(ctx, src_e, indent, child, generics)?;
+            let description_s = emit_expr_at(ctx, description_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_image_({attrs_s}, {src_s}, {description_s})"
+            )))
+        }
+
         // ── Std.Ui attribute builders ─────────────────────────────────────────
 
         // `Ui.spacing : Int -> Attribute msg`
@@ -2606,6 +2657,53 @@ fn emit_ui_call(
             let y = emit_expr_at(ctx, y_e, indent, child, generics)?;
             Ok(Some(format!(
                 "sky_runtime::ui::helpers::ui_padding_xy_({x}, {y})"
+            )))
+        }
+
+        // `Ui.paddingEach : { top : Int, right : Int, bottom : Int, left : Int } -> Attribute msg` (#76)
+        KernelFn::UiPaddingEach => {
+            let [rec_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiPaddingEach",
+                    detail: format!("Ui.paddingEach requires 1 argument, got {}", args.len()),
+                });
+            };
+            let Expr::Record(fields) = rec_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiPaddingEach",
+                    detail: "Ui.paddingEach arg must be an inline record literal".into(),
+                });
+            };
+            let top_e = lookup_field(
+                ctx,
+                fields,
+                "top",
+                "sky_backend_rust::emit_ui_call::UiPaddingEach::top",
+            )?;
+            let right_e = lookup_field(
+                ctx,
+                fields,
+                "right",
+                "sky_backend_rust::emit_ui_call::UiPaddingEach::right",
+            )?;
+            let bottom_e = lookup_field(
+                ctx,
+                fields,
+                "bottom",
+                "sky_backend_rust::emit_ui_call::UiPaddingEach::bottom",
+            )?;
+            let left_e = lookup_field(
+                ctx,
+                fields,
+                "left",
+                "sky_backend_rust::emit_ui_call::UiPaddingEach::left",
+            )?;
+            let top = emit_expr_at(ctx, top_e, indent, child, generics)?;
+            let right = emit_expr_at(ctx, right_e, indent, child, generics)?;
+            let bottom = emit_expr_at(ctx, bottom_e, indent, child, generics)?;
+            let left = emit_expr_at(ctx, left_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_padding_each_({top}, {right}, {bottom}, {left})"
             )))
         }
 
@@ -2655,9 +2753,21 @@ fn emit_ui_call(
         KernelFn::UiPointer => Ok(Some("sky_runtime::ui::helpers::ui_pointer_()".to_owned())),
         // `Ui.clip : Attribute msg` (arity 0)
         KernelFn::UiClip => Ok(Some("sky_runtime::ui::helpers::ui_clip_()".to_owned())),
+        // `Ui.clipX : Attribute msg` (arity 0) (#76)
+        KernelFn::UiClipX => Ok(Some("sky_runtime::ui::helpers::ui_clip_x_()".to_owned())),
+        // `Ui.clipY : Attribute msg` (arity 0) (#76)
+        KernelFn::UiClipY => Ok(Some("sky_runtime::ui::helpers::ui_clip_y_()".to_owned())),
         // `Ui.scrollbars : Attribute msg` (arity 0)
         KernelFn::UiScrollbars => Ok(Some(
             "sky_runtime::ui::helpers::ui_scrollbars_()".to_owned(),
+        )),
+        // `Ui.scrollbarX : Attribute msg` (arity 0) (#76)
+        KernelFn::UiScrollbarX => Ok(Some(
+            "sky_runtime::ui::helpers::ui_scrollbar_x_()".to_owned(),
+        )),
+        // `Ui.scrollbarY : Attribute msg` (arity 0) (#76)
+        KernelFn::UiScrollbarY => Ok(Some(
+            "sky_runtime::ui::helpers::ui_scrollbar_y_()".to_owned(),
         )),
 
         // `Ui.gridColumns : Int -> Attribute msg`
@@ -2847,6 +2957,24 @@ fn emit_ui_call(
             let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
             Ok(Some(format!(
                 "sky_runtime::ui::helpers::ui_background_image_({s})"
+            )))
+        }
+
+        // `Background.linearGradient : Float -> List (Float, Color) -> Attribute msg` (#76)
+        KernelFn::BackgroundLinearGradient => {
+            let [angle_e, stops_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::BackgroundLinearGradient",
+                    detail: format!(
+                        "Background.linearGradient requires 2 arguments, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let angle = emit_expr_at(ctx, angle_e, indent, child, generics)?;
+            let stops = emit_expr_at(ctx, stops_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_background_linear_gradient_({angle}, {stops})"
             )))
         }
 
@@ -3273,6 +3401,34 @@ fn emit_ui_call(
             Ok(Some(
                 "sky_runtime::ui::helpers::ui_reduced_motion_()".to_owned(),
             ))
+        }
+
+        // #76: PseudoClass constants — `Ui.hover` / `Ui.focus` / … : PseudoClass (0-arity)
+        KernelFn::UiHover => Ok(Some("sky_runtime::ui::helpers::ui_hover_()".to_owned())),
+        KernelFn::UiFocus => Ok(Some("sky_runtime::ui::helpers::ui_focus_()".to_owned())),
+        KernelFn::UiFocusVisible => Ok(Some(
+            "sky_runtime::ui::helpers::ui_focus_visible_()".to_owned(),
+        )),
+        KernelFn::UiActive => Ok(Some("sky_runtime::ui::helpers::ui_active_()".to_owned())),
+        KernelFn::UiDisabled => Ok(Some(
+            "sky_runtime::ui::helpers::ui_disabled_()".to_owned(),
+        )),
+
+        // `Ui.onPseudo : PseudoClass -> List (Attribute msg) -> Attribute msg` (#76)
+        // — generic escape hatch: folds `attrs` into one CSS rules-string and
+        // attaches it as `AttrPseudoRule(pc, css)`.
+        KernelFn::UiOnPseudo => {
+            let [pc_e, attrs_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnPseudo",
+                    detail: format!("Ui.onPseudo requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let pc = emit_expr_at(ctx, pc_e, indent, child, generics)?;
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_pseudo_({pc}, {attrs})"
+            )))
         }
 
         // #154: `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
@@ -4251,6 +4407,55 @@ fn emit_ui_call(
             )))
         }
 
+        // `Html.voidNode : String -> List Attr -> Html msg` (#76) — the generic
+        // void counterpart of `Html.node`: arbitrary runtime tag, no children
+        // arg. Shares the same `html_node_` sink with an emit-baked empty
+        // children vec, exactly like the fixed-tag void builders below.
+        KernelFn::HtmlVoidNode => {
+            let [tag_e, attrs_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlVoidNode",
+                    detail: format!("Html.voidNode requires 2 arguments, got {}", args.len()),
+                });
+            };
+            let tag = emit_expr_at(ctx, tag_e, indent, child, generics)?;
+            let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_node_({tag}, {attrs}, ::std::vec::Vec::new())"
+            )))
+        }
+
+        // `Html.doctype : List Html -> Html msg` (#76) — wraps children in the
+        // `!doctype-wrapper` pseudo-tag; `html::render_into_ctx` already
+        // special-cases that tag to emit `<!DOCTYPE html>`.
+        KernelFn::HtmlDoctype => {
+            let [children_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlDoctype",
+                    detail: format!("Html.doctype requires 1 argument, got {}", args.len()),
+                });
+            };
+            let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_doctype_({children})"
+            )))
+        }
+
+        // `Html.titleNode : String -> Html msg` (#76) — wraps a raw string
+        // directly in `<title>`.
+        KernelFn::HtmlTitleNode => {
+            let [s_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlTitleNode",
+                    detail: format!("Html.titleNode requires 1 argument, got {}", args.len()),
+                });
+            };
+            let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::html_title_node_({s})"
+            )))
+        }
+
         // `Html.styleNode : List Attr -> String -> Html msg` (arity-2; the
         // dedicated kernel close-tag-neutralises the CSS body — F7).
         KernelFn::HtmlStyleNode => {
@@ -4556,6 +4761,20 @@ fn emit_ui_call(
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
             Ok(Some(format!(
                 "sky_runtime::ui::helpers::ui_on_key_up_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
+            )))
+        }
+
+        // `Ui.onFile : (String -> msg) -> Attribute msg`  (T6: Arc-wrap; #76)
+        KernelFn::UiOnFile => {
+            let [f_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiOnFile",
+                    detail: format!("Ui.onFile requires 1 argument, got {}", args.len()),
+                });
+            };
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_file_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
             )))
         }
 

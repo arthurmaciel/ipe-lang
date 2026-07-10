@@ -1544,4 +1544,68 @@ mod tests {
             Some("widget".to_owned())
         );
     }
+
+    // ── #76: 20-kernel wiring batch — Html document-node regressions ─────────
+
+    #[test]
+    fn html_doctype_helper_wraps_doctype_wrapper_tag() {
+        // `Html.doctype [Html.div [] []]` via the `html_doctype_` kernel helper
+        // (not a hand-built tree) must round-trip through the SAME
+        // `!doctype-wrapper` recognition path as `fixture69_render_parity`.
+        let child: Html<()> = Html::HElement("div".into(), vec![], vec![]);
+        let doc = crate::sky_runtime::ui::helpers::html_doctype_(vec![child]);
+        let out = render_html(&doc);
+        assert!(
+            out.starts_with("<!DOCTYPE html>"),
+            "doctype prefix missing: {out}"
+        );
+        assert!(out.contains("<div"), "child must render: {out}");
+    }
+
+    #[test]
+    fn html_title_node_wraps_raw_string_in_title() {
+        let t: Html<()> = crate::sky_runtime::ui::helpers::html_title_node_("My App".to_owned());
+        let out = render_html(&t);
+        assert_eq!(out, "<title>My App</title>");
+    }
+
+    #[test]
+    fn html_title_node_escapes_text() {
+        // titleNode wraps via HText (escaped), not HRaw — a `<` in the title
+        // must not break out of the tag.
+        let t: Html<()> =
+            crate::sky_runtime::ui::helpers::html_title_node_("<script>x</script>".to_owned());
+        let out = render_html(&t);
+        assert!(!out.contains("<script>"), "title text must be escaped: {out}");
+    }
+
+    #[test]
+    fn html_void_node_shares_generic_node_sink_and_self_closes() {
+        // `Html.voidNode "br" []` shares the SAME `html_node_` runtime sink as
+        // `Html.node` (the emit site bakes an empty children vec) — verify the
+        // void tag still self-closes / drops any injected children via the
+        // render sink's own VOID-set gate (defence in depth against an
+        // injected-child XSS surface even if a caller passed non-empty kids).
+        let t: Html<()> = crate::sky_runtime::ui::helpers::html_node_(
+            "br".to_owned(),
+            vec![],
+            vec![Html::HText("should be dropped".into())],
+        );
+        let out = render_html(&t);
+        assert_eq!(out, "<br />");
+        assert!(!out.contains("should be dropped"));
+    }
+
+    #[test]
+    fn html_to_string_is_byte_identical_to_render() {
+        // `Html.toString` is a distinct kernel from `Html.render` but shares
+        // the same runtime fn (`html_render_`) — prove both produce identical
+        // output for the same input (alias correctness).
+        let t: Html<()> = Html::HElement(
+            "p".into(),
+            vec![Attribute::Attr("class".into(), "x".into())],
+            vec![Html::HText("hi".into())],
+        );
+        assert_eq!(html_render_(t.clone()), render_html(&t));
+    }
 }

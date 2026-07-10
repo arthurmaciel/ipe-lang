@@ -7619,8 +7619,16 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiPointer
                 // `Ui.clip : Attribute msg`
                 | KernelFn::UiClip
+                // `Ui.clipX : Attribute msg`
+                | KernelFn::UiClipX
+                // `Ui.clipY : Attribute msg`
+                | KernelFn::UiClipY
                 // `Ui.scrollbars : Attribute msg`
                 | KernelFn::UiScrollbars
+                // `Ui.scrollbarX : Attribute msg`
+                | KernelFn::UiScrollbarX
+                // `Ui.scrollbarY : Attribute msg`
+                | KernelFn::UiScrollbarY
                 // `Font.bold : Attribute msg`
                 | KernelFn::FontBold
                 // `Font.italic : Attribute msg`
@@ -7671,7 +7679,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiDesktop
                 | KernelFn::UiDarkMode
                 | KernelFn::UiLightMode
-                | KernelFn::UiReducedMotion,
+                | KernelFn::UiReducedMotion
+                // ── #76: PseudoClass constants — return PseudoClass, arity 0 ──
+                | KernelFn::UiHover
+                | KernelFn::UiFocus
+                | KernelFn::UiFocusVisible
+                | KernelFn::UiActive
+                | KernelFn::UiDisabled,
             ) => Ok(0),
             // Arity 1: single-argument pure serialisation / escape helpers.
             Callee::Kernel(
@@ -7877,7 +7891,18 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiDescLabel
                 // ── Std.Ui.Input (#124) — arity-1 constructors ───────────────────
                 // `Input.labelHidden : String -> Label msg`
-                | KernelFn::InputLabelHidden,
+                | KernelFn::InputLabelHidden
+                // ── #76: 20-kernel wiring batch — arity 1 ─────────────────────
+                // `Ui.paddingEach : { top, right, bottom, left : Int } -> Attribute msg`
+                | KernelFn::UiPaddingEach
+                // `Ui.onFile : (String -> msg) -> Attribute msg`
+                | KernelFn::UiOnFile
+                // `Html.doctype : List (Html msg) -> Html msg`
+                | KernelFn::HtmlDoctype
+                // `Html.titleNode : String -> Html msg`
+                | KernelFn::HtmlTitleNode
+                // `Html.toString : Html msg -> String`
+                | KernelFn::HtmlToString,
             ) => Ok(1),
             // Arity 2: `Ui.layout attrs elem`, `Ui.layoutWith cfg elem`,
             //          `Live.route path ctor`, `Live.renderStatic cfg path`.
@@ -8038,6 +8063,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlBody
                 // `Html.title : List (Attribute msg) -> List (Html msg) -> Html msg`
                 | KernelFn::HtmlTitle
+                // `Html.htmlNode : List (Attribute msg) -> List (Html msg) -> Html msg`
+                | KernelFn::HtmlHtmlNode
+                // `Html.headNode : List (Attribute msg) -> List (Html msg) -> Html msg`
+                | KernelFn::HtmlHeadNode
                 // `Live.route : String -> page -> LiveRoute` (#106: `page` is a
                 // bare polymorphic value — nullary ctor OR `String -> Page`)
                 | KernelFn::LiveRoute
@@ -8088,7 +8117,16 @@ impl<'a> Lowerer<'a> {
                 // `Input.radio : List (Attribute msg) -> { onChange, options, selected, label } -> Element msg`
                 | KernelFn::InputRadio
                 // `Input.radioRow : List (Attribute msg) -> { onChange, options, selected, label } -> Element msg`
-                | KernelFn::InputRadioRow,
+                | KernelFn::InputRadioRow
+                // ── #76: 20-kernel wiring batch — arity 2 ─────────────────────
+                // `Ui.image : List (Attribute msg) -> { src : String, description : String } -> Element msg`
+                | KernelFn::UiImage
+                // `Background.linearGradient : Float -> List (Float, Color) -> Attribute msg`
+                | KernelFn::BackgroundLinearGradient
+                // `Html.voidNode : String -> List (Attribute msg) -> Html msg`
+                | KernelFn::HtmlVoidNode
+                // `Ui.onPseudo : PseudoClass -> List (Attribute msg) -> Attribute msg`
+                | KernelFn::UiOnPseudo,
             ) => Ok(2),
             // Arity 3: `Ui.rgb r g b`, `Html.node tag attrs children`,
             //          `Ui.breakpoint query attrs element`.
@@ -8854,7 +8892,12 @@ impl<'a> Lowerer<'a> {
                     // ── M7: Std.Ui / Std.Html render kernels ─────────────────
                     ("Ui", "layout") => Ok(Callee::Kernel(KernelFn::UiLayout)),
                     ("Ui", "layoutWith") => Ok(Callee::Kernel(KernelFn::UiLayoutWith)),
-                    ("Html", "render" | "toString") => Ok(Callee::Kernel(KernelFn::HtmlRender)),
+                    ("Html", "render") => Ok(Callee::Kernel(KernelFn::HtmlRender)),
+                    // `Html.toString` is a distinct arity-1 kernel (decl() name
+                    // "toString") that shares `HtmlRender`'s runtime fn
+                    // (`html_render_`) but is a SEPARATE `KernelFn` variant so
+                    // `decl_equiv_legacy_match` sees a 1:1 name↔variant mapping.
+                    ("Html", "toString") => Ok(Callee::Kernel(KernelFn::HtmlToString)),
                     ("Html", "escapeHtml" | "escapeText") => {
                         Ok(Callee::Kernel(KernelFn::HtmlEscapeText))
                     }
@@ -8874,6 +8917,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "form") => Ok(Callee::Kernel(KernelFn::UiForm)),
                     ("Ui", "button") => Ok(Callee::Kernel(KernelFn::UiButton)),
                     ("Ui", "link") => Ok(Callee::Kernel(KernelFn::UiLink)),
+                    ("Ui", "image") => Ok(Callee::Kernel(KernelFn::UiImage)),
                     // ── M7: Std.Ui nearby attribute builders ───────────────────
                     ("Ui", "above") => Ok(Callee::Kernel(KernelFn::UiAbove)),
                     ("Ui", "below") => Ok(Callee::Kernel(KernelFn::UiBelow)),
@@ -8885,6 +8929,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "spacing") => Ok(Callee::Kernel(KernelFn::UiSpacing)),
                     ("Ui", "padding") => Ok(Callee::Kernel(KernelFn::UiPadding)),
                     ("Ui", "paddingXY") => Ok(Callee::Kernel(KernelFn::UiPaddingXY)),
+                    ("Ui", "paddingEach") => Ok(Callee::Kernel(KernelFn::UiPaddingEach)),
                     ("Ui", "width") => Ok(Callee::Kernel(KernelFn::UiWidth)),
                     ("Ui", "height") => Ok(Callee::Kernel(KernelFn::UiHeight)),
                     ("Ui", "centerX") => Ok(Callee::Kernel(KernelFn::UiCenterX)),
@@ -8894,10 +8939,16 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "alignTop") => Ok(Callee::Kernel(KernelFn::UiAlignTop)),
                     ("Ui", "alignBottom") => Ok(Callee::Kernel(KernelFn::UiAlignBottom)),
                     ("Ui", "pointer") => Ok(Callee::Kernel(KernelFn::UiPointer)),
-                    ("Ui", "clip" | "clipX" | "clipY") => Ok(Callee::Kernel(KernelFn::UiClip)),
-                    ("Ui", "scrollbars" | "scrollbarX" | "scrollbarY") => {
-                        Ok(Callee::Kernel(KernelFn::UiScrollbars))
-                    }
+                    ("Ui", "clip") => Ok(Callee::Kernel(KernelFn::UiClip)),
+                    // ── #76: clipX/clipY/scrollbarX/scrollbarY are distinct
+                    // per-axis kernels (different `AttrOverflow` values than
+                    // `clip`/`scrollbars`) — the former combined arm above
+                    // silently folded them onto the wrong (both-axes) semantics.
+                    ("Ui", "clipX") => Ok(Callee::Kernel(KernelFn::UiClipX)),
+                    ("Ui", "clipY") => Ok(Callee::Kernel(KernelFn::UiClipY)),
+                    ("Ui", "scrollbars") => Ok(Callee::Kernel(KernelFn::UiScrollbars)),
+                    ("Ui", "scrollbarX") => Ok(Callee::Kernel(KernelFn::UiScrollbarX)),
+                    ("Ui", "scrollbarY") => Ok(Callee::Kernel(KernelFn::UiScrollbarY)),
                     ("Ui", "gridColumns") => Ok(Callee::Kernel(KernelFn::UiGridColumns)),
                     // ── M7: Std.Ui Length builders ────────────────────────────
                     ("Ui", "px") => Ok(Callee::Kernel(KernelFn::UiPx)),
@@ -8919,6 +8970,9 @@ impl<'a> Lowerer<'a> {
                     // ── M7: Background sub-module ─────────────────────────────
                     ("Background", "color") => Ok(Callee::Kernel(KernelFn::BackgroundColor)),
                     ("Background", "image") => Ok(Callee::Kernel(KernelFn::BackgroundImage)),
+                    ("Background", "linearGradient") => {
+                        Ok(Callee::Kernel(KernelFn::BackgroundLinearGradient))
+                    }
                     // ── M7: Border sub-module ─────────────────────────────────
                     ("Border", "width") => Ok(Callee::Kernel(KernelFn::BorderWidth)),
                     ("Border", "rounded") => Ok(Callee::Kernel(KernelFn::BorderRounded)),
@@ -8940,10 +8994,16 @@ impl<'a> Lowerer<'a> {
                     // its own kernel, NOT folded into the arity-3 `HtmlNode`. The
                     // dedicated kernel close-tag-neutralises the CSS body (F7).
                     ("Html", "styleNode") => Ok(Callee::Kernel(KernelFn::HtmlStyleNode)),
-                    (
-                        "Html",
-                        "node" | "voidNode" | "doctype" | "titleNode" | "htmlNode" | "headNode",
-                    ) => Ok(Callee::Kernel(KernelFn::HtmlNode)),
+                    ("Html", "node") => Ok(Callee::Kernel(KernelFn::HtmlNode)),
+                    // ── #76: 20-kernel wiring batch — each of these 5 is now its
+                    // own dedicated `KernelFn` variant (distinct arity from the
+                    // generic arity-3 `Html.node`); the former combined arm
+                    // above silently mis-arities them onto `HtmlNode`.
+                    ("Html", "voidNode") => Ok(Callee::Kernel(KernelFn::HtmlVoidNode)),
+                    ("Html", "doctype") => Ok(Callee::Kernel(KernelFn::HtmlDoctype)),
+                    ("Html", "titleNode") => Ok(Callee::Kernel(KernelFn::HtmlTitleNode)),
+                    ("Html", "htmlNode") => Ok(Callee::Kernel(KernelFn::HtmlHtmlNode)),
+                    ("Html", "headNode") => Ok(Callee::Kernel(KernelFn::HtmlHeadNode)),
                     ("Html", "div") => Ok(Callee::Kernel(KernelFn::HtmlDiv)),
                     ("Html", "span") => Ok(Callee::Kernel(KernelFn::HtmlSpan)),
                     ("Html", "a") => Ok(Callee::Kernel(KernelFn::HtmlA)),
@@ -9066,6 +9126,7 @@ impl<'a> Lowerer<'a> {
                         Ok(Callee::Kernel(KernelFn::UiOnBool))
                     }
                     ("Ui", "onSubmit") => Ok(Callee::Kernel(KernelFn::UiOnSubmit)),
+                    ("Ui", "onFile") => Ok(Callee::Kernel(KernelFn::UiOnFile)),
                     // ── #107: Std.Html.Events builders (Event qualifier) — produce
                     // the `Std.Html.Attribute` variant so they compose with the
                     // Std.Html element + attribute builders. Same fallback note
@@ -9104,6 +9165,13 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "darkMode") => Ok(Callee::Kernel(KernelFn::UiDarkMode)),
                     ("Ui", "lightMode") => Ok(Callee::Kernel(KernelFn::UiLightMode)),
                     ("Ui", "reducedMotion") => Ok(Callee::Kernel(KernelFn::UiReducedMotion)),
+                    // ── #76: PseudoClass constants + Ui.onPseudo ──────────────
+                    ("Ui", "onPseudo") => Ok(Callee::Kernel(KernelFn::UiOnPseudo)),
+                    ("Ui", "hover") => Ok(Callee::Kernel(KernelFn::UiHover)),
+                    ("Ui", "focus") => Ok(Callee::Kernel(KernelFn::UiFocus)),
+                    ("Ui", "focusVisible") => Ok(Callee::Kernel(KernelFn::UiFocusVisible)),
+                    ("Ui", "active") => Ok(Callee::Kernel(KernelFn::UiActive)),
+                    ("Ui", "disabled") => Ok(Callee::Kernel(KernelFn::UiDisabled)),
                     ("Background", "hoverColor") => {
                         Ok(Callee::Kernel(KernelFn::BackgroundHoverColor))
                     }
