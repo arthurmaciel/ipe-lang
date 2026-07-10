@@ -1,10 +1,10 @@
 # Async-FFI Auto-Bridge — AUTHORITATIVE design (conciliation of the double-swarm)
 
 > **Status:** the ONE design of record for the async-FFI auto-bridge, produced
-> 2026-07-04 by conciliating the two swarm arms:
-> `async-ffi-bridge-fresh.md` (reference-blind first-principles) and
-> `async-ffi-bridge-learnings.md` (reference mining). Supersedes both for
-> implementation purposes; both remain as provenance. Amends the P-plan of
+> 2026-07-04 by conciliating the two swarm arms (a reference-blind
+> first-principles arm and a reference-mining arm). Supersedes both for
+> implementation purposes; the two swarm-arm inputs are preserved in git
+> history. Amends the P-plan of
 > `ffi-rust-subsystem-design.md` (§9 below re-slots its milestones).
 >
 > **Conciliation discipline applied:** faithful-port DEFAULT — where the
