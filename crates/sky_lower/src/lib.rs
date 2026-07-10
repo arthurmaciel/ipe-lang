@@ -140,6 +140,13 @@ pub fn lower(
         ek_conflict: interner.intern("Conflict")?,
         ek_unavailable: interner.intern("Unavailable")?,
         ek_unexpected: interner.intern("Unexpected")?,
+        // ── ErrorDetails (backlog #85 follow-up) ──────────────────────────────
+        errordetails: interner.intern("ErrorDetails")?,
+        ed_ffi_panic: interner.intern("FfiPanic")?,
+        ed_type_mismatch: interner.intern("TypeMismatch")?,
+        ed_http_status: interner.intern("HttpStatus")?,
+        ed_json_decode: interner.intern("JsonDecode")?,
+        ed_custom: interner.intern("Custom")?,
     };
     lower::Lowerer::new(
         m,

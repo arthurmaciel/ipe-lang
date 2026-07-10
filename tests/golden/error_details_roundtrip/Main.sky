@@ -1,0 +1,76 @@
+module Main exposing (main)
+
+-- Backlog #85 follow-up — `ErrorInfo.details : Maybe ErrorDetails` + the
+-- 5-variant `ErrorDetails`/`PanicInfo`/`TypeInfo` union (ported alongside the
+-- core `Error ErrorKind ErrorInfo` ADT from `crates/skyc/tests/
+-- golden_error_adt_roundtrip.rs`, backlog #85/#160).
+--
+-- `Error.withDetails` is the sanctioned way to attach `ErrorDetails` to a
+-- live `Error` value (raw record-literal construction of `ErrorInfo` /
+-- `PanicInfo` / `TypeInfo` is not supported — see `runtime/src/sky_runtime/
+-- error.rs`'s module doc). Round-trips THREE of the five `ErrorDetails`
+-- variants end to end (`HttpStatus`, `JsonDecode`, `Custom` — none carry a
+-- record payload); `FfiPanic` / `TypeMismatch` appear as exhaustive `case`
+-- arms only (proving their `PanicInfo`/`TypeInfo` record-payload ADT
+-- registration type-checks) without being constructed.
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+describeDetails : Maybe ErrorDetails -> String
+describeDetails maybeDetails =
+    case maybeDetails of
+        Nothing ->
+            "none"
+
+        Just (HttpStatus code) ->
+            "HttpStatus " ++ String.fromInt code
+
+        Just (JsonDecode msg) ->
+            "JsonDecode " ++ msg
+
+        Just (Custom msg) ->
+            "Custom " ++ msg
+
+        Just (FfiPanic panicInfo) ->
+            "FfiPanic " ++ panicInfo.message
+
+        Just (TypeMismatch typeInfo) ->
+            "TypeMismatch " ++ typeInfo.expected
+
+
+describe : Error -> String
+describe err =
+    case err of
+        Error _ info ->
+            Error.toString err ++ " | details=" ++ describeDetails info.details
+
+
+main =
+    let
+        base =
+            Error.io "disk full"
+
+        withHttp =
+            Error.withDetails (HttpStatus 404) base
+
+        withJson =
+            Error.withDetails (JsonDecode "unexpected token") base
+
+        withCustom =
+            Error.withDetails (Custom "custom detail") base
+
+        _ =
+            println (describe base)
+
+        _ =
+            println (describe withHttp)
+
+        _ =
+            println (describe withJson)
+
+        _ =
+            println (describe withCustom)
+    in
+    println "done"
