@@ -506,22 +506,25 @@ admissibility gates:
 - **#91 (shipped):** `check_admissible_model` in `emit_model_gate.rs:62` — gates
   Model at `skyc`, emits `SKY-L0120` on a non-serde/non-Clone leaf. Verified:
   `code.rs:198-200`, `emit_model_gate.rs`.
-- **#94 (designed, not yet in code.rs):** `check_admissible_msg` — gates Msg
-  at `skyc` using `ir_type_is_derivable` for all three app shapes (NOT serde —
-  Html is derivable and thus admissible as a Live Msg payload, unlike Live Model).
-  Emits the planned `SKY-L0121`. Designed in
-  `docs/architecture/seal-gates-msg-lambda-view-design.md §2`.
-- **#95 (designed, not yet committed):** Lambda-aware `fn_param_ty(e, idx)` in
-  `emit_model_gate.rs:38` — closes the fail-open gap where `view = \m -> …`
-  (an `Expr::Lambda`) bypassed the `FuncValue`-only model recovery and silently
-  skipped the gate. Designed in §3 of the same doc.
+- **#94 ✅ shipped (landed, corrected 2026-07-09):** `check_admissible_msg` in
+  `emit_model_gate.rs:105` — gates Msg at `skyc` using `ir_type_is_derivable`
+  for all three app shapes (NOT serde — Html is derivable and thus admissible
+  as a Live Msg payload, unlike Live Model), called from `emit_live.rs:349` /
+  `emit_tui.rs:182` / `emit_webview.rs:137`. Emits `SKY-L0125`
+  (`InadmissibleAppMsg`) — NOT the originally-planned `SKY-L0121`, which was
+  reassigned in the interim to the unrelated `JsonDec.succeed` curry-arity
+  gate. Regression: `crates/skyc/tests/msg_admissibility.rs` (7/7 green).
+  Originally designed in `docs/architecture/seal-gates-msg-lambda-view-design.md §2`.
+- **#95 ✅ shipped (landed, corrected 2026-07-09):** Lambda-aware
+  `fn_param_ty(e, idx)` in `emit_model_gate.rs:46` — closes the fail-open gap
+  where `view = \m -> …` (an `Expr::Lambda`) bypassed the `FuncValue`-only
+  model recovery and silently skipped the gate. Originally designed in §3 of
+  the same doc.
 
 *Rationale:* seal-forced divergence. The Go backend's dynamic path is correct for
 Go; the Rust backend's static bounds make the Go-dynamic path a `cargo`-fail.
 Gates at `skyc` convert the `cargo`-fail class into a clear user diagnostic.
 See `docs/architecture/seal-gates-msg-lambda-view-design.md §4`.
-*Note:* `SKY-L0121` (InadmissibleAppMsg) is **designed but not yet in
-`code.rs`** — mark as pending-implementation.
 
 ### A16 — App cfg must be an inline record literal (SKY-L0119)
 The reference Go backend accepts any expression as the `Live.app` / `Tui.app` /
