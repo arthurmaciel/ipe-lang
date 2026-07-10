@@ -3903,21 +3903,94 @@ impl<'a> Lowerer<'a> {
                     .ok_or_else(|| {
                         bug("sky_lower::lower_def", "no inferred type for unannotated fn")
                     })?;
+                // Boundary Scheme Promotion: if this def generalized at its
+                // home module's boundary (a non-empty `untyped_type_params`
+                // entry), install its quantified-var map exactly like the
+                // Typed arm does — so a `Ty::Var` reachable from `solved_ty`
+                // (region-zonked, hence solver-tagged) that IS one of these
+                // quantified vars lowers to `IrType::Generic(sym)` instead of
+                // hitting `ir_type_from_ty`'s SKY-L0102 fail-closed arm.
+                // Absent/empty entry (the common case — most untyped defs stay
+                // fully monomorphic): `current_poly_tvars` stays empty, byte-
+                // identical to before this feature existed.
+                let poly_key = (def.home().to_vec(), name);
+                let quantified_syms = self.types.untyped_type_params.get(&poly_key);
+                let is_generalized = quantified_syms.is_some_and(|v| !v.is_empty());
+                let saved_poly_tvars = if is_generalized {
+                    let poly = self.types.poly_var_map.get(&poly_key).cloned().unwrap_or_default();
+                    let mut slot = self.current_poly_tvars.borrow_mut();
+                    let saved = slot.clone();
+                    *slot = poly;
+                    Some(saved)
+                } else {
+                    None
+                };
+                let var_bounds = self.types.bounds.get(&poly_key);
+                // `used_generics` structural-appearance filter, ported from the
+                // Typed arm (Bug-28/Bug-29 invariant): a var only belongs in
+                // `type_params` if `IrType::Generic(v)` actually appears in the
+                // RESOLVED `params`/`ret` after `split_unannotated_sig` runs.
+                // `quantified_syms` alone is not enough — a var can be a
+                // residual boundary-scheme root that gets pinned to a concrete
+                // type by `resolve_deferred` (e.g. a field-access result var
+                // narrowly missed by `obligation_roots`) without disappearing
+                // from `untyped_type_params`. Declaring it as a Rust generic
+                // that appears in neither `params` nor `ret` is exactly the
+                // E0283 SEAL violation an independent review caught on a
+                // 3-module cross-module field-access getter; this filter is
+                // defense-in-depth alongside the `obligation_roots` fix above.
+                // Computed per-branch below, once `params`/`ret` are known.
+                let compute_type_params = |quantified_syms: Option<&Vec<Symbol>>,
+                                           var_bounds: Option<&BTreeMap<Symbol, TyBounds>>,
+                                           params: &[(Symbol, IrType)],
+                                           ret: &IrType| {
+                    let used_generics: BTreeSet<Symbol> = {
+                        let mut s = BTreeSet::new();
+                        for (_, ty) in params {
+                            collect_ir_generic_syms(ty, &mut s);
+                        }
+                        collect_ir_generic_syms(ret, &mut s);
+                        s
+                    };
+                    quantified_syms
+                        .into_iter()
+                        .flatten()
+                        .copied()
+                        .filter(|v| used_generics.contains(v))
+                        .map(|v| (v, Self::bounds_for(var_bounds, v)))
+                        .collect::<Vec<(Symbol, BoundSet)>>()
+                };
+
                 if !patterns.is_empty() {
                     // An unannotated top-level function: synthesise the typed
                     // parameter/return split from the HM-solved type, mirroring
                     // what `split_typed_sig` does for annotated bindings.
                     // Concrete solved types lower cleanly; a free `Ty::Var` in
-                    // a parameter or return position surfaces as
+                    // a parameter or return position that is NOT one of this
+                    // def's own quantified vars surfaces as
                     // `Feature::Polymorphism` (SKY-L0102) rather than emitting
-                    // unsound `any`-shaped parameters — fail-closed by design.
-                    let (params, prologue, ret) =
-                        self.split_unannotated_sig(solved_ty, patterns, sig_span)?;
+                    // unsound `any`-shaped parameters — fail-closed by design
+                    // (Divergence D1: an ambiguous instantiation the reference
+                    // erasure-accepts is rejected here, strictly safer).
+                    let split_result = self.split_unannotated_sig(solved_ty, patterns, sig_span);
+                    let (params, prologue, ret) = match split_result {
+                        Ok(v) => v,
+                        Err(e) => {
+                            if let Some(saved) = saved_poly_tvars {
+                                *self.current_poly_tvars.borrow_mut() = saved;
+                            }
+                            return Err(e);
+                        }
+                    };
                     // Save/set/restore fn_is_async (same rationale as Typed path).
                     let prev_async = self.fn_is_async.get();
                     self.fn_is_async.set(matches!(ret, IrType::Task(_)));
-                    let mut lowered_body = self.lower_expr(body)?;
+                    let body_result = self.lower_expr(body);
                     self.fn_is_async.set(prev_async);
+                    if let Some(saved) = saved_poly_tvars {
+                        *self.current_poly_tvars.borrow_mut() = saved;
+                    }
+                    let mut lowered_body = body_result?;
                     // Fold destructuring prologues outermost-first (reverse)
                     // so the first parameter's destructure is the outer binding.
                     for (binder_sym, binder_pat) in prologue.into_iter().rev() {
@@ -3942,35 +4015,54 @@ impl<'a> Lowerer<'a> {
                             reject_fn_value_reuse(*sym, ir_ty, &lowered_body, sig_span)?;
                         }
                     }
-                    // No source-level type variables → no type_params (the
-                    // function is monomorphic).  TCO still applies.
                     let arity = params.len();
                     if analyze_tail_recursion(id, arity, &lowered_body)
                         == TailRecursion::TailRecursive
                     {
                         lowered_body = rewrite_tail_calls(id, arity, params.clone(), lowered_body);
                     }
+                    let type_params =
+                        compute_type_params(quantified_syms, var_bounds, &params, &ret);
                     return Ok(Func {
                         id,
                         name,
                         home: ModPath(def.home().to_vec()),
-                        type_params: Vec::new(),
+                        type_params,
                         params,
                         ret,
                         body: lowered_body,
                     });
                 }
-                let ret = self.ir_type_from_ty(solved_ty, sig_span)?;
+                let ret_result = self.ir_type_from_ty(solved_ty, sig_span);
+                let ret = match ret_result {
+                    Ok(v) => v,
+                    Err(e) => {
+                        if let Some(saved) = saved_poly_tvars {
+                            *self.current_poly_tvars.borrow_mut() = saved;
+                        }
+                        return Err(e);
+                    }
+                };
                 // Save/set/restore fn_is_async for the 0-param (value-binding) path.
                 let prev_async = self.fn_is_async.get();
                 self.fn_is_async.set(matches!(ret, IrType::Task(_)));
-                let lowered_body = self.lower_expr(body)?;
+                let lowered_body = self.lower_expr(body);
                 self.fn_is_async.set(prev_async);
+                if let Some(saved) = saved_poly_tvars {
+                    *self.current_poly_tvars.borrow_mut() = saved;
+                }
+                let lowered_body = lowered_body?;
+                // Zero-param generalized value bindings (no value restriction,
+                // e.g. `empty = []` used at two element types cross-module)
+                // take the identical `params: []` path the backend already
+                // emits for zero-arg fn calls — no shared mutable cell, no
+                // memoization to break.
+                let type_params = compute_type_params(quantified_syms, var_bounds, &[], &ret);
                 Ok(Func {
                     id,
                     name,
                     home: ModPath(def.home().to_vec()),
-                    type_params: Vec::new(),
+                    type_params,
                     params: Vec::new(),
                     ret,
                     body: lowered_body,
@@ -5457,18 +5549,31 @@ impl<'a> Lowerer<'a> {
                 let ret = self.ir_type_from_ty(cur, span)?;
                 Ok(IrType::Fun(params, Box::new(ret)))
             }
-            // A type variable in value position. With M2a, a binding can be
-            // genuinely parametric, so a region the solver left as a bare
-            // variable is an under-determined polymorphic value the lowerer
-            // cannot monomorphise here yet — e.g. a polymorphic function
-            // referenced as a first-class value whose type never gets pinned to a
-            // concrete instance at the use site. That is a real M2a feature gap
-            // (the value's Rust type would itself have to be generic in a
+            // A type variable in value position. If it's one of the enclosing
+            // binding's own generic type parameters (`current_poly_tvars`,
+            // installed by `lower_def` for a `Def::Typed` or a Boundary-
+            // Scheme-Promoted `Def::Untyped` before it recurses into the
+            // body), emit `IrType::Generic(sym)` — the backend produces
+            // e.g. `Attribute<T1>` rather than failing closed.
+            //
+            // Otherwise: with M2a, a binding can be genuinely parametric, so
+            // a region the solver left as a bare variable is an
+            // under-determined polymorphic value the lowerer cannot
+            // monomorphise here yet — e.g. a polymorphic function referenced
+            // as a first-class value whose type never gets pinned to a
+            // concrete instance at the use site. That is a real M2a feature
+            // gap (the value's Rust type would itself have to be generic in a
             // position the backend does not yet model), not an invariant
-            // violation, so it surfaces as a `Diagnostic::Lower` with the span —
-            // never a `CompilerBug` for well-typed input.
+            // violation, so it surfaces as a `Diagnostic::Lower` with the span
+            // — never a `CompilerBug` for well-typed input.
             // [SKY-L0102, feature: polymorphism]
-            Ty::Var(_) => Err(unsupported(span, Feature::Polymorphism)),
+            Ty::Var(v) => {
+                if let Some(&sym) = self.current_poly_tvars.borrow().get(v) {
+                    Ok(IrType::Generic(sym))
+                } else {
+                    Err(unsupported(span, Feature::Polymorphism))
+                }
+            }
         }
     }
 
@@ -10575,6 +10680,7 @@ mod tests {
             bounds: BTreeMap::new(),
             warnings: Vec::new(),
             poly_var_map: BTreeMap::new(),
+            untyped_type_params: BTreeMap::new(),
         };
 
         // Immutable borrow of interner starts here — no more intern() calls.
