@@ -141,10 +141,31 @@ struct Builtins {
     ek_conflict: Symbol,
     ek_unavailable: Symbol,
     ek_unexpected: Symbol,
-    /// `"message"` — `ErrorInfo`'s sole field this pass (`details` is filed as
-    /// an explicit follow-up, see `runtime/src/sky_runtime/error.rs`'s module
-    /// doc).
+    /// `"message"` — shared by `ErrorInfo` and `PanicInfo` (backlog #85
+    /// follow-up).
     error_info_message: Symbol,
+    /// `"details"` — `ErrorInfo`'s optional `Maybe ErrorDetails` field
+    /// (backlog #85 follow-up).
+    error_info_details: Symbol,
+    /// `ErrorDetails` — the 5-variant enrichment union carried on
+    /// `ErrorInfo.details` (backlog #85 follow-up). Registered as a Prelude
+    /// built-in exactly like `ErrorKind` — see `sky_lower`'s
+    /// `enum_variants`/`ctor_arity` seeding.
+    errordetails: Symbol,
+    /// The 5 `ErrorDetails` constructor symbols, in canon's registered index
+    /// order (`crates/sky_canon/src/env.rs`) — do not reorder.
+    ed_ffi_panic: Symbol,
+    ed_type_mismatch: Symbol,
+    ed_http_status: Symbol,
+    ed_json_decode: Symbol,
+    ed_custom: Symbol,
+    /// `"stack"` — `PanicInfo`'s second field (`FfiPanic`'s payload; backlog
+    /// #85 follow-up).
+    panic_info_stack: Symbol,
+    /// `"expected"` / `"actual"` — `TypeInfo`'s two fields (`TypeMismatch`'s
+    /// payload; backlog #85 follow-up).
+    type_info_expected: Symbol,
+    type_info_actual: Symbol,
     /// Two distinct scheme type-variable symbols (`a`, `e`) used to build the
     /// built-in constructor schemes. Their identity links a constructor's
     /// payload to its result type, exactly like a user union's declared vars;
@@ -478,6 +499,16 @@ impl Builtins {
             ek_unavailable: interner.intern("Unavailable")?,
             ek_unexpected: interner.intern("Unexpected")?,
             error_info_message: interner.intern("message")?,
+            error_info_details: interner.intern("details")?,
+            errordetails: interner.intern("ErrorDetails")?,
+            ed_ffi_panic: interner.intern("FfiPanic")?,
+            ed_type_mismatch: interner.intern("TypeMismatch")?,
+            ed_http_status: interner.intern("HttpStatus")?,
+            ed_json_decode: interner.intern("JsonDecode")?,
+            ed_custom: interner.intern("Custom")?,
+            panic_info_stack: interner.intern("stack")?,
+            type_info_expected: interner.intern("expected")?,
+            type_info_actual: interner.intern("actual")?,
             tv_a: interner.intern("a")?,
             tv_e: interner.intern("e")?,
             // Http field names (camelCase, as they appear in Sky source).
@@ -680,11 +711,49 @@ impl Builtins {
             name: self.errorkind,
             args: Vec::new(),
         };
-        // `ErrorInfo` this pass: `{ message : String }` — an anonymous closed
-        // record, not a nominal type (Sky records are structural; `details`
-        // is filed as an explicit follow-up, see `runtime/.../error.rs`).
+        // Monomorphic `ErrorDetails` (backlog #85 follow-up) — no type params.
+        let errordetails_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.errordetails,
+            args: Vec::new(),
+        };
+        let maybe_errordetails_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.maybe,
+            args: vec![errordetails_ty.clone()],
+        };
+        let list_string_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.list,
+            args: vec![string_ty.clone()],
+        };
+        // `PanicInfo`: `{ message : String, stack : List String }` — `FfiPanic`'s
+        // payload (backlog #85 follow-up). Anonymous closed record, matching
+        // `ErrorInfo`'s structural (non-nominal) treatment.
+        let panic_info_ty = Ty::Record(
+            BTreeMap::from([
+                (self.error_info_message, string_ty.clone()),
+                (self.panic_info_stack, list_string_ty),
+            ]),
+            RowTail::Closed,
+        );
+        // `TypeInfo`: `{ expected : String, actual : String }` — `TypeMismatch`'s
+        // payload (backlog #85 follow-up).
+        let type_info_ty = Ty::Record(
+            BTreeMap::from([
+                (self.type_info_expected, string_ty.clone()),
+                (self.type_info_actual, string_ty.clone()),
+            ]),
+            RowTail::Closed,
+        );
+        // `ErrorInfo`: `{ message : String, details : Maybe ErrorDetails }` — an
+        // anonymous closed record, not a nominal type (Sky records are
+        // structural). `details` added by the backlog #85 follow-up.
         let error_info_ty = Ty::Record(
-            BTreeMap::from([(self.error_info_message, string_ty.clone())]),
+            BTreeMap::from([
+                (self.error_info_message, string_ty.clone()),
+                (self.error_info_details, maybe_errordetails_ty),
+            ]),
             RowTail::Closed,
         );
         vec![
@@ -816,6 +885,47 @@ impl Builtins {
                 CtorScheme {
                     arg_tys: Vec::new(),
                     result: errorkind_ty,
+                },
+            ),
+            // ── ErrorDetails constructors (backlog #85 follow-up) ───────────────
+            // `FfiPanic : PanicInfo -> ErrorDetails`
+            // `TypeMismatch : TypeInfo -> ErrorDetails`
+            // `HttpStatus : Int -> ErrorDetails`
+            // `JsonDecode : String -> ErrorDetails`
+            // `Custom : String -> ErrorDetails`
+            (
+                self.ed_ffi_panic,
+                CtorScheme {
+                    arg_tys: vec![panic_info_ty],
+                    result: errordetails_ty.clone(),
+                },
+            ),
+            (
+                self.ed_type_mismatch,
+                CtorScheme {
+                    arg_tys: vec![type_info_ty],
+                    result: errordetails_ty.clone(),
+                },
+            ),
+            (
+                self.ed_http_status,
+                CtorScheme {
+                    arg_tys: vec![int_ty.clone()],
+                    result: errordetails_ty.clone(),
+                },
+            ),
+            (
+                self.ed_json_decode,
+                CtorScheme {
+                    arg_tys: vec![string_ty.clone()],
+                    result: errordetails_ty.clone(),
+                },
+            ),
+            (
+                self.ed_custom,
+                CtorScheme {
+                    arg_tys: vec![string_ty.clone()],
+                    result: errordetails_ty,
                 },
             ),
             // ── SqlValue constructors (M5b-db) ─────────────────────────────────
@@ -3083,6 +3193,12 @@ impl<'a> Builder<'a> {
             name: self.builtins.error,
             args: Vec::new(),
         };
+        // `ErrorDetails` is a zero-argument constructor (backlog #85 follow-up).
+        let errordetails_ty = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.errordetails,
+            args: Vec::new(),
+        };
         let tuple2 = |a: Ty, b: Ty| Ty::Tuple(vec![a, b]);
         // `task(a)` — `Task a` (the error channel is the implicit `SkyError`).
         let task = |a: Ty| Ty::Con {
@@ -5113,7 +5229,8 @@ impl<'a> Builder<'a> {
             K::JsonEncObject => fun(list(tuple2(string(), value())), value()),
             K::JsonEncEncode => fun(int(), fun(value(), string())),
 
-            // ── Sky.Core.Error (14 — real Error/ErrorKind ADT, backlog #85/#160) ──
+            // ── Sky.Core.Error (15 — real Error/ErrorKind/ErrorDetails ADT,
+            //    backlog #85/#160) ──
             //    `Error` is `Error ErrorKind ErrorInfo` (`Error`'s own ctor scheme
             //    is registered in `ctor_schemes()`), backed at runtime by the real
             //    `sky_runtime::error::SkyError` enum (`IrType::Error`) — no longer
@@ -5125,10 +5242,10 @@ impl<'a> Builder<'a> {
             //    ErrorToString` special case above — this scheme arm is a
             //    shadowed fallback, never actually reached); `withMessage :
             //    String -> Error -> Error`; `isRetryable : Error -> Bool`
-            //    classifies on kind alone. `ErrorInfo` this pass carries only
-            //    `message` — the rich `ErrorDetails` union is filed as an
-            //    explicit follow-up (`BACKLOG.md`), not
-            //    silently dropped.
+            //    classifies on kind alone; `withDetails : ErrorDetails -> Error ->
+            //    Error` (backlog #85 follow-up) attaches the `ErrorDetails` union
+            //    to `ErrorInfo.details : Maybe ErrorDetails` (`ErrorDetails`'s own
+            //    5-variant ctor scheme is registered in `ctor_schemes()`).
             K::ErrorUnexpected
             | K::ErrorInvalidInput
             | K::ErrorIo
@@ -5141,6 +5258,7 @@ impl<'a> Builder<'a> {
             K::ErrorToString => fun(var(0), string()),
             K::ErrorWithMessage => fun(string(), fun(error_ty(), error_ty())),
             K::ErrorIsRetryable => fun(error_ty(), bool_ty()),
+            K::ErrorWithDetails => fun(errordetails_ty(), fun(error_ty(), error_ty())),
 
             // ── Sky.Core.CssSafety (4 — Std.Css leaf security kernels, #47) ──
             //    The three parsers are `String -> Maybe String` (`None` => the
@@ -6473,6 +6591,7 @@ mod registry_phase_c_tests {
             K::ErrorToString,
             K::ErrorWithMessage,
             K::ErrorIsRetryable,
+            K::ErrorWithDetails,
             // CssSafety (4 — Std.Css leaf security kernels, #47). Each WAS a hole
             // (`kernel_ty` has no CssSafety arm → `Ty::Var(u32::MAX)`) until
             // schemed above; the three parsers are `String -> Maybe String`,

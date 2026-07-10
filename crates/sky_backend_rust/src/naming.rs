@@ -364,6 +364,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::ErrorToString => "basics_error_to_string",
         KernelFn::ErrorWithMessage => "sky_error_with_message",
         KernelFn::ErrorIsRetryable => "sky_error_is_retryable",
+        KernelFn::ErrorWithDetails => "sky_error_with_details",
         KernelFn::MaybeWithDefault => "maybe_with_default",
         KernelFn::MaybeMap => "sky_maybe_map",
         KernelFn::MaybeAndThen => "sky_maybe_and_then",
