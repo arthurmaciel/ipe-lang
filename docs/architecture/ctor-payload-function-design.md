@@ -189,17 +189,19 @@ derive machinery, and the `andMap` kernels already handle the shapes.
    portable to Rust backends") needs when `Task.retryWith` is ported.
 
 3. **Add the `andMap` call-site arity gate** — the place the *curried* hazard
-   is actually unsound. In `lower_call`'s kernel dispatch for
-   `KernelFn::MaybeAndMap` / `KernelFn::ResultAndMap` (`lower.rs:4703`,
-   `lower.rs:4714`): read the call's solved instantiation; if the result-side
-   `b` in `Maybe (a -> b)` / `Result e (a -> b)` is itself a `Ty::Fun`
-   (i.e. the payload's arrow arity exceeds 1 — the applicative chain has ≥2
-   `andMap` steps), fail closed. Blame the `andMap` call span, message:
-   "an `andMap` chain applying a function of 2+ arguments needs curried
-   payload support — not supported yet". Keep it under `SKY_L0114` (update
-   the explain page) or mint a sibling code; recommendation: **keep L0114**
-   (same feature family, one explain page documents both the lifted and the
-   residual shape).
+   is actually unsound. **Superseded design, 2026-07-10** — this step's
+   original AST-shape-matching approach was implemented and reverted three
+   times (see `BACKLOG.md`'s `#90` row for the incident log); the current,
+   revised design lives in a companion document:
+   [`ctor-payload-andmap-arity-gate-design.md`](./ctor-payload-andmap-arity-gate-design.md).
+   Summary: a two-tier fix — a primary `TyBounds`-style type-checker
+   obligation on the `andMap` kernel scheme's payload-result slot (survives
+   arbitrary aliasing, including generalization, by construction — mirrors
+   the existing `Math.min`/`Set`/`Dict`-key obligation mechanism), plus a
+   lowering-time backstop re-anchored to `lower_callee` (the actual single
+   funnel every kernel/top-level reference resolves through, not just the
+   `Call`-node arm the reverted attempts used). Read the companion doc before
+   implementing T3.
 
 4. **Add a minimal fn-carrier reuse gate** so the lift opens no new seal
    hole ahead of #104. In the lowerer, for each binding whose solved type
@@ -335,7 +337,7 @@ first, per the backend wiring protocol.
 |---|---|---|---|
 | T1 | Narrow `embeds_nonderivable_function` / `con_payload_carries_function` Con arm to enum-like heads (Maybe/Result/user unions); keep collections + records gated | `sky_lower/src/lower.rs:184-231` | — |
 | T2 | Delete `lower_enum`'s `ir_contains_fun` decl gate | `lower.rs:1581-1583` | T1 (shared fixtures) |
-| T3 | `andMap` call-site arity gate (solved `b` is a `Fun` → fail closed, blame call span) | `lower.rs` kernel dispatch near `4703`/`4714` + diagnostics | T1 |
+| T3 | `andMap` payload-arity gate. **Superseded** — see [`ctor-payload-andmap-arity-gate-design.md`](./ctor-payload-andmap-arity-gate-design.md) for the current design (its own `T3a`-`T3g` task breakdown replaces this row) | `sky_types/src/{ty,lib,constrain}.rs` (primary) + `sky_lower/src/lower.rs` (backstop) + diagnostics | T1 |
 | T4 | Fn-carrier consuming-use-count gate → new `Feature::FunctionValueReuse` / SKY-L0121 + explain page | `sky_lower` walk + `sky_diagnostics` (code.rs, diagnostic.rs, render.rs, explain/) | T1 |
 | T5 | Fixtures + goldens of §5 (incl. flipping `golden_m3a_function_payload_gate` to its green branch); `unsupported.rs` + `seal_derivability.rs` units; negative type-level pins | `tests/golden/*`, `sky_lower/tests/`, `sky_backend_rust/tests/` | T1-T4 |
 | T6 | Rewrite `explain/SKY-L0114.md`; divergence-ledger entry (Box-payload vs upstream fn-pointer; m3a Go-oracle divergence); parity-snapshot refresh | `sky_diagnostics/explain/`, `docs/` | T1-T4 |
