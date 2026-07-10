@@ -666,6 +666,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::MiddlewareWithLogging => "Middleware.withLogging",
         KernelFn::MiddlewareWithBasicAuth => "Middleware.withBasicAuth",
         KernelFn::MiddlewareWithRateLimit => "Middleware.withRateLimit",
+        KernelFn::MiddlewareWithCsrf => "Middleware.withCsrf",
         KernelFn::RateLimitAllow => "RateLimit.allow",
         // ── M7: Std.Ui / Std.Html render kernels ─────────────────────────────
         KernelFn::UiLayout => "Ui.layout",

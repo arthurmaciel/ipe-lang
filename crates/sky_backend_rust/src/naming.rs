@@ -746,6 +746,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::MiddlewareWithLogging => "middleware_with_logging",
         KernelFn::MiddlewareWithBasicAuth => "middleware_with_basic_auth",
         KernelFn::MiddlewareWithRateLimit => "middleware_with_rate_limit",
+        KernelFn::MiddlewareWithCsrf => "middleware_with_csrf",
         KernelFn::RateLimitAllow => "rate_limit_allow",
         // ── M7: Std.Ui / Std.Html render kernels (Phase 0 — fully wired) ────
         KernelFn::UiLayout => "ui_layout",

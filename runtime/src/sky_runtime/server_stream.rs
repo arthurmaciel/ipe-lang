@@ -123,6 +123,7 @@ where
             body: format!("{}{}:{}", SENTINEL_PREFIX, sentinel_nonce(), token),
             headers: HashMap::new(),
             contentType: ct,
+            cookies: Vec::new(),
         })
     })
 }

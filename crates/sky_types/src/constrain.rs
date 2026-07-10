@@ -3716,6 +3716,7 @@ impl<'a> Builder<'a> {
                     ),
                 ),
             ),
+            K::MiddlewareWithCsrf => fun(fun(req(), task(resp())), fun(req(), task(resp()))),
 
             // ── RateLimit ──
             K::RateLimitAllow => fun(string(), fun(string(), fun(int(), fun(int(), bool_ty())))),
@@ -5585,11 +5586,12 @@ mod registry_phase_c_tests {
             K::SubBatch,
             K::SubEvery,
             K::SubSubscribeTopic,
-            // Middleware (4)
+            // Middleware (5)
             K::MiddlewareWithCors,
             K::MiddlewareWithLogging,
             K::MiddlewareWithBasicAuth,
             K::MiddlewareWithRateLimit,
+            K::MiddlewareWithCsrf,
             // RateLimit (1)
             K::RateLimitAllow,
             // Server (23)
