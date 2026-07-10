@@ -1650,13 +1650,20 @@ mod tests {
     /// short of the deliberately-excluded alias namespaces and the
     /// structurally-unreachable `KNOWN_UNBACKED` set proven disjoint by
     /// [`known_unbacked_disjoint_from_qual_vars`]) resolves to a concrete
-    /// [`sky_kernels::StdlibKernel`] id — which the type-scheme table
-    /// (`sky_types::constrain::stdlib_scheme`) is proven total over by
-    /// `stdlib_scheme_total_over_reachable`. Together the two totality proofs
-    /// close the exit-0-then-cargo-fail class `PRINCIPLES.md` calls out: a
-    /// kernel the resolver recognises but the type-scheme table does not
-    /// cover can no longer silently ride a flexible type variable past
-    /// canonicalisation.
+    /// [`sky_kernels::StdlibKernel`] id.
+    ///
+    /// **Scope note (this crate has no dependency on `sky_types`):** this
+    /// test proves `QUALIFIERS` (env.rs) stays consistent with
+    /// `StdlibKernel::ALL` — it does NOT re-verify the type-scheme table's
+    /// own fail-closed behaviour. That guarantee (`skyc`'s exit-0-then-
+    /// cargo-fail class `PRINCIPLES.md` calls out: a kernel the resolver
+    /// recognises but the type-scheme table does not cover) is a SEPARATE,
+    /// already-landed invariant owned by
+    /// `sky_types::constrain::kernel_scheme_or_unsupported`'s unconditional
+    /// `.ok_or(Err(..))` (no flexible-type-variable fallback exists there).
+    /// A future regression in that function would sail through this test
+    /// untouched — don't treat `canon_equals_registry` as a substitute
+    /// regression test for it.
     #[test]
     #[allow(clippy::too_many_lines)] // declarative tripwire — two subset-gate directions + a documented exception table; splitting would obscure the invariant
     fn canon_equals_registry() {
@@ -1722,10 +1729,11 @@ mod tests {
         // SUBSET GATE: every non-excluded qual_vars member must resolve to a
         // concrete id in the first place — a `VarHome::Kernel(None, ..)` here
         // means QUALIFIERS in env.rs names a member with NO matching
-        // StdlibKernel::ALL entry, which is exactly the "resolver recognises a
-        // kernel the type-scheme table does not cover" class PRINCIPLES.md
-        // forbids (it would let an ill-typed program pass canon and fail only
-        // downstream, at `cargo`).
+        // StdlibKernel::ALL entry, an anti-drift bug in this crate's own
+        // table (not, by itself, the exit-0-then-cargo-fail hole -- that
+        // hole is independently closed on the types side by
+        // sky_types::constrain::kernel_scheme_or_unsupported, which this
+        // test does not exercise; see the doc comment above).
         //
         // SCOPE — propagation wiring AND totality: verifies that
         // install_prelude_qualifiers stored the id it read from stdlib_index,
