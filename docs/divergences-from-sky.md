@@ -859,3 +859,32 @@ API-shape review):
 - **Sanctioned:** yes. Reference: `crates/sky_kernels/src/lib.rs::UiGridTracksRaw`,
   `runtime/src/sky_runtime/ui/element.rs::AttrGridTracks`,
   `runtime/src/sky_runtime/ui/render.rs`. Regression: `crates/skyc/tests/golden_stdui_grid_seal.rs`.
+
+
+### B-ErrorADT — real `Error ErrorKind ErrorInfo` (backlog #85/#160)
+- **Reference:** `../sky/sky-stdlib/Sky/Core/Error.sky` defines `Error = Error
+  ErrorKind ErrorInfo` (11-variant `ErrorKind`, `ErrorInfo = { message, details :
+  Maybe ErrorDetails }`, `ErrorDetails` a 5-variant union with `FfiPanic`/
+  `TypeMismatch`/`HttpStatus`/`JsonDecode`/`Custom` payloads), constructed via Go
+  runtime builders (`ErrIo`/`ErrNetwork`/etc, `runtime-go/rt/rt.go`).
+- **Port:** Ported the core, load-bearing slice: `Error ErrorKind ErrorInfo`
+  is now a REAL, pattern-matchable ADT (closing the canon/lowerer ctor-scheme
+  gap that was #160's blocker), backed by `sky_runtime::error::SkyError`
+  (`SkyErrorKind` mirrors the reference's 11 kinds; `SkyErrorInfo` carries only
+  `message` this pass). `Error.toString`/`isRetryable`/`withMessage` all work
+  end-to-end (E2E-verified: `crates/skyc/tests/golden_error_adt_roundtrip.rs`).
+- **Not yet ported (filed, not silently dropped):** `ErrorInfo.details : Maybe
+  ErrorDetails` and the `ErrorDetails`/`PanicInfo`/`TypeInfo` union — an
+  additive, separable enrichment (same registration recipe as `ErrorKind`,
+  just more variants) that doesn't block kind-based classification. Filed in
+  `docs/architecture/backlog.md`.
+- **Sanctioned:** yes (partial-surface port, not a semantic divergence — every
+  ported piece matches the reference design exactly). Reference:
+  `crates/sky_types/src/constrain.rs` (`Error`/`ErrorKind` ctor schemes),
+  `crates/sky_lower/src/lower.rs` (`IrType::Error`/`IrType::ErrorKind`),
+  `crates/sky_backend_rust/src/lib.rs::builtin_runtime_enum`,
+  `runtime/src/sky_runtime/error.rs`. Every project's generated `SkyError`
+  alias (`tests/golden/*/main.rs`'s boilerplate slice, `sky_backend_rust::
+  project::runtime_bindings`) flipped atomically from `type SkyError =
+  String` to `pub use sky_runtime::error::SkyError` in the same change — the
+  "69-golden flip" #85 had originally deferred this work for.

@@ -150,23 +150,25 @@ pub fn encoding_hex_decode<E: From<String>>(s: String) -> SkyResult<E, String> {
 //
 // The generic `base64_decode<E>`, `url_decode<E>`, `encoding_hex_decode<E>` above
 // use a flexible `E: From<String>` bound so the error type can be inferred from
-// surrounding context. Generated Sky code always sets `SkyError = String`, but
-// Rust's type inference cannot pin `E` when the error arm discards the value
-// (e.g. `Err _ ->` in a case expression). These concrete aliases pin `E = String`
-// up-front, eliminating the ambiguity without changing the runtime semantics.
+// surrounding context. Generated Sky code sets `SkyError = sky_runtime::error::
+// SkyError` (backlog #85/#160), but Rust's type inference cannot pin `E` when
+// the error arm discards the value (e.g. `Err _ ->` in a case expression).
+// These concrete aliases pin `E = SkyError` up-front, eliminating the
+// ambiguity without changing the runtime semantics — construction still
+// routes through `SkyError: From<String>` (classified `Unexpected`).
 
-/// Generated-code alias for `base64_decode` with `E = String`.
-pub fn sky_base64_decode(s: String) -> SkyResult<String, String> {
+/// Generated-code alias for `base64_decode` with `E = SkyError`.
+pub fn sky_base64_decode(s: String) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
     base64_decode(s)
 }
 
-/// Generated-code alias for `url_decode` with `E = String`.
-pub fn sky_url_decode(s: String) -> SkyResult<String, String> {
+/// Generated-code alias for `url_decode` with `E = SkyError`.
+pub fn sky_url_decode(s: String) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
     url_decode(s)
 }
 
-/// Generated-code alias for `encoding_hex_decode` with `E = String`.
-pub fn sky_encoding_hex_decode(s: String) -> SkyResult<String, String> {
+/// Generated-code alias for `encoding_hex_decode` with `E = SkyError`.
+pub fn sky_encoding_hex_decode(s: String) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
     encoding_hex_decode(s)
 }
 

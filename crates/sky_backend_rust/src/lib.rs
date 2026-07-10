@@ -869,6 +869,16 @@ impl<'a> EmitCtx<'a> {
             // Type-position rendering adds the `<SkyError>` via a special arm in
             // `emit_types::render_type` BEFORE the general `ctx.enum_name` path.
             Some("ChunkEvent") => Some("ChunkEvent"),
+            // `Error` is backed by `SkyError` (backlog #85/#160) — a single
+            // tuple-variant enum whose constructor shares the type's name
+            // (`enum_variants[(Prelude, error)] = [error]`, set in
+            // `sky_lower`), so this emits `SkyError::Error(kind, info)` via
+            // the SAME path `Maybe`/`Result` use above.
+            Some("Error") => Some("SkyError"),
+            // `ErrorKind` is backed by `SkyErrorKind` (#repr(u8), mirrors
+            // `Order`/`SkyOrder`). Constructor emission: `SkyErrorKind::Io` /
+            // `::Network` / etc.
+            Some("ErrorKind") => Some("SkyErrorKind"),
             _ => None,
         }
     }
@@ -993,7 +1003,9 @@ fn collect_record_shapes(
         // `Order` (LT/EQ/GT) is a primitive leaf — no record shape.
         // `Decimal` is a Copy newtype — no record shape.
         | IrType::Order
-        | IrType::Decimal => {}
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error => {}
         // `LiveRoute page` is page-parametric — descend in case the page type
         // carries a nested record shape.
         IrType::LiveRoute(page) => {
@@ -1111,7 +1123,9 @@ fn type_reaches_enum(
         // `Order` is a primitive value — no cycle risk.
         // `Decimal` is a Copy newtype — no cycle risk.
         | IrType::Order
-        | IrType::Decimal => false,
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::LiveRoute(page) => type_reaches_enum(page, target, enums, visited),
@@ -1165,7 +1179,9 @@ fn contains_generic(ty: &IrType) -> bool {
         // `Order` is monomorphic — no generic parameters.
         // `Decimal` is monomorphic — no generic parameters.
         | IrType::Order
-        | IrType::Decimal => false,
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error => false,
         // `LiveRoute page` is parametric on `page`; check if it carries a
         // generic.
         IrType::LiveRoute(page) => contains_generic(page),
@@ -1247,7 +1263,9 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         // `Order` is monomorphic — no generics to collect.
         // `Decimal` is monomorphic — no generics to collect.
         | IrType::Order
-        | IrType::Decimal => {}
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error => {}
         // `LiveRoute page` may carry generic parameters through `page`.
         IrType::LiveRoute(page) => collect_generics(page, out),
         // M7: `Ui { ctor, msg }` may carry generic parameters through `msg`.
@@ -1521,7 +1539,9 @@ fn match_template(
         // `Order` is a monomorphic leaf — must equal exactly.
         // `Decimal` is a monomorphic leaf — must equal exactly.
         | IrType::Order
-        | IrType::Decimal => {
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error => {
             if template == concrete {
                 Ok(())
             } else {

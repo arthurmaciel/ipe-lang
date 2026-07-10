@@ -136,55 +136,9 @@ pub fn basics_error_to_string<T: crate::sky_runtime::stringify::SkyStringify>(v:
     v.sky_show()
 }
 
-// ── Sky.Core.Error kernels (minimal `Error = String` slice, #86) ─────────────
-//
-// The Sky error channel `Error` is backed by `String` (`SkyError = String` in
-// the standalone crate; generated projects thread the error type as a plain
-// `String`). These kernels are therefore typed on `String` directly — NOT on the
-// `config::SkyError` alias, which does NOT exist in compiler-generated projects
-// (their `config.rs` is regenerated without it). An error value IS its message.
-// `Error.toString` reuses `basics_error_to_string` (above). The rich
-// `ErrorKind`/`ErrorDetails` ADT — and the `<Kind>: <message>` rendering it
-// enables — is deferred to #85; in this slice `Error.toString` echoes the
-// message verbatim.
-
-/// Every message-carrying `Error` constructor (`Error.unexpected` / `io` /
-/// `network` / `ffi` / `decode` / `invalidInput` / `conflict` / `unavailable`)
-/// shares this one runtime symbol: with the error channel backed by `String`, a
-/// `String -> Error` constructor is the identity — the message IS the error. The
-/// distinct Sky names are preserved as separate kernels for the future rich-ADT
-/// upgrade (#85).
-#[must_use]
-pub fn sky_error_from_message(msg: String) -> String {
-    msg
-}
-
-/// `Error.timeout : Error` — canonical timeout error message.
-#[must_use]
-pub fn sky_error_timeout() -> String {
-    "timeout".to_owned()
-}
-
-/// `Error.notFound : Error` — canonical not-found error message.
-#[must_use]
-pub fn sky_error_not_found() -> String {
-    "not found".to_owned()
-}
-
-/// `Error.permissionDenied : Error` — canonical permission-denied error message.
-#[must_use]
-pub fn sky_error_permission_denied() -> String {
-    "permission denied".to_owned()
-}
-
-/// `Error.withMessage : String -> Error -> Error` — replace an error's message.
-/// With the error channel backed by `String` the old error carries only its
-/// message, so this returns the new message and discards the old value (matching
-/// the upstream `Sky.Core.Error.withMessage` on a `details = Nothing` error).
-#[must_use]
-pub fn sky_error_with_message(msg: String, _old: String) -> String {
-    msg
-}
+// Sky.Core.Error's runtime kernels moved to `error.rs` (backlog #85/#160 —
+// `Error` is now the real `sky_runtime::error::SkyError` ADT, not a bare
+// `String`). `Error.toString` still reuses `basics_error_to_string` above.
 
 /// Sky `Debug.toString` — the `{{expr}}` string-interpolation stringifier.
 /// Display-based, NOT Debug: a `String` interpolates as itself (no surrounding
@@ -211,34 +165,15 @@ pub fn basics_to_string<T: std::fmt::Display>(v: T) -> String {
 mod tests {
     use super::*;
 
-    // ── Sky.Core.Error kernels (#86) ─────────────────────────────────────────
+    // Sky.Core.Error kernel tests moved to `error.rs` (backlog #85/#160 — the
+    // real ADT superseded the string-identity slice these tests exercised).
     #[test]
-    fn error_from_message_is_identity() {
-        // Every message constructor (unexpected/io/network/…) shares this symbol;
-        // with the String-backed error channel the message IS the error value.
-        assert_eq!(sky_error_from_message("boom".to_owned()), "boom");
-        assert_eq!(sky_error_from_message(String::new()), "");
-    }
-    #[test]
-    fn error_nullary_constructors_are_canonical_messages() {
-        assert_eq!(sky_error_timeout(), "timeout");
-        assert_eq!(sky_error_not_found(), "not found");
-        assert_eq!(sky_error_permission_denied(), "permission denied");
-    }
-    #[test]
-    fn error_with_message_replaces_and_discards_old() {
+    fn error_to_string_renders_kind_and_message() {
+        // `Error.toString` reuses `basics_error_to_string`, dispatching through
+        // `SkyStringify` to `SkyError::to_sky_string`'s `"<Kind>: <message>"`.
         assert_eq!(
-            sky_error_with_message("new".to_owned(), "old".to_owned()),
-            "new"
-        );
-    }
-    #[test]
-    fn error_to_string_echoes_message_verbatim() {
-        // `Error.toString` reuses `basics_error_to_string`; on a String-backed
-        // error it renders the message UNQUOTED (round-trips the constructor arg).
-        assert_eq!(
-            basics_error_to_string(sky_error_from_message("boom".to_owned())),
-            "boom"
+            basics_error_to_string(crate::sky_runtime::error::SkyError::io("boom".to_owned())),
+            "Io: boom"
         );
     }
 

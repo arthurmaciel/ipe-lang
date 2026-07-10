@@ -247,6 +247,8 @@ pub enum StdlibKernel {
     ErrorToString,
     // Modifier: `String -> Error -> Error` (replace the message).
     ErrorWithMessage,
+    // Classification: `Error -> Bool` (kind ∈ {Timeout, Network, Unavailable}).
+    ErrorIsRetryable,
     // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels, #47) ───
     // The FOUR primitive leaf shims over the audited `css_safety` policy that the
     // compiled-source `Std.Css` funnels every free-string entry through (PARSE,
@@ -1303,21 +1305,21 @@ impl StdlibKernel {
             Self::BasicsMax    => d("Basics", "max",    2, Pure, "math_max"),
             Self::BasicsCompare => d("Basics", "compare", 2, Pure, "basics_compare"),
             // ── end Basics numerics (#115) ──────────────────────────────────────
-            // ── Error (Sky.Core.Error — minimal `Error = String` slice, #86) ──
-            // The eight message constructors share ONE identity runtime symbol
-            // (`sky_error_from_message`): with `SkyError = String` a `String ->
-            // Error` constructor is the identity. `toString` reuses the existing
+            // ── Error (Sky.Core.Error — real Error/ErrorKind ADT, #85/#160) ──
+            // Each message constructor classifies its own `ErrorKind` at
+            // construction (`sky_runtime::error::SkyError`, no longer a
+            // shared string-identity). `toString` reuses the existing
             // `errorToString` runtime (`basics_error_to_string`).
-            Self::ErrorUnexpected => d("Error", "unexpected", 1, Pure, "sky_error_from_message"),
+            Self::ErrorUnexpected => d("Error", "unexpected", 1, Pure, "sky_error_unexpected"),
             Self::ErrorInvalidInput => {
-                d("Error", "invalidInput", 1, Pure, "sky_error_from_message")
+                d("Error", "invalidInput", 1, Pure, "sky_error_invalid_input")
             }
-            Self::ErrorIo => d("Error", "io", 1, Pure, "sky_error_from_message"),
-            Self::ErrorNetwork => d("Error", "network", 1, Pure, "sky_error_from_message"),
-            Self::ErrorFfi => d("Error", "ffi", 1, Pure, "sky_error_from_message"),
-            Self::ErrorDecode => d("Error", "decode", 1, Pure, "sky_error_from_message"),
-            Self::ErrorConflict => d("Error", "conflict", 1, Pure, "sky_error_from_message"),
-            Self::ErrorUnavailable => d("Error", "unavailable", 1, Pure, "sky_error_from_message"),
+            Self::ErrorIo => d("Error", "io", 1, Pure, "sky_error_io"),
+            Self::ErrorNetwork => d("Error", "network", 1, Pure, "sky_error_network"),
+            Self::ErrorFfi => d("Error", "ffi", 1, Pure, "sky_error_ffi"),
+            Self::ErrorDecode => d("Error", "decode", 1, Pure, "sky_error_decode"),
+            Self::ErrorConflict => d("Error", "conflict", 1, Pure, "sky_error_conflict"),
+            Self::ErrorUnavailable => d("Error", "unavailable", 1, Pure, "sky_error_unavailable"),
             Self::ErrorTimeout => d("Error", "timeout", 0, Pure, "sky_error_timeout"),
             Self::ErrorNotFound => d("Error", "notFound", 0, Pure, "sky_error_not_found"),
             Self::ErrorPermissionDenied => {
@@ -1327,6 +1329,7 @@ impl StdlibKernel {
             Self::ErrorWithMessage => {
                 d("Error", "withMessage", 2, Pure, "sky_error_with_message")
             }
+            Self::ErrorIsRetryable => d("Error", "isRetryable", 1, Pure, "sky_error_is_retryable"),
             // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf kernels, #47) ────
             // The `emit` symbols are the bare runtime fn names re-exported at the
             // `sky_runtime` root (`pub use css::*`): `safe_value` /
@@ -2383,6 +2386,7 @@ impl StdlibKernel {
         Self::ErrorPermissionDenied,
         Self::ErrorToString,
         Self::ErrorWithMessage,
+        Self::ErrorIsRetryable,
         // CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels, #47)
         Self::CssSafetySafeValue,
         Self::CssSafetySafePropName,
