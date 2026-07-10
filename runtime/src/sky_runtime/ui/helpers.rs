@@ -138,6 +138,24 @@ pub fn ui_link_<M: Clone>(
     )
 }
 
+/// `Ui.image : List (Attribute msg) -> { src : String, description : String } -> Element msg`
+/// (the `{ src, description }` record is destructured at the emit site into
+/// two positional args, matching `Ui.link`'s `{ url, label }` handling).
+/// Renders as `<img src=… alt=…>` (a void `TaggedNode`, no children) — mirrors
+/// the `../sky` reference: `AttrAttribute "src" cfg.src :: AttrAttribute "alt"
+/// cfg.description :: attrs`.
+pub fn ui_image_<M: Clone>(
+    attrs: Vec<Attribute<M>>,
+    src: String,
+    description: String,
+) -> Element<M> {
+    let mut full = Vec::with_capacity(attrs.len() + 2);
+    full.push(Attribute::AttrAttribute("src".into(), src));
+    full.push(Attribute::AttrAttribute("alt".into(), description));
+    full.extend(attrs);
+    Element::TaggedNode("img".into(), Description::NoDescription, full, vec![])
+}
+
 // ── Attribute builders ────────────────────────────────────────────────────────
 
 /// `Ui.spacing : Int -> Attribute msg`
@@ -156,6 +174,11 @@ pub fn ui_padding_<M>(n: i64) -> Attribute<M> {
 /// `x` = left/right padding, `y` = top/bottom padding.
 pub fn ui_padding_xy_<M>(x: i64, y: i64) -> Attribute<M> {
     Attribute::AttrPadding(y, x, y, x)
+}
+
+/// `Ui.paddingEach : { top : Int, right : Int, bottom : Int, left : Int } -> Attribute msg`
+pub fn ui_padding_each_<M>(top: i64, right: i64, bottom: i64, left: i64) -> Attribute<M> {
+    Attribute::AttrPadding(top, right, bottom, left)
 }
 
 /// `Ui.width : Length -> Attribute msg`
@@ -203,14 +226,41 @@ pub fn ui_pointer_<M>() -> Attribute<M> {
     Attribute::AttrPointer
 }
 
-/// `Ui.clip / clipX / clipY : Attribute msg`
+/// `Ui.clip : Attribute msg` — clip overflow on BOTH axes.
 pub fn ui_clip_<M>() -> Attribute<M> {
     Attribute::AttrOverflow("hidden".to_owned(), "hidden".to_owned())
 }
 
-/// `Ui.scrollbars / scrollbarX / scrollbarY : Attribute msg`
+/// `Ui.clipX : Attribute msg` — single-axis clip. Uses the CSS `clip` keyword
+/// (not `hidden`) on the X axis: CSS promotes a `visible` off-axis to `auto`
+/// (unwanted scrollbar) when the other axis is `hidden`/`auto`/`scroll` — but
+/// NOT when it is `clip`. So `overflow-x:clip;overflow-y:visible` truly
+/// leaves Y visible (matches the `../sky` reference exactly).
+pub fn ui_clip_x_<M>() -> Attribute<M> {
+    Attribute::AttrOverflow("clip".to_owned(), "visible".to_owned())
+}
+
+/// `Ui.clipY : Attribute msg` — single-axis clip on Y; see [`ui_clip_x_`].
+pub fn ui_clip_y_<M>() -> Attribute<M> {
+    Attribute::AttrOverflow("visible".to_owned(), "clip".to_owned())
+}
+
+/// `Ui.scrollbars : Attribute msg` — scrollbars on BOTH axes.
 pub fn ui_scrollbars_<M>() -> Attribute<M> {
     Attribute::AttrOverflow("auto".to_owned(), "auto".to_owned())
+}
+
+/// `Ui.scrollbarX : Attribute msg` — single-axis scroller. The off-axis is
+/// `hidden`, not `visible`: a `visible` off-axis gets promoted to `auto` by
+/// CSS (an unwanted second scrollbar). Matches the `../sky` reference.
+pub fn ui_scrollbar_x_<M>() -> Attribute<M> {
+    Attribute::AttrOverflow("auto".to_owned(), "hidden".to_owned())
+}
+
+/// `Ui.scrollbarY : Attribute msg` — single-axis scroller on Y; see
+/// [`ui_scrollbar_x_`].
+pub fn ui_scrollbar_y_<M>() -> Attribute<M> {
+    Attribute::AttrOverflow("hidden".to_owned(), "auto".to_owned())
 }
 
 /// `Ui.gridColumns : Int -> Attribute msg`
@@ -307,6 +357,26 @@ pub fn ui_background_color_<M>(c: Color) -> Attribute<M> {
 /// `Background.image : String -> Attribute msg`
 pub fn ui_background_image_<M>(s: String) -> Attribute<M> {
     Attribute::AttrBgImage(s)
+}
+
+/// `Background.linearGradient : Float -> List (Float, Color) -> Attribute msg`
+///
+/// Renders `background-image: linear-gradient(<angle>deg, <c1> <p1>%, …);`
+/// via the existing `AttrBgGradient` runtime variant (already rendered by
+/// `render.rs`'s `build_style_string`). Float formatting matches Go's
+/// `String.fromFloat` via the shared `string_from_float` kernel (parity with
+/// the `../sky` reference's `String.fromFloat angle` / `String.fromFloat pct`).
+pub fn ui_background_linear_gradient_<M>(angle: f64, stops: Vec<(f64, Color)>) -> Attribute<M> {
+    use crate::sky_runtime::string::string_from_float;
+    let joined = stops
+        .into_iter()
+        .map(|(pct, c)| format!("{} {}%", color_to_css(&c), string_from_float(pct)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Attribute::AttrBgGradient(format!(
+        "linear-gradient({}deg, {joined})",
+        string_from_float(angle)
+    ))
 }
 
 // ── Border sub-module ─────────────────────────────────────────────────────────
@@ -451,6 +521,20 @@ pub fn html_node_<M>(
     Html::HElement(tag, attrs, children)
 }
 
+/// `Html.doctype : List (Html msg) -> Html msg` — wraps children in the
+/// `!doctype-wrapper` pseudo-tag; `sky_runtime::html::render_into_ctx`
+/// recognises that literal tag and emits `<!DOCTYPE html>` before the
+/// children directly (mirrors Go's `live.go:303-312`).
+pub fn html_doctype_<M>(children: Vec<Html<M>>) -> Html<M> {
+    Html::HElement("!doctype-wrapper".to_owned(), Vec::new(), children)
+}
+
+/// `Html.titleNode : String -> Html msg` — wraps a raw string directly in
+/// `<title>` (`HElement "title" [] [HText s]`).
+pub fn html_title_node_<M>(s: String) -> Html<M> {
+    Html::HElement("title".to_owned(), Vec::new(), vec![Html::HText(s)])
+}
+
 /// `Html.div (and header) : List (Attribute msg) -> List (Html msg) -> Html msg`
 pub fn html_div_<M>(
     attrs: Vec<crate::sky_runtime::html::Attribute<M>>,
@@ -593,6 +677,18 @@ pub fn ui_on_key_up_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) ->
 /// The `f` argument is arc-wrapped at the call site by the emitter (T6 trap).
 pub fn ui_on_bool_<M>(f: std::sync::Arc<dyn Fn(bool) -> M + Send + Sync>) -> Attribute<M> {
     Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnBool("change".into(), f)))
+}
+
+/// `Ui.onFile : (String -> msg) -> Attribute msg` — wire event name
+/// `"sky-file"`. The browser-side driver reads the chosen file,
+/// base64-encodes it as a data URL, and dispatches the URL string to the
+/// handler (mirrors `Std.Html.Events.onFile`'s `EventAttr (OnString
+/// "sky-file" handler)` on the `../sky` reference).
+pub fn ui_on_file_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) -> Attribute<M> {
+    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnString(
+        "sky-file".into(),
+        f,
+    )))
 }
 
 // ── #76 Tier 1: extended Std.Ui / Font / Background / Border builders ────────
@@ -1144,6 +1240,54 @@ pub fn ui_light_mode_<M>() -> String {
 /// `Ui.reducedMotion : String` — CSS media query `(prefers-reduced-motion: reduce)`.
 pub fn ui_reduced_motion_<M>() -> String {
     "(prefers-reduced-motion: reduce)".to_owned()
+}
+
+// ── #76: PseudoClass opaque constants + Ui.onPseudo ───────────────────────────
+//
+// Typed-constant shortcuts so user code can write `Ui.hover` / `Ui.focus`
+// without a fully-qualified constructor path — mirrors `Ui.white` / `Ui.black`
+// (nullary `Color` constants) rather than the Breakpoint-as-`String`
+// divergence, because `PseudoClass` is a genuine registered opaque runtime
+// type (`sky_runtime::ui::element::PseudoClass`), not a stand-in.
+
+/// `Ui.hover : PseudoClass`
+pub fn ui_hover_() -> PseudoClass {
+    PseudoClass::Hover
+}
+
+/// `Ui.focus : PseudoClass`
+pub fn ui_focus_() -> PseudoClass {
+    PseudoClass::Focus
+}
+
+/// `Ui.focusVisible : PseudoClass`
+pub fn ui_focus_visible_() -> PseudoClass {
+    PseudoClass::FocusVisible
+}
+
+/// `Ui.active : PseudoClass`
+pub fn ui_active_() -> PseudoClass {
+    PseudoClass::Active
+}
+
+/// `Ui.disabled : PseudoClass` — distinct from the unrelated
+/// `Attr.disabled : Bool -> Attribute msg` (HTML boolean attribute).
+pub fn ui_disabled_() -> PseudoClass {
+    PseudoClass::Disabled
+}
+
+/// `Ui.onPseudo : PseudoClass -> List (Attribute msg) -> Attribute msg`
+///
+/// Generic escape hatch — folds `attrs` into one CSS rules-string via the SAME
+/// style-collection logic used for the main `style=""` attribute
+/// (`render::build_style_string`), and attaches it as `AttrPseudoRule(pc,
+/// css)`. Sub-module helpers (`Background.hoverColor`, `Font.hoverColor`,
+/// etc.) build on this exact primitive on the `../sky` reference; mirrored
+/// here so both paths render through the identical collector + the
+/// `data-sky-pc-rules` marker consumed by
+/// `sky_runtime::live::style_inject::build_pc`.
+pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Attribute<M> {
+    Attribute::AttrPseudoRule(pc, super::render::build_style_string(&attrs))
 }
 
 /// `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
