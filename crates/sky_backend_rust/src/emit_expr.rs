@@ -4539,10 +4539,10 @@ fn emit_ui_call(
         }
 
         // `Ui.onSubmit : (a -> msg) -> Attribute msg`
-        // The handler is type-erased into Arc<dyn Any> (OnRaw "submit") — the
-        // live dispatch layer downcasts + decodes form data at runtime, exactly
-        // as HtmlOnSubmit does.  The handler is wrapped in Arc so the closure
-        // is shared without move-out issues across the Attribute copy path.
+        // `ui_on_submit_` builds `Event::OnForm` with the concrete argument
+        // type recovered by Rust generic inference on the emitted handler
+        // closure `f_s` — no emit-site code change was needed for #109/#156,
+        // only the runtime function's signature (never `Arc<dyn Any>`).
         KernelFn::UiOnSubmit => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -4562,7 +4562,10 @@ fn emit_ui_call(
         // …) is a compile-time constant from `html_event_wire_name`; the payload
         // shape (Msg / String / Bool / Raw) comes from `html_event_shape`. The
         // `String`/`Bool` forms Arc-wrap the emitted Sky fn (`f` is a 'static
-        // closure); the `Raw` (onSubmit) form Arc-wraps the type-erased handler.
+        // closure); the `Raw` (onSubmit) form (`html_on_raw_`) builds
+        // `Event::OnForm` with the concrete payload type recovered by Rust
+        // generic inference on the emitted closure — never a type-erased
+        // handler (#109/#156).
         k if k.html_event_shape().is_some() => {
             let (Some(shape), Some(name)) = (k.html_event_shape(), k.html_event_wire_name()) else {
                 return Err(Diagnostic::CompilerBug {
