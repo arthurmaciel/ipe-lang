@@ -70,6 +70,24 @@ pub enum PseudoClass {
     Disabled,
 }
 
+impl PseudoClass {
+    /// Stable wire tag consumed by
+    /// `sky_runtime::live::style_inject::pseudo_selector_for_tag` when
+    /// decoding the `data-sky-pc-rules` marker attribute. MUST stay in
+    /// lock-step with that function and with `pseudoClassTag` in
+    /// `../sky`'s `Std.Ui.sky` (the shared wire-format contract).
+    #[must_use]
+    pub const fn wire_tag(self) -> &'static str {
+        match self {
+            Self::Hover => "h",
+            Self::Focus => "f",
+            Self::FocusVisible => "v",
+            Self::Active => "a",
+            Self::Disabled => "d",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Description {
     NoDescription,
