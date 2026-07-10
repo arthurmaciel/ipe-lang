@@ -591,7 +591,7 @@ mod tests {
     /// An unsupported `driver` value must be a loud, named error — NOT a
     /// silent fallback to sqlite (a silent fallback would build a project the
     /// user believes targets `driver = "mysql"` but that actually runs
-    /// against a local SQLite file).
+    /// against a local `SQLite` file).
     #[test]
     fn parse_manifest_unsupported_driver_is_a_named_error() {
         let toml_path = write_manifest("unsupported_driver", "[database]\ndriver = \"mysql\"\n");
