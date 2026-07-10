@@ -322,7 +322,9 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::ErrorKind
         | IrType::Error
         // `SqlFragment` is an opaque query-building value — no embedded function.
-        | IrType::SqlFragment => false,
+        // `Secret` is an opaque sealed string wrapper — no embedded function.
+        | IrType::SqlFragment
+        | IrType::Secret => false,
         // `LiveRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Sky `Fn`).
         IrType::LiveRoute(page) => ir_contains_fun(page),
@@ -372,7 +374,9 @@ fn clone_class(t: &IrType) -> CloneClass {
         // Error: SkyError derives Clone (not Copy — carries a heap `String`).
         // `SqlFragment` is `#[derive(Clone, PartialEq)]` (no Copy — carries a
         // heap-allocated `String` + `Vec<SqlParam>`).
-        IrType::Str | IrType::Bytes | IrType::Json | IrType::Db | IrType::UiPlain(_) | IrType::LiveReq | IrType::Error | IrType::SqlFragment => {
+        // `Secret` is `#[derive(Clone)]` (no Copy — carries a heap-allocated
+        // `String`; hand-written `PartialEq`, not derived — see its own doc).
+        IrType::Str | IrType::Bytes | IrType::Json | IrType::Db | IrType::UiPlain(_) | IrType::LiveReq | IrType::Error | IrType::SqlFragment | IrType::Secret => {
             CloneClass::CloneOk
         }
         // Runtime-verified Clone server/http opaques (audited 2026-07-05):
@@ -4207,6 +4211,9 @@ impl<'a> Lowerer<'a> {
                 // `SqlFragment` is `Std.Db.Sql`'s opaque WHERE-fragment type
                 // (backlog #61). Backed by `sky_runtime::db::SqlFragment`.
                 "SqlFragment" => Ok(IrType::SqlFragment),
+                // `Secret` is `Sky.Core.Secret`'s opaque sealed secret-string
+                // type (backlog #44). Backed by `sky_runtime::secret::Secret`.
+                "Secret" => Ok(IrType::Secret),
                 "String" => Ok(IrType::Str),
                 // `Error` is Sky's fixed error-channel type — backed by the real
                 // `sky_runtime::error::SkyError` ADT (backlog #85/#160), no
@@ -4881,6 +4888,9 @@ impl<'a> Lowerer<'a> {
                 // `SqlFragment` is `Std.Db.Sql`'s opaque WHERE-fragment type
                 // (backlog #61). Backed by `sky_runtime::db::SqlFragment`.
                 "SqlFragment" => Ok(IrType::SqlFragment),
+                // `Secret` is `Sky.Core.Secret`'s opaque sealed secret-string
+                // type (backlog #44). Backed by `sky_runtime::secret::Secret`.
+                "Secret" => Ok(IrType::Secret),
                 // `Algorithm` (D-00) shares the `String` IR representation.
                 "String" | "Algorithm" => Ok(IrType::Str),
                 // `Error` — backed by the real `sky_runtime::error::SkyError` ADT
@@ -8247,6 +8257,12 @@ impl<'a> Lowerer<'a> {
             // `findWhere : Db -> String -> SqlFragment -> Task Error (List Row)`
             // `deleteWhere : Db -> String -> SqlFragment -> Task Error Int`
             Callee::Kernel(KernelFn::DbFindWhere | KernelFn::DbDeleteWhere) => Ok(3),
+            // ── Sky.Core.Secret — opaque secret-string wrapper, arity 1 (#44) ──
+            // `fromString : String -> Secret`, `reveal : Secret -> String`,
+            // `redacted : Secret -> String`.
+            Callee::Kernel(
+                KernelFn::SecretFromString | KernelFn::SecretReveal | KernelFn::SecretRedacted,
+            ) => Ok(1),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -8762,6 +8778,10 @@ impl<'a> Lowerer<'a> {
                     ("Sql", "like") => Ok(Callee::Kernel(KernelFn::SqlLike)),
                     ("Db", "findWhere") => Ok(Callee::Kernel(KernelFn::DbFindWhere)),
                     ("Db", "deleteWhere") => Ok(Callee::Kernel(KernelFn::DbDeleteWhere)),
+                    // ── Secret kernels (backlog #44) ──────────────────────────
+                    ("Secret", "fromString") => Ok(Callee::Kernel(KernelFn::SecretFromString)),
+                    ("Secret", "reveal") => Ok(Callee::Kernel(KernelFn::SecretReveal)),
+                    ("Secret", "redacted") => Ok(Callee::Kernel(KernelFn::SecretRedacted)),
                     ("Db", "connect") => Ok(Callee::Kernel(KernelFn::DbConnect)),
                     ("Db", "open") => Ok(Callee::Kernel(KernelFn::DbOpen)),
                     ("Db", "close") => Ok(Callee::Kernel(KernelFn::DbClose)),
@@ -10221,7 +10241,8 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::UiPlain(_)
         | IrType::Decimal
         | IrType::LiveReq
-        | IrType::SqlFragment => {}
+        | IrType::SqlFragment
+        | IrType::Secret => {}
     }
 }
 

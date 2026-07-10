@@ -183,6 +183,9 @@ struct Builtins {
     /// `"SqlFragment"` — `Std.Db.Sql`'s opaque, parameterized WHERE-fragment
     /// type (backlog #61).
     sqlfragment: Symbol,
+    /// `"Secret"` — `Sky.Core.Secret`'s opaque, sealed secret-string wrapper
+    /// type (backlog #44).
+    secret: Symbol,
     // ── SqlValue constructor name symbols ─────────────────────────────────────
     sql_string: Symbol,
     sql_int: Symbol,
@@ -478,6 +481,7 @@ impl Builtins {
             sqlvalue: interner.intern("SqlValue")?,
             sqlfield: interner.intern("SqlField")?,
             sqlfragment: interner.intern("SqlFragment")?,
+            secret: interner.intern("Secret")?,
             sql_string: interner.intern("SqlString")?,
             sql_int: interner.intern("SqlInt")?,
             sql_float: interner.intern("SqlFloat")?,
@@ -3113,6 +3117,12 @@ impl<'a> Builder<'a> {
             name: self.builtins.sqlfragment,
             args: Vec::new(),
         };
+        // `Secret` — `Sky.Core.Secret`'s opaque sealed secret-string type (#44).
+        let secret = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.secret,
+            args: Vec::new(),
+        };
         let req = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.server_request,
@@ -5113,7 +5123,7 @@ impl<'a> Builder<'a> {
             K::AuthVerifyPassword => fun(string(), fun(string(), result(error_ty(), bool_ty()))),
             // passwordStrength : String -> Result Error String
             K::AuthPasswordStrength => fun(string(), result(error_ty(), string())),
-            // signToken : String -> Dict String String -> Int -> Result Error String
+            // signToken : Secret -> Dict String String -> Int -> Result Error String
             // AUD-06 (seal): claims used to be flex `var(0)` — unifies with ANY
             // type, so skyc accepted a record/Int/whatever as claims while the
             // emitted wrapper is pinned to `HashMap<String,String>`
@@ -5122,13 +5132,20 @@ impl<'a> Builder<'a> {
             // fail). Pinned concrete per the concrete-over-generic rule — this
             // was never genuine polymorphism, just an unpinned wildcard.
             // Diverges from Go's polymorphic `a`; see divergences-from-sky.md.
+            //
+            // backlog #44: the signing secret is `Secret`, not `String` — "secrets
+            // are typed" (PRINCIPLES.md). Re-typed in the same change as `Secret`
+            // itself; zero migration cost (no fixture calls this kernel yet).
+            // `project.rs`'s `AUTH_WRAPPERS` reveals the `Secret` to the runtime's
+            // `String`-typed `auth_sign_token` at the wrapper boundary.
             K::AuthSignToken => fun(
-                string(),
+                secret(),
                 fun(dict(string(), string()), fun(int(), result(error_ty(), string()))),
             ),
-            // verifyToken : String -> String -> Result Error (Dict String String)
+            // verifyToken : Secret -> String -> Result Error (Dict String String)
+            // backlog #44: same re-typing as `signToken` above.
             K::AuthVerifyToken => {
-                fun(string(), fun(string(), result(error_ty(), dict(string(), string()))))
+                fun(secret(), fun(string(), result(error_ty(), dict(string(), string()))))
             }
             // register : Db -> String -> String -> Task Error Int
             K::AuthRegister => fun(db(), fun(string(), fun(string(), task(int())))),
@@ -5136,6 +5153,20 @@ impl<'a> Builder<'a> {
             K::AuthLogin => fun(db(), fun(string(), fun(string(), task(int())))),
             // setRole : Db -> Int -> String -> Task Error ()
             K::AuthSetRole => fun(db(), fun(int(), fun(string(), task_unit()))),
+
+            // ── Sky.Core.Secret — opaque secret-string wrapper (backlog #44) ────
+            // `fromString` is the seal (construction boundary); `reveal` is the
+            // single greppable un-parse; `redacted` is the explicit "<redacted>"
+            // accessor (also what `toString`/interpolation gives automatically —
+            // see `sky_runtime::secret`'s hand-written `SkyStringify` impl). No
+            // `ty_is_equatable`/`has_show` denylist needed: `Secret` is a bare
+            // nullary `Ty::Con`, so `==`/`toString` stay permitted (safe by
+            // construction — see the fix spec §1) while Dict-key/Set-elem/`<`/`>`
+            // are already rejected by the existing scalar allowlist in
+            // `sky_types::{concrete_super_ok, emitted_bound_satisfied}`.
+            K::SecretFromString => fun(string(), secret()),
+            K::SecretReveal => fun(secret(), string()),
+            K::SecretRedacted => fun(secret(), string()),
 
             // ── #111: Sky.Http.Server.Stream (4 kernels) ────────────────────────
             // stream : String -> (StreamWriter -> Task Error ()) -> Task Error Response
@@ -6910,6 +6941,10 @@ mod registry_phase_c_tests {
             K::SqlLike,
             K::DbFindWhere,
             K::DbDeleteWhere,
+            // ── Sky.Core.Secret (backlog #44; 3) ─────────────────────────────
+            K::SecretFromString,
+            K::SecretReveal,
+            K::SecretRedacted,
         ]
     };
 

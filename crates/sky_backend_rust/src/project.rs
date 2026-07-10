@@ -233,6 +233,15 @@ const TEA_TYPE_ALIASES: &str = "pub type SkyCmd<M> = sky_runtime::tea::SkyCmd<M>
 /// `SkyError` so call sites in user function bodies compile without requiring
 /// a turbofish annotation.
 ///
+/// backlog #44: `auth_sign_token` / `auth_verify_token` take a Sky-typed
+/// `sky_runtime::secret::Secret` (not `String`) at this boundary — "secrets
+/// are typed, never `fmt`-stringified" (`PRINCIPLES.md`). The wrapper reveals
+/// it via `sky_runtime::secret::secret_reveal` immediately before delegating
+/// to the runtime's `String`-typed `sky_runtime::auth::{auth_sign_token,
+/// auth_verify_token}` — the runtime crate's own low-level signature is left
+/// unchanged (it has no dependency on `secret.rs`); the typed boundary lives
+/// entirely at this Sky-facing wrapper, matching the fix spec's design.
+///
 /// `auth_register`, `auth_login`, and `auth_set_role` are gated on
 /// `#[cfg(feature = "db")]` in the runtime source, so the three wrappers
 /// here are also gated.  A non-db Auth-only program (using only `hashPassword`
@@ -254,12 +263,12 @@ pub fn auth_password_strength(pw: String) -> SkyResult<SkyError, String> {\n    
     sky_runtime::auth::auth_password_strength(pw)\n\
 }\n\
 pub fn auth_sign_token(\n    \
-    secret: String, claims: HashMap<String, String>, expiry_seconds: i64,\n\
+    secret: sky_runtime::secret::Secret, claims: HashMap<String, String>, expiry_seconds: i64,\n\
 ) -> SkyResult<SkyError, String> {\n    \
-    sky_runtime::auth::auth_sign_token(secret, claims, expiry_seconds)\n\
+    sky_runtime::auth::auth_sign_token(sky_runtime::secret::secret_reveal(secret), claims, expiry_seconds)\n\
 }\n\
-pub fn auth_verify_token(secret: String, token: String) -> SkyResult<SkyError, HashMap<String, String>> {\n    \
-    sky_runtime::auth::auth_verify_token(secret, token)\n\
+pub fn auth_verify_token(secret: sky_runtime::secret::Secret, token: String) -> SkyResult<SkyError, HashMap<String, String>> {\n    \
+    sky_runtime::auth::auth_verify_token(sky_runtime::secret::secret_reveal(secret), token)\n\
 }\n\
 #[cfg(feature = \"db\")]\n\
 pub fn auth_register(conn: Db, email: String, password: String) -> SkyTask<i64> {\n    \

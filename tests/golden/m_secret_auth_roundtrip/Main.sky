@@ -1,0 +1,24 @@
+module Main exposing (main)
+
+-- backlog #44 golden: `Auth.signToken` / `Auth.verifyToken` are re-typed to
+-- take `Secret` (not `String`) at the signing-key position — "secrets are
+-- typed, never `fmt`-stringified" (PRINCIPLES.md). Sign a token with a
+-- `Secret`-sealed key, verify it with the SAME sealed key, and read a claim
+-- back — a full round trip through the AUTH_WRAPPERS boundary that reveals
+-- the `Secret` immediately before delegating to the runtime.
+
+signingKey =
+    Secret.fromString "this-is-a-32-byte-or-longer-secret-key-value"
+
+main =
+    case Auth.signToken signingKey (Dict.fromList [ ( "sub", "alice" ) ]) 3600 of
+        Ok token ->
+            case Auth.verifyToken signingKey token of
+                Ok claims ->
+                    println (Maybe.withDefault "?" (Dict.get "sub" claims))
+
+                Err _ ->
+                    println "verify-failed"
+
+        Err _ ->
+            println "sign-failed"

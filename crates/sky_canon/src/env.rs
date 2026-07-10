@@ -56,6 +56,8 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Sky", "Core", "Encoding"], "Encoding"),
     (&["Sky", "Core", "Crypto"], "Crypto"),
     (&["Sky", "Core", "Uuid"], "Uuid"),
+    // `Sky.Core.Secret` — opaque secret-string wrapper (backlog #44).
+    (&["Sky", "Core", "Secret"], "Secret"),
     // `Sky.Core.CssSafety` — the four Std.Css leaf security kernels (#47). This
     // is a KERNEL qualifier (imported by the compiled-source `Std.Css`); `Std.Css`
     // itself stays OUT of this table (it is compiled source, registered in skyc's
@@ -769,6 +771,10 @@ impl Env {
             // `Sky.Core.Uuid` — UUID generation and parsing (M5b).
             // `v4` and `v7` are arity-0 (bare value); `parse` is arity-1.
             ("Uuid", &["v4", "v7", "parse"]),
+            // `Sky.Core.Secret` — opaque secret-string wrapper (backlog #44).
+            // `fromString` is the seal; `reveal` is the single greppable
+            // un-parse; `redacted` is the explicit "<redacted>" accessor.
+            ("Secret", &["fromString", "reveal", "redacted"]),
             // `Sky.Core.Jwt` — JWT encode/decode for HS256 and RS256 (M5b),
             // plus builder API: claims / hs256 / rs256 / subject / issuer /
             // audience / expiresAt / notBefore / issuedAt / jwtId / withClaim /
