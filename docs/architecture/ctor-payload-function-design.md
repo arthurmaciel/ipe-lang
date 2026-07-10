@@ -1,17 +1,10 @@
 # #90 — SKY-L0114: function values in constructor payloads (`Ok f` / `Just f`)
 
-> **Status:** Stage 1 (T1-T4 below) LANDED — `Ok f`/`Just f` construction, a
-> declared function-typed payload, and `Maybe.andMap`/`Result.andMap` with an
-> arity-1 payload all lower and run (verified `SKY_E2E=1`, real `cargo build`
-> + run, against `tests/golden/l0114_*` + the flipped
-> `golden_m3a_function_payload_gate`). The two residual fail-closed gates T3
-> (curried `andMap` payload) and T4 (fn-carrier reuse, new SKY-L0127) landed
-> alongside T1/T2 — see `docs/divergences-from-sky.md` §B22. Stage 2 (curried
-> payloads through `andMap`, §3 below) is NOT implemented — still gated.
-> **Seal-touching: YES** — this lifts two fail-closed lowering gates whose
-> entire purpose is the `skyc` exit-0 ⇒ `cargo` exit-0 seal; landed with full
-> `SKY_E2E=1` build+run verification per shape (below) rather than a separate
-> Opus review pass.
+> **Status:** design (Design Lane, read-only study of the crates; no code
+> written, no build run). **Seal-touching: YES** — this lifts two fail-closed
+> lowering gates whose entire purpose is the `skyc` exit-0 ⇒ `cargo` exit-0
+> seal, so Lane A implementation requires the Opus adversarial review before
+> commit (same protocol as #87/#93/#104).
 >
 > **Verdict up front:** SKY-L0114 is an **over-restriction** for the shapes #90
 > names (`Ok (\x -> x+1)`, `Just someFn`, and every 1-ary function payload) and
@@ -215,7 +208,7 @@ derive machinery, and the `andMap` kernels already handle the shapes.
    occurrences in argument / payload / return position; an `Expr::Apply`
    *callee* position is non-consuming (`Box<dyn Fn>` calls by `&self`) and
    stays unlimited. More than one consuming use → fail closed with a new
-   code **SKY-L0127** (`Feature::FunctionValueReuse`; next free slot after
+   code **SKY-L0121** (`Feature::FunctionValueReuse`; next free slot after
    L0120 per `code.rs:196` + `code.rs:431` registry), message: "a value
    holding a function is used more than once — function values cannot be
    copied yet". Explain page with the `let g = mf in (use, use)` example and
@@ -231,7 +224,7 @@ derive machinery, and the `andMap` kernels already handle the shapes.
 5. **Diagnostics + docs bookkeeping**: rewrite
    `explain/SKY-L0114.md` (the "not supported yet" examples become the
    supported examples; the residual curried-`andMap` shape becomes the
-   documented limit); add `SKY-L0127` + explain page; update
+   documented limit); add `SKY-L0121` + explain page; update
    `render.rs`/`diagnostic.rs`/`code.rs` registries (the walker-arm rule —
    no wildcard arms); divergence-ledger entry (§2.1);
    `docs/architecture/parity-gap-snapshot.md` refresh if it lists #90.
@@ -294,7 +287,7 @@ exit-0-then-cargo-fail. Checklist, per emitted artifact:
 | serde under `uses_live` | #93: `enum_is_serde ⊊ enum_is_derivable`; `IrType::Fun → false` in `ir_type_is_serde` (`ir.rs:821`) poisons the carriers (`ir.rs:829-831`) — no forced serde derive. `SkyMaybe`'s unconditional-but-bounded `Serialize` derive is safe by construction (`core.rs:212-224` comment). |
 | Live/Tui/Webview Model holding `Maybe (a->b)` | #91 Model gate → SKY-L0120 (`emit_model_gate.rs`; predicates as above). Already fail-closed, no change. |
 | `==` / `toString` / `Log.*With` / Set-elem / Dict-key on fn-carriers | Type-checker obligations (`sky_types/src/lib.rs:280`, `306`, `319-327`) reject before lowering. Lane A adds negative fixtures to *prove* the Set/Dict comparable-key path also rejects (expected via the same recursive predicate family — verify, don't assume). |
-| Reuse of a fn-carrier | New SKY-L0127 gate (Stage 1, step 4) — fail-closed until #104's general pass lands with the non-Clone-type requirement. |
+| Reuse of a fn-carrier | New SKY-L0121 gate (Stage 1, step 4) — fail-closed until #104's general pass lands with the non-Clone-type requirement. |
 | ≥2-arity payload meeting `andMap` | New call-site gate (Stage 1, step 3) — fail-closed until Stage 2. |
 
 The `golden_m3a_function_payload_gate.rs` test is **already written for this
@@ -319,7 +312,7 @@ leg and a Go-oracle parity check where the Go backend supports the shape:
 | `m3a_function_payload_gate` (existing) | `Mk (\n -> n + 1)` through `type Box a = Mk a`, unwrap+apply | red branch of the either-test | green branch: prints `2` | **divergence** — Go backend fails `go build` (documented in the test header); ledger entry |
 | `ctor_decl_fn_payload` | `type Retryish e = RetryWhen (e -> Bool) \| RetryAlways`, construct + match + call | red: SKY-L0114 at decl | green (enum emits derive-free, `<fn>` stringify never called) | parity check vs Go `ShouldRetry` behaviour |
 | `and_map_curried_stays_gated` | `Just (\a b -> a + b) \|> Maybe.andMap (Just 1) \|> Maybe.andMap (Just 2)` | red: SKY-L0114 at construction | **still red, by design** — the call-site arity gate fires at the *first* `andMap`, clean diagnostic, never a cargo fail | n/a (negative) |
-| `fn_carrier_reuse_gated` | `let mf = Just (\x -> x+1) in (consume mf, consume mf)` | red: SKY-L0114 | red: **SKY-L0127** (reuse), never E0382 | n/a (negative) |
+| `fn_carrier_reuse_gated` | `let mf = Just (\x -> x+1) in (consume mf, consume mf)` | red: SKY-L0114 | red: **SKY-L0121** (reuse), never E0382 | n/a (negative) |
 | `fn_extracted_called_twice` | `case Just (\x -> x+1) of Just f -> f 1 + f 2` | red: SKY-L0114 | green: `5` (callee-position uses are non-consuming) | parity |
 | negative type-level pins | `Just f == Just g`, `toString (Just f)`, fn-carrier as Live Model | red (T-codes / L0120) | unchanged — assert the codes to prove the use-gates hold post-lift | n/a |
 
@@ -343,7 +336,7 @@ first, per the backend wiring protocol.
 | T1 | Narrow `embeds_nonderivable_function` / `con_payload_carries_function` Con arm to enum-like heads (Maybe/Result/user unions); keep collections + records gated | `sky_lower/src/lower.rs:184-231` | — |
 | T2 | Delete `lower_enum`'s `ir_contains_fun` decl gate | `lower.rs:1581-1583` | T1 (shared fixtures) |
 | T3 | `andMap` call-site arity gate (solved `b` is a `Fun` → fail closed, blame call span) | `lower.rs` kernel dispatch near `4703`/`4714` + diagnostics | T1 |
-| T4 | Fn-carrier consuming-use-count gate → new `Feature::FunctionValueReuse` / SKY-L0127 + explain page | `sky_lower` walk + `sky_diagnostics` (code.rs, diagnostic.rs, render.rs, explain/) | T1 |
+| T4 | Fn-carrier consuming-use-count gate → new `Feature::FunctionValueReuse` / SKY-L0121 + explain page | `sky_lower` walk + `sky_diagnostics` (code.rs, diagnostic.rs, render.rs, explain/) | T1 |
 | T5 | Fixtures + goldens of §5 (incl. flipping `golden_m3a_function_payload_gate` to its green branch); `unsupported.rs` + `seal_derivability.rs` units; negative type-level pins | `tests/golden/*`, `sky_lower/tests/`, `sky_backend_rust/tests/` | T1-T4 |
 | T6 | Rewrite `explain/SKY-L0114.md`; divergence-ledger entry (Box-payload vs upstream fn-pointer; m3a Go-oracle divergence); parity-snapshot refresh | `sky_diagnostics/explain/`, `docs/` | T1-T4 |
 | T7 | File the #104 requirement: last-use pass must diagnose (not clone) non-Clone-rendering types; file Stage 2 (curried payloads + ctor-as-function) as its own issue with §3-Stage-2 as the seed design | tracker | — |
