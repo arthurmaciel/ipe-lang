@@ -17,7 +17,10 @@ any of these, STOP and escalate. Do not land it. This outranks "make progress".
 Rust MUST `cargo build`. Never emit codegen that type-checks in skyc but fails
 `cargo`. Closing that gap is the point of most mechanical items.
 
-## 2. The six principles (CLAUDE.md §7)
+## 2. The six principles (PRINCIPLES.md)
+
+Read PRINCPILES.md fully and also follow the practical rules bellow.
+
 1. **If it compiles, it works** — no runtime panic from well-typed Sky. Every panic class has a regression test.
 2. **Root-cause only** — never suppress a type error or warning; a defensive cover-up that hides a contract violation IS a violation.
 3. **Match the reference** — Go/Haskell (`../sky`) parity is the default. Diverge ONLY where strictly better (Rust/Unicode/modern) AND recorded in `docs/divergences-from-sky.md`. A hack is never a "divergence".
