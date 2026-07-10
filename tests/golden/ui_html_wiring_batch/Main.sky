@@ -1,0 +1,64 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+import Std.Ui.Background as Background
+
+
+-- E2E smoke test for the #76 20-kernel wiring batch (BACKLOG "Sweep to
+-- green" — #45's exhaustiveness gate list). Exercises every kernel this
+-- lane wired: Ui.image / Ui.paddingEach / Ui.clipX / Ui.clipY /
+-- Ui.scrollbarX / Ui.scrollbarY / Ui.onFile / Ui.onPseudo / Ui.hover /
+-- Ui.focus / Ui.focusVisible / Ui.active / Ui.disabled / Html.toString /
+-- Html.voidNode / Html.doctype / Html.titleNode / Html.htmlNode /
+-- Html.headNode / Background.linearGradient. (Ui.mediaQuery is deferred —
+-- see the lane report — and is not exercised here.)
+-- oracle_divergence = true: skyc's own correct output, not a Go oracle diff.
+
+
+type Msg
+    = GotFile String
+
+
+docPage : String
+docPage =
+    Html.toString
+        (Html.doctype
+            [ Html.htmlNode []
+                [ Html.headNode [] [ Html.titleNode "My Page" ]
+                , Html.body [] [ Html.voidNode "br" [] ]
+                ]
+            ]
+        )
+
+
+uiPage : String
+uiPage =
+    Html.render
+        (Ui.layout []
+            (Ui.column
+                [ Ui.paddingEach { top = 1, right = 2, bottom = 3, left = 4 }
+                , Ui.clipX
+                , Ui.clipY
+                , Ui.scrollbarX
+                , Ui.scrollbarY
+                , Background.linearGradient 90.0
+                    [ ( 0.0, Ui.rgb 255 0 0 ), ( 100.0, Ui.rgb 0 0 255 ) ]
+                , Ui.onPseudo Ui.hover [ Background.color (Ui.rgb 10 20 30) ]
+                , Ui.onPseudo Ui.focus [ Background.color (Ui.rgb 40 50 60) ]
+                , Ui.onPseudo Ui.focusVisible [ Background.color (Ui.rgb 70 80 90) ]
+                , Ui.onPseudo Ui.active [ Background.color (Ui.rgb 100 110 120) ]
+                , Ui.onPseudo Ui.disabled [ Background.color (Ui.rgb 130 140 150) ]
+                ]
+                [ Ui.image [] { src = "a.png", description = "alt text" }
+                , Ui.el [ Ui.onFile GotFile ] (Ui.text "upload")
+                ]
+            )
+        )
+
+
+main =
+    let
+        _ = println docPage
+    in
+    println uiPage

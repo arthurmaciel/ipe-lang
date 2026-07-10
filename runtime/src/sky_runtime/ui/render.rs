@@ -65,7 +65,13 @@ fn color_css(c: &Color) -> String {
 /// Collect all CSS `key:value` pairs from a slice of `Attribute<M>` into a
 /// `style="…"` string.  Values that fail the CSS security gate are silently
 /// dropped (T3).
-fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
+///
+/// `pub(crate)` so `ui::helpers::ui_on_pseudo_` can reuse the identical
+/// style-collection logic to build a pseudo-class rules-string (mirrors the
+/// `../sky` reference's `onPseudo pc attrs = AttrPseudoRule pc
+/// (mediaQueryRulesCss attrs)`, which folds attrs through the SAME collector
+/// used for the main `style=""` attribute — one collector, two call sites).
+pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     for attr in attrs {
@@ -283,6 +289,16 @@ fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
 /// here; trust the render sink.
 fn collect_html_attrs<M: Clone>(attrs: &[Attribute<M>]) -> Vec<HtmlAttribute<M>> {
     let mut out: Vec<HtmlAttribute<M>> = Vec::new();
+    // `AttrPseudoRule` entries (from `Ui.onPseudo` and the `hoverColor` /
+    // `focusColor` / `activeColor` / `disabledColor` sub-module helpers that
+    // build on it) are collected into ONE `data-sky-pc-rules` marker attr,
+    // wire-format `"<tag>|<css>||<tag2>|<css2>"` — consumed by
+    // `sky_runtime::live::style_inject::build_pc` (called post-`assign_sky_ids`
+    // from the Sky.Live / Sky.Webview render pipelines), which expands it into
+    // a sky-id-scoped `<style>` block. Multiple entries with the SAME tag are
+    // NOT merged (each keeps its own `tag|css` segment) — matches the `../sky`
+    // reference's `injectPseudoClassStyles` wire contract.
+    let mut pseudo_rules: Vec<String> = Vec::new();
     for attr in attrs {
         match attr {
             Attribute::AttrClass(c) => {
@@ -318,9 +334,20 @@ fn collect_html_attrs<M: Clone>(attrs: &[Attribute<M>]) -> Vec<HtmlAttribute<M>>
                     _ => {}
                 }
             }
+            Attribute::AttrPseudoRule(pc, css) => {
+                if !css.is_empty() {
+                    pseudo_rules.push(format!("{}|{css}", pc.wire_tag()));
+                }
+            }
             // Style and nearby handled separately.
             _ => {}
         }
+    }
+    if !pseudo_rules.is_empty() {
+        out.push(HtmlAttribute::Attr(
+            "data-sky-pc-rules".to_owned(),
+            pseudo_rules.join("||"),
+        ));
     }
     out
 }
@@ -776,5 +803,172 @@ mod tests {
             "click event handler must register in rendered HTML: {s}"
         );
         assert!(s.contains("press me"), "element text must render: {s}");
+    }
+
+    // ── #76: 20-kernel wiring batch regressions ───────────────────────────────
+
+    #[test]
+    fn ui_padding_each_renders_four_distinct_sides() {
+        // `Ui.paddingEach { top = 1, right = 2, bottom = 3, left = 4 }` — each
+        // side distinct proves the record fields are NOT swapped/aliased.
+        let attrs = vec![super::super::helpers::ui_padding_each_::<TestMsg>(1, 2, 3, 4)];
+        let elem: Element<TestMsg> = Element::Empty;
+        let html = ui_layout(attrs, elem);
+        let s = render_html(&html);
+        assert!(
+            s.contains("padding:1px 2px 3px 4px"),
+            "paddingEach must render top/right/bottom/left in order: {s}"
+        );
+    }
+
+    #[test]
+    fn ui_clip_x_y_render_single_axis_clip_not_hidden() {
+        // Go/Sky reference: clipX = AttrOverflow "clip" "visible" (NOT "hidden"),
+        // clipY = AttrOverflow "visible" "clip". Distinct from `Ui.clip` (which
+        // uses "hidden" on both axes) — this is the exact semantics bug the
+        // design doc's clip family warns about.
+        let attrs_x = vec![super::super::helpers::ui_clip_x_::<TestMsg>()];
+        let html_x = ui_layout(attrs_x, Element::Empty);
+        let sx = render_html(&html_x);
+        assert!(
+            sx.contains("overflow-x:clip") && sx.contains("overflow-y:visible"),
+            "clipX must be overflow-x:clip;overflow-y:visible (not hidden): {sx}"
+        );
+
+        let attrs_y = vec![super::super::helpers::ui_clip_y_::<TestMsg>()];
+        let html_y = ui_layout(attrs_y, Element::Empty);
+        let sy = render_html(&html_y);
+        assert!(
+            sy.contains("overflow-x:visible") && sy.contains("overflow-y:clip"),
+            "clipY must be overflow-x:visible;overflow-y:clip: {sy}"
+        );
+    }
+
+    #[test]
+    fn ui_scrollbar_x_y_render_off_axis_hidden_not_visible() {
+        // Go/Sky reference: scrollbarX = AttrOverflow "auto" "hidden" (off-axis
+        // hidden, NOT visible — a visible off-axis gets promoted to `auto` by
+        // CSS, producing an unwanted second scrollbar).
+        let attrs_x = vec![super::super::helpers::ui_scrollbar_x_::<TestMsg>()];
+        let html_x = ui_layout(attrs_x, Element::Empty);
+        let sx = render_html(&html_x);
+        assert!(
+            sx.contains("overflow-x:auto") && sx.contains("overflow-y:hidden"),
+            "scrollbarX must be overflow-x:auto;overflow-y:hidden: {sx}"
+        );
+
+        let attrs_y = vec![super::super::helpers::ui_scrollbar_y_::<TestMsg>()];
+        let html_y = ui_layout(attrs_y, Element::Empty);
+        let sy = render_html(&html_y);
+        assert!(
+            sy.contains("overflow-x:hidden") && sy.contains("overflow-y:auto"),
+            "scrollbarY must be overflow-x:hidden;overflow-y:auto: {sy}"
+        );
+    }
+
+    #[test]
+    fn ui_image_renders_img_src_alt_void() {
+        let elem = super::super::helpers::ui_image_::<TestMsg>(
+            vec![],
+            "https://example.com/x.png".to_owned(),
+            "a cat".to_owned(),
+        );
+        let html = ui_layout(vec![], elem);
+        let s = render_html(&html);
+        assert!(s.contains("<img"), "must render <img>: {s}");
+        assert!(
+            s.contains("src=\"https://example.com/x.png\""),
+            "src attr missing: {s}"
+        );
+        assert!(s.contains("alt=\"a cat\""), "alt attr missing: {s}");
+        assert!(
+            !s.contains("</img>"),
+            "img is a void element — no closing tag: {s}"
+        );
+    }
+
+    #[test]
+    fn background_linear_gradient_renders_css_gradient() {
+        let attrs = vec![super::super::helpers::ui_background_linear_gradient_::<
+            TestMsg,
+        >(
+            90.0,
+            vec![
+                (0.0, Color::Rgba(255, 0, 0, 1.0)),
+                (100.0, Color::Rgba(0, 0, 255, 1.0)),
+            ],
+        )];
+        let html = ui_layout(attrs, Element::Empty);
+        let s = render_html(&html);
+        assert!(
+            s.contains(
+                "background-image:linear-gradient(90deg, rgba(255,0,0,1) 0%, rgba(0,0,255,1) 100%)"
+            ),
+            "linear-gradient CSS malformed: {s}"
+        );
+    }
+
+    #[test]
+    fn ui_on_pseudo_emits_data_sky_pc_rules_marker() {
+        // `Ui.onPseudo Ui.hover [Background.color red]` must attach a
+        // `data-sky-pc-rules="h|background-color:rgba(255,0,0,1)"` marker —
+        // the wire format `sky_runtime::live::style_inject::build_pc` decodes
+        // into a sky-id-scoped `<style>` block post-`assign_sky_ids`.
+        let inner = vec![Attribute::AttrBgColor(Color::Rgba(255, 0, 0, 1.0))];
+        let pseudo_attr =
+            super::super::helpers::ui_on_pseudo_(super::super::helpers::ui_hover_(), inner);
+        let attrs = vec![pseudo_attr];
+        let elem: Element<TestMsg> = Element::Text("hi".to_owned());
+        let html = ui_layout(attrs, elem);
+        let s = render_html(&html);
+        assert!(
+            s.contains("data-sky-pc-rules=\"h|background-color:rgba(255,0,0,1)\""),
+            "onPseudo(hover) marker missing/malformed: {s}"
+        );
+    }
+
+    #[test]
+    fn ui_on_pseudo_all_five_constants_produce_distinct_wire_tags() {
+        // hover→h, focus→f, focusVisible→v, active→a, disabled→d — MUST match
+        // `sky_runtime::live::style_inject::pseudo_selector_for_tag` and the
+        // `../sky` reference's `pseudoClassTag`.
+        let cases: [(super::super::element::PseudoClass, &str); 5] = [
+            (super::super::helpers::ui_hover_(), "h"),
+            (super::super::helpers::ui_focus_(), "f"),
+            (super::super::helpers::ui_focus_visible_(), "v"),
+            (super::super::helpers::ui_active_(), "a"),
+            (super::super::helpers::ui_disabled_(), "d"),
+        ];
+        for (pc, tag) in cases {
+            let attr: Attribute<TestMsg> =
+                super::super::helpers::ui_on_pseudo_(pc, vec![Attribute::AttrPointer]);
+            let s = build_style_string_for_test(&attr);
+            assert!(
+                s.starts_with(&format!("{tag}|")),
+                "pseudo-class {pc:?} must wire-tag as {tag:?}: {s}"
+            );
+        }
+    }
+
+    /// Test-only accessor: extract the `(tag, css)` payload of an
+    /// `AttrPseudoRule` as `"tag|css"` for assertions above.
+    fn build_style_string_for_test<M>(attr: &Attribute<M>) -> String {
+        match attr {
+            Attribute::AttrPseudoRule(pc, css) => format!("{}|{css}", pc.wire_tag()),
+            _ => String::new(),
+        }
+    }
+
+    #[test]
+    fn ui_on_file_registers_sky_file_wire_event() {
+        use crate::sky_runtime::html::{Attribute as HtmlAttr, Event};
+        let attr =
+            super::super::helpers::ui_on_file_::<TestMsg>(std::sync::Arc::new(|_s| TestMsg::Click));
+        match attr {
+            Attribute::AttrEvent(HtmlAttr::EventAttr(Event::OnString(name, _))) => {
+                assert_eq!(name, "sky-file", "onFile must wire as event name sky-file");
+            }
+            other => panic!("expected AttrEvent(EventAttr(OnString(\"sky-file\", _))), got {other:?}"),
+        }
     }
 }
