@@ -625,10 +625,8 @@ const fn feature_label(f: Feature) -> &'static str {
              fields at once [feature: ctor-as-function]"
         }
         Feature::CtorPayloadFunction => {
-            "storing a function value in a `List`/`Dict`/`Set` constructor-payload \
-             element is not supported yet, and an `andMap` chain applying a curried \
-             (2-or-more-argument) function needs curried-payload support that is not \
-             implemented yet [feature: ctor-payload-function]"
+            "storing a function value in a constructor payload is not supported \
+             yet [feature: ctor-payload-function]"
         }
         Feature::TuplePatternMatch => {
             "a tuple pattern is supported only as a single irrefutable destructure \
@@ -665,12 +663,6 @@ const fn feature_label(f: Feature) -> &'static str {
             "a function/task/decoder value captured by a closure can only be called, \
              not forwarded; bind the result outside the closure or wrap the forwarding \
              in a named top-level function [feature: non-clone-capture]"
-        }
-        Feature::FunctionValueReuse => {
-            "a value holding a function is used more than once — function values \
-             cannot be copied yet; calling it is unlimited, but a second non-call \
-             use needs the value re-constructed or the code restructured to a single \
-             linear use [feature: function-value-reuse]"
         }
     }
 }
