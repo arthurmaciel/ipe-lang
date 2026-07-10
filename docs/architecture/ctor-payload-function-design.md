@@ -1,21 +1,6 @@
 # #90 — SKY-L0114: function values in constructor payloads (`Ok f` / `Just f`)
 
-> **Status: IMPLEMENTED (2026-07-10).** Stage 1 (T1/T2, this document) and
-> the T3 `andMap` curried-payload gate (revised two-tier design, see
-> [`ctor-payload-andmap-arity-gate-design.md`](./ctor-payload-andmap-arity-gate-design.md))
-> landed together, along with the restored T4 fn-value-reuse gate
-> (`SKY-L0127`). See that companion document's own status note for the T3
-> implementation findings (diagnostic-code split between the eager-pin
-> `SKY-T0001` and the forwarder-path `SKY-T0014`, the confirmed-accepted
-> cross-module wrapper fixture, and the confirmed-not-constructible import-
-> alias row). §2's hazard table below is now accurate for the SHIPPED
-> behaviour, not merely the predicted design — every row was independently
-> confirmed against `crates/skyc/tests/golden_l0114_ctor_payload_function.rs`
-> and `crates/sky_lower/tests/unsupported.rs`.
->
-> Original design-pass status note (superseded, kept for history):
-
-> Design (Design Lane, read-only study of the crates; no code
+> **Status:** design (Design Lane, read-only study of the crates; no code
 > written, no build run). **Seal-touching: YES** — this lifts two fail-closed
 > lowering gates whose entire purpose is the `skyc` exit-0 ⇒ `cargo` exit-0
 > seal, so Lane A implementation requires the Opus adversarial review before
@@ -348,15 +333,15 @@ cargo-0 boundary) → Opus guardian design review of the final diff before
 commit; Haiku mech-check (clippy + full test suite + `SKY_E2E=1` golden legs)
 first, per the backend wiring protocol.
 
-| # | Task | Files | Depends on | Status |
-|---|---|---|---|---|
-| T1 | Narrow `embeds_nonderivable_function` / `con_payload_carries_function` Con arm to enum-like heads (Maybe/Result/user unions); keep collections + records gated | `sky_lower/src/lower.rs:184-231` | — | **DONE** |
-| T2 | Delete `lower_enum`'s `ir_contains_fun` decl gate | `lower.rs:1581-1583` | T1 (shared fixtures) | **DONE** |
-| T3 | `andMap` payload-arity gate — see [`ctor-payload-andmap-arity-gate-design.md`](./ctor-payload-andmap-arity-gate-design.md) for the implemented design (its own `T3a`-`T3g` task breakdown) | `sky_types/src/{ty,lib,constrain}.rs` (primary) + `sky_lower/src/lower.rs` (backstop) + diagnostics | T1 | **DONE** |
-| T4 | Fn-carrier consuming-use-count gate → new `Feature::FunctionValueReuse` / **SKY-L0127** (the actual free slot at implementation time — SKY-L0121 was already taken by an unrelated kernel by the time this landed) + explain page | `sky_lower` walk + `sky_diagnostics` (code.rs, diagnostic.rs, render.rs, explain/) | T1 | **DONE** |
-| T5 | Fixtures + goldens of §5 (incl. flipping `golden_m3a_function_payload_gate` to its green branch); `unsupported.rs` + `seal_derivability.rs` units; negative type-level pins | `tests/golden/*`, `sky_lower/tests/`, `sky_backend_rust/tests/` | T1-T4 | **DONE** — `crates/skyc/tests/golden_l0114_ctor_payload_function.rs` + `sky_lower/tests/unsupported.rs` |
-| T6 | Rewrite `explain/SKY-L0114.md`; divergence-ledger entry (Box-payload vs upstream fn-pointer; m3a Go-oracle divergence); parity-snapshot refresh | `sky_diagnostics/explain/`, `docs/` | T1-T4 | **DONE** — B22 restored in `docs/divergences-from-sky.md`; parity-snapshot refresh not yet done (file separately if `parity-gap-snapshot.md` lists #90) |
-| T7 | File the #104 requirement: last-use pass must diagnose (not clone) non-Clone-rendering types; file Stage 2 (curried payloads + ctor-as-function) as its own issue with §3-Stage-2 as the seed design | tracker | — | still open — Stage 2 (full curried applicative chains) remains a separate, un-started issue |
+| # | Task | Files | Depends on |
+|---|---|---|---|
+| T1 | Narrow `embeds_nonderivable_function` / `con_payload_carries_function` Con arm to enum-like heads (Maybe/Result/user unions); keep collections + records gated | `sky_lower/src/lower.rs:184-231` | — |
+| T2 | Delete `lower_enum`'s `ir_contains_fun` decl gate | `lower.rs:1581-1583` | T1 (shared fixtures) |
+| T3 | `andMap` payload-arity gate. **Superseded** — see [`ctor-payload-andmap-arity-gate-design.md`](./ctor-payload-andmap-arity-gate-design.md) for the current design (its own `T3a`-`T3g` task breakdown replaces this row) | `sky_types/src/{ty,lib,constrain}.rs` (primary) + `sky_lower/src/lower.rs` (backstop) + diagnostics | T1 |
+| T4 | Fn-carrier consuming-use-count gate → new `Feature::FunctionValueReuse` / SKY-L0121 + explain page | `sky_lower` walk + `sky_diagnostics` (code.rs, diagnostic.rs, render.rs, explain/) | T1 |
+| T5 | Fixtures + goldens of §5 (incl. flipping `golden_m3a_function_payload_gate` to its green branch); `unsupported.rs` + `seal_derivability.rs` units; negative type-level pins | `tests/golden/*`, `sky_lower/tests/`, `sky_backend_rust/tests/` | T1-T4 |
+| T6 | Rewrite `explain/SKY-L0114.md`; divergence-ledger entry (Box-payload vs upstream fn-pointer; m3a Go-oracle divergence); parity-snapshot refresh | `sky_diagnostics/explain/`, `docs/` | T1-T4 |
+| T7 | File the #104 requirement: last-use pass must diagnose (not clone) non-Clone-rendering types; file Stage 2 (curried payloads + ctor-as-function) as its own issue with §3-Stage-2 as the seed design | tracker | — |
 
 Estimated blast radius: `sky_lower` only (+ diagnostics registry); zero
 emit/runtime changes in Stage 1; goldens change only where a red fixture turns
