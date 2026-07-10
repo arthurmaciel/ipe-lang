@@ -150,20 +150,20 @@ recorded reference.
 - **Rationale:** correctness. **Sanctioned:** yes (`sanctioned:`). Golden
   `m5b_uuid_parse`.
 
-### B9 — `Sky.Core.Jwt` flat-kernel interim surface
-- **Differs:** ipê currently surfaces four flat kernels
+### B9 — `Sky.Core.Jwt` flat + builder surfaces (✅ both shipped, corrected 2026-07-09)
+- **No longer differs — closed.** ipê surfaces BOTH the four flat kernels
   (`encodeHs256`/`decodeHs256`/`encodeRs256`/`decodeRs256`, claims as a JSON
-  string). The Go backend exposes only the builder API
-  (`Jwt.encode (Jwt.hs256 secret) (claims …)` + `Algorithm`/`Claims` types), so a
-  builder-API program does not yet compile on ipê and the flat-kernel program
-  does not compile on Go. **The emitted token bytes are byte-identical to Go**
-  (same Go-parity primitives; byte equality asserted in
-  `golden_m5b_uuid_jwt.rs` and the runtime jwt tests; RS256/PKCS#1 v1.5 is
-  deterministic).
-- **Go-oracle relationship:** call-surface only; token bytes identical.
-- **Rationale:** interim API surface; a tracked follow-up adds the builder API so
-  the goldens become shared-source Go-parity goldens.
-- **Sanctioned:** yes (`divergence:`). Goldens `m5b_jwt_*`.
+  string) AND the full builder API (`Jwt.encode`/`Jwt.hs256`/`Jwt.rs256`/
+  `Jwt.claims`/`subject`/`issuer`/`audience`/`expiresAt`/`notBefore`/
+  `issuedAt`/`jwtId`/`withClaim`/`decode`, `Algorithm`/`Claims` types — D-00,
+  #152), wired end to end (kernel registry, type schemes, lowering, runtime
+  `jwt.rs`). **The emitted token bytes are byte-identical to Go** (same
+  Go-parity primitives; byte equality asserted in `golden_m5b_uuid_jwt.rs`'s
+  `jwt_decode_now` test, which exercises the builder syntax end to end;
+  RS256/PKCS#1 v1.5 is deterministic).
+- **Go-oracle relationship:** byte-identical, both call surfaces.
+- **Sanctioned:** yes (`divergence:` — offering both surfaces is strictly
+  additive over Go). Goldens `m5b_jwt_*`, `m_jwt_decode_now`.
 
 ### B10 — `Std.Db` emits Rust + `sqlx` (vs Go + SQLite/cgo)
 - **Differs:** the full `Std.Db` surface is shared, but Go emits Go+SQLite (cgo)
