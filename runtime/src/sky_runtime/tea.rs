@@ -263,18 +263,25 @@ where
         // Inline render (a closure borrowing `view` would make the future non-Send).
         // Fallible writes (NOT print!/println!, which panic on a broken pipe).
         //
-        // #122: each `view` render is a distinct rendered frame and MUST end in
-        // a newline so consecutive renders don't run together on one line
-        // (observed as "lines: 0lines: 1" — the second render's text glued
-        // directly onto the first's, since neither `view`'s own returned
-        // String nor this print loop supplied a separator). Every render
-        // call-site writes its own trailing "\n" immediately after the view
-        // bytes, so the separator is never skipped regardless of how the loop
-        // exits (in particular: an immediate stdin EOF, which breaks out of
-        // the loop before ever reaching the loop-body render, still gets a
-        // trailing newline from the INITIAL render below).
+        // #122 was reopened and reverted: a prior version of this code forced
+        // a trailing "\n" after EVERY render, on the theory that consecutive
+        // renders must always land on their own line. That is a real
+        // divergence from the Go oracle: `runtime-go/rt/cli.go`'s
+        // `cliPrintView` is explicit that it "writes the result to stdout
+        // WITHOUT a trailing newline (the user's prompt formatting decides
+        // whether to add one)" — Go only ever appends ONE newline, at
+        // `fmt.Println()` after the event loop exits (same as here). This is
+        // intentional REPL-prompt design: `examples/20-cli-counter`'s `view`
+        // returns `"count=" ++ ... ++ "  (+, -, r, q) > "` with NO trailing
+        // newline so the cursor stays on the prompt line for the user's
+        // input. Forcing a newline after every render broke that UX and was
+        // never checked against the Go reference before landing. An app that
+        // wants each render on its own line supplies its own trailing "\n"
+        // in its `view` string, exactly as the Go contract requires — see
+        // `tests/golden/i122_cli_program_view_separator` for a fixture that
+        // deliberately does NOT do this and therefore glues renders
+        // together, matching Go byte-for-byte.
         let _ = std::io::stdout().write_all(view(model.clone()).as_bytes());
-        let _ = std::io::stdout().write_all(b"\n");
         let _ = std::io::stdout().flush();
 
         while let Some(ev) = rx.recv().await {
@@ -289,10 +296,10 @@ where
             cli_run_cmd(cmd, &tx);
             submgr.update(subscriptions(model.clone()));
             let _ = std::io::stdout().write_all(view(model.clone()).as_bytes());
-            let _ = std::io::stdout().write_all(b"\n");
             let _ = std::io::stdout().flush();
         }
         submgr.stop_all();
+        let _ = std::io::stdout().write_all(b"\n");
         ok_res(())
     })
 }
