@@ -1227,6 +1227,17 @@ pub enum StdlibKernel {
     DbFindWhere,
     /// `Db.deleteWhere : Db -> String -> SqlFragment -> Task Error Int`
     DbDeleteWhere,
+    // ── Sky.Core.Secret — opaque secret-string wrapper (backlog #44) ─────────
+    // The ONLY public constructor: every `Secret` value traces back to one of
+    // these calls. Never derivable from a bare `String` implicitly.
+    /// `Secret.fromString : String -> Secret` — the seal; construction boundary.
+    SecretFromString,
+    /// `Secret.reveal : Secret -> String` — the single greppable un-parse.
+    SecretReveal,
+    /// `Secret.redacted : Secret -> String` — explicit `"<redacted>"` (also
+    /// what `toString` / interpolation gives automatically — see
+    /// `sky_runtime::secret`'s hand-written `SkyStringify` impl).
+    SecretRedacted,
 }
 
 impl StdlibKernel {
@@ -2336,6 +2347,10 @@ impl StdlibKernel {
             Self::SqlLike => d("Sql", "like", 2, Db, "sql_like"),
             Self::DbFindWhere => d("Db", "findWhere", 3, Db, "db_find_where"),
             Self::DbDeleteWhere => d("Db", "deleteWhere", 3, Db, "db_delete_where"),
+            // ── Sky.Core.Secret — opaque secret-string wrapper (backlog #44) ─
+            Self::SecretFromString => d("Secret", "fromString", 1, Pure, "secret_from_string"),
+            Self::SecretReveal => d("Secret", "reveal", 1, Pure, "secret_reveal"),
+            Self::SecretRedacted => d("Secret", "redacted", 1, Pure, "secret_redacted"),
         }
     }
 
@@ -3235,6 +3250,9 @@ impl StdlibKernel {
         Self::SqlLike,
         Self::DbFindWhere,
         Self::DbDeleteWhere,
+        Self::SecretFromString,
+        Self::SecretReveal,
+        Self::SecretRedacted,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────
