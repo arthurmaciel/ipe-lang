@@ -81,6 +81,15 @@ if [ "$NO_EQUIV" != 1 ]; then
 fi
 # rg is required by is_out_of_scope (the build_set Go-FFI filter) in EVERY mode.
 command -v rg >/dev/null 2>&1 || { echo "ERROR: rg (ripgrep) required for the example-scope filter (is_out_of_scope). Install ripgrep." >&2; exit 2; }
+# flock is required UNCONDITIONALLY: the cross-invocation build-serialization
+# critical section (#35's race fix, below) and the per-example diagnostic-file
+# STAMP-suffixing (#35b) both depend on it. This script has no `set -e`, so a
+# missing `flock` would otherwise fail SILENTLY deep inside the per-example
+# loop (`flock: command not found`, exit status never checked) and #35's race
+# fix would silently no-op with zero signal. Fail loudly up front instead.
+# util-linux ships it on Linux; macOS needs `brew install flock`; Windows/
+# Git-Bash carries it via MSYS.
+command -v flock >/dev/null 2>&1 || { echo "ERROR: flock required to serialize the cross-invocation shared-CARGO_TARGET_DIR build/run/equiv span (see #35's race fix). Install util-linux (Linux) / 'brew install flock' (macOS)." >&2; exit 2; }
 
 HIST="$HOME/.cache/sky/examples-sweep"; mkdir -p "$HIST"
 # PID suffix: two invocations starting in the same UTC second (e.g. two
@@ -91,6 +100,22 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 TABLE="$HIST/sweep-$STAMP.table"
 RUNLOG="$HIST/run-$STAMP.log"
 say() { echo "$@" | tee -a "$RUNLOG"; }
+
+# ── diag <example-name> <suffix> → $HIST path for a per-example diagnostic file
+# STAMP-suffixed (#35b — same bug class as #35, one layer down). Two sweep
+# invocations sharing this $HIST cache dir but pointed at DIFFERENT
+# CARGO_TARGET_DIRs (so #35's flock below never contends between them) can
+# still process the SAME example concurrently. Before this fix every
+# per-example diagnostic file was keyed ONLY by bare example name
+# ($HIST/$n.skyc.log, etc.), so two such invocations could open-and-truncate
+# the SAME path at overlapping times — genuinely interleaving bytes from both
+# processes into one file (not just "last write wins"), producing a false
+# DIFFER (corrupted diff.txt/.equiv) or a false equivalence pass (corrupted
+# go.run.log read back as if it matched). $STAMP already carries the PID ($$,
+# see above) — reusing it here (rather than a second, independent stamp)
+# keeps every artefact from one invocation grouped under the same STAMP
+# across rows-$STAMP.tsv / sweep-$STAMP.table / the per-example logs.
+diag() { printf '%s/%s.%s.%s\n' "$HIST" "$1" "$STAMP" "$2"; }
 say "=== ipê EXAMPLES sweep @ $STAMP (repo: $REPO · skyc: $SKYC_BIN) ==="
 [ "$BUILD_ONLY" = 1 ] && say "  (SKY_SWEEP_BUILD_ONLY=1 — BUILD column only; RUN+EQUIV skipped)"
 [ "$BUILD_ONLY" != 1 ] && [ "$NO_EQUIV" = 1 ] && say "  (SKY_SWEEP_NO_EQUIV=1 — BUILD+RUN; EQUIV skipped — the phase-1 default)"
@@ -113,16 +138,17 @@ BUILD_CELL=""
 WARN_CELL=0
 build_rust() {
   local d="$1" n="$2" tmo="${SKY_SWEEP_BUILD_TIMEOUT:-900}" tgt attempt ok=0
+  local skyclog cargolog; skyclog="$(diag "$n" skyc.log)"; cargolog="$(diag "$n" cargo.log)"
   tgt="$(skyc_build_target "$d")"
   for attempt in 1 2 3 4; do
     # --runtime is left to skyc's auto-resolve (walks up to $REPO/runtime/src/
     # sky_runtime); SKY_RUNTIME_DIR is exported by env.sh as a belt-and-braces.
-    if ( cd "$d" && timeout "$tmo" "$SKYC_BIN" build "$tgt" --out sky-out/rust >"$HIST/$n.skyc.log" 2>&1 ); then
+    if ( cd "$d" && timeout "$tmo" "$SKYC_BIN" build "$tgt" --out sky-out/rust >"$skyclog" 2>&1 ); then
       ok=1; break
     fi
     # Transient cargo registry / network flake — back off + retry.
     if [ "$attempt" -lt 4 ] && \
-       grep -qiE 'unable to update registry|download of .* failed|curl failed|HTTP2 framing|spurious network error|Connection reset|operation timed out|failed to get response' "$HIST/$n.skyc.log"; then
+       grep -qiE 'unable to update registry|download of .* failed|curl failed|HTTP2 framing|spurious network error|Connection reset|operation timed out|failed to get response' "$skyclog"; then
       sleep 5; continue
     fi
     break
@@ -133,8 +159,8 @@ build_rust() {
   # cargo build the emitted crate. The vendored runtime carries
   # `#![allow(unused, non_snake_case)]` (generated-code suppression), so a warning
   # that LEAKS PAST that allow is a genuine codegen defect — counted + gated.
-  if ( cd "$d" && timeout 900 cargo build --manifest-path sky-out/rust/Cargo.toml >"$HIST/$n.cargo.log" 2>&1 ); then
-    WARN_CELL="$(rg -o 'generated [0-9]+ warning' "$HIST/$n.cargo.log" 2>/dev/null | rg -o '[0-9]+' | tail -1)"
+  if ( cd "$d" && timeout 900 cargo build --manifest-path sky-out/rust/Cargo.toml >"$cargolog" 2>&1 ); then
+    WARN_CELL="$(rg -o 'generated [0-9]+ warning' "$cargolog" 2>/dev/null | rg -o '[0-9]+' | tail -1)"
     : "${WARN_CELL:=0}"
     BUILD_CELL="ok"; return 0
   fi
@@ -159,7 +185,7 @@ build_go() {
   # `rt/` package, yielding `undefined: rt.SetPortDefault` (every rt.* symbol) at
   # `go build`. `sky` has its own TH-embedded Go runtime, so the reference build
   # MUST run with SKY_RUNTIME_DIR unset. `env -u` scopes the unset to this child.
-  ( cd "$d" && env -u SKY_RUNTIME_DIR timeout 300 "$go_bin" build src/Main.sky >"$HIST/$n.go.build.log" 2>&1 )
+  ( cd "$d" && env -u SKY_RUNTIME_DIR timeout 300 "$go_bin" build src/Main.sky >"$(diag "$n" go.build.log)" 2>&1 )
   sync
   [ -x "$d/sky-out/app" ]
 }
@@ -176,7 +202,7 @@ go_stdout_deterministic() {
 # ── EQUIV for one example (PHASED — dormant while NO_EQUIV=1) ─────────────────
 equiv_for() {
   local d="$1" n="$2" mode="$3" rbin="$4"
-  local rsl="$HIST/$n.rust.run.log" gol="$HIST/$n.go.run.log"
+  local rsl gol; rsl="$(diag "$n" rust.run.log)"; gol="$(diag "$n" go.run.log)"
   case "$mode" in
     none) printf 'n/a\t%s\n' "$(equiv_override_reason "$d")"; return 0 ;;
   esac
@@ -187,23 +213,24 @@ equiv_for() {
       if ! go_stdout_deterministic "$d/sky-out/app" "$gol"; then
         printf 'n/a\tnondeterministic Go stdout (auto-probe)\n'; return 0
       fi
-      if diff <(norm "$gol.1") <(norm "$rsl") >"$HIST/$n.diff.txt" 2>&1; then
+      local difftxt; difftxt="$(diag "$n" diff.txt)"
+      if diff <(norm "$gol.1") <(norm "$rsl") >"$difftxt" 2>&1; then
         printf 'equiv-stdout\t\n'
       else
-        printf 'DIFFER\tstdout differs (see %s.diff.txt)\n' "$n"
+        printf 'DIFFER\tstdout differs (see %s)\n' "$(basename "$difftxt")"
       fi
       ;;
     body)
       build_go "$d" "$n" || { printf 'go-ref-broken\tGo build failed\n'; return 0; }
-      local res
-      res="$(exercise_server_equiv "$d/sky-out/app" "$rbin" "$d" "$HIST/$n.equiv")"
+      local res equivlog; equivlog="$(diag "$n" equiv)"
+      res="$(exercise_server_equiv "$d/sky-out/app" "$rbin" "$d" "$equivlog")"
       reap
       case "$res" in
         equiv-body\ *) printf '%s\t\n' "$res" ;;
         equiv-serve)   printf 'equiv-serve\t0 comparable GET routes — both boot\n' ;;
         go-ref-broken) printf 'go-ref-broken\tGo reference did not boot+serve\n' ;;
         rust-broken)   printf 'DIFFER\tRust did not boot+serve where Go did\n' ;;
-        DIFFER)        printf 'DIFFER\troute body differs (see %s.equiv)\n' "$n" ;;
+        DIFFER)        printf 'DIFFER\troute body differs (see %s)\n' "$(basename "$equivlog")" ;;
         *)             printf 'go-ref-broken\tequiv probe inconclusive (%s)\n' "$res" ;;
       esac
       ;;
@@ -256,15 +283,15 @@ equiv_for() {
         # behaviourally meaningful. Same exercise_server_equiv path used for
         # Sky.Http.Server body mode, but driven against a Live server.
         build_go "$d" "$n" || { printf 'go-ref-broken\tGo build failed\n'; return 0; }
-        local res
-        res="$(exercise_server_equiv "$d/sky-out/app" "$rbin" "$d" "$HIST/$n.equiv")"
+        local res equivlog; equivlog="$(diag "$n" equiv)"
+        res="$(exercise_server_equiv "$d/sky-out/app" "$rbin" "$d" "$equivlog")"
         reap
         case "$res" in
           equiv-body\ *) printf '%s\t(HTML-norm; no browser stack)\n' "$res" ;;
           equiv-serve)   printf 'equiv-serve\t0 comparable GET routes — both boot (no browser)\n' ;;
           go-ref-broken) printf 'go-ref-broken\tGo reference did not boot+serve\n' ;;
           rust-broken)   printf 'DIFFER\tRust did not boot+serve where Go did\n' ;;
-          DIFFER)        printf 'DIFFER\tHTML body differs after normalisation (see %s.equiv)\n' "$n" ;;
+          DIFFER)        printf 'DIFFER\tHTML body differs after normalisation (see %s)\n' "$(basename "$equivlog")" ;;
           *)             printf 'go-ref-broken\tequiv probe inconclusive (%s)\n' "$res" ;;
         esac
       fi
@@ -275,7 +302,7 @@ equiv_for() {
 
 # ── RUN for one example → echoes the RUN cell + NOTE (tab-separated) ─────────
 run_for() {
-  local n="$1" shape="$2" bin="$3" rl="$HIST/$n.run.log"
+  local n="$1" shape="$2" bin="$3" rl; rl="$(diag "$n" run.log)"
   case "$shape" in
     cli)
       if exercise_cli "$bin" "$rl"; then printf 'ok\t\n'
@@ -371,7 +398,7 @@ for d in "${EXAMPLES[@]}"; do
   flock -x "$SWEEP_LOCK_FD"
 
   if ! build_rust "$d" "$n"; then
-    build_cell="$BUILD_CELL"; note="rust build failed (see $n.skyc.log / $n.cargo.log)"
+    build_cell="$BUILD_CELL"; note="rust build failed (see $(basename "$(diag "$n" skyc.log)") / $(basename "$(diag "$n" cargo.log)"))"
     printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$build_cell" "—" "—" "$note" >>"$ROWS"
     ( cd "$d" && rm -rf sky-out .skycache .skydeps ); flock -u "$SWEEP_LOCK_FD"; continue
   fi
