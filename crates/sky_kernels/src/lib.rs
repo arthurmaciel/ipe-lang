@@ -252,6 +252,9 @@ pub enum StdlibKernel {
     ErrorWithMessage,
     // Classification: `Error -> Bool` (kind ∈ {Timeout, Network, Unavailable}).
     ErrorIsRetryable,
+    // Modifier (backlog #85 follow-up): `ErrorDetails -> Error -> Error`
+    // (attaches the `ErrorDetails` union to `ErrorInfo.details`).
+    ErrorWithDetails,
     // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels, #47) ───
     // The FOUR primitive leaf shims over the audited `css_safety` policy that the
     // compiled-source `Std.Css` funnels every free-string entry through (PARSE,
@@ -1467,6 +1470,9 @@ impl StdlibKernel {
                 d("Error", "withMessage", 2, Pure, "sky_error_with_message")
             }
             Self::ErrorIsRetryable => d("Error", "isRetryable", 1, Pure, "sky_error_is_retryable"),
+            Self::ErrorWithDetails => {
+                d("Error", "withDetails", 2, Pure, "sky_error_with_details")
+            }
             // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf kernels, #47) ────
             // The `emit` symbols are the bare runtime fn names re-exported at the
             // `sky_runtime` root (`pub use css::*`): `safe_value` /
@@ -2582,6 +2588,7 @@ impl StdlibKernel {
         Self::ErrorToString,
         Self::ErrorWithMessage,
         Self::ErrorIsRetryable,
+        Self::ErrorWithDetails,
         // CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels, #47)
         Self::CssSafetySafeValue,
         Self::CssSafetySafePropName,

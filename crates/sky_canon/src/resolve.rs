@@ -159,6 +159,14 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     // Std.Decimal opaque arbitrary-precision decimal type.
     // Lowerer arm: `ir_type_from_canon` `"Decimal" => IrType::Decimal`.
     "Decimal",
+    // `Sky.Core.Error`'s `ErrorDetails` union (backlog #85 follow-up).
+    // Lowerer arm: `ir_type_from_canon` `"ErrorDetails" => IrType::ErrorDetails`.
+    // (`ErrorKind` — registered the same way at the same lowerer site — is a
+    // PRE-EXISTING gap in this list, not introduced here; left alone to stay
+    // strictly additive. `PanicInfo`/`TypeInfo` are NOT added: like
+    // `ErrorInfo`, they are anonymous structural records with no dedicated
+    // `IrType` leaf, so they never need the empty-home sentinel here.)
+    "ErrorDetails",
 ];
 
 /// Kernel-implicit Prelude type names (#576) that are globally in scope in
