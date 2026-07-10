@@ -1298,7 +1298,7 @@ fn find_rustdoc_json(doc_dir: &PathBuf, safe_name: &str) -> Option<PathBuf> {
 /// compilation runs arbitrary code (`build.rs` / proc-macro expansion) with
 /// the current user's full privileges. Full sandboxing (landlock/seccomp,
 /// rootless container) is the tracked, larger fix (see
-/// `docs/architecture/backlog.md` Tier-2 FFI); this type only supports the
+/// `BACKLOG.md` FFI phase); this type only supports the
 /// audit's own named interim mitigation: naming every offender so a caller
 /// must explicitly opt in via `--allow-build-scripts` rather than firing
 /// silently.

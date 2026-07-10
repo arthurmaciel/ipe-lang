@@ -814,7 +814,7 @@ AOT path well before B2.
 - `emit_expr.rs` / `emit_types.rs` — **no change** (target-agnostic).
 - Example sweep + H12 conformance — add WASM rows (build + run under
   `--target wasm`).
-- Docs to sync on landing: `docs/roadmap.md` (add a WASM/browser section),
+- Docs to sync on landing: `ROADMAP.md` (add a WASM/browser section),
   `docs/architecture/ui-live-tui-webview-spec.md` (add `is_client_wasm` to the
   exhaustive target discrimination), `templates/CLAUDE.md` + `docs/sky-toml.md`
   (the `[wasm]` section), `docs/stdlib.md` (per-target capability notes).

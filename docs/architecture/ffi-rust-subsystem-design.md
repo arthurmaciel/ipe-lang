@@ -1,7 +1,7 @@
 # FFI-to-Rust Subsystem — Design + Implementation Plan (Tier 2)
 
 **Status:** design-ahead. Tier-2 FFI is implemented LAST per the roadmap
-(`docs/roadmap.md` §B); nothing in this doc executes now.
+(`ROADMAP.md` §B); nothing in this doc executes now.
 **Date:** 2026-07-04.
 
 > **GOAL CORRECTION (coordinator, 2026-07-04; premise corrected by the

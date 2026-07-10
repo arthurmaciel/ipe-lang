@@ -4,8 +4,9 @@
 //! or field-name awareness, so a captured-variable identifier that happened
 //! to also appear inside a string literal or as a record field key could get
 //! silently corrupted (wrong output) or turned into invalid Rust (build
-//! failure — a seal breach). See `docs/architecture/hardening-2026-07-09-batch-b-spec.md`
-//! section "B4" for the full root-cause writeup.
+//! failure — a seal breach). See `docs/architecture/principles-audit-2026-07-09.md`
+//! (AUD-04) for the finding; the batch-b fix-spec's "B4" root-cause writeup
+//! is preserved in git history.
 //!
 //! Four witnesses, one per fixture, each named `aud04_*`:
 //!

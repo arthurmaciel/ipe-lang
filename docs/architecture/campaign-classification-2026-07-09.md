@@ -1,6 +1,6 @@
 # 2026-07-09 hardening campaign — item classification
 
-> Produced by a Fable-model classifier agent from `docs/architecture/backlog.md`
+> Produced by a Fable-model classifier agent from `BACKLOG.md`
 > (in-scope: Sweep front, Tier-1, Security tier, AUD-08/09, SEAL follow-ups,
 > Rename, Non-blocking hardening) cross-referenced against
 > `docs/architecture/prior-art-runtime-rust-2026-07-09.md`. AUD-03 (landed) and

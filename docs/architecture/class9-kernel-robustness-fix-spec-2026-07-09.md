@@ -1,6 +1,6 @@
 # Class 9 — runtime kernel robustness + stdlib surface completeness: fix spec
 
-> Companion to `docs/architecture/backlog.md` and
+> Companion to `BACKLOG.md` and
 > `docs/architecture/campaign-classification-2026-07-09.md` (Class 9: MECHANICAL).
 > Scope per the 2026-07-09 assignment: `File.readFileLimit` TOCTOU (AUD-09
 > gap-sweep addition), #129 (`spawn_blocking` for compression/file kernels),
@@ -1230,7 +1230,7 @@ and needs no further kernel/constrain/lower work.
 
 ### 4.2 What's actually left (narrow, doc-accuracy + test-completeness only)
 
-1. **`docs/architecture/backlog.md` #157 entry is stale.** Update it to
+1. **`BACKLOG.md` #157 entry is stale.** Update it to
    record landed status, matching the exact pattern already used for #159
    (a stale-doc entry discovered mid-audit). Suggested replacement text for
    the `#157` bullet in the "Non-blocking hardening / follow-ups" section:
@@ -1391,7 +1391,7 @@ scripts/example-sweep.sh 2>&1 | tee /tmp/class9-example-sweep.log
 | `tests/golden/i122_cli_program_view_separator/Main.sky` | new fixture (§3.4) |
 | `crates/skyc/tests/golden_i122_cli_program_separator.rs` | new E2E test (§3.4) |
 | `crates/skyc/tests/support.rs` | add `build_and_run_emitted_with_stdin` if not already present (§3.4) |
-| `docs/architecture/backlog.md` | update stale #157 entry (§4.2.1) |
+| `BACKLOG.md` | update stale #157 entry (§4.2.1) |
 | `docs/divergences-from-sky.md` | update stale §B9 (§4.2.2) |
 | `tests/golden/m_jwt_builder_full_surface/Main.sky` | optional new fixture (§4.2.3) |
 | `crates/skyc/tests/golden_m_jwt_builder_full_surface.rs` | optional new E2E test (§4.2.3) |

@@ -9,7 +9,7 @@
 > floor, #33"). Cross-referenced against
 > `docs/architecture/prior-art-runtime-rust-2026-07-09.md` Part 1 §1 (the
 > ancestor `../sky/runtime-rust/src/sky_runtime/live/csrf.rs`) and
-> `docs/architecture/backlog.md` (Security tier #63, AUD-09 gap-sweep, #33).
+> `BACKLOG.md` (Security tier #63, AUD-09 gap-sweep, #33).
 >
 > **Read this first — the prior-art doc's premise does not hold in THIS
 > repo.** The ancestor's `csrf.rs` was flagged as "not yet wired into
