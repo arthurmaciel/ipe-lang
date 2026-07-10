@@ -2,23 +2,33 @@
 //!
 //! Ported from the ancestor Go/Haskell design (`sky-stdlib/Sky/Core/Error.sky`
 //! in the reference repo): `Error = Error ErrorKind ErrorInfo`, an 11-variant
-//! `ErrorKind` classification, and message-carrying `ErrorInfo`.
+//! `ErrorKind` classification, message-carrying `ErrorInfo`, and (backlog
+//! #85 follow-up) the 5-variant `ErrorDetails` union (`FfiPanic`/
+//! `TypeMismatch`/`HttpStatus`/`JsonDecode`/`Custom`) carried optionally on
+//! `ErrorInfo.details : Maybe ErrorDetails`.
 //!
-//! **Scope of this pass:** `ErrorInfo` carries only `message` — the reference
-//! design's `ErrorDetails` union (`FfiPanic`/`TypeMismatch`/`HttpStatus`/
-//! `JsonDecode`/`Custom`, each with its own nested payload record) is filed as
-//! an explicit, immediate follow-up (`BACKLOG.md`), not
-//! silently dropped. Kind-based classification (`isRetryable`, pattern
-//! matching, `toString`) is fully real and load-bearing today.
+//! Kind-based classification (`isRetryable`, pattern matching, `toString`)
+//! and the `details` enrichment are both fully real and load-bearing today.
+//! `Error.withDetails` is the sanctioned way to attach `ErrorDetails` to a
+//! live `Error` value — raw Sky-source construction of `ErrorInfo`/
+//! `PanicInfo`/`TypeInfo` record literals is NOT supported (those are
+//! anonymous structural records at the type level, so a literal lowers to a
+//! project-local synthesized struct, not this module's concrete
+//! `SkyErrorInfo`/`SkyPanicInfo`/`SkyTypeInfo` — the same limitation
+//! `ErrorInfo` itself already had before this pass; see
+//! `docs/divergences-from-sky.md`'s `B-ErrorADT` entry).
 //!
 //! Backed by `builtin_runtime_enum` (mirrors `Order`/`SkyOrder`, #123):
 //! `Error`'s sole constructor shares its name with the type
 //! (`sky_lower`'s `enum_variants` table), so it emits as the tuple variant
 //! `SkyError::Error(kind, info)` via the SAME generic constructor/pattern
 //! path `SkyMaybe::Just`/`SkyResult::Ok` already use — no new emitter
-//! mechanism needed, just two more `builtin_runtime_enum` table rows.
+//! mechanism needed, just table rows. `ErrorDetails` is registered the same
+//! way (`builtin_runtime_enum("ErrorDetails") -> "SkyErrorDetails"`).
 
 use std::fmt;
+
+use crate::sky_runtime::core::SkyMaybe;
 
 /// Sky's `ErrorKind` — 11 nullary variants. Repr(u8) for a compact, sound,
 /// exhaustively-matched runtime type (mirrors `SkyOrder`'s convention).
@@ -60,25 +70,66 @@ impl SkyErrorKind {
     }
 }
 
-/// Sky's `ErrorInfo` — this pass carries only `message`; `details` is filed
-/// as an immediate follow-up (see module doc).
+/// Sky's `PanicInfo` — `FfiPanic`'s payload: `{ message : String, stack :
+/// List String }` (backlog #85 follow-up).
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SkyPanicInfo {
+    pub message: String,
+    pub stack: Vec<String>,
+}
+
+/// Sky's `TypeInfo` — `TypeMismatch`'s payload: `{ expected : String, actual
+/// : String }` (backlog #85 follow-up).
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SkyTypeInfo {
+    pub expected: String,
+    pub actual: String,
+}
+
+/// Sky's `ErrorDetails` — the 5-variant enrichment union (backlog #85
+/// follow-up). Constructor names match Sky source verbatim
+/// (`sky_backend_rust`'s `builtin_runtime_enum("ErrorDetails")` routes
+/// `FfiPanic` / `TypeMismatch` / `HttpStatus` / `JsonDecode` / `Custom`
+/// straight to these variants — no synthetic `EnumDef`).
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub enum SkyErrorDetails {
+    FfiPanic(SkyPanicInfo),
+    TypeMismatch(SkyTypeInfo),
+    HttpStatus(i64),
+    JsonDecode(String),
+    Custom(String),
+}
+
+/// Sky's `ErrorInfo` — `{ message : String, details : Maybe ErrorDetails }`
+/// (backlog #85/#160; `details` added by the #85 follow-up).
+///
+/// No `#[derive(Eq)]`: `SkyMaybe<T>` (the `details` field's carrier) derives
+/// only `PartialEq`, not `Eq` (see `core.rs`'s `SkyMaybe` doc), so `Eq` here
+/// would fail to compile. `PartialEq` is unaffected and is what
+/// `ir_type_is_derivable`'s Rust-side gate actually requires.
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SkyErrorInfo {
     pub message: String,
+    pub details: SkyMaybe<SkyErrorDetails>,
 }
 
 /// Sky's `Error` — `Error ErrorKind ErrorInfo`, a single tuple-variant enum
 /// (constructor name == type name, matching `sky_lower`'s registration) so
 /// the generic `builtin_runtime_enum` constructor/pattern path handles it
 /// exactly like `SkyMaybe::Just`/`SkyResult::Ok`.
-#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+///
+/// No `#[derive(Eq)]` (see `SkyErrorInfo`'s doc — it carries a `SkyMaybe`
+/// field, and `SkyMaybe` is `PartialEq`-only).
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum SkyError {
     Error(SkyErrorKind, SkyErrorInfo),
 }
 
 impl SkyError {
+    /// Every message constructor defaults `details = Nothing`, mirroring the
+    /// reference design's `mkInfo` smart constructor (backlog #85 follow-up).
     fn with(kind: SkyErrorKind, message: String) -> Self {
-        Self::Error(kind, SkyErrorInfo { message })
+        Self::Error(kind, SkyErrorInfo { message, details: SkyMaybe::Nothing })
     }
 
     pub fn io(message: String) -> Self {
@@ -140,6 +191,17 @@ impl SkyError {
             kind,
             SkyErrorKind::Timeout | SkyErrorKind::Network | SkyErrorKind::Unavailable
         )
+    }
+
+    /// Sky `Error.withDetails : ErrorDetails -> Error -> Error` (backlog #85
+    /// follow-up) — keeps kind and message, sets `details = Just <details>`.
+    /// This is the sanctioned way to attach `ErrorDetails` to a live `Error`
+    /// value from Sky source (see module doc for why raw record-literal
+    /// construction of `ErrorInfo`/`PanicInfo`/`TypeInfo` is not supported).
+    #[must_use]
+    pub fn with_details(self, details: SkyErrorDetails) -> Self {
+        let Self::Error(kind, info) = self;
+        Self::Error(kind, SkyErrorInfo { message: info.message, details: SkyMaybe::Just(details) })
     }
 }
 
@@ -210,6 +272,12 @@ pub fn sky_error_with_message(msg: String, old: SkyError) -> SkyError {
 #[must_use]
 pub fn sky_error_is_retryable(e: SkyError) -> bool {
     e.is_retryable()
+}
+/// `Error.withDetails : ErrorDetails -> Error -> Error` (backlog #85
+/// follow-up).
+#[must_use]
+pub fn sky_error_with_details(details: SkyErrorDetails, old: SkyError) -> SkyError {
+    old.with_details(details)
 }
 
 // `Error.toString` routes through the shared Stringify-bounded mechanism
@@ -291,5 +359,44 @@ mod tests {
         let SkyError::Error(kind, info) = &e;
         assert_eq!(*kind, SkyErrorKind::Conflict);
         assert_eq!(info.message, "duplicate key");
+    }
+
+    #[test]
+    fn message_constructors_default_details_to_nothing() {
+        let e = SkyError::io("disk full".to_owned());
+        let SkyError::Error(_, info) = &e;
+        assert_eq!(info.details, SkyMaybe::Nothing);
+    }
+
+    #[test]
+    fn with_details_sets_just_keeps_kind_and_message() {
+        let e = SkyError::io("disk full".to_owned())
+            .with_details(SkyErrorDetails::HttpStatus(404));
+        let SkyError::Error(kind, info) = &e;
+        assert_eq!(*kind, SkyErrorKind::Io);
+        assert_eq!(info.message, "disk full");
+        assert_eq!(info.details, SkyMaybe::Just(SkyErrorDetails::HttpStatus(404)));
+    }
+
+    #[test]
+    fn error_details_round_trips_all_five_variants() {
+        let cases = [
+            SkyErrorDetails::FfiPanic(SkyPanicInfo {
+                message: "panic!".to_owned(),
+                stack: vec!["frame1".to_owned(), "frame2".to_owned()],
+            }),
+            SkyErrorDetails::TypeMismatch(SkyTypeInfo {
+                expected: "Int".to_owned(),
+                actual: "String".to_owned(),
+            }),
+            SkyErrorDetails::HttpStatus(500),
+            SkyErrorDetails::JsonDecode("unexpected token".to_owned()),
+            SkyErrorDetails::Custom("custom detail".to_owned()),
+        ];
+        for details in cases {
+            let e = SkyError::unexpected("boom".to_owned()).with_details(details.clone());
+            let SkyError::Error(_, info) = &e;
+            assert_eq!(info.details, SkyMaybe::Just(details));
+        }
     }
 }

@@ -316,11 +316,12 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::LiveReq
         // `Order` (LT/EQ/GT) is a primitive leaf — no embedded function.
         // `Decimal` is a Copy newtype — no embedded function.
-        // `ErrorKind`/`Error` are leaves — no embedded function.
+        // `ErrorKind`/`Error`/`ErrorDetails` are leaves — no embedded function.
         | IrType::Order
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
+        | IrType::ErrorDetails
         // `SqlFragment` is an opaque query-building value — no embedded function.
         // `Secret` is an opaque sealed string wrapper — no embedded function.
         | IrType::SqlFragment
@@ -372,11 +373,14 @@ fn clone_class(t: &IrType) -> CloneClass {
         // Str(String), Bytes(Vec<u8>), Json(serde_json::Value), Db(Arc-backed),
         // UiPlain (element.rs derives Clone), LiveReq (req.rs derives Clone).
         // Error: SkyError derives Clone (not Copy — carries a heap `String`).
+        // ErrorDetails: SkyErrorDetails derives Clone (not Copy — carries
+        // heap-allocated `String`/`Vec<String>` payloads; backlog #85
+        // follow-up).
         // `SqlFragment` is `#[derive(Clone, PartialEq)]` (no Copy — carries a
         // heap-allocated `String` + `Vec<SqlParam>`).
         // `Secret` is `#[derive(Clone)]` (no Copy — carries a heap-allocated
         // `String`; hand-written `PartialEq`, not derived — see its own doc).
-        IrType::Str | IrType::Bytes | IrType::Json | IrType::Db | IrType::UiPlain(_) | IrType::LiveReq | IrType::Error | IrType::SqlFragment | IrType::Secret => {
+        IrType::Str | IrType::Bytes | IrType::Json | IrType::Db | IrType::UiPlain(_) | IrType::LiveReq | IrType::Error | IrType::ErrorDetails | IrType::SqlFragment | IrType::Secret => {
             CloneClass::CloneOk
         }
         // Runtime-verified Clone server/http opaques (audited 2026-07-05):
@@ -2697,6 +2701,14 @@ pub struct BuiltinCtors {
     pub ek_conflict: Symbol,
     pub ek_unavailable: Symbol,
     pub ek_unexpected: Symbol,
+    // ── ErrorDetails ADT (backlog #85 follow-up) ──────────────────────────────
+    // `ErrorDetails` has 5 constructors, each arity 1.
+    pub errordetails: Symbol,
+    pub ed_ffi_panic: Symbol,
+    pub ed_type_mismatch: Symbol,
+    pub ed_http_status: Symbol,
+    pub ed_json_decode: Symbol,
+    pub ed_custom: Symbol,
 }
 
 /// The widest parameter-pattern count across the module's top-level bindings —
@@ -2987,7 +2999,27 @@ impl<'a> Lowerer<'a> {
         ctor_arity.insert((prelude_home.clone(), builtins.ek_invalid_input), 0);
         ctor_arity.insert((prelude_home.clone(), builtins.ek_conflict), 0);
         ctor_arity.insert((prelude_home.clone(), builtins.ek_unavailable), 0);
-        ctor_arity.insert((prelude_home, builtins.ek_unexpected), 0); // final move
+        ctor_arity.insert((prelude_home.clone(), builtins.ek_unexpected), 0);
+        // ── ErrorDetails ADT (backlog #85 follow-up) ─────────────────────────────
+        // 5-variant enrichment union carried on `ErrorInfo.details`. Same
+        // registration recipe as `ErrorKind` above — seeding here lets
+        // `case d of FfiPanic info -> …` / `HttpStatus code -> …` validate and
+        // lower past the `Match::new` enum-cover check.
+        enum_variants.insert(
+            (prelude_home.clone(), builtins.errordetails),
+            vec![
+                builtins.ed_ffi_panic,
+                builtins.ed_type_mismatch,
+                builtins.ed_http_status,
+                builtins.ed_json_decode,
+                builtins.ed_custom,
+            ],
+        );
+        ctor_arity.insert((prelude_home.clone(), builtins.ed_ffi_panic), 1); // FfiPanic(PanicInfo)
+        ctor_arity.insert((prelude_home.clone(), builtins.ed_type_mismatch), 1); // TypeMismatch(TypeInfo)
+        ctor_arity.insert((prelude_home.clone(), builtins.ed_http_status), 1); // HttpStatus(Int)
+        ctor_arity.insert((prelude_home.clone(), builtins.ed_json_decode), 1); // JsonDecode(String)
+        ctor_arity.insert((prelude_home, builtins.ed_custom), 1); // Custom(String), final move
 
         Self {
             m,
@@ -4220,6 +4252,10 @@ impl<'a> Lowerer<'a> {
                 // longer merged with `String`. `ErrorKind` mirrors `Order`.
                 "Error" => Ok(IrType::Error),
                 "ErrorKind" => Ok(IrType::ErrorKind),
+                // `ErrorDetails` — the 5-variant enrichment union carried on
+                // `ErrorInfo.details : Maybe ErrorDetails` (backlog #85
+                // follow-up). Backed by `sky_runtime::error::SkyErrorDetails`.
+                "ErrorDetails" => Ok(IrType::ErrorDetails),
                 "Char" => Ok(IrType::Char),
                 // `Bytes` is a built-in distinct primitive (Vec<u8> on Rust;
                 // distinct from String). Divergence from Sky: Sky aliases
@@ -4899,6 +4935,9 @@ impl<'a> Lowerer<'a> {
                 // `onError`/`mapError` pins the handler) lower here too.
                 "Error" => Ok(IrType::Error),
                 "ErrorKind" => Ok(IrType::ErrorKind),
+                // `ErrorDetails` — mirrors the `ir_type_from_canon` arm added at
+                // the same time (backlog #85 follow-up).
+                "ErrorDetails" => Ok(IrType::ErrorDetails),
                 "Char" => Ok(IrType::Char),
                 // ── Kernel-implicit opaque server / Sky.Live types (#152) ────────
                 // Mirror of the `ir_type_from_canon` arms added at the same
@@ -7495,7 +7534,9 @@ impl<'a> Lowerer<'a> {
                 // `Middleware.withCors : List String -> Handler -> Handler`
                 | KernelFn::MiddlewareWithCors
                 // `Error.withMessage : String -> Error -> Error` (#86)
-                | KernelFn::ErrorWithMessage,
+                | KernelFn::ErrorWithMessage
+                // `Error.withDetails : ErrorDetails -> Error -> Error` (#85 follow-up)
+                | KernelFn::ErrorWithDetails,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::StringReplace
@@ -8478,6 +8519,7 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Error", "withMessage") => Ok(Callee::Kernel(KernelFn::ErrorWithMessage)),
                     ("Error", "isRetryable") => Ok(Callee::Kernel(KernelFn::ErrorIsRetryable)),
+                    ("Error", "withDetails") => Ok(Callee::Kernel(KernelFn::ErrorWithDetails)),
                     // ── CssSafety kernels (Sky.Core.CssSafety — Std.Css leaf
                     //    security kernels, #47) ──────────────────────────────
                     ("CssSafety", "safeValue") => {
@@ -10298,6 +10340,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::Order
         | IrType::ErrorKind
         | IrType::Error
+        | IrType::ErrorDetails
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -10380,6 +10423,13 @@ mod tests {
         let ek_conflict = interner.intern("Conflict").unwrap();
         let ek_unavailable = interner.intern("Unavailable").unwrap();
         let ek_unexpected = interner.intern("Unexpected").unwrap();
+        // ── ErrorDetails ADT (backlog #85 follow-up) ─────────────────────────
+        let errordetails = interner.intern("ErrorDetails").unwrap();
+        let ed_ffi_panic = interner.intern("FfiPanic").unwrap();
+        let ed_type_mismatch = interner.intern("TypeMismatch").unwrap();
+        let ed_http_status = interner.intern("HttpStatus").unwrap();
+        let ed_json_decode = interner.intern("JsonDecode").unwrap();
+        let ed_custom = interner.intern("Custom").unwrap();
 
         BuiltinCtors {
             maybe,
@@ -10420,6 +10470,13 @@ mod tests {
             ek_conflict,
             ek_unavailable,
             ek_unexpected,
+            // ── ErrorDetails (backlog #85 follow-up) ─────────────────────────
+            errordetails,
+            ed_ffi_panic,
+            ed_type_mismatch,
+            ed_http_status,
+            ed_json_decode,
+            ed_custom,
         }
     }
 

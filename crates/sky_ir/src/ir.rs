@@ -714,10 +714,22 @@ pub enum IrType {
     /// info)` via the SAME `builtin_runtime_enum` path `Maybe`/`Result` use —
     /// no synthetic `EnumDef`, no new emitter mechanism.
     ///
-    /// This pass's `ErrorInfo` carries only `message`; the reference design's
-    /// `ErrorDetails` union is an explicit, filed follow-up (not a soundness
-    /// gap — `ErrorInfo` here is a plain closed record, not a leaf `IrType`).
+    /// `ErrorInfo` carries `{ message : String, details : Maybe ErrorDetails
+    /// }` — a plain closed record, not a leaf `IrType` (Sky records are
+    /// structural); `details` was added by the backlog #85 follow-up.
     Error,
+
+    /// The built-in `ErrorDetails` type — the 5-variant enrichment union
+    /// carried optionally on `ErrorInfo.details` (backlog #85 follow-up).
+    ///
+    /// Renders as `sky_runtime::error::SkyErrorDetails`. Constructor names
+    /// match Sky source verbatim (`FfiPanic` / `TypeMismatch` / `HttpStatus`
+    /// / `JsonDecode` / `Custom`) and emit via the SAME `builtin_runtime_enum`
+    /// path [`IrType::Error`]/[`IrType::ErrorKind`] use — no synthetic
+    /// `EnumDef`. `FfiPanic`/`TypeMismatch`'s record payloads (`PanicInfo` /
+    /// `TypeInfo`) are, like `ErrorInfo`, plain closed records rather than
+    /// leaf `IrType`s.
+    ErrorDetails,
 
     /// `Std.Db.Sql`'s opaque WHERE-fragment type (backlog #61 — SQL injection
     /// closed by construction: a `SqlFragment` can only be built through the
@@ -859,8 +871,11 @@ pub fn ir_type_is_derivable(
         // `SkyOrder` derives Clone + Copy + PartialEq + Eq + Debug — fully derivable.
         // `Decimal` derives Clone + Copy + PartialEq + Eq + Debug — fully derivable.
         // `SkyErrorKind` derives Clone + Copy + PartialEq + Eq + Debug.
-        // `SkyError` derives Clone + PartialEq + Eq + Debug (not Copy — carries
-        // a heap-allocated `String` message).
+        // `SkyError` derives Clone + PartialEq + Debug (not Copy — carries a
+        // heap-allocated `String` message; not `Eq` — its `SkyErrorInfo`
+        // field carries a `SkyMaybe`, which is `PartialEq`-only).
+        // `SkyErrorDetails` derives Clone + PartialEq + Eq + Debug (backlog
+        // #85 follow-up).
         // `SqlFragment` derives Clone + PartialEq (hand-written Debug; see
         // its own doc) — fully derivable, not serde (see `ir_type_is_serde`).
         // `Secret` derives Clone; `PartialEq`/`Debug` are hand-written
@@ -870,6 +885,7 @@ pub fn ir_type_is_derivable(
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
+        | IrType::ErrorDetails
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Generic(_)
@@ -983,13 +999,14 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::Generic(_)
         // `Order` (LT/EQ/GT) is a plain no-payload enum; SkyOrder derives serde.
         // `Decimal` is a Copy newtype; rust_decimal supports serde via feature.
-        // `SkyErrorKind`/`SkyError` derive serde — `Error` must serialize to
-        // round-trip through a Live session store (e.g. a Model's
-        // `historyError : Maybe Error` field).
+        // `SkyErrorKind`/`SkyError`/`SkyErrorDetails` derive serde — `Error`
+        // must serialize to round-trip through a Live session store (e.g. a
+        // Model's `historyError : Maybe Error` field).
         | IrType::Order
         | IrType::Decimal
         | IrType::ErrorKind
-        | IrType::Error => true,
+        | IrType::Error
+        | IrType::ErrorDetails => true,
         // All non-serde leaves collapse to `false`:
         //   * `UiPlain` value types (`Length`/`Color`/… → `ui::element::*`) and
         //     every `Ui` carrier (`Html`/`Element`/`Attribute`) derive only

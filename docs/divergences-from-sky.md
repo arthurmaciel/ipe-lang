@@ -953,21 +953,37 @@ API-shape review):
   Maybe ErrorDetails }`, `ErrorDetails` a 5-variant union with `FfiPanic`/
   `TypeMismatch`/`HttpStatus`/`JsonDecode`/`Custom` payloads), constructed via Go
   runtime builders (`ErrIo`/`ErrNetwork`/etc, `runtime-go/rt/rt.go`).
-- **Port:** Ported the core, load-bearing slice: `Error ErrorKind ErrorInfo`
-  is now a REAL, pattern-matchable ADT (closing the canon/lowerer ctor-scheme
-  gap that was #160's blocker), backed by `sky_runtime::error::SkyError`
-  (`SkyErrorKind` mirrors the reference's 11 kinds; `SkyErrorInfo` carries only
-  `message` this pass). `Error.toString`/`isRetryable`/`withMessage` all work
-  end-to-end (E2E-verified: `crates/skyc/tests/golden_error_adt_roundtrip.rs`).
-- **Not yet ported (filed, not silently dropped):** `ErrorInfo.details : Maybe
-  ErrorDetails` and the `ErrorDetails`/`PanicInfo`/`TypeInfo` union — an
-  additive, separable enrichment (same registration recipe as `ErrorKind`,
-  just more variants) that doesn't block kind-based classification. Filed in
-  `BACKLOG.md`.
-- **Sanctioned:** yes (partial-surface port, not a semantic divergence — every
-  ported piece matches the reference design exactly). Reference:
-  `crates/sky_types/src/constrain.rs` (`Error`/`ErrorKind` ctor schemes),
-  `crates/sky_lower/src/lower.rs` (`IrType::Error`/`IrType::ErrorKind`),
+- **Port:** Ported the full surface: `Error ErrorKind ErrorInfo` is a REAL,
+  pattern-matchable ADT (closing the canon/lowerer ctor-scheme gap that was
+  #160's blocker), backed by `sky_runtime::error::SkyError` (`SkyErrorKind`
+  mirrors the reference's 11 kinds). `Error.toString`/`isRetryable`/
+  `withMessage` all work end-to-end (E2E-verified: `crates/skyc/tests/
+  golden_error_adt_roundtrip.rs`). **Backlog #85 follow-up (same session):**
+  `ErrorInfo.details : Maybe ErrorDetails` + the 5-variant `ErrorDetails`
+  union (`FfiPanic PanicInfo | TypeMismatch TypeInfo | HttpStatus Int |
+  JsonDecode String | Custom String`) are now registered the same way as
+  `ErrorKind` (canon ctor registration, `IrType::ErrorDetails` leaf,
+  `builtin_runtime_enum`, constrain ctor schemes for all 5 variants +
+  `PanicInfo`/`TypeInfo`'s anonymous-record payloads). `Error.withDetails :
+  ErrorDetails -> Error -> Error` is the sanctioned way to attach
+  `ErrorDetails` to a live `Error` from Sky source — raw record-literal
+  construction of `ErrorInfo`/`PanicInfo`/`TypeInfo` is NOT supported (those
+  are anonymous structural records, so a Sky-source literal lowers to a
+  project-local synthesized struct rather than this module's concrete
+  `SkyErrorInfo`/`SkyPanicInfo`/`SkyTypeInfo` — verified empirically; the
+  runtime-side smart constructors are the only sound construction path,
+  matching how every other `Error` value is built). E2E-verified for 3 of the
+  5 variants (`HttpStatus`/`JsonDecode`/`Custom` — the non-record-payload
+  ones) round-tripping through `ErrorInfo.details`, plus exhaustive
+  compile-time coverage of all 5 (`FfiPanic`/`TypeMismatch` as unreached
+  `case` arms, proving their record-payload ADT registration type-checks):
+  `crates/skyc/tests/golden_error_details_roundtrip.rs`.
+- **Sanctioned:** yes (matches the reference design exactly; the raw
+  record-literal construction gap is a Rust-codegen limitation shared with
+  `ErrorInfo` itself, not a new divergence). Reference:
+  `crates/sky_types/src/constrain.rs` (`Error`/`ErrorKind`/`ErrorDetails`
+  ctor schemes), `crates/sky_lower/src/lower.rs` (`IrType::Error`/
+  `IrType::ErrorKind`/`IrType::ErrorDetails`),
   `crates/sky_backend_rust/src/lib.rs::builtin_runtime_enum`,
   `runtime/src/sky_runtime/error.rs`. Every project's generated `SkyError`
   alias (`tests/golden/*/main.rs`'s boilerplate slice, `sky_backend_rust::
