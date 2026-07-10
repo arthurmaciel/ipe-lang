@@ -1,0 +1,18 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+-- #56 proof-matrix shape P4: a CLOSED record annotation (no row var) called
+-- with a superset argument. `{ name : String }` pins `getName`'s parameter
+-- to the EXACT field set `{ name }`; a CLOSED side of `unifyRecords`
+-- (mechanism 1) cannot absorb the caller's extra `age` field, so this is
+-- rejected at type-check as SKY-T0001 — fail-loud, parity with the
+-- reference's E2001 ("expected <missing>, actual Int") for the same shape.
+getName : { name : String } -> String
+getName rec =
+    rec.name
+
+
+main =
+    println (getName { name = "Ada", age = 36 })

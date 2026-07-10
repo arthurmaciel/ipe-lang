@@ -1,0 +1,43 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+-- #56 proof-matrix shapes P5 + P7: a subset record PATTERN over a superset
+-- scrutinee, exercised both as a `case` pattern (P5) and as a lambda pattern
+-- fed through a HOF (P7 — `List.map (\{ name } -> name) people`).
+--
+-- Record patterns binding only a subset of the scrutinee's fields are
+-- completed by the lowerer to the scrutinee's full solved field set BEFORE
+-- the emitter resolves the backing struct (see
+-- docs/architecture/row-poly-subset-superset-design.md "At lowering").  The
+-- emitted pattern therefore names the SUPERSET struct with a `..` rest,
+-- e.g. `RecAgeName { age: _, name, .. }` — proving the A7 exact-set
+-- resolution path handles subset patterns as well as subset access.
+type alias Person =
+    { name : String, age : Int }
+
+
+people : List Person
+people =
+    [ { name = "Ada", age = 36 }, { name = "Bo", age = 40 } ]
+
+
+leader : Person
+leader =
+    { name = "Iri", age = 50 }
+
+
+main =
+    let
+        names =
+            List.map (\{ name } -> name) people
+
+        joined =
+            String.join ", " names
+
+        leaderName =
+            case leader of
+                { name } -> name
+    in
+    println (leaderName ++ ": " ++ joined)
