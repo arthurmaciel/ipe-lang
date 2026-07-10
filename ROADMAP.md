@@ -241,11 +241,11 @@ base.
 
 | Done at | Priority | Road map phase | Task | Notes | Spec |
 |---|---|---|---|---|---|
-| | Medium | Post-completion | #155 Route URL changes to a Msg (Elm `Browser.application` parity), demote the magic `page` field to sugar | First Elm-core-coverage item. | |
+| | Medium | Post-completion | #155 Route URL changes to a Msg (Elm `Browser.application` parity), demote the magic `page` field to sugar | First Elm-core-coverage item. | `docs/architecture/url-navigation-msg-design.md` |
 | | Medium | Post-completion | #116 Entry contract (Option C): auto-run Task/backend-app `main` + drop trailing `\|> Task.run` (v0.17.3 pipeCollapsesTask parity) | | `docs/architecture/adopt-from-sky-v0172.md` |
-| | Medium | Post-completion | #128 Drop `Task.run` + `Task.perform` from the Ipê surface (#116 companion) | Departure — first consumer of the CI example-patch-queue. | |
+| | Medium | Post-completion | #128 Drop `Task.run` + `Task.perform` from the Ipê surface (#116 companion) | Departure — first consumer of the CI example-patch-queue. | `docs/architecture/drop-task-run-surface-design.md` |
 | | Medium | Post-completion | #131 `Task.map2..5` + `Task.parallel2..5` (expression forms) + `parallelDo` block | | `docs/architecture/task-combinators.md` |
-| | Medium | Post-completion | #133 Multiline-string margin stripping (anchor = first string character's column) | Departure — output-changing; records an oracle divergence per patch class. | |
+| | Medium | Post-completion | #133 Multiline-string margin stripping (anchor = first string character's column) | Departure — output-changing; records an oracle divergence per patch class. | `docs/architecture/multiline-string-margin-stripping-design.md` |
 | | Medium | Post-completion | Idea-7 effect `do` block (scoped effect sequencing; kills the `let _ = TaskExpr` auto-force wart) | DESIGNED 2026-07-04. | `docs/ideas/idea-7-effect-do-block-design.md` |
 | | Medium | Post-completion | C.4 Guarantee Elm `core` library coverage — audit the stdlib against `elm/core`, add missing modules/functions (Array, Tuple, Bitwise, …) | | `docs/architecture/elm-core-coverage.md` + `docs/architecture/elm-core-gap-matrix.md` + `docs/architecture/additive-stdlib-features.md` |
 | | Medium | Post-completion | C.2 Module-namespace redesign: single flat standard library, nothing imported by default, LSP auto-import on first use | Research prelude handling in Rust, Elm, Gleam, Haskell, Go, Zig first. | `docs/architecture/flat-namespace-redesign.md` |
@@ -277,8 +277,8 @@ locale-correct case mapping.
 | Done at | Priority | Road map phase | Task | Notes | Spec |
 |---|---|---|---|---|---|
 | | Low | Longer-horizon | D.1 Incremental compilation (salsa) across the compiler and the LSP — foundation for fast watch + hotpatching | | `docs/architecture/incremental-compilation-and-watch.md` + `docs/superpowers/plans/2026-07-03-incremental-salsa.md` |
-| | Low | Longer-horizon | D.2 Standard-library behaviour audit against Elm semantics (JSON key order, integer-decoder strictness, float formatting, null/oneOf/nullable) | | |
-| | Low | Longer-horizon | D.3 Full floating-point Set/Dict keys (ordered-float) + locale-correct case mapping | Lifts SKY-L0117. | |
+| | Low | Longer-horizon | D.2 Standard-library behaviour audit against Elm semantics (JSON key order, integer-decoder strictness, float formatting, null/oneOf/nullable) | | `docs/architecture/stdlib-elm-behaviour-audit-plan.md` |
+| | Low | Longer-horizon | D.3 Full floating-point Set/Dict keys (ordered-float) + locale-correct case mapping | Lifts SKY-L0117. | `docs/architecture/float-keys-and-locale-case-design.md` |
 
 ---
 
