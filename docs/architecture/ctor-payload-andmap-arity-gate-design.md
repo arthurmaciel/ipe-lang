@@ -1,56 +1,6 @@
 # T3 revised design — the `andMap` curried-payload arity gate
 
-> **Status: IMPLEMENTED (2026-07-10, fourth landing).** T3a/T3b (Tier 2,
-> `TyBounds::and_map_payload()` wired into `constrain_var_kernel`) and T3e
-> (Tier 1 backstop, re-anchored inside `lower_callee`) landed together, plus
-> the restored T4 lambda-param-reuse gate. Full aliasing-shape matrix (T3f)
-> passes in `crates/skyc/tests/golden_l0114_ctor_payload_function.rs`,
-> including the `T3.residual` cross-module-annotated-wrapper fixture (T3c) —
-> **confirmed ACCEPTED, no false positive** — so **T3d is not needed**: the
-> "lift bound onto annotation skolem" propagation already worked correctly
-> via the same generic mechanism `Math.min`'s `Comparable` bound uses
-> (`Content::Rigid` meeting `Content::Super` in `unify.rs`), with zero
-> `and_map_payload`-specific code required beyond the `constrain_var_kernel`
-> tie itself.
->
-> **One correction to this design's own prediction, discovered empirically
-> while implementing T3f**: §3.1 predicted every violation surfaces as
-> `SKY-T0014`. In practice the diagnostic code depends on HOW the obligated
-> variable is used, mirroring a split this compiler ALREADY has for
-> `Math.min`/`Math.max` (`crates/skyc/tests/golden_m4c_math_gate.rs`, whose
-> own doc comment states this explicitly: "Calling `Math.min` directly on
-> two non-comparable values is the eager-pin sibling and surfaces SKY-T0001
-> instead"). A DIRECT `andMap` call pins the obligated `b` straight to a
-> concrete `Fun` structure at `unify.rs`'s own head-pin check
-> (`super_concrete_ok`) — the "eager pin" case — surfacing a plain
-> `SKY-T0001` (`TypeMismatch`). EVERY fixture in the aliasing-shape matrix
-> (§4's table) calls `andMap` directly, so every one of them surfaces
-> `SKY-T0001`, not `SKY-T0014`. `SKY-T0014` is reached only through an
-> ANNOTATED GENERIC FORWARDER (the `SchemeApp`/`check_scheme_applications`
-> path — exactly `Math.min`'s `pickMin` forwarder shape), added as its own
-> fixture (`l0114_and_map_forwarder_curried_is_t0014`) to prove the
-> friendly-message path genuinely exists. Both codes are equally sound —
-> neither is a cargo-fail — so `assert_and_map_curried_rejected` in the
-> golden test accepts `SKY-T0001` / `SKY-T0014` / `SKY-L0114` (Tier 1
-> backstop) as any of the three acceptable clean-rejection outcomes. This is
-> a diagnostic-quality nuance, not a soundness gap: deliberately NOT
-> "fixed" by special-casing `unify.rs`'s head-pin check to defer
-> `and_map_payload` violations to the nicer path for every shape, because
-> doing so would diverge from the established, already-tested precedent
-> every other `TyBounds` obligation in this compiler follows.
->
-> **Import-alias row: confirmed genuinely not constructible in `sky-rust`**
-> (not merely "expected non-issue, assumed"). `Result`/`Maybe` are entries in
-> a fixed compiler-kernel-qualifier list (`crates/sky_canon/src/resolve.rs`),
-> not backed by an importable Sky-source module in this milestone — there is
-> no module for `import Result as R` to name. Recorded explicitly in the
-> golden test's module doc comment and in `docs/divergences-from-sky.md`'s
-> B22 entry rather than silently skipped.
->
-> Original design-pass status note (superseded by the above, kept for
-> history):
-
-> Design only (read-only study of `crates/sky_types` and
+> **Status:** design only (read-only study of `crates/sky_types` and
 > `crates/sky_lower`; no code written, no build run, no worktree created).
 > Supersedes §3 step 3 ("Add the `andMap` call-site arity gate") and the `T3`
 > row of the Lane A task table in
@@ -449,15 +399,15 @@ once Tier 2 lands; `SKY-L0114` if only Tier 1 exists yet) rather than just
 
 ## 5. Task breakdown (supersedes the parent doc's `T3` row)
 
-| # | Task | Files | Depends on | Status |
-|---|---|---|---|---|
-| T3a | Add `TyBounds::and_map_payload()` + `not_curried_ok` predicate in `emitted_bound_satisfied`/`concrete_super_ok` + class name in `super_unsatisfied` | `sky_types/src/ty.rs`, `sky_types/src/lib.rs` | — | **DONE** |
-| T3b | Wire the obligation into `constrain_var_kernel` for `MaybeAndMap`/`ResultAndMap`, tying scheme-var `1` (`b`) to a bounded super-var, mirroring `key_obligation_for` | `sky_types/src/constrain.rs:2292` region | T3a | **DONE** |
-| T3c | `T3.residual` fixture (cross-module generalized wrapper, both annotated and unannotated variants) — run and record the actual outcome | `tests/golden/`, `sky_types/tests/` | T3b | **DONE** — `l0114_and_map_cross_module_wrapper_accepted` (annotated variant, two arity-1 uses) confirmed ACCEPTED. The unannotated cross-module variant (§3.3's acknowledged precision-loss case) was not separately fixtured — it is documented, not tested, since §3.3 already predicts and accepts its rejection as conservative-but-sound. |
-| T3d | If T3c's annotated variant is a false positive: extend the "lift bound onto annotation skolem" path … | TBD, audit first | T3c | **NOT NEEDED** — T3c's annotated variant was accepted on the first try, with zero `and_map_payload`-specific propagation code beyond the `constrain_var_kernel` tie in T3b. The generic `Content::Rigid` ⇄ `Content::Super` unification path (`unify.rs`) already lifts any bound onto an annotation skolem the same way it does for `Math.min`'s `Comparable` bound — no new machinery needed. |
-| T3e | Restore `reject_curried_andmap_payload` (logic unchanged from `39d9a57`), relocate its call site inside `lower_callee` per §3.2 | `sky_lower/src/lower.rs` | — (independent of T3a/b, can land in parallel) | **DONE** |
-| T3f | Full fixture matrix from §4 (7 aliasing categories × red/green, plus the T4-interaction pair) — both unit-level and golden E2E legs | `tests/golden/*`, `sky_types/tests/`, `sky_lower/tests/unsupported.rs`, `skyc/tests/golden_l0114_ctor_payload_function.rs` | T3a-e | **DONE** — every category in §4's table has a fixture; import-alias confirmed not constructible (documented, not skipped); direct/pipe, `let`-bound, bare-alias, higher-order-argument, and record-field-extraction all confirmed rejected (SKY-T0001, the eager-pin diagnostic — see this doc's top status note); an additional forwarder fixture proves the SKY-T0014 path also genuinely exists. |
-| T3g | Diagnostics/docs: extend `explain/SKY-T0014.md` with the `andMap` obligation class; note in `explain/SKY-L0114.md` that Tier 1 is now defense-in-depth behind a type error, not the primary gate; record §3.3's precision-loss trade-off in the parent doc's hazard table | `sky_diagnostics/explain/`, `docs/architecture/ctor-payload-function-design.md` | T3a-f | **DONE** — `SKY-T0014.md` and `SKY-L0114.md` both rewritten; parent doc's task table marks T1-T6 done. |
+| # | Task | Files | Depends on |
+|---|---|---|---|
+| T3a | Add `TyBounds::and_map_payload()` + `not_curried_ok` predicate in `emitted_bound_satisfied`/`concrete_super_ok` + class name in `super_unsatisfied` | `sky_types/src/ty.rs`, `sky_types/src/lib.rs` | — |
+| T3b | Wire the obligation into `constrain_var_kernel` for `MaybeAndMap`/`ResultAndMap`, tying scheme-var `1` (`b`) to a bounded super-var, mirroring `key_obligation_for` | `sky_types/src/constrain.rs:2292` region | T3a |
+| T3c | `T3.residual` fixture (cross-module generalized wrapper, both annotated and unannotated variants) — run and record the actual outcome | `tests/golden/`, `sky_types/tests/` | T3b |
+| T3d | If T3c's annotated variant is a false positive: extend the "lift bound onto annotation skolem" path (wherever `Math.min`'s equivalent propagation lives — audit needed, not yet located in this pass) to cover `and_map_payload`. Scoped narrowly; does not block T3a/b/e landing. | TBD, audit first | T3c |
+| T3e | Restore `reject_curried_andmap_payload` (logic unchanged from `39d9a57`), relocate its call site inside `lower_callee` per §3.2 | `sky_lower/src/lower.rs` | — (independent of T3a/b, can land in parallel) |
+| T3f | Full fixture matrix from §4 (7 aliasing categories × red/green, plus the T4-interaction pair) — both unit-level and golden E2E legs | `tests/golden/*`, `sky_types/tests/`, `sky_lower/tests/unsupported.rs`, `skyc/tests/golden_l0114_ctor_payload_function.rs` | T3a-e |
+| T3g | Diagnostics/docs: extend `explain/SKY-T0014.md` with the `NotCurried` obligation class; note in `explain/SKY-L0114.md` that Tier 1 is now defense-in-depth behind a type error, not the primary gate; record §3.3's precision-loss trade-off in the parent doc's hazard table | `sky_diagnostics/explain/`, `docs/architecture/ctor-payload-function-design.md` | T3a-f |
 
 Estimated blast radius: `sky_types` (new bound + one kernel-scheme tie,
 same shape as the existing Set/Dict-key precedent) + `sky_lower` (one

@@ -2415,36 +2415,6 @@ impl<'a> Builder<'a> {
                 }
                 return Ok(var);
             }
-            // `andMap` curried-payload obligation (#90 T3, primary/Tier-2
-            // mechanism — see `docs/architecture/ctor-payload-andmap-arity-gate-design.md`).
-            // `Maybe.andMap : Maybe a -> Maybe (a -> b) -> Maybe b` /
-            // `Result.andMap : Result e a -> Result e (a -> b) -> Result e b`
-            // fully apply the wrapped function to exactly one argument
-            // (`FnOnce(A) -> B`); a CURRIED (arity ≥ 2) payload function
-            // instantiates `b` to a residual arrow, which has no sound
-            // lowering. Tie the payload-result raw scheme-var `1` (`b` in
-            // both schemes) to a fresh super-typed variable carrying the
-            // `and_map_payload` obligation — same `stdlib_scheme` + tie shape
-            // as the Dict/Set key obligation above, so this is a genuine
-            // TYPE-LEVEL check that survives arbitrary Sky-level aliasing
-            // (direct call, piped, `let`-bound, bare-value re-export,
-            // higher-order argument, record-field extraction, import alias)
-            // by construction — the obligation is attached to the union-find
-            // variable `constrain_var_kernel` mints for THIS `andMap`
-            // reference, not to any particular AST shape a later use might
-            // take.
-            if matches!(k, StdlibKernel::MaybeAndMap | StdlibKernel::ResultAndMap) {
-                let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
-                    span,
-                    msg: LowerError::Unsupported(Feature::Kernels),
-                })?;
-                let (var, vars) = self.instantiate_tracked(&ty)?;
-                if let Some(&payload_result_var) = vars.get(&1) {
-                    let s = self.super_var(TyBounds::and_map_payload(), span)?;
-                    self.eq(span, payload_result_var, s);
-                }
-                return Ok(var);
-            }
             // `Log.*With : String -> List a -> Task Error ()` — the attr-list
             // ELEMENT `a` carries the STRINGIFY obligation (#77). Same
             // `stdlib_scheme` + tie shape as Dict/Set: instantiate the base

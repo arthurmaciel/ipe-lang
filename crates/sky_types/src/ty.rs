@@ -167,18 +167,6 @@ impl TyBounds {
     const SHOW: u16 = 1 << 7;
     /// The append obligation (`++` → `Appendable a ⊇ { String, List a }`).
     const APPEND: u16 = 1 << 8;
-    /// The `andMap` curried-payload obligation (#90 T3): this variable is the
-    /// RESULT of an `andMap` payload arrow (`b` in `Con (a -> b)`, i.e.
-    /// `Maybe (a -> b)` / `Result e (a -> b)`'s `b`) — it must not itself be a
-    /// function. `Maybe.andMap` / `Result.andMap` fully apply the wrapped
-    /// function to exactly one argument (`FnOnce(A) -> B`); when the wrapped
-    /// function is itself curried (arity ≥ 2, IR-flattened to one
-    /// multi-parameter `Fun`), `b` instantiates to the residual arrow and the
-    /// emitted kernel call has no sound lowering. Deliberately SHALLOW (only
-    /// the head, never nested — see [`Self::has_and_map_payload`]): a
-    /// collection-of-functions payload is a different, already-gated hazard.
-    /// See `docs/architecture/ctor-payload-andmap-arity-gate-design.md`.
-    const AND_MAP_PAYLOAD: u16 = 1 << 9;
 
     /// No obligation — a structurally-parametric variable.
     pub const EMPTY: Self = Self(0);
@@ -243,11 +231,6 @@ impl TyBounds {
     pub const fn appendable() -> Self {
         Self(Self::APPEND)
     }
-    /// The `andMap` curried-payload obligation — see [`Self::AND_MAP_PAYLOAD`].
-    #[must_use]
-    pub const fn and_map_payload() -> Self {
-        Self(Self::AND_MAP_PAYLOAD)
-    }
 
     /// Whether this set carries no obligation at all.
     #[must_use]
@@ -293,12 +276,6 @@ impl TyBounds {
     #[must_use]
     pub const fn has_append(self) -> bool {
         self.0 & Self::APPEND != 0
-    }
-    /// Whether the `andMap` curried-payload obligation is set — see
-    /// [`Self::AND_MAP_PAYLOAD`].
-    #[must_use]
-    pub const fn has_and_map_payload(self) -> bool {
-        self.0 & Self::AND_MAP_PAYLOAD != 0
     }
     /// Whether this variable carries a Sky `comparable`-key obligation — used as
     /// a `Set` element or a `Dict` key. Both are satisfied by exactly the Sky
