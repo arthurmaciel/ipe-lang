@@ -30,7 +30,6 @@ impl<M: Clone> HandlerIndex<M> {
             Event::OnString(_, f) => Some(f(args.first().cloned().unwrap_or_default())),
             Event::OnBool(_, f) => Some(f(args.first().map(|s| s == "true").unwrap_or(false))),
             Event::OnForm(_, _) => None, // dispatched via resolve_form
-            Event::OnRaw(_, _) => None,  // heterogeneous payload — not dispatchable
         }
     }
 
@@ -187,6 +186,41 @@ mod tests {
         assert_eq!(
             idx.resolve_form("r", "submit", fd),
             Some(Msg::Typed("alice".into()))
+        );
+    }
+
+    #[test]
+    fn ui_on_submit_dispatches_via_onform_not_onraw() {
+        use crate::sky_runtime::ui::element::Attribute as UiAttribute;
+
+        #[derive(serde::Deserialize, Default, PartialEq, Debug)]
+        #[serde(default)]
+        struct Creds {
+            email: String,
+            password: String,
+        }
+
+        let attr = crate::sky_runtime::ui::helpers::ui_on_submit_(|c: Creds| {
+            Msg::Typed(format!("{}:{}", c.email, c.password))
+        });
+        let html_attr = match attr {
+            UiAttribute::AttrEvent(a) => a,
+            other => panic!("expected AttrEvent, got {other:?}"),
+        };
+        let mut t = Html::HElement("form".into(), vec![html_attr], vec![]);
+        assign_sky_ids(&mut t, "r");
+        let idx = build_index(&t);
+
+        // Must dispatch via resolve_form (Event::OnForm), NOT resolve()
+        // (which returns None for a submit event with no positional args).
+        assert_eq!(idx.resolve("r", "submit", &[]), None);
+
+        let mut fd = FormData::new();
+        fd.insert("email".into(), "a@b.com".into());
+        fd.insert("password".into(), "hunter2".into());
+        assert_eq!(
+            idx.resolve_form("r", "submit", fd),
+            Some(Msg::Typed("a@b.com:hunter2".into()))
         );
     }
 

@@ -3999,8 +3999,10 @@ impl<'a> Builder<'a> {
                     fun(fun(string(), var(0)), html_attr(var(0)))
                 }
                 sky_kernels::HtmlEventShape::Bool => fun(fun(bool_ty(), var(0)), html_attr(var(0))),
-                // `onSubmit : a -> Attribute msg` — the handler `var(1)` is
-                // type-erased into `Event::OnRaw`, leaving `msg` (`var(0)`) free.
+                // `onSubmit : a -> Attribute msg` — the handler `var(1)` stays
+                // an unconstrained HM var here (Sky-level polymorphism only —
+                // see `html.rs`'s `Event::OnForm` for the runtime-typed
+                // construction, not `Event::OnRaw`, which no longer exists).
                 sky_kernels::HtmlEventShape::Raw => fun(var(1), html_attr(var(0))),
             },
 
