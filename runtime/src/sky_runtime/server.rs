@@ -1645,8 +1645,12 @@ where
             let header_tok = header_ci(&req.headers, "x-csrf-token")
                 .unwrap_or("")
                 .to_string();
-            let ok = !cookie_tok.is_empty()
-                && !header_tok.is_empty()
+            // Require both sides to be a genuine server-minted token, not just
+            // a matching pair of arbitrary bytes — without this, two equal
+            // malformed values (e.g. "x" cookie + "x" header) would pass the
+            // compare below even though neither is a real CSRF token.
+            let ok = csrf_token_well_formed(&cookie_tok)
+                && csrf_token_well_formed(&header_tok)
                 && bool::from(cookie_tok.as_bytes().ct_eq(header_tok.as_bytes()));
             if !ok {
                 return Box::pin(async move {
@@ -2012,6 +2016,28 @@ mod tests {
         cookies.insert("sky_csrf".to_string(), "c".repeat(64));
         let mut headers = HashMap::new();
         headers.insert("x-csrf-token".to_string(), "d".repeat(64));
+        let h = middleware_with_csrf::<String, _>(|_req: ServerRequest| {
+            Box::pin(ready(ok_res::<String, _>(server_text("ok".into()))))
+                as SkyTask<String, ServerResponse>
+        });
+        let req = mk_req("POST", cookies, headers);
+        match h(req).await {
+            SkyResult::Ok(r) => assert_eq!(r.status, 403),
+            SkyResult::Err(_) => panic!("expected Ok(403)"),
+        }
+    }
+
+    /// Regression for the well-formedness gap found by independent review of
+    /// #63: an EQUAL pair of malformed values (too short to be a real
+    /// server-minted token) must still be rejected — the compare alone
+    /// (`cookie_tok == header_tok`) is not sufficient, both sides must also
+    /// look like a genuine token.
+    #[tokio::test]
+    async fn csrf_post_with_matching_but_malformed_tokens_rejected() {
+        let mut cookies = HashMap::new();
+        cookies.insert("sky_csrf".to_string(), "x".to_string());
+        let mut headers = HashMap::new();
+        headers.insert("x-csrf-token".to_string(), "x".to_string());
         let h = middleware_with_csrf::<String, _>(|_req: ServerRequest| {
             Box::pin(ready(ok_res::<String, _>(server_text("ok".into()))))
                 as SkyTask<String, ServerResponse>
