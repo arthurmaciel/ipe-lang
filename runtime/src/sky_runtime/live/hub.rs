@@ -33,7 +33,100 @@ use serde_json::{Value, json};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Row, SqlitePool};
 use std::collections::HashMap;
+use std::future::Future;
 use std::time::Duration;
+
+// ─── Tenant-prefix SQL enforcement ─────────────────────────────────────────
+//
+// Direct port of the Go reference's `HubStoreReaderWithTenant` gate
+// (`../sky/runtime-go/rt/hub_bridge.go`'s `tenantPrefixForSession` /
+// `rejectCrossTenantSvc`, `../sky/runtime-go/rt/hub/store.go`'s
+// `LogFilter.TenantPrefix` / `escapeLikePrefix`). This module builds the full
+// CONSUMER side (SQL-layer `LIKE`-prefix scoping + the `reject_cross_tenant_svc`
+// gate + the task-local plumbing to carry a tenant prefix through a request) —
+// fully real and fully enforced, testable in isolation exactly like Go's own
+// unit tests (which use a hand-constructed session with a `Claims` map, not a
+// live `consoleAuth` callback).
+//
+// What is NOT wired here (tracked as a follow-up, not a silent gap): the
+// PRODUCER side — deriving a tenant prefix from a live session's authenticated
+// identity (`id.Claims["tenant"]`) and calling `with_tenant_prefix` from the
+// request-dispatch loop. That depends on `SKY_CONSOLE_AUTH=app` (the row-poly
+// `consoleAuth` callback that mints a per-session `Identity` with `claims`),
+// which is not yet implemented in this Rust runtime —
+// `runtime/src/sky_runtime/live/console.rs`'s `ConsoleAuthMode::App` arm is
+// explicitly stubbed, and `hub_current_identity` (below) is hardcoded to the
+// empty identity for the same reason. Until that lands, `with_tenant_prefix`
+// is called by tests only — every live request runs with an empty tenant
+// prefix, i.e. unscoped (matches the pre-existing, pre-this-fix behaviour;
+// this change is additive and cannot regress a deployment that has no tenant
+// concept configured).
+
+tokio::task_local! {
+    /// The tenant-scope prefix in effect for the current request, when the
+    /// session carries a `tenant` claim. Unset (→ "") outside a tenant-scoped
+    /// session — every service is in-scope in that case (matches Go's
+    /// `tenantPrefixForSession` returning "" when the session has no tenant
+    /// claim).
+    static TENANT_PREFIX: String;
+}
+
+/// Run future `f` with `prefix` available to [`current_tenant_prefix`] for
+/// `f`'s ENTIRE execution — across every `.await` point, not just its
+/// synchronous construction.
+///
+/// This is the `.scope(value, future).await` async form (mirrors
+/// `db.rs`'s `TXN_CONN.scope(..)` pattern), deliberately NOT
+/// `LocalKey::sync_scope` (mirrors `pubsub.rs`'s `SESSION_SID` pattern):
+/// `sync_scope` only holds the task-local for a SYNCHRONOUS closure, and
+/// [`current_tenant_prefix`] is read deep inside a lazily-polled
+/// `Box::pin(async move { .. })` future body (`hub_read_filtered_logs` and
+/// siblings) — by the time that body actually runs, a `sync_scope`-based
+/// design would have already popped the scope, silently defaulting every
+/// read back to the unscoped `""` prefix. The `.scope(..).await` form keeps
+/// the task-local set for as long as the awaited future is being polled,
+/// which is the actual lifetime this gate needs.
+pub async fn with_tenant_prefix<R>(prefix: String, f: impl Future<Output = R>) -> R {
+    TENANT_PREFIX.scope(prefix, f).await
+}
+
+fn current_tenant_prefix() -> String {
+    TENANT_PREFIX.try_with(|s| s.clone()).unwrap_or_default()
+}
+
+/// Enforce that an explicit service-name argument is scoped within the
+/// caller's tenant. `Ok(effective_svc)` when the call may proceed (either no
+/// tenant claim is in scope, so every svc is in-scope; or `svc == ""` so the
+/// tenant prefix alone drives scoping; or `svc` starts with the tenant
+/// prefix). `Err(())` when `svc` is outside the tenant's scope — the caller
+/// MUST refuse with an `Err`, never silently drop the tenant filter and fall
+/// through to an unscoped read.
+///
+/// Direct port of Go's `rejectCrossTenantSvc` (`hub_bridge.go`).
+fn reject_cross_tenant_svc(svc: &str, tenant_prefix: &str) -> Result<String, ()> {
+    if tenant_prefix.is_empty() {
+        return Ok(svc.to_string());
+    }
+    if svc.is_empty() {
+        return Ok(String::new());
+    }
+    if svc.starts_with(tenant_prefix) {
+        Ok(svc.to_string())
+    } else {
+        Err(())
+    }
+}
+
+/// Strip SQL `LIKE` wildcard characters (`%`, `_`) out of a tenant prefix
+/// before it is used to build a `LIKE 'prefix%'` pattern — a tenant identifier
+/// containing either character would otherwise WIDEN its own scope (e.g. a
+/// tenant literally named `%` would match every service). Mirrors Go's
+/// `escapeLikePrefix` (strips rather than backslash-escapes, since tenant
+/// identifiers are short alphanumeric-with-dashes slugs, not arbitrary user
+/// text where preserving the literal character matters).
+fn escape_like_prefix(p: &str) -> String {
+    p.chars().filter(|&c| c != '%' && c != '_').collect()
+}
 
 /// Default per-table read cap (Go `hub/bridge.go` uses 200 for logs/metrics).
 const LOG_LIMIT: i64 = 200;
@@ -103,10 +196,30 @@ fn parse_attrs(raw: &str) -> HashMap<String, String> {
     serde_json::from_str(raw).unwrap_or_default()
 }
 
+/// Append `AND service_name LIKE ?` to `sql` when `tenant_prefix` is
+/// non-empty, returning the bind pattern (`Some("<escaped-prefix>%")`) to
+/// push, else `None`. Centralises the tenant-scoping SQL fragment so all
+/// four `read_*_value` builders apply it identically — the SQL-layer half of
+/// the tenant-prefix gate (see the module-level `TENANT_PREFIX` doc comment).
+fn tenant_like_clause(sql: &mut String, tenant_prefix: &str) -> Option<String> {
+    if tenant_prefix.is_empty() {
+        return None;
+    }
+    sql.push_str(" AND service_name LIKE ?");
+    Some(format!("{}%", escape_like_prefix(tenant_prefix)))
+}
+
 /// Build the `LogEntry`-shaped JSON array (Go `toHubLogRow` + the client-side
 /// query/session filters in `QueryLogsJSON`). `service` empty → no service
-/// scoping. Returns an empty array on any open/SQL failure.
-async fn read_logs_value(db_path: &str, service: &str, filter: HubLogFilter) -> Value {
+/// scoping. `tenant_prefix` empty → no tenant scoping (every service
+/// in-scope); non-empty → additionally requires `service_name LIKE
+/// '<prefix>%'`. Returns an empty array on any open/SQL failure.
+async fn read_logs_value(
+    db_path: &str,
+    service: &str,
+    tenant_prefix: &str,
+    filter: HubLogFilter,
+) -> Value {
     let Some(pool) = open_spill(db_path).await else {
         return Value::Array(vec![]);
     };
@@ -118,6 +231,7 @@ async fn read_logs_value(db_path: &str, service: &str, filter: HubLogFilter) -> 
     if !service.is_empty() {
         sql.push_str(" AND service_name = ?");
     }
+    let tenant_like = tenant_like_clause(&mut sql, tenant_prefix);
     if level.is_some() {
         sql.push_str(" AND level = ?");
     }
@@ -126,6 +240,9 @@ async fn read_logs_value(db_path: &str, service: &str, filter: HubLogFilter) -> 
     let mut q = sqlx::query(&sql);
     if !service.is_empty() {
         q = q.bind(service);
+    }
+    if let Some(pat) = tenant_like {
+        q = q.bind(pat);
     }
     if let Some(lv) = level {
         q = q.bind(lv);
@@ -188,7 +305,10 @@ async fn read_logs_value(db_path: &str, service: &str, filter: HubLogFilter) -> 
     Value::Array(out)
 }
 
-/// `Hub_readLogs : String -> LogFilter -> Task Error (List LogEntry)`.
+/// `Hub_readLogs : String -> LogFilter -> Task Error (List LogEntry)`. Reads
+/// the caller's current tenant scope directly (no explicit `service` to
+/// validate) — a tenant-scoped session cannot bypass the gate by calling the
+/// no-service variant instead of `Hub_readFilteredLogs`.
 pub fn hub_read_logs<E, A, F>(db_path: String, filter: F) -> SkyTask<E, A>
 where
     E: Send + From<String> + 'static,
@@ -196,13 +316,17 @@ where
     F: Serialize + Send + 'static,
 {
     Box::pin(async move {
+        let tenant = current_tenant_prefix();
         let f = decode_filter(filter);
-        let arr = read_logs_value(&db_path, "", f).await;
+        let arr = read_logs_value(&db_path, "", &tenant, f).await;
         decode_rows(arr)
     })
 }
 
 /// `Hub_readFilteredLogs : String -> String -> LogFilter -> Task Error (List LogEntry)`.
+/// Enforces the tenant-prefix gate on the explicit `service` argument
+/// BEFORE building any SQL — a cross-tenant `service` is rejected with `Err`,
+/// never silently dropped.
 pub fn hub_read_filtered_logs<E, A, F>(db_path: String, service: String, filter: F) -> SkyTask<E, A>
 where
     E: Send + From<String> + 'static,
@@ -210,8 +334,17 @@ where
     F: Serialize + Send + 'static,
 {
     Box::pin(async move {
+        let tenant = current_tenant_prefix();
+        let effective_svc = match reject_cross_tenant_svc(&service, &tenant) {
+            Ok(s) => s,
+            Err(()) => {
+                return SkyResult::Err(str_err(
+                    "hub.readFilteredLogs: service outside tenant scope",
+                ));
+            }
+        };
         let f = decode_filter(filter);
-        let arr = read_logs_value(&db_path, &service, f).await;
+        let arr = read_logs_value(&db_path, &effective_svc, &tenant, f).await;
         decode_rows(arr)
     })
 }
@@ -248,7 +381,8 @@ const ERROR_LIMIT: i64 = 500;
 /// Build the `MetricRow`-shaped JSON array (Go `QueryMetricsJSON`). `labels` is
 /// the attrs map rendered `k=v, k=v` (keys sorted for stable output); `sum`/
 /// `count` are 0 (the spill doesn't carry histogram aggregates yet).
-async fn read_metrics_value(db_path: &str, service: &str) -> Value {
+/// `tenant_prefix` empty → no tenant scoping; see [`tenant_like_clause`].
+async fn read_metrics_value(db_path: &str, service: &str, tenant_prefix: &str) -> Value {
     let Some(pool) = open_spill(db_path).await else {
         return Value::Array(vec![]);
     };
@@ -256,10 +390,14 @@ async fn read_metrics_value(db_path: &str, service: &str) -> Value {
     if !service.is_empty() {
         sql.push_str(" AND service_name = ?");
     }
+    let tenant_like = tenant_like_clause(&mut sql, tenant_prefix);
     sql.push_str(" ORDER BY time DESC, id DESC LIMIT ?");
     let mut q = sqlx::query(&sql);
     if !service.is_empty() {
         q = q.bind(service);
+    }
+    if let Some(pat) = tenant_like {
+        q = q.bind(pat);
     }
     let rows = match q.bind(METRIC_LIMIT).fetch_all(&pool).await {
         Ok(r) => r,
@@ -306,8 +444,9 @@ fn duration_ms(start: &str, end: &str) -> f64 {
 }
 
 /// Build the `TraceRow`-shaped JSON array (Go `QuerySpansJSON`). `kind`=service,
-/// `durationMs` from start/end, `status` from attrs.
-async fn read_traces_value(db_path: &str, service: &str) -> Value {
+/// `durationMs` from start/end, `status` from attrs. `tenant_prefix` empty →
+/// no tenant scoping; see [`tenant_like_clause`].
+async fn read_traces_value(db_path: &str, service: &str, tenant_prefix: &str) -> Value {
     let Some(pool) = open_spill(db_path).await else {
         return Value::Array(vec![]);
     };
@@ -318,10 +457,14 @@ async fn read_traces_value(db_path: &str, service: &str) -> Value {
     if !service.is_empty() {
         sql.push_str(" AND service_name = ?");
     }
+    let tenant_like = tenant_like_clause(&mut sql, tenant_prefix);
     sql.push_str(" ORDER BY time DESC, id DESC LIMIT ?");
     let mut q = sqlx::query(&sql);
     if !service.is_empty() {
         q = q.bind(service);
+    }
+    if let Some(pat) = tenant_like {
+        q = q.bind(pat);
     }
     let rows = match q.bind(TRACE_LIMIT).fetch_all(&pool).await {
         Ok(r) => r,
@@ -351,8 +494,9 @@ async fn read_traces_value(db_path: &str, service: &str) -> Value {
 
 /// Build the `ErrorRow`-shaped JSON array (Go `QueryErrorsJSON`): error-level
 /// logs grouped by message → `{count, message}`, descending by count for a
-/// stable, useful order.
-async fn read_errors_value(db_path: &str, service: &str) -> Value {
+/// stable, useful order. `tenant_prefix` empty → no tenant scoping; see
+/// [`tenant_like_clause`].
+async fn read_errors_value(db_path: &str, service: &str, tenant_prefix: &str) -> Value {
     let Some(pool) = open_spill(db_path).await else {
         return Value::Array(vec![]);
     };
@@ -360,10 +504,14 @@ async fn read_errors_value(db_path: &str, service: &str) -> Value {
     if !service.is_empty() {
         sql.push_str(" AND service_name = ?");
     }
+    let tenant_like = tenant_like_clause(&mut sql, tenant_prefix);
     sql.push_str(" ORDER BY time DESC, id DESC LIMIT ?");
     let mut q = sqlx::query(&sql);
     if !service.is_empty() {
         q = q.bind(service);
+    }
+    if let Some(pat) = tenant_like {
+        q = q.bind(pat);
     }
     let rows = match q.bind(ERROR_LIMIT).fetch_all(&pool).await {
         Ok(r) => r,
@@ -386,58 +534,109 @@ async fn read_errors_value(db_path: &str, service: &str) -> Value {
     Value::Array(out)
 }
 
-/// `Hub_readMetrics : String -> Task Error (List MetricRow)`.
+/// `Hub_readMetrics : String -> Task Error (List MetricRow)`. Reads the
+/// caller's current tenant scope directly — see [`hub_read_logs`]'s doc.
 pub fn hub_read_metrics<E, A>(db_path: String) -> SkyTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
 {
-    Box::pin(async move { decode_rows(read_metrics_value(&db_path, "").await) })
+    Box::pin(async move {
+        let tenant = current_tenant_prefix();
+        decode_rows(read_metrics_value(&db_path, "", &tenant).await)
+    })
 }
 
 /// `Hub_readFilteredMetrics : String -> String -> Task Error (List MetricRow)`.
+/// Enforces the tenant-prefix gate on `service` before building any SQL — see
+/// [`hub_read_filtered_logs`]'s doc.
 pub fn hub_read_filtered_metrics<E, A>(db_path: String, service: String) -> SkyTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
 {
-    Box::pin(async move { decode_rows(read_metrics_value(&db_path, &service).await) })
+    Box::pin(async move {
+        let tenant = current_tenant_prefix();
+        let effective_svc = match reject_cross_tenant_svc(&service, &tenant) {
+            Ok(s) => s,
+            Err(()) => {
+                return SkyResult::Err(str_err(
+                    "hub.readFilteredMetrics: service outside tenant scope",
+                ));
+            }
+        };
+        decode_rows(read_metrics_value(&db_path, &effective_svc, &tenant).await)
+    })
 }
 
-/// `Hub_readTraces : String -> Task Error (List TraceRow)`.
+/// `Hub_readTraces : String -> Task Error (List TraceRow)`. Reads the
+/// caller's current tenant scope directly — see [`hub_read_logs`]'s doc.
 pub fn hub_read_traces<E, A>(db_path: String) -> SkyTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
 {
-    Box::pin(async move { decode_rows(read_traces_value(&db_path, "").await) })
+    Box::pin(async move {
+        let tenant = current_tenant_prefix();
+        decode_rows(read_traces_value(&db_path, "", &tenant).await)
+    })
 }
 
 /// `Hub_readFilteredTraces : String -> String -> Task Error (List TraceRow)`.
+/// Enforces the tenant-prefix gate on `service` before building any SQL — see
+/// [`hub_read_filtered_logs`]'s doc.
 pub fn hub_read_filtered_traces<E, A>(db_path: String, service: String) -> SkyTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
 {
-    Box::pin(async move { decode_rows(read_traces_value(&db_path, &service).await) })
+    Box::pin(async move {
+        let tenant = current_tenant_prefix();
+        let effective_svc = match reject_cross_tenant_svc(&service, &tenant) {
+            Ok(s) => s,
+            Err(()) => {
+                return SkyResult::Err(str_err(
+                    "hub.readFilteredTraces: service outside tenant scope",
+                ));
+            }
+        };
+        decode_rows(read_traces_value(&db_path, &effective_svc, &tenant).await)
+    })
 }
 
-/// `Hub_readErrors : String -> Task Error (List ErrorRow)`.
+/// `Hub_readErrors : String -> Task Error (List ErrorRow)`. Reads the
+/// caller's current tenant scope directly — see [`hub_read_logs`]'s doc.
 pub fn hub_read_errors<E, A>(db_path: String) -> SkyTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
 {
-    Box::pin(async move { decode_rows(read_errors_value(&db_path, "").await) })
+    Box::pin(async move {
+        let tenant = current_tenant_prefix();
+        decode_rows(read_errors_value(&db_path, "", &tenant).await)
+    })
 }
 
 /// `Hub_readFilteredErrors : String -> String -> Task Error (List ErrorRow)`.
+/// Enforces the tenant-prefix gate on `service` before building any SQL — see
+/// [`hub_read_filtered_logs`]'s doc.
 pub fn hub_read_filtered_errors<E, A>(db_path: String, service: String) -> SkyTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
 {
-    Box::pin(async move { decode_rows(read_errors_value(&db_path, &service).await) })
+    Box::pin(async move {
+        let tenant = current_tenant_prefix();
+        let effective_svc = match reject_cross_tenant_svc(&service, &tenant) {
+            Ok(s) => s,
+            Err(()) => {
+                return SkyResult::Err(str_err(
+                    "hub.readFilteredErrors: service outside tenant scope",
+                ));
+            }
+        };
+        decode_rows(read_errors_value(&db_path, &effective_svc, &tenant).await)
+    })
 }
 
 // ── Overview, ServiceStats, Identity ────────────────────────────────────────
@@ -1219,6 +1418,208 @@ mod tests {
             }
             SkyResult::Err(_) => panic!("expected Ok"),
         }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ─── §5 Class-7 spec: tenant-prefix SQL enforcement ────────────────────
+
+    #[test]
+    fn reject_cross_tenant_svc_table() {
+        // Ported from the Go reference's TestRejectCrossTenantSvc table.
+        assert_eq!(reject_cross_tenant_svc("", "tenant-"), Ok(String::new()));
+        assert_eq!(
+            reject_cross_tenant_svc("tenant-foo", "tenant-"),
+            Ok("tenant-foo".to_string())
+        );
+        assert_eq!(reject_cross_tenant_svc("other-foo", "tenant-"), Err(()));
+        // Prefix match must be strict (bare "tenant" does not start with
+        // "tenant-" as a PREFIX match on the full string "tenant-").
+        assert_eq!(reject_cross_tenant_svc("tenant", "tenant-"), Err(()));
+        // No tenant claim → every svc in scope.
+        assert_eq!(
+            reject_cross_tenant_svc("anything", ""),
+            Ok("anything".to_string())
+        );
+    }
+
+    #[test]
+    fn escape_like_prefix_strips_wildcards() {
+        assert_eq!(escape_like_prefix("customer-42-"), "customer-42-");
+        assert_eq!(escape_like_prefix("cust%omer_42"), "customer42");
+    }
+
+    /// The two-tenant regression: a spill DB seeded with rows for
+    /// "customer-42-billing" and "customer-99-billing" — querying with tenant
+    /// prefix "customer-42-" must return ONLY the customer-42 rows, even
+    /// when called with `service = ""` (tenant-only scope, the
+    /// `hub_read_logs` / no-explicit-service shape).
+    #[tokio::test]
+    async fn hub_read_filtered_logs_two_tenants_no_cross_read() {
+        let path = std::env::temp_dir()
+            .join(format!("hub-tenant-2t-{}.db", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        let _ = std::fs::remove_file(&path);
+        let pool = seed(&path).await;
+        for svc in ["customer-42-billing", "customer-99-billing"] {
+            sqlx::query(
+                "INSERT INTO telemetry_log (service_name, time, level, message, attrs) \
+                 VALUES (?, '2026-01-01T00:00:00Z', 'info', 'm', '{}')",
+            )
+            .bind(svc)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let res: SkyResult<String, Vec<Value>> = with_tenant_prefix(
+            "customer-42-".to_string(),
+            hub_read_filtered_logs(path.clone(), String::new(), TestFilter::none()),
+        )
+        .await;
+        match res {
+            SkyResult::Ok(rows) => {
+                assert_eq!(rows.len(), 1, "expected exactly the customer-42 row: {rows:?}");
+                assert_eq!(rows[0]["subapp"], "customer-42-billing");
+            }
+            SkyResult::Err(_) => panic!("expected Ok"),
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A `hub_read_logs` (no explicit `service`) call under a tenant scope must
+    /// ALSO be tenant-filtered — otherwise a tenant-scoped session could bypass
+    /// `hub_read_filtered_logs`'s gate simply by calling the no-service kernel.
+    #[tokio::test]
+    async fn hub_read_logs_no_service_still_tenant_scoped() {
+        let path = std::env::temp_dir()
+            .join(format!("hub-tenant-noservice-{}.db", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        let _ = std::fs::remove_file(&path);
+        let pool = seed(&path).await;
+        for svc in ["customer-42-billing", "customer-99-billing"] {
+            sqlx::query(
+                "INSERT INTO telemetry_log (service_name, time, level, message, attrs) \
+                 VALUES (?, '2026-01-01T00:00:00Z', 'info', 'm', '{}')",
+            )
+            .bind(svc)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let res: SkyResult<String, Vec<Value>> = with_tenant_prefix(
+            "customer-42-".to_string(),
+            hub_read_logs(path.clone(), TestFilter::none()),
+        )
+        .await;
+        match res {
+            SkyResult::Ok(rows) => {
+                assert_eq!(
+                    rows.len(),
+                    1,
+                    "hub_read_logs must NOT leak other tenants' rows: {rows:?}"
+                );
+                assert_eq!(rows[0]["subapp"], "customer-42-billing");
+            }
+            SkyResult::Err(_) => panic!("expected Ok"),
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// An explicit cross-tenant `service` argument must be rejected with `Err`
+    /// BEFORE any SQL runs — never silently dropped/widened to an unscoped
+    /// read, and never leak a cross-tenant row even in the Err path.
+    #[tokio::test]
+    async fn hub_read_filtered_logs_rejects_explicit_cross_tenant_svc() {
+        let path = std::env::temp_dir()
+            .join(format!("hub-tenant-reject-{}.db", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        let _ = std::fs::remove_file(&path);
+        let pool = seed(&path).await;
+        sqlx::query(
+            "INSERT INTO telemetry_log (service_name, time, level, message, attrs) \
+             VALUES ('customer-99-billing', '2026-01-01T00:00:00Z', 'info', 'm', '{}')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let res: SkyResult<String, Vec<Value>> = with_tenant_prefix(
+            "customer-42-".to_string(),
+            hub_read_filtered_logs(
+                path.clone(),
+                "customer-99-billing".to_string(),
+                TestFilter::none(),
+            ),
+        )
+        .await;
+        assert!(
+            matches!(res, SkyResult::Err(_)),
+            "cross-tenant service must be rejected: {res:?}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Sibling of the two-tenant logs regression, for metrics/traces/errors —
+    /// confirms the tenant gate was wired into all four `read_*_value`
+    /// builders, not just logs.
+    #[tokio::test]
+    async fn hub_read_filtered_metrics_traces_errors_scope_to_tenant() {
+        let path = std::env::temp_dir()
+            .join(format!("hub-tenant-mte-{}.db", std::process::id()))
+            .to_string_lossy()
+            .to_string();
+        let _ = std::fs::remove_file(&path);
+        let pool = seed(&path).await;
+        for svc in ["customer-42-billing", "customer-99-billing"] {
+            sqlx::query(
+                "INSERT INTO telemetry_metric (service_name, time, name, type, value, attrs) \
+                 VALUES (?, '2026-01-01T00:00:00Z', 'reqs', 'counter', 1.0, '{}')",
+            )
+            .bind(svc)
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO telemetry_span (service_name, time, name, trace_id, span_id, \
+                 parent_id, start_time, end_time, attrs) \
+                 VALUES (?, '2026-01-01T00:00:00Z', 'op', 't', 's', '', '', '', '{}')",
+            )
+            .bind(svc)
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO telemetry_log (service_name, time, level, message, attrs) \
+                 VALUES (?, '2026-01-01T00:00:00Z', 'error', 'boom', '{}')",
+            )
+            .bind(svc)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let metrics: SkyResult<String, Vec<Value>> = with_tenant_prefix(
+            "customer-42-".to_string(),
+            hub_read_filtered_metrics(path.clone(), String::new()),
+        )
+        .await;
+        assert!(matches!(&metrics, SkyResult::Ok(rows) if rows.len() == 1));
+
+        let traces: SkyResult<String, Vec<Value>> = with_tenant_prefix(
+            "customer-42-".to_string(),
+            hub_read_filtered_traces(path.clone(), String::new()),
+        )
+        .await;
+        assert!(matches!(&traces, SkyResult::Ok(rows) if rows.len() == 1));
+
+        let errors: SkyResult<String, Vec<Value>> = with_tenant_prefix(
+            "customer-42-".to_string(),
+            hub_read_filtered_errors(path.clone(), String::new()),
+        )
+        .await;
+        assert!(matches!(&errors, SkyResult::Ok(rows) if rows.len() == 1));
+
         let _ = std::fs::remove_file(&path);
     }
 }
