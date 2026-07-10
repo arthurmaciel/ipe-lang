@@ -2,8 +2,18 @@
 //!
 //! All entries are `Vec<u8> -> Task Error Vec<u8>`. Input and output are raw
 //! byte buffers (`Vec<u8>`) — Sky's `Bytes` primitive — so compressed payloads
-//! (including non-UTF-8 binary) round-trip losslessly. Compression is sync CPU
-//! work wrapped in a ready Future to satisfy the `Task` shape.
+//! (including non-UTF-8 binary) round-trip losslessly.
+//!
+//! # Reactor-starvation guard (#129)
+//!
+//! gzip/zstd (de)compression is CPU-bound and can take non-trivial wall time
+//! on large payloads. Every kernel here offloads its work to
+//! `tokio::task::spawn_blocking` so it can't stall the tokio worker thread
+//! that's polling the returned future — a single large `Compression.gzip`
+//! call previously ran INLINE on the calling thread before the future was
+//! even polled, blocking every other task scheduled on that worker for the
+//! call's full duration. See
+//! `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md` §2.
 //!
 //! # Decompression bomb protection
 //!
@@ -13,7 +23,6 @@
 //! the process.
 
 use super::*;
-use std::future::ready;
 use std::io::{Read, Write};
 
 /// Returns the decompression output cap in bytes.
@@ -64,44 +73,76 @@ fn gunzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+fn zstd_compress_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
+    zstd::encode_all(data, 0).map_err(|e| e.to_string())
+}
+
 /// Compression.gzip : Bytes -> Task Error Bytes
 pub fn compression_gzip<E: From<String> + Send + 'static>(data: Vec<u8>) -> SkyTask<E, Vec<u8>> {
-    let r = match gzip_bytes(&data) {
-        Ok(b) => ok_res(b),
-        Err(e) => SkyResult::Err(format!("Compression.gzip: {}", e).into()),
-    };
-    Box::pin(ready(r))
+    Box::pin(async move {
+        // #129: gzip is CPU-bound; offload to the blocking pool so it can't
+        // starve the tokio worker thread polling this future (same rationale
+        // as auth.rs's bcrypt spawn_blocking). The `compression` Cargo
+        // feature ALWAYS pulls in `tokio` (`compression = ["flate2", "zstd",
+        // "tokio"]`, runtime/Cargo.toml), so this module can call
+        // `tokio::task::spawn_blocking` unconditionally — no `cfg` needed.
+        match tokio::task::spawn_blocking(move || gzip_bytes(&data)).await {
+            Ok(Ok(b)) => ok_res(b),
+            Ok(Err(e)) => SkyResult::Err(format!("Compression.gzip: {}", e).into()),
+            Err(_) => {
+                SkyResult::Err("Compression.gzip: compression task panicked".to_string().into())
+            }
+        }
+    })
 }
 
 /// Compression.gunzip : Bytes -> Task Error Bytes
 pub fn compression_gunzip<E: From<String> + Send + 'static>(data: Vec<u8>) -> SkyTask<E, Vec<u8>> {
-    let r = match gunzip_bytes(&data) {
-        Ok(b) => ok_res(b),
-        Err(e) => SkyResult::Err(format!("Compression.gunzip: {}", e).into()),
-    };
-    Box::pin(ready(r))
+    Box::pin(async move {
+        match tokio::task::spawn_blocking(move || gunzip_bytes(&data)).await {
+            Ok(Ok(b)) => ok_res(b),
+            Ok(Err(e)) => SkyResult::Err(format!("Compression.gunzip: {}", e).into()),
+            Err(_) => SkyResult::Err(
+                "Compression.gunzip: decompression task panicked"
+                    .to_string()
+                    .into(),
+            ),
+        }
+    })
 }
 
 /// Compression.zstdCompress : Bytes -> Task Error Bytes
 pub fn compression_zstd_compress<E: From<String> + Send + 'static>(
     data: Vec<u8>,
 ) -> SkyTask<E, Vec<u8>> {
-    let r = match zstd::encode_all(&data[..], 0) {
-        Ok(out) => ok_res(out),
-        Err(e) => SkyResult::Err(format!("Compression.zstdCompress: {}", e).into()),
-    };
-    Box::pin(ready(r))
+    Box::pin(async move {
+        match tokio::task::spawn_blocking(move || zstd_compress_bytes(&data)).await {
+            Ok(Ok(b)) => ok_res(b),
+            Ok(Err(e)) => SkyResult::Err(format!("Compression.zstdCompress: {}", e).into()),
+            Err(_) => SkyResult::Err(
+                "Compression.zstdCompress: compression task panicked"
+                    .to_string()
+                    .into(),
+            ),
+        }
+    })
 }
 
 /// Compression.zstdDecompress : Bytes -> Task Error Bytes
 pub fn compression_zstd_decompress<E: From<String> + Send + 'static>(
     data: Vec<u8>,
 ) -> SkyTask<E, Vec<u8>> {
-    let r = match zstd_decompress_capped(&data) {
-        Ok(b) => ok_res(b),
-        Err(e) => SkyResult::Err(format!("Compression.zstdDecompress: {}", e).into()),
-    };
-    Box::pin(ready(r))
+    Box::pin(async move {
+        match tokio::task::spawn_blocking(move || zstd_decompress_capped(&data)).await {
+            Ok(Ok(b)) => ok_res(b),
+            Ok(Err(e)) => SkyResult::Err(format!("Compression.zstdDecompress: {}", e).into()),
+            Err(_) => SkyResult::Err(
+                "Compression.zstdDecompress: decompression task panicked"
+                    .to_string()
+                    .into(),
+            ),
+        }
+    })
 }
 
 fn zstd_decompress_capped(data: &[u8]) -> Result<Vec<u8>, String> {
@@ -251,5 +292,83 @@ mod tests {
         };
         assert!(result.is_err(), "expected bomb-detection error, got Ok");
         assert!(result.unwrap_err().contains("exceeds"));
+    }
+
+    /// #129 regression: on a SINGLE-WORKER (current_thread) runtime, a
+    /// blocking zstd compression call run inline on the polled future would
+    /// starve every other task on that runtime until it completes. This
+    /// proves `compression_zstd_compress` offloads its CPU-bound work to
+    /// tokio's blocking-thread pool instead: a concurrently-spawned cheap
+    /// ticker task must make progress (ticks > 0) WHILE the compression is
+    /// in flight.
+    ///
+    /// Pre-fix this is NOT a flaky race: the ticker makes EXACTLY zero
+    /// progress deterministically, because the worker thread never yields
+    /// back to the executor until compression returns.
+    #[test]
+    fn zstd_compress_does_not_starve_concurrent_async_work() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        // Low-compressibility-ish payload so zstd actually spends CPU time
+        // rather than short-circuiting on a trivially repetitive pattern.
+        let payload: Vec<u8> = (0..32 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+
+        let ticks = rt.block_on(async move {
+            let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let counter2 = counter.clone();
+            let ticker = tokio::spawn(async move {
+                loop {
+                    counter2.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    tokio::task::yield_now().await;
+                }
+            });
+            let fut: SkyTask<String, Vec<u8>> = compression_zstd_compress(payload);
+            let _res: SkyResult<String, Vec<u8>> = fut.await;
+            ticker.abort();
+            counter.load(std::sync::atomic::Ordering::Relaxed)
+        });
+
+        assert!(
+            ticks > 0,
+            "concurrent ticker task made ZERO progress while zstd compression ran — \
+             the blocking compression is starving the single-threaded executor \
+             (spawn_blocking missing or not taking effect)"
+        );
+    }
+
+    /// Same shape, for `compression_gzip` — proves gzip is ALSO offloaded
+    /// (the sibling kernel to zstd; both went through the identical
+    /// pre-fix eager-inline-before-poll bug).
+    #[test]
+    fn gzip_does_not_starve_concurrent_async_work() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let payload: Vec<u8> = (0..32 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+
+        let ticks = rt.block_on(async move {
+            let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let counter2 = counter.clone();
+            let ticker = tokio::spawn(async move {
+                loop {
+                    counter2.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    tokio::task::yield_now().await;
+                }
+            });
+            let fut: SkyTask<String, Vec<u8>> = compression_gzip(payload);
+            let _res: SkyResult<String, Vec<u8>> = fut.await;
+            ticker.abort();
+            counter.load(std::sync::atomic::Ordering::Relaxed)
+        });
+
+        assert!(
+            ticks > 0,
+            "concurrent ticker task made ZERO progress while gzip compression ran — \
+             the blocking compression is starving the single-threaded executor \
+             (spawn_blocking missing or not taking effect)"
+        );
     }
 }
