@@ -1985,6 +1985,7 @@ fn emit_server_call(
         | KernelFn::MiddlewareWithLogging
         | KernelFn::MiddlewareWithBasicAuth
         | KernelFn::MiddlewareWithRateLimit
+        | KernelFn::MiddlewareWithCsrf
         | KernelFn::RateLimitAllow
         // ── #111: Sky.Http.Server.Stream (server-side streaming) ─────────────
         | KernelFn::StreamStream
