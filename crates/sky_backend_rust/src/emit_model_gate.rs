@@ -259,6 +259,9 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::WebSocketServerCfg
         | IrType::LiveReq
         | IrType::LiveRoute(_)
+        // `SqlFragment` (backlog #61) is a query-building value, never
+        // persisted to a Live session store — not a valid Model leaf.
+        | IrType::SqlFragment
         // `Order` is a plain three-variant data enum — an admissible leaf.
         // `Decimal` is a Copy newtype — an admissible leaf.
         // `ErrorKind`/`Error` derive serde — admissible leaves (e.g. a Model's

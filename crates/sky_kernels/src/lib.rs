@@ -590,7 +590,6 @@ pub enum StdlibKernel {
     DbFindOneByField,
     DbFindManyByField,
     DbFindByConditions,
-    DbUnsafeFindWhere,
     DbInsertFields,
     DbUpdateFields,
     DbInsertFieldsReturning,
@@ -1175,6 +1174,59 @@ pub enum StdlibKernel {
     DecSubPercent,
     /// `Decimal.formatWith : String -> String -> Int -> Decimal -> String`
     DecFormatWith,
+    // ── Std.Db.Sql — SqlFragment builder (backlog #61) ───────────────────────
+    // Typed, parameterized WHERE-fragment combinators. Replace the removed
+    // `Db.unsafeFindWhere` raw-string escape hatch: a `SqlFragment` can only be
+    // constructed through these kernels, so SQL injection via a hand-built
+    // WHERE clause becomes a type error (String where SqlFragment is expected)
+    // rather than a runtime risk.
+    /// `Sql.column : String -> SqlFragment` — validated column/table reference
+    /// (dot-accepting, so `users.id` is legal).
+    SqlColumn,
+    /// `Sql.param : SqlValue -> SqlFragment` — binds a single `?` placeholder.
+    SqlParam,
+    /// `Sql.int : Int -> SqlFragment` — sugar over `Sql.param`; shares the
+    /// `sql_param` runtime symbol (`i64: Into<SqlParam>` already exists).
+    SqlInt,
+    /// `Sql.string : String -> SqlFragment` — sugar over `Sql.param`.
+    SqlString,
+    /// `Sql.float : Float -> SqlFragment` — sugar over `Sql.param`.
+    SqlFloat,
+    /// `Sql.bool : Bool -> SqlFragment` — sugar over `Sql.param`.
+    SqlBool,
+    /// `Sql.eq : SqlFragment -> SqlFragment -> SqlFragment`
+    SqlEq,
+    /// `Sql.ne : SqlFragment -> SqlFragment -> SqlFragment`
+    SqlNe,
+    /// `Sql.gt : SqlFragment -> SqlFragment -> SqlFragment`
+    SqlGt,
+    /// `Sql.lt : SqlFragment -> SqlFragment -> SqlFragment`
+    SqlLt,
+    /// `Sql.gte : SqlFragment -> SqlFragment -> SqlFragment`
+    SqlGte,
+    /// `Sql.lte : SqlFragment -> SqlFragment -> SqlFragment`
+    SqlLte,
+    /// `Sql.and : SqlFragment -> SqlFragment -> SqlFragment`
+    SqlAnd,
+    /// `Sql.or : SqlFragment -> SqlFragment -> SqlFragment`
+    SqlOr,
+    /// `Sql.not : SqlFragment -> SqlFragment`
+    SqlNot,
+    /// `Sql.isNull : SqlFragment -> SqlFragment`
+    SqlIsNull,
+    /// `Sql.isNotNull : SqlFragment -> SqlFragment`
+    SqlIsNotNull,
+    /// `Sql.inList : SqlFragment -> List SqlValue -> SqlFragment` — `[]` emits
+    /// `(1 = 0)` rather than the SQL syntax error `IN ()`.
+    SqlInList,
+    /// `Sql.like : SqlFragment -> String -> SqlFragment` — the pattern is
+    /// always a bound param, never interpolated.
+    SqlLike,
+    /// `Db.findWhere : Db -> String -> SqlFragment -> Task Error (List Row)` —
+    /// the `SqlFragment`-typed replacement for the removed `unsafeFindWhere`.
+    DbFindWhere,
+    /// `Db.deleteWhere : Db -> String -> SqlFragment -> Task Error Int`
+    DbDeleteWhere,
 }
 
 impl StdlibKernel {
@@ -1705,7 +1757,6 @@ impl StdlibKernel {
             Self::DbFindOneByField => d("Db", "findOneByField", 3, Db, "db_find_one_by_field"),
             Self::DbFindManyByField => d("Db", "findManyByField", 3, Db, "db_find_many_by_field"),
             Self::DbFindByConditions => d("Db", "findByConditions", 3, Db, "db_find_by_conditions"),
-            Self::DbUnsafeFindWhere => d("Db", "unsafeFindWhere", 3, Db, "db_unsafe_find_where"),
             Self::DbInsertFields => d("Db", "insertFields", 3, Db, "db_insert_fields"),
             Self::DbUpdateFields => d("Db", "updateFields", 4, Db, "db_update_fields"),
             Self::DbInsertFieldsReturning => d(
@@ -2260,6 +2311,31 @@ impl StdlibKernel {
             Self::DecAddPercent  => d("Decimal", "addPercent",  2, Pure, "decimal_add_percent"),
             Self::DecSubPercent  => d("Decimal", "subPercent",  2, Pure, "decimal_sub_percent"),
             Self::DecFormatWith  => d("Decimal", "formatWith",  4, Pure, "decimal_format_with"),
+            // ── Std.Db.Sql — SqlFragment builder (backlog #61) ───────────────
+            Self::SqlColumn => d("Sql", "column", 1, Db, "sql_column"),
+            // `int` / `string` / `float` / `bool` are Sky-level type
+            // narrowings of `param`; all five share the `sql_param` runtime
+            // symbol (see the emit-side note in `sky_backend_rust::naming`).
+            Self::SqlParam => d("Sql", "param", 1, Db, "sql_param"),
+            Self::SqlInt => d("Sql", "int", 1, Db, "sql_param"),
+            Self::SqlString => d("Sql", "string", 1, Db, "sql_param"),
+            Self::SqlFloat => d("Sql", "float", 1, Db, "sql_param"),
+            Self::SqlBool => d("Sql", "bool", 1, Db, "sql_param"),
+            Self::SqlEq => d("Sql", "eq", 2, Db, "sql_eq"),
+            Self::SqlNe => d("Sql", "ne", 2, Db, "sql_ne"),
+            Self::SqlGt => d("Sql", "gt", 2, Db, "sql_gt"),
+            Self::SqlLt => d("Sql", "lt", 2, Db, "sql_lt"),
+            Self::SqlGte => d("Sql", "gte", 2, Db, "sql_gte"),
+            Self::SqlLte => d("Sql", "lte", 2, Db, "sql_lte"),
+            Self::SqlAnd => d("Sql", "and", 2, Db, "sql_and"),
+            Self::SqlOr => d("Sql", "or", 2, Db, "sql_or"),
+            Self::SqlNot => d("Sql", "not", 1, Db, "sql_not"),
+            Self::SqlIsNull => d("Sql", "isNull", 1, Db, "sql_is_null"),
+            Self::SqlIsNotNull => d("Sql", "isNotNull", 1, Db, "sql_is_not_null"),
+            Self::SqlInList => d("Sql", "inList", 2, Db, "sql_in_list"),
+            Self::SqlLike => d("Sql", "like", 2, Db, "sql_like"),
+            Self::DbFindWhere => d("Db", "findWhere", 3, Db, "db_find_where"),
+            Self::DbDeleteWhere => d("Db", "deleteWhere", 3, Db, "db_delete_where"),
         }
     }
 
@@ -2675,7 +2751,6 @@ impl StdlibKernel {
         Self::DbFindOneByField,
         Self::DbFindManyByField,
         Self::DbFindByConditions,
-        Self::DbUnsafeFindWhere,
         Self::DbInsertFields,
         Self::DbUpdateFields,
         Self::DbInsertFieldsReturning,
@@ -3139,6 +3214,27 @@ impl StdlibKernel {
         Self::DecAddPercent,
         Self::DecSubPercent,
         Self::DecFormatWith,
+        Self::SqlColumn,
+        Self::SqlParam,
+        Self::SqlInt,
+        Self::SqlString,
+        Self::SqlFloat,
+        Self::SqlBool,
+        Self::SqlEq,
+        Self::SqlNe,
+        Self::SqlGt,
+        Self::SqlLt,
+        Self::SqlGte,
+        Self::SqlLte,
+        Self::SqlAnd,
+        Self::SqlOr,
+        Self::SqlNot,
+        Self::SqlIsNull,
+        Self::SqlIsNotNull,
+        Self::SqlInList,
+        Self::SqlLike,
+        Self::DbFindWhere,
+        Self::DbDeleteWhere,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────
@@ -3168,7 +3264,6 @@ impl StdlibKernel {
                 | Self::DbFindOneByField
                 | Self::DbFindManyByField
                 | Self::DbFindByConditions
-                | Self::DbUnsafeFindWhere
                 | Self::DbInsertFields
                 | Self::DbUpdateFields
                 | Self::DbInsertFieldsReturning
@@ -3188,6 +3283,33 @@ impl StdlibKernel {
                 | Self::DbDecMap4
                 | Self::DbDecRequired
                 | Self::DbDecOptional
+                // ── Std.Db.Sql (backlog #61) — classified `Db` like
+                // `Db.Decode.*` above: no live connection is touched by the
+                // combinators, but the runtime types they build on
+                // (`SqlFragment` / `SqlParam`) live in this crate's
+                // `feature = "db"`-gated `db.rs` module, so a program using
+                // ONLY `Sql.*` still needs the `db` Cargo feature turned on.
+                | Self::SqlColumn
+                | Self::SqlParam
+                | Self::SqlInt
+                | Self::SqlString
+                | Self::SqlFloat
+                | Self::SqlBool
+                | Self::SqlEq
+                | Self::SqlNe
+                | Self::SqlGt
+                | Self::SqlLt
+                | Self::SqlGte
+                | Self::SqlLte
+                | Self::SqlAnd
+                | Self::SqlOr
+                | Self::SqlNot
+                | Self::SqlIsNull
+                | Self::SqlIsNotNull
+                | Self::SqlInList
+                | Self::SqlLike
+                | Self::DbFindWhere
+                | Self::DbDeleteWhere
         )
     }
 
