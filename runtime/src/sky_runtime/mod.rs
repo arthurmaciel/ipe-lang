@@ -218,6 +218,9 @@ pub use string::*;
 pub mod basics;
 pub use basics::*;
 
+pub mod error;
+pub use error::*;
+
 pub mod stringify;
 pub use stringify::*;
 

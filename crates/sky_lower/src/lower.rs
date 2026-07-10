@@ -316,8 +316,11 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::LiveReq
         // `Order` (LT/EQ/GT) is a primitive leaf — no embedded function.
         // `Decimal` is a Copy newtype — no embedded function.
+        // `ErrorKind`/`Error` are leaves — no embedded function.
         | IrType::Order
-        | IrType::Decimal => false,
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error => false,
         // `LiveRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Sky `Fn`).
         IrType::LiveRoute(page) => ir_contains_fun(page),
@@ -358,13 +361,14 @@ fn clone_class(t: &IrType) -> CloneClass {
     match t {
         // Scalars — primitive Copy types.
         // `Decimal` is `#[derive(Copy)]` — treat as CopyLeaf.
-        IrType::Int | IrType::Float | IrType::Bool | IrType::Char | IrType::Unit | IrType::Order | IrType::Decimal => {
+        IrType::Int | IrType::Float | IrType::Bool | IrType::Char | IrType::Unit | IrType::Order | IrType::Decimal | IrType::ErrorKind => {
             CloneClass::CopyLeaf
         }
         // Runtime-verified Clone types.
         // Str(String), Bytes(Vec<u8>), Json(serde_json::Value), Db(Arc-backed),
         // UiPlain (element.rs derives Clone), LiveReq (req.rs derives Clone).
-        IrType::Str | IrType::Bytes | IrType::Json | IrType::Db | IrType::UiPlain(_) | IrType::LiveReq => {
+        // Error: SkyError derives Clone (not Copy — carries a heap `String`).
+        IrType::Str | IrType::Bytes | IrType::Json | IrType::Db | IrType::UiPlain(_) | IrType::LiveReq | IrType::Error => {
             CloneClass::CloneOk
         }
         // Runtime-verified Clone server/http opaques (audited 2026-07-05):
@@ -4104,10 +4108,12 @@ impl<'a> Lowerer<'a> {
                 // `Decimal` is the Std.Decimal arbitrary-precision type.
                 // Backed by `sky_runtime::decimal::Decimal` (rust_decimal newtype).
                 "Decimal" => Ok(IrType::Decimal),
-                // `Error` is Sky's fixed error-channel type, backed by `SkyError =
-                // String` in the runtime.  Merged with `String` here since they
-                // share the same IR representation (`IrType::Str`).
-                "String" | "Error" => Ok(IrType::Str),
+                "String" => Ok(IrType::Str),
+                // `Error` is Sky's fixed error-channel type — backed by the real
+                // `sky_runtime::error::SkyError` ADT (backlog #85/#160), no
+                // longer merged with `String`. `ErrorKind` mirrors `Order`.
+                "Error" => Ok(IrType::Error),
+                "ErrorKind" => Ok(IrType::ErrorKind),
                 "Char" => Ok(IrType::Char),
                 // `Bytes` is a built-in distinct primitive (Vec<u8> on Rust;
                 // distinct from String). Divergence from Sky: Sky aliases
@@ -4773,13 +4779,14 @@ impl<'a> Lowerer<'a> {
                 // `Decimal` is the Std.Decimal arbitrary-precision type.
                 // Backed by `sky_runtime::decimal::Decimal` (rust_decimal newtype).
                 "Decimal" => Ok(IrType::Decimal),
-                // `Error` is Sky's fixed error-channel type, backed by `SkyError =
-                // String` in the runtime.  Lambda parameters typed as `Error` (e.g.
-                // the `e` in `\e -> ...` when `onError`/`mapError` pins the handler)
-                // must lower to `IrType::Str`.  Merged with `String` since they share
-                // the same IR representation.
-                // `Algorithm` (D-00) shares the same `String` IR representation.
-                "String" | "Error" | "Algorithm" => Ok(IrType::Str),
+                // `Algorithm` (D-00) shares the `String` IR representation.
+                "String" | "Algorithm" => Ok(IrType::Str),
+                // `Error` — backed by the real `sky_runtime::error::SkyError` ADT
+                // (backlog #85/#160), no longer merged with `String`. Lambda
+                // parameters typed as `Error` (e.g. the `e` in `\e -> ...` when
+                // `onError`/`mapError` pins the handler) lower here too.
+                "Error" => Ok(IrType::Error),
+                "ErrorKind" => Ok(IrType::ErrorKind),
                 "Char" => Ok(IrType::Char),
                 // ── Kernel-implicit opaque server / Sky.Live types (#152) ────────
                 // Mirror of the `ir_type_from_canon` arms added at the same
@@ -7134,6 +7141,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ErrorUnavailable
                 // `Error.toString : Error -> String`
                 | KernelFn::ErrorToString
+                // `Error.isRetryable : Error -> Bool` (#85/#160)
+                | KernelFn::ErrorIsRetryable
                 // ── CssSafety arity-1 (Std.Css leaf kernels, #47) ─────────────
                 // `safeValue`/`safePropName`/`safeSelector : String -> Maybe String`
                 // `stripStyleClose : String -> String`
@@ -8265,6 +8274,7 @@ impl<'a> Lowerer<'a> {
                         Ok(Callee::Kernel(KernelFn::ErrorToString))
                     }
                     ("Error", "withMessage") => Ok(Callee::Kernel(KernelFn::ErrorWithMessage)),
+                    ("Error", "isRetryable") => Ok(Callee::Kernel(KernelFn::ErrorIsRetryable)),
                     // ── CssSafety kernels (Sky.Core.CssSafety — Std.Css leaf
                     //    security kernels, #47) ──────────────────────────────
                     ("CssSafety", "safeValue") => {
@@ -10027,6 +10037,8 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::Json
         | IrType::Db
         | IrType::Order
+        | IrType::ErrorKind
+        | IrType::Error
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
