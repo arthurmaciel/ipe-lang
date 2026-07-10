@@ -586,8 +586,36 @@ fn pool_cache() -> &'static std::sync::Mutex<HashMap<String, Db>> {
 /// is a DISTINCT in-memory database, so a shared pool would silently merge what
 /// callers expect to be isolated DBs (soundness). File / network URLs are safe —
 /// and correct — to share.
+/// `:memory:` SQLite URLs (bare, or with a scheme prefix like `sqlite://` or
+/// `sqlite:`) and URI-mode `mode=memory` WITHOUT `cache=shared` must NOT be
+/// pooled: each connection is a DISTINCT in-memory database, so sharing a
+/// pool would silently merge what callers expect to be isolated DBs
+/// (soundness). Matching on the exact SQLite special-string / query
+/// parameter — not a raw substring match on "memory" anywhere in the URL —
+/// so a legitimate file path like `sqlite://data/memory_bank.db` is
+/// correctly treated as cacheable.
 fn url_is_cacheable(url: &str) -> bool {
-    !url.contains("memory")
+    // Strip a `sqlite:` / `sqlite://` scheme prefix if present, then compare
+    // the remainder (path + query) — mirrors how sqlx/libsqlite3 parse the
+    // connection string.
+    let rest = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))
+        .unwrap_or(url);
+
+    // Split off the query string (everything after the first `?`) so
+    // `mode=memory` can be checked independently of the path.
+    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+
+    if path == ":memory:" {
+        return false;
+    }
+    if query.split('&').any(|kv| kv == "mode=memory")
+        && !query.split('&').any(|kv| kv.starts_with("cache=shared"))
+    {
+        return false;
+    }
+    true
 }
 
 /// Upper bound on pooled connections per database. Bounded by default so that
@@ -2040,6 +2068,35 @@ pub fn db_insert_fields_returning<E: Send + From<String> + 'static, A: Send + 's
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_is_cacheable_bare_memory_is_not_cacheable() {
+        assert!(!url_is_cacheable(":memory:"));
+        assert!(!url_is_cacheable("sqlite::memory:"));
+        assert!(!url_is_cacheable("sqlite://:memory:"));
+    }
+
+    #[test]
+    fn url_is_cacheable_mode_memory_without_shared_cache_is_not_cacheable() {
+        assert!(!url_is_cacheable("file:foo.db?mode=memory"));
+    }
+
+    #[test]
+    fn url_is_cacheable_mode_memory_with_shared_cache_is_cacheable() {
+        // `cache=shared` mode=memory URLs are a shared named in-memory DB —
+        // multiple connections to the SAME url ARE the same database, so
+        // pooling is correct here (this is the regression this fix must NOT
+        // break: don't overcorrect to "any mode=memory is uncacheable").
+        assert!(url_is_cacheable("file:foo.db?mode=memory&cache=shared"));
+    }
+
+    #[test]
+    fn url_is_cacheable_filename_containing_memory_substring_is_cacheable() {
+        // The DoS-reopen regression: a legitimate file path containing the
+        // substring "memory" must NOT be excluded from pooling.
+        assert!(url_is_cacheable("sqlite://data/memory_bank.db?mode=rwc"));
+        assert!(url_is_cacheable("sqlite:./memory_backup.sqlite"));
+    }
 
     // #52: the SkyRow accessor is total over a Dict-shaped row — present field
     // reads back, absent field is "" (never panics), int/bool parse + default.
