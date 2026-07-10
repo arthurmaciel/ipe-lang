@@ -162,6 +162,44 @@ main =
         }
 "#;
 
+// backlog #44: a `Secret` Model field must be rejected for `Std.Live` — a
+// `Secret` must NEVER round-trip through the session store. `Secret` is
+// NON-serde by design (`ir_type_is_serde(Secret) = false`), so this is the
+// SAME mechanism as `LIVE_CMD_MODEL` / `LIVE_HTML_MODEL` above, not a new gate.
+const LIVE_SECRET_MODEL: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg = Tick
+
+type alias Model = { count : Int, apiKey : Secret }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0, apiKey = Secret.fromString "sk_live_x" }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Tick ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout [] (Ui.text (String.fromInt model.count))
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Tick
+        }
+"#;
+
 const TUI_GOOD: &str = r"module Main exposing (main)
 
 import Std.Tui as Tui
@@ -261,6 +299,13 @@ fn live_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
 #[test]
 fn live_model_with_html_field_is_rejected() -> Result<(), BoxError> {
     assert_rejected_with("live_html", LIVE_HTML_MODEL, "SKY-L0120")
+}
+
+/// backlog #44: `Secret` in a Live Model is a compile-time `SKY-L0120`, never
+/// a session-store leak — see `LIVE_SECRET_MODEL`'s doc comment.
+#[test]
+fn live_model_with_secret_field_is_rejected() -> Result<(), BoxError> {
+    assert_rejected_with("live_secret", LIVE_SECRET_MODEL, "SKY-L0120")
 }
 
 #[test]

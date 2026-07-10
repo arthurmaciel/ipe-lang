@@ -262,6 +262,13 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         // `SqlFragment` (backlog #61) is a query-building value, never
         // persisted to a Live session store — not a valid Model leaf.
         | IrType::SqlFragment
+        // `Secret` (backlog #44) must never round-trip through a Live session
+        // store — not a valid Model leaf. This is the `blame()` classification
+        // consulted ONLY after `admissible()` (which uses `ir_type_is_serde`,
+        // `false` for `Secret`) has already rejected a Live Model containing
+        // one, so a `Secret` Model field is a compile-time SKY-L0120 naming
+        // this leaf, never a session-store leak.
+        | IrType::Secret
         // `Order` is a plain three-variant data enum — an admissible leaf.
         // `Decimal` is a Copy newtype — an admissible leaf.
         // `ErrorKind`/`Error` derive serde — admissible leaves (e.g. a Model's
