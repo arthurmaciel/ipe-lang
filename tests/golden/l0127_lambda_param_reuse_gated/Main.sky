@@ -1,0 +1,23 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- #90 T4 residual gate, revert-incident Bug 1 regression: a fn-carrying,
+-- non-Clone LAMBDA parameter (as opposed to a Def param / let-binding /
+-- match-arm binding — the other 4 call sites `reject_fn_value_reuse` was
+-- already wired to) used in TWO consuming (argument) positions inside the
+-- lambda's own body. `lower_lambda` builds its own `ir_params` separately
+-- from those 4 sites and, before the fix, never ran them through the reuse
+-- gate — this exact shape reached `cargo build` as E0382
+-- (use of moved value: `mf`) instead of a clean SKY-L0127. Must stay
+-- rejected with SKY-L0127, never silently accepted.
+consume : Maybe (Int -> Int) -> Int
+consume mf =
+    case mf of
+        Just f -> f 1
+        Nothing -> 0
+
+main =
+    let
+        apply2 = \mf -> consume mf + consume mf
+    in
+    println (String.fromInt (apply2 (Just (\x -> x + 1))))
