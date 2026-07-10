@@ -342,8 +342,34 @@ fn fold_log(it: &serde_json::Value) {
     }
 }
 
+/// True when `Origin` is present AND does not match `Host` — i.e. this is a
+/// cross-origin request. Absent `Origin` (same-origin fetch/XHR, curl,
+/// server-to-server pushes from `push_exporter.rs`) is NOT flagged: those
+/// callers never send a hostile cross-origin request by construction, and
+/// requiring `Origin` would break legitimate non-browser ingest pushes.
+/// Mirrors `csrf.rs::origin_mismatch`'s same-origin comparison, applied
+/// unconditionally here (not opt-in) since it's the ONLY defense available
+/// when `SKY_INGEST_TOKEN` is unset.
+fn is_cross_origin_ingest(headers: &axum::http::HeaderMap) -> bool {
+    let origin = match headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|h| h.to_str().ok())
+    {
+        Some(o) => o,
+        None => return false,
+    };
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let origin_host = origin.split_once("://").map(|x| x.1).unwrap_or(origin);
+    !host.is_empty() && origin_host != host
+}
+
 /// `Some(401)` when `SKY_INGEST_TOKEN` is set and the `X-Sky-Ingest-Token` header
-/// is absent or wrong (constant-time compare). Unset → `None` (open endpoint).
+/// is absent or wrong (constant-time compare). Unset → open EXCEPT for a
+/// cross-origin browser POST (log-injection CSRF shape — see
+/// `is_cross_origin_ingest`), which is rejected even in dev.
 fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::Response> {
     use subtle::ConstantTimeEq;
     let want = match crate::sky_runtime::system::read_env_var("SKY_INGEST_TOKEN")
@@ -361,6 +387,22 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
                     (
                         StatusCode::UNAUTHORIZED,
                         "observability ingest requires SKY_INGEST_TOKEN in production",
+                    )
+                        .into_response(),
+                );
+            }
+            // Dev + no token configured: the ONLY remaining defense is
+            // same-origin. A same-origin fetch/XHR, curl, or a same-process
+            // push (no Origin header) is allowed; a cross-origin browser POST
+            // (the CSRF-log-injection shape — a `POST` with
+            // `Content-Type: text/plain` and no custom header is a CORS
+            // "simple request", so a malicious cross-origin page can fire it
+            // without a preflight) is rejected.
+            if is_cross_origin_ingest(headers) {
+                return Some(
+                    (
+                        StatusCode::FORBIDDEN,
+                        "observability ingest: cross-origin request rejected (set SKY_INGEST_TOKEN to allow federated pushes)",
                     )
                         .into_response(),
                 );
@@ -389,14 +431,59 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
 mod tests {
     use super::*;
 
+    // Pure (no env dependency) — safe as its own test, no race with
+    // ingest_token_gate's SKY_INGEST_TOKEN mutation below.
+    #[test]
+    fn is_cross_origin_ingest_detection() {
+        let mk = |origin: Option<&str>, host: &str| {
+            let mut h = axum::http::HeaderMap::new();
+            if let Some(o) = origin {
+                h.insert("origin", o.parse().unwrap());
+            }
+            h.insert("host", host.parse().unwrap());
+            h
+        };
+        assert!(is_cross_origin_ingest(&mk(
+            Some("https://evil.example"),
+            "victim.example"
+        )));
+        assert!(!is_cross_origin_ingest(&mk(
+            Some("https://victim.example"),
+            "victim.example"
+        )));
+        // No Origin header at all → not flagged (curl / server-to-server push).
+        assert!(!is_cross_origin_ingest(&mk(None, "victim.example")));
+    }
+
     // One test (not split) — SKY_INGEST_TOKEN is process-global env, so a split
     // would race other threads. Sets then clears the var within the test.
     #[test]
     fn ingest_token_gate() {
         std::env::remove_var("SKY_INGEST_TOKEN");
-        // Unset → endpoint open regardless of header.
+        // Unset → endpoint open regardless of header, when same-origin (or no
+        // Origin at all — curl / non-browser caller).
         let h = axum::http::HeaderMap::new();
         assert!(ingest_token_blocked(&h).is_none(), "open when unset");
+
+        // Unset token + cross-origin browser POST → rejected (the CSRF-log-
+        // injection shape: no token configured, so same-origin is the only
+        // remaining defense).
+        let mut h = axum::http::HeaderMap::new();
+        h.insert("origin", "https://evil.example".parse().unwrap());
+        h.insert("host", "victim.example".parse().unwrap());
+        assert!(
+            ingest_token_blocked(&h).is_some(),
+            "cross-origin POST with no token configured must be rejected"
+        );
+
+        // Unset token + same-origin Origin header → still open.
+        let mut h = axum::http::HeaderMap::new();
+        h.insert("origin", "https://victim.example".parse().unwrap());
+        h.insert("host", "victim.example".parse().unwrap());
+        assert!(
+            ingest_token_blocked(&h).is_none(),
+            "same-origin request still open in dev"
+        );
 
         std::env::set_var("SKY_INGEST_TOKEN", "secret123");
         // Missing header → blocked.
@@ -406,10 +493,16 @@ mod tests {
         let mut h = axum::http::HeaderMap::new();
         h.insert("x-sky-ingest-token", "wrong".parse().unwrap());
         assert!(ingest_token_blocked(&h).is_some(), "wrong token blocked");
-        // Correct token → allowed.
+        // Correct token → allowed, even cross-origin (bearer-token auth makes
+        // the same-origin check redundant once a real token is configured).
         let mut h = axum::http::HeaderMap::new();
         h.insert("x-sky-ingest-token", "secret123".parse().unwrap());
-        assert!(ingest_token_blocked(&h).is_none(), "correct token allowed");
+        h.insert("origin", "https://evil.example".parse().unwrap());
+        h.insert("host", "victim.example".parse().unwrap());
+        assert!(
+            ingest_token_blocked(&h).is_none(),
+            "correct token allowed even cross-origin"
+        );
 
         std::env::remove_var("SKY_INGEST_TOKEN");
     }
