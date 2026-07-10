@@ -1,0 +1,26 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- #90 T3 residual gate, revert-incident Bug 3 regression (the shape that
+-- caused the THIRD revert): a BARE, POINT-FREE top-level re-export of
+-- `Result.andMap` (`myAndMap = Result.andMap`), later called with a curried
+-- (arity >= 2) payload. `myAndMap`'s OWN call site (`myAndMap (Ok 1) (Ok
+-- add3)`) resolves to `Callee::Func(myAndMap_id)` — a USER function, not
+-- `Callee::Kernel(..)` — so a check keyed on the outer call's resolved callee
+-- can never see this. `Result.andMap`'s literal occurrence lives INSIDE
+-- `myAndMap`'s own body as a bare-value reference, lowered through
+-- `lower_expr`'s bare-value arm (never `lower_call_uniform`). Must stay
+-- rejected — SKY-T0014 (Tier 2, the primary `TyBounds` obligation) and/or
+-- SKY-L0114 (Tier 1 backstop, now re-anchored inside `lower_callee` itself so
+-- every reference funnels through it) — never a silent accept that reaches
+-- `cargo build` as E0277.
+add3 : Int -> Int -> Int -> Int
+add3 a b c =
+    a + b + c
+
+myAndMap = Result.andMap
+
+main =
+    case myAndMap (Ok 1) (Ok add3) of
+        Ok _ -> println "ok"
+        Err _ -> println "err"

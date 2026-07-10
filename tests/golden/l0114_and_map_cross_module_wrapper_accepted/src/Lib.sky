@@ -1,0 +1,14 @@
+module Lib exposing (andMapAlias)
+
+import Sky.Core.Prelude exposing (..)
+
+-- #90 T3.residual fixture (design doc §4 "T3.residual" row): an ANNOTATED
+-- wrapper around `Result.andMap`, exported and reused cross-module at two
+-- DIFFERENT concrete payload types (both individually arity-1-SAFE). Per the
+-- design's §2.4 precedent (`Math.min`'s Comparable bound lifting onto its
+-- own annotation skolem, re-verified at each of the wrapper's own external
+-- call sites), this must stay ACCEPTED — the `and_map_payload` obligation on
+-- `b` is meant to propagate the SAME way an ordinary super-type bound does.
+andMapAlias : Result e a -> Result e (a -> b) -> Result e b
+andMapAlias x f =
+    Result.andMap x f
