@@ -1,0 +1,28 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+-- #56 proof-matrix shape P1 — the ONE completeness gap found by the #56
+-- investigation, filed as backlog row #56b. The row-var record annotation
+-- syntax `{ r | name : String }` (Elm/reference: parses, types the row var
+-- as part of the scheme, and monomorphises the callee per record-shape
+-- instantiation in the backend) is NOT supported by ipê's parser today.
+-- ipê fails CLOSED at parse (SKY-P0001, "found `|`, expected `:`") rather
+-- than accepting a program the backend cannot yet emit for — see
+-- docs/architecture/row-poly-subset-superset-design.md "Gap filed".
+--
+-- This is a canary: it MUST keep failing with SKY-P0001 until someone lands
+-- the full chain (parser + canon + constrain + per-shape backend
+-- monomorphisation) described in the spec's gap section. If this test
+-- starts failing because skyc now PARSES the annotation, re-read that
+-- section before changing the expected code — accepting the syntax without
+-- the backend monomorphisation step is a SEAL violation (the A7 exact-key
+-- struct lookup would miss on a row-var-typed record).
+getName : { r | name : String } -> String
+getName rec =
+    rec.name
+
+
+main =
+    println (getName { name = "Ada", age = 36 })
