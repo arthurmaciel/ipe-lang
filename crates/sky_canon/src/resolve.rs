@@ -88,6 +88,10 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // `EXTRA_BUILTIN_TYPE_NAMES`) so user shadowing of this security-tier type
     // is a hard canon error, matching the `SqlValue`/`SqlField` precedent.
     "SqlFragment",
+    // `Sky.Core.Secret`'s opaque sealed secret-string type (backlog #44) —
+    // reserved for the same reason as `SqlFragment`: a security-tier type
+    // must not be shadowable by user code.
+    "Secret",
     "StreamId",
     "ChunkEvent",
     "Request",

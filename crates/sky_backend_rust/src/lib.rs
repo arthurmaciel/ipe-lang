@@ -1023,7 +1023,10 @@ fn collect_record_shapes(
         | IrType::Error
         // `SqlFragment` (backlog #61) is an opaque query-building value — no
         // record shape.
-        | IrType::SqlFragment => {}
+        // `Secret` (backlog #44) is an opaque sealed string wrapper — no
+        // record shape.
+        | IrType::SqlFragment
+        | IrType::Secret => {}
         // `LiveRoute page` is page-parametric — descend in case the page type
         // carries a nested record shape.
         IrType::LiveRoute(page) => {
@@ -1146,7 +1149,10 @@ fn type_reaches_enum(
         | IrType::Error
         // `SqlFragment` (backlog #61) is a heap-backed struct (String +
         // Vec<SqlParam>) — no size-cycle risk.
-        | IrType::SqlFragment => false,
+        // `Secret` (backlog #44) is a heap-backed newtype (String) — no
+        // size-cycle risk.
+        | IrType::SqlFragment
+        | IrType::Secret => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::LiveRoute(page) => type_reaches_enum(page, target, enums, visited),
@@ -1204,7 +1210,9 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::ErrorKind
         | IrType::Error
         // `SqlFragment` (backlog #61) is monomorphic — no generic parameters.
-        | IrType::SqlFragment => false,
+        // `Secret` (backlog #44) is monomorphic — no generic parameters.
+        | IrType::SqlFragment
+        | IrType::Secret => false,
         // `LiveRoute page` is parametric on `page`; check if it carries a
         // generic.
         IrType::LiveRoute(page) => contains_generic(page),
@@ -1290,7 +1298,9 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::ErrorKind
         | IrType::Error
         // `SqlFragment` (backlog #61) is monomorphic — no generics to collect.
-        | IrType::SqlFragment => {}
+        // `Secret` (backlog #44) is monomorphic — no generics to collect.
+        | IrType::SqlFragment
+        | IrType::Secret => {}
         // `LiveRoute page` may carry generic parameters through `page`.
         IrType::LiveRoute(page) => collect_generics(page, out),
         // M7: `Ui { ctor, msg }` may carry generic parameters through `msg`.
@@ -1568,7 +1578,9 @@ fn match_template(
         | IrType::ErrorKind
         | IrType::Error
         // `SqlFragment` (backlog #61) is a monomorphic opaque leaf.
-        | IrType::SqlFragment => {
+        // `Secret` (backlog #44) is a monomorphic opaque leaf.
+        | IrType::SqlFragment
+        | IrType::Secret => {
             if template == concrete {
                 Ok(())
             } else {

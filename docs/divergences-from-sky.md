@@ -1013,6 +1013,70 @@ API-shape review):
   (`db_findwhere_string_is_t0001` — the negative "parse, don't validate"
   proof). Spec: `docs/architecture/class6-secret-sqlfragment-fix-spec-2026-07-09.md`.
 
+### B-Secret — `Sky.Core.Secret` opaque secret-string type; `Auth.signToken`/`verifyToken` re-typed (backlog #44)
+- **Reference:** the Go backend's `Std.Auth.signToken` / `verifyToken` take a
+  plain `String` signing key, and every other Go/Haskell surface handles API
+  keys / passwords / tokens as bare `String` — no typed boundary stops one
+  from landing in a log line, a `fmt.Sprintf("%v", …)`, or an error message.
+- **ipê design:** a new opaque `Secret` type (`Sky.Core.Secret`, 3 kernels:
+  `fromString` — the seal; `reveal` — the single greppable un-parse;
+  `redacted` — the explicit `"<redacted>"` accessor). `Auth.signToken` /
+  `Auth.verifyToken`'s signing-key argument is re-typed `String -> Secret`
+  (zero migration cost — no fixture called either kernel before this change).
+  `==` and `toString`/string-interpolation/`Log.*With` stringification are
+  ALL **allowed** on `Secret` and are **safe by construction**: `Secret` has
+  exactly one hand-written `PartialEq` (constant-time, via
+  `subtle::ConstantTimeEq`) and exactly one hand-written `SkyStringify` /
+  `Debug` (both ALWAYS render the fixed `"<redacted>"` placeholder,
+  regardless of the wrapped value) — there is no OTHER impl a caller could
+  reach instead, so no `ty_is_equatable`/`has_show` denylist is needed at
+  all. `Secret` has NO `Display`, NO `Hash`, NO `Ord`, NO `serde`: a bare
+  `Basics.toString`/`Debug.toString` call and any `Dict`-key/`Set`-element/
+  ordering (`<`/`>`) use are Rust-or-Sky-level compile errors, never a
+  runtime concern (Dict-key/ordering rejection needs zero new type-checker
+  code — `Secret` is a bare `Ty::Con` outside the 4-5-scalar
+  `comparable`/`Ord` allowlist already). The backing buffer is zeroized on
+  `Drop` (`zeroize::Zeroize`), shipped in the same change as the type itself
+  (security-tier hardening is pre-push, never deferred).
+- **Sanctioned:** yes — strictly-better-security class ("secrets are typed,
+  never `fmt`-stringified", `PRINCIPLES.md`'s Security & soundness
+  enforcement section); no Go counterpart type exists (`oracle_divergence =
+  true` on every new golden). `Secret` is `Clone + PartialEq` (derivable) but
+  deliberately NOT `serde` — this is ALSO the mechanism that makes a
+  `Std.Live` Model field of type `Secret` a compile-time `SKY-L0120`
+  (never a session-store leak): `ir_type_is_serde(Secret) = false` gates the
+  Live Model exactly like it gates `SqlFragment`. A record containing a
+  `Secret` field stays fully `Clone`/`Debug`/`==` (the #45/#70
+  derive-blast-radius class `SqlFragment` already closed — marking a leaf
+  merely non-serde, never non-derivable). Reference:
+  `runtime/src/sky_runtime/secret.rs` (`Secret` + `secret_from_string` /
+  `secret_reveal` / `secret_redacted`), `crates/sky_kernels/src/lib.rs`
+  (`SecretFromString`/`SecretReveal`/`SecretRedacted` tail-appended kernels),
+  `crates/sky_types/src/constrain.rs` (`stdlib_scheme` `FIRST_SCHEMED`
+  entries + the `AuthSignToken`/`AuthVerifyToken` re-typing),
+  `crates/sky_backend_rust/src/project.rs` (`AUTH_WRAPPERS` reveals the
+  `Secret` at the Sky-facing boundary before delegating to the runtime's
+  unchanged `String`-typed `auth_sign_token`/`auth_verify_token`),
+  `crates/skyc/tests/golden_secret.rs` (seal/reveal/redacted round trip,
+  `==` match/mismatch/length-mismatch, record-containing-Secret,
+  Log.infoWith redaction, Auth sign/verify round trip) +
+  `crates/skyc/tests/secret_gates.rs` (`secret_concat_is_rejected` — the
+  negative "parse, don't validate" proof) +
+  `crates/skyc/tests/model_admissibility.rs`
+  (`live_model_with_secret_field_is_rejected`). Spec:
+  `docs/architecture/class6-secret-sqlfragment-fix-spec-2026-07-09.md`.
+  **Out of scope, explicitly deferred** (per the spec's own filed-follow-ups
+  list, not a gap introduced here): a `System.getenvSecret` construction
+  convenience (`Task.map Secret.fromString (System.getenv …)` is the v1
+  pattern); a committed-secret-literal lint; `Secret`-accepting `Log.*`/
+  `Trace.*` overloads (rejected as a design, not deferred — normalizes
+  routing secrets toward logging; `Secret.redacted`/the automatic
+  `SkyStringify` redaction already cover the use case); the WASM
+  `HydrationState` field-type containment gate documented in
+  `docs/architecture/wasm-target.md` §Q6 — nothing to gate yet, the WASM
+  target does not exist in this compiler; `Secret`'s `ir_type_is_serde =
+  false` classification IS the future predicate that gate will consult.
+
 ---
 
 <a id="planned-future-divergences"></a>

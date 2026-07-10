@@ -2927,10 +2927,13 @@ mod tests {
     /// REJECTED at type-check (SKY-T0001-class), not silently accepted.
     #[test]
     fn auth_sign_token_claims_pinned_to_dict_string_string() {
+        // backlog #44: `signToken`'s first argument is `Secret`, not `String` —
+        // seal via `Secret.fromString` (auto-qualified prelude module, no
+        // import needed, same as `Uuid.v4`).
         let ok_src = "module Main exposing (main)\n\
              import Sky.Core.Prelude exposing (..)\n\
              import Std.Auth as Auth\n\
-             main =\n    Auth.signToken \"s\" (Dict.fromList [(\"sub\", \"x\")]) 3600\n";
+             main =\n    Auth.signToken (Secret.fromString \"s\") (Dict.fromList [(\"sub\", \"x\")]) 3600\n";
         let Some((m, mut i)) = canon_src(ok_src) else {
             return;
         };
@@ -2942,7 +2945,7 @@ mod tests {
         let bad_src = "module Main exposing (main)\n\
              import Sky.Core.Prelude exposing (..)\n\
              import Std.Auth as Auth\n\
-             main =\n    Auth.signToken \"s\" { sub = \"x\" } 3600\n";
+             main =\n    Auth.signToken (Secret.fromString \"s\") { sub = \"x\" } 3600\n";
         let Some((m2, mut i2)) = canon_src(bad_src) else {
             return;
         };

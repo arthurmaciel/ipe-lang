@@ -107,6 +107,13 @@ pub use tui::{tui_app, tui_app_ui};
 pub mod uuid_kernel;
 pub use uuid_kernel::*;
 
+// `Sky.Core.Secret` — opaque secret-string wrapper (backlog #44). Always
+// compiled (no cfg gate): a plain newtype over `String` with only `subtle` /
+// `zeroize` as deps (both non-optional base deps), so every feature subset
+// gets the type.
+pub mod secret;
+pub use secret::*;
+
 // Canonical HTTP header-name casing, shared by Sky.Live and Sky.Http.Server.
 // `live` implies `server`, so gating on `server` covers both request paths.
 #[cfg(feature = "server")]
