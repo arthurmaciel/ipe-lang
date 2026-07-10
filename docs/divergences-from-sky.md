@@ -371,7 +371,54 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   SKY-N0002 not SKY-I0001; positive control `i138_kernel_implicit_positive` →
   must compile clean).
 
-### B22 — Boundary Scheme Promotion: phase-1 under-acceptance for untyped bindings (class-1 inference fix #2)
+### B22 — Function value in a `Maybe`/`Result`/user-union constructor payload (#90 Stage 1)
+- **Differs:** ipê lifted the blanket `SKY-L0114` rejection of a function
+  value in a constructor payload for ENUM-LIKE heads (`Maybe`/`Result`, or a
+  user union) — `Ok (\x -> x + 1)`, `Just f`, and a DECLARED function-typed
+  payload (`type Retryish e = RetryWhen (e -> Bool)`) all lower and run.
+  `Maybe.andMap`/`Result.andMap` are usable with a function payload (arity 1);
+  a CURRIED (2+-argument) payload through `andMap`, and reuse of a fn-carrying
+  binding in more than one non-call position, stay fail-closed (SKY-L0114 /
+  new SKY-L0127 respectively — Stage 2 territory, not covered). Upstream's
+  Haskell→Rust codegen instead renders a function-typed field as a bare `fn`
+  pointer (`TypeRenderer.hs`) — `Clone`/`Debug`/`PartialEq`-preserving, but
+  restricted to NON-CAPTURING closures (documented there explicitly). ipê's
+  `Box<dyn Fn>` payload is strictly more general (Sky closures capture
+  freely) at the cost of losing those three derives on the carrier — absorbed
+  by the #87 derive-demotion fixpoint and the type checker's
+  `ty_is_equatable`/serde/#91-Model use-site gates, so no unsound use reaches
+  `cargo`.
+- **Go-oracle relationship:** for a NON-CAPTURING payload closure and a plain
+  `Ok f |> Result.andMap x` / `Just f |> Maybe.andMap x` chain, the reference
+  Go compiler (`sky` v0.16.29) has an existing codegen bug (the same
+  `interface{}`-boxed-value class as B-below): a case-arm-extracted function
+  value sometimes fails `go build` outright (`invalid operation: cannot call
+  f (variable of interface type any): any is not a function` —
+  `m3a_function_payload_gate`, `l0114_ctor_decl_fn_payload`,
+  `l0114_fn_extracted_called_twice`) and sometimes builds but computes the
+  WRONG value (`l0114_result_and_map_fn_payload`, `l0114_maybe_and_map_fn_payload`
+  — Go silently returns the untransformed `ra` operand instead of applying the
+  boxed function, verified against an unambiguous named-function probe:
+  `Ok addTen |> Result.andMap (Ok 5)` prints `5` under Go, not the correct
+  `15`). ipê's `Box<dyn Fn>` kernel call computes the semantically correct
+  value in every case. A minority of shapes (a genuinely non-capturing payload
+  with no `andMap`/case-extraction involved) DO match — real parity there.
+- **Rationale:** Sky closures capture freely; a bare-`fn`-pointer restriction
+  (upstream's choice) would silently forbid that. `Box<dyn Fn>` is the sound
+  direction, and the machinery to keep it seal-safe (#87/#93/#91/type-checker
+  equatable gate) already ships. See
+  `docs/architecture/ctor-payload-function-design.md` for the full hazard
+  analysis.
+- **Sanctioned:** yes (`sanctioned:` for the Go-succeeds-but-differs shapes;
+  Go-failure divergence for the shapes that don't `go build`). Goldens
+  `l0114_result_and_map_fn_payload`, `l0114_maybe_and_map_fn_payload`,
+  `l0114_ctor_decl_fn_payload`, `l0114_fn_extracted_called_twice`,
+  `m3a_function_payload_gate` (flipped from its reject branch to its
+  build-and-run branch). Negative controls (must stay `SKY-L0114`/`SKY-L0127`,
+  no oracle needed): `l0114_and_map_curried_stays_gated`,
+  `l0127_fn_carrier_reuse_gated`.
+
+### B23 — Boundary Scheme Promotion: phase-1 under-acceptance for untyped bindings (class-1 inference fix #2)
 - **Context:** an unannotated top-level binding is monomorphic *within its
   home module* (unchanged); at its module's boundary it is now generalized
   into a scheme, and each cross-module reference instantiates it fresh — see
@@ -698,14 +745,17 @@ API-shape review):
 
 ## Counts
 
-- **Behavioral divergences:** 21 classes (B1–B21). B16 (#104 true last-use) and
+- **Behavioral divergences:** 23 classes (B1–B23). B16 (#104 true last-use) and
   B17 (#99 alias bind) are pending fixture goldens. B3 RETIRED (task #55a) per
   inline note. B18–B20 are WS-server entries added with task #127. B20 CLOSED
   (#135) — Ping heartbeat ported. B21 is the #138 total-resolution gate
-  (unknown-type → SKY-N0002 not ICE). Sanctioned/recorded goldens: 42 carry a
-  marker (`Math` 4, `Bytes` 5, `Encoding` 1, `Jwt` 5, `Db` 11, `Ui` 6,
-  `Cmd`/`Sub` 3, `Uuid` 2, plus Go-failure kind-1 shapes and Money/case/toFloat
-  sanctioned entries). B16/B17 goldens pending.
+  (unknown-type → SKY-N0002 not ICE). B22 is the #90 Stage-1 ctor-payload-
+  function lift (`Ok`/`Just` holding a function). B23 is Boundary Scheme
+  Promotion phase-1 under-acceptance (class-1 inference fix #2). Sanctioned/recorded goldens:
+  47 carry a marker (`Math` 4, `Bytes` 5, `Encoding` 1, `Jwt` 5, `Db` 11, `Ui` 6,
+  `Cmd`/`Sub` 3, `Uuid` 2, plus Go-failure kind-1 shapes, Money/case/toFloat
+  sanctioned entries, and the B22 ctor-payload-function set). B16/B17 goldens
+  pending.
 - **Architectural divergences:** 18 (A1–A18). A8 and A13 are reference-ahead on
   completeness. A15–A17 are seal-gate entries. A18 is the WS phantom-`msg`
   type-var entry added with task #127.
