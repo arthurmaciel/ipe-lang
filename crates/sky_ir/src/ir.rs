@@ -729,6 +729,24 @@ pub enum IrType {
     /// runtime type to show SQL text + bind COUNT only, never bind values (a
     /// bind may carry a revealed secret).
     SqlFragment,
+
+    /// `Sky.Core.Secret`'s opaque, sealed secret-string type (backlog #44 —
+    /// "secrets are typed, never `fmt`-stringified": a `Secret` can only be
+    /// built through `Secret.fromString`, never implicitly from a `String`).
+    ///
+    /// Renders as `sky_runtime::secret::Secret`. Fully `Clone + PartialEq`
+    /// (derivable — `PartialEq` is hand-written and CONSTANT-TIME, the only
+    /// equality impl the runtime type has), but NOT serde — a `Secret` must
+    /// never round-trip through a session store or any other serialisation
+    /// path (this is ALSO the WASM hydration-island containment predicate a
+    /// future `HydrationState` field-type gate consults, per
+    /// `docs/architecture/wasm-target.md` §Q6 — nothing to build yet, the
+    /// target does not exist). `Debug` and the Sky-facing `SkyStringify` (the
+    /// trait backing `toString` / interpolation / `Log.*With`) are BOTH
+    /// hand-written on the runtime type to ALWAYS render a fixed
+    /// `"<redacted>"` placeholder, never the wrapped value — see
+    /// `sky_runtime::secret`'s module doc for the full design.
+    Secret,
 }
 
 /// Tag enum for the message-parametric `Std.Ui` / `Std.Html` types.
@@ -845,11 +863,15 @@ pub fn ir_type_is_derivable(
         // a heap-allocated `String` message).
         // `SqlFragment` derives Clone + PartialEq (hand-written Debug; see
         // its own doc) — fully derivable, not serde (see `ir_type_is_serde`).
+        // `Secret` derives Clone; `PartialEq`/`Debug` are hand-written
+        // (constant-time equality, always-redacting Debug — see its own doc)
+        // — fully derivable, not serde (see `ir_type_is_serde`).
         | IrType::Order
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
         | IrType::SqlFragment
+        | IrType::Secret
         | IrType::Generic(_)
         | IrType::UiPlain(_) => true,
         // The fully-derivable Std.Ui / Std.Html carriers vs the two Clone-only
@@ -994,6 +1016,12 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // `SqlFragment` is a query-building value, never persisted to a Live
         // session store — derivable (see `ir_type_is_derivable`) but not serde.
         | IrType::SqlFragment
+        // `Secret` must NEVER round-trip through serde (session store, JSON
+        // encode, anything) — derivable (see `ir_type_is_derivable`) but not
+        // serde. This is the load-bearing gate that makes a `Std.Live` Model
+        // field of type `Secret` a compile-time SKY-L0120, not a session-store
+        // leak (backlog #44).
+        | IrType::Secret
         // #127: `WsHandle` / `WsServerCfg` are opaque handles; not serde.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
@@ -2621,6 +2649,44 @@ mod tests {
         assert!(
             !ir_type_is_serde(&t, &all_serde),
             "SqlFragment must NOT be serde"
+        );
+    }
+
+    /// `Secret` (backlog #44): fully derivable (Clone + `PartialEq`) but
+    /// deliberately NOT serde — a `Secret` must never round-trip through a
+    /// Live session store or any other serialisation path. This is also the
+    /// #45/#70 derive-blast-radius regression: a record containing a `Secret`
+    /// field must still get `Clone`/`Debug`/`==` (proved by
+    /// `serde_poisons_carriers_transitively`-style coverage below).
+    #[test]
+    fn secret_derivable_but_not_serde() {
+        let t = IrType::Secret;
+        assert!(
+            ir_type_is_derivable(&t, &all_serde),
+            "Secret IS derivable (Clone + PartialEq)"
+        );
+        assert!(!ir_type_is_serde(&t, &all_serde), "Secret must NOT be serde");
+    }
+
+    /// #44 derive-blast-radius regression: a record `{ apiKey : Secret, label :
+    /// String }` must still be derivable (Clone/Debug/PartialEq) even though
+    /// its `Secret` field is not serde — marking a leaf non-derivable (rather
+    /// than merely non-serde) would have made the WHOLE record lose ALL
+    /// derives (the exact #45/#70 exit-0-then-cargo-fail class the fix spec's
+    /// §1 mechanism exists to avoid).
+    #[test]
+    fn record_containing_secret_stays_derivable() {
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert(Symbol::from_raw(0), IrType::Secret);
+        fields.insert(Symbol::from_raw(1), IrType::Str);
+        let t = IrType::Record(fields);
+        assert!(
+            ir_type_is_derivable(&t, &all_serde),
+            "a record containing a Secret field must stay derivable"
+        );
+        assert!(
+            !ir_type_is_serde(&t, &all_serde),
+            "a record containing a Secret field must NOT be serde"
         );
     }
 

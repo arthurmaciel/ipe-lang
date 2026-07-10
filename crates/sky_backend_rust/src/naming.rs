@@ -725,6 +725,10 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::SqlIsNotNull => "sql_is_not_null",
         KernelFn::SqlInList => "sql_in_list",
         KernelFn::SqlLike => "sql_like",
+        // ── Sky.Core.Secret — opaque secret-string wrapper (backlog #44) ─────
+        KernelFn::SecretFromString => "secret_from_string",
+        KernelFn::SecretReveal => "secret_reveal",
+        KernelFn::SecretRedacted => "secret_redacted",
         // ── M5c: TEA Cmd / Sub / Time kernels (wired) ────────────────────────
         KernelFn::CmdNone => "cmd_none",
         KernelFn::CmdBatch => "cmd_batch",

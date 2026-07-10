@@ -193,6 +193,7 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::ErrorKind => "ErrorKind".to_owned(),
         IrType::Error => "Error".to_owned(),
         IrType::SqlFragment => "SqlFragment".to_owned(),
+        IrType::Secret => "Secret".to_owned(),
     }
 }
 
@@ -646,6 +647,9 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SqlIsNotNull => "Sql.isNotNull",
         KernelFn::SqlInList => "Sql.inList",
         KernelFn::SqlLike => "Sql.like",
+        KernelFn::SecretFromString => "Secret.fromString",
+        KernelFn::SecretReveal => "Secret.reveal",
+        KernelFn::SecretRedacted => "Secret.redacted",
         // M5c: TEA Cmd / Sub / Time.every (wired)
         KernelFn::CmdNone => "Cmd.none",
         KernelFn::CmdBatch => "Cmd.batch",

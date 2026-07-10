@@ -36,6 +36,10 @@ futures-util = { version = "0.3", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_urlencoded = { version = "0.7", optional = true }
 subtle = "2"
+# `Sky.Core.Secret` (backlog #44): zeroizes the backing buffer on `Drop` so a
+# revealed/discarded secret does not linger in freed heap memory. NON-optional
+# (like `subtle`) — `secret.rs` is always compiled, no feature gate.
+zeroize = "1"
 hmac = "0.12"
 sha1 = "0.10"
 md-5 = "0.10"
