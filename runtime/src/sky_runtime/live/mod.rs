@@ -864,8 +864,28 @@ fn page_response(sid: &str, body: &str, csrf_token: &str) -> axum::response::Res
 fn live_max_body_bytes() -> usize {
     crate::sky_runtime::system::read_env_var("SKY_LIVE_MAX_BODY_BYTES")
         .ok()
-        .and_then(|s| s.parse::<usize>().ok())
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
         .unwrap_or(5 << 20)
+}
+
+#[cfg(test)]
+mod live_max_body_bytes_tests {
+    use super::live_max_body_bytes;
+
+    // SKY_LIVE_MAX_BODY_BYTES=0 must floor at the default, not disable the
+    // body (matching server::max_body's already-correct `.filter(|&n| n > 0)`
+    // — the missing floor previously 413'd every /_sky/event POST).
+    #[test]
+    fn live_max_body_bytes_floors_at_default_on_zero() {
+        std::env::remove_var("SKY_LIVE_MAX_BODY_BYTES");
+        assert_eq!(live_max_body_bytes(), 5 << 20);
+        std::env::set_var("SKY_LIVE_MAX_BODY_BYTES", "1024");
+        assert_eq!(live_max_body_bytes(), 1024);
+        std::env::set_var("SKY_LIVE_MAX_BODY_BYTES", "0"); // invalid → default, not "reject everything"
+        assert_eq!(live_max_body_bytes(), 5 << 20);
+        std::env::remove_var("SKY_LIVE_MAX_BODY_BYTES");
+    }
 }
 
 /// Session idle-TTL: `SKY_LIVE_TTL` seconds, default 1800 (30 min) — matches the
