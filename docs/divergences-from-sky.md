@@ -446,6 +446,70 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   temporarily neutering the corresponding fix and re-observing the exact
   original `cargo build` failure (E0382 / E0277) before restoring it.
 
+### B23 — Boundary Scheme Promotion: phase-1 under-acceptance for untyped bindings (class-1 inference fix #2)
+- **Context:** an unannotated top-level binding is monomorphic *within its
+  home module* (unchanged); at its module's boundary it is now generalized
+  into a scheme, and each cross-module reference instantiates it fresh — see
+  `docs/architecture/class1-inference-fix-spec-2026-07-09.md`. Empirically
+  verified against the reference `sky v0.16.29`: a cross-module untyped
+  helper used at two different concrete types from two different importers,
+  and an untyped zero-param value binding used at two different element
+  types cross-module, are both **accepted** by the reference. ipê now accepts
+  both too (test matrix items 1 and 3 in the spec).
+- **D1 — ambiguous instantiation fails closed.** Where the reference accepts
+  via Go's `[]any` erasure (a use-site region still carrying a free type
+  variable not covered by the enclosing def's own generics), ipê rejects with
+  SKY-L0102-ambiguous at the use span. **Sanctioned:** yes — matches the
+  repo's "prefer concrete over generic codegen" rule; strictly the safer
+  direction (under-acceptance, never a soundness hole).
+- **D2 — `Super`-bounded residual vars stay program-monomorphic in phase 1.**
+  The reference generalizes `number`-bounded untyped bindings (e.g. `plus a b
+  = a + b` used at `Int` in one module and `Float` in another); ipê phase 1
+  defers this — `Super`-bounded roots are excluded from quantification and
+  stay shared program-wide, so such a program is still rejected. **Sanctioned:**
+  yes — known under-acceptance; phase 2 (quantify `Super{flex}` too, populate
+  `bounds` keyed by synthesized symbols) is additive-only when it lands;
+  `#66`/`#110`'s oracle differential must whitelist this gap until then.
+- **D3 — rigid-contaminated untyped defs stay unquantified.** A def whose
+  body unifies with a typed sibling's skolem (`f : a -> a; f x = ident x`)
+  leaves `ident`'s shared var rigid; phase 1 conservatively excludes rigid
+  roots from generalization. **Sanctioned:** yes — known under-acceptance,
+  phase-2 item after a skolem-escape review.
+- **Rationale:** all three (D1/D2/D3) are under-acceptance (ipê rejects
+  programs the reference accepts) — the safe direction. At the HM-solver
+  level, an instantiated scheme var is always plain `Flex` (the same shape
+  typed instantiation already produces), so no new `Super`-flex / `Super`-
+  rigid meeting points exist — no HM-soundness hole is introduced by this
+  fix.
+- **Incident note (do not re-drop this caveat):** this fix first landed as
+  commit `29bab0d` and was same-day reverted (`5e870b4`) after independent
+  adversarial review found a real SEAL violation that the doc's own earlier
+  draft had missed: `skyc` exit-0, but the emitted Rust failed `cargo build`
+  with E0283 ("cannot infer type of the type parameter T1 ... cannot satisfy
+  `_: Clone`") on a 3-module cross-module field-access getter
+  (`getName r = r.name`). Root cause: `promote_untyped_boundaries`'s
+  `obligation_roots` excluded the record var (`fa.record`) from
+  quantification but not the field-access's own result var (`fa.result`),
+  so a getter's return-type var could be quantified before `resolve_deferred`
+  pinned it concrete — a codegen-level defect (an unused Rust generic), not
+  an HM-soundness hole, but a genuine SEAL violation (exit-0 on a program
+  whose emitted output does not compile). Re-fixed by (1) inserting
+  `fa.result` into `obligation_roots` alongside `fa.record`, and (2) porting
+  the Typed lowering arm's `used_generics` structural-appearance filter into
+  the Untyped arm as defense-in-depth, so a stale quantified var can never be
+  declared as a Rust generic absent from the resolved `params`/`ret` again.
+  Both re-verified against the EXACT failing shape via a real `cargo build`
+  + `cargo run` golden (`crates/skyc/tests/golden_class1_boundary_scheme_field_result.rs`,
+  `SKY_E2E=1`), not just a `sky_types` unit test — the original attempt's
+  full `sky_types` unit-test matrix (including the obligation-gated
+  single-record-type-cross-module-use case) passed despite the bug, because
+  the defect is invisible to HM-level checks. Given that history, this
+  entry deliberately does **not** claim an exhaustive "zero over-acceptance"
+  guarantee across the whole `obligation_roots` surface — only that the
+  specific bug class independent review found is closed and re-verified,
+  and that the two fixes are structurally defense-in-depth (a gap in one
+  does not silently defeat the other).
+
 ---
 
 ## 3. Architectural divergences (compiler + runtime structure)
@@ -738,16 +802,23 @@ API-shape review):
 
 ## Counts
 
-- **Behavioral divergences:** 22 classes (B1–B22). B16 (#104 true last-use) and
+- **Behavioral divergences:** 23 classes (B1–B23). B16 (#104 true last-use) and
   B17 (#99 alias bind) are pending fixture goldens. B3 RETIRED (task #55a) per
   inline note. B18–B20 are WS-server entries added with task #127. B20 CLOSED
   (#135) — Ping heartbeat ported. B21 is the #138 total-resolution gate
   (unknown-type → SKY-N0002 not ICE). B22 is the #90 Stage-1 ctor-payload-
-  function lift (`Ok`/`Just` holding a function). Sanctioned/recorded goldens:
-  47 carry a marker (`Math` 4, `Bytes` 5, `Encoding` 1, `Jwt` 5, `Db` 11, `Ui` 6,
-  `Cmd`/`Sub` 3, `Uuid` 2, plus Go-failure kind-1 shapes, Money/case/toFloat
-  sanctioned entries, and the B22 ctor-payload-function set). B16/B17 goldens
-  pending.
+  function lift (`Ok`/`Just` holding a function), re-landed 2026-07-10 after a
+  same-day revert (2 additional regression goldens closing the review's
+  findings). B23 is class-1 inference fix #2 (Boundary Scheme Promotion,
+  D1/D2/D3 under-acceptance), also re-landed 2026-07-10 after a same-day
+  revert; regression golden:
+  `crates/skyc/tests/golden_class1_boundary_scheme_field_result.rs`.
+  Sanctioned/recorded goldens: 47 carry a marker (`Math` 4, `Bytes` 5,
+  `Encoding` 1, `Jwt` 5, `Db` 11, `Ui` 6, `Cmd`/`Sub` 3, `Uuid` 2, plus
+  Go-failure kind-1 shapes, Money/case/toFloat sanctioned entries, and the
+  B22 ctor-payload-function set — B23 is pure under-acceptance, not a
+  Go-sanctioned divergence, so it adds no entries to this count). B16/B17
+  goldens pending.
 - **Architectural divergences:** 18 (A1–A18). A8 and A13 are reference-ahead on
   completeness. A15–A17 are seal-gate entries. A18 is the WS phantom-`msg`
   type-var entry added with task #127.
