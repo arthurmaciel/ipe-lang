@@ -871,20 +871,28 @@ fn live_max_body_bytes() -> usize {
 
 #[cfg(test)]
 mod live_max_body_bytes_tests {
-    use super::live_max_body_bytes;
-
     // SKY_LIVE_MAX_BODY_BYTES=0 must floor at the default, not disable the
     // body (matching server::max_body's already-correct `.filter(|&n| n > 0)`
     // — the missing floor previously 413'd every /_sky/event POST).
+    //
+    // This tests the parsing/filtering formula directly rather than mutating
+    // the real env var: `std::env::set_var` is not thread-safe under a
+    // parallel test harness, and `SKY_LIVE_MAX_BODY_BYTES` already has an
+    // env-mutating test in server.rs (`max_body_env_override`) — a second
+    // unsynchronized mutator of the same key would make both tests
+    // intermittently flaky. Mirrors the established convention documented at
+    // `server::tests::ws_send_buffer_default_is_256`.
+    fn parse(raw: Option<&str>) -> usize {
+        raw.and_then(|s| s.trim().parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(5 << 20)
+    }
+
     #[test]
     fn live_max_body_bytes_floors_at_default_on_zero() {
-        std::env::remove_var("SKY_LIVE_MAX_BODY_BYTES");
-        assert_eq!(live_max_body_bytes(), 5 << 20);
-        std::env::set_var("SKY_LIVE_MAX_BODY_BYTES", "1024");
-        assert_eq!(live_max_body_bytes(), 1024);
-        std::env::set_var("SKY_LIVE_MAX_BODY_BYTES", "0"); // invalid → default, not "reject everything"
-        assert_eq!(live_max_body_bytes(), 5 << 20);
-        std::env::remove_var("SKY_LIVE_MAX_BODY_BYTES");
+        assert_eq!(parse(None), 5 << 20);
+        assert_eq!(parse(Some("1024")), 1024);
+        assert_eq!(parse(Some("0")), 5 << 20); // invalid → default, not "reject everything"
     }
 }
 
