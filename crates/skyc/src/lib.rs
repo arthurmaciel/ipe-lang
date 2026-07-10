@@ -39,6 +39,11 @@ use sky_intern::Interner;
 pub enum CliError {
     /// Command-line misuse; carries a fixed usage hint.
     Usage(&'static str),
+    /// Command-line / manifest misuse whose message must echo user-supplied
+    /// input (e.g. an unrecognised `sky.toml` value) — kept distinct from
+    /// [`Self::Usage`] so no call site needs to leak a `String` into a
+    /// `&'static str` just to report what the user actually wrote.
+    UsageOwned(String),
     /// A filesystem operation failed at `path`.
     Io {
         path: PathBuf,
@@ -68,6 +73,7 @@ impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage(hint) => write!(f, "{hint}"),
+            Self::UsageOwned(hint) => write!(f, "{hint}"),
             Self::Io { path, source } => write!(f, "io error at {}: {source}", path.display()),
             Self::Pipeline { file, src, diag } => {
                 f.write_str(&render(diag, &file.to_string_lossy(), src))
@@ -135,7 +141,18 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
         module_path: entry_path.clone(),
     }];
 
-    compile_modules(sources, discovered, &entry_path, out_dir, runtime_dir, entry)
+    // No manifest on the single-file path — default to sqlite, matching the
+    // documented `sky.toml` default for a project that has no `[database]`
+    // section at all.
+    compile_modules(
+        sources,
+        discovered,
+        &entry_path,
+        out_dir,
+        runtime_dir,
+        entry,
+        sky_backend_rust::DbDriver::Sqlite,
+    )
 }
 
 /// Build a `.sky` entry file and all sibling modules discovered in the same
@@ -212,6 +229,8 @@ pub fn build_with_sibling_discovery(
         }
     }
 
+    // No sky.toml on this path either (sibling discovery is the "no manifest
+    // found" fallback) — default to sqlite, same rationale as `build`.
     compile_modules(
         sources,
         discovered,
@@ -219,6 +238,7 @@ pub fn build_with_sibling_discovery(
         out_dir,
         runtime_dir,
         entry,
+        sky_backend_rust::DbDriver::Sqlite,
     )
 }
 
@@ -261,6 +281,7 @@ fn compile_modules(
     out_dir: &Path,
     runtime_dir: &Path,
     blame_path: &Path,
+    db_driver: sky_backend_rust::DbDriver,
 ) -> Result<(), CliError> {
     // Inject the transitive compiled-source stdlib closure. `injected` is the
     // driver's unforgeable record of which module paths are trusted stdlib
@@ -486,6 +507,7 @@ fn compile_modules(
     let program =
         sky_lower::lower(&linked, &types, &mut interner).map_err(span_attributed_err)?;
     let emitted = RustBackend::new(&interner)
+        .with_db_driver(db_driver)
         .emit(&program)
         .map_err(span_attributed_err)?;
 
@@ -561,6 +583,7 @@ pub fn build_project(
         out_dir,
         runtime_dir,
         manifest_path,
+        manifest.driver,
     )
 }
 
