@@ -3,8 +3,8 @@
 > **Status:** DESIGNED (2026-07-04). Implementation deferred **post-parity**
 > (this is a syntactic divergence from Elm/Sky, not oracle-verifiable — it must
 > not compete with the examples-sweep-green push). Supersedes the three earlier
-> candidate spellings in `docs/ideas/departures-from-sky.md` (Gleam `use`,
-> `Task.block` + `!`, Roc bare `!`).
+> candidate spellings (Gleam `use`, `Task.block` + `!`, Roc bare `!`) — filed
+> in `docs/divergences-from-sky.md#planned-future-divergences` §6.5.
 
 ## 1. Summary / the decision
 
