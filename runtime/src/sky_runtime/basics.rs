@@ -111,15 +111,38 @@ pub fn basics_negate<T: ::core::ops::Neg<Output = T>>(x: T) -> T {
     -x
 }
 
+/// AUD-09: `-x` on a bare `Neg` bound panics for `x == i64::MIN` (its negation
+/// is not representable in `i64`) — the no-panic rule violation `Math.abs`
+/// already closes via `checked_abs().unwrap_or(i64::MAX)`. `Basics.abs`
+/// dispatches through this SAME generic function for both `Int` and `Float`,
+/// so the fix must stay generic: this trait supplies a saturating negation
+/// per concrete type, with `f64`'s negation (never overflows) passing
+/// through unchanged.
+pub trait SaturatingNeg: Sized {
+    fn saturating_neg(self) -> Self;
+}
+impl SaturatingNeg for i64 {
+    fn saturating_neg(self) -> Self {
+        self.checked_neg().unwrap_or(i64::MAX)
+    }
+}
+impl SaturatingNeg for f64 {
+    fn saturating_neg(self) -> Self {
+        -self
+    }
+}
+
 /// Sky `abs : number -> number` — absolute value on Int or Float.
 ///
 /// Uses `T::default()` as the zero sentinel (`0_i64` / `0.0_f64`), both of
 /// which satisfy `Default`. The `Copy` bound allows reusing `x` after the
-/// comparison without a clone. Matches Go's `Basics_abs` semantics exactly:
-/// negative values are negated, non-negatives pass through unchanged.
-pub fn basics_abs<T: PartialOrd + ::core::ops::Neg<Output = T> + Copy + Default>(x: T) -> T {
+/// comparison without a clone. Matches Go's `Basics_abs` semantics, with the
+/// no-panic rule taking precedence at `i64::MIN` (Go's `int64` overflow wraps
+/// silently to `i64::MIN` itself; Rust saturates to `i64::MAX` instead of
+/// wrapping to a NEGATIVE "absolute value" — see `docs/divergences-from-sky.md`).
+pub fn basics_abs<T: PartialOrd + SaturatingNeg + Copy + Default>(x: T) -> T {
     let zero = T::default();
-    if x < zero { -x } else { x }
+    if x < zero { x.saturating_neg() } else { x }
 }
 
 // ── end Basics numerics (#115) ──────────────────────────────────────────────

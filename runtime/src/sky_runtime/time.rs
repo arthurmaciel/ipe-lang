@@ -260,7 +260,13 @@ pub fn time_is_weekend<E: From<String>>(z: String, ms: i64) -> SkyResult<E, bool
 }
 
 pub fn time_is_leap_year(y: i64) -> bool {
-    let y = y as i32;
+    // AUD-09: parse into chrono's i32 domain rather than truncating — a lossy
+    // `as i32` cast on a large caller Int wraps to a valid band, giving a
+    // wrong (but plausible-looking) leap-year answer instead of failing
+    // closed. Mirrors `time_days_in_month`'s existing pattern below.
+    let Ok(y) = i32::try_from(y) else {
+        return false;
+    };
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
@@ -421,9 +427,14 @@ pub fn time_from_parts<E: From<String>>(
             return SkyResult::Err(format!("Time.fromParts: unknown timezone {:?}", zone).into());
         }
     };
-    let naive = match NaiveDate::from_ymd_opt(y as i32, m as u32, d as u32)
-        .and_then(|day| day.and_hms_opt(h as u32, mins as u32, s as u32))
-    {
+    // AUD-09: parse `y` into chrono's i32 domain rather than truncating — a
+    // lossy `as i32` cast on a large caller Int wraps to a valid band,
+    // silently accepting an out-of-range year as if it were a different,
+    // in-range one instead of failing closed with "invalid date parts".
+    let naive = match i32::try_from(y).ok().and_then(|y32| {
+        NaiveDate::from_ymd_opt(y32, m as u32, d as u32)
+            .and_then(|day| day.and_hms_opt(h as u32, mins as u32, s as u32))
+    }) {
         Some(n) => n,
         None => {
             return SkyResult::Err(
