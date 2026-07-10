@@ -247,8 +247,11 @@ SKY_SWEEP_NO_EQUIV=1 bash scripts/examples-sweep.sh
 ```
 
 Output: an aligned table + `~/.cache/sky/examples-sweep/sweep-<stamp>.table`;
-per-example logs (`<n>.skyc.log`, `<n>.cargo.log`, `<n>.go.build.log`,
-`<n>.diff.txt`) under the same dir. Exit 0 = no RED row.
+per-example logs (`<n>.<stamp>.skyc.log`, `<n>.<stamp>.cargo.log`,
+`<n>.<stamp>.go.build.log`, `<n>.<stamp>.diff.txt`, …) under the same dir,
+STAMP-suffixed (#35b) so two invocations sharing this cache dir never
+interleave-corrupt each other's diagnostic files for the same example. Exit
+0 = no RED row.
 
 ---
 
