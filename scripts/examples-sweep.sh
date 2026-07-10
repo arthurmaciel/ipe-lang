@@ -83,7 +83,11 @@ fi
 command -v rg >/dev/null 2>&1 || { echo "ERROR: rg (ripgrep) required for the example-scope filter (is_out_of_scope). Install ripgrep." >&2; exit 2; }
 
 HIST="$HOME/.cache/sky/examples-sweep"; mkdir -p "$HIST"
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+# PID suffix: two invocations starting in the same UTC second (e.g. two
+# concurrent progressive-development lanes sharing $HIST) would otherwise
+# collide on rows-$STAMP.tsv/sweep-$STAMP.table and silently merge/interleave
+# each other's report rows.
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 TABLE="$HIST/sweep-$STAMP.table"
 RUNLOG="$HIST/run-$STAMP.log"
 say() { echo "$@" | tee -a "$RUNLOG"; }
@@ -340,6 +344,20 @@ ROWS="$HIST/rows-$STAMP.tsv"; : >"$ROWS"
 WARNS="$HIST/warnings-$STAMP.tsv"; : >"$WARNS"
 DCUR=""
 
+# ── Cross-invocation build serialization ─────────────────────────────────────
+# skyc emits a FIXED `sky-app` binary name into the shared $CARGO_TARGET_DIR
+# (see resolve_bin's comment above: "each example's cargo build writes
+# $CARGO_TARGET_DIR/{debug,release}/sky-app"). If two examples-sweep.sh
+# invocations race against the SAME CARGO_TARGET_DIR (e.g. two
+# progressive-development lanes sharing ~/.cache/sky-rust-target), one's cargo
+# build can overwrite sky-app between another's build_rust and its
+# resolve_bin/RUN/EQUIV step — RUN then silently executes the WRONG example's
+# binary (verified empirically: concurrent lanes made 01-hello-world's RUN
+# print an unrelated example's stdout). flock the build→resolve→run→equiv span
+# per example so concurrent sweeps interleave safely instead of racing.
+SWEEP_LOCK_FILE="$CARGO_TARGET_DIR/.examples-sweep-build.lock"
+exec {SWEEP_LOCK_FD}>"$SWEEP_LOCK_FILE"
+
 for d in "${EXAMPLES[@]}"; do
   n="$(basename "$d")"
   [ -f "$d/src/Main.sky" ] || continue
@@ -350,10 +368,12 @@ for d in "${EXAMPLES[@]}"; do
 
   build_cell=""; run_cell="—"; equiv_cell="—"; note=""
 
+  flock -x "$SWEEP_LOCK_FD"
+
   if ! build_rust "$d" "$n"; then
     build_cell="$BUILD_CELL"; note="rust build failed (see $n.skyc.log / $n.cargo.log)"
     printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$build_cell" "—" "—" "$note" >>"$ROWS"
-    ( cd "$d" && rm -rf sky-out .skycache .skydeps ); continue
+    ( cd "$d" && rm -rf sky-out .skycache .skydeps ); flock -u "$SWEEP_LOCK_FD"; continue
   fi
   build_cell="ok"
   printf '%s\t%s\n' "$n" "${WARN_CELL:-0}" >>"$WARNS"
@@ -362,7 +382,7 @@ for d in "${EXAMPLES[@]}"; do
   if [ "$BUILD_ONLY" = 1 ] || [ -z "$rbin" ]; then
     [ -z "$rbin" ] && { run_cell="noserve"; note="no binary resolved after build"; }
     printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$build_cell" "$run_cell" "$equiv_cell" "$note" >>"$ROWS"
-    ( cd "$d" && rm -rf sky-out .skycache .skydeps ); continue
+    ( cd "$d" && rm -rf sky-out .skycache .skydeps ); flock -u "$SWEEP_LOCK_FD"; continue
   fi
 
   IFS=$'\t' read -r run_cell run_note < <(run_for "$n" "$shape" "$rbin")
@@ -372,6 +392,8 @@ for d in "${EXAMPLES[@]}"; do
   else
     IFS=$'\t' read -r equiv_cell equiv_note < <(equiv_for "$d" "$n" "$mode" "$rbin")
   fi
+
+  flock -u "$SWEEP_LOCK_FD"
 
   note="$run_note"; [ -n "$equiv_note" ] && note="${note:+$note; }$equiv_note"
   printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$build_cell" "$run_cell" "$equiv_cell" "$note" >>"$ROWS"
