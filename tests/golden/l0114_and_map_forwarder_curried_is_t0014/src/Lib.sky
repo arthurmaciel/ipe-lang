@@ -1,0 +1,12 @@
+module Lib exposing (andMapAlias)
+
+import Sky.Core.Prelude exposing (..)
+
+-- #90 T3.residual — see the sibling `l0114_and_map_cross_module_wrapper_accepted`
+-- fixture for the ACCEPTED (arity-1) companion of this same wrapper. This
+-- module is reused verbatim so both fixtures exercise the identical
+-- `andMapAlias`'s `and_map_payload` bound propagating onto its own
+-- annotation skolem `b`, checked per external call site.
+andMapAlias : Result e a -> Result e (a -> b) -> Result e b
+andMapAlias x f =
+    Result.andMap x f
