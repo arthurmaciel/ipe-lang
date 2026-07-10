@@ -25,8 +25,9 @@
 //! [`oracle`] crate so the `refresh-oracle` tool and these tests cannot drift —
 //! the tool WRITES the cache via the same code the tests READ it through.
 
+use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Outcome of building and running an emitted Sky project.
 // Fields are only accessed from E2E test functions (`build_and_run_emitted`
@@ -72,6 +73,83 @@ pub fn build_and_run_emitted(golden_name: &str, emitted_dir: &Path) -> RunOutcom
     RunOutcome {
         stdout: result.stdout,
         exit_code: result.exit_code,
+    }
+}
+
+/// Build the emitted project and run its binary with `stdin_bytes` piped to its
+/// stdin, then closed (signalling EOF), returning its captured stdout and exit
+/// code.
+///
+/// Used by goldens that drive an interactive/line-oriented loop (e.g.
+/// `Cli.program`) past its first stdin read, which [`build_and_run_emitted`]
+/// cannot exercise since it runs the binary with stdin already at EOF.
+///
+/// # Panics
+/// Fails the calling test if the binary cannot be located (surfacing cargo's
+/// stderr), or cannot be spawned with a piped stdin.
+#[must_use]
+#[allow(dead_code)] // only stdin-driven goldens exercise this helper
+pub fn build_and_run_emitted_with_stdin(
+    golden_name: &str,
+    emitted_dir: &Path,
+    stdin_bytes: &[u8],
+) -> RunOutcome {
+    let exe = oracle::build_rust_binary(golden_name, emitted_dir);
+    assert!(
+        exe.is_ok(),
+        "{}",
+        exe.as_ref().err().map_or("", String::as_str)
+    );
+    let Ok(exe) = exe else {
+        return RunOutcome {
+            stdout: String::new(),
+            exit_code: None,
+        };
+    };
+
+    let child = Command::new(&exe)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn();
+    assert!(
+        child.is_ok(),
+        "{golden_name}: failed to spawn `{exe}`: {:?}",
+        child.as_ref().err()
+    );
+    let Ok(mut child) = child else {
+        return RunOutcome {
+            stdout: String::new(),
+            exit_code: None,
+        };
+    };
+
+    let stdin = child.stdin.take();
+    assert!(stdin.is_some(), "{golden_name}: child stdin must be piped");
+    let Some(mut stdin) = stdin else {
+        return RunOutcome {
+            stdout: String::new(),
+            exit_code: None,
+        };
+    };
+    let wrote = stdin.write_all(stdin_bytes);
+    assert!(wrote.is_ok(), "{golden_name}: failed to write stdin: {wrote:?}");
+    drop(stdin); // close stdin so the child's reader sees EOF after these bytes
+
+    let output = child.wait_with_output();
+    assert!(
+        output.is_ok(),
+        "{golden_name}: failed to wait on `{exe}`: {:?}",
+        output.as_ref().err()
+    );
+    let Ok(output) = output else {
+        return RunOutcome {
+            stdout: String::new(),
+            exit_code: None,
+        };
+    };
+    RunOutcome {
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        exit_code: output.status.code(),
     }
 }
 
