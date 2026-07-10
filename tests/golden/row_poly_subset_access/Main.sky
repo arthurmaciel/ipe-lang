@@ -1,0 +1,31 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+-- #56 proof-matrix shape P2: an unannotated top-level getter, called once
+-- with a record that carries MORE fields than the getter reads.
+--
+-- `rec.name` is a deferred field access (mechanism 2 in
+-- docs/architecture/row-poly-subset-superset-design.md); it does not force
+-- an exact-shape unification against `rec`, so a subset access over a
+-- WIDER record is legal by construction. The monomorphic env var pins the
+-- record parameter to the one concrete shape that reaches this call site
+-- (mechanism 4), so by the time the record type reaches the backend it is
+-- fully solved and concrete — the A7 exact-sorted-field-set struct lookup
+-- resolves it without a miss.
+type alias Person =
+    { name : String, age : Int }
+
+
+getName rec =
+    rec.name
+
+
+ada : Person
+ada =
+    { name = "Ada", age = 36 }
+
+
+main =
+    println (getName ada)
