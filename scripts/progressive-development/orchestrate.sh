@@ -9,8 +9,8 @@
 # (the norm for kernel lanes that all touch the shared registry files) dispatches
 # an Opus 4.8 agent to UNION-reconcile, then re-gates.
 #
-# Why author-parallel / gate-serial: on one box the gate (cargo test --workspace)
-# is CPU+RAM+disk-heavy and does NOT parallelize cheaply (N lanes = N cold builds
+# Why author-parallel / gate-serial: on one box the gate (cargo nextest run
+# --workspace) is CPU+RAM+disk-heavy and does NOT parallelize cheaply (N lanes = N cold builds
 # on separate targets). Authoring is API/IO-bound and parallelizes for free. So
 # we parallelize the cheap phase and serialize the expensive one on the warm
 # shared target.
@@ -94,11 +94,24 @@ You are one PARALLEL lane. Work on EXACTLY this item and nothing else:
   → $item
 
 Do the root-cause edits and \`git add -A && git commit\` them on THIS branch with
-a clear message. Do NOT run the full workspace gate (cargo test --workspace) —
+a clear message. Do NOT run the full workspace gate (cargo nextest run --workspace) —
 the orchestrator integrates + gates all lanes afterward on the shared target;
 running it here would be a redundant cold build. Still obey every principle, the
 boundary, and the seal. If the item is excluded/non-mechanical, write an
-escalation and exit without committing. Final line: PROGDEV: LANDED/ESCALATED/FAILED." \
+escalation and exit without committing.
+
+OVERRIDE of the base prompt's \`git stash\`-if-dirty step: you are in an
+ISOLATED worktree ($wt) freshly created from a clean base — it should NEVER
+be dirty at start. \`git stash\`'s ref storage (\`refs/stash\`) is SHARED
+across every worktree of this repo (a documented git limitation, not
+per-worktree state), so parallel lanes stashing concurrently can collide and
+silently swap/lose each other's in-progress diffs. If this worktree is
+unexpectedly dirty at start, do NOT run \`git stash\` — that is a
+worktree-isolation violation, not a routine mess to paper over. Abort
+immediately with \`PROGDEV: ABORT unexpected-dirty-worktree\` and describe
+what you found; do not attempt recovery yourself.
+
+Final line: PROGDEV: LANDED/ESCALATED/FAILED." \
             > "$REPO/$ilog" 2>&1
     ) &
     pids+=("$!")
@@ -111,7 +124,13 @@ log "authoring phase complete"
 run_gate() {
     ( cd "$REPO"
       touch runtime/tests/*.rs crates/skyc/tests/*.rs 2>/dev/null
-      CARGO_TARGET_DIR="$GATE_TARGET" timeout 3000 cargo test --workspace >/tmp/orch-gate.log 2>&1 \
+      # nextest's parallel runner, not `cargo test --workspace` (banned by
+      # ~/.claude/hooks/enforce-tooling.sh for interactive calls; this
+      # in-script invocation bypasses that hook, so it must independently
+      # follow the same rule). nextest does not run doctests, so pair with a
+      # cheap `cargo test --doc` for full parity with the old gate.
+      CARGO_TARGET_DIR="$GATE_TARGET" timeout 3000 cargo nextest run --workspace >/tmp/orch-gate.log 2>&1 \
+      && CARGO_TARGET_DIR="$GATE_TARGET" timeout 600 cargo test --doc --workspace >>/tmp/orch-gate.log 2>&1 \
       && CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo clippy --workspace --all-targets -- -D warnings >>/tmp/orch-gate.log 2>&1 )
 }
 

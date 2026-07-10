@@ -41,12 +41,30 @@ Haskell/Go backend or upstream.
 ## 6. The gate (the only thing that authorises a commit)
 ```
 touch runtime/tests/*.rs crates/skyc/tests/*.rs
-CARGO_TARGET_DIR="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}" timeout 3000 cargo test --workspace
+CARGO_TARGET_DIR="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}" timeout 3000 cargo nextest run --workspace
+CARGO_TARGET_DIR="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}" timeout 600 cargo test --doc --workspace
 CARGO_TARGET_DIR="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}" timeout 1200 cargo clippy --workspace --all-targets -- -D warnings
 ```
-Both exit 0. For a sweep blocker, also rebuild the example with the fresh `skyc`
-and confirm the original diagnostic is gone (note the new blocker). Green →
-commit. Red → `git reset --hard` + log the reason. The tree only advances.
+`cargo test --workspace` is banned — `cargo nextest run --workspace` is the
+parallel runner and is dramatically faster on this machine; nextest does not
+run doctests, so the `cargo test --doc` line covers those (cheap — this
+workspace has few/no doctests to run). All three exit 0. For a sweep
+blocker, also rebuild the example with the fresh `skyc` and confirm the
+original diagnostic is gone (note the new blocker). Green → commit. Red →
+`git reset --hard` + log the reason. The tree only advances.
+
+## 6b. Isolated-worktree lanes — NEVER `git stash`
+If this iteration is running as an orchestrated PARALLEL lane (its own git
+worktree, not the single shared checkout), do NOT run `git stash` under any
+circumstance — `refs/stash` is SHARED across every worktree of one repo (a
+documented git limitation, not per-worktree state), so concurrent lanes
+stashing at the same time can collide and silently swap or lose each other's
+in-progress diffs. A freshly-created lane worktree should never be dirty at
+start; if you find one dirty, that is a worktree-isolation violation — abort
+and escalate, do not stash it away. (Single-checkout sequential iterations —
+i.e. `autopilot.sh`, not `orchestrate.sh` — are the only context where
+stash-if-dirty from a prior iteration is safe, since there is exactly one
+writer at a time.)
 
 ## 7. Output style — caveman-ultra (mandatory)
 Your prose is watched live. Be EXTREMELY terse. Drop articles, filler, hedging,

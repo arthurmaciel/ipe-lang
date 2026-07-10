@@ -19,7 +19,7 @@ force-push, rewrite history, or touch `main`/`master` outside the progressive-de
 
 ## Read state first (these are volatile — read them every time)
 1. `git rev-parse --abbrev-ref HEAD` — confirm you are on a `progressive-development/*` branch. If not, STOP and write an escalation (see below); do nothing else.
-2. `git status --short` — the tree MUST be clean. If dirty, run `git stash` (a prior iteration left a mess) and note it in the log.
+2. `git status --short` — the tree MUST be clean. If dirty AND you are the single writer on a shared sequential checkout (autopilot.sh), run `git stash` (a prior iteration left a mess) and note it in the log. If dirty AND you are one of several PARALLEL orchestrated lanes (each in its own worktree), do NOT `git stash` — `refs/stash` is SHARED across every worktree of one repo, so concurrent lanes stashing at the same time can collide and silently swap/lose each other's diffs. A freshly-created lane worktree should never be dirty at start; treat it as a worktree-isolation violation and abort/escalate instead.
 3. `docs/architecture/backlog.md` — the work list.
 4. `docs/architecture/progressive-development-log.md` — what prior iterations did (outcomes + per-item attempt counts).
 5. `docs/architecture/progressive-development-escalations.md` — items already escalated; do NOT retry these.
@@ -45,13 +45,17 @@ Run, from the repo root, timeout-bounded, on the ISOLATED gate target (never the
 
 ```
 touch runtime/tests/*.rs crates/skyc/tests/*.rs
-CARGO_TARGET_DIR="$HOME/.cache/master-gate-target" timeout 3000 cargo test --workspace
+CARGO_TARGET_DIR="$HOME/.cache/master-gate-target" timeout 3000 cargo nextest run --workspace
+CARGO_TARGET_DIR="$HOME/.cache/master-gate-target" timeout 600 cargo test --doc --workspace
 CARGO_TARGET_DIR="$HOME/.cache/master-gate-target" timeout 1200 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Both MUST be exit 0. If the item was an example-sweep blocker, ALSO rebuild that
-one example with the freshly-built `skyc` and confirm its original diagnostic is
-gone (note the NEW blocker for the backlog).
+`cargo test --workspace` is banned — use `cargo nextest run --workspace`
+(parallel runner, dramatically faster); it does not run doctests, so the
+`cargo test --doc` line covers those. All three MUST be exit 0. If the item
+was an example-sweep blocker, ALSO rebuild that one example with the
+freshly-built `skyc` and confirm its original diagnostic is gone (note the
+NEW blocker for the backlog).
 
 ## Land or discard — then log — then exit
 - **Green** → update `backlog.md` (mark the item done / advance its blocker), `git add -A`, `git commit` with a message stating root cause + fix + new blocker. Append a `LANDED` line to `progressive-development-log.md`. Exit `PROGDEV: LANDED <sha>`.
