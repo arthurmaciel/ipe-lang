@@ -773,7 +773,8 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // ── M7: Std.Ui / Std.Html render kernels (Phase 0 — fully wired) ────
         KernelFn::UiLayout => "ui_layout",
         KernelFn::UiLayoutWith => "ui_layout_with",
-        KernelFn::HtmlRender => "html_render_",
+        // `Html.toString` is a distinct kernel sharing `HtmlRender`'s runtime fn.
+        KernelFn::HtmlRender | KernelFn::HtmlToString => "html_render_",
         KernelFn::HtmlEscapeText => "html_escape_text_",
         KernelFn::HtmlEscapeAttr => "html_escape_attr_",
         KernelFn::HtmlAttrToString => "html_attr_to_string_",
@@ -801,6 +802,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiForm => "ui_form_",
         KernelFn::UiButton => "ui_button_",
         KernelFn::UiLink => "ui_link_",
+        KernelFn::UiImage => "ui_image_",
         KernelFn::UiAbove => "ui_above_",
         KernelFn::UiBelow => "ui_below_",
         KernelFn::UiOnLeft => "ui_on_left_",
@@ -811,6 +813,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiSpacing => "ui_spacing_",
         KernelFn::UiPadding => "ui_padding_",
         KernelFn::UiPaddingXY => "ui_padding_xy_",
+        KernelFn::UiPaddingEach => "ui_padding_each_",
         KernelFn::UiWidth => "ui_width_",
         KernelFn::UiHeight => "ui_height_",
         KernelFn::UiCenterX => "ui_center_x_",
@@ -821,7 +824,11 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiAlignBottom => "ui_align_bottom_",
         KernelFn::UiPointer => "ui_pointer_",
         KernelFn::UiClip => "ui_clip_",
+        KernelFn::UiClipX => "ui_clip_x_",
+        KernelFn::UiClipY => "ui_clip_y_",
         KernelFn::UiScrollbars => "ui_scrollbars_",
+        KernelFn::UiScrollbarX => "ui_scrollbar_x_",
+        KernelFn::UiScrollbarY => "ui_scrollbar_y_",
         KernelFn::UiGridColumns => "ui_grid_columns_",
         // ── M7: Std.Ui Length builders ───────────────────────────────────────
         KernelFn::UiPx => "ui_px_",
@@ -843,6 +850,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // ── M7: Background / Border / Font sub-modules ───────────────────────
         KernelFn::BackgroundColor => "ui_background_color_",
         KernelFn::BackgroundImage => "ui_background_image_",
+        KernelFn::BackgroundLinearGradient => "ui_background_linear_gradient_",
         KernelFn::BorderWidth => "ui_border_width_",
         KernelFn::BorderRounded => "ui_border_rounded_",
         KernelFn::BorderColor => "ui_border_color_",
@@ -874,6 +882,12 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiDarkMode => "ui_dark_mode_",
         KernelFn::UiLightMode => "ui_light_mode_",
         KernelFn::UiReducedMotion => "ui_reduced_motion_",
+        KernelFn::UiOnPseudo => "ui_on_pseudo_",
+        KernelFn::UiHover => "ui_hover_",
+        KernelFn::UiFocus => "ui_focus_",
+        KernelFn::UiFocusVisible => "ui_focus_visible_",
+        KernelFn::UiActive => "ui_active_",
+        KernelFn::UiDisabled => "ui_disabled_",
         KernelFn::BackgroundHoverColor => "ui_bg_hover_color_",
         KernelFn::BackgroundFocusColor => "ui_bg_focus_color_",
         KernelFn::BackgroundActiveColor => "ui_bg_active_color_",
@@ -954,6 +968,8 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // ── M7: Html element builders ────────────────────────────────────────
         KernelFn::HtmlTextNode => "html_text_node_",
         KernelFn::HtmlRawNode => "html_raw_node_",
+        KernelFn::HtmlDoctype => "html_doctype_",
+        KernelFn::HtmlTitleNode => "html_title_node_",
         KernelFn::HtmlStyleNode => "html_style_node_",
         KernelFn::HtmlDiv => "html_div_",
         KernelFn::HtmlSpan => "html_span_",
@@ -965,7 +981,10 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // #76 batch 2: Std.Html element builders — tag-as-data, all share the
         // generic `html_node_` sink (the wire tag is injected by `emit_ui_call`).
         // `Html.node` itself shares this bare helper name (same sink).
+        // `Html.voidNode` (#76) shares it too — tag is a real runtime arg, empty
+        // children vec baked at the emit site.
         KernelFn::HtmlNode
+        | KernelFn::HtmlVoidNode
         | KernelFn::HtmlH1
         | KernelFn::HtmlH2
         | KernelFn::HtmlH3
@@ -1020,6 +1039,8 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         | KernelFn::HtmlScript
         | KernelFn::HtmlBody
         | KernelFn::HtmlTitle
+        | KernelFn::HtmlHtmlNode
+        | KernelFn::HtmlHeadNode
         | KernelFn::HtmlBr
         | KernelFn::HtmlHr
         | KernelFn::HtmlMeta
@@ -1070,6 +1091,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiOnKeyUp => "ui_on_key_up_",
         KernelFn::UiOnBool => "ui_on_bool_",
         KernelFn::UiOnSubmit => "ui_on_submit_",
+        KernelFn::UiOnFile => "ui_on_file_",
         // #107: Std.Html.Events builders — emitted via the dedicated
         // `emit_ui_call` arm (`html_event_shape().is_some()`), so this generic
         // name map is not consulted at emit time; the arms are here to keep the

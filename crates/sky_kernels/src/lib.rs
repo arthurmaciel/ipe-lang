@@ -682,6 +682,9 @@ pub enum StdlibKernel {
     UiLink, // (List Attr, { url : String, label : Element msg }) → Element msg
     /// `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
     UiForm,
+    /// `Ui.image : List Attr -> { src : String, description : String } -> Element msg`
+    /// — renders `<img src=… alt=…>` (a void `TaggedNode`, no children).
+    UiImage,
     // ── M7: Std.Ui nearby attribute builders (absolute-positioned overlays) ──
     /// `Ui.above : Element msg -> Attribute msg`
     UiAbove,
@@ -699,6 +702,8 @@ pub enum StdlibKernel {
     UiSpacing,
     UiPadding,
     UiPaddingXY,
+    /// `Ui.paddingEach : { top : Int, right : Int, bottom : Int, left : Int } -> Attribute msg`
+    UiPaddingEach,
     UiWidth,
     UiHeight,
     UiCenterX,
@@ -709,7 +714,16 @@ pub enum StdlibKernel {
     UiAlignBottom,
     UiPointer,
     UiClip,
+    /// `Ui.clipX : Attribute msg` — `AttrOverflow "clip" "visible"` (single-axis
+    /// clip; Y stays truly visible, no `auto`-scrollbar promotion — #76).
+    UiClipX,
+    /// `Ui.clipY : Attribute msg` — `AttrOverflow "visible" "clip"`.
+    UiClipY,
     UiScrollbars,
+    /// `Ui.scrollbarX : Attribute msg` — `AttrOverflow "auto" "hidden"`.
+    UiScrollbarX,
+    /// `Ui.scrollbarY : Attribute msg` — `AttrOverflow "hidden" "auto"`.
+    UiScrollbarY,
     UiGridColumns,
     // ── M7: Std.Ui Length builders ───────────────────────────────────────────
     UiPx,
@@ -732,6 +746,10 @@ pub enum StdlibKernel {
     // ── M7: Background / Border / Font sub-modules ───────────────────────────
     BackgroundColor,
     BackgroundImage,
+    /// `Background.linearGradient : Float -> List (Float, Color) -> Attribute msg`
+    /// — renders `background-image: linear-gradient(<angle>deg, <c1> <p1>%, …);`
+    /// via the existing `AttrBgGradient` runtime variant.
+    BackgroundLinearGradient,
     BorderWidth,
     BorderRounded,
     BorderColor,
@@ -748,6 +766,22 @@ pub enum StdlibKernel {
     HtmlTextNode,
     HtmlRawNode,
     HtmlNode,
+    /// `Html.voidNode : String -> List Attr -> Html msg` — a void element of an
+    /// arbitrary (runtime) tag; the generic counterpart of the fixed-tag void
+    /// builders below. Routes through the same `html_node_(tag, attrs, [])`
+    /// sink as `Html.node`, just with an empty children vec baked at emit.
+    HtmlVoidNode,
+    /// `Html.doctype : List Html -> Html msg` — wraps children in the
+    /// `!doctype-wrapper` pseudo-tag; `html::render_into_ctx` already
+    /// special-cases that tag to emit a literal `<!DOCTYPE html>` prefix then
+    /// the children directly (renderer support pre-existed this kernel wiring).
+    HtmlDoctype,
+    /// `Html.titleNode : String -> Html msg` — wraps a raw string directly in
+    /// `<title>` (`HElement "title" [] [HText s]`).
+    HtmlTitleNode,
+    /// `Html.toString : Html msg -> String` — alias of `Html.render` (same
+    /// runtime kernel `html_render_`), kept for API familiarity.
+    HtmlToString,
     /// `Html.styleNode : List Attr -> String -> Html msg` — arity-2, NOT the
     /// arity-3 `HtmlNode` it was previously mis-folded into. Its dedicated
     /// runtime kernel `html_style_node_` close-tag-neutralises the CSS body at
@@ -824,6 +858,11 @@ pub enum StdlibKernel {
     HtmlScript,
     HtmlBody,
     HtmlTitle,
+    /// `Html.htmlNode : List Attr -> List Html -> Html msg` — `<html>` document
+    /// root container. Tag-as-data, same generic `html_node_` sink as `h1`/`nav`.
+    HtmlHtmlNode,
+    /// `Html.headNode : List Attr -> List Html -> Html msg` — `<head>` container.
+    HtmlHeadNode,
     HtmlBr,
     HtmlHr,
     HtmlMeta,
@@ -885,6 +924,10 @@ pub enum StdlibKernel {
     UiOnKeyUp,
     UiOnBool,
     UiOnSubmit,   // (a -> msg) -> Attribute msg  — form submit
+    /// `Ui.onFile : (String -> msg) -> Attribute msg` — wire event name
+    /// `"sky-file"`; the browser-side driver reads the chosen file, base64
+    /// data-URL-encodes it, and dispatches the URL string to the handler.
+    UiOnFile,
     // ── #107: Std.Html.Events builders — produce `Std.Html.Attribute msg`
     // (`html_attr`), so they unify with `Std.Html.Attributes` builders and the
     // element builders' `List (Std.Html.Attribute msg)` slot. Distinct from the
@@ -928,6 +971,33 @@ pub enum StdlibKernel {
     UiDarkMode,      // Breakpoint constant: "(prefers-color-scheme: dark)"
     UiLightMode,     // Breakpoint constant: "(prefers-color-scheme: light)"
     UiReducedMotion, // Breakpoint constant: "(prefers-reduced-motion: reduce)"
+    // ── #76: PseudoClass opaque constants + Ui.onPseudo generic escape hatch ──
+    // `PseudoClass` is a genuine 5-constructor opaque runtime type (mirrors
+    // `sky_runtime::ui::element::PseudoClass` byte-for-byte — the SAME enum
+    // `Background.hoverColor` / `Border.hoverColor` / `Font.hoverColor` already
+    // construct internally via `AttrPseudoRule`). Unlike `Breakpoint` (typed as
+    // a bare CSS-query `String`), `PseudoClass` carries no CSS text itself — it
+    // is a closed 5-value tag consumed by `onPseudo`/the pseudo-class-colour
+    // helpers — so it is registered as a real opaque nullary-constant type
+    // rather than a String divergence.
+    /// `Ui.onPseudo : PseudoClass -> List (Attribute msg) -> Attribute msg`
+    /// — generic escape hatch: folds `attrs` into one CSS rules-string (the
+    /// same style-collection logic as `Ui.layout`'s `style=""` attr) and
+    /// attaches it as `AttrPseudoRule(pc, css)`. Sub-module helpers
+    /// (`Background.hoverColor` etc.) already build on this exact primitive on
+    /// the `../sky` reference; the Rust port backs them the same way.
+    UiOnPseudo,
+    /// `Ui.hover : PseudoClass` — `PseudoClass::Hover`.
+    UiHover,
+    /// `Ui.focus : PseudoClass` — `PseudoClass::Focus`.
+    UiFocus,
+    /// `Ui.focusVisible : PseudoClass` — `PseudoClass::FocusVisible`.
+    UiFocusVisible,
+    /// `Ui.active : PseudoClass` — `PseudoClass::Active`.
+    UiActive,
+    /// `Ui.disabled : PseudoClass` — `PseudoClass::Disabled`. Distinct from the
+    /// unrelated `Attr.disabled : Bool -> Attribute msg` (HTML boolean attr).
+    UiDisabled,
     // Background namespace — pseudo-class colour tints
     BackgroundHoverColor,
     BackgroundFocusColor,
@@ -1877,6 +1947,7 @@ impl StdlibKernel {
             Self::UiButton => d("Ui", "button", 2, Ui, "ui_button_"),
             Self::UiLink => d("Ui", "link", 2, Ui, "ui_link_"),
             Self::UiForm => d("Ui", "form", 2, Ui, "ui_form_"),
+            Self::UiImage => d("Ui", "image", 2, Ui, "ui_image_"),
             // ── M7: Std.Ui nearby attribute builders ───────────────────────
             Self::UiAbove => d("Ui", "above", 1, Ui, "ui_above_"),
             Self::UiBelow => d("Ui", "below", 1, Ui, "ui_below_"),
@@ -1888,6 +1959,7 @@ impl StdlibKernel {
             Self::UiSpacing => d("Ui", "spacing", 1, Ui, "ui_spacing_"),
             Self::UiPadding => d("Ui", "padding", 1, Ui, "ui_padding_"),
             Self::UiPaddingXY => d("Ui", "paddingXY", 2, Ui, "ui_padding_xy_"),
+            Self::UiPaddingEach => d("Ui", "paddingEach", 1, Ui, "ui_padding_each_"),
             Self::UiWidth => d("Ui", "width", 1, Ui, "ui_width_"),
             Self::UiHeight => d("Ui", "height", 1, Ui, "ui_height_"),
             Self::UiCenterX => d("Ui", "centerX", 0, Ui, "ui_center_x_"),
@@ -1898,7 +1970,11 @@ impl StdlibKernel {
             Self::UiAlignBottom => d("Ui", "alignBottom", 0, Ui, "ui_align_bottom_"),
             Self::UiPointer => d("Ui", "pointer", 0, Ui, "ui_pointer_"),
             Self::UiClip => d("Ui", "clip", 0, Ui, "ui_clip_"),
+            Self::UiClipX => d("Ui", "clipX", 0, Ui, "ui_clip_x_"),
+            Self::UiClipY => d("Ui", "clipY", 0, Ui, "ui_clip_y_"),
             Self::UiScrollbars => d("Ui", "scrollbars", 0, Ui, "ui_scrollbars_"),
+            Self::UiScrollbarX => d("Ui", "scrollbarX", 0, Ui, "ui_scrollbar_x_"),
+            Self::UiScrollbarY => d("Ui", "scrollbarY", 0, Ui, "ui_scrollbar_y_"),
             Self::UiGridColumns => d("Ui", "gridColumns", 1, Ui, "ui_grid_columns_"),
             // ── M7: Std.Ui Length builders ───────────────────────────────────
             Self::UiPx => d("Ui", "px", 1, Ui, "ui_px_"),
@@ -1920,6 +1996,13 @@ impl StdlibKernel {
             // ── M7: Background / Border / Font sub-modules ───────────────────
             Self::BackgroundColor => d("Background", "color", 1, Ui, "ui_background_color_"),
             Self::BackgroundImage => d("Background", "image", 1, Ui, "ui_background_image_"),
+            Self::BackgroundLinearGradient => d(
+                "Background",
+                "linearGradient",
+                2,
+                Ui,
+                "ui_background_linear_gradient_",
+            ),
             Self::BorderWidth => d("Border", "width", 1, Ui, "ui_border_width_"),
             Self::BorderRounded => d("Border", "rounded", 1, Ui, "ui_border_rounded_"),
             Self::BorderColor => d("Border", "color", 1, Ui, "ui_border_color_"),
@@ -1938,6 +2021,10 @@ impl StdlibKernel {
             Self::HtmlTextNode => d("Html", "text", 1, Ui, "html_text_node_"),
             Self::HtmlRawNode => d("Html", "raw", 1, Ui, "html_raw_node_"),
             Self::HtmlNode => d("Html", "node", 3, Ui, "html_node_"),
+            Self::HtmlVoidNode => d("Html", "voidNode", 2, Ui, "html_node_"),
+            Self::HtmlDoctype => d("Html", "doctype", 1, Ui, "html_doctype_"),
+            Self::HtmlTitleNode => d("Html", "titleNode", 1, Ui, "html_title_node_"),
+            Self::HtmlToString => d("Html", "toString", 1, Ui, "html_render_"),
             Self::HtmlStyleNode => d("Html", "styleNode", 2, Ui, "html_style_node_"),
             // Arity corrected 3→2 / 2→1 (task #74): the tag is a baked literal,
             // not a parameter — `html_div_` etc. take (attrs, children) = 2, the
@@ -2007,6 +2094,8 @@ impl StdlibKernel {
             Self::HtmlScript => d("Html", "script", 2, Ui, "html_node_"),
             Self::HtmlBody => d("Html", "body", 2, Ui, "html_node_"),
             Self::HtmlTitle => d("Html", "title", 2, Ui, "html_node_"),
+            Self::HtmlHtmlNode => d("Html", "htmlNode", 2, Ui, "html_node_"),
+            Self::HtmlHeadNode => d("Html", "headNode", 2, Ui, "html_node_"),
             Self::HtmlBr => d("Html", "br", 1, Ui, "html_node_"),
             Self::HtmlHr => d("Html", "hr", 1, Ui, "html_node_"),
             Self::HtmlMeta => d("Html", "meta", 1, Ui, "html_node_"),
@@ -2067,6 +2156,7 @@ impl StdlibKernel {
             Self::UiOnKeyUp => d("Ui", "onKeyUp", 1, Ui, "ui_on_key_up_"),
             Self::UiOnBool => d("Ui", "onBool", 1, Ui, "ui_on_bool_"),
             Self::UiOnSubmit => d("Ui", "onSubmit", 1, Ui, "ui_on_submit_"),
+            Self::UiOnFile => d("Ui", "onFile", 1, Ui, "ui_on_file_"),
             // ── #107: Std.Html.Events builders (qualifier "Event" — matches the
             // `QUALIFIERS` table in env.rs). Each produces `html::Attribute<M>`
             // via a dedicated runtime constructor (family `Ui` so emit routes
@@ -2107,6 +2197,13 @@ impl StdlibKernel {
             Self::UiDarkMode => d("Ui", "darkMode", 0, Ui, "ui_dark_mode_"),
             Self::UiLightMode => d("Ui", "lightMode", 0, Ui, "ui_light_mode_"),
             Self::UiReducedMotion => d("Ui", "reducedMotion", 0, Ui, "ui_reduced_motion_"),
+            // #76: PseudoClass opaque constants + Ui.onPseudo
+            Self::UiOnPseudo => d("Ui", "onPseudo", 2, Ui, "ui_on_pseudo_"),
+            Self::UiHover => d("Ui", "hover", 0, Ui, "ui_hover_"),
+            Self::UiFocus => d("Ui", "focus", 0, Ui, "ui_focus_"),
+            Self::UiFocusVisible => d("Ui", "focusVisible", 0, Ui, "ui_focus_visible_"),
+            Self::UiActive => d("Ui", "active", 0, Ui, "ui_active_"),
+            Self::UiDisabled => d("Ui", "disabled", 0, Ui, "ui_disabled_"),
             // Background namespace
             Self::BackgroundHoverColor => {
                 d("Background", "hoverColor", 1, Ui, "ui_bg_hover_color_")
@@ -2837,6 +2934,7 @@ impl StdlibKernel {
         Self::UiButton,
         Self::UiLink,
         Self::UiForm,
+        Self::UiImage,
         // M7: Ui nearby attribute builders
         Self::UiAbove,
         Self::UiBelow,
@@ -2848,6 +2946,7 @@ impl StdlibKernel {
         Self::UiSpacing,
         Self::UiPadding,
         Self::UiPaddingXY,
+        Self::UiPaddingEach,
         Self::UiWidth,
         Self::UiHeight,
         Self::UiCenterX,
@@ -2858,7 +2957,11 @@ impl StdlibKernel {
         Self::UiAlignBottom,
         Self::UiPointer,
         Self::UiClip,
+        Self::UiClipX,
+        Self::UiClipY,
         Self::UiScrollbars,
+        Self::UiScrollbarX,
+        Self::UiScrollbarY,
         Self::UiGridColumns,
         // M7: Ui Length builders
         Self::UiPx,
@@ -2880,6 +2983,7 @@ impl StdlibKernel {
         // M7: Background / Border / Font
         Self::BackgroundColor,
         Self::BackgroundImage,
+        Self::BackgroundLinearGradient,
         Self::BorderWidth,
         Self::BorderRounded,
         Self::BorderColor,
@@ -2896,6 +3000,10 @@ impl StdlibKernel {
         Self::HtmlTextNode,
         Self::HtmlRawNode,
         Self::HtmlNode,
+        Self::HtmlVoidNode,
+        Self::HtmlDoctype,
+        Self::HtmlTitleNode,
+        Self::HtmlToString,
         Self::HtmlDiv,
         Self::HtmlSpan,
         Self::HtmlA,
@@ -2959,6 +3067,8 @@ impl StdlibKernel {
         Self::HtmlScript,
         Self::HtmlBody,
         Self::HtmlTitle,
+        Self::HtmlHtmlNode,
+        Self::HtmlHeadNode,
         Self::HtmlBr,
         Self::HtmlHr,
         Self::HtmlMeta,
@@ -3025,6 +3135,7 @@ impl StdlibKernel {
         Self::UiOnKeyUp,
         Self::UiOnBool,
         Self::UiOnSubmit,
+        Self::UiOnFile,
         // #107: Std.Html.Events builders (produce html_attr)
         Self::HtmlOnClick,
         Self::HtmlOnFocus,
@@ -3055,6 +3166,12 @@ impl StdlibKernel {
         Self::UiDarkMode,
         Self::UiLightMode,
         Self::UiReducedMotion,
+        Self::UiOnPseudo,
+        Self::UiHover,
+        Self::UiFocus,
+        Self::UiFocusVisible,
+        Self::UiActive,
+        Self::UiDisabled,
         Self::BackgroundHoverColor,
         Self::BackgroundFocusColor,
         Self::BackgroundActiveColor,
@@ -3443,6 +3560,7 @@ impl StdlibKernel {
                 | Self::UiButton
                 | Self::UiLink
                 | Self::UiForm
+                | Self::UiImage
                 | Self::UiAbove
                 | Self::UiBelow
                 | Self::UiOnLeft
@@ -3452,6 +3570,7 @@ impl StdlibKernel {
                 | Self::UiSpacing
                 | Self::UiPadding
                 | Self::UiPaddingXY
+                | Self::UiPaddingEach
                 | Self::UiWidth
                 | Self::UiHeight
                 | Self::UiCenterX
@@ -3462,7 +3581,11 @@ impl StdlibKernel {
                 | Self::UiAlignBottom
                 | Self::UiPointer
                 | Self::UiClip
+                | Self::UiClipX
+                | Self::UiClipY
                 | Self::UiScrollbars
+                | Self::UiScrollbarX
+                | Self::UiScrollbarY
                 | Self::UiGridColumns
                 | Self::UiPx
                 | Self::UiFill
@@ -3481,6 +3604,7 @@ impl StdlibKernel {
                 | Self::UiColorCss
                 | Self::BackgroundColor
                 | Self::BackgroundImage
+                | Self::BackgroundLinearGradient
                 | Self::BorderWidth
                 | Self::BorderRounded
                 | Self::BorderColor
@@ -3496,6 +3620,10 @@ impl StdlibKernel {
                 | Self::HtmlTextNode
                 | Self::HtmlRawNode
                 | Self::HtmlNode
+                | Self::HtmlVoidNode
+                | Self::HtmlDoctype
+                | Self::HtmlTitleNode
+                | Self::HtmlToString
                 | Self::HtmlStyleNode
                 | Self::HtmlDiv
                 | Self::HtmlSpan
@@ -3559,6 +3687,8 @@ impl StdlibKernel {
                 | Self::HtmlScript
                 | Self::HtmlBody
                 | Self::HtmlTitle
+                | Self::HtmlHtmlNode
+                | Self::HtmlHeadNode
                 | Self::HtmlBr
                 | Self::HtmlHr
                 | Self::HtmlMeta
@@ -3604,6 +3734,7 @@ impl StdlibKernel {
                 | Self::UiOnKeyUp
                 | Self::UiOnBool
                 | Self::UiOnSubmit
+                | Self::UiOnFile
                 | Self::HtmlOnClick
                 | Self::HtmlOnFocus
                 | Self::HtmlOnBlur
@@ -3634,6 +3765,13 @@ impl StdlibKernel {
                 | Self::UiDarkMode
                 | Self::UiLightMode
                 | Self::UiReducedMotion
+                // ── #76: PseudoClass opaque constants + Ui.onPseudo ────────────
+                | Self::UiOnPseudo
+                | Self::UiHover
+                | Self::UiFocus
+                | Self::UiFocusVisible
+                | Self::UiActive
+                | Self::UiDisabled
                 | Self::BackgroundHoverColor
                 | Self::BackgroundFocusColor
                 | Self::BackgroundActiveColor
@@ -3901,6 +4039,8 @@ impl StdlibKernel {
                 | Self::HtmlScript
                 | Self::HtmlBody
                 | Self::HtmlTitle
+                | Self::HtmlHtmlNode
+                | Self::HtmlHeadNode
         )
     }
 
@@ -3984,6 +4124,8 @@ impl StdlibKernel {
             Self::HtmlScript => "script",
             Self::HtmlBody => "body",
             Self::HtmlTitle => "title",
+            Self::HtmlHtmlNode => "html",
+            Self::HtmlHeadNode => "head",
             Self::HtmlBr => "br",
             Self::HtmlHr => "hr",
             Self::HtmlMeta => "meta",
