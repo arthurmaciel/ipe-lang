@@ -75,6 +75,50 @@ pub fn system_args<E: Send + 'static>(_: ()) -> SkyTask<E, Vec<String>> {
     Box::pin(async move { ok_res(std::env::args().skip(1).collect()) })
 }
 
+// ── #129: shared blocking-pool helper ───────────────────────────────────────
+//
+// `process_run` calls `std::process::Command::output()`, which BLOCKS the
+// calling thread until the child process exits — an arbitrarily long wait
+// (the whole point of `Process.run` is running a caller-chosen subprocess).
+// On a tokio worker thread that stalls every other task scheduled on it for
+// the subprocess's full runtime — reactor starvation, same class as the
+// bcrypt/gzip/zstd/file cases. `system` (this module) is UNCONDITIONALLY
+// compiled (not gated behind any feature — see the module-level comment
+// above `pub mod system;` in `mod.rs`), while `tokio` is an `optional = true`
+// dependency, so `tokio` is not guaranteed present here. Same
+// `#[cfg(feature = "tokio")]` / fallback split `file.rs` uses for its own
+// `run_blocking` helper (real generated Sky projects always have `tokio` —
+// see `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md`
+// §2.2 — so the fallback only matters for this crate's own narrow-feature
+// standalone builds).
+#[cfg(feature = "tokio")]
+async fn run_blocking<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(r) => r,
+        Err(_) => Err("background process task panicked".to_string()),
+    }
+}
+
+#[cfg(not(feature = "tokio"))]
+async fn run_blocking<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    f()
+}
+
+fn process_run_sync(cmd: &str, args: &[String]) -> Result<std::process::Output, String> {
+    std::process::Command::new(cmd)
+        .args(args)
+        .output()
+        .map_err(|e| format!("{}: {}", cmd, e))
+}
+
 /// `Sky.Core.Process.run : String -> List String -> Task Error String` — run a
 /// subprocess, returning its combined stdout+stderr. Mirrors Go's `Process_run`
 /// (`exec.Command` + `CombinedOutput`): a non-zero exit or a spawn failure is
@@ -85,12 +129,20 @@ pub fn system_args<E: Send + 'static>(_: ()) -> SkyTask<E, Vec<String>> {
 /// parity with the Go backend) — no more permissive than Go's. Sandboxing
 /// untrusted Sky source (e.g. blocking the `Process.` module) is the calling
 /// application's responsibility, exactly as on Go.
+///
+/// #129: the actual `Command::output()` wait is offloaded via `run_blocking`
+/// (see the module-level doc comment above) so a long-running subprocess
+/// can't stall the tokio worker thread polling this future.
 pub fn process_run<E: Send + From<String> + 'static>(
     cmd: String,
     args: Vec<String>,
 ) -> SkyTask<E, String> {
     Box::pin(async move {
-        match std::process::Command::new(&cmd).args(&args).output() {
+        // `process_run_sync` already folds `cmd` into its `Err` string (spawn
+        // failure), so the outer `Err` arm (a `run_blocking` `JoinError`,
+        // i.e. the blocking task panicked) doesn't need `cmd` — it's moved
+        // into the closure below.
+        match run_blocking(move || process_run_sync(&cmd, &args)).await {
             Ok(out) => {
                 // Go's CombinedOutput: stdout then stderr (callers usually `2>&1`).
                 let mut combined = out.stdout;
@@ -119,7 +171,7 @@ pub fn process_run<E: Send + From<String> + 'static>(
                     SkyResult::Err(str_err(&format!("{}: {}", snippet, out.status)))
                 }
             }
-            Err(e) => SkyResult::Err(str_err(&format!("{}: {}", cmd, e))),
+            Err(e) => SkyResult::Err(str_err(&e)),
         }
     })
 }
@@ -323,6 +375,101 @@ mod exit_hook_tests {
         assert!(
             CALLS.load(Ordering::SeqCst) >= 1,
             "registered exit hook must run"
+        );
+    }
+}
+
+#[cfg(test)]
+mod process_run_tests {
+    use super::*;
+
+    fn block<T>(fut: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(fut)
+    }
+
+    /// Functional correctness (independent of whether `run_blocking` takes the
+    /// real `spawn_blocking` path or the no-tokio-feature fallback — both
+    /// paths must return the same result).
+    #[test]
+    fn success_returns_combined_output() {
+        let res: SkyResult<String, String> = block(process_run::<String>(
+            "echo".to_string(),
+            vec!["hello".to_string()],
+        ));
+        match res {
+            SkyResult::Ok(s) => assert!(s.contains("hello"), "unexpected output: {s:?}"),
+            SkyResult::Err(e) => panic!("unexpected Err: {e}"),
+        }
+    }
+
+    #[test]
+    fn nonexistent_binary_errs() {
+        let res: SkyResult<String, String> = block(process_run::<String>(
+            "sky-does-not-exist-binary-xyz".to_string(),
+            vec![],
+        ));
+        assert!(matches!(res, SkyResult::Err(_)));
+    }
+
+    #[test]
+    fn nonzero_exit_errs() {
+        let res: SkyResult<String, String> =
+            block(process_run::<String>("false".to_string(), vec![]));
+        assert!(matches!(res, SkyResult::Err(_)));
+    }
+}
+
+#[cfg(all(test, feature = "tokio"))]
+mod process_run_spawn_blocking_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// #129 regression: `Command::output()` blocks the calling thread until
+    /// the child process exits. On a SINGLE-WORKER (current_thread) runtime,
+    /// running that wait inline (no `spawn_blocking`) would starve every
+    /// other task scheduled on that runtime for the subprocess's whole
+    /// lifetime. This proves `process_run` offloads the wait to tokio's
+    /// blocking-thread pool: a concurrently-spawned cheap ticker task must
+    /// make progress (ticks > 0) WHILE the subprocess is running.
+    ///
+    /// Uses `sleep 1` as a cheap, portable way to force the subprocess to run
+    /// long enough for at least one `yield_now` to land elsewhere. Pre-fix
+    /// this is NOT a flaky race: the ticker makes EXACTLY zero progress
+    /// deterministically, because the worker thread never yields back to the
+    /// executor until `Command::output()` returns.
+    #[test]
+    fn process_run_does_not_starve_concurrent_async_work() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let ticks = rt.block_on(async move {
+            let counter = Arc::new(AtomicU64::new(0));
+            let counter2 = counter.clone();
+            let ticker = tokio::spawn(async move {
+                loop {
+                    counter2.fetch_add(1, Ordering::Relaxed);
+                    tokio::task::yield_now().await;
+                }
+            });
+            let run_fut: SkyTask<String, String> =
+                process_run("sleep".to_string(), vec!["1".to_string()]);
+            let _res: SkyResult<String, String> = run_fut.await;
+            ticker.abort();
+            counter.load(Ordering::Relaxed)
+        });
+
+        assert!(
+            ticks > 0,
+            "concurrent ticker task made ZERO progress while process_run ran — \
+             the blocking subprocess wait is starving the single-threaded executor \
+             (spawn_blocking missing or not taking effect)"
         );
     }
 }

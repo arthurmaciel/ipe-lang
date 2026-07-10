@@ -1,6 +1,50 @@
 // File kernel stubs — generic over E.
 use super::*;
 
+// ── #129: shared blocking-pool helper ───────────────────────────────────────
+//
+// Every kernel in this module does a blocking `std::fs` syscall inside its
+// `Box::pin(async move { ... })` body. On a tokio worker thread (the shape
+// every generated Sky.Live/Sky.Http.Server/Sky.Cli/Sky.Tui app runs under),
+// a blocking syscall stalls that worker for its full duration — reactor
+// starvation under concurrent load, or a real multi-second stall on a
+// slow/network filesystem. `run_blocking` offloads the closure to tokio's
+// blocking-thread pool via `spawn_blocking`, mirroring the pattern already
+// used by `auth.rs` for bcrypt (`auth_register`/`auth_login`/`auth_set_role`).
+//
+// Feature-gating note: `pub mod file;` (`mod.rs`) is UNCONDITIONAL — unlike
+// `compression.rs`, which is gated on a `compression` feature that always
+// pulls in `tokio` — while `tokio` itself is an `optional = true` dependency.
+// The main CI clippy job (`cargo clippy --all-targets --workspace`) builds
+// with the crate's `default = []` features, i.e. `tokio` NOT enabled, so an
+// unconditional `tokio::task::spawn_blocking` reference here would break that
+// job. Every REAL generated Sky project always has `tokio` (`Task.run`/
+// `block_on` need it regardless of which kernels are used — see
+// `tests/golden/m0/Cargo.toml`), so the `#[cfg(not(feature = "tokio"))]`
+// fallback below only matters for the standalone `sky-runtime-rust` crate's
+// own narrow-feature builds, never for a real Sky program. See
+// `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md` §2.2.
+#[cfg(feature = "tokio")]
+async fn run_blocking<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(r) => r,
+        Err(_) => Err("background file task panicked".to_string()),
+    }
+}
+
+#[cfg(not(feature = "tokio"))]
+async fn run_blocking<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    f()
+}
+
 /// `Sky.Core.File.readFile : String -> Task Error String`. Reads the whole file,
 /// but bounded by a hard ceiling so an attacker-controlled path pointing at an
 /// unbounded source (`/dev/zero`, a named pipe, a multi-GiB file) cannot OOM the
@@ -16,32 +60,37 @@ fn file_read_ceiling() -> u64 {
         .unwrap_or(512 * 1024 * 1024)
 }
 
+fn file_read_file_sync(path: &str, cap: u64) -> Result<String, String> {
+    use std::io::Read;
+    let f = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
+    // take(cap + 1): if the source yields more than `cap` bytes we still
+    // stop at a bounded read and report an error rather than OOM.
+    let mut buf = String::new();
+    let read = f
+        .take(cap.saturating_add(1))
+        .read_to_string(&mut buf)
+        .map_err(|e| format!("{}", e))?;
+    if read as u64 > cap {
+        return Err(format!(
+            "file exceeds read ceiling of {} bytes (raise SKY_FILE_READ_MAX or use File.readFileLimit): {}",
+            cap, path
+        ));
+    }
+    Ok(buf)
+}
+
 pub fn file_read_file<E: Send + From<String> + 'static>(path: String) -> SkyTask<E, String> {
     Box::pin(async move {
         let cap = file_read_ceiling();
-        let run = || -> Result<String, String> {
-            use std::io::Read;
-            let f = std::fs::File::open(&path).map_err(|e| format!("{}", e))?;
-            // take(cap + 1): if the source yields more than `cap` bytes we still
-            // stop at a bounded read and report an error rather than OOM.
-            let mut buf = String::new();
-            let read = f
-                .take(cap.saturating_add(1))
-                .read_to_string(&mut buf)
-                .map_err(|e| format!("{}", e))?;
-            if read as u64 > cap {
-                return Err(format!(
-                    "file exceeds read ceiling of {} bytes (raise SKY_FILE_READ_MAX or use File.readFileLimit): {}",
-                    cap, path
-                ));
-            }
-            Ok(buf)
-        };
-        match run() {
+        match run_blocking(move || file_read_file_sync(&path, cap)).await {
             Ok(s) => ok_res(s),
             Err(e) => SkyResult::Err(str_err(&e)),
         }
     })
+}
+
+fn file_write_file_sync(path: &str, content: &str) -> Result<(), String> {
+    std::fs::write(path, content).map_err(|e| format!("{}", e))
 }
 
 pub fn file_write_file<E: Send + From<String> + 'static>(
@@ -49,15 +98,25 @@ pub fn file_write_file<E: Send + From<String> + 'static>(
     content: String,
 ) -> SkyTask<E, ()> {
     Box::pin(async move {
-        match std::fs::write(&path, &content) {
-            Ok(_) => ok_res(()),
-            Err(e) => SkyResult::Err(str_err(&format!("{}", e))),
+        match run_blocking(move || file_write_file_sync(&path, &content)).await {
+            Ok(()) => ok_res(()),
+            Err(e) => SkyResult::Err(str_err(&e)),
         }
     })
 }
 
 pub fn file_exists<E: Send + 'static>(path: String) -> SkyTask<E, bool> {
-    Box::pin(async move { ok_res(std::path::Path::new(&path).exists()) })
+    Box::pin(async move {
+        // Infallible closure — `run_blocking`'s `Err` arm is unreachable here
+        // (kept `Result`-shaped only to satisfy the shared helper's bound), so
+        // a hypothetical `JoinError` (task panicked) falls back to `false`
+        // rather than propagating — there is no `Err` channel on this
+        // kernel's existing `SkyTask<E, bool>` signature to propagate into.
+        let exists = run_blocking(move || Ok(std::path::Path::new(&path).exists()))
+            .await
+            .unwrap_or(false);
+        ok_res(exists)
+    })
 }
 
 /// Alias of `file_remove` (the `remove` contract). Kept as a public name for
@@ -66,19 +125,40 @@ pub fn file_delete<E: Send + From<String> + 'static>(path: String) -> SkyTask<E,
     file_remove(path)
 }
 
+fn file_mkdir_all_sync(path: &str) -> Result<(), String> {
+    std::fs::create_dir_all(path).map_err(|e| format!("{}", e))
+}
+
 /// `Sky.Core.File.mkdirAll : String -> Task Error ()` — create the directory
 /// and every missing parent (mkdir -p). Already-exists is `Ok` (matching
 /// `std::fs::create_dir_all`); a real I/O failure is `Err`.
 pub fn file_mkdir_all<E: Send + From<String> + 'static>(path: String) -> SkyTask<E, ()> {
     Box::pin(async move {
-        match std::fs::create_dir_all(&path) {
-            Ok(_) => ok_res(()),
-            Err(e) => SkyResult::Err(str_err(&format!("{}", e))),
+        match run_blocking(move || file_mkdir_all_sync(&path)).await {
+            Ok(()) => ok_res(()),
+            Err(e) => SkyResult::Err(str_err(&e)),
         }
     })
 }
 
 // ─── Read variants ─────────────────────────────────────────────────────────
+
+fn file_read_file_limit_sync(path: &str, cap: u64) -> Result<String, String> {
+    use std::io::Read as _;
+    let f = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
+    let mut buf = String::new();
+    let read = f
+        .take(cap.saturating_add(1))
+        .read_to_string(&mut buf)
+        .map_err(|e| format!("{}", e))?;
+    if read as u64 > cap {
+        return Err(format!(
+            "file exceeds {}-byte limit (stopped reading at the limit — actual size not reported to bound memory use): {}",
+            cap, path
+        ));
+    }
+    Ok(buf)
+}
 
 /// `Sky.Core.File.readFileLimit : String -> Int -> Task Error String`
 /// Read at most `limit` bytes. Returns `Err` when the file is larger than
@@ -99,33 +179,28 @@ pub fn file_read_file_limit<E: Send + From<String> + 'static>(
     path: String,
     limit: i64,
 ) -> SkyTask<E, String> {
-    use std::io::Read as _;
     let cap: u64 = if limit > 0 {
         limit as u64
     } else {
         10 * 1024 * 1024
     };
     Box::pin(async move {
-        let result: Result<String, String> = (|| {
-            let f = std::fs::File::open(&path).map_err(|e| format!("{}", e))?;
-            let mut buf = String::new();
-            let read = f
-                .take(cap.saturating_add(1))
-                .read_to_string(&mut buf)
-                .map_err(|e| format!("{}", e))?;
-            if read as u64 > cap {
-                return Err(format!(
-                    "file exceeds {}-byte limit (stopped reading at the limit — actual size not reported to bound memory use): {}",
-                    cap, path
-                ));
-            }
-            Ok(buf)
-        })();
-        match result {
+        match run_blocking(move || file_read_file_limit_sync(&path, cap)).await {
             Ok(s) => ok_res(s),
             Err(e) => SkyResult::Err(str_err(&e)),
         }
     })
+}
+
+fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
+    const DEFAULT_CAP: u64 = 10 * 1024 * 1024;
+    use std::io::Read as _;
+    let f = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
+    let mut buf = Vec::new();
+    f.take(DEFAULT_CAP)
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("{}", e))?;
+    Ok(from_u8_slice(&buf))
 }
 
 /// `Sky.Core.File.readFileBytes : String -> Task Error (List Int)`
@@ -135,18 +210,8 @@ pub fn file_read_file_limit<E: Send + From<String> + 'static>(
 pub fn file_read_file_bytes<E: Send + From<String> + 'static>(
     path: String,
 ) -> SkyTask<E, Vec<i64>> {
-    const DEFAULT_CAP: u64 = 10 * 1024 * 1024;
     Box::pin(async move {
-        use std::io::Read as _;
-        let result: Result<Vec<i64>, String> = (|| {
-            let f = std::fs::File::open(&path).map_err(|e| format!("{}", e))?;
-            let mut buf = Vec::new();
-            f.take(DEFAULT_CAP)
-                .read_to_end(&mut buf)
-                .map_err(|e| format!("{}", e))?;
-            Ok(from_u8_slice(&buf))
-        })();
-        match result {
+        match run_blocking(move || file_read_file_bytes_sync(&path)).await {
             Ok(v) => ok_res(v),
             Err(e) => SkyResult::Err(str_err(&e)),
         }
@@ -154,6 +219,17 @@ pub fn file_read_file_bytes<E: Send + From<String> + 'static>(
 }
 
 // ─── Write variants ────────────────────────────────────────────────────────
+
+fn file_append_sync(path: &str, content: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+        .map_err(|e| format!("{}", e))?;
+    f.write_all(content.as_bytes())
+        .map_err(|e| format!("{}", e))
+}
 
 /// `Sky.Core.File.append : String -> String -> Task Error ()`
 /// Append `content` to the end of the file at `path`, creating it if absent.
@@ -163,18 +239,8 @@ pub fn file_append<E: Send + From<String> + 'static>(
     content: String,
 ) -> SkyTask<E, ()> {
     Box::pin(async move {
-        use std::io::Write as _;
-        let result = (|| {
-            let mut f = std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(&path)
-                .map_err(|e| format!("{}", e))?;
-            f.write_all(content.as_bytes())
-                .map_err(|e| format!("{}", e))
-        })();
-        match result {
-            Ok(_) => ok_res(()),
+        match run_blocking(move || file_append_sync(&path, &content)).await {
+            Ok(()) => ok_res(()),
             Err(e) => SkyResult::Err(str_err(&e)),
         }
     })
@@ -182,39 +248,44 @@ pub fn file_append<E: Send + From<String> + 'static>(
 
 // ─── Removal ───────────────────────────────────────────────────────────────
 
+fn file_remove_sync(path: &str) -> Result<(), String> {
+    std::fs::remove_file(path).map_err(|e| format!("{}", e))
+}
+
 /// `Sky.Core.File.remove : String -> Task Error ()`
 /// Remove the file at `path`. Returns `Err` on any I/O failure (including
 /// "not found"). Mirrors Go's `os.Remove`.
 pub fn file_remove<E: Send + From<String> + 'static>(path: String) -> SkyTask<E, ()> {
     Box::pin(async move {
-        match std::fs::remove_file(&path) {
-            Ok(_) => ok_res(()),
-            Err(e) => SkyResult::Err(str_err(&format!("{}", e))),
+        match run_blocking(move || file_remove_sync(&path)).await {
+            Ok(()) => ok_res(()),
+            Err(e) => SkyResult::Err(str_err(&e)),
         }
     })
 }
 
 // ─── Directory queries ─────────────────────────────────────────────────────
 
+fn file_read_dir_sync(path: &str) -> Result<Vec<String>, String> {
+    // Propagate per-entry read errors instead of silently dropping them
+    // (`rd.flatten()` would discard `Err` items mid-walk, omitting entries
+    // a transient stat/readdir failure touched — Go's `os.ReadDir` surfaces
+    // such an error rather than returning a truncated list).
+    let rd = std::fs::read_dir(path).map_err(|e| format!("{}", e))?;
+    let mut names: Vec<String> = Vec::new();
+    for entry in rd {
+        let entry = entry.map_err(|e| format!("{}", e))?;
+        names.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    Ok(names)
+}
+
 /// `Sky.Core.File.readDir : String -> Task Error (List String)`
 /// Return the names (not full paths) of all entries in the directory at
 /// `path`, in filesystem order. Mirrors Go's `os.ReadDir` → `e.Name()`.
 pub fn file_read_dir<E: Send + From<String> + 'static>(path: String) -> SkyTask<E, Vec<String>> {
     Box::pin(async move {
-        // Propagate per-entry read errors instead of silently dropping them
-        // (`rd.flatten()` would discard `Err` items mid-walk, omitting entries
-        // a transient stat/readdir failure touched — Go's `os.ReadDir` surfaces
-        // such an error rather than returning a truncated list).
-        let result: Result<Vec<String>, String> = (|| {
-            let rd = std::fs::read_dir(&path).map_err(|e| format!("{}", e))?;
-            let mut names: Vec<String> = Vec::new();
-            for entry in rd {
-                let entry = entry.map_err(|e| format!("{}", e))?;
-                names.push(entry.file_name().to_string_lossy().into_owned());
-            }
-            Ok(names)
-        })();
-        match result {
+        match run_blocking(move || file_read_dir_sync(&path)).await {
             Ok(names) => ok_res(names),
             Err(e) => SkyResult::Err(str_err(&e)),
         }
@@ -227,9 +298,14 @@ pub fn file_read_dir<E: Send + From<String> + 'static>(path: String) -> SkyTask<
 /// does not exist — matching Go's shape (`os.Stat` error → `false`).
 pub fn file_is_dir<E: Send + 'static>(path: String) -> SkyTask<E, bool> {
     Box::pin(async move {
-        let is_dir = std::fs::metadata(&path)
-            .map(|m| m.is_dir())
-            .unwrap_or(false);
+        // Same infallible-closure shape as `file_exists` above.
+        let is_dir = run_blocking(move || {
+            Ok(std::fs::metadata(&path)
+                .map(|m| m.is_dir())
+                .unwrap_or(false))
+        })
+        .await
+        .unwrap_or(false);
         ok_res(is_dir)
     })
 }
@@ -246,7 +322,7 @@ pub fn file_is_dir<E: Send + 'static>(path: String) -> SkyTask<E, bool> {
 /// `OpenOptions::create_new`). No `tempfile` crate needed (pure `std`).
 pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> SkyTask<E, String> {
     Box::pin(async move {
-        match make_temp_path(&prefix, false) {
+        match run_blocking(move || make_temp_path(&prefix, false)).await {
             Ok(p) => ok_res(p),
             Err(e) => SkyResult::Err(str_err(&e)),
         }
@@ -259,7 +335,7 @@ pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> SkyTa
 /// The caller is responsible for removing the directory when done.
 pub fn file_temp_dir<E: Send + From<String> + 'static>(prefix: String) -> SkyTask<E, String> {
     Box::pin(async move {
-        match make_temp_path(&prefix, true) {
+        match run_blocking(move || make_temp_path(&prefix, true)).await {
             Ok(p) => ok_res(p),
             Err(e) => SkyResult::Err(str_err(&e)),
         }
@@ -329,19 +405,26 @@ fn make_temp_path(prefix: &str, is_dir: bool) -> Result<String, String> {
 
 // ─── Copy / rename ─────────────────────────────────────────────────────────
 
+fn file_copy_sync(src: &str, dst: &str) -> Result<(), String> {
+    std::fs::copy(src, dst)
+        .map(|_| ())
+        .map_err(|e| format!("{}", e))
+}
+
 /// `Sky.Core.File.copy : String -> String -> Task Error ()`
 /// Copy the file at `src` to `dst`, creating or overwriting `dst`.
 /// Mirrors Go's `io.Copy(out, in)` pattern.
 pub fn file_copy<E: Send + From<String> + 'static>(src: String, dst: String) -> SkyTask<E, ()> {
     Box::pin(async move {
-        match std::fs::copy(&src, &dst)
-            .map(|_| ())
-            .map_err(|e| format!("{}", e))
-        {
-            Ok(_) => ok_res(()),
+        match run_blocking(move || file_copy_sync(&src, &dst)).await {
+            Ok(()) => ok_res(()),
             Err(e) => SkyResult::Err(str_err(&e)),
         }
     })
+}
+
+fn file_rename_sync(src: &str, dst: &str) -> Result<(), String> {
+    std::fs::rename(src, dst).map_err(|e| format!("{}", e))
 }
 
 /// `Sky.Core.File.rename : String -> String -> Task Error ()`
@@ -349,9 +432,9 @@ pub fn file_copy<E: Send + From<String> + 'static>(src: String, dst: String) -> 
 /// Mirrors Go's `os.Rename`.
 pub fn file_rename<E: Send + From<String> + 'static>(src: String, dst: String) -> SkyTask<E, ()> {
     Box::pin(async move {
-        match std::fs::rename(&src, &dst) {
-            Ok(_) => ok_res(()),
-            Err(e) => SkyResult::Err(str_err(&format!("{}", e))),
+        match run_blocking(move || file_rename_sync(&src, &dst)).await {
+            Ok(()) => ok_res(()),
+            Err(e) => SkyResult::Err(str_err(&e)),
         }
     })
 }
@@ -471,5 +554,101 @@ mod read_file_limit_tests {
             SkyResult::Ok(s) => assert_eq!(s, "small"),
             SkyResult::Err(e) => panic!("unexpected Err: {e}"),
         }
+    }
+}
+
+#[cfg(all(test, feature = "tokio"))]
+mod spawn_blocking_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// #129 regression: on a SINGLE-WORKER (current_thread) runtime, a
+    /// blocking `std::fs` read called directly on the polled future would
+    /// starve every other task on that runtime until the read completes.
+    /// This proves `file_read_file` offloads the blocking read to tokio's
+    /// blocking-thread pool instead of running it on the (sole) worker
+    /// thread: a concurrently-spawned cheap ticker task must make progress
+    /// (ticks > 0) WHILE the read is in flight.
+    ///
+    /// Pre-fix this is NOT a flaky race: the ticker makes EXACTLY zero
+    /// progress deterministically, because the worker thread never yields
+    /// back to the executor until `read_to_string` returns.
+    #[test]
+    fn file_read_file_does_not_starve_concurrent_async_work() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let p = std::env::temp_dir()
+            .join(format!("sky_spawn_blocking_probe_{}.txt", std::process::id()));
+        // Large enough that the read takes measurable (not instant) wall time.
+        std::fs::write(&p, vec![b'x'; 64 * 1024 * 1024]).unwrap(); // 64 MiB
+        std::env::set_var("SKY_FILE_READ_MAX", (128 * 1024 * 1024).to_string());
+        let path = p.to_string_lossy().into_owned();
+
+        let ticks = rt.block_on(async move {
+            let counter = Arc::new(AtomicU64::new(0));
+            let counter2 = counter.clone();
+            let ticker = tokio::spawn(async move {
+                loop {
+                    counter2.fetch_add(1, Ordering::Relaxed);
+                    tokio::task::yield_now().await;
+                }
+            });
+            let read_fut: SkyTask<String, String> = file_read_file(path);
+            let _res: SkyResult<String, String> = read_fut.await;
+            ticker.abort();
+            counter.load(Ordering::Relaxed)
+        });
+
+        std::env::remove_var("SKY_FILE_READ_MAX");
+        let _ = std::fs::remove_file(&p);
+
+        assert!(
+            ticks > 0,
+            "concurrent ticker task made ZERO progress while file_read_file ran — \
+             the blocking read is starving the single-threaded executor \
+             (spawn_blocking missing or not taking effect)"
+        );
+    }
+
+    /// Same shape as above, for `file_write_file` — proves the write path is
+    /// ALSO offloaded (a sibling kernel with the identical un-wrapped
+    /// `std::fs::write` shape pre-fix).
+    #[test]
+    fn file_write_file_does_not_starve_concurrent_async_work() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let p = std::env::temp_dir()
+            .join(format!("sky_spawn_blocking_write_probe_{}.txt", std::process::id()));
+        let path = p.to_string_lossy().into_owned();
+        let content = "x".repeat(64 * 1024 * 1024); // 64 MiB
+
+        let ticks = rt.block_on(async move {
+            let counter = Arc::new(AtomicU64::new(0));
+            let counter2 = counter.clone();
+            let ticker = tokio::spawn(async move {
+                loop {
+                    counter2.fetch_add(1, Ordering::Relaxed);
+                    tokio::task::yield_now().await;
+                }
+            });
+            let write_fut: SkyTask<String, ()> = file_write_file(path, content);
+            let _res: SkyResult<String, ()> = write_fut.await;
+            ticker.abort();
+            counter.load(Ordering::Relaxed)
+        });
+
+        let _ = std::fs::remove_file(&p);
+
+        assert!(
+            ticks > 0,
+            "concurrent ticker task made ZERO progress while file_write_file ran — \
+             the blocking write is starving the single-threaded executor \
+             (spawn_blocking missing or not taking effect)"
+        );
     }
 }
