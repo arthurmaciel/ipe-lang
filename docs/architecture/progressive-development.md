@@ -3,7 +3,7 @@
 Progressive Development is our variant of the "fresh-context loop" (a.k.a. the Ralph technique):
 a shell loop that spawns a new `claude -p` process each iteration, reads durable
 state from disk, and lands ONE backlog item as a green committed increment — or
-discards its work and logs why. Progress accumulates in git + `backlog.md`, not
+discards its work and logs why. Progress accumulates in git + `BACKLOG.md`, not
 in a growing conversation.
 
 **Why "Progressive Development":** a ratchet-and-pawl only advances, never slips back. That is
@@ -16,7 +16,7 @@ is possible by construction.
 |---|---|
 | `scripts/progressive-development/run.sh` | the loop = OUTER safety harness (disk/mem/budget/iteration-cap/kill-switch/single-writer) |
 | `scripts/progressive-development/prompt.md` | the per-iteration playbook the fresh agent executes (pick → fix → gate → land-or-discard → log) |
-| `docs/architecture/backlog.md` | the work list; only **sweep-front** / **[progdev-safe]** items are eligible |
+| `BACKLOG.md` | the work list; only **sweep-front** / **[progdev-safe]** items are eligible |
 | `docs/architecture/progressive-development-log.md` | append-only per-iteration outcomes + attempt counts (created on first run) |
 | `docs/architecture/progressive-development-escalations.md` | items the loop refused (excluded class) + fix sketches (created on first run) |
 
@@ -28,7 +28,7 @@ is possible by construction.
 5. **Resource preconditions every iteration.** mem-guard alive, free disk ≥ 15 GB, timeout-bounded builds, no background processes. The CLAUDE.md non-negotiables become loop invariants.
 6. **Kill-switch + caps.** `touch progressive-development.stop` for a clean exit; `PROGDEV_MAX_ITERS` and per-iteration `timeout` bound the blast radius; `--once` validates a single iteration before unleashing the loop.
 7. **Isolated gate target.** Always `~/.cache/master-gate-target`, never the shared lane target — the stale-rlib thrash cannot fool the gate.
-8. **Idempotent / crash-safe.** All state is on disk; a crash mid-run just means the next iteration re-reads `backlog.md` + `progressive-development-log.md` and continues. Nothing lives only in memory.
+8. **Idempotent / crash-safe.** All state is on disk; a crash mid-run just means the next iteration re-reads `BACKLOG.md` + `progressive-development-log.md` and continues. Nothing lives only in memory.
 
 ## Operating it
 ```bash
@@ -137,7 +137,7 @@ fixed part** if `F` is large and N is high: a 25k-token `F` over 50 iterations i
    across *separate* invocations — turning cold reloads back into warm reads. Hence
    `PROGDEV_COOLDOWN` defaults to 20s (well under the TTL), not minutes.
 
-3. **Read volatile state via tool calls, never in the cached prefix.** `backlog.md`
+3. **Read volatile state via tool calls, never in the cached prefix.** `BACKLOG.md`
    and `git status` change every iteration; if they sat in the system preamble they
    would bust the cache each time. The playbook has the agent *read them as its
    first actions*, so the volatile bytes land after the cacheable prefix and don't

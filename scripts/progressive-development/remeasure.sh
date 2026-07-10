@@ -2,8 +2,8 @@
 # remeasure.sh — rebuild skyc, run every example through it, and print the first
 # blocker per example (or PASS), diffing against the last run. This is the
 # "measure" half of the refill cadence: it SURFACES new/changed blockers so a
-# human can triage which are mechanical (→ backlog.md [progdev-safe], loop-eligible)
-# vs guardian/design (→ their own backlog section). It deliberately does NOT
+# human can triage which are mechanical (→ root BACKLOG.md [progdev-safe], loop-eligible)
+# vs guardian/design (→ their own backlog rows). It deliberately does NOT
 # triage or edit the backlog — that is a judgment call the loop can't make.
 #
 # Usage:
@@ -62,6 +62,6 @@ fi
 mkdir -p "$(dirname "$SNAP")"; cp "$tmp" "$SNAP"; rm -f "$tmp"
 echo ""
 echo "snapshot → $SNAP"
-echo "NEXT: triage any changed/new blocker into docs/architecture/backlog.md —"
+echo "NEXT: triage any changed/new blocker into the root BACKLOG.md —"
 echo "  mechanical (kernel wire / module register / fixture, reference-backed) → [progdev-safe]"
 echo "  divergence / feature-gap / security / type-system → its own section (guardian)."

@@ -3,7 +3,7 @@
 > Synthesis of 3 independent guardian-design reasoners (2026-07-09), reconciling
 > `docs/architecture/class1-inference-questions-2026-07-09.md`'s question list.
 > This spec is the implementable target — a fresh engineer should be able to
-> execute it without re-deriving the design. Backlog item: `docs/architecture/backlog.md`
+> execute it without re-deriving the design. Backlog item: `BACKLOG.md`
 > "Sweep front" §2 ("untyped top-level binding shares ONE monomorphic var").
 
 ## Decision record (what was chosen and why)

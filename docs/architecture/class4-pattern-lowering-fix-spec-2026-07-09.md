@@ -509,7 +509,7 @@ declaration never reaches Gate 2 because its field is `Generic`, not `Fun`).
   (or whichever fixture is the ex00 stand-in in this repo) and confirm the
   `SKY-L0114` failure at `Sky.Test:32` is gone and the NEXT blocker (if any)
   in the onion-peeling chain is a DIFFERENT, unrelated diagnostic — update
-  `docs/architecture/backlog.md`'s sweep-front section with whatever that
+  `BACKLOG.md`'s sweep-front section with whatever that
   next blocker turns out to be, per the "onion-peeling" convention already
   used there.
 - Unit test on `is_opaque_boxed_wrapper` directly (if not already covered by

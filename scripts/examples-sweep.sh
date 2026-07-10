@@ -24,7 +24,7 @@
 # PHASED Go-parity: EQUIV needs a Go reference built by the Haskell `sky`
 # compiler, which this repo does NOT have. The FIRST CI iteration runs BUILD+RUN
 # only (SKY_SWEEP_NO_EQUIV=1). The EQUIV column + build_go() below are kept intact
-# so parity can be turned on later (see docs/architecture/examples-sweep-port.md).
+# so parity can be turned on later (see docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md §1).
 #
 # GREEN row  = BUILD ok AND RUN ok AND EQUIV ∈ {equiv-*, n/a, —, amber go-ref-broken}.
 # RED row    = BUILD/RUN/EQUIV failure (*-fail / panic / hang / noserve / notty /

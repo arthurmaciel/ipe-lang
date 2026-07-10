@@ -3,8 +3,9 @@
 //! Every [`crate::Diagnostic`] maps to exactly one [`Code`] via
 //! [`crate::Diagnostic::code`]. Codes are the machine-greppable, user-facing
 //! handle a reader passes to `skyc explain <CODE>`; they never change once
-//! shipped. The taxonomy is authoritative and lives in
-//! `docs/superpowers/specs/2026-06-27-diagnostics-error-code-system-design.md`.
+//! shipped. The taxonomy is authoritative here (this file + the explain
+//! pages under `crates/sky_diagnostics/explain/`); the original design spec
+//! is preserved in git history.
 //!
 //! Ranges: `SKY-P####` parse, `SKY-N####` name resolution, `SKY-T####` type,
 //! `SKY-L####` lower / not-yet-supported, `SKY-I####` internal (compiler bug).

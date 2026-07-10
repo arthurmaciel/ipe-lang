@@ -4943,7 +4943,7 @@ impl<'a> Builder<'a> {
             //    String -> Error -> Error`; `isRetryable : Error -> Bool`
             //    classifies on kind alone. `ErrorInfo` this pass carries only
             //    `message` — the rich `ErrorDetails` union is filed as an
-            //    explicit follow-up (`docs/architecture/backlog.md`), not
+            //    explicit follow-up (`BACKLOG.md`), not
             //    silently dropped.
             K::ErrorUnexpected
             | K::ErrorInvalidInput

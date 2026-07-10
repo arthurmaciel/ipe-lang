@@ -1,0 +1,341 @@
+# ipê — Project Roadmap
+
+This document enumerates the remaining and future work for the ipê
+compiler, backend, and runtime, in priority order, together with the
+**done ledger** (dated landed milestones and major items). It is the
+durable plan of record: finish the compiler + backend + runtime first,
+then the parked FFI subsystem, then the post-completion program, then
+the longer-horizon standing work.
+
+**Pending work is mirrored in [`BACKLOG.md`](BACKLOG.md)** — the flat,
+pending-only SSOT table the progressive-development loop consumes. The
+eight canonical road-map phase names used in both files are defined
+here: **Sweep to green** · **Security hardening** · **CI, oracle &
+publish** · **Hardening follow-ups** · **FFI** · **Post-completion** ·
+**Longer-horizon** · **Designed targets**. Sections A (phases 1–4),
+B (FFI), C (Post-completion), D (Longer-horizon), and E (Designed
+targets) below carry the same rows, with a `Done at` column recording
+what has already landed.
+
+**Principles order.** security > correctness > soundness > efficiency
+> completeness > readability. Every decision below is resolved in
+favour of the earlier principle when two conflict.
+
+**Two fundamental design rules** govern all work:
+
+- **Parse, don't validate** — turn unstructured input into precise
+  types at the boundary; never re-check the same invariant downstream.
+- **Make invalid states unrepresentable** — encode invariants in the
+  type system so illegal configurations cannot be constructed.
+
+**How work runs (velocity model, condensed).** Rigour and speed
+conflict only if you serialize the wrong thing. Each round lands a
+short sequential CORE step (shared-contract additions: IR variants,
+diagnostic codes, kernel-registry rows), then fans out parallel agents
+with **disjoint file sets only** (hard rule — no shared file is edited
+by two agents in a round), each behind the full non-negotiable gate
+(guardian review, behavioural parity vs the Go reference, clippy-hardest
++ tests + fmt), then merges serially through the same gate. The gates
+are never skipped to save time; speed comes from partitioning, not from
+relaxing rigour. Mechanical, reference-backed items are additionally
+eligible for the autonomous progressive-development loop (rows tagged
+`[progdev-safe]` in `BACKLOG.md`).
+
+---
+
+## Done ledger — milestone ladder (M0–M6)
+
+| Done at | Milestone |
+|---|---|
+| 2026-06-26 | **M0 — spine**: ADT + `case` + a kernel + `println`, end-to-end, runs |
+| 2026-06-27 | **M1 — core language**: `let…in`, lambdas + first-class functions, `if`/multi-way `if`, tuples, full binop set, records + access + update, type aliases |
+| 2026-06-28 → 06-29 | **M2 — polymorphism**: type variables end-to-end, generic functions, same-module re-instantiation, wildcard-`any` soundness gate, parametric type aliases, float literals + exponent parity |
+| 2026-06-29 → 06-30 | **M3 — full ADTs & patterns**: non-nullary constructors, nested/cons/tuple/record/literal/alias/wildcard patterns, exhaustiveness (Maranget) |
+| 2026-06-30 → 07-06 | **M4 — stdlib breadth via the kernel registry**: List/Maybe/Result/Dict/Set/String/Math/Char/Decimal/… as registry rows + Rust runtime mirrors + parity tests |
+| 2026-07-03 → 07-05 | **M5 — effects & runtime**: Task everywhere (incl. `Task.retryWith`), Cmd/Sub, Http, File, System, Process, Db, Crypto, Time, Random — mirroring `runtime-go` module-for-module |
+| 2026-07-04 → ongoing | **M6 — app shapes (partial)**: Sky.Http.Server, Sky.Live (routed apps, SSE, forms), Sky.Tui, Cli — driven by the example-sweep front; Webview pending |
+
+## Done ledger — major landed items
+
+| Done at | Item |
+|---|---|
+| 2026-07-02 | #50 crate-spec SSOT; #52 float sci-notation pinned to Go `%v` (exp ≥ 6, probed vs Go 1.26.2); #48 let-bound-cfg diagnostic |
+| 2026-07-03 | F7 CSS/attribute emission injection-safe by construction; #55a Encoding text codecs → UTF-8 (Go parity); #96 lambda/function parameter patterns (SKY-L0105 retired); auto-TCO (typed `TailRecur`/`TailLoop` IR → Rust `loop`) |
+| 2026-07-04 | #89 JsonDecP seal (curry-wrap succeed, DbDecSucceed naming, Decoder thunk-rewrite); #111 effect modules (Auth + ServerStream + HttpStream); #95 lambda-view seal gate design landed with RoutedLiveApp (#108, closes #56 core) |
+| 2026-07-05 | #121 curried FuncValue arity-exact invariant (T1–T6 + SKY-L0125); #94 Msg-admissibility gate (SKY-L0125); #135 WS Ping heartbeat (B20 closed); #143 Appendable `++` super-type — `++` accepts both `String` and `List` operands (closes the former "`++` is String-only" parity gap) |
+| 2026-07-06 | #66 well-typed no-panic fuzzer + #66-N first half (ill-typed rejection fuzzer, 0 false-acceptances); #154 misplaced-span kernels wired; Border.shadow/glow/innerShadow kernels; SKY-I0001 interp-literal ICE fixed (`crates/skyc/tests/interp_literal.rs`) |
+| 2026-07-09 | #85 Error rich-ADT core (`Error ErrorKind ErrorInfo`, 69-golden `SkyError` flip) + #160 Error ctor-scheme; #71 explain_lookup (closed by AUD-15); AUD-01..08 + AUD-10..15 hardening (14 confirmed audit findings, 13 landed — see `docs/architecture/principles-audit-2026-07-09.md`); class-1 inference bug #1 (integer-literal monomorphization) fixed + gate-verified; #82 record type-alias auto-constructor (SKY-N0001); ex27/ex37 erased-`any` ctor payload pinned to `Dict String String` (`pin_any_in_ty`, divergence B-AnyCtorPayload) |
+| 2026-07-10 | #109/#156 `Ui.onSubmit`/`Std.Html.Events.onSubmit` dispatch via `Event::OnForm`; `Arc<dyn Any>` OnRaw removed — zero `dyn Any` in emitted-code paths |
+
+Closed-as-obsolete / not-a-bug: #75 (Color reservation — superseded by
+home-aware type resolution + `Std.Css`'s own `type Color`), #122 (Cli
+view printer — reference-correct as-is), #157 (Jwt builder API — was
+already fully wired).
+
+---
+
+## A. Critical path — compiler + backend + runtime to completion
+
+**DONE gate.** Completion is defined by the example sweep: every
+non-Go-only example passes the GitHub example sweep with all three
+checks green — **build ✓, run ✓, equivalent-to-Go-reference ✓.**
+
+The critical path decomposes into four phases: **Sweep to green**
+(close every per-example blocker), **Security hardening** (the
+pre-push security tier — never deferred past the push), **CI, oracle &
+publish** (port the sweep, activate the oracle, fix CI, rename, push),
+and **Hardening follow-ups** (correctness/efficiency debts that don't
+block the sweep). The #59 rename runs **solo, dead-last before the
+push** (per the Tier-1 chain: sweep-green → seal → #110 → #37 → #59 →
+push).
+
+Standing precondition: reclaim build-cache / disk headroom before
+heavy local builds — a near-full disk fails a build mid-run as
+`ENOSPC` *after* type-check and codegen succeed and masquerades as a
+codegen regression.
+
+### A-table — Sweep to green
+
+| Done at | Priority | Road map phase | Task | Notes | Spec |
+|---|---|---|---|---|---|
+| | Critical | Sweep to green | Boundary Scheme Promotion — fix untyped top-level bindings sharing ONE monomorphic var across the linked program (class-1 inference bug #2) | Design done 2026-07-09, not implemented. Guardian-paced: verify with the #66 no-panic fuzzer + new multi-module fuzz templates + adversarial review, not just the gate. Rank-based let-generalization was considered and REJECTED by all 3 reasoners (more permissive than the reference itself). Blocks the whole Tier-1 sweep-green → seal → #110 → #37 → #59 → push chain. | `docs/architecture/class1-inference-fix-spec-2026-07-09.md` |
+| | High | Sweep to green | #90 SKY-L0114 ctor-payload-function — `Ok`/`Just` holding a function is rejected, making `Result.andMap` / `Maybe.andMap` unusable | Confirmed 2026-07-09 as ex00's current first blocker (`Sky.Test:32`, `Leaf String (() -> TestResult)`). | `docs/architecture/ctor-payload-function-design.md` |
+| | High | Sweep to green | #158 Nested-constructor-payload function-argument patterns (`f (Just (h :: t)) = …`, `f (Ok {name}) = …`) are fail-closed (SKY-L0112/SKY-L0116) where the reference recurses and compiles | Correct fail-closed behavior; the completeness gap itself is the item (divergence A13). | `docs/architecture/class4-pattern-lowering-fix-spec-2026-07-09.md` |
+| | High | Sweep to green | #99 Refutable match-arm alias over non-Copy payload double-moves — `case m of Just ((a,b) as w) -> use a,b,w` → E0382 | Pre-existing, out of #96 scope. | `docs/architecture/seal-noncopy-move-design.md` §4.2 + `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` |
+| | High | Sweep to green | #125 Decoder thunk coverage: tuple-destructure + record-field binders (loud E0382) | Pre-existing. | `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` |
+| | Medium | Sweep to green | #102 F1 shadow diagnostic: local `type X` shadowing a dep-imported `X` → downstream SKY-T0001 instead of clean SKY-N0012 at the decl | Low-risk, fail-closed today. | `docs/architecture/class4-pattern-lowering-fix-spec-2026-07-09.md` |
+| | High | Sweep to green | #113 Pseudo-class attrs render to nothing in the static `htmlRender` sink (AttrPseudoRule no-op) | | `docs/architecture/class10-ui-html-fix-spec-2026-07-09.md` |
+| | Medium | Sweep to green | #105 Std.Css hardening (defence-in-depth): optional @import/expression gating on `raw`/`keyframes` bodies + reject CSS-hex-escaped values in `safeValue` | | `docs/architecture/class10-ui-html-fix-spec-2026-07-09.md` |
+| | High | Sweep to green | #32 M5a follow-ups (fail-closed): Task arity-3 ICE + Task-in-ADT-ctor gate | | `docs/architecture/class4-pattern-lowering-fix-spec-2026-07-09.md` |
+| | High | Sweep to green | #56 Prove row-poly subset/superset record resolution (A7 watch) + gate on sweep | | |
+| | High | Sweep to green | #45 Make the constrain kernel-scheme table exhaustive over canon lists (close the exit-0-then-cargo-fail class) | | `docs/architecture/class3-kernel-registry-fix-spec-2026-07-09.md` + `docs/architecture/html-ui-live-scheme-table.md` + `docs/superpowers/plans/2026-07-03-registry-phase-E.md` |
+| | High | Sweep to green | #70 Fix kernel arity-table drift (`decl().arity` vs `callee_arity`) — latent exit-0-then-cargo-fail | | `docs/architecture/class3-kernel-registry-fix-spec-2026-07-09.md` |
+| | Medium | Sweep to green | #85 ErrorDetails follow-up: port `ErrorInfo.details : Maybe ErrorDetails` + the 5-variant `ErrorDetails`/`PanicInfo`/`TypeInfo` union | Additive; same registration recipe as `ErrorKind` (canon ctor registration + lowerer arms + `IrType` leaf + `builtin_runtime_enum` + constrain ctor schemes). Core `Error ErrorKind ErrorInfo` ADT landed 2026-07-09. | `docs/architecture/error-module-design.md` |
+| | High | Sweep to green | Remaining Std.Ui / Std.Html kernel gaps surfaced by the example sweep — wire missing kernels across the layers with the `../sky` reference | [progdev-safe] Per-example blockers live in `docs/architecture/remeasure-snapshot.tsv`; computed gaps via `scripts/ipe-index parity --gaps`. Template = the landed `Border.shadow`/`Border.glow`/`Border.innerShadow` wirings. | `docs/architecture/ui-html-completeness-design.md` |
+
+### A-table — Security hardening
+
+| Done at | Priority | Road map phase | Task | Notes | Spec |
+|---|---|---|---|---|---|
+| | High | Security hardening | #44 Opaque `Secret` stdlib type (gates WASM hydration island + secrets-are-typed rule) | | `docs/architecture/class6-secret-sqlfragment-fix-spec-2026-07-09.md` |
+| | High | Security hardening | #61 `SqlFragment` param-query newtype — SQL injection = type error | | `docs/architecture/class6-secret-sqlfragment-fix-spec-2026-07-09.md` |
+| | High | Security hardening | #63 Port `Sky.Http.Middleware.withCsrf` (constant-time, `__Host-`, parse-once) | | `docs/architecture/class8-live-http-security-fix-spec-2026-07-09.md` + `docs/architecture/prior-art-runtime-rust-2026-07-09.md` |
+| | High | Security hardening | Class-8 web remainder: session cookie `Secure` TLS-gated (not ENV-gated), `/_sky/observability/ingest` CSRF exemption, WS upgrade Origin check outside production (CSWSH), `live_max_body_bytes()` `>0` floor | From the AUD-09 gap-sweep. | `docs/architecture/class8-live-http-security-fix-spec-2026-07-09.md` |
+| | High | Security hardening | Class-7 SQL/DB remainder: `url_is_cacheable` substring-`contains("memory")` DoS reopen, `SqlNull` text-typed NULL breaks Postgres, Postgres driver structurally unreachable, `db_insert_row` fabricated `id=0` on non-integer PK, tenant-prefix SQL enforcement absent from plain `db.rs` | From AUD-09 + gap-sweep. | `docs/architecture/class7-sql-db-fix-spec-2026-07-09.md` |
+| | Medium | Security hardening | #66-T2 Type-directed well-typed AST generator (fuzzer Tier-A): generate arbitrary well-typed programs by construction (typing rules run in reverse), assert skyc accepts + emitted program is no-panic | Guardian-typesystem, multi-session PROJECT — do NOT rush. Adopt the reference design (`../sky` `WellTypedFuzzerGen.hs`) via `proptest`/`arbitrary`. Load-bearing invariant: "well-typed by construction under generation". Scope: pure type-relevant constructs only. | |
+| | Medium | Security hardening | #66-N second half — differential rejection fuzzer vs `../sky`: mutate freely, run both compilers, compare accept/reject | The reference is NOT ground truth: a divergence is a REVIEW candidate, never an auto-verdict ("Ipê rejects, Sky accepts" is most likely Ipê being MORE correct). First half (guaranteed-breaking mutation tier, `scripts/fuzz-ill-typed.sh`) landed 2026-07-06. | |
+| 2026-07-06 | — | Security hardening | #66 Well-typed no-panic fuzzer (`scripts/fuzz-well-typed.sh`) — landed; wired into the autopilot as the guardian soundness oracle | | |
+
+### A-table — CI, oracle & publish
+
+| Done at | Priority | Road map phase | Task | Notes | Spec |
+|---|---|---|---|---|---|
+| | High | CI, oracle & publish | #35 Port examples-sweep to skyc + run the full sweep (the source-of-truth gate) | | `docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md` |
+| | High | CI, oracle & publish | #110 Oracle full-activation: wire HTML/tui/scenario normalizers + rebuild release skyc + flip CI phase-2 + 65-fixture divergence corpus | | `docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md` |
+| | High | CI, oracle & publish | #37 Fix CI (port ../sky examples-sweep.yml + ci.yml) + push to `git@github.com:arthurmaciel/ipe-lang` | Includes the CI example-patch-queue (in-repo patches CI applies to upstream examples before build), accepted per `docs/divergences-from-sky.md#planned-future-divergences`. Windows question: `docs/architecture/tui-windows-ci.md` / `docs/architecture/windows-ci-support.md`. Plans: `docs/architecture/sweep-and-parity-plan.md`, `docs/superpowers/plans/2026-07-02-ci-and-push.md`. | `docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md` |
+| | Critical | CI, oracle & publish | #59 PRE-PUSH: full codebase rename Sky → Ipê/Ipe/ipe (case-preserving; watch the naive-sed trap — upstream-Sky refs stay Sky) | Runs SOLO, dead-last before the push — no other work in flight during the rename. | `docs/superpowers/plans/2026-07-03-rename-sky-to-ipe.md` |
+| | Medium | CI, oracle & publish | Publish the README (honest relation-to-Elm-and-Sky framing) | Re-run the divergences review (`docs/divergences-review.md`) first so the ledger the README cites is current. | `docs/README-draft-relation-to-elm-and-sky.md` |
+| | Medium | CI, oracle & publish | E2E shared-target + cached-oracle infrastructure (queued) | | `docs/architecture/e2e-and-oracle-caching.md` |
+
+### A-table — Hardening follow-ups
+
+| Done at | Priority | Road map phase | Task | Notes | Spec |
+|---|---|---|---|---|---|
+| | Medium | Hardening follow-ups | #34 M5b-db follow-ups: SqlValue variant completeness, exhaustive `emit_db_call`, self-oracle, db-without-live build; wire `db_decode_money` into kernel dispatch (implemented + tested in runtime but unreachable — no `StdlibKernel` variant, no constrain scheme, no lower arm) | `ipe-index parity --gaps` flags it (`DbDec.money go=1 rust=0`). | `docs/architecture/class7-sql-db-fix-spec-2026-07-09.md` |
+| | Medium | Hardening follow-ups | #33 M5b-http residual: header-case parity remainder + extra Http builders | Confirmed partially already fixed — the residual is the item (class8 spec §6). | `docs/architecture/class8-live-http-security-fix-spec-2026-07-09.md` |
+| | Medium | Hardening follow-ups | #129 Runtime audit: `spawn_blocking` for CPU-heavy/blocking kernels (bcrypt/zstd/file) — reactor-starvation guard | | `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md` |
+| | Medium | Hardening follow-ups | `File.readFileLimit` metadata-then-`take(cap)` is TOCTOU — a file growing mid-check silently truncates instead of erroring | From the AUD-09 gap-sweep (`file.rs:100`). | `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md` |
+| | Medium | Hardening follow-ups | #142 Precision follow-up: #139 made `Expr::Access` clone unconditionally + blanket `Clone` bounds on fn generics — restore the borrow fast-path | | `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` |
+| | Medium | Hardening follow-ups | #31 Phase-4 remainder — make-invalid-states-unrepresentable hardening (non-blocking) | | |
+| | Medium | Hardening follow-ups | AUD-09 lower/emitter leftovers: `Match::from_parts_unchecked` pub (`ir.rs:1626`), Bug-29 `any`-return matches any `Ty::Con` (`lower.rs:3405`), unconditional field-access `.clone()` O(n²) (`emit_expr.rs:4794`) | See the audit ledger for loc+fix each. | `docs/architecture/class3-kernel-registry-fix-spec-2026-07-09.md` + `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` |
+| | Low | Hardening follow-ups | #53 Emit backend via typed token AST instead of String concatenation | Guardian-design item. | |
+| | Low | Hardening follow-ups | Efficiency-audit ledger burn-down (remaining medium/low findings) | | `docs/architecture/efficiency-audit-2026-07-02.md` |
+| 2026-07-09 | — | Hardening follow-ups | AUD-01..08 + AUD-10..15 (audit hardening pass, 13/15 landed; AUD-09 partial) | Full findings + ledger: `docs/architecture/principles-audit-2026-07-09.md`. | |
+
+---
+
+## B. FFI subsystem — parked until A completes
+
+The FFI design is complete and reviewed
+(`docs/architecture/ffi-port-spec.md`). Implementation does not start
+until the compiler is done. Scope: **fully-automatic, shim-free
+binding of arbitrary Rust crates** (not Go packages).
+
+**Divergence from Sky:** the reference implementation binds Go
+packages; ipê's FFI binds Rust crates. The subsystem is otherwise
+designed to reach the same fully-automatic, no-user-written-shim
+experience.
+
+*Rationale:* parking FFI keeps the critical path focused; the ordering
+puts the security gate ahead of convenience so an untrusted-crate
+compile can never run unsandboxed. Prove on pure/sync crates first,
+then async SDKs — shim-free binding of async SDKs is the acceptance
+metric.
+
+| Done at | Priority | Road map phase | Task | Notes | Spec |
+|---|---|---|---|---|---|
+| | High | FFI | #40 FFI Phase 0 — inspector hardening (disjoint `tools/` crate) | | `docs/superpowers/plans/2026-07-02-ffi-phase0-inspector.md` + `docs/architecture/ffi-subsystem-design.md` |
+| | Critical | FFI | #41 FFI sandbox — blocking security gate before `ipe add` ships (compiling arbitrary third-party crates is execution of untrusted code) | Security precedes any generation work. | `docs/architecture/ffi-sandbox-and-generator-impl-ready.md` |
+| | High | FFI | #42 FFI consumer port — generator (Haskell → Rust `ipe_ffi` crate) | Depends on the kernel registry. | `docs/architecture/ffi-port-spec.md` + `docs/architecture/ffi-design.md` + `docs/architecture/ffi-rust-subsystem-design.md` |
+| | Medium | FFI | Async FFI bridge — bind async Rust SDKs (tokio-runtime bridge, `AbortOnDrop` cancel propagation, B8 error funnel) | Shim-free async-SDK binding is THE acceptance metric. | `docs/architecture/async-ffi-bridge-design.md` |
+| 2026-07-10 | — | FFI | AUD-10 inspector interim mitigation: refuse `custom-build`/`proc-macro` targets unless `--allow-build-scripts` | Full sandboxing remains #41. | |
+
+---
+
+## C. Post-completion program
+
+### C.1 — Project rename to `ipe`
+
+Ship a single `ipe` binary spanning the compiler, the future
+interpreter, the project doctor, and watch. Apply consistent naming
+throughout the codebase, retaining a single acknowledgement line in the
+README. The codebase rename itself (#59) is **pre-push** (see the
+CI, oracle & publish phase above, per the Tier-1 chain); C.1 keeps the
+single-`ipe`-binary product scope.
+
+*Rationale:* one binary and one name is the coherent product identity;
+the acknowledgement line records lineage without diluting it.
+
+### C.2 — Module-namespace redesign
+
+Replace the two-tier core/std split with a **single flat standard
+library**, with nothing imported by default and LSP auto-import on
+first use. Research prelude handling in Rust, Elm, Gleam, Haskell, Go,
+and Zig before committing to the shape.
+
+### C.3 — Source-name de-abbreviation
+
+Rename abbreviated source identifiers for readability — for example
+`kernel_ty` → `kernel_type`, `Ty::Var` → `Type::Variable`. Idiomatic
+Rust abbreviations are retained.
+
+### C.4 — Guarantee Elm `core` library coverage
+
+Audit the standard library against `elm/core` and add the missing
+modules and functions (Array, Tuple, Bitwise, and any others the audit
+surfaces). The authoritative `elm/core` inventory is enumerated in
+[`elm-core-coverage.md`](docs/architecture/elm-core-coverage.md).
+
+### C.5 — Evaluate more principled compilation strategies
+
+Study the reference Haskell backend and `elm/compiler`, and adopt a
+strategy only where it **strictly improves a project principle without
+harming a higher one**. Where a strategy is not adopted, record a
+comparison table capturing the trade-off.
+
+### C.6 — Implement the filed divergent language features
+
+Implement the language features filed in
+[`docs/divergences-from-sky.md#planned-future-divergences`](docs/divergences-from-sky.md#planned-future-divergences):
+hot-reloading, Std.Ui-as-IR, standalone TEA, deep-update sugar,
+or-patterns, pattern guards, effect-sequencing (`do` block), record
+punning, a dev-only time-travel debugger, and the CI patch queue over
+upstream examples.
+
+**Divergence from Sky:** these features are intentional departures
+from the reference language; each is tracked with its own rationale in
+the divergences ledger. Divergences go last, on a verified-complete
+base.
+
+| Done at | Priority | Road map phase | Task | Notes | Spec |
+|---|---|---|---|---|---|
+| | Medium | Post-completion | #155 Route URL changes to a Msg (Elm `Browser.application` parity), demote the magic `page` field to sugar | First Elm-core-coverage item. | |
+| | Medium | Post-completion | #116 Entry contract (Option C): auto-run Task/backend-app `main` + drop trailing `\|> Task.run` (v0.17.3 pipeCollapsesTask parity) | | `docs/architecture/adopt-from-sky-v0172.md` |
+| | Medium | Post-completion | #128 Drop `Task.run` + `Task.perform` from the Ipê surface (#116 companion) | Departure — first consumer of the CI example-patch-queue. | |
+| | Medium | Post-completion | #131 `Task.map2..5` + `Task.parallel2..5` (expression forms) + `parallelDo` block | | `docs/architecture/task-combinators.md` |
+| | Medium | Post-completion | #133 Multiline-string margin stripping (anchor = first string character's column) | Departure — output-changing; records an oracle divergence per patch class. | |
+| | Medium | Post-completion | Idea-7 effect `do` block (scoped effect sequencing; kills the `let _ = TaskExpr` auto-force wart) | DESIGNED 2026-07-04. | `docs/ideas/idea-7-effect-do-block-design.md` |
+| | Medium | Post-completion | C.4 Guarantee Elm `core` library coverage — audit the stdlib against `elm/core`, add missing modules/functions (Array, Tuple, Bitwise, …) | | `docs/architecture/elm-core-coverage.md` + `docs/architecture/elm-core-gap-matrix.md` + `docs/architecture/additive-stdlib-features.md` |
+| | Medium | Post-completion | C.2 Module-namespace redesign: single flat standard library, nothing imported by default, LSP auto-import on first use | Research prelude handling in Rust, Elm, Gleam, Haskell, Go, Zig first. | `docs/architecture/flat-namespace-redesign.md` |
+| | Medium | Post-completion | C.3 Source-name de-abbreviation (`kernel_ty` → `kernel_type`, `Ty::Var` → `Type::Variable`; idiomatic Rust abbreviations retained) | | `docs/architecture/readability-and-naming-audit.md` |
+| | Medium | Post-completion | C.5 Evaluate more principled compilation strategies from the reference Haskell backend + `elm/compiler`; adopt only where a principle strictly improves, else record the comparison table | | `docs/architecture/sky-upstream-learnings.md` |
+| | Medium | Post-completion | C.6 Implement the filed divergent language features (deep-update sugar, or-patterns, pattern guards, record punning, hot-reload family, time-travel debugger, …) | Divergences go last, on a verified-complete base. | `docs/divergences-from-sky.md#planned-future-divergences` |
+
+---
+
+## D. Longer-horizon / standing
+
+### D.1 — Incremental compilation (salsa)
+
+Introduce salsa-based incremental compilation across the compiler and
+the LSP — the foundation for fast watch and hotpatching.
+
+### D.2 — Standard-library behaviour audit against Elm semantics
+
+Audit standard-library behaviour against Elm semantics, covering at
+least: JSON object key order, integer-decoder strictness, float
+formatting, and null / oneOf / nullable handling.
+
+### D.3 — Full floating-point Set/Dict keys and locale-correct case mapping
+
+Support full floating-point keys in Set and Dict (ordered-float) and
+locale-correct case mapping.
+
+| Done at | Priority | Road map phase | Task | Notes | Spec |
+|---|---|---|---|---|---|
+| | Low | Longer-horizon | D.1 Incremental compilation (salsa) across the compiler and the LSP — foundation for fast watch + hotpatching | | `docs/architecture/incremental-compilation-and-watch.md` + `docs/superpowers/plans/2026-07-03-incremental-salsa.md` |
+| | Low | Longer-horizon | D.2 Standard-library behaviour audit against Elm semantics (JSON key order, integer-decoder strictness, float formatting, null/oneOf/nullable) | | |
+| | Low | Longer-horizon | D.3 Full floating-point Set/Dict keys (ordered-float) + locale-correct case mapping | Lifts SKY-L0117. | |
+
+---
+
+## E. Designed compilation targets (specs approved; priority to be set)
+
+Each has a complete, security-reviewed design spec; sequencing against
+sections A–D is a product decision.
+
+### E.1 — WASM / browser target
+
+Compile ipê programs to WebAssembly so apps run client-side in the
+browser (TEA in the browser, reusing the ported VNode/diff to drive the
+real DOM), and support an online playground. The design fixes the
+public-bundle secret boundary at compile time (server-only effects are
+unrepresentable under `--target wasm`; a distinct `HydrationState` type
+gates what may enter the SSR hydration island) and preserves the
+no-eval / strict-CSP posture. Spec:
+[`wasm-target.md`](docs/architecture/wasm-target.md).
+
+### E.2 — Static compilation (portable single binaries)
+
+Produce fully-static, portable binaries — musl on Linux, static-CRT on
+Windows, with an honest macOS limitation — with a pure-Rust **`dlmalloc`
+default allocator** (clears the musl-malloc throughput cliff without a C
+dependency, per the security-first order); mimalloc is an explicit,
+notice-emitting opt-in. Spec:
+[`static-compilation.md`](docs/architecture/static-compilation.md).
+
+### E.3 — Language server (LSP)
+
+A salsa-backed, editor-agnostic language server: diagnostics, hover,
+go-to-definition, completion, semantic tokens, formatting, and rename —
+reusing the compiler's single type-checker (no divergent analyzer). Its
+headline feature is **TEA scaffolding** — snippets, code actions ("add
+`Msg` variant + matching `update` arm", "convert `main = Task.run` to a
+worker"), and lints/hints — delivered over standard LSP so it works in
+most editors. Every generated edit passes a `VerifiedEdit` gate that
+re-checks the whole edit blast radius, so a scaffold can never break the
+build. Spec: [`ipe-lsp.md`](docs/architecture/ipe-lsp.md).
+
+### E.4 — TEA everywhere (opt-in worker shape)
+
+Make The Elm Architecture an opt-in program shape for every backend —
+including a headless `Std.Worker.program` (init / update / subscriptions,
+no view) for CLI and long-running processes, modelled on Elm's
+`Platform.worker`. Least-intrusive: existing entries (`main = Task.run`,
+`Live.app`, `Server.listen`) are byte-unchanged; TEA is strictly
+additive and reuses the ported TEA runtime. The headless loop terminates
+soundly by tracking live source-task liveness (a signal-only daemon
+stays alive for SIGTERM; a quiescent worker exits cleanly). Spec:
+[`tea-everywhere.md`](docs/architecture/tea-everywhere.md).
+
+*Implementation invariants (from the design review, to enforce at build
+time):* sequence the counter Acquire-loads before `try_recv`; `select!`
+over mailbox-recv and a quit-notify so a full-mailbox daemon still
+observes SIGTERM; abort (not await) source tasks during the quit-drain.
+
+| Done at | Priority | Road map phase | Task | Notes | Spec |
+|---|---|---|---|---|---|
+| | Low | Designed targets | E.1 WASM / browser target (TEA in the browser, playground; compile-time public-bundle secret boundary) | | `docs/architecture/wasm-target.md` |
+| | Low | Designed targets | E.2 Static compilation — portable single binaries (musl / static-CRT; `dlmalloc` default allocator) | | `docs/architecture/static-compilation.md` + `docs/superpowers/plans/2026-07-03-static-compilation.md` |
+| | Low | Designed targets | E.3 Language server (LSP) — salsa-backed, TEA scaffolding, `VerifiedEdit` gate | | `docs/architecture/ipe-lsp.md` + `docs/superpowers/plans/2026-07-03-lsp.md` |
+| | Low | Designed targets | E.4 TEA everywhere — opt-in headless `Std.Worker.program` shape for every backend | Implementation invariants recorded in the spec (Acquire-loads before `try_recv`; `select!` over mailbox + quit-notify; abort source tasks during quit-drain). | `docs/architecture/tea-everywhere.md` |

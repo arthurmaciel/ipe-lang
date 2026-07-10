@@ -3,7 +3,7 @@
 **This file is the loop's COMPLETE instruction set.** The repo's large
 `CLAUDE.md` is written for interactive general-purpose work and is NOT your
 contract — this is. Where they conflict, follow this. Everything else you need
-is `backlog.md` + the `../sky` reference + the code you touch.
+is the root `BACKLOG.md` + the `../sky` reference + the code you touch.
 
 (Distilled from `CLAUDE.md` §7 core-principles + §8 non-regression + the seal.
 If the human meant a different specific subset, they will edit this file.)
@@ -19,7 +19,7 @@ Rust MUST `cargo build`. Never emit codegen that type-checks in skyc but fails
 
 ## 2. The six principles (PRINCIPLES.md)
 
-Read PRINCPILES.md fully and also follow the practical rules bellow.
+Read PRINCIPLES.md fully and also follow the practical rules below.
 
 1. **If it compiles, it works** — no runtime panic from well-typed Sky. Every panic class has a regression test.
 2. **Root-cause only** — never suppress a type error or warning; a defensive cover-up that hides a contract violation IS a violation.

@@ -23,3 +23,34 @@ Independent of and beneath the ranked principles, every design and every code pa
 - **Make invalid states unrepresentable.** Encode invariants in the types so an illegal combination cannot be constructed at all, rather than relying on a runtime guard or convention. Prefer a sum type over a bool-pair that admits impossible combinations; prefer an exhaustive `match` (no wildcard that silently swallows a new variant) so an unhandled case is a compile error; prefer a smart constructor over a public field that could hold an out-of-range value. In this compiler specifically: a kernel that the resolver recognises but the type-scheme table does not cover must be a compile-time error, never a silent flexible type variable that lets an ill-typed program pass the type-checker and fail only at the downstream Rust build (the "exit-0-then-cargo-fail" class).
 
 These two rules are the structural machinery by which the ranked principles — especially Soundness and Correctness — are actually achieved: the ordering says *what wins in a conflict*; these two rules say *how you build code that doesn't create the conflict*.
+
+## The seal — no exit-0-then-cargo-fail
+
+THE SEAL is the project's core compiler mandate: **"If `skyc` accepts a program (exit 0), the emitted Rust MUST `cargo build`. Never emit codegen that type-checks in skyc but fails cargo."**
+
+The seal is the make-invalid-states-unrepresentable rule applied to the compiler pipeline itself: a kernel the resolver recognises but the type-scheme table does not cover, an arity table that drifts from its callee table, a generic emitted where a concrete type was required — each of these is a representable-but-illegal pipeline state whose symptom is precisely an exit-0-then-cargo-fail. Closing that gap — making acceptance by `skyc` a structural proof that the downstream `cargo build` succeeds — is the point of most mechanical hardening items, and any new acceptance path (kernel, scheme, lowering arm, emitter case) must be sealed the same way: fail closed at `skyc` time, never open at `cargo` time.
+
+## Security & soundness enforcement
+
+The principles above are not aspirational — they are mechanically enforced at the crate level. The enforcement posture is **comply by construction**: when a lint fires, fix the code, never the lint level.
+
+### Crate-level deny lints
+
+- Root `Cargo.toml` `[workspace.lints.clippy]`: `unwrap_used`, `expect_used`, `panic`, `indexing_slicing`, `unreachable`, `todo`, `unimplemented`, `pedantic`, `nursery` — all `"deny"`.
+- `runtime/Cargo.toml` `[lints.clippy]`: `unwrap_used`, `expect_used` deny; the only permitted exceptions are the 3 INFALLIBLE-tagged HMAC `#[allow]` sites.
+- `runtime/src/lib.rs`: `#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::panic, clippy::unreachable, clippy::todo, clippy::unimplemented, clippy::panic_in_result_fn))]`. The only `#[allow(clippy::panic)]` sites are the 2 `ffi_polyfills` dynamic-dispatch fallbacks.
+- Exactly ONE sanctioned `unsafe` block exists in the runtime — `prctl(PR_SET_PDEATHSIG)` in `live::console_proxy` — which is the reason there is no crate-wide `forbid(unsafe_code)`; every other module is `unsafe`-free.
+
+### No `dyn Any` in emitted code — concrete over generic
+
+The backend NEVER emits `dyn Any` / `.downcast` / type-erasure. Wildcard `any` is not polymorphism — it has exactly ONE concrete lowering (an opaque carrier type chosen per position, e.g. `Dict String String` in pub/sub payload position); only genuine named type variables (`a`, `msg`) become Rust generics, monomorphized by rustc at compile time. A generic emitted where a concrete type was possible passes a mechanical gate but can ship a silent runtime bug — always emit concrete when concrete is possible.
+
+Current state: zero `dyn Any` in emitted-code paths (the former `OnRaw` `Arc<dyn Any>` exception was removed by #109/#156). Two documented runtime-internal *container* uses remain, both named exceptions: `runtime/src/sky_runtime/cache.rs` (value-erased `Box<dyn Any + Send>` store, downcast on `get`, documented infallible) and `runtime/src/sky_runtime/live/pubsub.rs` (TypeId-keyed broker registry container — the payload itself is never erased or downcast).
+
+### Root causes only — no fake solutions
+
+Never suppress a type error or warning; a defensive cover-up that hides a contract violation IS a violation. The guardian pre-final-gate outcome ladder governs every change: **clean → proceed**; **a principle is hurt → rethink and reimplement within the boundary**; **no adequate in-boundary fix exists → revert, log why, and signal the user** — never ship a silent workaround. "Pre-existing" / "known edge case" is never a shipping excuse (no-deferral): root-cause it or escalate it, never paper over it.
+
+### Match the reference
+
+Go/Haskell (`../sky`) parity is the default contract. Diverge ONLY where the divergence is strictly better under the principle order (Rust semantics, Unicode correctness, modern security posture) AND it is recorded in `docs/divergences-from-sky.md` with rationale and its own tests. A hack is never a "divergence".

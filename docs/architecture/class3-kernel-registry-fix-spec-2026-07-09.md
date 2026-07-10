@@ -2,7 +2,7 @@
 
 Status: read-only research complete, no code changed. Companion to
 `docs/architecture/campaign-classification-2026-07-09.md` (Class 3) and
-`docs/architecture/backlog.md`. AUD-08 (the other original Class-3 member) is
+`BACKLOG.md`. AUD-08 (the other original Class-3 member) is
 **already landed** (`crates/sky_backend_rust/src/lib.rs`'s function-name
 collision guard, `crates/skyc/tests/golden_aud08_function_name_collision.rs`,
 commit `8cc5cab`) — not re-specced here.
@@ -33,7 +33,7 @@ codes that had both a `title()` arm and an `include_str!` explain page:
 SKY-L0119`. The audit's own reproduction: `skyc explain SKY-L0117` returned
 `UnknownCode` at the time it was written.
 
-This was fixed by **AUD-09's sibling AUD-15** (`docs/architecture/backlog.md`
+This was fixed by **AUD-09's sibling AUD-15** (`BACKLOG.md`
 line 66: *"AUD-15 🟠 completeness ✅ LANDED (`9b55853`, orchestrate lane)
 `crates/sky_diagnostics/src/code.rs` — `ALL_CODES` promoted `pub`, skyc's
 drifted hand-mirror deleted."*), which is precisely H2d's prescribed fix
@@ -68,7 +68,7 @@ test tests::all_taxonomy_codes_resolve_via_explain_lookup ... ok
 
 ### Action required
 
-No source change. Update `docs/architecture/backlog.md` line 36 to strike
+No source change. Update `BACKLOG.md` line 36 to strike
 `#71` with a note pointing at AUD-15 (`9b55853`) as the closing commit and
 `all_taxonomy_codes_resolve_via_explain_lookup` /
 `explain_resolves_sky_t0014` / `code_index_lists_every_code` as the
