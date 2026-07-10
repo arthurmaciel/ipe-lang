@@ -68,8 +68,11 @@ pub enum HtmlEventShape {
     /// `(Bool -> msg) -> Attribute msg`. Constructs `Event::OnBool`.
     Bool,
     /// Heterogeneous payload whose handler type is DECOUPLED from `msg`
-    /// (`onSubmit`: `a -> Attribute msg`). Constructs `Event::OnRaw`, which
-    /// type-erases the payload behind `Arc<dyn Any>`, so `msg` stays free.
+    /// (`onSubmit`: `a -> Attribute msg`). `msg`/the payload type stay free at
+    /// the Sky/HM level only; the codegen-side runtime constructor
+    /// (`html_on_raw_`) now builds `Event::OnForm` with the concrete payload
+    /// type recovered via Rust generic inference — never `Arc<dyn Any>` at
+    /// runtime (#109/#156).
     Raw,
 }
 

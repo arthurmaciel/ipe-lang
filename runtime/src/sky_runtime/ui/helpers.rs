@@ -1036,16 +1036,38 @@ pub fn ui_form_<M: Clone>(
 
 /// `Ui.onSubmit : (a -> msg) -> Attribute msg`
 ///
-/// Stores the handler type-erased as `Event::OnRaw("submit", Arc<dyn Any>)`.
-/// The Sky.Live dispatch layer downcasts + JSON-decodes form data into the
-/// typed record at runtime, matching the Go backend's `json.Unmarshal` path.
-/// `A: Any + Send + Sync` is always satisfied by emitted Sky function types
-/// (they are `'static` enum constructors or pure closures with no borrows).
-pub fn ui_on_submit_<M, A: std::any::Any + Send + Sync>(f: A) -> Attribute<M> {
-    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnRaw(
+/// Builds `Event::OnForm` directly: the handler `f`'s argument type `T` is
+/// recovered by ordinary Rust generic inference from `f`'s own monomorphized
+/// signature at the codegen call site (never type-erased at runtime). The
+/// Sky.Live dispatch layer (`HandlerIndex::resolve_form`) decodes the wire
+/// `FormData` into `T` via a re-encoded x-www-form-urlencoded round trip
+/// (`live::form::decode_form_or_warn` — type-directed per-field coercion, NOT
+/// a JSON path), matching the Go backend's `json.Unmarshal` semantics at the
+/// record-shape level (case-insensitive field-name match, missing field ⇒
+/// zero value). `F: Fn(T) -> M + Send + Sync + 'static` is always satisfied
+/// by emitted Sky function types (they are `'static` enum constructors or
+/// pure closures with no borrows) — a strictly narrower requirement than the
+/// `A: Any` bound this replaces (#109/#156).
+#[cfg(feature = "live")]
+pub fn ui_on_submit_<M, T, F>(f: F) -> Attribute<M>
+where
+    T: serde::de::DeserializeOwned,
+    F: Fn(T) -> M + Send + Sync + 'static,
+{
+    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnForm(
         "submit".into(),
-        std::sync::Arc::new(f),
+        std::sync::Arc::new(move |fd: crate::sky_runtime::html::FormData| {
+            crate::sky_runtime::live::form::decode_form_or_warn::<T>(fd).map(&f)
+        }),
     )))
+}
+
+/// Non-`live` builds (Sky.Tui without the HTTP form wire): `Ui.onSubmit` was
+/// already inert everywhere before this fix, so this degrades to a
+/// structural no-op — not a regression, Tui has no form-submit wire concept.
+#[cfg(not(feature = "live"))]
+pub fn ui_on_submit_<M, T, F: Fn(T) -> M>(_f: F) -> Attribute<M> {
+    Attribute::NoAttribute
 }
 
 // ── Nearby attribute builders ────────────────────────────────────────────────
