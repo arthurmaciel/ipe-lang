@@ -982,6 +982,24 @@ fn ws_origin_matches(pattern: &str, origin: &str) -> bool {
     host_safe(rest.get(..rest.len() - last.len()).unwrap_or(""))
 }
 
+/// True when `Origin` is present and does not match `Host` (cross-origin).
+/// Absent `Origin` (same-origin browsers on older UA quirks, non-browser WS
+/// clients, and legitimate same-origin pages under some proxy setups that
+/// strip it) is NOT flagged — matches the equivalent CSRF/ingest same-origin
+/// helpers elsewhere in this runtime (`csrf.rs::origin_mismatch`,
+/// `console.rs::is_cross_origin_ingest`); duplicated locally (not shared via
+/// a `live`-feature-gated module) because `server.rs` must build standalone
+/// under `--features server` without `live`.
+fn ws_cross_origin(req: &ServerRequest) -> bool {
+    let origin = match header_ci(&req.headers, "origin") {
+        Some(o) if !o.is_empty() => o,
+        _ => return false,
+    };
+    let host = header_ci(&req.headers, "host").unwrap_or("");
+    let origin_host = origin.split_once("://").map(|x| x.1).unwrap_or(origin);
+    !host.is_empty() && origin_host != host
+}
+
 /// ServerWebSocket_upgrade : Request -> WebSocketServerCfg -> Task Error Response
 pub fn server_web_socket_upgrade<E: From<String> + Send + 'static>(
     req: ServerRequest,
@@ -1010,6 +1028,17 @@ pub fn server_web_socket_upgrade<E: From<String> + Send + 'static>(
             {
                 return ok_res(ws_resp(403, "websocket: origin not allowed"));
             }
+        } else if ws_cross_origin(&req) {
+            // Dev mode, no explicit allowlist: default to same-origin rather
+            // than allow-all (closes CSWSH — Cross-Site WebSocket Hijacking. A
+            // WS handshake can't carry a custom header, so unlike a
+            // CSRF-protected form POST, Origin validation is the ONLY defense
+            // available). Configure `Ws.withOriginPatterns` explicitly to
+            // allow legitimate cross-origin clients.
+            return ok_res(ws_resp(
+                403,
+                "websocket: cross-origin request rejected (set Ws.withOriginPatterns to allow)",
+            ));
         }
         let upgrader = WS_UPGRADER.try_with(|c| c.take()).ok().flatten();
         match upgrader {
@@ -1117,8 +1146,9 @@ pub fn server_web_socket_close_client<E: From<String> + Send + 'static>(id: i64)
 //   D4 — bounded fail-fast `try_send` (SKY_WS_SEND_BUFFER=256 default).
 
 /// `Ws.defaultCfg` — no-op callbacks, `maxMessageBytes = 0` (→ 1 MiB in
-/// `ws_loop`), empty `originPatterns` (dev: allow-all; production: 403 on
-/// `upgrade`).
+/// `ws_loop`), empty `originPatterns` (dev: same-origin only — `Origin` must
+/// match `Host` when `Origin` is present, `ws_cross_origin`; production: 403
+/// on `upgrade`).
 pub fn ws_server_default_cfg<E: From<String> + Send + 'static>() -> WsServerCfg<E> {
     WsServerCfg {
         onConnect: Arc::new(|_| Box::pin(async { ok_res(()) })),
@@ -1905,6 +1935,81 @@ mod tests {
             "https://app.example.com*",
             "https://app.example.com/anything"
         ));
+    }
+
+    fn mk_ws_req(headers: &[(&str, &str)]) -> ServerRequest {
+        let mut h = HashMap::new();
+        for (k, v) in headers {
+            h.insert(k.to_string(), v.to_string());
+        }
+        ServerRequest {
+            method: "GET".to_string(),
+            path: "/ws".to_string(),
+            body: String::new(),
+            headers: h,
+            params: HashMap::new(),
+            query: HashMap::new(),
+            cookies: HashMap::new(),
+            remoteAddr: String::new(),
+        }
+    }
+
+    #[test]
+    fn ws_cross_origin_detection() {
+        assert!(ws_cross_origin(&mk_ws_req(&[
+            ("origin", "https://evil.example"),
+            ("host", "victim.example:8000"),
+        ])));
+        assert!(!ws_cross_origin(&mk_ws_req(&[
+            ("origin", "https://victim.example:8000"),
+            ("host", "victim.example:8000"),
+        ])));
+        // No Origin header at all → not flagged (non-browser client).
+        assert!(!ws_cross_origin(&mk_ws_req(&[("host", "victim.example")])));
+    }
+
+    #[tokio::test]
+    async fn ws_upgrade_dev_rejects_cross_origin_without_allowlist() {
+        // No SKY_TRUSTED_PROXY / ENV involvement — this exercises the CSWSH
+        // default-deny path directly: dev mode (no ENV set in this test
+        // process), empty originPatterns, cross-origin Origin/Host pair. The
+        // pre-fix behaviour fell through with no check at all (allow-all).
+        let cfg = ws_server_default_cfg::<String>();
+        let req = mk_ws_req(&[
+            ("origin", "https://evil.example"),
+            ("host", "victim.example"),
+        ]);
+        // No WS_UPGRADER task-local is set in a plain unit test, so a request
+        // that PASSES the origin check would hit the `None => 400` upgrader
+        // branch instead of 403 — the origin check must short-circuit before
+        // that point for this assertion to distinguish the two paths.
+        match server_web_socket_upgrade::<String>(req, cfg).await {
+            SkyResult::Ok(r) => assert_eq!(
+                r.status, 403,
+                "cross-origin WS upgrade must be rejected outside production too"
+            ),
+            SkyResult::Err(e) => panic!("expected Ok(403), got Err({e})"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ws_upgrade_dev_allows_same_origin_without_allowlist() {
+        let cfg = ws_server_default_cfg::<String>();
+        let req = mk_ws_req(&[
+            ("origin", "https://victim.example"),
+            ("host", "victim.example"),
+        ]);
+        // Same-origin passes the CSWSH check; falls through to the "no
+        // upgrader present" 400 (this unit test doesn't drive a real axum
+        // WS upgrade), which is enough to prove it did NOT hit the 403
+        // cross-origin branch.
+        match server_web_socket_upgrade::<String>(req, cfg).await {
+            SkyResult::Ok(r) => assert_eq!(
+                r.status, 400,
+                "same-origin WS upgrade must pass the origin check (400 = no real upgrader in this unit test, not 403)"
+            ),
+            SkyResult::Err(e) => panic!("expected Ok(400), got Err({e})"),
+        }
     }
 
     #[test]
