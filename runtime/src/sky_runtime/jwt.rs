@@ -294,7 +294,7 @@ pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> SkyR
 // The generic `jwt_encode_hs256<E: From<String>>` and friends cannot be
 // called directly from generated code where the `Err` arm may be discarded —
 // Rust cannot infer `E` in that context. These monomorphic aliases pin
-// `E = String` and are what `naming::kernel_name()` maps the Jwt kernels to,
+// `E = SkyError` (backlog #85/#160) and are what `naming::kernel_name()` maps the Jwt kernels to,
 // mirroring the `sky_aes_gcm_encrypt` pattern in `crypto.rs`.
 //
 // SECURITY: only the error message crosses the `From<String>` boundary; no
@@ -302,22 +302,22 @@ pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> SkyR
 // above). These wrappers add no new logging surface.
 
 /// Generated-code alias for `jwt_encode_hs256` with `E = String`.
-pub fn sky_jwt_encode_hs256(secret: String, claims_json: String) -> SkyResult<String, String> {
+pub fn sky_jwt_encode_hs256(secret: String, claims_json: String) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
     jwt_encode_hs256(secret, claims_json)
 }
 
 /// Generated-code alias for `jwt_decode_hs256` with `E = String`.
-pub fn sky_jwt_decode_hs256(secret: String, token: String) -> SkyResult<String, String> {
+pub fn sky_jwt_decode_hs256(secret: String, token: String) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
     jwt_decode_hs256(secret, token)
 }
 
 /// Generated-code alias for `jwt_encode_rs256` with `E = String`.
-pub fn sky_jwt_encode_rs256(key_pem: String, claims_json: String) -> SkyResult<String, String> {
+pub fn sky_jwt_encode_rs256(key_pem: String, claims_json: String) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
     jwt_encode_rs256(key_pem, claims_json)
 }
 
 /// Generated-code alias for `jwt_decode_rs256` with `E = String`.
-pub fn sky_jwt_decode_rs256(key_pem: String, token: String) -> SkyResult<String, String> {
+pub fn sky_jwt_decode_rs256(key_pem: String, token: String) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
     jwt_decode_rs256(key_pem, token)
 }
 
@@ -424,7 +424,7 @@ pub fn sky_jwt_with_claim(key: String, value: String, claims: JsonValue) -> Json
 pub fn sky_jwt_encode(
     algorithm_descriptor: String,
     claims: JsonValue,
-) -> SkyResult<String, String> {
+) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
     // Serialise the claims through the Go-parity encoder so the payload bytes
     // match those produced by `Jwt.encode` in the Go backend.
     let claims_json = super::json_enc_encode(0, claims);
@@ -433,10 +433,13 @@ pub fn sky_jwt_encode(
     } else if let Some(pem) = algorithm_descriptor.strip_prefix("RS256:") {
         jwt_encode_rs256(pem.to_string(), claims_json)
     } else {
-        SkyResult::Err(format!(
-            "jwt-encode: unknown algorithm descriptor (expected HS256:… or RS256:…): {}",
-            &algorithm_descriptor[..algorithm_descriptor.len().min(20)]
-        ))
+        SkyResult::Err(
+            format!(
+                "jwt-encode: unknown algorithm descriptor (expected HS256:… or RS256:…): {}",
+                &algorithm_descriptor[..algorithm_descriptor.len().min(20)]
+            )
+            .into(),
+        )
     }
 }
 
@@ -453,7 +456,7 @@ pub fn sky_jwt_decode(
     algorithm_descriptor: String,
     now: i64,
     token: String,
-) -> SkyResult<String, String> {
+) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
     // 1. Split token into three segments.
     let parts: Vec<&str> = token.splitn(3, '.').collect();
     if parts.len() != 3 {
@@ -491,10 +494,13 @@ pub fn sky_jwt_decode(
             return SkyResult::Err("jwt-decode: invalid signature".into());
         }
     } else {
-        return SkyResult::Err(format!(
-            "jwt-decode: unknown algorithm descriptor (expected HS256:… or RS256:…): {}",
-            &algorithm_descriptor[..algorithm_descriptor.len().min(20)]
-        ));
+        return SkyResult::Err(
+            format!(
+                "jwt-decode: unknown algorithm descriptor (expected HS256:… or RS256:…): {}",
+                &algorithm_descriptor[..algorithm_descriptor.len().min(20)]
+            )
+            .into(),
+        );
     }
 
     // 3. Extract payload JSON via base64url-decode (parse, don't validate).

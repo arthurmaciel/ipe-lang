@@ -544,11 +544,11 @@ impl Env {
                     "andMap", "combine", "traverse",
                 ],
             ),
-            // `Sky.Core.Error` — the unified error type (minimal `Error = String`
-            // slice, #86). Message constructors + nullary constructors + `toString`
-            // render + `withMessage` modifier. The rich `ErrorKind`/`ErrorDetails`
-            // ADT is deferred to #85; here `Error` is String-backed at runtime but
-            // a distinct nominal HM type.
+            // `Sky.Core.Error` — the real `Error ErrorKind ErrorInfo` ADT (backlog
+            // #85/#160). Message constructors + nullary constructors + `toString`
+            // render + `withMessage` modifier + `isRetryable` classification.
+            // `ErrorInfo` this pass carries only `message` — the rich
+            // `ErrorDetails` union is an explicit, filed follow-up.
             (
                 "Error",
                 &[
@@ -565,6 +565,7 @@ impl Env {
                     "permissionDenied",
                     "toString",
                     "withMessage",
+                    "isRetryable",
                 ],
             ),
             // `Sky.Core.CssSafety` — the four Std.Css leaf security kernels (#47):

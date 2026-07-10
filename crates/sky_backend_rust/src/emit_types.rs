@@ -75,6 +75,8 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
     Ok(match ty {
         IrType::Order => "sky_runtime::basics::SkyOrder".to_owned(),
         IrType::Decimal => "sky_runtime::decimal::Decimal".to_owned(),
+        IrType::ErrorKind => "sky_runtime::error::SkyErrorKind".to_owned(),
+        IrType::Error => "sky_runtime::error::SkyError".to_owned(),
         IrType::Int => "i64".to_owned(),
         IrType::Float => "f64".to_owned(),
         IrType::Bool => "bool".to_owned(),

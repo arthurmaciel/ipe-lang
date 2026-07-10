@@ -309,7 +309,7 @@ fn anchor_missing(anchor: &str) -> Diagnostic {
 /// from the embedded golden — a drifted-golden invariant violation, surfaced
 /// instead of a silent empty slice.
 fn runtime_bindings() -> DResult<&'static str> {
-    const START: &str = "type SkyError = String;";
+    const START: &str = "pub use sky_runtime::error::SkyError;";
     const END: &str = "    sky_runtime::http_client::http_parse_query(raw)\n}\n";
     let start = GOLDEN.find(START).ok_or_else(|| anchor_missing(START))?;
     let rest = GOLDEN.get(start..).ok_or_else(|| anchor_missing(START))?;

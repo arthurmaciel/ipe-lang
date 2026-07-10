@@ -1,0 +1,39 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+main =
+    let
+        e1 = Error.io "disk full"
+
+        e2 = Error.timeout
+
+        e3 = Error.withMessage "custom message" e1
+    in
+    case e1 of
+        Error kind info ->
+            let
+                kindName =
+                    case kind of
+                        Io -> "Io"
+                        Network -> "Network"
+                        Ffi -> "Ffi"
+                        Decode -> "Decode"
+                        Timeout -> "Timeout"
+                        NotFound -> "NotFound"
+                        PermissionDenied -> "PermissionDenied"
+                        InvalidInput -> "InvalidInput"
+                        Conflict -> "Conflict"
+                        Unavailable -> "Unavailable"
+                        Unexpected -> "Unexpected"
+
+                _ = println (Error.toString e1)
+                _ = println info.message
+                _ = println kindName
+                _ = println (if Error.isRetryable e1 then "retryable" else "not-retryable")
+                _ = println (if Error.isRetryable e2 then "retryable" else "not-retryable")
+                _ = println (Error.toString e3)
+            in
+            println "done"

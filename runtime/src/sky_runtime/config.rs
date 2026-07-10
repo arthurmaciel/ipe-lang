@@ -1,6 +1,8 @@
 // Config stub for standalone crate testing.
 // In generated projects this file is OVERRIDDEN by the Sky compiler.
-pub type SkyError = String;
+// `SkyError` used to be aliased to `String` here (backlog #86's "minimal
+// slice"); it is now the real ADT from `error.rs` (backlog #85/#160),
+// re-exported at the crate root via `pub use error::*` — no alias needed.
 
 #[cfg(feature = "db")]
 pub type DbPool = sqlx::sqlite::SqlitePool;
