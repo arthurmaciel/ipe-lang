@@ -275,13 +275,24 @@ pub fn auth_set_role(conn: Db, user_id: i64, role: String) -> SkyTask<()> {\n   
 }\n\
 ";
 
-/// The `sky_runtime/config.rs` emitted for db-enabled programs. Replaces the
-/// no-op M0 stub with the `SQLite` type aliases + helper fns the `db.rs` module
-/// requires. Mirrors `runtime/src/sky_runtime/config.rs` verbatim, keeping the
+/// The `sky_runtime/config.rs` emitted for db-enabled programs targeting
+/// `SQLite` (the default driver). Replaces the no-op M0 stub with the `SQLite`
+/// type aliases + helper fns the `db.rs` module requires. Mirrors
+/// `runtime/src/sky_runtime/config.rs` verbatim, keeping the
 /// `#[cfg(feature = "db")]` / `#[cfg(not(feature = "db"))]` guards so a
 /// non-db build (hypothetically possible via feature flag override) degrades
 /// gracefully rather than failing with undefined types.
-const RUNTIME_CONFIG_RS_DB: &str = include_str!("../../../runtime/src/sky_runtime/config.rs");
+const RUNTIME_CONFIG_RS_DB_SQLITE: &str =
+    include_str!("../../../runtime/src/sky_runtime/config.rs");
+
+/// The `sky_runtime/config.rs` emitted for db-enabled programs targeting
+/// Postgres (`sky.toml`'s `[database] driver = "postgres"`). Same symbol
+/// surface as [`RUNTIME_CONFIG_RS_DB_SQLITE`] (`DbPool`/`DbRow`/`sky_db_url`/
+/// `db_last_insert_id`/`db_format_sql`/`DB_USES_RETURNING_ID`/
+/// `db_auto_id_column`), so `db.rs` is byte-identical across both driver
+/// builds.
+const RUNTIME_CONFIG_RS_DB_POSTGRES: &str =
+    include_str!("../../../runtime/src/sky_runtime/config_postgres.rs");
 
 /// The `Diagnostic::CompilerBug` raised when a golden anchor is absent — a
 /// drifted-golden invariant violation, surfaced (SKY-I0203) instead of a silent
@@ -420,7 +431,11 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     // any combination. The order: db first, then server; both modify the same
     // base manifest so we chain the transformations.
     let (cargo_toml, runtime_config_rs) = if ctx.uses_db {
-        (db_cargo_toml()?, RUNTIME_CONFIG_RS_DB.to_owned())
+        let cfg = match ctx.db_driver {
+            crate::DbDriver::Sqlite => RUNTIME_CONFIG_RS_DB_SQLITE,
+            crate::DbDriver::Postgres => RUNTIME_CONFIG_RS_DB_POSTGRES,
+        };
+        (db_cargo_toml(ctx.db_driver)?, cfg.to_owned())
     } else {
         (CARGO_TOML.to_owned(), RUNTIME_CONFIG_RS.to_owned())
     };
@@ -542,21 +557,30 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 /// Build the db-enabled `Cargo.toml` from the base M0 manifest by:
 ///
 /// 1. Adding `"db"` to the `default` feature list.
-/// 2. Appending the `sqlx` dependency line.
+/// 2. Appending the `sqlx` dependency line, with the sqlx driver feature
+///    (`"sqlite"` / `"postgres"`) selected by `driver` — the structural fix
+///    that makes a Postgres-driver program's sqlx dependency actually enable
+///    Postgres support (a `driver = "postgres"` build with only the
+///    `"sqlite"` sqlx feature fails to compile `sqlx::postgres::PgPool`,
+///    which is exactly the "Postgres driver structurally unreachable" gap
+///    this closes).
 ///
 /// String surgery rather than a second static file: the manifest content is
 /// small and the two edits are unambiguous anchors.
-fn db_cargo_toml() -> DResult<String> {
+fn db_cargo_toml(driver: crate::DbDriver) -> DResult<String> {
     const DEFAULT_LINE: &str = r#"default = ["tokio", "crypto", "json"]"#;
     const DEFAULT_LINE_DB: &str = r#"default = ["tokio", "crypto", "json", "db"]"#;
     // The sqlx line is appended right before the dev/release profile sections.
     // Anchoring on `[profile.dev]` is stable (always present in the template).
     const PROFILE_ANCHOR: &str = "[profile.dev]";
     // Version + crate name sourced from the SSOT (`crate_specs`); the feature
-    // list stays inline (it depends on usage). Byte-identical to the prior
-    // literal.
+    // list stays inline (it depends on usage AND driver).
+    let sqlx_driver_feature = match driver {
+        crate::DbDriver::Sqlite => "sqlite",
+        crate::DbDriver::Postgres => "postgres",
+    };
     let sqlx_line = format!(
-        "{} = {{ version = \"{}\", features = [\"runtime-tokio-rustls\", \"sqlite\"] }}\n\n",
+        "{} = {{ version = \"{}\", features = [\"runtime-tokio-rustls\", {sqlx_driver_feature:?}] }}\n\n",
         crate_specs::SQLX.name,
         crate_specs::SQLX.version,
     );
@@ -1054,7 +1078,12 @@ fn emit_db_projection_impls(ctx: &EmitCtx) -> DResult<String> {
     // `SqlParam::Int`.  `SqlDecimal` and `SqlMoney` carry lossless string
     // representations (decimal digits for Decimal, "ISO_CODE AMOUNT" for
     // Money) — both map to `SqlParam::Text`.  `SqlNull` carries a SqlValue
-    // type-witness that is discarded here; the runtime sees just `SqlParam::Null`.
+    // type-witness — threaded through (NOT discarded) into
+    // `SqlParam::Null(Box<SqlParam>)` so the bind site (`bind_sql_param`)
+    // can pick the correctly-typed `Option::<T>::None`, which matters on
+    // Postgres (sqlx's extended query protocol validates a per-param
+    // type-OID hint against the target column) even though it's a no-op on
+    // SQLite's dynamic typing.
     Ok(format!(
         "\
 impl {sv} {{
@@ -1073,7 +1102,7 @@ impl {sv} {{
             Self::SqlTime(v) => sky_runtime::db::SqlParam::Int(v),
             Self::SqlDecimal(v) => sky_runtime::db::SqlParam::Text(v),
             Self::SqlMoney(v) => sky_runtime::db::SqlParam::Text(v),
-            Self::SqlNull(_) => sky_runtime::db::SqlParam::Null,
+            Self::SqlNull(inner) => sky_runtime::db::SqlParam::Null(Box::new(inner.into_sql_param())),
         }}
     }}
 }}
@@ -1101,8 +1130,10 @@ impl {sf} {{
 #[cfg(test)]
 mod tests {
     use super::{
-        CARGO_TOML, RUNTIME_MOD_RS_LIVE_APPEND, db_cargo_toml, live_cargo_toml, server_cargo_toml,
+        CARGO_TOML, RUNTIME_CONFIG_RS_DB_POSTGRES, RUNTIME_CONFIG_RS_DB_SQLITE,
+        RUNTIME_MOD_RS_LIVE_APPEND, db_cargo_toml, live_cargo_toml, server_cargo_toml,
     };
+    use crate::DbDriver;
     use crate::crate_specs;
 
     /// Helper: extract the `default = [...]` line from a manifest string.
@@ -1150,7 +1181,7 @@ mod tests {
     /// the default list, and neither overwrites the other.
     #[test]
     fn server_toml_db_compose_inserts_both() {
-        let db_base = db_cargo_toml().expect("db_cargo_toml must succeed");
+        let db_base = db_cargo_toml(crate::DbDriver::Sqlite).expect("db_cargo_toml must succeed");
         let out = server_cargo_toml(&db_base).expect("server_cargo_toml on db base must succeed");
         let def = default_line(&out);
         for feat in &[
@@ -1185,7 +1216,7 @@ mod tests {
     /// leaves open (SSOT ↔ manifests): this is SSOT ↔ emitted output.
     #[test]
     fn emitted_manifests_use_ssot_versions() {
-        let db = db_cargo_toml().expect("db_cargo_toml");
+        let db = db_cargo_toml(crate::DbDriver::Sqlite).expect("db_cargo_toml");
         assert!(
             db.contains(&format!(
                 "{} = {{ version = \"{}\"",
@@ -1224,7 +1255,7 @@ mod tests {
     /// that composition order.
     #[test]
     fn live_db_toml_includes_postgres() {
-        let db_base = db_cargo_toml().expect("db_cargo_toml must succeed");
+        let db_base = db_cargo_toml(crate::DbDriver::Sqlite).expect("db_cargo_toml must succeed");
         // server_cargo_toml always runs before live_cargo_toml when uses_live is
         // true (see emit_program).  It adds the tokio net+sync features that
         // live_cargo_toml's anchor requires.
@@ -1267,6 +1298,64 @@ mod tests {
             !out.contains("\"postgres\""),
             "a Live-only (no Db) manifest must NOT contain the postgres feature: {out}"
         );
+    }
+
+    // ── Class 7 §3: Postgres driver structural reachability ─────────────────
+
+    /// `db_cargo_toml(DbDriver::Sqlite)` must be byte-identical to the
+    /// pre-driver-selection output (non-regression: every existing db-enabled
+    /// sqlite project's Cargo.toml is unaffected by the driver plumbing).
+    #[test]
+    fn db_cargo_toml_sqlite_driver_unchanged_sqlx_feature() {
+        let out = db_cargo_toml(DbDriver::Sqlite).expect("db_cargo_toml(Sqlite) must succeed");
+        assert!(
+            out.contains(r#"features = ["runtime-tokio-rustls", "sqlite"]"#),
+            "sqlite driver must keep the sqlite sqlx feature, not add postgres: {out}"
+        );
+        assert!(!out.contains(r#""postgres"]"#), "sqlite driver must not enable postgres: {out}");
+    }
+
+    /// The actual structural fix under test: `driver = "postgres"` must
+    /// produce a `Cargo.toml` whose sqlx dependency enables the `"postgres"`
+    /// sqlx feature (not `"sqlite"`) — closing the "Postgres driver
+    /// structurally unreachable" gap (a `driver = "postgres"` build with only
+    /// the sqlite sqlx feature fails to compile `sqlx::postgres::PgPool` at
+    /// all).
+    #[test]
+    fn db_cargo_toml_postgres_driver_enables_postgres_sqlx_feature() {
+        let out = db_cargo_toml(DbDriver::Postgres).expect("db_cargo_toml(Postgres) must succeed");
+        assert!(
+            out.contains(r#"features = ["runtime-tokio-rustls", "postgres"]"#),
+            "postgres driver must enable the postgres sqlx feature: {out}"
+        );
+        assert!(
+            !out.contains(r#""sqlite"]"#),
+            "postgres driver must not ALSO enable sqlite (would be a needless \
+             extra compile-time dependency, not a correctness bug, but the \
+             point of the driver selection is to pick exactly one): {out}"
+        );
+    }
+
+    /// The sqlite `config.rs` template is unchanged by this feature (byte
+    /// containment check on the two symbols that matter for driver
+    /// dispatch — the full file is covered by the existing runtime crate's
+    /// own build).
+    #[test]
+    fn runtime_config_rs_sqlite_template_has_sqlite_types() {
+        assert!(RUNTIME_CONFIG_RS_DB_SQLITE.contains("sqlx::sqlite::SqlitePool"));
+        assert!(RUNTIME_CONFIG_RS_DB_SQLITE.contains("DB_USES_RETURNING_ID: bool = false"));
+    }
+
+    /// The new Postgres `config.rs` template must declare `PgPool`/`PgRow`
+    /// and `DB_USES_RETURNING_ID = true` — the two symbols
+    /// `db_insert_row`/`db_insert_fields` (Class 7 §4b) key their
+    /// `RETURNING id` branch on.
+    #[test]
+    fn runtime_config_rs_postgres_template_has_postgres_types() {
+        assert!(RUNTIME_CONFIG_RS_DB_POSTGRES.contains("sqlx::postgres::PgPool"));
+        assert!(RUNTIME_CONFIG_RS_DB_POSTGRES.contains("sqlx::postgres::PgRow"));
+        assert!(RUNTIME_CONFIG_RS_DB_POSTGRES.contains("DB_USES_RETURNING_ID: bool = true"));
+        assert!(RUNTIME_CONFIG_RS_DB_POSTGRES.contains("id BIGSERIAL PRIMARY KEY"));
     }
 
     /// `RUNTIME_MOD_RS_LIVE_APPEND` must re-export `LiveReq` from the `live`
