@@ -36,6 +36,23 @@ use sky_ir::{FuncId, IrType, ModPath, Program, TypeDef};
 
 pub use preamble::{epilogue, preamble};
 
+/// Which SQL database driver the emitted project targets.
+///
+/// Selected by `sky.toml`'s `[database] driver` key
+/// (`crates/skyc/src/project.rs::DbDriver`, converted at the `skyc` →
+/// `sky_backend_rust` boundary via [`RustBackend::with_db_driver`]) — drives
+/// the `sky_runtime/config.rs` template and `Cargo.toml` sqlx feature
+/// [`crate::project::emit_program`] selects. `Sqlite` is the default: a
+/// program with no `[database]` section, or one built via the single-file
+/// `skyc build` path (no manifest at all), emits byte-identical output to
+/// pre-driver-selection backends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DbDriver {
+    #[default]
+    Sqlite,
+    Postgres,
+}
+
 /// The Rust code-generation backend.
 ///
 /// Holds a reference to the [`Interner`] used to build the program, so it can
@@ -43,13 +60,27 @@ pub use preamble::{epilogue, preamble};
 /// [`Backend::emit`] signature.
 pub struct RustBackend<'a> {
     interner: &'a Interner,
+    db_driver: DbDriver,
 }
 
 impl<'a> RustBackend<'a> {
     /// Construct a backend that resolves IR symbols through `interner`.
+    /// Defaults to [`DbDriver::Sqlite`] — call [`Self::with_db_driver`] to
+    /// target Postgres.
     #[must_use]
     pub const fn new(interner: &'a Interner) -> Self {
-        Self { interner }
+        Self {
+            interner,
+            db_driver: DbDriver::Sqlite,
+        }
+    }
+
+    /// Select the SQL driver the emitted project targets (from `sky.toml`'s
+    /// `[database] driver`). No-op on programs that don't use any Db kernel.
+    #[must_use]
+    pub const fn with_db_driver(mut self, driver: DbDriver) -> Self {
+        self.db_driver = driver;
+        self
     }
 }
 
@@ -59,7 +90,7 @@ impl Backend for RustBackend<'_> {
     }
 
     fn emit(&self, program: &Program) -> DResult<EmittedProject> {
-        let ctx = EmitCtx::build(self.interner, program)?;
+        let ctx = EmitCtx::build(self.interner, program, self.db_driver)?;
         project::emit_program(&ctx, program)
     }
 }
@@ -141,6 +172,11 @@ pub(crate) struct EmitCtx<'a> {
     ///   user type declarations, so the Db call sites can project Sky ADT
     ///   values to the runtime's `SqlParam`.
     pub(crate) uses_db: bool,
+    /// Which SQL driver the emitted `Cargo.toml` / `sky_runtime/config.rs`
+    /// target when [`Self::uses_db`] is set (`sky.toml`'s `[database] driver`,
+    /// threaded in via [`RustBackend::with_db_driver`]). Meaningless / ignored
+    /// when `uses_db` is `false`.
+    pub(crate) db_driver: DbDriver,
     /// `true` when the program uses at least one TEA (`Cmd` / `Sub` /
     /// `Time.every`) kernel introduced in M5c. When set,
     /// [`crate::project::emit_program`]:
@@ -249,7 +285,7 @@ pub(crate) struct EmitCtx<'a> {
 impl<'a> EmitCtx<'a> {
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally similar
-    fn build(interner: &'a Interner, program: &Program) -> DResult<Self> {
+    fn build(interner: &'a Interner, program: &Program, db_driver: DbDriver) -> DResult<Self> {
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
         let mut enum_variants: BTreeMap<(ModPath, Symbol), Vec<Vec<IrType>>> = BTreeMap::new();
@@ -595,6 +631,7 @@ impl<'a> EmitCtx<'a> {
         Ok(Self {
             interner,
             uses_db,
+            db_driver,
             uses_tea,
             uses_server,
             uses_ui,

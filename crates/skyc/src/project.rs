@@ -44,6 +44,11 @@ pub struct ProjectManifest {
     pub root: PathBuf,
     /// Absolute path to the source root (`<root>/src` by default).
     pub src_root: PathBuf,
+    /// The SQL driver the emitted project targets (from `[database] driver
+    /// = "…"`). Defaults to [`sky_backend_rust::DbDriver::Sqlite`] when the
+    /// `[database]` section (or the `driver` key within it) is absent — the
+    /// documented default in `CLAUDE.md`'s `sky.toml` schema table.
+    pub driver: sky_backend_rust::DbDriver,
 }
 
 /// A discovered Sky source file with its resolved module path.
@@ -74,20 +79,45 @@ pub struct CycleError {
 // Manifest parsing
 // ---------------------------------------------------------------------------
 
+/// Parse a `[database] driver = "…"` value. Recognises `"sqlite"` (also the
+/// default when the section/key is absent) and `"postgres"` / `"postgresql"`.
+/// Any other value is a hard error naming the bad value — silently falling
+/// back to sqlite on a typo (`"postgre"`, `"postgress"`) would build a project
+/// the user believes targets Postgres but that actually runs against a local
+/// `SQLite` file, a correctness footgun worse than a loud rejection.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] naming the unrecognised value.
+fn parse_db_driver(s: &str) -> Result<sky_backend_rust::DbDriver, CliError> {
+    match s {
+        "sqlite" => Ok(sky_backend_rust::DbDriver::Sqlite),
+        "postgres" | "postgresql" => Ok(sky_backend_rust::DbDriver::Postgres),
+        other => Err(CliError::UsageOwned(format!(
+            "sky.toml: [database] driver = {other:?} is not supported \
+             (expected \"sqlite\" or \"postgres\")"
+        ))),
+    }
+}
+
 /// Parse a `sky.toml` file and return a [`ProjectManifest`].
 ///
 /// The format recognised:
 /// ```toml
 /// [project]
 /// name = "my-app"
+///
+/// [database]
+/// driver = "sqlite"   # or "postgres" — defaults to "sqlite" when absent
 /// ```
 /// Lines that start with `#` are comments and are ignored. All other lines
-/// outside `[project]` are ignored (forward-compatible). Within `[project]`,
-/// only `name` is extracted; other keys are ignored.
+/// outside `[project]` / `[database]` are ignored (forward-compatible). Within
+/// `[project]`, only `name` is extracted; within `[database]`, only `driver`
+/// is extracted; other keys are ignored.
 ///
 /// # Errors
 /// [`CliError::Io`] if the file cannot be read; [`CliError::Usage`] if the
-/// manifest is malformed or the `src/` directory does not exist.
+/// manifest is malformed or the `src/` directory does not exist;
+/// [`CliError::UsageOwned`] if `[database] driver` names an unsupported value.
 pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError> {
     let root = manifest_path
         .parent()
@@ -100,10 +130,12 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
 
     // `sky.toml` schema: `name` may sit at the top level (Sky's own examples) or
     // under `[project]`; the source root comes from `[source] root = "…"`,
-    // defaulting to `src`. `section` is the empty string at the top level.
+    // defaulting to `src`; the driver comes from `[database] driver = "…"`,
+    // defaulting to sqlite. `section` is the empty string at the top level.
     let mut section = "";
     let mut name: Option<String> = None;
     let mut src_rel: Option<String> = None;
+    let mut driver_str: Option<String> = None;
 
     for raw_line in text.lines() {
         let line = raw_line.trim();
@@ -115,6 +147,8 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
                 "[project]"
             } else if line == "[source]" {
                 "[source]"
+            } else if line == "[database]" {
+                "[database]"
             } else {
                 "other"
             };
@@ -128,6 +162,7 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         match (section, key) {
             ("" | "[project]", "name") => name = Some(val.to_owned()),
             ("[source]", "root") => src_rel = Some(val.to_owned()),
+            ("[database]", "driver") => driver_str = Some(val.to_owned()),
             _ => {}
         }
     }
@@ -141,10 +176,16 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         ));
     }
 
+    let driver = match driver_str {
+        Some(s) => parse_db_driver(&s)?,
+        None => sky_backend_rust::DbDriver::Sqlite,
+    };
+
     Ok(ProjectManifest {
         name,
         root,
         src_root,
+        driver,
     })
 }
 
@@ -489,6 +530,79 @@ pub fn extract_imports_from_source(source: &str) -> Vec<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Write a minimal manifest + `src/Main.sky` under a fresh temp dir and
+    /// return the manifest path. `database_section` is spliced in verbatim
+    /// (empty string → no `[database]` section at all).
+    fn write_manifest(test_name: &str, database_section: &str) -> PathBuf {
+        let tmp = std::env::temp_dir().join(format!("skyc_project_{test_name}"));
+        let _ = fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        fs::create_dir_all(&src).expect("create src/");
+        fs::write(
+            src.join("Main.sky"),
+            "module Main exposing (main)\nmain = 0\n",
+        )
+        .expect("write Main.sky");
+        let toml_path = tmp.join("sky.toml");
+        fs::write(
+            &toml_path,
+            format!("[project]\nname = \"test\"\n{database_section}"),
+        )
+        .expect("write sky.toml");
+        toml_path
+    }
+
+    /// #61-adjacent regression (Class 7 §3): no `[database]` section at all →
+    /// the manifest defaults to `DbDriver::Sqlite`, matching the documented
+    /// `sky.toml` schema default.
+    #[test]
+    fn parse_manifest_no_database_section_defaults_to_sqlite() {
+        let toml_path = write_manifest("no_db_section", "");
+        let manifest = parse_manifest(&toml_path).expect("manifest must parse");
+        assert_eq!(manifest.driver, sky_backend_rust::DbDriver::Sqlite);
+        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
+    }
+
+    #[test]
+    fn parse_manifest_explicit_sqlite_driver() {
+        let toml_path = write_manifest("explicit_sqlite", "[database]\ndriver = \"sqlite\"\n");
+        let manifest = parse_manifest(&toml_path).expect("manifest must parse");
+        assert_eq!(manifest.driver, sky_backend_rust::DbDriver::Sqlite);
+        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
+    }
+
+    #[test]
+    fn parse_manifest_postgres_driver() {
+        let toml_path = write_manifest("postgres", "[database]\ndriver = \"postgres\"\n");
+        let manifest = parse_manifest(&toml_path).expect("manifest must parse");
+        assert_eq!(manifest.driver, sky_backend_rust::DbDriver::Postgres);
+        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
+    }
+
+    #[test]
+    fn parse_manifest_postgresql_alias_driver() {
+        let toml_path = write_manifest("postgresql_alias", "[database]\ndriver = \"postgresql\"\n");
+        let manifest = parse_manifest(&toml_path).expect("manifest must parse");
+        assert_eq!(manifest.driver, sky_backend_rust::DbDriver::Postgres);
+        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
+    }
+
+    /// An unsupported `driver` value must be a loud, named error — NOT a
+    /// silent fallback to sqlite (a silent fallback would build a project the
+    /// user believes targets `driver = "mysql"` but that actually runs
+    /// against a local SQLite file).
+    #[test]
+    fn parse_manifest_unsupported_driver_is_a_named_error() {
+        let toml_path = write_manifest("unsupported_driver", "[database]\ndriver = \"mysql\"\n");
+        let err = parse_manifest(&toml_path).expect_err("mysql driver must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("mysql"),
+            "error must name the unsupported value: {msg}"
+        );
+        let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
+    }
 
     #[test]
     fn is_module_segment_rules() {
