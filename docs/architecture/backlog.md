@@ -33,7 +33,7 @@ Wrinkle for all lanes: the shared `~/.cache/sky-rust-target` suffers cross-workt
 - **#56** Prove row-poly subset/superset record resolution (A7 watch) + gate on sweep.
 - **#45** Make constrain kernel-scheme table exhaustive over canon lists (close exit-0-then-cargo-fail class).
 - **#70** Fix kernel arity-table drift (`decl().arity` vs `callee_arity`) — latent exit-0-then-cargo-fail.
-- **#71** Fix `explain_lookup`: UnknownCode for 8 real page-backed diagnostic codes.
+- **#71 ✅ LANDED (already, confirmed 2026-07-09)** — Fix `explain_lookup`: UnknownCode for 8 real page-backed diagnostic codes. Closed by AUD-15 (`9b55853`): `skyc`'s drifted hand-mirror of `ALL_CODES` was deleted, now imports `sky_diagnostics::ALL_CODES` directly. Verified: `all_taxonomy_codes_resolve_via_explain_lookup` passes, covering all 86 codes.
 
 ## Security tier — BEFORE the compiler push (per memory `security-hardening-before-push`; all Tier-1 except FFI-sandbox which gates FFI)
 - **#44** Opaque `Secret` stdlib type (gates WASM hydration island + CLAUDE.md §8 secrets-are-typed).
