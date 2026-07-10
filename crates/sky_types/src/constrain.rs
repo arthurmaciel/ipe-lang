@@ -23,6 +23,7 @@ use sky_kernels::StdlibKernel;
 use crate::doc::{VarNamer, canon_type_to_doc, ty_to_doc};
 use crate::solve::{Budget, Constraint};
 use crate::ty::{Content, FlatType, RowTail, Ty, TyBounds, from_canon, is_solver_var, tag_solver_var};
+use crate::unify::unify;
 use crate::unionfind::{UnionFind, VarId};
 
 /// `where_` tag for any `CompilerBug` raised during constraint generation.
@@ -1043,6 +1044,32 @@ pub struct Builder<'a> {
     /// obligation rejects a type containing a function, which Rust cannot
     /// compare, with SKY-T0014 rather than emitting code `cargo` rejects).
     super_vars: Vec<(VarId, TyBounds, Span)>,
+    /// One entry per *cross-module* reference to an untyped top-level binding
+    /// (`Builder::current_home != source.0`). A same-module reference keeps
+    /// sharing `untyped[key]` directly (unchanged monomorphic-within-module
+    /// behaviour); a cross-module reference instead gets its own isolated
+    /// placeholder here, discharged post-solve by `promote_untyped_boundaries`
+    /// against the source binding's *generalized* scheme — see the "Boundary
+    /// Scheme Promotion" design at
+    /// `docs/architecture/class1-inference-fix-spec-2026-07-09.md`.
+    pending_instantiations: Vec<PendingInstantiation>,
+}
+
+/// A cross-module reference to an untyped top-level binding, recorded during
+/// constraint generation. `placeholder` is a fresh, isolated `Flex` var minted
+/// at the reference site (instead of sharing the binding's program-wide var);
+/// the post-solve `promote_untyped_boundaries` pass unifies it with a fresh
+/// instantiation of the source binding's generalized scheme, once that scheme
+/// exists (source module precedes `use_home` in topo order).
+pub struct PendingInstantiation {
+    /// The referenced binding's `(home, name)`.
+    pub source: (Vec<Symbol>, Symbol),
+    /// The fresh, isolated `Flex` var minted at the reference site.
+    pub placeholder: VarId,
+    /// The module that owns the reference (for blame attribution).
+    pub use_home: Vec<Symbol>,
+    /// The reference's source span (for blame attribution).
+    pub span: Span,
 }
 
 /// A single use site of a typed top-level binding.
@@ -1213,6 +1240,18 @@ pub struct Generated {
     pub typed_rigids: Vec<PolyVarEntry>,
     pub scheme_apps: Vec<SchemeApp>,
     pub super_vars: Vec<(VarId, TyBounds, Span)>,
+    /// Every cross-module untyped-binding reference recorded during
+    /// constraint generation. See [`PendingInstantiation`].
+    pub pending_instantiations: Vec<PendingInstantiation>,
+    /// Every distinct module home reachable in the linked program, in
+    /// first-encounter order over `module.defs` — which is itself
+    /// dependency-first topo order, since `link::link` concatenates each
+    /// source module's whole def list in the caller-supplied topo order (see
+    /// `sky_canon::link` and `skyc::project::topological_order`). Consumed by
+    /// `promote_untyped_boundaries` to discharge/generalize each module's
+    /// untyped defs only after every module it depends on has already been
+    /// generalized.
+    pub module_order: Vec<Vec<Symbol>>,
 }
 
 impl<'a> Builder<'a> {
@@ -1246,6 +1285,7 @@ impl<'a> Builder<'a> {
             typed_rigids: Vec::new(),
             scheme_apps: Vec::new(),
             super_vars: Vec::new(),
+            pending_instantiations: Vec::new(),
         };
 
         // Register the Prelude-built-in constructor schemes (`True` / `False` /
@@ -1374,6 +1414,18 @@ impl<'a> Builder<'a> {
             builder.constrain_def(def)?;
         }
 
+        // `module.defs` is already dependency-first topo order (link::link
+        // concatenates each source module's whole def list in the
+        // caller-supplied topo order) — a single first-encounter dedup pass
+        // recovers the distinct module homes in that same order.
+        let mut module_order: Vec<Vec<Symbol>> = Vec::new();
+        for def in &module.defs {
+            let home = def.home();
+            if module_order.iter().all(|h| h.as_slice() != home) {
+                module_order.push(home.to_vec());
+            }
+        }
+
         Ok(Generated {
             regions: builder.regions,
             constraints: builder.constraints,
@@ -1386,6 +1438,8 @@ impl<'a> Builder<'a> {
             typed_rigids: builder.typed_rigids,
             scheme_apps: builder.scheme_apps,
             super_vars: builder.super_vars,
+            pending_instantiations: builder.pending_instantiations,
+            module_order,
         })
     }
 
@@ -2159,7 +2213,27 @@ impl<'a> Builder<'a> {
             });
             Ok(var)
         } else if let Some(v) = self.untyped.get(&key).copied() {
-            Ok(v)
+            if key.0 == self.current_home {
+                // Same-module: still the one shared monomorphic var — an
+                // untyped binding is monomorphic *within its home module*
+                // (matches the reference's `CLocal` semantics exactly; see
+                // `untyped_polymorphic_use_at_two_types_is_rejected`).
+                Ok(v)
+            } else {
+                // Cross-module: isolate this reference behind its own fresh
+                // placeholder instead of sharing the binding's program-wide
+                // var. `promote_untyped_boundaries` (in `lib.rs`, post-solve)
+                // discharges it against the source binding's generalized
+                // scheme, once that scheme exists.
+                let placeholder = self.flex()?;
+                self.pending_instantiations.push(PendingInstantiation {
+                    source: key,
+                    placeholder,
+                    use_home: self.current_home.clone(),
+                    span,
+                });
+                Ok(placeholder)
+            }
         } else {
             Err(Diagnostic::CompilerBug {
                 where_: "sky_types::constrain_var_top_level",
@@ -5179,6 +5253,399 @@ impl<'a> Builder<'a> {
     }
 }
 
+// ===========================================================================
+// Boundary Scheme Promotion — untyped top-level binding generalization.
+//
+// See `docs/architecture/class1-inference-fix-spec-2026-07-09.md` for the
+// full design. Summary: an unannotated top-level binding is monomorphic
+// *within its home module* (unchanged), but is generalized into a scheme at
+// its module's boundary, so each cross-module reference instantiates it
+// fresh — exactly like an annotated (typed) binding already does via
+// `instantiate_tracked`, except the scheme is *discovered* post-solve rather
+// than declared. `promote_untyped_boundaries` (called once, between
+// `solve_attributed` and `resolve_deferred`) drives this for the whole
+// linked program, in module topo order.
+// ===========================================================================
+
+/// A generalized scheme for one untyped top-level binding, discovered at its
+/// home module's boundary-discharge step.
+///
+/// `quantified` maps each generalized `Flex` root to its synthesized name
+/// (`"a"`, `"b"`, …, never `"any"`). Only plain, obligation-free `Flex` roots
+/// are quantified in phase 1 — `Super`-bounded and `Rigid`-contaminated roots
+/// stay shared program-wide (Divergences D2/D3 in the spec); a residual root
+/// still reachable from a pending field-access / record-update / route
+/// obligation is excluded too (the existing "single concrete use" gate
+/// fallback stays intact for those defs).
+pub struct UntypedScheme {
+    /// The shared, home-module-monomorphic root every same-module reference
+    /// (and, pre-discharge, the binding's own `untyped[key]` var) resolves to.
+    root: VarId,
+    /// Generalized root → synthesized type-variable name.
+    pub quantified: BTreeMap<VarId, Symbol>,
+}
+
+/// Every untyped def's generalized scheme, keyed by `(home, name)`. Returned
+/// by [`promote_untyped_boundaries`].
+pub type UntypedSchemes = BTreeMap<(Vec<Symbol>, Symbol), UntypedScheme>;
+
+const COPY_VAR_NODE_LIMIT: u32 = 4_096;
+
+/// One step of the iterative [`copy_var`] work stack — the mirror image of
+/// [`ZonkTask`]: instead of reading a settled UF node back into an owned
+/// [`Ty`], it builds a *fresh* UF substructure over it.
+enum CopyVarTask {
+    Visit(VarId),
+    BuildFun,
+    BuildCon {
+        module: Vec<Symbol>,
+        name: Symbol,
+        arity: usize,
+    },
+    BuildTuple {
+        arity: usize,
+    },
+    BuildRecord {
+        names: Vec<Symbol>,
+    },
+}
+
+/// Instantiate a generalized untyped-def scheme at one use site.
+///
+/// A quantified root (per `quantified`) gets a fresh `Flex` per call — shared
+/// via `fresh_map` so repeated occurrences of the same quantified var within
+/// *this one* instantiation alpha-rename consistently (`fresh_map` must be
+/// fresh per discharge, i.e. per cross-module reference, not shared across
+/// references). Every other var — `Flex` not in `quantified`, `Super`,
+/// `Rigid` — is returned as-is, unchanged: this is what makes a program with
+/// no boundary-free untyped defs byte-identical to today, since nothing is
+/// ever copied unless it was actually quantified. Every `Structure` node is
+/// rebuilt with fresh children, including a **fresh** `EmptyRecord` sentinel
+/// per closed record (mirrors `empty_record_tail`'s occurs-distinctness
+/// rule) — this is a UF-level copy-walk, deliberately NOT a `Ty`-level reify
+/// (`instantiate_in`), so it never needs to round-trip through a resolved
+/// `Ty` (and its `AUD-13` solver-var tagging) at all.
+///
+/// **Iterative**, mirroring [`zonk`]: an explicit heap-allocated work stack,
+/// so it never grows the native call stack regardless of how deep the
+/// scheme's type is, budget-ticked per node and bounded by
+/// [`COPY_VAR_NODE_LIMIT`] (stack-safety, not the DOS budget).
+///
+/// # Errors
+/// [`Diagnostic::CompilerBug`] on a union-find invariant violation or if the
+/// structure has more than [`COPY_VAR_NODE_LIMIT`] nodes;
+/// [`TypeError::StepBudgetExceeded`] if the shared budget is exhausted.
+#[allow(clippy::too_many_lines)] // one task-stack state machine, mirrors `zonk` — splitting would obscure the Visit/Build pairing
+fn copy_var(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    var: VarId,
+    quantified: &BTreeMap<VarId, Symbol>,
+    fresh_map: &mut BTreeMap<VarId, VarId>,
+) -> DResult<VarId> {
+    let mut work: Vec<CopyVarTask> = vec![CopyVarTask::Visit(var)];
+    let mut results: Vec<VarId> = Vec::new();
+    let mut nodes_left = COPY_VAR_NODE_LIMIT;
+
+    while let Some(task) = work.pop() {
+        match task {
+            CopyVarTask::Visit(v) => {
+                budget.tick()?;
+                nodes_left = nodes_left
+                    .checked_sub(1)
+                    .ok_or_else(|| Diagnostic::CompilerBug {
+                        where_: STAGE,
+                        detail: "type exceeded scheme-instantiation node limit".to_owned(),
+                    })?;
+                let root = uf.find(v)?;
+                if let Some(&fresh) = fresh_map.get(&root) {
+                    results.push(fresh);
+                    continue;
+                }
+                match uf.content(root)? {
+                    Content::Flex if quantified.contains_key(&root) => {
+                        let fresh = uf.fresh(Content::Flex)?;
+                        fresh_map.insert(root, fresh);
+                        results.push(fresh);
+                    }
+                    Content::Flex | Content::Rigid | Content::Super { .. } => {
+                        // Not quantified: shared program-wide, no copy.
+                        fresh_map.insert(root, root);
+                        results.push(root);
+                    }
+                    Content::Structure(FlatType::Unit) => {
+                        results.push(uf.fresh(Content::Structure(FlatType::Unit))?);
+                    }
+                    Content::Structure(FlatType::EmptyRecord) => {
+                        // A fresh sentinel per copy — same rationale as
+                        // `empty_record_tail`: distinct closed records must
+                        // stay distinguishable to a later occurs check.
+                        results.push(uf.fresh(Content::Structure(FlatType::EmptyRecord))?);
+                    }
+                    Content::Structure(FlatType::Fun(a, b)) => {
+                        work.push(CopyVarTask::BuildFun);
+                        work.push(CopyVarTask::Visit(b));
+                        work.push(CopyVarTask::Visit(a));
+                    }
+                    Content::Structure(FlatType::Con { module, name, args }) => {
+                        let arity = args.len();
+                        work.push(CopyVarTask::BuildCon { module, name, arity });
+                        for a in args.into_iter().rev() {
+                            work.push(CopyVarTask::Visit(a));
+                        }
+                    }
+                    Content::Structure(FlatType::Tuple(elems)) => {
+                        let arity = elems.len();
+                        work.push(CopyVarTask::BuildTuple { arity });
+                        for e in elems.into_iter().rev() {
+                            work.push(CopyVarTask::Visit(e));
+                        }
+                    }
+                    Content::Structure(FlatType::Record(fields, ext)) => {
+                        let names: Vec<Symbol> = fields.keys().copied().collect();
+                        work.push(CopyVarTask::BuildRecord { names });
+                        work.push(CopyVarTask::Visit(ext));
+                        for v in fields.values().copied().rev() {
+                            work.push(CopyVarTask::Visit(v));
+                        }
+                    }
+                }
+            }
+            CopyVarTask::BuildFun => {
+                let (Some(b), Some(a)) = (results.pop(), results.pop()) else {
+                    return Err(copy_var_underflow());
+                };
+                results.push(uf.fresh(Content::Structure(FlatType::Fun(a, b)))?);
+            }
+            CopyVarTask::BuildCon { module, name, arity } => {
+                let split = results
+                    .len()
+                    .checked_sub(arity)
+                    .ok_or_else(copy_var_underflow)?;
+                let args = results.split_off(split);
+                results.push(uf.fresh(Content::Structure(FlatType::Con { module, name, args }))?);
+            }
+            CopyVarTask::BuildTuple { arity } => {
+                let split = results
+                    .len()
+                    .checked_sub(arity)
+                    .ok_or_else(copy_var_underflow)?;
+                let elems = results.split_off(split);
+                results.push(uf.fresh(Content::Structure(FlatType::Tuple(elems)))?);
+            }
+            CopyVarTask::BuildRecord { names } => {
+                let Some(ext) = results.pop() else {
+                    return Err(copy_var_underflow());
+                };
+                let split = results
+                    .len()
+                    .checked_sub(names.len())
+                    .ok_or_else(copy_var_underflow)?;
+                let vals = results.split_off(split);
+                let fields: BTreeMap<Symbol, VarId> = names.into_iter().zip(vals).collect();
+                results.push(uf.fresh(Content::Structure(FlatType::Record(fields, ext)))?);
+            }
+        }
+    }
+
+    match results.pop() {
+        Some(v) if results.is_empty() => Ok(v),
+        _ => Err(copy_var_underflow()),
+    }
+}
+
+/// The work-stack invariant was violated (only reachable via a compiler bug in
+/// `copy_var` itself, never from input).
+fn copy_var_underflow() -> Diagnostic {
+    Diagnostic::CompilerBug {
+        where_: STAGE,
+        detail: "copy_var result stack underflow".to_owned(),
+    }
+}
+
+/// Every `Flex`-content root structurally reachable from `root` (through
+/// `Structure` children only — `Flex`/`Rigid`/`Super` are leaves), collected
+/// as UF representatives. The traversal shape mirrors `unify::occurs`
+/// exactly (iterative, explicit stack, budget-ticked per node), just
+/// collecting instead of comparing against a target.
+///
+/// Used by `promote_untyped_boundaries` to find an untyped binding's
+/// generalization *candidates* — the actual quantified set additionally
+/// excludes any root still reachable from a pending deferred obligation (see
+/// callers).
+fn reachable_flex_roots(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    root: VarId,
+) -> DResult<std::collections::BTreeSet<VarId>> {
+    let mut seen: std::collections::BTreeSet<VarId> = std::collections::BTreeSet::new();
+    let mut flex: std::collections::BTreeSet<VarId> = std::collections::BTreeSet::new();
+    let mut stack = vec![root];
+    while let Some(v) = stack.pop() {
+        budget.tick()?;
+        let here = uf.find(v)?;
+        if !seen.insert(here) {
+            continue;
+        }
+        match uf.content(here)? {
+            Content::Flex => {
+                flex.insert(here);
+            }
+            Content::Rigid
+            | Content::Super { .. }
+            | Content::Structure(FlatType::Unit | FlatType::EmptyRecord) => {}
+            Content::Structure(FlatType::Fun(a, b)) => {
+                stack.push(a);
+                stack.push(b);
+            }
+            Content::Structure(FlatType::Con { args, .. }) => {
+                for a in args {
+                    stack.push(a);
+                }
+            }
+            Content::Structure(FlatType::Tuple(elems)) => {
+                for e in elems {
+                    stack.push(e);
+                }
+            }
+            Content::Structure(FlatType::Record(fields, ext)) => {
+                for v in fields.values() {
+                    stack.push(*v);
+                }
+                stack.push(ext);
+            }
+        }
+    }
+    Ok(flex)
+}
+
+/// Mint a fresh, source-collision-free type-variable name (`"a"`, `"b"`, …,
+/// `"z"`, `"a1"`, …) for a generalized untyped-def scheme — never `"any"`
+/// (AUD-13's wildcard sentinel is reserved). `next` is the caller's shared
+/// naming cursor, threaded across every quantified var of every scheme in one
+/// `promote_untyped_boundaries` run so names stay distinct program-wide (not
+/// required for soundness — each scheme's names only need to be distinct
+/// *within* that scheme — but keeps `SKY_DEBUG_UNTYPED` dumps unambiguous).
+fn mint_synth_symbol(interner: &mut Interner, next: &mut u32) -> DResult<Symbol> {
+    loop {
+        let candidate = crate::doc::letters(*next);
+        *next = next.saturating_add(1);
+        if !interner.contains(&candidate) {
+            return interner.intern(&candidate);
+        }
+    }
+}
+
+/// Boundary Scheme Promotion — discharge every cross-module untyped-binding
+/// reference and generalize every untyped def at its home module's boundary.
+///
+/// Runs once, over the WHOLE linked program, between `solve_attributed` and
+/// `resolve_deferred` (see `docs/architecture/class1-inference-fix-spec-2026-07-09.md`'s
+/// algorithm section). Walks `module_order` (dependency-first topo order): for
+/// each module, first discharges its own OUTGOING pending instantiations
+/// (against schemes already computed for modules it depends on — always
+/// present, since those modules precede it in `module_order`), then
+/// generalizes its OWN untyped defs (recording their schemes for later
+/// modules to discharge against).
+///
+/// Returns the generalized scheme for every `(home, name)` key `untyped`
+/// covers (an entry with an empty `quantified` map means the def stayed
+/// fully monomorphic — no boundary-free residual `Flex` root). The caller
+/// folds this into `SolvedTypes::untyped_type_params` / `poly_var_map`.
+///
+/// # Errors
+/// A cross-module reference's instantiated scheme failing to unify against
+/// local call-site structure is a genuine `SKY-T0001`, blamed on the
+/// referencing (`use_home`) module. A union-find invariant violation is a
+/// `Diagnostic::CompilerBug` with an empty home.
+pub fn promote_untyped_boundaries(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &mut Interner,
+    generated: &Generated,
+) -> Result<UntypedSchemes, (Diagnostic, Vec<Symbol>)> {
+    macro_rules! lift {
+        ($e:expr) => {
+            $e.map_err(|d: Diagnostic| (d, Vec::<Symbol>::new()))?
+        };
+    }
+
+    // Roots still reachable from a still-pending deferred obligation are
+    // excluded from quantification — the existing "single concrete use" gate
+    // fallback for these defs stays intact (test matrix item 6; D2/D3-style
+    // conservative under-acceptance). Computed once, globally: every one of
+    // these obligations is still pending at this point in the pipeline (this
+    // pass runs BEFORE `resolve_deferred`), regardless of which module owns
+    // which untyped def.
+    let mut obligation_roots: std::collections::BTreeSet<VarId> = std::collections::BTreeSet::new();
+    for fa in &generated.field_accesses {
+        obligation_roots.insert(lift!(uf.find(fa.record)));
+    }
+    for ru in &generated.record_updates {
+        obligation_roots.insert(lift!(uf.find(ru.record)));
+    }
+    for rw in &generated.route_witness_checks {
+        obligation_roots.insert(lift!(uf.find(rw.builder_var)));
+        obligation_roots.insert(lift!(uf.find(rw.page_var)));
+    }
+    for rl in &generated.routed_live_checks {
+        obligation_roots.insert(lift!(uf.find(rl.model_var)));
+        obligation_roots.insert(lift!(uf.find(rl.not_found_var)));
+    }
+
+    let mut schemes: UntypedSchemes = BTreeMap::new();
+    // Shared naming cursor across every scheme in this run — see
+    // `mint_synth_symbol`'s doc comment for why this is a convenience, not a
+    // soundness requirement.
+    let mut synth_next: u32 = 0;
+
+    for home in &generated.module_order {
+        // (a) Discharge this module's OUTGOING cross-module references.
+        for pi in generated.pending_instantiations.iter().filter(|pi| &pi.use_home == home) {
+            let Some(scheme) = schemes.get(&pi.source) else {
+                // module_order is dependency-first, and a `PendingInstantiation`
+                // only exists for a key already present in `untyped` — so the
+                // source module always precedes `use_home` and always has a
+                // scheme by now. Unreachable except via a link-order invariant
+                // break; fail closed rather than panic.
+                return Err((
+                    Diagnostic::CompilerBug {
+                        where_: "sky_types::promote_untyped_boundaries",
+                        detail: "cross-module untyped reference discharged before its source \
+                                 module was generalized"
+                            .to_owned(),
+                    },
+                    pi.use_home.clone(),
+                ));
+            };
+            let root = scheme.root;
+            let quantified = scheme.quantified.clone();
+            let mut fresh_map = BTreeMap::new();
+            let inst = copy_var(uf, budget, root, &quantified, &mut fresh_map)
+                .map_err(|d| (d, pi.use_home.clone()))?;
+            unify(uf, budget, interner, pi.span, inst, pi.placeholder)
+                .map_err(|d| (d, pi.use_home.clone()))?;
+        }
+
+        // (b) Generalize this module's own untyped defs.
+        for (key, &shared) in generated.untyped.iter().filter(|(k, _)| &k.0 == home) {
+            let root = lift!(uf.find(shared));
+            let candidates = reachable_flex_roots(uf, budget, root).map_err(|d| (d, key.0.clone()))?;
+            let mut quantified = BTreeMap::new();
+            for r in candidates {
+                if obligation_roots.contains(&r) {
+                    continue;
+                }
+                let sym = lift!(mint_synth_symbol(interner, &mut synth_next));
+                quantified.insert(r, sym);
+            }
+            schemes.insert(key.clone(), UntypedScheme { root, quantified });
+        }
+    }
+
+    Ok(schemes)
+}
+
 /// A single step of the iterative [`zonk`] work stack.
 ///
 /// `Visit` reads one union-find node and pushes either a leaf result or the
@@ -5399,6 +5866,7 @@ impl<'a> Builder<'a> {
             typed_rigids: Vec::new(),
             scheme_apps: Vec::new(),
             super_vars: Vec::new(),
+            pending_instantiations: Vec::new(),
         }
     }
 }
