@@ -482,19 +482,11 @@ fn emitted_bound_satisfied(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bo
                     && args.len() == 1
                     && interner.resolve(*name) == Some("List")
         );
-    // #90 T3: the `andMap` curried-payload obligation. Deliberately SHALLOW —
-    // only the HEAD is checked (`Ty::Fun` directly, not nested anywhere) —
-    // unlike `ty_is_equatable`'s deep walk: `Result e (List (Int -> Int))` is
-    // a different, already-gated hazard (collections of functions), not
-    // `andMap`'s arity restriction, which only cares whether the payload
-    // RESULT `b` itself is an arrow.
-    let not_curried_ok = !matches!(ty, Ty::Fun(_, _));
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
         && (!bounds.has_eq() || ty_is_equatable(ty))
         && (!bounds.has_comparable_key() || key_ok)
         && (!bounds.has_append() || appendable_ok)
-        && (!bounds.has_and_map_payload() || not_curried_ok)
 }
 
 /// Whether a resolved concrete type satisfies super-type obligations `bounds`
@@ -534,9 +526,6 @@ pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) 
         // since every non-function type derives `SkyStringify`.
         && (!bounds.has_show() || ty_is_equatable(ty))
         && (!bounds.has_append() || appendable_ok)
-        // #90 T3: see `emitted_bound_satisfied`'s matching comment — same
-        // shallow head-only check, reused verbatim for the concrete-pin path.
-        && (!bounds.has_and_map_payload() || !matches!(ty, Ty::Fun(_, _)))
 }
 
 /// Whether a resolved type derives Rust's `PartialEq`: true for every fully
@@ -579,14 +568,6 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
     }
     if bounds.has_append() {
         classes.push("Appendable");
-    }
-    // #90 T3: the `andMap` curried-payload obligation. Named distinctly from
-    // the other classes (it is not a Sky super-type a user annotates against
-    // — it is an internal arity restriction on `Maybe.andMap` /
-    // `Result.andMap`'s payload-result slot), so the message reads "single-
-    // argument function" rather than a generic trait name.
-    if bounds.has_and_map_payload() {
-        classes.push("single-argument function (andMap payload)");
     }
     let class = if classes.is_empty() {
         "Equatable".to_owned()
