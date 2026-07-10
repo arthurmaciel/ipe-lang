@@ -1,0 +1,26 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- #90 Stage 1 residual gate, revert-incident Bug 2 regression:
+-- `Result.andMap`'s partial application is first bound to a `let`
+-- (`g = Result.andMap (Ok 1)`), splitting the 2-arg application across a
+-- `let`-binding (an under-saturated `VarKernel` call) and a LATER
+-- `Expr_::Apply` on a plain local `Var(g)` (`g (Ok add3)`). The original
+-- gate only pattern-matched the direct 2-arg spelling and the
+-- pipe-desugared curried-call spelling — this `let`-bound alias shape
+-- reached `cargo build` as E0277 (expected a `FnOnce` closure, found a
+-- 3-argument `dyn Fn`) instead of a clean SKY-L0114. Must stay rejected
+-- with SKY-L0114 under EVERY syntactic spelling of the aliasing, never
+-- silently accepted.
+add3 : Int -> Int -> Int -> Int
+add3 a b c =
+    a + b + c
+
+main =
+    let
+        g = Result.andMap (Ok 1)
+        r = g (Ok add3)
+    in
+    case r of
+        Ok _ -> println "ok"
+        Err _ -> println "err"
