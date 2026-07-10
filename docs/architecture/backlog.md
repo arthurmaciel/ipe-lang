@@ -91,7 +91,7 @@ Wrinkle for all lanes: the shared `~/.cache/sky-rust-target` suffers cross-workt
 - **#159 ✅ LANDED 2026-07-09** — `docs/divergences-from-sky.md` §A15/#94/#95 corrected to reflect landed status under `SKY-L0125` (was stale, claiming "designed, not yet committed").
 - **#105** Std.Css hardening (defence-in-depth): optional @import/expression gating on `raw`/`keyframes` bodies + reject CSS-hex-escaped values in `safeValue`.
 - **#129** Runtime audit: `spawn_blocking` for CPU-heavy/blocking kernels (bcrypt/zstd/file) — reactor-starvation guard.
-- **#122** Cli.program view printer: missing separator (`lines: 0lines: 1`) — cosmetic runtime nit.
+- **#122 ✅ LANDED 2026-07-09** — Cli.program view printer missing separator (`lines: 0lines: 1`) fixed: `runtime/src/sky_runtime/tea.rs`'s `cli_program` now writes a trailing `\n` at every render call-site (initial + loop-body) instead of relying on one unconditional `\n` after the event loop exits. New E2E golden `tests/golden/i122_cli_program_view_separator` + `crates/skyc/tests/golden_i122_cli_program_separator.rs` pipe 2 stdin lines through the real TEA loop and assert `"lines: 0\nlines: 1\nlines: 2\n"`; existing `golden_i111_cli_program_seal` unaffected (single-render case, byte-identical output).
 - **#53** Backlog: emit backend via typed token AST instead of String concatenation.
 
 ## Tier-3 — macro roadmap (post-parity; ORDER: Elm-core coverage → salsa → LSP → watch → departures)
