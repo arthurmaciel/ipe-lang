@@ -7130,6 +7130,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ServerMethod
                 // `Middleware.withLogging : Handler -> Handler`
                 | KernelFn::MiddlewareWithLogging
+                // `Middleware.withCsrf : Handler -> Handler`
+                | KernelFn::MiddlewareWithCsrf
                 // ── Error message constructors (#86) : `String -> Error` ──────
                 | KernelFn::ErrorUnexpected
                 | KernelFn::ErrorInvalidInput
@@ -8679,6 +8681,7 @@ impl<'a> Lowerer<'a> {
                     ("Middleware", "withRateLimit") => {
                         Ok(Callee::Kernel(KernelFn::MiddlewareWithRateLimit))
                     }
+                    ("Middleware", "withCsrf") => Ok(Callee::Kernel(KernelFn::MiddlewareWithCsrf)),
                     ("RateLimit", "allow") => Ok(Callee::Kernel(KernelFn::RateLimitAllow)),
                     // ── M7: Std.Ui / Std.Html render kernels ─────────────────
                     ("Ui", "layout") => Ok(Callee::Kernel(KernelFn::UiLayout)),

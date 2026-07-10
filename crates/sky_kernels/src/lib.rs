@@ -659,6 +659,7 @@ pub enum StdlibKernel {
     MiddlewareWithLogging,
     MiddlewareWithBasicAuth,
     MiddlewareWithRateLimit,
+    MiddlewareWithCsrf,
     RateLimitAllow,
     // ── M7: Std.Ui / Std.Html render kernels ─────────────────────────────────
     UiLayout,
@@ -1800,6 +1801,9 @@ impl StdlibKernel {
                 Server,
                 "middleware_with_rate_limit",
             ),
+            Self::MiddlewareWithCsrf => {
+                d("Middleware", "withCsrf", 1, Server, "middleware_with_csrf")
+            }
             Self::RateLimitAllow => d("RateLimit", "allow", 2, Server, "rate_limit_allow"),
             // ── M7: Std.Ui / Std.Html render kernels ─────────────────────────
             Self::UiLayout => d("Ui", "layout", 2, Ui, "ui_layout"),
@@ -2735,6 +2739,7 @@ impl StdlibKernel {
         Self::MiddlewareWithLogging,
         Self::MiddlewareWithBasicAuth,
         Self::MiddlewareWithRateLimit,
+        Self::MiddlewareWithCsrf,
         Self::RateLimitAllow,
         // M7: Ui / Html render kernels
         Self::UiLayout,
@@ -3241,6 +3246,7 @@ impl StdlibKernel {
                 | Self::MiddlewareWithLogging
                 | Self::MiddlewareWithBasicAuth
                 | Self::MiddlewareWithRateLimit
+                | Self::MiddlewareWithCsrf
                 | Self::RateLimitAllow
                 // ── #111: Sky.Http.Server.Stream (server-side) ───────────────────
                 | Self::StreamStream
