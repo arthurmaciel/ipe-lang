@@ -557,13 +557,22 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 /// Build the db-enabled `Cargo.toml` from the base M0 manifest by:
 ///
 /// 1. Adding `"db"` to the `default` feature list.
-/// 2. Appending the `sqlx` dependency line, with the sqlx driver feature
-///    (`"sqlite"` / `"postgres"`) selected by `driver` — the structural fix
-///    that makes a Postgres-driver program's sqlx dependency actually enable
-///    Postgres support (a `driver = "postgres"` build with only the
-///    `"sqlite"` sqlx feature fails to compile `sqlx::postgres::PgPool`,
-///    which is exactly the "Postgres driver structurally unreachable" gap
-///    this closes).
+/// 2. Appending the `sqlx` dependency line, with `"sqlite"` ALWAYS enabled
+///    plus `"postgres"` ADDITIONALLY when `driver` is Postgres — the
+///    structural fix that makes a Postgres-driver program's sqlx dependency
+///    actually enable Postgres support (a `driver = "postgres"` build with
+///    only the `"sqlite"` sqlx feature fails to compile
+///    `sqlx::postgres::PgPool`, which is exactly the "Postgres driver
+///    structurally unreachable" gap this closes).
+///
+///    `"sqlite"` can never be dropped regardless of `driver`: the always-
+///    emitted `telemetry_spill`/`live::hub`/`live::store` runtime modules
+///    hardcode `SqlitePool` for their local spill/session persistence
+///    (independent of the app's `[database]` driver choice), so an
+///    exclusive sqlite-vs-postgres feature selection made every Postgres
+///    build fail `cargo build` downstream of `db_cargo_toml` even though
+///    `skyc` itself exited 0 — an exit-0-then-cargo-fail SEAL violation.
+///    Additive, not exclusive, is the only sound selection here.
 ///
 /// String surgery rather than a second static file: the manifest content is
 /// small and the two edits are unambiguous anchors.
@@ -574,13 +583,14 @@ fn db_cargo_toml(driver: crate::DbDriver) -> DResult<String> {
     // Anchoring on `[profile.dev]` is stable (always present in the template).
     const PROFILE_ANCHOR: &str = "[profile.dev]";
     // Version + crate name sourced from the SSOT (`crate_specs`); the feature
-    // list stays inline (it depends on usage AND driver).
-    let sqlx_driver_feature = match driver {
-        crate::DbDriver::Sqlite => "sqlite",
-        crate::DbDriver::Postgres => "postgres",
+    // list stays inline (it depends on usage AND driver). `"sqlite"` is
+    // unconditional — see the doc comment above for why.
+    let sqlx_features = match driver {
+        crate::DbDriver::Sqlite => r#""sqlite""#.to_owned(),
+        crate::DbDriver::Postgres => r#""sqlite", "postgres""#.to_owned(),
     };
     let sqlx_line = format!(
-        "{} = {{ version = \"{}\", features = [\"runtime-tokio-rustls\", {sqlx_driver_feature:?}] }}\n\n",
+        "{} = {{ version = \"{}\", features = [\"runtime-tokio-rustls\", {sqlx_features}] }}\n\n",
         crate_specs::SQLX.name,
         crate_specs::SQLX.version,
     );
@@ -1317,22 +1327,24 @@ mod tests {
 
     /// The actual structural fix under test: `driver = "postgres"` must
     /// produce a `Cargo.toml` whose sqlx dependency enables the `"postgres"`
-    /// sqlx feature (not `"sqlite"`) — closing the "Postgres driver
-    /// structurally unreachable" gap (a `driver = "postgres"` build with only
-    /// the sqlite sqlx feature fails to compile `sqlx::postgres::PgPool` at
-    /// all).
+    /// sqlx feature — closing the "Postgres driver structurally unreachable"
+    /// gap (a `driver = "postgres"` build with only the sqlite sqlx feature
+    /// fails to compile `sqlx::postgres::PgPool` at all).
+    ///
+    /// `"sqlite"` MUST stay enabled too — this is additive, not exclusive.
+    /// An earlier version of this fix dropped `"sqlite"` when the driver was
+    /// Postgres; that produced an exit-0-then-cargo-fail SEAL violation
+    /// (found by independent review, 2026-07-10) because the always-emitted
+    /// `telemetry_spill`/`live::hub`/`live::store` runtime modules hardcode
+    /// `SqlitePool` for their local spill/session persistence, independent
+    /// of the app's `[database]` driver choice.
     #[test]
     fn db_cargo_toml_postgres_driver_enables_postgres_sqlx_feature() {
         let out = db_cargo_toml(DbDriver::Postgres).expect("db_cargo_toml(Postgres) must succeed");
         assert!(
-            out.contains(r#"features = ["runtime-tokio-rustls", "postgres"]"#),
-            "postgres driver must enable the postgres sqlx feature: {out}"
-        );
-        assert!(
-            !out.contains(r#""sqlite"]"#),
-            "postgres driver must not ALSO enable sqlite (would be a needless \
-             extra compile-time dependency, not a correctness bug, but the \
-             point of the driver selection is to pick exactly one): {out}"
+            out.contains(r#"features = ["runtime-tokio-rustls", "sqlite", "postgres"]"#),
+            "postgres driver must enable both the sqlite sqlx feature (always \
+             needed by telemetry_spill/hub/store) and the postgres feature: {out}"
         );
     }
 
