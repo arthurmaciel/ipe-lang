@@ -1,0 +1,44 @@
+module Main exposing (main)
+
+-- #122 regression: Cli.program must print each `view` render on its own
+-- line. Two `onLine`-triggered updates force two loop-body renders; without
+-- the fix stdout would read "lines: 0lines: 1lines: 2" with no separators.
+
+import Std.Cli as Cli
+
+type Msg
+    = LineReceived String
+
+type alias Model =
+    { count : Int }
+
+init : () -> ( Model, Cmd Msg )
+init _ =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        LineReceived _ ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+view : Model -> String
+view model =
+    "lines: " ++ String.fromInt model.count
+
+subscriptions : Model -> Sub Msg
+subscriptions _ =
+    Sub.none
+
+onLine : String -> Msg
+onLine l =
+    LineReceived l
+
+main =
+    Cli.program
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , onLine = onLine
+        }
