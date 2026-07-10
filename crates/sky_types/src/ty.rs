@@ -36,8 +36,33 @@ use crate::unionfind::VarId;
 /// A resolved type (post-solve, immutable). M0 subset.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Ty {
-    /// An unresolved type variable that survived solving (e.g. an unused
-    /// polymorphic kernel argument). Carries the representative's arena id.
+    /// A type variable. Carries a raw `u32` from ONE OF TWO DISJOINT id
+    /// spaces (AUD-13):
+    ///
+    /// 1. **Annotation-symbol space** — [`sky_intern::Symbol::as_raw`] of a
+    ///    source-level type-variable name (`a`, `msg`, `any`, a kernel
+    ///    scheme's `tv_a`/`tv_e` placeholder, a declared ADT type param).
+    ///    Every `Ty` built from a canonicalized annotation
+    ///    ([`crate::ty::from_canon`], ctor schemes, kernel schemes) lives
+    ///    here. [`crate::constrain::Builder::instantiate_in`]'s wildcard-
+    ///    `"any"` detection is sound ONLY for ids from this space — it
+    ///    resolves the raw through the interner and compares the string.
+    /// 2. **Solver-representative space** — a [`crate::unionfind::VarId`]
+    ///    (itself a bare `u32` alias, see `unionfind.rs`) surviving past
+    ///    [`crate::constrain::zonk`]. These ids are tagged with
+    ///    [`SOLVER_VAR_TAG`] before being stored here specifically so they
+    ///    can NEVER numerically collide with an annotation-symbol raw and
+    ///    misfire the wildcard-`any` check — both spaces are independent
+    ///    small sequential counters starting at 0, so an untagged collision
+    ///    is not just theoretical, it is a near-certainty on any
+    ///    sufficiently large compiled program.
+    ///
+    /// A `Ty` containing a tagged (solver-space) `Var` must never be fed to
+    /// `instantiate_in`/`instantiate_tracked`/`instantiate_rigid` — those
+    /// only handle annotation-space ids. No current consumer needs to
+    /// recover the underlying [`crate::unionfind::VarId`] from a tagged raw
+    /// (`crate::doc::ty_to_doc`'s `VarNamer` treats it as an opaque key);
+    /// mask off [`SOLVER_VAR_TAG`] if one ever does.
     Var(u32),
     /// A function `arg -> result`.
     Fun(Box<Self>, Box<Self>),
@@ -62,6 +87,33 @@ pub enum Ty {
     /// set exact) from open records (kernel cfg records that absorb optional
     /// extra fields via a row variable).
     Record(BTreeMap<Symbol, Self>, RowTail),
+}
+
+/// Reserved high bit marking a [`Ty::Var`] raw as solver-representative space
+/// (a tagged [`VarId`]) rather than annotation-symbol space (a
+/// [`sky_intern::Symbol`] raw). See [`Ty::Var`]'s doc comment (AUD-13) for the
+/// full rationale. Both id spaces are independent counters starting at 0 and
+/// allocate nowhere near 2^31 entries in any real compiled program, so this
+/// bit can never collide with a genuine id from either space.
+const SOLVER_VAR_TAG: u32 = 1 << 31;
+
+/// Tag a solver [`VarId`] (from [`crate::constrain::zonk`]) for storage in a
+/// [`Ty::Var`], marking it as solver-representative space so
+/// `instantiate_in`'s wildcard-`"any"` check cannot misinterpret it as an
+/// annotation symbol.
+#[must_use]
+pub const fn tag_solver_var(id: VarId) -> u32 {
+    id | SOLVER_VAR_TAG
+}
+
+/// True iff a [`Ty::Var`] raw is solver-representative space (tagged by
+/// [`tag_solver_var`]) rather than an annotation-symbol raw. Callers that
+/// resolve a `Ty::Var` raw through the interner (e.g. the wildcard-`"any"`
+/// check) MUST skip that resolution when this returns true — a tagged raw is
+/// structurally guaranteed to never be a real interned symbol.
+#[must_use]
+pub const fn is_solver_var(raw: u32) -> bool {
+    raw & SOLVER_VAR_TAG != 0
 }
 
 /// The tail of a record type's row variable — whether the record is closed
@@ -345,5 +397,33 @@ pub fn from_canon(t: &canon::Type) -> Ty {
                 .collect(),
             RowTail::Closed,
         ),
+    }
+}
+
+#[cfg(test)]
+mod aud13_tag_tests {
+    use super::{is_solver_var, tag_solver_var};
+
+    #[test]
+    fn tag_is_detectable_and_preserves_the_id_bits() {
+        for raw in [0u32, 1, 42, 1_000_000, u32::MAX >> 1] {
+            let tagged = tag_solver_var(raw);
+            assert!(is_solver_var(tagged), "tagged raw must report as solver-space");
+            assert_eq!(
+                tagged & !(1u32 << 31),
+                raw,
+                "tagging must only set the reserved bit, never touch the id's own bits"
+            );
+        }
+    }
+
+    #[test]
+    fn untagged_raw_never_reports_as_solver_var() {
+        for raw in [0u32, 1, 42, 1_000_000] {
+            assert!(
+                !is_solver_var(raw),
+                "a plain annotation-symbol raw must never look tagged"
+            );
+        }
     }
 }
