@@ -10239,6 +10239,116 @@ mod tests {
 
     use super::{BuiltinCtors, Lowerer, SymbolPools};
 
+    /// Intern every constructor / ADT-payload name [`Lowerer::new`] needs to
+    /// seed `enum_variants` (`Maybe`/`Result`/`SqlValue`/`SqlField`/`Order`/
+    /// `Error`/`ErrorKind` and their payload variants), and return the
+    /// resulting [`BuiltinCtors`].
+    ///
+    /// Shared by every test in this module that needs a minimal-but-valid
+    /// [`Lowerer`] — [`decl_equiv_legacy_match`] and
+    /// [`callee_arity_matches_decl_arity`] both call this rather than
+    /// hand-rolling their own copy of the ~35-symbol interning block (see
+    /// `docs/architecture/class3-kernel-registry-fix-spec-2026-07-09.md`
+    /// Item 3, Step 1: "Reuse the exact `BuiltinCtors` construction ...
+    /// verbatim — do not hand-roll a second copy").
+    fn build_test_builtin_ctors(interner: &mut Interner) -> BuiltinCtors {
+        // BuiltinCtor names (required by Lowerer::new to seed enum_variants).
+        let maybe = interner.intern("Maybe").unwrap();
+        let result = interner.intern("Result").unwrap();
+        let just = interner.intern("Just").unwrap();
+        let nothing = interner.intern("Nothing").unwrap();
+        let ok = interner.intern("Ok").unwrap();
+        let err = interner.intern("Err").unwrap();
+        let sqlvalue = interner.intern("SqlValue").unwrap();
+        let sqlfield = interner.intern("SqlField").unwrap();
+        let sql_string = interner.intern("SqlString").unwrap();
+        let sql_int = interner.intern("SqlInt").unwrap();
+        let sql_float = interner.intern("SqlFloat").unwrap();
+        let sql_bool = interner.intern("SqlBool").unwrap();
+        let sql_bytes = interner.intern("SqlBytes").unwrap();
+        let sql_time = interner.intern("SqlTime").unwrap();
+        let sql_decimal = interner.intern("SqlDecimal").unwrap();
+        let sql_money = interner.intern("SqlMoney").unwrap();
+        let sql_null = interner.intern("SqlNull").unwrap();
+        let set_field = interner.intern("SetField").unwrap();
+        let omit_field = interner.intern("OmitField").unwrap();
+        // ── Order ADT (#123) ─────────────────────────────────────────────────
+        let order = interner.intern("Order").unwrap();
+        let lt = interner.intern("LT").unwrap();
+        let eq = interner.intern("EQ").unwrap();
+        let gt = interner.intern("GT").unwrap();
+        // ── Error / ErrorKind ADTs (E-12, #152) ─────────────────────────────
+        let error = interner.intern("Error").unwrap();
+        let errorkind = interner.intern("ErrorKind").unwrap();
+        let ek_io = interner.intern("Io").unwrap();
+        let ek_network = interner.intern("Network").unwrap();
+        let ek_ffi = interner.intern("Ffi").unwrap();
+        let ek_decode = interner.intern("Decode").unwrap();
+        let ek_timeout = interner.intern("Timeout").unwrap();
+        let ek_not_found = interner.intern("NotFound").unwrap();
+        let ek_permission_denied = interner.intern("PermissionDenied").unwrap();
+        let ek_invalid_input = interner.intern("InvalidInput").unwrap();
+        let ek_conflict = interner.intern("Conflict").unwrap();
+        let ek_unavailable = interner.intern("Unavailable").unwrap();
+        let ek_unexpected = interner.intern("Unexpected").unwrap();
+
+        BuiltinCtors {
+            maybe,
+            result,
+            just,
+            nothing,
+            ok,
+            err,
+            sqlvalue,
+            sqlfield,
+            sql_string,
+            sql_int,
+            sql_float,
+            sql_bool,
+            sql_bytes,
+            sql_time,
+            sql_decimal,
+            sql_money,
+            sql_null,
+            set_field,
+            omit_field,
+            // ── Order ADT (#123) ─────────────────────────────────────────────
+            order,
+            lt,
+            eq,
+            gt,
+            // ── Error / ErrorKind (E-12, #152) ───────────────────────────────
+            error,
+            errorkind,
+            ek_io,
+            ek_network,
+            ek_ffi,
+            ek_decode,
+            ek_timeout,
+            ek_not_found,
+            ek_permission_denied,
+            ek_invalid_input,
+            ek_conflict,
+            ek_unavailable,
+            ek_unexpected,
+        }
+    }
+
+    /// A minimal, empty [`SolvedTypes`] — every field this module's tests
+    /// need is populated at [`Lowerer`] construction time from `module`, not
+    /// from `types`; the tests below only exercise paths that don't consult
+    /// solved region/env types.
+    fn empty_solved_types() -> SolvedTypes {
+        SolvedTypes {
+            env: BTreeMap::new(),
+            regions: BTreeMap::new(),
+            bounds: BTreeMap::new(),
+            warnings: Vec::new(),
+            poly_var_map: BTreeMap::new(),
+            untyped_type_params: BTreeMap::new(),
+        }
+    }
+
     // ── Registry-only allowlist ──────────────────────────────────────────────
     //
     // These variants appear in `KernelFn::ALL` (and are therefore present in
@@ -10295,44 +10405,7 @@ mod tests {
         let mut interner = Interner::new();
 
         // BuiltinCtor names (required by Lowerer::new to seed enum_variants).
-        let maybe = interner.intern("Maybe").unwrap();
-        let result = interner.intern("Result").unwrap();
-        let just = interner.intern("Just").unwrap();
-        let nothing = interner.intern("Nothing").unwrap();
-        let ok = interner.intern("Ok").unwrap();
-        let err = interner.intern("Err").unwrap();
-        let sqlvalue = interner.intern("SqlValue").unwrap();
-        let sqlfield = interner.intern("SqlField").unwrap();
-        let sql_string = interner.intern("SqlString").unwrap();
-        let sql_int = interner.intern("SqlInt").unwrap();
-        let sql_float = interner.intern("SqlFloat").unwrap();
-        let sql_bool = interner.intern("SqlBool").unwrap();
-        let sql_bytes = interner.intern("SqlBytes").unwrap();
-        let sql_time = interner.intern("SqlTime").unwrap();
-        let sql_decimal = interner.intern("SqlDecimal").unwrap();
-        let sql_money = interner.intern("SqlMoney").unwrap();
-        let sql_null = interner.intern("SqlNull").unwrap();
-        let set_field = interner.intern("SetField").unwrap();
-        let omit_field = interner.intern("OmitField").unwrap();
-        // ── Order ADT (#123) ─────────────────────────────────────────────────
-        let order = interner.intern("Order").unwrap();
-        let lt = interner.intern("LT").unwrap();
-        let eq = interner.intern("EQ").unwrap();
-        let gt = interner.intern("GT").unwrap();
-        // ── Error / ErrorKind ADTs (E-12, #152) ─────────────────────────────
-        let error = interner.intern("Error").unwrap();
-        let errorkind = interner.intern("ErrorKind").unwrap();
-        let ek_io = interner.intern("Io").unwrap();
-        let ek_network = interner.intern("Network").unwrap();
-        let ek_ffi = interner.intern("Ffi").unwrap();
-        let ek_decode = interner.intern("Decode").unwrap();
-        let ek_timeout = interner.intern("Timeout").unwrap();
-        let ek_not_found = interner.intern("NotFound").unwrap();
-        let ek_permission_denied = interner.intern("PermissionDenied").unwrap();
-        let ek_invalid_input = interner.intern("InvalidInput").unwrap();
-        let ek_conflict = interner.intern("Conflict").unwrap();
-        let ek_unavailable = interner.intern("Unavailable").unwrap();
-        let ek_unexpected = interner.intern("Unexpected").unwrap();
+        let builtins = build_test_builtin_ctors(&mut interner);
 
         // Pre-intern all kernel (qualifier, name) strings in ALL order.
         // Must happen before Lowerer borrows interner immutably.
@@ -10346,59 +10419,12 @@ mod tests {
             })
             .collect();
 
-        let builtins = BuiltinCtors {
-            maybe,
-            result,
-            just,
-            nothing,
-            ok,
-            err,
-            sqlvalue,
-            sqlfield,
-            sql_string,
-            sql_int,
-            sql_float,
-            sql_bool,
-            sql_bytes,
-            sql_time,
-            sql_decimal,
-            sql_money,
-            sql_null,
-            set_field,
-            omit_field,
-            // ── Order ADT (#123) ─────────────────────────────────────────────
-            order,
-            lt,
-            eq,
-            gt,
-            // ── Error / ErrorKind (E-12, #152) ───────────────────────────────
-            error,
-            errorkind,
-            ek_io,
-            ek_network,
-            ek_ffi,
-            ek_decode,
-            ek_timeout,
-            ek_not_found,
-            ek_permission_denied,
-            ek_invalid_input,
-            ek_conflict,
-            ek_unavailable,
-            ek_unexpected,
-        };
         let module = canon::Module {
             name: vec![],
             unions: vec![],
             defs: vec![],
         };
-        let types = SolvedTypes {
-            env: BTreeMap::new(),
-            regions: BTreeMap::new(),
-            bounds: BTreeMap::new(),
-            warnings: Vec::new(),
-            poly_var_map: BTreeMap::new(),
-            untyped_type_params: BTreeMap::new(),
-        };
+        let types = empty_solved_types();
 
         // Immutable borrow of interner starts here — no more intern() calls.
         let lowerer = Lowerer::new(
@@ -10473,6 +10499,76 @@ mod tests {
             "variant accounting mismatch: \
              covered={covered} + allowlisted={allowlisted} + \
              skipped_internal={skipped_internal} != total={total}",
+        );
+    }
+
+    /// #70 — `callee_arity`'s hand-written per-variant arity buckets must
+    /// agree with `StdlibKernel::decl().arity` (the same enum, aliased as
+    /// `KernelFn`).
+    ///
+    /// `constrain_var_kernel` (`sky_types::constrain`) types a call against
+    /// `stdlib_scheme`'s arrow count, while `callee_arity` independently
+    /// governs how many arguments the IR actually saturates / eta-expands
+    /// against at lowering time (its call sites decide eta-expansion,
+    /// argument saturation, and TEA default-arg elision). Rust's
+    /// exhaustiveness checker guarantees `callee_arity`'s match covers every
+    /// `KernelFn` variant (a *missing* arm is a compile error), but nothing
+    /// previously caught a *wrong* arity value inside one of the buckets —
+    /// that silent drift is the exit-0-then-cargo-fail class `#70` names: a
+    /// program can pass `skyc`'s type-check against `decl().arity`'s arrow
+    /// count and still emit a Rust call with the wrong argument count,
+    /// caught only by `cargo`, never by `skyc`.
+    ///
+    /// This test is the mechanical cross-check: for every `KernelFn::ALL`
+    /// variant, `callee_arity(Callee::Kernel(sk))` must equal
+    /// `sk.decl().arity`. A future kernel addition (or a copy-paste slot
+    /// into the wrong arity bucket) that gets this wrong now fails
+    /// `cargo nextest run --workspace` immediately instead of shipping a
+    /// latent bug.
+    #[test]
+    fn callee_arity_matches_decl_arity() {
+        let mut interner = Interner::new();
+        let builtins = build_test_builtin_ctors(&mut interner);
+        let module = canon::Module {
+            name: vec![],
+            unions: vec![],
+            defs: vec![],
+        };
+        let types = empty_solved_types();
+
+        // `callee_arity`'s `Callee::Kernel` arm reads only the match subject
+        // (`self.interner`/`self.m` are consulted solely by the
+        // `Callee::Func` arm) — a minimal Lowerer built the same way
+        // `decl_equiv_legacy_match` builds one is a faithful fixture.
+        let lowerer = Lowerer::new(
+            &module,
+            &types,
+            &interner,
+            SymbolPools {
+                eta_params: vec![],
+                cap_params: vec![],
+                param_binders: vec![],
+                any_param_binders: vec![],
+            },
+            &builtins,
+        );
+
+        let mut mismatches = Vec::new();
+        for &sk in KernelFn::ALL {
+            let decl_arity = usize::from(sk.decl().arity);
+            match lowerer.callee_arity(&Callee::Kernel(sk)) {
+                Ok(computed) if computed == decl_arity => {}
+                Ok(computed) => mismatches.push(format!(
+                    "{sk:?}: decl().arity={decl_arity} but callee_arity={computed}"
+                )),
+                Err(e) => mismatches.push(format!("{sk:?}: callee_arity() errored: {e:?}")),
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "decl().arity / callee_arity drift found ({} entries):\n{}",
+            mismatches.len(),
+            mismatches.join("\n"),
         );
     }
 }
