@@ -265,6 +265,14 @@ struct Builtins {
     /// / `Ui.descNavigation` / …. Lowered to `IrType::UiPlain(UiPlain::Description)`
     /// via the `"Description"` arm in `sky_lower::ir_type_from_ty`.
     description: Symbol,
+    /// `"PseudoClass"` — Std.Ui nullary pseudo-class-selector type produced by
+    /// `Ui.hover` / `Ui.focus` / `Ui.focusVisible` / `Ui.active` / `Ui.disabled`
+    /// and consumed by `Ui.onPseudo`. Lowered to
+    /// `IrType::UiPlain(UiPlain::PseudoClass)` via the pre-existing
+    /// `"PseudoClass"` arm in `sky_lower::ir_type_from_ty` (the whole IR /
+    /// backend / runtime pipeline for this type already existed — only the
+    /// kernel-scheme wiring was missing).
+    pseudo_class: Symbol,
     /// `"Value"` — the opaque JSON value type (`Value = any` in Sky) produced /
     /// consumed by the `JsonEnc.*` encoders. Lowered to `IrType::Json`
     /// (`serde_json::Value`, re-exported as `JsonVal`) via the `"Value"` arm in
@@ -411,6 +419,11 @@ struct Builtins {
     shadow_f_spread: Symbol,
     /// `"color"` — shadow colour field.
     shadow_f_color: Symbol,
+    // ── Ui.image record field name symbols (#76) ──────────────────────────────
+    /// `"src"` — image source URL field of `Ui.image _ { src, description }`.
+    img_f_src: Symbol,
+    /// `"description"` — alt-text field of `Ui.image _ { src, description }`.
+    img_f_description: Symbol,
     // ── JWT builder opaque type constructor symbols (D-00) ────────────────────
     /// `"Claims"` — opaque JWT claims builder object.  Backed at runtime by
     /// `serde_json::Value` (a JSON object accumulator).  Used as the input /
@@ -515,6 +528,7 @@ impl Builtins {
             length: interner.intern("Length")?,
             color: interner.intern("Color")?,
             description: interner.intern("Description")?,
+            pseudo_class: interner.intern("PseudoClass")?,
             json_value: interner.intern("Value")?,
             lw_wrapper_attrs: interner.intern("wrapperAttrs")?,
             lw_root_attrs: interner.intern("rootAttrs")?,
@@ -582,6 +596,9 @@ impl Builtins {
             shadow_f_blur: interner.intern("blur")?,
             shadow_f_spread: interner.intern("spread")?,
             shadow_f_color: interner.intern("color")?,
+            // ── Ui.image record field names (#76) ────────────────────────────────
+            img_f_src: interner.intern("src")?,
+            img_f_description: interner.intern("description")?,
             // ── JWT builder opaque type constructor symbols (D-00) ──────────────
             jwt_claims: interner.intern("Claims")?,
             jwt_algorithm: interner.intern("Algorithm")?,
@@ -3247,6 +3264,15 @@ impl<'a> Builder<'a> {
             name: self.builtins.description,
             args: Vec::new(),
         };
+        // `pseudo_class()` — the opaque `PseudoClass` selector-tag type produced
+        // by `Ui.hover` / `Ui.focus` / `Ui.focusVisible` / `Ui.active` /
+        // `Ui.disabled` and consumed by `Ui.onPseudo`. Lowered to
+        // `IrType::UiPlain(UiPlain::PseudoClass)`.
+        let pseudo_class = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.pseudo_class,
+            args: Vec::new(),
+        };
         // `value()` — the opaque `Value = any` JSON node produced/consumed by the
         // `JsonEnc.*` encoders. Lowered to `IrType::Json` (`JsonVal`).
         let value = || Ty::Con {
@@ -4069,7 +4095,7 @@ impl<'a> Builder<'a> {
             K::UiOnClick | K::UiOnFocus | K::UiOnBlur | K::UiOnMouseOver | K::UiOnMouseOut => {
                 fun(var(0), attr(var(0)))
             }
-            K::UiOnInput | K::UiOnChange | K::UiOnKeyDown | K::UiOnKeyUp => {
+            K::UiOnInput | K::UiOnChange | K::UiOnKeyDown | K::UiOnKeyUp | K::UiOnFile => {
                 fun(fun(string(), var(0)), attr(var(0)))
             }
             K::UiOnBool => fun(fun(bool_ty(), var(0)), attr(var(0))),
@@ -4484,7 +4510,11 @@ impl<'a> Builder<'a> {
             | K::UiAlignBottom
             | K::UiPointer
             | K::UiClip
+            | K::UiClipX
+            | K::UiClipY
             | K::UiScrollbars
+            | K::UiScrollbarX
+            | K::UiScrollbarY
             | K::FontBold
             | K::FontItalic
             // #76 Tier 1 — nullary Attr
@@ -4553,8 +4583,31 @@ impl<'a> Builder<'a> {
             K::BackgroundImage => fun(string(), attr(var(0))),
             K::FontFamily => fun(string(), attr(var(0))),
 
+            // ── Background.linearGradient ────────────────────────────────────────
+            // linearGradient : Float -> List (Float, Color) -> Attribute msg
+            K::BackgroundLinearGradient => fun(
+                float(),
+                fun(list(Ty::Tuple(vec![float(), color()])), attr(var(0))),
+            ),
+
             // Std.Ui — two Int args (arity 2).
             K::UiPaddingXY => fun(int(), fun(int(), attr(var(0)))),
+
+            // ── Ui.paddingEach ──────────────────────────────────────────────────
+            // paddingEach : { top : Int, right : Int, bottom : Int, left : Int }
+            //             -> Attribute msg  (same record shape/symbols as
+            // Border.widthEach — the `*Each` family shares field names).
+            K::UiPaddingEach => {
+                let rec_arg = Ty::Record({
+                    let mut m = BTreeMap::new();
+                    m.insert(self.builtins.edge_f_top, int());
+                    m.insert(self.builtins.edge_f_right, int());
+                    m.insert(self.builtins.edge_f_bottom, int());
+                    m.insert(self.builtins.edge_f_left, int());
+                    m
+                }, RowTail::Closed);
+                fun(rec_arg, attr(var(0)))
+            }
 
             // #76 Tier 1 — two-arg attrs.
             K::UiAspectRatioWH => fun(int(), fun(int(), attr(var(0)))),
@@ -4590,6 +4643,18 @@ impl<'a> Builder<'a> {
             K::UiMobile | K::UiTablet | K::UiDesktop | K::UiDarkMode | K::UiLightMode
             | K::UiReducedMotion => string(),
 
+            // ── #76: PseudoClass opaque constants + Ui.onPseudo ──────────────────
+            // Typed-constant shortcuts — all return the opaque `PseudoClass` type
+            // (mirrors `sky_runtime::ui::element::PseudoClass`'s 5 constructors).
+            K::UiHover | K::UiFocus | K::UiFocusVisible | K::UiActive | K::UiDisabled => {
+                pseudo_class()
+            }
+            // `Ui.onPseudo : PseudoClass -> List (Attribute msg) -> Attribute msg`
+            K::UiOnPseudo => fun(
+                pseudo_class(),
+                fun(list(attr(var(0))), attr(var(0))),
+            ),
+
             // Std.Html leaf nodes (arity 1).
             K::HtmlTextNode | K::HtmlRawNode => fun(string(), html_t(var(0))),
 
@@ -4603,9 +4668,27 @@ impl<'a> Builder<'a> {
                 ),
             ),
 
+            // `Html.voidNode : String -> List Attr -> Html msg` — the generic
+            // void counterpart of `Html.node` (arbitrary runtime tag, no
+            // children arg). Routes through the same `html_node_` runtime sink
+            // with an emit-baked empty children vec.
+            K::HtmlVoidNode => fun(string(), fun(list(html_attr(var(0))), html_t(var(0)))),
+
+            // `Html.doctype : List Html -> Html msg` — wraps children in the
+            // `!doctype-wrapper` pseudo-tag; `html::render_into_ctx` already
+            // recognises it and emits the literal `<!DOCTYPE html>` prefix.
+            K::HtmlDoctype => fun(list(html_t(var(0))), html_t(var(0))),
+
+            // `Html.titleNode : String -> Html msg` — wraps a raw string
+            // directly in `<title>`.
+            K::HtmlTitleNode => fun(string(), html_t(var(0))),
+
+            // `Html.toString : Html msg -> String` — alias of `Html.render`.
+            K::HtmlToString => fun(html_t(var(0)), string()),
+
             // Std.Html container nodes (arity 2 — attrs, children; tag baked).
             K::HtmlDiv | K::HtmlSpan | K::HtmlA | K::HtmlButton | K::HtmlP
-            | K::HtmlH1 | K::HtmlH2 | K::HtmlH3 | K::HtmlH4 | K::HtmlH5 | K::HtmlH6 | K::HtmlNav | K::HtmlSection | K::HtmlArticle | K::HtmlHeader | K::HtmlHeaderNode | K::HtmlCodeNode | K::HtmlMainNode | K::HtmlFooterNode | K::HtmlFooter | K::HtmlMain | K::HtmlAside | K::HtmlUl | K::HtmlOl | K::HtmlLi | K::HtmlTable | K::HtmlThead | K::HtmlTbody | K::HtmlTfoot | K::HtmlTr | K::HtmlTh | K::HtmlTd | K::HtmlTextarea | K::HtmlSelect | K::HtmlOption | K::HtmlLabel | K::HtmlForm | K::HtmlFieldset | K::HtmlLegend | K::HtmlPre | K::HtmlCode | K::HtmlStrong | K::HtmlEm | K::HtmlSmall | K::HtmlBlockquote | K::HtmlFigure | K::HtmlFigcaption | K::HtmlDetails | K::HtmlSummary | K::HtmlDialog | K::HtmlVideo | K::HtmlAudio | K::HtmlCanvas | K::HtmlIframe | K::HtmlProgress | K::HtmlMeter | K::HtmlScript | K::HtmlBody | K::HtmlTitle => fun(
+            | K::HtmlH1 | K::HtmlH2 | K::HtmlH3 | K::HtmlH4 | K::HtmlH5 | K::HtmlH6 | K::HtmlNav | K::HtmlSection | K::HtmlArticle | K::HtmlHeader | K::HtmlHeaderNode | K::HtmlCodeNode | K::HtmlMainNode | K::HtmlFooterNode | K::HtmlFooter | K::HtmlMain | K::HtmlAside | K::HtmlUl | K::HtmlOl | K::HtmlLi | K::HtmlTable | K::HtmlThead | K::HtmlTbody | K::HtmlTfoot | K::HtmlTr | K::HtmlTh | K::HtmlTd | K::HtmlTextarea | K::HtmlSelect | K::HtmlOption | K::HtmlLabel | K::HtmlForm | K::HtmlFieldset | K::HtmlLegend | K::HtmlPre | K::HtmlCode | K::HtmlStrong | K::HtmlEm | K::HtmlSmall | K::HtmlBlockquote | K::HtmlFigure | K::HtmlFigcaption | K::HtmlDetails | K::HtmlSummary | K::HtmlDialog | K::HtmlVideo | K::HtmlAudio | K::HtmlCanvas | K::HtmlIframe | K::HtmlProgress | K::HtmlMeter | K::HtmlScript | K::HtmlBody | K::HtmlTitle | K::HtmlHtmlNode | K::HtmlHeadNode => fun(
                 list(html_attr(var(0))),
                 fun(list(html_t(var(0))), html_t(var(0))),
             ),
@@ -5238,6 +5321,19 @@ impl<'a> Builder<'a> {
                     m.insert(self.builtins.http_f_url, string());
                     // `label : Element msg`
                     m.insert(self.builtins.btn_f_label, elem_t(var(0)));
+                    m
+                }, RowTail::Closed);
+                fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
+            }
+
+            // ── Ui.image ─────────────────────────────────────────────────────────
+            // image : List (Attribute msg) -> { src : String, description : String }
+            //       -> Element msg
+            K::UiImage => {
+                let cfg_rec = Ty::Record({
+                    let mut m = BTreeMap::new();
+                    m.insert(self.builtins.img_f_src, string());
+                    m.insert(self.builtins.img_f_description, string());
                     m
                 }, RowTail::Closed);
                 fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
@@ -6873,6 +6969,29 @@ mod registry_phase_c_tests {
             K::BorderShadow,
             K::BorderGlow,
             K::BorderInnerShadow,
+            // ── #76: 20 previously-unbacked Std.Ui / Std.Html / Background
+            // kernels (BACKLOG "Sweep to green" — #45's exhaustiveness gate list).
+            // New kernels with no legacy `kernel_ty` entry — pure holes.
+            K::UiImage,
+            K::UiPaddingEach,
+            K::UiClipX,
+            K::UiClipY,
+            K::UiScrollbarX,
+            K::UiScrollbarY,
+            K::UiOnFile,
+            K::HtmlToString,
+            K::HtmlVoidNode,
+            K::HtmlDoctype,
+            K::HtmlTitleNode,
+            K::HtmlHtmlNode,
+            K::HtmlHeadNode,
+            K::BackgroundLinearGradient,
+            K::UiOnPseudo,
+            K::UiHover,
+            K::UiFocus,
+            K::UiFocusVisible,
+            K::UiActive,
+            K::UiDisabled,
             // ── Std.Ui.Keyed (column + row) ──────────────────────────────────
             K::KeyedColumn,
             K::KeyedRow,
