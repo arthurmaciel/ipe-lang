@@ -455,7 +455,7 @@ All 14 verified. Security + seal first:
 12. 🟠 `config.rs:10`/`project.rs:284` — wire real `SKY_DB_URL` (correctness).
 13. 🟠 `code.rs:456` — promote `ALL_CODES` public, delete skyc's drifting mirror (completeness).
 
-Confirmed-real items are mirrored into `docs/architecture/backlog.md`
+Confirmed-real items are mirrored into `BACKLOG.md`
 (Security/hardening tier, AUD-01..15) per the no-deferral rule.
 
 **Status:** audit complete (12/12 partitions, full verify pass). No lanes owed.

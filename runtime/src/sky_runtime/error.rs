@@ -7,7 +7,7 @@
 //! **Scope of this pass:** `ErrorInfo` carries only `message` — the reference
 //! design's `ErrorDetails` union (`FfiPanic`/`TypeMismatch`/`HttpStatus`/
 //! `JsonDecode`/`Custom`, each with its own nested payload record) is filed as
-//! an explicit, immediate follow-up (`docs/architecture/backlog.md`), not
+//! an explicit, immediate follow-up (`BACKLOG.md`), not
 //! silently dropped. Kind-based classification (`isRetryable`, pattern
 //! matching, `toString`) is fully real and load-bearing today.
 //!

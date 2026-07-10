@@ -1,8 +1,9 @@
 //! AUD-14 regression — two `import ... as <same alias>` statements naming
 //! DIFFERENT dep modules must be rejected with `NameError::DuplicateQualifier`
 //! (SKY-N0027), never silently resolve to whichever import came last in
-//! source order. See `docs/architecture/hardening-2026-07-09-batch-a-spec.md`
-//! section "A2" for the root-cause writeup.
+//! source order. See `docs/architecture/principles-audit-2026-07-09.md`
+//! (AUD-14) for the finding; the batch-a fix-spec's "A2" root-cause writeup
+//! is preserved in git history.
 //!
 //! ```text
 //! cargo test -p skyc --test golden_aud14_duplicate_qualifier

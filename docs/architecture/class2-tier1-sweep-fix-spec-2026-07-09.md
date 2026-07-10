@@ -18,7 +18,7 @@
 
 ## 0. Precondition — DO NOT START #35's sweep-green run until Class 1 lands
 
-Per `docs/architecture/backlog.md` Tier-1 ORDER: **sweep-green → seal → #110 →
+Per `BACKLOG.md` Tier-1 ORDER: **sweep-green → seal → #110 →
 #37 → #59 → push**. "sweep-green" depends on the inference-cluster fix tracked
 in `docs/architecture/class1-inference-fix-spec-2026-07-09.md` ("Boundary
 Scheme Promotion" — untyped top-level bindings sharing one monomorphic var
@@ -70,7 +70,7 @@ reading the files directly (not the backlog prose):
 | `scripts/equiv-corpus.sh` / `scripts/equiv-render.sh` drivers | ❌ NOT PORTED | confirmed absent in this repo; exist in `../sky/runtime-rust/scripts/{equiv-corpus.sh,equiv-render.sh}` (both read below, §3.2/§3.3) |
 | `vendor/upstream-sky/` submodule | ❌ NOT DONE (tracked separately) | `repo-layout-and-mirroring.md` §5 step 2 still pending; `ci.yml`'s `e2e` job self-skips on its absence by design — **not this spec's job to add**, see §4.1 |
 | Windows CI (`windows-latest` matrix entry) | ❌ NOT DONE, fully spec'd | `docs/architecture/windows-ci-support.md` is a complete, ready-to-execute 18-item change-set; not yet applied to `examples-sweep.yml` |
-| CI example-patch-queue (`docs/ideas/departures-from-sky.md` §"CI patch queue") | N/A — **intentionally deferred** | disposition: "accepted (2026-07-05), **execute at Tier-3 start**" — see §4.3, do not build this now |
+| CI example-patch-queue (`docs/divergences-from-sky.md#planned-future-divergences` §6.9) | N/A — **intentionally deferred** | disposition: "accepted (2026-07-05), **execute at Tier-3 start**" — see §4.3, do not build this now |
 | Push to a public remote | ❌ NOT DONE | current `origin` = `git@github.com:arthurmaciel/ipe.git`; GitHub also has an **empty** `arthurmaciel/ipe-lang` repo (see §4.4) — name mismatch needs resolving before the real push, not before this spec's work |
 
 Read this table again before starting: roughly 60% of #35 and 15% of #110 is
@@ -619,7 +619,8 @@ Two independent changes to this one file:
 
 ### 4.3 CI example-patch-queue — do NOT build this now
 
-`docs/ideas/departures-from-sky.md`'s own disposition line: *"accepted
+The filed idea's own disposition line
+(`docs/divergences-from-sky.md#planned-future-divergences` §6.9): *"accepted
 (2026-07-05), **execute at Tier-3 start** — first consumer is #128/#133; wire
 `--patched` mode into the sweep + CI (#37) **when the first departure
 lands**."* No Sky-surface departure (#128 drop-`Task.run`, #133 margin
@@ -627,7 +628,7 @@ stripping) has landed yet — Tier-3 has not started (Tier-1 is still in
 progress, per the ORDER in §0). **Action for #37 today: none.** Leave a single
 comment pointer in `scripts/examples-sweep.sh`'s header (if not already
 present) noting the `--patched` mode is designed but intentionally not yet
-implemented, citing `docs/ideas/departures-from-sky.md`. Do not scaffold an
+implemented, citing `docs/divergences-from-sky.md#planned-future-divergences`. Do not scaffold an
 empty patch-queue directory or a no-op `--patched` flag — that adds
 maintenance surface with zero present consumer, contrary to the doc's own
 "queue is empty, sweep runs pristine" until-then state.

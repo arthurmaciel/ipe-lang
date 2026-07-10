@@ -2350,8 +2350,8 @@ fn pat_binds_symbol(pat: &Pat, target: Symbol) -> bool {
 /// Rewrite every free `Expr::Var(target)` in `expr` to
 /// `Expr::Apply { func: Var(target), args: [] }` (emitted as `(target)()`).
 ///
-/// This is the read-site half of the Decoder thunk rewrite (F2 in
-/// `docs/architecture/seal-jsondecp-design.md` §5.C): after
+/// This is the read-site half of the Decoder thunk rewrite (#89 F2, design
+/// preserved in git history as `seal-jsondecp-design.md` §5.C): after
 /// [`Lowerer::lower_let`] wraps a Decoder-typed binding value in a zero-arg
 /// lambda, every read of that binding must call the thunk to obtain a fresh
 /// `Decoder` value.

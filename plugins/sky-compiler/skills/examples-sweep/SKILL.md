@@ -38,7 +38,7 @@ does not ship. So the **first CI iteration runs BUILD+RUN only**
 (`SKY_SWEEP_NO_EQUIV=1`). The EQUIV column, `build_go()`, `exercise_server_equiv`,
 and the two Python normalisers are kept intact so parity flips on later — either by
 putting a Haskell `sky` on PATH as `SKY_GO_BIN`, or by consuming vendored Go
-reference outputs. See `docs/architecture/examples-sweep-port.md`.
+reference outputs. See `docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md` §1.
 
 ## Verdict
 
@@ -111,7 +111,7 @@ Rust binary; EQUIV (phased) exercises BOTH backends and compares.
   (`~/.cache/sky-rust-target`, pinned in this repo's `~/.cargo/config.toml`) —
   `target/release/skyc` first, then `target/debug/skyc`, then `$REPO/target`, then PATH.
 - Go-FFI examples are ABSENT from `build_set` (imports of Go-package modules) and
-  were never vendored — see `docs/architecture/examples-sweep-port.md` for the copied-vs-excluded list.
+  were never vendored — see `docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md` §1 for the vendored-example state (the original copied-vs-excluded list is preserved in git history).
 - `26-ui-showcase` has no `sky.toml` → single-file build target; it imports a local
   module, so it surfaces a real `skyc-fail` until a manifest is added upstream.
 - Never edit runtime / crate files while this runs (concurrent copy → false build error).
