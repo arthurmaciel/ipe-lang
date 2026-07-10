@@ -975,6 +975,44 @@ API-shape review):
   String` to `pub use sky_runtime::error::SkyError` in the same change — the
   "69-golden flip" #85 had originally deferred this work for.
 
+### B-SqlFragment — `Std.Db.Sql` typed WHERE-fragment builder; `Db.unsafeFindWhere` removed (backlog #61)
+- **Reference:** the Go backend's `Db.unsafeFindWhere : Db -> String -> String
+  -> List String -> Task Error (List Row)` accepts a raw, hand-built WHERE
+  clause string with `?`-parameterized args — the values are bind-safe, but
+  the WHERE clause's STRUCTURE (column names, operators, boolean composition)
+  is caller-authored text with no typed guard against a mistaken
+  string-interpolated fragment sneaking in alongside the intentional
+  parameterization.
+- **ipê design:** a new opaque `SqlFragment` type (`Std.Db.Sql`, qualifier
+  `Sql`) whose ONLY constructors are typed combinators — `column`, `param`
+  (plus the `int`/`string`/`float`/`bool` sugar), `eq`/`ne`/`gt`/`lt`/`gte`/
+  `lte`, `and`/`or`/`not`, `isNull`/`isNotNull`, `inList`, `like`. Every
+  combinator unconditionally parenthesizes its output and merges binds, so
+  precedence bugs are unrepresentable and a `SqlFragment`'s `sql` text is
+  always `?`-placeholder text with a matching `binds` list. `Db.findWhere` /
+  `Db.deleteWhere` take `SqlFragment`, not `String` — a naive
+  string-concatenated WHERE clause is now a `skyc` compile-time `SKY-T0001`
+  type mismatch, never a runtime value. `Db.unsafeFindWhere` (and its runtime
+  `db_unsafe_find_where`) is REMOVED, not deprecated — the security-tier
+  no-deferral rule (`CLAUDE.md` / `PRINCIPLES.md`) treats "keep the raw-SQL
+  escape hatch a brand-new safe API supersedes, at zero migration cost" as a
+  forbidden shipping excuse. Zero fixtures called `unsafeFindWhere` outside
+  its own golden, which was rewritten to `Db.findWhere`.
+- **Sanctioned:** yes — strictly-better-security class (parse-don't-validate
+  applied to SQL WHERE-clause construction); no Go counterpart exists for
+  `Sql.*` / `Db.findWhere` / `Db.deleteWhere` (`oracle_divergence = true` on
+  every new golden). `SqlFragment` is `Clone + PartialEq` (derivable) but
+  deliberately NOT `serde` (never persisted to a Live session store); its
+  hand-written `Debug` shows SQL text + bind COUNT only, never bind VALUES.
+  Reference: `runtime/src/sky_runtime/db.rs` (`SqlFragment` + `sql_*`
+  combinators + `db_find_where`/`db_delete_where`), `crates/sky_kernels/src/
+  lib.rs` (`SqlColumn..DbDeleteWhere` tail-appended kernels),
+  `crates/sky_types/src/constrain.rs` (`stdlib_scheme` `FIRST_SCHEMED`
+  entries), `crates/skyc/tests/golden_m5b_db.rs` (`db_find_where` /
+  `db_delete_where` / `db_sql_combinators`) + `golden_m5b_db_gates.rs`
+  (`db_findwhere_string_is_t0001` — the negative "parse, don't validate"
+  proof). Spec: `docs/architecture/class6-secret-sqlfragment-fix-spec-2026-07-09.md`.
+
 ---
 
 <a id="planned-future-divergences"></a>
