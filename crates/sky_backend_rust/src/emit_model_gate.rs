@@ -261,8 +261,12 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::LiveRoute(_)
         // `Order` is a plain three-variant data enum — an admissible leaf.
         // `Decimal` is a Copy newtype — an admissible leaf.
+        // `ErrorKind`/`Error` derive serde — admissible leaves (e.g. a Model's
+        // `historyError : Maybe Error` field).
         | IrType::Order
         | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error
         | IrType::Int
         | IrType::Float
         | IrType::Bool

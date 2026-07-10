@@ -613,5 +613,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::LiveRoute(_) => "LiveRoute",
         IrType::Order => "Order",
         IrType::Decimal => "Decimal",
+        IrType::ErrorKind => "ErrorKind",
+        IrType::Error => "Error",
     }
 }
