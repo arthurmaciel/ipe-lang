@@ -30,26 +30,29 @@ pub enum Attribute<M> {
 }
 
 /// Variant names mirror the Sky stdlib `Std.Html.Attributes.Event` ADT
-/// (`OnMsg | OnString | OnBool | OnRaw String any`). `OnString`/`OnBool` carry
+/// (`OnMsg | OnString | OnBool | OnForm`). `OnString`/`OnBool` carry
 /// `Arc<dyn Fn(..) -> msg>` (not bare fn pointers) so the handler can be a
 /// CAPTURING closure — exactly as the Go backend allows. A faithful Sky.Live
 /// app's `onChange = \s -> toMsg (parse s default)` captures locals; a bare
 /// fn-pointer field rejected that. Bare ctors / non-capturing fns coerce into
-/// `Arc::new` fine; capturing closures box into the trait object. This follows
-/// the `OnForm` precedent (already `Arc<dyn Fn>`). `OnRaw` is the
-/// heterogeneous-payload escape hatch (`on` / `onSubmit`); its payload is
-/// type-erased — not dispatchable, but kept so the bridge compiles. The
-/// `submit` wire path resolves via `OnForm` instead (constructed server-side,
-/// never from Sky stdlib).
+/// `Arc::new` fine; capturing closures box into the trait object.
+///
+/// `Ui.onSubmit` / `Std.Html.Events.onSubmit` (the heterogeneous-payload
+/// handler whose argument type is decoupled from `msg`) construct `OnForm`
+/// too — `ui_on_submit_` / `html_on_raw_` close over a
+/// `decode_form_or_warn::<T>` call for the CONCRETE record type `T`, recovered
+/// by ordinary Rust generic inference on the handler closure's own signature
+/// at the codegen call site, never `Arc<dyn Any>` (#109/#156 — the former
+/// `OnRaw` variant, which erased the payload behind `Arc<dyn Any>` and was
+/// consequently NEVER dispatchable in any backend, is deleted).
 #[derive(Clone)]
 pub enum Event<M> {
     OnMsg(String, M),
     OnString(String, std::sync::Arc<dyn Fn(String) -> M + Send + Sync>),
     OnBool(String, std::sync::Arc<dyn Fn(bool) -> M + Send + Sync>),
-    OnRaw(String, std::sync::Arc<dyn std::any::Any + Send + Sync>),
-    /// Server-constructed form handler (not produced by the Sky stdlib bridge).
-    /// Returns `Option<M>`: a malformed/incomplete form (decode failure) yields
-    /// `None` so the live loop dispatches no Msg (see `decode_form`).
+    /// Form-submit handler. Returns `Option<M>`: a malformed/incomplete form
+    /// (decode failure) yields `None` so the live loop dispatches no Msg (see
+    /// `decode_form`).
     OnForm(
         String,
         std::sync::Arc<dyn Fn(FormData) -> Option<M> + Send + Sync>,
@@ -99,7 +102,6 @@ impl<M> Event<M> {
             Event::OnMsg(n, _)
             | Event::OnString(n, _)
             | Event::OnBool(n, _)
-            | Event::OnRaw(n, _)
             | Event::OnForm(n, _) => n,
         }
     }
@@ -109,7 +111,6 @@ impl<M> Event<M> {
             Event::OnMsg(n, _) => (0, n),
             Event::OnString(n, _) => (1, n),
             Event::OnBool(n, _) => (2, n),
-            Event::OnRaw(n, _) => (4, n),
             Event::OnForm(n, _) => (3, n),
         }
     }
@@ -119,7 +120,6 @@ impl<M> Event<M> {
             Event::OnMsg(..) => "OnMsg",
             Event::OnString(..) => "OnString",
             Event::OnBool(..) => "OnBool",
-            Event::OnRaw(..) => "OnRaw",
             Event::OnForm(..) => "OnForm",
         }
     }
@@ -839,13 +839,44 @@ pub fn html_on_bool_<M>(
     Attribute::EventAttr(Event::OnBool(name, handler))
 }
 
-/// `Std.Html.Events.{onSubmit,on}` (#107) — a heterogeneous-payload event whose
-/// handler type is DECOUPLED from `M` (a form's `onSubmit DoSignIn` must not
-/// leak `LoginForm -> Msg` into the surrounding `Html msg`). The payload is
-/// type-erased behind `Arc<dyn Any>`; the wire driver downcasts it at dispatch.
+/// `Std.Html.Events.onSubmit` (#107) — a heterogeneous-payload event whose
+/// handler argument type `T` is DECOUPLED from `M` at the Sky type level (a
+/// form's `onSubmit DoSignIn` must not force `LoginForm` into the surrounding
+/// `Html msg`'s type). `T` stays a free HM variable in `constrain.rs`'s
+/// scheme; at CODEGEN time Rust's ordinary generic inference recovers the
+/// CONCRETE `T` from the handler closure `f`'s own monomorphized signature —
+/// no runtime type erasure, no `Arc<dyn Any>`, no downcast (#109/#156, closes
+/// the PRINCIPLES.md no-`dyn Any` exception this used to be). Builds
+/// `Event::OnForm` directly, reusing the already-correct, already-tested
+/// `HandlerIndex::resolve_form` + `decode_form_or_warn` dispatch path.
+///
+/// Despite the historical name (kept to avoid an unrelated rename touching
+/// `naming.rs` / emit-site literals / parity tooling), this is no longer a
+/// "raw" escape hatch — it fully participates in typed dispatch.
+#[cfg(feature = "live")]
 #[must_use]
-pub fn html_on_raw_<M, A: std::any::Any + Send + Sync>(name: String, payload: A) -> Attribute<M> {
-    Attribute::EventAttr(Event::OnRaw(name, std::sync::Arc::new(payload)))
+pub fn html_on_raw_<M, T, F>(name: String, payload: F) -> Attribute<M>
+where
+    T: serde::de::DeserializeOwned,
+    F: Fn(T) -> M + Send + Sync + 'static,
+{
+    Attribute::EventAttr(Event::OnForm(
+        name,
+        std::sync::Arc::new(move |fd: FormData| {
+            crate::sky_runtime::live::form::decode_form_or_warn::<T>(fd).map(&payload)
+        }),
+    ))
+}
+
+/// Non-`live` builds (Sky.Tui without the HTTP wire) have no `FormData`
+/// decode path. `Std.Html.Events.onSubmit` was already inert everywhere
+/// before this fix (the `OnRaw` path never dispatched in ANY backend), so
+/// degrading to a structural no-op attribute here is not a regression for
+/// Tui — it was never functional there and Tui has no form-submit wire
+/// concept.
+#[cfg(not(feature = "live"))]
+pub fn html_on_raw_<M, T, F: Fn(T) -> M>(_name: String, _payload: F) -> Attribute<M> {
+    Attribute::NoAttr
 }
 
 /// `Ffi.callPure "htmlEscapeText"` — HTML-escape a string for text content.
@@ -1485,5 +1516,32 @@ mod tests {
         assert!(safe_patch_attr("onclick", "x").is_none());
         let (_, v) = safe_patch_attr("href", "javascript:alert(1)").unwrap();
         assert!(!v.to_ascii_lowercase().contains("javascript:"));
+    }
+
+    #[test]
+    #[cfg(feature = "live")]
+    fn html_on_submit_dispatches_via_onform() {
+        // Mirror of dispatch.rs's ui_on_submit_dispatches_via_onform_not_onraw,
+        // exercising Std.Html.Events.onSubmit's backing fn directly.
+        #[derive(serde::Deserialize, Default, PartialEq, Debug)]
+        #[serde(default)]
+        struct Order {
+            item: String,
+        }
+        let attr: Attribute<String> = html_on_raw_("submit".to_owned(), |o: Order| o.item);
+        let mut t: Html<String> = Html::HElement("form".into(), vec![attr], vec![]);
+        assign_sky_ids(&mut t, "r");
+        let idx = crate::sky_runtime::live::build_index(&t);
+
+        // Must dispatch via resolve_form (Event::OnForm), never resolve()'s
+        // positional-args path — there is no Event::OnRaw any more.
+        assert_eq!(idx.resolve("r", "submit", &[]), None);
+
+        let mut fd = FormData::new();
+        fd.insert("item".into(), "widget".into());
+        assert_eq!(
+            idx.resolve_form("r", "submit", fd),
+            Some("widget".to_owned())
+        );
     }
 }
