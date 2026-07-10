@@ -1,0 +1,24 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Lib exposing (andMapAlias)
+import Std.Log exposing (println)
+
+-- #90 T3, "forwarder" path: `andMapAlias` (a GENERIC, ANNOTATED wrapper
+-- around `Result.andMap`) is instantiated at a CURRIED (arity >= 3) payload.
+-- Unlike every direct-call fixture in `golden_l0114_ctor_payload_function.rs`
+-- (which hit the Tier-2 EAGER-PIN path and surface a plain SKY-T0001), the
+-- obligation on `andMapAlias`'s own `b` skolem here is checked through
+-- `check_scheme_applications` / `SchemeApp` — the SAME per-external-call-site
+-- re-verification `Math.min`'s forwarder gate uses
+-- (`crates/skyc/tests/golden_m4c_math_gate.rs`) — producing the FRIENDLY,
+-- specifically-labelled `SuperTypeUnsatisfied` (SKY-T0014) diagnostic naming
+-- the obligation, not a generic type mismatch.
+add3 : Int -> Int -> Int -> Int
+add3 a b c =
+    a + b + c
+
+main =
+    case andMapAlias (Ok 1) (Ok add3) of
+        Ok _ -> println "ok"
+        Err _ -> println "err"
