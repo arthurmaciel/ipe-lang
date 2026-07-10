@@ -1,11 +1,14 @@
 module Main exposing (main)
 
--- M5b-db golden: Db.unsafeFindWhere with BOUND args (List String).
--- Inserts two rows then queries WHERE qty > ? with args = ["9"] so only the
--- high-qty row matches.  Proves the parameterised-binding channel is used
--- (NOT string interpolation into the WHERE clause — the sole sanctioned path).
+-- M5b-db golden: Db.findWhere with a typed SqlFragment predicate (backlog #61).
+-- Replaces the removed Db.unsafeFindWhere raw-string golden: the WHERE clause
+-- is built from Sql.column / Sql.int / Sql.gt combinators, never a hand-built
+-- string, so the parameterised channel is structural rather than a caller
+-- convention.
 --
--- Uses sqlite::memory: inside withTransaction so all ops share one connection.
+-- Inserts two rows then queries WHERE qty > 9 so only the high-qty row
+-- matches. Uses sqlite::memory: inside withTransaction so all ops share one
+-- connection.
 
 main =
     Task.andThen
@@ -41,8 +44,11 @@ main =
                             in
                             println (name ++ ":" ++ String.fromInt qty)
                         )
-                        -- args bound via ? — proves the parameterised channel, not interpolation
-                        (Db.unsafeFindWhere txconn "products" "qty > ?" [ "9" ])
+                        -- Typed WHERE clause: SQL injection via a naive
+                        -- string-concatenated WHERE is a compile-time type
+                        -- error at this call site (String vs SqlFragment) —
+                        -- see the m5b_db_gate_findwhere_string negative golden.
+                        (Db.findWhere txconn "products" (Sql.gt (Sql.column "qty") (Sql.int 9)))
                 )
         )
         (Db.open "sqlite" "sqlite::memory:")

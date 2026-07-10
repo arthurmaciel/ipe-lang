@@ -1,0 +1,49 @@
+module Main exposing (main)
+
+-- M5b-db golden: Db.deleteWhere with a typed SqlFragment predicate (backlog #61).
+-- Inserts three rows, deletes the one matching `Sql.eq (Sql.column "name")
+-- (Sql.string "gadget")`, then queries all remaining rows ordered by name and
+-- prints them. Proves the row-count return value AND that only the matching
+-- row was removed.
+
+main =
+    Task.andThen
+        (\conn ->
+            Db.withTransaction conn
+                (\txconn ->
+                    let
+                        _ =
+                            Db.execRaw txconn
+                                "CREATE TABLE products (name TEXT NOT NULL, qty INTEGER NOT NULL)"
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO products (name, qty) VALUES (?, ?)"
+                                [ SqlString "widget", SqlInt 10 ]
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO products (name, qty) VALUES (?, ?)"
+                                [ SqlString "gadget", SqlInt 7 ]
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO products (name, qty) VALUES (?, ?)"
+                                [ SqlString "sprocket", SqlInt 3 ]
+                    in
+                    Task.andThen
+                        (\deletedCount ->
+                            Task.andThen
+                                (\rows ->
+                                    let
+                                        names =
+                                            List.map (\r -> Db.getString "name" r) rows
+                                    in
+                                    println (String.fromInt deletedCount ++ ":" ++ String.join "," names)
+                                )
+                                (Db.query txconn "SELECT * FROM products ORDER BY name" [])
+                        )
+                        (Db.deleteWhere txconn "products" (Sql.eq (Sql.column "name") (Sql.string "gadget")))
+                )
+        )
+        (Db.open "sqlite" "sqlite::memory:")
