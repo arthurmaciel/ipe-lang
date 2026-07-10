@@ -1627,19 +1627,38 @@ mod tests {
         );
     }
 
-    /// **Phase-A tripwire: registry → canon parity.**
+    /// **Phase-A/E tripwire: registry ↔ canon parity, now a full subset gate.**
     ///
-    /// For every [`sky_kernels::StdlibKernel`] variant in `ALL`, if the
-    /// variant's declared qualifier IS present in `Env.qual_vars`, then the
-    /// variant's declared name must ALSO be present in that qualifier's member
-    /// map.  A failure here means `QUALIFIERS` in `env.rs` diverged from
+    /// Forward direction (registry → canon): for every
+    /// [`sky_kernels::StdlibKernel`] variant in `ALL`, if the variant's
+    /// declared qualifier IS present in `Env.qual_vars`, then the variant's
+    /// declared name must ALSO be present in that qualifier's member map.  A
+    /// failure here means `QUALIFIERS` in `env.rs` diverged from
     /// `StdlibKernel::ALL + decl()` — the anti-drift invariant is broken.
     ///
-    /// The check is intentionally one-directional (registry → canon): names
-    /// present in `QUALIFIERS` but absent from the registry (e.g. `Basics.*`
-    /// helper aliases) are NOT an error.  Qualifiers absent from `qual_vars`
-    /// entirely (e.g. `"Log"`, `"PubSub"`) are skipped automatically.
+    /// The forward check is intentionally one-directional: names present in
+    /// `QUALIFIERS` but absent from the registry (e.g. `Basics.*` helper
+    /// aliases) are NOT an error.  Qualifiers absent from `qual_vars` entirely
+    /// (e.g. `"Log"`, `"PubSub"`) are skipped automatically.
+    ///
+    /// Reverse direction (canon → registry, "G1"): for every non-excluded
+    /// qualifier's members, `VarHome::Kernel(Some(sk), ..)` entries are
+    /// checked for exact id propagation (unchanged since Phase B).  **Phase E
+    /// Task 3** extends this into a FULL SUBSET GATE: it additionally asserts
+    /// no non-excluded member sits on `VarHome::Kernel(None, ..)` — i.e. every
+    /// kernel the resolver/canon layer recognises (every `qual_vars` member,
+    /// short of the deliberately-excluded alias namespaces and the
+    /// structurally-unreachable `KNOWN_UNBACKED` set proven disjoint by
+    /// [`known_unbacked_disjoint_from_qual_vars`]) resolves to a concrete
+    /// [`sky_kernels::StdlibKernel`] id — which the type-scheme table
+    /// (`sky_types::constrain::stdlib_scheme`) is proven total over by
+    /// `stdlib_scheme_total_over_reachable`. Together the two totality proofs
+    /// close the exit-0-then-cargo-fail class `PRINCIPLES.md` calls out: a
+    /// kernel the resolver recognises but the type-scheme table does not
+    /// cover can no longer silently ride a flexible type variable past
+    /// canonicalisation.
     #[test]
+    #[allow(clippy::too_many_lines)] // declarative tripwire — two subset-gate directions + a documented exception table; splitting would obscure the invariant
     fn canon_equals_registry() {
         use crate::env::VarHome;
         use sky_intern::Interner;
@@ -1695,14 +1714,23 @@ mod tests {
             );
         }
 
-        // ── G1 reverse check (Phase B): canon → registry ─────────────────────
+        // ── G1 reverse check (Phase B/E Task 3): canon → registry ────────────
         // For every qual_vars entry that carries id = Some(actual_sk) (i.e.
         // was resolved against stdlib_index at parse time), verify that the
-        // stored id EXACTLY MATCHES stdlib_index[(qual, name)].
+        // stored id EXACTLY MATCHES stdlib_index[(qual, name)].  A second pass
+        // (Phase E Task 3) additionally proves the reverse direction is a FULL
+        // SUBSET GATE: every non-excluded qual_vars member must resolve to a
+        // concrete id in the first place — a `VarHome::Kernel(None, ..)` here
+        // means QUALIFIERS in env.rs names a member with NO matching
+        // StdlibKernel::ALL entry, which is exactly the "resolver recognises a
+        // kernel the type-scheme table does not cover" class PRINCIPLES.md
+        // forbids (it would let an ill-typed program pass canon and fail only
+        // downstream, at `cargo`).
         //
-        // SCOPE — propagation wiring only: verifies that
+        // SCOPE — propagation wiring AND totality: verifies that
         // install_prelude_qualifiers stored the id it read from stdlib_index,
-        // not some transposed or stale copy.  It does NOT verify injectivity
+        // not some transposed or stale copy, AND that every reachable member
+        // has an id at all.  It does NOT verify injectivity
         // of decl() (covered by sky_kernels::tests::no_colliding_qualifier_name_pairs)
         // and does NOT verify decl-equiv-legacy equivalence (covered by
         // sky_lower::tests::decl_equiv_legacy_match).
@@ -1739,6 +1767,79 @@ mod tests {
         .into_iter()
         .collect();
 
+        // Deliberately-unbacked-but-reachable members (Task 3 design addition
+        // — the spec's `excluded_quals` is qualifier-granular and would blind
+        // the whole gate for e.g. String's ~30 real kernels; a single
+        // known-holdout member needs a member-granular exception instead).
+        // Unlike `excluded_quals` (alias namespaces that resolve elsewhere),
+        // these are genuine `id = None` holes: `QUALIFIERS` in env.rs names
+        // them (so they parse + canonicalise) but `sky_kernels::StdlibKernel`
+        // has NO variant for them yet (confirmed by grepping
+        // `crates/sky_kernels/src/lib.rs` for each — zero hits). They already
+        // fail CLOSED at type-check today with a loud SKY-L0108
+        // (`error[SKY-L0108]: kernel function not available yet`) via
+        // `constrain_var_kernel`'s existing `id.and_then(..)` — never
+        // silently — so listing them here does not violate the
+        // exit-0-then-cargo-fail property Task 3 exists to close; it makes
+        // the already-fail-closed state explicit and machine-checked instead
+        // of an untracked hole this new gate would otherwise panic on.
+        //
+        // Two are pre-existing, deliberate holdouts documented in
+        // `crates/skyc/tests/golden_core_stdlib.rs`'s header comment:
+        //   - `String.toChar` — no runtime fn; ambiguous Char-vs-Maybe-Char
+        //     semantics.
+        //   - `Basics.toString` — polymorphic `a -> String` needs a
+        //     Display/Stringify bound HM cannot express; already excluded via
+        //     the "Basics" qualifier-level entry above, listed here too for
+        //     self-documentation (harmless duplicate — `excluded_quals` skips
+        //     the whole qualifier before this set is even consulted).
+        //
+        // The remaining 20 were discovered while landing this Task 3 gate
+        // (2026-07-10) — the `html-ui-live-scheme-table.md` derivation only
+        // audited kernels that already had a `StdlibKernel` id (a TYPES-side
+        // `Ty::Var(u32::MAX)`-class hole); these have no id at all yet, a
+        // CANON-side hole one layer earlier. Each is a real Std.Ui / Std.Html
+        // surface named in `QUALIFIERS` (env.rs) with no matching
+        // `sky_kernels::StdlibKernel::decl()` entry — i.e. not-yet-ported
+        // advanced UI features (pseudo-classes, media queries, gradients,
+        // HTML-document-level nodes), not typos or drift. Filed for
+        // follow-up; NOT implemented here (implementing 20 kernels with real
+        // runtime backing is out of scope for the exhaustiveness-gate task
+        // that landed this list — see the lane report for #45).
+        let deliberately_unbacked_members: std::collections::BTreeSet<(&str, &str)> = [
+            ("String", "toChar"),
+            ("Basics", "toString"),
+            // Std.Ui — sized elements / attrs / pseudo-classes / media queries.
+            ("Ui", "image"),
+            ("Ui", "disabled"),
+            ("Ui", "paddingEach"),
+            ("Ui", "clipX"),
+            ("Ui", "clipY"),
+            ("Ui", "scrollbarX"),
+            ("Ui", "scrollbarY"),
+            ("Ui", "onFile"),
+            ("Ui", "mediaQuery"),
+            ("Ui", "onPseudo"),
+            ("Ui", "hover"),
+            ("Ui", "focus"),
+            ("Ui", "focusVisible"),
+            ("Ui", "active"),
+            // Std.Html — document-level nodes + display helper.
+            ("Html", "toString"),
+            ("Html", "voidNode"),
+            ("Html", "doctype"),
+            ("Html", "titleNode"),
+            ("Html", "htmlNode"),
+            ("Html", "headNode"),
+            // Std.Ui.Background — gradients.
+            ("Background", "linearGradient"),
+        ]
+        .into_iter()
+        .collect();
+
+        // G1 forward-propagation check (unchanged since Phase B): every
+        // `VarHome::Kernel(Some(actual_sk), m, f)` entry's id must match
+        // `stdlib_index[(m, f)]` exactly.
         for (qual_sym, members) in &env.qual_vars {
             let qual_str = interner.resolve(*qual_sym).unwrap_or("<unknown>");
             if excluded_quals.contains(qual_str) {
@@ -1746,15 +1847,16 @@ mod tests {
             }
             for (name_sym, home) in members {
                 if let VarHome::Kernel(Some(actual_sk), m, f) = home {
-                    // This entry carries a pre-resolved id — verify it against
-                    // stdlib_index using the CANONICAL (module, name) stored in
-                    // VarHome, not the qual_vars KEY.
+                    // This entry carries a pre-resolved id — verify it
+                    // against stdlib_index using the CANONICAL (module, name)
+                    // stored in VarHome, not the qual_vars KEY.
                     //
                     // For plain entries: m == qual_sym, f == name_sym.
-                    // For FUNC_ALIASES: name_sym is the ALIAS (e.g. "htmlRender")
-                    // while f is the CANONICAL name (e.g. "render").  stdlib_index
-                    // is keyed by (qual_sym, canonical_name), so using (m, f) is
-                    // always correct for both.
+                    // For FUNC_ALIASES: name_sym is the ALIAS (e.g.
+                    // "htmlRender") while f is the CANONICAL name (e.g.
+                    // "render").  stdlib_index is keyed by
+                    // (qual_sym, canonical_name), so using (m, f) is always
+                    // correct for both.
                     let expected = env.stdlib_index.get(&(*m, *f));
                     let name_str = interner.resolve(*name_sym).unwrap_or("<unknown>");
                     let canon_str = interner.resolve(*f).unwrap_or("<unknown>");
@@ -1769,6 +1871,166 @@ mod tests {
                 }
             }
         }
+
+        // Phase E Task 3 subset gate: every non-excluded qual_vars member
+        // must resolve to a concrete StdlibKernel id. Pulled into a free
+        // function (below) so `qual_vars_subset_gate_catches_unbacked_member`
+        // can prove — with a tiny synthetic fixture, no full `Env::initial`
+        // needed — that the gate actually fires on a genuine miss, not just
+        // that it stays silent on the real (currently clean-of-undocumented-
+        // holes) table.
+        let unbacked = qual_vars_none_violations(
+            &env.qual_vars,
+            &interner,
+            &excluded_quals,
+            &deliberately_unbacked_members,
+        );
+        assert!(
+            unbacked.is_empty(),
+            "Task 3 subset gate: every non-excluded qual_vars member must \
+             resolve to a concrete StdlibKernel id (a `None` here means \
+             QUALIFIERS in env.rs names a member with NO matching \
+             StdlibKernel::ALL entry; either add the missing StdlibKernel \
+             variant + scheme, or add the qualifier/member to the \
+             excluded_quals / deliberately_unbacked_members exclusion sets \
+             above with a comment explaining why it is deliberately \
+             unbacked, mirroring KNOWN_UNBACKED in constrain.rs). {} \
+             violation(s):\n{}",
+            unbacked.len(),
+            unbacked.join("\n"),
+        );
+    }
+
+    /// Core of the Phase E Task 3 subset gate: collect one description string
+    /// per `VarHome::Kernel(None, ..)` member found in `qual_vars`, skipping
+    /// qualifiers in `excluded_quals` and `(qualifier, name)` pairs in
+    /// `deliberately_unbacked_members`. An empty return means every
+    /// non-excluded, non-deliberately-unbacked member resolves to a concrete
+    /// `StdlibKernel` id — the property this task's gate exists to enforce
+    /// (`crates/sky_canon/src/lib.rs`'s `canon_equals_registry`).
+    fn qual_vars_none_violations(
+        qual_vars: &std::collections::BTreeMap<
+            sky_intern::Symbol,
+            std::collections::BTreeMap<sky_intern::Symbol, crate::env::VarHome>,
+        >,
+        interner: &sky_intern::Interner,
+        excluded_quals: &std::collections::BTreeSet<&str>,
+        deliberately_unbacked_members: &std::collections::BTreeSet<(&str, &str)>,
+    ) -> Vec<String> {
+        use crate::env::VarHome;
+
+        let mut unbacked = Vec::new();
+        for (qual_sym, members) in qual_vars {
+            let qual_str = interner.resolve(*qual_sym).unwrap_or("<unknown>");
+            if excluded_quals.contains(qual_str) {
+                continue;
+            }
+            for (name_sym, home) in members {
+                let name_str = interner.resolve(*name_sym).unwrap_or("<unknown>");
+                if deliberately_unbacked_members.contains(&(qual_str, name_str)) {
+                    continue;
+                }
+                if let VarHome::Kernel(None, m, f) = home {
+                    let m_str = interner.resolve(*m).unwrap_or("<unknown>");
+                    let f_str = interner.resolve(*f).unwrap_or("<unknown>");
+                    unbacked.push(format!(
+                        "qual_vars[{qual_str:?}][{name_str:?}] is \
+                         VarHome::Kernel(None, {m_str:?}, {f_str:?})",
+                    ));
+                }
+            }
+        }
+        unbacked
+    }
+
+    /// **Mandatory #45 regression proof**: the Phase E Task 3 subset gate
+    /// (`qual_vars_none_violations`, exercised for real by
+    /// `canon_equals_registry`) actually FIRES on a kernel-without-scheme,
+    /// rather than being a check that just happens to stay silent on today's
+    /// (already-clean-of-undocumented-holes) table. This is the direct,
+    /// durable proof that closing #45's exit-0-then-cargo-fail class is not
+    /// merely a green test but a gate that provably catches the exact defect
+    /// class `PRINCIPLES.md` names: "a kernel that the resolver recognises
+    /// but the type-scheme table does not cover."
+    ///
+    /// Builds a minimal synthetic `qual_vars`-shaped fixture — bypassing
+    /// `Env::initial` entirely — with one qualifier holding a
+    /// `VarHome::Kernel(None, ..)` member that is in neither exclusion set,
+    /// and asserts the gate reports exactly that violation.
+    #[test]
+    fn qual_vars_subset_gate_catches_unbacked_member() {
+        use crate::env::VarHome;
+        use sky_intern::Interner;
+
+        let mut interner = Interner::new();
+        let qual_sym = interner.intern("Totally.Fake").expect("intern OOM");
+        let name_sym = interner.intern("madeUpKernel").expect("intern OOM");
+
+        let mut members = std::collections::BTreeMap::new();
+        // A kernel the resolver recognises (it is a real qual_vars member)
+        // but the type-scheme table cannot possibly cover, because — like
+        // the real drift Task 3 caught during development (`Ui.image`,
+        // `Html.doctype`, etc.) — no matching `StdlibKernel::ALL` entry
+        // exists for it at all.
+        members.insert(name_sym, VarHome::Kernel(None, qual_sym, name_sym));
+
+        let mut qual_vars = std::collections::BTreeMap::new();
+        qual_vars.insert(qual_sym, members);
+
+        let excluded_quals: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        let deliberately_unbacked_members: std::collections::BTreeSet<(&str, &str)> =
+            std::collections::BTreeSet::new();
+
+        let violations = qual_vars_none_violations(
+            &qual_vars,
+            &interner,
+            &excluded_quals,
+            &deliberately_unbacked_members,
+        );
+
+        assert_eq!(
+            violations.len(),
+            1,
+            "expected exactly one violation for the synthetic unbacked \
+             member, got {violations:?}",
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("Totally.Fake") && v.contains("madeUpKernel")),
+            "violation message doesn't name the synthetic kernel: {violations:?}",
+        );
+
+        // Sanity check on the OTHER direction: excluding the qualifier makes
+        // the same fixture report zero violations, proving the exclusion
+        // mechanism itself works (not just that the detector fires
+        // unconditionally).
+        let excluded_this_time: std::collections::BTreeSet<&str> =
+            std::iter::once("Totally.Fake").collect();
+        let violations_excluded = qual_vars_none_violations(
+            &qual_vars,
+            &interner,
+            &excluded_this_time,
+            &deliberately_unbacked_members,
+        );
+        assert!(
+            violations_excluded.is_empty(),
+            "expected zero violations once the qualifier is excluded, got {violations_excluded:?}",
+        );
+
+        // And via the member-granular exception set.
+        let member_excluded: std::collections::BTreeSet<(&str, &str)> =
+            std::iter::once(("Totally.Fake", "madeUpKernel")).collect();
+        let violations_member_excluded = qual_vars_none_violations(
+            &qual_vars,
+            &interner,
+            &excluded_quals,
+            &member_excluded,
+        );
+        assert!(
+            violations_member_excluded.is_empty(),
+            "expected zero violations once the member is excluded, got {violations_member_excluded:?}",
+        );
     }
 
     /// Phase E — Task 0 gate. The `KNOWN_UNBACKED` kernels (`PubSub.publish` /
