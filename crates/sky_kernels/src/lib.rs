@@ -1684,31 +1684,31 @@ impl StdlibKernel {
             Self::TaskWithBaseMs => d("Task", "withBaseMs", 2, Pure, "task_with_base_ms"),
             Self::TaskWithKind => d("Task", "withKind", 2, Pure, "task_with_kind"),
             // ── Io ──────────────────────────────────────────────────────────
-            Self::IoReadLine => d("Io", "readLine", 0, Pure, "io_read_line"),
+            Self::IoReadLine => d("Io", "readLine", 1, Pure, "io_read_line"),
             Self::IoWriteStdout => d("Io", "writeStdout", 1, Pure, "io_write_stdout"),
             Self::IoWriteStderr => d("Io", "writeStderr", 1, Pure, "io_write_stderr"),
             // ── Time (non-TEA) ──────────────────────────────────────────────
-            Self::TimeNow => d("Time", "now", 0, Pure, "time_now"),
+            Self::TimeNow => d("Time", "now", 1, Pure, "time_now"),
             Self::TimeSleep => d("Time", "sleep", 1, Pure, "time_sleep"),
-            Self::TimeUnixMillis => d("Time", "unixMillis", 0, Pure, "time_unix_millis"),
+            Self::TimeUnixMillis => d("Time", "unixMillis", 1, Pure, "time_unix_millis"),
             Self::TimeTimeString => d("Time", "timeString", 1, Pure, "time_time_string"),
             Self::TimeIsLeapYear => d("Time", "isLeapYear", 1, Pure, "time_is_leap_year"),
             Self::TimeDaysInMonth => d("Time", "daysInMonth", 2, Pure, "time_days_in_month"),
             // ── System ──────────────────────────────────────────────────────
-            Self::SystemArgs => d("System", "args", 0, Pure, "system_args"),
+            Self::SystemArgs => d("System", "args", 1, Pure, "system_args"),
             Self::SystemGetenv => d("System", "getenv", 1, Pure, "system_getenv"),
             Self::SystemGetenvOr => d("System", "getenvOr", 2, Pure, "system_getenv_or"),
             Self::SystemGetArg => d("System", "getArg", 1, Pure, "system_get_arg"),
-            Self::SystemGetenvInt => d("System", "getenvInt", 2, Pure, "system_getenv_int"),
-            Self::SystemGetenvBool => d("System", "getenvBool", 2, Pure, "system_getenv_bool"),
+            Self::SystemGetenvInt => d("System", "getenvInt", 1, Pure, "system_getenv_int"),
+            Self::SystemGetenvBool => d("System", "getenvBool", 1, Pure, "system_getenv_bool"),
             Self::SystemSetenv => d("System", "setenv", 2, Pure, "system_setenv"),
             Self::SystemUnsetenv => d("System", "unsetenv", 1, Pure, "system_unsetenv"),
-            Self::SystemCwd => d("System", "cwd", 0, Pure, "system_cwd"),
-            Self::SystemLoadEnv => d("System", "loadEnv", 0, Pure, "system_load_env"),
+            Self::SystemCwd => d("System", "cwd", 1, Pure, "system_cwd"),
+            Self::SystemLoadEnv => d("System", "loadEnv", 1, Pure, "system_load_env"),
             Self::SystemExit => d("System", "exit", 1, Pure, "system_exit"),
             // ── Random ──────────────────────────────────────────────────────
             Self::RandomInt => d("Random", "int", 2, Pure, "random_int"),
-            Self::RandomFloat => d("Random", "float", 0, Pure, "random_float"),
+            Self::RandomFloat => d("Random", "float", 2, Pure, "random_float"),
             Self::RandomChoice => d("Random", "choice", 1, Pure, "random_choice"),
             // ── File ────────────────────────────────────────────────────────
             Self::FileReadFile => d("File", "readFile", 1, Pure, "file_read_file"),
@@ -1732,7 +1732,7 @@ impl StdlibKernel {
             Self::HttpRequest => d("Http", "request", 1, Pure, "http_request"),
             Self::HttpParseQuery => d("Http", "parseQuery", 1, Pure, "http_parse_query"),
             Self::HttpDefaultRequest => {
-                d("Http", "defaultRequest", 0, Pure, "http_default_request")
+                d("Http", "defaultRequest", 1, Pure, "http_default_request")
             }
             Self::HttpWithMethod => d("Http", "withMethod", 2, Pure, "http_with_method"),
             Self::HttpWithTimeout => d("Http", "withTimeout", 2, Pure, "http_with_timeout"),
@@ -1740,9 +1740,9 @@ impl StdlibKernel {
             Self::HttpWithHeader => d("Http", "withHeader", 3, Pure, "http_with_header"),
             // ── Db ──────────────────────────────────────────────────────────
             Self::DbConnect => d("Db", "connect", 1, Db, "db_connect"),
-            Self::DbOpen => d("Db", "open", 1, Db, "db_open"),
+            Self::DbOpen => d("Db", "open", 2, Db, "db_open"),
             Self::DbClose => d("Db", "close", 1, Db, "db_close"),
-            Self::DbExecRaw => d("Db", "execRaw", 3, Db, "db_exec_raw"),
+            Self::DbExecRaw => d("Db", "execRaw", 2, Db, "db_exec_raw"),
             Self::DbExec => d("Db", "exec", 3, Db, "db_exec_params"),
             Self::DbQuery => d("Db", "query", 3, Db, "db_query_params"),
             Self::DbQueryDecode => d("Db", "queryDecode", 4, Db, "db_query_decode_params"),
@@ -1751,11 +1751,11 @@ impl StdlibKernel {
             Self::DbGetBool => d("Db", "getBool", 2, Db, "db_get_bool"),
             Self::DbGetField => d("Db", "getField", 2, Db, "db_get_field"),
             Self::DbInsertRow => d("Db", "insertRow", 3, Db, "db_insert_row"),
-            Self::DbGetById => d("Db", "getById", 2, Db, "db_get_by_id"),
-            Self::DbUpdateById => d("Db", "updateById", 3, Db, "db_update_by_id"),
-            Self::DbDeleteById => d("Db", "deleteById", 2, Db, "db_delete_by_id"),
-            Self::DbFindOneByField => d("Db", "findOneByField", 3, Db, "db_find_one_by_field"),
-            Self::DbFindManyByField => d("Db", "findManyByField", 3, Db, "db_find_many_by_field"),
+            Self::DbGetById => d("Db", "getById", 3, Db, "db_get_by_id"),
+            Self::DbUpdateById => d("Db", "updateById", 4, Db, "db_update_by_id"),
+            Self::DbDeleteById => d("Db", "deleteById", 3, Db, "db_delete_by_id"),
+            Self::DbFindOneByField => d("Db", "findOneByField", 4, Db, "db_find_one_by_field"),
+            Self::DbFindManyByField => d("Db", "findManyByField", 4, Db, "db_find_many_by_field"),
             Self::DbFindByConditions => d("Db", "findByConditions", 3, Db, "db_find_by_conditions"),
             Self::DbInsertFields => d("Db", "insertFields", 3, Db, "db_insert_fields"),
             Self::DbUpdateFields => d("Db", "updateFields", 4, Db, "db_update_fields"),
@@ -1794,15 +1794,15 @@ impl StdlibKernel {
             // ── TEA: M6 reserved pub/sub ─────────────────────────────────────
             // Qualifier "Cmd" IS in qual_vars but "publish"/"publishNoEcho" are
             // NOT yet. Absent from ALL until wired; decl() is still exhaustive.
-            Self::CmdPublish => d("Cmd", "publish", 1, Tea, "cmd_publish"),
-            Self::CmdPublishNoEcho => d("Cmd", "publishNoEcho", 1, Tea, "cmd_publish_no_echo"),
+            Self::CmdPublish => d("Cmd", "publish", 2, Tea, "cmd_publish"),
+            Self::CmdPublishNoEcho => d("Cmd", "publishNoEcho", 2, Tea, "cmd_publish_no_echo"),
             // Qualifier "Sub" IS in qual_vars but "subscribeTopic" is NOT yet.
             Self::SubSubscribeTopic => d("Sub", "subscribeTopic", 2, Tea, "sub_subscribe_topic"),
             // Qualifier "PubSub" is NOT yet in qual_vars — safe to put in ALL
             // (tripwire skips unknown qualifiers), but kept out for clarity.
-            Self::PubSubPublish => d("PubSub", "publish", 1, Tea, "pubsub_publish"),
+            Self::PubSubPublish => d("PubSub", "publish", 2, Tea, "pubsub_publish"),
             Self::PubSubPublishNoEcho => {
-                d("PubSub", "publishNoEcho", 1, Tea, "pubsub_publish_no_echo")
+                d("PubSub", "publishNoEcho", 2, Tea, "pubsub_publish_no_echo")
             }
             // ── Sky.Http.Server / Middleware / RateLimit ─────────────────────
             Self::ServerGet => d("Server", "get", 2, Server, "server_get"),
@@ -1826,10 +1826,10 @@ impl StdlibKernel {
             Self::ServerBody => d("Server", "body", 1, Server, "server_body"),
             Self::ServerPath => d("Server", "path", 1, Server, "server_path"),
             Self::ServerMethod => d("Server", "method", 1, Server, "server_method"),
-            Self::ServerCookieNew => d("Server", "cookie", 1, Server, "server_cookie"),
+            Self::ServerCookieNew => d("Server", "cookie", 2, Server, "server_cookie"),
             Self::ServerWithCookie => d("Server", "withCookie", 2, Server, "server_with_cookie"),
             Self::MiddlewareWithCors => {
-                d("Middleware", "withCors", 1, Server, "middleware_with_cors")
+                d("Middleware", "withCors", 2, Server, "middleware_with_cors")
             }
             Self::MiddlewareWithLogging => d(
                 "Middleware",
@@ -1841,21 +1841,21 @@ impl StdlibKernel {
             Self::MiddlewareWithBasicAuth => d(
                 "Middleware",
                 "withBasicAuth",
-                2,
+                3,
                 Server,
                 "middleware_with_basic_auth",
             ),
             Self::MiddlewareWithRateLimit => d(
                 "Middleware",
                 "withRateLimit",
-                2,
+                4,
                 Server,
                 "middleware_with_rate_limit",
             ),
             Self::MiddlewareWithCsrf => {
                 d("Middleware", "withCsrf", 1, Server, "middleware_with_csrf")
             }
-            Self::RateLimitAllow => d("RateLimit", "allow", 2, Server, "rate_limit_allow"),
+            Self::RateLimitAllow => d("RateLimit", "allow", 4, Server, "rate_limit_allow"),
             // ── M7: Std.Ui / Std.Html render kernels ─────────────────────────
             Self::UiLayout => d("Ui", "layout", 2, Ui, "ui_layout"),
             Self::UiLayoutWith => d("Ui", "layoutWith", 2, Ui, "ui_layout_with"),
@@ -2049,7 +2049,7 @@ impl StdlibKernel {
             Self::LiveApp => d("Live", "app", 1, Live, "live_app"),
             Self::LiveAppRouted => d("Live", "appRouted", 1, Live, "live_app_routed"),
             Self::LiveRoute => d("Live", "route", 2, Live, "live_route"),
-            Self::LiveRenderStatic => d("Live", "renderStatic", 1, Live, "live_render_static"),
+            Self::LiveRenderStatic => d("Live", "renderStatic", 2, Live, "live_render_static"),
             // ── M7: Std.Tui app-entry kernels ────────────────────────────────
             Self::TuiProgram => d("Tui", "program", 1, Tui, "tui_app"),
             Self::TuiApp => d("Tui", "app", 1, Tui, "tui_app_ui"),
