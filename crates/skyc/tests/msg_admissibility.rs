@@ -105,14 +105,11 @@ main =
         }
 ";
 
-/// `Sky.Live` app: Msg variant carries a function. Before #90, this was
-/// rejected by the (now-deleted) declaration-site Gate 2 (`ir_contains_fun` in
-/// `lower_enum`, `SKY-L0114`), which fired before the #94 Msg gate ever ran.
-/// #90 lifted that gate (a declared function-typed payload is sound on its
-/// own — #87's derive-demotion keeps the emitted enum's derives correct), so
-/// this now correctly falls through to the MORE PRECISE #94 Msg-admissibility
-/// gate: `Msg` fails the runtime's `Clone + Send + Sync + Debug + 'static`
-/// bound because of the embedded function, `SKY-L0125`.
+/// `Sky.Live` app: Msg variant carries a function. Rejected by the pre-existing
+/// Gate 2 (`ir_contains_fun` in `lower_enum`, `SKY-L0114`) which fires before the
+/// #94 Msg gate. The important thing is that such programs are rejected; the
+/// code is `L0114` not `L0125` because function-in-constructor is a separate,
+/// earlier constraint.
 const LIVE_FN_MSG: &str = r"module Main exposing (main)
 
 import Std.Live as Live
@@ -237,8 +234,8 @@ main =
         }
 ";
 
-/// `Sky.Tui` app: Msg variant carries a function. Same #90 story as
-/// `LIVE_FN_MSG` — now falls through to the #94 Msg gate, `SKY-L0125`.
+/// `Sky.Tui` app: Msg variant carries a function. Rejected by Gate 2
+/// (SKY-L0114) before the #94 Msg gate, same as `LIVE_FN_MSG`.
 const TUI_FN_MSG: &str = r"module Main exposing (main)
 
 import Std.Tui as Tui
@@ -379,9 +376,8 @@ fn live_msg_with_cmd_is_rejected() -> Result<(), BoxError> {
 
 #[test]
 fn live_msg_with_fn_is_rejected() -> Result<(), BoxError> {
-    // #90 lifted the declaration-site Gate 2 (L0114); the #94 Msg gate (L0125)
-    // now correctly catches the non-admissible function-embedding Msg.
-    assert_rejected_with("live_fn_msg", LIVE_FN_MSG, "SKY-L0125")
+    // Gate 2 (L0114) fires before the #94 Msg gate for function-type payloads.
+    assert_rejected_with("live_fn_msg", LIVE_FN_MSG, "SKY-L0114")
 }
 
 #[test]
@@ -396,9 +392,8 @@ fn tui_msg_with_cmd_is_rejected() -> Result<(), BoxError> {
 
 #[test]
 fn tui_msg_with_fn_is_rejected() -> Result<(), BoxError> {
-    // #90 lifted the declaration-site Gate 2 (L0114); the #94 Msg gate (L0125)
-    // now correctly catches the non-admissible function-embedding Msg.
-    assert_rejected_with("tui_fn_msg", TUI_FN_MSG, "SKY-L0125")
+    // Gate 2 (L0114) fires before the #94 Msg gate for function-type payloads.
+    assert_rejected_with("tui_fn_msg", TUI_FN_MSG, "SKY-L0114")
 }
 
 /// THE CRITICAL ASYMMETRY TEST: Html in Msg must be ACCEPTED (derivable, not serde).
