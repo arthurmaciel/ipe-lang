@@ -122,6 +122,28 @@ struct Builtins {
     /// handler parameter type in `mapError` / `onError` so a bare lambda `\e ->
     /// ...` infers `e : Error` without leaving a free variable.
     error: Symbol,
+    /// `ErrorKind` — the 11-variant classification carried by `Error`'s first
+    /// field (backlog #85/#160). Registered as a Prelude built-in exactly
+    /// like `Order` (#123) — see `sky_lower`'s `enum_variants`/`ctor_arity`
+    /// (E-12, #152), which already validate `Error kind info ->` patterns.
+    errorkind: Symbol,
+    /// The 11 `ErrorKind` nullary constructor symbols, in canon's registered
+    /// index order (`crates/sky_canon/src/env.rs`) — do not reorder.
+    ek_io: Symbol,
+    ek_network: Symbol,
+    ek_ffi: Symbol,
+    ek_decode: Symbol,
+    ek_timeout: Symbol,
+    ek_not_found: Symbol,
+    ek_permission_denied: Symbol,
+    ek_invalid_input: Symbol,
+    ek_conflict: Symbol,
+    ek_unavailable: Symbol,
+    ek_unexpected: Symbol,
+    /// `"message"` — `ErrorInfo`'s sole field this pass (`details` is filed as
+    /// an explicit follow-up, see `runtime/src/sky_runtime/error.rs`'s module
+    /// doc).
+    error_info_message: Symbol,
     /// Two distinct scheme type-variable symbols (`a`, `e`) used to build the
     /// built-in constructor schemes. Their identity links a constructor's
     /// payload to its result type, exactly like a user union's declared vars;
@@ -423,6 +445,19 @@ impl Builtins {
             true_: interner.intern("True")?,
             false_: interner.intern("False")?,
             error: interner.intern("Error")?,
+            errorkind: interner.intern("ErrorKind")?,
+            ek_io: interner.intern("Io")?,
+            ek_network: interner.intern("Network")?,
+            ek_ffi: interner.intern("Ffi")?,
+            ek_decode: interner.intern("Decode")?,
+            ek_timeout: interner.intern("Timeout")?,
+            ek_not_found: interner.intern("NotFound")?,
+            ek_permission_denied: interner.intern("PermissionDenied")?,
+            ek_invalid_input: interner.intern("InvalidInput")?,
+            ek_conflict: interner.intern("Conflict")?,
+            ek_unavailable: interner.intern("Unavailable")?,
+            ek_unexpected: interner.intern("Unexpected")?,
+            error_info_message: interner.intern("message")?,
             tv_a: interner.intern("a")?,
             tv_e: interner.intern("e")?,
             // Http field names (camelCase, as they appear in Sky source).
@@ -608,6 +643,24 @@ impl Builtins {
             name: self.bytes,
             args: Vec::new(),
         };
+        // Monomorphic `Error` / `ErrorKind` (backlog #85/#160) — no type params.
+        let error_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.error,
+            args: Vec::new(),
+        };
+        let errorkind_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.errorkind,
+            args: Vec::new(),
+        };
+        // `ErrorInfo` this pass: `{ message : String }` — an anonymous closed
+        // record, not a nominal type (Sky records are structural; `details`
+        // is filed as an explicit follow-up, see `runtime/.../error.rs`).
+        let error_info_ty = Ty::Record(
+            BTreeMap::from([(self.error_info_message, string_ty.clone())]),
+            RowTail::Closed,
+        );
         vec![
             (
                 self.true_,
@@ -649,6 +702,94 @@ impl Builtins {
                 CtorScheme {
                     arg_tys: vec![Ty::Var(self.tv_e.as_raw())],
                     result: result_ty,
+                },
+            ),
+            // ── Error / ErrorKind constructors (backlog #85/#160) ──────────────
+            // `Error : ErrorKind -> ErrorInfo -> Error` — closes #160 (the
+            // no-scheme ctor-pattern fallback that bound `info` to an untied
+            // fresh var). `ErrorKind`'s 11 variants are all nullary.
+            (
+                self.error,
+                CtorScheme {
+                    arg_tys: vec![errorkind_ty.clone(), error_info_ty],
+                    result: error_ty,
+                },
+            ),
+            (
+                self.ek_io,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: errorkind_ty.clone(),
+                },
+            ),
+            (
+                self.ek_network,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: errorkind_ty.clone(),
+                },
+            ),
+            (
+                self.ek_ffi,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: errorkind_ty.clone(),
+                },
+            ),
+            (
+                self.ek_decode,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: errorkind_ty.clone(),
+                },
+            ),
+            (
+                self.ek_timeout,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: errorkind_ty.clone(),
+                },
+            ),
+            (
+                self.ek_not_found,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: errorkind_ty.clone(),
+                },
+            ),
+            (
+                self.ek_permission_denied,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: errorkind_ty.clone(),
+                },
+            ),
+            (
+                self.ek_invalid_input,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: errorkind_ty.clone(),
+                },
+            ),
+            (
+                self.ek_conflict,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: errorkind_ty.clone(),
+                },
+            ),
+            (
+                self.ek_unavailable,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: errorkind_ty.clone(),
+                },
+            ),
+            (
+                self.ek_unexpected,
+                CtorScheme {
+                    arg_tys: Vec::new(),
+                    result: errorkind_ty,
                 },
             ),
             // ── SqlValue constructors (M5b-db) ─────────────────────────────────
@@ -4786,15 +4927,22 @@ impl<'a> Builder<'a> {
             K::JsonEncObject => fun(list(tuple2(string(), value())), value()),
             K::JsonEncEncode => fun(int(), fun(value(), string())),
 
-            // ── Sky.Core.Error (13 — minimal `Error = String` slice, #86) ──
-            //    `Error` is a DISTINCT nominal HM type (`builtins.error`) even
-            //    though it lowers to `IrType::Str` (`SkyError = String`), so
-            //    `Task.fail (Error.unexpected "…") : Task Error a` unifies and a
-            //    stringly `Task.fail "…"` still type-checks (both are `Error`-
-            //    channel). The eight message constructors are `String -> Error`;
+            // ── Sky.Core.Error (14 — real Error/ErrorKind ADT, backlog #85/#160) ──
+            //    `Error` is `Error ErrorKind ErrorInfo` (`Error`'s own ctor scheme
+            //    is registered in `ctor_schemes()`), backed at runtime by the real
+            //    `sky_runtime::error::SkyError` enum (`IrType::Error`) — no longer
+            //    string-backed. The eight message constructors are `String ->
+            //    Error` (each now classifies its `ErrorKind` at construction);
             //    `timeout`/`notFound`/`permissionDenied` are nullary `Error`;
-            //    `toString : Error -> String`; `withMessage : String -> Error ->
-            //    Error`. The rich `ErrorKind`/`ErrorDetails` ADT is deferred (#85).
+            //    `toString : Error -> String` routes through the shared
+            //    Stringify-bounded mechanism (see the `BasicsToString |
+            //    ErrorToString` special case above — this scheme arm is a
+            //    shadowed fallback, never actually reached); `withMessage :
+            //    String -> Error -> Error`; `isRetryable : Error -> Bool`
+            //    classifies on kind alone. `ErrorInfo` this pass carries only
+            //    `message` — the rich `ErrorDetails` union is filed as an
+            //    explicit follow-up (`docs/architecture/backlog.md`), not
+            //    silently dropped.
             K::ErrorUnexpected
             | K::ErrorInvalidInput
             | K::ErrorIo
@@ -4806,6 +4954,7 @@ impl<'a> Builder<'a> {
             K::ErrorTimeout | K::ErrorNotFound | K::ErrorPermissionDenied => error_ty(),
             K::ErrorToString => fun(var(0), string()),
             K::ErrorWithMessage => fun(string(), fun(error_ty(), error_ty())),
+            K::ErrorIsRetryable => fun(error_ty(), bool_ty()),
 
             // ── Sky.Core.CssSafety (4 — Std.Css leaf security kernels, #47) ──
             //    The three parsers are `String -> Maybe String` (`None` => the
@@ -5664,6 +5813,7 @@ mod registry_phase_c_tests {
             K::ErrorPermissionDenied,
             K::ErrorToString,
             K::ErrorWithMessage,
+            K::ErrorIsRetryable,
             // CssSafety (4 — Std.Css leaf security kernels, #47). Each WAS a hole
             // (`kernel_ty` has no CssSafety arm → `Ty::Var(u32::MAX)`) until
             // schemed above; the three parsers are `String -> Maybe String`,

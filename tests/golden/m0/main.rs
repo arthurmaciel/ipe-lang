@@ -42,9 +42,9 @@ impl SkyStringify for MainMsg {
     }
 }
 
-type SkyError = String;
+pub use sky_runtime::error::SkyError;
 pub fn str_err(s: &str) -> SkyError {
-    s.to_string()
+    SkyError::unexpected(s.to_string())
 }
 
 pub type SkyTask<A> = sky_runtime::SkyTask<SkyError, A>;

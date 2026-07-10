@@ -696,6 +696,28 @@ pub enum IrType {
     /// a field type in record structs and as a direct call-argument / return
     /// value for all `Decimal.*` kernels.
     Decimal,
+
+    /// The built-in `ErrorKind` type — `Error`'s 11-variant classification
+    /// (backlog #85/#160).
+    ///
+    /// Renders as `sky_runtime::error::SkyErrorKind` (a `#[repr(u8)]` enum,
+    /// same convention as [`IrType::Order`]). Constructors (`Io` / `Network` /
+    /// …) emit via the `builtin_runtime_enum` path — no synthetic `EnumDef`.
+    ErrorKind,
+
+    /// The built-in `Error` type — `Error ErrorKind ErrorInfo` (backlog
+    /// #85/#160).
+    ///
+    /// Renders as `sky_runtime::error::SkyError`. Sole constructor shares its
+    /// name with the type (`enum_variants[(Prelude, error)] = [error]`, set in
+    /// `sky_lower`), so it emits as the tuple variant `SkyError::Error(kind,
+    /// info)` via the SAME `builtin_runtime_enum` path `Maybe`/`Result` use —
+    /// no synthetic `EnumDef`, no new emitter mechanism.
+    ///
+    /// This pass's `ErrorInfo` carries only `message`; the reference design's
+    /// `ErrorDetails` union is an explicit, filed follow-up (not a soundness
+    /// gap — `ErrorInfo` here is a plain closed record, not a leaf `IrType`).
+    Error,
 }
 
 /// Tag enum for the message-parametric `Std.Ui` / `Std.Html` types.
@@ -807,8 +829,13 @@ pub fn ir_type_is_derivable(
         | IrType::Json
         // `SkyOrder` derives Clone + Copy + PartialEq + Eq + Debug — fully derivable.
         // `Decimal` derives Clone + Copy + PartialEq + Eq + Debug — fully derivable.
+        // `SkyErrorKind` derives Clone + Copy + PartialEq + Eq + Debug.
+        // `SkyError` derives Clone + PartialEq + Eq + Debug (not Copy — carries
+        // a heap-allocated `String` message).
         | IrType::Order
         | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error
         | IrType::Generic(_)
         | IrType::UiPlain(_) => true,
         // The fully-derivable Std.Ui / Std.Html carriers vs the two Clone-only
@@ -920,8 +947,13 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::Generic(_)
         // `Order` (LT/EQ/GT) is a plain no-payload enum; SkyOrder derives serde.
         // `Decimal` is a Copy newtype; rust_decimal supports serde via feature.
+        // `SkyErrorKind`/`SkyError` derive serde — `Error` must serialize to
+        // round-trip through a Live session store (e.g. a Model's
+        // `historyError : Maybe Error` field).
         | IrType::Order
-        | IrType::Decimal => true,
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error => true,
         // All non-serde leaves collapse to `false`:
         //   * `UiPlain` value types (`Length`/`Color`/… → `ui::element::*`) and
         //     every `Ui` carrier (`Html`/`Element`/`Attribute`) derive only

@@ -190,6 +190,8 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         }
         IrType::Order => "Order".to_owned(),
         IrType::Decimal => "Decimal".to_owned(),
+        IrType::ErrorKind => "ErrorKind".to_owned(),
+        IrType::Error => "Error".to_owned(),
     }
 }
 
@@ -330,6 +332,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::ErrorPermissionDenied => "Error.permissionDenied",
         KernelFn::ErrorToString => "Error.toString",
         KernelFn::ErrorWithMessage => "Error.withMessage",
+        KernelFn::ErrorIsRetryable => "Error.isRetryable",
         // CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels, #47)
         KernelFn::CssSafetySafeValue => "CssSafety.safeValue",
         KernelFn::CssSafetySafePropName => "CssSafety.safePropName",
