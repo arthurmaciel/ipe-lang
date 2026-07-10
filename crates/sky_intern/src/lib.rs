@@ -104,17 +104,6 @@ impl Interner {
     pub fn resolve(&self, sym: Symbol) -> Option<&str> {
         self.strings.get(sym.0 as usize).map(String::as_str)
     }
-
-    /// Whether `s` has already been interned, i.e. `intern(s)` would return an
-    /// existing [`Symbol`] rather than minting a new one.
-    ///
-    /// Lets a caller mint a synthesized name (e.g. a generalized type
-    /// variable's `"a"`, `"b"`, …) that is guaranteed not to alias a real user
-    /// identifier, without provisionally interning-then-discarding candidates.
-    #[must_use]
-    pub fn contains(&self, s: &str) -> bool {
-        self.map.contains_key(s)
-    }
 }
 
 #[cfg(test)]

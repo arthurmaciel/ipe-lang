@@ -43,12 +43,11 @@ pub use solve::{BUDGET_ENV, Budget, DEFAULT_SOLVER_BUDGET};
 pub use ty::{RowTail, Ty, TyBounds};
 
 use constrain::{
-    Builder, FieldAccess, RecordUpdate, RoutedLiveCheck, RouteWitnessCheck, SchemeApp,
-    promote_untyped_boundaries, zonk,
+    Builder, FieldAccess, RecordUpdate, RoutedLiveCheck, RouteWitnessCheck, SchemeApp, zonk,
 };
 use doc::{VarNamer, ty_to_doc};
 use solve::solve_attributed;
-use ty::{Content, FlatType, tag_solver_var};
+use ty::{Content, FlatType};
 use unify::unify;
 use unionfind::{UnionFind, VarId};
 
@@ -109,13 +108,6 @@ pub struct SolvedTypes {
     /// producing E0308 in the emitted Rust.  With it, the lowerer emits
     /// `IrType::Generic(parentMsg_sym)` → `Attribute<T1>`.
     pub poly_var_map: BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<u32, Symbol>>,
-    /// Generalized type-variable symbols of each untyped top-level binding
-    /// that Boundary Scheme Promotion generalized, in synthesis order (`"a"`,
-    /// `"b"`, …), keyed by `(home, def_name)`. Absent or empty for a def that
-    /// stayed fully monomorphic (no boundary-free residual `Flex` root) — the
-    /// lowerer's untyped-def arm behaves exactly as before this field
-    /// existed. See `docs/architecture/class1-inference-fix-spec-2026-07-09.md`.
-    pub untyped_type_params: BTreeMap<(Vec<Symbol>, Symbol), Vec<Symbol>>,
 }
 
 /// Infer the types of a canonical module.
@@ -188,16 +180,6 @@ fn infer_with_budget_attributed(
     let generated = lift!(Builder::run(&mut uf, interner, m));
 
     solve_attributed(&mut uf, budget, interner, &generated.constraints)?;
-
-    // Boundary Scheme Promotion (class-1 inference fix #2): generalize every
-    // untyped top-level binding at its home module's boundary and discharge
-    // every cross-module reference against the resulting scheme, fresh per
-    // use site. Must run BEFORE `resolve_deferred` below: a discharged
-    // cross-module call site's field accesses / record updates need the
-    // freshly-instantiated (not the stale program-wide-shared) structure to
-    // resolve correctly. See
-    // `docs/architecture/class1-inference-fix-spec-2026-07-09.md`.
-    let untyped_schemes = promote_untyped_boundaries(&mut uf, budget, interner, &generated)?;
 
     // Discharge deferred field accesses and record updates in a joint fixpoint.
     // These two passes must interleave because a record update can pin the
@@ -354,30 +336,6 @@ fn infer_with_budget_attributed(
         }
     }
 
-    // Fold each Boundary-Scheme-Promoted untyped def's quantified vars into
-    // `untyped_type_params` / `poly_var_map`, alongside the typed bindings'
-    // entries above. Region/env `Ty::Var`s for these defs come from `zonk`
-    // (see the `env` read-back below), which always tags a solver
-    // representative with `tag_solver_var` before storing it — so these
-    // `poly_var_map` keys must be tagged too, or `current_poly_tvars` lookups
-    // in the lowerer would never match (unlike the typed-rigids loop above,
-    // which is keyed by the untagged skolem representative because a typed
-    // binding's own `params`/`ret` are read from its ANNOTATION type, never
-    // zonked).
-    let mut untyped_type_params: BTreeMap<(Vec<Symbol>, Symbol), Vec<Symbol>> = BTreeMap::new();
-    for (key, scheme) in &untyped_schemes {
-        if scheme.quantified.is_empty() {
-            continue;
-        }
-        let tagged: BTreeMap<u32, Symbol> = scheme
-            .quantified
-            .iter()
-            .map(|(&root, &sym)| (tag_solver_var(root), sym))
-            .collect();
-        untyped_type_params.insert(key.clone(), scheme.quantified.values().copied().collect());
-        poly_var_map.insert(key.clone(), tagged);
-    }
-
     // Soundness gate: a super-typed binding used at a concrete type must be used
     // at a type that actually supports the operations its generic emission
     // requires. Without this, `double True` (where `double` needs Number) would
@@ -409,7 +367,6 @@ fn infer_with_budget_attributed(
         bounds,
         warnings,
         poly_var_map,
-        untyped_type_params,
     })
 }
 
@@ -1439,316 +1396,6 @@ mod tests {
         let parsed = sky_parse::parse_module(src, &mut i).ok()?;
         let m = sky_canon::canonicalise(&parsed, &mut i).ok()?;
         Some((m, i))
-    }
-
-    // ── Boundary Scheme Promotion (class-1 inference fix #2) ────────────────
-
-    /// Canonicalise + link N modules, given in dependency-first topo order
-    /// (each entry's own `import`s must reference only EARLIER entries),
-    /// mirroring what the real multi-file build driver does
-    /// (`skyc::project` discovers + topo-orders files, `sky_canon::link`
-    /// merges them into one program). Each entry is `(dotted module path,
-    /// source)`. Returns `None` on any parse / canonicalise / link failure —
-    /// per this file's existing convention, a `None` here means "test can't
-    /// run" (fails the caller's own `let Some(..) = .. else { return; }`
-    /// guard), it is never itself the assertion.
-    fn link_modules(modules_src: &[(&str, &str)]) -> Option<(canon::Module, Interner)> {
-        let mut i = Interner::new();
-        let mut deps: BTreeMap<Vec<Symbol>, sky_canon::ModuleExports> = BTreeMap::new();
-        let mut canon_modules: Vec<canon::Module> = Vec::new();
-        let mut entry_path: Vec<Symbol> = Vec::new();
-        for (path_str, src) in modules_src {
-            let path: Vec<Symbol> = path_str
-                .split('.')
-                .map(|seg| i.intern(seg))
-                .collect::<DResult<Vec<Symbol>>>()
-                .ok()?;
-            let parsed = sky_parse::parse_module(src, &mut i).ok()?;
-            let (cm, exports) =
-                sky_canon::canonicalise_module(&parsed, &path, &deps, &mut i).ok()?;
-            deps.insert(path.clone(), exports);
-            entry_path = path;
-            canon_modules.push(cm);
-        }
-        let linked = sky_canon::link::link(entry_path, canon_modules, &i).ok()?;
-        Some((linked, i))
-    }
-
-    const LIB1_IDENT: (&str, &str) = ("Lib1", "module Lib1 exposing (ident)\n\nident x =\n    x\n");
-
-    /// Test matrix item 1: a cross-module untyped helper used at two
-    /// DIFFERENT concrete types from two DIFFERENT importers must be
-    /// accepted (empirically matches `sky v0.16.29`'s observable semantics —
-    /// see the fix spec's decision record).
-    #[test]
-    fn untyped_binding_generalizes_across_cross_module_uses() {
-        let mid = (
-            "ModA",
-            "module ModA exposing (useInt)\n\n\
-             import Lib1 exposing (ident)\n\n\
-             useInt : Int\n\
-             useInt =\n    ident 5\n",
-        );
-        let main = (
-            "Main",
-            "module Main exposing (main)\n\n\
-             import Sky.Core.Prelude exposing (..)\n\
-             import Lib1 exposing (ident)\n\
-             import ModA exposing (useInt)\n\n\
-             useBool : Bool\n\
-             useBool =\n    ident (0 == 0)\n\n\
-             main =\n    println (String.fromInt useInt)\n",
-        );
-        let Some((m, mut i)) = link_modules(&[LIB1_IDENT, mid, main]) else {
-            return;
-        };
-        let r = infer(&m, &mut i);
-        assert!(
-            r.is_ok(),
-            "a cross-module untyped helper used at Int (ModA) and Bool (Main) \
-             must be accepted: {r:?}"
-        );
-    }
-
-    // Test matrix item 2 (existing, unchanged reference-parity behaviour):
-    // see `untyped_polymorphic_use_at_two_types_is_rejected` — same-module
-    // reuse at two types stays rejected.
-
-    /// Test matrix item 3: an untyped VALUE binding (no parameters) also
-    /// generalizes cross-module — no value restriction (the reference
-    /// compiler has none; Sky is pure, so it's sound).
-    #[test]
-    fn untyped_value_binding_generalizes_across_cross_module_uses() {
-        let lib = ("Lib1", "module Lib1 exposing (empty)\n\nempty =\n    []\n");
-        let mid = (
-            "ModA",
-            "module ModA exposing (ints)\n\n\
-             import Lib1 exposing (empty)\n\n\
-             ints : List Int\n\
-             ints =\n    empty\n",
-        );
-        let main = (
-            "Main",
-            "module Main exposing (main)\n\n\
-             import Sky.Core.Prelude exposing (..)\n\
-             import Lib1 exposing (empty)\n\
-             import ModA exposing (ints)\n\n\
-             bools : List Bool\n\
-             bools =\n    empty\n\n\
-             main =\n    println (String.fromInt (List.length ints + List.length bools))\n",
-        );
-        let Some((m, mut i)) = link_modules(&[lib, mid, main]) else {
-            return;
-        };
-        let r = infer(&m, &mut i);
-        assert!(
-            r.is_ok(),
-            "an untyped zero-param value binding used at List Int and List \
-             Bool cross-module must be accepted (no value restriction): {r:?}"
-        );
-    }
-
-    /// Test matrix item 4: a chained cross-module untyped helper
-    /// (`twice x = Lib1.ident (Lib1.ident x)`) proves discharge instantiates
-    /// fresh per reference — the SAME call site referencing `ident` twice
-    /// must not force the two occurrences to share one instantiation.
-    #[test]
-    fn chained_cross_module_untyped_reference_discharges_fresh_per_site() {
-        let main = (
-            "Main",
-            "module Main exposing (main)\n\n\
-             import Sky.Core.Prelude exposing (..)\n\
-             import Lib1 exposing (ident)\n\n\
-             twice x =\n    ident (ident x)\n\n\
-             useInt : Int\n\
-             useInt =\n    twice 5\n\n\
-             main =\n    println (String.fromInt useInt)\n",
-        );
-        let Some((m, mut i)) = link_modules(&[LIB1_IDENT, main]) else {
-            return;
-        };
-        let r = infer(&m, &mut i);
-        assert!(
-            r.is_ok(),
-            "a chained cross-module untyped reference (ident (ident x)) must \
-             typecheck: {r:?}"
-        );
-    }
-
-    /// Test matrix item 5: a same-module recursive/mutually-recursive
-    /// untyped pair, used polymorphically from OUTSIDE the group, is
-    /// accepted — recursion resolves via the shared var within the module
-    /// (required for HM decidability), then the WHOLE group generalizes
-    /// together at the module boundary.
-    #[test]
-    fn recursive_untyped_pair_generalizes_together_at_the_boundary() {
-        let lib = (
-            "Lib1",
-            "module Lib1 exposing (isEven)\n\n\
-             isEven n =\n    if n == 0 then True else isOdd (n - 1)\n\n\
-             isOdd n =\n    if n == 0 then False else isEven (n - 1)\n",
-        );
-        let main = (
-            "Main",
-            "module Main exposing (main)\n\n\
-             import Sky.Core.Prelude exposing (..)\n\
-             import Lib1 exposing (isEven)\n\n\
-             result : Bool\n\
-             result =\n    isEven 4\n\n\
-             main =\n    println (String.fromInt (if result then 1 else 0))\n",
-        );
-        let Some((m, mut i)) = link_modules(&[lib, main]) else {
-            return;
-        };
-        let r = infer(&m, &mut i);
-        assert!(
-            r.is_ok(),
-            "a same-module recursive untyped pair used cross-module must \
-             typecheck: {r:?}"
-        );
-    }
-
-    /// Test matrix item 6: an obligation-gated def (`getName r = r.name`) —
-    /// a single-record-type cross-module use is still accepted (the existing
-    /// deferred-field-access gate fallback is preserved); a two-DIFFERENT-
-    /// record-type cross-module use is still rejected (D2/D3-style
-    /// row-conservatism: a Flex root still reachable from a pending field
-    /// access is excluded from quantification, so it stays program-wide
-    /// shared — exactly like before this fix).
-    #[test]
-    fn obligation_gated_untyped_def_single_record_type_cross_module_use_accepted() {
-        let lib = (
-            "Lib1",
-            "module Lib1 exposing (getName)\n\ngetName r =\n    r.name\n",
-        );
-        let main = (
-            "Main",
-            "module Main exposing (main)\n\n\
-             import Sky.Core.Prelude exposing (..)\n\
-             import Lib1 exposing (getName)\n\n\
-             name : String\n\
-             name =\n    getName { name = \"Ada\" }\n\n\
-             main =\n    println name\n",
-        );
-        let Some((m, mut i)) = link_modules(&[lib, main]) else {
-            return;
-        };
-        let r = infer(&m, &mut i);
-        assert!(
-            r.is_ok(),
-            "a single-record-type cross-module use of an obligation-gated \
-             untyped def must still typecheck: {r:?}"
-        );
-    }
-
-    #[test]
-    fn obligation_gated_untyped_def_two_record_types_cross_module_is_rejected() {
-        let lib = (
-            "Lib1",
-            "module Lib1 exposing (getName)\n\ngetName r =\n    r.name\n",
-        );
-        let mid = (
-            "ModA",
-            "module ModA exposing (aName)\n\n\
-             import Lib1 exposing (getName)\n\n\
-             aName : String\n\
-             aName =\n    getName { name = \"Ada\" }\n",
-        );
-        let main = (
-            "Main",
-            "module Main exposing (main)\n\n\
-             import Sky.Core.Prelude exposing (..)\n\
-             import Lib1 exposing (getName)\n\
-             import ModA exposing (aName)\n\n\
-             bName : String\n\
-             bName =\n    getName { name = \"Bea\", age = 9 }\n\n\
-             main =\n    println (aName ++ bName)\n",
-        );
-        let Some((m, mut i)) = link_modules(&[lib, mid, main]) else {
-            return;
-        };
-        let r = infer(&m, &mut i);
-        assert!(
-            r.is_err(),
-            "an obligation-gated untyped def used at TWO DIFFERENT record \
-             types cross-module must still be rejected (D2/D3-style \
-             row-conservatism, matches the pre-fix gate fallback): {r:?}"
-        );
-    }
-
-    /// Test matrix item 7: a `Super`-bounded untyped helper (`plus a b = a +
-    /// b`) used at `Int` in one module and `Float` in another must still be
-    /// rejected — Divergence D2: `Super`-bounded residual vars stay
-    /// program-monomorphic in phase 1 (the reference DOES generalize these;
-    /// deferred to phase 2, `bounds` map plumbing is additive-only).
-    #[test]
-    fn super_bounded_untyped_helper_cross_module_is_rejected() {
-        let lib = (
-            "Lib1",
-            "module Lib1 exposing (plus)\n\nplus a b =\n    a + b\n",
-        );
-        let mid = (
-            "ModA",
-            "module ModA exposing (sumInt)\n\n\
-             import Lib1 exposing (plus)\n\n\
-             sumInt : Int\n\
-             sumInt =\n    plus 1 2\n",
-        );
-        let main = (
-            "Main",
-            "module Main exposing (main)\n\n\
-             import Sky.Core.Prelude exposing (..)\n\
-             import Lib1 exposing (plus)\n\
-             import ModA exposing (sumInt)\n\n\
-             sumFloat : Float\n\
-             sumFloat =\n    plus 1.0 2.0\n\n\
-             main =\n    println (String.fromInt sumInt)\n",
-        );
-        let Some((m, mut i)) = link_modules(&[lib, mid, main]) else {
-            return;
-        };
-        let r = infer(&m, &mut i);
-        assert!(
-            r.is_err(),
-            "a Super-bounded untyped helper used at Int and Float \
-             cross-module must still be rejected (D2 — phase 1 does not \
-             generalize Number-bounded vars): {r:?}"
-        );
-    }
-
-    /// Test matrix item 8: a rigid-contaminated untyped def (its body unifies
-    /// with a typed sibling's skolem) is unchanged — phase 1 conservatively
-    /// excludes rigid roots from generalization, so this stays exactly as
-    /// restrictive as before the fix.
-    #[test]
-    fn rigid_contaminated_untyped_def_stays_unquantified() {
-        let src = "module Main exposing (main)\n\
-                   import Sky.Core.Prelude exposing (..)\n\
-                   f : a -> a\n\
-                   f x =\n    ident x\n\
-                   ident y =\n    y\n\
-                   useInt : Int\n\
-                   useInt =\n    f 5\n\
-                   useBool : Bool\n\
-                   useBool =\n    f (0 == 0)\n\
-                   main =\n    println (String.fromInt useInt)\n";
-        let Some((m, mut i)) = canon_src(src) else {
-            return;
-        };
-        // `ident`'s own shared var unifies with `f`'s rigid skolem `a` while
-        // `f`'s body is checked, so `ident` is rigid-contaminated. `f` itself
-        // is typed (annotated) and genuinely polymorphic — its own two uses
-        // at Int/Bool must still typecheck (this is unrelated to Boundary
-        // Scheme Promotion, just confirming the surrounding program is
-        // otherwise sound). The load-bearing assertion is only that this
-        // program's SHAPE (an untyped def rigid-contaminated by a typed
-        // sibling) does not ICE and does not silently over-generalize.
-        let r = infer(&m, &mut i);
-        assert!(
-            r.is_ok(),
-            "a typed polymorphic binding whose body routes through a \
-             rigid-contaminated untyped helper must still typecheck: {r:?}"
-        );
     }
 
     fn con_doc(name: &str) -> sky_diagnostics::TyDoc {
@@ -2954,16 +2601,10 @@ mod tests {
         );
     }
 
-    /// Reference-parity semantics (Boundary Scheme Promotion, class-1
-    /// inference fix #2): an *un*annotated binding is monomorphic *within its
-    /// home module* — every same-module reference shares one variable, so
-    /// using it at two different concrete types from within its own module is
-    /// a sound rejection, exactly matching the reference `sky` compiler's
-    /// `CLocal` semantics (empirically verified against `sky v0.16.29`; see
-    /// `docs/architecture/class1-inference-fix-spec-2026-07-09.md`). A
-    /// CROSS-module use at two different types IS accepted — see
-    /// [`untyped_binding_generalizes_across_cross_module_uses`]. To get
-    /// polymorphism from within the same module, annotate it (see
+    /// Documents the M2a limitation: an *un*annotated polymorphic binding is
+    /// monomorphic at its use sites (no rank-based generalisation yet), so using
+    /// it at two different concrete types in one module is a sound rejection. The
+    /// fix is to annotate it (see
     /// [`polymorphic_identity_used_at_int_and_bool_both_unify`]).
     #[test]
     fn untyped_polymorphic_use_at_two_types_is_rejected() {
