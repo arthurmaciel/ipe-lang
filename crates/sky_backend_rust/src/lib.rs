@@ -338,10 +338,25 @@ impl<'a> EmitCtx<'a> {
                     .iter()
                     .map(|s| resolve_sym(interner, *s))
                     .collect::<DResult<Vec<&str>>>()?;
-                func_names.insert(
-                    func.id,
-                    naming::module_value(&func_segs, resolve_sym(interner, func.name)?),
-                );
+                let rust_name = naming::module_value(&func_segs, resolve_sym(interner, func.name)?);
+                // AUD-08: mirror the enum guard above (`enum_names.values().any`,
+                // line ~306). `naming::module_value`'s snake_case fold is not
+                // injective over the (home, name) split — `["Std", "Ui"]/borderRounded`
+                // and `["Std", "Ui", "Border"]/rounded` both fold to
+                // `std_ui_border_rounded` — so two DISTINCT functions could
+                // otherwise emit the same Rust fn and trip `rustc` E0428. Fail
+                // closed with the same duplicate-value diagnostic rather than
+                // emit a broken crate.
+                if func_names.values().any(|n| n == &rust_name) {
+                    return Err(Diagnostic::Name {
+                        span: Span::DUMMY,
+                        msg: NameError::DuplicateValue {
+                            name: rust_name.into_boxed_str(),
+                            first: Span::DUMMY,
+                        },
+                    });
+                }
+                func_names.insert(func.id, rust_name);
             }
         }
 

@@ -40,9 +40,15 @@ fn gzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 fn gunzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
-    use flate2::read::GzDecoder;
+    // AUD-09: `GzDecoder` only decodes the FIRST gzip member and silently
+    // ignores any trailing concatenated members — Go's `gzip.Reader` (via
+    // `multistream(true)`, the default) decodes ALL concatenated members.
+    // `MultiGzDecoder` matches the Go behavior; single-member input decodes
+    // identically either way, so this is a pure completeness fix, not a
+    // behavior change for the common case.
+    use flate2::read::MultiGzDecoder;
     let max = decompress_max_bytes();
-    let d = GzDecoder::new(data);
+    let d = MultiGzDecoder::new(data);
     // Read up to max+1 bytes; if we fill the buffer exactly at max+1 the
     // input would expand beyond the cap.
     let mut out = Vec::new();

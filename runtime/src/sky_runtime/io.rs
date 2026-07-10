@@ -6,10 +6,22 @@ use std::io::Write;
 /// `Io.readLine : () -> Task Error String`. Reads one line from stdin with the
 /// trailing newline stripped. EOF yields an empty string (Ok), matching the
 /// "no more input" convention rather than erroring.
+///
+/// AUD-09: capped at 1 MiB via a `Take`-wrapped reader. Unbounded, a caller
+/// piping input with no newline (or a misbehaving/adversarial source) could
+/// grow `line` without limit (an OOM / DoS vector). Over the cap,
+/// `read_line` stops at the byte limit (a truncated line, no newline found)
+/// rather than allocating without bound — the same truncate-not-OOM
+/// trade-off `File.readFileLimit` already makes.
+const IO_READ_LINE_CAP_BYTES: u64 = 1024 * 1024;
+
 pub fn io_read_line<E: Send + From<String> + 'static>(_: ()) -> SkyTask<E, String> {
     Box::pin(async move {
         let mut line = String::new();
-        match std::io::stdin().read_line(&mut line) {
+        let stdin = std::io::stdin();
+        let limited = std::io::Read::take(stdin.lock(), IO_READ_LINE_CAP_BYTES);
+        let mut reader = std::io::BufReader::new(limited);
+        match std::io::BufRead::read_line(&mut reader, &mut line) {
             Ok(_) => {
                 let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
                 ok_res(trimmed)
