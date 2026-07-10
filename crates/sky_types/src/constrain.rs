@@ -864,7 +864,11 @@ impl Builtins {
                 },
             ),
             // SqlNull wraps another SqlValue as a type-level witness; the inner
-            // value is discarded by `into_sql_param()` → SqlParam::Null.
+            // value is discarded (a NULL carries no value) but its VARIANT TAG
+            // is threaded through `into_sql_param()` → `SqlParam::Null(Box<SqlParam>)`
+            // so the bind site can select a correctly-typed `Option::<T>::None`
+            // (load-bearing on Postgres, whose extended query protocol validates
+            // a per-param type-OID hint against the target column — Class 7 §4a).
             (
                 self.sql_null,
                 CtorScheme {

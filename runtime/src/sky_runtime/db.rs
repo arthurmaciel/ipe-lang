@@ -1185,6 +1185,25 @@ impl SqlIdent {
     }
 }
 
+/// Extract an `Int` id from a `RETURNING id` row. `Err` (never a fabricated
+/// `0`) when the `id` column isn't `i64`- or `i32`-decodable — a non-integer
+/// primary key (`TEXT`/`UUID`/composite) or a table whose PK column isn't
+/// named `id`. Before this helper existed, `db_insert_row` silently returned
+/// `0` on a decode miss — indistinguishable from a genuine `id = 0` row, and
+/// any caller that used the returned id to look the row back up would
+/// silently operate on the wrong row (or no row at all).
+#[cfg(feature = "db")]
+fn extract_returning_id(r: &DbRow) -> Result<i64, String> {
+    r.try_get::<i64, _>("id")
+        .or_else(|_| r.try_get::<i32, _>("id").map(|v| i64::from(v)))
+        .map_err(|_| {
+            "inserted row's id column is not an integer (non-integer or composite \
+             primary key) — cannot report an Int id; use Db.insertFieldsReturning \
+             with a typed decoder instead"
+                .to_string()
+        })
+}
+
 /// `insertRow : Db -> String -> Dict String String -> Task Error Int` —
 /// returns the inserted row's id (lastInsertRowid for sqlite).
 pub fn db_insert_row<E: Send + From<String> + 'static>(
@@ -1226,18 +1245,21 @@ pub fn db_insert_row<E: Send + From<String> + 'static>(
             // Postgres has no LastInsertId — append `RETURNING id` and read the
             // generated key (matches the Go backend's pgx path). `id` is
             // BIGSERIAL (i64) by db_auto_id_column, but a user table may use
-            // SERIAL (i32); try both and degrade to 0 (never panic) on mismatch.
+            // SERIAL (i32); try both, and surface a clear Err — never a
+            // fabricated `0` — when the id column isn't integer-decodable at
+            // all (non-integer/composite primary key).
             let sql = db_format_sql(format!("{} RETURNING id", base));
             let mut q = sqlx::query(&sql);
             for k in &keys {
                 q = q.bind(row.get(*k).cloned().unwrap_or_default());
             }
             match fetch_one_routed(&conn, q).await {
-                Ok(r) => ok_res(
-                    r.try_get::<i64, _>("id")
-                        .or_else(|_| r.try_get::<i32, _>("id").map(|v| v as i64))
-                        .unwrap_or(0),
-                ),
+                Ok(r) => match extract_returning_id(&r) {
+                    Ok(id) => ok_res(id),
+                    Err(msg) => {
+                        SkyResult::Err(format!("db.insertRow: {msg}").into())
+                    }
+                },
                 Err(e) => SkyResult::Err(sky_err(&e)),
             }
         } else {
@@ -1708,7 +1730,7 @@ pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
 //   StdDbSqlValue::SqlDecimal(d)  → SqlParam::Text(d.to_string())  (lossless)
 //   StdDbSqlValue::SqlTime(ms)    → SqlParam::Int(ms)  (Unix millis, matches Go)
 //   StdDbSqlValue::SqlMoney(m)    → SqlParam::Text("ISO_CODE AMOUNT")  (see note)
-//   StdDbSqlValue::SqlNull(_)     → SqlParam::Null
+//   StdDbSqlValue::SqlNull(inner) → SqlParam::Null(Box::new(inner.into_sql_param()))
 //
 // Money note: `StdMoneyMoney::Money(amount, currency)` is also generated; codegen
 // serialises it to "CODE AMOUNT" string (same as Go's sqlMoneyToString).  If
@@ -1739,8 +1761,21 @@ pub enum SqlParam {
     Bool(bool),
     /// `SqlBytes s` — binds as BLOB.
     Bytes(Vec<u8>),
-    /// `SqlNull _` — binds as NULL regardless of the witness type.
-    Null,
+    /// `SqlNull witness` — binds a NULL typed according to `witness`'s
+    /// variant, so the driver's type-OID hint (Postgres) matches the target
+    /// column. `witness`'s VALUE is never read (a NULL carries no value) —
+    /// only its variant tag selects the typed `Option::<T>::None` to bind.
+    ///
+    /// On SQLite this distinction is cosmetic (SQLite is dynamically typed —
+    /// a bound NULL is a NULL regardless of the wrapping Rust type). On
+    /// Postgres it is load-bearing: sqlx's extended query protocol sends a
+    /// type-OID hint per bound parameter derived from the bound Rust type,
+    /// and Postgres validates that hint against the target column's type at
+    /// prepare time. Binding `Option::<String>::None` (OID: TEXT) against an
+    /// `INTEGER`/`BOOLEAN`/`BYTEA`/`TIMESTAMP` column fails with a Postgres
+    /// type-mismatch error. Boxed to keep construction cheap (one variant,
+    /// rarely on a hot loop) without inflating every other variant's size.
+    Null(Box<SqlParam>),
 }
 
 // ── `From<T> for SqlParam` — primitive Sky types ────────────────────────────
@@ -1814,7 +1849,19 @@ fn bind_sql_param<'q>(q: DbQuery<'q>, p: SqlParam) -> DbQuery<'q> {
         SqlParam::Float(f) => q.bind(f),
         SqlParam::Bool(b) => q.bind(b),
         SqlParam::Bytes(v) => q.bind(v),
-        SqlParam::Null => q.bind(Option::<String>::None),
+        SqlParam::Null(witness) => match *witness {
+            SqlParam::Text(_) => q.bind(Option::<String>::None),
+            SqlParam::Int(_) => q.bind(Option::<i64>::None),
+            SqlParam::Float(_) => q.bind(Option::<f64>::None),
+            SqlParam::Bool(_) => q.bind(Option::<bool>::None),
+            SqlParam::Bytes(_) => q.bind(Option::<Vec<u8>>::None),
+            // A nested Null-of-Null witness is a degenerate shape that should
+            // not arise from codegen (SqlValue's SqlNull wraps a concrete leaf
+            // SqlValue variant, not another SqlNull) — fall back to a
+            // TEXT-typed NULL rather than panicking; matches the pre-fix
+            // SQLite-safe behaviour for this unreachable case.
+            SqlParam::Null(_) => q.bind(Option::<String>::None),
+        },
     }
 }
 
@@ -2142,11 +2189,15 @@ fn build_insert_sql(
 /// database applies their DEFAULT.  When every column is OmitField the runtime
 /// emits `INSERT INTO <table> DEFAULT VALUES`.
 ///
-/// Returns the number of rows affected (1 on success for a single-row insert).
+/// Returns the inserted row's generated/provided id (lastInsertRowid on
+/// sqlite; `RETURNING id` on Postgres, since Postgres's `QueryResult` carries
+/// no last-insert-id concept — see [`DB_USES_RETURNING_ID`]).
 ///
 /// Security: table + column names are identifier-validated `[A-Za-z0-9_.]`;
 /// values are bound positionally — never interpolated into SQL.
-/// Totality: every error path returns `SkyResult::Err`; no panic/unwrap.
+/// Totality: every error path returns `SkyResult::Err`; no panic/unwrap. Never
+/// fabricates `id = 0` on a non-integer primary key — surfaces a clear `Err`
+/// instead (mirrors [`db_insert_row`]'s fix for the same bug class).
 #[cfg(feature = "db")]
 pub fn db_insert_fields<E: Send + From<String> + 'static>(
     conn: Db,
@@ -2158,14 +2209,36 @@ pub fn db_insert_fields<E: Send + From<String> + 'static>(
             Ok(v) => v,
             Err(e) => return SkyResult::Err(e.into()),
         };
-        let sql = db_format_sql(base_sql);
-        let mut q = sqlx::query(&sql);
-        for p in args {
-            q = bind_sql_param(q, p);
-        }
-        match exec_routed(&conn, q).await {
-            Ok(res) => ok_res(db_last_insert_id(&res)),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+        if DB_USES_RETURNING_ID {
+            // Same rationale as `db_insert_row`: Postgres has no
+            // LastInsertId, so recover the generated key via `RETURNING id`
+            // instead of unconditionally calling `db_last_insert_id` (which
+            // is a stub returning a fabricated `0` on the Postgres config
+            // template — see `config_postgres.rs`).
+            let sql = db_format_sql(format!("{base_sql} RETURNING id"));
+            let mut q = sqlx::query(&sql);
+            for p in args {
+                q = bind_sql_param(q, p);
+            }
+            match fetch_one_routed(&conn, q).await {
+                Ok(r) => match extract_returning_id(&r) {
+                    Ok(id) => ok_res(id),
+                    Err(msg) => {
+                        SkyResult::Err(format!("db.insertFields: {msg}").into())
+                    }
+                },
+                Err(e) => SkyResult::Err(sky_err(&e)),
+            }
+        } else {
+            let sql = db_format_sql(base_sql);
+            let mut q = sqlx::query(&sql);
+            for p in args {
+                q = bind_sql_param(q, p);
+            }
+            match exec_routed(&conn, q).await {
+                Ok(res) => ok_res(db_last_insert_id(&res)),
+                Err(e) => SkyResult::Err(sky_err(&e)),
+            }
         }
     })
 }
@@ -2596,15 +2669,18 @@ mod tests {
         .await;
         assert!(matches!(ins, SkyResult::Ok(1)), "mixed insert: {ins:?}");
 
-        // A row with typed NULLs (SqlNull → SqlParam::Null).
+        // A row with typed NULLs (SqlNull carries a type witness so the
+        // NULL binds with the right driver type-OID — see SqlParam::Null's
+        // doc comment). `name` is TEXT, `price` is REAL: witness each with
+        // the matching leaf variant.
         let ins2: SkyResult<String, i64> = db_exec_params(
             db.clone(),
             "INSERT INTO items (name, qty, active, price) VALUES (?, ?, ?, ?)".to_string(),
             vec![
-                SqlParam::Null,
+                SqlParam::Null(Box::new(SqlParam::Text(String::new()))),
                 SqlParam::Int(0),
                 SqlParam::Bool(false),
-                SqlParam::Null,
+                SqlParam::Null(Box::new(SqlParam::Float(0.0))),
             ],
         )
         .await;
@@ -2644,6 +2720,59 @@ mod tests {
             SkyResult::Ok(SkyMaybe::Just(m)) => assert_eq!(m.get("title").unwrap(), "buy milk"),
             other => panic!("unexpected: {:?}", other),
         }
+    }
+
+    /// Tier-1 regression for the `db_insert_row`/`db_insert_fields`
+    /// fabricated-`id = 0` fix (Class 7 §4b). `DB_USES_RETURNING_ID` is
+    /// `false` on the standalone sqlite build, so `extract_returning_id` is
+    /// called directly here — bypassing the `if DB_USES_RETURNING_ID` gate —
+    /// against a REAL SQLite `RETURNING id` row with a non-integer (`TEXT`)
+    /// PK. This exercises the exact decode-miss path without needing a live
+    /// Postgres (`DB_USES_RETURNING_ID = true` is only reachable once the §3
+    /// Postgres driver template is selected by a real project build).
+    #[tokio::test]
+    async fn extract_returning_id_errs_on_non_integer_pk() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
+        sqlx::query("CREATE TABLE t (id TEXT PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .expect("create table");
+        let row = fetch_one_routed(
+            &pool,
+            sqlx::query("INSERT INTO t (id) VALUES ('non-integer-pk') RETURNING id"),
+        )
+        .await
+        .expect("insert should succeed");
+        assert!(
+            extract_returning_id(&row).is_err(),
+            "a non-integer id column must surface Err, never a fabricated 0"
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_returning_id_ok_on_integer_pk() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
+        sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .expect("create table");
+        let row = fetch_one_routed(
+            &pool,
+            sqlx::query("INSERT INTO t (id) VALUES (42) RETURNING id"),
+        )
+        .await
+        .expect("insert should succeed");
+        assert_eq!(extract_returning_id(&row), Ok(42));
     }
 
     #[tokio::test]
