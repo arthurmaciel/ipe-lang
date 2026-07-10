@@ -95,10 +95,65 @@ fn postgres_driver_selects_postgres_config_template() {
     let cargo_toml =
         fs::read_to_string(out.join("Cargo.toml")).expect("emitted Cargo.toml must exist");
     assert!(
-        cargo_toml.contains(r#"features = ["runtime-tokio-rustls", "postgres"]"#),
-        "driver = \"postgres\" must enable the postgres sqlx feature in Cargo.toml, \
-         not sqlite (the compile-time gap that made Postgres structurally \
-         unreachable):\n{cargo_toml}"
+        cargo_toml.contains(r#"features = ["runtime-tokio-rustls", "sqlite", "postgres"]"#),
+        "driver = \"postgres\" must enable the postgres sqlx feature in Cargo.toml \
+         IN ADDITION TO sqlite (the always-emitted telemetry_spill/live::hub/ \
+         live::store runtime modules hardcode SqlitePool independently of the \
+         app's [database] driver choice — dropping sqlite here was the \
+         compile-time gap that made Postgres structurally unreachable, closed \
+         2026-07-10 after an independent review caught a cargo-build failure \
+         it produced):\n{cargo_toml}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&out);
+}
+
+/// `SKY_E2E` tier: the emitted Postgres-driver project must actually
+/// `cargo build` (isolated target dir) — proves the seal (skyc exit 0
+/// implies cargo build exit 0) for the whole Postgres codegen path, not just
+/// the config.rs/Cargo.toml source-text assertions above. This is the check
+/// that would have caught the 2026-07-10 SEAL violation (an exclusive
+/// sqlite-vs-postgres sqlx feature selection compiled fine as SOURCE TEXT
+/// but failed `cargo build` because always-emitted runtime modules unrelated
+/// to the `[database]` driver hardcode `SqlitePool`) — source-text greps
+/// alone cannot catch a missing Cargo feature dependency.
+#[test]
+fn postgres_driver_project_cargo_builds() {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    let dir = write_project(
+        "postgres_cargo_build",
+        "[database]\ndriver = \"postgres\"\n",
+    );
+    let out =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pg_reachability_postgres_cargo_build");
+    let _ = fs::remove_dir_all(&out);
+
+    let built = skyc::build_project(&dir.join("sky.toml"), &out, &runtime());
+    assert!(
+        built.is_ok(),
+        "build_project must succeed for a postgres-driver db-using project: {:?}",
+        built.err()
+    );
+
+    let target = std::env::temp_dir()
+        .join("r_class7")
+        .join("postgres_driver_cargo_build");
+    #[allow(clippy::expect_used)]
+    let check_output = std::process::Command::new("cargo")
+        .arg("check")
+        .env("CARGO_TARGET_DIR", &target)
+        .current_dir(&out)
+        .output()
+        .expect("cargo must spawn");
+    assert!(
+        check_output.status.success(),
+        "emitted driver=\"postgres\" project must cargo-check clean \
+         (no live Postgres connection needed for `cargo check`)\n\
+         --- cargo stderr ---\n{}",
+        String::from_utf8_lossy(&check_output.stderr),
     );
 
     let _ = fs::remove_dir_all(&dir);
