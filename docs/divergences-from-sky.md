@@ -19,6 +19,11 @@ The lens throughout is the PRINCIPLES order — **security > correctness >
 soundness > efficiency > completeness > readability** — plus the two foundational
 rules **parse, don't validate** and **make invalid states unrepresentable**.
 
+This document is also the ledger of **planned** divergences: §6 files the
+intentional future departures from the reference language (accepted or
+designed, not yet implemented), so shipped and planned divergences live in
+one place.
+
 Every divergence in §2 is recorded in-repo and non-silent: the oracle framework
 (`tools/oracle`) pins each one with an `oracle_divergence = true` marker and a
 tagged reason in `tests/golden/<name>/oracle.meta` + `sanctioned.divergence`
@@ -880,7 +885,7 @@ API-shape review):
   ErrorDetails` and the `ErrorDetails`/`PanicInfo`/`TypeInfo` union — an
   additive, separable enrichment (same registration recipe as `ErrorKind`,
   just more variants) that doesn't block kind-based classification. Filed in
-  `docs/architecture/backlog.md`.
+  `BACKLOG.md`.
 - **Sanctioned:** yes (partial-surface port, not a semantic divergence — every
   ported piece matches the reference design exactly). Reference:
   `crates/sky_types/src/constrain.rs` (`Error`/`ErrorKind` ctor schemes),
@@ -891,3 +896,140 @@ API-shape review):
   project::runtime_bindings`) flipped atomically from `type SkyError =
   String` to `pub use sky_runtime::error::SkyError` in the same change — the
   "69-golden flip" #85 had originally deferred this work for.
+
+---
+
+<a id="planned-future-divergences"></a>
+## 6. Planned future divergences (filed, not yet implemented)
+
+Intentional departures from the reference language, filed and (where noted)
+designed, sequenced for the post-completion program (`ROADMAP.md` §C.6).
+Governing rules: every divergence here, if/when adopted, becomes a documented
+ledger entry above (a divergence is *documented*, never silent) and flips the
+relevant parity row from "mirrors Go" → "intentional design + rationale + own
+tests". Until then ipê still **mirrors** upstream behaviour. **Divergences go
+last, on a verified-complete base** (rule filed 2026-06-28): a grammar
+superset can't be checked against the Go oracle (its parser rejects the new
+form), so adding one early would muddy every parity sweep.
+
+### 6.1 Hot-reload / Ui-as-IR / standalone TEA (research, post-core)
+
+Three runtime-side directions that compose into one vision — "edit code → UI
+updates live, render any UI to any target" (the graphical-and-programmatic
+site-builder):
+
+- **Hotloading a running app** (preserve `Model` state across code change).
+  Key fact: **salsa ≠ hotloading** — salsa only makes the *rebuild* fast;
+  getting new code into a live process is a separate runtime mechanism.
+  Mechanisms ranked by principle-fit: (1) dev-mode IR interpreter (safe, no
+  `unsafe`, reuses the IR — best fit); (2) WASM module reload (sandboxed);
+  (3) native dylib reload — **discouraged** (`dlopen` + fn-pointer transmute
+  violates the no-`unsafe` spirit); (4) baseline: fast watch-rebuild →
+  restart → session-store persist → SSE reconnect. Open: `Model`-shape
+  migration on type changes; interpreter eval path must stay sandboxed.
+- **`Std.Ui` as a backend-agnostic UI IR** — target chosen by a function call
+  (`Ui.toHtml : Element -> String`, `Ui.toAnsi : Element -> AnsiBuffer`),
+  decoupling *what UI* from *how rendered*. Pure functions — excellent
+  principle fit. **Security is load-bearing:** HTML *generation* must keep
+  the HTML-escaping / no-eval / no-XSS guarantees even when
+  producing-not-serving; ANSI generation must sanitize control bytes.
+- **Standalone TEA engine** — make the TEA runtime a backend-agnostic engine;
+  Live / TUI / Webview become transports/drivers plugged into it. Enables the
+  hot-reload host (which owns the `Model` and swaps `update`/`view`).
+
+All three are research/deferred until the mirror/parity machinery is proven;
+each then becomes a real ledger entry with its own tests.
+
+### 6.2 Deep nested-record-update sugar `{ r | a.b.c = v }`
+
+Elm has no deep-update syntax; this is a deliberate grammar superset.
+**Static path only** — the LHS must be a literal field chain (no computed or
+conditional paths). **Desugars in canon** into the existing nested
+`update`+`access` form, so types/lower/backend see only supported primitives
+— zero new IR, zero new codegen; runtime behaviour is identical to the manual
+form, the only divergence is the accepted grammar. Filed 2026-06-28
+(user-approved); post-M6 per the divergences-go-last rule.
+
+### 6.3 Or-patterns (alternative patterns in one case arm)
+
+`A | B -> arm` — one arm matching several patterns. **Syntax decided
+2026-06-28: `|` (NOT `||`)** — `|` already means "one of these" via ADT sums,
+matches Rust/OCaml/F#/Python, and maps 1:1 to Rust's native or-pattern; `||`
+would overload one token with two structurally different meanings.
+**Correctness gate (load-bearing):** every alternative MUST bind the same set
+of variables at the same types — reject mismatched-binding or-patterns
+fail-fast in canon/types (before Rust would). Exhaustiveness: the Maranget
+check expands `p|q` into two rows (the algorithm already supports this).
+Filed 2026-06-28 (user-approved); post-M6.
+
+### 6.4 Pattern guards
+
+`pattern if cond -> body`. **Syntax decided 2026-06-28: `if` (NOT Haskell's
+`|`)** — `|` is taken by or-patterns (6.3); Rust's spelling composes with
+them (`A | B if cond -> …`, guard applies to the whole or-pattern) and maps
+1:1 to Rust match guards. **Soundness floor (load-bearing):** a guarded arm
+does NOT contribute to exhaustiveness (the guard may be false) — the Maranget
+check must treat guarded rows as non-covering, requiring an unguarded/
+wildcard fallback else **SKY-T0010**, caught BEFORE emit (Rust would
+otherwise reject the guard-only match as E0004 = exit-0-then-cargo-fail).
+Guards also affect redundancy (a guard can make a shadowed later arm
+reachable). Implement together with 6.3. Filed 2026-06-28 (user-approved);
+post-M6.
+
+### 6.5 Effect `do` block (effect-sequencing sugar)
+
+The nested-`Task.andThen`-lambda pyramid gets a scoped effect block. A long
+spelling debate (Gleam `use`, `let x <- e`, `Task.chain`, free-floating Roc
+`!`, `Task.block`-fenced `!`) converged on the outcome recorded in the design
+doc: effect visibility is a first-class criterion (the block boundary marks
+the effect REGION, a per-line marker marks each effect), bind is built-in for
+the fixed effect types only (no user-facing Monad class), a bare effect line
+= run/discard (kills the `let _ = TaskExpr` auto-force wart). **DESIGNED
+2026-07-04** — spec: `docs/ideas/idea-7-effect-do-block-design.md`. Post-M6.
+
+### 6.6 Record field-punning on construction
+
+`{ name, age, email }` ⇒ `{ name = name, age = age, email = email }` — dual
+of the record-pattern punning already supported. Pure **canon-level desugar**
+resolving each bare field to the in-scope local of the same name (error if
+none); zero new IR / codegen / runtime. Filed 2026-06-28; post-M6, low
+effort, low risk.
+
+### 6.7 Time-travel debugger for live apps (dev-only)
+
+Elm-style debugger for TEA/live apps (Live + Webview + Tui): record the Msg
+history, step back/forward, inspect the Model at each step, import/export
+sessions. **Dev mode only** (off in production — no overhead, no surface).
+Future: simulate Model-value edits + replay forward, Msg injection,
+time-scrubbing, adjacent-state diff. Filed 2026-06-29; post-M6 (needs the
+live runtime); same dev-loop family as 6.1.
+
+### 6.8 Language-level ADT⇄string ergonomics (undecided route)
+
+A sum type used as an option set (`type Theme = Light | Dark | Purple`)
+almost always needs a hand-written `toString`/`fromString` pair that drifts.
+Two candidate routes, **undecided**: (1) **LSP code-action** generating both
+functions + a round-trip property test from the variant list — zero language
+magic, ordinary visible code; (2) **syntax-SSOT** — declare the wire name
+alongside each variant (`type Theme = Light "light" | …`) and derive both
+functions. The "is this magic good?" judgement is the crux — lean LSP-route
+if the magic proves surprising. Filed 2026-06-30; brainstorm post-core.
+
+### 6.9 CI patch queue over the upstream examples corpus — ACCEPTED
+
+Every surface departure (dropping `Task.run`/`Task.perform` #128, margin
+stripping #133, the rename) breaks the pristine upstream examples corpus —
+exactly the regression net we most need. **Accepted 2026-07-05; execute at
+Tier-3 start** (first consumer is #128/#133; wire `--patched` mode into the
+sweep + CI with #37). Keep examples byte-identical to upstream and carry an
+in-repo patch queue (`tests/example-patches/…`) that CI applies before
+build/run/perf. Patch-apply failure is a feature (fires exactly when upstream
+changed the lines we diverge on). Go-only examples get adaptation patches,
+widening the corpus. **Oracle policy per patch class:** output-neutral
+departures keep byte-equivalence against the Go oracle running the UNpatched
+source; output-changing departures record an `oracle_divergence + reason`
+(carried in the patch-file header) per the sanctioned-divergence policy.
+**Codemod synergy:** mechanical departures ship with a `skyc fix`
+auto-migration; CI can generate the patches by running the migrator over
+pristine sources — the queue doubles as an end-to-end test of the user-facing
+migration tool.

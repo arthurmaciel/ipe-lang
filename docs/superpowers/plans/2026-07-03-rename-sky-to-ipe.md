@@ -97,7 +97,7 @@ project name* is frozen. This is why the list is **line-level**, never file-leve
 |---|---|---|---|
 | 1 | `docs/divergences-from-sky.md` | filename, title, "divergences from Sky", `../sky` paths, Go-reference prose | our error codes `SKY-*`→`IPE-*`, our crate/type names |
 | 2 | `docs/divergences-review.md` | upstream "Sky" prose, `../sky` | our codes/identifiers |
-| 3 | `docs/ideas/departures-from-sky.md` | filename, "departures from Sky", codes discussed as upstream | our error codes when ours |
+| 3 | `docs/divergences-from-sky.md` §6 "Planned future divergences" (absorbed the former ideas-log of departures from Sky) | "departures from Sky" prose, codes discussed as upstream | our error codes when ours |
 | 4 | `docs/README-draft-relation-to-elm-and-sky.md` | §"Relationship to Sky", "ported from **Sky**" (L32), "Rust port of Sky" / parity-reference (L145-148) | **also fix**: this draft uses lowercase `ipê` for our language → must become `Ipê` (invariant 1); our identifiers keep code form |
 | 5 | `docs/architecture/sky-rust-backend-reference-audit.md` | in-content upstream "Sky" references, `../sky` | **filename renames** → `ipe-rust-backend-reference-audit.md` (the "sky-rust-backend" in the name is OUR backend) |
 | 6-18 | `docs/architecture/{repo-layout-and-mirroring, static-compilation, go-oracle-fixture-corpus-plan, examples-sweep-port, windows-ci-support, principled-decisions-audit, sweep-and-parity-plan, ffi-subsystem-design, ffi-sandbox-and-generator-impl-ready, ffi-port-spec, kernel-registry-design, ui-live-tui-webview-spec, tui-windows-ci}.md` | `../sky` sibling-checkout paths, "Go `sky`" binary, upstream-parity prose | our codes/crates/identifiers when named as ours |
