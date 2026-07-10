@@ -686,7 +686,8 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::DbFindOneByField => "db_find_one_by_field",
         KernelFn::DbFindManyByField => "db_find_many_by_field",
         KernelFn::DbFindByConditions => "db_find_by_conditions",
-        KernelFn::DbUnsafeFindWhere => "db_unsafe_find_where",
+        KernelFn::DbFindWhere => "db_find_where",
+        KernelFn::DbDeleteWhere => "db_delete_where",
         KernelFn::DbInsertFields => "db_insert_fields",
         KernelFn::DbUpdateFields => "db_update_fields",
         KernelFn::DbInsertFieldsReturning => "db_insert_fields_returning",
@@ -703,6 +704,27 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // into the JsonDec* section above to satisfy clippy::match_same_arms.
         KernelFn::DbDecRequired => "db_decode_required",
         KernelFn::DbDecOptional => "db_decode_optional",
+        // ── Std.Db.Sql — SqlFragment builder (backlog #61) ───────────────────
+        // `int`/`string`/`float`/`bool` share `sql_param`'s runtime symbol —
+        // each is a Sky-level type narrowing of the same generic
+        // `sql_param::<T: Into<SqlParam>>`, so no separate runtime fn exists.
+        KernelFn::SqlColumn => "sql_column",
+        KernelFn::SqlParam | KernelFn::SqlInt | KernelFn::SqlString | KernelFn::SqlFloat | KernelFn::SqlBool => {
+            "sql_param"
+        }
+        KernelFn::SqlEq => "sql_eq",
+        KernelFn::SqlNe => "sql_ne",
+        KernelFn::SqlGt => "sql_gt",
+        KernelFn::SqlLt => "sql_lt",
+        KernelFn::SqlGte => "sql_gte",
+        KernelFn::SqlLte => "sql_lte",
+        KernelFn::SqlAnd => "sql_and",
+        KernelFn::SqlOr => "sql_or",
+        KernelFn::SqlNot => "sql_not",
+        KernelFn::SqlIsNull => "sql_is_null",
+        KernelFn::SqlIsNotNull => "sql_is_not_null",
+        KernelFn::SqlInList => "sql_in_list",
+        KernelFn::SqlLike => "sql_like",
         // ── M5c: TEA Cmd / Sub / Time kernels (wired) ────────────────────────
         KernelFn::CmdNone => "cmd_none",
         KernelFn::CmdBatch => "cmd_batch",

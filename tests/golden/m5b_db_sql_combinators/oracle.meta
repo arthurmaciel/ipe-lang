@@ -1,0 +1,6 @@
+# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
+main_sky_sha256 = 03cc46b5a1bf4a53643880d100cfc6dc80f001b2b80f60bfc678f6c4b753c045
+go_sky_version = unknown
+exit_code = 0
+oracle_divergence = true
+divergence_reason = sanctioned: this program exercises the full `Std.Db.Sql` combinator family (backlog #61: column, param, int, string, float, bool, eq, ne, gt, lt, gte, lte, and, or, not, isNull, isNotNull, inList, like) plus Db.findWhere — none of these have a Go counterpart (ipê-only addition, no Go reference exists to diverge from). The Go backend and ipê otherwise share the Sky stdlib surface but emit different SQLite drivers (Go+cgo vs Rust+sqlx) with different in-memory connection-pool behaviour, so even the shared subset of this program (Db.open/withTransaction/exec) would not run identically on both backends. ipê's output is recorded as the correct reference.

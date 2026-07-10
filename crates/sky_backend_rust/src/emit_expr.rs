@@ -1702,24 +1702,37 @@ fn emit_db_call(
                 "{fn_name}({conn_s}.clone(), {table_s}, {conditions_s})"
             )))
         }
-        // ── DbUnsafeFindWhere: (conn, table, where_clause, args: List String) ──
+        // ── Db.findWhere / Db.deleteWhere: (conn, table, frag: SqlFragment) ──
         //
-        // The runtime `db_unsafe_find_where` takes `Vec<String>` for the `args`
-        // parameter — the parameterized-binding channel that keeps this raw-SQL
-        // path injection-safe.  The Sky `List String` IR type emits as a `Vec<_>`
-        // that the runtime accepts directly.
-        KernelFn::DbUnsafeFindWhere => {
+        // The `SqlFragment`-typed replacement for the removed `unsafeFindWhere`
+        // (backlog #61). `frag` is a bare struct value (no `List` projection
+        // needed) — only the `conn.clone()` treatment (shared by every other
+        // Task-returning Db kernel here) is special-cased.
+        KernelFn::DbFindWhere | KernelFn::DbDeleteWhere => {
             let conn_e = arg!(0, "conn")?;
             let table_e = arg!(1, "table")?;
-            let where_e = arg!(2, "where_clause")?;
-            let args_e = arg!(3, "args")?;
+            let frag_e = arg!(2, "frag")?;
             let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
             let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
-            let where_s = emit_expr_at(ctx, where_e, indent, child, generics)?;
-            let args_s = emit_expr_at(ctx, args_e, indent, child, generics)?;
+            let frag_s = emit_expr_at(ctx, frag_e, indent, child, generics)?;
             let fn_name = crate::naming::kernel_name(*k);
             Ok(Some(format!(
-                "{fn_name}({conn_s}.clone(), {table_s}, {where_s}, {args_s})"
+                "{fn_name}({conn_s}.clone(), {table_s}, {frag_s})"
+            )))
+        }
+        // ── Sql.inList: (frag: SqlFragment, values: List SqlValue) ───────────
+        //
+        // `values` needs the same `List SqlValue` → `Vec<SqlParam>` projection
+        // as `DbExec`/`DbQuery`'s params argument.
+        KernelFn::SqlInList => {
+            let frag_e = arg!(0, "frag")?;
+            let values_e = arg!(1, "values")?;
+            let frag_s = emit_expr_at(ctx, frag_e, indent, child, generics)?;
+            let values_s = emit_expr_at(ctx, values_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({frag_s}, {})",
+                project_params(&values_s)
             )))
         }
         // ── Standard-path Db kernels ────────────────────────────────────────────
@@ -1744,7 +1757,28 @@ fn emit_db_call(
         | KernelFn::DbDecMap3
         | KernelFn::DbDecMap4
         | KernelFn::DbDecRequired
-        | KernelFn::DbDecOptional => Ok(None),
+        | KernelFn::DbDecOptional
+        // `Sql.column`/`param`/`int`/`string`/`float`/`bool`/`eq`/`ne`/`gt`/`lt`/
+        // `gte`/`lte`/`and`/`or`/`not`/`isNull`/`isNotNull`/`like` take plain
+        // scalar or `SqlFragment` args — no `Db` handle, no List projection.
+        | KernelFn::SqlColumn
+        | KernelFn::SqlParam
+        | KernelFn::SqlInt
+        | KernelFn::SqlString
+        | KernelFn::SqlFloat
+        | KernelFn::SqlBool
+        | KernelFn::SqlEq
+        | KernelFn::SqlNe
+        | KernelFn::SqlGt
+        | KernelFn::SqlLt
+        | KernelFn::SqlGte
+        | KernelFn::SqlLte
+        | KernelFn::SqlAnd
+        | KernelFn::SqlOr
+        | KernelFn::SqlNot
+        | KernelFn::SqlIsNull
+        | KernelFn::SqlIsNotNull
+        | KernelFn::SqlLike => Ok(None),
         // A Db kernel that reached this arm is a compiler bug: either add a
         // custom projection arm above, or add it to the standard-path list.
         // This arm is unreachable for any KernelFn variant listed above, so

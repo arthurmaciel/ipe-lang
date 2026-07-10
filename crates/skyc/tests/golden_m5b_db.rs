@@ -43,10 +43,25 @@
 //!   `Db.findByConditions conn "items" (Dict.fromList [("name","apple")])` →
 //!   single-row result → `Db.getString` / `Db.getInt` → `println`.
 //!   Output: `"apple:5"`. Proves `Dict String String` arg type + emit arm.
-//! * `m5b_db_unsafe_find_where` — `Db.exec` two INSERTs →
-//!   `Db.unsafeFindWhere conn "products" "qty > ?" ["9"]` →
+//! * `m5b_db_find_where` — `Db.exec` two INSERTs →
+//!   `Db.findWhere conn "products" (Sql.gt (Sql.column "qty") (Sql.int 9))` →
 //!   single-row result → `println`. Output: `"widget:10"`.
-//!   Proves 4-arg wiring + parameterised-binding channel (no string interpolation).
+//!   The `SqlFragment`-typed replacement for the removed `Db.unsafeFindWhere`
+//!   (backlog #61) — the WHERE clause can only be built through the `Sql.*`
+//!   combinators, never a hand-built string.
+//! * `m5b_db_delete_where` — `Db.exec` three INSERTs →
+//!   `Db.deleteWhere conn "products" (Sql.eq (Sql.column "name") (Sql.string "gadget"))`
+//!   → row-count + a follow-up `Db.query` confirming only the matched row was
+//!   removed → `println`. Output: `"1:sprocket,widget"`.
+//! * `m5b_db_sql_combinators` — exercises every `Sql.*` combinator at least
+//!   once (column, param via int/string/float/bool, eq, ne, gt, lt, gte, lte,
+//!   and, or, not, isNull, isNotNull, like, inList non-empty AND the
+//!   empty-list `(1 = 0)` shortcut) via three `Db.findWhere` calls.
+//!   Output: `"widget|0|gadget"`.
+//! * `m5b_db_gate_findwhere_string` (negative, `golden_m5b_db_gates.rs`) —
+//!   `Db.findWhere conn "products" ("qty > " ++ "9")` is a compile-time
+//!   `SKY-T0001` (`String` vs `SqlFragment`) — the "parse, don't validate"
+//!   property backlog #61 exists to establish.
 //!
 //! Run:
 //!
@@ -214,20 +229,47 @@ fn db_find_by_conditions() {
     assert_runs_and_matches_oracle("m5b_db_find_by_conditions");
 }
 
-// ── Db.unsafeFindWhere ────────────────────────────────────────────────────────
+// ── Db.findWhere / Db.deleteWhere / Std.Db.Sql combinators (backlog #61) ──────
 
 /// `Db.exec` INSERTs `"widget:10"` and `"gadget:7"` rows →
-/// `Db.unsafeFindWhere conn "products" "qty > ?" ["9"]` →
+/// `Db.findWhere conn "products" (Sql.gt (Sql.column "qty") (Sql.int 9))` →
 /// single-row result (`widget:10`) → print `"widget:10"`.
 ///
-/// Proves: (a) the `List String` args parameter is wired (4th arg, not 3);
-/// (b) values are bound via `?` placeholders — the parameterised channel that
-/// prevents SQL injection on this sole sanctioned raw-SQL path.
+/// Proves: (a) the `SqlFragment`-typed `findWhere` wiring works end-to-end
+/// (kernel decl, scheme, lower, emit, runtime); (b) values are bound via `?`
+/// placeholders — the WHERE clause can only be built through `Sql.*`
+/// combinators, never a hand-built string (see `db_findwhere_string_is_t0001`
+/// in `golden_m5b_db_gates.rs` for the negative side of this property).
 ///
-/// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
+/// Sanctioned divergence: ipê emits Rust+sqlx; `Db.findWhere` has no Go
+/// counterpart; oracle is ipê's own output.
 #[test]
-fn db_unsafe_find_where() {
-    assert_runs_and_matches_oracle("m5b_db_unsafe_find_where");
+fn db_find_where() {
+    assert_runs_and_matches_oracle("m5b_db_find_where");
+}
+
+/// `Db.exec` INSERTs three rows → `Db.deleteWhere conn "products" (Sql.eq
+/// (Sql.column "name") (Sql.string "gadget"))` → row count `1` → a follow-up
+/// `Db.query` confirms only `"gadget"` was removed → print
+/// `"1:sprocket,widget"`.
+///
+/// Sanctioned divergence: ipê emits Rust+sqlx; `Db.deleteWhere` has no Go
+/// counterpart; oracle is ipê's own output.
+#[test]
+fn db_delete_where() {
+    assert_runs_and_matches_oracle("m5b_db_delete_where");
+}
+
+/// Exercises every `Std.Db.Sql` combinator at least once (column, param via
+/// int/string/float/bool, eq, ne, gt, lt, gte, lte, and, or, not, isNull,
+/// isNotNull, like, inList non-empty AND the empty-list `(1 = 0)` shortcut)
+/// through three `Db.findWhere` calls. Output: `"widget|0|gadget"`.
+///
+/// Sanctioned divergence: ipê emits Rust+sqlx; the `Sql.*` family has no Go
+/// counterpart; oracle is ipê's own output.
+#[test]
+fn db_sql_combinators() {
+    assert_runs_and_matches_oracle("m5b_db_sql_combinators");
 }
 
 // ── SqlDecimal + SqlMoney ctors ───────────────────────────────────────────────
