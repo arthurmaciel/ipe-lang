@@ -2,30 +2,26 @@
 //! THROUGH a type variable must NEVER emit cargo-failing Rust silently.
 //!
 //! The shape — `type Box a = Mk a`, with `Mk (\n -> n + 1)` — instantiates the
-//! payload field `a` to `Int -> Int` at the use site. #90 (Stage 1) lifted the
-//! blanket rejection for enum-like heads (`Maybe`/`Result`/user unions): the
-//! runtime/derive machinery already tolerates a function payload there — #87's
-//! derive-demotion fixpoint drops `MainBox<T1>`'s `#[derive(Clone, Debug,
-//! PartialEq)]` when a field is not derivable, and its hand-written
-//! `SkyStringify` impl renders the non-derivable field as `<fn>` instead of
-//! calling a derive. So this fixture now takes the BUILD-AND-RUN branch below —
-//! `skyc` accepts it, `cargo` builds it, and it runs, printing `2`
-//! (`(\n -> n + 1) 1 == 2`).
+//! payload field `a` to `Int -> Int` at the use site. The synthesised Rust enum
+//! `MainBox<T1>` derives `Clone`/`Debug`/`PartialEq` and impls `SkyStringify`; a
+//! `Box<dyn Fn>` field satisfies none of them, so the emitted Rust would not
+//! build. The syntactic per-field gate cannot see this (the payload value at the
+//! call site is a bare lambda, not a struct/enum field), so the lowerer's
+//! region-based gate catches it and surfaces the documented first-class-function
+//! gap (SKY-L0107).
 //!
 //! This pins the recurring soundness-floor class (the sibling of the M2C
 //! function-in-record gate): the driver must produce EITHER a clean Sky
-//! diagnostic (SKY-L0114, for a shape #90 does NOT cover — a collection-of-
-//! functions payload, or a curried `andMap` chain) OR Rust that builds and runs
-//! with the semantically-correct output. It must NEVER accept the program and
-//! then cargo-fail.
+//! diagnostic (SKY-L0107) OR — should eager `Box<dyn Fn>` coercion at the
+//! construction site ever land — Rust that builds and runs with the
+//! semantically-correct output (`2`, since `(\n -> n + 1) 1 == 2`). It must NEVER
+//! accept the program and then cargo-fail.
 //!
-//! Note on the Go oracle: the Go reference compiler (`/usr/local/bin/sky`,
-//! v0.16.29) fails this exact shape — its codegen emits Go that `go build`
-//! rejects (`invalid operation: cannot call f (variable of interface type any):
-//! any is not a function`), captured in `oracle.meta` as a Go-failure
-//! divergence (`oracle_divergence = true`) by the `refresh-oracle` tool. So the
-//! Rust build-and-run outcome is a strict improvement over the Go reference,
-//! not a Sky-Rust behavior divergence.
+//! Note on the Go oracle: the Go reference compiler at
+//! `/home/arthur/Documentos/comp/sky/sky-out/sky` ALSO fails this shape today —
+//! its codegen emits Go that `go build` rejects ("the Go compiler does not
+//! accept"), hand-verified in a temp dir. So the Rust clean diagnostic is a
+//! strict improvement over the Go reference, not a divergence.
 
 use std::path::{Path, PathBuf};
 
