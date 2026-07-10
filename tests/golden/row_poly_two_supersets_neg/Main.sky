@@ -1,0 +1,25 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+-- #56 proof-matrix shape P6 (the class-1 "Boundary Scheme Promotion"
+-- coupling tripwire): an unannotated LET-BOUND lambda getter called with
+-- TWO DIFFERENT superset shapes. Neither ipê nor the reference
+-- let-generalizes over record rows, so the first call site's field access
+-- pins `getName`'s record parameter to `{ name, age }`; the second call
+-- site's `{ name, id }` argument cannot unify against that pinned shape and
+-- is rejected as SKY-T0001 (reference parity: E2001).
+--
+-- This is the guard the class-1 "Boundary Scheme Promotion" work MUST NOT
+-- silently flip to accept: doing so without adding per-record-shape callee
+-- monomorphisation to the backend would let a record type with an
+-- unregistered field set reach the A7 exact-key struct lookup — an ICE
+-- (best case) or an emitted-code type error (a SEAL violation). See
+-- docs/architecture/row-poly-subset-superset-design.md "Coupling tripwire".
+main =
+    let
+        getName rec =
+            rec.name
+    in
+    println (getName { name = "Ada", age = 36 } ++ getName { name = "Bo", id = 7 })
