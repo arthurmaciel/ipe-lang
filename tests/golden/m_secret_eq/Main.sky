@@ -1,0 +1,21 @@
+module Main exposing (main)
+
+-- backlog #44 golden: `Secret`'s ONLY equality is the hand-written
+-- constant-time `PartialEq` (`==` is always safe by construction — see the
+-- fix spec §1). Exercises match / content-mismatch / length-mismatch in one
+-- program.
+
+a = Secret.fromString "same-value"
+b = Secret.fromString "same-value"
+c = Secret.fromString "different-value-longer"
+d = Secret.fromString "short"
+
+boolStr : Bool -> String
+boolStr flag =
+    if flag then
+        "T"
+    else
+        "F"
+
+main =
+    println (boolStr (a == b) ++ boolStr (a == c) ++ boolStr (a == d))
