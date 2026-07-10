@@ -1,7 +1,18 @@
-//! #122 regression — `Cli.program`'s view printer must separate consecutive
-//! renders with a newline. Pre-fix, piping 2 lines through stdin produced
-//! "lines: 0lines: 1lines: 2" (renders glued together); post-fix each
-//! render lands on its own line.
+//! #122 — Go-oracle parity check for `Cli.program`'s view printer. A
+//! `view` that doesn't append its own trailing newline gets renders glued
+//! together with NOTHING in between, and exactly ONE trailing newline after
+//! the event loop exits. This matches `runtime-go/rt/cli.go`'s
+//! `cliPrintView` contract byte-for-byte: it "writes the result to stdout
+//! WITHOUT a trailing newline (the user's prompt formatting decides whether
+//! to add one)".
+//!
+//! #122 was originally filed as a bug ("lines: 0lines: 1" looked wrong) and
+//! briefly "fixed" by forcing a newline after every render — but that broke
+//! `examples/20-cli-counter`'s REPL-prompt UX (`view` returns
+//! `"count=... > "` with no trailing newline so the cursor stays on the
+//! prompt line) and was never checked against the Go reference. Reverted;
+//! this test now asserts the CORRECT (Go-parity) glued-together behavior so
+//! a future "fix" doesn't reintroduce the same divergence.
 //!
 //! Gated on `SKY_E2E=1`. Run:
 //!
@@ -19,7 +30,7 @@ fn repo_root() -> PathBuf {
 }
 
 #[test]
-fn cli_program_separates_consecutive_renders() {
+fn cli_program_glues_consecutive_renders_matching_go_oracle() {
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
@@ -42,10 +53,13 @@ fn cli_program_separates_consecutive_renders() {
         support::build_and_run_emitted_with_stdin("i122_cli_program_view_separator", &out, b"a\nb\n");
 
     assert_eq!(outcome.exit_code, Some(0));
-    let expected = "lines: 0\nlines: 1\nlines: 2\n";
+    // Go-parity: renders glue together (view supplies no separator of its
+    // own), with exactly ONE trailing newline after the loop exits.
+    let expected = "lines: 0lines: 1lines: 2\n";
     assert_eq!(
         outcome.stdout, expected,
-        "consecutive Cli.program renders must be newline-separated, got: {:?}",
+        "Cli.program must match Go's cliPrintView contract (no per-render \
+         newline, one trailing newline at exit), got: {:?}",
         outcome.stdout
     );
 }
