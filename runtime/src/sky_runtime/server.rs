@@ -53,6 +53,14 @@ pub struct ServerResponse {
     pub body: String,
     pub headers: HashMap<String, String>,
     pub contentType: String,
+    /// Pre-built `Set-Cookie` header VALUES (e.g. `"sid=abc; Path=/; HttpOnly"`),
+    /// one entry per cookie. Kept separate from `headers` because `headers` is a
+    /// `HashMap` (one value per key) and HTTP allows/requires MULTIPLE
+    /// `Set-Cookie` response headers when a response needs to set more than one
+    /// cookie (RFC 6265 §4.1 — Set-Cookie is the one header that must NEVER be
+    /// comma-folded). A second caller writing into `headers["Set-Cookie"]` would
+    /// silently clobber the first.
+    pub cookies: Vec<String>,
 }
 
 /// Sky.Http.Server.Cookie (opaque) — safe defaults applied at attach time.
@@ -251,6 +259,7 @@ fn resp(status: i64, body: String, ct: &str) -> ServerResponse {
         body,
         headers: HashMap::new(),
         contentType: ct.to_string(),
+        cookies: Vec::new(),
     }
 }
 
@@ -375,7 +384,7 @@ pub fn server_with_cookie(c: ServerCookie, mut r: ServerResponse) -> ServerRespo
         "{}={}; HttpOnly; Path=/; SameSite=Lax{}",
         name, value, secure
     );
-    r.headers.insert("Set-Cookie".to_string(), v);
+    r.cookies.push(v);
     r
 }
 
@@ -575,6 +584,15 @@ fn to_axum_response(r: ServerResponse) -> axum::response::Response {
     }
     for (k, v) in &r.headers {
         builder = builder.header(k.as_str(), v.as_str());
+    }
+    // Multiple Set-Cookie response headers (RFC 6265 §4.1 forbids comma-folding
+    // them into one line) — kept in a dedicated Vec (see `ServerResponse.cookies`)
+    // so two cookie-setting code paths (e.g. a handler's `Server.withCookie` plus
+    // a wrapping `Middleware.withCsrf`) never clobber each other via the
+    // single-valued `headers` map. `builder.header` APPENDS, so repeated calls
+    // with the same key name produce separate header lines on the wire.
+    for cookie_v in &r.cookies {
+        builder = builder.header("set-cookie", cookie_v.as_str());
     }
     // Safe-by-default security headers (Go parity: setSecurityHeaders on the
     // server path, rt.go:7838) — applied only when the handler hasn't already
@@ -898,6 +916,7 @@ fn ws_resp(status: i64, body: &str) -> ServerResponse {
         body: body.to_string(),
         headers: HashMap::new(),
         contentType: "text/plain".to_string(),
+        cookies: Vec::new(),
     }
 }
 
@@ -1004,6 +1023,7 @@ pub fn server_web_socket_upgrade<E: From<String> + Send + 'static>(
                     body: String::new(),
                     headers: HashMap::new(),
                     contentType: String::new(),
+                    cookies: Vec::new(),
                 })
             }
             None => ok_res(ws_resp(400, "websocket: expected an Upgrade request")),
@@ -1371,6 +1391,7 @@ fn plain_resp(status: i64, body: &str, extra: &[(&str, &str)]) -> ServerResponse
         body: body.to_string(),
         headers,
         contentType: "text/plain".to_string(),
+        cookies: Vec::new(),
     }
 }
 
@@ -1542,6 +1563,107 @@ where
         } else {
             Box::pin(async move { ok_res(plain_resp(429, "Too Many Requests", &[])) })
         }
+    })
+}
+
+/// `__Host-` prefix requires Secure + Path=/ + no Domain — mirrors
+/// `live/csrf.rs::csrf_cookie_name`'s reasoning, gated on the SAME
+/// process-wide production signal `server_with_cookie` already uses
+/// (`telemetry::production_from_env`), so naming stays internally consistent
+/// with the rest of `server.rs`'s cookie handling.
+fn csrf_cookie_name() -> &'static str {
+    if crate::sky_runtime::telemetry::production_from_env() {
+        "__Host-sky_csrf"
+    } else {
+        "sky_csrf"
+    }
+}
+
+/// 64 lowercase-hex chars (two concatenated UUIDv4s, ~244 combined random
+/// bits — comfortably above the 128-bit CSRF-token floor). Does NOT use
+/// `aes_gcm::aead::OsRng` (unlike `live/csrf.rs::gen_token`) because this
+/// function must compile under `--features server` alone, which does not
+/// pull in the `aes-gcm` crate (see `Cargo.toml`'s `server` vs `live`
+/// feature sets). `uuid::Uuid::new_v4` is an approved CSPRNG source per
+/// `random.rs`'s documented security-bearing-randomness convention.
+fn csrf_gen_token() -> String {
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+fn csrf_token_well_formed(t: &str) -> bool {
+    t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// NOT HttpOnly — client JS must be able to read this to echo it into
+/// `X-Csrf-Token` (classic double-submit; still safe against a forging
+/// cross-origin page because SOP blocks that page from reading the
+/// victim-origin cookie). `Secure` mirrors `server_with_cookie`'s existing
+/// production gate.
+fn csrf_set_cookie_value(token: &str) -> String {
+    let name = csrf_cookie_name();
+    let secure = if crate::sky_runtime::telemetry::production_from_env() {
+        "; Secure"
+    } else {
+        ""
+    };
+    format!("{name}={token}; Path=/; SameSite=Strict{secure}")
+}
+
+/// Middleware.withCsrf : Handler -> Handler. Double-submit-cookie CSRF guard
+/// for `Sky.Http.Server` routes (Go/upstream-audit parity: `__Host-sky_csrf`
+/// cookie, safe methods set/refresh it, unsafe methods require cookie ==
+/// `X-Csrf-Token` header via constant-time compare, 403 on any
+/// mismatch/missing value).
+///
+/// Depends on `ServerResponse.cookies` so this middleware's Set-Cookie can
+/// never clobber (or be clobbered by) one the wrapped handler sets via
+/// `Server.withCookie`.
+pub fn middleware_with_csrf<E, H>(h: H) -> ServerHandler<E>
+where
+    E: Send + 'static,
+    H: IntoServerHandler<E>,
+{
+    let h = h.into_server_handler();
+    Arc::new(move |req: ServerRequest| {
+        use subtle::ConstantTimeEq;
+        let safe = matches!(
+            req.method.to_ascii_uppercase().as_str(),
+            "GET" | "HEAD" | "OPTIONS"
+        );
+        let cookie_name = csrf_cookie_name();
+        let existing = req.cookies.get(cookie_name).cloned();
+        let token = existing
+            .clone()
+            .filter(|t| csrf_token_well_formed(t))
+            .unwrap_or_else(csrf_gen_token);
+        if !safe {
+            let cookie_tok = existing.unwrap_or_default();
+            let header_tok = header_ci(&req.headers, "x-csrf-token")
+                .unwrap_or("")
+                .to_string();
+            let ok = !cookie_tok.is_empty()
+                && !header_tok.is_empty()
+                && bool::from(cookie_tok.as_bytes().ct_eq(header_tok.as_bytes()));
+            if !ok {
+                return Box::pin(async move {
+                    ok_res(plain_resp(403, "csrf token invalid or missing", &[]))
+                });
+            }
+        }
+        let task = h(req);
+        Box::pin(async move {
+            match task.await {
+                SkyResult::Ok(mut resp) => {
+                    resp.cookies.push(csrf_set_cookie_value(&token));
+                    SkyResult::Ok(resp)
+                }
+                other => other,
+            }
+        })
     })
 }
 
@@ -1804,5 +1926,100 @@ mod tests {
         std::env::set_var("SKY_LIVE_MAX_BODY_BYTES", "0"); // invalid → default
         assert_eq!(max_body(), DEFAULT_MAX_BODY);
         std::env::remove_var("SKY_LIVE_MAX_BODY_BYTES");
+    }
+
+    #[tokio::test]
+    async fn two_set_cookie_headers_both_survive() {
+        let mut r = server_text("ok".to_string());
+        r = server_with_cookie(server_cookie("a".into(), "1".into()), r);
+        r = server_with_cookie(server_cookie("b".into(), "2".into()), r);
+        let resp = to_axum_response(r);
+        let cookies: Vec<_> = resp
+            .headers()
+            .get_all(axum::http::header::SET_COOKIE)
+            .iter()
+            .collect();
+        assert_eq!(cookies.len(), 2, "both Set-Cookie lines must survive");
+    }
+
+    fn mk_req(
+        method: &str,
+        cookies: HashMap<String, String>,
+        headers: HashMap<String, String>,
+    ) -> ServerRequest {
+        ServerRequest {
+            method: method.to_string(),
+            path: "/".to_string(),
+            body: String::new(),
+            headers,
+            params: HashMap::new(),
+            query: HashMap::new(),
+            cookies,
+            remoteAddr: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn csrf_get_mints_and_sets_cookie_no_check() {
+        let h = middleware_with_csrf::<String, _>(|_req: ServerRequest| {
+            Box::pin(ready(ok_res::<String, _>(server_text("ok".into()))))
+                as SkyTask<String, ServerResponse>
+        });
+        let req = mk_req("GET", HashMap::new(), HashMap::new());
+        let resp = h(req).await;
+        match resp {
+            SkyResult::Ok(r) => assert_eq!(r.cookies.len(), 1, "GET must mint a fresh cookie"),
+            SkyResult::Err(_) => panic!("GET must never be rejected"),
+        }
+    }
+
+    #[tokio::test]
+    async fn csrf_post_without_header_rejected() {
+        let mut cookies = HashMap::new();
+        cookies.insert("sky_csrf".to_string(), "a".repeat(64));
+        let h = middleware_with_csrf::<String, _>(|_req: ServerRequest| {
+            Box::pin(ready(ok_res::<String, _>(server_text("ok".into()))))
+                as SkyTask<String, ServerResponse>
+        });
+        let req = mk_req("POST", cookies, HashMap::new());
+        match h(req).await {
+            SkyResult::Ok(r) => assert_eq!(r.status, 403),
+            SkyResult::Err(_) => panic!("expected an Ok(403), not an Err"),
+        }
+    }
+
+    #[tokio::test]
+    async fn csrf_post_with_matching_cookie_and_header_allowed() {
+        let tok = "b".repeat(64);
+        let mut cookies = HashMap::new();
+        cookies.insert("sky_csrf".to_string(), tok.clone());
+        let mut headers = HashMap::new();
+        headers.insert("x-csrf-token".to_string(), tok);
+        let h = middleware_with_csrf::<String, _>(|_req: ServerRequest| {
+            Box::pin(ready(ok_res::<String, _>(server_text("ok".into()))))
+                as SkyTask<String, ServerResponse>
+        });
+        let req = mk_req("POST", cookies, headers);
+        match h(req).await {
+            SkyResult::Ok(r) => assert_eq!(r.status, 200),
+            SkyResult::Err(_) => panic!("expected Ok(200)"),
+        }
+    }
+
+    #[tokio::test]
+    async fn csrf_post_with_mismatched_cookie_and_header_rejected() {
+        let mut cookies = HashMap::new();
+        cookies.insert("sky_csrf".to_string(), "c".repeat(64));
+        let mut headers = HashMap::new();
+        headers.insert("x-csrf-token".to_string(), "d".repeat(64));
+        let h = middleware_with_csrf::<String, _>(|_req: ServerRequest| {
+            Box::pin(ready(ok_res::<String, _>(server_text("ok".into()))))
+                as SkyTask<String, ServerResponse>
+        });
+        let req = mk_req("POST", cookies, headers);
+        match h(req).await {
+            SkyResult::Ok(r) => assert_eq!(r.status, 403),
+            SkyResult::Err(_) => panic!("expected Ok(403)"),
+        }
     }
 }
