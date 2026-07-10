@@ -156,6 +156,43 @@ fn is_opaque_boxed_wrapper(interner: &Interner, name: Symbol) -> bool {
     )
 }
 
+/// The built-in COLLECTION type constructors (`List`/`Dict`/`Set`), whose Rust
+/// rendering (`Vec<T>` / `HashMap<K,V>` / `BTreeSet<T>`) is a container the
+/// kernels (`DictGet`, `ListMap`, …) blanket-`.clone()` their element/value
+/// argument (#90 design doc §2 hazard table: "collections of functions" stays
+/// a real gap). A function type argument here is NOT the sound
+/// enum-constructor-payload shape [`is_enum_like_con_head`] exempts — kept
+/// gated (`ty_contains_fun`) by [`embeds_nonderivable_function`]'s fallback arm.
+fn is_builtin_collection(interner: &Interner, name: Symbol) -> bool {
+    matches!(interner.resolve(name), Some("List" | "Dict" | "Set"))
+}
+
+/// Is this `Ty::Con` head an ENUM-LIKE constructor — the built-in `Maybe` /
+/// `Result` or a user-declared union — as opposed to a builtin COLLECTION
+/// (`List`/`Dict`/`Set`) or an opaque boxed wrapper?
+///
+/// #90 (SKY-L0114 narrowing): `Ok f` / `Just f` construct the RUNTIME
+/// `SkyResult`/`SkyMaybe` enums, whose derives are generic-bounded
+/// (`impl<T: Clone> Clone for SkyMaybe<T>`, `runtime/src/sky_runtime/core.rs`)
+/// — the TYPE `SkyMaybe<Box<dyn Fn(..)->R>>` compiles regardless of whether
+/// `T` satisfies the bound; only *using* `.clone()`/`==`/stringify on it would
+/// fail, and each such use is independently gated (type-checker's
+/// `ty_is_equatable`, the #91 Model gate, #93's serde-derive gate). A
+/// user-declared union enjoys the same shape after the #87 derive-demotion
+/// fixpoint (`enum_is_derivable` drops the auto-derive when a payload embeds a
+/// function). So a function argument directly under an enum-like head is
+/// SOUND to lower — [`is_opaque_boxed_wrapper`] callers already exempt the
+/// truly-opaque carriers; this exempts the enum-shaped ones too.
+///
+/// A COLLECTION head (`List (a -> b)`, …) is excluded: the emitted `Vec<T>` /
+/// `HashMap<K,V>` / `BTreeSet<T>` element type is real Rust generic
+/// instantiation, and several collection kernels blanket-`.clone()` their
+/// element (`DictGet`, `emit_expr.rs`) — E0599 on a non-`Clone`
+/// `Box<dyn Fn>` element. Kept gated (Stage 2 territory, not #90).
+fn is_enum_like_con_head(interner: &Interner, name: Symbol) -> bool {
+    !is_opaque_boxed_wrapper(interner, name) && !is_builtin_collection(interner, name)
+}
+
 /// Does this solved [`Ty`] embed a record field OR an enum payload whose type
 /// contains a function?
 ///
@@ -194,11 +231,18 @@ fn embeds_nonderivable_function(interner: &Interner, ty: &Ty) -> bool {
         // payload behind a trait object and derives nothing over it — a function
         // there is legitimate, so it is NOT a non-derivable carrier.
         Ty::Con { name, .. } if is_opaque_boxed_wrapper(interner, *name) => false,
-        // Otherwise a `Con` is a user enum (which derives `Clone`/`Debug`/
-        // `PartialEq` + `SkyStringify`) applied to its type arguments. A function
-        // reaching a payload field — directly (`Opt (Int -> Int)`) or nested
-        // inside another payload/record under it — makes those derives fail, so
-        // it is the same non-derivable shape as a function in a record field.
+        // #90: an ENUM-LIKE head (built-in `Maybe`/`Result` or a user union) —
+        // the runtime/derive machinery already tolerates a function argument
+        // directly under it (see `is_enum_like_con_head`); only recurse for a
+        // NESTED non-derivable carrier under the argument (e.g. a `List (a->b)`
+        // buried inside `Maybe (List (Int -> Int))`), never flag a bare
+        // function argument itself.
+        Ty::Con { name, args, .. } if is_enum_like_con_head(interner, *name) => args
+            .iter()
+            .any(|a| embeds_nonderivable_function(interner, a)),
+        // A builtin COLLECTION head (`List`/`Dict`/`Set`): unchanged blanket
+        // check — a function element/value type is still the real gap (#90
+        // design doc §2, "collections of functions").
         Ty::Con { args, .. } => args
             .iter()
             .any(|a| ty_contains_fun(a) || embeds_nonderivable_function(interner, a)),
@@ -1322,6 +1366,142 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
         | Expr::Unit
         | Expr::FuncValue { .. } => 0,
     }
+}
+
+// ── Fn-value reuse gate, T4 (#90) ─────────────────────────────────────────────
+//
+// A binding whose type embeds a function (`IrType::Fun`, or a `Maybe`/
+// `Result`/user-union carrying one) renders as (or contains) `Box<dyn Fn(..)
+// -> R + Send + 'static>`, which is NOT `Clone`. Unlike the T5 multi-use-clone
+// rewrite above (only applied to `CloneClass::CloneOk` bindings, which get
+// `.clone()` inserted), a `CloneClass::NonClone` fn-carrying binding used more
+// than once in a CONSUMING position has no sound rewrite available — it is
+// rejected with SKY-L0127 ([`Feature::FunctionValueReuse`]) instead.
+//
+// [`count_fn_value_uses`] mirrors [`count_var_uses`] with exactly one
+// difference: an [`Expr::Apply`] whose `func` is DIRECTLY `sym` is a call —
+// `Box<dyn Fn>` implements `Fn`, so `Fn::call` borrows (`&self`), never
+// moves — so that occurrence is NOT counted. Every other position (an
+// argument, a nested capture, a second forwarding) is counted exactly as
+// `count_var_uses` would.
+
+/// Count the number of times `sym` is CONSUMED (moved, in emitted Rust) by
+/// `expr`, treating a direct-callee `Expr::Apply` position as non-consuming
+/// (a `Box<dyn Fn>` call borrows via `Fn::call(&self, ..)`).
+///
+/// Used only for the fn-value reuse gate (T4, #90) — never for the T5
+/// multi-use-clone rewrite, which has different call-position semantics for
+/// `CloneOk` types (those are not directly callable, so the distinction never
+/// mattered there).
+fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
+        Expr::Lambda { body, .. } => usize::from(lambda_body_refs_sym(sym, body)),
+        Expr::Let { name, value, body } => {
+            let in_value = count_fn_value_uses(sym, value);
+            let in_body = if *name == sym { 0 } else { count_fn_value_uses(sym, body) };
+            in_value + in_body
+        }
+        Expr::Destructure { binder, value, body } => {
+            let in_value = count_fn_value_uses(sym, value);
+            let in_body = if pat_binds_symbol(binder, sym) {
+                0
+            } else {
+                count_fn_value_uses(sym, body)
+            };
+            in_value + in_body
+        }
+        Expr::If { cond, then_, else_ } => {
+            count_fn_value_uses(sym, cond)
+                + count_fn_value_uses(sym, then_)
+                + count_fn_value_uses(sym, else_)
+        }
+        Expr::Match(m) => {
+            let in_scrut = count_fn_value_uses(sym, m.scrutinee());
+            let in_arms: usize = m
+                .arms()
+                .iter()
+                .map(|arm| {
+                    if pat_binds_symbol(&arm.pat, sym) {
+                        0
+                    } else {
+                        count_fn_value_uses(sym, &arm.body)
+                    }
+                })
+                .sum();
+            in_scrut + in_arms
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            count_fn_value_uses(sym, lhs) + count_fn_value_uses(sym, rhs)
+        }
+        Expr::Call { args, .. } => args.iter().map(|a| count_fn_value_uses(sym, a)).sum(),
+        // The one arm that differs from `count_var_uses`: a direct-callee
+        // `Apply { func: Var(sym) | CloneVar(sym), .. }` borrows, not moves.
+        Expr::Apply { func, args } => {
+            let func_uses = if matches!(func.as_ref(), Expr::Var(s) | Expr::CloneVar(s) if *s == sym)
+            {
+                0
+            } else {
+                count_fn_value_uses(sym, func)
+            };
+            func_uses
+                + args
+                    .iter()
+                    .map(|a| count_fn_value_uses(sym, a))
+                    .sum::<usize>()
+        }
+        Expr::Tuple(items) => items.iter().map(|e| count_fn_value_uses(sym, e)).sum(),
+        Expr::List { items, .. } => items.iter().map(|e| count_fn_value_uses(sym, e)).sum(),
+        Expr::Cons { head, tail } => {
+            count_fn_value_uses(sym, head) + count_fn_value_uses(sym, tail)
+        }
+        Expr::Record(fields) => fields.iter().map(|(_, e)| count_fn_value_uses(sym, e)).sum(),
+        Expr::Update { fields, .. } => {
+            fields.iter().map(|(_, e)| count_fn_value_uses(sym, e)).sum::<usize>()
+        }
+        Expr::Ctor { args, .. } => args.iter().map(|a| count_fn_value_uses(sym, a)).sum(),
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            count_fn_value_uses(sym, effect) + count_fn_value_uses(sym, rest)
+        }
+        Expr::TailLoop { params, body } => {
+            if params.iter().any(|(s, _)| *s == sym) {
+                0
+            } else {
+                count_fn_value_uses(sym, body)
+            }
+        }
+        Expr::TailRecur { args } => args.iter().map(|a| count_fn_value_uses(sym, a)).sum(),
+        Expr::Access { record, .. } => count_fn_value_uses(sym, record),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => 0,
+    }
+}
+
+/// T4 (#90): fail closed with [`Feature::FunctionValueReuse`] (SKY-L0127) if
+/// `sym` — a binding whose IR type embeds a function
+/// ([`ir_contains_fun`]) and does not derive `Clone`
+/// ([`CloneClass::NonClone`]) — is CONSUMED more than once in `body`.
+///
+/// Self-guarding: a no-op `Ok(())` for any OTHER type (a `CopyLeaf` like
+/// `Int`, or a `CloneOk`/opaque `NonClone` carrier with no embedded
+/// function — e.g. a bare `Task`/`Decoder`, which #90 does not touch and
+/// which the T5 multi-use-clone rewrite already handles for `CloneOk`), so
+/// callers may invoke it unconditionally wherever T5 does not apply. See the
+/// "Fn-value reuse gate, T4 (#90)" module doc block above
+/// [`count_fn_value_uses`] for why a direct-callee use is exempt.
+fn reject_fn_value_reuse(sym: Symbol, ir_ty: &IrType, body: &Expr, span: Span) -> DResult<()> {
+    if !ir_contains_fun(ir_ty) || !matches!(clone_class(ir_ty), CloneClass::NonClone) {
+        return Ok(());
+    }
+    if count_fn_value_uses(sym, body) > 1 {
+        return Err(unsupported(span, Feature::FunctionValueReuse));
+    }
+    Ok(())
 }
 
 /// Rewrite `Var(sym)` / `Lambda`-captures of `sym` in DFS left-to-right order
@@ -3276,17 +3456,15 @@ impl<'a> Lowerer<'a> {
     /// constructor becomes a [`Variant`] whose declared payload field types lower
     /// under that generic scope.
     ///
-    /// Two fail-closed gates run per constructor, both surfaced as a
-    /// span-carrying [`Diagnostic::Lower`] rather than emitting Rust that cargo
-    /// rejects:
+    /// One fail-closed gate runs per constructor, surfaced as a span-carrying
+    /// [`Diagnostic::Lower`] rather than emitting Rust that cargo rejects: a
+    /// field type variable not bound by the union's parameters (`type Foo a =
+    /// Bar b`) would have no Rust generic to resolve to — the polymorphism gap
+    /// ([`Feature::Polymorphism`]).
     ///
-    /// * a field type variable not bound by the union's parameters (`type Foo a =
-    ///   Bar b`) would have no Rust generic to resolve to — the polymorphism gap
-    ///   ([`Feature::Polymorphism`]);
-    /// * a field whose type embeds a function (`type Box = Mk (Int -> Int)`)
-    ///   would make the enum's derived `Clone`/`Debug`/`PartialEq` /
-    ///   `SkyStringify` fail to hold for a `Box<dyn Fn>` field — the
-    ///   constructor-payload-function gap ([`Feature::CtorPayloadFunction`]).
+    /// A field whose type embeds a function (`type Retryish e = RetryWhen (e ->
+    /// Bool)`) is NOT gated here (#90) — #87's derive-demotion fixpoint keeps
+    /// the emitted enum sound (see the field-loop comment below).
     fn lower_enum(&self, u: &canon::Union) -> DResult<EnumDef> {
         let type_params = u.vars.clone();
         let mut variants = Vec::with_capacity(u.ctors.len());
@@ -3309,13 +3487,16 @@ impl<'a> Lowerer<'a> {
                     return Err(unsupported(ctor.span, Feature::Polymorphism));
                 }
                 let ir = self.ir_type_from_canon(arg, &type_params)?;
-                // Gate 2: a function-bearing payload field cannot satisfy the
-                // enum's derives. The carrier is a constructor payload, so blame
-                // the constructor declaration with the payload-specific message
-                // (SKY-L0114) rather than the record-field one.
-                if ir_contains_fun(&ir) {
-                    return Err(unsupported(ctor.span, Feature::CtorPayloadFunction));
-                }
+                // #90: a function-bearing payload field (`type Retryish e =
+                // RetryWhen (e -> Bool)`) is SOUND to declare — #87's
+                // derive-demotion fixpoint (`enum_is_derivable`,
+                // `sky_backend_rust::emit_types`) drops the enum's
+                // `#[derive(Clone, Debug, PartialEq)]` whenever any field
+                // (transitively) embeds `IrType::Fun`, and the hand-written
+                // `SkyStringify` impl renders a non-derivable field as the
+                // `<fn>` placeholder instead of calling a derive. No gate
+                // needed at declaration time; see
+                // `docs/architecture/ctor-payload-function-design.md`.
                 fields.push(ir);
             }
             variants.push(Variant {
@@ -3686,6 +3867,10 @@ impl<'a> Lowerer<'a> {
                             lowered_body =
                                 rewrite_multiuse_clones(*sym, &mut remaining, lowered_body);
                         }
+                    } else {
+                        // T4 (#90): a fn-carrying, non-Clone param has no sound
+                        // multi-use rewrite — fail closed on reuse instead.
+                        reject_fn_value_reuse(*sym, ir_ty, &lowered_body, sig_span)?;
                     }
                 }
                 // TCO: if every self-call is a tail call, rewrite the body to a
@@ -3752,6 +3937,9 @@ impl<'a> Lowerer<'a> {
                                 lowered_body =
                                     rewrite_multiuse_clones(*sym, &mut remaining, lowered_body);
                             }
+                        } else {
+                            // T4 (#90): see the Typed-path comment above.
+                            reject_fn_value_reuse(*sym, ir_ty, &lowered_body, sig_span)?;
                         }
                     }
                     // No source-level type variables → no type_params (the
@@ -5373,10 +5561,26 @@ impl<'a> Lowerer<'a> {
                         Ok(IrType::Maybe(Box::new(elem)))
                     }
                     "Result" if args.len() == 2 => {
-                        let err = self.ir_type_from_ty_json(
-                            args.first().ok_or_else(result_arg_bug)?,
-                            span,
-                        )?;
+                        // #90 T3: the ERROR position defaults to `SkyError`
+                        // (`IrType::Error`) when unresolved, matching
+                        // `KernelFn::ResultOkDefault`'s `ok_res` convention
+                        // (an unconstrained `Ok x` pins its error type to the
+                        // project's `SkyError`, `lower_call_uniform`) — NOT
+                        // the generic Json fallback below, which would emit a
+                        // mismatched `SkyResult<JsonVal, _>` eta-param
+                        // annotation against a `SkyResult<SkyError, _>` value
+                        // (surfaced by `Ok f |> Result.andMap ra`'s
+                        // eta-expanded missing slot, #90). Only the OK-payload
+                        // position keeps the general Json-for-any-unresolved-
+                        // var fallback — the documented `Result Error a`
+                        // callback-slot case this helper was written for
+                        // already has a CONCRETE error type there.
+                        let err_ty = args.first().ok_or_else(result_arg_bug)?;
+                        let err = if matches!(err_ty, Ty::Var(_)) {
+                            IrType::Error
+                        } else {
+                            self.ir_type_from_ty_json(err_ty, span)?
+                        };
                         let ok = self.ir_type_from_ty_json(
                             args.get(1).ok_or_else(result_arg_bug)?,
                             span,
@@ -5949,6 +6153,102 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
+    /// #90 Stage 1 fail-closed guard: `Maybe.andMap` / `Result.andMap` applied
+    /// to a CURRIED (arity ≥ 2) payload function.
+    ///
+    /// `andMap : Maybe (a -> b) -> Maybe a -> Maybe b` (`Result e (a -> b) ->
+    /// Result e a -> Result e b`) is arity-1 per application: it fully applies
+    /// the wrapped function to exactly one argument. When the wrapped function
+    /// is itself curried (`\a b -> …`, IR-flattened to one multi-parameter
+    /// `Fun`), `a` instantiates to the first parameter and `b` to the
+    /// REMAINING curried tail — itself a `Ty::Fun`. This call's own solved
+    /// region type is then `Maybe b` / `Result e b` with `b` a function: the
+    /// applicative chain has not reached a fully-applied value, and finishing
+    /// it needs a nested-closure (`curryN`-style) lowering this Stage does not
+    /// implement (Stage 2, tracked separately — see
+    /// `docs/architecture/ctor-payload-function-design.md` §3). Fail closed
+    /// here, at the FIRST such `andMap`, rather than let an unfinished chain
+    /// reach a use site with no sound lowering.
+    ///
+    /// Only fires for the two `andMap` kernels; every other call is untouched
+    /// (`Ok(())` fast path). `lower_callee` is a pure symbol-table lookup — see
+    /// [`Self::intercept_live_kernel_call`]'s doc comment for why re-calling it
+    /// here is safe.
+    /// `mfn |> Maybe.andMap ma` desugars the pipe as `(Maybe.andMap ma) mfn` —
+    /// `Maybe.andMap ma` is ALREADY its own (under-saturated, 1-of-2-arg)
+    /// `Call` node before the pipe applies it to `mfn`, so the shape THIS
+    /// method actually sees is the CURRIED nesting `Call(Call(andMap, [ma]),
+    /// [mfn])`, never a flat 2-arg `Call(andMap, [ma, mfn])` (that flat form
+    /// only arises from the non-idiomatic direct-call spelling
+    /// `Maybe.andMap ma mfn`, also handled below). Both shapes are matched so
+    /// `mfn` — the function-wrapping argument, always the ARGUMENT THAT
+    /// COMPLETES the 2-arg application — is found regardless of spelling.
+    ///
+    /// Deliberately checks `mfn`'s OWN region type, not this call's overall
+    /// result type: the curried-call shape's OUTER node is lowered through
+    /// [`Self::lower_call_uniform`]'s generic Apply fallback (its callee is a
+    /// `Call`, not a `VarKernel`/`VarTopLevel`), whose result-region — after
+    /// eta-expansion collapses the inner partial application into a closure
+    /// — is `Maybe b`, still correct, but relying on it would require
+    /// re-deriving the eta-expansion's exact instantiation here; reading
+    /// `mfn`'s own solved type is direct and shape-independent.
+    fn reject_curried_andmap_payload(
+        &self,
+        callee: &canon::Expr,
+        args: &[canon::Expr],
+        call_span: Span,
+    ) -> DResult<()> {
+        let is_andmap_kernel = |e: &canon::Expr| -> DResult<bool> {
+            Ok(matches!(
+                &e.value,
+                canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. }
+            ) && matches!(
+                self.lower_callee(e)?,
+                Callee::Kernel(KernelFn::MaybeAndMap | KernelFn::ResultAndMap)
+            ))
+        };
+        let mfn_expr = match &callee.value {
+            // Direct 2-arg spelling: `Maybe.andMap ma mfn` (no pipe).
+            canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } => {
+                if args.len() != 2 || !is_andmap_kernel(callee)? {
+                    return Ok(());
+                }
+                args.get(1)
+            }
+            // Piped/curried spelling: `mfn |> Maybe.andMap ma`.
+            canon::Expr_::Call(inner_callee, inner_args) => {
+                if args.len() != 1
+                    || inner_args.len() != 1
+                    || !is_andmap_kernel(inner_callee)?
+                {
+                    return Ok(());
+                }
+                args.first()
+            }
+            _ => return Ok(()),
+        };
+        let Some(mfn_expr) = mfn_expr else {
+            return Ok(());
+        };
+        // `mfn`'s wrapped type is ALWAYS an arrow (`Maybe (a -> b)` /
+        // `Result e (a -> b)` — that is `andMap`'s whole signature); the
+        // curried signal is whether `b`, the arrow's OWN return type, is
+        // ITSELF an arrow (arity ≥ 2 flattened into one `IrType::Fun`, which
+        // `maybe_and_map`/`result_and_map`'s `F: FnOnce(A) -> B` cannot
+        // represent when `B` is a function — no `Box<dyn Fn(A0,A1)->R>`
+        // implements `FnOnce(A0) -> (A1 -> R)`).
+        let Some(Ty::Con { args: mfn_args, .. }) = self.region_ty(mfn_expr.span) else {
+            return Ok(());
+        };
+        let Some(Ty::Fun(_, ret)) = mfn_args.last() else {
+            return Ok(());
+        };
+        if matches!(ret.as_ref(), Ty::Fun(_, _)) {
+            return Err(unsupported(call_span, Feature::CtorPayloadFunction));
+        }
+        Ok(())
+    }
+
     /// Whether a solved type is the concrete builtin `Float` (a nullary `Ty::Con`
     /// resolving to `"Float"`). A bare `Ty::Var` is deliberately NOT a float —
     /// an unpinned polymorphic element is sound to lower.
@@ -6081,6 +6381,9 @@ impl<'a> Lowerer<'a> {
         // A Set / Dict produced by inference (no annotation driving an
         // `ir_type_from_ty` conversion) is gated here on its own region type.
         self.reject_float_keyed_collection(call_span)?;
+        // #90 Stage 1: `Maybe.andMap` / `Result.andMap` applied to a curried
+        // (arity ≥ 2) payload function — see the helper doc comment.
+        self.reject_curried_andmap_payload(callee, args, call_span)?;
 
         // App-entry / Live.route intercepts (Phase-1b/#108) — see the helper.
         if let Some(intercepted) = self.intercept_live_kernel_call(callee, args)? {
@@ -9593,6 +9896,10 @@ impl<'a> Lowerer<'a> {
                                         acc
                                     }
                                 } else {
+                                    // T4 (#90): a fn-carrying, non-Clone
+                                    // let-binding has no sound multi-use
+                                    // rewrite — fail closed on reuse instead.
+                                    reject_fn_value_reuse(*name, ir_ty, &acc, b.body.span)?;
                                     acc
                                 }
                             } else {
@@ -9761,14 +10068,28 @@ impl<'a> Lowerer<'a> {
                             find_first_varlocal_span(sym, &br.body)
                         && let Some(ty) = self.region_ty(span)
                         && let Ok(ir_ty) = self.ir_type_from_ty(ty, span)
-                        && matches!(clone_class(&ir_ty), CloneClass::CloneOk)
                     {
-                        let mut remaining = n;
-                        arm_body = rewrite_multiuse_clones(
-                            sym,
-                            &mut remaining,
-                            arm_body,
-                        );
+                        match clone_class(&ir_ty) {
+                            CloneClass::CloneOk => {
+                                let mut remaining = n;
+                                arm_body = rewrite_multiuse_clones(
+                                    sym,
+                                    &mut remaining,
+                                    arm_body,
+                                );
+                            }
+                            // T4 (#90): a fn-carrying, non-Clone arm-bound
+                            // variable (`case Just f of Just f -> …`) has no
+                            // sound multi-use rewrite — fail closed on reuse.
+                            // `count_var_uses`'s `n` over-counts a direct-call
+                            // position (`f x` borrows, never moves), so
+                            // `reject_fn_value_reuse` recomputes the precise
+                            // consuming-use count rather than trusting `n`.
+                            CloneClass::NonClone if ir_contains_fun(&ir_ty) => {
+                                reject_fn_value_reuse(sym, &ir_ty, &arm_body, span)?;
+                            }
+                            CloneClass::NonClone | CloneClass::CopyLeaf => {}
+                        }
                     }
                 }
 

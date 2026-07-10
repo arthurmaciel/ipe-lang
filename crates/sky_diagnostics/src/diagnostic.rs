@@ -14,7 +14,7 @@ use crate::code::{
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
     SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118, SKY_L0119, SKY_L0120, SKY_L0121,
-    SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0126, SKY_L0200,
+    SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0126, SKY_L0127, SKY_L0200,
     SKY_N0001,
     SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
     SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_N0027,
@@ -592,6 +592,16 @@ pub enum Feature {
     /// called, not forwarded; bind the result outside the closure or wrap
     /// the forwarding in a named top-level function. [SKY-L0125]
     NonCloneCapture,
+    /// A binding whose type embeds a function (a bare function value, or one
+    /// held inside a `Maybe`/`Result`/user-union payload — #90) was used more
+    /// than once in a value-consuming (non-callee) position. `Box<dyn Fn>` is
+    /// not `Clone`, so a second consuming use would double-move in the
+    /// emitted Rust (E0382). Calling the function is unlimited (a call
+    /// borrows, never moves); only a second non-call use is rejected. A
+    /// narrow, conservative gate — superseded once a general last-use clone
+    /// pass (an extension of [`Self::NonCloneCapture`]'s analysis) lands.
+    /// [SKY-L0127]
+    FunctionValueReuse,
 }
 
 /// The app shape whose entry point rejected an inadmissible Model. Drives the
@@ -1004,6 +1014,7 @@ const fn feature_code(f: Feature) -> Code {
         Feature::RoutedLiveApp => SKY_L0118,
         Feature::LetBoundAppCfg => SKY_L0119,
         Feature::NonCloneCapture => SKY_L0126,
+        Feature::FunctionValueReuse => SKY_L0127,
     }
 }
 
