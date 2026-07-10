@@ -262,7 +262,19 @@ where
         submgr.update(subscriptions(model.clone()));
         // Inline render (a closure borrowing `view` would make the future non-Send).
         // Fallible writes (NOT print!/println!, which panic on a broken pipe).
+        //
+        // #122: each `view` render is a distinct rendered frame and MUST end in
+        // a newline so consecutive renders don't run together on one line
+        // (observed as "lines: 0lines: 1" — the second render's text glued
+        // directly onto the first's, since neither `view`'s own returned
+        // String nor this print loop supplied a separator). Every render
+        // call-site writes its own trailing "\n" immediately after the view
+        // bytes, so the separator is never skipped regardless of how the loop
+        // exits (in particular: an immediate stdin EOF, which breaks out of
+        // the loop before ever reaching the loop-body render, still gets a
+        // trailing newline from the INITIAL render below).
         let _ = std::io::stdout().write_all(view(model.clone()).as_bytes());
+        let _ = std::io::stdout().write_all(b"\n");
         let _ = std::io::stdout().flush();
 
         while let Some(ev) = rx.recv().await {
@@ -277,10 +289,10 @@ where
             cli_run_cmd(cmd, &tx);
             submgr.update(subscriptions(model.clone()));
             let _ = std::io::stdout().write_all(view(model.clone()).as_bytes());
+            let _ = std::io::stdout().write_all(b"\n");
             let _ = std::io::stdout().flush();
         }
         submgr.stop_all();
-        let _ = std::io::stdout().write_all(b"\n");
         ok_res(())
     })
 }
