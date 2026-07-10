@@ -792,21 +792,81 @@ fn cookie_path() -> String {
     cookie_path_for(&live_base_path())
 }
 
+/// Whether to trust `X-Forwarded-Proto` for TLS-termination detection. Mirrors
+/// `server.rs`'s `SKY_TRUSTED_PROXY` gate (same env var, same rationale: a
+/// client-supplied header must never be trusted by default — an operator opts
+/// in only when a real reverse proxy sits in front of this process).
+///
+/// Snapshotted once (env is stable at process start; same rationale as
+/// `csrf::cookies_secure()` — avoids a per-request global env-lock read).
+fn trust_proxy_headers() -> bool {
+    use std::sync::OnceLock;
+    static TRUST: OnceLock<bool> = OnceLock::new();
+    *TRUST.get_or_init(|| {
+        crate::sky_runtime::system::read_env_var("SKY_TRUSTED_PROXY")
+            .map(|v| !v.is_empty() && v != "0" && v != "false")
+            .unwrap_or(false)
+    })
+}
+
+/// Request-scoped HTTPS detection, parameterised on the trust decision so it's
+/// unit-testable without mutating the real (OnceLock-cached) process env —
+/// `trust_proxy_headers()` snapshots once per process, so a test that mutates
+/// `SKY_TRUSTED_PROXY` and expects `request_is_https` to observe the change
+/// would be flaky/order-dependent. Only consulted (via `request_is_https`)
+/// when `trust` is true — otherwise a client could forge `X-Forwarded-Proto`
+/// to fool the Secure-cookie decision (the same footgun `server.rs` already
+/// closed for `X-Forwarded-For`).
+fn request_is_https_with_trust(headers: &axum::http::HeaderMap, trust: bool) -> bool {
+    if !trust {
+        return false;
+    }
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("https"))
+        .unwrap_or(false)
+}
+
+/// Request-scoped HTTPS detection: true when THIS request arrived over TLS at
+/// the trusted proxy (`X-Forwarded-Proto: https`). See
+/// `request_is_https_with_trust` for the testable core.
+fn request_is_https(headers: &axum::http::HeaderMap) -> bool {
+    request_is_https_with_trust(headers, trust_proxy_headers())
+}
+
 /// Build the full-page HTTP response for a GET (initial render or reuse): the
 /// client-bearing HTML wrap + the session cookie (name/path base-path-aware).
-fn page_response(sid: &str, body: &str, csrf_token: &str) -> axum::response::Response {
+fn page_response(
+    sid: &str,
+    body: &str,
+    csrf_token: &str,
+    headers: &axum::http::HeaderMap,
+) -> axum::response::Response {
     use axum::response::IntoResponse;
     let html = render_page_full(sid, &live_base_path(), body, csrf_token);
     // Session cookie carries `Secure` in production / frame-ancestors mode (was
-    // unconditionally omitted — a downgrade hole). NOTE the decision is
-    // ENV-gated, NOT request-scoped: `csrf::cookies_secure()` snapshots
-    // `production_from_env() || frame_ancestors().is_some()` once at process
-    // start; it does NOT inspect this request's TLS / `X-Forwarded-Proto`. A
-    // dev process fronted by a TLS proxy therefore emits a non-Secure session
-    // cookie. Request-scoped TLS detection needs trusted-proxy gating + header
-    // plumbing across the cookie-name (`__Host-`) decision and is deferred.
+    // unconditionally omitted — a downgrade hole), OR when this specific
+    // request arrived over TLS at a trusted proxy (`request_is_https`, opt-in
+    // via `SKY_TRUSTED_PROXY` — closes the gap where `csrf::cookies_secure()`
+    // snapshots `production_from_env() || frame_ancestors().is_some()` ONCE at
+    // process start and never inspects this request's TLS / `X-Forwarded-Proto`,
+    // so a dev process fronted by a TLS proxy used to emit a non-Secure session
+    // cookie even though the browser connection was HTTPS). The untrusted-proxy
+    // case (operator hasn't set `SKY_TRUSTED_PROXY`) keeps the pre-existing
+    // ENV-only behaviour — still SOUND, just not maximally precise, because it
+    // never marks a cookie Secure incorrectly, only potentially fails to mark
+    // one Secure that could safely have been.
+    //
+    // NOTE: this does NOT change the `__Host-` cookie-NAME decision
+    // (`csrf::cookies_secure()`, still process-global) — the cookie's identity
+    // must stay stable across a browser session, or the double-submit compare
+    // would spuriously fail whenever proxy-scheme detection flips between
+    // requests. Only the SESSION cookie's `Secure` ATTRIBUTE becomes
+    // request-scoped.
+    //
     // SameSite=Lax stays so top-level navigations keep the session.
-    let secure = if csrf::cookies_secure() {
+    let secure = if csrf::cookies_secure() || request_is_https(headers) {
         "; Secure"
     } else {
         ""
@@ -1263,7 +1323,7 @@ where
                         render_html(&tree)
                     };
                     st.store.set(&sid, handle).await; // touch last-seen
-                    return page_response(&sid, &body, &csrf_tok);
+                    return page_response(&sid, &body, &csrf_tok, &headers);
                 }
                 Some((sid, store::StoreHit::Cold(m))) => {
                     // A returning user with a valid sid cookie → not new attack
@@ -1351,7 +1411,7 @@ where
             // Fire init's Cmd into the loop (None for a cold-restored session).
             run_cmd(cmd0, &msg_tx, &sid);
 
-            page_response(&sid, &body, &csrf_tok)
+            page_response(&sid, &body, &csrf_tok, &headers)
         }
 
         // ── GET /_sky/sse ─────────────────────────────────────────────────
@@ -1915,6 +1975,38 @@ mod duration_parse_tests {
         assert_eq!(parse_duration_secs("1h30"), None); // trailing unit-less number
         assert_eq!(parse_duration_secs("m"), None); // unit with no number
         assert_eq!(parse_duration_secs("-5m"), None);
+    }
+}
+
+#[cfg(test)]
+mod request_is_https_tests {
+    use super::request_is_https_with_trust;
+
+    #[test]
+    fn ignored_without_trust_opt_in() {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert("x-forwarded-proto", "https".parse().unwrap());
+        assert!(
+            !request_is_https_with_trust(&h, false),
+            "must ignore X-Forwarded-Proto without SKY_TRUSTED_PROXY opt-in"
+        );
+    }
+
+    #[test]
+    fn honoured_when_trusted() {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert("x-forwarded-proto", "https".parse().unwrap());
+        assert!(request_is_https_with_trust(&h, true));
+
+        let mut h2 = axum::http::HeaderMap::new();
+        h2.insert("x-forwarded-proto", "http".parse().unwrap());
+        assert!(!request_is_https_with_trust(&h2, true));
+    }
+
+    #[test]
+    fn missing_header_is_not_https() {
+        let h = axum::http::HeaderMap::new();
+        assert!(!request_is_https_with_trust(&h, true));
     }
 }
 
