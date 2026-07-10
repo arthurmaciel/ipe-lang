@@ -1,0 +1,17 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+import Lib1
+import Lib2
+
+
+-- Cross-module reference to `Lib1.getName`, used at exactly ONE concrete
+-- record type (`Lib2.Person`). This is the "single-record-type cross-module
+-- use" shape that the obligation-gate fallback keeps monomorphic on the
+-- RECORD parameter — but pre-fix, the getter's own RESULT var was
+-- incorrectly quantified as a spurious Rust generic that appears in neither
+-- the emitted `params` nor `ret`, so `cargo build` failed E0283 at this
+-- call site ("cannot infer type of the type parameter").
+main =
+    println (Lib1.getName Lib2.samplePerson)

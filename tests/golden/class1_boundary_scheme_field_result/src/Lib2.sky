@@ -1,0 +1,12 @@
+module Lib2 exposing (Person, samplePerson)
+
+
+type alias Person =
+    { name : String
+    , age : Int
+    }
+
+
+samplePerson : Person
+samplePerson =
+    { name = "Ada", age = 36 }
