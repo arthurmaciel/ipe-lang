@@ -1,6 +1,0 @@
-# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
-main_sky_sha256 = 0a6a1cb7dd63488d8f8113d832cb22cd95aca7c6a03507d086836cb1149bbba0
-go_sky_version = sky dev
-exit_code = 0
-oracle_divergence = true
-divergence_reason = sanctioned: this program uses Std.Db kernels (Db.open / Db.withTransaction / Db.exec / Db.unsafeFindWhere / Db.getString / Db.getInt) — the Go backend emits Go+SQLite (cgo) binaries while ipê emits Rust+sqlx; the SQLite in-memory connection-pool behaviour and row-type representation differ enough that a shared Main.sky cannot run on both backends. ipê's output is the correct reference. The parameterised-args channel (List String bound via ? placeholders) is exercised here — callers are NOT interpolating values into the WHERE clause.

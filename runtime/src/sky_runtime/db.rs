@@ -1473,29 +1473,6 @@ pub fn db_find_by_conditions<E: Send + From<String> + 'static>(
     })
 }
 
-/// `unsafeFindWhere : Db -> String -> String -> List String -> Task Error (List (Dict String String))` —
-/// raw WHERE clause with parameterised args. Vulnerable to injection if
-/// the where-clause is built from untrusted input.
-pub fn db_unsafe_find_where<E: Send + From<String> + 'static>(
-    conn: Db,
-    table: String,
-    where_clause: String,
-    args: Vec<String>,
-) -> SkyTask<E, Vec<HashMap<String, String>>> {
-    Box::pin(async move {
-        let qtable = match SqlIdent::parse(&table) {
-            Some(t) => t,
-            None => {
-                return SkyResult::Err(
-                    format!("db.unsafeFindWhere: invalid table {:?}", table).into(),
-                );
-            }
-        };
-        let sql = format!("SELECT * FROM {} WHERE {}", qtable.as_str(), where_clause);
-        db_query(conn, sql, args).await
-    })
-}
-
 /// `queryDecode : Db -> String -> List String -> Decoder a -> Task Error (List a)` —
 /// typed query with a per-row decoder (Decoder<E,A>). Builds a NULL-preserving
 /// `JsonVal::Object` per row (via `row_to_json`) and runs the decoder against it.
@@ -1745,7 +1722,12 @@ pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
 
 /// A runtime-nameable SQL parameter value, matching the Sky `SqlValue` ADT.
 /// See the module-level comment above for the generated-ADT conversion rules.
-#[derive(Clone, Debug)]
+///
+/// `PartialEq` precondition (backlog #61 `SqlFragment` design note): every
+/// constituent field type here (`String`, `i64`, `f64`, `bool`, `Vec<u8>`) is
+/// already `PartialEq`, so the derive below is total and structural — no
+/// hand-written impl needed.
+#[derive(Clone, Debug, PartialEq)]
 pub enum SqlParam {
     /// `SqlString s` — binds as TEXT.
     Text(String),
@@ -1834,6 +1816,275 @@ fn bind_sql_param<'q>(q: DbQuery<'q>, p: SqlParam) -> DbQuery<'q> {
         SqlParam::Bytes(v) => q.bind(v),
         SqlParam::Null => q.bind(Option::<String>::None),
     }
+}
+
+// ─── Std.Db.Sql — SqlFragment builder (backlog #61) ────────────────────────
+//
+// Closes the SQL-injection surface the removed `unsafeFindWhere` left open.
+// The ONLY way to obtain a `SqlFragment` is through the combinators below —
+// there is no public constructor that accepts an arbitrary `String` as SQL
+// text — so a naive string-concatenated WHERE clause is a `skyc` TYPE ERROR
+// (`String` where `SqlFragment` is expected) at `Db.findWhere` /
+// `Db.deleteWhere`, never a runtime injection risk.
+//
+// Every combinator unconditionally parenthesizes its output (so composing
+// `and`/`or`/`not` can never produce an ambiguous-precedence SQL string) and
+// merges `binds` positionally with the `?` placeholders it emits — the two
+// always stay in lockstep by construction.
+//
+// `invalid` is a poison marker: `sql_column` sets it on a malformed
+// identifier instead of panicking or interpolating unchecked text; every
+// combinator propagates the first poison it sees; the two consumers surface
+// it as a `Task::Err` rather than emitting malformed SQL.
+
+/// `Std.Db.Sql`'s opaque, parameterized WHERE-fragment value.
+///
+/// The derived `PartialEq` precondition is verified above: every `SqlParam`
+/// field type is `PartialEq`, so this derive is total and structural,
+/// comparing `sql` text + `binds` + `invalid` state — a meaningful equality
+/// with no security concern (unlike `Secret`, nothing here is ever a secret
+/// payload).
+#[derive(Clone, PartialEq)]
+pub struct SqlFragment {
+    sql: String,
+    binds: Vec<SqlParam>,
+    invalid: Option<String>,
+}
+
+impl std::fmt::Debug for SqlFragment {
+    /// SQL text + bind COUNT only — never bind VALUES. A bind may carry a
+    /// revealed secret; this is the one place `SqlFragment` and `Secret`
+    /// (backlog #44) intersect, and it resolves the same way both items
+    /// resolve elsewhere: safe by construction, no reliance on a caller
+    /// remembering an escape hatch.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqlFragment")
+            .field("sql", &self.sql)
+            .field("binds", &self.binds.len())
+            .field("invalid", &self.invalid)
+            .finish()
+    }
+}
+
+/// `Sql.column : String -> SqlFragment` — a validated column/table reference.
+/// Accepts dotted references (`users.id`) via [`valid_sql_ident`] (the
+/// DOT-ACCEPTING validator — [`SqlIdent::parse`] is the table/column-name-only
+/// validator used elsewhere in this module and rejects dots). An invalid
+/// identifier poisons the fragment instead of panicking or interpolating
+/// unchecked text.
+///
+/// Takes an owned `String` (not `&str`) to match every other Sky-`String`-
+/// typed kernel parameter in this module — the generic call-emission path
+/// (`sky_backend_rust::emit_expr`'s standard-path fallback) always produces an
+/// owned `String` for a Sky `String` argument, never a borrow.
+pub fn sql_column(name: String) -> SqlFragment {
+    if valid_sql_ident(&name) {
+        SqlFragment {
+            sql: name,
+            binds: Vec::new(),
+            invalid: None,
+        }
+    } else {
+        SqlFragment {
+            sql: String::new(),
+            binds: Vec::new(),
+            invalid: Some(format!("Sql.column: invalid identifier {name:?}")),
+        }
+    }
+}
+
+/// `Sql.param : SqlValue -> SqlFragment` — binds `v` as a single `?`
+/// placeholder. Also the shared runtime symbol for `Sql.int` / `Sql.string` /
+/// `Sql.float` / `Sql.bool`: each is a Sky-level type narrowing of this same
+/// generic entry point (`i64` / `String` / `f64` / `bool` all already have a
+/// `From<T> for SqlParam` impl above), so no separate per-type runtime
+/// function exists — see the kernel decl doc in `sky_kernels`.
+pub fn sql_param<T: Into<SqlParam>>(v: T) -> SqlFragment {
+    SqlFragment {
+        sql: "?".to_string(),
+        binds: vec![v.into()],
+        invalid: None,
+    }
+}
+
+/// Shared implementation for the binary comparison/boolean combinators:
+/// unconditional parens, positional bind merge, first-poison-wins.
+fn sql_binop(op: &str, a: SqlFragment, b: SqlFragment) -> SqlFragment {
+    let invalid = a.invalid.or(b.invalid);
+    let mut binds = a.binds;
+    binds.extend(b.binds);
+    SqlFragment {
+        sql: format!("({} {} {})", a.sql, op, b.sql),
+        binds,
+        invalid,
+    }
+}
+
+/// `Sql.eq : SqlFragment -> SqlFragment -> SqlFragment`
+pub fn sql_eq(a: SqlFragment, b: SqlFragment) -> SqlFragment {
+    sql_binop("=", a, b)
+}
+/// `Sql.ne : SqlFragment -> SqlFragment -> SqlFragment`
+pub fn sql_ne(a: SqlFragment, b: SqlFragment) -> SqlFragment {
+    sql_binop("!=", a, b)
+}
+/// `Sql.gt : SqlFragment -> SqlFragment -> SqlFragment`
+pub fn sql_gt(a: SqlFragment, b: SqlFragment) -> SqlFragment {
+    sql_binop(">", a, b)
+}
+/// `Sql.lt : SqlFragment -> SqlFragment -> SqlFragment`
+pub fn sql_lt(a: SqlFragment, b: SqlFragment) -> SqlFragment {
+    sql_binop("<", a, b)
+}
+/// `Sql.gte : SqlFragment -> SqlFragment -> SqlFragment`
+pub fn sql_gte(a: SqlFragment, b: SqlFragment) -> SqlFragment {
+    sql_binop(">=", a, b)
+}
+/// `Sql.lte : SqlFragment -> SqlFragment -> SqlFragment`
+pub fn sql_lte(a: SqlFragment, b: SqlFragment) -> SqlFragment {
+    sql_binop("<=", a, b)
+}
+/// `Sql.and : SqlFragment -> SqlFragment -> SqlFragment`
+pub fn sql_and(a: SqlFragment, b: SqlFragment) -> SqlFragment {
+    sql_binop("AND", a, b)
+}
+/// `Sql.or : SqlFragment -> SqlFragment -> SqlFragment`
+pub fn sql_or(a: SqlFragment, b: SqlFragment) -> SqlFragment {
+    sql_binop("OR", a, b)
+}
+
+/// `Sql.not : SqlFragment -> SqlFragment`
+pub fn sql_not(a: SqlFragment) -> SqlFragment {
+    SqlFragment {
+        sql: format!("(NOT {})", a.sql),
+        binds: a.binds,
+        invalid: a.invalid,
+    }
+}
+/// `Sql.isNull : SqlFragment -> SqlFragment`
+pub fn sql_is_null(a: SqlFragment) -> SqlFragment {
+    SqlFragment {
+        sql: format!("({} IS NULL)", a.sql),
+        binds: a.binds,
+        invalid: a.invalid,
+    }
+}
+/// `Sql.isNotNull : SqlFragment -> SqlFragment`
+pub fn sql_is_not_null(a: SqlFragment) -> SqlFragment {
+    SqlFragment {
+        sql: format!("({} IS NOT NULL)", a.sql),
+        binds: a.binds,
+        invalid: a.invalid,
+    }
+}
+
+/// `Sql.like : SqlFragment -> String -> SqlFragment` — the pattern is always a
+/// bound param (never interpolated), so `%`/`_` wildcards in untrusted input
+/// stay data, never syntax.
+pub fn sql_like(a: SqlFragment, pattern: String) -> SqlFragment {
+    let mut binds = a.binds;
+    binds.push(SqlParam::Text(pattern));
+    SqlFragment {
+        sql: format!("({} LIKE ?)", a.sql),
+        binds,
+        invalid: a.invalid,
+    }
+}
+
+/// `Sql.inList : SqlFragment -> List SqlValue -> SqlFragment`. Empty `values`
+/// emits `(1 = 0)` (always-false) rather than the SQL syntax error `IN ()` —
+/// `a`'s own `sql` text is discarded in that case, so `a`'s binds (if any)
+/// are dropped too (keeping the placeholder count and `binds` length in
+/// lockstep); `a.invalid` still propagates so an upstream poisoned column
+/// reference is not silently swallowed by the always-false shortcut.
+pub fn sql_in_list(a: SqlFragment, values: Vec<SqlParam>) -> SqlFragment {
+    if values.is_empty() {
+        return SqlFragment {
+            sql: "(1 = 0)".to_string(),
+            binds: Vec::new(),
+            invalid: a.invalid,
+        };
+    }
+    let placeholders = vec!["?"; values.len()].join(", ");
+    let mut binds = a.binds;
+    binds.extend(values);
+    SqlFragment {
+        sql: format!("({} IN ({}))", a.sql, placeholders),
+        binds,
+        invalid: a.invalid,
+    }
+}
+
+/// `Db.findWhere : Db -> String -> SqlFragment -> Task Error (List (Dict String String))`
+/// — the `SqlFragment`-typed replacement for the removed `unsafeFindWhere`.
+/// The WHERE clause can only be built through the `Sql.*` combinators above,
+/// so `frag.sql` is always `?`-placeholder text with a matching `frag.binds`
+/// list — there is no representable way to smuggle untrusted string content
+/// into the SQL text.
+pub fn db_find_where<E: Send + From<String> + 'static>(
+    conn: Db,
+    table: String,
+    frag: SqlFragment,
+) -> SkyTask<E, Vec<HashMap<String, String>>> {
+    Box::pin(async move {
+        if let Some(reason) = frag.invalid {
+            return SkyResult::Err(format!("db.findWhere: {reason}").into());
+        }
+        let qtable = match SqlIdent::parse(&table) {
+            Some(t) => t,
+            None => {
+                return SkyResult::Err(format!("db.findWhere: invalid table {:?}", table).into());
+            }
+        };
+        let sql = db_format_sql(format!(
+            "SELECT * FROM {} WHERE {}",
+            qtable.as_str(),
+            frag.sql
+        ));
+        let mut q = sqlx::query(&sql);
+        for p in frag.binds {
+            q = bind_sql_param(q, p);
+        }
+        match fetch_all_routed(&conn, q).await {
+            Ok(rows) => ok_res(rows.iter().map(row_to_map).collect()),
+            Err(e) => SkyResult::Err(sky_err(&e)),
+        }
+    })
+}
+
+/// `Db.deleteWhere : Db -> String -> SqlFragment -> Task Error Int` — the
+/// row-count deletion counterpart to [`db_find_where`].
+pub fn db_delete_where<E: Send + From<String> + 'static>(
+    conn: Db,
+    table: String,
+    frag: SqlFragment,
+) -> SkyTask<E, i64> {
+    Box::pin(async move {
+        if let Some(reason) = frag.invalid {
+            return SkyResult::Err(format!("db.deleteWhere: {reason}").into());
+        }
+        let qtable = match SqlIdent::parse(&table) {
+            Some(t) => t,
+            None => {
+                return SkyResult::Err(
+                    format!("db.deleteWhere: invalid table {:?}", table).into(),
+                );
+            }
+        };
+        let sql = db_format_sql(format!(
+            "DELETE FROM {} WHERE {}",
+            qtable.as_str(),
+            frag.sql
+        ));
+        let mut q = sqlx::query(&sql);
+        for p in frag.binds {
+            q = bind_sql_param(q, p);
+        }
+        match exec_routed(&conn, q).await {
+            Ok(res) => ok_res(res.rows_affected() as i64),
+            Err(e) => SkyResult::Err(sky_err(&e)),
+        }
+    })
 }
 
 /// Shared logic for `db_insert_fields` and `db_insert_fields_returning`:
@@ -3098,23 +3349,172 @@ mod tests {
         assert!(matches!(r, SkyResult::Ok(())));
     }
 
-    #[tokio::test]
-    async fn test_unsafe_find_where() {
-        let db = fresh_db().await;
+    // ─── Std.Db.Sql — SqlFragment builder (backlog #61) ────────────────────
+
+    async fn insert_todo(db: &Db, title: &str) {
         let mut r = HashMap::new();
-        r.insert("title".to_string(), "alpha".to_string());
+        r.insert("title".to_string(), title.to_string());
         let _: SkyResult<String, i64> = db_insert_row(db.clone(), "todos".into(), r).await;
-        let found: SkyResult<String, Vec<HashMap<String, String>>> = db_unsafe_find_where(
-            db,
-            "todos".into(),
-            "title = ?".into(),
-            vec!["alpha".to_string()],
-        )
-        .await;
+    }
+
+    /// `Db.findWhere` with a single `Sql.eq` predicate finds exactly the
+    /// matching row — the `SqlFragment`-typed replacement for
+    /// `unsafeFindWhere`, proving the parameterised channel (never string
+    /// interpolation) still works end-to-end.
+    #[tokio::test]
+    async fn test_find_where_eq() {
+        let db = fresh_db().await;
+        insert_todo(&db, "alpha").await;
+        insert_todo(&db, "beta").await;
+        let frag = sql_eq(sql_column("title".to_string()), sql_param("alpha".to_string()));
+        let found: SkyResult<String, Vec<HashMap<String, String>>> =
+            db_find_where(db, "todos".into(), frag).await;
+        match found {
+            SkyResult::Ok(v) => {
+                assert_eq!(v.len(), 1);
+                assert_eq!(v[0].get("title").map(String::as_str), Some("alpha"));
+            }
+            SkyResult::Err(e) => panic!("expected Ok, got Err({e})"),
+        }
+    }
+
+    /// `Sql.and` composes two predicates; `Sql.gt` on the auto-increment `id`
+    /// column proves numeric comparison (not just string equality).
+    #[tokio::test]
+    async fn test_find_where_and_gt() {
+        let db = fresh_db().await;
+        insert_todo(&db, "alpha").await;
+        insert_todo(&db, "beta").await;
+        insert_todo(&db, "beta").await;
+        let frag = sql_and(
+            sql_eq(sql_column("title".to_string()), sql_param("beta".to_string())),
+            sql_gt(sql_column("id".to_string()), sql_param(1_i64)),
+        );
+        let found: SkyResult<String, Vec<HashMap<String, String>>> =
+            db_find_where(db, "todos".into(), frag).await;
+        match found {
+            SkyResult::Ok(v) => assert_eq!(v.len(), 2),
+            SkyResult::Err(e) => panic!("expected Ok, got Err({e})"),
+        }
+    }
+
+    /// `Db.deleteWhere` removes exactly the matching rows and returns the
+    /// affected row count.
+    #[tokio::test]
+    async fn test_delete_where() {
+        let db = fresh_db().await;
+        insert_todo(&db, "alpha").await;
+        insert_todo(&db, "beta").await;
+        let frag = sql_eq(sql_column("title".to_string()), sql_param("alpha".to_string()));
+        let deleted: SkyResult<String, i64> =
+            db_delete_where(db.clone(), "todos".into(), frag).await;
+        assert_eq!(deleted, SkyResult::Ok(1));
+        let remaining: SkyResult<String, Vec<HashMap<String, String>>> =
+            db_find_where(db, "todos".into(), sql_is_not_null(sql_column("title".to_string()))).await;
+        match remaining {
+            SkyResult::Ok(v) => assert_eq!(v.len(), 1),
+            SkyResult::Err(e) => panic!("expected Ok, got Err({e})"),
+        }
+    }
+
+    /// `Sql.inList` with a non-empty list matches every listed value.
+    #[tokio::test]
+    async fn test_in_list_non_empty() {
+        let db = fresh_db().await;
+        insert_todo(&db, "alpha").await;
+        insert_todo(&db, "beta").await;
+        insert_todo(&db, "gamma").await;
+        let frag = sql_in_list(
+            sql_column("title".to_string()),
+            vec![
+                SqlParam::Text("alpha".to_string()),
+                SqlParam::Text("gamma".to_string()),
+            ],
+        );
+        let found: SkyResult<String, Vec<HashMap<String, String>>> =
+            db_find_where(db, "todos".into(), frag).await;
+        match found {
+            SkyResult::Ok(v) => assert_eq!(v.len(), 2),
+            SkyResult::Err(e) => panic!("expected Ok, got Err({e})"),
+        }
+    }
+
+    /// Empty `Sql.inList` emits `(1 = 0)` (always-false) rather than the SQL
+    /// syntax error `IN ()` — a real column reference stays a real column
+    /// reference, but the whole predicate matches nothing.
+    #[tokio::test]
+    async fn test_in_list_empty_matches_nothing() {
+        let db = fresh_db().await;
+        insert_todo(&db, "alpha").await;
+        let frag = sql_in_list(sql_column("title".to_string()), Vec::new());
+        let found: SkyResult<String, Vec<HashMap<String, String>>> =
+            db_find_where(db, "todos".into(), frag).await;
+        match found {
+            SkyResult::Ok(v) => assert_eq!(v.len(), 0),
+            SkyResult::Err(e) => panic!("expected Ok, got Err({e})"),
+        }
+    }
+
+    /// `Sql.column` accepts a dotted reference (`table.column`) via the
+    /// DOT-ACCEPTING `valid_sql_ident`, distinct from `SqlIdent::parse`
+    /// (table-name-only, dot-rejecting) used for the table argument itself.
+    #[tokio::test]
+    async fn test_column_accepts_dotted_reference() {
+        let db = fresh_db().await;
+        insert_todo(&db, "alpha").await;
+        let frag = sql_eq(sql_column("todos.title".to_string()), sql_param("alpha".to_string()));
+        let found: SkyResult<String, Vec<HashMap<String, String>>> =
+            db_find_where(db, "todos".into(), frag).await;
         match found {
             SkyResult::Ok(v) => assert_eq!(v.len(), 1),
-            _ => panic!("unsafe find"),
+            SkyResult::Err(e) => panic!("expected Ok, got Err({e})"),
         }
+    }
+
+    /// An invalid `Sql.column` identifier poisons the fragment instead of
+    /// panicking or interpolating unchecked text; `Db.findWhere` surfaces the
+    /// poison as a `Task::Err`, never malformed SQL.
+    #[tokio::test]
+    async fn test_poisoned_column_surfaces_as_task_err() {
+        let db = fresh_db().await;
+        insert_todo(&db, "alpha").await;
+        // Space + semicolon are outside `valid_sql_ident`'s charset.
+        let frag = sql_eq(
+            sql_column("title; DROP TABLE todos".to_string()),
+            sql_param("alpha".to_string()),
+        );
+        let found: SkyResult<String, Vec<HashMap<String, String>>> =
+            db_find_where(db, "todos".into(), frag).await;
+        assert!(
+            matches!(found, SkyResult::Err(_)),
+            "poisoned column must surface as Task::Err, got {found:?}"
+        );
+    }
+
+    /// `SqlFragment`'s hand-written `Debug` shows SQL text + bind COUNT —
+    /// never the bind VALUE.
+    #[test]
+    fn test_sqlfragment_debug_never_shows_bind_values() {
+        let frag = sql_eq(
+            sql_column("title".to_string()),
+            sql_param("super-secret-value".to_string()),
+        );
+        let shown = format!("{frag:?}");
+        assert!(
+            !shown.contains("super-secret-value"),
+            "Debug leaked a bind value: {shown}"
+        );
+        assert!(shown.contains("binds: 1"), "Debug should show bind count: {shown}");
+    }
+
+    /// `SqlFragment` derives `PartialEq` structurally (sql + binds + invalid).
+    #[test]
+    fn test_sqlfragment_partial_eq() {
+        let a = sql_eq(sql_column("title".to_string()), sql_param(1_i64));
+        let b = sql_eq(sql_column("title".to_string()), sql_param(1_i64));
+        let c = sql_eq(sql_column("title".to_string()), sql_param(2_i64));
+        assert_eq!(a, b);
+        assert_ne!(a, c);
     }
 
     // ─── db_exec / db_query parameter-binding characterization (candidate B) ──────

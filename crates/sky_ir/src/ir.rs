@@ -718,6 +718,17 @@ pub enum IrType {
     /// `ErrorDetails` union is an explicit, filed follow-up (not a soundness
     /// gap — `ErrorInfo` here is a plain closed record, not a leaf `IrType`).
     Error,
+
+    /// `Std.Db.Sql`'s opaque WHERE-fragment type (backlog #61 — SQL injection
+    /// closed by construction: a `SqlFragment` can only be built through the
+    /// `Sql.*` combinator kernels, never from an arbitrary `String`).
+    ///
+    /// Renders as `sky_runtime::db::SqlFragment`. Fully `Clone + PartialEq`
+    /// (derivable), but NOT serde — it is a query-building value, never
+    /// persisted to a Live session store. `Debug` is hand-written on the
+    /// runtime type to show SQL text + bind COUNT only, never bind values (a
+    /// bind may carry a revealed secret).
+    SqlFragment,
 }
 
 /// Tag enum for the message-parametric `Std.Ui` / `Std.Html` types.
@@ -832,10 +843,13 @@ pub fn ir_type_is_derivable(
         // `SkyErrorKind` derives Clone + Copy + PartialEq + Eq + Debug.
         // `SkyError` derives Clone + PartialEq + Eq + Debug (not Copy — carries
         // a heap-allocated `String` message).
+        // `SqlFragment` derives Clone + PartialEq (hand-written Debug; see
+        // its own doc) — fully derivable, not serde (see `ir_type_is_serde`).
         | IrType::Order
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
+        | IrType::SqlFragment
         | IrType::Generic(_)
         | IrType::UiPlain(_) => true,
         // The fully-derivable Std.Ui / Std.Html carriers vs the two Clone-only
@@ -977,6 +991,9 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle; not serde.
         | IrType::HttpRequest
+        // `SqlFragment` is a query-building value, never persisted to a Live
+        // session store — derivable (see `ir_type_is_derivable`) but not serde.
+        | IrType::SqlFragment
         // #127: `WsHandle` / `WsServerCfg` are opaque handles; not serde.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
@@ -2589,6 +2606,22 @@ mod tests {
                 "{t:?} must NOT be serde (the #91 CDPeq-but-not-serde gap)"
             );
         }
+    }
+
+    /// `SqlFragment` (backlog #61): fully derivable (Clone + `PartialEq`) but
+    /// deliberately NOT serde — it is a query-building value, never persisted
+    /// to a Live session store.
+    #[test]
+    fn sqlfragment_derivable_but_not_serde() {
+        let t = IrType::SqlFragment;
+        assert!(
+            ir_type_is_derivable(&t, &all_serde),
+            "SqlFragment IS derivable (Clone + PartialEq)"
+        );
+        assert!(
+            !ir_type_is_serde(&t, &all_serde),
+            "SqlFragment must NOT be serde"
+        );
     }
 
     /// A carrier is serde iff every child is; one bad field poisons it.

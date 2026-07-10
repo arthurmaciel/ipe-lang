@@ -46,6 +46,9 @@ const SUGGESTION_MAX_DISTANCE: usize = 2;
 /// LayoutContext 2302, LiveReq 2304.
 /// ```
 ///
+/// `SqlFragment` (backlog #61) was added after this citation list was drawn
+/// up; see its own arm in `ir_type_from_ty` / `ir_type_from_canon`.
+///
 /// Several names that `ir_type_from_ty` also matches are deliberately EXCLUDED,
 /// because #101 moved them BELOW the `enum_variants` guard in BOTH lowering
 /// paths (ty + canon), so a program union of that name wins by its
@@ -81,6 +84,10 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "Sub",
     "SqlValue",
     "SqlField",
+    // `Std.Db.Sql`'s opaque WHERE-fragment type (backlog #61) — reserved (not
+    // `EXTRA_BUILTIN_TYPE_NAMES`) so user shadowing of this security-tier type
+    // is a hard canon error, matching the `SqlValue`/`SqlField` precedent.
+    "SqlFragment",
     "StreamId",
     "ChunkEvent",
     "Request",

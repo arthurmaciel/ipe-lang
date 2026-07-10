@@ -77,6 +77,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Decimal => "sky_runtime::decimal::Decimal".to_owned(),
         IrType::ErrorKind => "sky_runtime::error::SkyErrorKind".to_owned(),
         IrType::Error => "sky_runtime::error::SkyError".to_owned(),
+        IrType::SqlFragment => "sky_runtime::db::SqlFragment".to_owned(),
         IrType::Int => "i64".to_owned(),
         IrType::Float => "f64".to_owned(),
         IrType::Bool => "bool".to_owned(),
