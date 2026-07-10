@@ -85,6 +85,16 @@ pub fn file_mkdir_all<E: Send + From<String> + 'static>(path: String) -> SkyTask
 /// `limit` (to avoid OOM on unbounded inputs) or when the content is not
 /// valid UTF-8 (use `readFileBytes` for binary data in that case).
 /// A non-positive limit falls back to the same 10 MiB default Go uses.
+///
+/// AUD-09 gap-sweep TOCTOU fix: no separate `metadata()` pre-check. A
+/// stat-then-read split is TOCTOU — a file that grows between the two
+/// syscalls would pass the (now-stale) size check and then have `take(cap)`
+/// silently truncate the read with no error, instead of reporting that the
+/// file exceeds the limit. Reading `cap + 1` bytes in a single pass and
+/// checking the ACTUAL bytes read (same idiom as `file_read_file` above, and
+/// as `compression.rs`'s `gunzip`/`zstdDecompress` decompression-bomb check)
+/// removes the race window structurally: there is only one syscall
+/// sequence, so there is nothing left to race against.
 pub fn file_read_file_limit<E: Send + From<String> + 'static>(
     path: String,
     limit: i64,
@@ -98,18 +108,17 @@ pub fn file_read_file_limit<E: Send + From<String> + 'static>(
     Box::pin(async move {
         let result: Result<String, String> = (|| {
             let f = std::fs::File::open(&path).map_err(|e| format!("{}", e))?;
-            let meta = f.metadata().map_err(|e| format!("{}", e))?;
-            if meta.len() > cap {
-                return Err(format!(
-                    "file exceeds {}-byte limit (actual: {})",
-                    cap,
-                    meta.len()
-                ));
-            }
             let mut buf = String::new();
-            f.take(cap)
+            let read = f
+                .take(cap.saturating_add(1))
                 .read_to_string(&mut buf)
                 .map_err(|e| format!("{}", e))?;
+            if read as u64 > cap {
+                return Err(format!(
+                    "file exceeds {}-byte limit (stopped reading at the limit — actual size not reported to bound memory use): {}",
+                    cap, path
+                ));
+            }
             Ok(buf)
         })();
         match result {
@@ -385,6 +394,81 @@ mod read_ceiling_tests {
         let _ = std::fs::remove_file(&p);
         match res {
             SkyResult::Ok(s) => assert_eq!(s, "hello"),
+            SkyResult::Err(e) => panic!("unexpected Err: {e}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod read_file_limit_tests {
+    use super::*;
+
+    fn block<T>(fut: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(fut)
+    }
+
+    #[test]
+    fn under_limit_reads_full_content() {
+        let p = std::env::temp_dir().join(format!("sky_rfl_under_{}.txt", std::process::id()));
+        std::fs::write(&p, b"hello world").unwrap();
+        let res: SkyResult<String, String> =
+            block(file_read_file_limit(p.to_string_lossy().into_owned(), 1024));
+        let _ = std::fs::remove_file(&p);
+        match res {
+            SkyResult::Ok(s) => assert_eq!(s, "hello world"),
+            SkyResult::Err(e) => panic!("unexpected Err: {e}"),
+        }
+    }
+
+    /// Boundary: a file whose size is EXACTLY `limit` bytes must succeed with
+    /// the full content, not be rejected as "over" (the `> cap` check, not
+    /// `>= cap`).
+    #[test]
+    fn exactly_at_limit_is_ok() {
+        let p = std::env::temp_dir().join(format!("sky_rfl_exact_{}.txt", std::process::id()));
+        let content = vec![b'a'; 16];
+        std::fs::write(&p, &content).unwrap();
+        let res: SkyResult<String, String> =
+            block(file_read_file_limit(p.to_string_lossy().into_owned(), 16));
+        let _ = std::fs::remove_file(&p);
+        match res {
+            SkyResult::Ok(s) => assert_eq!(s.len(), 16),
+            SkyResult::Err(e) => panic!("exactly-at-limit must be Ok, got Err: {e}"),
+        }
+    }
+
+    /// Regression for the TOCTOU fix: a file ONE byte over the limit must
+    /// Err, never silently truncate to `limit` bytes and report Ok. This
+    /// pins the single-pass rewrite's over-limit-at-rest behavior while
+    /// removing the stat-then-read race window a growing-file scenario
+    /// would otherwise hit.
+    #[test]
+    fn over_limit_by_one_byte_errs() {
+        let p = std::env::temp_dir().join(format!("sky_rfl_over_{}.txt", std::process::id()));
+        std::fs::write(&p, vec![b'a'; 17]).unwrap();
+        let res: SkyResult<String, String> =
+            block(file_read_file_limit(p.to_string_lossy().into_owned(), 16));
+        let _ = std::fs::remove_file(&p);
+        assert!(
+            matches!(res, SkyResult::Err(_)),
+            "17 bytes under a 16-byte limit must Err, not silently truncate"
+        );
+    }
+
+    /// Non-positive limit falls back to the documented 10 MiB default.
+    #[test]
+    fn non_positive_limit_uses_default_cap() {
+        let p = std::env::temp_dir().join(format!("sky_rfl_default_{}.txt", std::process::id()));
+        std::fs::write(&p, b"small").unwrap();
+        let res: SkyResult<String, String> =
+            block(file_read_file_limit(p.to_string_lossy().into_owned(), 0));
+        let _ = std::fs::remove_file(&p);
+        match res {
+            SkyResult::Ok(s) => assert_eq!(s, "small"),
             SkyResult::Err(e) => panic!("unexpected Err: {e}"),
         }
     }
