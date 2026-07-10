@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use sky_canon::ast as canon;
 use sky_diagnostics::{
     Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0101, SKY_L0102,
-    SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0119, Span,
+    SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0114, SKY_L0119, Span,
 };
 use sky_intern::{Interner, Symbol};
 use sky_ir::{BoundSet, Callee, Expr, FuncId, IrType, KernelFn};
@@ -638,6 +638,106 @@ fn function_inside_opaque_boxed_wrapper_is_accepted() -> DResult<()> {
         "a function inside an opaque boxed wrapper (Decoder) must lower cleanly, \
          not trip the ctor-payload/record-field function gate: {:?}",
         res.err()
+    );
+    Ok(())
+}
+
+#[test]
+fn function_inside_maybe_via_type_variable_is_accepted() -> DResult<()> {
+    // #90 (SKY-L0114 narrowing): a function reaching the type argument of the
+    // built-in ENUM-LIKE `Maybe` is sound — `Just`/`Ok` construct the RUNTIME
+    // `SkyMaybe`/`SkyResult` enums, whose derives are generic-bounded, so the
+    // type compiles regardless of the payload; use (`==`/stringify/serde) is
+    // independently gated elsewhere. Same shape as
+    // `function_inside_opaque_boxed_wrapper_is_accepted`, but for an
+    // enum-like (not opaque) head — the region gate must now let it through
+    // too, distinct from a COLLECTION head (see the `List` sibling test).
+    let mut i = Interner::new();
+    let boxed = i.intern("boxed")?;
+    let r = i.intern("r")?;
+    let int_name = i.intern("Int")?;
+    let maybe_name = i.intern("Maybe")?;
+    let ty = con_int(&mut i)?;
+    let body_span = Span::new(40, 41);
+    let body = Located::new(body_span, canon::Expr_::VarLocal(r));
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(Span::new(36, 37), boxed),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty,
+    };
+    let con = |name| Ty::Con {
+        module: Vec::new(),
+        name,
+        args: Vec::new(),
+    };
+    // region type: `Maybe (Int -> Int)` — a function inside the enum-like
+    // built-in `Maybe`.
+    let mut regions = BTreeMap::new();
+    regions.insert(
+        body_span,
+        Ty::Con {
+            module: Vec::new(),
+            name: maybe_name,
+            args: vec![Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name)))],
+        },
+    );
+    let res = run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i);
+    assert!(
+        res.is_ok(),
+        "a function inside `Maybe` must lower cleanly (#90) — the runtime \
+         SkyMaybe's derives are generic-bounded: {:?}",
+        res.err()
+    );
+    Ok(())
+}
+
+#[test]
+fn function_inside_list_via_type_variable_is_still_unsupported() -> DResult<()> {
+    // #90's narrowing exempts ENUM-LIKE heads (`Maybe`/`Result`/user unions),
+    // not COLLECTION heads (`List`/`Dict`/`Set`) — a `List (a -> b)` renders
+    // to `Vec<Box<dyn Fn>>`, and collection kernels (e.g. `DictGet`)
+    // blanket-`.clone()` their element, which `Box<dyn Fn>` cannot satisfy.
+    // Must stay SKY-L0114 (no regression from the #90 lift).
+    let mut i = Interner::new();
+    let boxed = i.intern("boxed")?;
+    let r = i.intern("r")?;
+    let int_name = i.intern("Int")?;
+    let list_name = i.intern("List")?;
+    let ty = con_int(&mut i)?;
+    let body_span = Span::new(40, 41);
+    let body = Located::new(body_span, canon::Expr_::VarLocal(r));
+    let def = canon::Def::Typed {
+        home: vec![],
+        name: Located::new(Span::new(36, 37), boxed),
+        free_vars: Vec::new(),
+        patterns: Vec::new(),
+        body,
+        ty,
+    };
+    let con = |name| Ty::Con {
+        module: Vec::new(),
+        name,
+        args: Vec::new(),
+    };
+    // region type: `List (Int -> Int)` — a function inside the COLLECTION
+    // built-in `List`.
+    let mut regions = BTreeMap::new();
+    regions.insert(
+        body_span,
+        Ty::Con {
+            module: Vec::new(),
+            name: list_name,
+            args: vec![Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name)))],
+        },
+    );
+    assert_unsupported(
+        run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i),
+        Feature::CtorPayloadFunction,
+        SKY_L0114,
+        body_span,
     );
     Ok(())
 }

@@ -1,11 +1,22 @@
-module Dep exposing (Box)
+module Dep exposing (Box, mkBox)
 
 -- SKY-L0114 misattribution regression fixture.
--- A function-bearing union constructor cannot satisfy the enum's derives
--- (Clone/Debug/PartialEq/SkyStringify), raising SKY-L0114.
--- The diagnostic span is ctor.span — which lives in Dep's byte-namespace.
--- Pre-fix: source_for_span found no enclosing def body → fell back to
--- entry file (Main.sky). Post-fix: ctor span is scanned and attributed
--- correctly to Dep.sky.
+--
+-- #90 (2026-07-10) lifted the SKY-L0114 gate for a function DIRECTLY in an
+-- enum-like (`Maybe`/`Result`/user-union) constructor payload — `Mk (Int ->
+-- Int)` alone no longer trips this diagnostic (it lowers and runs; see
+-- `docs/architecture/ctor-payload-function-design.md`). The residual gate
+-- this fixture now exercises: a function inside a `List`/`Dict`/`Set`
+-- COLLECTION element still trips SKY-L0114 (the emitted `Vec<T>` element is
+-- a real Rust generic instantiation; collection kernels `.clone()` their
+-- element, which `Box<dyn Fn>` cannot satisfy). The diagnostic span is the
+-- list-literal construction site — which lives in Dep's byte-namespace.
+-- Pre-fix (span attribution, independent of #90): `source_for_span` found no
+-- enclosing def body → fell back to the entry file (Main.sky). Post-fix: the
+-- span is scanned and attributed correctly to Dep.sky.
 
-type Box = Mk (Int -> Int)
+type Box a = Mk a
+
+mkBox : Box (List (Int -> Int))
+mkBox =
+    Mk [ \n -> n + 1 ]
