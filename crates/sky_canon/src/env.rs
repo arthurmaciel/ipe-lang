@@ -991,7 +991,13 @@ impl Env {
             // M6: Sky.Http.Middleware kernels.
             (
                 "Middleware",
-                &["withCors", "withLogging", "withBasicAuth", "withRateLimit"],
+                &[
+                    "withCors",
+                    "withLogging",
+                    "withBasicAuth",
+                    "withRateLimit",
+                    "withCsrf",
+                ],
             ),
             // M6: Sky.Http.RateLimit kernels.
             ("RateLimit", &["allow"]),
