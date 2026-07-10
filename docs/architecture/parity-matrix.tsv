@@ -334,7 +334,6 @@ DbDeleteById	Db	deleteById	2	Db	Y	Y	Y	N	Y	Y	db_delete_by_id	Y	Y	Y	OK
 DbFindOneByField	Db	findOneByField	3	Db	Y	Y	Y	N	Y	Y	db_find_one_by_field	Y	Y	Y	OK
 DbFindManyByField	Db	findManyByField	3	Db	Y	Y	Y	N	Y	Y	db_find_many_by_field	Y	Y	Y	OK
 DbFindByConditions	Db	findByConditions	3	Db	Y	Y	Y	N	Y	Y	db_find_by_conditions	Y	Y	Y	OK
-DbUnsafeFindWhere	Db	unsafeFindWhere	3	Db	Y	Y	Y	N	Y	Y	db_unsafe_find_where	Y	Y	Y	OK
 DbInsertFields	Db	insertFields	3	Db	Y	Y	Y	N	Y	Y	db_insert_fields	Y	Y	Y	OK
 DbUpdateFields	Db	updateFields	4	Db	Y	Y	Y	N	Y	Y	db_update_fields	Y	Y	Y	OK
 DbInsertFieldsReturning					Y	N	Y	N	N	Y	db_insert_fields_returning	Y	Y	N	OK
