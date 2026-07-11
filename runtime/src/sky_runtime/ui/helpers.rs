@@ -1200,45 +1200,56 @@ pub fn ui_behind_<M: Clone>(elem: Element<M>) -> Attribute<M> {
 
 // ── #154: Breakpoint constants + wrapper ──────────────────────────────────────
 //
-// These functions support `Ui.breakpoint` and the named `Breakpoint` constants
-// (`Ui.mobile`, `Ui.tablet`, …).
+// These functions support `Ui.breakpoint` / `Ui.mediaQuery` and the named
+// `Breakpoint` constants (`Ui.mobile`, `Ui.tablet`, …).
 //
-// **Sanctioned divergence from Sky Go** (see docs/divergences-from-sky.md
-// §B-Breakpoint): in the Go runtime `Breakpoint` is an opaque struct that
-// carries the CSS media-query string and is consumed by the renderer to inject
-// a `<style data-sky-mq=…>` child.  In this Rust Phase-0 port we model
-// `Breakpoint` as a plain `String` (the raw CSS query) and the
-// `ui_breakpoint_` wrapper is a no-op passthrough — the element is returned
-// unchanged.  Rendering of media-query scoped styles is tracked as a Phase-1
-// item.
+// **Sanctioned divergence from Sky Go**: in the Go runtime `Breakpoint` is an
+// opaque struct that carries the CSS media-query string; in this Rust port we
+// model `Breakpoint` as a plain `String` (the raw CSS query).  Since
+// upstream's `breakpoint bp attrs child = mediaQuery (breakpointToQuery bp)
+// attrs child` and `breakpointToQuery` is the identity under this typing,
+// `ui_breakpoint_` delegates to `ui_media_query_` — both emit the
+// `data-sky-mq-q` / `data-sky-mq-rules` marker pair consumed by
+// `live::style_inject::build_mq` into a sky-id-scoped
+// `<style data-sky-mq="<sid>">@media <q> { [sky-id="<sid>"] { <rules> } }</style>`
+// block.  (The pre-2026-07-11 Phase-0 no-op-passthrough stub is gone; see
+// docs/architecture/ui-mediaquery-design-2026-07-11.md.)
+
+// NOTE (2026-07-11): these six breakpoint constants return a bare `String`
+// with NO `M` in the signature, so they take NO type parameter. A phantom
+// `<M>` here was a latent bug — an unconstrained type param can't be inferred
+// and produces `E0282: type annotations needed` the moment the value flows
+// into a real consumer (which it now does, once `ui_breakpoint_` delegates to
+// `ui_media_query_` instead of ignoring its query arg). The codegen emits
+// `ui_mobile_()` (no turbofish), so a non-generic fn is exactly what's needed.
 
 /// `Ui.mobile : String` — CSS media query `(max-width: 767px)`.
-pub fn ui_mobile_<M>() -> String {
+pub fn ui_mobile_() -> String {
     "(max-width: 767px)".to_owned()
 }
 
 /// `Ui.tablet : String` — CSS media query `(min-width: 768px) and (max-width: 1023px)`.
-pub fn ui_tablet_<M>() -> String {
+pub fn ui_tablet_() -> String {
     "(min-width: 768px) and (max-width: 1023px)".to_owned()
 }
 
 /// `Ui.desktop : String` — CSS media query `(min-width: 1024px)`.
-pub fn ui_desktop_<M>() -> String {
+pub fn ui_desktop_() -> String {
     "(min-width: 1024px)".to_owned()
 }
 
 /// `Ui.darkMode : String` — CSS media query `(prefers-color-scheme: dark)`.
-pub fn ui_dark_mode_<M>() -> String {
+pub fn ui_dark_mode_() -> String {
     "(prefers-color-scheme: dark)".to_owned()
 }
 
 /// `Ui.lightMode : String` — CSS media query `(prefers-color-scheme: light)`.
-pub fn ui_light_mode_<M>() -> String {
+pub fn ui_light_mode_() -> String {
     "(prefers-color-scheme: light)".to_owned()
 }
 
 /// `Ui.reducedMotion : String` — CSS media query `(prefers-reduced-motion: reduce)`.
-pub fn ui_reduced_motion_<M>() -> String {
+pub fn ui_reduced_motion_() -> String {
     "(prefers-reduced-motion: reduce)".to_owned()
 }
 
@@ -1290,15 +1301,62 @@ pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Att
     Attribute::AttrPseudoRule(pc, super::render::build_style_string(&attrs))
 }
 
+/// `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
+///
+/// Raw-CSS-media-query escape hatch (mirrors `../sky` `Std.Ui.sky`'s
+/// `mediaQuery`): wraps `child` in a `<div>` carrying the
+/// `data-sky-mq-q` (the query) + `data-sky-mq-rules` (the attrs folded
+/// through the SAME `render::build_style_string` collector as the inline
+/// `style=""` path and `Ui.onPseudo`, so every value-as-data attr inherits
+/// the `SafeCssValue` gate) marker pair.  The Sky.Live / Sky.Webview render
+/// pipelines consume the markers post-`assign_sky_ids` via
+/// `live::style_inject::apply_style_injections` (`build_mq`), emitting a
+/// sky-id-scoped `<style data-sky-mq="<sid>">@media <q> {
+/// [sky-id="<sid>"] { <rules> } }</style>` child — two media queries on the
+/// same page cannot cross-contaminate because each rule is keyed to its own
+/// sky-id.
+///
+/// SECURITY (fail-closed): the query string is attacker-influenceable and is
+/// spliced into the `@media … {` position of a raw `<style>` body, so it is
+/// gated here — at the sole producer — through
+/// [`crate::sky_runtime::css_safety::SafeCssMediaQuery`].  A query that fails
+/// the gate (ruleset/declaration breakout `{ } ;`, `</` close-tag, `/*`
+/// comment, `@import`, script sinks, or any CSS-hex-escaped spelling of
+/// those) drops the ENTIRE media-query styling: the wrapper `<div>` is still
+/// emitted (stable DOM shape for the Live diff) but carries no marker attrs,
+/// so no `<style>` block is ever built.  `build_mq`'s `strip_style_close` at
+/// the sink stays as defence-in-depth, not the primary gate.
+pub fn ui_media_query_<M: Clone>(
+    query: String,
+    attrs: Vec<Attribute<M>>,
+    child: Element<M>,
+) -> Element<M> {
+    use crate::sky_runtime::css_safety::SafeCssMediaQuery;
+
+    let rules = super::render::build_style_string(&attrs);
+    let markers = match SafeCssMediaQuery::parse(&query) {
+        Some(q) if !rules.is_empty() => vec![
+            Attribute::AttrAttribute("data-sky-mq-q".to_owned(), q.as_str().to_owned()),
+            Attribute::AttrAttribute("data-sky-mq-rules".to_owned(), rules),
+        ],
+        // Gate failure or nothing to style → no markers (fail-closed drop of
+        // the styling only; the child still renders inside the wrapper).
+        _ => vec![],
+    };
+    Element::Node(Description::NoDescription, markers, vec![child])
+}
+
 /// `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
 ///
-/// Phase-0 passthrough: the `_query` and `_attrs` arguments are intentionally
-/// ignored and the element is returned unchanged.  Breakpoint-scoped CSS
-/// injection is a Phase-1 renderer feature.
-pub fn ui_breakpoint_<M>(
-    _query: String,
-    _attrs: Vec<Attribute<M>>,
+/// Upstream defines `breakpoint bp attrs child = mediaQuery
+/// (breakpointToQuery bp) attrs child`; with `Breakpoint` typed as the raw
+/// query `String` in this port, `breakpointToQuery` is the identity — so
+/// this is a direct delegation to [`ui_media_query_`] (which also applies
+/// the `SafeCssMediaQuery` gate; the named constants above all pass it).
+pub fn ui_breakpoint_<M: Clone>(
+    query: String,
+    attrs: Vec<Attribute<M>>,
     el: Element<M>,
 ) -> Element<M> {
-    el
+    ui_media_query_(query, attrs, el)
 }

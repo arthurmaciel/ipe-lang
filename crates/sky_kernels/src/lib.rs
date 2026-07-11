@@ -963,12 +963,26 @@ pub enum StdlibKernel {
     // ── #154: Breakpoint opaque constants + Ui.breakpoint wrapper ────────────
     /// `Ui.breakpoint : Breakpoint -> List (Attribute msg) -> Element msg -> Element msg`
     ///
-    /// Phase-0: eager passthrough — breakpoint CSS media queries are not yet
-    /// applied in the Rust runtime.  Divergence recorded in
-    /// `docs/divergences-from-sky.md` §B-Breakpoint.
-    /// `Breakpoint` is typed as `String` in the Rust port; see sanctioned
-    /// divergence note in `constrain.rs::stdlib_scheme` (`UiBreakpoint` arm).
+    /// Delegates to `Ui.mediaQuery` at runtime (`ui_breakpoint_` →
+    /// `ui_media_query_`), mirroring upstream's `breakpoint bp attrs child =
+    /// mediaQuery (breakpointToQuery bp) attrs child` — `breakpointToQuery`
+    /// is the identity here because `Breakpoint` is typed as `String` in the
+    /// Rust port (see sanctioned divergence note in
+    /// `constrain.rs::stdlib_scheme`, `UiBreakpoint` arm).
     UiBreakpoint,
+    /// `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
+    ///
+    /// Raw-CSS-media-query escape hatch (the typed `Breakpoint` constants
+    /// cover the common cases via `Ui.breakpoint`). Wraps `child` in a
+    /// marker-carrying `<div>` (`data-sky-mq-q` = the query, gated through
+    /// `SafeCssMediaQuery`; `data-sky-mq-rules` = the attrs folded through
+    /// the shared `build_style_string` collector). The Live / Webview render
+    /// pipelines consume the markers via
+    /// `live::style_inject::apply_style_injections` (`build_mq`) into a
+    /// sky-id-scoped `<style data-sky-mq="<sid>">@media <q> {
+    /// [sky-id="<sid>"] { <rules> } }</style>` block. See
+    /// `docs/architecture/ui-mediaquery-design-2026-07-11.md`.
+    UiMediaQuery,
     UiMobile,        // Breakpoint constant: "(max-width: 767px)"
     UiTablet,        // Breakpoint constant: "(min-width: 768px) and (max-width: 1023px)"
     UiDesktop,       // Breakpoint constant: "(min-width: 1024px)"
@@ -2210,6 +2224,7 @@ impl StdlibKernel {
             }
             // #154: Breakpoint
             Self::UiBreakpoint => d("Ui", "breakpoint", 3, Ui, "ui_breakpoint_"),
+            Self::UiMediaQuery => d("Ui", "mediaQuery", 3, Ui, "ui_media_query_"),
             Self::UiMobile => d("Ui", "mobile", 0, Ui, "ui_mobile_"),
             Self::UiTablet => d("Ui", "tablet", 0, Ui, "ui_tablet_"),
             Self::UiDesktop => d("Ui", "desktop", 0, Ui, "ui_desktop_"),
@@ -3185,6 +3200,7 @@ impl StdlibKernel {
         Self::UiTransitionRaw,
         Self::UiGridTracksRaw,
         Self::UiBreakpoint,
+        Self::UiMediaQuery,
         Self::UiMobile,
         Self::UiTablet,
         Self::UiDesktop,
@@ -3788,6 +3804,7 @@ impl StdlibKernel {
                 | Self::UiGridTracksRaw
                 // ── #154: Breakpoint ──────────────────────────────────────────
                 | Self::UiBreakpoint
+                | Self::UiMediaQuery
                 | Self::UiMobile
                 | Self::UiTablet
                 | Self::UiDesktop

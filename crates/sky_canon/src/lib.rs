@@ -1956,7 +1956,11 @@ mod tests {
             ("Ui", "scrollbarX"),
             ("Ui", "scrollbarY"),
             ("Ui", "onFile"),
-            ("Ui", "mediaQuery"),
+            // ("Ui", "mediaQuery") — REMOVED 2026-07-11: backed by
+            // `StdlibKernel::UiMediaQuery` (runtime `ui_media_query_` +
+            // `live::style_inject::build_mq` consumer). The last of the 20
+            // deferred members from this list to be wired; see
+            // docs/architecture/ui-mediaquery-design-2026-07-11.md.
             ("Ui", "onPseudo"),
             ("Ui", "hover"),
             ("Ui", "focus"),

@@ -11,8 +11,9 @@ import Std.Ui.Background as Background
 -- Ui.scrollbarX / Ui.scrollbarY / Ui.onFile / Ui.onPseudo / Ui.hover /
 -- Ui.focus / Ui.focusVisible / Ui.active / Ui.disabled / Html.toString /
 -- Html.voidNode / Html.doctype / Html.titleNode / Html.htmlNode /
--- Html.headNode / Background.linearGradient. (Ui.mediaQuery is deferred —
--- see the lane report — and is not exercised here.)
+-- Html.headNode / Background.linearGradient. (Ui.mediaQuery was deferred
+-- from this batch; wired 2026-07-11 with its own golden — see
+-- tests/golden/ui_mediaquery/.)
 -- oracle_divergence = true: skyc's own correct output, not a Go oracle diff.
 
 
