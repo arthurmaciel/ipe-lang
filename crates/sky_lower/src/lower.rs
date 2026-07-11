@@ -3782,12 +3782,60 @@ impl<'a> Lowerer<'a> {
     /// A field whose type embeds a function (`type Retryish e = RetryWhen (e ->
     /// Bool)`) is NOT gated here (#90) — #87's derive-demotion fixpoint keeps
     /// the emitted enum sound (see the field-loop comment below).
+    /// Search a canonical constructor-payload type for a mis-arity `Task`
+    /// application (any arity other than the internal unary `Task a` or the
+    /// canonical `Task Error a`), returning the offending argument count.
+    ///
+    /// A mis-arity `Task` reached through a constructor FIELD type
+    /// (`type J a = J (Task Error a Bool)`) never passes through
+    /// `normalize_annotation_ty`, so E1's SKY-T0016 gate does not fire — it
+    /// reaches `ir_type_from_canon`'s `"Task"` dispatch directly, which would
+    /// otherwise raise a `CompilerBug` ICE. This predicate lets `lower_enum`
+    /// fail closed with the SAME clean SKY-T0016 diagnostic before that happens.
+    /// A mis-arity `Task` in a constructor field is ALWAYS wrong, never a
+    /// legitimate program.
+    fn task_arity_in_canon(&self, t: &canon::Type) -> Option<usize> {
+        match t {
+            canon::Type::Con { name, args, .. } => {
+                if self.interner.resolve(*name) == Some("Task")
+                    && args.len() != 1
+                    && args.len() != 2
+                {
+                    return Some(args.len());
+                }
+                args.iter().find_map(|a| self.task_arity_in_canon(a))
+            }
+            canon::Type::Lambda(a, b) => self
+                .task_arity_in_canon(a)
+                .or_else(|| self.task_arity_in_canon(b)),
+            canon::Type::Tuple(elems) => elems.iter().find_map(|e| self.task_arity_in_canon(e)),
+            canon::Type::Record(fields) => {
+                fields.iter().find_map(|(_, ty)| self.task_arity_in_canon(ty))
+            }
+            canon::Type::Var(_) | canon::Type::Unit => None,
+        }
+    }
+
     fn lower_enum(&self, u: &canon::Union) -> DResult<EnumDef> {
         let type_params = u.vars.clone();
         let mut variants = Vec::with_capacity(u.ctors.len());
         for ctor in &u.ctors {
             let mut fields = Vec::with_capacity(ctor.args.len());
             for arg in &ctor.args {
+                // Gate 0a: a mis-arity `Task` in a constructor payload
+                // (`J (Task Error a Bool)`) would trip `ir_type_from_canon`'s
+                // `"Task"` catch-all `CompilerBug`. Fail closed with the clean
+                // SKY-T0016 diagnostic (`TypeError::TaskArity`) at the ctor span,
+                // matching E1's annotation-path behaviour. A well-formed
+                // `Task Error a` (arity 2) is NOT rejected here — it lowers to a
+                // `Variant` carrying `IrType::Task`, and #87's derive-demotion
+                // fixpoint degrades a non-derivable enum gracefully.
+                if let Some(found) = self.task_arity_in_canon(arg) {
+                    return Err(Diagnostic::Type {
+                        span: ctor.span,
+                        msg: sky_diagnostics::TypeError::TaskArity { found },
+                    });
+                }
                 // Gate 1: every field type variable must be one the union
                 // quantifies, so it resolves to a Rust generic by position.
                 // Exception: `any` wildcard is the pub/sub wire-carrier pin

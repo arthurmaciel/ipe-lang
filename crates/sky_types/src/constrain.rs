@@ -2156,9 +2156,11 @@ impl<'a> Builder<'a> {
     /// # Errors
     ///
     /// Returns `SKY-T0001` when the error channel is not `Error` (e.g.
-    /// `Task String a` or `Task Int a`).  Returns a `CompilerBug` when a
-    /// `Task` annotation has a number of type arguments other than 1 or 2
-    /// (canonicalisation rules out arity-0 or arity-3+ applications).
+    /// `Task String a` or `Task Int a`).  Returns `SKY-T0016`
+    /// ([`TypeError::TaskArity`]) when a `Task` annotation has a number of type
+    /// arguments other than 1 or 2 — reachable from source (a bare `Task`, or
+    /// `Task Error Int Bool`), because canonicalisation validates arity only for
+    /// type *aliases*, never for a non-alias constructor application like `Task`.
     #[allow(clippy::too_many_lines)]
     fn normalize_annotation_ty(&self, ty: Ty, span: Span) -> DResult<Ty> {
         match ty {
@@ -2222,11 +2224,16 @@ impl<'a> Builder<'a> {
                                 args: vec![inner],
                             })
                         }
-                        n => Err(Diagnostic::CompilerBug {
-                            where_: STAGE,
-                            detail: format!(
-                                "Task annotation with {n} type argument(s); expected 1 or 2"
-                            ),
+                        // A `Task` applied to any other arity (bare `Task`, or
+                        // `Task Error Int Bool`) is ill-formed. It reaches here
+                        // from source because canonicalisation validates arity
+                        // only for type *aliases* (`NameError::AliasArity`), never
+                        // for a non-alias type-constructor application like `Task`.
+                        // Fail closed with a clean SKY-T0016 diagnostic naming the
+                        // found argument count instead of raising a `CompilerBug`.
+                        n => Err(Diagnostic::Type {
+                            span,
+                            msg: TypeError::TaskArity { found: n },
                         }),
                     }
                 } else if args.is_empty()
