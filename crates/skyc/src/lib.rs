@@ -288,11 +288,36 @@ fn compile_modules(
     // source — the ONLY inputs that earn `ModuleOrigin::EmbeddedStdlib` below.
     let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
 
+    // Salsa database (incremental Phase 1 — see
+    // docs/architecture/salsa-incremental-compilation-2026-07-11.md). The
+    // driver parses external state ONCE into typed inputs here (`SourceFile`
+    // per module + the `SourceRoot` file set); the front-end `imports`/`parse`
+    // stages below are demanded as memoized queries. The database is cold and
+    // per-invocation, and queries are demanded in the fixed topo order, so the
+    // interning sequence — and therefore emitted bytes — is identical to the
+    // pre-salsa pipeline (golden-suite-enforced).
+    let db = sky_db::SkyDatabase::new();
+    let file_handles: BTreeMap<Vec<String>, sky_db::SourceFile> = sources
+        .iter()
+        .map(|(mod_path, (_, src))| {
+            (
+                mod_path.clone(),
+                sky_db::SourceFile::new(&db, mod_path.clone(), src.clone()),
+            )
+        })
+        .collect();
+    let source_root = sky_db::SourceRoot::new(&db, file_handles);
+    // The build-wide interner is owned by the database (Option 3a) so the
+    // parse query and the non-salsa passes share one symbol table. NEVER hold
+    // a lock guard across a salsa query demand (the mutex is not reentrant).
+    let shared_interner = sky_db::Db::interner(&db).clone();
+
     // Build the import graph, then topologically sort (dep-first, cycle = N0021).
     let topo = project::topological_order(&discovered, entry_path, |mod_path| {
-        sources
+        source_root
+            .files(&db)
             .get(mod_path)
-            .map(|(_, src)| project::extract_imports_from_source(src))
+            .map(|file| (*sky_db::imports(&db, *file)).clone())
             .unwrap_or_default()
     })
     .map_err(|cycle| {
@@ -309,7 +334,6 @@ fn compile_modules(
     })?;
 
     // Canonicalise each module in dep-first order.
-    let mut interner = sky_intern::Interner::new();
     let mut dep_exports: BTreeMap<Vec<sky_intern::Symbol>, sky_canon::ModuleExports> =
         BTreeMap::new();
     let mut canon_modules: Vec<sky_canon::ast::Module> = Vec::new();
@@ -321,6 +345,11 @@ fn compile_modules(
                 "internal: module in topo order not in source map",
             ));
         };
+        let Some(file_handle) = source_root.files(&db).get(&m.module_path).copied() else {
+            return Err(CliError::Usage(
+                "internal: module in topo order not in source map",
+            ));
+        };
 
         let pipeline_err = |diag: sky_diagnostics::Diagnostic| CliError::Pipeline {
             file: path.clone(),
@@ -328,7 +357,13 @@ fn compile_modules(
             diag,
         };
 
-        let parsed = sky_parse::parse_module(src, &mut interner).map_err(&pipeline_err)?;
+        // Memoized parse (locks the shared interner internally — no guard may
+        // be live here).
+        let parsed = sky_db::parse(&db, file_handle).map_err(&pipeline_err)?;
+
+        // Everything below this point in the iteration is non-salsa; one
+        // guard covers the interning + canonicalisation of this module.
+        let mut interner = shared_interner.lock();
 
         let expected_path: Vec<sky_intern::Symbol> = m
             .module_path
@@ -379,6 +414,12 @@ fn compile_modules(
         src: entry_src.clone(),
         diag,
     };
+
+    // No salsa query is demanded from here on: link → infer → lower → emit
+    // are whole-program (pre-Phase-2) passes, so one guard on the shared
+    // interner covers the whole tail. The guard binds as `interner` so the
+    // pass call sites read exactly as they did pre-salsa.
+    let mut interner = shared_interner.lock();
 
     // The link step now gates cross-module type-identity duplicates
     // `(home, name)` (#100), so it is fallible; blame a duplicate on the entry
@@ -510,6 +551,9 @@ fn compile_modules(
         .with_db_driver(db_driver)
         .emit(&program)
         .map_err(span_attributed_err)?;
+    // Emit was the guard's last consumer; release it before the filesystem
+    // writes below (clippy::significant_drop_tightening).
+    drop(interner);
 
     // Vendor the runtime module tree FIRST, then write the emitted files. The
     // backend emits a trimmed `sky_runtime/mod.rs` + `config.rs`; writing the
