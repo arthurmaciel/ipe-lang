@@ -69,8 +69,9 @@ pub fn role_of(path: &str) -> Role {
 /// Ipê-repo (`crates/` compiler, `runtime/` runtime, `tools/` tooling,
 /// `crates/skyc/stdlib/**.sky` Sky stdlib) classifier.
 fn role_of_ipe(rel: &str) -> Role {
-    if rel.starts_with("crates/skyc/stdlib/") && rel.ends_with(".sky") { Role::IpeStdlibSky }
-    else if rel.ends_with(".sky") { Role::IpeStdlibSky }               // any bundled Sky source
+    // Any .sky source is stdlib-Sky (the `crates/skyc/stdlib/` bundle and any
+    // other bundled Sky file classify identically).
+    if rel.ends_with(".sky") { Role::IpeStdlibSky }
     else if rel.starts_with("crates/") && rel.ends_with(".rs") { Role::IpeCompilerRs }
     else if rel.starts_with("runtime/") && rel.ends_with(".rs") { Role::IpeRuntimeRs }
     else if rel.starts_with("tools/") && rel.ends_with(".rs") { Role::IpeToolRs }
