@@ -61,6 +61,63 @@ pub fn scan_import_paths(src: &str) -> Option<Vec<Vec<String>>> {
     Some(out)
 }
 
+/// Token-level scan of every identifier word occurring in `src` — the
+/// program-derived collision universe for the lowerer's fresh-name pools
+/// (`Interner::set_fresh_avoid`).
+///
+/// Lexes `src` with the real lexer and collects, for every `Ident` token,
+/// the full (possibly dotted) text AND each dot-segment — a superset of every
+/// identifier string [`parse_module`] interns from this module. Triple-quoted
+/// strings contribute the words inside their `{{…}}` interpolation regions
+/// (the canonicaliser resolves those as real identifier references); plain
+/// string/char literal contents and comments contribute nothing, matching
+/// what the parser actually interns.
+///
+/// Soundness shape: the set must OVER-approximate the module's user
+/// identifiers (a missing identifier could let a minted fresh name capture
+/// it); extra words only skip more candidates.
+///
+/// Returns `None` when `src` does not lex (an unlexable module cannot parse,
+/// so it never reaches lowering; callers may substitute a raw word scan for
+/// totality).
+#[must_use]
+pub fn scan_identifier_words(src: &str) -> Option<std::collections::BTreeSet<String>> {
+    let toks = lexer::lex(src).ok()?;
+    let mut words = std::collections::BTreeSet::new();
+    for tok in &toks {
+        match &tok.kind {
+            lexer::Tok::Ident(text) => {
+                words.insert(text.clone());
+                for segment in text.split('.') {
+                    words.insert(segment.to_owned());
+                }
+            }
+            lexer::Tok::TripleStr(raw) => {
+                // `{{expr}}` interpolation bodies are canonicalised as real
+                // expressions; collect their identifier-shaped words.
+                let mut rest = raw.as_str();
+                while let Some(open) = rest.find("{{") {
+                    let after = rest.get(open.saturating_add(2)..).unwrap_or("");
+                    let Some(close) = after.find("}}") else {
+                        break;
+                    };
+                    let body = after.get(..close).unwrap_or("");
+                    for word in
+                        body.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    {
+                        if !word.is_empty() {
+                            words.insert(word.to_owned());
+                        }
+                    }
+                    rest = after.get(close.saturating_add(2)..).unwrap_or("");
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(words)
+}
+
 #[cfg(test)]
 // Triple-string lexer tests use `toks[0]` after asserting `toks.len() == 1`.
 // The index is provably in-bounds at that point; suppressing the lint is
