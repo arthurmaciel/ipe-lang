@@ -744,11 +744,13 @@ API-shape review):
   D1/D2/D3 under-acceptance), re-landed 2026-07-10 after a same-day revert;
   regression golden:
   `crates/skyc/tests/golden_class1_boundary_scheme_field_result.rs`.
-  Sanctioned/recorded goldens: 42 carry a marker (`Math` 4, `Bytes` 5,
-  `Encoding` 1, `Jwt` 5, `Db` 11, `Ui` 6, `Cmd`/`Sub` 3, `Uuid` 2, plus
+  Sanctioned/recorded goldens: 43 carry a marker (`Math` 4, `Bytes` 5,
+  `Encoding` 1, `Jwt` 5, `Db` 12, `Ui` 6, `Cmd`/`Sub` 3, `Uuid` 2, plus
   Go-failure kind-1 shapes and Money/case/toFloat sanctioned entries — B23 is
   pure under-acceptance, not a Go-sanctioned divergence, so it adds no
-  entries to this count). B16/B17 goldens pending.
+  entries to this count). `Db` 12 adds B-DbDecMoney's `m5b_db_decode_money`
+  (backlog #34) to the pre-existing 11 `Db`-tagged goldens. B16/B17 goldens
+  pending.
 - **Architectural divergences:** 18 (A1–A18). A8 and A13 are reference-ahead on
   completeness. A15–A17 are seal-gate entries. A18 is the WS phantom-`msg`
   type-var entry added with task #127.
@@ -1092,6 +1094,45 @@ API-shape review):
   `docs/architecture/wasm-target.md` §Q6 — nothing to gate yet, the WASM
   target does not exist in this compiler; `Secret`'s `ir_type_is_serde =
   false` classification IS the future predicate that gate will consult.
+
+### B-DbDecMoney — `Db.Decode.money` returns `Decoder (Decimal, String)`, not `Decoder Money` (backlog #34)
+
+- **Reference:** the Go backend's `DbDec_money` (`../sky/runtime-go/rt/
+  db_decoder.go:202-244`) returns a full `Decoder Money`, constructing the
+  Sky `Money` ADT directly at the runtime layer (including resolving the
+  3-letter ISO code to a `Currency` ADT variant via a hand-rolled
+  `sqlCodeToCurrency` switch) — Go's runtime is dynamically-typed
+  (`any`-based `SkyADT`), so it can construct an arbitrary user ADT value at
+  runtime with no compile-time dependency on the project's generated types.
+- **ipê design:** `db_decode_money` (`runtime/src/sky_runtime/db.rs`) returns
+  the structural pair `Decoder (Decimal, String)` instead. `Money`/`Currency`
+  are project-generated Rust types (`StdMoneyMoney`/`StdMoneyCurrency`,
+  named per the project's module prefix) unnameable from the shared
+  `sky-runtime-rust` crate — there is no equivalent to Go's `any`-typed
+  runtime ADT construction available here. `Db.Decode.money "col"` decodes
+  the `"ISO_CODE AMOUNT"` TEXT column `SqlMoney` writes on INSERT (v0.16.26
+  lossless serialisation) back into its `(amount, currency_code)` pair;
+  callers compose `Decode.map (\(amount, code) -> …) (Decode.money "col")`
+  to build a `Money` value at the call site.
+- **Sanctioned:** yes, tagged `divergence` (not `sanctioned`) — a real
+  API-shape difference, not a strictly-better-security/correctness class;
+  Go's `Decoder Money` shape cannot be replicated without a
+  `Currency`-construction codegen wrapper that reimplements Go's 50+-code
+  `sqlCodeToCurrency` table (or calls into a Sky-level
+  `Std.Money.parseCurrency`-equivalent) — filed as a separate follow-up, not
+  bundled into this mechanical kernel-registration fix. Before this fix,
+  `db_decode_money` was fully implemented and unit-tested in the runtime
+  (`test_db_decode_money_roundtrip`) but had NO `StdlibKernel` variant, NO
+  constrain scheme, and NO lower/emit arm — unreachable from Sky source
+  (`ipe-index parity --gaps` flagged `DbDec.money go=1 rust=0`). Reference:
+  `crates/sky_canon/src/env.rs` (`Db.Decode` allowlist), `crates/sky_kernels/
+  src/lib.rs` (`DbDecMoney` decl + `is_db()` classification),
+  `crates/sky_types/src/constrain.rs` (`K::DbDecMoney` scheme +
+  exhaustiveness list), `crates/sky_lower/src/lower.rs` (arity-1 dispatch +
+  callee resolution), `crates/sky_backend_rust/src/{naming,emit_expr}.rs`,
+  `crates/sky_ir/src/pretty.rs`, `crates/skyc/tests/golden_m5b_db.rs`
+  (`db_decode_money`). Spec:
+  `docs/architecture/class7-sql-db-fix-spec-2026-07-09.md` §6.
 
 ---
 

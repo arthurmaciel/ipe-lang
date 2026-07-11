@@ -705,6 +705,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // into the JsonDec* section above to satisfy clippy::match_same_arms.
         KernelFn::DbDecRequired => "db_decode_required",
         KernelFn::DbDecOptional => "db_decode_optional",
+        KernelFn::DbDecMoney => "db_decode_money",
         // ── Std.Db.Sql — SqlFragment builder (backlog #61) ───────────────────
         // `int`/`string`/`float`/`bool` share `sql_param`'s runtime symbol —
         // each is a Sky-level type narrowing of the same generic

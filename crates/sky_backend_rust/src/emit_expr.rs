@@ -1758,6 +1758,7 @@ fn emit_db_call(
         | KernelFn::DbDecMap4
         | KernelFn::DbDecRequired
         | KernelFn::DbDecOptional
+        | KernelFn::DbDecMoney
         // `Sql.column`/`param`/`int`/`string`/`float`/`bool`/`eq`/`ne`/`gt`/`lt`/
         // `gte`/`lte`/`and`/`or`/`not`/`isNull`/`isNotNull`/`like` take plain
         // scalar or `SqlFragment` args — no `Db` handle, no List projection.
