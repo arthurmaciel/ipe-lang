@@ -2794,17 +2794,36 @@ impl<'a> Builder<'a> {
             } => self.constrain_var_ctor(home, *type_name, *name)?,
             canon::Expr_::Call(callee, args) => {
                 let callee_var = self.constrain_expr(local, callee)?;
-                let mut arg_vars = Vec::with_capacity(args.len());
+                // Each argument gets a FRESH param var rather than flowing its
+                // own var straight into the callee's arrow shape. Two payoffs
+                // (diagnostic-orientation fix, BACKLOG 2026-07-10 row):
+                //  1. the callee-vs-shape constraint below is solved FIRST, so
+                //     each param var adopts the callee's DECLARED param type;
+                //  2. the per-arg constraint then unifies found=actual-arg
+                //     against expected=declared-param AT THE ARG'S SPAN —
+                //     `Task.fail "str"` reads "expected Error, found String",
+                //     never the inversion (and blames the argument, not the
+                //     callee name).
+                // A non-function callee still reports found=callee's type,
+                // expected=`a -> b` via the callee-vs-shape constraint.
+                let mut arg_pairs = Vec::with_capacity(args.len());
                 for a in args {
-                    arg_vars.push(self.constrain_expr(local, a)?);
+                    let arg_var = self.constrain_expr(local, a)?;
+                    let param_var = self.flex()?;
+                    arg_pairs.push((a.span, arg_var, param_var));
                 }
                 let ret = self.flex()?;
-                // Fold a right-associative arrow: a0 -> a1 -> … -> ret.
-                let mut expected = ret;
-                for av in arg_vars.into_iter().rev() {
-                    expected = self.structure(FlatType::Fun(av, expected))?;
+                // Fold a right-associative arrow over the fresh param vars:
+                // p0 -> p1 -> … -> ret.
+                let mut fun_shape = ret;
+                for (_, _, param_var) in arg_pairs.iter().rev() {
+                    fun_shape = self.structure(FlatType::Fun(*param_var, fun_shape))?;
                 }
-                self.eq(callee.span, callee_var, expected);
+                // Order matters: callee-vs-shape first (see above).
+                self.eq(callee.span, callee_var, fun_shape);
+                for (arg_span, arg_var, param_var) in arg_pairs {
+                    self.eq(arg_span, arg_var, param_var);
+                }
                 ret
             }
             canon::Expr_::Case(scrut, branches) => self.constrain_case(local, scrut, branches)?,
