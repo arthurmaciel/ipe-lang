@@ -76,6 +76,25 @@ jobs:
       - run: cargo nextest run --workspace          # E2E tests no-op without SKY_E2E
       - run: cargo test --doc --workspace           # nextest doesn't run doctests
 
+  # `sky-runtime-rust`'s `default = []` leaves `compression`/`csv`/`config`/
+  # `tokio` (and every other optional feature) OFF, so the `test` job above
+  # never compiles the `#[cfg(feature = "...")]`-gated unit tests that live
+  # behind those flags — including #129's 7 `*_spawn_blocking_tests` modules
+  # in `file`/`compression`/`config_decode`/`csv`/`system.rs`, which prove a
+  # blocking kernel actually offloads onto tokio's blocking pool (a future
+  # refactor that silently dropped `spawn_blocking` would pass the default
+  # gate untouched). `full` turns on every optional feature so this job is
+  # the one place those regression tests run in CI.
+  runtime-full-features:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run -p sky-runtime-rust --features full
+
   miri:
     runs-on: ubuntu-latest
     steps:

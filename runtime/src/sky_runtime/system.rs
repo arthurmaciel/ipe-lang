@@ -326,29 +326,54 @@ pub fn system_getcwd<E: Send + From<String> + 'static>(unit: ()) -> SkyTask<E, S
     system_cwd(unit)
 }
 
+/// Blocking half of `system_load_env`: read + parse `.env` in the CWD and set
+/// each var. Never fails — a missing/unreadable `.env` is silently a no-op,
+/// matching the Sky-facing contract (`loadEnv` never returns `Err`).
+fn system_load_env_sync() {
+    if let Ok(contents) = std::fs::read_to_string(".env") {
+        for line in contents.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((k, v)) = line.split_once('=') {
+                let k = k.trim();
+                let v = v.trim().trim_matches('"').trim_matches('\'');
+                // Atomic check-and-set under one write lock — avoids the
+                // TOCTOU window a separate read + set would open against a
+                // concurrent mutator.
+                locked_set_var_if_absent(k, v);
+            }
+        }
+    }
+}
+
 /// `System.loadEnv : () -> Task Error ()`. Parses a `.env` file in the CWD
 /// (KEY=VALUE per line, `#` comments, optional surrounding quotes) and sets
 /// each var WITHOUT overriding one already present in the process environment
 /// (process env wins, matching Sky's precedence). A missing `.env` is a no-op
 /// success.
+///
+/// #129 follow-up: `std::fs::read_to_string(".env")` is a blocking syscall —
+/// this kernel used to run it inline inside the `async move` body instead of
+/// through the `run_blocking` helper this very module defines (above, for
+/// `process_run`), the exact class #129 closed for `file.rs`/
+/// `compression.rs`/`csv.rs`/`config_decode.rs`. Low real-world impact
+/// (`.env` is small and read once at startup), but on a slow/network
+/// filesystem it would still stall the tokio worker thread polling this
+/// future. Routed through `run_blocking` so it's offloaded like every other
+/// blocking-fs kernel in this module.
 pub fn system_load_env<E: Send + 'static>(_: ()) -> SkyTask<E, ()> {
     Box::pin(async move {
-        if let Ok(contents) = std::fs::read_to_string(".env") {
-            for line in contents.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                if let Some((k, v)) = line.split_once('=') {
-                    let k = k.trim();
-                    let v = v.trim().trim_matches('"').trim_matches('\'');
-                    // Atomic check-and-set under one write lock — avoids the
-                    // TOCTOU window a separate read + set would open against a
-                    // concurrent mutator.
-                    locked_set_var_if_absent(k, v);
-                }
-            }
-        }
+        // `run_blocking`'s `Err` arm (the blocking task panicked) is folded
+        // back into `Ok(())` here — `loadEnv` never surfaces an `Err` for a
+        // missing/unreadable `.env`, and a panicked blocking task shouldn't
+        // change that contract either.
+        let _: Result<(), String> = run_blocking(|| {
+            system_load_env_sync();
+            Ok(())
+        })
+        .await;
         ok_res(())
     })
 }
@@ -469,6 +494,102 @@ mod process_run_spawn_blocking_tests {
             ticks > 0,
             "concurrent ticker task made ZERO progress while process_run ran — \
              the blocking subprocess wait is starving the single-threaded executor \
+             (spawn_blocking missing or not taking effect)"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "tokio"))]
+mod system_load_env_spawn_blocking_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// #129 follow-up regression: `system_load_env` reads `.env` via
+    /// `std::fs::read_to_string`, a blocking syscall. Pre-fix this ran
+    /// inline inside the `async move` body instead of through the shared
+    /// `run_blocking` helper (defined above in this file, already used by
+    /// `process_run`) — the exact class #129 closed for `file.rs` /
+    /// `compression.rs` / `csv.rs` / `config_decode.rs`, just missed for this
+    /// module's own kernel. This proves the post-fix `system_load_env`
+    /// offloads the read to tokio's blocking-thread pool: a concurrently-
+    /// spawned cheap ticker task must make progress (ticks > 0) WHILE the
+    /// read is in flight.
+    ///
+    /// Uses a large `.env` (64 MiB of comment padding, same idiom as
+    /// `file.rs`'s `spawn_blocking_tests`) so the read takes measurable wall
+    /// time. Pre-fix this is NOT a flaky race — the ticker makes EXACTLY
+    /// zero progress deterministically, because the worker thread never
+    /// yields back to the executor until `read_to_string` returns.
+    ///
+    /// `set_current_dir` mutates process-global state; safe here only
+    /// because this crate's tests run one-process-per-test under `cargo
+    /// nextest` (the codebase's existing convention for tests that mutate
+    /// global process state — e.g. this same file's `exit_hook_tests` /
+    /// `console.rs`'s `ingest_token_gate` mutate env vars directly for the
+    /// same reason).
+    #[test]
+    fn system_load_env_does_not_starve_concurrent_async_work() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "sky_load_env_spawn_blocking_probe_{}_{}",
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let env_path = dir.join(".env");
+        // One huge comment line (skipped by the parser) + one real var —
+        // large enough that the read takes measurable (not instant) wall
+        // time, same idiom as `file.rs`'s spawn_blocking probe.
+        let mut contents = String::from("# ");
+        contents.push_str(&"x".repeat(64 * 1024 * 1024));
+        contents.push('\n');
+        contents.push_str("SKY_LOAD_ENV_PROBE_VAR=probe_value\n");
+        std::fs::write(&env_path, contents).unwrap();
+
+        let orig_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        locked_remove_var("SKY_LOAD_ENV_PROBE_VAR");
+
+        let ticks = rt.block_on(async move {
+            let counter = Arc::new(AtomicU64::new(0));
+            let counter2 = counter.clone();
+            let ticker = tokio::spawn(async move {
+                loop {
+                    counter2.fetch_add(1, Ordering::Relaxed);
+                    tokio::task::yield_now().await;
+                }
+            });
+            let load_fut: SkyTask<String, ()> = system_load_env(());
+            let _res: SkyResult<String, ()> = load_fut.await;
+            ticker.abort();
+            counter.load(Ordering::Relaxed)
+        });
+
+        // Functional sanity: the real var was actually picked up.
+        let loaded = read_env_var("SKY_LOAD_ENV_PROBE_VAR");
+
+        std::env::set_current_dir(&orig_cwd).unwrap();
+        locked_remove_var("SKY_LOAD_ENV_PROBE_VAR");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            loaded.as_deref(),
+            Ok("probe_value"),
+            "system_load_env did not set the var from the probe .env file"
+        );
+        assert!(
+            ticks > 0,
+            "concurrent ticker task made ZERO progress while system_load_env ran — \
+             the blocking .env read is starving the single-threaded executor \
              (spawn_blocking missing or not taking effect)"
         );
     }

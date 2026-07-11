@@ -197,16 +197,30 @@ fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
     use std::io::Read as _;
     let f = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
     let mut buf = Vec::new();
-    f.take(DEFAULT_CAP)
+    // Read `DEFAULT_CAP + 1` bytes in one pass and check the ACTUAL bytes
+    // read, same idiom as `file_read_file_sync` / `file_read_file_limit_sync`
+    // above (and the fix applied to `readFileLimit`'s TOCTOU race, commit
+    // 706f026): a file over the cap must `Err`, never silently truncate to
+    // `DEFAULT_CAP` bytes and report `Ok`.
+    let read = f
+        .take(DEFAULT_CAP.saturating_add(1))
         .read_to_end(&mut buf)
         .map_err(|e| format!("{}", e))?;
+    if read as u64 > DEFAULT_CAP {
+        return Err(format!(
+            "file exceeds {}-byte limit (stopped reading at the limit — actual size not reported to bound memory use): {}",
+            DEFAULT_CAP, path
+        ));
+    }
     Ok(from_u8_slice(&buf))
 }
 
 /// `Sky.Core.File.readFileBytes : String -> Task Error (List Int)`
 /// Read the file as raw bytes, returned as `Vec<i64>` (Sky `List Int`,
-/// values 0..=255). Uses the same 10 MiB default cap as Go. For text
-/// content with guaranteed UTF-8, prefer `readFile` / `readFileLimit`.
+/// values 0..=255). Uses the same 10 MiB default cap as Go — a file over the
+/// cap is an `Err`, never a silent truncation (sibling fix to
+/// `readFileLimit`'s TOCTOU close, commit 706f026). For text content with
+/// guaranteed UTF-8, prefer `readFile` / `readFileLimit`.
 pub fn file_read_file_bytes<E: Send + From<String> + 'static>(
     path: String,
 ) -> SkyTask<E, Vec<i64>> {
@@ -554,6 +568,74 @@ mod read_file_limit_tests {
             SkyResult::Ok(s) => assert_eq!(s, "small"),
             SkyResult::Err(e) => panic!("unexpected Err: {e}"),
         }
+    }
+}
+
+/// Sibling of `read_file_limit_tests` for `File.readFileBytes`'s own fixed
+/// 10 MiB cap (backlog "hardening follow-ups": `readFileBytes` used to
+/// silently truncate at the cap via `take(DEFAULT_CAP).read_to_end(..)` with
+/// no post-read size check, instead of erroring — same class as
+/// `readFileLimit`'s TOCTOU, fixed in commit 706f026).
+#[cfg(test)]
+mod read_file_bytes_tests {
+    use super::*;
+
+    const DEFAULT_CAP: usize = 10 * 1024 * 1024;
+
+    fn block<T>(fut: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(fut)
+    }
+
+    #[test]
+    fn under_cap_reads_full_content() {
+        let p = std::env::temp_dir().join(format!("sky_rfb_under_{}.bin", std::process::id()));
+        std::fs::write(&p, [1u8, 2, 3, 255, 0]).unwrap();
+        let res: SkyResult<String, Vec<i64>> =
+            block(file_read_file_bytes(p.to_string_lossy().into_owned()));
+        let _ = std::fs::remove_file(&p);
+        match res {
+            SkyResult::Ok(v) => assert_eq!(v, vec![1, 2, 3, 255, 0]),
+            SkyResult::Err(e) => panic!("unexpected Err: {e}"),
+        }
+    }
+
+    /// Boundary: a file whose size is EXACTLY the 10 MiB cap must succeed
+    /// with the full content, not be rejected as "over" (the `> cap` check,
+    /// not `>= cap`).
+    #[test]
+    fn exactly_at_cap_is_ok() {
+        let p = std::env::temp_dir().join(format!("sky_rfb_exact_{}.bin", std::process::id()));
+        std::fs::write(&p, vec![7u8; DEFAULT_CAP]).unwrap();
+        let res: SkyResult<String, Vec<i64>> =
+            block(file_read_file_bytes(p.to_string_lossy().into_owned()));
+        let _ = std::fs::remove_file(&p);
+        match res {
+            SkyResult::Ok(v) => assert_eq!(v.len(), DEFAULT_CAP),
+            SkyResult::Err(e) => panic!("exactly-at-cap must be Ok, got Err: {e}"),
+        }
+    }
+
+    /// Regression: a file ONE byte over the 10 MiB cap must `Err`, never
+    /// silently truncate to `DEFAULT_CAP` bytes and report `Ok` — this is
+    /// the exact bug this fix closes. Pre-fix, this assertion FAILS: the old
+    /// `take(DEFAULT_CAP).read_to_end(..)` reads exactly `DEFAULT_CAP` bytes
+    /// with no error, and the returned `Vec` has `DEFAULT_CAP` elements
+    /// (silently dropping the last byte) instead of erroring.
+    #[test]
+    fn over_cap_by_one_byte_errs() {
+        let p = std::env::temp_dir().join(format!("sky_rfb_over_{}.bin", std::process::id()));
+        std::fs::write(&p, vec![7u8; DEFAULT_CAP + 1]).unwrap();
+        let res: SkyResult<String, Vec<i64>> =
+            block(file_read_file_bytes(p.to_string_lossy().into_owned()));
+        let _ = std::fs::remove_file(&p);
+        assert!(
+            matches!(res, SkyResult::Err(_)),
+            "a file one byte over the 10 MiB cap must Err, not silently truncate: {res:?}"
+        );
     }
 }
 
