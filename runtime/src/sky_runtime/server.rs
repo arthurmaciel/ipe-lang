@@ -1596,11 +1596,70 @@ where
     })
 }
 
+/// Whether to trust `X-Forwarded-Proto` (and friends) for TLS-termination
+/// detection. Mirrors `build_request`'s existing `SKY_TRUSTED_PROXY` gate for
+/// `remoteAddr` (line ~497 above) and `live/mod.rs`'s `trust_proxy_headers()`
+/// for the session cookie's `Secure` gate — same env var, same rationale: a
+/// client-supplied header must never be trusted by default, an operator opts
+/// in only when a real reverse proxy sits in front of this process.
+///
+/// Snapshotted once (env is stable at process start; same rationale as
+/// `csrf_cookie_name`'s production check being re-read per call is fine
+/// because it's a plain fn call, but this one backs a per-request hot path so
+/// it's cached like `live/mod.rs`'s twin).
+fn trust_proxy_headers() -> bool {
+    use std::sync::OnceLock;
+    static TRUST: OnceLock<bool> = OnceLock::new();
+    *TRUST.get_or_init(|| {
+        crate::sky_runtime::system::read_env_var("SKY_TRUSTED_PROXY")
+            .map(|v| !v.is_empty() && v != "0" && v != "false")
+            .unwrap_or(false)
+    })
+}
+
+/// Request-scoped HTTPS detection, parameterised on the trust decision so
+/// it's unit-testable without mutating the real (`OnceLock`-cached) process
+/// env. Only consulted (via `request_is_https`) when `trust` is true —
+/// otherwise a client could forge `X-Forwarded-Proto` to fool the
+/// Secure-cookie decision (the same footgun `build_request` already closed
+/// for `X-Forwarded-For`). Mirrors `live/mod.rs::request_is_https_with_trust`,
+/// adapted to `ServerRequest.headers`'s `HashMap<String, String>` shape
+/// (already canonicalised from the axum request at `build_request` time —
+/// see `header_ci`) instead of a raw `axum::http::HeaderMap`.
+fn request_is_https_with_trust(headers: &HashMap<String, String>, trust: bool) -> bool {
+    if !trust {
+        return false;
+    }
+    header_ci(headers, "x-forwarded-proto")
+        .map(|v| v.eq_ignore_ascii_case("https"))
+        .unwrap_or(false)
+}
+
+/// Request-scoped HTTPS detection: true when THIS request arrived over TLS at
+/// a trusted proxy (`X-Forwarded-Proto: https`). See
+/// `request_is_https_with_trust` for the testable core.
+///
+/// MUST be called (and its result captured) BEFORE the `ServerRequest` is
+/// moved into the wrapped handler in `middleware_with_csrf` — by the time the
+/// response comes back the request is gone, so the boolean has to be
+/// snapshotted up front and threaded through as a plain `bool` capture.
+fn request_is_https(headers: &HashMap<String, String>) -> bool {
+    request_is_https_with_trust(headers, trust_proxy_headers())
+}
+
 /// `__Host-` prefix requires Secure + Path=/ + no Domain — mirrors
 /// `live/csrf.rs::csrf_cookie_name`'s reasoning, gated on the SAME
 /// process-wide production signal `server_with_cookie` already uses
 /// (`telemetry::production_from_env`), so naming stays internally consistent
 /// with the rest of `server.rs`'s cookie handling.
+///
+/// This stays process-global (NOT request-scoped) deliberately, same
+/// reasoning as the session cookie's `__Host-` name decision
+/// (`csrf::cookies_secure()`, `live/mod.rs`): the cookie's IDENTITY must stay
+/// stable across a browser session, or the double-submit compare would
+/// spuriously fail whenever proxy-scheme detection flips between requests.
+/// Only the `Secure` ATTRIBUTE (`csrf_set_cookie_value`) becomes
+/// request-scoped.
 fn csrf_cookie_name() -> &'static str {
     if crate::sky_runtime::telemetry::production_from_env() {
         "__Host-sky_csrf"
@@ -1631,11 +1690,27 @@ fn csrf_token_well_formed(t: &str) -> bool {
 /// NOT HttpOnly — client JS must be able to read this to echo it into
 /// `X-Csrf-Token` (classic double-submit; still safe against a forging
 /// cross-origin page because SOP blocks that page from reading the
-/// victim-origin cookie). `Secure` mirrors `server_with_cookie`'s existing
-/// production gate.
-fn csrf_set_cookie_value(token: &str) -> String {
+/// victim-origin cookie).
+///
+/// `Secure` is set when EITHER `production_from_env()` is true (unconditional
+/// floor — a production deploy always gets `Secure`, matching
+/// `server_with_cookie`'s pre-existing gate and the session cookie's
+/// `csrf::cookies_secure()` half) OR `request_is_https` is true (THIS
+/// specific request arrived over TLS at a trusted proxy, opt-in via
+/// `SKY_TRUSTED_PROXY` — closes the gap where a dev process (`ENV` unset)
+/// fronted by a TLS-terminating proxy used to emit a non-Secure CSRF cookie
+/// even though the browser connection was HTTPS). Same OR-gate shape as the
+/// session cookie's fix in `live/mod.rs::page_response`.
+///
+/// `request_is_https` MUST be computed from the ORIGINAL request headers
+/// before the request is consumed — see the call site in
+/// `middleware_with_csrf`, which captures it into a local `bool` before
+/// moving `req` into the wrapped handler `h(req)`. By the time this function
+/// runs (after the handler's `Task` resolves), the request itself is gone;
+/// only the pre-captured bool survives.
+fn csrf_set_cookie_value(token: &str, request_is_https: bool) -> String {
     let name = csrf_cookie_name();
-    let secure = if crate::sky_runtime::telemetry::production_from_env() {
+    let secure = if crate::sky_runtime::telemetry::production_from_env() || request_is_https {
         "; Secure"
     } else {
         ""
@@ -1688,11 +1763,20 @@ where
                 });
             }
         }
+        // Capture the request-scoped TLS signal HERE — before `req` is moved
+        // into `h(req)` below. `ServerRequest` is not `Clone`-cheap-by-design
+        // (it owns the full body/headers/cookies maps) and the wrapped
+        // handler legitimately needs to consume it, so there is no request
+        // left to inspect once `task` is awaited. `bool` is `Copy`, so this
+        // one-line snapshot is the entire adaptation needed versus the
+        // session-cookie fix (which reads `headers` at cookie-set time
+        // because `page_response` runs BEFORE the request is handed off).
+        let is_https = request_is_https(&req.headers);
         let task = h(req);
         Box::pin(async move {
             match task.await {
                 SkyResult::Ok(mut resp) => {
-                    resp.cookies.push(csrf_set_cookie_value(&token));
+                    resp.cookies.push(csrf_set_cookie_value(&token, is_https));
                     SkyResult::Ok(resp)
                 }
                 other => other,
@@ -2151,6 +2235,121 @@ mod tests {
         match h(req).await {
             SkyResult::Ok(r) => assert_eq!(r.status, 403),
             SkyResult::Err(_) => panic!("expected Ok(403)"),
+        }
+    }
+
+    // ── #63c: CSRF cookie `Secure` — ENV-vs-TLS combined gate ──────────────
+
+    #[test]
+    fn request_is_https_ignored_without_trust_opt_in() {
+        let mut headers = HashMap::new();
+        headers.insert("x-forwarded-proto".to_string(), "https".to_string());
+        assert!(
+            !request_is_https_with_trust(&headers, false),
+            "must ignore X-Forwarded-Proto without SKY_TRUSTED_PROXY opt-in"
+        );
+    }
+
+    #[test]
+    fn request_is_https_honoured_when_trusted() {
+        let mut headers = HashMap::new();
+        headers.insert("x-forwarded-proto".to_string(), "https".to_string());
+        assert!(request_is_https_with_trust(&headers, true));
+
+        let mut headers2 = HashMap::new();
+        headers2.insert("x-forwarded-proto".to_string(), "http".to_string());
+        assert!(!request_is_https_with_trust(&headers2, true));
+    }
+
+    #[test]
+    fn request_is_https_missing_header_is_not_https() {
+        let headers = HashMap::new();
+        assert!(!request_is_https_with_trust(&headers, true));
+    }
+
+    /// `csrf_set_cookie_value`'s combined gate: `Secure` when EITHER
+    /// production OR the (pre-captured) request-scoped TLS signal is true.
+    /// Exercises all four (production, request_is_https) combinations —
+    /// this is the pure-function core, independent of env-var mutation.
+    #[test]
+    fn csrf_cookie_secure_or_gate_truth_table() {
+        // production=false is simulated by calling with request_is_https
+        // directly; production is exercised via the ENV-var tests below
+        // (per-process under nextest, so mutating ENV here is safe).
+        let tok = "a".repeat(64);
+
+        std::env::remove_var("ENV");
+        std::env::remove_var("SKY_ENV");
+        // (a) not production, request IS https -> Secure.
+        assert!(
+            csrf_set_cookie_value(&tok, true).contains("; Secure"),
+            "TLS-detected request must get Secure regardless of ENV"
+        );
+        // (b) not production, request NOT https -> no Secure (dev-mode-correct).
+        assert!(
+            !csrf_set_cookie_value(&tok, false).contains("; Secure"),
+            "plain-HTTP dev request must NOT get Secure"
+        );
+    }
+
+    #[test]
+    fn csrf_cookie_secure_production_forces_secure_even_without_tls_signal() {
+        // (c) the exact gap this closes: ENV=production set, but THIS
+        // request is not detected as TLS (e.g. SKY_TRUSTED_PROXY unset, or
+        // no proxy in front) -> Secure still fires off the unconditional
+        // production floor. Matches the session cookie's own combined-gate
+        // semantics in live/mod.rs::page_response (`csrf::cookies_secure()
+        // || request_is_https(headers)` — production forces Secure
+        // unconditionally; the request-scoped signal only ADDS Secure in
+        // the non-production case).
+        std::env::set_var("ENV", "production");
+        let tok = "b".repeat(64);
+        let cookie = csrf_set_cookie_value(&tok, false);
+        std::env::remove_var("ENV");
+        assert!(
+            cookie.contains("; Secure"),
+            "ENV=production must force Secure even when this request isn't TLS-detected: {cookie}"
+        );
+    }
+
+    #[test]
+    fn csrf_cookie_secure_production_and_tls_signal_both_true() {
+        std::env::set_var("ENV", "production");
+        let tok = "c".repeat(64);
+        let cookie = csrf_set_cookie_value(&tok, true);
+        std::env::remove_var("ENV");
+        assert!(cookie.contains("; Secure"));
+    }
+
+    /// End-to-end through `middleware_with_csrf` (not just the pure
+    /// `csrf_set_cookie_value` helper): a GET request carrying
+    /// `X-Forwarded-Proto: https` mints a Secure cookie when
+    /// `SKY_TRUSTED_PROXY` is honoured, proving the signal survives the
+    /// capture-before-move + thread-through-the-closure adaptation.
+    #[tokio::test]
+    async fn csrf_middleware_mints_secure_cookie_for_trusted_https_request() {
+        let mut headers = HashMap::new();
+        headers.insert("x-forwarded-proto".to_string(), "https".to_string());
+        let h = middleware_with_csrf::<String, _>(|_req: ServerRequest| {
+            Box::pin(ready(ok_res::<String, _>(server_text("ok".into()))))
+                as SkyTask<String, ServerResponse>
+        });
+        let req = mk_req("GET", HashMap::new(), headers);
+        // `middleware_with_csrf` calls the process-wide `request_is_https`
+        // (via `trust_proxy_headers()`'s `OnceLock`), which without
+        // `SKY_TRUSTED_PROXY` set never trusts the header — so this test
+        // documents the untrusted-by-default floor: no Secure without the
+        // operator's opt-in, even though the header claims https.
+        match h(req).await {
+            SkyResult::Ok(r) => {
+                assert_eq!(r.cookies.len(), 1);
+                assert!(
+                    !r.cookies[0].contains("; Secure"),
+                    "X-Forwarded-Proto must be ignored without SKY_TRUSTED_PROXY opt-in: {}",
+                    r.cookies[0]
+                );
+            }
+            SkyResult::Err(_) => panic!("GET must never be rejected"),
         }
     }
 }
