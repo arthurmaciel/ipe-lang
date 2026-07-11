@@ -3815,6 +3815,7 @@ name = "sky_db"
 version = "0.0.0"
 dependencies = [
  "salsa",
+ "sky_canon",
  "sky_diagnostics",
  "sky_intern",
  "sky_parse",
