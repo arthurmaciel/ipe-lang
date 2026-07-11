@@ -191,11 +191,15 @@ pub fn parse(db: &dyn Db, file: SourceFile) -> ParseResult {
 
 /// The import list of one module, keyed on `file`'s text.
 ///
-/// Deliberately the same pre-parse string-scan the driver's topological sort
-/// has always used (not derived from [`parse`]): the topo sort must work even
-/// on files whose parse would fail, and changing that ordering is an
-/// observable behavior change that belongs behind the clean-vs-incremental
-/// parity gate (plan Task 5/18), not in the byte-identical Phase 1.
+/// Backed by [`extract_imports_from_source`] — a token-level scan (real
+/// lexer) whose edge set is a superset-or-equal of the AST's import edges,
+/// which is what makes the driver's SKY-N0021 cycle gate sound (M1 fix).
+/// Deliberately pre-parse rather than derived from [`parse`]: the topo sort
+/// must still work on files whose parse would fail (a lex-failing file falls
+/// back to the historical line scan for ordering only — it contributes no
+/// AST edges), and deriving from the AST is an observable ordering change
+/// that belongs behind the clean-vs-incremental parity gate (plan Task
+/// 5/18).
 #[salsa::tracked]
 pub fn imports(db: &dyn Db, file: SourceFile) -> Arc<Vec<Vec<String>>> {
     Arc::new(extract_imports_from_source(file.text(db)))
@@ -286,9 +290,15 @@ pub type CanonResult = Result<Arc<CanonicalModule>, Diagnostic>;
 /// `module_interface(dep)` for each resolved dep.
 ///
 /// Import cycles: the driver's topological sort rejects cycles (SKY-N0021)
-/// before any `canonicalize` demand, so the production path never recurses
-/// into a cycle. A direct demand on a cyclic import graph hits salsa's
-/// cycle panic — fail-loud, never a stale or fixpointed value.
+/// before any `canonicalize` demand. That gate is sound because the topo
+/// sort's edge set ([`extract_imports_from_source`], a token-level scan via
+/// the real lexer) is a superset-or-equal of the AST import edges this query
+/// walks — the M1 fix; the previous line scanner missed lexer-legal edges
+/// (`import\tB`, `import {- c -} B`), letting a scan-invisible cycle reach
+/// salsa's dependency-cycle panic on the production path. A *direct* demand
+/// on a cyclic import graph (test/LSP misuse, bypassing the driver's gate)
+/// still hits salsa's cycle panic — fail-loud, never a stale or fixpointed
+/// value.
 #[salsa::tracked]
 pub fn canonicalize(db: &dyn Db, root: SourceRoot, file: SourceFile) -> CanonResult {
     let parsed = parse(db, file)?;
@@ -370,7 +380,23 @@ pub fn module_interface(
     Ok(Arc::new(canonical.exports.clone()))
 }
 
-/// Extract `import A.B.C` module paths from raw source, one per line.
+/// Extract `import A.B.C` module paths from raw source.
+///
+/// Primary path: [`sky_parse::scan_import_paths`] — a token-level scan using
+/// the REAL lexer, so the returned edge set is a guaranteed
+/// superset-or-equal of the import edges in the parsed AST (the parser
+/// consumes the same token stream). That superset property is load-bearing:
+/// the driver's topological sort uses these edges for its SKY-N0021
+/// import-cycle gate, and a missed edge would let a cyclic
+/// `module_interface` demand reach salsa's dependency-cycle panic (the M1
+/// regression — the previous line scanner required the literal prefix
+/// `"import "` and missed lexer-legal edges such as `import\tB` or
+/// `import {- c -} B`).
+///
+/// Fallback (source that does not lex): the historical line scan, kept for
+/// topo *ordering* only. An unlexable module cannot parse, so it contributes
+/// no AST import edges — the fallback's under-approximation cannot bypass
+/// the cycle gate.
 ///
 /// Kernel imports are included verbatim; the caller filters against its
 /// known-module set (unknown paths are skipped by the topo sort and later
@@ -378,6 +404,15 @@ pub fn module_interface(
 /// of path segments.
 #[must_use]
 pub fn extract_imports_from_source(source: &str) -> Vec<Vec<String>> {
+    if let Some(imports) = sky_parse::scan_import_paths(source) {
+        return imports;
+    }
+    line_scan_imports(source)
+}
+
+/// Historical best-effort line scan (`import <path>` at line start), used
+/// ONLY when the source does not lex — see [`extract_imports_from_source`].
+fn line_scan_imports(source: &str) -> Vec<Vec<String>> {
     let mut imports: Vec<Vec<String>> = Vec::new();
     for line in source.lines() {
         let trimmed = line.trim();
