@@ -236,7 +236,7 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn sky_main() -> SkyTask<()> {
-    log_println(string_from_int(list_foldr(Box::new(move |x: i64, a: i64| -> i64 { (x - a) }), 0, vec![1, 2, 3])))
+    log_println(string_from_int(list_foldr({ let __sky_fn: Box<dyn Fn(i64, i64) -> i64 + Send + 'static> = Box::new(move |x: i64, a: i64| -> i64 { (x - a) }); __sky_fn }, 0, vec![1, 2, 3])))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
