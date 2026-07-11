@@ -10,7 +10,7 @@
 # LOAD-BEARING RULE: every mutation is ILL-TYPED BY CONSTRUCTION.
 #   Random mutations of valid programs are NOT necessarily ill-typed, so
 #   we do NOT assert "any mutant is rejected." Instead, we use a catalogue
-#   of six provably-breaking mutation families:
+#   of nine provably-breaking mutation families:
 #
 #   Cat 1 — UNDEFINED FIELD ACCESS:
 #       Base has record with field `f`. Mutation accesses `.f<SEED>` (absent).
@@ -39,6 +39,19 @@
 #   Cat 6 — NON-EXHAUSTIVE CASE:
 #       An ADT with 3 constructors; the case covers only 2.
 #       Expected code: SKY-T0010 (this case does not handle every possibility).
+#
+#   Cat 7 — SAME-MODULE 2-TYPE USE OF AN UNTYPED HELPER (#66-N canary):
+#       `ident x = x` used at Int AND String within its own module. Boundary
+#       scheme promotion generalizes at MODULE boundaries only — same-module
+#       reuse stays monomorphic (reference parity, class1 spec). A silent
+#       acceptance here means the promotion over-generalized.
+#       Expected code: SKY-T0001.
+#
+#   Cat 8 — CROSS-MODULE USE AT AN INCOMPATIBLE INSTANTIATED TYPE
+#       (multi-module: writes src/Lib.sky): `Lib.inc "str"` against the
+#       untyped Number-bounded `inc n = n + 1`. The imported scheme's bound
+#       must survive fresh instantiation.
+#       Expected code: SKY-T0001.
 #
 # SELF-VALIDATION:
 #   - Bases COMPILE CLEAN (proves the harness doesn't reject everything).
@@ -464,6 +477,61 @@ EOF
     # Triangle). Expect SKY-T0010 (this case does not handle every possibility).
 }
 
+# Cat 7 — same-module 2-type use of an UNTYPED helper. The class-1 boundary
+# scheme promotion generalizes untyped defs at MODULE boundaries only;
+# same-module reuse at two types stays REJECTED (reference-parity semantics —
+# see docs/architecture/class1-inference-fix-spec-2026-07-09.md). This is the
+# #66-N false-acceptance canary: if the promotion ever over-generalizes to
+# same-module uses, this mutant is silently ACCEPTED and the fuzzer flags it.
+mutant_same_module_2type() {
+    local seed=$1
+    local n; n=$(( (seed % 90) + 1 ))
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+ident x = x
+
+main =
+    println (String.fromInt (ident $n) ++ ident "s$n")
+EOF
+    # Why ill-typed (by current semantics): `ident` is untyped and used at Int
+    # AND String within its own module — same-module reuse is monomorphic.
+    # Expect SKY-T0001 (empirically verified 2026-07-11).
+}
+
+# Cat 8 — CROSS-MODULE use of an untyped Number-bounded helper at an
+# incompatible instantiated type (`Lib.inc "str"` where `inc n = n + 1`).
+# The boundary scheme promotion must instantiate the imported scheme fresh
+# AND still carry the Number bound — a String argument is an ordinary
+# SKY-T0001, never an acceptance. Writes a Lib.sky sibling (multi-module).
+mutant_cross_module_bad_inst() {
+    local seed=$1 libdst=$2
+    local n; n=$(( (seed % 90) + 1 ))
+    cat > "$libdst" <<'EOF'
+module Lib exposing (inc)
+
+import Sky.Core.Prelude exposing (..)
+
+inc n = n + 1
+EOF
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Lib
+import Std.Log exposing (println)
+
+main =
+    println (String.fromInt (Lib.inc "oops$n"))
+EOF
+    # Why ill-typed: Lib.inc's promoted scheme is Number-bounded (n + 1);
+    # instantiating it at String violates the bound — SKY-T0001
+    # (empirically verified 2026-07-11).
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # CATALOGUE: list of (mutant_fn, expected_code, category_label)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -476,13 +544,17 @@ EOF
 #  4      type_mismatch_if            SKY-T0001      cat4b
 #  5      ctor_arity                  SKY-T0001      cat5
 #  6      nonexhaustive_case          SKY-T0010      cat6
+#  7      same_module_2type           SKY-T0001      cat7 (#66-N canary)
+#  8      cross_module_bad_inst       SKY-T0001      cat8 (multi-module)
 #
-# Total: 7 entries in the catalogue.
+# Total: 9 entries in the catalogue.
 
-CATALOGUE_SIZE=7
+CATALOGUE_SIZE=9
 
+# catalogue_fn idx seed srcdir — writes Main.sky to stdout; multi-module
+# entries (cat 8) additionally write "$srcdir/Lib.sky" as a side effect.
 catalogue_fn() {
-    local idx=$1 seed=$2
+    local idx=$1 seed=$2 srcdir=$3
     case $idx in
         0) mutant_undef_field       "$seed" ;;
         1) mutant_undef_var         "$seed" ;;
@@ -491,6 +563,8 @@ catalogue_fn() {
         4) mutant_type_mismatch_if  "$seed" ;;
         5) mutant_ctor_arity        "$seed" ;;
         6) mutant_nonexhaustive_case "$seed" ;;
+        7) mutant_same_module_2type "$seed" ;;
+        8) mutant_cross_module_bad_inst "$seed" "$srcdir/Lib.sky" ;;
     esac
 }
 
@@ -504,6 +578,8 @@ catalogue_code() {
         4) echo "SKY-T0001" ;;
         5) echo "SKY-T0001" ;;
         6) echo "SKY-T0010" ;;
+        7) echo "SKY-T0001" ;;
+        8) echo "SKY-T0001" ;;
     esac
 }
 
@@ -517,6 +593,8 @@ catalogue_label() {
         4) echo "cat4b-type-mismatch-if" ;;
         5) echo "cat5-ctor-arity" ;;
         6) echo "cat6-nonexhaustive-case" ;;
+        7) echo "cat7-same-module-2type-canary" ;;
+        8) echo "cat8-cross-module-bad-inst" ;;
     esac
 }
 
@@ -623,7 +701,7 @@ run_cat_demo() {
         local code;  code=$(catalogue_code "$idx")
         local ddir="$FUZZ_DIR/demo-$idx"
         setup_project "$ddir"
-        catalogue_fn "$idx" "$demo_seed" > "$ddir/src/Main.sky"
+        catalogue_fn "$idx" "$demo_seed" "$ddir/src" > "$ddir/src/Main.sky"
 
         printf '[cat %d] %-34s expect %s\n' "$idx" "$label" "$code"
 
@@ -687,7 +765,7 @@ run_iter() {
     local code;  code=$(catalogue_code "$idx")
 
     setup_project "$iterdir"
-    catalogue_fn "$idx" "$seed" > "$iterdir/src/Main.sky"
+    catalogue_fn "$idx" "$seed" "$iterdir/src" > "$iterdir/src/Main.sky"
 
     local log="$iterdir/build.log"
     : > "$log"
