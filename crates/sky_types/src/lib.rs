@@ -210,6 +210,10 @@ fn infer_with_budget_attributed(
     // [`RequestFields`]); intern it once here so the immutable-borrow
     // `resolve_deferred` pass can resolve `req.<field>` accesses.
     let req_fields = lift!(RequestFields::build(interner));
+    // The nominal error-payload types `PanicInfo`/`TypeInfo`/`ErrorInfo`
+    // resolve field accesses the same way (SEAL fix 2026-07-11 — see
+    // [`ErrorRecordFields`]).
+    let err_fields = lift!(ErrorRecordFields::build(interner));
     // Unlike the other post-solve passes, `resolve_deferred` returns the failing
     // field-access / record-update's `home` module path so a SKY-T0012 attributes
     // to the source file that actually owns the access — not the byte-offset
@@ -220,6 +224,7 @@ fn infer_with_budget_attributed(
         budget,
         interner,
         &req_fields,
+        &err_fields,
         &generated.field_accesses,
         &generated.record_updates,
     )?;
@@ -774,11 +779,181 @@ impl RequestFields {
     }
 }
 
+/// The field type of a builtin nominal-record field ([`ErrorRecordFields`]).
+#[derive(Clone, Copy)]
+enum ErrFieldTy {
+    /// `String`
+    Str,
+    /// `List String`
+    ListStr,
+    /// `Maybe ErrorDetails`
+    MaybeErrorDetails,
+}
+
+/// Fixed field tables for the NOMINAL error-payload types `PanicInfo` /
+/// `TypeInfo` / `ErrorInfo` (SEAL fix 2026-07-11 — see `docs/architecture/
+/// error-record-literal-seal-fix-2026-07-11.md`).
+///
+/// These three types are opaque `Con`s at the type level (so a bare record
+/// literal cannot masquerade as the runtime's concrete `SkyPanicInfo` /
+/// `SkyTypeInfo` / `SkyErrorInfo` structs — that shape was an
+/// exit-0-then-cargo-fail), but their fields stay READABLE: the deferred
+/// [`FieldAccess`] pass resolves `p.message` / `t.expected` / `info.details`
+/// against this table, exactly like the opaque server `Request` type does via
+/// [`RequestFields`]. Record UPDATE on them intentionally falls through to
+/// the non-record rejection — a structurally-updated copy has no sound
+/// lowering (the runtime type is the only constructor-side representation).
+struct ErrorRecordFields {
+    /// `"PanicInfo"` / `"TypeInfo"` / `"ErrorInfo"` type-constructor symbols.
+    panicinfo: Symbol,
+    typeinfo: Symbol,
+    errorinfo: Symbol,
+    /// `"String"` / `"List"` / `"Maybe"` / `"ErrorDetails"` constructor
+    /// symbols for building field-type variables.
+    string: Symbol,
+    list: Symbol,
+    maybe: Symbol,
+    errordetails: Symbol,
+    /// (owning con, field name) → field type.
+    fields: BTreeMap<(Symbol, Symbol), ErrFieldTy>,
+}
+
+impl ErrorRecordFields {
+    /// Intern the three field tables once (idempotent). Called with the
+    /// mutable interner before the immutable-borrow [`resolve_deferred`] pass.
+    fn build(interner: &mut Interner) -> DResult<Self> {
+        let panicinfo = interner.intern("PanicInfo")?;
+        let typeinfo = interner.intern("TypeInfo")?;
+        let errorinfo = interner.intern("ErrorInfo")?;
+        let message = interner.intern("message")?;
+        let stack = interner.intern("stack")?;
+        let expected = interner.intern("expected")?;
+        let actual = interner.intern("actual")?;
+        let details = interner.intern("details")?;
+        let mut fields = BTreeMap::new();
+        // Matches `runtime/src/sky_runtime/error.rs`'s struct definitions.
+        fields.insert((panicinfo, message), ErrFieldTy::Str);
+        fields.insert((panicinfo, stack), ErrFieldTy::ListStr);
+        fields.insert((typeinfo, expected), ErrFieldTy::Str);
+        fields.insert((typeinfo, actual), ErrFieldTy::Str);
+        fields.insert((errorinfo, message), ErrFieldTy::Str);
+        fields.insert((errorinfo, details), ErrFieldTy::MaybeErrorDetails);
+        Ok(Self {
+            panicinfo,
+            typeinfo,
+            errorinfo,
+            string: interner.intern("String")?,
+            list: interner.intern("List")?,
+            maybe: interner.intern("Maybe")?,
+            errordetails: interner.intern("ErrorDetails")?,
+            fields,
+        })
+    }
+
+    /// Whether `con` is one of the three builtin nominal-record types.
+    fn owns(&self, con: Symbol) -> bool {
+        con == self.panicinfo || con == self.typeinfo || con == self.errorinfo
+    }
+
+    /// Build the union-find variable for `field`'s type on `con`, or `None`
+    /// when `field` is not a member (→ a genuine SKY-T0012).
+    fn field_var(
+        &self,
+        uf: &mut UnionFind<Content>,
+        con: Symbol,
+        field: Symbol,
+    ) -> DResult<Option<VarId>> {
+        let nullary = |uf: &mut UnionFind<Content>, name: Symbol| {
+            uf.fresh(Content::Structure(FlatType::Con {
+                module: Vec::new(),
+                name,
+                args: Vec::new(),
+            }))
+        };
+        match self.fields.get(&(con, field)) {
+            None => Ok(None),
+            Some(ErrFieldTy::Str) => Ok(Some(nullary(uf, self.string)?)),
+            Some(ErrFieldTy::ListStr) => {
+                let s = nullary(uf, self.string)?;
+                let l = uf.fresh(Content::Structure(FlatType::Con {
+                    module: Vec::new(),
+                    name: self.list,
+                    args: vec![s],
+                }))?;
+                Ok(Some(l))
+            }
+            Some(ErrFieldTy::MaybeErrorDetails) => {
+                let d = nullary(uf, self.errordetails)?;
+                let m = uf.fresh(Content::Structure(FlatType::Con {
+                    module: Vec::new(),
+                    name: self.maybe,
+                    args: vec![d],
+                }))?;
+                Ok(Some(m))
+            }
+        }
+    }
+}
+
+/// The 3-way outcome of resolving one [`FieldAccess`]'s base (helper of
+/// [`resolve_deferred`]; built by [`field_access_state`]).
+enum FieldState {
+    /// The base var is still `Flex` — defer to the next fixpoint pass.
+    Deferred,
+    /// The base is a record (or a fixed-field builtin Con) and has the
+    /// field; the payload is the field's type var.
+    Found(VarId),
+    /// The base is resolved but does not have the field (or is not a record
+    /// at all) — an immediate SKY-T0012.
+    Missing,
+}
+
+/// Resolve one [`FieldAccess`]'s base to its [`FieldState`].
+///
+/// `uf.content()` returns an owned clone; the borrow ends before any `fresh`
+/// call the table lookups make, avoiding a simultaneous mutable borrow.
+fn field_access_state(
+    uf: &mut UnionFind<Content>,
+    req_fields: &RequestFields,
+    err_fields: &ErrorRecordFields,
+    root: VarId,
+    field: Symbol,
+) -> DResult<FieldState> {
+    let found_or_missing = |v: Option<VarId>| v.map_or(FieldState::Missing, FieldState::Found);
+    Ok(match uf.content(root)? {
+        Content::Structure(FlatType::Record(fields, _ext)) => {
+            found_or_missing(fields.get(&field).copied())
+        }
+        // The opaque server `Request` Con is not a structural record, but
+        // its field set is fixed (see [`RequestFields`]). Resolve the
+        // field against the known table so `req.body` type-checks; the
+        // emit reads `runtime::ServerRequest` directly.
+        Content::Structure(FlatType::Con {
+            ref name, ref args, ..
+        }) if *name == req_fields.con && args.is_empty() => {
+            found_or_missing(req_fields.field_var(uf, field)?)
+        }
+        // `PanicInfo` / `TypeInfo` / `ErrorInfo` are opaque nominal Cons
+        // (SEAL fix 2026-07-11) whose field sets are fixed (see
+        // [`ErrorRecordFields`]). Resolve the field against the known table
+        // so `p.message` / `t.expected` / `info.details` type-check; the
+        // emit reads the runtime structs' pub fields directly.
+        Content::Structure(FlatType::Con {
+            ref name, ref args, ..
+        }) if err_fields.owns(*name) && args.is_empty() => {
+            found_or_missing(err_fields.field_var(uf, *name, field)?)
+        }
+        Content::Flex => FieldState::Deferred, // not settled yet
+        _ => FieldState::Missing, // rigid / super / non-record structure — error
+    })
+}
+
 fn resolve_deferred(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
     interner: &Interner,
     req_fields: &RequestFields,
+    err_fields: &ErrorRecordFields,
     accesses: &[FieldAccess],
     updates: &[RecordUpdate],
 ) -> Result<(), (Diagnostic, Vec<Symbol>)> {
@@ -810,41 +985,16 @@ fn resolve_deferred(
         // ── Field accesses ────────────────────────────────────────────────────
         for fa in &pending_fa {
             let root = lift!(uf.find(fa.record));
-            // `uf.content()` returns an owned clone; the borrow ends before
-            // `unify` is called, avoiding a simultaneous mutable borrow.
-            //
-            // `field_state` encoding:
-            //   `None`          → record var is still `Flex` — defer to next pass.
-            //   `Some(Some(v))` → record is a record type and has the field.
-            //   `Some(None)`    → record is resolved but does not have the field
-            //                     (or is not a record at all) — immediate error.
-            let field_state: Option<Option<VarId>> = match lift!(uf.content(root)) {
-                Content::Structure(FlatType::Record(fields, _ext)) => {
-                    Some(fields.get(&fa.field).copied())
-                }
-                // The opaque server `Request` Con is not a structural record, but
-                // its field set is fixed (see [`RequestFields`]). Resolve the
-                // field against the known table so `req.body` type-checks; the
-                // emit reads `runtime::ServerRequest` directly.
-                Content::Structure(FlatType::Con {
-                    ref name,
-                    ref args,
-                    ..
-                }) if *name == req_fields.con && args.is_empty() => {
-                    Some(lift!(req_fields.field_var(uf, fa.field)))
-                }
-                Content::Flex => None, // not settled yet — defer
-                _ => Some(None),       // rigid / super / non-record structure — error
-            };
-            match field_state {
-                None => {
+            // See [`field_access_state`] for the encoding + borrow discipline.
+            match lift!(field_access_state(uf, req_fields, err_fields, root, fa.field)) {
+                FieldState::Deferred => {
                     next_fa.push(fa);
                 }
-                Some(Some(v)) => {
+                FieldState::Found(v) => {
                     made_progress = true;
                     lift!(unify(uf, budget, interner, fa.span, fa.result, v));
                 }
-                Some(None) => {
+                FieldState::Missing => {
                     return Err((
                         no_such_field(uf, budget, interner, fa.record, fa.field, fa.span),
                         fa.home.clone(),

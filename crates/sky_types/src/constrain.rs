@@ -141,12 +141,6 @@ struct Builtins {
     ek_conflict: Symbol,
     ek_unavailable: Symbol,
     ek_unexpected: Symbol,
-    /// `"message"` — shared by `ErrorInfo` and `PanicInfo` (backlog #85
-    /// follow-up).
-    error_info_message: Symbol,
-    /// `"details"` — `ErrorInfo`'s optional `Maybe ErrorDetails` field
-    /// (backlog #85 follow-up).
-    error_info_details: Symbol,
     /// `ErrorDetails` — the 5-variant enrichment union carried on
     /// `ErrorInfo.details` (backlog #85 follow-up). Registered as a Prelude
     /// built-in exactly like `ErrorKind` — see `sky_lower`'s
@@ -159,13 +153,19 @@ struct Builtins {
     ed_http_status: Symbol,
     ed_json_decode: Symbol,
     ed_custom: Symbol,
-    /// `"stack"` — `PanicInfo`'s second field (`FfiPanic`'s payload; backlog
-    /// #85 follow-up).
-    panic_info_stack: Symbol,
-    /// `"expected"` / `"actual"` — `TypeInfo`'s two fields (`TypeMismatch`'s
-    /// payload; backlog #85 follow-up).
-    type_info_expected: Symbol,
-    type_info_actual: Symbol,
+    /// `PanicInfo` / `TypeInfo` / `ErrorInfo` — NOMINAL type-constructor
+    /// symbols (SEAL fix 2026-07-11, `docs/architecture/
+    /// error-record-literal-seal-fix-2026-07-11.md`). The three payload
+    /// record types are opaque nominal Cons (like the server `Request`), NOT
+    /// structural records: a bare record literal must not unify with them —
+    /// the runtime backs them with concrete structs (`SkyPanicInfo` /
+    /// `SkyTypeInfo` / `SkyErrorInfo`), so a structural lowering
+    /// (project-local synthesized struct) would fail `cargo build` after a
+    /// clean `skyc` exit. Field ACCESS on them stays available through
+    /// `resolve_deferred`'s builtin-record field tables.
+    panicinfo: Symbol,
+    typeinfo: Symbol,
+    errorinfo: Symbol,
     /// Two distinct scheme type-variable symbols (`a`, `e`) used to build the
     /// built-in constructor schemes. Their identity links a constructor's
     /// payload to its result type, exactly like a user union's declared vars;
@@ -498,17 +498,15 @@ impl Builtins {
             ek_conflict: interner.intern("Conflict")?,
             ek_unavailable: interner.intern("Unavailable")?,
             ek_unexpected: interner.intern("Unexpected")?,
-            error_info_message: interner.intern("message")?,
-            error_info_details: interner.intern("details")?,
             errordetails: interner.intern("ErrorDetails")?,
             ed_ffi_panic: interner.intern("FfiPanic")?,
             ed_type_mismatch: interner.intern("TypeMismatch")?,
             ed_http_status: interner.intern("HttpStatus")?,
             ed_json_decode: interner.intern("JsonDecode")?,
             ed_custom: interner.intern("Custom")?,
-            panic_info_stack: interner.intern("stack")?,
-            type_info_expected: interner.intern("expected")?,
-            type_info_actual: interner.intern("actual")?,
+            panicinfo: interner.intern("PanicInfo")?,
+            typeinfo: interner.intern("TypeInfo")?,
+            errorinfo: interner.intern("ErrorInfo")?,
             tv_a: interner.intern("a")?,
             tv_e: interner.intern("e")?,
             // Http field names (camelCase, as they appear in Sky source).
@@ -717,45 +715,31 @@ impl Builtins {
             name: self.errordetails,
             args: Vec::new(),
         };
-        let maybe_errordetails_ty = Ty::Con {
+        // `PanicInfo` / `TypeInfo` / `ErrorInfo` — NOMINAL opaque Cons, not
+        // structural records (SEAL fix 2026-07-11; see the `TypeNames` field
+        // doc). A bare record literal (`FfiPanic { message = …, stack = … }`)
+        // now fails to unify with a clean skyc-time type mismatch instead of
+        // lowering to a synthesized struct that fails `cargo build` against
+        // the runtime's `SkyPanicInfo`/`SkyTypeInfo`/`SkyErrorInfo`. Field
+        // access on values of these types resolves through
+        // `resolve_deferred`'s builtin-record field tables (the `Request`
+        // recipe); construction from Sky source goes through the smart
+        // constructors (`Error.io`/… + `Error.withDetails`) only.
+        let panic_info_ty = Ty::Con {
             module: Vec::new(),
-            name: self.maybe,
-            args: vec![errordetails_ty.clone()],
+            name: self.panicinfo,
+            args: Vec::new(),
         };
-        let list_string_ty = Ty::Con {
+        let type_info_ty = Ty::Con {
             module: Vec::new(),
-            name: self.list,
-            args: vec![string_ty.clone()],
+            name: self.typeinfo,
+            args: Vec::new(),
         };
-        // `PanicInfo`: `{ message : String, stack : List String }` — `FfiPanic`'s
-        // payload (backlog #85 follow-up). Anonymous closed record, matching
-        // `ErrorInfo`'s structural (non-nominal) treatment.
-        let panic_info_ty = Ty::Record(
-            BTreeMap::from([
-                (self.error_info_message, string_ty.clone()),
-                (self.panic_info_stack, list_string_ty),
-            ]),
-            RowTail::Closed,
-        );
-        // `TypeInfo`: `{ expected : String, actual : String }` — `TypeMismatch`'s
-        // payload (backlog #85 follow-up).
-        let type_info_ty = Ty::Record(
-            BTreeMap::from([
-                (self.type_info_expected, string_ty.clone()),
-                (self.type_info_actual, string_ty.clone()),
-            ]),
-            RowTail::Closed,
-        );
-        // `ErrorInfo`: `{ message : String, details : Maybe ErrorDetails }` — an
-        // anonymous closed record, not a nominal type (Sky records are
-        // structural). `details` added by the backlog #85 follow-up.
-        let error_info_ty = Ty::Record(
-            BTreeMap::from([
-                (self.error_info_message, string_ty.clone()),
-                (self.error_info_details, maybe_errordetails_ty),
-            ]),
-            RowTail::Closed,
-        );
+        let error_info_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.errorinfo,
+            args: Vec::new(),
+        };
         vec![
             (
                 self.true_,
