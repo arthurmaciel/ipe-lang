@@ -243,6 +243,54 @@ impl<'a> SafeCssSelector<'a> {
     }
 }
 
+/// A validated CSS media-query condition string (`Ui.mediaQuery` /
+/// `Ui.breakpoint` — the text spliced into `@media <query> {` inside a raw
+/// `<style>` body by `live::style_inject::build_mq`).
+///
+/// Deliberately a DISTINCT boundary type from [`SafeCssSelector`]: the
+/// selector allowlist blocks `<` outright, but Media Queries Level 4 range
+/// syntax legitimately uses it (`(400px <= width <= 700px)`), and a media
+/// query is a different grammar from a selector. The POLICY, however, is the
+/// shared [`has_dangerous_css_pattern`] + [`css_unescape`] re-scan pair that
+/// [`SafeCssValue`] uses (one policy, one place — no second weaker encoder):
+/// it rejects everything that could break out of the `@media … {` position —
+/// `;` `{` `}` `</` `/*` `@import` and the script-sink keywords, in both the
+/// raw and CSS-escape-decoded forms. None of those occur in any valid media
+/// query (`</` cannot form because a query has no `/` followed by tag text
+/// that matters — and if present it is rejected, fail-closed). A query that
+/// fails is DROPPED with its whole rule; the wrapped child still renders.
+pub(crate) struct SafeCssMediaQuery<'a>(&'a str);
+
+impl<'a> SafeCssMediaQuery<'a> {
+    /// Parse and validate a CSS media-query condition string.
+    ///
+    /// Returns `None` (drop the media-query styling) when `q` is empty after
+    /// trimming or carries any breakout / script-sink pattern in either its
+    /// raw or CSS-escape-decoded form.
+    pub(crate) fn parse(q: &'a str) -> Option<Self> {
+        let s = q.trim();
+        if s.is_empty() {
+            return None;
+        }
+        let low = s.to_ascii_lowercase();
+        if has_dangerous_css_pattern(&low) {
+            return None;
+        }
+        // Defence-in-depth (same as SafeCssValue): decode CSS backslash
+        // escapes and re-scan so `\3b` / `\7b`-style obfuscation of a
+        // breakout char is caught too.
+        let decoded_low = css_unescape(&low);
+        if has_dangerous_css_pattern(&decoded_low) {
+            return None;
+        }
+        Some(SafeCssMediaQuery(s))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        self.0
+    }
+}
+
 /// Strip every `</style` close-tag occurrence from a raw CSS body before it
 /// becomes an `HRaw` `<style>` child (or is spliced into a `<style>` sink).
 ///
@@ -320,6 +368,56 @@ mod tests {
         assert!(SafeCssSelector::parse("@import url(x)").is_none());
         assert!(SafeCssSelector::parse("a/*{}*/b").is_none()); // comment digraph
         assert!(SafeCssSelector::parse(".card:hover > a[href^=\"/\"]").is_some());
+    }
+
+    #[test]
+    fn media_query_accepts_real_queries_including_level4_ranges() {
+        for q in [
+            "(min-width: 768px)",
+            "(max-width: 600px)",
+            "(min-width: 768px) and (max-width: 1023px)",
+            "(prefers-color-scheme: dark)",
+            "(prefers-reduced-motion: reduce)",
+            "(hover: hover) and (pointer: fine)",
+            "only screen and (min-resolution: 2dppx)",
+            "not all and (monochrome)",
+            // Media Queries Level 4 range syntax — `<`/`<=` are legitimate
+            // here (this is exactly why SafeCssSelector is NOT reused).
+            "(400px <= width <= 700px)",
+            "(width < 600px)",
+        ] {
+            assert!(
+                SafeCssMediaQuery::parse(q).is_some(),
+                "valid media query must pass: {q}"
+            );
+            assert_eq!(SafeCssMediaQuery::parse(q).map(|v| v.as_str().to_owned()), Some(q.to_owned()));
+        }
+    }
+
+    #[test]
+    fn media_query_rejects_breakout_and_escaped_breakout() {
+        for q in [
+            "",
+            "   ",
+            // ruleset / declaration breakout
+            "(min-width: 1px) { } body { display:none }",
+            "screen) { } @media (",
+            "(min-width: 1px); color:red",
+            // style-tag breakout + comment obfuscation
+            "(min-width: 1px) </style><script>alert(1)</script>",
+            "(min-width: 1px) /* */",
+            // at-rule smuggling
+            "(min-width: 1px) @import url(evil)",
+            // CSS-hex-escaped `{` (`\7b`) — caught by the decode-then-rescan.
+            "(min-width: 1px) \\7b  color:red",
+            // script sink
+            "url(javascript:alert(1))",
+        ] {
+            assert!(
+                SafeCssMediaQuery::parse(q).is_none(),
+                "breakout media query must be dropped: {q:?}"
+            );
+        }
     }
 
     #[test]

@@ -3498,6 +3498,31 @@ fn emit_ui_call(
             )))
         }
 
+        // `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
+        // Raw-CSS-media-query escape hatch: wraps the child in a
+        // marker-carrying `<div>` (`data-sky-mq-q` / `data-sky-mq-rules`)
+        // consumed by `live::style_inject::build_mq` into a sky-id-scoped
+        // `<style data-sky-mq=…>` block. The query string is gated through
+        // `SafeCssMediaQuery` inside the runtime helper (fail-closed drop).
+        // See docs/architecture/ui-mediaquery-design-2026-07-11.md.
+        KernelFn::UiMediaQuery => {
+            let [q_e, a_e, el_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiMediaQuery",
+                    detail: format!(
+                        "Ui.mediaQuery requires 3 arguments, got {}",
+                        args.len()
+                    ),
+                });
+            };
+            let q = emit_expr_at(ctx, q_e, indent, child, generics)?;
+            let a = emit_expr_at(ctx, a_e, indent, child, generics)?;
+            let el = emit_expr_at(ctx, el_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_media_query_({q}, {a}, {el})"
+            )))
+        }
+
         // Background pseudo-class colour attrs (Color -> Attribute msg)
         KernelFn::BackgroundHoverColor => {
             let [c_e] = args else {

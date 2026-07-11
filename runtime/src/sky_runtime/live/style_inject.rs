@@ -646,6 +646,107 @@ mod tests {
         );
     }
 
+    /// `Ui.mediaQuery` exact-output pin at the injector: the marker pair on a
+    /// sky-id-stamped element must expand to EXACTLY the upstream shape
+    /// `<style data-sky-mq="<sid>">@media <q> { [sky-id="<sid>"] { <rules> } }</style>`
+    /// prepended as the first child, with both markers stripped.
+    #[test]
+    fn media_query_markers_expand_to_exact_scoped_style_block() {
+        use crate::sky_runtime::html::render_html;
+
+        let mut tree: Html<()> = Html::HElement(
+            "div".to_string(),
+            vec![
+                attr("sky-id", "mq0"),
+                attr("data-sky-mq-q", "(min-width: 768px)"),
+                attr("data-sky-mq-rules", "background-color:rgba(18,18,24,1)"),
+            ],
+            vec![Html::HText("responsive".to_string())],
+        );
+        apply_style_injections(&mut tree);
+        let s = render_html(&tree);
+        assert!(
+            s.contains(
+                "<style data-sky-mq=\"mq0\">@media (min-width: 768px) { \
+                 [sky-id=\"mq0\"] { background-color:rgba(18,18,24,1) } }</style>"
+            ),
+            "exact <style data-sky-mq=…> block must render: {s}"
+        );
+        assert!(
+            !s.contains("data-sky-mq-q") && !s.contains("data-sky-mq-rules"),
+            "markers must be consumed, never leak into final HTML: {s}"
+        );
+    }
+
+    /// `Ui.mediaQuery` FULL-pipeline end-to-end (producer → consumer): the
+    /// runtime helper's wrapper (`ui_media_query_`) through `ui_layout` →
+    /// `assign_sky_ids` → `apply_style_injections` → `render_html` must
+    /// produce a sky-id-scoped `@media` `<style>` block, leave no marker, and
+    /// keep the rule keyed to the wrapper's own sky-id so two media queries
+    /// on one page cannot cross-contaminate.
+    #[test]
+    fn end_to_end_ui_media_query_renders_scoped_style_and_leaves_no_marker() {
+        use crate::sky_runtime::html::{assign_sky_ids, render_html};
+        use crate::sky_runtime::ui::element::{Attribute, Color, Element};
+        use crate::sky_runtime::ui::helpers::ui_media_query_;
+        use crate::sky_runtime::ui::render::ui_layout;
+
+        let elem = ui_media_query_::<()>(
+            "(min-width: 768px)".to_owned(),
+            vec![Attribute::AttrBgColor(Color::Rgba(18, 18, 24, 1.0))],
+            Element::Text("responsive".to_owned()),
+        );
+        let mut html = ui_layout(vec![], elem);
+        assign_sky_ids(&mut html, "r");
+        apply_style_injections(&mut html);
+        let s = render_html(&html);
+        assert!(
+            !s.contains("data-sky-mq-q") && !s.contains("data-sky-mq-rules"),
+            "markers must be consumed, never leak into final HTML: {s}"
+        );
+        assert!(
+            s.contains("<style data-sky-mq=\""),
+            "scoped <style data-sky-mq=…> block must render: {s}"
+        );
+        assert!(
+            s.contains("@media (min-width: 768px) { [sky-id=\""),
+            "@media rule must be sky-id-scoped: {s}"
+        );
+        assert!(
+            s.contains("background-color:rgba(18,18,24,1) } }"),
+            "collector rules must land inside the scoped block: {s}"
+        );
+    }
+
+    /// SECURITY end-to-end: a breakout media-query string through the real
+    /// producer must be neutralised — the `SafeCssMediaQuery` gate drops the
+    /// markers at construction, so the pipeline emits NO `@media`, NO
+    /// `</style` breakout, and NO `<script>`, while the child still renders.
+    #[test]
+    fn end_to_end_ui_media_query_breakout_is_neutralised() {
+        use crate::sky_runtime::html::{assign_sky_ids, render_html};
+        use crate::sky_runtime::ui::element::{Attribute, Color, Element};
+        use crate::sky_runtime::ui::helpers::ui_media_query_;
+        use crate::sky_runtime::ui::render::ui_layout;
+
+        let elem = ui_media_query_::<()>(
+            "(min-width: 1px) </style><script>alert(1)</script> { } @import url(evil)"
+                .to_owned(),
+            vec![Attribute::AttrBgColor(Color::Rgba(1, 2, 3, 1.0))],
+            Element::Text("still here".to_owned()),
+        );
+        let mut html = ui_layout(vec![], elem);
+        assign_sky_ids(&mut html, "r");
+        apply_style_injections(&mut html);
+        let s = render_html(&html);
+        let low = s.to_ascii_lowercase();
+        assert!(!low.contains("</style><script"), "breakout must not form: {s}");
+        assert!(!low.contains("<script"), "script must never render: {s}");
+        assert!(!low.contains("@media"), "gated query must emit no rule: {s}");
+        assert!(!low.contains("@import"), "at-rule must not survive: {s}");
+        assert!(s.contains("still here"), "child must still render: {s}");
+    }
+
     #[test]
     fn idempotent_second_run_adds_no_duplicate_style() {
         let mut tree: Html<()> = Html::HElement(

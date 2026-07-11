@@ -5,9 +5,9 @@
 //! `Html.toString/voidNode/doctype/titleNode/htmlNode/headNode`,
 //! `Background.linearGradient`).
 //!
-//! `Ui.mediaQuery` is NOT exercised here — deferred (needs a wrapper-Element
-//! CSS-emission mechanism that doesn't exist yet for any kernel; see the lane
-//! report).
+//! `Ui.mediaQuery` is NOT exercised here — it was deferred from this batch
+//! and wired 2026-07-11 with its own golden (`golden_ui_mediaquery.rs`; see
+//! `docs/architecture/ui-mediaquery-design-2026-07-11.md`).
 //!
 //! ## Oracle provenance
 //!
