@@ -15,6 +15,7 @@ path = "src/main.rs"
 sky_intern = { path = "../sky_intern" }
 sky_diagnostics = { path = "../sky_diagnostics" }
 sky_parse = { path = "../sky_parse" }
+sky_db = { path = "../sky_db" }
 sky_canon = { path = "../sky_canon" }
 sky_types = { path = "../sky_types" }
 sky_lower = { path = "../sky_lower" }

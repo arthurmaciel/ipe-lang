@@ -3893,6 +3893,7 @@ dependencies = [
  "sky_backend",
  "sky_backend_rust",
  "sky_canon",
+ "sky_db",
  "sky_diagnostics",
  "sky_intern",
  "sky_ir",

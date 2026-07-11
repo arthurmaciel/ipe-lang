@@ -493,35 +493,11 @@ pub fn inject_compiled_std_closure(
 /// harmlessly included in the returned set — the topo-sort driver filters them
 /// against the `module_set`.
 ///
-/// Returns a `Vec<Vec<String>>` of path segments.
-#[must_use]
-pub fn extract_imports_from_source(source: &str) -> Vec<Vec<String>> {
-    let mut imports: Vec<Vec<String>> = Vec::new();
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("import ") {
-            continue;
-        }
-        // Take the token after `import `, stopping at `as`, `exposing`, or
-        // whitespace.
-        let rest = trimmed["import ".len()..].trim_start();
-        let module_str = rest
-            .split(|c: char| c.is_whitespace() || c == '(')
-            .next()
-            .unwrap_or("");
-        // Remove a trailing `as` keyword if it bled in (shouldn't happen but
-        // defensive).
-        let module_str = module_str
-            .strip_suffix(" as")
-            .map_or(module_str, |s| s.trim());
-        let module_str = module_str.trim_end_matches(" as");
-        let parts: Vec<String> = module_str.split('.').map(str::to_owned).collect();
-        if parts.first().is_some_and(|s| !s.is_empty()) {
-            imports.push(parts);
-        }
-    }
-    imports
-}
+/// The single implementation lives in [`sky_db`] (it also backs the memoized
+/// `sky_db::imports` query the topo sort consumes) — re-exported here so the
+/// scan used for stdlib-closure injection and the scan used for topo ordering
+/// can never drift apart.
+pub use sky_db::extract_imports_from_source;
 
 // ---------------------------------------------------------------------------
 // Tests
