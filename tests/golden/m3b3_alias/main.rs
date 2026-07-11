@@ -238,7 +238,7 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 pub fn main_f(n: i64) -> i64 {
     match n {
         0 => 0,
-        k @ m => (k + m),
+        __sky_arm_alias_0 => { let k = __sky_arm_alias_0; let m = k.clone(); (k + m) },
     }
 }
 pub fn sky_main() -> SkyTask<()> {

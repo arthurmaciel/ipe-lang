@@ -329,9 +329,23 @@ fn alias_subpattern_renders_binding_with_subpattern() -> DResult<()> {
     let mut i = Interner::new();
     let (prog, _x, _y) = alias_program(&mut i)?;
     let src = emit(&i, &prog)?;
+    // #99: in a by-VALUE ctor-payload position the alias no longer renders
+    // as `y @ x` (that spelling double-moves a non-`Copy` payload — sound
+    // only under a by-ref binding mode). It now binds a fresh temp and
+    // re-derives both binders in the arm prelude via the #96 clone-rebuild
+    // strategy: `MkWrap(__sky_arm_alias_0) => { let y = __sky_arm_alias_0;
+    // let x = y.clone(); … }`.
     assert!(
-        src.contains("MainWrap::MkWrap(y @ x) =>"),
-        "alias pattern must render as Rust `name @ <inner>`; got:\n{src}"
+        src.contains("MainWrap::MkWrap(__sky_arm_alias_0) =>"),
+        "alias pattern must bind a temp in a by-value ctor payload; got:\n{src}"
+    );
+    assert!(
+        src.contains("let y = __sky_arm_alias_0;"),
+        "alias binder must re-derive from the temp; got:\n{src}"
+    );
+    assert!(
+        src.contains("let x = y.clone();"),
+        "inner binder must re-derive from a clone of the alias binder; got:\n{src}"
     );
     Ok(())
 }

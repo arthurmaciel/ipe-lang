@@ -1,0 +1,101 @@
+//! #99 — refutable match-arm `as`-alias over a non-Copy payload.
+//!
+//! GREEN side: `Just ((a, b) as w)` over `Maybe (String, String)` used to
+//! emit `Just(w @ (a, b))` in a by-value arm — a Rust partial move (E0382)
+//! the moment the arm body reads `w` after `a`/`b` (skyc exit 0, cargo
+//! exit 101: the exact exit-0-then-cargo-fail seal class). The fix binds
+//! the whole payload once and re-derives the inner bindings from a clone
+//! (the #96 strategy, extended to by-value match arms).
+//!
+//! RED side: an alias over a dispatch-NEEDING inner (`(Just x) as inner`
+//! nested in a ctor payload) is SKY-L0128 fail-closed — the clone-rebuild
+//! repair is only sound for dispatch-free inners.
+//!
+//! Spec: `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §1.
+//!
+//! Run: `SKY_E2E=1 cargo test golden_i99`
+
+use std::path::{Path, PathBuf};
+
+mod support;
+
+fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+fn golden_dir(root: &Path, name: &str) -> PathBuf {
+    root.join("tests").join("golden").join(name)
+}
+
+/// The alias-over-dispatch-free-tuple shape must be skyc-0 (proving the
+/// pre-fix lowering-side path accepts it) — cheap tier, always runs.
+#[test]
+fn i99_alias_tuple_match_arm_is_skyc_ok() {
+    let root = repo_root();
+    let entry = golden_dir(&root, "i99_alias_tuple_match_arm").join("Main.sky");
+    let out = std::env::temp_dir().join("skyc_i99_alias_tuple_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve");
+    let Ok(runtime) = runtime else { return };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "#99: alias over a dispatch-free tuple in a match arm must be skyc-0: {:?}",
+        built.err()
+    );
+}
+
+/// `SKY_E2E` tier: the emitted project must cargo-build AND run with the
+/// arm body reading `a`, `b`, AND `w` — proving the E0382 partial move is
+/// gone and the values are correct (not just "compiles").
+#[test]
+fn i99_alias_tuple_match_arm_builds_and_runs() {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    let root = repo_root();
+    let entry = golden_dir(&root, "i99_alias_tuple_match_arm").join("Main.sky");
+    let out = std::env::temp_dir().join("skyc_i99_alias_tuple_e2e_run");
+    let _ = std::fs::remove_dir_all(&out);
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve");
+    let Ok(runtime) = runtime else { return };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(built.is_ok(), "build failed: {:?}", built.err());
+
+    let outcome = support::build_and_run_emitted("i99_alias_tuple_match_arm", &out);
+    assert_eq!(outcome.exit_code, Some(0), "must run clean");
+    assert_eq!(
+        outcome.stdout.trim(),
+        "hello|world|hello-world",
+        "arm body must read a, b, AND the alias binder w correctly"
+    );
+}
+
+/// RED-side control: an alias over a dispatch-NEEDING inner (`Just x`) in a
+/// by-value ctor payload is a clean SKY-L0128 lowering rejection — never a
+/// skyc-accept-then-cargo-fail, and never silently over-broad (the GREEN
+/// fixture above proves the dispatch-free shape still passes).
+#[test]
+fn i99_alias_over_ctor_inner_is_sky_l0128() {
+    let root = repo_root();
+    let entry = golden_dir(&root, "i99_alias_ctor_rejected").join("Main.sky");
+    let out = std::env::temp_dir().join("skyc_i99_alias_ctor_rejected");
+    let _ = std::fs::remove_dir_all(&out);
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve");
+    let Ok(runtime) = runtime else { return };
+    let built = skyc::build(&entry, &out, &runtime);
+    let err = built.expect_err("#99: alias over a dispatch-needing inner must be rejected");
+    let rendered = format!("{err:?}");
+    assert!(
+        rendered.contains("AliasOverRefutablePayload") || rendered.contains("SKY-L0128"),
+        "rejection must be the SKY-L0128 gate, got: {rendered}"
+    );
+    assert!(
+        !out.join("src").join("main.rs").exists(),
+        "no Rust may be emitted on a rejection"
+    );
+}
