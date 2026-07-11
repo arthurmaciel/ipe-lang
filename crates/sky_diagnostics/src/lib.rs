@@ -20,13 +20,13 @@ pub use code::{
     SKY_P0014, SKY_P0015, SKY_P0016, SKY_P0017, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031,
     SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002,
     SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_T0015,
-    SKY_T0016, Severity, explain_page, title,
+    SKY_T0016, SKY_T0017, Severity, explain_page, title,
 };
 pub use diagnostic::{
     AppShape, Applicability, CaseDefect, Construct, DResult, Diagnostic, Expected, ExpectedSet,
-    ExposingDefect, Feature, HeaderDefect, HelpLine, Hint, IfDefect, LetDefect, LowerError,
-    ModelLeaf, NameError, ParseError, SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect,
-    TypeError,
+    ExposingDefect, Feature, HOF_KERNEL_RESULT_CLASS, HeaderDefect, HelpLine, Hint, IfDefect,
+    LetDefect, LowerError, ModelLeaf, NameError, ParseError, SpanRole, Suggestion, TokenKind,
+    TyDoc, TypeDeclDefect, TypeError,
 };
 pub use render::render;
 pub use span::{Located, Span};

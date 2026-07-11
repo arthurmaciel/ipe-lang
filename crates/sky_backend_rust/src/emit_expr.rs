@@ -5536,66 +5536,77 @@ pub fn emit_expr_at(
             Ok(format!("(if {cond} {{ {then_} }} else {{ {else_} }})"))
         }
         Expr::Call { callee, args } => {
-            // JSON decoder kernel special cases are factored into a separate
-            // `#[inline(never)]` helper to keep the `emit_expr_at` stack frame
-            // small enough for the depth-guard test (SKY-L0200). The helper
-            // returns `None` when no special case applies.
-            if let Some(result) =
-                emit_json_decoder_call(ctx, callee, args, indent, child, generics)?
-            {
-                return Ok(result);
-            }
-            // Http network kernel special cases: Http.get / Http.post /
-            // Http.request need a task_map conversion closure (Design B).
-            // Http.parseQuery falls through (standard path is correct).
-            if let Some(result) = emit_http_call(ctx, callee, args, indent, child, generics)? {
-                return Ok(result);
-            }
-            // Http builder kernels: Http.defaultRequest / Http.withMethod /
-            // Http.withTimeout / Http.withBody / Http.withHeader emit inline
-            // struct construction or clone-and-reassign record updates.
-            if let Some(result) =
-                emit_http_builder_call(ctx, callee, args, indent, child, generics)?
-            {
-                return Ok(result);
-            }
-            // Task.RetryPolicy builders and Task.retryWith: inline struct
-            // construction / move-update / runtime call.
-            if let Some(result) =
-                emit_task_retry_call(ctx, callee, args, indent, child, generics)?
-            {
-                return Ok(result);
-            }
-            // Db projection kernels: DbExec / DbQuery / DbQueryDecode /
-            // DbInsertFields / DbUpdateFields / DbInsertFieldsReturning need
-            // `List SqlValue` / `List (String, SqlField)` projected to
-            // `Vec<SqlParam>` / `Vec<(String, Option<SqlParam>)>` at the call
-            // site via the generated `into_sql_param` / `into_field_param` methods.
-            if let Some(result) = emit_db_call(ctx, callee, args, indent, child, generics)? {
-                return Ok(result);
-            }
-            if let Some(result) = emit_tea_call(ctx, callee, args, indent, child, generics)? {
-                return Ok(result);
-            }
-            if let Some(result) = emit_server_call(ctx, callee, args, indent, child, generics)? {
-                return Ok(result);
-            }
-            // M7: Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview kernels.
-            if let Some(result) = emit_ui_call(ctx, callee, args, indent, child, generics)? {
-                return Ok(result);
-            }
-            // Dict.get borrows semantics: the runtime takes the HashMap by
-            // value, but Sky dicts are persistent — the same dict binding may
-            // be passed to multiple Dict.get calls in one let-chain (e.g.
-            // `let a = Dict.get "a" d; let b = Dict.get "b" d`).  Cloning the
-            // dict arg before each call keeps the original binding alive and
-            // avoids the "use of moved value" Rust compile error.
-            if matches!(callee, Callee::Kernel(KernelFn::DictGet))
-                && let [key_arg, dict_arg] = args.as_slice()
-            {
-                let key_s = emit_expr_at(ctx, key_arg, indent, child, generics)?;
-                let dict_s = emit_expr_at(ctx, dict_arg, indent, child, generics)?;
-                return Ok(format!("dict_get({key_s}, {dict_s}.clone())"));
+            // Kernel-dispatch special cases apply ONLY to `Callee::Kernel` —
+            // every probe below starts with a `let Callee::Kernel(..) = callee
+            // else { return Ok(None) }` gate, so a plain user-function call
+            // (`Callee::Func`) provably falls straight through all of them.
+            // Gating once here skips eight non-inlined probe calls per
+            // user-function call node (efficiency-audit §4 medium); kernel
+            // calls still traverse the probes in the same order.
+            if matches!(callee, Callee::Kernel(_)) {
+                // JSON decoder kernel special cases are factored into a separate
+                // `#[inline(never)]` helper to keep the `emit_expr_at` stack frame
+                // small enough for the depth-guard test (SKY-L0200). The helper
+                // returns `None` when no special case applies.
+                if let Some(result) =
+                    emit_json_decoder_call(ctx, callee, args, indent, child, generics)?
+                {
+                    return Ok(result);
+                }
+                // Http network kernel special cases: Http.get / Http.post /
+                // Http.request need a task_map conversion closure (Design B).
+                // Http.parseQuery falls through (standard path is correct).
+                if let Some(result) = emit_http_call(ctx, callee, args, indent, child, generics)? {
+                    return Ok(result);
+                }
+                // Http builder kernels: Http.defaultRequest / Http.withMethod /
+                // Http.withTimeout / Http.withBody / Http.withHeader emit inline
+                // struct construction or clone-and-reassign record updates.
+                if let Some(result) =
+                    emit_http_builder_call(ctx, callee, args, indent, child, generics)?
+                {
+                    return Ok(result);
+                }
+                // Task.RetryPolicy builders and Task.retryWith: inline struct
+                // construction / move-update / runtime call.
+                if let Some(result) =
+                    emit_task_retry_call(ctx, callee, args, indent, child, generics)?
+                {
+                    return Ok(result);
+                }
+                // Db projection kernels: DbExec / DbQuery / DbQueryDecode /
+                // DbInsertFields / DbUpdateFields / DbInsertFieldsReturning need
+                // `List SqlValue` / `List (String, SqlField)` projected to
+                // `Vec<SqlParam>` / `Vec<(String, Option<SqlParam>)>` at the call
+                // site via the generated `into_sql_param` / `into_field_param` methods.
+                if let Some(result) = emit_db_call(ctx, callee, args, indent, child, generics)? {
+                    return Ok(result);
+                }
+                if let Some(result) = emit_tea_call(ctx, callee, args, indent, child, generics)? {
+                    return Ok(result);
+                }
+                if let Some(result) =
+                    emit_server_call(ctx, callee, args, indent, child, generics)?
+                {
+                    return Ok(result);
+                }
+                // M7: Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview kernels.
+                if let Some(result) = emit_ui_call(ctx, callee, args, indent, child, generics)? {
+                    return Ok(result);
+                }
+                // Dict.get borrows semantics: the runtime takes the HashMap by
+                // value, but Sky dicts are persistent — the same dict binding may
+                // be passed to multiple Dict.get calls in one let-chain (e.g.
+                // `let a = Dict.get "a" d; let b = Dict.get "b" d`).  Cloning the
+                // dict arg before each call keeps the original binding alive and
+                // avoids the "use of moved value" Rust compile error.
+                if matches!(callee, Callee::Kernel(KernelFn::DictGet))
+                    && let [key_arg, dict_arg] = args.as_slice()
+                {
+                    let key_s = emit_expr_at(ctx, key_arg, indent, child, generics)?;
+                    let dict_s = emit_expr_at(ctx, dict_arg, indent, child, generics)?;
+                    return Ok(format!("dict_get({key_s}, {dict_s}.clone())"));
+                }
             }
             let name = callee_name(ctx, callee)?;
             let mut parts = Vec::with_capacity(args.len());

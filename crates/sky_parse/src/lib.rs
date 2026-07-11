@@ -31,6 +31,93 @@ pub fn parse_module(src: &str, interner: &mut Interner) -> DResult<Module> {
     p.parse_module()
 }
 
+/// Token-level scan of the module paths named by `import` in `src`.
+///
+/// Lexes `src` with the real lexer and returns the dotted path of every
+/// `Ident` token that immediately follows an `import` keyword token — exactly
+/// the token shape [`parse_module`]'s import parser consumes (one `import`
+/// token, then one dotted-identifier token; the layout filter never splices
+/// tokens between them). Because the parser reads this same token stream,
+/// every import edge in a successfully parsed module's AST appears in this
+/// scan. The scan may *over*-approximate (an `import` keyword token outside
+/// the header is a parse error, not an edge) but can never miss an AST edge —
+/// the load-bearing property for the driver's SKY-N0021 import-cycle gate.
+///
+/// Returns `None` when `src` does not lex. An unlexable module cannot parse,
+/// so it contributes no AST import edges; callers may substitute a heuristic
+/// scan for ordering purposes only.
+#[must_use]
+pub fn scan_import_paths(src: &str) -> Option<Vec<Vec<String>>> {
+    let toks = lexer::lex(src).ok()?;
+    let mut out: Vec<Vec<String>> = Vec::new();
+    for pair in toks.windows(2) {
+        let [first, second] = pair else { continue };
+        if first.kind == lexer::Tok::Import
+            && let lexer::Tok::Ident(text) = &second.kind
+        {
+            out.push(text.split('.').map(str::to_owned).collect());
+        }
+    }
+    Some(out)
+}
+
+/// Token-level scan of every identifier word occurring in `src` — the
+/// program-derived collision universe for the lowerer's fresh-name pools
+/// (`Interner::set_fresh_avoid`).
+///
+/// Lexes `src` with the real lexer and collects, for every `Ident` token,
+/// the full (possibly dotted) text AND each dot-segment — a superset of every
+/// identifier string [`parse_module`] interns from this module. Triple-quoted
+/// strings contribute the words inside their `{{…}}` interpolation regions
+/// (the canonicaliser resolves those as real identifier references); plain
+/// string/char literal contents and comments contribute nothing, matching
+/// what the parser actually interns.
+///
+/// Soundness shape: the set must OVER-approximate the module's user
+/// identifiers (a missing identifier could let a minted fresh name capture
+/// it); extra words only skip more candidates.
+///
+/// Returns `None` when `src` does not lex (an unlexable module cannot parse,
+/// so it never reaches lowering; callers may substitute a raw word scan for
+/// totality).
+#[must_use]
+pub fn scan_identifier_words(src: &str) -> Option<std::collections::BTreeSet<String>> {
+    let toks = lexer::lex(src).ok()?;
+    let mut words = std::collections::BTreeSet::new();
+    for tok in &toks {
+        match &tok.kind {
+            lexer::Tok::Ident(text) => {
+                words.insert(text.clone());
+                for segment in text.split('.') {
+                    words.insert(segment.to_owned());
+                }
+            }
+            lexer::Tok::TripleStr(raw) => {
+                // `{{expr}}` interpolation bodies are canonicalised as real
+                // expressions; collect their identifier-shaped words.
+                let mut rest = raw.as_str();
+                while let Some(open) = rest.find("{{") {
+                    let after = rest.get(open.saturating_add(2)..).unwrap_or("");
+                    let Some(close) = after.find("}}") else {
+                        break;
+                    };
+                    let body = after.get(..close).unwrap_or("");
+                    for word in
+                        body.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    {
+                        if !word.is_empty() {
+                            words.insert(word.to_owned());
+                        }
+                    }
+                    rest = after.get(close.saturating_add(2)..).unwrap_or("");
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(words)
+}
+
 #[cfg(test)]
 // Triple-string lexer tests use `toks[0]` after asserting `toks.len() == 1`.
 // The index is provably in-bounds at that point; suppressing the lint is

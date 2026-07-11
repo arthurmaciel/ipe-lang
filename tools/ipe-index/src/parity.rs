@@ -49,6 +49,23 @@ fn peephole_alias_present(kernel: &str, rust_fns: &HashSet<String>) -> bool {
     alias.is_some_and(|a| rust_fns.contains(a))
 }
 
+/// Synthesized rust_fn for a kernel the Rust route table doesn't name (Pass 2).
+///
+/// Family-convention overrides come first: where every EXPLICIT ancestor
+/// Rust-route row of a kernel family uses a rust_fn prefix that differs from
+/// the mechanical snake-case of the PascalCase module, an Ipê-new kernel of
+/// that family must synthesize under the family's convention or it reads as a
+/// phantom `go-only` gap forever (e.g. `DbDec.money` → `db_decode_money`, the
+/// `db_decode_*` prefix every explicit `("DbDec", …)` row uses — the
+/// mechanical form would be `db_dec_money`, which matches no runtime fn).
+fn synth_rust_fn(kernel: &str) -> String {
+    if let Some(rest) = kernel.strip_prefix("DbDec.") {
+        // Snake-case the member name too (`andThen` → `and_then`).
+        return format!("db_decode_{}", conventional_rust_fn(rest));
+    }
+    conventional_rust_fn(kernel)
+}
+
 fn conventional_rust_fn(kernel: &str) -> String {
     let mut out = String::with_capacity(kernel.len() + 4);
     for ch in kernel.chars() {
@@ -101,7 +118,7 @@ pub fn parse_routes_with_locs(hs_src_pairs: &[(&str, &str)]) -> HashMap<String, 
                     continue;
                 }
                 let loc = format!("{}:{}", file, lineno + 1);
-                m.entry(conventional_rust_fn(&kernel)).or_insert(RouteInfo { kernel_name: kernel, hs_loc: loc });
+                m.entry(synth_rust_fn(&kernel)).or_insert(RouteInfo { kernel_name: kernel, hs_loc: loc });
             }
         }
     }
@@ -133,12 +150,12 @@ fn go_name(kernel: &str) -> String { kernel.replace('.', "_") }
 /// Rust backend handles it without a runtime kernel, so it is NOT a real gap.
 ///
 /// Parity values:
-///   - `ok`             — both backends have an impl.
-///   - `go-only`        — Go impl present, Rust absent, sky_decl=true → REAL gap.
-///   - `go-kernel-opt`  — Go impl present, Rust absent, sky_decl=false → NOT a gap
-///                        (Go optimisation / pure-Sky in stdlib; Rust needs no kernel).
-///   - `rust-only`      — Rust impl present, Go absent.
-///   - `orphan-route`   — neither backend has an impl.
+/// - `ok` — both backends have an impl.
+/// - `go-only` — Go impl present, Rust absent, sky_decl=true → REAL gap.
+/// - `go-kernel-opt` — Go impl present, Rust absent, sky_decl=false → NOT a
+///   gap (Go optimisation / pure-Sky in stdlib; Rust needs no kernel).
+/// - `rust-only` — Rust impl present, Go absent.
+/// - `orphan-route` — neither backend has an impl.
 pub fn reconcile_with_locs(
     routes: &HashMap<String, RouteInfo>,
     go_fns: &HashSet<String>,
@@ -259,5 +276,50 @@ mod tests {
         assert!(ri.hs_loc.contains("Kernel.hs:1"), "expected line 1, got: {}", ri.hs_loc);
         let ri2 = routes.get("dict_union").unwrap();
         assert!(ri2.hs_loc.contains("Kernel.hs:2"), "expected line 2, got: {}", ri2.hs_loc);
+    }
+
+    #[test]
+    fn dbdec_go_synth_follows_db_decode_family_convention() {
+        // `DbDec.money` is Ipê-new: the ancestor Rust route table has no
+        // explicit row for it, so its route is synthesized from the Go
+        // KernelInfo shape. The DbDec family's rust_fn convention — per every
+        // EXPLICIT row in the ancestor Rust Kernel.hs — is `db_decode_*`, not
+        // the mechanical `db_dec_*`. A `db_dec_money` synth key never matches
+        // the real `db_decode_money` runtime fn, so the fully-wired,
+        // SEAL-proven kernel read as a phantom `go-only` gap forever
+        // (BACKLOG row filed by the #34 independent review, 2026-07-11).
+        let hs = r#"
+    ("DbDec", "string") -> "db_decode_string"
+    , (("DbDec", "money"),  KernelInfo "rt.DbDec_money" 1 False)
+    , (("DbDec", "string"), KernelInfo "rt.DbDec_string" 1 False)
+"#;
+        let pairs = vec![("Kernel.hs", hs)];
+        let routes = parse_routes_with_locs(&pairs);
+        // The synthesized route must land on the family-convention name…
+        let money = routes.get("db_decode_money").expect("family-convention key");
+        assert_eq!(money.kernel_name, "DbDec.money");
+        // …and never on the mechanical snake-case of the PascalCase module.
+        assert_eq!(routes.get("db_dec_money").map(|r| r.kernel_name.as_str()), None);
+
+        // End-to-end: with the real runtime fn present, parity reads `ok`.
+        let go: HashSet<String> = ["DbDec_money", "DbDec_string"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let rust: HashSet<String> = ["db_decode_money", "db_decode_string"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let sky: HashSet<String> = ["DbDec_money", "DbDec_string"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let kernels = reconcile_with_locs(&routes, &go, &rust, &sky);
+        let money = kernels.iter().find(|k| k.name == "DbDec.money").unwrap();
+        assert_eq!(
+            money.parity, "ok",
+            "a wired DbDec.money must not read as a phantom go-only gap"
+        );
+        assert_eq!(money.rust_fn, "db_decode_money");
     }
 }

@@ -427,7 +427,13 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
 
         # ── v4 stage 4: INTEGRATE — nextest + doctests + clippy + fuzz, on NIGHTLY ──
         # nextest run replaces `cargo test` (faster scheduler + better isolation) but
-        # does NOT run doctests → a `--doc` pass follows. Whole gate runs on nightly
+        # does NOT run doctests → a `--doc` pass follows. The `--features full`
+        # runtime lane is LOAD-BEARING (gate blind spot, 2026-07-11): the runtime's
+        # `default = []` and workspace feature-unification never enables `live`/
+        # `db`/`tui`/…, so the workspace run silently skips every feature-gated
+        # test — incl. the whole `sky_runtime::live::*` surface (style_inject
+        # CSS-injection sink gates, SSE/session/dispatch) and the spawn_blocking
+        # regressions. Mirrors CI's `runtime-full-features` job. Gate runs on nightly
         # with RUSTFLAGS="mold link + -Zthreads=8" (parallel rustc frontend — which IS
         # clippy — so it speeds clippy AND the test builds; mold speeds the link).
         # GRF replaces the config's rustflags (must re-include mold). clippy dropped
@@ -442,6 +448,7 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
         if git merge --no-ff -m "autopilot: $class fix — $gdesc" "$gbr" >/dev/null 2>&1 \
            && ( touch runtime/tests/*.rs crates/skyc/tests/*.rs 2>/dev/null; \
                 RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 3000 cargo +nightly nextest run --workspace >/tmp/autopilot-gate.log 2>&1 \
+                && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1800 cargo +nightly nextest run -p sky-runtime-rust --features full >>/tmp/autopilot-gate.log 2>&1 \
                 && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 600 cargo +nightly test --workspace --doc >>/tmp/autopilot-gate.log 2>&1 \
                 && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly clippy --workspace --no-deps --jobs 4 -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
            && ( "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 ); then
