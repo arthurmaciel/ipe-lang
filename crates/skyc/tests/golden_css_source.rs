@@ -93,8 +93,23 @@ fn css_e2e_neutralises_injection() {
         "benign stylesheet must render:\n{stdout}"
     );
 
-    // Security: NONE of the injection payloads survive in any form.
-    for needle in ["</style", "<script", "javascript:", "expression(", "alert"] {
+    // #105 non-regression: a benign `keyframes` still renders its frames.
+    assert!(
+        stdout.contains("opacity: 0") && stdout.contains("opacity: 1"),
+        "benign keyframes must render:\n{stdout}"
+    );
+
+    // Security: NONE of the injection payloads survive in any form —
+    // including the #105 `@import` (CSS-level SSRF) vector newly gated on
+    // `raw` / `keyframes` bodies.
+    for needle in [
+        "</style",
+        "<script",
+        "javascript:",
+        "expression(",
+        "alert",
+        "@import",
+    ] {
         assert!(
             !low.contains(needle),
             "injection needle {needle:?} must be neutralised, but survived in:\n{stdout}"

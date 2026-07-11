@@ -63,45 +63,109 @@ impl<'a> SafeCssPropertyName<'a> {
 ///   `url(data:application`.
 pub(crate) struct SafeCssValue<'a>(&'a str);
 
+/// Breakout / script-sink patterns for a CSS declaration value. Checked
+/// against both the raw value and the CSS-escape-decoded value
+/// (`css_unescape`) by [`has_dangerous_css_pattern`] — one list, one policy.
+const BAD_VALUE_PATTERNS: &[&str] = &[
+    "expression(",
+    "javascript:",
+    "vbscript:",
+    "url(javascript:",
+    "url('javascript:",
+    "url(\"javascript:",
+    "url(vbscript:",
+    "url(data:text",
+    "url(data:application",
+];
+
+/// True when `low` (already lowercased) carries a declaration/ruleset
+/// breakout character or a script-sink keyword. Shared by the raw-value and
+/// CSS-escape-decoded-value passes so they cannot drift.
+fn has_dangerous_css_pattern(low: &str) -> bool {
+    // Declaration / ruleset / style-tag breakout + comment obfuscation.
+    if low.contains(';')
+        || low.contains('{')
+        || low.contains('}')
+        || low.contains("</")
+        || low.contains("/*")
+        || low.contains("@import")
+    {
+        return true;
+    }
+    // Script sinks — whitespace stripped so `url( javascript:…` /
+    // `java script:` cannot evade.
+    let low_nows: String = low.chars().filter(|c| !c.is_whitespace()).collect();
+    BAD_VALUE_PATTERNS.iter().any(|bad| low_nows.contains(bad))
+}
+
+/// Decode CSS backslash escapes (CSS Syntax Level 3 §4.3.7) for DETECTION
+/// purposes only — the decoded string is never emitted; [`SafeCssValue`]
+/// keeps the caller's ORIGINAL string on success. A value that hides a
+/// blocked keyword or breakout char behind a hex escape (`\65 xpression(…)`,
+/// `\3b` for `;`) decodes to the literal form here, so
+/// [`has_dangerous_css_pattern`] catches it on the second pass.
+///
+/// Best-effort / fail-closed, not a spec-complete CSS tokenizer: an escape
+/// decoding to an invalid Unicode scalar value is dropped rather than
+/// reconstructed (erring toward "the scan sees less" is the safe direction
+/// for a detector — it never helps an attacker hide a keyword).
+fn css_unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let mut hex = String::new();
+        while hex.len() < 6 {
+            match chars.peek() {
+                Some(h) if h.is_ascii_hexdigit() => {
+                    hex.push(*h);
+                    chars.next();
+                }
+                _ => break,
+            }
+        }
+        if !hex.is_empty() {
+            // One trailing whitespace char is consumed as the escape's
+            // delimiter (CSS Syntax §4.3.7), if present.
+            if matches!(chars.peek(), Some(w) if w.is_whitespace()) {
+                chars.next();
+            }
+            if let Ok(cp) = u32::from_str_radix(&hex, 16) {
+                if let Some(ch) = char::from_u32(cp) {
+                    out.push(ch);
+                }
+            }
+            continue;
+        }
+        // `\` followed by a non-hex char: CSS escapes that literal char.
+        if let Some(next) = chars.next() {
+            out.push(next);
+        }
+        // trailing lone backslash (no following char): dropped.
+    }
+    out
+}
+
 impl<'a> SafeCssValue<'a> {
     /// Parse and validate a CSS property value.
     ///
-    /// Returns `None` (silently drop) when any dangerous pattern is found.
+    /// Returns `None` (silently drop) when any dangerous pattern is found —
+    /// in either the raw value or its CSS-escape-decoded form (#105).
     pub(crate) fn parse(v: &'a str) -> Option<Self> {
         let low = v.to_ascii_lowercase();
-
-        // Declaration / ruleset / style-tag breakout + comment obfuscation.
-        // These chars cannot appear legitimately in a single CSS declaration
-        // value; their presence always indicates an injection attempt.
-        if low.contains(';')
-            || low.contains('{')
-            || low.contains('}')
-            || low.contains("</")
-            || low.contains("/*")
-            || low.contains("@import")
-        {
+        if has_dangerous_css_pattern(&low) {
             return None;
         }
-
-        // Script sinks — check WHOLE value (not prefix only) with whitespace
-        // stripped so `url( javascript:…` / `java script:` cannot evade.
-        let low_nows: String = low.chars().filter(|c| !c.is_whitespace()).collect();
-        for bad in &[
-            "expression(",
-            "javascript:",
-            "vbscript:",
-            "url(javascript:",
-            "url('javascript:",
-            "url(\"javascript:",
-            "url(vbscript:",
-            "url(data:text",
-            "url(data:application",
-        ] {
-            if low_nows.contains(bad) {
-                return None;
-            }
+        // Defence-in-depth: decode CSS backslash escapes and re-scan so a
+        // hex-escaped bypass of the check above (`\65 xpression(…)`, `\3b`
+        // for `;`) is caught too.
+        let decoded_low = css_unescape(&low);
+        if has_dangerous_css_pattern(&decoded_low) {
+            return None;
         }
-
         Some(SafeCssValue(v))
     }
 
@@ -218,6 +282,29 @@ mod tests {
         assert!(SafeCssValue::parse("0; background:url(javascript:alert(1))").is_none());
         assert!(SafeCssValue::parse("url( javascript:alert(1))").is_none()); // ws-stripped
         assert!(SafeCssValue::parse("#ff6600").is_some()); // benign passes
+    }
+
+    #[test]
+    fn value_rejects_hex_escaped_expression_and_scheme_sinks() {
+        // #105 part 2: CSS backslash-hex escapes (CSS Syntax L3 §4.3.7)
+        // decode to a blocked keyword / breakout char ANYWHERE a token is
+        // lexed. The raw substring scan misses these; the decode-then-rescan
+        // pass catches them.
+        // `\65 `='e' (space delimiter consumed) → "expression(alert(1))".
+        assert!(SafeCssValue::parse("\\65 xpression(alert(1))").is_none());
+        // `\75`='u', `\6a`='j' → "url(javascript:alert(1))".
+        assert!(SafeCssValue::parse("\\75 rl(\\6a avascript:alert(1))").is_none());
+        // `\3b`=';' (hex-escaped BREAKOUT char, not just a script-sink kw).
+        assert!(SafeCssValue::parse("red\\3b  malicious").is_none());
+        // benign values with no escapes still pass unchanged.
+        assert_eq!(
+            SafeCssValue::parse("#ff6600").map(|v| v.as_str().to_owned()),
+            Some("#ff6600".to_owned())
+        );
+        assert_eq!(
+            SafeCssValue::parse("rgba(0,0,0,0.2)").map(|v| v.as_str().to_owned()),
+            Some("rgba(0,0,0,0.2)".to_owned())
+        );
     }
 
     #[test]
