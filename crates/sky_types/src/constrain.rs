@@ -4025,6 +4025,9 @@ impl<'a> Builder<'a> {
             K::HttpWithTimeout => fun(int(), fun(http_request(), http_request())),
             K::HttpWithBody => fun(string(), fun(http_request(), http_request())),
             K::HttpWithHeader => fun(string(), fun(string(), fun(http_request(), http_request()))),
+            K::HttpWithUrl => fun(string(), fun(http_request(), http_request())),
+            K::HttpWithFollowRedirects => fun(bool_ty(), fun(http_request(), http_request())),
+            K::HttpWithMaxRedirects => fun(int(), fun(http_request(), http_request())),
 
             // ── Cmd ──
             K::CmdNone => cmd(var(0)),
@@ -6538,7 +6541,7 @@ mod registry_phase_c_tests {
             K::FileCopy,
             K::FileRename,
             K::FileDelete,
-            // Http (9)
+            // Http (12)
             K::HttpGet,
             K::HttpPost,
             K::HttpRequest,
@@ -6548,6 +6551,9 @@ mod registry_phase_c_tests {
             K::HttpWithTimeout,
             K::HttpWithBody,
             K::HttpWithHeader,
+            K::HttpWithUrl,
+            K::HttpWithFollowRedirects,
+            K::HttpWithMaxRedirects,
             // Cmd (3)
             K::CmdNone,
             K::CmdBatch,

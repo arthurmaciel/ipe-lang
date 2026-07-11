@@ -48,6 +48,10 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     "http_with_body",
     "http_with_header",
     "http_with_timeout",
+    // #33 §6.2 Go-parity builders — same inline clone-and-reassign emission.
+    "http_with_url",
+    "http_with_follow_redirects",
+    "http_with_max_redirects",
     // ── Dead: emit_live_route generates a closure expression, not a function
     //         call. ──────────────────────────────────────────────────────────
     "live_route",

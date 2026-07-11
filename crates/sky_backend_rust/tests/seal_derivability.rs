@@ -133,6 +133,7 @@ fn decoder_field_record_has_no_derive() -> DResult<()> {
         body: Expr::Access {
             record: Box::new(Expr::Var(par)),
             field: n,
+            field_ty: IrType::Int,
         },
     };
     let src = emit(&interner, &program(main_mod, vec![], vec![func]))?;
@@ -181,6 +182,7 @@ fn normal_record_keeps_full_derive() -> DResult<()> {
         body: Expr::Access {
             record: Box::new(Expr::Var(par)),
             field: x,
+            field_ty: IrType::Int,
         },
     };
     let src = emit(&interner, &program(main_mod, vec![], vec![func]))?;
@@ -293,6 +295,7 @@ fn live_html_helper_record_gets_cdpeq_without_serde() -> DResult<()> {
         body: Expr::Access {
             record: Box::new(Expr::Var(p)),
             field: title,
+            field_ty: IrType::Str,
         },
     };
     let model_func = Func {
@@ -305,6 +308,7 @@ fn live_html_helper_record_gets_cdpeq_without_serde() -> DResult<()> {
         body: Expr::Access {
             record: Box::new(Expr::Var(p)),
             field: count,
+            field_ty: IrType::Int,
         },
     };
 

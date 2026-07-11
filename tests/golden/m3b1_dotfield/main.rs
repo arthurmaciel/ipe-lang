@@ -248,7 +248,7 @@ pub fn main_wrap(n: i64) -> RecValue {
     RecValue { value: n }
 }
 pub fn sky_main() -> SkyTask<()> {
-    ({ let r = RecValue { value: 1 }; log_println(string_from_int(((main_wrap(41)).value.clone() + (r).value.clone()))) })
+    ({ let r = RecValue { value: 1 }; log_println(string_from_int(((main_wrap(41)).value + (r).value))) })
 }
 pub fn main_Box(value: i64) -> RecValue {
     RecValue { value: value }
