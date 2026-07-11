@@ -55,3 +55,26 @@ fn task_bad_error_channel_is_sky_t0001() {
         sky_diagnostics::SKY_T0001,
     );
 }
+
+/// `Task.fail "plain string"` must be rejected with SKY-T0001 ("expected
+/// Error, found String"). Class-7 fix (2026-07-10, `db_crud`/`db_transaction`
+/// E2E hardening): `K::TaskFail`'s scheme used to be over-polymorphic
+/// (`fun(var(1), task(var(0)))`), so a bare `String` argument HM-checked and
+/// only blew up later at the emitted project's `cargo build` (E0308,
+/// `SkyError` vs `String`) — a "compilation successful, then `cargo build`
+/// fails" class violation. The scheme is now pinned to `fun(error_ty(),
+/// task(var(0)))`, matching `mapError`/`onError` and the bundled
+/// `Sky.Core.Task.sky:33` annotation (`fail : Error -> Task Error a`), so the
+/// mismatch is now caught at `skyc` type-check time. This also pins the
+/// divergence from upstream Sky's polymorphic `fail : e -> Task e a`
+/// (`docs/divergences-from-sky.md`, "`Task` error-channel scheme is
+/// monomorphic") — a future "restore Elm-parity polymorphism" change cannot
+/// silently reopen the ill-typed-emission hole without confronting this test.
+#[test]
+fn task_fail_string_literal_is_sky_t0001() {
+    assert_gate(
+        "m5a_gate_task_fail_string",
+        "m5a_gate_task_fail_string_emit",
+        sky_diagnostics::SKY_T0001,
+    );
+}
