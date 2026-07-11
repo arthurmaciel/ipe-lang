@@ -2427,7 +2427,7 @@ impl<'a> Builder<'a> {
     ///   `Decoder` family in particular must NOT be gated — its runtime has
     ///   genuine `curry1..curry10` currying support the applicative decoder
     ///   pipeline depends on).
-    fn hof_result_slot_for(k: StdlibKernel) -> Option<u32> {
+    const fn hof_result_slot_for(k: StdlibKernel) -> Option<u32> {
         use StdlibKernel as K;
         match k {
             K::MaybeMap

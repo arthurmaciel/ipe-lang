@@ -5745,10 +5745,25 @@ impl<'a> Lowerer<'a> {
                         Ok(IrType::Maybe(Box::new(elem)))
                     }
                     "Result" if args.len() == 2 => {
-                        let err = self.ir_type_from_ty_json(
-                            args.first().ok_or_else(result_arg_bug)?,
-                            span,
-                        )?;
+                        // A free `Ty::Var` in the ERROR slot must pin to
+                        // `IrType::Error` (`SkyError`), NOT the Json fallback:
+                        // the emitted `ok_res` wrapper (`ResultOkDefault`, see
+                        // the ctor-lowering arm) pins an unresolved error type
+                        // to the project's `SkyError` — "the canonical
+                        // default" — so a type ANNOTATION derived from the
+                        // same free var (e.g. an eta-param binder for a piped
+                        // `Ok f |> Result.andMap …`) must agree, or the
+                        // emitted `let eta_0: SkyResult<JsonVal, _> = ok_res(…)`
+                        // is an E0308 exit-0-then-cargo-fail (found while
+                        // gating #90's 5th attempt: the
+                        // `l0114_result_and_map_fn_payload` positive-path
+                        // fixture). One defaulting policy, both sides.
+                        let err_ty = args.first().ok_or_else(result_arg_bug)?;
+                        let err = if matches!(err_ty, Ty::Var(_)) {
+                            IrType::Error
+                        } else {
+                            self.ir_type_from_ty_json(err_ty, span)?
+                        };
                         let ok = self.ir_type_from_ty_json(
                             args.get(1).ok_or_else(result_arg_bug)?,
                             span,
