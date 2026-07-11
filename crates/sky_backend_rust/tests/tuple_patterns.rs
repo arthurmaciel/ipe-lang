@@ -83,6 +83,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
             args: vec![Pat::Tuple(vec![Pat::Var(a), Pat::Var(b)])],
         },
         body: Expr::Var(a),
+        guard: None,
     }];
     let fst_of_fn = Func {
         id: FuncId::from_raw(0),

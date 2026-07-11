@@ -3040,6 +3040,15 @@ impl<'a> Builder<'a> {
                     self.eq(pat.span, result_var, scrut_var);
                     for (sub, av) in args.iter().zip(arg_vars) {
                         self.constrain_pattern(local, sub, av)?;
+                        // Record this sub-pattern's own instantiated field type so
+                        // the lowerer can recover a NESTED record / list sub-pattern's
+                        // complete shape the same way a top-level `case` / `let` binder
+                        // already does (identical precedent in `constrain_lambda`, the
+                        // `regions.insert` on every lambda-parameter span below).
+                        // Class 4 item C (#158) —
+                        // docs/architecture/class4-pattern-lowering-fix-spec-2026-07-09.md.
+                        self.regions
+                            .insert((self.current_home.clone(), sub.span), av);
                     }
                 } else {
                     // A constructor with no registered scheme (imported, outside the
@@ -3073,6 +3082,11 @@ impl<'a> Builder<'a> {
                 self.eq(pat.span, tuple, scrut_var);
                 for (sub, ev) in elems.iter().zip(elem_vars) {
                     self.constrain_pattern(local, sub, ev)?;
+                    // Same region-threading as the `PCtor` arm above so a record
+                    // (or list) nested inside a TUPLE element (`(Ok {name}, y)`)
+                    // recovers its complete shape in the lowerer. Class 4 item C (#158).
+                    self.regions
+                        .insert((self.current_home.clone(), sub.span), ev);
                 }
                 Ok(())
             }

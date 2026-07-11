@@ -2,8 +2,6 @@
 //! clean, span-carrying diagnostic, never a panic / internal compiler bug /
 //! cargo-failing Rust:
 //!
-//! * a RECORD sub-pattern nested in a constructor payload (`Box { x }`) →
-//!   SKY-L0112 (the nested-record-carrier gap),
 //! * a non-exhaustive NESTED `case` (`Just (Just a) -> … ; Nothing -> …`,
 //!   missing `Just Nothing`) → SKY-T0010, caught BEFORE emit so rustc never
 //!   sees a non-exhaustive `match` (the soundness floor),
@@ -60,12 +58,33 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code)
     );
 }
 
+/// A RECORD sub-pattern nested in a constructor payload (`Box { x }`) used to be
+/// the SKY-L0112 nested-record-carrier gap. #158 (Class 4 item C) closed it: the
+/// constraint generator now records a region on every ctor sub-pattern, so the
+/// lowerer recovers the nested record's complete field set the way a top-level
+/// binder already does. This shape is now ACCEPTED and builds — the positive
+/// end-to-end regression (build + run + stdout) lives in
+/// `golden_m158_nested_patterns`.
 #[test]
-fn record_pattern_in_ctor_payload_is_sky_l0112() {
-    assert_gate(
-        "m3b2_gate_record_payload",
-        "m3b2_gate_record_payload_emit",
-        sky_diagnostics::SKY_L0112,
+fn record_pattern_in_ctor_payload_accepted() {
+    let root = repo_root();
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join("m3b2_gate_record_payload")
+        .join("Main.sky");
+    let out =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m3b2_gate_record_payload_emit");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "a record sub-pattern nested in a ctor payload must be accepted (#158), got: {:?}",
+        built.err()
     );
 }
 

@@ -21,8 +21,8 @@ use sky_canon::ast as canon;
 use sky_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{
-    is_dispatch_free, Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn,
-    Match, ModPath, Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant,
+    is_dispatch_free, is_irrefutable, Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, FuncId,
+    IrType, KernelFn, Match, ModPath, Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant,
 };
 use sky_types::{SolvedTypes, Ty, TyBounds};
 
@@ -910,7 +910,7 @@ fn rewrite_captured_clones(
                                 depth,
                             )?
                         };
-                    Ok(Arm { pat: arm.pat, body: new_body })
+                    Ok(Arm { pat: arm.pat, body: new_body, guard: arm.guard })
                 })
                 .collect::<DResult<Vec<_>>>()?;
             Ok(Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms)))
@@ -971,6 +971,19 @@ fn rewrite_captured_clones(
             tail: Box::new(rewrite_captured_clones(
                 clone_set, noncl_set, lambda_span, *tail, depth,
             )?),
+        }),
+        Expr::ListIndexClone { list, index } => Ok(Expr::ListIndexClone {
+            list: Box::new(rewrite_captured_clones(
+                clone_set, noncl_set, lambda_span, *list, depth,
+            )?),
+            index,
+        }),
+        Expr::ListLenCheck { list, len, exact } => Ok(Expr::ListLenCheck {
+            list: Box::new(rewrite_captured_clones(
+                clone_set, noncl_set, lambda_span, *list, depth,
+            )?),
+            len,
+            exact,
         }),
         Expr::Record(fields) => Ok(Expr::Record(
             fields
@@ -1149,6 +1162,9 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
         Expr::List { items, .. } => items.iter().any(|e| lambda_body_refs_sym(sym, e)),
         Expr::Cons { head, tail } => {
             lambda_body_refs_sym(sym, head) || lambda_body_refs_sym(sym, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            lambda_body_refs_sym(sym, list)
         }
         Expr::Record(fields) => fields.iter().any(|(_, e)| lambda_body_refs_sym(sym, e)),
         // Update.record is wrapped in `.clone()` by emit_update (borrow, not move).
@@ -1343,6 +1359,9 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
         Expr::Cons { head, tail } => {
             count_var_uses(sym, head) + count_var_uses(sym, tail)
         }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            count_var_uses(sym, list)
+        }
         Expr::Record(fields) => {
             fields.iter().map(|(_, e)| count_var_uses(sym, e)).sum()
         }
@@ -1470,6 +1489,9 @@ fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
         Expr::List { items, .. } => items.iter().map(|e| count_fn_value_uses(sym, e)).sum(),
         Expr::Cons { head, tail } => {
             count_fn_value_uses(sym, head) + count_fn_value_uses(sym, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            count_fn_value_uses(sym, list)
         }
         Expr::Record(fields) => fields.iter().map(|(_, e)| count_fn_value_uses(sym, e)).sum(),
         Expr::Update { fields, .. } => {
@@ -1629,7 +1651,7 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
                     } else {
                         rewrite_multiuse_clones(sym, remaining, arm.body)
                     };
-                    Arm { pat: arm.pat, body: new_body }
+                    Arm { pat: arm.pat, body: new_body, guard: arm.guard }
                 })
                 .collect();
             Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms))
@@ -1665,6 +1687,15 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
         Expr::Cons { head, tail } => Expr::Cons {
             head: Box::new(rewrite_multiuse_clones(sym, remaining, *head)),
             tail: Box::new(rewrite_multiuse_clones(sym, remaining, *tail)),
+        },
+        Expr::ListIndexClone { list, index } => Expr::ListIndexClone {
+            list: Box::new(rewrite_multiuse_clones(sym, remaining, *list)),
+            index,
+        },
+        Expr::ListLenCheck { list, len, exact } => Expr::ListLenCheck {
+            list: Box::new(rewrite_multiuse_clones(sym, remaining, *list)),
+            len,
+            exact,
         },
         Expr::Record(fields) => Expr::Record(
             fields
@@ -1737,6 +1768,62 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
 
 /// Outcome of the tail-recursion analysis for one `Func`. Computed once; the
 /// rewrite consumes it. Distinct constructors keep "should we TCO?" a value —
+/// One binder slot in a nested list pattern — a named variable or a wildcard.
+#[derive(Clone, Copy)]
+enum NestedBinder {
+    Named(Symbol),
+    Wildcard,
+}
+
+/// The open-tail shape of a nested list pattern: a `[a, b]` literal (or a cons
+/// chain ending in `[]`) is `Closed` (exact-length match); an open cons chain
+/// carries a `Named` / `Wildcard` rest binder.
+#[derive(Clone, Copy)]
+enum NestedTail {
+    Closed,
+    Rest(NestedBinder),
+}
+
+/// The flattened shape of a SUPPORTABLE list / cons sub-pattern nested inside a
+/// constructor payload, for the Class 4 item C2 (#158) desugaring. `prefix`
+/// holds one binder per leading element; `tail` records whether the pattern is
+/// closed (exact length) or open (a rest binder).
+struct FlatNestedList {
+    prefix: Vec<NestedBinder>,
+    tail: NestedTail,
+}
+
+impl FlatNestedList {
+    /// Is this pattern CLOSED (a `[a, b]` literal / a cons chain ending in
+    /// `[]`)? A closed pattern lowers to an exact-length `.len() == N` guard; an
+    /// open one to `.len() >= N`.
+    const fn closed(&self) -> bool {
+        matches!(self.tail, NestedTail::Closed)
+    }
+
+    /// Does this nested list BIND at least one value (a named head element or a
+    /// named open-tail binder)? A fully-wildcard shape (`Just [_, _]`) binds
+    /// nothing, so it needs no element-`Clone` bound and skips the polymorphism
+    /// gate.
+    fn binds_a_value(&self) -> bool {
+        self.prefix
+            .iter()
+            .any(|b| matches!(b, NestedBinder::Named(_)))
+            || matches!(self.tail, NestedTail::Rest(NestedBinder::Named(_)))
+    }
+}
+
+/// Classify a single list-element / tail sub-pattern as a plain binder for the
+/// #158 C2 desugaring: a `PVar` / `PAnything`. Any refutable sub-pattern is
+/// `None` (the whole nested list is then not desugarable).
+const fn nested_simple_binder(p: &canon::Pattern) -> Option<NestedBinder> {
+    match &p.value {
+        canon::Pattern_::PVar(s) => Some(NestedBinder::Named(*s)),
+        canon::Pattern_::PAnything => Some(NestedBinder::Wildcard),
+        _ => None,
+    }
+}
+
 /// never a re-derived predicate.
 #[doc(hidden)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1850,6 +1937,9 @@ fn count_self_calls(
             count_self_calls(self_id, arity, head, false, tail, non_tail);
             count_self_calls(self_id, arity, t, false, tail, non_tail);
         }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            count_self_calls(self_id, arity, list, false, tail, non_tail);
+        }
         Expr::Tuple(xs) | Expr::List { items: xs, .. } => {
             for x in xs {
                 count_self_calls(self_id, arity, x, false, tail, non_tail);
@@ -1944,6 +2034,7 @@ fn rewrite_in_tail(self_id: FuncId, arity: usize, expr: Expr) -> Expr {
                 .map(|arm| Arm {
                     pat: arm.pat.clone(),
                     body: rewrite_in_tail(self_id, arity, arm.body.clone()),
+                    guard: arm.guard.clone(),
                 })
                 .collect();
             Match::new_flat(scrutinee, arms).map_or(Expr::Match(m), Expr::Match)
@@ -2014,6 +2105,9 @@ fn expr_uses_db_kernel(expr: &Expr) -> bool {
         // pre-TCO body would, so kernel-presence detection is unchanged in meaning.
         Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_db_kernel(body),
         Expr::Cons { head, tail } => expr_uses_db_kernel(head) || expr_uses_db_kernel(tail),
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            expr_uses_db_kernel(list)
+        }
         Expr::Tuple(elems) => elems.iter().any(expr_uses_db_kernel),
         Expr::List { items, .. } => items.iter().any(expr_uses_db_kernel),
         Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_db_kernel(v)),
@@ -2089,6 +2183,9 @@ fn expr_uses_tea_kernel(expr: &Expr) -> bool {
         Expr::BinOp { lhs, rhs, .. } => expr_uses_tea_kernel(lhs) || expr_uses_tea_kernel(rhs),
         Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_tea_kernel),
         Expr::Cons { head, tail } => expr_uses_tea_kernel(head) || expr_uses_tea_kernel(tail),
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            expr_uses_tea_kernel(list)
+        }
         Expr::Apply { func, args } => {
             expr_uses_tea_kernel(func) || args.iter().any(expr_uses_tea_kernel)
         }
@@ -2162,6 +2259,9 @@ fn expr_uses_server_kernel(expr: &Expr) -> bool {
             args.iter().any(expr_uses_server_kernel)
         }
         Expr::Cons { head, tail } => expr_uses_server_kernel(head) || expr_uses_server_kernel(tail),
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            expr_uses_server_kernel(list)
+        }
         Expr::Apply { func, args } => {
             expr_uses_server_kernel(func) || args.iter().any(expr_uses_server_kernel)
         }
@@ -2222,6 +2322,9 @@ fn expr_uses_ui_kernel(expr: &Expr) -> bool {
         Expr::BinOp { lhs, rhs, .. } => expr_uses_ui_kernel(lhs) || expr_uses_ui_kernel(rhs),
         Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_ui_kernel),
         Expr::Cons { head, tail } => expr_uses_ui_kernel(head) || expr_uses_ui_kernel(tail),
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            expr_uses_ui_kernel(list)
+        }
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             expr_uses_ui_kernel(effect) || expr_uses_ui_kernel(rest)
         }
@@ -2277,6 +2380,9 @@ fn expr_uses_css_kernel(expr: &Expr) -> bool {
             args.iter().any(expr_uses_css_kernel)
         }
         Expr::Cons { head, tail } => expr_uses_css_kernel(head) || expr_uses_css_kernel(tail),
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            expr_uses_css_kernel(list)
+        }
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             expr_uses_css_kernel(effect) || expr_uses_css_kernel(rest)
         }
@@ -2335,6 +2441,9 @@ fn expr_uses_auth_kernel(expr: &Expr) -> bool {
             args.iter().any(expr_uses_auth_kernel)
         }
         Expr::Cons { head, tail } => expr_uses_auth_kernel(head) || expr_uses_auth_kernel(tail),
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            expr_uses_auth_kernel(list)
+        }
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             expr_uses_auth_kernel(effect) || expr_uses_auth_kernel(rest)
         }
@@ -2386,6 +2495,9 @@ fn expr_uses_live_kernel(expr: &Expr) -> bool {
             args.iter().any(expr_uses_live_kernel)
         }
         Expr::Cons { head, tail } => expr_uses_live_kernel(head) || expr_uses_live_kernel(tail),
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            expr_uses_live_kernel(list)
+        }
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             expr_uses_live_kernel(effect) || expr_uses_live_kernel(rest)
         }
@@ -2433,6 +2545,9 @@ fn expr_uses_tui_kernel(expr: &Expr) -> bool {
         Expr::BinOp { lhs, rhs, .. } => expr_uses_tui_kernel(lhs) || expr_uses_tui_kernel(rhs),
         Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_tui_kernel),
         Expr::Cons { head, tail } => expr_uses_tui_kernel(head) || expr_uses_tui_kernel(tail),
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            expr_uses_tui_kernel(list)
+        }
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             expr_uses_tui_kernel(effect) || expr_uses_tui_kernel(rest)
         }
@@ -2490,6 +2605,9 @@ fn expr_uses_webview_kernel(expr: &Expr) -> bool {
         }
         Expr::Cons { head, tail } => {
             expr_uses_webview_kernel(head) || expr_uses_webview_kernel(tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            expr_uses_webview_kernel(list)
         }
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             expr_uses_webview_kernel(effect) || expr_uses_webview_kernel(rest)
@@ -2621,14 +2739,28 @@ fn rewrite_var_free_occurrences(
             let new_arms = arms
                 .into_iter()
                 .map(|arm| {
-                    let new_body = if pat_binds_symbol(&arm.pat, target) {
+                    let binds = pat_binds_symbol(&arm.pat, target);
+                    let new_body = if binds {
                         arm.body
                     } else {
                         rewrite_var_free_occurrences(target, arm.body, on_hit)
                     };
+                    // A C2 arm guard is evaluated in the same scope as its body;
+                    // rewrite free occurrences of `target` there too when the arm
+                    // pattern does not shadow it (guards over a fresh length-check
+                    // var normally reference no outer capture, but staying uniform
+                    // keeps this rewrite total for any future guard shape).
+                    let new_guard = arm.guard.map(|g| {
+                        if binds {
+                            g
+                        } else {
+                            rewrite_var_free_occurrences(target, g, on_hit)
+                        }
+                    });
                     Arm {
                         pat: arm.pat,
                         body: new_body,
+                        guard: new_guard,
                     }
                 })
                 .collect();
@@ -2651,6 +2783,15 @@ fn rewrite_var_free_occurrences(
         Expr::Cons { head, tail } => Expr::Cons {
             head: Box::new(rewrite_var_free_occurrences(target, *head, on_hit)),
             tail: Box::new(rewrite_var_free_occurrences(target, *tail, on_hit)),
+        },
+        Expr::ListIndexClone { list, index } => Expr::ListIndexClone {
+            list: Box::new(rewrite_var_free_occurrences(target, *list, on_hit)),
+            index,
+        },
+        Expr::ListLenCheck { list, len, exact } => Expr::ListLenCheck {
+            list: Box::new(rewrite_var_free_occurrences(target, *list, on_hit)),
+            len,
+            exact,
         },
         Expr::Record(fields) => Expr::Record(
             fields
@@ -2958,6 +3099,18 @@ pub struct Lowerer<'a> {
     /// Monotonic cursor into [`Self::destructure_thunk_binders`],
     /// mirroring [`Self::param_cursor`]'s shape exactly.
     destructure_thunk_cursor: Cell<usize>,
+    /// Pre-minted, collision-free `Vec` binder names for the Class 4 item C2
+    /// (#158) nested-cons desugaring — a `PList` / `PCons` sub-pattern nested in
+    /// a `PCtor` arm payload (`Just (h :: t)`) lowers to a fresh `Vec` binder in
+    /// that ctor-arg slot plus an arm guard, with the named head / tail bindings
+    /// recovered in the body prelude. Sized by [`count_nested_cons_payload_sites`]
+    /// (an upper bound over every `case`-arm head) and handed out through
+    /// [`Self::nested_cons_cursor`] as a GLOBALLY-unique supply, mirroring
+    /// [`Self::param_binders`].
+    nested_cons_binders: Vec<Symbol>,
+    /// Monotonic cursor into [`Self::nested_cons_binders`], mirroring
+    /// [`Self::param_cursor`]'s shape exactly.
+    nested_cons_cursor: Cell<usize>,
     /// Home module path of the def currently being lowered.  Set at the start of
     /// each [`Self::lower_def`] call; read by [`Self::region_ty`] to key the
     /// region map as `(home, span)` — matching the discriminant the constraint
@@ -3275,6 +3428,88 @@ pub fn count_destructure_thunk_sites(m: &canon::Module) -> usize {
         .sum()
 }
 
+/// Count `case`-arm sites that need a fresh payload binder for the Class 4
+/// item C2 (#158) nested-cons desugaring: a `PList` / `PCons` sub-pattern that
+/// is a DIRECT argument of a `PCtor` arm head (`Just (h :: t)`, `Ok [a, b]`).
+/// Each such argument lowers to one fresh `Vec` binder plus an arm guard.
+///
+/// The count is deliberately an UPPER BOUND — it walks every `case` arm HEAD in
+/// the module and counts every nested `PList` / `PCons` argument regardless of
+/// whether that arm ultimately takes the C2 path (a same-position wildcard arm,
+/// a fully-generic element type, etc. may bail out before minting a binder). An
+/// over-count is harmless: unused pool entries are simply never handed out, the
+/// same policy [`count_destructure_thunk_sites`] documents.
+pub fn count_nested_cons_payload_sites(m: &canon::Module) -> usize {
+    fn direct_list_args(pat: &canon::Pattern_) -> usize {
+        match pat {
+            canon::Pattern_::PCtor { args, .. } => args
+                .iter()
+                .map(|a| {
+                    usize::from(matches!(
+                        a.value,
+                        canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _)
+                    )) + direct_list_args(&a.value)
+                })
+                .sum(),
+            canon::Pattern_::PTuple(elems) => {
+                elems.iter().map(|e| direct_list_args(&e.value)).sum()
+            }
+            canon::Pattern_::PAlias(inner, _) => direct_list_args(&inner.value),
+            _ => 0,
+        }
+    }
+    fn walk_expr(e: &canon::Expr) -> usize {
+        match &e.value {
+            canon::Expr_::Let(bindings, body) => {
+                bindings.iter().map(|b| walk_expr(&b.body)).sum::<usize>() + walk_expr(body)
+            }
+            canon::Expr_::Case(scrut, branches) => {
+                walk_expr(scrut)
+                    + branches
+                        .iter()
+                        .map(|b| direct_list_args(&b.pat.value) + walk_expr(&b.body))
+                        .sum::<usize>()
+            }
+            canon::Expr_::Lambda(_, body) => walk_expr(body),
+            canon::Expr_::Call(callee, args) => {
+                walk_expr(callee) + args.iter().map(walk_expr).sum::<usize>()
+            }
+            canon::Expr_::Binop { lhs, rhs, .. } => walk_expr(lhs) + walk_expr(rhs),
+            canon::Expr_::If(branches, else_expr) => {
+                branches
+                    .iter()
+                    .map(|(c, b)| walk_expr(c) + walk_expr(b))
+                    .sum::<usize>()
+                    + walk_expr(else_expr)
+            }
+            canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
+                elems.iter().map(walk_expr).sum()
+            }
+            canon::Expr_::Cons(head, tail) => walk_expr(head) + walk_expr(tail),
+            canon::Expr_::Record(fields) => fields.iter().map(|(_, v)| walk_expr(v)).sum(),
+            canon::Expr_::Access(record, _) => walk_expr(record),
+            canon::Expr_::Update(base, fields) => {
+                walk_expr(base) + fields.iter().map(|(_, v)| walk_expr(v)).sum::<usize>()
+            }
+            canon::Expr_::VarLocal(_)
+            | canon::Expr_::VarTopLevel { .. }
+            | canon::Expr_::VarKernel { .. }
+            | canon::Expr_::VarCtor { .. }
+            | canon::Expr_::Int(_)
+            | canon::Expr_::Float(_)
+            | canon::Expr_::Str(_)
+            | canon::Expr_::Char(_)
+            | canon::Expr_::Unit => 0,
+        }
+    }
+    m.defs
+        .iter()
+        .map(|d| match d {
+            canon::Def::Typed { body, .. } | canon::Def::Untyped { body, .. } => walk_expr(body),
+        })
+        .sum()
+}
+
 /// Every pre-minted, collision-free synthetic-symbol pool [`Lowerer::new`]
 /// needs — bundled into one argument so the constructor stays under
 /// clippy's arg-count ceiling. Each field is documented at its matching
@@ -3286,6 +3521,7 @@ pub struct SymbolPools {
     pub param_binders: Vec<Symbol>,
     pub any_param_binders: Vec<Symbol>,
     pub destructure_thunk_binders: Vec<Symbol>,
+    pub nested_cons_binders: Vec<Symbol>,
 }
 
 /// `(params, prologue, ret, any_syms_minted)` — [`Lowerer::split_typed_sig`]'s
@@ -3312,6 +3548,7 @@ impl<'a> Lowerer<'a> {
             param_binders,
             any_param_binders,
             destructure_thunk_binders,
+            nested_cons_binders,
         } = pools;
         let mut func_ids = BTreeMap::new();
         for (idx, def) in m.defs.iter().enumerate() {
@@ -3475,6 +3712,8 @@ impl<'a> Lowerer<'a> {
             any_param_cursor: Cell::new(0),
             destructure_thunk_binders,
             destructure_thunk_cursor: Cell::new(0),
+            nested_cons_binders,
+            nested_cons_cursor: Cell::new(0),
             current_home: std::cell::RefCell::new(Vec::new()),
             current_poly_tvars: std::cell::RefCell::new(BTreeMap::new()),
             fn_is_async: Cell::new(false),
@@ -3530,6 +3769,23 @@ impl<'a> Lowerer<'a> {
             )
         })?;
         self.destructure_thunk_cursor.set(i + 1);
+        Ok(sym)
+    }
+
+    /// Hand out the next globally-unique Class 4 item C2 (#158) nested-cons
+    /// payload binder from [`Self::nested_cons_binders`]. Mirrors
+    /// [`Self::fresh_param_binder`] exactly; sized by
+    /// [`count_nested_cons_payload_sites`] (an upper bound), so an overrun is an
+    /// internal invariant violation, never an index panic.
+    fn fresh_nested_cons_binder(&self) -> DResult<Symbol> {
+        let i = self.nested_cons_cursor.get();
+        let sym = *self.nested_cons_binders.get(i).ok_or_else(|| {
+            bug(
+                "sky_lower::fresh_nested_cons_binder",
+                "nested-cons-payload binder pool exhausted",
+            )
+        })?;
+        self.nested_cons_cursor.set(i + 1);
         Ok(sym)
     }
 
@@ -4723,7 +4979,7 @@ impl<'a> Lowerer<'a> {
                 Box::new(self.lower_param_binder_pat(inner, param_span)?),
                 name.value,
             )),
-            _ => Self::lower_destructure_pat(pat),
+            _ => self.lower_destructure_pat(pat),
         }
     }
 
@@ -10185,7 +10441,7 @@ impl<'a> Lowerer<'a> {
     /// those (`Just (a, b)`), lowered element-wise. A nested constructor /
     /// literal / record / cons sub-pattern is the nested-payload gap (SKY-L0112),
     /// surfaced fail-closed rather than mis-lowered.
-    fn lower_payload_pat(p: &canon::Pattern) -> DResult<Pat> {
+    fn lower_payload_pat(&self, p: &canon::Pattern) -> DResult<Pat> {
         match &p.value {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
             canon::Pattern_::PAnything => Ok(Pat::Wildcard),
@@ -10196,13 +10452,13 @@ impl<'a> Lowerer<'a> {
             canon::Pattern_::PStr(s) => Ok(Pat::Str(s.clone())),
             // An alias `inner as name` lowers to the IR binding-with-subpattern.
             canon::Pattern_::PAlias(inner, name) => Ok(Pat::Alias(
-                Box::new(Self::lower_payload_pat(inner)?),
+                Box::new(self.lower_payload_pat(inner)?),
                 name.value,
             )),
             canon::Pattern_::PTuple(elems) => {
                 let subs = elems
                     .iter()
-                    .map(Self::lower_payload_pat)
+                    .map(|e| self.lower_payload_pat(e))
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Pat::Tuple(subs))
             }
@@ -10222,7 +10478,7 @@ impl<'a> Lowerer<'a> {
             } => {
                 let subs = args
                     .iter()
-                    .map(Self::lower_payload_pat)
+                    .map(|a| self.lower_payload_pat(a))
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Pat::Ctor {
                     home: ModPath(home.clone()),
@@ -10231,12 +10487,29 @@ impl<'a> Lowerer<'a> {
                     args: subs,
                 })
             }
-            // A record sub-pattern nested in a constructor payload needs the
-            // payload field's record type threaded here to recover the complete
-            // field set; not yet plumbed. [SKY-L0112]
-            canon::Pattern_::PRecord(_) => Err(unsupported(p.span, Feature::NestedPayloadPatterns)),
-            // List / cons sub-patterns carry no Rust `match`-over-`Vec` lowering
-            // yet — fail-closed (SKY-L0116) rather than mis-lowered.
+            // A record sub-pattern nested in a constructor payload (`Ok {name}`).
+            // The payload field's complete record type is recovered from the
+            // per-sub-pattern region the constraint generator now records (Class 4
+            // item C / #158), then `lower_record_pat` builds the complete
+            // `Pat::Record` the same way a top-level `case` / `let` binder does.
+            // `Pat::Record` nested inside `Pat::Ctor.args` is an already-permitted
+            // IR shape and lowers to valid Rust struct-pattern nesting.
+            canon::Pattern_::PRecord(fields) => {
+                let ty = self.region_ty(p.span).ok_or_else(|| {
+                    bug(
+                        "sky_lower::lower_payload_pat",
+                        "nested record sub-pattern has no solved region type",
+                    )
+                })?;
+                self.lower_record_pat(fields, ty, p.span)
+            }
+            // List / cons sub-patterns nested in a constructor payload cannot be
+            // slice-pattern-matched inline against a `Vec<T>` enum FIELD; the
+            // arm-level guard desugaring that handles them lives one level up in
+            // `lower_arm_pat` (which owns the whole arm + body). Reaching a
+            // PList / PCons HERE means the shape is nested via some OTHER path
+            // (two levels deep, `Ok (Just (h :: t))`, out of this item's scope) —
+            // fail-closed (SKY-L0116). Class 4 item C / #158.
             canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => {
                 Err(unsupported(p.span, Feature::NestedCtorDiscrimination))
             }
@@ -10250,14 +10523,14 @@ impl<'a> Lowerer<'a> {
     /// REFUTABLE element — a constructor (a literal once those land) — could
     /// fail to match and is the tuple-pattern gap (SKY-L0115), surfaced
     /// fail-closed rather than emitted as a refutable `let`.
-    fn lower_destructure_pat(p: &canon::Pattern) -> DResult<Pat> {
+    fn lower_destructure_pat(&self, p: &canon::Pattern) -> DResult<Pat> {
         match &p.value {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
             canon::Pattern_::PAnything => Ok(Pat::Wildcard),
             canon::Pattern_::PTuple(elems) => {
                 let subs = elems
                     .iter()
-                    .map(Self::lower_destructure_pat)
+                    .map(|e| self.lower_destructure_pat(e))
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Pat::Tuple(subs))
             }
@@ -10273,16 +10546,25 @@ impl<'a> Lowerer<'a> {
             // An alias `inner as name` is irrefutable exactly when `inner` is, so
             // it recurses: a refutable inner surfaces the same SKY-L0115 gap.
             canon::Pattern_::PAlias(inner, name) => Ok(Pat::Alias(
-                Box::new(Self::lower_destructure_pat(inner)?),
+                Box::new(self.lower_destructure_pat(inner)?),
                 name.value,
             )),
-            // A record pattern nested inside a tuple destructure needs the
-            // element's record type to recover the complete field set; only a
-            // top-level record binder is supported (via `lower_binder_pat`).
-            // [SKY-L0112]
-            canon::Pattern_::PRecord(_) => Err(unsupported(p.span, Feature::NestedPayloadPatterns)),
+            // A record pattern nested inside a tuple destructure (`(Ok {name}, y)`
+            // single-arm form, `({ x }, y) = e`). The element's complete record
+            // type is recovered from the per-sub-pattern region the constraint
+            // generator now records (Class 4 item C / #158) — same recovery a
+            // top-level record binder uses via `lower_binder_pat`.
+            canon::Pattern_::PRecord(fields) => {
+                let ty = self.region_ty(p.span).ok_or_else(|| {
+                    bug(
+                        "sky_lower::lower_destructure_pat",
+                        "nested record sub-pattern has no solved region type",
+                    )
+                })?;
+                self.lower_record_pat(fields, ty, p.span)
+            }
             // List / cons elements are refutable AND have no `Vec` match lowering
-            // yet — fail-closed (SKY-L0116).
+            // in an irrefutable destructure position — fail-closed (SKY-L0116).
             canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => {
                 Err(unsupported(p.span, Feature::NestedCtorDiscrimination))
             }
@@ -10318,7 +10600,7 @@ impl<'a> Lowerer<'a> {
                 Box::new(self.lower_binder_pat(inner, value)?),
                 name.value,
             )),
-            _ => Self::lower_destructure_pat(pat),
+            _ => self.lower_destructure_pat(pat),
         }
     }
 
@@ -10717,6 +10999,11 @@ impl<'a> Lowerer<'a> {
         Ok(acc)
     }
 
+    // The per-arm loop (T5 clone insertion + #158 C2 nested-cons desugaring)
+    // plus the destructure / tuple / enum-cover dispatch pushes this past the
+    // 100-line ceiling; splitting on an arbitrary boundary would obscure the
+    // single linear lowering flow. The allow is narrow: only this function.
+    #[allow(clippy::too_many_lines)]
     fn lower_case(&self, scrut: &canon::Expr, branches: &[canon::CaseBranch]) -> DResult<Expr> {
         let scrutinee = self.lower_expr(scrut)?;
 
@@ -10801,7 +11088,16 @@ impl<'a> Lowerer<'a> {
         let arms = branches
             .iter()
             .map(|br| {
-                let arm_pat = Self::lower_arm_pat(&br.pat)?;
+                // #158 C2: a ctor arm head nesting a supportable list / cons
+                // sub-pattern (`Just (h :: t)`) desugars to a fresh `Vec` binder
+                // in that arg slot PLUS an arm guard PLUS body-prelude bindings.
+                // `None` → the ordinary `lower_arm_pat` path (which keeps a
+                // still-unsupported nested list fail-closed SKY-L0116).
+                let (arm_pat, arm_guard, nested_bindings) =
+                    match self.desugar_ctor_nested_lists(&br.pat)? {
+                        Some((pat, guard, bindings)) => (pat, guard, bindings),
+                        None => (self.lower_arm_pat(&br.pat)?, None, Vec::new()),
+                    };
                 let mut arm_body = self.lower_expr(&br.body)?;
 
                 // T5 for arm-bound variables.  Each symbol the canon pattern
@@ -10854,13 +11150,46 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
-                Ok(Arm { pat: arm_pat, body: arm_body })
+                // #158 C2: prepend the nested-list head / tail bindings as a
+                // right-nested `Expr::Let` chain (built after T5 so the
+                // multi-use clones in the body are already inserted). Head
+                // element clones BORROW the fresh `Vec`; the tail `List.drop`
+                // MOVES it — the ordered chain keeps ownership sound. Empty for
+                // every non-C2 arm (byte-identical to the prior shape).
+                for (sym, value) in nested_bindings.into_iter().rev() {
+                    arm_body = Expr::Let {
+                        name: sym,
+                        value: Box::new(value),
+                        body: Box::new(arm_body),
+                    };
+                }
+
+                Ok(Arm {
+                    pat: arm_pat,
+                    body: arm_body,
+                    guard: arm_guard,
+                })
             })
             .collect::<DResult<Vec<_>>>()?;
 
         // #99 (SKY-L0128): reject dispatch-needing `as`-aliases in by-value
         // match positions before they reach the backend.
         Self::gate_by_value_dispatch_needing_aliases(&arms, branches)?;
+
+        // #158 C2: a guarded arm (the nested-cons desugaring) is REFUTABLE to
+        // rustc — its guard may fall through — so the arm set is only Rust-
+        // exhaustive when a trailing irrefutable catch-all follows. Every
+        // reachable Sky program of the repro shape (`Just (h::t) -> … ; _ -> …`)
+        // already has one (its own SKY-T0010 exhaustiveness check requires
+        // covering `Just []`). Without a trailing catch-all the emitted `match`
+        // would be a rustc non-exhaustive error, so keep that residual shape
+        // (e.g. `Just (h::t)` + `Just []` + `Nothing`, exhaustive at Sky level
+        // but guard-non-exhaustive at Rust level) fail-closed with its existing
+        // clean diagnostic rather than an accept-then-cargo-fail.
+        let has_guarded_arm = arms.iter().any(|a| a.guard.is_some());
+        if has_guarded_arm && !arms.last().is_some_and(|a| is_irrefutable(&a.pat)) {
+            return Err(unsupported(first.pat.span, Feature::NestedCtorDiscrimination));
+        }
 
         // A list `case` that BINDS a value (a head element or a rest list) needs
         // the backend's owned-rebind (`x.clone()` / `rest.to_vec()`), which
@@ -11017,7 +11346,7 @@ impl<'a> Lowerer<'a> {
     /// [`Self::lower_payload_pat`]). A tuple / record head is the destructure
     /// path (handled by the single-arm branch of [`Self::lower_case`]); reaching
     /// it here is a multi-arm product `case`, the tuple-pattern gap (SKY-L0115).
-    fn lower_arm_pat(p: &canon::Pattern) -> DResult<Pat> {
+    fn lower_arm_pat(&self, p: &canon::Pattern) -> DResult<Pat> {
         match &p.value {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
             canon::Pattern_::PAnything => Ok(Pat::Wildcard),
@@ -11026,7 +11355,7 @@ impl<'a> Lowerer<'a> {
             canon::Pattern_::PChar(c) => Ok(Pat::Char(c.clone())),
             canon::Pattern_::PStr(s) => Ok(Pat::Str(s.clone())),
             canon::Pattern_::PAlias(inner, name) => Ok(Pat::Alias(
-                Box::new(Self::lower_arm_pat(inner)?),
+                Box::new(self.lower_arm_pat(inner)?),
                 name.value,
             )),
             canon::Pattern_::PCtor {
@@ -11038,7 +11367,7 @@ impl<'a> Lowerer<'a> {
             } => {
                 let sub = args
                     .iter()
-                    .map(Self::lower_payload_pat)
+                    .map(|a| self.lower_payload_pat(a))
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Pat::Ctor {
                     home: ModPath(home.clone()),
@@ -11057,7 +11386,7 @@ impl<'a> Lowerer<'a> {
             canon::Pattern_::PTuple(elems) => {
                 let subs = elems
                     .iter()
-                    .map(Self::lower_arm_pat)
+                    .map(|e| self.lower_arm_pat(e))
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Pat::Tuple(subs))
             }
@@ -11067,7 +11396,177 @@ impl<'a> Lowerer<'a> {
             canon::Pattern_::PRecord(_) => Err(unsupported(p.span, Feature::TuplePatternMatch)),
             // A list (`[a, b]`) or cons (`x :: xs`) case-arm head flattens to the
             // slice-shaped IR [`Pat::Slice`] (M4a).
-            canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => Self::lower_list_arm_pat(p),
+            canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => self.lower_list_arm_pat(p),
+        }
+    }
+
+    /// Class 4 item C2 (#158) — desugar a `case`-arm HEAD that nests a list /
+    /// cons sub-pattern DIRECTLY inside a constructor payload (`Just (h :: t)`,
+    /// `Ok [a, b]`) into a fresh `Vec` binder in that ctor-arg slot PLUS an
+    /// arm-level length guard PLUS a body-prelude that recovers the named head /
+    /// tail bindings by index / `List.drop`.
+    ///
+    /// Returns `Ok(None)` when `p` is not a `PCtor` head OR none of its direct
+    /// args is a supportable nested list (the caller then lowers the arm the
+    /// ordinary way — a nested list reached via `lower_payload_pat` stays
+    /// fail-closed SKY-L0116, e.g. two levels deep). Returns
+    /// `Ok(Some((ir_pat, guard, bindings)))` otherwise, where `bindings` are
+    /// prepended to the arm body as a right-nested `Expr::Let` chain in order
+    /// (head element clones, which BORROW the fresh `Vec`, precede the tail
+    /// `List.drop`, which MOVES it — so ownership is sound).
+    ///
+    /// SUPPORTED nested shapes are exactly the two verified repros: a `PCons`
+    /// chain / `PList` whose every element sub-pattern AND open tail is a plain
+    /// `PVar` / `PAnything` binder. Any refutable element (a literal / ctor /
+    /// deeper list) makes that argument NOT desugarable here — it falls back to
+    /// `lower_payload_pat` and stays fail-closed (residual scope, documented in
+    /// the spec).
+    #[allow(clippy::type_complexity)]
+    fn desugar_ctor_nested_lists(
+        &self,
+        p: &canon::Pattern,
+    ) -> DResult<Option<(Pat, Option<Expr>, Vec<(Symbol, Expr)>)>> {
+        let canon::Pattern_::PCtor {
+            home,
+            type_name,
+            name,
+            args,
+            ..
+        } = &p.value
+        else {
+            return Ok(None);
+        };
+        // Does any direct arg nest a SUPPORTABLE list / cons sub-pattern? If not,
+        // leave the arm to the ordinary `lower_arm_pat` path.
+        let has_desugarable = args
+            .iter()
+            .any(|a| Self::simple_nested_list(a).is_some());
+        if !has_desugarable {
+            return Ok(None);
+        }
+        let mut ir_args = Vec::with_capacity(args.len());
+        let mut guards: Vec<Expr> = Vec::new();
+        let mut bindings: Vec<(Symbol, Expr)> = Vec::new();
+        for a in args {
+            if let Some(flat) = Self::simple_nested_list(a) {
+                // Binding a head element (`h`) or the tail (`t`) needs the
+                // element type to be `Clone` — `ListIndexClone` clones an element
+                // and `List.drop` returns an owned `Vec`. Every CONCRETE element
+                // derives `Clone`; a still-generic element carries no such bound,
+                // so binding one would emit Rust that fails `cargo` — the same
+                // SKY-L0102 polymorphic-element gate the top-level list path
+                // applies (here the list lives at the ctor sub-pattern's span,
+                // whose `List T` region the constraint generator now records).
+                if flat.binds_a_value()
+                    && matches!(self.list_elem_ir(a.span)?, IrType::Generic(_))
+                {
+                    return Err(unsupported(a.span, Feature::Polymorphism));
+                }
+                // Replace this ctor arg with a fresh `Vec` binder and record the
+                // guard + per-element prelude bindings against it.
+                let fresh = self.fresh_nested_cons_binder()?;
+                ir_args.push(Pat::Var(fresh));
+                let prefix_len = flat.prefix.len();
+                guards.push(Expr::ListLenCheck {
+                    list: Box::new(Expr::Var(fresh)),
+                    len: prefix_len,
+                    exact: flat.closed(),
+                });
+                // Head-element binders BORROW `fresh` (index + clone), so they
+                // precede the tail binder that MOVES it.
+                for (idx, elem) in flat.prefix.iter().enumerate() {
+                    if let NestedBinder::Named(sym) = elem {
+                        bindings.push((
+                            *sym,
+                            Expr::ListIndexClone {
+                                list: Box::new(Expr::Var(fresh)),
+                                index: idx,
+                            },
+                        ));
+                    }
+                }
+                if let NestedTail::Rest(NestedBinder::Named(rest_sym)) = flat.tail {
+                    // `t = List.drop(prefix_len, fresh)` — the remaining list; a
+                    // wildcard tail binds nothing and is dropped.
+                    bindings.push((
+                        rest_sym,
+                        Expr::Call {
+                            callee: Callee::Kernel(KernelFn::ListDrop),
+                            args: vec![
+                                Expr::Int(i64::try_from(prefix_len).unwrap_or(i64::MAX)),
+                                Expr::Var(fresh),
+                            ],
+                        },
+                    ));
+                }
+            } else {
+                // A non-list arg (or a nested list we don't desugar) lowers the
+                // ordinary way; a still-unsupported nested list stays fail-closed.
+                ir_args.push(self.lower_payload_pat(a)?);
+            }
+        }
+        let ir_pat = Pat::Ctor {
+            home: ModPath(home.clone()),
+            ty: *type_name,
+            variant: *name,
+            args: ir_args,
+        };
+        // Combine per-arg guards with `&&`; there is at least one (has_desugarable).
+        let guard = guards.into_iter().reduce(|acc, g| Expr::BinOp {
+            op: BinOp::And,
+            lhs: Box::new(acc),
+            rhs: Box::new(g),
+        });
+        Ok(Some((ir_pat, guard, bindings)))
+    }
+
+    /// Classify a constructor-arg sub-pattern as a SUPPORTABLE nested list for
+    /// the #158 C2 desugaring: a `PList` / `PCons` whose every element AND open
+    /// tail is a plain `PVar` / `PAnything`. Returns the flattened prefix (each
+    /// entry `Some(sym)` for a named binder, `None` for a wildcard), whether it
+    /// is `closed` (a `PList` literal / a cons chain ending in `[]`), and the
+    /// open `rest` tail binder (`Some(Some(sym))` named, `Some(None)` wildcard,
+    /// `None` when closed). Any refutable element makes it NOT desugarable →
+    /// `None` (the caller keeps it fail-closed).
+    fn simple_nested_list(a: &canon::Pattern) -> Option<FlatNestedList> {
+        // Only a directly-nested list / cons is in this item's scope.
+        if !matches!(
+            a.value,
+            canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _)
+        ) {
+            return None;
+        }
+        let mut prefix: Vec<NestedBinder> = Vec::new();
+        let mut cur = a;
+        loop {
+            match &cur.value {
+                canon::Pattern_::PList(elems) => {
+                    // A closed list literal: every element must be a simple binder.
+                    for e in elems {
+                        prefix.push(nested_simple_binder(e)?);
+                    }
+                    return Some(FlatNestedList {
+                        prefix,
+                        tail: NestedTail::Closed,
+                    });
+                }
+                canon::Pattern_::PCons(head, tail) => {
+                    prefix.push(nested_simple_binder(head)?);
+                    match &tail.value {
+                        canon::Pattern_::PCons(_, _) | canon::Pattern_::PList(_) => cur = tail,
+                        // A variable / wildcard tail is the open rest binder; a
+                        // refutable / aliased tail is out of scope (not desugarable).
+                        _ => {
+                            let rest = nested_simple_binder(tail)?;
+                            return Some(FlatNestedList {
+                                prefix,
+                                tail: NestedTail::Rest(rest),
+                            });
+                        }
+                    }
+                }
+                _ => return None,
+            }
         }
     }
 
@@ -11079,7 +11578,7 @@ impl<'a> Lowerer<'a> {
     /// sub-pattern lowers through [`Self::lower_payload_pat`] (variable /
     /// wildcard / literal / alias / nested tuple / constructor); the open tail
     /// binds a variable / wildcard / alias via [`Self::lower_rest_pat`].
-    fn lower_list_arm_pat(p: &canon::Pattern) -> DResult<Pat> {
+    fn lower_list_arm_pat(&self, p: &canon::Pattern) -> DResult<Pat> {
         let mut prefix = Vec::new();
         let mut cur = p;
         loop {
@@ -11087,12 +11586,12 @@ impl<'a> Lowerer<'a> {
                 // A closed list literal terminates the prefix with no open tail.
                 canon::Pattern_::PList(elems) => {
                     for e in elems {
-                        prefix.push(Self::lower_payload_pat(e)?);
+                        prefix.push(self.lower_payload_pat(e)?);
                     }
                     return Ok(Pat::Slice { prefix, rest: None });
                 }
                 canon::Pattern_::PCons(head, tail) => {
-                    prefix.push(Self::lower_payload_pat(head)?);
+                    prefix.push(self.lower_payload_pat(head)?);
                     match &tail.value {
                         // A cons / list tail keeps extending the same flattened
                         // slice (`a :: b :: rest`, `x :: [a, b]`).
@@ -11471,6 +11970,7 @@ mod tests {
                 param_binders: vec![],
                 any_param_binders: vec![],
                 destructure_thunk_binders: vec![],
+                nested_cons_binders: vec![],
             },
             &builtins,
         );
@@ -11585,6 +12085,7 @@ mod tests {
                 param_binders: vec![],
                 any_param_binders: vec![],
                 destructure_thunk_binders: vec![],
+                nested_cons_binders: vec![],
             },
             &builtins,
         );

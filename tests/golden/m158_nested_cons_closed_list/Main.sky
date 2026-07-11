@@ -1,0 +1,21 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #158 Class-4 item C: a CLOSED list literal nested in a constructor payload
+-- (`Just [a, b]`). Lowers to an EXACT-length guard (`.len() == 2`) plus indexed
+-- head-element bindings. A `Just [1]` (wrong length) falls through to the
+-- wildcard, so this exercises both the exact-match and the fall-through path.
+f : Maybe (List Int) -> Int
+f m =
+    case m of
+        Just [ a, b ] ->
+            a + b
+
+        _ ->
+            0
+
+
+main =
+    println (String.fromInt (f (Just [ 10, 20 ])))
