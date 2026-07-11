@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #158 Class-4 item C, THE decisive soundness test: `Just []` is a valid value
+-- of `Maybe (List Int)` that must FALL THROUGH the `Just (h :: t)` arm to the
+-- wildcard fallback — printing `0`, never panicking. The guard-based lowering
+-- (an `if list.len() >= 1` arm guard) is what makes the fall-through sound
+-- (a "bind + panic-on-mismatch" prelude would be unsound here).
+f : Maybe (List Int) -> Int
+f m =
+    case m of
+        Just (h :: t) ->
+            h
+
+        _ ->
+            0
+
+
+main =
+    println (String.fromInt (f (Just [])))

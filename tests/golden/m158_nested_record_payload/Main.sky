@@ -1,0 +1,27 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #158 Class-4 item C, Repro 2: a record sub-pattern nested inside a
+-- constructor payload (`Ok { name }`). Used to fail-closed with SKY-L0112
+-- because `lower_payload_pat` had no `&self` to consult the solved region
+-- type of the nested record; now the constraint generator records the
+-- payload sub-pattern's region and `lower_record_pat` recovers the full
+-- field set the same way a top-level record binder does.
+type alias Person =
+    { name : String, age : Int }
+
+
+describe : Result String Person -> String
+describe r =
+    case r of
+        Ok { name } ->
+            name
+
+        Err _ ->
+            "none"
+
+
+main =
+    println (describe (Ok { name = "Ada", age = 30 }))

@@ -15,8 +15,8 @@ mod ir;
 mod pretty;
 
 pub use ir::{
-    ir_type_is_derivable, ir_type_is_serde, is_dispatch_free, Arm, BinOp, BoundSet, Callee,
-    EnumDef, Expr, Func, FuncId, HtmlEventShape, IrType, KernelFn, Match, ModPath, Module, Pat,
-    Program, TypeDef, UiCtor, UiPlain, Variant,
+    ir_type_is_derivable, ir_type_is_serde, is_dispatch_free, is_irrefutable, Arm, BinOp, BoundSet,
+    Callee, EnumDef, Expr, Func, FuncId, HtmlEventShape, IrType, KernelFn, Match, ModPath, Module,
+    Pat, Program, TypeDef, UiCtor, UiPlain, Variant,
 };
 pub use pretty::pretty;
