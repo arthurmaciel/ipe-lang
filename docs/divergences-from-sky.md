@@ -371,6 +371,154 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   SKY-N0002 not SKY-I0001; positive control `i138_kernel_implicit_positive` →
   must compile clean).
 
+### B22 — Function value in a `Maybe`/`Result`/user-union constructor payload (#90 Stage 1)
+- **Differs:** ipê lifted the blanket `SKY-L0114` rejection of a function
+  value in a constructor payload for ENUM-LIKE heads (`Maybe`/`Result`, or a
+  user union) — `Ok (\x -> x + 1)`, `Just f`, and a DECLARED function-typed
+  payload (`type Retryish e = RetryWhen (e -> Bool)`) all lower and run.
+  `Maybe.andMap`/`Result.andMap` are usable with a function payload (arity 1);
+  a CURRIED (2+-argument) payload through `andMap`, and reuse of a fn-carrying
+  binding in more than one non-call position, stay fail-closed. Upstream's
+  Haskell→Rust codegen instead renders a function-typed field as a bare `fn`
+  pointer (`TypeRenderer.hs`) — `Clone`/`Debug`/`PartialEq`-preserving, but
+  restricted to NON-CAPTURING closures (documented there explicitly). ipê's
+  `Box<dyn Fn>` payload is strictly more general (Sky closures capture
+  freely) at the cost of losing those three derives on the carrier — absorbed
+  by the #87 derive-demotion fixpoint and the type checker's
+  `ty_is_equatable`/serde/#91-Model use-site gates, so no unsound use reaches
+  `cargo`.
+- **The curried-callback gate is now a genuine TYPE-LEVEL obligation, not an
+  AST-shape match (2026-07-10, re-landed a FIFTH time — the 4th attempt was
+  reverted the same day for a fail-open `Ty::Var` arm; see the history note
+  below).** `sky_types::ty::TyBounds::hof_kernel_result()` (a bit alongside
+  `SetElem`/`DictKey`/`Show`) is tied to the callback-RESULT scheme variable
+  of EVERY `Maybe`/`Result` higher-order kernel — `map`, `map2..5`,
+  `mapError`, `andMap` (13 kernels; slot table
+  `constrain::Builder::hof_result_slot_for`, drift-pinned by the
+  `hof_result_slots_match_scheme_shapes` unit test) — at
+  `constrain_var_kernel`, exactly mirroring the pre-existing `Math.min`/
+  `Set`/`Dict`-key obligation mechanism INCLUDING its fail-closed treatment
+  of a bare variable the obligation escaped into (the 4th attempt's
+  `andMap`-only, fail-open-on-`Ty::Var` version let an ANNOTATED DOUBLE
+  FORWARDER reach `cargo build` as E0308, and let the whole
+  `map`/`map2..5`/`mapError` family through entirely — a user applicative
+  `map2` over `Result.map`+`Result.andMap` cargo-failed even at a safe
+  arity). Because the obligation is minted once per kernel REFERENCE (not
+  per call-node), it survives arbitrary Sky-level aliasing by construction —
+  direct call, piped, `let`-bound, bare-value top-level re-export,
+  higher-order argument, record-field extraction, and every forwarder
+  nesting depth — with no AST-shape enumeration anywhere.
+  `Maybe.andThen`/`Result.andThen`/`Result.traverse` need no obligation:
+  their callback results are `Con`-headed in the scheme itself, so a curried
+  callback is already a plain type mismatch (pinned by the
+  `l0114_and_then_fn_payload_accepted` fixture, which also proves a callback
+  legitimately returning `Ok fn` stays accepted and computes correctly). A lowering-time
+  backstop (`reject_curried_andmap_payload`, re-anchored inside
+  `lower_callee` itself — the single funnel EVERY kernel/top-level reference
+  resolves through, not just the `Call`-node arm the three reverted attempts
+  used) stays wired as defense-in-depth but was never observed firing in
+  this pass's fixture matrix (Tier 2 always catches the hazard first). See
+  `docs/architecture/ctor-payload-andmap-arity-gate-design.md` for the full
+  design and `crates/skyc/tests/golden_l0114_ctor_payload_function.rs` for
+  the aliasing-shape fixture matrix (direct call, `let`-bound, bare
+  top-level re-export, higher-order argument, record-field extraction, and a
+  cross-module ANNOTATED forwarder reused at two different arity-1-safe
+  types — confirmed ACCEPTED, closing the one precision-loss case the design
+  flagged as needing empirical confirmation before declaring done). Import
+  aliasing (`import Result as R`) is NOT constructible in ipê today —
+  `Result`/`Maybe` are fixed compiler-kernel qualifiers
+  (`crates/sky_canon/src/resolve.rs`), not backed by an importable
+  Sky-source module in this milestone, so there is no module to alias.
+- **Diagnostic code depends on HOW the obligation is violated, mirroring the
+  pre-existing `Math.min` gate's own documented split
+  (`crates/skyc/tests/golden_m4c_math_gate.rs`)**: a DIRECT `andMap` call
+  pins the obligated payload-result variable straight to a concrete `Fun`
+  structure at the unifier's own head-pin check (the "eager pin" case),
+  surfacing a plain `SKY-T0001` (`TypeMismatch`) — every aliasing shape in
+  the fixture matrix hits this path, confirmed empirically. An ANNOTATED
+  GENERIC FORWARDER around `andMap` instead lifts the obligation onto its
+  own annotation skolem, re-verified per external call site, surfacing the
+  friendlier `SKY-T0014` (`SuperTypeUnsatisfied`, "non-function callback
+  result (Maybe/Result higher-order kernel)"). Both are clean Sky
+  diagnostics; the pipeline never emits Rust that `cargo` rejects either
+  way. One documented conservatism (5th attempt): when the obligated result
+  escapes into ANOTHER binding's generic variable — an annotated forwarder
+  OF a forwarder, or a cross-module unannotated forwarder's promoted scheme
+  — the check fails CLOSED and rejects the inner reference even when every
+  eventual payload would have been arity-safe, exactly as `Math.min`'s
+  Comparable bound already does on the identical shape. Cross-binding
+  obligation propagation (for ALL bounds at once, with matching trait-bound
+  emission) is the filed follow-up that would recover those programs.
+- **Go-oracle relationship:** for a NON-CAPTURING payload closure and a plain
+  `Ok f |> Result.andMap x` / `Just f |> Maybe.andMap x` chain, the reference
+  Go compiler (`sky` v0.16.29) has an existing codegen bug (the same
+  `interface{}`-boxed-value class as B-below): a case-arm-extracted function
+  value sometimes fails `go build` outright (`invalid operation: cannot call
+  f (variable of interface type any): any is not a function` —
+  `m3a_function_payload_gate`, `l0114_ctor_decl_fn_payload`,
+  `l0114_fn_extracted_called_twice`) and sometimes builds but computes the
+  WRONG value (`l0114_result_and_map_fn_payload`, `l0114_maybe_and_map_fn_payload`
+  — Go silently returns the untransformed `ra` operand instead of applying the
+  boxed function, verified against an unambiguous named-function probe:
+  `Ok addTen |> Result.andMap (Ok 5)` prints `5` under Go, not the correct
+  `15`). ipê's `Box<dyn Fn>` kernel call computes the semantically correct
+  value in every case. A minority of shapes (a genuinely non-capturing payload
+  with no `andMap`/case-extraction involved) DO match — real parity there.
+- **Rationale:** Sky closures capture freely; a bare-`fn`-pointer restriction
+  (upstream's choice) would silently forbid that. `Box<dyn Fn>` is the sound
+  direction, and the machinery to keep it seal-safe (#87/#93/#91/type-checker
+  equatable gate) already ships. See
+  `docs/architecture/ctor-payload-function-design.md` for the full hazard
+  analysis and `docs/architecture/ctor-payload-andmap-arity-gate-design.md`
+  for the T3 two-tier design.
+- **Sanctioned:** yes (`sanctioned:` for the Go-succeeds-but-differs shapes;
+  Go-failure divergence for the shapes that don't `go build`). Goldens
+  `l0114_result_and_map_fn_payload`, `l0114_maybe_and_map_fn_payload`,
+  `l0114_ctor_decl_fn_payload`, `l0114_fn_extracted_called_twice`,
+  `m3a_function_payload_gate` (flipped from its reject branch to its
+  build-and-run branch). Negative controls (aliasing-shape matrix, must stay
+  a clean diagnostic — SKY-T0001 / SKY-T0014 / SKY-L0114, never a cargo-fail;
+  no oracle needed): `l0114_and_map_curried_stays_gated`,
+  `l0114_and_map_let_bound_alias_stays_gated`,
+  `l0114_and_map_bare_alias_stays_gated`,
+  `l0114_and_map_higher_order_arg_stays_gated`,
+  `l0114_and_map_record_field_stays_gated`,
+  `l0114_and_map_forwarder_curried_is_t0014`, `l0127_fn_carrier_reuse_gated`,
+  `l0127_lambda_param_reuse_gated`. Positive cross-module control (must stay
+  ACCEPTED): `l0114_and_map_cross_module_wrapper_accepted`.
+- **Revert-incident history (2026-07-10, THREE reverts before this landing).**
+  (1) `f80f05a` landed, reverted (`dbd876b`): the SKY-L0127 reuse gate was
+  wired at 4 call sites (Def params, `let`-bindings, match-arm bindings) but
+  not at `lower_lambda`'s own parameters — `\mf -> consume mf + consume mf`
+  with `mf : Maybe (Int -> Int)` reused the boxed closure twice and reached
+  `cargo build` as E0382; the SKY-L0114 curried-`andMap` gate also matched
+  only two syntactic call shapes and was bypassed by a `let`-bound partial
+  application (`let g = Result.andMap (Ok 1) in g (Ok add3)`), reaching
+  `cargo build` as E0277. (2) `39d9a57` re-landed with both bugs fixed —
+  the reuse gate now also runs over `lower_lambda`'s `ir_params`, and the
+  curried-payload check moved into `lower_call_uniform`'s
+  `VarKernel | VarTopLevel` arm, keyed on the resolved `Callee` — but was
+  reverted AGAIN (`73f33bc`) after independent review found a THIRD bypass:
+  a bare, point-free top-level re-export (`myAndMap = Result.andMap`, then
+  `myAndMap (Ok 1) (Ok add3)`) resolves to `Callee::Func`, not
+  `Callee::Kernel`, at the OUTER call site — the check, still living inside
+  `lower_call_uniform`'s Call-node arm, never saw the kernel reference at
+  all, because that reference is a bare VALUE inside `myAndMap`'s own body,
+  lowered through a DIFFERENT `lower_expr` arm that never calls
+  `lower_call_uniform`. (3) This landing (the one this entry documents)
+  replaces the AST-shape approach entirely with the two-tier design summarized
+  above: Tier 2 is a genuine type-level obligation minted once per kernel
+  reference (immune to AST shape by construction), and Tier 1 is re-anchored
+  inside `lower_callee` — the actual single funnel, proven by inspection to
+  be the only path any kernel/top-level reference can lower through. Every
+  exact failing shape from all three incidents is now a permanent fixture:
+  `l0127_lambda_param_reuse_gated` (Bug 1), `l0114_and_map_let_bound_alias_stays_gated`
+  (Bug 2), `l0114_and_map_bare_alias_stays_gated` (Bug 3) — plus new fixtures
+  for higher-order-argument and record-field-extraction aliasing (neither
+  incident found these bypassed, but the design doc named them as unexplored
+  shapes to verify rather than assume closed) and the cross-module annotated-
+  forwarder case the design flagged as needing empirical confirmation.
+
 ### B23 — Boundary Scheme Promotion: phase-1 under-acceptance for untyped bindings (class-1 inference fix #2)
 - **Context:** an unannotated top-level binding is monomorphic *within its
   home module* (unchanged); at its module's boundary it is now generalized
@@ -752,30 +900,40 @@ API-shape review):
 
 ## Counts
 
-- **Behavioral divergences:** 21 classes (B1–B23, B22 retired). B16 (#104 true
+- **Behavioral divergences:** 22 classes (B1–B23). B16 (#104 true
   last-use) and B17 (#99 alias bind) are pending fixture goldens. B3 RETIRED
   (task #55a) per inline note. B18–B20 are WS-server entries added with task
   #127. B20 CLOSED (#135) — Ping heartbeat ported. B21 is the #138
-  total-resolution gate (unknown-type → SKY-N0002 not ICE). **B22 RETIRED
-  2026-07-10** — the #90 ctor-payload-function lift was landed, reverted,
-  re-landed, then reverted AGAIN the same day after a second independent
-  review reproduced a THIRD SEAL violation in the curried-`andMap` gate (a
-  bare/re-exported alias to `Maybe.andMap`/`Result.andMap`, e.g. `myAndMap =
-  Result.andMap`, bypasses the AST-shape-keyed check entirely — the hazard is
-  a type-level property, not an AST shape, and needs a real design pass at
-  the kernel-emission boundary, not another pattern match; see `BACKLOG.md`'s
-  `#90` row for full 3-incident history and the reviewer's structural fix
-  guidance). B23 is class-1 inference fix #2 (Boundary Scheme Promotion,
+  total-resolution gate (unknown-type → SKY-N0002 not ICE). **B22
+  RE-LANDED 2026-07-10** — the #90 ctor-payload-function lift was landed,
+  reverted, re-landed, then reverted AGAIN the same day after a second
+  independent review reproduced a THIRD seal violation in the curried-
+  `andMap` gate (a bare/re-exported alias to `Maybe.andMap`/`Result.andMap`,
+  e.g. `myAndMap = Result.andMap`, bypassed the AST-shape-keyed check
+  entirely). The fourth attempt replaces the AST-shape approach with a
+  two-tier design: a genuine type-level `TyBounds` obligation minted once
+  per kernel reference (Tier 2, primary — survives arbitrary aliasing by
+  construction) plus a lowering-time backstop re-anchored inside
+  `lower_callee` itself, the actual single funnel every kernel/top-level
+  reference resolves through (Tier 1). See B22's own entry above and
+  `docs/architecture/ctor-payload-andmap-arity-gate-design.md` for the full
+  design and incident history. B23 is class-1 inference fix #2 (Boundary
+  Scheme Promotion,
   D1/D2/D3 under-acceptance), re-landed 2026-07-10 after a same-day revert;
   regression golden:
   `crates/skyc/tests/golden_class1_boundary_scheme_field_result.rs`.
-  Sanctioned/recorded goldens: 43 carry a marker (`Math` 4, `Bytes` 5,
-  `Encoding` 1, `Jwt` 5, `Db` 12, `Ui` 6, `Cmd`/`Sub` 3, `Uuid` 2, plus
-  Go-failure kind-1 shapes and Money/case/toFloat sanctioned entries — B23 is
-  pure under-acceptance, not a Go-sanctioned divergence, so it adds no
-  entries to this count). `Db` 12 adds B-DbDecMoney's `m5b_db_decode_money`
-  (backlog #34) to the pre-existing 11 `Db`-tagged goldens. B16/B17 goldens
-  pending.
+  Sanctioned/recorded goldens: 43 carry a marker (authoritative count:
+  `find tests/golden -name sanctioned.divergence | wc -l` — the
+  hand-maintained per-family sub-counts drifted twice in one day and are
+  retired; families span `Math`/`Bytes`/`Encoding`/`Jwt`/`Db` (incl.
+  B-DbDecMoney's `m5b_db_decode_money`, backlog #34, and the
+  `m5b_db_find_by_field` coverage golden)/`Ui`/`Cmd`/`Sub`/`Uuid`,
+  Go-failure kind-1 shapes, Money/case/toFloat sanctioned entries, and the
+  B22 ctor-payload-function set (`l0114_maybe_and_map_fn_payload`,
+  `l0114_result_and_map_fn_payload`,
+  `l0114_and_map_untyped_double_forwarder_arity1`). B23 is pure
+  under-acceptance, not a Go-sanctioned divergence, so it adds no entries
+  to this count. B16/B17 goldens pending.
 - **Architectural divergences:** 18 (A1–A18). A8 and A13 are reference-ahead on
   completeness. A15–A17 are seal-gate entries. A18 is the WS phantom-`msg`
   type-var entry added with task #127.
