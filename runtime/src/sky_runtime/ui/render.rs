@@ -928,6 +928,29 @@ mod tests {
     }
 
     #[test]
+    fn multiple_pseudo_rules_merge_into_one_marker() {
+        // #113 spec §1.4: two pseudo-class sugars on ONE element must merge
+        // into a single `data-sky-pc-rules` marker with `||`-joined entries.
+        // NB: `Border.focusColor` maps to `PseudoClass::FocusVisible` (wire
+        // tag "v"), not `Focus` ("f") — see `ui_border_focus_color_`.
+        let attrs: Vec<Attribute<TestMsg>> = vec![
+            super::super::helpers::ui_bg_hover_color_(Color::Rgba(255, 0, 0, 1.0)),
+            super::super::helpers::ui_border_focus_color_(Color::Rgba(0, 0, 255, 1.0)),
+        ];
+        let elem: Element<TestMsg> = Element::Text("hi".to_owned());
+        let html = ui_layout(attrs, elem);
+        let s = render_html(&html);
+        assert!(s.contains("h|background-color:rgba(255,0,0,1)"), "{s}");
+        assert!(s.contains("||"), "entries must be || joined: {s}");
+        assert!(s.contains("v|border-color:rgba(0,0,255,1)"), "{s}");
+        assert_eq!(
+            s.matches("data-sky-pc-rules").count(),
+            1,
+            "exactly ONE merged marker attr, not one per rule: {s}"
+        );
+    }
+
+    #[test]
     fn ui_on_pseudo_all_five_constants_produce_distinct_wire_tags() {
         // hover→h, focus→f, focusVisible→v, active→a, disabled→d — MUST match
         // `sky_runtime::live::style_inject::pseudo_selector_for_tag` and the
