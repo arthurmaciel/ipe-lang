@@ -491,7 +491,14 @@ pub enum TypeError {
     /// non-alias type-constructor application like `Task Error Int Bool` (3 args)
     /// or a bare `Task` (0 args). Converts a former `CompilerBug` ICE into a clean
     /// fail-closed diagnostic naming the found argument count. [SKY-T0016]
-    TaskArity { found: usize },
+    ///
+    /// `carrier` is the async-carrier constructor name — `"Task"` (expects 1
+    /// or 2 args), `"Cmd"` / `"Sub"` (expect exactly 1) — so the rendered
+    /// message names the actual type the user mis-applied, not always `Task`.
+    TaskArity {
+        carrier: &'static str,
+        found: usize,
+    },
 }
 
 /// A language feature that the Milestone-0 lowerer does not yet support. Each
