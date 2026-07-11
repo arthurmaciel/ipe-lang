@@ -1,0 +1,39 @@
+module Main exposing (main)
+
+-- #125: TWO decoders built as one tuple value, tuple-destructured, one of
+-- them reused. `Decoder` is `!Clone` and `decodeString` consumes it by
+-- value, so the pre-fix plain `let (nameDecoder, ageDecoder) = …;` emission
+-- double-moves `nameDecoder` at the second `decodeString` call (rustc
+-- E0382, "use of moved value") even though skyc exits 0. The fix thunks
+-- the WHOLE destructure (spec §2.2) so each read re-derives its component
+-- from a fresh thunk call.
+-- Expected: Alice|Bob
+
+import Sky.Core.Json.Decode as JsonDec
+import Sky.Core.Json.Decode.Pipeline as JsonDecP
+
+
+buildPair : () -> ( JsonDec.Decoder String, JsonDec.Decoder Int )
+buildPair _ =
+    ( JsonDecP.required "name" JsonDec.string (JsonDec.succeed (\name -> name))
+    , JsonDec.int
+    )
+
+
+main =
+    let
+        ( nameDecoder, ageDecoder ) =
+            buildPair ()
+
+        r1 =
+            JsonDec.decodeString nameDecoder "{\"name\":\"Alice\"}"
+
+        r2 =
+            JsonDec.decodeString nameDecoder "{\"name\":\"Bob\"}"
+    in
+    case ( r1, r2 ) of
+        ( Ok a, Ok b ) ->
+            println (a ++ "|" ++ b)
+
+        _ ->
+            println "err"
