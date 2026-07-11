@@ -61,12 +61,13 @@ module Std.Css exposing
 --     via `prop`, selector / media query via `safeSelector` (a failing selector
 --     DROPS the whole rule as `CssRuleDropped`).
 --   * `raw` and `keyframes` frame bodies are a TRUSTED-INPUT escape hatch
---     (dangerouslySetInnerHTML-class): they apply ONLY the `stripStyleClose`
---     breakout FLOOR (no `</style>` escapes the `<style>` sink) and do NOT
---     value-scan — `@import` / `expression(` / `<script>` survive as
---     inert-or-CSS-sink text.  Do NOT pass untrusted input to `raw`; it is for
---     trusted, author-controlled CSS only (see follow-up: optional `@import`
---     gating on `raw`).
+--     (dangerouslySetInnerHTML-class): they apply the `stripStyleClose`
+--     breakout FLOOR (no `</style>` escapes the `<style>` sink) AND, as of
+--     #105, drop the whole rule if the body smuggles an `@import`
+--     (stylesheet-injection / CSS-level SSRF) or a legacy `expression(`
+--     script sink.  They still do NOT full value-scan (a `<script>` in a
+--     `<style>` body is inert CSS text); prefer the typed builders over
+--     `raw` for anything not author-controlled.
 --   * `stylesheet` folds in pure Sky and finishes through `stripStyleClose`
 --     (defence in depth); the `<style>` render sink strips again (belt & braces
 --     with `html_style_node_`).  For benign input the output is byte-identical
@@ -1518,11 +1519,43 @@ media query rules =
 
 -- `@keyframes name { frames }` — name parsed; each raw frame body is close-tag
 -- stripped (breakout floor).
+-- Defence-in-depth (#105): reject a raw/keyframes body that smuggles an
+-- `@import` (stylesheet-injection / CSS-level SSRF — fetches an
+-- attacker-controlled resource in the victim's browser) or a legacy
+-- `expression(` script sink. `raw`/`keyframes` are documented
+-- trusted-author escape hatches (only `stripStyleClose`'s breakout floor
+-- applies otherwise); this closes the specific follow-up flagged in this
+-- module's own header comment. Case-insensitive substring check —
+-- consistent with `SafeCssValue`'s policy in css_safety.rs.
+containsDangerousCssConstruct : String -> Bool
+containsDangerousCssConstruct s =
+    let
+        lower =
+            String.toLower s
+    in
+    String.contains "@import" lower || String.contains "expression(" lower
+
+
 keyframes : String -> List String -> CssRule
 keyframes name frames =
     case safeSelector name of
         Just n ->
-            CssKeyframes n (List.map stripStyleClose frames)
+            let
+                stripped =
+                    List.map stripStyleClose frames
+            in
+            -- Scan the CONCATENATION of all frames for the dangerous
+            -- constructs: a smuggled `@import`/`expression(` in ANY frame
+            -- appears in the joined string, so this catches it without a
+            -- per-frame higher-order `List.any` (which would force a
+            -- Clone-able predicate closure the backend can't yet emit for a
+            -- bare named function). Joining can only ever OVER-detect at a
+            -- boundary — fail-safe for a security drop.
+            if containsDangerousCssConstruct (String.join "" stripped) then
+                CssRuleDropped
+
+            else
+                CssKeyframes n stripped
 
         Nothing ->
             CssRuleDropped
@@ -1537,10 +1570,19 @@ frame pctStr props =
         ++ " }"
 
 
--- A raw, pre-rendered fragment — close-tag stripped at construction.
+-- A raw, pre-rendered fragment — close-tag stripped at construction, then
+-- dropped entirely if it smuggles an `@import`/`expression(` (#105).
 raw : String -> CssRule
 raw s =
-    CssRaw (stripStyleClose s)
+    let
+        stripped =
+            stripStyleClose s
+    in
+    if containsDangerousCssConstruct stripped then
+        CssRuleDropped
+
+    else
+        CssRaw stripped
 
 
 renderProp : CssProp -> String

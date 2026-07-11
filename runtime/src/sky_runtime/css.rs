@@ -99,6 +99,11 @@ mod tests {
             safe_value("red</style><script>alert(1)</script>".into()),
             SkyMaybe::Nothing
         ));
+        // #105 part 2: CSS-hex-escaped bypass (`\65 ` → 'e') dropped too.
+        assert!(matches!(
+            safe_value("\\65 xpression(alert(1))".into()),
+            SkyMaybe::Nothing
+        ));
         // benign values pass through unchanged.
         assert_eq!(opt(&safe_value("#ff6600".into())), Some("#ff6600"));
         assert_eq!(opt(&safe_value("8px".into())), Some("8px"));

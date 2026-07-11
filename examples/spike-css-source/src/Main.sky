@@ -40,6 +40,35 @@ attackSelector =
         [ rule "body{}</style><script>alert(1)</script>" [ color (hex "000") ] ]
 
 
+-- #105: a `raw` body smuggling an `@import` (CSS-level SSRF) is DROPPED
+-- entirely (`CssRuleDropped`), not just `</style`-stripped.
+attackRawImport : String
+attackRawImport =
+    stylesheet
+        [ raw "@import url(https://evil.example/x.css);" ]
+
+
+-- #105: a `keyframes` frame smuggling `@import` drops the whole rule
+-- (`List.any` — ANY frame poisons it).
+attackKeyframesImport : String
+attackKeyframesImport =
+    stylesheet
+        [ keyframes "spin"
+            [ "0% { transform: rotate(0deg) }"
+            , "100% { transform: rotate(360deg) } @import url(x)"
+            ]
+        ]
+
+
+-- #105 non-regression: a benign `keyframes` still renders.
+benignKeyframes : String
+benignKeyframes =
+    stylesheet
+        [ keyframes "fade"
+            [ "0% { opacity: 0 }", "100% { opacity: 1 }" ]
+        ]
+
+
 main =
     println
         (benign
@@ -49,4 +78,10 @@ main =
             ++ attackScheme
             ++ "\n---\n"
             ++ attackSelector
+            ++ "\n---\n"
+            ++ attackRawImport
+            ++ "\n---\n"
+            ++ attackKeyframesImport
+            ++ "\n---\n"
+            ++ benignKeyframes
         )
