@@ -317,7 +317,7 @@ pub fn title(c: Code) -> &'static str {
         SKY_T0013 => "constructor pattern binds the wrong number of fields",
         SKY_T0014 => "this type does not support the required operations",
         SKY_T0015 => "parameter pattern must be irrefutable",
-        SKY_T0016 => "`Task` applied to the wrong number of type arguments",
+        SKY_T0016 => "async carrier (`Task`/`Cmd`/`Sub`) applied to the wrong number of type arguments",
         SKY_L0100 => "pattern kind not supported yet",
         SKY_L0101 => "operator not supported yet",
         SKY_L0102 => "polymorphic value's type could not be determined",

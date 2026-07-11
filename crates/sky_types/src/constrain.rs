@@ -2233,9 +2233,33 @@ impl<'a> Builder<'a> {
                         // found argument count instead of raising a `CompilerBug`.
                         n => Err(Diagnostic::Type {
                             span,
-                            msg: TypeError::TaskArity { found: n },
+                            msg: TypeError::TaskArity {
+                                carrier: "Task",
+                                found: n,
+                            },
                         }),
                     }
+                } else if (name == self.builtins.cmd || name == self.builtins.sub)
+                    && args.len() != 1
+                {
+                    // `Cmd` / `Sub` take exactly one message type. A mis-arity
+                    // application (bare `Cmd`, `Cmd Int Bool`) would otherwise
+                    // reach the lowerer's `ir_type_from_canon` catch-all and
+                    // ICE (SKY-I0001) — the Cmd/Sub sibling of #32's Task gate.
+                    // Fail closed here with the same clean SKY-T0016, symmetric
+                    // with the `Task` arm above. [found by the #32 review]
+                    let carrier = if name == self.builtins.cmd {
+                        "Cmd"
+                    } else {
+                        "Sub"
+                    };
+                    Err(Diagnostic::Type {
+                        span,
+                        msg: TypeError::TaskArity {
+                            carrier,
+                            found: args.len(),
+                        },
+                    })
                 } else if args.is_empty()
                     && self.interner.resolve(name) == Some("HttpRequest")
                 {

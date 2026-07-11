@@ -79,6 +79,31 @@ fn task_fail_string_literal_is_sky_t0001() {
     );
 }
 
+/// #32 review follow-up: a mis-arity `Cmd` ANNOTATION (`Cmd Int Bool` — Cmd
+/// takes exactly ONE message type) must be a clean SKY-T0016, not the
+/// SKY-I0001 ICE the Task-only gate left the sibling carriers with.
+/// `normalize_annotation_ty` now validates Cmd/Sub arity too.
+#[test]
+fn cmd_annotation_wrong_arity_is_sky_t0016_not_ice() {
+    assert_gate(
+        "m5a_gate_cmd_arity",
+        "m5a_gate_cmd_arity_emit",
+        sky_diagnostics::SKY_T0016,
+    );
+}
+
+/// #32 review follow-up: a mis-arity `Sub` in a CTOR PAYLOAD must be a clean
+/// SKY-T0016 at the ctor span, via `lower_enum`'s Gate 0a (generalized from
+/// Task to all three async carriers).
+#[test]
+fn sub_ctor_payload_wrong_arity_is_sky_t0016_not_ice() {
+    assert_gate(
+        "m5a_gate_sub_ctor_arity",
+        "m5a_gate_sub_ctor_arity_emit",
+        sky_diagnostics::SKY_T0016,
+    );
+}
+
 /// #32 (E1): a `Task` ANNOTATION with the wrong arity (`Task Error Int Bool`,
 /// three type arguments) must surface a clean SKY-T0016 diagnostic — NOT the
 /// former generic `CompilerBug` ICE ("please report"). Reachable from source
