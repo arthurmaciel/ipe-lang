@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use sky_diagnostics::{DResult, Diagnostic};
 
@@ -29,8 +29,20 @@ impl Symbol {
 
 #[derive(Default)]
 pub struct Interner {
-    map: HashMap<String, Symbol>,
-    strings: Vec<String>,
+    /// One shared `Arc<str>` per unique string, stored in BOTH `map` (as the
+    /// key) and `strings` (as the id-indexed entry) — the second store is a
+    /// refcount bump, not a second heap copy (efficiency-audit §5 medium:
+    /// every unique identifier used to be heap-allocated twice). `Arc` (not
+    /// `Rc`) keeps `Interner: Send + Sync`. Symbol assignment order, dedup,
+    /// and the `resolve` None-on-forged-symbol contract are unchanged.
+    map: HashMap<std::sync::Arc<str>, Symbol>,
+    strings: Vec<std::sync::Arc<str>>,
+    /// When set, [`Self::fresh_symbols`] avoids exactly the names in this set
+    /// instead of every already-interned string — see the incremental-build
+    /// determinism note on that method. Set per build via
+    /// [`Self::set_fresh_avoid`]; `None` preserves the historical
+    /// whole-table behaviour for callers that own a per-build interner.
+    fresh_avoid: Option<BTreeSet<String>>,
 }
 
 impl Interner {
@@ -56,21 +68,35 @@ impl Interner {
             detail: "symbol table exhausted (u32::MAX identifiers)".to_owned(),
         })?;
         let sym = Symbol(id);
-        self.strings.push(s.to_owned());
-        self.map.insert(s.to_owned(), sym);
+        let shared: std::sync::Arc<str> = std::sync::Arc::from(s);
+        self.strings.push(std::sync::Arc::clone(&shared));
+        self.map.insert(shared, sym);
         Ok(sym)
     }
 
     /// Mint `count` fresh symbols whose resolved strings are guaranteed to be
-    /// distinct from one another *and* from every string already interned.
+    /// distinct from one another *and* from every user identifier.
     ///
     /// Each name is `<prefix><n>` for the smallest run of `n` (from `0`) whose
-    /// candidate is not already present, so the result can never alias a user
-    /// identifier (all of which are interned before this is called) nor a
-    /// previously minted fresh symbol. The lowerer uses this for eta-expansion
-    /// parameter names, which must not capture any name free in the supplied
-    /// arguments. Deterministic for a given interner state: the same call on the
-    /// same interner always yields the same symbols.
+    /// candidate does not collide, so the result can never alias a user
+    /// identifier nor a previously minted fresh symbol of the same pool. The
+    /// lowerer uses this for eta-expansion parameter names, which must not
+    /// capture any name free in the supplied arguments.
+    ///
+    /// **Collision universe** — two modes:
+    ///
+    /// - [`Self::set_fresh_avoid`] set (the incremental driver path): a
+    ///   candidate collides IFF it is in the avoid set — the identifier words
+    ///   of the *current program*, a pure function of the build's source
+    ///   inputs. This keeps the minted names deterministic on a **warm**
+    ///   (reused) interner: names minted by a previous build's lowering are
+    ///   NOT collisions (re-minting `eta_0` returns the same append-only
+    ///   symbol), so a rebuild emits the same names a cold build would —
+    ///   proven by the Task-18 clean-vs-incremental parity gate.
+    /// - unset (per-build interners: unit tests, direct embedders): the
+    ///   historical whole-table behaviour — any interned string collides.
+    ///   Equivalent to the avoid-set mode on a cold interner, where every
+    ///   interned string came from this build.
     ///
     /// # Errors
     ///
@@ -83,7 +109,11 @@ impl Interner {
         let mut n: u32 = 0;
         while out.len() < count {
             let candidate = format!("{prefix}{n}");
-            if !self.map.contains_key(&candidate) {
+            let collides = match &self.fresh_avoid {
+                Some(avoid) => avoid.contains(&candidate),
+                None => self.map.contains_key(candidate.as_str()),
+            };
+            if !collides {
                 out.push(self.intern(&candidate)?);
             }
             n = n.checked_add(1).ok_or_else(|| Diagnostic::CompilerBug {
@@ -94,6 +124,20 @@ impl Interner {
         Ok(out)
     }
 
+    /// Set the fresh-name collision universe for the CURRENT build: the set
+    /// of identifier words appearing in the program's source text (the
+    /// driver computes it as a pure function of the build inputs — see
+    /// `sky_db::identifier_words`). Overwrites any previous build's set.
+    ///
+    /// Must over-approximate the program's user identifiers: extra entries
+    /// only skip more candidate names (sound); a MISSING user identifier
+    /// could let a minted name capture it (unsound) — which is why callers
+    /// derive the set from a total scan of the source text rather than a
+    /// per-AST-node walker that could silently under-approximate.
+    pub fn set_fresh_avoid(&mut self, avoid: BTreeSet<String>) {
+        self.fresh_avoid = Some(avoid);
+    }
+
     /// Resolve a [`Symbol`] to its interned string.
     ///
     /// Returns `None` for a symbol this interner never handed out (a forged or
@@ -102,7 +146,7 @@ impl Interner {
     /// invariant violation.
     #[must_use]
     pub fn resolve(&self, sym: Symbol) -> Option<&str> {
-        self.strings.get(sym.0 as usize).map(String::as_str)
+        self.strings.get(sym.0 as usize).map(AsRef::as_ref)
     }
 
     /// Whether `s` has already been interned, i.e. `intern(s)` would return an
@@ -176,6 +220,63 @@ mod tests {
     fn fresh_symbols_zero_count_is_empty() -> sky_diagnostics::DResult<()> {
         let mut i = Interner::new();
         assert!(i.fresh_symbols("eta_", 0)?.is_empty());
+        Ok(())
+    }
+
+    /// Avoid-set mode: re-minting a pool on a WARM interner (previous build's
+    /// pool names already interned) yields the SAME names — the previous
+    /// build's synthetic names are not collisions, only the program's
+    /// identifier words are. This is the Task-18 warm/cold byte-parity
+    /// property at the interner level.
+    #[test]
+    fn fresh_symbols_avoid_set_is_stable_across_rebuilds() -> sky_diagnostics::DResult<()> {
+        let mut i = Interner::new();
+        i.set_fresh_avoid(BTreeSet::new());
+        let run1 = i.fresh_symbols("eta_", 2)?;
+        let run2 = i.fresh_symbols("eta_", 2)?;
+        assert_eq!(run1, run2, "warm re-mint returns the same symbols");
+        let names: Vec<Option<&str>> = run2.iter().map(|&s| i.resolve(s)).collect();
+        assert_eq!(names, vec![Some("eta_0"), Some("eta_1")]);
+        Ok(())
+    }
+
+    /// Avoid-set mode still dodges the program's user identifiers.
+    #[test]
+    fn fresh_symbols_avoid_set_dodges_user_identifiers() -> sky_diagnostics::DResult<()> {
+        let mut i = Interner::new();
+        let user = i.intern("eta_0")?;
+        i.set_fresh_avoid(BTreeSet::from(["eta_0".to_owned()]));
+        let pool = i.fresh_symbols("eta_", 2)?;
+        let names: Vec<Option<&str>> = pool.iter().map(|&s| i.resolve(s)).collect();
+        assert_eq!(names, vec![Some("eta_1"), Some("eta_2")]);
+        assert!(
+            pool.iter().all(|&s| s != user),
+            "a fresh symbol never aliases a user name"
+        );
+        Ok(())
+    }
+
+    /// A later build's avoid set replaces the earlier one: a user identifier
+    /// REMOVED from the program frees its candidate again (cold-build
+    /// equivalence — the collision universe is per build, not sticky).
+    #[test]
+    fn fresh_symbols_avoid_set_is_per_build_not_sticky() -> sky_diagnostics::DResult<()> {
+        let mut i = Interner::new();
+        i.set_fresh_avoid(BTreeSet::from(["eta_0".to_owned()]));
+        let run1 = i.fresh_symbols("eta_", 1)?;
+        assert_eq!(
+            run1.first().and_then(|&s| i.resolve(s)),
+            Some("eta_1"),
+            "avoided while the program names eta_0"
+        );
+        // Next build: the program no longer names `eta_0`.
+        i.set_fresh_avoid(BTreeSet::new());
+        let run2 = i.fresh_symbols("eta_", 1)?;
+        assert_eq!(
+            run2.first().and_then(|&s| i.resolve(s)),
+            Some("eta_0"),
+            "freed once the program stops naming it (cold-build equivalence)"
+        );
         Ok(())
     }
 }

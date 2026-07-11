@@ -210,6 +210,81 @@ pub(crate) fn sink_safe_declaration_list(rules: &str) -> Option<&str> {
     if any { Some(rules) } else { None }
 }
 
+/// Sink-side re-validation of a `@keyframes` BODY — the `<kfBody>` slot of the
+/// `data-sky-anim-rules` marker (`name||tail||kfBody||respect`). A keyframes
+/// body legitimately contains `{` `}` `;` (`0% { opacity: 0; … } 100% { … }`),
+/// so the flat declaration-value policy cannot be reused — this validator
+/// parses the keyframe GRAMMAR instead:
+///
+/// ```text
+/// body      := (selector block)+          -- nothing outside blocks
+/// selector  := comma-separated tokens, each `from` | `to` | `<number>%`
+/// block     := `{` decl-list `}`          -- keyframe blocks cannot nest
+/// decl-list := `;`-separated declarations, each through the shared
+///              SafeCssValue policy (raw + CSS-escape-decoded scans)
+/// ```
+///
+/// Returns the ORIGINAL slice when every selector and every declaration is
+/// safe (byte-identical passthrough — no reformat); `None` (fail-closed) on
+/// ANY breakout: non-keyframe selector text, trailing content after the last
+/// block, a missing `{`/`}`, `@import`/script-sink/`</`/`/*` in a declaration
+/// (a nested `{` inside a block lands in a declaration and is rejected by the
+/// same policy), or an empty body.
+///
+/// `cfg(feature = "live")`-gated for the same reason as
+/// [`sink_safe_declaration_list`]: its only caller is the `live` style sink's
+/// `build_anim` (`live/style_inject.rs`).
+#[cfg(feature = "live")]
+pub(crate) fn sink_safe_keyframes_body(body: &str) -> Option<&str> {
+    let mut rest = body.trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    while !rest.is_empty() {
+        let open = rest.find('{')?;
+        if !is_safe_keyframe_selector(&rest[..open]) {
+            return None;
+        }
+        let after_open = &rest[open + 1..];
+        // First `}` closes the block — a nested `{` before it stays inside
+        // `decls` and is rejected by the SafeCssValue scan below.
+        let close = after_open.find('}')?;
+        for d in after_open[..close].split(';') {
+            let d = d.trim();
+            if d.is_empty() {
+                continue;
+            }
+            SafeCssValue::parse(d)?;
+        }
+        rest = after_open[close + 1..].trim_start();
+    }
+    Some(body)
+}
+
+/// A keyframe selector list: comma-separated tokens, each `from` / `to`
+/// (ASCII-case-insensitive) or a percentage with an optional single decimal
+/// point (`0%`, `12.5%`). Anything else — including every breakout char — is
+/// rejected, so no escape/obfuscation can hide in the selector slot.
+#[cfg(feature = "live")]
+fn is_safe_keyframe_selector(sel: &str) -> bool {
+    let s = sel.trim();
+    !s.is_empty()
+        && s.split(',').all(|tok| {
+            let t = tok.trim();
+            if t.eq_ignore_ascii_case("from") || t.eq_ignore_ascii_case("to") {
+                return true;
+            }
+            match t.strip_suffix('%') {
+                Some(num) => {
+                    !num.is_empty()
+                        && num.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+                        && num.bytes().filter(|&b| b == b'.').count() <= 1
+                }
+                None => false,
+            }
+        })
+}
+
 /// A validated CSS selector / media-query string (NEW — strict, drop-on-doubt).
 ///
 /// Allowed charset: ASCII letters, digits, and the CSS structural set
@@ -452,6 +527,60 @@ mod tests {
             assert!(
                 SafeCssMediaQuery::parse(q).is_none(),
                 "breakout media query must be dropped: {q:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "live")]
+    #[test]
+    fn keyframes_body_accepts_legit_bodies_byte_identical() {
+        for b in [
+            "0% { opacity: 0 } 100% { opacity: 1 }",
+            "0% { opacity: 0; transform: translateY(10px) } 100% { opacity: 1; transform: translateY(0px) }",
+            "from { opacity: 0 } to { opacity: 1 }",
+            "FROM { opacity: 0 } TO { opacity: 1 }",
+            "0%, 50% { opacity: 0 } 100% { opacity: 1 }",
+            "12.5% { transform: scale(1.5) rotate(45deg) }",
+            "0% {  }", // empty block is legal CSS
+        ] {
+            assert_eq!(
+                sink_safe_keyframes_body(b),
+                Some(b),
+                "legit keyframes body must pass byte-identical: {b}"
+            );
+        }
+    }
+
+    #[cfg(feature = "live")]
+    #[test]
+    fn keyframes_body_rejects_breakout() {
+        for b in [
+            "",
+            "   ",
+            // trailing content after the last block — the classic close-then-
+            // inject shape (`</style>`, page-wide rule, at-rule…).
+            "0% { opacity: 0 } </style><script>alert(1)</script>",
+            "0% { opacity: 0 } } body { display:none }",
+            "0% { opacity: 0 } @import url(//evil/x.css) ;",
+            // non-keyframe selector text (rule injection in the selector slot)
+            "body { display:none }",
+            "0% </style> { opacity: 0 }",
+            "0%; { opacity: 0 }",
+            // nested `{` inside a block (lands in a declaration → rejected)
+            "0% { a: b { } }",
+            // script sinks / comment obfuscation inside a declaration
+            "0% { background: url(javascript:alert(1)) }",
+            "0% { opacity: 0 /* } body { */ }",
+            // hex-escaped breakout inside a declaration (`\7d` = `}`)
+            "0% { opacity: 0\\7d  }",
+            // unbalanced blocks
+            "0% { opacity: 0",
+            "0% opacity: 0 }",
+        ] {
+            assert_eq!(
+                sink_safe_keyframes_body(b),
+                None,
+                "breakout keyframes body must be dropped: {b:?}"
             );
         }
     }

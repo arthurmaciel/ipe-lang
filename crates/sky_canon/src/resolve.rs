@@ -442,11 +442,47 @@ pub fn canonicalise_module(
 /// Same set as [`canonicalise_module`], plus a fail-closed
 /// [`Diagnostic::CompilerBug`] when an [`ModuleOrigin::EmbeddedStdlib`] module has
 /// an un-annotated top-level binding.
-#[allow(clippy::too_many_lines)] // qualifier_paths pass added ~20 lines; refactor tracked in #todo
 pub fn canonicalise_module_with_origin(
     m: &src::Module,
     expected_path: &[Symbol],
     deps: &BTreeMap<Vec<Symbol>, crate::ModuleExports>,
+    origin: ModuleOrigin,
+    interner: &mut Interner,
+) -> DResult<(canon::Module, crate::ModuleExports)> {
+    // Legacy entry point: dep exports arrive as an owned map and the
+    // known-module universe for SKY-N0020 did-you-mean IS that map's key set —
+    // the pre-incremental behaviour, preserved for non-driver callers.
+    let dep_refs: BTreeMap<Vec<Symbol>, &crate::ModuleExports> =
+        deps.iter().map(|(k, v)| (k.clone(), v)).collect();
+    let known_modules: BTreeSet<Box<str>> = deps
+        .keys()
+        .map(|p| path_to_dot_string(interner, p))
+        .collect();
+    canonicalise_module_in_project(m, expected_path, &dep_refs, &known_modules, origin, interner)
+}
+
+/// Canonicalise a module against per-dep export references plus an explicit
+/// known-module universe (the incremental driver's entry point).
+///
+/// Identical semantics to [`canonicalise_module_with_origin`] except:
+/// * `deps` holds *references* to the importers' dep interfaces (the salsa
+///   `module_interface` query memos) rather than owned clones, and is expected
+///   to contain exactly this module's resolved imports — the only entries the
+///   pre-incremental accumulated map ever observably consulted;
+/// * `known_modules` (dot-joined module paths) supplies the SKY-N0020
+///   did-you-mean candidate list, decoupling the *suggestion universe* (all
+///   modules in the project) from the *injection map* (this module's imports).
+///   Strings only — suggestion building must never intern (interning here
+///   would perturb build-wide symbol numbering).
+///
+/// # Errors
+/// Same set as [`canonicalise_module_with_origin`].
+#[allow(clippy::too_many_lines)] // qualifier_paths pass added ~20 lines; refactor tracked in #todo
+pub fn canonicalise_module_in_project(
+    m: &src::Module,
+    expected_path: &[Symbol],
+    deps: &BTreeMap<Vec<Symbol>, &crate::ModuleExports>,
+    known_modules: &BTreeSet<Box<str>>,
     origin: ModuleOrigin,
     interner: &mut Interner,
 ) -> DResult<(canon::Module, crate::ModuleExports)> {
@@ -526,13 +562,11 @@ pub fn canonicalise_module_with_origin(
         }
         // SKY-N0020: dep module must have been discovered + canonicalised before
         // this module in topological order.
-        let dep = deps.get(dep_path).ok_or_else(|| {
+        let dep = *deps.get(dep_path).ok_or_else(|| {
             let name = path_to_dot_string(interner, dep_path);
-            // Offer did-you-mean by collecting all known dep paths as dot strings.
-            let sugg: Box<[Box<str>]> = deps
-                .keys()
-                .map(|p| path_to_dot_string(interner, p))
-                .collect();
+            // Offer did-you-mean over the caller-supplied known-module universe
+            // (strings only — never intern on this path).
+            let sugg: Box<[Box<str>]> = known_modules.iter().cloned().collect();
             Diagnostic::Name {
                 span: import.name.span,
                 msg: NameError::ModuleNotFound {
@@ -754,7 +788,7 @@ fn register_stdlib_import_aliases(
         // a later `Alias.member` resolves to the same `VarKernel` a canonical
         // reference would (the lowerer's kernel match arms are unaffected).
         if let Some(members) = env.qual_vars.get(&canonical).cloned() {
-            env.qual_vars.entry(alias).or_default().extend(members);
+            std::rc::Rc::make_mut(&mut env.qual_vars).entry(alias).or_default().extend(members);
         }
     }
     Ok(())
@@ -956,7 +990,7 @@ fn inject_stdlib_wildcard_values(
             // (or an aliased re-import) overwrites its own prior origin rather
             // than registering a phantom second candidate that would fake an
             // ambiguity with itself.
-            env.wildcard_vars.entry(name).or_default().insert(
+            std::rc::Rc::make_mut(&mut env.wildcard_vars).entry(name).or_default().insert(
                 canonical,
                 WildcardOrigin {
                     home,
@@ -1694,7 +1728,7 @@ fn inject_dep_exports(
     let qualifier = import
         .alias
         .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
-    let qual_map = env.qual_vars.entry(qualifier).or_default();
+    let qual_map = std::rc::Rc::make_mut(&mut env.qual_vars).entry(qualifier).or_default();
     for &v in &dep.values {
         qual_map.insert(v, VarHome::TopLevel(dep_path.clone()));
     }
@@ -1705,7 +1739,7 @@ fn inject_dep_exports(
     // user's `exposing (...)` clause — qualified access does not require the
     // name to be in the exposing list (only unqualified access does).
     if !dep.ctors.is_empty() {
-        let qual_ctor_map = env.qual_ctors.entry(qualifier).or_default();
+        let qual_ctor_map = std::rc::Rc::make_mut(&mut env.qual_ctors).entry(qualifier).or_default();
         for (ctor_sym, ctor_home) in &dep.ctors {
             qual_ctor_map.entry(*ctor_sym).or_insert_with(|| ctor_home.clone());
         }
@@ -1790,7 +1824,7 @@ fn inject_ctors_for_type(
                 // Same module exposed again — harmless, no-op.
             } else {
                 unqual_ctor_origins.insert(ctor_home.name, dep_path.clone());
-                env.ctors.insert(ctor_home.name, ctor_home.clone());
+                std::rc::Rc::make_mut(&mut env.ctors).insert(ctor_home.name, ctor_home.clone());
             }
         }
     }
@@ -1946,7 +1980,7 @@ fn register_union(
             });
         }
         seen_ctors.insert(name, c.span);
-        env.ctors.insert(
+        std::rc::Rc::make_mut(&mut env.ctors).insert(
             name,
             CtorHome {
                 home: home.to_vec(),

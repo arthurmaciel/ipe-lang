@@ -97,6 +97,22 @@ impl<T: Clone> UnionFind<T> {
         Ok(root)
     }
 
+    /// Read-only view of the descriptor at an ALREADY-RESOLVED root, without
+    /// cloning it. The caller must have run [`Self::find`] first (so path
+    /// compression is preserved); passing a non-root is the same error
+    /// contract as [`Self::content`]. Lets post-solve passes peek a large
+    /// record descriptor's field map without deep-copying it
+    /// (efficiency-audit §2 medium).
+    ///
+    /// # Errors
+    /// [`Diagnostic::CompilerBug`] when `root` is dangling or not a root.
+    pub fn root_content(&self, root: VarId) -> DResult<&T> {
+        match self.node(root)? {
+            Node::Root { content, .. } => Ok(content),
+            Node::Link(_) => Err(not_a_root()),
+        }
+    }
+
     /// Clone of the descriptor stored at `v`'s representative root.
     ///
     /// # Errors
@@ -128,8 +144,13 @@ impl<T: Clone> UnionFind<T> {
 
     /// Whether `a` and `b` already share a representative.
     ///
+    /// Test-only since the `unify` hot path inlined it (two reused `find`s —
+    /// efficiency-audit §2 low); the semantics tests below still assert
+    /// class-merge behaviour through it.
+    ///
     /// # Errors
     /// [`Diagnostic::CompilerBug`] on a dangling id.
+    #[cfg(test)]
     pub fn equivalent(&mut self, a: VarId, b: VarId) -> DResult<bool> {
         Ok(self.find(a)? == self.find(b)?)
     }

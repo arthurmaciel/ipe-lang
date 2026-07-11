@@ -31,6 +31,55 @@ time; line numbers are approximate and should be re-confirmed before editing.
 
 ---
 
+## 0. Burn-down status (2026-07-11)
+
+The strictly-safe ledger burn-down landed as one batch (all gates green:
+workspace nextest 1979/1979, runtime `--features live` nextest 771/771, doc
+tests, clippy `-D warnings` on both feature sets — the golden/equivalence
+suites are the byte-identical proof the header demands).
+
+**LANDED (20 of 27):** every high (3/3), every medium except one (12/13), and
+4 lows —
+
+- §2 solver: `Rc<CtorScheme>` ctor table · `Rc<Ty>` top-level schemes (≡ §7
+  cross-cut #1) · `root_content` by-ref peek for field accesses AND record
+  updates · `unify` 6→2 union-find traversals (`equivalent` now
+  `#[cfg(test)]`).
+- §3 lowerer: nine kernel-family walks → ONE `KernelUsage` traversal
+  (early-exit) · `collect_records_in_ty` HashSet dedup (`IrType: Hash`) ·
+  `lower_callee` peek threaded through `Intercepted::Fallthrough` · positional
+  `FuncId` in `lower_def` (drops the per-def `Vec<Symbol>` key).
+- §4 emitter: single `Callee::Kernel` gate before the 8 dispatch probes ·
+  `emit_program` capacity hint (`GOLDEN.len() + 4096`).
+- §5 canon/interner/parser: `Env` kernel/ctor/qual/wildcard/stdlib tables
+  behind `Rc` + `Rc::make_mut` setup writes · interner single `Arc<str>` per
+  unique string (≡ §7) · qualified-ident `rfind('.')` slice split.
+- §6 runtime: single-pass HTML escaper (`escape_html`, metachar-free fast
+  path) · borrowed `&str` attr-diff maps · borrowed sky-id in `diff_node` ·
+  `render_children` shared accumulator via `pub(crate) render_into` ·
+  `build_style_string` single buffer with running `;`.
+- §2 low `kernel_ty` eager `task_unit`: found ALREADY closed at HEAD
+  (`let task_unit = || Ty::Con { … }` — the closure form this row asked for).
+
+**RESIDUAL (7 of 27) — each gated by the audit's own safety analysis, kept as
+a narrowed BACKLOG row:**
+
+- §7 medium `ModPathId` module-path interning — determinism caveat (mandatory
+  `Ord`-by-resolved-path guard vs Go-parity emission order).
+- §2 low scope-entry persistent map — explicitly profile-gated ("not applied
+  blind"), adds a dep.
+- §3 low `lower_callee` Symbol-keyed kernel table — logged
+  low-priority-not-rejected (§8 note), broad mechanical diff.
+- §4 low Http field-name `&'static` consts — small, safe; batched with the
+  fieldset-keying row below since both touch the same lookup helper.
+- §4 low `record_by_fieldset` interned keying — conditionally safe (a
+  mismatched key silently resolves the wrong struct).
+- §5 low lexer streaming — gated behind a byte-for-byte lexer golden suite.
+- §6 low `SafeCssValue::parse` lazy buffers — security-gated (must re-prove
+  the exact match set; security > efficiency).
+
+---
+
 ## 1. Roll-up (class × impact)
 
 Actionable findings only (the four REJECTED entries are excluded and listed

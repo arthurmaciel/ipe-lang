@@ -3,6 +3,10 @@
 > **Status:** authoritative design spec (design-only — no implementation
 > commitment beyond the locked decisions below). Supersedes the memory note
 > `incremental-compilation-salsa.md` for scope purposes.
+> **Implementation status:** Phase 1 (salsa db + `SourceFile`/`SourceRoot`
+> inputs + `parse`/`imports` tracked queries on the one-shot `skyc` path)
+> landed 2026-07-11 — see
+> `docs/architecture/salsa-incremental-compilation-2026-07-11.md`.
 >
 > **Principles order (hard):** security > correctness > soundness > efficiency
 > > completeness > readability. Two fundamental rules govern every decision:
