@@ -108,11 +108,13 @@ Semantics after the fix:
   `info.message`, `info.details`) keeps working via the field tables.
 * Record *update* (`{ p | message = … }`) on the three nominals is rejected
   at `skyc` time (there is nowhere sound for the updated structural value to
-  flow). It surfaces as SKY-T0012 ("type PanicInfo has no field `message`")
-  via the existing non-record fall-through — loud, span-attributed and
-  sound, though the wording is imperfect for a field that IS readable; a
-  dedicated "opaque builtin type does not support record update" diagnostic
-  is a possible DX follow-up, not filed as a blocker.
+  flow). Originally it surfaced as SKY-T0012 ("type PanicInfo has no field
+  `message`") via the non-record fall-through — loud, span-attributed and
+  sound, but misleadingly worded for a field that IS readable. The dedicated
+  diagnostic this note anticipated landed 2026-07-11 as **SKY-T0017**
+  (`TypeError::BuiltinRecordUpdate`): "`PanicInfo` is a built-in type — its
+  fields can be read (`x.field`), but it cannot be rebuilt with
+  record-update syntax", with its own explain page.
 * The escape direction is now **green**, not just rejected: an unannotated
   (or `PanicInfo`-annotated — the three names are annotatable builtins now)
   helper over a pattern-bound payload lowers its parameter to
