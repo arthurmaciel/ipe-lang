@@ -515,7 +515,7 @@ fn and_map_triple_forwarder_curried_rejected() {
 }
 
 /// Eta-reduced annotated forwarder (`am2 = am1`, bare reference) — the
-/// SchemeApp records at the bare reference; same fail-closed rejection.
+/// `SchemeApp` records at the bare reference; same fail-closed rejection.
 #[test]
 fn and_map_eta_reduced_forwarder_curried_rejected() {
     assert_rejected_t0014("l0114_and_map_eta_reduced_forwarder_curried");
@@ -631,7 +631,7 @@ fn user_map2_via_andmap_stays_gated() {
 }
 
 /// Annotated generic forwarder around `Result.map` at a curried callback —
-/// the deferred SchemeApp path, map-family mirror of
+/// the deferred `SchemeApp` path, map-family mirror of
 /// `and_map_forwarder_curried_is_sky_t0014`.
 #[test]
 fn map_annotated_forwarder_curried_is_sky_t0014() {
