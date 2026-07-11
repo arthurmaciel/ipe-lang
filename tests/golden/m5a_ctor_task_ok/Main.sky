@@ -1,0 +1,21 @@
+module Main exposing (main)
+
+-- E3 acceptance: a WELL-FORMED `Task Error Int` (arity 2) embedded in a
+-- constructor payload is NOT rejected. The declaration lowers to a `Variant`
+-- carrying `IrType::Task`; #87's derive-demotion fixpoint degrades the
+-- non-derivable enum gracefully (matching Item B's function/Result/Maybe
+-- precedent). This must BUILD cleanly — never an ICE, never a cargo failure.
+--
+-- (Value construction of a Task-in-payload — `Job (Task.succeed 1)` — hits an
+-- unrelated pre-existing SKY-T0001 unify quirk between the annotation's
+-- normalized `Task Error a` and the kernel's unary `Task a`; that is a separate
+-- concern from #32's fail-closed ICE gate and is tracked independently.)
+type Job = Job (Task Error Int)
+
+label : Job -> String
+label j =
+    case j of
+        Job _ -> "job"
+
+main =
+    println "ok"

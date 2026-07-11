@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+-- `Task Error Int Bool` (3 type arguments) is ill-formed: `Task` takes exactly
+-- an error channel and a success type. Before #32 this ICE'd with a generic
+-- `CompilerBug` ("please report"); now `normalize_annotation_ty` fails closed
+-- with a clean SKY-T0016 diagnostic naming the found argument count.
+doThing : String -> Task Error Int Bool
+doThing s =
+    Task.succeed 42
+
+main =
+    println "test"
