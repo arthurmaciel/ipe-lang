@@ -1,0 +1,13 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+
+-- #32 review follow-up: a mis-arity `Sub` in a CTOR PAYLOAD (`Sub` takes
+-- exactly one message type) used to ICE via lower_enum → ir_type_from_canon.
+-- lower_enum's Gate 0a now fails closed with SKY-T0016 at the ctor span.
+type J
+    = J (Sub Int Bool)
+
+
+main =
+    println "x"

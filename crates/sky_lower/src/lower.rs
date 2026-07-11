@@ -3794,14 +3794,24 @@ impl<'a> Lowerer<'a> {
     /// fail closed with the SAME clean SKY-T0016 diagnostic before that happens.
     /// A mis-arity `Task` in a constructor field is ALWAYS wrong, never a
     /// legitimate program.
-    fn task_arity_in_canon(&self, t: &canon::Type) -> Option<usize> {
+    /// Find a mis-arity async carrier (`Task`/`Cmd`/`Sub`) anywhere in a
+    /// canonical type, returning `(carrier_name, found_arity)`. `Task` is
+    /// well-formed at arity 1 (internal unary) or 2 (`Task Error a`);
+    /// `Cmd`/`Sub` take exactly 1 (`Cmd msg`). Any other arity would trip
+    /// `ir_type_from_canon`'s catch-all `CompilerBug` (SKY-I0001), so
+    /// `lower_enum`'s Gate 0a fails closed on it with a clean SKY-T0016.
+    /// (Cmd/Sub coverage added after the #32 review found the Task-only gate
+    /// left the siblings ICE-ing, contrary to the item title.)
+    fn task_arity_in_canon(&self, t: &canon::Type) -> Option<(&'static str, usize)> {
         match t {
             canon::Type::Con { name, args, .. } => {
-                if self.interner.resolve(*name) == Some("Task")
-                    && args.len() != 1
-                    && args.len() != 2
-                {
-                    return Some(args.len());
+                match self.interner.resolve(*name) {
+                    Some("Task") if args.len() != 1 && args.len() != 2 => {
+                        return Some(("Task", args.len()));
+                    }
+                    Some("Cmd") if args.len() != 1 => return Some(("Cmd", args.len())),
+                    Some("Sub") if args.len() != 1 => return Some(("Sub", args.len())),
+                    _ => {}
                 }
                 args.iter().find_map(|a| self.task_arity_in_canon(a))
             }
@@ -3830,10 +3840,10 @@ impl<'a> Lowerer<'a> {
                 // `Task Error a` (arity 2) is NOT rejected here — it lowers to a
                 // `Variant` carrying `IrType::Task`, and #87's derive-demotion
                 // fixpoint degrades a non-derivable enum gracefully.
-                if let Some(found) = self.task_arity_in_canon(arg) {
+                if let Some((carrier, found)) = self.task_arity_in_canon(arg) {
                     return Err(Diagnostic::Type {
                         span: ctor.span,
-                        msg: sky_diagnostics::TypeError::TaskArity { found },
+                        msg: sky_diagnostics::TypeError::TaskArity { carrier, found },
                     });
                 }
                 // Gate 1: every field type variable must be one the union
