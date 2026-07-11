@@ -882,6 +882,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiGridTracksRaw => "ui_grid_tracks_raw_",
         // #154: Breakpoint constants + wrapper
         KernelFn::UiBreakpoint => "ui_breakpoint_",
+        KernelFn::UiMediaQuery => "ui_media_query_",
         KernelFn::UiMobile => "ui_mobile_",
         KernelFn::UiTablet => "ui_tablet_",
         KernelFn::UiDesktop => "ui_desktop_",

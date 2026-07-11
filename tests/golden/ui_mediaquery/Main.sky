@@ -1,0 +1,50 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+import Std.Ui.Background as Background
+
+
+-- E2E smoke test for `Ui.mediaQuery` (the 1-of-20 kernel deferred from the
+-- 2026-07-10 Std.Ui/Html wiring batch, wired 2026-07-11 — see
+-- docs/architecture/ui-mediaquery-design-2026-07-11.md). Also exercises
+-- `Ui.breakpoint`, which now delegates to the same marker-emitting
+-- mechanism instead of the Phase-0 passthrough stub.
+-- oracle_divergence = true: skyc's own correct output, not a Go oracle diff.
+-- (Plain Html.render leaves the data-sky-mq-* markers visible; the Live /
+-- Webview pipelines expand them into the sky-id-scoped <style> block via
+-- apply_style_injections — pinned by the runtime unit tests.)
+
+
+mqPage : String
+mqPage =
+    Html.render
+        (Ui.layout []
+            (Ui.column []
+                [ Ui.mediaQuery "(min-width: 768px)"
+                    [ Background.color (Ui.rgb 18 18 24) ]
+                    (Ui.text "responsive")
+                , Ui.breakpoint Ui.mobile
+                    [ Background.color (Ui.rgb 1 2 3) ]
+                    (Ui.text "mobile-only")
+                ]
+            )
+        )
+
+
+evilPage : String
+evilPage =
+    Html.render
+        (Ui.layout []
+            (Ui.mediaQuery "(min-width: 1px) </style><script>alert(1)</script>"
+                [ Background.color (Ui.rgb 4 5 6) ]
+                (Ui.text "gated")
+            )
+        )
+
+
+main =
+    let
+        _ = println mqPage
+    in
+    println evilPage
