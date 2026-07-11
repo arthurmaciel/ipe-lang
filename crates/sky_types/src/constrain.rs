@@ -6004,6 +6004,20 @@ pub fn promote_untyped_boundaries(
     }
     for ru in &generated.record_updates {
         obligation_roots.insert(lift!(uf.find(ru.record)));
+        // Symmetric to `fa.result` above: each updated field's VALUE var is
+        // pinned to the record's concrete field type by
+        // [`crate::resolve_record_updates`], which runs AFTER this pass. At
+        // this point it can still be a residual plain-`Flex` root (e.g. the
+        // `n` parameter in `setName r n = { r | name = n }`), so without this
+        // exclusion it would be quantified into the def's scheme and later
+        // pinned — producing a stale quantified symbol that structurally
+        // appears nowhere in the resolved `params`/`ret`. The lowerer's
+        // `used_generics` filter independently strips such a symbol
+        // (defense-in-depth, empirically verified), but the primary
+        // obligation-exclusion mechanism must be complete in its own right.
+        for &(_, value_var) in &ru.fields {
+            obligation_roots.insert(lift!(uf.find(value_var)));
+        }
     }
     for rw in &generated.route_witness_checks {
         obligation_roots.insert(lift!(uf.find(rw.builder_var)));
