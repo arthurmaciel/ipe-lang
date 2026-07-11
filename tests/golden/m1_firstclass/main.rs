@@ -245,7 +245,7 @@ pub fn main_make_inc(base: i64) -> Box<dyn Fn(i64) -> i64 + Send + 'static> {
     { let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + 'static> = Box::new(main_inc); __sky_fn }
 }
 pub fn sky_main() -> SkyTask<()> {
-    ({ let a = main_apply_twice(Box::new(move |n: i64| -> i64 { (n + 3) }), 1); ({ let b = main_apply_twice({ let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + 'static> = Box::new(main_inc); __sky_fn }, 1); ({ let g = main_make_inc(0); ({ let c = (g)(40); log_println(string_from_int(((a + b) + c))) }) }) }) })
+    ({ let a = main_apply_twice({ let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + 'static> = Box::new(move |n: i64| -> i64 { (n + 3) }); __sky_fn }, 1); ({ let b = main_apply_twice({ let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + 'static> = Box::new(main_inc); __sky_fn }, 1); ({ let g = main_make_inc(0); ({ let c = (g)(40); log_println(string_from_int(((a + b) + c))) }) }) }) })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

@@ -7087,11 +7087,31 @@ fn emit_lambda_unboxed(
     ))
 }
 
-/// Emit a lambda `\p0 p1 ... -> body` as a boxed closure
-/// `Box::new(move |p0: T0, ...| -> R { <body> })`. The `move` capture takes any
-/// free locals by value; the explicit return type pins the closure's signature
-/// so it coerces cleanly to the `Box<dyn Fn(..) -> R>` slot it fills. `depth` is
-/// the lambda's own IR-nesting level; its body is emitted one level deeper. Kept
+/// Emit a lambda `\p0 p1 ... -> body` as a boxed closure whose static type is
+/// pinned to the trait-object form
+/// `{ let __sky_fn: Box<dyn Fn(T0, ...) -> R + Send + 'static> = Box::new(move
+/// |p0: T0, ...| -> R { <body> }); __sky_fn }`. The `move` capture takes any
+/// free locals by value; the explicit return type pins the closure's signature.
+///
+/// The `let`-binding type annotation is load-bearing: `Box::new(closure)` on
+/// its own infers `Box<{closure@…}>` — a box of the CONCRETE, unnameable
+/// closure type — which only unsize-coerces to `Box<dyn Fn(..) -> ..>` when the
+/// surrounding position supplies the trait-object target (a kernel call arg, a
+/// return slot, …). A lambda that flows into a `let` binding first, or into a
+/// built-in `Ok`/`Just` payload (which routes to the runtime `SkyResult`/
+/// `SkyMaybe` enum whose generic argument is inferred from the constructor arg,
+/// NOT from a field type), has no such target at the box site, so Rust pins the
+/// concrete closure type and a LATER use against `Box<dyn Fn>` fails as E0308.
+/// Pinning the trait object HERE — the same technique [`emit_func_value`] uses
+/// for a named function value — makes every lambda's static type the boxed
+/// trait object regardless of where it flows, closing the #90 SKY-L0114
+/// `let f = Ok (\x -> …)` seal hole with no lowering / type-check change.
+///
+/// The pointer constructor matches the rendered type: a lambda filling one of
+/// the runtime's `Arc<dyn Fn + Send + Sync>` slots (a `ServerHandler` /
+/// `WsServerCfg` callback shape — see [`render_type`]'s special-case arms) is
+/// boxed with `Arc::new`, everything else with `Box::new`. `depth` is the
+/// lambda's own IR-nesting level; its body is emitted one level deeper. Kept
 /// out of the `emit_expr_at` match (`#[inline(never)]`) for the same frame-size
 /// reason as [`emit_record`] / [`emit_update`].
 #[inline(never)]
@@ -7105,7 +7125,22 @@ fn emit_lambda(
     generics: GenericScope,
 ) -> DResult<String> {
     let inner = emit_lambda_unboxed(ctx, params, ret, body, indent, depth, generics)?;
-    Ok(format!("Box::new({inner})"))
+    let fun_ty = IrType::Fun(
+        params.iter().map(|(_, t)| t.clone()).collect(),
+        Box::new(ret.clone()),
+    );
+    let typed = render_type(ctx, &fun_ty, generics)?;
+    // The rendered type is `Arc<dyn Fn…>` for the two runtime handler shapes
+    // (ServerHandler / WsServerCfg callbacks) and `Box<dyn Fn…>` otherwise; the
+    // pointer constructor must match the smart pointer of the annotated type.
+    let ctor = if typed.starts_with("Arc<") {
+        "Arc"
+    } else {
+        "Box"
+    };
+    Ok(format!(
+        "{{ let __sky_fn: {typed} = {ctor}::new({inner}); __sky_fn }}"
+    ))
 }
 
 /// Render one type parameter's trailing bound clause for the generic list:
