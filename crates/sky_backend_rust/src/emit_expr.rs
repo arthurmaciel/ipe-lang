@@ -7246,6 +7246,80 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
     format!(": {}", traits.join(" + "))
 }
 
+/// Recursively elide a `Task.run` / `Task.perform` call in EVERY tail
+/// position of `expr`, returning the rewritten expression only when ALL tail
+/// leaves are such a call. `None` when even one tail leaf is not — a partial
+/// elision would leave some arms `Task<A>`-shaped and others
+/// `Result<E, A>`-shaped, which cannot render as one Rust `match`/`if` with a
+/// single type, so this is deliberately all-or-nothing.
+///
+/// Mirrors [`emit_func`]'s original flat single-call elision (a bare
+/// `Call(TaskRun, [inner])` whole-function body) generalised through the
+/// control-flow constructs that legally appear in a tail position: `Match`
+/// (`case`), `If`, and `Let` / `Destructure` (only their BODY is a tail
+/// position — the bound `value` is left untouched and un-recursed-into).
+/// `Match` is rebuilt via [`Match::from_parts_unchecked`]: only arm BODIES
+/// change here, never the arm patterns, so the exhaustiveness proof
+/// [`Match::new`] / [`Match::new_flat`] already ran stays valid.
+fn elide_task_run_tail(expr: &Expr) -> Option<Expr> {
+    match expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::TaskRun | KernelFn::TaskPerform),
+            args,
+        } => {
+            let [inner] = args.as_slice() else {
+                return None;
+            };
+            Some(inner.clone())
+        }
+        Expr::If { cond, then_, else_ } => {
+            let then_e = elide_task_run_tail(then_)?;
+            let else_e = elide_task_run_tail(else_)?;
+            Some(Expr::If {
+                cond: cond.clone(),
+                then_: Box::new(then_e),
+                else_: Box::new(else_e),
+            })
+        }
+        Expr::Let { name, value, body } => {
+            let body_e = elide_task_run_tail(body)?;
+            Some(Expr::Let {
+                name: *name,
+                value: value.clone(),
+                body: Box::new(body_e),
+            })
+        }
+        Expr::Destructure { binder, value, body } => {
+            let body_e = elide_task_run_tail(body)?;
+            Some(Expr::Destructure {
+                binder: binder.clone(),
+                value: value.clone(),
+                body: Box::new(body_e),
+            })
+        }
+        Expr::Match(m) => {
+            let mut new_arms = Vec::with_capacity(m.arms().len());
+            for arm in m.arms() {
+                let new_body = elide_task_run_tail(&arm.body)?;
+                new_arms.push(Arm {
+                    pat: arm.pat.clone(),
+                    body: new_body,
+                    guard: arm.guard.clone(),
+                });
+            }
+            Some(Expr::Match(Match::from_parts_unchecked(
+                Box::new(m.scrutinee().clone()),
+                new_arms,
+            )))
+        }
+        // Every other expression shape is a genuine value in tail position
+        // (not a control-flow construct that merely forwards to a nested tail
+        // position), so it either IS the whole elidable call (handled above)
+        // or it is not elidable at all.
+        _ => None,
+    }
+}
+
 /// Emit a whole function item, including its trailing newline.
 ///
 /// Shape: `pub fn <name>[<generics>](<params>) -> <ret> {\n    <body>\n}\n`. A
@@ -7268,18 +7342,30 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // to return `SkyTask<A>` (an unevaluated future), NOT `SkyResult<E, A>`.
     // Elide the outer `task_run(...)` wrapper: use the inner task expression as
     // the body and convert the return type from `Result(Error, A)` to `Task(A)`.
-    let (body_expr, elided_ret): (&Expr, Option<IrType>) = if name == "sky_main"
-        && let Expr::Call {
-            callee: Callee::Kernel(k),
-            args,
-        } = &func.body
-        && matches!(k, KernelFn::TaskRun | KernelFn::TaskPerform)
-        && let [inner] = args.as_slice()
+    //
+    // This is not always a FLAT `Call(TaskRun, …)` body — the Sky.Tui / Sky.Live
+    // `argv`-dispatch idiom branches on `System.args` before picking which app to
+    // run, e.g. `main = case List.head argsList of Just "live" -> Live.app cfg
+    // |> Task.run; _ -> Tui.app cfg |> Task.run`. Every arm still tail-calls
+    // `Task.run`, so the SAME elision must apply — otherwise `sky_main` keeps
+    // its `SkyResult<E, A>` return type and `block_on(sky_main())` mismatches
+    // exactly as the flat case would (a real SEAL violation found on
+    // `examples/24-tui-kitchen-sink`, BACKLOG "24-tui-kitchen-sink").
+    // `elide_task_run_tail` recurses through every tail-position control-flow
+    // construct (`Match` / `If` / `Let` / `Destructure`) and elides ONLY when
+    // EVERY leaf in tail position is a `Task.run` / `Task.perform` call — a
+    // partial elision is never produced, so the rewritten body always has a
+    // single uniform `Task<A>` shape.
+    let elided: Option<(Expr, IrType)> = if name == "sky_main"
         && let IrType::Result(_, ok_ty) = &func.ret
     {
-        (inner, Some(IrType::Task(ok_ty.clone())))
+        elide_task_run_tail(&func.body).map(|body| (body, IrType::Task(ok_ty.clone())))
     } else {
-        (&func.body, None)
+        None
+    };
+    let (body_expr, elided_ret): (&Expr, Option<IrType>) = match &elided {
+        Some((body, ret)) => (body, Some(ret.clone())),
+        None => (&func.body, None),
     };
 
     // ── sky_main synchronous-body wrap ────────────────────────────────────────
