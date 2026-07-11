@@ -987,17 +987,18 @@ fn ws_origin_matches(pattern: &str, origin: &str) -> bool {
 /// clients, and legitimate same-origin pages under some proxy setups that
 /// strip it) is NOT flagged — matches the equivalent CSRF/ingest same-origin
 /// helpers elsewhere in this runtime (`csrf.rs::origin_mismatch`,
-/// `console.rs::is_cross_origin_ingest`); duplicated locally (not shared via
-/// a `live`-feature-gated module) because `server.rs` must build standalone
-/// under `--features server` without `live`.
+/// `console.rs::is_cross_origin_ingest`), via the shared `origin_host_mismatch`
+/// helper in `http_header` (normalizes away each side's scheme-implied
+/// default port so the three never drift to different behavior).
+/// `http_header` is gated on `feature = "server"` only (not `live`), so this
+/// reuse still builds standalone under `--features server` without `live`.
 fn ws_cross_origin(req: &ServerRequest) -> bool {
     let origin = match header_ci(&req.headers, "origin") {
         Some(o) if !o.is_empty() => o,
         _ => return false,
     };
     let host = header_ci(&req.headers, "host").unwrap_or("");
-    let origin_host = origin.split_once("://").map(|x| x.1).unwrap_or(origin);
-    !host.is_empty() && origin_host != host
+    crate::sky_runtime::http_header::origin_host_mismatch(origin, host)
 }
 
 /// ServerWebSocket_upgrade : Request -> WebSocketServerCfg -> Task Error Response
@@ -1966,6 +1967,12 @@ mod tests {
         ])));
         // No Origin header at all → not flagged (non-browser client).
         assert!(!ws_cross_origin(&mk_ws_req(&[("host", "victim.example")])));
+        // Backlog port-mismatch fix: an implicit-default-port Origin against
+        // an explicit-default-port Host is the SAME origin, not a mismatch.
+        assert!(!ws_cross_origin(&mk_ws_req(&[
+            ("origin", "https://victim.example"),
+            ("host", "victim.example:443"),
+        ])));
     }
 
     #[tokio::test]
