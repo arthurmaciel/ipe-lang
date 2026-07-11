@@ -591,6 +591,9 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HttpWithTimeout => "Http.withTimeout",
         KernelFn::HttpWithBody => "Http.withBody",
         KernelFn::HttpWithHeader => "Http.withHeader",
+        KernelFn::HttpWithUrl => "Http.withUrl",
+        KernelFn::HttpWithFollowRedirects => "Http.withFollowRedirects",
+        KernelFn::HttpWithMaxRedirects => "Http.withMaxRedirects",
         // ── Db kernels (M5b-db) ──────────────────────────────────────────────
         KernelFn::DbConnect => "Db.connect",
         KernelFn::DbOpen => "Db.open",
@@ -1464,7 +1467,11 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
             write_expr(out, list, interner, level + 1);
         }
         Expr::Record(fields) => write_record(out, fields, interner, level),
-        Expr::Access { record, field } => {
+        Expr::Access {
+            record,
+            field,
+            field_ty: _,
+        } => {
             line(
                 out,
                 level,
@@ -1977,6 +1984,7 @@ program
                 Expr::Access {
                     record: Box::new(Expr::Var(param)),
                     field: x,
+                    field_ty: IrType::Int,
                 },
             )],
         };

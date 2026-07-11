@@ -538,14 +538,145 @@ main =
 EOF
 }
 
+# ── Multi-module templates (constructs 19–22) ────────────────────────────────
+# Boundary Scheme Promotion follow-up (class1 spec §"Fuzzer additions"):
+# each writes a `Lib.sky` SIBLING next to `Main.sky` (two-file project) so the
+# fuzzer exercises the cross-module untyped-boundary generalization path the
+# 2026-07-10 class-1 fix landed — single-file templates can never reach it.
+# Each template function takes the Lib.sky path as its FIRST argument.
+
+# Template 19: cross-module 2-type reuse — an UNTYPED `ident x = x` in Lib,
+# instantiated at Int AND String from Main. Pre-fix this was the class-1
+# "one monomorphic var across the linked program" bug (E0308/false reject);
+# post-fix the boundary scheme generalizes and both uses are accepted.
+template_mm_2type_reuse() {
+    local libdst=$1 n1=$2 s1=$3
+    cat > "$libdst" <<EOF
+module Lib exposing (ident)
+
+import Sky.Core.Prelude exposing (..)
+
+-- Untyped on purpose: the boundary-scheme promotion must generalize this
+-- def at the module boundary so each importer use instantiates it fresh.
+ident x = x
+EOF
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Lib exposing (ident)
+import Std.Log exposing (println)
+
+main =
+    println (String.fromInt (ident $n1) ++ "|" ++ ident "$s1")
+EOF
+}
+
+# Template 20: untyped VALUE binding (`empty = []`) used at two element types
+# cross-module — proves the promotion has no value restriction (class1 spec
+# new-unit-test 3, fuzz form).
+template_mm_value_binding() {
+    local libdst=$1 n1=$2 s1=$3
+    cat > "$libdst" <<EOF
+module Lib exposing (empty)
+
+import Sky.Core.Prelude exposing (..)
+
+-- Untyped value binding: promoted to a scheme at the boundary; importers
+-- may use it as List Int AND List String.
+empty = []
+EOF
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Lib
+import Std.Log exposing (println)
+
+main =
+    println
+        (String.fromInt
+            (List.length ($n1 :: Lib.empty) + List.length ("$s1" :: Lib.empty)))
+EOF
+}
+
+# Template 21: Number-bounded untyped helper (`plus a b = a + b`) used
+# cross-module at ONE numeric type. Documents D2 (class1 spec): using it at
+# Int in one module and Float in another stays REJECTED (conservative
+# Super-bound handling), so the well-typed template pins the accepted
+# single-type shape.
+template_mm_number_helper() {
+    local libdst=$1 n1=$2 n2=$3
+    cat > "$libdst" <<EOF
+module Lib exposing (plus)
+
+import Sky.Core.Prelude exposing (..)
+
+-- Untyped Number-bounded helper. Single-type cross-module use is accepted;
+-- Int+Float dual use is D2-rejected by design (see class1 spec).
+plus a b = a + b
+EOF
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Lib
+import Std.Log exposing (println)
+
+main =
+    println (String.fromInt (Lib.plus $n1 $n2))
+EOF
+}
+
+# Template 22: mutually-recursive UNTYPED pair in Lib, used polymorphically
+# (two element types) from outside the recursion group (class1 spec
+# new-unit-test 5, fuzz form).
+template_mm_recursive_pair() {
+    local libdst=$1 lst=$2 s1=$3
+    cat > "$libdst" <<EOF
+module Lib exposing (evenLen, oddLen)
+
+import Sky.Core.Prelude exposing (..)
+
+-- Mutually-recursive untyped pair, polymorphic in the element type. The
+-- boundary promotion must generalize the GROUP so importers can use it at
+-- several element types.
+evenLen xs =
+    case xs of
+        [] -> True
+        _ :: rest -> oddLen rest
+
+oddLen xs =
+    case xs of
+        [] -> False
+        _ :: rest -> evenLen rest
+EOF
+    cat <<EOF
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Lib
+import Std.Log exposing (println)
+
+main =
+    let a = if Lib.evenLen $lst then "E" else "O" in
+    let b = if Lib.evenLen [ "$s1" ] then "E" else "O" in
+    println (a ++ b)
+EOF
+}
+
 # ── Template renderer ─────────────────────────────────────────────────────────
-# Total templates: 19 (6 original + 13 new). kind = seed-derived mod 19.
+# Total templates: 23 (6 original + 13 single-file + 4 multi-module).
+# kind = seed-derived mod 23. Kinds 19-22 write a Lib.sky sibling (the
+# multi-file infrastructure lives inside render_template: dst is always
+# src/Main.sky, so Lib.sky lands next to it and skyc's module resolution
+# picks it up from the same src/ directory).
 render_template() {
     local seed=$1 dst=$2
     local ps pk s1 s2 s3 n1 n2 n3 slen str llen lstr lst i cs cidx ch ls lv
 
     ps=$(lcg_next "$seed")
-    local kind=$(( ps % 19 ))
+    local kind=$(( ps % 23 ))
 
     s1=$(lcg_next $(( seed + 1 )))
     s2=$(lcg_next $(( seed + 2 )))
@@ -596,6 +727,13 @@ render_template() {
         16) echo "maybeandmap";    template_maybe_andmap      "$n1" "$n2"        > "$dst" ;;
         17) echo "resultmap2";     template_result_map2       "$n1" "$n2"        > "$dst" ;;
         18) echo "multilineinterp"; template_multiline_interp "$n1" "$n2" "$str" > "$dst" ;;
+        # Multi-module kinds (19-22): Lib.sky is written as a sibling of dst
+        # (always src/Main.sky), exercising the class-1 boundary-scheme
+        # promotion's cross-module generalization path.
+        19) echo "mm2typereuse";   template_mm_2type_reuse    "$(dirname "$dst")/Lib.sky" "$n1" "$str" > "$dst" ;;
+        20) echo "mmvaluebind";    template_mm_value_binding  "$(dirname "$dst")/Lib.sky" "$n1" "$str" > "$dst" ;;
+        21) echo "mmnumberhelper"; template_mm_number_helper  "$(dirname "$dst")/Lib.sky" "$n1" "$n2"  > "$dst" ;;
+        22) echo "mmrecpair";      template_mm_recursive_pair "$(dirname "$dst")/Lib.sky" "$lst" "$str" > "$dst" ;;
     esac
 }
 

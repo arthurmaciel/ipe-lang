@@ -261,7 +261,7 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 pub fn main_sum_r(c: MainRChain) -> i64 {
     match c {
         MainRChain::REnd => 0,
-        MainRChain::RNode(rec) => { let rec = *rec; ((rec).val.clone() + main_sum_r((rec).rest.clone())) },
+        MainRChain::RNode(rec) => { let rec = *rec; ((rec).val + main_sum_r((rec).rest.clone())) },
     }
 }
 pub fn sky_main() -> SkyTask<()> {
