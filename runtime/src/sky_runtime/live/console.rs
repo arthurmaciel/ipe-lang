@@ -347,7 +347,10 @@ fn fold_log(it: &serde_json::Value) {
 /// server-to-server pushes from `push_exporter.rs`) is NOT flagged: those
 /// callers never send a hostile cross-origin request by construction, and
 /// requiring `Origin` would break legitimate non-browser ingest pushes.
-/// Mirrors `csrf.rs::origin_mismatch`'s same-origin comparison, applied
+/// Mirrors `csrf.rs::origin_mismatch`'s same-origin comparison (via the
+/// shared `origin_host_mismatch` helper, also used by
+/// `server.rs::ws_cross_origin` — normalizes away each side's scheme-implied
+/// default port so the three never drift to different behavior), applied
 /// unconditionally here (not opt-in) since it's the ONLY defense available
 /// when `SKY_INGEST_TOKEN` is unset.
 fn is_cross_origin_ingest(headers: &axum::http::HeaderMap) -> bool {
@@ -362,8 +365,7 @@ fn is_cross_origin_ingest(headers: &axum::http::HeaderMap) -> bool {
         .get(axum::http::header::HOST)
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
-    let origin_host = origin.split_once("://").map(|x| x.1).unwrap_or(origin);
-    !host.is_empty() && origin_host != host
+    crate::sky_runtime::http_header::origin_host_mismatch(origin, host)
 }
 
 /// `Some(401)` when `SKY_INGEST_TOKEN` is set and the `X-Sky-Ingest-Token` header
@@ -453,6 +455,12 @@ mod tests {
         )));
         // No Origin header at all → not flagged (curl / server-to-server push).
         assert!(!is_cross_origin_ingest(&mk(None, "victim.example")));
+        // Backlog port-mismatch fix: an implicit-default-port Origin against
+        // an explicit-default-port Host is the SAME origin, not a mismatch.
+        assert!(!is_cross_origin_ingest(&mk(
+            Some("https://victim.example"),
+            "victim.example:443"
+        )));
     }
 
     // One test (not split) — SKY_INGEST_TOKEN is process-global env, so a split

@@ -184,10 +184,12 @@ fn origin_mismatch(headers: &HeaderMap) -> bool {
         .get(axum::http::header::HOST)
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
-    // Compare the Origin's host[:port] to the request Host. Origin is
-    // `scheme://host[:port]`; strip the scheme.
-    let origin_host = origin.split_once("://").map(|x| x.1).unwrap_or(origin);
-    !host.is_empty() && origin_host != host
+    // Compare the Origin's host[:port] to the request Host, normalizing away
+    // each side's scheme-implied default port — shared with
+    // `console.rs::is_cross_origin_ingest` / `server.rs::ws_cross_origin` so
+    // the three never drift to different normalization behavior (see
+    // `origin_host_mismatch`'s doc comment).
+    crate::sky_runtime::http_header::origin_host_mismatch(origin, host)
 }
 
 /// The axum middleware. Validates CSRF on mutating, non-exempt requests; passes
