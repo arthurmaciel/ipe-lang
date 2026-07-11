@@ -155,6 +155,65 @@ fn maybe_and_map_fn_payload_accepted() {
     assert_eq!(outcome.stdout.trim(), "42");
 }
 
+/// #90 Stage-1 RESIDUAL seal hole (found by the 5th-attempt adversarial
+/// review, bisected to `cd9bb1c`): a LET-BOUND constructor-wrapped closure
+/// (`let f = Ok (\x -> x + 1)`) later passed to a `Box<dyn Fn>`-expecting
+/// position was a skyc-accept / cargo-reject E0308. The inline pipe form
+/// (`Ok (\x…) |> Result.andMap (Ok 2)`) works because the kernel call site
+/// supplies the `Box<dyn Fn>` coercion target; a bare `let` binding has none —
+/// `Ok` routes to the runtime `SkyResult` enum whose generic arg is inferred
+/// from the constructor arg, so `Box::new(closure)` pinned the CONCRETE closure
+/// type and the later use against `Box<dyn Fn>` failed to unsize-coerce across
+/// the `let` boundary. Fixed by pinning the trait-object type at the lambda's
+/// own emission site (`{ let __sky_fn: Box<dyn Fn(..)->..> = Box::new(closure);
+/// __sky_fn }`), the same technique `emit_func_value` uses for a named fn value.
+/// Passing the fn-carrier through a type-annotated function boundary
+/// (`applyIt : Result Error (Int -> Int) -> Int`) is what makes the bug
+/// reachable — Rust's whole-function inference cannot patch the closure type
+/// from the far side of a `fn` call.
+#[test]
+fn let_bound_fn_payload_accepted() {
+    let root = repo_root();
+    if skyc::resolve_runtime().is_err() {
+        return;
+    }
+    let (built, out) = built_code(&root, "l0114_let_bound_fn_payload");
+    assert!(
+        built.is_ok(),
+        "let f = Ok (\\x -> …) crossing a fn boundary must be accepted: {built:?}"
+    );
+
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    let outcome = support::build_and_run_emitted("l0114_let_bound_fn_payload", &out);
+    assert_eq!(outcome.exit_code, Some(0), "exit 0; stdout:\n{}", outcome.stdout);
+    assert_eq!(outcome.stdout.trim(), "42");
+}
+
+/// #90 let-bound seal hole — Maybe variant, exercising the same lambda
+/// trait-object-pin fix through the runtime `SkyMaybe` enum
+/// (`let f = Just (\x -> x * 2)`). Must build+run and print `42`.
+#[test]
+fn let_bound_maybe_fn_payload_accepted() {
+    let root = repo_root();
+    if skyc::resolve_runtime().is_err() {
+        return;
+    }
+    let (built, out) = built_code(&root, "l0114_let_bound_maybe_fn_payload");
+    assert!(
+        built.is_ok(),
+        "let f = Just (\\x -> …) crossing a fn boundary must be accepted: {built:?}"
+    );
+
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    let outcome = support::build_and_run_emitted("l0114_let_bound_maybe_fn_payload", &out);
+    assert_eq!(outcome.exit_code, Some(0), "exit 0; stdout:\n{}", outcome.stdout);
+    assert_eq!(outcome.stdout.trim(), "42");
+}
+
 /// A DECLARED function-typed constructor payload (`RetryWhen (e -> Bool)`)
 /// used to trip SKY-L0114 at the union declaration itself. #87's
 /// derive-demotion fixpoint already keeps the emitted enum sound.
