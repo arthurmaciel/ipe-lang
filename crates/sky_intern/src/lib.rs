@@ -29,8 +29,14 @@ impl Symbol {
 
 #[derive(Default)]
 pub struct Interner {
-    map: HashMap<String, Symbol>,
-    strings: Vec<String>,
+    /// One shared `Arc<str>` per unique string, stored in BOTH `map` (as the
+    /// key) and `strings` (as the id-indexed entry) — the second store is a
+    /// refcount bump, not a second heap copy (efficiency-audit §5 medium:
+    /// every unique identifier used to be heap-allocated twice). `Arc` (not
+    /// `Rc`) keeps `Interner: Send + Sync`. Symbol assignment order, dedup,
+    /// and the `resolve` None-on-forged-symbol contract are unchanged.
+    map: HashMap<std::sync::Arc<str>, Symbol>,
+    strings: Vec<std::sync::Arc<str>>,
 }
 
 impl Interner {
@@ -56,8 +62,9 @@ impl Interner {
             detail: "symbol table exhausted (u32::MAX identifiers)".to_owned(),
         })?;
         let sym = Symbol(id);
-        self.strings.push(s.to_owned());
-        self.map.insert(s.to_owned(), sym);
+        let shared: std::sync::Arc<str> = std::sync::Arc::from(s);
+        self.strings.push(std::sync::Arc::clone(&shared));
+        self.map.insert(shared, sym);
         Ok(sym)
     }
 
@@ -83,7 +90,7 @@ impl Interner {
         let mut n: u32 = 0;
         while out.len() < count {
             let candidate = format!("{prefix}{n}");
-            if !self.map.contains_key(&candidate) {
+            if !self.map.contains_key(candidate.as_str()) {
                 out.push(self.intern(&candidate)?);
             }
             n = n.checked_add(1).ok_or_else(|| Diagnostic::CompilerBug {
@@ -102,7 +109,7 @@ impl Interner {
     /// invariant violation.
     #[must_use]
     pub fn resolve(&self, sym: Symbol) -> Option<&str> {
-        self.strings.get(sym.0 as usize).map(String::as_str)
+        self.strings.get(sym.0 as usize).map(AsRef::as_ref)
     }
 
     /// Whether `s` has already been interned, i.e. `intern(s)` would return an

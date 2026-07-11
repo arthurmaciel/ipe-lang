@@ -6,6 +6,7 @@
 //! `BTreeMap`s so the structure is deterministic regardless of insertion order.
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use sky_diagnostics::DResult;
 use sky_intern::{Interner, Symbol};
@@ -162,18 +163,27 @@ pub struct Env {
     /// The module being canonicalised.
     pub home: Vec<Symbol>,
     /// Unqualified variable bindings.
+    ///
+    /// The one genuinely scope-local table — it stays owned so per-scope
+    /// entry (`env.clone()` in `resolve.rs`) copies only the current local
+    /// bindings. Every other (large, setup-time-immutable) table below is
+    /// behind an `Rc`, making the per-scope clone a refcount bump instead of
+    /// a deep copy of the ~600-entry kernel registry (efficiency-audit §5
+    /// high). Setup-phase writes go through `Rc::make_mut` (refcount 1 →
+    /// in-place, no copy). Same maps read with the same `BTreeMap` ordering →
+    /// identical resolution + diagnostic order.
     pub vars: BTreeMap<Symbol, VarHome>,
     /// Unqualified constructor bindings.
-    pub ctors: BTreeMap<Symbol, CtorHome>,
+    pub ctors: Rc<BTreeMap<Symbol, CtorHome>>,
     /// Qualified variable bindings: qualifier → (name → home).
-    pub qual_vars: BTreeMap<Symbol, BTreeMap<Symbol, VarHome>>,
+    pub qual_vars: Rc<BTreeMap<Symbol, BTreeMap<Symbol, VarHome>>>,
     /// Qualified constructor bindings: qualifier → (`ctor_name` → home).
     ///
     /// Populated when `import Foo as Alias` (user-module import) registers
     /// `dep.ctors` under the alias qualifier.  Lets `Alias.CtorName` resolve
     /// to `VarCtor` — needed for compiled-source ADTs like `Std.Money`'s
     /// `Currency` constructors accessed as `Money.USD`, `Money.EUR`, etc.
-    pub qual_ctors: BTreeMap<Symbol, BTreeMap<Symbol, CtorHome>>,
+    pub qual_ctors: Rc<BTreeMap<Symbol, BTreeMap<Symbol, CtorHome>>>,
     /// **Low-priority wildcard-exposed stdlib value members (#98).**
     ///
     /// A bare value name maps to the set of stdlib modules that flooded it into
@@ -189,7 +199,7 @@ pub struct Env {
     /// explicit-list path). When two or more distinct modules survive for a bare
     /// use, that use is `AmbiguousImport` (SKY-N0024) AT THE USE SITE, never a
     /// silent last-wins.
-    pub wildcard_vars: BTreeMap<Symbol, BTreeMap<Symbol, WildcardOrigin>>,
+    pub wildcard_vars: Rc<BTreeMap<Symbol, BTreeMap<Symbol, WildcardOrigin>>>,
     /// **Phase-A parse-once registry index.**  Maps `(qualifier_sym, name_sym)`
     /// to the typed [`StdlibKernel`] variant, built anti-drift from
     /// [`StdlibKernel::ALL`] in `install_prelude_qualifiers`.
@@ -197,7 +207,7 @@ pub struct Env {
     /// Phase B will thread this through `VarHome::Kernel`; Phase A exposes it
     /// here so the `canon_equals_registry` tripwire test can validate parity
     /// with `qual_vars` without touching any downstream path.
-    pub stdlib_index: BTreeMap<(Symbol, Symbol), StdlibKernel>,
+    pub stdlib_index: Rc<BTreeMap<(Symbol, Symbol), StdlibKernel>>,
 }
 
 impl Env {
@@ -325,7 +335,7 @@ impl Env {
             ("Custom", errordetails, 4, 1),
         ] {
             let name = interner.intern(name)?;
-            self.ctors.insert(
+            Rc::make_mut(&mut self.ctors).insert(
                 name,
                 CtorHome {
                     home: Vec::new(),
@@ -1570,7 +1580,7 @@ impl Env {
             }
             let qual_sym = interner.intern(decl.qualifier)?;
             let name_sym = interner.intern(decl.name)?;
-            self.stdlib_index.insert((qual_sym, name_sym), *sk);
+            Rc::make_mut(&mut self.stdlib_index).insert((qual_sym, name_sym), *sk);
         }
 
         for (qual, funcs) in QUALIFIERS {
@@ -1609,7 +1619,7 @@ impl Env {
                 };
                 module.insert(func_sym, VarHome::Kernel(id, mod_sym, name_sym));
             }
-            self.qual_vars.entry(qual_sym).or_default().extend(module);
+            Rc::make_mut(&mut self.qual_vars).entry(qual_sym).or_default().extend(module);
         }
 
         for (qual, alias, canonical) in FUNC_ALIASES {
@@ -1621,7 +1631,7 @@ impl Env {
             // The id is resolved against the CANONICAL (qual, name) key.
             let id = self.stdlib_index.get(&(qual_sym, canonical_sym)).copied();
             let home = VarHome::Kernel(id, qual_sym, canonical_sym);
-            self.qual_vars
+            Rc::make_mut(&mut self.qual_vars)
                 .entry(qual_sym)
                 .or_default()
                 .insert(alias_sym, home);
@@ -1633,7 +1643,7 @@ impl Env {
             // `.cloned()` releases the shared borrow before the mutable
             // `entry(alias_sym)` borrow — required by the borrow checker.
             if let Some(canonical_members) = self.qual_vars.get(&canonical_sym).cloned() {
-                self.qual_vars
+                Rc::make_mut(&mut self.qual_vars)
                     .entry(alias_sym)
                     .or_default()
                     .extend(canonical_members);
