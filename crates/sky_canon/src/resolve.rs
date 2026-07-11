@@ -788,7 +788,7 @@ fn register_stdlib_import_aliases(
         // a later `Alias.member` resolves to the same `VarKernel` a canonical
         // reference would (the lowerer's kernel match arms are unaffected).
         if let Some(members) = env.qual_vars.get(&canonical).cloned() {
-            env.qual_vars.entry(alias).or_default().extend(members);
+            std::rc::Rc::make_mut(&mut env.qual_vars).entry(alias).or_default().extend(members);
         }
     }
     Ok(())
@@ -990,7 +990,7 @@ fn inject_stdlib_wildcard_values(
             // (or an aliased re-import) overwrites its own prior origin rather
             // than registering a phantom second candidate that would fake an
             // ambiguity with itself.
-            env.wildcard_vars.entry(name).or_default().insert(
+            std::rc::Rc::make_mut(&mut env.wildcard_vars).entry(name).or_default().insert(
                 canonical,
                 WildcardOrigin {
                     home,
@@ -1728,7 +1728,7 @@ fn inject_dep_exports(
     let qualifier = import
         .alias
         .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
-    let qual_map = env.qual_vars.entry(qualifier).or_default();
+    let qual_map = std::rc::Rc::make_mut(&mut env.qual_vars).entry(qualifier).or_default();
     for &v in &dep.values {
         qual_map.insert(v, VarHome::TopLevel(dep_path.clone()));
     }
@@ -1739,7 +1739,7 @@ fn inject_dep_exports(
     // user's `exposing (...)` clause — qualified access does not require the
     // name to be in the exposing list (only unqualified access does).
     if !dep.ctors.is_empty() {
-        let qual_ctor_map = env.qual_ctors.entry(qualifier).or_default();
+        let qual_ctor_map = std::rc::Rc::make_mut(&mut env.qual_ctors).entry(qualifier).or_default();
         for (ctor_sym, ctor_home) in &dep.ctors {
             qual_ctor_map.entry(*ctor_sym).or_insert_with(|| ctor_home.clone());
         }
@@ -1824,7 +1824,7 @@ fn inject_ctors_for_type(
                 // Same module exposed again — harmless, no-op.
             } else {
                 unqual_ctor_origins.insert(ctor_home.name, dep_path.clone());
-                env.ctors.insert(ctor_home.name, ctor_home.clone());
+                std::rc::Rc::make_mut(&mut env.ctors).insert(ctor_home.name, ctor_home.clone());
             }
         }
     }
@@ -1980,7 +1980,7 @@ fn register_union(
             });
         }
         seen_ctors.insert(name, c.span);
-        env.ctors.insert(
+        std::rc::Rc::make_mut(&mut env.ctors).insert(
             name,
             CtorHome {
                 home: home.to_vec(),

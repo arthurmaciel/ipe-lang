@@ -403,8 +403,16 @@ fn infer_with_budget_attributed(
     }
 
     // `env` = annotation types of typed bindings (exact) + read-back of every
-    // untyped binding's inferred body type.
-    let mut env = generated.top_level;
+    // untyped binding's inferred body type. The typed schemes lived behind an
+    // `Rc` during constraint generation (per-reference clone = refcount bump);
+    // unwrap here to keep the public `SolvedTypes::env` shape. The refcount is
+    // 1 by now (per-reference clones were transient), so `try_unwrap` moves
+    // without copying; the fallback deep-clone is correctness-equivalent.
+    let mut env: BTreeMap<(Vec<Symbol>, Symbol), Ty> = generated
+        .top_level
+        .into_iter()
+        .map(|(k, v)| (k, std::rc::Rc::try_unwrap(v).unwrap_or_else(|rc| (*rc).clone())))
+        .collect();
     for (name, var) in generated.untyped {
         env.insert(name, lift!(zonk(&mut uf, budget, var)));
     }
@@ -621,7 +629,9 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
     // function, because the runtime kernel applies the callback at one exact
     // arity while the IR flattens curried functions.
     if bounds.has_hof_kernel_result() {
-        classes.push("non-function callback result (Maybe/Result higher-order kernel)");
+        // Shared constant: the renderer keys a tailored (non-double-negative)
+        // sentence off this exact label.
+        classes.push(sky_diagnostics::HOF_KERNEL_RESULT_CLASS);
     }
     let class = if classes.is_empty() {
         "Equatable".to_owned()
@@ -909,10 +919,42 @@ enum FieldState {
     Missing,
 }
 
+/// Small decision datum peeked BY REFERENCE from a field-access base's
+/// union-find descriptor (helper of [`field_access_state`]).
+///
+/// The former `uf.content(root)?` deep-cloned the whole record field map per
+/// field access (efficiency-audit §2 medium); extracting this `Copy`-sized
+/// outcome instead releases the `&uf` borrow before the `&mut uf` table
+/// lookups that follow.
+enum Peek {
+    Record(Option<VarId>),
+    Req,
+    ErrCon(Symbol),
+    Deferred,
+    Missing,
+}
+
+/// Per-update pre-copy of the K needed field vars, peeked BY REFERENCE from
+/// the base record's union-find descriptor (helper of [`resolve_deferred`]'s
+/// record-update pass; see the call-site comment for the borrow rationale).
+enum RuPeek {
+    /// `(field, value_var, field_var-if-present)` per updated field.
+    Fields(Vec<(Symbol, VarId, Option<VarId>)>),
+    Flex,
+    /// The base is a nominal BUILTIN with a fixed READABLE field table
+    /// (`PanicInfo` / `TypeInfo` / `ErrorInfo` / `Request`) — field access
+    /// works, record UPDATE does not. Reported as the dedicated SKY-T0017
+    /// rather than a misleading "no field" SKY-T0012.
+    BuiltinCon(Symbol),
+    Other,
+}
+
 /// Resolve one [`FieldAccess`]'s base to its [`FieldState`].
 ///
-/// `uf.content()` returns an owned clone; the borrow ends before any `fresh`
-/// call the table lookups make, avoiding a simultaneous mutable borrow.
+/// `uf.root_content()` peeks the descriptor by reference (the caller already
+/// ran `find`, so path compression is preserved); the [`Peek`] extraction ends
+/// the borrow before any `fresh` call the table lookups make, avoiding a
+/// simultaneous mutable borrow.
 fn field_access_state(
     uf: &mut UnionFind<Content>,
     req_fields: &RequestFields,
@@ -921,31 +963,38 @@ fn field_access_state(
     field: Symbol,
 ) -> DResult<FieldState> {
     let found_or_missing = |v: Option<VarId>| v.map_or(FieldState::Missing, FieldState::Found);
-    Ok(match uf.content(root)? {
+    let peek = match uf.root_content(root)? {
         Content::Structure(FlatType::Record(fields, _ext)) => {
-            found_or_missing(fields.get(&field).copied())
+            Peek::Record(fields.get(&field).copied())
         }
         // The opaque server `Request` Con is not a structural record, but
         // its field set is fixed (see [`RequestFields`]). Resolve the
         // field against the known table so `req.body` type-checks; the
         // emit reads `runtime::ServerRequest` directly.
-        Content::Structure(FlatType::Con {
-            ref name, ref args, ..
-        }) if *name == req_fields.con && args.is_empty() => {
-            found_or_missing(req_fields.field_var(uf, field)?)
+        Content::Structure(FlatType::Con { name, args, .. })
+            if *name == req_fields.con && args.is_empty() =>
+        {
+            Peek::Req
         }
         // `PanicInfo` / `TypeInfo` / `ErrorInfo` are opaque nominal Cons
         // (SEAL fix 2026-07-11) whose field sets are fixed (see
         // [`ErrorRecordFields`]). Resolve the field against the known table
         // so `p.message` / `t.expected` / `info.details` type-check; the
         // emit reads the runtime structs' pub fields directly.
-        Content::Structure(FlatType::Con {
-            ref name, ref args, ..
-        }) if err_fields.owns(*name) && args.is_empty() => {
-            found_or_missing(err_fields.field_var(uf, *name, field)?)
+        Content::Structure(FlatType::Con { name, args, .. })
+            if err_fields.owns(*name) && args.is_empty() =>
+        {
+            Peek::ErrCon(*name)
         }
-        Content::Flex => FieldState::Deferred, // not settled yet
-        _ => FieldState::Missing, // rigid / super / non-record structure — error
+        Content::Flex => Peek::Deferred, // not settled yet
+        _ => Peek::Missing, // rigid / super / non-record structure — error
+    };
+    Ok(match peek {
+        Peek::Record(v) => found_or_missing(v),
+        Peek::Req => found_or_missing(req_fields.field_var(uf, field)?),
+        Peek::ErrCon(name) => found_or_missing(err_fields.field_var(uf, name, field)?),
+        Peek::Deferred => FieldState::Deferred,
+        Peek::Missing => FieldState::Missing,
     })
 }
 
@@ -1007,46 +1056,12 @@ fn resolve_deferred(
 
         // ── Record updates ────────────────────────────────────────────────────
         for ru in &pending_ru {
-            let root = lift!(uf.find(ru.record));
-            // Clone the field map before any `unify` call (same borrow discipline
-            // as the field-access arm above).
-            match lift!(uf.content(root)) {
-                Content::Structure(FlatType::Record(fields, _ext)) => {
-                    made_progress = true;
-                    for (field, value_var) in &ru.fields {
-                        match fields.get(field).copied() {
-                            Some(field_var) => {
-                                lift!(unify(uf, budget, interner, ru.span, *value_var, field_var));
-                            }
-                            None => {
-                                return Err((
-                                    no_such_field(
-                                        uf, budget, interner, ru.record, *field, ru.span,
-                                    ),
-                                    ru.home.clone(),
-                                ));
-                            }
-                        }
-                    }
-                }
-                Content::Flex => {
-                    // Base not settled yet — defer, just as field accesses do.
-                    next_ru.push(ru);
-                }
-                _ => {
-                    // Not a record and not Flex — error on the first updated
-                    // field (mirrors the pre-fix behaviour of the single-pass
-                    // `resolve_record_updates`).
-                    if let Some((field, _)) = ru.fields.first() {
-                        return Err((
-                            no_such_field(uf, budget, interner, ru.record, *field, ru.span),
-                            ru.home.clone(),
-                        ));
-                    }
-                    // Empty update on a non-record base: degenerate; treat as
-                    // discharged so we don't stall the loop on it.
-                    made_progress = true;
-                }
+            // Deferred → carry to the next pass; Discharged → progress; Error →
+            // propagate. Extracted into a helper so this fixpoint driver stays
+            // under the readability line-cap.
+            match resolve_one_record_update(uf, budget, interner, req_fields, err_fields, ru)? {
+                RuOutcome::Deferred => next_ru.push(ru),
+                RuOutcome::Discharged => made_progress = true,
             }
         }
         pending_ru = next_ru;
@@ -1072,6 +1087,93 @@ fn resolve_deferred(
                     ru.home.clone(),
                 ));
             }
+        }
+    }
+}
+
+/// Whether one deferred record update was discharged this pass or must wait
+/// for the next fixpoint iteration (an error propagates out of the helper
+/// directly, so it is not a variant here).
+enum RuOutcome {
+    Deferred,
+    Discharged,
+}
+
+/// Process ONE deferred record update against the settled union-find (helper
+/// of [`resolve_deferred`]'s record-update pass).
+///
+/// Peeks the base's descriptor by reference into a small [`RuPeek`] pre-copy
+/// (releasing the arena borrow without deep-cloning the field map —
+/// efficiency-audit §2 medium), then:
+/// * a structural record → unify each updated field's value var against the
+///   field's type var (or SKY-T0012 on a missing field);
+/// * a nominal builtin (`PanicInfo`/`TypeInfo`/`ErrorInfo`/`Request`) → the
+///   dedicated SKY-T0017 (readable fields, no update form);
+/// * `Flex` → defer to the next pass;
+/// * anything else → SKY-T0012 on the first updated field (degenerate empty
+///   update on a non-record base is treated as discharged so the loop can't
+///   stall on it).
+fn resolve_one_record_update(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    req_fields: &RequestFields,
+    err_fields: &ErrorRecordFields,
+    ru: &RecordUpdate,
+) -> Result<RuOutcome, (Diagnostic, Vec<Symbol>)> {
+    macro_rules! lift {
+        ($e:expr) => {
+            $e.map_err(|d: Diagnostic| (d, Vec::<Symbol>::new()))?
+        };
+    }
+    let root = lift!(uf.find(ru.record));
+    let peek = match lift!(uf.root_content(root)) {
+        Content::Structure(FlatType::Record(fields, _ext)) => RuPeek::Fields(
+            ru.fields
+                .iter()
+                .map(|(field, value_var)| (*field, *value_var, fields.get(field).copied()))
+                .collect(),
+        ),
+        Content::Structure(FlatType::Con { name, args, .. })
+            if args.is_empty() && (err_fields.owns(*name) || *name == req_fields.con) =>
+        {
+            RuPeek::BuiltinCon(*name)
+        }
+        Content::Flex => RuPeek::Flex,
+        _ => RuPeek::Other,
+    };
+    match peek {
+        RuPeek::Fields(fields) => {
+            for (field, value_var, field_var) in fields {
+                match field_var {
+                    Some(field_var) => {
+                        lift!(unify(uf, budget, interner, ru.span, value_var, field_var));
+                    }
+                    None => {
+                        return Err((
+                            no_such_field(uf, budget, interner, ru.record, field, ru.span),
+                            ru.home.clone(),
+                        ));
+                    }
+                }
+            }
+            Ok(RuOutcome::Discharged)
+        }
+        RuPeek::Flex => Ok(RuOutcome::Deferred),
+        RuPeek::BuiltinCon(name) => Err((
+            lift!(builtin_record_update(interner, name, ru.span)),
+            ru.home.clone(),
+        )),
+        RuPeek::Other => {
+            if let Some((field, _)) = ru.fields.first() {
+                return Err((
+                    no_such_field(uf, budget, interner, ru.record, *field, ru.span),
+                    ru.home.clone(),
+                ));
+            }
+            // Empty update on a non-record base: degenerate; treat as
+            // discharged so we don't stall the loop on it.
+            Ok(RuOutcome::Discharged)
         }
     }
 }
@@ -1194,6 +1296,30 @@ fn resolve_routed_live_checks(
         // Non-routed with no routes → genuinely non-routed → silently skip.
     }
     Ok(())
+}
+
+/// Build the [`TypeError::BuiltinRecordUpdate`] (SKY-T0017) for a record
+/// update on a nominal builtin (`PanicInfo` / `TypeInfo` / `ErrorInfo` /
+/// `Request`) — readable fields, no user-writable update form. Resolving the
+/// type-constructor symbol is the only fallible step; a missing backing string
+/// is a compiler-bug invariant, surfaced as such.
+fn builtin_record_update(interner: &Interner, name: Symbol, span: Span) -> DResult<Diagnostic> {
+    let name: Box<str> = match interner.resolve(name) {
+        Some(s) => Box::from(s),
+        None => {
+            return Err(Diagnostic::CompilerBug {
+                where_: "intern.resolve",
+                detail: format!(
+                    "no backing string for builtin type symbol {}",
+                    name.as_raw()
+                ),
+            });
+        }
+    };
+    Ok(Diagnostic::Type {
+        span,
+        msg: TypeError::BuiltinRecordUpdate { name },
+    })
 }
 
 /// Build the [`TypeError::NoSuchField`] (SKY-T0012) for a field that is absent
@@ -1875,6 +2001,58 @@ mod tests {
         );
     }
 
+    /// Regression for the `RecordUpdate.fields` obligation-exclusion gap
+    /// (BACKLOG "Boundary Scheme Promotion — `obligation_roots`" Low row,
+    /// symmetric to the `fa.result` gap): a cross-module untyped record-update
+    /// helper's field VALUE var (`n` in `setName r n = { r | name = n }`) is
+    /// pinned by `resolve_record_updates` AFTER `promote_untyped_boundaries`
+    /// runs, so it must be excluded from quantification like `ru.record`
+    /// itself. Pre-fix, the scheme quantified it (a quantified-then-later-
+    /// pinned var — the exact E0283 class the `fa.result` fix closed), and
+    /// only the lowerer's `used_generics` backstop kept the emitted Rust
+    /// building. This test pins the PRIMARY mechanism: the promoted scheme
+    /// for `setName` must quantify nothing.
+    #[test]
+    fn record_update_field_value_var_is_excluded_from_quantification() {
+        let lib = (
+            "Lib1",
+            "module Lib1 exposing (setName)\n\n\
+             setName r n =\n    { r | name = n }\n",
+        );
+        let main = (
+            "Main",
+            "module Main exposing (main)\n\n\
+             import Sky.Core.Prelude exposing (..)\n\
+             import Lib1 exposing (setName)\n\n\
+             main =\n    println ((setName { name = \"Ada\" } \"Bea\").name)\n",
+        );
+        let Some((m, mut i)) = link_modules(&[lib, main]) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            r.is_ok(),
+            "a single-record-type cross-module use of an untyped record-update \
+             helper must typecheck: {r:?}"
+        );
+        let Ok(solved) = r else { return };
+        let Ok(lib1) = i.intern("Lib1") else { return };
+        let Ok(set_name) = i.intern("setName") else { return };
+        // An all-monomorphic scheme is skipped when `untyped_type_params` is
+        // populated (empty `quantified` ⇒ no entry), so the post-fix success
+        // signal is "no entry OR an empty entry"; pre-fix the gap produced a
+        // one-symbol entry for the field VALUE var.
+        let quantified = solved.untyped_type_params.get(&(vec![lib1], set_name));
+        assert!(
+            quantified.is_none_or(Vec::is_empty),
+            "setName's promoted scheme must quantify NOTHING — both `r` \
+             (`ru.record`) and `n` (the field VALUE var, pinned later by \
+             resolve_record_updates) are obligation roots; a non-empty list \
+             means a quantified-then-later-pinned var leaked into the scheme \
+             (the E0283 stale-generic class): {quantified:?}"
+        );
+    }
+
     /// Test matrix item 7: a `Super`-bounded untyped helper (`plus a b = a +
     /// b`) used at `Int` in one module and `Float` in another must still be
     /// rejected — Divergence D2: `Super`-bounded residual vars stay
@@ -2000,6 +2178,143 @@ mod tests {
                 args: Box::new([]),
             }
         );
+    }
+
+    #[test]
+    fn call_arg_mismatch_expected_is_declared_param_found_is_actual_arg() {
+        // `Task.fail : Error -> Task Error a` called with a `String` argument:
+        // the DECLARED parameter type is the *expected* side and the user's
+        // actual argument the *found* side — "expected Error, found String",
+        // never the inversion. Regression for the BACKLOG diagnostic-
+        // orientation row (2026-07-10 review of the db_crud/Task.fail pin):
+        // the Call arm used to constrain `eq(callee_var, arrow-of-arg-types)`,
+        // which put the actual argument on unify's *expected* side.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   main =\n    Task.fail \"plain string\"\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::TypeMismatch { .. },
+                    ..
+                })
+            ),
+            "Task.fail \"str\" must be a TypeMismatch, got {r:?}"
+        );
+        let Err(Diagnostic::Type {
+            msg: TypeError::TypeMismatch {
+                expected, found, ..
+            },
+            ..
+        }) = r
+        else {
+            return;
+        };
+        assert_eq!(
+            *expected,
+            con_doc("Error"),
+            "declared param type must be the expected side"
+        );
+        assert_eq!(
+            *found,
+            con_doc("String"),
+            "actual argument type must be the found side"
+        );
+    }
+
+    #[test]
+    fn calling_a_non_function_keeps_function_shape_on_expected_side() {
+        // Calling a non-function value: the *expected* side stays the
+        // function shape the call site demands, the *found* side the callee's
+        // actual (non-function) type. Locks the companion orientation so the
+        // per-arg fix above cannot silently flip this arm.
+        // (`String`, not an integer literal — a bare `5` is a polymorphic
+        // Number var and would render as a type variable, not a Con.)
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   main =\n    let x = \"s\" in x 1\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::TypeMismatch { .. },
+                    ..
+                })
+            ),
+            "calling a String must be a TypeMismatch, got {r:?}"
+        );
+        let Err(Diagnostic::Type {
+            msg: TypeError::TypeMismatch {
+                expected, found, ..
+            },
+            ..
+        }) = r
+        else {
+            return;
+        };
+        assert!(
+            matches!(*expected, sky_diagnostics::TyDoc::Fun(..)),
+            "the call-shape (a function type) must be the expected side, got {expected:?}"
+        );
+        assert_eq!(
+            *found,
+            con_doc("String"),
+            "the non-function callee's type must be the found side"
+        );
+    }
+
+    #[test]
+    fn record_update_on_builtin_nominal_is_dedicated_diagnostic() {
+        // `{ p | message = "x" }` on the nominal builtin `PanicInfo` must NOT
+        // surface as SKY-T0012 "type PanicInfo has no field `message`" — the
+        // field IS readable (`p.message`); the real reason is that a nominal
+        // builtin has no user-writable record-update form. It must be the
+        // dedicated `BuiltinRecordUpdate` (SKY-T0017) naming the type.
+        // (BACKLOG DX row from the PanicInfo nominal-identity review,
+        // 2026-07-11; the design doc called this exact follow-up out.)
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   f : PanicInfo -> PanicInfo\n\
+                   f p =\n    { p | message = \"x\" }\n\
+                   main =\n    println \"never\"\n";
+        let parsed = canon_src(src);
+        assert!(
+            parsed.is_some(),
+            "fixture must parse + canonicalise (a None here would make the \
+             test vacuous)"
+        );
+        let Some((m, mut i)) = parsed else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::BuiltinRecordUpdate { .. },
+                    ..
+                })
+            ),
+            "record update on the nominal builtin PanicInfo must surface the \
+             dedicated BuiltinRecordUpdate (SKY-T0017), not SKY-T0012, got {r:?}"
+        );
+        let Err(Diagnostic::Type {
+            msg: TypeError::BuiltinRecordUpdate { name },
+            ..
+        }) = r
+        else {
+            return;
+        };
+        assert_eq!(&*name, "PanicInfo");
     }
 
     #[test]
