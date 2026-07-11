@@ -1,0 +1,35 @@
+module Main exposing (main)
+
+-- #125 (lower_case sibling): the SAME tuple-of-decoders reuse gap via a
+-- single-arm product `case` (`case buildPair () of (d1, d2) -> …`), which
+-- lowers through `lower_case`'s single-arm destructure branch rather than
+-- `lower_let`'s catch-all. Proves §2.6's `lower_case` wiring, not just
+-- `lower_let`'s.
+-- Expected: Alice|Bob
+
+import Sky.Core.Json.Decode as JsonDec
+
+
+buildPair : () -> ( JsonDec.Decoder String, JsonDec.Decoder Int )
+buildPair _ =
+    ( JsonDec.field "name" JsonDec.string
+    , JsonDec.int
+    )
+
+
+main =
+    case buildPair () of
+        ( nameDecoder, ageDecoder ) ->
+            let
+                r1 =
+                    JsonDec.decodeString nameDecoder "{\"name\":\"Alice\"}"
+
+                r2 =
+                    JsonDec.decodeString nameDecoder "{\"name\":\"Bob\"}"
+            in
+            case ( r1, r2 ) of
+                ( Ok a, Ok b ) ->
+                    println (a ++ "|" ++ b)
+
+                _ ->
+                    println "err"

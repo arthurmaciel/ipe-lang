@@ -1,0 +1,35 @@
+module Main exposing (main)
+
+-- #125: same shape as the tuple fixture, via a RECORD-field binder.
+-- `let { nameDecoder } = buildDecoders () in …` reuses `nameDecoder`
+-- twice; the pre-fix plain record destructure moves the Decoder out of
+-- the struct once, so the second `decodeString` read is rustc E0382.
+-- Expected: Alice|Bob
+
+import Sky.Core.Json.Decode as JsonDec
+
+
+buildDecoders : () -> { nameDecoder : JsonDec.Decoder String, ageDecoder : JsonDec.Decoder Int }
+buildDecoders _ =
+    { nameDecoder = JsonDec.field "name" JsonDec.string
+    , ageDecoder = JsonDec.int
+    }
+
+
+main =
+    let
+        { nameDecoder } =
+            buildDecoders ()
+
+        r1 =
+            JsonDec.decodeString nameDecoder "{\"name\":\"Alice\"}"
+
+        r2 =
+            JsonDec.decodeString nameDecoder "{\"name\":\"Bob\"}"
+    in
+    case ( r1, r2 ) of
+        ( Ok a, Ok b ) ->
+            println (a ++ "|" ++ b)
+
+        _ ->
+            println "err"
