@@ -1,0 +1,16 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- #90 Stage 1 residual seal hole — Maybe variant of the let-bound
+-- constructor-wrapped closure (see l0114_let_bound_fn_payload for the full
+-- root-cause note). Exercises the SAME lambda trait-object-pin fix through the
+-- runtime `SkyMaybe` enum rather than `SkyResult`. Must build+run and print 42.
+applyIt : Maybe (Int -> Int) -> Int
+applyIt mfn =
+    Maybe.withDefault 0 (Maybe.andMap (Just 21) mfn)
+
+main =
+    let
+        f = Just (\x -> x * 2)
+    in
+    println (String.fromInt (applyIt f))
