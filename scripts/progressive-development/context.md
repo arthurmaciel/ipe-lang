@@ -45,13 +45,21 @@ Haskell/Go backend or upstream.
 ```
 touch runtime/tests/*.rs crates/skyc/tests/*.rs
 CARGO_TARGET_DIR="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}" timeout 3000 cargo nextest run --workspace
+CARGO_TARGET_DIR="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}" timeout 1800 cargo nextest run -p sky-runtime-rust --features full
 CARGO_TARGET_DIR="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}" timeout 600 cargo test --doc --workspace
 CARGO_TARGET_DIR="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}" timeout 1200 cargo clippy --workspace --all-targets -- -D warnings
 ```
 `cargo test --workspace` is banned — `cargo nextest run --workspace` is the
 parallel runner and is dramatically faster on this machine; nextest does not
 run doctests, so the `cargo test --doc` line covers those (cheap — this
-workspace has few/no doctests to run). All three exit 0. For a sweep
+workspace has few/no doctests to run). The `--features full` runtime lane is
+LOAD-BEARING, not optional: the runtime's `default = []`, and workspace
+feature-unification does NOT switch on `live` (or `db`/`tui`/…), so the
+workspace run silently skips every `#[cfg(feature = "…")]`-gated test —
+including the ENTIRE `sky_runtime::live::*` surface (`style_inject` CSS-
+injection sink gates, SSE/session/dispatch) and the `spawn_blocking`
+regression modules. A default-only gate can show green while those are red
+(mirror of CI's `runtime-full-features` job). All four lines exit 0. For a sweep
 blocker, also rebuild the example with the fresh `skyc` and confirm the
 original diagnostic is gone (note the new blocker). Green → commit. Red →
 `git reset --hard` + log the reason. The tree only advances.

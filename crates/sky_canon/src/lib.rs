@@ -28,7 +28,7 @@ pub use resolve::ModuleOrigin;
 /// own alias table and expand it there. Fields mirror the private `AliasDef`
 /// in `resolve.rs`; the public counterpart lets the multi-module driver pass
 /// exports across the boundary without exposing resolver internals.
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ExportedAlias {
     /// Declared type-parameter names, in source order.
     pub params: Vec<Symbol>,
@@ -42,7 +42,7 @@ pub struct ExportedAlias {
 ///
 /// Used by [`canonicalise_module`] as the `deps` map entries so importing
 /// modules can inject the right resolved names into their environments.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct ModuleExports {
     /// The module's own path, e.g. `[Lib, Utils]`.
     pub path: Vec<Symbol>,
@@ -136,6 +136,28 @@ pub fn canonicalise_module_with_origin(
     interner: &mut Interner,
 ) -> DResult<(ast::Module, ModuleExports)> {
     resolve::canonicalise_module_with_origin(m, expected_path, deps, origin, interner)
+}
+
+/// Canonicalise a module for the incremental (salsa) build driver.
+///
+/// Like [`canonicalise_module_with_origin`] but takes the dep interfaces by
+/// reference (the `module_interface` query memos — no per-importer deep clone)
+/// and an explicit `known_modules` universe (dot-joined module paths) used
+/// ONLY for the SKY-N0020 did-you-mean list. `deps` must contain exactly this
+/// module's resolved imports; `known_modules` should list every module in the
+/// project. Strings only on the suggestion path — it never interns.
+///
+/// # Errors
+/// Same set as [`canonicalise_module_with_origin`].
+pub fn canonicalise_module_in_project(
+    m: &sky_syntax::Module,
+    expected_path: &[Symbol],
+    deps: &BTreeMap<Vec<Symbol>, &ModuleExports>,
+    known_modules: &BTreeSet<Box<str>>,
+    origin: ModuleOrigin,
+    interner: &mut Interner,
+) -> DResult<(ast::Module, ModuleExports)> {
+    resolve::canonicalise_module_in_project(m, expected_path, deps, known_modules, origin, interner)
 }
 
 #[cfg(test)]
