@@ -940,6 +940,11 @@ enum RuPeek {
     /// `(field, value_var, field_var-if-present)` per updated field.
     Fields(Vec<(Symbol, VarId, Option<VarId>)>),
     Flex,
+    /// The base is a nominal BUILTIN with a fixed READABLE field table
+    /// (`PanicInfo` / `TypeInfo` / `ErrorInfo` / `Request`) — field access
+    /// works, record UPDATE does not. Reported as the dedicated SKY-T0017
+    /// rather than a misleading "no field" SKY-T0012.
+    BuiltinCon(Symbol),
     Other,
 }
 
@@ -1050,59 +1055,12 @@ fn resolve_deferred(
 
         // ── Record updates ────────────────────────────────────────────────────
         for ru in &pending_ru {
-            let root = lift!(uf.find(ru.record));
-            // Peek only the K needed field vars by reference into a small
-            // pre-copy ([`RuPeek`]), then run the unify loop over that — the
-            // former `uf.content(root)` deep-cloned the WHOLE base-record
-            // field map even when few fields change (efficiency-audit §2
-            // medium). Same field vars resolved, same unify order, same span
-            // blamed; the pre-copy releases the arena borrow exactly as the
-            // map clone did.
-            let peek = match lift!(uf.root_content(root)) {
-                Content::Structure(FlatType::Record(fields, _ext)) => RuPeek::Fields(
-                    ru.fields
-                        .iter()
-                        .map(|(field, value_var)| (*field, *value_var, fields.get(field).copied()))
-                        .collect(),
-                ),
-                Content::Flex => RuPeek::Flex,
-                _ => RuPeek::Other,
-            };
-            match peek {
-                RuPeek::Fields(fields) => {
-                    made_progress = true;
-                    for (field, value_var, field_var) in fields {
-                        match field_var {
-                            Some(field_var) => {
-                                lift!(unify(uf, budget, interner, ru.span, value_var, field_var));
-                            }
-                            None => {
-                                return Err((
-                                    no_such_field(uf, budget, interner, ru.record, field, ru.span),
-                                    ru.home.clone(),
-                                ));
-                            }
-                        }
-                    }
-                }
-                RuPeek::Flex => {
-                    // Base not settled yet — defer, just as field accesses do.
-                    next_ru.push(ru);
-                }
-                RuPeek::Other => {
-                    // Not a record and not Flex — error on the first updated
-                    // field (mirrors the pre-fix behaviour of the single-pass
-                    // `resolve_record_updates`).
-                    if let Some((field, _)) = ru.fields.first() {
-                        return Err((
-                            no_such_field(uf, budget, interner, ru.record, *field, ru.span),
-                            ru.home.clone(),
-                        ));
-                    }
-                    // Empty update on a non-record base: degenerate; treat as
-                    // discharged so we don't stall the loop on it.
-                    made_progress = true;
-                }
+            // Deferred → carry to the next pass; Discharged → progress; Error →
+            // propagate. Extracted into a helper so this fixpoint driver stays
+            // under the readability line-cap.
+            match resolve_one_record_update(uf, budget, interner, req_fields, err_fields, ru)? {
+                RuOutcome::Deferred => next_ru.push(ru),
+                RuOutcome::Discharged => made_progress = true,
             }
         }
         pending_ru = next_ru;
@@ -1128,6 +1086,93 @@ fn resolve_deferred(
                     ru.home.clone(),
                 ));
             }
+        }
+    }
+}
+
+/// Whether one deferred record update was discharged this pass or must wait
+/// for the next fixpoint iteration (an error propagates out of the helper
+/// directly, so it is not a variant here).
+enum RuOutcome {
+    Deferred,
+    Discharged,
+}
+
+/// Process ONE deferred record update against the settled union-find (helper
+/// of [`resolve_deferred`]'s record-update pass).
+///
+/// Peeks the base's descriptor by reference into a small [`RuPeek`] pre-copy
+/// (releasing the arena borrow without deep-cloning the field map —
+/// efficiency-audit §2 medium), then:
+/// * a structural record → unify each updated field's value var against the
+///   field's type var (or SKY-T0012 on a missing field);
+/// * a nominal builtin (`PanicInfo`/`TypeInfo`/`ErrorInfo`/`Request`) → the
+///   dedicated SKY-T0017 (readable fields, no update form);
+/// * `Flex` → defer to the next pass;
+/// * anything else → SKY-T0012 on the first updated field (degenerate empty
+///   update on a non-record base is treated as discharged so the loop can't
+///   stall on it).
+fn resolve_one_record_update(
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &Interner,
+    req_fields: &RequestFields,
+    err_fields: &ErrorRecordFields,
+    ru: &RecordUpdate,
+) -> Result<RuOutcome, (Diagnostic, Vec<Symbol>)> {
+    macro_rules! lift {
+        ($e:expr) => {
+            $e.map_err(|d: Diagnostic| (d, Vec::<Symbol>::new()))?
+        };
+    }
+    let root = lift!(uf.find(ru.record));
+    let peek = match lift!(uf.root_content(root)) {
+        Content::Structure(FlatType::Record(fields, _ext)) => RuPeek::Fields(
+            ru.fields
+                .iter()
+                .map(|(field, value_var)| (*field, *value_var, fields.get(field).copied()))
+                .collect(),
+        ),
+        Content::Structure(FlatType::Con { name, args, .. })
+            if args.is_empty() && (err_fields.owns(*name) || *name == req_fields.con) =>
+        {
+            RuPeek::BuiltinCon(*name)
+        }
+        Content::Flex => RuPeek::Flex,
+        _ => RuPeek::Other,
+    };
+    match peek {
+        RuPeek::Fields(fields) => {
+            for (field, value_var, field_var) in fields {
+                match field_var {
+                    Some(field_var) => {
+                        lift!(unify(uf, budget, interner, ru.span, value_var, field_var));
+                    }
+                    None => {
+                        return Err((
+                            no_such_field(uf, budget, interner, ru.record, field, ru.span),
+                            ru.home.clone(),
+                        ));
+                    }
+                }
+            }
+            Ok(RuOutcome::Discharged)
+        }
+        RuPeek::Flex => Ok(RuOutcome::Deferred),
+        RuPeek::BuiltinCon(name) => Err((
+            lift!(builtin_record_update(interner, name, ru.span)),
+            ru.home.clone(),
+        )),
+        RuPeek::Other => {
+            if let Some((field, _)) = ru.fields.first() {
+                return Err((
+                    no_such_field(uf, budget, interner, ru.record, *field, ru.span),
+                    ru.home.clone(),
+                ));
+            }
+            // Empty update on a non-record base: degenerate; treat as
+            // discharged so we don't stall the loop on it.
+            Ok(RuOutcome::Discharged)
         }
     }
 }
@@ -1250,6 +1295,30 @@ fn resolve_routed_live_checks(
         // Non-routed with no routes → genuinely non-routed → silently skip.
     }
     Ok(())
+}
+
+/// Build the [`TypeError::BuiltinRecordUpdate`] (SKY-T0017) for a record
+/// update on a nominal builtin (`PanicInfo` / `TypeInfo` / `ErrorInfo` /
+/// `Request`) — readable fields, no user-writable update form. Resolving the
+/// type-constructor symbol is the only fallible step; a missing backing string
+/// is a compiler-bug invariant, surfaced as such.
+fn builtin_record_update(interner: &Interner, name: Symbol, span: Span) -> DResult<Diagnostic> {
+    let name: Box<str> = match interner.resolve(name) {
+        Some(s) => Box::from(s),
+        None => {
+            return Err(Diagnostic::CompilerBug {
+                where_: "intern.resolve",
+                detail: format!(
+                    "no backing string for builtin type symbol {}",
+                    name.as_raw()
+                ),
+            });
+        }
+    };
+    Ok(Diagnostic::Type {
+        span,
+        msg: TypeError::BuiltinRecordUpdate { name },
+    })
 }
 
 /// Build the [`TypeError::NoSuchField`] (SKY-T0012) for a field that is absent
@@ -2200,6 +2269,51 @@ mod tests {
             con_doc("String"),
             "the non-function callee's type must be the found side"
         );
+    }
+
+    #[test]
+    fn record_update_on_builtin_nominal_is_dedicated_diagnostic() {
+        // `{ p | message = "x" }` on the nominal builtin `PanicInfo` must NOT
+        // surface as SKY-T0012 "type PanicInfo has no field `message`" — the
+        // field IS readable (`p.message`); the real reason is that a nominal
+        // builtin has no user-writable record-update form. It must be the
+        // dedicated `BuiltinRecordUpdate` (SKY-T0017) naming the type.
+        // (BACKLOG DX row from the PanicInfo nominal-identity review,
+        // 2026-07-11; the design doc called this exact follow-up out.)
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   f : PanicInfo -> PanicInfo\n\
+                   f p =\n    { p | message = \"x\" }\n\
+                   main =\n    println \"never\"\n";
+        let parsed = canon_src(src);
+        assert!(
+            parsed.is_some(),
+            "fixture must parse + canonicalise (a None here would make the \
+             test vacuous)"
+        );
+        let Some((m, mut i)) = parsed else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::BuiltinRecordUpdate { .. },
+                    ..
+                })
+            ),
+            "record update on the nominal builtin PanicInfo must surface the \
+             dedicated BuiltinRecordUpdate (SKY-T0017), not SKY-T0012, got {r:?}"
+        );
+        let Err(Diagnostic::Type {
+            msg: TypeError::BuiltinRecordUpdate { name },
+            ..
+        }) = r
+        else {
+            return;
+        };
+        assert_eq!(&*name, "PanicInfo");
     }
 
     #[test]
