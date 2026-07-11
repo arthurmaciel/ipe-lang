@@ -79,26 +79,15 @@ const RUNTIME_MOD_RS_SERVER_APPEND: &str = "pub mod server;\npub use server::*;\
     pub mod http_stream;\npub use http_stream::*;\n";
 
 // ── Shared transitive dep: http_header ──────────────────────────────────────
-
-/// Lines appended to `sky_runtime/mod.rs` when the program wires in the `server`
-/// OR `live` runtime module.
-///
-/// `http_header.rs` is an ungated, dependency-free leaf module exposing
-/// `canonical_header`. It is referenced UNCONDITIONALLY by BOTH `server.rs`
-/// (`server_header` / `build_request`) and `live/req.rs`
-/// (`crate::sky_runtime::http_header::canonical_header`). It is NOT part of the
-/// M0 base `mod.rs` (a plain CLI program never touches request-header
-/// canonicalisation), so without this append a `Std.Live` or `Sky.Http.Server`
-/// program emits `exit-0`-then-`cargo`-`E0433` (`could not find http_header in
-/// sky_runtime`).
-///
-/// This closes the mod-pruning transitive-dependency hole for `http_header`:
-/// a module that is an unconditional dependency of an INCLUDED module must
-/// itself be included. It is appended AT MOST ONCE — guarded on
-/// `uses_server || uses_live || uses_webview` and de-duplicated by the single
-/// guard — so a program using both Server and Live does not emit a duplicate
-/// `pub mod http_header;` (`E0428`).
-const RUNTIME_MOD_RS_HTTP_HEADER_APPEND: &str = "pub mod http_header;\n";
+//
+// `http_header.rs` (a dependency-free leaf exposing `canonical_header`) used
+// to be a CONDITIONAL append here, guarded on
+// `uses_server || uses_live || uses_webview` — it was referenced only by
+// `server.rs` and `live/req.rs`. Since #33 §6.1 the outbound `http_client.rs`
+// response path (part of the M0 BASE module set) also calls it, so it moved
+// into the base `mod.rs` (`tests/golden/m0/sky_runtime/mod.rs`) and the
+// conditional append was removed — re-adding one would emit a duplicate
+// `pub mod http_header;` (E0428) for server/live programs.
 
 // ── #111: Std.Auth ──────────────────────────────────────────────────────────
 
@@ -511,14 +500,9 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         if ctx.uses_auth {
             mod_rs.push_str(RUNTIME_MOD_RS_AUTH_APPEND);
         }
-        // Shared transitive dependency: `http_header` is an unconditional leaf
-        // dependency of BOTH the `server` and `live` runtime modules. Include it
-        // exactly once whenever either is wired in (webview forces `live`). This
-        // is the transitive-closure invariant the append list must maintain — a
-        // module depended on by an included module MUST itself be included.
-        if ctx.uses_server || ctx.uses_live || ctx.uses_webview {
-            mod_rs.push_str(RUNTIME_MOD_RS_HTTP_HEADER_APPEND);
-        }
+        // `http_header` is now part of the M0 BASE `mod.rs` (#33 §6.1 made the
+        // base `http_client` module depend on it), so it needs no conditional
+        // append here — see the retired-append note at the top of this file.
         // #47: Std.Css leaf security kernels — declared for any render-capable
         // program (`uses_ui`, whose html/ui/live runtime modules import
         // `css_safety`) OR a pure-`Std.Css` program (`uses_css`, no render

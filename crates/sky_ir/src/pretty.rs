@@ -591,6 +591,9 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HttpWithTimeout => "Http.withTimeout",
         KernelFn::HttpWithBody => "Http.withBody",
         KernelFn::HttpWithHeader => "Http.withHeader",
+        KernelFn::HttpWithUrl => "Http.withUrl",
+        KernelFn::HttpWithFollowRedirects => "Http.withFollowRedirects",
+        KernelFn::HttpWithMaxRedirects => "Http.withMaxRedirects",
         // ── Db kernels (M5b-db) ──────────────────────────────────────────────
         KernelFn::DbConnect => "Db.connect",
         KernelFn::DbOpen => "Db.open",

@@ -574,6 +574,15 @@ pub enum StdlibKernel {
     HttpWithTimeout,
     HttpWithBody,
     HttpWithHeader,
+    /// `Http.withUrl : String -> HttpRequest -> HttpRequest` — pure builder
+    /// (Go parity, #33 §6.2).
+    HttpWithUrl,
+    /// `Http.withFollowRedirects : Bool -> HttpRequest -> HttpRequest` —
+    /// pure builder (Go parity, #33 §6.2).
+    HttpWithFollowRedirects,
+    /// `Http.withMaxRedirects : Int -> HttpRequest -> HttpRequest` — pure
+    /// builder (Go parity, #33 §6.2).
+    HttpWithMaxRedirects,
     // ── Db ──────────────────────────────────────────────────────────────────
     DbConnect,
     DbOpen,
@@ -1840,6 +1849,17 @@ impl StdlibKernel {
             Self::HttpWithTimeout => d("Http", "withTimeout", 2, Pure, "http_with_timeout"),
             Self::HttpWithBody => d("Http", "withBody", 2, Pure, "http_with_body"),
             Self::HttpWithHeader => d("Http", "withHeader", 3, Pure, "http_with_header"),
+            Self::HttpWithUrl => d("Http", "withUrl", 2, Pure, "http_with_url"),
+            Self::HttpWithFollowRedirects => d(
+                "Http",
+                "withFollowRedirects",
+                2,
+                Pure,
+                "http_with_follow_redirects",
+            ),
+            Self::HttpWithMaxRedirects => {
+                d("Http", "withMaxRedirects", 2, Pure, "http_with_max_redirects")
+            }
             // ── Db ──────────────────────────────────────────────────────────
             Self::DbConnect => d("Db", "connect", 1, Db, "db_connect"),
             Self::DbOpen => d("Db", "open", 2, Db, "db_open"),
@@ -2868,6 +2888,9 @@ impl StdlibKernel {
         Self::HttpWithTimeout,
         Self::HttpWithBody,
         Self::HttpWithHeader,
+        Self::HttpWithUrl,
+        Self::HttpWithFollowRedirects,
+        Self::HttpWithMaxRedirects,
         // Db
         Self::DbConnect,
         Self::DbOpen,
