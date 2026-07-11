@@ -53,6 +53,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
                 lhs: Box::new(Expr::Var(count)),
                 rhs: Box::new(Expr::Int(1)),
             },
+            guard: None,
         },
         Arm {
             pat: Pat::Ctor {
@@ -66,6 +67,7 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
                 lhs: Box::new(Expr::Var(count)),
                 rhs: Box::new(Expr::Int(1)),
             },
+            guard: None,
         },
     ];
     let update_match = Match::new(Expr::Var(msg), arms, &[increment, decrement])?;

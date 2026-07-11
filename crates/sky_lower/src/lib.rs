@@ -97,6 +97,12 @@ pub fn lower(
     // harmlessly).
     let destructure_thunk_binders =
         interner.fresh_symbols("destr_thunk_", lower::count_destructure_thunk_sites(m))?;
+    // #158 C2: one fresh `Vec` payload binder per `case`-arm site that nests a
+    // list / cons sub-pattern inside a constructor payload. `fresh_symbols`
+    // (mutable-mint) runs after the count (immutable borrow), same two-borrow
+    // ordering the `anyp_` pool documents above.
+    let nested_cons_site_count = lower::count_nested_cons_payload_sites(m);
+    let nested_cons_binders = interner.fresh_symbols("ncons_", nested_cons_site_count)?;
     // The built-in `Maybe` / `Result` types + constructors are Prelude
     // built-ins (no `type` declaration), so the lowerer needs their symbols to
     // seed the variant-set / arity tables it would otherwise read from
@@ -165,6 +171,7 @@ pub fn lower(
             param_binders,
             any_param_binders,
             destructure_thunk_binders,
+            nested_cons_binders,
         },
         &builtins,
     )

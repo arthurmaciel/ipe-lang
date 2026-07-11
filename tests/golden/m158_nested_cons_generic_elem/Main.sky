@@ -1,0 +1,21 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #158: a nested-cons payload whose element type flows through a GENERIC
+-- function parameter (`firstOr : b -> Maybe (List b) -> b`). The backend emits
+-- the enclosing function with a `T: Clone` bound, so the head-element
+-- `.clone()` + `List.drop` are sound — this shape is ACCEPTED and runs.
+firstOr : b -> Maybe (List b) -> b
+firstOr dflt m =
+    case m of
+        Just (h :: t) ->
+            h
+
+        _ ->
+            dflt
+
+
+main =
+    println (String.fromInt (firstOr 0 (Just [ 1, 2 ])))
