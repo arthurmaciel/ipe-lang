@@ -183,7 +183,7 @@ survives across revisions on a production path (Phase 2+).
 | **1 (this spec — DONE)** | 1, 2-trim, 3a, 4, 5-imports | db + inputs + `parse`/`imports` queries on the skyc path, memo-hit proof |
 | **2 (DONE — see §7)** | 5 (AST imports), 6, 7, 8 | `resolve_imports` closed-enum edge (add/delete/rename/shadow), `module_interface` firewall + completeness gate, `canonicalize(ModuleId)` tracked |
 | 3 | 9, 11, 18 | `kernel_types()`, coarse whole-program spine (`linked_program()` wrapping link→infer→lower→emit), **stand up the clean-vs-incremental parity gate EARLY** |
-| 4 | 12, 13 | per-module `typecheck`/`lower` (riskiest; gated by 18; coarse floor is the sanctioned fallback) |
+| **4 (implemented — see §9; coarse fallback, NOT per-module)** | 12, 13 | per-module `typecheck`/`lower` (riskiest; gated by 18; coarse floor is the sanctioned fallback) |
 | 5 | 14–17 | `program_metadata()` (conservative, re-runs every build — LOCKED), per-file emit, emit→cargo bridge (content-gated atomic write + manifest prune), config projections |
 | 6 | 19, 20 | Option-B persisted lowered-IR cache (whole-project content address, version-epoch), toolchain refuse-don't-guess |
 | 7 | 21–25 | `ipe watch` (confined watcher, debounce, last-good state machine, L0+ continuity, cancellation) |
@@ -488,3 +488,185 @@ order for every reachable module — is order-independent and unchanged.
 | `kernel_types_memoized_and_source_independent` | memoized; source edits never re-derive; query table == direct `kernel_type_table` read |
 | `sync_source_root_noop_add_remove` | byte-identical re-sync dirties nothing; module add/remove flows through the file set |
 | `sky_intern fresh_symbols_avoid_set_*` (3 tests) | warm re-mint stability, user-identifier dodging, per-build (non-sticky) semantics |
+
+---
+
+## 9. Phase 4 — implemented as the SANCTIONED COARSE FALLBACK, not per-module
+
+Phase 4 = plan Tasks **12, 13**. Headline result: **`typecheck` and
+`lower_program` now exist as their own memoized salsa queries**, closing the
+gap where `compile_prepared` called `sky_types::infer_attributed` and
+`sky_lower::lower` as plain functions on every single build — even a
+byte-equal warm rebuild re-ran the whole solver and the whole lowering pass.
+That waste is now visible to salsa and skippable. **What Phase 4 does NOT
+ship is per-module granularity**: both queries are keyed on `(root, entry)`
+and depend on the whole-program [`linked_program`](#83-task-11--the-coarse-linked_program-spine)
+merge, so an edit anywhere in the reachable module graph still re-executes
+the ENTIRE query, exactly as re-running `infer_attributed`/`lower` would
+today. This is the plan's own explicitly sanctioned fallback for "the
+riskiest phase" (spec Phase table, this doc's original §5) — recorded here
+as a deliberate, load-bearing decision, not an oversight.
+
+### 9.1 Why true per-module `typecheck(ModuleId)` is out of reach today
+
+The survey (reading `sky_types::infer_with_budget_attributed` and
+`sky_lower::lower` end to end before writing anything, per this phase's own
+mandate) found two independent, compounding sources of whole-program
+coupling:
+
+**Inference (`sky_types::constrain` + `solve`).** `Builder::run` builds ONE
+[`sky_types::unionfind::UnionFind`] over the ENTIRE linked module — every
+def in every reachable module shares the same union-find arena and the same
+generated constraint list. The post-solve pipeline then runs, in sequence,
+over that single joint constraint set:
+
+1. `solve_attributed` — budget-bounded discharge of every constraint from
+   every module at once.
+2. **Boundary Scheme Promotion** — generalizes every UNTYPED top-level
+   binding at its home module's boundary and discharges every cross-module
+   reference against the resulting scheme, fresh per call site. This is the
+   ONE place the implementation already partially respects module
+   boundaries (scheme generalization per binding, not per program) — but it
+   runs as a pass over the whole joint UF state, not as an independently
+   invalidatable per-module step, and it explicitly must run before the next
+   pass (ordering dependency, see the code comment at
+   `sky_types::lib::infer_with_budget_attributed`).
+3. `resolve_deferred` — a joint fixpoint over field-access and record-update
+   obligations from EVERY module, because a record update in module X can
+   pin a field type that a field access in module Y needs (the doc example:
+   `{ model | history = snapshots }` in one module enabling `snap.ok` to
+   resolve in another).
+4. `resolve_route_witness_checks` / `resolve_routed_live_checks` — whole-
+   program passes over `Live.app` routing witnesses.
+
+None of these passes is scoped to "the constraints this one module
+generated" — they read and write into the same `UnionFind` and the same
+`generated: Builder::Output` regardless of which module a constraint's
+`home` names. Splitting this into a real per-module query would mean each
+module's inference seeds its OWN environment from deps' TYPED interfaces
+(inferred schemes, not just the canon-level `ModuleExports`
+[`module_interface`] already carries) and discharges its OWN constraints
+independently — i.e., building the ML-module-system "compile against
+signatures" discipline Boundary Scheme Promotion only halfway implements
+today. That is a redesign of `constrain.rs` (7800+ lines) and `solve.rs`,
+not a refactor, and every one of the four passes above would need its own
+soundness argument for why a per-module scoping doesn't silently
+under-constrain a cross-module obligation (a correctness regression, which
+this project's principles order ranks above any efficiency gain).
+
+**Lowering (`sky_lower::lower`).** Independently of inference's coupling,
+`lower` mints its fresh-symbol pools (`eta_`, `cap_`, `arg_`,
+`destr_thunk_`, `ncons_`) sized from WHOLE-PROGRAM facts —
+`lower::max_def_arity(m)` and `lower::count_destructure_param_sites(m)` walk
+every def in the merged module before lowering begins. A per-module lowering
+pass needs those pools either (a) resized per module — which risks exactly
+the numbering the golden-oracle SEAL pins, the same bug class Phase 3's
+Task-18 gate caught for the fresh-name-avoid-set fix (§8.1) — or (b)
+restructured into a composable, incrementally-extensible allocation scheme
+that a per-module `lower(ModuleId)` query can grow without renumbering
+earlier modules' already-lowered pools. Neither is safe to improvise inside
+this phase's budget; both need their own design pass reviewed against the
+Task-18 gate before landing.
+
+### 9.2 What shipped instead — the coarse per-program SEAM
+
+`sky_db::typecheck(db, root, entry)` and `sky_db::lower_program(db, root,
+entry)` (`crates/sky_db/src/lib.rs`):
+
+- `typecheck` depends on `linked_program(root, entry)`, locks the shared
+  interner, and calls `sky_types::infer_attributed` unchanged — same
+  computation, same error shape (`(Diagnostic, home)`), now wrapped in a
+  memoized salsa node.
+- `lower_program` depends on `linked_program(root, entry)` AND
+  `typecheck(root, entry)` (a guaranteed memo hit when the driver demands
+  `typecheck` first, which it does), locks the interner again, and calls
+  `sky_lower::lower` unchanged.
+- `compile_prepared` (`crates/skyc/src/lib.rs`) now demands
+  `sky_db::typecheck` then `sky_db::lower_program` instead of calling
+  `sky_types::infer_attributed` / `sky_lower::lower` directly. The
+  `home_to_source` diagnostic-blame map and the `fresh_avoid` set are still
+  built in the driver (outside any tracked query, exactly as
+  `linked_program`'s consumer-side bookkeeping already was) — no NEW
+  interning happens anywhere in this refactor. The interning SEQUENCE
+  (parse → canon → link → `Builtins::new` inside `infer_attributed` → the
+  fresh-symbol pools inside `lower`) is byte-for-byte the same as before
+  Phase 4; only the lock-scope BOUNDARIES moved (one continuous lock became
+  three short ones, since the new tracked queries each take their own lock
+  internally — the same pattern `canonicalize`/`linked_program` already
+  use). This is why the byte-identity SEAL and the Task-18 parity gate stay
+  green with zero golden-file changes.
+- **Deliberately NOT wired**: `kernel_types(root)` as an explicit dependency
+  of `typecheck`. `Builder::run` still derives kernel schemes internally via
+  `Builder::stdlib_scheme` (never reads the materialized
+  `kernel_type_table`), so adding a `kernel_types(db, root)` demand inside
+  `typecheck` would call `Builtins::new` (which interns builtin type-
+  constructor names) at a NEW, earlier point in the sequence than today —
+  a plausible symbol-numbering perturbation with no compensating benefit
+  yet (nothing consumes the materialized table on this path). Recorded as
+  a follow-up to attempt ONLY once `Builder::run` is changed to read the
+  materialized table instead of re-deriving it — at that point the
+  dependency becomes both meaningful (real reuse) and safe to reason about
+  in one change.
+
+### 9.3 What this buys, honestly
+
+- **Real, salsa-proven memoization** where there was none: `typecheck_memoized_coarse_floor`
+  and `lower_program_memoized_coarse_floor`
+  (`crates/sky_db/tests/phase4_seams.rs`) prove a repeat demand and a
+  byte-equal re-save execute zero new `WillExecute` events for either query
+  — before Phase 4, `infer_attributed`/`lower` re-ran unconditionally on
+  every `compile_prepared` call, warm or not.
+- **The query-graph seam future work needs** — `typecheck(root, entry)` and
+  `lower_program(root, entry)` are now NAMED, independently-observable salsa
+  nodes a future per-module redesign can retarget (change their key shape
+  to `ModuleId`, loop `compile_prepared` per module) without the driver's
+  overall calling convention changing shape, matching `linked_program`'s own
+  documented intent ("Phase 4's per-module typecheck/lower refinement
+  replaces the CONSUMER SIDE of this query").
+- **Explicitly NOT claimed**: any reduction in re-typecheck/re-lower scope
+  for a body-only edit to one module in a multi-module program.
+  `typecheck_is_program_wide_not_per_module`
+  (`crates/sky_db/tests/phase4_seams.rs`) is a REGRESSION-PROOF of the
+  coarseness itself — it asserts that editing module C's body (no import
+  edge to sibling module A) still re-executes `typecheck` in full. This
+  test exists so a future contributor cannot accidentally believe Phase 4
+  shipped fine-grained typecheck by reading only the "memoized" tests.
+
+### 9.4 Phase-4 continuation scope (for the next session)
+
+In priority order, matching the two coupling sources found in §9.1:
+
+1. **Design a typed cross-module interface.** Extend `module_interface`
+   (or add a sibling query) that carries not just `ModuleExports`'
+   canon-level surface but each exported binding's INFERRED scheme —
+   requires running a bounded, self-contained inference pass per module
+   that only needs deps' schemes (not their bodies) as input, mirroring
+   what Boundary Scheme Promotion does for untyped bindings today, widened
+   to cover typed bindings and the deferred field-access/record-update/
+   routed-Live-check passes. This is the crux; everything else is
+   downstream of it.
+2. **Prove the four post-solve passes are sound per-module.** For each of
+   solve/Boundary-Scheme-Promotion/resolve_deferred/routed-checks, write
+   the argument (and a regression test) for why scoping it to one module's
+   constraints plus its deps' typed interfaces cannot under-constrain a
+   cross-module obligation. Do this BEFORE writing the per-module
+   `typecheck` query, not after — a red Task-18 gate after the fact is a
+   correctness bug already shipped to a memo, not a design review.
+3. **Only then** tackle lowering's fresh-symbol-pool sizing (§9.1,
+   independently risky) — a composable per-module allocation scheme,
+   proven against Task-18 before touching the production path.
+4. **Wire `kernel_types` for real** — change `Builder::run` to consume the
+   materialized `kernel_type_table` instead of re-deriving schemes inline,
+   THEN add the `typecheck`-depends-on-`kernel_types` edge (§9.2's
+   deliberately-skipped step) once the interning-order risk is designed
+   away rather than merely avoided.
+
+### 9.5 Phase-4 proof tests
+
+| Test | Asserts |
+|---|---|
+| `sky_db::phase4_seams typecheck_memoized_coarse_floor` | repeat demand + byte-equal re-save execute nothing; dep body edit re-executes (coarse floor) |
+| `typecheck_is_program_wide_not_per_module` | editing an UNRELATED sibling module's body still re-executes the whole seam — the coarseness is a regression-proof, not just an absence of a finer test |
+| `lower_program_memoized_coarse_floor` | same shape one layer down; `typecheck` and `lower_program` re-execute in lockstep on a dep edit |
+| `lower_program_short_circuits_on_typecheck_error` | a red program never reaches `sky_lower::lower` — `lower_program`'s error is `typecheck`'s own diagnostic, verbatim |
+| `skyc::clean_vs_incremental_parity` (5 tests, re-run) | still green — zero golden-file changes, proving the lock-scope restructuring preserved the exact interning sequence |
