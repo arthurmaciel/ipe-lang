@@ -15,6 +15,10 @@
 
 use std::fs;
 
+// Deliberate: this test re-panics with a diagnostic message when it catches an
+// unexpected driver panic — that IS the test's failure-reporting mechanism
+// (the finding this file exists to pin), not production code.
+#[allow(clippy::panic)]
 #[test]
 fn scan_invisible_cycle_must_not_panic_the_driver() {
     let Ok(runtime) = skyc::resolve_runtime() else {

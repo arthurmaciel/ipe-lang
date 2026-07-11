@@ -1402,14 +1402,17 @@ impl<'a> Parser<'a> {
         let head_upper = first.chars().next().is_some_and(|c| c.is_ascii_uppercase());
         if head_upper {
             // Qualified: everything but the last segment is the qualifier.
-            let mut all: Vec<&str> = Vec::with_capacity(rest.len() + 1);
-            all.push(first);
-            all.extend(rest);
-            let Some((last, init)) = all.split_last() else {
+            // Slice at the last '.' instead of re-assembling the init
+            // segments through Vec + join (efficiency-audit §5 low) —
+            // `split('.')` → join of the init segments ≡ `text[..last_dot]`,
+            // and rfind at an ASCII '.' is always a char boundary (safe
+            // slice). `rest` is non-empty here, so the rfind always hits.
+            let Some(idx) = text.rfind('.') else {
                 return Ok(Expr_::VarLocal(self.interner.intern(text)?));
             };
-            let qualifier = init.join(".");
-            let q = self.interner.intern(&qualifier)?;
+            let qualifier = text.get(..idx).unwrap_or_default();
+            let last = text.get(idx + 1..).unwrap_or_default();
+            let q = self.interner.intern(qualifier)?;
             let name = self.interner.intern(last)?;
             return Ok(Expr_::VarQual(q, name));
         }

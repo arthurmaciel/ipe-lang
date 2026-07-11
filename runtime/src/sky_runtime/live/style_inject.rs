@@ -15,12 +15,16 @@
 //! prepended (or sibling-hoisted after a void element, #409).
 //!
 //! SECURITY: the `<style>` body is emitted as an `HRaw` node (CSS cannot be
-//! entity-escaped without breaking it), so the only thing standing between a
-//! marker value and a tag breakout is the close-tag strip applied to EVERY CSS
-//! fragment below — it is load-bearing, mirrors Go byte-for-byte (the same
-//! 7-char both-case strip), and must never be dropped. The selector uses the
-//! element's own already-sanitised sky-id (assign_sky_ids), never a user attr,
-//! so the selector cannot be broken out of either.
+//! entity-escaped without breaking it). The marker attrs are raw Strings a
+//! caller can FORGE via `Ui.htmlAttribute` (bypassing every producer-side
+//! `SafeCss*` gate), so the PRIMARY gate lives at THIS sink: every builder
+//! below re-validates its marker payload through the shared `css_safety`
+//! policy (`SafeCssMediaQuery` / `sink_safe_declaration_list` / `SafeCssValue`
+//! / `sink_safe_keyframes_body`) and drops the block fail-closed on any
+//! breakout. The close-tag strip applied to EVERY CSS fragment stays as
+//! belt-and-braces and must never be dropped. The selector uses the element's
+//! own already-sanitised sky-id (assign_sky_ids), never a user attr, so the
+//! selector cannot be broken out of either.
 //!
 //! Idempotent: a second run finds the markers already stripped and is a no-op
 //! (matches Go's idempotency contract), a belt-and-braces against a missed
@@ -193,7 +197,8 @@ fn strip_markers<M>(attrs: &mut Vec<Attribute<M>>, markers: &[&str]) {
 // `<style>` path and the Std.Css / styleNode `<style>` sink share the identical
 // close-tag stripper.
 use super::super::css_safety::{
-    SafeCssMediaQuery, SafeCssValue, sink_safe_declaration_list, strip_style_close,
+    SafeCssMediaQuery, SafeCssValue, sink_safe_declaration_list, sink_safe_keyframes_body,
+    strip_style_close,
 };
 
 fn build_mq<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
@@ -312,8 +317,21 @@ fn build_anim<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
         if name.is_empty() || body.is_empty() {
             continue;
         }
-        let safe_body = strip_style_close(body);
-        let safe_tail = strip_style_close(tail);
+        // Sink-side re-validation (forgeable marker — see `build_mq`). The
+        // keyframes BODY legitimately contains `{ } ;`, so it goes through the
+        // keyframe-grammar validator instead of the flat declaration policy;
+        // the shorthand TAIL is a single declaration value. An entry that
+        // fails either gate drops fail-closed (`continue` — sibling animations
+        // and the element still render, same per-entry posture as `build_pc`).
+        // `strip_style_close` stays as sink-final belt-and-braces.
+        let safe_body = match sink_safe_keyframes_body(body) {
+            Some(b) => strip_style_close(b),
+            None => continue,
+        };
+        let safe_tail = match SafeCssValue::parse(tail) {
+            Some(t) => strip_style_close(t.as_str()),
+            None => continue,
+        };
         let safe_name = sanitise_animation_name(name);
         if safe_name.is_empty() {
             continue;
@@ -517,8 +535,103 @@ mod tests {
         )];
         let css = build_anim("r.0#div", &attrs);
         assert!(!css.contains("</style"), "{css}");
-        // leading-digit prefixed + non-ident chars → `_`, sky-id ident suffix.
+        // Post-2026-07-11 sink hardening: the body carries trailing content
+        // after the last keyframe block (`</style>`), so
+        // `sink_safe_keyframes_body` rejects it and the whole entry drops
+        // FAIL-CLOSED (stronger than the old strip-then-still-emit contract).
+        assert_eq!(
+            css, "",
+            "forged breakout keyframes body must drop the entry: {css}"
+        );
+    }
+
+    #[test]
+    fn anim_sanitises_name_on_legit_entry() {
+        // Name sanitisation (leading digit prefixed, non-ident chars → `_`,
+        // sky-id-derived ident suffix) still applies on the legit path.
+        let attrs = vec![attr(
+            "data-sky-anim-rules",
+            "9bad name!||300ms ease||0% { opacity: 0 } 100% { opacity: 1 }||1",
+        )];
+        let css = build_anim("r.0#div", &attrs);
         assert!(css.contains("@keyframes _9bad_name___r_0_div"), "{css}");
+        assert!(
+            css.contains("@media (prefers-reduced-motion: no-preference)"),
+            "respect=1 must keep the reduced-motion gate: {css}"
+        );
+    }
+
+    #[test]
+    fn build_anim_sink_keeps_legit_entries_byte_identical() {
+        let attrs = vec![attr(
+            "data-sky-anim-rules",
+            "fadeIn||300ms ease-out 0ms 1 none||0% { opacity: 0; transform: translateY(10px) } 100% { opacity: 1; transform: translateY(0px) }||0",
+        )];
+        let css = build_anim("r.0", &attrs);
+        assert!(
+            css.contains(
+                "@keyframes fadeIn__r_0 { 0% { opacity: 0; transform: translateY(10px) } \
+                 100% { opacity: 1; transform: translateY(0px) } }"
+            ),
+            "legit keyframes must survive byte-identical: {css}"
+        );
+        assert!(
+            css.contains("animation: fadeIn__r_0 300ms ease-out 0ms 1 none;"),
+            "legit shorthand tail must survive: {css}"
+        );
+        assert!(
+            !css.contains("prefers-reduced-motion"),
+            "respect=0 must skip the media gate: {css}"
+        );
+    }
+
+    #[test]
+    fn build_anim_sink_drops_forged_body_breakout() {
+        // Forged body: valid first block, then a close-and-inject page-wide
+        // rule + at-rule — exactly what `strip_style_close` alone missed.
+        let attrs = vec![attr(
+            "data-sky-anim-rules",
+            "x||300ms||0% { opacity: 0 } } body { display:none } @import url(//evil/x.css) {||1",
+        )];
+        assert_eq!(
+            build_anim("r.0", &attrs),
+            "",
+            "forged keyframes-body breakout must drop the entry fail-closed"
+        );
+    }
+
+    #[test]
+    fn build_anim_sink_drops_forged_tail_breakout() {
+        let attrs = vec![attr(
+            "data-sky-anim-rules",
+            "x||300ms; } [y] { color:red||0% { opacity: 0 }||1",
+        )];
+        assert_eq!(
+            build_anim("r.0", &attrs),
+            "",
+            "forged shorthand-tail breakout must drop the entry fail-closed"
+        );
+    }
+
+    #[test]
+    fn build_anim_sink_drops_only_the_forged_entry() {
+        // Per-entry fail-closed posture (same as build_pc): the forged entry
+        // drops, the legit sibling animation still renders.
+        let attrs = vec![attr(
+            "data-sky-anim-rules",
+            "evil||300ms||0% { opacity: 0 } </style><script>alert(1)</script>||1\
+             @@good||200ms linear||0% { opacity: 0 } 100% { opacity: 1 }||1",
+        )];
+        let css = build_anim("r.0", &attrs);
+        assert!(!css.contains("evil__"), "forged entry must drop: {css}");
+        assert!(
+            !css.to_ascii_lowercase().contains("<script"),
+            "script must never render: {css}"
+        );
+        assert!(
+            css.contains("@keyframes good__r_0"),
+            "legit sibling entry must survive: {css}"
+        );
     }
 
     #[test]

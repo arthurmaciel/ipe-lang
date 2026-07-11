@@ -22,7 +22,8 @@ use crate::code::{
     SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015,
     SKY_P0016, SKY_P0017, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041,
     SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004,
-    SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_T0015, SKY_T0016, Severity,
+    SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_T0015, SKY_T0016, SKY_T0017,
+    Severity,
 };
 use crate::span::Span;
 
@@ -415,6 +416,17 @@ pub enum NameError {
     DuplicateQualifier { qualifier: Box<str>, first: Span },
 }
 
+/// Class label for the #90 T3 higher-order-kernel callback-result obligation.
+///
+/// `Maybe`/`Result` `map`/`map2..5`/`mapError`/`andMap` apply their callback
+/// at one exact arity, so the callback's result must not itself be a
+/// function. Shared between the constructor (`sky_types::super_unsatisfied`)
+/// and the renderer's tailored [`TypeError::SuperTypeUnsatisfied`] sentence so
+/// the two sites cannot drift — the generic "`X` is not a `<class>` type"
+/// template would read as a confusing double negative for this label.
+pub const HOF_KERNEL_RESULT_CLASS: &str =
+    "non-function callback result (Maybe/Result higher-order kernel)";
+
 /// Errors raised during type inference / checking.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TypeError {
@@ -460,6 +472,14 @@ pub enum TypeError {
     /// A `record.field` access whose `field` is not present in the (closed)
     /// record type `record` — or whose base is not a record at all. [SKY-T0012]
     NoSuchField { field: Box<str>, record: Box<TyDoc> },
+    /// A record UPDATE (`{ p | message = … }`) on a nominal BUILTIN type
+    /// (`PanicInfo` / `TypeInfo` / `ErrorInfo` / `Request`). Those types expose
+    /// readable fields through a fixed table (`p.message` type-checks), but
+    /// they are not structural records — there is no user-writable
+    /// record-update form, and nowhere sound for the updated structural value
+    /// to flow. A plain [`TypeError::NoSuchField`] here would be misleading
+    /// ("no field `message`" for a field that IS readable). [SKY-T0017]
+    BuiltinRecordUpdate { name: Box<str> },
     /// A constructor pattern binds a number of payload sub-patterns that differs
     /// from the constructor's declared field count (`Just` with no payload, or
     /// `Node l r` for a three-field `Node`). [SKY-T0013]
@@ -473,7 +493,10 @@ pub enum TypeError {
     /// at a type that does not provide those operations (`double True`, where
     /// `double` needs `Number`), or at a type that stays non-concrete (the
     /// obligation cannot be propagated across the use). `class` names the
-    /// super-type; `found` is the offending type. [SKY-T0014]
+    /// super-type; `found` is the offending type. A `class` equal to
+    /// [`HOF_KERNEL_RESULT_CLASS`] renders through a tailored sentence — the
+    /// generic "`X` is not a `<class>` type" template reads as a confusing
+    /// double negative for that internal arity obligation. [SKY-T0014]
     SuperTypeUnsatisfied { class: Box<str>, found: Box<TyDoc> },
     /// A **parameter** pattern (lambda param, function-def head, or `let`
     /// binder) is **refutable** — it can fail to match some value of its type
@@ -902,6 +925,7 @@ impl Diagnostic {
                 | TypeError::TooManyParameters { .. }
                 | TypeError::NonExhaustiveCase { .. }
                 | TypeError::NoSuchField { .. }
+                | TypeError::BuiltinRecordUpdate { .. }
                 | TypeError::CtorPatternArity { .. }
                 | TypeError::SuperTypeUnsatisfied { .. }
                 | TypeError::RefutablePatternParameter
@@ -998,6 +1022,7 @@ const fn type_code(msg: &TypeError) -> Code {
         TypeError::RedundantCaseBranch { .. } => SKY_T0011,
         TypeError::RoutedAppMissingPageField { .. } => SKY_L0124,
         TypeError::NoSuchField { .. } => SKY_T0012,
+        TypeError::BuiltinRecordUpdate { .. } => SKY_T0017,
         TypeError::CtorPatternArity { .. } => SKY_T0013,
         TypeError::SuperTypeUnsatisfied { .. } => SKY_T0014,
         TypeError::RefutablePatternParameter => SKY_T0015,
@@ -1160,6 +1185,7 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
         | TypeError::TooManyParameters { .. }
         | TypeError::RedundantCaseBranch { .. }
         | TypeError::NoSuchField { .. }
+        | TypeError::BuiltinRecordUpdate { .. }
         | TypeError::CtorPatternArity { .. }
         | TypeError::SuperTypeUnsatisfied { .. }
         | TypeError::TaskArity { .. } => Vec::new(),

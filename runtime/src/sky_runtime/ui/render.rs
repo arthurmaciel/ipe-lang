@@ -72,22 +72,38 @@ fn color_css(c: &Color) -> String {
 /// (mediaQueryRulesCss attrs)`, which folds attrs through the SAME collector
 /// used for the main `style=""` attribute — one collector, two call sites).
 pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
-    let mut parts: Vec<String> = Vec::new();
+    // Single shared buffer with a running `;` separator — replaces the former
+    // per-declaration `Vec<String>` + `join(";")` (efficiency-audit §6 medium:
+    // one String per CSS declaration + a join copy). Byte-identical output:
+    // the first declaration is unprefixed and every later one prepends `;`,
+    // exactly what `join(";")` produced. CSS security gates
+    // (`SafeCssPropertyName`/`SafeCssValue`, dangerous-URL, saturating_add)
+    // are untouched.
+    use std::fmt::Write as _;
+    let mut parts = String::new();
+    macro_rules! decl {
+        ($($arg:tt)*) => {{
+            if !parts.is_empty() {
+                parts.push(';');
+            }
+            let _ = write!(parts, $($arg)*);
+        }};
+    }
 
     for attr in attrs {
         match attr {
             Attribute::AttrWidth(len) => {
-                parts.push(format!("width:{}", length_css(len)));
+                decl!("width:{}", length_css(len));
                 if let Length::Fill(n) = len {
-                    parts.push(format!("flex-grow:{n}"));
-                    parts.push("min-width:0".to_owned());
+                    decl!("flex-grow:{n}");
+                    decl!("min-width:0");
                 }
             }
             Attribute::AttrHeight(len) => {
-                parts.push(format!("height:{}", length_css(len)));
+                decl!("height:{}", length_css(len));
                 if let Length::Fill(n) = len {
-                    parts.push(format!("flex-grow:{n}"));
-                    parts.push("min-height:0".to_owned());
+                    decl!("flex-grow:{n}");
+                    decl!("min-height:0");
                 }
             }
             Attribute::AttrAlignX(h) => {
@@ -96,7 +112,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                     HAlign::CenterX => "center",
                     HAlign::AlignRight => "flex-end",
                 };
-                parts.push(format!("align-self:{v}"));
+                decl!("align-self:{v}");
             }
             Attribute::AttrAlignY(v) => {
                 let css = match v {
@@ -104,13 +120,13 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                     VAlign::CenterY => "center",
                     VAlign::AlignBottom => "flex-end",
                 };
-                parts.push(format!("align-self:{css}"));
+                decl!("align-self:{css}");
             }
             Attribute::AttrPadding(t, r, b, l) => {
-                parts.push(format!("padding:{t}px {r}px {b}px {l}px"));
+                decl!("padding:{t}px {r}px {b}px {l}px");
             }
             Attribute::AttrSpacing(n) => {
-                parts.push(format!("gap:{n}px"));
+                decl!("gap:{n}px");
             }
             Attribute::AttrStyle(k, v) => {
                 // Internal direction markers injected by `ui_row_` / `ui_column_` /
@@ -119,20 +135,20 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 // Instead: map to the corresponding Flexbox CSS.
                 match k.as_str() {
                     "__col" => {
-                        parts.push("display:flex".to_owned());
-                        parts.push("flex-direction:column".to_owned());
+                        decl!("display:flex");
+                        decl!("flex-direction:column");
                     }
                     "__row" => {
-                        parts.push("display:flex".to_owned());
-                        parts.push("flex-direction:row".to_owned());
+                        decl!("display:flex");
+                        decl!("flex-direction:row");
                     }
                     "__wrappedrow" => {
-                        parts.push("display:flex".to_owned());
-                        parts.push("flex-direction:row".to_owned());
-                        parts.push("flex-wrap:wrap".to_owned());
+                        decl!("display:flex");
+                        decl!("flex-direction:row");
+                        decl!("flex-wrap:wrap");
                     }
                     "__grid" => {
-                        parts.push("display:grid".to_owned());
+                        decl!("display:grid");
                     }
                     _ => {
                         // User-supplied CSS key+value.
@@ -143,7 +159,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                         if let (Some(pk), Some(pv)) =
                             (SafeCssPropertyName::parse(k), SafeCssValue::parse(v))
                         {
-                            parts.push(format!("{}:{}", pk.as_str(), pv.as_str()));
+                            decl!("{}:{}", pk.as_str(), pv.as_str());
                         }
                         // else: silently drop — consistent with the
                         // `is_dangerous_url_scheme` path in `AttrBgImage`.
@@ -151,10 +167,10 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 }
             }
             Attribute::AttrFontSize(n) => {
-                parts.push(format!("font-size:{n}px"));
+                decl!("font-size:{n}px");
             }
             Attribute::AttrFontColor(c) => {
-                parts.push(format!("color:{}", color_css(c)));
+                decl!("color:{}", color_css(c));
             }
             Attribute::AttrFontFamily(f) => {
                 // Value-as-data gate (UI CSS-escaping hardening): a raw Sky
@@ -165,36 +181,36 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 // spaces) pass untouched. See
                 // `docs/architecture/ui-css-escaping-fix-spec-2026-07-10.md`.
                 if let Some(v) = SafeCssValue::parse(f) {
-                    parts.push(format!("font-family:{}", v.as_str()));
+                    decl!("font-family:{}", v.as_str());
                 }
             }
             Attribute::AttrFontWeight(w) => {
-                parts.push(format!("font-weight:{w}"));
+                decl!("font-weight:{w}");
             }
             Attribute::AttrFontItalic => {
-                parts.push("font-style:italic".to_owned());
+                decl!("font-style:italic");
             }
             Attribute::AttrFontUnderline => {
-                parts.push("text-decoration:underline".to_owned());
+                decl!("text-decoration:underline");
             }
             Attribute::AttrFontDecoration(d) => {
                 if let Some(v) = SafeCssValue::parse(d) {
-                    parts.push(format!("text-decoration:{}", v.as_str()));
+                    decl!("text-decoration:{}", v.as_str());
                 }
             }
             Attribute::AttrFontLetterSpacing(n) => {
-                parts.push(format!("letter-spacing:{n}px"));
+                decl!("letter-spacing:{n}px");
             }
             Attribute::AttrFontWordSpacing(n) => {
-                parts.push(format!("word-spacing:{n}px"));
+                decl!("word-spacing:{n}px");
             }
             Attribute::AttrFontAlign(a) => {
                 if let Some(v) = SafeCssValue::parse(a) {
-                    parts.push(format!("text-align:{}", v.as_str()));
+                    decl!("text-align:{}", v.as_str());
                 }
             }
             Attribute::AttrBgColor(c) => {
-                parts.push(format!("background-color:{}", color_css(c)));
+                decl!("background-color:{}", color_css(c));
             }
             Attribute::AttrBgImage(url) => {
                 // T3: check the raw URL scheme before wrapping in url().
@@ -211,7 +227,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                     // (BG-2 quoting is the upgrade if ever needed).
                     let composed = format!("url({url})");
                     if let Some(v) = SafeCssValue::parse(&composed) {
-                        parts.push(format!("background-image:{}", v.as_str()));
+                        decl!("background-image:{}", v.as_str());
                     }
                 }
             }
@@ -221,11 +237,11 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 // closing the mid-value `expression()` / `url(javascript:…)`
                 // bypass.
                 if let Some(sv) = SafeCssValue::parse(g) {
-                    parts.push(format!("background-image:{}", sv.as_str()));
+                    decl!("background-image:{}", sv.as_str());
                 }
             }
             Attribute::AttrBorderWidth(n) => {
-                parts.push(format!("border-width:{n}px"));
+                decl!("border-width:{n}px");
             }
             Attribute::AttrBorderWidthEach(t, r, b, l) => {
                 // T5: use saturating_add to avoid debug-mode overflow panics.
@@ -233,59 +249,59 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                     .saturating_add(*r)
                     .saturating_add(*b)
                     .saturating_add(*l);
-                parts.push(format!("border-width:{t}px {r}px {b}px {l}px"));
+                decl!("border-width:{t}px {r}px {b}px {l}px");
             }
             Attribute::AttrBorderColor(c) => {
-                parts.push(format!("border-color:{}", color_css(c)));
+                decl!("border-color:{}", color_css(c));
             }
             Attribute::AttrBorderRounded(n) => {
-                parts.push(format!("border-radius:{n}px"));
+                decl!("border-radius:{n}px");
             }
             Attribute::AttrBorderStyle(s) => {
                 if let Some(v) = SafeCssValue::parse(s) {
-                    parts.push(format!("border-style:{}", v.as_str()));
+                    decl!("border-style:{}", v.as_str());
                 }
             }
             Attribute::AttrBorderShadow(x, y, blur, spread, c) => {
-                parts.push(format!(
+                decl!(
                     "box-shadow:{x}px {y}px {blur}px {spread}px {}",
                     color_css(c)
-                ));
+                );
             }
             Attribute::AttrBorderInsetShadow(x, y, blur, spread, c) => {
-                parts.push(format!(
+                decl!(
                     "box-shadow:inset {x}px {y}px {blur}px {spread}px {}",
                     color_css(c)
-                ));
+                );
             }
             Attribute::AttrPointer => {
-                parts.push("cursor:pointer".to_owned());
+                decl!("cursor:pointer");
             }
             Attribute::AttrOverflow(x, y) => {
                 // Per-component gating: one bad axis drops alone, the other
                 // legit axis still renders.
                 if let Some(v) = SafeCssValue::parse(x) {
-                    parts.push(format!("overflow-x:{}", v.as_str()));
+                    decl!("overflow-x:{}", v.as_str());
                 }
                 if let Some(v) = SafeCssValue::parse(y) {
-                    parts.push(format!("overflow-y:{}", v.as_str()));
+                    decl!("overflow-y:{}", v.as_str());
                 }
             }
             Attribute::AttrTransition(t, _respect_reduced) => {
                 if let Some(v) = SafeCssValue::parse(t) {
-                    parts.push(format!("transition:{}", v.as_str()));
+                    decl!("transition:{}", v.as_str());
                 }
             }
             Attribute::AttrGridTracks(cols, rows) => {
                 // Fixed property names; user-supplied values go through SafeCssValue.
                 if !cols.is_empty() {
                     if let Some(pv) = SafeCssValue::parse(cols) {
-                        parts.push(format!("grid-template-columns:{}", pv.as_str()));
+                        decl!("grid-template-columns:{}", pv.as_str());
                     }
                 }
                 if !rows.is_empty() {
                     if let Some(pv) = SafeCssValue::parse(rows) {
-                        parts.push(format!("grid-template-rows:{}", pv.as_str()));
+                        decl!("grid-template-rows:{}", pv.as_str());
                     }
                 }
             }
@@ -298,7 +314,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 // Gate the composed `name spec` shorthand as ONE value.
                 let shorthand = format!("{name} {spec}");
                 if let Some(v) = SafeCssValue::parse(&shorthand) {
-                    parts.push(format!("animation:{}", v.as_str()));
+                    decl!("animation:{}", v.as_str());
                 }
             }
             // Non-style attrs handled in `collect_html_attrs` below.
@@ -312,7 +328,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
         }
     }
 
-    parts.join(";")
+    parts
 }
 
 /// Collect HTML attributes (class, arbitrary attrs, event handlers, `nearby`
