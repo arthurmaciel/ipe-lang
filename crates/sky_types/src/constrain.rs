@@ -4126,6 +4126,15 @@ impl<'a> Builder<'a> {
                     fun(var(0), fun(dec(fun(var(0), var(1))), dec(var(1)))),
                 ),
             ),
+            // `Db.Decode.money : String -> Decoder (Decimal, String)` — decodes a
+            // `"ISO_CODE AMOUNT"` TEXT column (the lossless serialisation
+            // `SqlMoney` writes on INSERT) back into its amount/currency-code
+            // pair. Deliberately NOT `Decoder Money`: `Money`/`Currency` are
+            // project-generated types unnameable from this crate (see #34 spec,
+            // `docs/architecture/class7-sql-db-fix-spec-2026-07-09.md` §6) — a
+            // recorded divergence from the Go backend's `Decoder Money`,
+            // documented in `docs/divergences-from-sky.md`.
+            K::DbDecMoney => fun(string(), dec(tuple2(decimal(), string()))),
 
             // ── Set (base schemes; the `set_elem` obligation is layered in
             //    constrain_var_kernel, keyed off the id) ──
@@ -6416,7 +6425,7 @@ mod registry_phase_c_tests {
             K::DbInsertFieldsReturning,
             K::DbWithTransaction,
             K::DbMigrate,
-            // Db.Decode (14)
+            // Db.Decode (15)
             K::DbDecString,
             K::DbDecInt,
             K::DbDecFloat,
@@ -6431,6 +6440,7 @@ mod registry_phase_c_tests {
             K::DbDecMap4,
             K::DbDecRequired,
             K::DbDecOptional,
+            K::DbDecMoney,
             // Set (10) — base scheme; set_elem obligation layered in constrain_var_kernel
             K::SetEmpty,
             K::SetSize,

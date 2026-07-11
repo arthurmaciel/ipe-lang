@@ -995,8 +995,8 @@ impl Env {
             (
                 "Db.Decode",
                 &[
-                    "string", "int", "float", "bool", "nullable", "map", "andThen", "succeed",
-                    "fail", "map2", "map3", "map4", "required", "optional",
+                    "string", "int", "float", "bool", "money", "nullable", "map", "andThen",
+                    "succeed", "fail", "map2", "map3", "map4", "required", "optional",
                 ],
             ),
             // M6: Sky.Http.Server kernels.
