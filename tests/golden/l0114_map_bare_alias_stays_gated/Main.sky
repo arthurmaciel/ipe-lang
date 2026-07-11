@@ -1,0 +1,19 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #90 T3 (5th attempt): bare point-free re-export of `Result.map` (the
+-- revert-incident Bug-3 shape, replayed against the map family) — the
+-- Tier-2 obligation is minted at the kernel REFERENCE, so the alias hop
+-- changes nothing.
+myMap = Result.map
+
+add : Int -> Int -> Int
+add a b =
+    a + b
+
+main =
+    case myMap add (Ok 1) of
+        Ok g -> println (String.fromInt (g 2))
+        Err _ -> println "err"

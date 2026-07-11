@@ -13,10 +13,17 @@
 //! * T1/T2 — a function value DIRECTLY in `Ok`/`Just`/a user union's payload
 //!   (declared or laundered through a type variable) is now ACCEPTED.
 //! * T3 Tier 2 (primary) — `sky_types::constrain::constrain_var_kernel` ties
-//!   `Maybe.andMap`/`Result.andMap`'s payload-result scheme-var to a
-//!   `TyBounds::and_map_payload()` obligation, checked at type-check time
-//!   (`sky_types::infer`) BEFORE lowering ever runs. This is a TYPE-LEVEL
-//!   check, so it survives arbitrary Sky-level aliasing by construction. It
+//!   the callback-result scheme-var of EVERY `Maybe`/`Result` higher-order
+//!   kernel (`map`, `map2..5`, `mapError`, `andMap` — 13 kernels, pinned by
+//!   `hof_result_slots_match_scheme_shapes` in `sky_types`) to a
+//!   `TyBounds::hof_kernel_result()` obligation, checked at type-check time
+//!   (`sky_types::infer`) BEFORE lowering ever runs. The 4th attempt scoped
+//!   this to `andMap` alone AND failed OPEN on a bare `Ty::Var`; the 5th
+//!   attempt (this one) generalizes the kernel set (the 13th bypass shape
+//!   went through `Result.map`) and fails CLOSED on a variable (the 12th
+//!   bypass shape escaped through an annotated double forwarder's skolem).
+//!   This is a TYPE-LEVEL check, so it survives arbitrary Sky-level
+//!   aliasing by construction. It
 //!   surfaces as ONE of two diagnostics depending on HOW the obligated
 //!   variable is used, mirroring the existing `Math.min` gate's documented
 //!   split (`golden_m4c_math_gate.rs`): a DIRECT `andMap` call pins the
@@ -26,8 +33,9 @@
 //!   `andMap` instead lifts the obligation onto its own skolem and defers to
 //!   the `SchemeApp`/`check_scheme_applications` pass, re-verified at each of
 //!   the forwarder's own external call sites — surfacing the friendlier,
-//!   specifically-labelled `SKY-T0014` (`SuperTypeUnsatisfied`, "single-
-//!   argument function"). Both are clean Sky diagnostics, never a cargo-fail;
+//!   specifically-labelled `SKY-T0014` (`SuperTypeUnsatisfied`,
+//!   "non-function callback result (Maybe/Result higher-order kernel)").
+//!   Both are clean Sky diagnostics, never a cargo-fail;
 //!   which one you see depends only on whether `andMap` was called directly
 //!   or through a forwarder, confirmed empirically below (not merely
 //!   predicted by the design doc, which anticipated SKY-T0014 as the sole
@@ -46,7 +54,7 @@
 //!
 //! Every shape the incident history found (or the revised design's fixture
 //! matrix names) gets its own red (still correctly rejected) fixture, each
-//! going through `assert_and_map_curried_rejected` (accepts SKY-T0001 /
+//! going through `assert_hof_curried_rejected` (accepts SKY-T0001 /
 //! SKY-T0014 / SKY-L0114 — see that helper's doc comment):
 //!
 //! | Shape | Fixture | Origin | Observed code |
@@ -54,9 +62,22 @@
 //! | Direct call / pipe-desugared | `l0114_and_map_curried_stays_gated` | pre-existing | SKY-T0001 |
 //! | `let`-bound partial application | `l0114_and_map_let_bound_alias_stays_gated` | Bug 2 (2nd revert) | SKY-T0001 |
 //! | Bare, point-free top-level re-export | `l0114_and_map_bare_alias_stays_gated` | Bug 3 (3rd revert) | SKY-T0001 |
-//! | Higher-order argument | `l0114_and_map_higher_order_arg_stays_gated` | new, this pass | SKY-T0001 |
-//! | Record-field extraction | `l0114_and_map_record_field_stays_gated` | new, this pass | SKY-T0001 (Tier 2 fires before the pipeline ever reaches the unrelated, pre-existing SKY-L0107 record-field gate — confirmed empirically, see the test's own doc comment) |
-//! | Annotated generic forwarder | `l0114_and_map_forwarder_curried_is_t0014` | new, this pass | SKY-T0014 (the friendly-message path) |
+//! | Higher-order argument | `l0114_and_map_higher_order_arg_stays_gated` | new, 4th attempt | SKY-T0001 |
+//! | Record-field extraction | `l0114_and_map_record_field_stays_gated` | new, 4th attempt | SKY-T0001 (Tier 2 fires before the pipeline ever reaches the unrelated, pre-existing SKY-L0107 record-field gate — confirmed empirically, see the test's own doc comment) |
+//! | Annotated generic forwarder | `l0114_and_map_forwarder_curried_is_t0014` | new, 4th attempt | SKY-T0014 (the friendly-message path) |
+//! | **Annotated DOUBLE forwarder** | `l0114_and_map_annotated_double_forwarder_curried` | **the 12th shape — broke the 4th attempt (fail-open `Ty::Var` arm), revert 2a7b0d6** | SKY-T0014 (fail-closed at the inner `am1` reference) |
+//! | Annotated double forwarder, SAFE arity-1 payload | `l0114_and_map_annotated_double_forwarder_arity1` | 5th attempt — documented precision loss (matches `Math.min`'s conservatism on the identical shape) | SKY-T0014 (conservative reject; the alternative was the 12th shape's cargo-fail) |
+//! | Annotated TRIPLE forwarder | `l0114_and_map_triple_forwarder_curried` | new, 5th attempt | SKY-T0014 (rejected at the first hop) |
+//! | Eta-reduced annotated forwarder (`am2 = am1`) | `l0114_and_map_eta_reduced_forwarder_curried` | new, 5th attempt | SKY-T0014 |
+//! | Unannotated same-module double forwarder | `l0114_and_map_untyped_double_forwarder_curried` (+ green twin `…_arity1`) | new, 5th attempt | SKY-T0014 (concrete found-type via `CLocal`; green twin ACCEPTED, runs, prints 42) |
+//! | Cross-module UNANNOTATED double forwarder | `l0114_and_map_cross_module_untyped_forwarder_curried` | new, 5th attempt (Boundary-Scheme-Promotion escape) | SKY-T0014 |
+//! | **`Result.map` curried callback** | `l0114_map_curried_stays_gated` (Maybe variant) | **the 13th shape family — the 4th attempt gated `andMap` only; `map`/`map2..5`/`mapError` shared the identical FnOnce-vs-flattened hazard and reached cargo as E0277** | SKY-T0001 |
+//! | `Maybe.map2` arity-3 callback | `l0114_map2_extra_arity_stays_gated` (+ exact-arity green twin) | new, 5th attempt | SKY-T0001 |
+//! | `Result.mapError` curried callback | `l0114_map_error_curried_stays_gated` (+ arity-1 green twin) | new, 5th attempt | SKY-T0001 |
+//! | Bare re-export of `Result.map` | `l0114_map_bare_alias_stays_gated` | new, 5th attempt (Bug-3 replay on the map family) | SKY-T0001 |
+//! | **User applicative `map2` via `Result.map`+`andMap`** | `l0114_user_map2_via_andmap_stays_gated` | **the concrete 13th shape this pass's adversarial self-review found (cargo-failed under the 4th attempt even at a SAFE arity-2 use)** | SKY-T0001 |
+//! | Annotated `map` forwarder, curried | `l0114_map_annotated_forwarder_curried_is_t0014` (+ arity-1 green twin) | new, 5th attempt | SKY-T0014 |
+//! | `Result.andThen` returning `Ok fn` | `l0114_and_then_fn_payload_accepted` | new, 5th attempt — boundary pin: `andThen` needs NO obligation (Con-headed callback result), and a callback legitimately returning `Ok fn` stays ACCEPTED and computes 42 | n/a — accepted |
 //! | Import alias | *(not constructible)* | `Result`/`Maybe` are compiler-kernel qualifiers in `sky-rust`, not backed by an importable Sky-source module (`crates/sky_canon/src/resolve.rs`'s fixed kernel-qualifier list) — there is no module to `import … as …` in this milestone. Documented here rather than silently skipped. | n/a |
 //! | Cross-module annotated wrapper, reused at 2 different arity-1 types | `l0114_and_map_cross_module_wrapper_accepted` | design doc's `T3.residual` row — must stay ACCEPTED (proves Tier 2 does not over-reject) | n/a — accepted, confirmed; no `T3d` follow-up needed |
 
@@ -205,7 +226,7 @@ fn fn_extracted_called_twice_accepted() {
 ///   pass's testing, but kept as an accepted outcome so a future Tier-2
 ///   regression fails LOUD with a wrong-tier note rather than silently
 ///   passing this assertion).
-fn assert_and_map_curried_rejected(name: &str) {
+fn assert_hof_curried_rejected(name: &str) {
     let root = repo_root();
     if skyc::resolve_runtime().is_err() {
         return;
@@ -219,7 +240,7 @@ fn assert_and_map_curried_rejected(name: &str) {
         code == Some(sky_diagnostics::SKY_T0001)
             || code == Some(sky_diagnostics::SKY_T0014)
             || code == Some(sky_diagnostics::SKY_L0114),
-        "{name}: curried andMap payload must be rejected with SKY-T0001 (Tier 2, \
+        "{name}: curried higher-order-kernel callback must be rejected with SKY-T0001 (Tier 2, \
          eager pin — the expected outcome for a DIRECT `andMap` call), SKY-T0014 \
          (Tier 2, deferred — reached only through a generic forwarder), or \
          SKY-L0114 (Tier 1 backstop), got: {built:?}"
@@ -230,7 +251,7 @@ fn assert_and_map_curried_rejected(name: &str) {
 /// caught even by the first (buggy) T3 attempts.
 #[test]
 fn and_map_curried_direct_call_stays_gated() {
-    assert_and_map_curried_rejected("l0114_and_map_curried_stays_gated");
+    assert_hof_curried_rejected("l0114_and_map_curried_stays_gated");
 }
 
 /// `let`-bound partial application — revert-incident Bug 2 (2nd revert):
@@ -238,7 +259,7 @@ fn and_map_curried_direct_call_stays_gated() {
 /// which pattern-matched only the direct + pipe-desugared call shapes.
 #[test]
 fn and_map_curried_let_bound_alias_stays_gated() {
-    assert_and_map_curried_rejected("l0114_and_map_let_bound_alias_stays_gated");
+    assert_hof_curried_rejected("l0114_and_map_let_bound_alias_stays_gated");
 }
 
 /// Bare, point-free top-level re-export — revert-incident Bug 3 (3rd
@@ -250,7 +271,7 @@ fn and_map_curried_let_bound_alias_stays_gated() {
 /// not depend on lowering-time AST shape at all.
 #[test]
 fn and_map_curried_bare_alias_stays_gated() {
-    assert_and_map_curried_rejected("l0114_and_map_bare_alias_stays_gated");
+    assert_hof_curried_rejected("l0114_and_map_bare_alias_stays_gated");
 }
 
 /// Higher-order argument — `Result.andMap` passed bare as a call ARGUMENT
@@ -258,7 +279,7 @@ fn and_map_curried_bare_alias_stays_gated() {
 /// to.
 #[test]
 fn and_map_curried_higher_order_arg_stays_gated() {
-    assert_and_map_curried_rejected("l0114_and_map_higher_order_arg_stays_gated");
+    assert_hof_curried_rejected("l0114_and_map_higher_order_arg_stays_gated");
 }
 
 /// Record-field extraction — `{ combiner = Result.andMap }`, later called
@@ -277,7 +298,7 @@ fn and_map_curried_higher_order_arg_stays_gated() {
 /// every other row.
 #[test]
 fn and_map_record_field_extraction_stays_gated() {
-    assert_and_map_curried_rejected("l0114_and_map_record_field_stays_gated");
+    assert_hof_curried_rejected("l0114_and_map_record_field_stays_gated");
 }
 
 /// design doc `T3.residual` fixture: an ANNOTATED wrapper around
@@ -407,4 +428,231 @@ fn fn_carrier_reuse_gated() {
         "a fn-carrying let-binding used twice (consuming positions) must be \
          rejected with SKY-L0127, got: {built:?}"
     );
+}
+
+// ── T3, 5th attempt: forwarder-escape family (the 12th shape and friends) ──
+
+/// Assert `name` is rejected with SKY-T0014 specifically (the deferred
+/// `check_scheme_applications` path — the fail-closed `Ty::Var` arm or a
+/// concrete `Fun` found at a forwarder's own external call site).
+fn assert_rejected_t0014(name: &str) {
+    let root = repo_root();
+    if skyc::resolve_runtime().is_err() {
+        return;
+    }
+    let (built, _out) = built_code(&root, name);
+    let code = match &built {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        code,
+        Some(sky_diagnostics::SKY_T0014),
+        "{name}: must be rejected with SKY-T0014 (fail-closed forwarder-escape \
+         path), got: {built:?}"
+    );
+}
+
+/// Build a green fixture, assert acceptance, and (under `SKY_E2E=1`) build the
+/// emitted crate and assert its runtime stdout — the exact verification step
+/// whose absence let attempts 1-4 ship exit-0-then-cargo-fail bugs.
+fn assert_accepted_runs(name: &str, expected_stdout: &str) {
+    let root = repo_root();
+    if skyc::resolve_runtime().is_err() {
+        return;
+    }
+    let (built, out) = built_code(&root, name);
+    assert!(built.is_ok(), "{name}: must be accepted, got: {built:?}");
+
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    let outcome = support::build_and_run_emitted(name, &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "{name}: emitted crate must build and exit 0; stdout:\n{}",
+        outcome.stdout
+    );
+    assert_eq!(outcome.stdout.trim(), expected_stdout, "{name}: wrong runtime output");
+}
+
+/// THE 12TH SHAPE — the one that broke the 4th attempt (revert `2a7b0d6`):
+/// an ANNOTATED double forwarder (`am2 x f = am1 x f` over
+/// `am1 x f = Result.andMap x f`, both with explicit signatures) applied to
+/// an arity-2 payload. `am1`'s obligated `b` instantiates to `am2`'s own
+/// annotation skolem; `check_scheme_applications` is one-shot (no bound
+/// transfer), so the 4th attempt's fail-OPEN `Ty::Var` arm let the payload
+/// flow unguarded to `main`'s call of `am2` — reaching `cargo build` as
+/// E0308 (reproduced on the restored attempt-4 code before this fix). The
+/// fail-closed arm rejects the inner `am1` reference, exactly as
+/// `Math.min`'s `ord` obligation does on the identical shape.
+#[test]
+fn and_map_annotated_double_forwarder_curried_rejected() {
+    assert_rejected_t0014("l0114_and_map_annotated_double_forwarder_curried");
+}
+
+/// Documented PRECISION LOSS companion: the same annotated double forwarder
+/// at a SAFE arity-1 payload is conservatively rejected too (fail-closed on
+/// the escaped skolem — cross-binding obligation propagation is not yet
+/// supported for ANY bound; `Math.min` behaves identically). This test pins
+/// the CLEAN diagnostic: the two sound outcomes are reject-both (this) or a
+/// genuine bound-transfer accepting arity-1 and rejecting arity-2 at
+/// `main`; accept-both (the 4th attempt) was a seal violation. If this test
+/// ever starts FAILING because the program is ACCEPTED, that is only
+/// correct if cross-binding propagation landed — in that case the curried
+/// sibling above MUST still be rejected AND this fixture's emitted crate
+/// MUST build and print 42; anything else is the 12th shape regressing.
+#[test]
+fn and_map_annotated_double_forwarder_arity1_conservatively_rejected() {
+    assert_rejected_t0014("l0114_and_map_annotated_double_forwarder_arity1");
+}
+
+/// Triple forwarder — escape depth is irrelevant; rejected at the first hop.
+#[test]
+fn and_map_triple_forwarder_curried_rejected() {
+    assert_rejected_t0014("l0114_and_map_triple_forwarder_curried");
+}
+
+/// Eta-reduced annotated forwarder (`am2 = am1`, bare reference) — the
+/// SchemeApp records at the bare reference; same fail-closed rejection.
+#[test]
+fn and_map_eta_reduced_forwarder_curried_rejected() {
+    assert_rejected_t0014("l0114_and_map_eta_reduced_forwarder_curried");
+}
+
+/// Unannotated same-module double forwarder, arity-2 — `CLocal` sharing
+/// keeps the solved type CONCRETE at the check, so this rejects with the
+/// precise found-type (no precision loss where the solver can see through).
+#[test]
+fn and_map_untyped_double_forwarder_curried_rejected() {
+    assert_rejected_t0014("l0114_and_map_untyped_double_forwarder_curried");
+}
+
+/// GREEN twin: the same unannotated same-module double forwarder at an
+/// arity-1 payload stays ACCEPTED and computes 42 — proves the fail-closed
+/// `Ty::Var` arm did not over-reject the concretely-solvable path.
+#[test]
+fn and_map_untyped_double_forwarder_arity1_accepted() {
+    assert_accepted_runs("l0114_and_map_untyped_double_forwarder_arity1", "42");
+}
+
+/// Cross-module UNANNOTATED double forwarder — the Boundary-Scheme-Promotion
+/// escape (the quantified var is a bare `Ty::Var` at the check inside `Lib`);
+/// fail-closed rejects it.
+#[test]
+fn and_map_cross_module_untyped_forwarder_curried_rejected() {
+    let root = repo_root();
+    if skyc::resolve_runtime().is_err() {
+        return;
+    }
+    let entry =
+        fixture_src_entry(&root, "l0114_and_map_cross_module_untyped_forwarder_curried");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("l0114_and_map_cross_module_untyped_forwarder_curried_emit");
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let code = match &built {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        code,
+        Some(sky_diagnostics::SKY_T0014),
+        "cross-module unannotated double forwarder at a curried payload must \
+         be rejected with SKY-T0014, got: {built:?}"
+    );
+}
+
+// ── T3, 5th attempt: the map/map2..5/mapError family (the 13th shape) ──────
+
+/// `Maybe.map` with a curried callback — the 13th-shape FAMILY: the 4th
+/// attempt gated `andMap` only; `map` shares the identical
+/// FnOnce-vs-IR-flattened-closure hazard and reached `cargo build` as E0277.
+#[test]
+fn map_curried_stays_gated() {
+    assert_hof_curried_rejected("l0114_map_curried_stays_gated");
+}
+
+/// GREEN twin: `Result.map` with an exact-arity-1 callback stays accepted.
+#[test]
+fn map_fn_arity1_accepted() {
+    assert_accepted_runs("l0114_map_fn_arity1_accepted", "42");
+}
+
+/// `Maybe.map2` with an arity-3 callback (one residual arrow) — rejected.
+#[test]
+fn map2_extra_arity_stays_gated() {
+    assert_hof_curried_rejected("l0114_map2_extra_arity_stays_gated");
+}
+
+/// GREEN twin: `Maybe.map2` with an exact-arity-2 callback stays accepted —
+/// the scheme's own intermediate `b -> v` arrow carries NO obligation, only
+/// the final result var does.
+#[test]
+fn map2_exact_arity_accepted() {
+    assert_accepted_runs("l0114_map2_exact_arity_accepted", "42");
+}
+
+/// `Result.mapError` with a curried callback — the hazard reaches the ERROR
+/// channel too.
+#[test]
+fn map_error_curried_stays_gated() {
+    assert_hof_curried_rejected("l0114_map_error_curried_stays_gated");
+}
+
+/// GREEN twin: `Result.mapError` with an arity-1 callback stays accepted.
+#[test]
+fn map_error_arity1_accepted() {
+    assert_accepted_runs("l0114_map_error_arity1_accepted", "e:boom");
+}
+
+/// Bug-3 replay on the map family: bare point-free re-export of
+/// `Result.map`, applied to a curried callback.
+#[test]
+fn map_bare_alias_stays_gated() {
+    assert_hof_curried_rejected("l0114_map_bare_alias_stays_gated");
+}
+
+/// THE CONCRETE 13TH SHAPE (found by this pass's adversarial self-review): a
+/// user-written applicative `map2` over `Result.map` + `Result.andMap`.
+/// Under the 4th attempt this cargo-failed as E0277 even at a SAFE arity-2
+/// use — `Result.map`'s callback result escaped into the annotation skolem
+/// chain unchecked, and `myMap2` itself carried no obligation. The
+/// generalized `Result.map` obligation now rejects the definition's kernel
+/// reference itself (conservative: the same fail-closed treatment as every
+/// other forwarder-escape; the workaround is the built-in `Result.map2`).
+#[test]
+fn user_map2_via_andmap_stays_gated() {
+    assert_hof_curried_rejected("l0114_user_map2_via_andmap_stays_gated");
+}
+
+/// Annotated generic forwarder around `Result.map` at a curried callback —
+/// the deferred SchemeApp path, map-family mirror of
+/// `and_map_forwarder_curried_is_sky_t0014`.
+#[test]
+fn map_annotated_forwarder_curried_is_sky_t0014() {
+    assert_rejected_t0014("l0114_map_annotated_forwarder_curried_is_t0014");
+}
+
+/// GREEN twin: the same annotated map forwarder at an arity-1 callback stays
+/// accepted — the obligation lifts onto the forwarder's own skolem and
+/// re-verifies concretely (at `Int`) at the external call site.
+#[test]
+fn map_annotated_forwarder_arity1_accepted() {
+    assert_accepted_runs("l0114_map_annotated_forwarder_arity1_accepted", "42");
+}
+
+/// Boundary pin: `Result.andThen` carries NO obligation — its callback
+/// result is `Con`-headed in the scheme itself (a curried callback is a
+/// plain type mismatch), and a callback legitimately returning `Ok fn`
+/// (arity-1 inner lambda) is sound end-to-end: the extracted function
+/// computes 42. Guards against a future over-eager extension of
+/// `hof_result_slot_for` to structurally-protected kernels.
+#[test]
+fn and_then_fn_payload_accepted() {
+    assert_accepted_runs("l0114_and_then_fn_payload_accepted", "42");
 }

@@ -1,0 +1,16 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #90 T3 green twin: `Maybe.map2` with an exact-arity-2 callback must stay
+-- accepted (the intermediate `b -> v` arrow inside the scheme is the
+-- kernel's own shape; only the FINAL result var carries the obligation).
+add : Int -> Int -> Int
+add a b =
+    a + b
+
+main =
+    case Maybe.map2 add (Just 40) (Just 2) of
+        Just n -> println (String.fromInt n)
+        Nothing -> println "none"

@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #90 T3 green twin: `Result.mapError` with an arity-1 callback. The Ok
+-- payload is pinned to Int via `check`'s annotation (an UNPINNED payload
+-- var on mapError is a separate, pre-existing E0282 emission gap —
+-- documented in the design doc's follow-up section, unrelated to the
+-- callback obligation, verified present with the obligation removed).
+tag : String -> String
+tag s =
+    String.append "e:" s
+
+check : Result String Int -> String
+check r =
+    case r of
+        Ok _ -> "ok"
+        Err msg -> msg
+
+main =
+    println (check (Result.mapError tag (Err "boom")))

@@ -8696,13 +8696,19 @@ impl<'a> Lowerer<'a> {
     /// position, is checked exactly once, by construction, regardless of how
     /// many more lowering arms are added later. This is a lowering-time
     /// BACKSTOP (Tier 1) behind the primary type-checker obligation
-    /// (`sky_types::constrain::constrain_var_kernel`'s `and_map_payload`
+    /// (`sky_types::constrain::constrain_var_kernel`'s `hof_kernel_result`
     /// `TyBounds` tie, Tier 2 — see
     /// `docs/architecture/ctor-payload-andmap-arity-gate-design.md` §3.2):
     /// Tier 2 already rejects the hazard as a type error (`SKY-T0014`)
     /// before lowering ever runs; this backstop gives a second, independent
     /// line of defense keyed on the ACTUAL kernel-call resolution boundary
-    /// rather than any particular AST shape.
+    /// rather than any particular AST shape. Scope note: this Tier-1
+    /// backstop covers the `andMap` kernels ONLY (its peeling logic reads
+    /// the `Con (a -> b)` payload position specific to `andMap`'s scheme);
+    /// the `map`/`map2..5`/`mapError` members of the hazard family are
+    /// covered by Tier 2 alone, whose fail-closed predicate
+    /// (`sky_types::emitted_bound_satisfied`, rejecting both `Ty::Fun` and
+    /// bare `Ty::Var`) is the load-bearing gate for every member.
     fn lower_callee(&self, callee: &canon::Expr) -> DResult<Callee> {
         let resolved = self.lower_callee_resolve(callee)?;
         self.reject_curried_andmap_payload(&resolved, callee)?;

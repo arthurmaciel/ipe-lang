@@ -1,0 +1,20 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #90 T3 (5th attempt): annotated generic forwarder around `Result.map`,
+-- instantiated at a curried callback — the deferred SchemeApp path
+-- (SKY-T0014, friendly message), mirroring the andMap forwarder fixture.
+mmap : (a -> b) -> Result e a -> Result e b
+mmap f x =
+    Result.map f x
+
+add : Int -> Int -> Int
+add a b =
+    a + b
+
+main =
+    case mmap add (Ok 1) of
+        Ok g -> println (String.fromInt (g 2))
+        Err _ -> println "err"
