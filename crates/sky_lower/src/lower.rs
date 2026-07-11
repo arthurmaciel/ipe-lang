@@ -2728,6 +2728,142 @@ fn rewrite_var_to_apply(target: Symbol, expr: Expr) -> Expr {
     })
 }
 
+/// Does `ty` structurally contain [`IrType::Decoder`] anywhere (itself, or
+/// nested inside a `Tuple`/`Record`/`Maybe`/`Result`/`List`)? Gates #125's
+/// destructure-thunk rewrite: a `Tuple`/`Record` binder whose aggregate
+/// type contains a Decoder anywhere needs the WHOLE destructure thunked
+/// (spec §2.2) — a Decoder nested inside e.g. `Maybe (Decoder a)` is out of
+/// today's realistic reach (Decoders aren't optional in practice) but the
+/// predicate stays structurally total rather than special-cased to Tuple/
+/// Record only, matching `ir_type_contains_task`'s existing shape in the
+/// Rust backend (AUD-04).
+fn ir_type_contains_decoder(ty: &IrType) -> bool {
+    match ty {
+        IrType::Decoder(_) => true,
+        IrType::Tuple(elems) => elems.iter().any(ir_type_contains_decoder),
+        IrType::Record(fields) => fields.values().any(ir_type_contains_decoder),
+        IrType::Maybe(inner) | IrType::List(inner) => ir_type_contains_decoder(inner),
+        IrType::Result(e, a) => ir_type_contains_decoder(e) || ir_type_contains_decoder(a),
+        _ => false,
+    }
+}
+
+/// Collect every symbol `pat` binds (recursively) into `out`. Local twin
+/// of `sky_backend_rust::pat_bound_symbols` (same shape, same crate-
+/// boundary rationale — `sky_lower` and `sky_backend_rust` each keep their
+/// own copy rather than share one, since IR flows one-way lower → backend).
+fn pat_bound_symbols(pat: &Pat, out: &mut BTreeSet<Symbol>) {
+    match pat {
+        Pat::Var(s) => {
+            out.insert(*s);
+        }
+        Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => {}
+        Pat::Alias(inner, s) => {
+            out.insert(*s);
+            pat_bound_symbols(inner, out);
+        }
+        Pat::Ctor { args, .. } | Pat::Tuple(args) => {
+            for p in args {
+                pat_bound_symbols(p, out);
+            }
+        }
+        Pat::Record(fields) => {
+            for (_, p) in fields {
+                pat_bound_symbols(p, out);
+            }
+        }
+        Pat::Slice { prefix, rest } => {
+            for p in prefix {
+                pat_bound_symbols(p, out);
+            }
+            if let Some(p) = rest {
+                pat_bound_symbols(p, out);
+            }
+        }
+    }
+}
+
+/// Rebuild `pat` with every bound name EXCEPT `keep` erased to
+/// [`Pat::Wildcard`] — an `Alias`'s own name collapses to a bare
+/// `Pat::Var(keep)` at that position when `keep` is the alias name itself
+/// (dropping the alias wrapper entirely; a single flat name needs no `as`),
+/// otherwise the alias erases and recurses into `inner` (its own name is
+/// irrelevant to this masked, single-name extraction). Used to build the
+/// per-read-site re-destructure pattern for #125 (spec §2.2) — reusing the
+/// ORIGINAL pattern's shape (masked) sidesteps needing any tuple-index /
+/// record-field EXPRESSION accessor in the IR, since [`Expr::Destructure`]
+/// already exists to bind a pattern from a value.
+fn mask_pattern_except(pat: &Pat, keep: Symbol) -> Pat {
+    match pat {
+        Pat::Var(s) => {
+            if *s == keep {
+                Pat::Var(*s)
+            } else {
+                Pat::Wildcard
+            }
+        }
+        Pat::Alias(inner, s) => {
+            if *s == keep {
+                Pat::Var(*s)
+            } else {
+                mask_pattern_except(inner, keep)
+            }
+        }
+        Pat::Tuple(elems) => {
+            Pat::Tuple(elems.iter().map(|p| mask_pattern_except(p, keep)).collect())
+        }
+        Pat::Record(fields) => Pat::Record(
+            fields
+                .iter()
+                .map(|(n, p)| (*n, mask_pattern_except(p, keep)))
+                .collect(),
+        ),
+        // Binding-free leaves keep their shape. `Ctor` / `Slice` never
+        // appear in a #125-eligible binder (the irrefutable destructure
+        // grammar forbids them — `lower_destructure_pat`'s own fail-closed
+        // arms); kept total via an unreachable-in-practice clone rather
+        // than a partial match.
+        Pat::Wildcard
+        | Pat::Int(_)
+        | Pat::Bool(_)
+        | Pat::Char(_)
+        | Pat::Str(_)
+        | Pat::Ctor { .. }
+        | Pat::Slice { .. } => pat.clone(),
+    }
+}
+
+/// Shadow-aware rewrite: replace every FREE `Expr::Var(target)` in `expr`
+/// with a fresh, masked re-destructure of `thunk_name`'s call result — the
+/// #125 generalization of [`rewrite_var_to_apply`] (which only ever needs a
+/// bare `Apply`, since a `PVar` binder has exactly one name that directly
+/// names the re-buildable value). A `Tuple`/`Record` binder introduces
+/// MULTIPLE names from ONE value, so each read must also RE-PROJECT the
+/// right component out of a fresh thunk call:
+///
+/// ```text
+/// -- every free read of `d1` becomes:
+/// { let (d1, _) = (__thunk)(); d1 }
+/// ```
+///
+/// Shares [`rewrite_var_free_occurrences`]'s walk, so the shadow rules are
+/// provably identical to [`rewrite_var_to_apply`]'s.
+fn rewrite_destructure_read(
+    target: Symbol,
+    root_pat: &Pat,
+    thunk_name: Symbol,
+    expr: Expr,
+) -> Expr {
+    rewrite_var_free_occurrences(target, expr, &|s| Expr::Destructure {
+        binder: mask_pattern_except(root_pat, s),
+        value: Box::new(Expr::Apply {
+            func: Box::new(Expr::Var(thunk_name)),
+            args: vec![],
+        }),
+        body: Box::new(Expr::Var(s)),
+    })
+}
+
 /// The lowering pass over a single canonical module.
 pub struct Lowerer<'a> {
     m: &'a canon::Module,
@@ -2809,6 +2945,19 @@ pub struct Lowerer<'a> {
     /// Monotonic cursor into [`Self::any_param_binders`], mirroring
     /// [`Self::param_cursor`]'s shape exactly.
     any_param_cursor: Cell<usize>,
+    /// Pre-minted, collision-free names for the #125 destructure-thunk
+    /// binding (`let destr_thunk_N = move || <value>; …`) that
+    /// [`Self::build_destructure_or_decoder_thunk`] introduces when a
+    /// tuple / record / alias destructure binds a value whose type
+    /// contains `IrType::Decoder`. Sized by
+    /// [`count_destructure_thunk_sites`] (every syntactic destructure
+    /// site, regardless of type — the type gate runs post-solve) and
+    /// handed out through [`Self::destructure_thunk_cursor`] as a
+    /// GLOBALLY-unique supply, mirroring [`Self::param_binders`].
+    destructure_thunk_binders: Vec<Symbol>,
+    /// Monotonic cursor into [`Self::destructure_thunk_binders`],
+    /// mirroring [`Self::param_cursor`]'s shape exactly.
+    destructure_thunk_cursor: Cell<usize>,
     /// Home module path of the def currently being lowered.  Set at the start of
     /// each [`Self::lower_def`] call; read by [`Self::region_ty`] to key the
     /// region map as `(home, span)` — matching the discriminant the constraint
@@ -3037,6 +3186,95 @@ pub fn count_any_param_sites(m: &canon::Module, interner: &Interner) -> usize {
         .sum()
 }
 
+/// Count every destructure-binder `let` binding AND single-arm product
+/// `case` in the module — one pre-minted symbol needed per site for #125's
+/// Decoder-thunk generalization (spec §2.6), REGARDLESS of whether that
+/// binding ultimately turns out to be Decoder-typed (the type-dependent
+/// gate runs later, once solving has completed; this pass is purely
+/// syntactic, like its [`count_destructure_param_sites`] sibling). A `let`
+/// binding counts whenever its pattern is neither `PVar` nor `PAnything` —
+/// exactly the set that reaches [`Lowerer::lower_let`]'s destructure
+/// catch-all; a `case` counts when it has exactly one arm whose head is a
+/// product destructure ([`Lowerer::is_destructure_head`]'s shape). Over-
+/// counting is harmless; under-counting fails closed as a [`bug`], never an
+/// index panic.
+pub fn count_destructure_thunk_sites(m: &canon::Module) -> usize {
+    const fn is_thunk_countable_binding(pat: &canon::Pattern_) -> bool {
+        !matches!(
+            pat,
+            canon::Pattern_::PVar(_) | canon::Pattern_::PAnything
+        )
+    }
+    fn is_destructure_headed(pat: &canon::Pattern_) -> bool {
+        match pat {
+            canon::Pattern_::PTuple(_) | canon::Pattern_::PRecord(_) => true,
+            canon::Pattern_::PAlias(inner, _) => is_destructure_headed(&inner.value),
+            _ => false,
+        }
+    }
+    fn walk_expr(e: &canon::Expr) -> usize {
+        match &e.value {
+            canon::Expr_::Let(bindings, body) => {
+                bindings
+                    .iter()
+                    .map(|b| {
+                        usize::from(is_thunk_countable_binding(&b.pat.value)) + walk_expr(&b.body)
+                    })
+                    .sum::<usize>()
+                    + walk_expr(body)
+            }
+            canon::Expr_::Case(scrut, branches) => {
+                let head = branches.len() == 1
+                    && branches
+                        .first()
+                        .is_some_and(|b| is_destructure_headed(&b.pat.value));
+                usize::from(head)
+                    + walk_expr(scrut)
+                    + branches.iter().map(|b| walk_expr(&b.body)).sum::<usize>()
+            }
+            // Every other recursive arm mirrors
+            // `count_destructure_param_sites`'s `walk_expr` shape.
+            canon::Expr_::Lambda(_, body) => walk_expr(body),
+            canon::Expr_::Call(callee, args) => {
+                walk_expr(callee) + args.iter().map(walk_expr).sum::<usize>()
+            }
+            canon::Expr_::Binop { lhs, rhs, .. } => walk_expr(lhs) + walk_expr(rhs),
+            canon::Expr_::If(branches, else_expr) => {
+                branches
+                    .iter()
+                    .map(|(c, b)| walk_expr(c) + walk_expr(b))
+                    .sum::<usize>()
+                    + walk_expr(else_expr)
+            }
+            canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
+                elems.iter().map(walk_expr).sum()
+            }
+            canon::Expr_::Cons(head, tail) => walk_expr(head) + walk_expr(tail),
+            canon::Expr_::Record(fields) => fields.iter().map(|(_, v)| walk_expr(v)).sum(),
+            canon::Expr_::Access(record, _) => walk_expr(record),
+            canon::Expr_::Update(base, fields) => {
+                walk_expr(base) + fields.iter().map(|(_, v)| walk_expr(v)).sum::<usize>()
+            }
+            // Leaves host no let / case.
+            canon::Expr_::VarLocal(_)
+            | canon::Expr_::VarTopLevel { .. }
+            | canon::Expr_::VarKernel { .. }
+            | canon::Expr_::VarCtor { .. }
+            | canon::Expr_::Int(_)
+            | canon::Expr_::Float(_)
+            | canon::Expr_::Str(_)
+            | canon::Expr_::Char(_)
+            | canon::Expr_::Unit => 0,
+        }
+    }
+    m.defs
+        .iter()
+        .map(|d| match d {
+            canon::Def::Typed { body, .. } | canon::Def::Untyped { body, .. } => walk_expr(body),
+        })
+        .sum()
+}
+
 /// Every pre-minted, collision-free synthetic-symbol pool [`Lowerer::new`]
 /// needs — bundled into one argument so the constructor stays under
 /// clippy's arg-count ceiling. Each field is documented at its matching
@@ -3047,6 +3285,7 @@ pub struct SymbolPools {
     pub cap_params: Vec<Symbol>,
     pub param_binders: Vec<Symbol>,
     pub any_param_binders: Vec<Symbol>,
+    pub destructure_thunk_binders: Vec<Symbol>,
 }
 
 /// `(params, prologue, ret, any_syms_minted)` — [`Lowerer::split_typed_sig`]'s
@@ -3072,6 +3311,7 @@ impl<'a> Lowerer<'a> {
             cap_params,
             param_binders,
             any_param_binders,
+            destructure_thunk_binders,
         } = pools;
         let mut func_ids = BTreeMap::new();
         for (idx, def) in m.defs.iter().enumerate() {
@@ -3233,6 +3473,8 @@ impl<'a> Lowerer<'a> {
             param_cursor: Cell::new(0),
             any_param_binders,
             any_param_cursor: Cell::new(0),
+            destructure_thunk_binders,
+            destructure_thunk_cursor: Cell::new(0),
             current_home: std::cell::RefCell::new(Vec::new()),
             current_poly_tvars: std::cell::RefCell::new(BTreeMap::new()),
             fn_is_async: Cell::new(false),
@@ -3271,6 +3513,23 @@ impl<'a> Lowerer<'a> {
             )
         })?;
         self.any_param_cursor.set(i + 1);
+        Ok(sym)
+    }
+
+    /// Hand out the next globally-unique #125 destructure-thunk binder from
+    /// [`Self::destructure_thunk_binders`]. Mirrors
+    /// [`Self::fresh_param_binder`] exactly; sized by
+    /// [`count_destructure_thunk_sites`], so an overrun is an internal
+    /// invariant violation, never an index panic.
+    fn fresh_destructure_thunk_symbol(&self) -> DResult<Symbol> {
+        let i = self.destructure_thunk_cursor.get();
+        let sym = *self.destructure_thunk_binders.get(i).ok_or_else(|| {
+            bug(
+                "sky_lower::fresh_destructure_thunk_symbol",
+                "destructure-thunk-binder pool exhausted",
+            )
+        })?;
+        self.destructure_thunk_cursor.set(i + 1);
         Ok(sym)
     }
 
@@ -10186,6 +10445,89 @@ impl<'a> Lowerer<'a> {
             .map(|inner| IrType::Decoder(Box::new(inner)))
     }
 
+    /// Build the [`Expr`] for a destructure-binder `let` / single-arm-`case`
+    /// binding, applying the #125 Decoder-thunk generalization when `value`'s
+    /// aggregate type contains [`IrType::Decoder`] anywhere. Falls through to
+    /// a plain [`Expr::Destructure`] (byte-identical to pre-#125 emission)
+    /// when it does not.
+    ///
+    /// The Decoder path generalizes #89 Fix C to multi-name binders: the
+    /// whole `value` is wrapped in a zero-arg thunk lambda and EVERY name the
+    /// binder binds gets its free reads rewritten to a fresh, masked
+    /// re-destructure of a thunk call
+    /// (`{ let (d1, _) = (destr_thunk_N)(); d1 }`) — see
+    /// `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §2.
+    /// Sound for the same reason Fix C is sound: Decoders are pure values, so
+    /// re-evaluating the construction per read is semantics-neutral.
+    /// Uniformly thunking ALL bound names (Decoder-typed or not) mirrors Fix
+    /// C's own "unconditional, no use-count gate" decision — mixing bound-
+    /// directly and bound-via-thunk names in ONE Rust binding statement is
+    /// not representable without literal tuple/field projection, which the IR
+    /// deliberately does not have.
+    ///
+    /// `canon_value` is the CANON (pre-lowering) expression the binding
+    /// evaluates — [`Self::captured_locals`] needs it (not the lowered
+    /// `value`) for the T3 (#121) capture-clone analysis on the thunk body,
+    /// exactly as [`Self::lower_let`]'s `PVar` Decoder arm does.
+    fn build_destructure_or_decoder_thunk(
+        &self,
+        binder: Pat,
+        value: Expr,
+        value_span: Span,
+        body: Expr,
+        canon_value: &canon::Expr,
+    ) -> DResult<Expr> {
+        let value_ir_ty = self
+            .region_ty(value_span)
+            .and_then(|ty| self.ir_type_from_ty(ty, value_span).ok());
+        let Some(ir_ty) = value_ir_ty.filter(ir_type_contains_decoder) else {
+            return Ok(Expr::Destructure {
+                binder,
+                value: Box::new(value),
+                body: Box::new(body),
+            });
+        };
+
+        // T3 (#121)-style capture-clone rewrite on the thunk body, mirroring
+        // the PVar arm exactly: the thunk has zero params, so every free
+        // VarLocal in `canon_value` is an outer capture.
+        let thunk_body = {
+            let captures = self.captured_locals(&[], canon_value);
+            let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
+            let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
+            for (sym, ir_ty) in captures {
+                match ir_ty.as_ref().map(clone_class) {
+                    Some(CloneClass::CloneOk) => {
+                        clone_set.insert(sym);
+                    }
+                    Some(CloneClass::NonClone) => {
+                        noncl_set.insert(sym);
+                    }
+                    Some(CloneClass::CopyLeaf) | None => {}
+                }
+            }
+            rewrite_captured_clones(&clone_set, &noncl_set, value_span, value, 0)?
+        };
+        let thunk_name = self.fresh_destructure_thunk_symbol()?;
+        let thunk = Expr::Lambda {
+            params: vec![],
+            ret: ir_ty,
+            body: Box::new(thunk_body),
+        };
+
+        let mut bound: BTreeSet<Symbol> = BTreeSet::new();
+        pat_bound_symbols(&binder, &mut bound);
+        let mut new_body = body;
+        for name in &bound {
+            new_body = rewrite_destructure_read(*name, &binder, thunk_name, new_body);
+        }
+        Ok(Expr::Let {
+            name: thunk_name,
+            value: Box::new(thunk),
+            body: Box::new(new_body),
+        })
+    }
+
     fn lower_let(&self, bindings: &[canon::LetBinding], body: &canon::Expr) -> DResult<Expr> {
         let mut acc = self.lower_expr(body)?;
         for b in bindings.iter().rev() {
@@ -10308,11 +10650,20 @@ impl<'a> Lowerer<'a> {
                         }
                     }
                 }
-                _ => Expr::Destructure {
-                    binder: self.lower_binder_pat(&b.pat, &b.body)?,
-                    value: Box::new(value),
-                    body: Box::new(acc),
-                },
+                // #125: a destructure binder (tuple / record / alias) whose
+                // bound value's type contains a Decoder anywhere gets the
+                // whole-destructure thunk treatment; every other shape falls
+                // through to the plain (byte-identical) `Destructure`.
+                _ => {
+                    let binder = self.lower_binder_pat(&b.pat, &b.body)?;
+                    self.build_destructure_or_decoder_thunk(
+                        binder,
+                        value,
+                        b.body.span,
+                        acc,
+                        &b.body,
+                    )?
+                }
             };
         }
         Ok(acc)
@@ -10333,12 +10684,14 @@ impl<'a> Lowerer<'a> {
         // a destructure even under one or more `as` aliases.
         if Self::is_destructure_head(&first.pat.value) {
             if branches.len() == 1 {
+                // #125: same Decoder-thunk gate as `lower_let`'s destructure
+                // catch-all — `case buildPair () of (d1, d2) -> …` reusing a
+                // Decoder-typed component is the identical E0382 gap.
                 let binder = self.lower_binder_pat(&first.pat, scrut)?;
-                return Ok(Expr::Destructure {
-                    binder,
-                    value: Box::new(scrutinee),
-                    body: Box::new(self.lower_expr(&first.body)?),
-                });
+                let body = self.lower_expr(&first.body)?;
+                return self.build_destructure_or_decoder_thunk(
+                    binder, scrutinee, scrut.span, body, scrut,
+                );
             }
             // A MULTI-arm product `case`. A tuple scrutinee whose arms are tuple
             // heads plus (optionally) a `_` catch-all lowers to a native Rust
@@ -11069,6 +11422,7 @@ mod tests {
                 cap_params: vec![],
                 param_binders: vec![],
                 any_param_binders: vec![],
+                destructure_thunk_binders: vec![],
             },
             &builtins,
         );
@@ -11182,6 +11536,7 @@ mod tests {
                 cap_params: vec![],
                 param_binders: vec![],
                 any_param_binders: vec![],
+                destructure_thunk_binders: vec![],
             },
             &builtins,
         );
