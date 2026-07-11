@@ -2543,14 +2543,12 @@ fn pat_binds_symbol(pat: &Pat, target: Symbol) -> bool {
     }
 }
 
-/// Rewrite every free `Expr::Var(target)` in `expr` to
-/// `Expr::Apply { func: Var(target), args: [] }` (emitted as `(target)()`).
-///
-/// This is the read-site half of the Decoder thunk rewrite (#89 F2, design
-/// preserved in git history as `seal-jsondecp-design.md` §5.C): after
-/// [`Lowerer::lower_let`] wraps a Decoder-typed binding value in a zero-arg
-/// lambda, every read of that binding must call the thunk to obtain a fresh
-/// `Decoder` value.
+/// Rewrite every FREE `Expr::Var(target)` in `expr` to `on_hit(target)` —
+/// the shared shadow-aware tree walk behind [`rewrite_var_to_apply`] (#89 F2)
+/// and [`rewrite_destructure_read`] (#125). Factoring the walk out keeps the
+/// two rewrites' shadow handling provably identical instead of two chances
+/// to drift (spec §2.5,
+/// `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md`).
 ///
 /// Shadow-safe: stops rewriting into any scope where `target` is rebound by:
 /// * `Expr::Let { name, … }` — `name == target` shadows in `body`
@@ -2559,15 +2557,16 @@ fn pat_binds_symbol(pat: &Pat, target: Symbol) -> bool {
 /// * `Expr::Match` arms — an arm's `pat` binds `target`
 ///
 /// `value` is never rewritten inside a `Let` (it is evaluated in the outer
-/// scope, matching the `let` scoping rule), and the thunk's own body (the
+/// scope, matching the `let` scoping rule), and a thunk's own body (the
 /// decoder expression) is also in the outer scope and is already correct.
 #[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
-fn rewrite_var_to_apply(target: Symbol, expr: Expr) -> Expr {
+fn rewrite_var_free_occurrences(
+    target: Symbol,
+    expr: Expr,
+    on_hit: &impl Fn(Symbol) -> Expr,
+) -> Expr {
     match expr {
-        Expr::Var(s) if s == target => Expr::Apply {
-            func: Box::new(Expr::Var(s)),
-            args: vec![],
-        },
+        Expr::Var(s) if s == target => on_hit(s),
         Expr::Var(_)
         | Expr::CloneVar(_)
         | Expr::Int(_)
@@ -2579,18 +2578,18 @@ fn rewrite_var_to_apply(target: Symbol, expr: Expr) -> Expr {
         | Expr::FuncValue { .. } => expr,
         Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
             op,
-            lhs: Box::new(rewrite_var_to_apply(target, *lhs)),
-            rhs: Box::new(rewrite_var_to_apply(target, *rhs)),
+            lhs: Box::new(rewrite_var_free_occurrences(target, *lhs, on_hit)),
+            rhs: Box::new(rewrite_var_free_occurrences(target, *rhs, on_hit)),
         },
         // `let name = value in body` — `value` is outer-scope; `body` is
         // inner-scope but the shadow check applies.
         Expr::Let { name, value, body } => {
-            let new_value = Box::new(rewrite_var_to_apply(target, *value));
+            let new_value = Box::new(rewrite_var_free_occurrences(target, *value, on_hit));
             let new_body = if name == target {
                 // `target` is shadowed; reads in body are the new binding.
                 body
             } else {
-                Box::new(rewrite_var_to_apply(target, *body))
+                Box::new(rewrite_var_free_occurrences(target, *body, on_hit))
             };
             Expr::Let {
                 name,
@@ -2599,11 +2598,11 @@ fn rewrite_var_to_apply(target: Symbol, expr: Expr) -> Expr {
             }
         }
         Expr::Destructure { binder, value, body } => {
-            let new_value = Box::new(rewrite_var_to_apply(target, *value));
+            let new_value = Box::new(rewrite_var_free_occurrences(target, *value, on_hit));
             let new_body = if pat_binds_symbol(&binder, target) {
                 body
             } else {
-                Box::new(rewrite_var_to_apply(target, *body))
+                Box::new(rewrite_var_free_occurrences(target, *body, on_hit))
             };
             Expr::Destructure {
                 binder,
@@ -2612,20 +2611,20 @@ fn rewrite_var_to_apply(target: Symbol, expr: Expr) -> Expr {
             }
         }
         Expr::If { cond, then_, else_ } => Expr::If {
-            cond: Box::new(rewrite_var_to_apply(target, *cond)),
-            then_: Box::new(rewrite_var_to_apply(target, *then_)),
-            else_: Box::new(rewrite_var_to_apply(target, *else_)),
+            cond: Box::new(rewrite_var_free_occurrences(target, *cond, on_hit)),
+            then_: Box::new(rewrite_var_free_occurrences(target, *then_, on_hit)),
+            else_: Box::new(rewrite_var_free_occurrences(target, *else_, on_hit)),
         },
         Expr::Match(m) => {
             let (scrutinee, arms) = m.into_parts();
-            let new_scrutinee = Box::new(rewrite_var_to_apply(target, *scrutinee));
+            let new_scrutinee = Box::new(rewrite_var_free_occurrences(target, *scrutinee, on_hit));
             let new_arms = arms
                 .into_iter()
                 .map(|arm| {
                     let new_body = if pat_binds_symbol(&arm.pat, target) {
                         arm.body
                     } else {
-                        rewrite_var_to_apply(target, arm.body)
+                        rewrite_var_free_occurrences(target, arm.body, on_hit)
                     };
                     Arm {
                         pat: arm.pat,
@@ -2639,62 +2638,62 @@ fn rewrite_var_to_apply(target: Symbol, expr: Expr) -> Expr {
             callee,
             args: args
                 .into_iter()
-                .map(|a| rewrite_var_to_apply(target, a))
+                .map(|a| rewrite_var_free_occurrences(target, a, on_hit))
                 .collect(),
         },
         Expr::Tuple(items) => {
-            Expr::Tuple(items.into_iter().map(|e| rewrite_var_to_apply(target, e)).collect())
+            Expr::Tuple(items.into_iter().map(|e| rewrite_var_free_occurrences(target, e, on_hit)).collect())
         }
         Expr::List { elem, items } => Expr::List {
             elem,
-            items: items.into_iter().map(|e| rewrite_var_to_apply(target, e)).collect(),
+            items: items.into_iter().map(|e| rewrite_var_free_occurrences(target, e, on_hit)).collect(),
         },
         Expr::Cons { head, tail } => Expr::Cons {
-            head: Box::new(rewrite_var_to_apply(target, *head)),
-            tail: Box::new(rewrite_var_to_apply(target, *tail)),
+            head: Box::new(rewrite_var_free_occurrences(target, *head, on_hit)),
+            tail: Box::new(rewrite_var_free_occurrences(target, *tail, on_hit)),
         },
         Expr::Record(fields) => Expr::Record(
             fields
                 .into_iter()
-                .map(|(sym, e)| (sym, rewrite_var_to_apply(target, e)))
+                .map(|(sym, e)| (sym, rewrite_var_free_occurrences(target, e, on_hit)))
                 .collect(),
         ),
         Expr::Access { record, field } => Expr::Access {
-            record: Box::new(rewrite_var_to_apply(target, *record)),
+            record: Box::new(rewrite_var_free_occurrences(target, *record, on_hit)),
             field,
         },
         Expr::Update { record, fields } => Expr::Update {
-            record: Box::new(rewrite_var_to_apply(target, *record)),
+            record: Box::new(rewrite_var_free_occurrences(target, *record, on_hit)),
             fields: fields
                 .into_iter()
-                .map(|(sym, e)| (sym, rewrite_var_to_apply(target, e)))
+                .map(|(sym, e)| (sym, rewrite_var_free_occurrences(target, e, on_hit)))
                 .collect(),
         },
         Expr::Lambda { params, ret, body } => {
             let new_body = if params.iter().any(|(s, _)| *s == target) {
                 body
             } else {
-                Box::new(rewrite_var_to_apply(target, *body))
+                Box::new(rewrite_var_free_occurrences(target, *body, on_hit))
             };
             Expr::Lambda { params, ret, body: new_body }
         }
         Expr::Apply { func, args } => Expr::Apply {
-            func: Box::new(rewrite_var_to_apply(target, *func)),
-            args: args.into_iter().map(|a| rewrite_var_to_apply(target, a)).collect(),
+            func: Box::new(rewrite_var_free_occurrences(target, *func, on_hit)),
+            args: args.into_iter().map(|a| rewrite_var_free_occurrences(target, a, on_hit)).collect(),
         },
         Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
-            effect: Box::new(rewrite_var_to_apply(target, *effect)),
-            rest: Box::new(rewrite_var_to_apply(target, *rest)),
+            effect: Box::new(rewrite_var_free_occurrences(target, *effect, on_hit)),
+            rest: Box::new(rewrite_var_free_occurrences(target, *rest, on_hit)),
         },
         Expr::TaskSeqSync { effect, rest } => Expr::TaskSeqSync {
-            effect: Box::new(rewrite_var_to_apply(target, *effect)),
-            rest: Box::new(rewrite_var_to_apply(target, *rest)),
+            effect: Box::new(rewrite_var_free_occurrences(target, *effect, on_hit)),
+            rest: Box::new(rewrite_var_free_occurrences(target, *rest, on_hit)),
         },
         Expr::Ctor { home, ty, variant, args } => Expr::Ctor {
             home,
             ty,
             variant,
-            args: args.into_iter().map(|a| rewrite_var_to_apply(target, a)).collect(),
+            args: args.into_iter().map(|a| rewrite_var_free_occurrences(target, a, on_hit)).collect(),
         },
         // TailLoop/TailRecur are produced by a separate TCO pass that runs
         // AFTER lower_let, so they never appear in the IR at the point this
@@ -2704,14 +2703,29 @@ fn rewrite_var_to_apply(target: Symbol, expr: Expr) -> Expr {
             let new_body = if params.iter().any(|(s, _)| *s == target) {
                 body
             } else {
-                Box::new(rewrite_var_to_apply(target, *body))
+                Box::new(rewrite_var_free_occurrences(target, *body, on_hit))
             };
             Expr::TailLoop { params, body: new_body }
         }
         Expr::TailRecur { args } => Expr::TailRecur {
-            args: args.into_iter().map(|a| rewrite_var_to_apply(target, a)).collect(),
+            args: args.into_iter().map(|a| rewrite_var_free_occurrences(target, a, on_hit)).collect(),
         },
     }
+}
+
+/// Rewrite every free `Expr::Var(target)` in `expr` to
+/// `Expr::Apply { func: Var(target), args: [] }` (emitted as `(target)()`).
+///
+/// This is the read-site half of the Decoder thunk rewrite (#89 F2, design
+/// preserved in git history as `seal-jsondecp-design.md` §5.C): after
+/// [`Lowerer::lower_let`] wraps a Decoder-typed binding value in a zero-arg
+/// lambda, every read of that binding must call the thunk to obtain a fresh
+/// `Decoder` value. Thin wrapper over [`rewrite_var_free_occurrences`].
+fn rewrite_var_to_apply(target: Symbol, expr: Expr) -> Expr {
+    rewrite_var_free_occurrences(target, expr, &|s| Expr::Apply {
+        func: Box::new(Expr::Var(s)),
+        args: vec![],
+    })
 }
 
 /// The lowering pass over a single canonical module.
