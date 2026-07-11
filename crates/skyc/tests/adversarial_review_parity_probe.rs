@@ -31,11 +31,6 @@ use skyc::project;
 type UserSources = BTreeMap<Vec<String>, String>;
 type PreparedSources = BTreeMap<Vec<String>, (PathBuf, String)>;
 
-fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    std::fs::canonicalize(&joined).unwrap_or(joined)
-}
-
 fn prepared(user: &UserSources) -> (PreparedSources, std::collections::BTreeSet<Vec<String>>) {
     let mut sources: PreparedSources = user
         .iter()
@@ -98,6 +93,7 @@ impl WarmSession {
 
     /// Sync inputs to `user`'s state WITHOUT demanding any query — used to
     /// construct the "two edits, one demand" adversarial shape.
+    #[allow(clippy::single_match_else)]
     fn sync_only(&mut self, user: &UserSources) {
         let (sources, injected) = prepared(user);
         let desired: BTreeMap<Vec<String>, (String, sky_db::ModuleOrigin)> = sources
@@ -121,6 +117,11 @@ impl WarmSession {
     }
 
     /// Demand a compile at the CURRENT input state (no sync).
+    ///
+    /// `expect`: every call site in this harness invokes `sync_only` first,
+    /// which unconditionally sets `self.root` — this is a test-scaffold
+    /// invariant, not a fallible external condition.
+    #[allow(clippy::expect_used)]
     fn demand(&self, user: &UserSources) -> CompileOutcome {
         let (sources, _) = prepared(user);
         let root = self.root.expect("root must exist before demand()");
