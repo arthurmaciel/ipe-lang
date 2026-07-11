@@ -62,6 +62,18 @@
 //!   `Db.findWhere conn "products" ("qty > " ++ "9")` is a compile-time
 //!   `SKY-T0001` (`String` vs `SqlFragment`) — the "parse, don't validate"
 //!   property backlog #61 exists to establish.
+//! * `m5b_db_find_by_field` — `Db.exec` three INSERTs (two `category = "fruit"`,
+//!   one `category = "veggie"`) → `Db.findOneByField conn "items" "name" "apple"`
+//!   (match → `Just` row) → `Db.findOneByField conn "items" "name" "durian"`
+//!   (no match → `Nothing`) → `Db.findManyByField conn "items" "category"
+//!   "fruit"` (match → two rows, sorted by name since the kernel issues no
+//!   `ORDER BY`) → `Db.findManyByField conn "items" "category" "mineral"` (no
+//!   match → `[]`). Output:
+//!   `"apple:fruit:5\nmissing\napple:fruit:5,banana:fruit:3\nempty"`.
+//!   Closes the golden-E2E-coverage gap for `DbFindOneByField`/
+//!   `DbFindManyByField` (arity fixed by #70) — previously verified only via
+//!   direct runtime source inspection, never a real `skyc build` + `cargo
+//!   build` + run.
 //!
 //! Run:
 //!
@@ -333,4 +345,26 @@ fn db_poly_params_compiles() {
 #[test]
 fn db_poly_params_e2e() {
     assert_runs_and_matches_oracle("m5b_db_poly_params");
+}
+
+// ── Db.findOneByField / Db.findManyByField ────────────────────────────────────
+
+/// `Db.exec` three INSERTs into `items` (apple/fruit, banana/fruit,
+/// carrot/veggie) → `Db.findOneByField conn "items" "name" "apple"` (match) →
+/// `Db.findOneByField conn "items" "name" "durian"` (no match) →
+/// `Db.findManyByField conn "items" "category" "fruit"` (two-row match) →
+/// `Db.findManyByField conn "items" "category" "mineral"` (no match) →
+/// `println`. Output:
+/// `"apple:fruit:5\nmissing\napple:fruit:5,banana:fruit:3\nempty"`.
+///
+/// Closes the golden-E2E-coverage gap for `DbFindOneByField`/
+/// `DbFindManyByField` noted in the backlog (arity fixed by #70, but the
+/// kernels themselves were previously verified only via direct runtime
+/// source inspection + the internal exhaustiveness test, never a real
+/// `skyc build` + `cargo build` + run).
+///
+/// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
+#[test]
+fn db_find_by_field() {
+    assert_runs_and_matches_oracle("m5b_db_find_by_field");
 }
