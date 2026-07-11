@@ -181,7 +181,7 @@ survives across revisions on a production path (Phase 2+).
 | Phase | Plan tasks | Content |
 |---|---|---|
 | **1 (this spec — DONE)** | 1, 2-trim, 3a, 4, 5-imports | db + inputs + `parse`/`imports` queries on the skyc path, memo-hit proof |
-| 2 | 5 (AST imports), 6, 7, 8 | `resolve_imports` closed-enum edge (add/delete/rename/shadow), `module_interface` firewall + completeness gate, `canonicalize(ModuleId)` tracked |
+| **2 (DONE — see §7)** | 5 (AST imports), 6, 7, 8 | `resolve_imports` closed-enum edge (add/delete/rename/shadow), `module_interface` firewall + completeness gate, `canonicalize(ModuleId)` tracked |
 | 3 | 9, 11, 18 | `kernel_types()`, coarse whole-program spine (`linked_program()` wrapping link→infer→lower→emit), **stand up the clean-vs-incremental parity gate EARLY** |
 | 4 | 12, 13 | per-module `typecheck`/`lower` (riskiest; gated by 18; coarse floor is the sanctioned fallback) |
 | 5 | 14–17 | `program_metadata()` (conservative, re-runs every build — LOCKED), per-file emit, emit→cargo bridge (content-gated atomic write + manifest prune), config projections |
@@ -203,3 +203,123 @@ survives across revisions on a production path (Phase 2+).
    design-level until their phase.
 6. **Cold database per `compile_modules`** — one-shot semantics preserved
    exactly; warm reuse is test-only until the Task-18 parity gate exists.
+
+---
+
+## 7. Phase 2 — implemented (2026-07-11)
+
+Phase 2 = plan Tasks **5 (AST imports), 6, 7, 8** on the production `skyc`
+path: the canonicalisation tier is now three tracked queries in `sky_db`, and
+the driver's per-module parse+canon loop is a per-module `canonicalize`
+demand. The `dep_exports` accumulation map is gone from the driver — the
+query graph carries it.
+
+### 7.1 Query graph (added to §3.4's table)
+
+| Query | Depends on | Returns |
+|---|---|---|
+| `resolve_imports(db, SourceRoot, SourceFile)` | `parse(self)` + `files(root)` | `Result<Arc<Vec<(Vec<String>, ImportResolution)>>, Diagnostic>` — per-import, in declaration order |
+| `canonicalize(db, SourceRoot, SourceFile)` | `parse(self)`, `resolve_imports(self)`, `module_interface(dep)` per resolved dep, `origin(self)`, `files(root)` (did-you-mean universe) | `Result<Arc<CanonicalModule>, Diagnostic>` (resolved AST + exports) |
+| `module_interface(db, SourceRoot, SourceFile)` | `canonicalize(self)` | `Result<Arc<ModuleExports>, Diagnostic>` |
+
+`ImportResolution` is the closed enum `Resolved(SourceFile) | Unresolved`.
+**`Ambiguous` is deliberately unrepresentable**, not merely unconstructed:
+`SourceRoot.files` is a `BTreeMap` keyed by module path — the exact invariant
+the driver's source map enforces (stdlib injection skips pre-existing keys) —
+so two files claiming one module path cannot be expressed at the input
+boundary. Recorded as the Phase-2 deviation from plan Task 6's three-variant
+sketch; if file discovery ever gains a path where duplicates are possible,
+the variant is added *with* the representation change that makes it real.
+
+### 7.2 The firewall is salsa backdating, not a second summarizer
+
+Plan Task 7 sketches `module_interface` "derived from `parse(A)`". Phase 2
+instead makes it a **projection of `canonicalize(A)`** (`ModuleExports`, now
+`PartialEq`): when a body-only edit re-runs `canonicalize(A)` and the export
+surface comes out equal, salsa backdates the interface memo and importers'
+`canonicalize` memos validate without re-executing. Rationale (correctness >
+efficiency): a second, parse-only export summarizer would be a duplicate
+computation of "what does A export" that could silently drift from what
+canonicalisation actually injects — the classic under-invalidation seed. One
+code path, provably in lockstep, at the cost of re-running the dep's own
+canon on its own edits (which is necessary anyway).
+
+Sound over-approximation note (H3): `ModuleExports` carries exported alias
+*bodies* including source spans, so an edit that shifts an exported alias's
+spans re-canonicalises importers even when nothing semantic changed —
+over-invalidation, never staleness. Span-erased interfaces are a filed
+follow-up; the Task-7 *type-signature* completeness obligation activates when
+typecheck becomes per-module (plan Task 12) — at Phase 2, whole-program
+link→infer runs every build, so canon-level exports ARE the complete
+cross-module observable.
+
+### 7.3 Byte-identity argument (why the SEAL stays green)
+
+The old loop's interning sequence per module was: memoized parse →
+expected-path interning → canon (which interns `Sky`/`Std`/env internals).
+`canonicalize` reproduces it exactly: it demands parse / resolutions / dep
+interfaces **before** its single interner lock scope (dep interfaces are memo
+hits under topo-order demand; `resolve_imports` and the did-you-mean universe
+resolve/join strings without interning), then interns the expected path and
+runs canon under one guard. Dep-path map keys re-intern strings the dep's own
+`canonicalize` already interned — lookups, not appends. Cold database + fixed
+topo demand order ⇒ identical append sequence ⇒ identical symbol numbering ⇒
+byte-identical emit. Enforced by the 140+ golden byte-diff tests.
+
+### 7.4 Recorded behavioural deltas (error paths only, none golden-visible)
+
+1. **SKY-N0020 did-you-mean universe.** Previously the suggestion list was
+   the keys of the driver's *accumulated* dep-exports map — a DFS-order
+   prefix of the topo sort (modules that happened to finish first). Now it is
+   the full project module set (`SourceRoot` keys, dot-joined,
+   lexicographically sorted) — deterministic, complete, and independent of
+   traversal order. Strings only: the suggestion path never interns (interning
+   not-yet-canonicalised module paths would perturb the symbol numbering the
+   SEAL pins). No test pinned the old list; the legacy
+   `canonicalise_module_with_origin` entry point keeps the old
+   keys-of-the-map behaviour for non-driver callers.
+2. **`resolve_imports` is AST-derived** (plan Task 5's shape) because its
+   consumer — canonicalisation — iterates the parsed import declarations. The
+   pre-parse string-scan `imports` query **stays** in service of the
+   topological sort only (§3.4's recorded parity choice); retiring it in
+   favour of AST imports changes error ordering for unparseable modules and
+   waits for the Task-18 parity gate.
+3. **Import cycles**: the driver's topo sort still rejects cycles (SKY-N0021)
+   before any `canonicalize` demand. A *direct* demand on a cyclic graph
+   (test/LSP misuse) hits salsa's cycle panic — fail-loud, never a stale or
+   silently-fixpointed value.
+
+### 7.5 Phase-2 decisions ledger
+
+1. **`(SourceRoot, SourceFile)` keying** — queries take the root explicitly
+   (rust-analyzer style) rather than a global singleton input; salsa interns
+   the argument tuple.
+2. **Trust origin is an input field.** `SourceFile.origin: ModuleOrigin` is
+   set only by the driver from its unforgeable `injected` record; the
+   reserved-namespace gate (SKY-N0025) and the stdlib annotation gate key off
+   it inside the query. Proven by `stdlib_shadow_stays_rejected`.
+3. **Dep interfaces flow by reference.** `canonicalise_module_in_project`
+   takes `BTreeMap<Vec<Symbol>, &ModuleExports>` borrowing the interface
+   memos — no per-importer deep clone of dep export tables.
+4. **Driver clones each canon module out of its memo** (`link` consumes
+   `Vec<Module>` by value). One O(AST) clone per module per build — the cost
+   of memo-safety until `link` learns to borrow; noted for the Phase-3 coarse
+   spine work.
+5. **Errors as values, both tiers**: `resolve_imports` propagates the parse
+   diagnostic (`Result`, not an empty list — the resolution of an unparseable
+   module is *unknown*); `canonicalize` short-circuits on it first, so blame
+   attribution in the driver is unchanged.
+
+### 7.6 Phase-2 proof tests (`crates/sky_db/tests/phase2_incrementality.rs`)
+
+| Test | Asserts |
+|---|---|
+| `module_interface_firewall` (the mission proof) | edit dep A's *private* body; importer B re-demanded → exactly 1 `canonicalize` re-execution (A's), B memo-validated via interface backdating; B's value byte-stable |
+| `module_interface_completeness` | widen A's `exposing` list → BOTH A and B re-canonicalise (the firewall must not over-cut) |
+| `module_interface_value_stability` | interface value equal across a body edit; unequal across an export change (the property backdating keys on) |
+| `canonicalize_granularity` | edit unrelated C → exactly 1 of 3 modules re-canonicalises |
+| `resolve_imports_shape` | project import → `Resolved(file)`; kernel import → `Unresolved` |
+| `resolve_imports_add_module` | missing dep: red (N0020) → add file to `SourceRoot` → resolution flips `Resolved`, importer re-canons green |
+| `resolve_imports_delete_module` | green → remove dep from the set → red (never a stale green) |
+| `resolve_imports_rename_module` | rename dep module → importer red; fix the `import` line → green |
+| `stdlib_shadow_stays_rejected` | user file at `Std.…` stays SKY-N0025-rejected; same path with driver-vouched `EmbeddedStdlib` origin canonicalises |
