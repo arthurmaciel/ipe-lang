@@ -1054,14 +1054,17 @@ fn emit_http_call(
 /// Handle Http builder kernel calls that emit inline struct construction or
 /// clone-and-reassign record updates.
 ///
-/// Returns `Some(emitted)` for the five pure builder kernels:
+/// Returns `Some(emitted)` for the eight pure builder kernels:
 ///
 /// * **`HttpDefaultRequest url`** — emits a struct literal with sensible
 ///   defaults: `method = "GET"`, `body = ""`, `headers = []`,
 ///   `timeout = 30000`, `followRedirects = true`, `maxRedirects = 10`.
 ///
 /// * **`HttpWithMethod m req`**, **`HttpWithTimeout t req`**,
-///   **`HttpWithBody b req`** — each emits a clone-and-reassign block
+///   **`HttpWithBody b req`**, **`HttpWithUrl u req`**,
+///   **`HttpWithFollowRedirects f req`**, **`HttpWithMaxRedirects n req`**
+///   (last three: Go parity, #33 §6.2) — each emits a clone-and-reassign
+///   block
 ///   (`{ let mut __sky_rec = (req).clone(); __sky_rec.field = val; __sky_rec }`)
 ///   matching the `emit_update` pattern so the source record is moved once.
 ///
@@ -1075,7 +1078,7 @@ fn emit_http_call(
 /// standard call path. Factored out of `emit_expr_at` to keep its stack frame
 /// small (same rationale as `emit_http_call`).
 #[inline(never)]
-#[allow(clippy::too_many_lines)] // 5 match arms × ~20 lines = inherently verbose but linear
+#[allow(clippy::too_many_lines)] // 8 match arms × ~20 lines = inherently verbose but linear
 fn emit_http_builder_call(
     ctx: &EmitCtx,
     callee: &Callee,
@@ -1089,7 +1092,10 @@ fn emit_http_builder_call(
         | KernelFn::HttpWithMethod
         | KernelFn::HttpWithTimeout
         | KernelFn::HttpWithBody
-        | KernelFn::HttpWithHeader),
+        | KernelFn::HttpWithHeader
+        | KernelFn::HttpWithUrl
+        | KernelFn::HttpWithFollowRedirects
+        | KernelFn::HttpWithMaxRedirects),
     ) = callee
     else {
         return Ok(None);
@@ -1185,6 +1191,57 @@ fn emit_http_builder_call(
                  __sky_rec.body = {b_s}; __sky_rec }}"
             )))
         }
+        KernelFn::HttpWithUrl => {
+            // withUrl : String -> HttpRequest -> HttpRequest (#33 §6.2)
+            let u = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithUrl expects 2 arguments (url, req)".to_owned(),
+            })?;
+            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithUrl expects 2 arguments (url, req)".to_owned(),
+            })?;
+            let u_s = emit_expr_at(ctx, u, indent, child, generics)?;
+            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({req_s}).clone(); \
+                 __sky_rec.url = {u_s}; __sky_rec }}"
+            )))
+        }
+        KernelFn::HttpWithFollowRedirects => {
+            // withFollowRedirects : Bool -> HttpRequest -> HttpRequest (#33 §6.2)
+            let f = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithFollowRedirects expects 2 arguments (flag, req)".to_owned(),
+            })?;
+            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithFollowRedirects expects 2 arguments (flag, req)".to_owned(),
+            })?;
+            let f_s = emit_expr_at(ctx, f, indent, child, generics)?;
+            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({req_s}).clone(); \
+                 __sky_rec.followRedirects = {f_s}; __sky_rec }}"
+            )))
+        }
+        KernelFn::HttpWithMaxRedirects => {
+            // withMaxRedirects : Int -> HttpRequest -> HttpRequest (#33 §6.2)
+            let n = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithMaxRedirects expects 2 arguments (n, req)".to_owned(),
+            })?;
+            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithMaxRedirects expects 2 arguments (n, req)".to_owned(),
+            })?;
+            let n_s = emit_expr_at(ctx, n, indent, child, generics)?;
+            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({req_s}).clone(); \
+                 __sky_rec.maxRedirects = {n_s}; __sky_rec }}"
+            )))
+        }
         KernelFn::HttpWithHeader => {
             // withHeader : String -> String -> HttpRequest -> HttpRequest
             // PREPENDS (key, value) — matches Go reference `(k,v) :: req.headers`.
@@ -1209,7 +1266,7 @@ fn emit_http_builder_call(
             )))
         }
         // Unreachable: the guard at the top of this function constrains `k` to the
-        // five variants matched above. The `_ =>` arm keeps Rust's exhaustiveness
+        // eight variants matched above. The `_ =>` arm keeps Rust's exhaustiveness
         // checker satisfied without introducing a catch-all over the full `KernelFn`
         // set (which would violate the no-catch-all principle for the logic above).
         _ => Ok(None),
