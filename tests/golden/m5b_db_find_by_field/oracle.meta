@@ -1,0 +1,6 @@
+# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
+main_sky_sha256 = 9b06973429fa59d0c7e09a89229fe8d44db7c36e10f11644013a7e718bc1a970
+go_sky_version = unknown
+exit_code = 0
+oracle_divergence = true
+divergence_reason = sanctioned: this program uses Db.open + Db.withTransaction + Db.exec (SqlValue params) + Db.findOneByField + Db.findManyByField — the Go backend and ipê share the Sky stdlib surface but the Go reference emits Go+SQLite (cgo) binaries while ipê emits Rust+sqlx; the SQLite in-memory connection-pool behaviour and row-type representation differ enough that a shared Main.sky cannot run on both backends. ipê's output is recorded as the correct reference.
