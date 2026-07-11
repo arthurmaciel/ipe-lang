@@ -297,7 +297,17 @@ async fn do_request<E: From<String> + Send + 'static>(
     let mut headers = HashMap::new();
     for (k, v) in resp.headers() {
         if let Ok(s) = v.to_str() {
-            headers.insert(k.as_str().to_string(), s.to_string());
+            // MIME-case parity (#33 §6.1): reqwest's `HeaderName::as_str()`
+            // ALWAYS returns lower-case, but the Go reference stores response
+            // headers canonicalised (`net/http.Header` always is) — a Sky
+            // program's `Dict.get "Content-Type" resp.headers` must find the
+            // key. Route through the SAME `canonical_header` the Server
+            // inbound path uses (its Go-parity table is pinned by
+            // `canonical_header_matches_go_canonical_mime_key`).
+            headers.insert(
+                crate::sky_runtime::http_header::canonical_header(k.as_str()),
+                s.to_string(),
+            );
         }
     }
     let body = match read_body_capped::<E>(resp).await {
@@ -429,6 +439,33 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #33 §6.1 wiring seal: the response-header collection loop must route
+    /// every key through `http_header::canonical_header` (reqwest's
+    /// `HeaderName::as_str()` is always lower-case; Go's `net/http.Header` is
+    /// always canonical — `Dict.get "Content-Type"` parity depends on it).
+    /// `do_request` needs a live round-trip to test end-to-end, so this pins
+    /// the call's PRESENCE at the source level; the transform itself is
+    /// proven by `http_header`'s own Go-parity table test.
+    #[test]
+    fn response_header_loop_canonicalises_keys() {
+        let src = include_str!("http_client.rs");
+        let loop_marker = "for (k, v) in resp.headers()";
+        let start = src.find(loop_marker);
+        assert!(start.is_some(), "response-header loop not found");
+        let Some(start) = start else { return };
+        // Window sized to comfortably cover the loop body INCLUDING its doc
+        // comment (the canonicalisation call sits ~700 bytes past the marker).
+        let window = &src[start..src.len().min(start + 1600)];
+        assert!(
+            window.contains("canonical_header(k.as_str())"),
+            "response-header keys must be canonicalised (Go MIME-case parity, #33 §6.1)"
+        );
+        assert!(
+            !window.contains("insert(k.as_str().to_string()"),
+            "raw lower-case header-key insert reintroduced (#33 §6.1 regression)"
+        );
+    }
 
     #[test]
     fn parse_query_decode_and_first_wins() {

@@ -8379,11 +8379,16 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FileRename
                 // ── Http arity-2 (M5b) ────────────────────────────────────────
                 // `HttpPost` : String -> String -> Task Error HttpResponse
-                // `HttpWithMethod` / `HttpWithTimeout` / `HttpWithBody` : pure builders
+                // `HttpWithMethod` / `HttpWithTimeout` / `HttpWithBody` /
+                // `HttpWithUrl` / `HttpWithFollowRedirects` /
+                // `HttpWithMaxRedirects` : pure builders
                 | KernelFn::HttpPost
                 | KernelFn::HttpWithMethod
                 | KernelFn::HttpWithTimeout
                 | KernelFn::HttpWithBody
+                | KernelFn::HttpWithUrl
+                | KernelFn::HttpWithFollowRedirects
+                | KernelFn::HttpWithMaxRedirects
                 // ── Db arity-2 (M5b-db) ───────────────────────────────────────
                 // `DbOpen : String -> String -> Task Error Db`
                 | KernelFn::DbOpen
@@ -9797,6 +9802,13 @@ impl<'a> Lowerer<'a> {
                     ("Http", "withTimeout") => Ok(Callee::Kernel(KernelFn::HttpWithTimeout)),
                     ("Http", "withBody") => Ok(Callee::Kernel(KernelFn::HttpWithBody)),
                     ("Http", "withHeader") => Ok(Callee::Kernel(KernelFn::HttpWithHeader)),
+                    ("Http", "withUrl") => Ok(Callee::Kernel(KernelFn::HttpWithUrl)),
+                    ("Http", "withFollowRedirects") => {
+                        Ok(Callee::Kernel(KernelFn::HttpWithFollowRedirects))
+                    }
+                    ("Http", "withMaxRedirects") => {
+                        Ok(Callee::Kernel(KernelFn::HttpWithMaxRedirects))
+                    }
                     // ── Db kernels (M5b-db) ──────────────────────────────────
                     // ── Sql kernels (#61 SqlFragment combinators) ──────────
                     ("Sql", "column") => Ok(Callee::Kernel(KernelFn::SqlColumn)),
