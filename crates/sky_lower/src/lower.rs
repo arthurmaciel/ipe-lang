@@ -21,8 +21,8 @@ use sky_canon::ast as canon;
 use sky_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{
-    Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
-    Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant,
+    is_dispatch_free, Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn,
+    Match, ModPath, Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant,
 };
 use sky_types::{SolvedTypes, Ty, TyBounds};
 
@@ -10443,6 +10443,10 @@ impl<'a> Lowerer<'a> {
             })
             .collect::<DResult<Vec<_>>>()?;
 
+        // #99 (SKY-L0128): reject dispatch-needing `as`-aliases in by-value
+        // match positions before they reach the backend.
+        Self::gate_by_value_dispatch_needing_aliases(&arms, branches)?;
+
         // A list `case` that BINDS a value (a head element or a rest list) needs
         // the backend's owned-rebind (`x.clone()` / `rest.to_vec()`), which
         // requires the element type to be `Clone`. Every CONCRETE element type
@@ -10486,6 +10490,109 @@ impl<'a> Lowerer<'a> {
         } else {
             Ok(Expr::Match(Match::new_flat(scrutinee, arms)?))
         }
+    }
+
+    /// #99: does this BY-VALUE (whole-scrutinee, non-str/non-list) arm
+    /// pattern contain an `as`-alias whose inner shape needs Rust-level
+    /// runtime dispatch anywhere? Such an alias cannot be honored soundly by
+    /// value: `name @ inner` double-moves a non-`Copy` payload (E0382), and
+    /// the clone-rebuild repair (`render_arm_pat_alias_safe`, the #96/#99
+    /// strategy) is only sound for a dispatch-FREE inner — a failing inner
+    /// check may have discarded data the alias binder needs. Walks every
+    /// nested position (ctor payloads, tuple elements, record fields) since
+    /// by-value binding modes propagate all the way down. A dispatch-free
+    /// alias inner cannot itself contain a dispatch-needing alias
+    /// ([`is_dispatch_free`] recurses through `Alias`), so the alias arm
+    /// needs no further recursion on the true branch.
+    fn arm_has_dispatch_needing_alias(pat: &Pat) -> bool {
+        match pat {
+            Pat::Alias(inner, _) => !is_dispatch_free(inner),
+            Pat::Tuple(elems) => elems.iter().any(Self::arm_has_dispatch_needing_alias),
+            Pat::Record(fields) => fields
+                .iter()
+                .any(|(_, p)| Self::arm_has_dispatch_needing_alias(p)),
+            Pat::Ctor { args, .. } => args.iter().any(Self::arm_has_dispatch_needing_alias),
+            Pat::Slice { prefix, rest } => {
+                prefix.iter().any(Self::arm_has_dispatch_needing_alias)
+                    || rest
+                        .as_deref()
+                        .is_some_and(Self::arm_has_dispatch_needing_alias)
+            }
+            Pat::Var(_)
+            | Pat::Wildcard
+            | Pat::Int(_)
+            | Pat::Bool(_)
+            | Pat::Char(_)
+            | Pat::Str(_) => false,
+        }
+    }
+
+    /// #99 fail-closed gate (SKY-L0128). Mirrors the backend's per-match mode
+    /// decision (`emit_match_scrutinee` / `tuple_col_modes`) EXACTLY: STR and
+    /// LIST modes match the scrutinee by REFERENCE (`.as_str()` /
+    /// `.as_slice()`), where Rust's default binding modes make `name @ inner`
+    /// a borrow — sound for any inner, no gate. Only the by-VALUE positions
+    /// (WHOLE mode with neither flag, and non-str/non-list tuple columns) are
+    /// gated: a dispatch-needing alias inner there is rejected at lowering
+    /// with a clean diagnostic rather than reaching the backend, where it
+    /// would either double-move (the pre-#99 E0382 seal hole) or require a
+    /// by-reference arm redesign. Dispatch-free aliases pass through — the
+    /// backend's `render_arm_pat_alias_safe` repairs those.
+    fn gate_by_value_dispatch_needing_aliases(
+        arms: &[Arm],
+        branches: &[canon::CaseBranch],
+    ) -> DResult<()> {
+        // Tuple mode: per-column str/list flags (bare `Str` / `Slice` sub —
+        // the same predicate `tuple_col_modes` uses).
+        if let Some(arity) = arms.iter().find_map(|a| match &a.pat {
+            Pat::Tuple(elems) => Some(elems.len()),
+            _ => None,
+        }) {
+            let mut col_by_ref = vec![false; arity];
+            for arm in arms {
+                if let Pat::Tuple(elems) = &arm.pat {
+                    for (c, sub) in elems.iter().enumerate() {
+                        if matches!(sub, Pat::Str(_) | Pat::Slice { .. })
+                            && let Some(slot) = col_by_ref.get_mut(c)
+                        {
+                            *slot = true;
+                        }
+                    }
+                }
+            }
+            for (arm, br) in arms.iter().zip(branches.iter()) {
+                if let Pat::Tuple(elems) = &arm.pat {
+                    for (c, sub) in elems.iter().enumerate() {
+                        if !col_by_ref.get(c).copied().unwrap_or(false)
+                            && Self::arm_has_dispatch_needing_alias(sub)
+                        {
+                            return Err(unsupported(
+                                br.pat.span,
+                                Feature::AliasOverRefutablePayload,
+                            ));
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+        // Whole mode: by-ref iff some arm's TOP pattern is a bare `Str` /
+        // `Slice` (the same predicate `emit_match_scrutinee` uses).
+        let by_ref = arms
+            .iter()
+            .any(|a| matches!(a.pat, Pat::Str(_) | Pat::Slice { .. }));
+        if by_ref {
+            return Ok(());
+        }
+        for (arm, br) in arms.iter().zip(branches.iter()) {
+            if Self::arm_has_dispatch_needing_alias(&arm.pat) {
+                return Err(unsupported(
+                    br.pat.span,
+                    Feature::AliasOverRefutablePayload,
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Lower a `case`-arm HEAD pattern to its IR [`Pat`]. Handles the full M3b-3

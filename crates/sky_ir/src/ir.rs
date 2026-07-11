@@ -1466,6 +1466,45 @@ pub fn is_irrefutable(pat: &Pat) -> bool {
     }
 }
 
+/// Whether this pattern needs NO Rust-level runtime dispatch (discriminant
+/// check) anywhere in its shape — no [`Pat::Ctor`], literal leaf, or
+/// [`Pat::Slice`] at any depth.
+///
+/// A `Var` / `Wildcard` leaf, or any nesting of `Tuple` / `Record` /
+/// `Alias` over such leaves, is dispatch-free: Rust's tuple/struct/binding
+/// patterns always succeed structurally, so matching them costs no
+/// discriminant check and (unlike [`is_irrefutable`], which answers a
+/// different question about catch-all arms and treats `Tuple`/`Record` as
+/// unconditionally refutable) is safe to evaluate at ANY nesting depth,
+/// including inside another constructor's payload.
+///
+/// Used by the Rust backend (`render_arm_pat_alias_safe`) to decide whether
+/// an `Alias` node's inner shape can be safely rebuilt from a CLONE of the
+/// alias binder (the #96/#99 by-value alias-split fix) — safe exactly when
+/// reconstructing every leaf `inner` binds is possible without having
+/// discarded any data, which holds only when `inner` never needed a runtime
+/// check to get there. The `sky_lower` lowerer calls this too, to reject an
+/// alias over a dispatch-needing inner pattern in a REFUTABLE match-arm
+/// position (SKY-L0128) rather than let it reach the backend, where
+/// honoring it soundly would require matching the scrutinee by reference
+/// throughout — a materially larger redesign. See
+/// `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §1.
+#[must_use]
+pub fn is_dispatch_free(pat: &Pat) -> bool {
+    match pat {
+        Pat::Wildcard | Pat::Var(_) => true,
+        Pat::Alias(inner, _) => is_dispatch_free(inner),
+        Pat::Tuple(elems) => elems.iter().all(is_dispatch_free),
+        Pat::Record(fields) => fields.iter().all(|(_, p)| is_dispatch_free(p)),
+        Pat::Int(_)
+        | Pat::Bool(_)
+        | Pat::Char(_)
+        | Pat::Str(_)
+        | Pat::Ctor { .. }
+        | Pat::Slice { .. } => false,
+    }
+}
+
 /// Whether a pattern is LIST-SHAPED — a slice / cons pattern ([`Pat::Slice`]), an
 /// irrefutable whole-list binder (a variable / wildcard catch-all over a list
 /// scrutinee), or an alias whose inner pattern is itself list-shaped. Used by
@@ -2099,6 +2138,54 @@ mod tests {
         assert!(!is_irrefutable(&Pat::Bool(true)));
         assert!(!is_irrefutable(&Pat::Str("hi".to_owned())));
         assert!(!is_irrefutable(&Pat::Alias(Box::new(Pat::Int(0)), x)));
+        Ok(())
+    }
+
+    #[test]
+    fn dispatch_free_over_tuple_of_vars_and_wildcards() -> DResult<()> {
+        let mut i = Interner::new();
+        let x = i.intern("x")?;
+        assert!(is_dispatch_free(&Pat::Tuple(vec![
+            Pat::Var(x),
+            Pat::Wildcard
+        ])));
+        // An alias over a dispatch-free tuple stays dispatch-free.
+        assert!(is_dispatch_free(&Pat::Alias(
+            Box::new(Pat::Tuple(vec![Pat::Var(x), Pat::Var(x)])),
+            x,
+        )));
+        // A record of binder leaves is dispatch-free too.
+        assert!(is_dispatch_free(&Pat::Record(vec![
+            (x, Pat::Var(x)),
+            (x, Pat::Wildcard)
+        ])));
+        Ok(())
+    }
+
+    #[test]
+    fn dispatch_free_false_over_nested_ctor_or_literal() -> DResult<()> {
+        let mut i = Interner::new();
+        let x = i.intern("x")?;
+        assert!(!is_dispatch_free(&Pat::Tuple(vec![
+            Pat::Int(0),
+            Pat::Var(x)
+        ])));
+        // A Ctor nested inside a Tuple inside an Alias must still fail.
+        assert!(!is_dispatch_free(&Pat::Alias(
+            Box::new(Pat::Tuple(vec![Pat::Ctor {
+                home: ModPath(vec![]),
+                ty: x,
+                variant: x,
+                args: vec![],
+            }])),
+            x,
+        )));
+        // Slice / literal leaves need dispatch wherever they sit.
+        assert!(!is_dispatch_free(&Pat::Slice {
+            prefix: vec![Pat::Var(x)],
+            rest: None,
+        }));
+        assert!(!is_dispatch_free(&Pat::Str("s".to_owned())));
         Ok(())
     }
 

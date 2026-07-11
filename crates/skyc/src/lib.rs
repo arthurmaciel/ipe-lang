@@ -1253,7 +1253,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 87, "taxonomy is 87 codes"); // #90: +SKY-L0127
+        assert_eq!(ALL_CODES.len(), 88, "taxonomy is 88 codes"); // #90: +SKY-L0127; #99: +SKY-L0128
         assert!(
             index.contains("SKY-T0001  type mismatch"),
             "index pairs code with title"

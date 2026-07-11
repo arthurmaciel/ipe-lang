@@ -575,6 +575,9 @@ fn hint_text(hint: Hint) -> String {
     }
 }
 
+// One flat label per `Feature` variant; each new feature adds ~5 lines, so the
+// 100-line pedantic ceiling is structural, not a complexity smell. Narrow allow.
+#[allow(clippy::too_many_lines)]
 const fn feature_label(f: Feature) -> &'static str {
     match f {
         Feature::CasePatternKinds => {
@@ -618,6 +621,13 @@ const fn feature_label(f: Feature) -> &'static str {
              destructure, but not yet nested inside a constructor payload or a \
              tuple element — that needs the carrier's record type threaded to the \
              lowerer [feature: nested-payload-patterns]"
+        }
+        Feature::AliasOverRefutablePayload => {
+            "an `as`-alias over a nested constructor / literal / list pattern \
+             in a match arm is not supported yet — the alias binder and the \
+             inner bindings would double-move a non-Copy payload; bind the \
+             whole value with a plain name and match the inner shape in a \
+             nested `case` instead [feature: alias-over-refutable-payload]"
         }
         Feature::CtorAsFunction => {
             "a data constructor used as a function value (referenced bare or \
