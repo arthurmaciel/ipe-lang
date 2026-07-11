@@ -875,53 +875,31 @@ fn rewrite_captured_clones(
                 )?),
             })
         }
-        Expr::Match(m) => {
-            let (scrutinee, arms) = m.into_parts();
-            let new_scrutinee = Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *scrutinee,
-                depth,
-            )?);
-            let new_arms = arms
-                .into_iter()
-                .map(|arm| {
-                    let new_body =
-                        if pat_binds_any_in(&arm.pat, clone_set)
-                            || pat_binds_any_in(&arm.pat, noncl_set)
-                        {
-                            let inner_clone: BTreeSet<Symbol> = clone_set
-                                .iter()
-                                .copied()
-                                .filter(|&s| !pat_binds_symbol(&arm.pat, s))
-                                .collect();
-                            let inner_noncl: BTreeSet<Symbol> = noncl_set
-                                .iter()
-                                .copied()
-                                .filter(|&s| !pat_binds_symbol(&arm.pat, s))
-                                .collect();
-                            rewrite_captured_clones(
-                                &inner_clone,
-                                &inner_noncl,
-                                lambda_span,
-                                arm.body,
-                                depth,
-                            )?
-                        } else {
-                            rewrite_captured_clones(
-                                clone_set,
-                                noncl_set,
-                                lambda_span,
-                                arm.body,
-                                depth,
-                            )?
-                        };
-                    Ok(Arm { pat: arm.pat, body: new_body, guard: arm.guard })
-                })
-                .collect::<DResult<Vec<_>>>()?;
-            Ok(Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms)))
-        }
+        Expr::Match(m) => Ok(Expr::Match(m.try_map_bodies(
+            |scrutinee| {
+                rewrite_captured_clones(clone_set, noncl_set, lambda_span, scrutinee, depth)
+            },
+            |pat, body, guard| {
+                let new_body = if pat_binds_any_in(pat, clone_set)
+                    || pat_binds_any_in(pat, noncl_set)
+                {
+                    let inner_clone: BTreeSet<Symbol> = clone_set
+                        .iter()
+                        .copied()
+                        .filter(|&s| !pat_binds_symbol(pat, s))
+                        .collect();
+                    let inner_noncl: BTreeSet<Symbol> = noncl_set
+                        .iter()
+                        .copied()
+                        .filter(|&s| !pat_binds_symbol(pat, s))
+                        .collect();
+                    rewrite_captured_clones(&inner_clone, &inner_noncl, lambda_span, body, depth)?
+                } else {
+                    rewrite_captured_clones(clone_set, noncl_set, lambda_span, body, depth)?
+                };
+                Ok((new_body, guard))
+            },
+        )?)),
         Expr::If { cond, then_, else_ } => Ok(Expr::If {
             cond: Box::new(rewrite_captured_clones(
                 clone_set, noncl_set, lambda_span, *cond, depth,
@@ -1001,11 +979,16 @@ fn rewrite_captured_clones(
                 })
                 .collect::<DResult<Vec<_>>>()?,
         )),
-        Expr::Access { record, field } => Ok(Expr::Access {
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Ok(Expr::Access {
             record: Box::new(rewrite_captured_clones(
                 clone_set, noncl_set, lambda_span, *record, depth,
             )?),
             field,
+            field_ty,
         }),
         Expr::Update { record, fields } => Ok(Expr::Update {
             record: Box::new(rewrite_captured_clones(
@@ -1647,21 +1630,21 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
             Expr::Destructure { binder, value: new_value, body: new_body }
         }
         Expr::Match(m) => {
-            let (scrutinee, arms) = m.into_parts();
-            let new_scrutinee =
-                Box::new(rewrite_multiuse_clones(sym, remaining, *scrutinee));
-            let new_arms = arms
-                .into_iter()
-                .map(|arm| {
-                    let new_body = if pat_binds_symbol(&arm.pat, sym) {
-                        arm.body
+            // `remaining` is one `&mut` counter threaded through scrutinee and
+            // bodies — rewrite the scrutinee first (DFS order, as before), then
+            // map the bodies with an identity scrutinee_map (E0524 otherwise).
+            let m = m.map_scrutinee(|scrutinee| rewrite_multiuse_clones(sym, remaining, scrutinee));
+            Expr::Match(m.map_bodies(
+                |scrutinee| scrutinee,
+                |pat, body, guard| {
+                    let new_body = if pat_binds_symbol(pat, sym) {
+                        body
                     } else {
-                        rewrite_multiuse_clones(sym, remaining, arm.body)
+                        rewrite_multiuse_clones(sym, remaining, body)
                     };
-                    Arm { pat: arm.pat, body: new_body, guard: arm.guard }
-                })
-                .collect();
-            Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms))
+                    (new_body, guard)
+                },
+            ))
         }
         Expr::Call { callee, args } => Expr::Call {
             callee,
@@ -1716,9 +1699,14 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
         // Access-under-record uses).  A VarLocal found here becomes CloneVar
         // unless it is the last overall use, in which case it stays bare (the
         // borrow keeps the original value alive for subsequent uses).
-        Expr::Access { record, field } => Expr::Access {
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Expr::Access {
             record: Box::new(rewrite_multiuse_clones(sym, remaining, *record)),
             field,
+            field_ty,
         },
         // `Update.record` is always wrapped in `(record).clone()` by `emit_update`
         // (a borrow via `Clone::clone(&self)`).  Only the field VALUES are consuming
@@ -2740,39 +2728,30 @@ fn rewrite_var_free_occurrences(
             then_: Box::new(rewrite_var_free_occurrences(target, *then_, on_hit)),
             else_: Box::new(rewrite_var_free_occurrences(target, *else_, on_hit)),
         },
-        Expr::Match(m) => {
-            let (scrutinee, arms) = m.into_parts();
-            let new_scrutinee = Box::new(rewrite_var_free_occurrences(target, *scrutinee, on_hit));
-            let new_arms = arms
-                .into_iter()
-                .map(|arm| {
-                    let binds = pat_binds_symbol(&arm.pat, target);
-                    let new_body = if binds {
-                        arm.body
+        Expr::Match(m) => Expr::Match(m.map_bodies(
+            |scrutinee| rewrite_var_free_occurrences(target, scrutinee, on_hit),
+            |pat, body, guard| {
+                let binds = pat_binds_symbol(pat, target);
+                let new_body = if binds {
+                    body
+                } else {
+                    rewrite_var_free_occurrences(target, body, on_hit)
+                };
+                // A C2 arm guard is evaluated in the same scope as its body;
+                // rewrite free occurrences of `target` there too when the arm
+                // pattern does not shadow it (guards over a fresh length-check
+                // var normally reference no outer capture, but staying uniform
+                // keeps this rewrite total for any future guard shape).
+                let new_guard = guard.map(|g| {
+                    if binds {
+                        g
                     } else {
-                        rewrite_var_free_occurrences(target, arm.body, on_hit)
-                    };
-                    // A C2 arm guard is evaluated in the same scope as its body;
-                    // rewrite free occurrences of `target` there too when the arm
-                    // pattern does not shadow it (guards over a fresh length-check
-                    // var normally reference no outer capture, but staying uniform
-                    // keeps this rewrite total for any future guard shape).
-                    let new_guard = arm.guard.map(|g| {
-                        if binds {
-                            g
-                        } else {
-                            rewrite_var_free_occurrences(target, g, on_hit)
-                        }
-                    });
-                    Arm {
-                        pat: arm.pat,
-                        body: new_body,
-                        guard: new_guard,
+                        rewrite_var_free_occurrences(target, g, on_hit)
                     }
-                })
-                .collect();
-            Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms))
-        }
+                });
+                (new_body, new_guard)
+            },
+        )),
         Expr::Call { callee, args } => Expr::Call {
             callee,
             args: args
@@ -2806,9 +2785,14 @@ fn rewrite_var_free_occurrences(
                 .map(|(sym, e)| (sym, rewrite_var_free_occurrences(target, e, on_hit)))
                 .collect(),
         ),
-        Expr::Access { record, field } => Expr::Access {
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Expr::Access {
             record: Box::new(rewrite_var_free_occurrences(target, *record, on_hit)),
             field,
+            field_ty,
         },
         Expr::Update { record, fields } => Expr::Update {
             record: Box::new(rewrite_var_free_occurrences(target, *record, on_hit)),
@@ -6729,10 +6713,27 @@ impl<'a> Lowerer<'a> {
                 });
                 Ok(Expr::Record(lowered))
             }
-            canon::Expr_::Access(record, field) => Ok(Expr::Access {
-                record: Box::new(self.lower_expr(record)?),
-                field: *field,
-            }),
+            canon::Expr_::Access(record, field) => {
+                // #142/AUD-09 type-directed Copy elision: thread the field's
+                // solved type (the Access expression's own region type) into
+                // the IR so the backend can skip `.clone()` on `Copy` scalars.
+                // `ir_type_from_ty` may legitimately fail for a still-generic
+                // field type inside a polymorphic body (same tolerance as
+                // `lower_case`'s T5 rewrite) — do NOT fail closed: the field's
+                // concreteness was never load-bearing before this change. The
+                // `IrType::Generic` fallback is classified non-`Copy` by the
+                // backend, which conservatively KEEPS the `.clone()` —
+                // semantically identical to the previous unconditional clone.
+                let field_ty = self
+                    .region_ty(e.span)
+                    .and_then(|ty| self.ir_type_from_ty(ty, e.span).ok())
+                    .unwrap_or(IrType::Generic(*field));
+                Ok(Expr::Access {
+                    record: Box::new(self.lower_expr(record)?),
+                    field: *field,
+                    field_ty,
+                })
+            }
             canon::Expr_::Update(base, fields) => self.lower_update(base, fields),
             canon::Expr_::Case(scrut, branches) => self.lower_case(scrut, branches),
             // A top-level binding or kernel named as a bare *value* (passed,
