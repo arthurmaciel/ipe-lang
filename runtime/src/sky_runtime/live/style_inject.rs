@@ -593,6 +593,59 @@ mod tests {
         );
     }
 
+    /// UI CSS-escaping hardening (spec §6.2), the direct regression for
+    /// Repro A: an adversarial `Font.family` value routed through
+    /// `Ui.onPseudo` → `build_style_string` → `collect_html_attrs` →
+    /// `apply_style_injections` must not survive into the emitted `<style>`
+    /// block as a page-wide rule. The `}` breakout is dropped upstream in
+    /// `build_style_string`, so no `body{`/`display:none` reaches the sink,
+    /// while the scoped `:hover` rule + `@media (hover: hover)` guard stay.
+    #[test]
+    fn onpseudo_font_family_breakout_is_neutralised_end_to_end() {
+        use crate::sky_runtime::html::{assign_sky_ids, render_html};
+        use crate::sky_runtime::ui::element::Element;
+        use crate::sky_runtime::ui::helpers::{ui_hover_, ui_on_pseudo_};
+        use crate::sky_runtime::ui::render::ui_layout;
+
+        let evil = "s } body { display:none } .x:hover {".to_owned();
+        let pseudo = ui_on_pseudo_::<()>(
+            ui_hover_(),
+            vec![crate::sky_runtime::ui::element::Attribute::AttrFontFamily(evil)],
+        );
+        let mut html = ui_layout(vec![pseudo], Element::Text("hi".to_owned()));
+        assign_sky_ids(&mut html, "r");
+        apply_style_injections(&mut html);
+        let out = render_html(&html);
+        assert!(
+            !out.contains("body {") && !out.contains("body{") && !out.contains("display:none"),
+            "page-wide selector must not survive the collector gate: {out}"
+        );
+    }
+
+    /// Repro B: an `@import` breakout through `Background.image` inside
+    /// `Ui.onPseudo` must not reach the emitted `<style>` block.
+    #[test]
+    fn onpseudo_bg_image_import_breakout_is_neutralised_end_to_end() {
+        use crate::sky_runtime::html::{assign_sky_ids, render_html};
+        use crate::sky_runtime::ui::element::Element;
+        use crate::sky_runtime::ui::helpers::{ui_hover_, ui_on_pseudo_};
+        use crate::sky_runtime::ui::render::ui_layout;
+
+        let evil = "x) } @import url(\"https://evil.example/x.css\") ; .y:hover { background:url(x".to_owned();
+        let pseudo = ui_on_pseudo_::<()>(
+            ui_hover_(),
+            vec![crate::sky_runtime::ui::element::Attribute::AttrBgImage(evil)],
+        );
+        let mut html = ui_layout(vec![pseudo], Element::Text("hi".to_owned()));
+        assign_sky_ids(&mut html, "r");
+        apply_style_injections(&mut html);
+        let out = render_html(&html);
+        assert!(
+            !out.contains("@import"),
+            "remote @import must not survive the collector gate: {out}"
+        );
+    }
+
     #[test]
     fn idempotent_second_run_adds_no_duplicate_style() {
         let mut tree: Html<()> = Html::HElement(

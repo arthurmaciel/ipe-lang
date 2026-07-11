@@ -157,7 +157,16 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 parts.push(format!("color:{}", color_css(c)));
             }
             Attribute::AttrFontFamily(f) => {
-                parts.push(format!("font-family:{f}"));
+                // Value-as-data gate (UI CSS-escaping hardening): a raw Sky
+                // `String` reaching a CSS sink must pass the shared
+                // `SafeCssValue` breakout scan (`;{}@import`, script sinks) —
+                // drop on failure, same posture as `AttrStyle` /
+                // `AttrBgGradient` below. Legit font stacks (commas, quotes,
+                // spaces) pass untouched. See
+                // `docs/architecture/ui-css-escaping-fix-spec-2026-07-10.md`.
+                if let Some(v) = SafeCssValue::parse(f) {
+                    parts.push(format!("font-family:{}", v.as_str()));
+                }
             }
             Attribute::AttrFontWeight(w) => {
                 parts.push(format!("font-weight:{w}"));
@@ -169,7 +178,9 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 parts.push("text-decoration:underline".to_owned());
             }
             Attribute::AttrFontDecoration(d) => {
-                parts.push(format!("text-decoration:{d}"));
+                if let Some(v) = SafeCssValue::parse(d) {
+                    parts.push(format!("text-decoration:{}", v.as_str()));
+                }
             }
             Attribute::AttrFontLetterSpacing(n) => {
                 parts.push(format!("letter-spacing:{n}px"));
@@ -178,7 +189,9 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 parts.push(format!("word-spacing:{n}px"));
             }
             Attribute::AttrFontAlign(a) => {
-                parts.push(format!("text-align:{a}"));
+                if let Some(v) = SafeCssValue::parse(a) {
+                    parts.push(format!("text-align:{}", v.as_str()));
+                }
             }
             Attribute::AttrBgColor(c) => {
                 parts.push(format!("background-color:{}", color_css(c)));
@@ -188,7 +201,18 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 // `sanitise_css_value` only fires on `url(` or `expression(` prefixes,
                 // so we need the is_dangerous_url_scheme check here on the bare URL.
                 if !is_dangerous_url_scheme(url) {
-                    parts.push(format!("background-image:url({url})"));
+                    // BG-1 (spec §4.3): gate the COMPOSED `url({url})` value
+                    // so a `)` closing `url(` early followed by `}`/`;`/
+                    // `@import` is rejected by the shared breakout scan.
+                    // Known, documented limitation: an inline base64 data
+                    // URI (`url(data:image/png;base64,…)`) contains `;` and
+                    // is dropped — Background.image takes a path/URL;
+                    // data-URI backgrounds are unsupported through Std.Ui
+                    // (BG-2 quoting is the upgrade if ever needed).
+                    let composed = format!("url({url})");
+                    if let Some(v) = SafeCssValue::parse(&composed) {
+                        parts.push(format!("background-image:{}", v.as_str()));
+                    }
                 }
             }
             Attribute::AttrBgGradient(g) => {
@@ -218,7 +242,9 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 parts.push(format!("border-radius:{n}px"));
             }
             Attribute::AttrBorderStyle(s) => {
-                parts.push(format!("border-style:{s}"));
+                if let Some(v) = SafeCssValue::parse(s) {
+                    parts.push(format!("border-style:{}", v.as_str()));
+                }
             }
             Attribute::AttrBorderShadow(x, y, blur, spread, c) => {
                 parts.push(format!(
@@ -236,11 +262,19 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 parts.push("cursor:pointer".to_owned());
             }
             Attribute::AttrOverflow(x, y) => {
-                parts.push(format!("overflow-x:{x}"));
-                parts.push(format!("overflow-y:{y}"));
+                // Per-component gating: one bad axis drops alone, the other
+                // legit axis still renders.
+                if let Some(v) = SafeCssValue::parse(x) {
+                    parts.push(format!("overflow-x:{}", v.as_str()));
+                }
+                if let Some(v) = SafeCssValue::parse(y) {
+                    parts.push(format!("overflow-y:{}", v.as_str()));
+                }
             }
             Attribute::AttrTransition(t, _respect_reduced) => {
-                parts.push(format!("transition:{t}"));
+                if let Some(v) = SafeCssValue::parse(t) {
+                    parts.push(format!("transition:{}", v.as_str()));
+                }
             }
             Attribute::AttrGridTracks(cols, rows) => {
                 // Fixed property names; user-supplied values go through SafeCssValue.
@@ -261,7 +295,11 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 // + `spec` provide the `animation:` property; keyframes are
                 // silently dropped for now and tracked as a Phase-1 follow-up.
                 let _ = keyframes; // suppress unused-variable warning
-                parts.push(format!("animation:{name} {spec}"));
+                // Gate the composed `name spec` shorthand as ONE value.
+                let shorthand = format!("{name} {spec}");
+                if let Some(v) = SafeCssValue::parse(&shorthand) {
+                    parts.push(format!("animation:{}", v.as_str()));
+                }
             }
             // Non-style attrs handled in `collect_html_attrs` below.
             Attribute::NoAttribute
@@ -925,6 +963,96 @@ mod tests {
             s.contains("data-sky-pc-rules=\"h|background-color:rgba(255,0,0,1)\""),
             "onPseudo(hover) marker missing/malformed: {s}"
         );
+    }
+
+    // ── UI CSS-escaping hardening (value-as-data attrs; spec §6.1) ─────────
+
+    /// Every previously-ungated raw-string arm must DROP a value carrying the
+    /// rule-breakout set (`}` / `;` / `@import`) — the page-wide-injection
+    /// primitive once `Ui.onPseudo` routes the collector output into a
+    /// `<style>` block (Repro A of the spec).
+    #[test]
+    fn value_as_data_attrs_drop_rule_breakout_payloads() {
+        let cases: Vec<Attribute<TestMsg>> = vec![
+            Attribute::AttrFontFamily("serif } body { display:none".to_owned()),
+            Attribute::AttrFontFamily("x;color:red".to_owned()),
+            Attribute::AttrFontDecoration("underline } .x{}".to_owned()),
+            Attribute::AttrFontAlign("center;position:fixed".to_owned()),
+            Attribute::AttrBorderStyle("solid } .x{color:red".to_owned()),
+            Attribute::AttrTransition("all 1s } body{}".to_owned(), true),
+            Attribute::AttrAnimation(
+                "a } body {".to_owned(),
+                "300ms".to_owned(),
+                String::new(),
+                true,
+            ),
+            Attribute::AttrBgImage("x) } @import url(evil)".to_owned()),
+        ];
+        for attr in cases {
+            let css = build_style_string(std::slice::from_ref(&attr));
+            assert!(
+                !css.contains('}') && !css.contains("display:none") && !css.contains("@import"),
+                "breakout payload must be dropped, got {css:?} for {attr:?}"
+            );
+        }
+    }
+
+    /// Per-component gating: one poisoned overflow axis drops alone; the
+    /// sibling legit axis still renders.
+    #[test]
+    fn overflow_gates_each_axis_independently() {
+        let attr: Attribute<TestMsg> =
+            Attribute::AttrOverflow("auto }".to_owned(), "hidden".to_owned());
+        let css = build_style_string(std::slice::from_ref(&attr));
+        assert!(!css.contains("overflow-x"), "poisoned axis must drop: {css}");
+        assert!(css.contains("overflow-y:hidden"), "legit axis must stay: {css}");
+    }
+
+    /// Legitimate values must render byte-for-byte — the gate's charset is
+    /// permissive for everything a real single-declaration value contains
+    /// (commas, quotes, spaces); zero legitimate loss.
+    #[test]
+    fn value_as_data_attrs_keep_legitimate_values() {
+        let cases: Vec<(Attribute<TestMsg>, &str)> = vec![
+            (
+                Attribute::AttrFontFamily("\"Helvetica Neue\", Georgia, serif".to_owned()),
+                "font-family:\"Helvetica Neue\", Georgia, serif",
+            ),
+            (
+                Attribute::AttrTransition("all 200ms ease-in-out".to_owned(), true),
+                "transition:all 200ms ease-in-out",
+            ),
+            (Attribute::AttrFontAlign("center".to_owned()), "text-align:center"),
+            (
+                Attribute::AttrBorderStyle("dashed".to_owned()),
+                "border-style:dashed",
+            ),
+            (
+                Attribute::AttrFontDecoration("underline".to_owned()),
+                "text-decoration:underline",
+            ),
+            (
+                Attribute::AttrAnimation(
+                    "fadeIn".to_owned(),
+                    "300ms ease".to_owned(),
+                    String::new(),
+                    true,
+                ),
+                "animation:fadeIn 300ms ease",
+            ),
+            (
+                Attribute::AttrOverflow("auto".to_owned(), "scroll".to_owned()),
+                "overflow-x:auto;overflow-y:scroll",
+            ),
+            (
+                Attribute::AttrBgImage("hero.png".to_owned()),
+                "background-image:url(hero.png)",
+            ),
+        ];
+        for (attr, want) in cases {
+            let css = build_style_string(std::slice::from_ref(&attr));
+            assert_eq!(css, want, "legit value must render verbatim for {attr:?}");
+        }
     }
 
     #[test]
