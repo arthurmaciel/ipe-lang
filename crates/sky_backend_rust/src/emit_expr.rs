@@ -7051,6 +7051,42 @@ fn emit_apply(
 /// `ty` is the value's `Fun` IR type; [`render_type`] renders it as the typed
 /// smart-pointer.  Kept `#[inline(never)]` for the same frame-size reason as
 /// the neighbouring helpers.
+/// Does a function value / lambda of IR type `ty` fill one of the runtime's
+/// `Arc<dyn Fn + Send + Sync>` callback slots (so it must be boxed with
+/// `Arc::new`, not `Box::new`)? The shapes:
+///   • `ServerHandler<E>`: `Fn(ServerRequest) -> SkyTask<E, ServerResponse>`
+///   • `WsServerCfg` callbacks, `-> SkyTask<E, ()>`:
+///       - `Fn(WsHandle)`           (onConnect / onClose)
+///       - `Fn(WsHandle, String)`   (onMessage)
+///       - `Fn(WsHandle, Error)`    (onError — 2nd param is the error type,
+///         NOT String; its setter `ws_server_with_on_error` takes `Arc<…>`)
+///
+/// This MUST dispatch on the `IrType` STRUCTURE, never on the rendered type
+/// string. `render_type` renders `ServerHandler<E>` as the type-ALIAS name
+/// `"ServerHandler<SkyError>"` — NOT the expanded `"Arc<dyn Fn…>"` — so a
+/// `starts_with("Arc<")` string test silently misclassifies every handler shape
+/// as `Box` and reintroduces the E0308 seal break for inline
+/// `Server.post path (\req -> …)` handler lambdas (the regression this shared
+/// helper closes). The param patterns are kept in LOCK-STEP with `render_type`'s
+/// WS/ServerHandler Arc arms (`emit_types.rs`) — a shape rendered as `Arc<…>`
+/// there but boxed with `Box::new` here (or vice-versa) is an E0308. Both
+/// `emit_func_value` and `emit_lambda` route through here so the two emit paths
+/// can never drift.
+fn wants_arc_ctor(ty: &IrType) -> bool {
+    matches!(ty,
+        IrType::Fun(params, ret)
+            if (matches!(params.as_slice(), [IrType::ServerRequest])
+                && matches!(ret.as_ref(), IrType::Task(inner)
+                    if matches!(inner.as_ref(), IrType::ServerResponse)))
+               || (matches!(
+                    params.as_slice(),
+                    [IrType::WebSocketServer]
+                        | [IrType::WebSocketServer, IrType::Str | IrType::Error]
+                ) && matches!(ret.as_ref(), IrType::Task(inner)
+                    if matches!(inner.as_ref(), IrType::Unit)))
+    )
+}
+
 #[inline(never)]
 fn emit_func_value(
     ctx: &EmitCtx,
@@ -7060,33 +7096,7 @@ fn emit_func_value(
 ) -> DResult<String> {
     let name = callee_name(ctx, callee)?;
     let typed = render_type(ctx, ty, generics)?;
-    // ServerHandler<E> is Arc<dyn Fn(ServerRequest) -> SkyTask<E, ServerResponse>
-    //   + Send + Sync> (defined in sky_runtime::server).  Using Box::new here
-    // produces a type-mismatch because Arc and Box are distinct smart pointers.
-    // Detect this shape and use Arc::new instead.
-    //
-    // WsServerCfg callback fields are also Arc<dyn Fn + Send + Sync> — same
-    // reason.  Shapes: Fn(WsHandle) -> SkyTask<()>  (onConnect / onClose) and
-    // Fn(WsHandle, String) -> SkyTask<()>  (onMessage / onError).
-    // Use Arc::new when the runtime field is Arc<dyn Fn + Send + Sync>:
-    //   • ServerHandler<E>: Fn(ServerRequest) -> SkyTask<E, ServerResponse>
-    //   • WsServerCfg callbacks: Fn(WsHandle) -> SkyTask<E, ()>
-    //                            Fn(WsHandle, String) -> SkyTask<E, ()>
-    let ctor = if matches!(ty,
-        IrType::Fun(params, ret)
-            if (matches!(params.as_slice(), [IrType::ServerRequest])
-                && matches!(ret.as_ref(), IrType::Task(inner)
-                    if matches!(inner.as_ref(), IrType::ServerResponse)))
-               || (matches!(
-                    params.as_slice(),
-                    [IrType::WebSocketServer] | [IrType::WebSocketServer, IrType::Str]
-                ) && matches!(ret.as_ref(), IrType::Task(inner)
-                    if matches!(inner.as_ref(), IrType::Unit)))
-    ) {
-        "Arc"
-    } else {
-        "Box"
-    };
+    let ctor = if wants_arc_ctor(ty) { "Arc" } else { "Box" };
     Ok(format!(
         "{{ let __sky_fn: {typed} = {ctor}::new({name}); __sky_fn }}"
     ))
@@ -7166,14 +7176,14 @@ fn emit_lambda(
         Box::new(ret.clone()),
     );
     let typed = render_type(ctx, &fun_ty, generics)?;
-    // The rendered type is `Arc<dyn Fn…>` for the two runtime handler shapes
-    // (ServerHandler / WsServerCfg callbacks) and `Box<dyn Fn…>` otherwise; the
-    // pointer constructor must match the smart pointer of the annotated type.
-    let ctor = if typed.starts_with("Arc<") {
-        "Arc"
-    } else {
-        "Box"
-    };
+    // The pointer constructor must match the smart pointer of the annotated
+    // type: `Arc::new` for the two runtime handler shapes (ServerHandler /
+    // WsServerCfg callbacks, whose fields are `Arc<dyn Fn + Send + Sync>`),
+    // `Box::new` otherwise. Dispatch on the IR STRUCTURE via `wants_arc_ctor`,
+    // NOT on the rendered string — `render_type` emits `ServerHandler<E>` as the
+    // alias name, so a `starts_with("Arc<")` test would misclassify it as Box
+    // and E0308 the handler-lambda shape.
+    let ctor = if wants_arc_ctor(&fun_ty) { "Arc" } else { "Box" };
     Ok(format!(
         "{{ let __sky_fn: {typed} = {ctor}::new({inner}); __sky_fn }}"
     ))

@@ -46,13 +46,20 @@ Run, from the repo root, timeout-bounded, on the ISOLATED gate target (never the
 ```
 touch runtime/tests/*.rs crates/skyc/tests/*.rs
 CARGO_TARGET_DIR="$HOME/.cache/master-gate-target" timeout 3000 cargo nextest run --workspace
+CARGO_TARGET_DIR="$HOME/.cache/master-gate-target" timeout 1800 cargo nextest run -p sky-runtime-rust --features full
 CARGO_TARGET_DIR="$HOME/.cache/master-gate-target" timeout 600 cargo test --doc --workspace
 CARGO_TARGET_DIR="$HOME/.cache/master-gate-target" timeout 1200 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 `cargo test --workspace` is banned — use `cargo nextest run --workspace`
 (parallel runner, dramatically faster); it does not run doctests, so the
-`cargo test --doc` line covers those. All three MUST be exit 0. If the item
+`cargo test --doc` line covers those. The `--features full` runtime lane is
+LOAD-BEARING: the runtime's `default = []` and workspace feature-unification
+does NOT enable `live`/`db`/`tui`/…, so the workspace run silently skips
+every feature-gated test — including the whole `sky_runtime::live::*`
+surface (`style_inject` CSS-injection sink gates, SSE/session/dispatch) and
+the `spawn_blocking` regressions (mirror of CI's `runtime-full-features`
+job). All four lines MUST be exit 0. If the item
 was an example-sweep blocker, ALSO rebuild that one example with the
 freshly-built `skyc` and confirm its original diagnostic is gone (note the
 NEW blocker for the backlog).
