@@ -402,8 +402,16 @@ fn infer_with_budget_attributed(
     }
 
     // `env` = annotation types of typed bindings (exact) + read-back of every
-    // untyped binding's inferred body type.
-    let mut env = generated.top_level;
+    // untyped binding's inferred body type. The typed schemes lived behind an
+    // `Rc` during constraint generation (per-reference clone = refcount bump);
+    // unwrap here to keep the public `SolvedTypes::env` shape. The refcount is
+    // 1 by now (per-reference clones were transient), so `try_unwrap` moves
+    // without copying; the fallback deep-clone is correctness-equivalent.
+    let mut env: BTreeMap<(Vec<Symbol>, Symbol), Ty> = generated
+        .top_level
+        .into_iter()
+        .map(|(k, v)| (k, std::rc::Rc::try_unwrap(v).unwrap_or_else(|rc| (*rc).clone())))
+        .collect();
     for (name, var) in generated.untyped {
         env.insert(name, lift!(zonk(&mut uf, budget, var)));
     }
@@ -908,10 +916,37 @@ enum FieldState {
     Missing,
 }
 
+/// Small decision datum peeked BY REFERENCE from a field-access base's
+/// union-find descriptor (helper of [`field_access_state`]).
+///
+/// The former `uf.content(root)?` deep-cloned the whole record field map per
+/// field access (efficiency-audit §2 medium); extracting this `Copy`-sized
+/// outcome instead releases the `&uf` borrow before the `&mut uf` table
+/// lookups that follow.
+enum Peek {
+    Record(Option<VarId>),
+    Req,
+    ErrCon(Symbol),
+    Deferred,
+    Missing,
+}
+
+/// Per-update pre-copy of the K needed field vars, peeked BY REFERENCE from
+/// the base record's union-find descriptor (helper of [`resolve_deferred`]'s
+/// record-update pass; see the call-site comment for the borrow rationale).
+enum RuPeek {
+    /// `(field, value_var, field_var-if-present)` per updated field.
+    Fields(Vec<(Symbol, VarId, Option<VarId>)>),
+    Flex,
+    Other,
+}
+
 /// Resolve one [`FieldAccess`]'s base to its [`FieldState`].
 ///
-/// `uf.content()` returns an owned clone; the borrow ends before any `fresh`
-/// call the table lookups make, avoiding a simultaneous mutable borrow.
+/// `uf.root_content()` peeks the descriptor by reference (the caller already
+/// ran `find`, so path compression is preserved); the [`Peek`] extraction ends
+/// the borrow before any `fresh` call the table lookups make, avoiding a
+/// simultaneous mutable borrow.
 fn field_access_state(
     uf: &mut UnionFind<Content>,
     req_fields: &RequestFields,
@@ -920,31 +955,38 @@ fn field_access_state(
     field: Symbol,
 ) -> DResult<FieldState> {
     let found_or_missing = |v: Option<VarId>| v.map_or(FieldState::Missing, FieldState::Found);
-    Ok(match uf.content(root)? {
+    let peek = match uf.root_content(root)? {
         Content::Structure(FlatType::Record(fields, _ext)) => {
-            found_or_missing(fields.get(&field).copied())
+            Peek::Record(fields.get(&field).copied())
         }
         // The opaque server `Request` Con is not a structural record, but
         // its field set is fixed (see [`RequestFields`]). Resolve the
         // field against the known table so `req.body` type-checks; the
         // emit reads `runtime::ServerRequest` directly.
-        Content::Structure(FlatType::Con {
-            ref name, ref args, ..
-        }) if *name == req_fields.con && args.is_empty() => {
-            found_or_missing(req_fields.field_var(uf, field)?)
+        Content::Structure(FlatType::Con { name, args, .. })
+            if *name == req_fields.con && args.is_empty() =>
+        {
+            Peek::Req
         }
         // `PanicInfo` / `TypeInfo` / `ErrorInfo` are opaque nominal Cons
         // (SEAL fix 2026-07-11) whose field sets are fixed (see
         // [`ErrorRecordFields`]). Resolve the field against the known table
         // so `p.message` / `t.expected` / `info.details` type-check; the
         // emit reads the runtime structs' pub fields directly.
-        Content::Structure(FlatType::Con {
-            ref name, ref args, ..
-        }) if err_fields.owns(*name) && args.is_empty() => {
-            found_or_missing(err_fields.field_var(uf, *name, field)?)
+        Content::Structure(FlatType::Con { name, args, .. })
+            if err_fields.owns(*name) && args.is_empty() =>
+        {
+            Peek::ErrCon(*name)
         }
-        Content::Flex => FieldState::Deferred, // not settled yet
-        _ => FieldState::Missing, // rigid / super / non-record structure — error
+        Content::Flex => Peek::Deferred, // not settled yet
+        _ => Peek::Missing, // rigid / super / non-record structure — error
+    };
+    Ok(match peek {
+        Peek::Record(v) => found_or_missing(v),
+        Peek::Req => found_or_missing(req_fields.field_var(uf, field)?),
+        Peek::ErrCon(name) => found_or_missing(err_fields.field_var(uf, name, field)?),
+        Peek::Deferred => FieldState::Deferred,
+        Peek::Missing => FieldState::Missing,
     })
 }
 
@@ -1007,32 +1049,45 @@ fn resolve_deferred(
         // ── Record updates ────────────────────────────────────────────────────
         for ru in &pending_ru {
             let root = lift!(uf.find(ru.record));
-            // Clone the field map before any `unify` call (same borrow discipline
-            // as the field-access arm above).
-            match lift!(uf.content(root)) {
-                Content::Structure(FlatType::Record(fields, _ext)) => {
+            // Peek only the K needed field vars by reference into a small
+            // pre-copy ([`RuPeek`]), then run the unify loop over that — the
+            // former `uf.content(root)` deep-cloned the WHOLE base-record
+            // field map even when few fields change (efficiency-audit §2
+            // medium). Same field vars resolved, same unify order, same span
+            // blamed; the pre-copy releases the arena borrow exactly as the
+            // map clone did.
+            let peek = match lift!(uf.root_content(root)) {
+                Content::Structure(FlatType::Record(fields, _ext)) => RuPeek::Fields(
+                    ru.fields
+                        .iter()
+                        .map(|(field, value_var)| (*field, *value_var, fields.get(field).copied()))
+                        .collect(),
+                ),
+                Content::Flex => RuPeek::Flex,
+                _ => RuPeek::Other,
+            };
+            match peek {
+                RuPeek::Fields(fields) => {
                     made_progress = true;
-                    for (field, value_var) in &ru.fields {
-                        match fields.get(field).copied() {
+                    for (field, value_var, field_var) in fields {
+                        match field_var {
                             Some(field_var) => {
-                                lift!(unify(uf, budget, interner, ru.span, *value_var, field_var));
+                                lift!(unify(uf, budget, interner, ru.span, value_var, field_var));
                             }
                             None => {
                                 return Err((
-                                    no_such_field(
-                                        uf, budget, interner, ru.record, *field, ru.span,
-                                    ),
+                                    no_such_field(uf, budget, interner, ru.record, field, ru.span),
                                     ru.home.clone(),
                                 ));
                             }
                         }
                     }
                 }
-                Content::Flex => {
+                RuPeek::Flex => {
                     // Base not settled yet — defer, just as field accesses do.
                     next_ru.push(ru);
                 }
-                _ => {
+                RuPeek::Other => {
                     // Not a record and not Flex — error on the first updated
                     // field (mirrors the pre-fix behaviour of the single-pass
                     // `resolve_record_updates`).

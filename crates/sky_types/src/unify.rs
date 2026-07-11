@@ -99,11 +99,16 @@ pub fn unify(
     b: VarId,
 ) -> DResult<()> {
     budget.tick()?;
-    if uf.equivalent(a, b)? {
-        return Ok(());
-    }
+    // Two finds, reused for both the same-class short-circuit and the content
+    // reads below (efficiency-audit §2 low: `equivalent(a, b)` + two more
+    // finds performed up to 6 union-find traversals where 2 suffice).
+    // `equivalent` is exactly `find(a)? == find(b)?`, so the short-circuit is
+    // identical and path compression still runs on both chains.
     let ra = uf.find(a)?;
     let rb = uf.find(b)?;
+    if ra == rb {
+        return Ok(());
+    }
     let ca = uf.content(ra)?;
     let cb = uf.content(rb)?;
     match (ca, cb) {
