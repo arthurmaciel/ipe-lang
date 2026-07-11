@@ -1149,27 +1149,39 @@ API-shape review):
   union (`FfiPanic PanicInfo | TypeMismatch TypeInfo | HttpStatus Int |
   JsonDecode String | Custom String`) are now registered the same way as
   `ErrorKind` (canon ctor registration, `IrType::ErrorDetails` leaf,
-  `builtin_runtime_enum`, constrain ctor schemes for all 5 variants +
-  `PanicInfo`/`TypeInfo`'s anonymous-record payloads). `Error.withDetails :
-  ErrorDetails -> Error -> Error` is the sanctioned way to attach
-  `ErrorDetails` to a live `Error` from Sky source — raw record-literal
-  construction of `ErrorInfo`/`PanicInfo`/`TypeInfo` is NOT supported (those
-  are anonymous structural records, so a Sky-source literal lowers to a
-  project-local synthesized struct rather than this module's concrete
-  `SkyErrorInfo`/`SkyPanicInfo`/`SkyTypeInfo` — verified empirically; the
-  runtime-side smart constructors are the only sound construction path,
-  matching how every other `Error` value is built). E2E-verified for 3 of the
-  5 variants (`HttpStatus`/`JsonDecode`/`Custom` — the non-record-payload
-  ones) round-tripping through `ErrorInfo.details`, plus exhaustive
-  compile-time coverage of all 5 (`FfiPanic`/`TypeMismatch` as unreached
-  `case` arms, proving their record-payload ADT registration type-checks):
-  `crates/skyc/tests/golden_error_details_roundtrip.rs`.
-- **Sanctioned:** yes (matches the reference design exactly; the raw
-  record-literal construction gap is a Rust-codegen limitation shared with
-  `ErrorInfo` itself, not a new divergence). Reference:
+  `builtin_runtime_enum`, constrain ctor schemes for all 5 variants).
+  `Error.withDetails : ErrorDetails -> Error -> Error` is the sanctioned way
+  to attach `ErrorDetails` to a live `Error` from Sky source. **SEAL fix
+  2026-07-11** (`docs/architecture/
+  error-record-literal-seal-fix-2026-07-11.md`): `PanicInfo` / `TypeInfo` /
+  `ErrorInfo` are NOMINAL opaque builtin types (backed by the runtime's
+  `SkyPanicInfo`/`SkyTypeInfo`/`SkyErrorInfo` structs), not anonymous
+  structural records. Raw record-literal construction is a LOUD `skyc`-time
+  SKY-T0001 rejection — before the fix it was silently accepted and the
+  emitted project failed `cargo build` (E0308: the literal lowered to a
+  project-local synthesized struct), an exit-0-then-cargo-fail that was
+  temporarily mis-filed here as a sanctioned divergence. Field access on the
+  three types (`p.message`/`p.stack`/`t.expected`/`t.actual`/`info.message`/
+  `info.details`) resolves via fixed builtin field tables (`sky_types`'
+  `ErrorRecordFields`, the same recipe as the opaque server `Request`), the
+  names are annotatable (`describePanic : PanicInfo -> String`), and a
+  pattern-bound payload agrees with every use site on one Rust type.
+  E2E-verified for 3 of the 5 variants
+  (`HttpStatus`/`JsonDecode`/`Custom` — the non-record-payload ones)
+  round-tripping through `ErrorInfo.details`, plus exhaustive compile-time
+  coverage of all 5 (`FfiPanic`/`TypeMismatch` as unreached `case` arms):
+  `crates/skyc/tests/golden_error_details_roundtrip.rs`; nominal-payload
+  coherence: `crates/skyc/tests/golden_error_nominal_payload.rs`; the
+  record-literal rejections: `crates/skyc/tests/
+  error_record_literal_gates.rs`.
+- **Sanctioned:** yes (matches the reference design exactly; construction
+  goes through the smart constructors + `withDetails`, and the former
+  record-literal codegen gap is CLOSED as a compile-time rejection, no
+  longer a divergence). Reference:
   `crates/sky_types/src/constrain.rs` (`Error`/`ErrorKind`/`ErrorDetails`
-  ctor schemes), `crates/sky_lower/src/lower.rs` (`IrType::Error`/
-  `IrType::ErrorKind`/`IrType::ErrorDetails`),
+  ctor schemes + the nominal payload Cons), `crates/sky_lower/src/lower.rs`
+  (`IrType::Error`/`IrType::ErrorKind`/`IrType::ErrorDetails`/
+  `IrType::ErrorInfo`/`IrType::PanicInfo`/`IrType::TypeInfo`),
   `crates/sky_backend_rust/src/lib.rs::builtin_runtime_enum`,
   `runtime/src/sky_runtime/error.rs`. Every project's generated `SkyError`
   alias (`tests/golden/*/main.rs`'s boilerplate slice, `sky_backend_rust::

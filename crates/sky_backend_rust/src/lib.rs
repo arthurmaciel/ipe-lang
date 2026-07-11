@@ -1064,6 +1064,11 @@ fn collect_record_shapes(
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
+        // Nominal error-payload leaves (SEAL fix 2026-07-11) — monomorphic
+        // runtime structs, same classification as `Error`/`ErrorDetails`.
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
         // `SqlFragment` (backlog #61) is an opaque query-building value — no
         // record shape.
         // `Secret` (backlog #44) is an opaque sealed string wrapper — no
@@ -1191,6 +1196,11 @@ fn type_reaches_enum(
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
+        // Nominal error-payload leaves (SEAL fix 2026-07-11) — monomorphic
+        // runtime structs, same classification as `Error`/`ErrorDetails`.
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
         // `SqlFragment` (backlog #61) is a heap-backed struct (String +
         // Vec<SqlParam>) — no size-cycle risk.
         // `Secret` (backlog #44) is a heap-backed newtype (String) — no
@@ -1254,6 +1264,11 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
+        // Nominal error-payload leaves (SEAL fix 2026-07-11) — monomorphic
+        // runtime structs, same classification as `Error`/`ErrorDetails`.
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
         // `SqlFragment` (backlog #61) is monomorphic — no generic parameters.
         // `Secret` (backlog #44) is monomorphic — no generic parameters.
         | IrType::SqlFragment
@@ -1343,6 +1358,11 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
+        // Nominal error-payload leaves (SEAL fix 2026-07-11) — monomorphic
+        // runtime structs, same classification as `Error`/`ErrorDetails`.
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
         // `SqlFragment` (backlog #61) is monomorphic — no generics to collect.
         // `Secret` (backlog #44) is monomorphic — no generics to collect.
         | IrType::SqlFragment
@@ -1624,6 +1644,11 @@ fn match_template(
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
+        // Nominal error-payload leaves (SEAL fix 2026-07-11) — monomorphic
+        // runtime structs, same classification as `Error`/`ErrorDetails`.
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
         // `SqlFragment` (backlog #61) is a monomorphic opaque leaf.
         // `Secret` (backlog #44) is a monomorphic opaque leaf.
         | IrType::SqlFragment
