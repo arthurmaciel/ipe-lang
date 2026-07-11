@@ -14,7 +14,7 @@ use crate::code::{
     SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
     SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
     SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118, SKY_L0119, SKY_L0120, SKY_L0121,
-    SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0126, SKY_L0127, SKY_L0200,
+    SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0126, SKY_L0127, SKY_L0128, SKY_L0200,
     SKY_N0001,
     SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
     SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_N0027,
@@ -531,6 +531,15 @@ pub enum Feature {
     /// `Node (Node …) x r`) are accepted; only the nested-record carrier is
     /// gated here. [SKY-L0112]
     NestedPayloadPatterns,
+    /// An `as`-alias in a REFUTABLE match-arm position whose inner pattern
+    /// itself needs Rust-level runtime dispatch (a nested constructor,
+    /// literal, or list/cons pattern anywhere) — `Just ((Ok x) as w)`. The
+    /// common alias shape (`(a, b) as w`, dispatch-free) is fully supported;
+    /// only a dispatch-NEEDING inner is gated here, because honoring it
+    /// soundly by value would double-move a non-`Copy` payload (the exact
+    /// #99 bug) and honoring it by reference would require matching the
+    /// whole arm by reference — a materially larger redesign. [SKY-L0128]
+    AliasOverRefutablePayload,
     /// A data constructor named as a first-class function *value* — referenced
     /// bare (`map Just xs`) or partially applied (`Node l 1` for a three-field
     /// `Node`). M3a lowers a *saturated* construction (`Just 5`, `Node l 1 r`);
@@ -1006,6 +1015,7 @@ const fn feature_code(f: Feature) -> Code {
         Feature::PartialOverApplication => SKY_L0110,
         Feature::BoundedRecordUpdate => SKY_L0111,
         Feature::NestedPayloadPatterns => SKY_L0112,
+        Feature::AliasOverRefutablePayload => SKY_L0128,
         Feature::CtorAsFunction => SKY_L0113,
         Feature::CtorPayloadFunction => SKY_L0114,
         Feature::TuplePatternMatch => SKY_L0115,

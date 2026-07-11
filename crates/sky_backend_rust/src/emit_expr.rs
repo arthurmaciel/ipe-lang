@@ -5904,15 +5904,23 @@ fn emit_whole_arm_head(
 ) -> DResult<(String, String)> {
     if let Pat::Ctor { home, ty, variant, args } = pat {
         emit_ctor_arm_pat(ctx, home, *ty, *variant, args)
-    } else {
+    } else if str_mode || list_mode {
+        // STR/LIST mode: the scrutinee IS a reference (`.as_str()` /
+        // `.as_slice()`), so `render_pat`'s `name @ inner` is a borrow and
+        // sound for any inner shape (#99 §1.1) — unchanged.
         let prelude = if str_mode {
             str_binder_rebinds(ctx, pat)?
-        } else if list_mode {
-            list_binder_rebinds(ctx, pat)?
         } else {
-            String::new()
+            list_binder_rebinds(ctx, pat)?
         };
         Ok((render_pat(ctx, pat)?, prelude))
+    } else {
+        // WHOLE mode, by value: a top-level dispatch-free alias head
+        // (`(a, b) as w ->`) takes the #99 alias-safe clone-rebuild path.
+        let mut alias_counter: usize = 0;
+        let mut prelude = String::new();
+        let rendered = render_arm_pat_alias_safe(ctx, pat, &mut alias_counter, &mut prelude)?;
+        Ok((rendered, prelude))
     }
 }
 
@@ -5966,11 +5974,21 @@ fn emit_ctor_arm_pat(
         if args.is_empty() {
             return Ok((path, String::new()));
         }
+        // #99: the concrete repro (`Just ((a, b) as w)`) lives HERE — a
+        // builtin `Maybe`/`Result` payload matched by value. Route through
+        // the alias-safe renderer; alias-free payloads are byte-identical.
+        let mut alias_counter: usize = 0;
+        let mut alias_prelude = String::new();
         let mut sub_pats = Vec::with_capacity(args.len());
         for sub in args {
-            sub_pats.push(render_pat(ctx, sub)?);
+            sub_pats.push(render_arm_pat_alias_safe(
+                ctx,
+                sub,
+                &mut alias_counter,
+                &mut alias_prelude,
+            )?);
         }
-        return Ok((format!("{path}({})", sub_pats.join(", ")), String::new()));
+        return Ok((format!("{path}({})", sub_pats.join(", ")), alias_prelude));
     }
     let path = format!("{}::{}", ctx.enum_name(home, ty)?, ctx.emit_ident(variant)?);
     if args.is_empty() {
@@ -5992,8 +6010,18 @@ fn emit_ctor_arm_pat(
     }
     let mut sub_pats = Vec::with_capacity(args.len());
     let mut unbox_lines = String::new();
+    // #99: a dispatch-free `as`-alias in a by-value ctor payload renders via
+    // the alias-safe clone-rebuild path; its re-derivation `let`s share the
+    // arm's existing prelude slot. Alias-free sub-patterns take the
+    // byte-identical `render_pat` fast path inside.
+    let mut alias_counter: usize = 0;
     for (sub, field_ty) in args.iter().zip(fields.iter()) {
-        sub_pats.push(render_pat(ctx, sub)?);
+        sub_pats.push(render_arm_pat_alias_safe(
+            ctx,
+            sub,
+            &mut alias_counter,
+            &mut unbox_lines,
+        )?);
         // A variable bound to a boxed self-edge field is unboxed so the body
         // sees the payload's own type, not `Box<…>`.
         if ctx.is_cyclic_self_field(field_ty, home, ty)
@@ -6303,6 +6331,150 @@ fn pat_contains_alias(pat: &Pat) -> bool {
         | Pat::Ctor { .. }
         | Pat::Record(_)
         | Pat::Slice { .. } => false,
+    }
+}
+
+/// Does this pattern contain a [`Pat::Alias`] ANYWHERE in its shape —
+/// unlike [`pat_contains_alias`] (which only recurses into `Tuple`, because
+/// it exists solely for the by-VALUE Destructure grammar where
+/// `Ctor`/`Record`/`Slice` never legitimately appear), this ALSO recurses
+/// into `Ctor` args, `Record` fields, and `Slice` prefix/rest — all of which
+/// DO appear in a refutable match-arm pattern. (#99)
+fn pat_contains_alias_in_arm(pat: &Pat) -> bool {
+    match pat {
+        Pat::Alias(..) => true,
+        Pat::Tuple(elems) => elems.iter().any(pat_contains_alias_in_arm),
+        Pat::Ctor { args, .. } => args.iter().any(pat_contains_alias_in_arm),
+        Pat::Record(fields) => fields.iter().any(|(_, p)| pat_contains_alias_in_arm(p)),
+        Pat::Slice { prefix, rest } => {
+            prefix.iter().any(pat_contains_alias_in_arm)
+                || rest.as_deref().is_some_and(pat_contains_alias_in_arm)
+        }
+        Pat::Var(_) | Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => {
+            false
+        }
+    }
+}
+
+/// Render a BY-VALUE (whole-scrutinee, non-str, non-list) match-arm
+/// sub-pattern, routing any [`Pat::Alias`] through the SAME "bind the whole,
+/// destructure the inner shape from a CLONE" strategy #96's
+/// [`emit_binding_stmts`] already proved sound for irrefutable Destructure
+/// positions — because in THIS context the scrutinee is matched BY VALUE
+/// (never `&str`/`&[T]`), so `render_pat`'s `name @ inner` spelling (sound
+/// only under a by-REF default binding mode) would double-move `name` and
+/// `inner`'s own bindings for any non-`Copy` payload (#99).
+///
+/// A subtree with no alias anywhere renders through the existing,
+/// byte-identical [`render_pat`] (fast path — zero behavior change for the
+/// overwhelmingly common alias-free case). `prelude` accumulates the `let`
+/// statements that re-derive every aliased binder; the caller splices it
+/// into the SAME prelude slot `emit_ctor_arm_pat`'s cyclic-self-edge
+/// unboxing already uses (`unbox_lines`) or `emit_whole_arm_head`'s
+/// `prelude` return.
+fn render_arm_pat_alias_safe(
+    ctx: &EmitCtx,
+    pat: &Pat,
+    counter: &mut usize,
+    prelude: &mut String,
+) -> DResult<String> {
+    if !pat_contains_alias_in_arm(pat) {
+        return render_pat(ctx, pat);
+    }
+    match pat {
+        Pat::Alias(inner, _name) => {
+            // SKY-L0128 (`gate_by_value_dispatch_needing_aliases`) guarantees
+            // `inner` is dispatch-free by the time lowering succeeds; fail
+            // closed rather than silently mis-emit if that invariant is ever
+            // violated — never trust a backend-side "this can't happen"
+            // silently.
+            if !sky_ir::is_dispatch_free(inner) {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::render_arm_pat_alias_safe",
+                    detail: "alias over a dispatch-needing inner pattern reached the \
+                             backend; SKY-L0128 should have rejected this at lowering"
+                        .to_owned(),
+                });
+            }
+            let temp = format!("__sky_arm_alias_{}", *counter);
+            *counter += 1;
+            // `emit_binding_stmts` (the #96 machinery) already handles
+            // `Pat::Alias` exactly this way: `let <name> = <src>; let
+            // <inner-pattern> = <name>.clone();` — reuse it verbatim, passing
+            // the WHOLE alias node and the fresh temp as `src`.
+            for stmt in emit_binding_stmts(ctx, pat, &temp)? {
+                prelude.push_str(&stmt);
+                prelude.push(' ');
+            }
+            Ok(temp)
+        }
+        Pat::Tuple(elems) => {
+            let mut subs = Vec::with_capacity(elems.len());
+            for e in elems {
+                subs.push(render_arm_pat_alias_safe(ctx, e, counter, prelude)?);
+            }
+            Ok(format!("({})", subs.join(", ")))
+        }
+        Pat::Ctor {
+            home,
+            ty,
+            variant,
+            args,
+        } => {
+            let path = match ctx.builtin_runtime_enum(home, *ty) {
+                Some(runtime) => format!("{runtime}::{}", ctx.emit_ident(*variant)?),
+                None => format!("{}::{}", ctx.enum_name(home, *ty)?, ctx.emit_ident(*variant)?),
+            };
+            if args.is_empty() {
+                Ok(path)
+            } else {
+                let mut subs = Vec::with_capacity(args.len());
+                for a in args {
+                    subs.push(render_arm_pat_alias_safe(ctx, a, counter, prelude)?);
+                }
+                Ok(format!("{path}({})", subs.join(", ")))
+            }
+        }
+        Pat::Record(fields) => {
+            // Mirror [`render_record_pat`]'s struct-name resolution but
+            // recurse sub-patterns through this alias-safe renderer instead
+            // of the plain one.
+            let mut key = Vec::with_capacity(fields.len());
+            for (sym, _) in fields {
+                key.push(ctx.resolve_ident(*sym)?.to_owned());
+            }
+            let struct_name = ctx.record_name_for_literal(&key)?.to_owned();
+            let mut parts = Vec::with_capacity(fields.len());
+            for (sym, sub) in fields {
+                let field_ident = ctx.emit_ident(*sym)?;
+                if let Pat::Var(var) = sub
+                    && ctx.emit_ident(*var)? == field_ident
+                {
+                    parts.push(field_ident);
+                } else {
+                    let rendered = render_arm_pat_alias_safe(ctx, sub, counter, prelude)?;
+                    parts.push(format!("{field_ident}: {rendered}"));
+                }
+            }
+            if parts.is_empty() {
+                Ok(format!("{struct_name} {{ .. }}"))
+            } else {
+                Ok(format!("{struct_name} {{ {}, .. }}", parts.join(", ")))
+            }
+        }
+        // A `Slice` carrying a nested alias reaches LIST mode, which matches
+        // by reference and is unaffected by #99 — this by-VALUE renderer is
+        // never invoked from that path, so reaching here is an internal
+        // invariant violation, not a real user program.
+        Pat::Slice { .. } => Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::render_arm_pat_alias_safe",
+            detail: "Pat::Slice reached the by-value alias-safe renderer; list-mode \
+                     arms must route through render_pat directly"
+                .to_owned(),
+        }),
+        Pat::Var(_) | Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => {
+            render_pat(ctx, pat)
+        }
     }
 }
 

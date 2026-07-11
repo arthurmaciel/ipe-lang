@@ -1,0 +1,21 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #99: an `as`-alias over a dispatch-free tuple inside a by-value ctor
+-- payload. Pre-fix this emitted `Just(w @ (a, b))` over a non-Copy
+-- (String, String) — Rust E0382 (partial move) the moment the arm body
+-- reads `w` after `a`/`b`. Post-fix the whole payload binds once and the
+-- inner shape re-derives from a clone, so all three reads succeed.
+describe : Maybe (String, String) -> String
+describe m =
+    case m of
+        Just ((a, b) as w) ->
+            a ++ "|" ++ b ++ "|" ++ fst w ++ "-" ++ snd w
+
+        Nothing ->
+            "none"
+
+main =
+    println (describe (Just ("hello", "world")))

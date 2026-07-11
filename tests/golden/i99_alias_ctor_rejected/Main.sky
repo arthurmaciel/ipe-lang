@@ -1,0 +1,23 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+type Wrap
+    = Wrap (Maybe Int)
+
+-- #99 RED-side control: an alias over a dispatch-NEEDING inner (`Just x`
+-- needs its own discriminant check) in a by-value arm is SKY-L0128 — the
+-- clone-rebuild repair is only sound for dispatch-free inners, and the
+-- fail-closed gate must fire rather than let the backend double-move.
+describe : Wrap -> String
+describe w =
+    case w of
+        Wrap ((Just x) as inner) ->
+            "got"
+
+        Wrap Nothing ->
+            "none"
+
+main =
+    println (describe (Wrap (Just 1)))

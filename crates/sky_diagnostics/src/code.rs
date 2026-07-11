@@ -226,6 +226,9 @@ pub const SKY_L0126: Code = Code("SKY-L0126");
 /// a value holding a function is used more than once (function values cannot
 /// be copied yet)
 pub const SKY_L0127: Code = Code("SKY-L0127");
+/// an `as`-alias in a refutable match-arm position whose inner pattern needs
+/// Rust-level runtime dispatch (a nested constructor / literal / list pattern)
+pub const SKY_L0128: Code = Code("SKY-L0128");
 /// expression nests too deeply for the backend
 pub const SKY_L0200: Code = Code("SKY-L0200");
 
@@ -339,6 +342,7 @@ pub fn title(c: Code) -> &'static str {
         SKY_L0125 => "app Msg is not admissible for this app shape",
         SKY_L0126 => "non-Clone capture in a closure is not yet supported",
         SKY_L0127 => "a value holding a function is used more than once",
+        SKY_L0128 => "alias over a dispatch-needing nested pattern not supported yet",
         SKY_L0200 => "expression nests too deeply for the backend",
         SKY_I0001 => "internal compiler error",
         SKY_I0010 => "intern: unresolved symbol",
@@ -443,6 +447,7 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         SKY_L0125 => Some(include_str!("../explain/SKY-L0125.md")),
         SKY_L0126 => Some(include_str!("../explain/SKY-L0126.md")),
         SKY_L0127 => Some(include_str!("../explain/SKY-L0127.md")),
+        SKY_L0128 => Some(include_str!("../explain/SKY-L0128.md")),
         SKY_L0200 => Some(include_str!("../explain/SKY-L0200.md")),
         SKY_I0001 => Some(include_str!("../explain/SKY-I0001.md")),
         SKY_I0010 => Some(include_str!("../explain/SKY-I0010.md")),
@@ -474,7 +479,7 @@ pub const ALL_CODES: &[Code] = &[
     SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108,
     SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113, SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117,
     SKY_L0118, SKY_L0119, SKY_L0120, SKY_L0121, SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125,
-    SKY_L0126, SKY_L0127, SKY_L0200, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101,
+    SKY_L0126, SKY_L0127, SKY_L0128, SKY_L0200, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101,
     SKY_I0102,
     SKY_I0103, SKY_I0200, SKY_I0201, SKY_I0202, SKY_I0203,
 ];
@@ -484,8 +489,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn taxonomy_has_eighty_seven_codes() {
-        assert_eq!(ALL_CODES.len(), 87); // #90: +SKY-L0127
+    fn taxonomy_has_eighty_eight_codes() {
+        assert_eq!(ALL_CODES.len(), 88); // #90: +SKY-L0127; #99: +SKY-L0128
     }
 
     #[test]
@@ -503,7 +508,7 @@ mod tests {
             assert!(s.starts_with("SKY-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 87); // #90: +SKY-L0127
+        assert_eq!(seen.len(), 88); // #90: +SKY-L0127; #99: +SKY-L0128
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.
