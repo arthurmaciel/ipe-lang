@@ -74,6 +74,54 @@ fn i99_alias_tuple_match_arm_builds_and_runs() {
     );
 }
 
+/// #99 self-edge regression (found by the #99 review): an `as`-alias over a
+/// CYCLIC self-edge (recursive) ctor field is boxed in the emitted enum, so
+/// the clone-rebuild re-derivation must unbox the temp — pre-fix both the
+/// alias binder and the inner binder stayed `Box<Tree>` (skyc-0, cargo-E0308).
+#[test]
+fn i99_alias_over_self_edge_is_skyc_ok() {
+    let root = repo_root();
+    let entry = golden_dir(&root, "i99_alias_self_edge").join("Main.sky");
+    let out = std::env::temp_dir().join("skyc_i99_self_edge_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve");
+    let Ok(runtime) = runtime else { return };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "#99: alias over a cyclic self-edge field must be skyc-0: {:?}",
+        built.err()
+    );
+}
+
+/// `SKY_E2E` tier: the emitted self-edge project must cargo-build AND run
+/// with the arm body reading BOTH the recursed value (`child`) and the
+/// aliased whole (`w`) — proving the E0308 box mismatch is gone.
+#[test]
+fn i99_alias_over_self_edge_builds_and_runs() {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    let root = repo_root();
+    let entry = golden_dir(&root, "i99_alias_self_edge").join("Main.sky");
+    let out = std::env::temp_dir().join("skyc_i99_self_edge_e2e_run");
+    let _ = std::fs::remove_dir_all(&out);
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve");
+    let Ok(runtime) = runtime else { return };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(built.is_ok(), "build failed: {:?}", built.err());
+
+    let outcome = support::build_and_run_emitted("i99_alias_self_edge", &out);
+    assert_eq!(outcome.exit_code, Some(0), "must run clean");
+    assert_eq!(
+        outcome.stdout.trim(),
+        "11",
+        "self-edge arm must read child + w correctly (1 + 5 + 5 = 11)"
+    );
+}
+
 /// RED-side control: an alias over a dispatch-NEEDING inner (`Just x`) in a
 /// by-value ctor payload is a clean SKY-L0128 lowering rejection — never a
 /// skyc-accept-then-cargo-fail, and never silently over-broad (the GREEN
