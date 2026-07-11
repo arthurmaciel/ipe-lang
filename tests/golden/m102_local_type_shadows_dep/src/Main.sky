@@ -1,0 +1,16 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Dep exposing (Color(..))
+import Std.Log exposing (println)
+
+type Color = Warm | Cool
+
+describe : Color -> String
+describe c =
+    case c of
+        Warm -> "warm"
+        Cool -> "cool"
+
+main =
+    println (describe Warm)
