@@ -414,7 +414,12 @@ pub struct Func {
 }
 
 /// The M0 type lattice. Widened in later milestones.
-#[derive(Clone, PartialEq, Eq, Debug)]
+///
+/// `Hash` is derived so record-shape collection (`sky_lower`'s
+/// `collect_record_types`) can dedup via a `HashSet` gate instead of an
+/// O(n²) `Vec::contains` scan (efficiency-audit §3 medium). The derive is
+/// inert — it emits no IR and changes no equality semantics.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum IrType {
     Int,
     Float,
@@ -792,7 +797,7 @@ pub enum IrType {
 /// Used inside [`IrType::Ui`] to select the correct Rust path at emission time.
 /// The set is intentionally small to keep the pattern match exhaustive without a
 /// catch-all.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum UiCtor {
     /// `Html msg` — a rendered HTML tree (`sky_runtime::html::Html<M>`).
     Html,
@@ -820,7 +825,7 @@ pub enum UiCtor {
 ///
 /// Used inside [`IrType::UiPlain`] to select the correct Rust path at emission
 /// time.  The set is closed (eight variants).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum UiPlain {
     /// `Length` — `sky_runtime::ui::element::Length`.
     Length,

@@ -129,7 +129,15 @@ run_gate() {
       # in-script invocation bypasses that hook, so it must independently
       # follow the same rule). nextest does not run doctests, so pair with a
       # cheap `cargo test --doc` for full parity with the old gate.
+      # The `--features full` runtime lane is LOAD-BEARING (gate blind spot,
+      # 2026-07-11): the runtime's `default = []` and workspace feature-
+      # unification never enables `live`/`db`/`tui`/…, so the workspace run
+      # silently skips every feature-gated test — including the whole
+      # `sky_runtime::live::*` surface (style_inject CSS-injection sink gates,
+      # SSE/session/dispatch) and the spawn_blocking regressions. Mirrors CI's
+      # `runtime-full-features` job.
       CARGO_TARGET_DIR="$GATE_TARGET" timeout 3000 cargo nextest run --workspace >/tmp/orch-gate.log 2>&1 \
+      && CARGO_TARGET_DIR="$GATE_TARGET" timeout 1800 cargo nextest run -p sky-runtime-rust --features full >>/tmp/orch-gate.log 2>&1 \
       && CARGO_TARGET_DIR="$GATE_TARGET" timeout 600 cargo test --doc --workspace >>/tmp/orch-gate.log 2>&1 \
       && CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo clippy --workspace --all-targets -- -D warnings >>/tmp/orch-gate.log 2>&1 )
 }

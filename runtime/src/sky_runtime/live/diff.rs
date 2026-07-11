@@ -84,11 +84,13 @@ fn diff_node<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>) {
     };
     let _ = ot;
     // Patch id targets the element currently in the DOM — the OLD tree's id
-    // (Go parity: `old.SkyID`).
-    let id = sky_id(old).unwrap_or("").to_string();
+    // (Go parity: `old.SkyID`). Borrowed: `Patch::for_id` copies it only when
+    // a Patch is actually built, so an unchanged element pair allocates
+    // nothing here (efficiency-audit §6 medium).
+    let id: &str = sky_id(old).unwrap_or("");
 
     // Attribute + event delta.
-    let mut p = Patch::for_id(&id);
+    let mut p = Patch::for_id(id);
     diff_attrs(oa, na, &mut p);
     if !id.is_empty() && !p.attrs.is_empty() {
         out.push(p);
@@ -98,7 +100,7 @@ fn diff_node<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>) {
     if ok.len() == 1 && nk.len() == 1 {
         if let (Some(Html::HText(o)), Some(Html::HText(n))) = (ok.first(), nk.first()) {
             if o != n && !id.is_empty() {
-                let mut tp = Patch::for_id(&id);
+                let mut tp = Patch::for_id(id);
                 tp.text = Some(n.clone());
                 out.push(tp);
             }
@@ -108,7 +110,7 @@ fn diff_node<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>) {
 
     // Child-count change → replace the whole subtree.
     if ok.len() != nk.len() {
-        push_html_replace(&id, nk, out);
+        push_html_replace(id, nk, out);
         return;
     }
 
@@ -120,7 +122,7 @@ fn diff_node<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>) {
                 // (Go parity: single-text is the fast path above; anything else is a
                 // parent html-replace).
                 if o != n {
-                    push_html_replace(&id, nk, out);
+                    push_html_replace(id, nk, out);
                     return;
                 }
             }
@@ -132,7 +134,7 @@ fn diff_node<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>) {
             }
             // Tag / kind mismatch → replace the subtree at the parent.
             _ => {
-                push_html_replace(&id, nk, out);
+                push_html_replace(id, nk, out);
                 return;
             }
         }
@@ -143,23 +145,30 @@ fn diff_node<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>) {
 /// Keys changed or added → new value. Keys removed → empty string (Go convention).
 /// `sky-id` is excluded (never patched as an attribute).
 fn diff_attrs<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
-    let collect = |xs: &[Attribute<M>]| -> HashMap<String, String> {
+    // Borrowed maps: cloning every key AND value of every element into two
+    // owned HashMaps per diff was the hottest allocation in the SSE path
+    // (efficiency-audit §6 high). The changed/added/removed key set is
+    // identical owned-or-borrowed; only `insert_safe_attr` (which already
+    // copies, post-XSS-gate) allocates, and only for changed attrs.
+    // (A named fn, not a closure — fn lifetime elision ties the borrowed map
+    // to the argument slice; closure elision can't express that tie.)
+    fn collect<M>(xs: &[Attribute<M>]) -> HashMap<&str, &str> {
         let mut m = HashMap::new();
         for a in xs {
             match a {
                 Attribute::Attr(k, v) if k != "sky-id" => {
-                    m.insert(k.clone(), v.clone());
+                    m.insert(k.as_str(), v.as_str());
                 }
                 Attribute::BoolAttr(k, true) => {
                     // Go parity: live.go line 190 `vn.Attrs[k] = k`.
                     // Key-as-value encodes a present boolean attr; "" is the remove sentinel only.
-                    m.insert(k.clone(), k.clone());
+                    m.insert(k.as_str(), k.as_str());
                 }
                 _ => {}
             }
         }
         m
-    };
+    }
     let (om, nm) = (collect(old), collect(new));
     for (k, v) in &nm {
         if om.get(k) != Some(v) {
@@ -233,9 +242,13 @@ fn diff_events<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
 }
 
 fn render_children<M>(kids: &[Html<M>]) -> String {
+    // Write every child into ONE shared accumulator instead of allocating a
+    // throwaway String per child (efficiency-audit §6 medium). `render_html`
+    // is exactly `String::new()` + `render_into`, so concat order, content,
+    // recursion, and the `MAX_HTML_DEPTH` cap are unchanged.
     let mut s = String::new();
     for c in kids {
-        s.push_str(&render_html(c));
+        crate::sky_runtime::html::render_into(c, &mut s);
     }
     s
 }

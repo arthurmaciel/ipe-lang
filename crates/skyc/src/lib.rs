@@ -288,19 +288,96 @@ fn compile_modules(
     // source — the ONLY inputs that earn `ModuleOrigin::EmbeddedStdlib` below.
     let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
 
-    // Build the import graph, then topologically sort (dep-first, cycle = N0021).
-    let topo = project::topological_order(&discovered, entry_path, |mod_path| {
-        sources
-            .get(mod_path)
-            .map(|(_, src)| project::extract_imports_from_source(src))
-            .unwrap_or_default()
-    })
-    .map_err(|cycle| {
-        let path: Box<[Box<str>]> = cycle.path.into_iter().map(String::into_boxed_str).collect();
-        let diag = sky_diagnostics::Diagnostic::Name {
-            span: sky_diagnostics::Span::DUMMY,
-            msg: sky_diagnostics::NameError::ImportCycle { path },
-        };
+    // Salsa database (incremental Phase 1 — see
+    // docs/architecture/salsa-incremental-compilation-2026-07-11.md). The
+    // driver parses external state ONCE into typed inputs here (`SourceFile`
+    // per module + the `SourceRoot` file set); the front-end stages are
+    // demanded as memoized queries inside `compile_prepared`. The database is
+    // cold and per-invocation, and queries are demanded in the fixed topo
+    // order, so the interning sequence — and therefore emitted bytes — is
+    // identical to the pre-salsa pipeline (golden-suite-enforced).
+    let db = sky_db::SkyDatabase::new();
+    let source_root = create_source_root(&db, &sources, &injected);
+
+    let emitted = compile_prepared(
+        &db,
+        source_root,
+        &sources,
+        entry_path,
+        blame_path,
+        db_driver,
+    )?;
+
+    write_emitted_project(&emitted, out_dir, runtime_dir)
+}
+
+/// Create the salsa inputs for one build: a [`sky_db::SourceFile`] per module
+/// plus the [`sky_db::SourceRoot`] file set.
+///
+/// The trust tag: `EmbeddedStdlib` IFF the module path is in `injected` (the
+/// driver's unforgeable record from [`project::inject_compiled_std_closure`]).
+/// A user file squatting on `Std.Foo` is NOT in `injected` (injection skipped
+/// it on the pre-existing-key guard), so it is `User` and stays
+/// SKY-N0025-rejected.
+#[must_use]
+pub fn create_source_root(
+    db: &sky_db::SkyDatabase,
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+    injected: &std::collections::BTreeSet<Vec<String>>,
+) -> sky_db::SourceRoot {
+    let file_handles: BTreeMap<Vec<String>, sky_db::SourceFile> = sources
+        .iter()
+        .map(|(mod_path, (_, src))| {
+            let origin = if injected.contains(mod_path) {
+                sky_canon::ModuleOrigin::EmbeddedStdlib
+            } else {
+                sky_canon::ModuleOrigin::User
+            };
+            (
+                mod_path.clone(),
+                sky_db::SourceFile::new(db, mod_path.clone(), src.clone(), origin),
+            )
+        })
+        .collect();
+    sky_db::SourceRoot::new(db, file_handles)
+}
+
+/// The in-memory compile core over an already-populated database.
+///
+/// topo order → per-module canonicalisation (memoized, blame-attributed) →
+/// [`sky_db::linked_program`] (the coarse Phase-3 spine) → infer → lower →
+/// emit. Returns the emitted project without touching the filesystem.
+///
+/// This is THE production pipeline — [`compile_modules`] wraps it with input
+/// creation and disk writes, and the clean-vs-incremental parity gate (plan
+/// Task 18) drives it against both cold and warm databases, so the gate can
+/// never test a divergent copy of the pipeline.
+///
+/// `sources` is consulted for diagnostic blame only (module path → file/src).
+///
+/// # Errors
+/// [`CliError::Pipeline`] carrying the first compiler diagnostic.
+#[allow(clippy::too_many_lines)]
+pub fn compile_prepared(
+    db: &sky_db::SkyDatabase,
+    source_root: sky_db::SourceRoot,
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+    entry_path: &[String],
+    blame_path: &Path,
+    db_driver: sky_backend_rust::DbDriver,
+) -> Result<sky_backend::EmittedProject, CliError> {
+    // The build-wide interner is owned by the database (Option 3a) so the
+    // parse query and the non-salsa passes share one symbol table. NEVER hold
+    // a lock guard across a salsa query demand (the mutex is not reentrant).
+    let shared_interner = sky_db::Db::interner(db).clone();
+
+    let Some(entry_file) = source_root.files(db).get(entry_path).copied() else {
+        return Err(CliError::Usage("internal: entry module not in source map"));
+    };
+
+    // Dep-first module order (memoized; cycle = N0021, blamed on the
+    // caller-supplied blame path since no single file owns a cycle).
+    let topo = sky_db::topo_order(db, source_root, entry_file).map_err(|diag| {
         CliError::Pipeline {
             file: blame_path.to_path_buf(),
             src: String::new(),
@@ -308,60 +385,37 @@ fn compile_modules(
         }
     })?;
 
-    // Canonicalise each module in dep-first order.
-    let mut interner = sky_intern::Interner::new();
-    let mut dep_exports: BTreeMap<Vec<sky_intern::Symbol>, sky_canon::ModuleExports> =
-        BTreeMap::new();
-    let mut canon_modules: Vec<sky_canon::ast::Module> = Vec::new();
-    let mut entry_name: Vec<sky_intern::Symbol> = Vec::new();
-
-    for m in &topo {
-        let Some((path, src)) = sources.get(&m.module_path) else {
+    // Canonicalise each module in dep-first order through the salsa query
+    // graph (incremental Phase 2). Each `canonicalize` demand runs
+    // parse → resolve_imports → module_interface(dep) → canon; demanding in
+    // topo order keeps every dep memoized before its importers ask for it,
+    // so the interning sequence — and therefore emitted bytes — matches the
+    // pre-salsa driver exactly (golden-suite-enforced). This loop exists for
+    // BLAME attribution (a module's own diagnostic renders against its own
+    // file); `linked_program` below re-demands the same memos.
+    for mod_path in topo.iter() {
+        let Some((path, src)) = sources.get(mod_path) else {
+            return Err(CliError::Usage(
+                "internal: module in topo order not in source map",
+            ));
+        };
+        let Some(file_handle) = source_root.files(db).get(mod_path).copied() else {
             return Err(CliError::Usage(
                 "internal: module in topo order not in source map",
             ));
         };
 
-        let pipeline_err = |diag: sky_diagnostics::Diagnostic| CliError::Pipeline {
-            file: path.clone(),
-            src: src.clone(),
-            diag,
-        };
-
-        let parsed = sky_parse::parse_module(src, &mut interner).map_err(&pipeline_err)?;
-
-        let expected_path: Vec<sky_intern::Symbol> = m
-            .module_path
-            .iter()
-            .map(|s| interner.intern(s))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(&pipeline_err)?;
-
-        // The trust tag: EmbeddedStdlib IFF this exact module path was injected
-        // from the embed table. A user file squatting on `Std.Foo` is NOT in
-        // `injected` (injection skipped it on the pre-existing-key guard), so it
-        // is `User` and stays SKY-N0025-rejected.
-        let origin = if injected.contains(&m.module_path) {
-            sky_canon::ModuleOrigin::EmbeddedStdlib
-        } else {
-            sky_canon::ModuleOrigin::User
-        };
-
-        let (canon_mod, exports) = sky_canon::canonicalise_module_with_origin(
-            &parsed,
-            &expected_path,
-            &dep_exports,
-            origin,
-            &mut interner,
-        )
-        .map_err(&pipeline_err)?;
-
-        if m.module_path == entry_path {
-            entry_name.clone_from(&expected_path);
-        }
-
-        dep_exports.insert(expected_path, exports);
-        canon_modules.push(canon_mod);
+        // Memoized canonicalisation (locks the shared interner internally —
+        // no guard may be live here). A dep's own diagnostic never surfaces
+        // here mis-blamed: deps precede the module in topo order, so a red
+        // dep already errored at its own iteration with its own file.
+        sky_db::canonicalize(db, source_root, file_handle).map_err(|diag| {
+            CliError::Pipeline {
+                file: path.clone(),
+                src: src.clone(),
+                diag,
+            }
+        })?;
     }
 
     // Link → infer → lower → emit on the merged module. Blame link/lower/emit
@@ -380,18 +434,39 @@ fn compile_modules(
         diag,
     };
 
-    // The link step now gates cross-module type-identity duplicates
-    // `(home, name)` (#100), so it is fallible; blame a duplicate on the entry
-    // file like every other post-link diagnostic.
-    let linked =
-        sky_canon::link::link(entry_name, canon_modules, &interner).map_err(&pipeline_err)?;
+    // The coarse whole-program spine (incremental Phase 3, plan Task 11):
+    // every per-module canonical result assembled + linked inside salsa. All
+    // `canonicalize` demands above are memo hits here. The link step gates
+    // cross-module type-identity duplicates `(home, name)` (#100), blamed on
+    // the entry file like every other post-link diagnostic.
+    let linked_program =
+        sky_db::linked_program(db, source_root, entry_file).map_err(&pipeline_err)?;
+    let linked = &linked_program.module;
+
+    // The fresh-name collision universe for this build: the identifier words
+    // of the CURRENT program — a pure function of the source inputs, so the
+    // lowering pools (`eta_*`, `cap_*`, …) mint the SAME names on a warm
+    // (reused) database as on a cold one. Interner-membership minting would
+    // skip the previous build's pool names and drift the emitted bytes — the
+    // exact divergence the Task-18 parity gate caught.
+    let mut fresh_avoid: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for file in source_root.files(db).values() {
+        fresh_avoid.extend(sky_db::identifier_words(db, *file).iter().cloned());
+    }
+
+    // No salsa query is demanded from here on: infer → lower → emit are
+    // whole-program (pre-Phase-4) passes, so one guard on the shared
+    // interner covers the whole tail. The guard binds as `interner` so the
+    // pass call sites read exactly as they did pre-salsa.
+    let mut interner = shared_interner.lock();
+    interner.set_fresh_avoid(fresh_avoid);
 
     // Build a module-home → (file, src) map used to attribute infer diagnostics
     // to the correct dep source file (#144).  Intern each String module-path
     // segment so the keys match the Symbol-keyed `home` fields on linked defs.
     let mut home_to_source: BTreeMap<Vec<sky_intern::Symbol>, (PathBuf, String)> =
         BTreeMap::new();
-    for (str_path, (file, src)) in &sources {
+    for (str_path, (file, src)) in sources {
         let sym_path: Result<Vec<_>, _> =
             str_path.iter().map(|s| interner.intern(s)).collect();
         if let Ok(sym_path) = sym_path {
@@ -473,7 +548,7 @@ fn compile_modules(
     // generation, field-access pass, exhaustiveness) we fall back to the existing
     // heuristic, preserving the behaviour for every error class that pre-dates
     // this fix.
-    let types = sky_types::infer_attributed(&linked, &mut interner).map_err(|(diag, home)| {
+    let types = sky_types::infer_attributed(linked, &mut interner).map_err(|(diag, home)| {
         let span = diag_span(&diag);
         let (file, src) = if home.is_empty() {
             source_for_span(span)
@@ -505,12 +580,27 @@ fn compile_modules(
         CliError::Pipeline { file, src, diag }
     };
     let program =
-        sky_lower::lower(&linked, &types, &mut interner).map_err(span_attributed_err)?;
+        sky_lower::lower(linked, &types, &mut interner).map_err(span_attributed_err)?;
     let emitted = RustBackend::new(&interner)
         .with_db_driver(db_driver)
         .emit(&program)
         .map_err(span_attributed_err)?;
+    // Emit was the guard's last consumer; release it before returning
+    // (clippy::significant_drop_tightening).
+    drop(interner);
+    Ok(emitted)
+}
 
+/// Write an emitted project to `out_dir`, vendoring the runtime module tree
+/// from `runtime_dir`.
+///
+/// # Errors
+/// [`CliError::Io`] on any filesystem failure.
+fn write_emitted_project(
+    emitted: &sky_backend::EmittedProject,
+    out_dir: &Path,
+    runtime_dir: &Path,
+) -> Result<(), CliError> {
     // Vendor the runtime module tree FIRST, then write the emitted files. The
     // backend emits a trimmed `sky_runtime/mod.rs` + `config.rs`; writing the
     // emitted files last lets them overwrite the fuller copies from the source
@@ -543,7 +633,8 @@ fn compile_modules(
 /// The build pipeline:
 /// 1. Parse `sky.toml` to locate the source root.
 /// 2. Discover every `*.sky` file under `src/`.
-/// 3. Scan each file for `import` lines to build the import graph.
+/// 3. Scan each file for `import` declarations (token-level lexer scan) to
+///    build the import graph.
 /// 4. Topological sort — fail closed on a cycle (SKY-N0021).
 /// 5. Canonicalise each module in dep-first order (SKY-N0020 / N0022 / N0023 /
 ///    N0024 / N0025 gate).
@@ -1253,7 +1344,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 89, "taxonomy is 89 codes"); // #90: +SKY-L0127; #99: +SKY-L0128; #32: +SKY-T0016
+        assert_eq!(ALL_CODES.len(), 90, "taxonomy is 90 codes"); // #90: +SKY-L0127; #99: +SKY-L0128; #32: +SKY-T0016; builtin-record-update: +SKY-T0017
         assert!(
             index.contains("SKY-T0001  type mismatch"),
             "index pairs code with title"
