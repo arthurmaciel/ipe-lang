@@ -726,10 +726,36 @@ pub enum IrType {
     /// match Sky source verbatim (`FfiPanic` / `TypeMismatch` / `HttpStatus`
     /// / `JsonDecode` / `Custom`) and emit via the SAME `builtin_runtime_enum`
     /// path [`IrType::Error`]/[`IrType::ErrorKind`] use — no synthetic
-    /// `EnumDef`. `FfiPanic`/`TypeMismatch`'s record payloads (`PanicInfo` /
-    /// `TypeInfo`) are, like `ErrorInfo`, plain closed records rather than
-    /// leaf `IrType`s.
+    /// `EnumDef`.
     ErrorDetails,
+
+    /// The built-in NOMINAL `ErrorInfo` type — `Error`'s second constructor
+    /// argument, `{ message : String, details : Maybe ErrorDetails }` at the
+    /// field level (SEAL fix 2026-07-11 — see `docs/architecture/
+    /// error-record-literal-seal-fix-2026-07-11.md`).
+    ///
+    /// Renders as `sky_runtime::error::SkyErrorInfo`. NOT a structural
+    /// record: a bare record literal cannot construct it (the type checker
+    /// rejects the unification), so the backend never has to reconcile a
+    /// synthesized record struct with the runtime's concrete type — the
+    /// exit-0-then-cargo-fail this leaf exists to prevent. Field access is
+    /// resolved by `sky_types`' `ErrorRecordFields` table and emits plain
+    /// `.message` / `.details` reads of the runtime struct's pub fields.
+    ErrorInfo,
+
+    /// The built-in NOMINAL `PanicInfo` type — `FfiPanic`'s payload,
+    /// `{ message : String, stack : List String }` at the field level (SEAL
+    /// fix 2026-07-11; same design as [`IrType::ErrorInfo`]).
+    ///
+    /// Renders as `sky_runtime::error::SkyPanicInfo`.
+    PanicInfo,
+
+    /// The built-in NOMINAL `TypeInfo` type — `TypeMismatch`'s payload,
+    /// `{ expected : String, actual : String }` at the field level (SEAL fix
+    /// 2026-07-11; same design as [`IrType::ErrorInfo`]).
+    ///
+    /// Renders as `sky_runtime::error::SkyTypeInfo`.
+    TypeInfo,
 
     /// `Std.Db.Sql`'s opaque WHERE-fragment type (backlog #61 — SQL injection
     /// closed by construction: a `SqlFragment` can only be built through the
@@ -876,6 +902,9 @@ pub fn ir_type_is_derivable(
         // field carries a `SkyMaybe`, which is `PartialEq`-only).
         // `SkyErrorDetails` derives Clone + PartialEq + Eq + Debug (backlog
         // #85 follow-up).
+        // `SkyErrorInfo` derives Clone + PartialEq + Debug (not Eq — carries
+        // a `SkyMaybe`); `SkyPanicInfo`/`SkyTypeInfo` derive Clone +
+        // PartialEq + Eq + Debug (SEAL fix 2026-07-11).
         // `SqlFragment` derives Clone + PartialEq (hand-written Debug; see
         // its own doc) — fully derivable, not serde (see `ir_type_is_serde`).
         // `Secret` derives Clone; `PartialEq`/`Debug` are hand-written
@@ -886,6 +915,9 @@ pub fn ir_type_is_derivable(
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
         | IrType::SqlFragment
         | IrType::Secret
         | IrType::Generic(_)
@@ -1001,12 +1033,17 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // `Decimal` is a Copy newtype; rust_decimal supports serde via feature.
         // `SkyErrorKind`/`SkyError`/`SkyErrorDetails` derive serde — `Error`
         // must serialize to round-trip through a Live session store (e.g. a
-        // Model's `historyError : Maybe Error` field).
+        // Model's `historyError : Maybe Error` field). The nominal payload
+        // types `SkyErrorInfo`/`SkyPanicInfo`/`SkyTypeInfo` derive serde for
+        // the same reason (they ride inside `Error`; SEAL fix 2026-07-11).
         | IrType::Order
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
-        | IrType::ErrorDetails => true,
+        | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo => true,
         // All non-serde leaves collapse to `false`:
         //   * `UiPlain` value types (`Length`/`Color`/… → `ui::element::*`) and
         //     every `Ui` carrier (`Html`/`Element`/`Attribute`) derive only

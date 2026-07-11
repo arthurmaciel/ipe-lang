@@ -616,6 +616,9 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::ErrorKind => "ErrorKind",
         IrType::Error => "Error",
         IrType::ErrorDetails => "ErrorDetails",
+        IrType::ErrorInfo => "ErrorInfo",
+        IrType::PanicInfo => "PanicInfo",
+        IrType::TypeInfo => "TypeInfo",
         IrType::SqlFragment => "SqlFragment",
         IrType::Secret => "Secret",
     }
