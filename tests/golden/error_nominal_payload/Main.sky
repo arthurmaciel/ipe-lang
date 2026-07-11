@@ -1,0 +1,69 @@
+module Main exposing (main)
+
+-- SEAL fix 2026-07-11 (docs/architecture/
+-- error-record-literal-seal-fix-2026-07-11.md) — POSITIVE golden for the
+-- nominal `PanicInfo`/`TypeInfo`/`ErrorInfo` payload types:
+--
+--   * `describePanic : PanicInfo -> String` — the nominal names are
+--     annotatable builtins, and a pattern-bound payload agrees with the
+--     helper's parameter on ONE Rust type (`SkyPanicInfo`). Before the fix
+--     this exact shape was an exit-0-then-cargo-fail (the helper's parameter
+--     lowered to a project-local synthesized record struct).
+--   * `describeInfo info = info.message` — UNANNOTATED helper over the
+--     nominal `ErrorInfo`; field access resolves via the builtin field
+--     tables (`sky_types`' `ErrorRecordFields`, the `Request` recipe).
+--   * `info.details` / `p.message` / `p.stack` / `t.expected` / `t.actual`
+--     — every fixed field of the three nominal types is read somewhere.
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+describePanic : PanicInfo -> String
+describePanic p =
+    p.message ++ " (" ++ String.fromInt (List.length p.stack) ++ " frames)"
+
+
+describeInfo info =
+    info.message
+
+
+describe : Error -> String
+describe err =
+    case err of
+        Error _ info ->
+            case info.details of
+                Just (FfiPanic p) ->
+                    "FfiPanic: " ++ describePanic p
+
+                Just (TypeMismatch t) ->
+                    "TypeMismatch: " ++ t.expected ++ " vs " ++ t.actual
+
+                Just (HttpStatus code) ->
+                    "HttpStatus " ++ String.fromInt code
+
+                Just (JsonDecode msg) ->
+                    "JsonDecode " ++ msg
+
+                Just (Custom msg) ->
+                    "Custom " ++ msg
+
+                Nothing ->
+                    "plain: " ++ describeInfo info
+
+
+main =
+    let
+        base =
+            Error.io "disk full"
+
+        withCustom =
+            Error.withDetails (Custom "custom detail") base
+
+        _ =
+            println (describe base)
+
+        _ =
+            println (describe withCustom)
+    in
+    println "done"
