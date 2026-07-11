@@ -1,8 +1,13 @@
 # E2E shared target + cached Go oracle (queued infra)
 
-> Status: QUEUED — run as one infra batch at the post-M2-lex idle gap, before M4
-> (M4 explodes the golden count, so both wins compound there). Both touch the
-> E2E/parity harness, which M2-lex is editing — that's why it waits.
+> Status: DONE (verified 2026-07-11). Fix 1 landed in the shared E2E harness —
+> every emitted project builds into the ONE machine-global shared cargo target
+> (`~/.cargo/config.toml` `target-dir`; no per-project `CARGO_TARGET_DIR`
+> override — see `crates/skyc/tests/support/mod.rs` header +
+> `oracle::build_rust_binary`, which rewrites the manifest to a unique package
+> name per golden so binaries coexist). Fix 2 landed as the `oracle` crate
+> (`tools/oracle`) + `refresh-oracle` tool; its unit tests pin the four rigour
+> invariants (match / stale / missing / divergence).
 
 ## Problem
 - Each E2E golden builds its emitted Rust project in its OWN `/tmp/skyc_<name>_e2e/target/`,
