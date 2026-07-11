@@ -6594,7 +6594,9 @@ mod registry_phase_c_tests {
             K::DbDecMap4,
             K::DbDecRequired,
             K::DbDecOptional,
-            K::DbDecMoney,
+            // `DbDecMoney` is FIRST_SCHEMED, not relocated — it is Ipê-new
+            // (#34), so no byte-faithful legacy `kernel_ty` oracle ever
+            // existed for it (taxonomy fix, independent-review row 2026-07-11).
             // Set (10) — base scheme; set_elem obligation layered in constrain_var_kernel
             K::SetEmpty,
             K::SetSize,
@@ -7346,6 +7348,11 @@ mod registry_phase_c_tests {
             K::SqlLike,
             K::DbFindWhere,
             K::DbDeleteWhere,
+            // `Db.Decode.money` (#34) — Ipê-NEW kernel (the ancestor has no
+            // DbDec money route), so it closed a genuine hole rather than
+            // relocating a legacy `kernel_ty` scheme. Its DbDec siblings are
+            // RELOCATED; this one is deliberately not (hole XOR relocation).
+            K::DbDecMoney,
             // ── Sky.Core.Secret (backlog #44; 3) ─────────────────────────────
             K::SecretFromString,
             K::SecretReveal,
