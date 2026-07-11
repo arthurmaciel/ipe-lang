@@ -1982,7 +1982,7 @@ mod tests {
         // G1 forward-propagation check (unchanged since Phase B): every
         // `VarHome::Kernel(Some(actual_sk), m, f)` entry's id must match
         // `stdlib_index[(m, f)]` exactly.
-        for (qual_sym, members) in &env.qual_vars {
+        for (qual_sym, members) in env.qual_vars.iter() {
             let qual_str = interner.resolve(*qual_sym).unwrap_or("<unknown>");
             if excluded_quals.contains(qual_str) {
                 continue;

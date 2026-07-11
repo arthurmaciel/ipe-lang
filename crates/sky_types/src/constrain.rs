@@ -14,6 +14,7 @@
 //! structure) and [`Builder::zonk`] (a settled union-find variable → [`Ty`]).
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use sky_canon::ast as canon;
 use sky_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span, TypeError};
@@ -1124,7 +1125,11 @@ pub struct Builder<'a> {
     /// into one flat def list.  Every `VarTopLevel { module, name }` reference
     /// looks up its home module's entry, not an entry that may belong to a
     /// different module that happens to share the bare name.
-    top_level: BTreeMap<(Vec<Symbol>, Symbol), Ty>,
+    /// Values are `Rc` so a typed top-level reference clones a refcount, not
+    /// the whole annotation `Ty` tree (efficiency-audit §2/§7 medium).
+    /// `instantiate_tracked` only reads the scheme; resolved types are
+    /// byte-identical. Single-threaded solver → `Rc` suffices.
+    top_level: BTreeMap<(Vec<Symbol>, Symbol), Rc<Ty>>,
     /// Body region-var of each untyped top-level binding, read back for `env`.
     ///
     /// Keyed by `(home_module_path, bare_name)` for the same reason as
@@ -1143,7 +1148,13 @@ pub struct Builder<'a> {
     /// by constructor name. A constructor is a (possibly generic) function
     /// `field0 -> … -> fieldN -> T vars`; each use site instantiates the scheme
     /// fresh, exactly as a polymorphic top-level binding does.
-    ctors: BTreeMap<Symbol, CtorScheme>,
+    /// Each value is an `Rc` so per-use-site instantiation clones a refcount,
+    /// not the whole scheme (efficiency-audit §2 medium: the constructor-ref /
+    /// ctor-pattern checks deep-cloned the full `CtorScheme` per use to
+    /// release the `&self` borrow before the `&mut self` instantiate call).
+    /// The `Rc` holds byte-identical data — same fresh vars, same constraints,
+    /// same errors. Fully internal to `Builder`.
+    ctors: BTreeMap<Symbol, Rc<CtorScheme>>,
     /// One entry per typed binding: its `(home, name)` and the rigid (skolem)
     /// variable each of its annotation type variables instantiated to while its
     /// body was checked. Read post-solve to recover each variable's super-type
@@ -1351,7 +1362,10 @@ pub struct Generated {
     /// See [`Builder::regions`] for the rationale.
     pub regions: BTreeMap<(Vec<Symbol>, Span), VarId>,
     pub constraints: Vec<Constraint>,
-    pub top_level: BTreeMap<(Vec<Symbol>, Symbol), Ty>,
+    /// Values stay behind the builder's `Rc`; the read-back (`lib.rs`) unwraps
+    /// them into the public `SolvedTypes::env` shape (refcount is 1 by then —
+    /// every per-reference clone is transient inside constraint generation).
+    pub top_level: BTreeMap<(Vec<Symbol>, Symbol), Rc<Ty>>,
     pub untyped: BTreeMap<(Vec<Symbol>, Symbol), VarId>,
     pub field_accesses: Vec<FieldAccess>,
     pub record_updates: Vec<RecordUpdate>,
@@ -1417,7 +1431,7 @@ impl<'a> Builder<'a> {
         // user `type` cannot shadow these names (the canon §3.2 gate rejects it),
         // so the module-union loop below never collides with them.
         for (name, scheme) in builder.builtins.ctor_schemes() {
-            builder.ctors.insert(name, scheme);
+            builder.ctors.insert(name, Rc::new(scheme));
         }
 
         // Register every data constructor's scheme up front, so a `VarCtor`
@@ -1460,10 +1474,10 @@ impl<'a> Builder<'a> {
                 }
                 builder.ctors.insert(
                     ctor.name,
-                    CtorScheme {
+                    Rc::new(CtorScheme {
                         arg_tys,
                         result: result.clone(),
-                    },
+                    }),
                 );
             }
         }
@@ -1523,7 +1537,7 @@ impl<'a> Builder<'a> {
                         raw
                     };
                     let normalized = builder.normalize_annotation_ty(expanded, name.span)?;
-                    builder.top_level.insert((home_key, name.value), normalized);
+                    builder.top_level.insert((home_key, name.value), Rc::new(normalized));
                 }
                 canon::Def::Untyped { name, .. } => {
                     let v = builder.flex()?;
