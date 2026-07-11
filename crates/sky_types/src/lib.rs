@@ -628,7 +628,9 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
     // function, because the runtime kernel applies the callback at one exact
     // arity while the IR flattens curried functions.
     if bounds.has_hof_kernel_result() {
-        classes.push("non-function callback result (Maybe/Result higher-order kernel)");
+        // Shared constant: the renderer keys a tailored (non-double-negative)
+        // sentence off this exact label.
+        classes.push(sky_diagnostics::HOF_KERNEL_RESULT_CLASS);
     }
     let class = if classes.is_empty() {
         "Equatable".to_owned()
