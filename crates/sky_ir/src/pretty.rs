@@ -1464,7 +1464,11 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
             write_expr(out, list, interner, level + 1);
         }
         Expr::Record(fields) => write_record(out, fields, interner, level),
-        Expr::Access { record, field } => {
+        Expr::Access {
+            record,
+            field,
+            field_ty: _,
+        } => {
             line(
                 out,
                 level,
@@ -1977,6 +1981,7 @@ program
                 Expr::Access {
                     record: Box::new(Expr::Var(param)),
                     field: x,
+                    field_ty: IrType::Int,
                 },
             )],
         };
