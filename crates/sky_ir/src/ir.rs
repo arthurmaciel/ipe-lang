@@ -1179,6 +1179,32 @@ pub enum Expr {
         head: Box<Self>,
         tail: Box<Self>,
     },
+    /// Clone the element at a CONSTANT index of a list value: `<list>[<index>].clone()`.
+    ///
+    /// Introduced for Class 4 item C2 (#158). A cons / list sub-pattern nested in
+    /// a constructor payload lowers to a fresh `Vec` binder plus an arm-level
+    /// length GUARD ([`Arm::guard`]); the named head elements are then recovered
+    /// in the arm-body prelude via this node, one per prefix position. It is ONLY
+    /// ever emitted where the arm's guard has already proven `list.len() > index`,
+    /// so the Rust index is in bounds by construction (never a panic on
+    /// well-typed source — the guard falls through to the next arm otherwise).
+    /// The `.clone()` keeps the original list intact for the sibling tail binder
+    /// (`List.drop`), mirroring the `rebind_clone` the top-level slice path uses.
+    ListIndexClone {
+        list: Box<Self>,
+        index: usize,
+    },
+    /// A borrowing list-length CHECK for a Class 4 item C2 (#158) arm guard:
+    /// `<list>.len() >= <len>` (`exact == false`, an OPEN cons chain
+    /// `a :: b :: rest`) or `<list>.len() == <len>` (`exact == true`, a CLOSED
+    /// list literal `[a, b]`). `.len()` borrows the bound `Vec` — a match guard
+    /// may not MOVE out of a binding, so this is deliberately NOT the consuming
+    /// `List.length` kernel. Only ever emitted in [`Arm::guard`] position.
+    ListLenCheck {
+        list: Box<Self>,
+        len: usize,
+        exact: bool,
+    },
     /// A record literal `{ x = e1, y = e2, ... }`.
     ///
     /// The fields are carried as `(field name, value)` pairs sorted by field
@@ -1341,6 +1367,34 @@ pub enum BinOp {
 pub struct Arm {
     pub pat: Pat,
     pub body: Expr,
+    /// An optional boolean guard evaluated after `pat` matches; `false` falls
+    /// through to the next arm (native Rust `match` guard semantics). `None`
+    /// for every pre-existing arm shape (byte-identical emission — the backend
+    /// renders `{pat} => …` unchanged, only adding `if {guard}` when `Some`).
+    ///
+    /// Introduced for Class 4 item C2 (#158) — a cons / list sub-pattern nested
+    /// in a constructor payload lowers to a plain [`Pat::Var`] binder for that
+    /// position PLUS a guard checking the bound `Vec`'s length, with the named
+    /// sub-bindings (`h`, `t`) recovered via indexing / slicing in the arm
+    /// body's prelude rather than embedded in the pattern itself (Rust cannot
+    /// slice-pattern a `Vec<T>` ENUM FIELD inline — only an actual slice/array,
+    /// which needs a scrutinee-level `.as_slice()` coercion this nested position
+    /// does not have).
+    pub guard: Option<Expr>,
+}
+
+impl Arm {
+    /// A guard-free arm — the default shape for every pattern that discriminates
+    /// entirely in its `Pat`. Keeps the ~40 existing `Arm { pat, body }` call
+    /// sites concise while the `guard` field defaults to `None`.
+    #[must_use]
+    pub const fn new(pat: Pat, body: Expr) -> Self {
+        Self {
+            pat,
+            body,
+            guard: None,
+        }
+    }
 }
 
 /// A pattern.
@@ -1443,9 +1497,11 @@ pub enum Pat {
     },
 }
 
-/// Whether a pattern matches EVERY value of its scrutinee type — a wildcard, a
-/// variable binder, or an alias whose inner pattern is itself irrefutable. Used
-/// to prove a flat `match`'s trailing arm is a genuine catch-all.
+/// Whether a pattern matches EVERY value of its scrutinee type.
+///
+/// True for a wildcard, a variable binder, or an alias whose inner pattern is
+/// itself irrefutable. Used to prove a flat `match`'s trailing arm is a genuine
+/// catch-all.
 #[must_use]
 pub fn is_irrefutable(pat: &Pat) -> bool {
     match pat {
@@ -1807,6 +1863,7 @@ mod tests {
                     lhs: Box::new(Expr::Var(count)),
                     rhs: Box::new(Expr::Int(1)),
                 },
+                guard: None,
             },
             Arm {
                 pat: Pat::Ctor {
@@ -1820,6 +1877,7 @@ mod tests {
                     lhs: Box::new(Expr::Var(count)),
                     rhs: Box::new(Expr::Int(1)),
                 },
+                guard: None,
             },
         ];
         let res = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec]);
@@ -1850,6 +1908,7 @@ mod tests {
                 args: vec![],
             },
             body: Expr::Var(count),
+            guard: None,
         }];
         let r = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec]);
         assert!(matches!(r, Err(Diagnostic::CompilerBug { .. })));
@@ -1873,6 +1932,7 @@ mod tests {
                     args: vec![],
                 },
                 body: Expr::Int(0),
+                guard: None,
             },
             Arm {
                 pat: Pat::Ctor {
@@ -1882,6 +1942,7 @@ mod tests {
                     args: vec![],
                 },
                 body: Expr::Int(1),
+                guard: None,
             },
             Arm {
                 pat: Pat::Ctor {
@@ -1891,6 +1952,7 @@ mod tests {
                     args: vec![],
                 },
                 body: Expr::Int(2),
+                guard: None,
             },
         ];
         let r = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec])?;
@@ -1915,6 +1977,7 @@ mod tests {
                     args: vec![],
                 },
                 body: Expr::Int(0),
+                guard: None,
             },
             Arm {
                 pat: Pat::Ctor {
@@ -1924,6 +1987,7 @@ mod tests {
                     args: vec![],
                 },
                 body: Expr::Int(1),
+                guard: None,
             },
         ];
         let r = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec]);
@@ -1946,6 +2010,7 @@ mod tests {
                     args: vec![],
                 },
                 body: Expr::Int(0),
+                guard: None,
             },
             Arm {
                 pat: Pat::Ctor {
@@ -1955,6 +2020,7 @@ mod tests {
                     args: vec![],
                 },
                 body: Expr::Int(1),
+                guard: None,
             },
         ];
         let r = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec]);
@@ -1973,14 +2039,17 @@ mod tests {
             Arm {
                 pat: Pat::Int(0),
                 body: Expr::Int(0),
+                guard: None,
             },
             Arm {
                 pat: Pat::Int(1),
                 body: Expr::Int(1),
+                guard: None,
             },
             Arm {
                 pat: Pat::Wildcard,
                 body: Expr::Int(9),
+                guard: None,
             },
         ];
         let r = Match::new_flat(Expr::Var(n), arms);
@@ -1999,10 +2068,12 @@ mod tests {
             Arm {
                 pat: Pat::Int(0),
                 body: Expr::Int(0),
+                guard: None,
             },
             Arm {
                 pat: Pat::Alias(Box::new(Pat::Var(m)), k),
                 body: Expr::Var(k),
+                guard: None,
             },
         ];
         assert!(Match::new_flat(Expr::Var(n), arms).is_ok());
@@ -2018,10 +2089,12 @@ mod tests {
             Arm {
                 pat: Pat::Bool(true),
                 body: Expr::Int(1),
+                guard: None,
             },
             Arm {
                 pat: Pat::Bool(false),
                 body: Expr::Int(0),
+                guard: None,
             },
         ];
         assert!(Match::new_flat(Expr::Var(b), arms).is_ok());
@@ -2058,6 +2131,7 @@ mod tests {
                     w,
                 ),
                 body: Expr::Var(x),
+                guard: None,
             },
             Arm {
                 pat: Pat::Ctor {
@@ -2072,6 +2146,7 @@ mod tests {
                     }],
                 },
                 body: Expr::Int(0),
+                guard: None,
             },
             Arm {
                 pat: Pat::Ctor {
@@ -2081,6 +2156,7 @@ mod tests {
                     args: vec![],
                 },
                 body: Expr::Int(1),
+                guard: None,
             },
         ];
         assert!(Match::new_flat(Expr::Var(o), arms).is_ok());
@@ -2098,10 +2174,12 @@ mod tests {
             Arm {
                 pat: Pat::Int(0),
                 body: Expr::Int(0),
+                guard: None,
             },
             Arm {
                 pat: Pat::Int(1),
                 body: Expr::Int(1),
+                guard: None,
             },
         ];
         assert!(matches!(
@@ -2119,6 +2197,7 @@ mod tests {
         let arms = vec![Arm {
             pat: Pat::Bool(true),
             body: Expr::Int(1),
+            guard: None,
         }];
         assert!(matches!(
             Match::new_flat(Expr::Var(b), arms),
@@ -2594,6 +2673,7 @@ mod tests {
                     args: vec![Pat::Var(x)],
                 },
                 body: Expr::Var(x),
+                guard: None,
             },
             Arm {
                 pat: Pat::Ctor {
@@ -2603,6 +2683,7 @@ mod tests {
                     args: vec![],
                 },
                 body: Expr::Int(0),
+                guard: None,
             },
         ];
         let m1 = Match::new(Expr::Var(m), arms, &[just, nothing])?;
@@ -2630,6 +2711,7 @@ mod tests {
         let arms = vec![Arm {
             pat: Pat::Var(i.intern("anything")?),
             body: Expr::Int(0),
+            guard: None,
         }];
         let r = Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec]);
         assert!(matches!(r, Err(Diagnostic::CompilerBug { .. })));
