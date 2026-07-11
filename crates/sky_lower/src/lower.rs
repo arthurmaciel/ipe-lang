@@ -2076,58 +2076,176 @@ pub mod tco_analysis {
     pub use super::{TailRecursion, analyze_tail_recursion, rewrite_tail_calls};
 }
 
-// ── M5b-db: Db-kernel presence detection ─────────────────────────────────────
+// ── Kernel-family presence detection (one traversal) ────────────────────────
 
-/// Return `true` when `expr` (or any of its sub-expressions, recursively)
-/// contains a call whose callee is one of the `Db*` kernel variants.
+/// Outcome of [`Lowerer::intercept_live_kernel_call`].
+enum Intercepted {
+    /// The call was intercepted and fully lowered.
+    Done(Expr),
+    /// Not intercepted — continue on [`Lowerer::lower_call_uniform`]. When the
+    /// callee was a `VarKernel`/`VarTopLevel`, the already-resolved [`Callee`]
+    /// is carried so the uniform path doesn't re-run the `lower_callee`
+    /// dispatch (efficiency-audit §3 medium).
+    Fallthrough(Option<Callee>),
+}
+
+/// Per-family kernel-usage flags, collected in ONE traversal over every
+/// function body (efficiency-audit §3 medium: [`Lowerer::run`] previously
+/// walked every body once per family — nine independent full-AST
+/// `expr_uses_<family>_kernel` passes).
 ///
-/// Used by [`Lowerer::run`] to decide whether the synthetic `SqlValue` /
-/// `SqlField` `EnumDef`s must be injected into the module's type list.
-fn expr_uses_db_kernel(expr: &Expr) -> bool {
+/// Each flag is the OR of the same [`sky_ir::KernelFn`] family predicate the
+/// former per-family walkers applied to `Call` / `FuncValue` callees, over the
+/// same traversal shape — so the nine booleans are identical to the
+/// nine-pass form.
+// Nine genuinely independent presence flags (same shape as `ir::Module`'s
+// `uses_*` fields, which carry the same allow) — not a state machine.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Default)]
+struct KernelUsage {
+    /// Any `Db*` (including `DbDec*`) kernel — gates the synthetic
+    /// `SqlValue`/`SqlField` enum injection and the db-enabled backend files.
+    db: bool,
+    /// Any TEA (`Cmd*` / `Sub*` / `TimeEvery`) kernel (M5c).
+    tea: bool,
+    /// Any Sky.Http.Server kernel (M6).
+    server: bool,
+    /// Any Std.Ui render kernel (M7).
+    ui: bool,
+    /// Any Std.Css (Sky.Core.CssSafety) leaf kernel (#47) — independent of
+    /// `ui`: a pure-Std.Css program uses no render kernel.
+    css: bool,
+    /// Any Std.Auth kernel (#111).
+    auth: bool,
+    /// Any Std.Live kernel (M7).
+    live: bool,
+    /// Any Std.Tui kernel (M7).
+    tui: bool,
+    /// Any Std.Webview kernel (M7).
+    webview: bool,
+}
+
+impl KernelUsage {
+    /// Every flag already set — nothing left to learn, traversal can stop.
+    const fn all_set(&self) -> bool {
+        self.db
+            && self.tea
+            && self.server
+            && self.ui
+            && self.css
+            && self.auth
+            && self.live
+            && self.tui
+            && self.webview
+    }
+
+    /// OR in the family flags for one kernel callee.
+    const fn record(&mut self, k: KernelFn) {
+        self.db |= k.is_db();
+        self.tea |= k.is_tea();
+        self.server |= k.is_server();
+        self.ui |= k.is_ui();
+        self.css |= k.is_css();
+        self.auth |= k.is_auth();
+        self.live |= k.is_live();
+        self.tui |= k.is_tui();
+        self.webview |= k.is_webview();
+    }
+}
+
+/// Record every kernel callee reachable from `expr` into `usage`.
+///
+/// Traversal shape mirrors the former per-family walkers exactly: `Call` /
+/// `FuncValue` callees are inspected (a `FuncValue` reifies a callee as a
+/// first-class value — not a direct call — but a kernel callee still implies
+/// usage); every sub-expression is visited; leaves cannot contain a kernel
+/// call. A `TailLoop` (a TCO'd body) recurses into its tail body exactly as
+/// the pre-TCO body would; a `TailRecur` (a TCO jump) carries its
+/// next-iteration args like a `Ctor`. Early-exits once every flag is set.
+fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
+    if usage.all_set() {
+        return;
+    }
     match expr {
         Expr::Call { callee, args } => {
-            let callee_is_db = matches!(callee, Callee::Kernel(k) if kernel_is_db(*k));
-            callee_is_db || args.iter().any(expr_uses_db_kernel)
+            if let Callee::Kernel(k) = callee {
+                usage.record(*k);
+            }
+            for a in args {
+                scan_kernel_usage(a, usage);
+            }
         }
-        // FuncValue reifies a callee as a first-class value (not a direct call),
-        // but if that callee is a Db kernel it still implies Db usage.
         Expr::FuncValue { callee, .. } => {
-            matches!(callee, Callee::Kernel(k) if kernel_is_db(*k))
+            if let Callee::Kernel(k) = callee {
+                usage.record(*k);
+            }
         }
         Expr::Apply { func, args } => {
-            expr_uses_db_kernel(func) || args.iter().any(expr_uses_db_kernel)
+            scan_kernel_usage(func, usage);
+            for a in args {
+                scan_kernel_usage(a, usage);
+            }
         }
-        Expr::Let { value, body, .. } => expr_uses_db_kernel(value) || expr_uses_db_kernel(body),
-        Expr::Destructure { value, body, .. } => {
-            expr_uses_db_kernel(value) || expr_uses_db_kernel(body)
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            scan_kernel_usage(value, usage);
+            scan_kernel_usage(body, usage);
         }
         Expr::If { cond, then_, else_ } => {
-            expr_uses_db_kernel(cond) || expr_uses_db_kernel(then_) || expr_uses_db_kernel(else_)
+            scan_kernel_usage(cond, usage);
+            scan_kernel_usage(then_, usage);
+            scan_kernel_usage(else_, usage);
         }
         Expr::Match(m) => {
-            expr_uses_db_kernel(m.scrutinee())
-                || m.arms().iter().any(|arm| expr_uses_db_kernel(&arm.body))
+            scan_kernel_usage(m.scrutinee(), usage);
+            for arm in m.arms() {
+                scan_kernel_usage(&arm.body, usage);
+            }
         }
-        // `TailLoop` (a TCO'd body) recurses into its tail body exactly as the
-        // pre-TCO body would, so kernel-presence detection is unchanged in meaning.
-        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_db_kernel(body),
-        Expr::Cons { head, tail } => expr_uses_db_kernel(head) || expr_uses_db_kernel(tail),
+        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => {
+            scan_kernel_usage(body, usage);
+        }
+        Expr::Cons { head, tail } => {
+            scan_kernel_usage(head, usage);
+            scan_kernel_usage(tail, usage);
+        }
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            expr_uses_db_kernel(list)
+            scan_kernel_usage(list, usage);
         }
-        Expr::Tuple(elems) => elems.iter().any(expr_uses_db_kernel),
-        Expr::List { items, .. } => items.iter().any(expr_uses_db_kernel),
-        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_db_kernel(v)),
-        Expr::Access { record, .. } => expr_uses_db_kernel(record),
+        Expr::Tuple(elems) => {
+            for e in elems {
+                scan_kernel_usage(e, usage);
+            }
+        }
+        Expr::List { items, .. } => {
+            for e in items {
+                scan_kernel_usage(e, usage);
+            }
+        }
+        Expr::Record(fields) => {
+            for (_, v) in fields {
+                scan_kernel_usage(v, usage);
+            }
+        }
+        Expr::Access { record, .. } => scan_kernel_usage(record, usage),
         Expr::Update { record, fields } => {
-            expr_uses_db_kernel(record) || fields.iter().any(|(_, v)| expr_uses_db_kernel(v))
+            scan_kernel_usage(record, usage);
+            for (_, v) in fields {
+                scan_kernel_usage(v, usage);
+            }
         }
-        Expr::BinOp { lhs, rhs, .. } => expr_uses_db_kernel(lhs) || expr_uses_db_kernel(rhs),
+        Expr::BinOp { lhs, rhs, .. } => {
+            scan_kernel_usage(lhs, usage);
+            scan_kernel_usage(rhs, usage);
+        }
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
-            expr_uses_db_kernel(effect) || expr_uses_db_kernel(rest)
+            scan_kernel_usage(effect, usage);
+            scan_kernel_usage(rest, usage);
         }
-        // A `TailRecur` (a TCO jump) carries its next-iteration args like a `Ctor`.
-        Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_db_kernel),
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                scan_kernel_usage(a, usage);
+            }
+        }
         // Leaf expressions that cannot contain a kernel call.
         Expr::Int(_)
         | Expr::Bool(_)
@@ -2136,497 +2254,7 @@ fn expr_uses_db_kernel(expr: &Expr) -> bool {
         | Expr::Char(_)
         | Expr::Unit
         | Expr::CloneVar(_)
-        | Expr::Var(_) => false,
-    }
-}
-
-/// Return `true` when `k` is one of the `Db*` kernel variants (including
-/// `DbDec*`).
-///
-/// Delegates to [`KernelFn::is_db`], the single authoritative list maintained
-/// in `sky_ir`.  Note that `matches!` always has an implicit `_ => false` arm,
-/// so this function does NOT cause a compiler warning if a new `Db*` variant is
-/// added without being listed — callers that need that guarantee should use the
-/// result as a guard inside their own exhaustive `match`.
-const fn kernel_is_db(k: KernelFn) -> bool {
-    k.is_db()
-}
-
-// ── M5c: TEA kernel presence detection ───────────────────────────────────────
-
-/// Return `true` when `expr` (or any of its sub-expressions, recursively)
-/// contains a call whose callee is one of the TEA (`Cmd*` / `Sub*` /
-/// `TimeEvery`) kernel variants introduced in M5c.
-///
-/// Used by [`Lowerer::run`] to decide whether the emitted project needs
-/// `pub mod tea; pub use tea::*;` appended to `sky_runtime/mod.rs`.
-fn expr_uses_tea_kernel(expr: &Expr) -> bool {
-    match expr {
-        Expr::Call { callee, args } => {
-            let callee_is_tea = matches!(callee, Callee::Kernel(k) if kernel_is_tea(*k));
-            callee_is_tea || args.iter().any(expr_uses_tea_kernel)
-        }
-        Expr::FuncValue { callee, .. } => {
-            matches!(callee, Callee::Kernel(k) if kernel_is_tea(*k))
-        }
-        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
-            expr_uses_tea_kernel(value) || expr_uses_tea_kernel(body)
-        }
-        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_tea_kernel(body),
-        Expr::If { cond, then_, else_ } => {
-            expr_uses_tea_kernel(cond) || expr_uses_tea_kernel(then_) || expr_uses_tea_kernel(else_)
-        }
-        Expr::Match(m) => {
-            expr_uses_tea_kernel(m.scrutinee())
-                || m.arms().iter().any(|arm| expr_uses_tea_kernel(&arm.body))
-        }
-        Expr::Tuple(elems) => elems.iter().any(expr_uses_tea_kernel),
-        Expr::List { items, .. } => items.iter().any(expr_uses_tea_kernel),
-        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_tea_kernel(v)),
-        Expr::Access { record, .. } => expr_uses_tea_kernel(record),
-        Expr::Update { record, fields } => {
-            expr_uses_tea_kernel(record) || fields.iter().any(|(_, v)| expr_uses_tea_kernel(v))
-        }
-        Expr::BinOp { lhs, rhs, .. } => expr_uses_tea_kernel(lhs) || expr_uses_tea_kernel(rhs),
-        Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_tea_kernel),
-        Expr::Cons { head, tail } => expr_uses_tea_kernel(head) || expr_uses_tea_kernel(tail),
-        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            expr_uses_tea_kernel(list)
-        }
-        Expr::Apply { func, args } => {
-            expr_uses_tea_kernel(func) || args.iter().any(expr_uses_tea_kernel)
-        }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
-            expr_uses_tea_kernel(effect) || expr_uses_tea_kernel(rest)
-        }
-        Expr::Int(_)
-        | Expr::Float(_)
-        | Expr::Bool(_)
-        | Expr::Str(_)
-        | Expr::Char(_)
-        | Expr::Unit
-        | Expr::CloneVar(_)
-        | Expr::Var(_) => false,
-    }
-}
-
-/// Return `true` when `k` is one of the TEA kernel variants introduced in M5c
-/// (including M6-reserved variants).
-///
-/// Delegates to [`KernelFn::is_tea`].
-const fn kernel_is_tea(k: KernelFn) -> bool {
-    k.is_tea()
-}
-
-// ── M6: Sky.Http.Server kernel presence detection ────────────────────────────
-
-/// Return `true` when `expr` (or any of its sub-expressions, recursively)
-/// contains a call whose callee is one of the `Sky.Http.Server` kernel
-/// variants introduced in M6.
-///
-/// Used by [`Lowerer::run`] to decide whether the emitted project needs the
-/// `server` feature in its `Cargo.toml` and the server module appended to
-/// `sky_runtime/mod.rs`.
-fn expr_uses_server_kernel(expr: &Expr) -> bool {
-    match expr {
-        Expr::Call { callee, args } => {
-            let callee_is_server = matches!(callee, Callee::Kernel(k) if kernel_is_server(*k));
-            callee_is_server || args.iter().any(expr_uses_server_kernel)
-        }
-        Expr::FuncValue { callee, .. } => {
-            matches!(callee, Callee::Kernel(k) if kernel_is_server(*k))
-        }
-        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
-            expr_uses_server_kernel(value) || expr_uses_server_kernel(body)
-        }
-        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_server_kernel(body),
-        Expr::If { cond, then_, else_ } => {
-            expr_uses_server_kernel(cond)
-                || expr_uses_server_kernel(then_)
-                || expr_uses_server_kernel(else_)
-        }
-        Expr::Match(m) => {
-            expr_uses_server_kernel(m.scrutinee())
-                || m.arms()
-                    .iter()
-                    .any(|arm| expr_uses_server_kernel(&arm.body))
-        }
-        Expr::Tuple(elems) => elems.iter().any(expr_uses_server_kernel),
-        Expr::List { items, .. } => items.iter().any(expr_uses_server_kernel),
-        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_server_kernel(v)),
-        Expr::Access { record, .. } => expr_uses_server_kernel(record),
-        Expr::Update { record, fields } => {
-            expr_uses_server_kernel(record)
-                || fields.iter().any(|(_, v)| expr_uses_server_kernel(v))
-        }
-        Expr::BinOp { lhs, rhs, .. } => {
-            expr_uses_server_kernel(lhs) || expr_uses_server_kernel(rhs)
-        }
-        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
-            args.iter().any(expr_uses_server_kernel)
-        }
-        Expr::Cons { head, tail } => expr_uses_server_kernel(head) || expr_uses_server_kernel(tail),
-        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            expr_uses_server_kernel(list)
-        }
-        Expr::Apply { func, args } => {
-            expr_uses_server_kernel(func) || args.iter().any(expr_uses_server_kernel)
-        }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
-            expr_uses_server_kernel(effect) || expr_uses_server_kernel(rest)
-        }
-        Expr::Int(_)
-        | Expr::Float(_)
-        | Expr::Bool(_)
-        | Expr::Str(_)
-        | Expr::Char(_)
-        | Expr::Unit
-        | Expr::CloneVar(_)
-        | Expr::Var(_) => false,
-    }
-}
-
-/// Return `true` when `k` is one of the Sky.Http.Server kernel variants
-/// introduced in M6.
-///
-/// Delegates to [`KernelFn::is_server`].
-const fn kernel_is_server(k: KernelFn) -> bool {
-    k.is_server()
-}
-
-// ── M7: Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview detection ───────
-
-/// Return `true` when `expr` (or any sub-expression) contains a call to a
-/// Std.Ui / Std.Html render kernel introduced in M7.
-fn expr_uses_ui_kernel(expr: &Expr) -> bool {
-    match expr {
-        Expr::Call { callee, args } => {
-            let is_ui = matches!(callee, Callee::Kernel(k) if k.is_ui());
-            is_ui || args.iter().any(expr_uses_ui_kernel)
-        }
-        Expr::FuncValue { callee, .. } => matches!(callee, Callee::Kernel(k) if k.is_ui()),
-        Expr::Apply { func, args } => {
-            expr_uses_ui_kernel(func) || args.iter().any(expr_uses_ui_kernel)
-        }
-        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
-            expr_uses_ui_kernel(value) || expr_uses_ui_kernel(body)
-        }
-        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_ui_kernel(body),
-        Expr::If { cond, then_, else_ } => {
-            expr_uses_ui_kernel(cond) || expr_uses_ui_kernel(then_) || expr_uses_ui_kernel(else_)
-        }
-        Expr::Match(m) => {
-            expr_uses_ui_kernel(m.scrutinee())
-                || m.arms().iter().any(|arm| expr_uses_ui_kernel(&arm.body))
-        }
-        Expr::Tuple(elems) => elems.iter().any(expr_uses_ui_kernel),
-        Expr::List { items, .. } => items.iter().any(expr_uses_ui_kernel),
-        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_ui_kernel(v)),
-        Expr::Access { record, .. } => expr_uses_ui_kernel(record),
-        Expr::Update { record, fields } => {
-            expr_uses_ui_kernel(record) || fields.iter().any(|(_, v)| expr_uses_ui_kernel(v))
-        }
-        Expr::BinOp { lhs, rhs, .. } => expr_uses_ui_kernel(lhs) || expr_uses_ui_kernel(rhs),
-        Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_ui_kernel),
-        Expr::Cons { head, tail } => expr_uses_ui_kernel(head) || expr_uses_ui_kernel(tail),
-        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            expr_uses_ui_kernel(list)
-        }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
-            expr_uses_ui_kernel(effect) || expr_uses_ui_kernel(rest)
-        }
-        Expr::Int(_)
-        | Expr::Float(_)
-        | Expr::Bool(_)
-        | Expr::Str(_)
-        | Expr::Char(_)
-        | Expr::Unit
-        | Expr::CloneVar(_)
-        | Expr::Var(_) => false,
-    }
-}
-
-/// Return `true` when `expr` (or any sub-expression) contains a call to a
-/// `Sky.Core.CssSafety` leaf security kernel (the `Std.Css` backing, #47).
-///
-/// Mirrors [`expr_uses_ui_kernel`] exactly, delegating to
-/// [`KernelFn::is_css`]. A pure `Std.Css` program (CSS + `println`, no
-/// `Std.Ui` / `Std.Html`) never sets `uses_ui`, so the backend needs this
-/// independent flag to declare `css_safety` / `css` in the emitted
-/// `sky_runtime/mod.rs`.
-fn expr_uses_css_kernel(expr: &Expr) -> bool {
-    match expr {
-        Expr::Call { callee, args } => {
-            let is_css = matches!(callee, Callee::Kernel(k) if k.is_css());
-            is_css || args.iter().any(expr_uses_css_kernel)
-        }
-        Expr::FuncValue { callee, .. } => matches!(callee, Callee::Kernel(k) if k.is_css()),
-        Expr::Apply { func, args } => {
-            expr_uses_css_kernel(func) || args.iter().any(expr_uses_css_kernel)
-        }
-        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
-            expr_uses_css_kernel(value) || expr_uses_css_kernel(body)
-        }
-        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_css_kernel(body),
-        Expr::If { cond, then_, else_ } => {
-            expr_uses_css_kernel(cond) || expr_uses_css_kernel(then_) || expr_uses_css_kernel(else_)
-        }
-        Expr::Match(m) => {
-            expr_uses_css_kernel(m.scrutinee())
-                || m.arms().iter().any(|arm| expr_uses_css_kernel(&arm.body))
-        }
-        Expr::Tuple(elems) => elems.iter().any(expr_uses_css_kernel),
-        Expr::List { items, .. } => items.iter().any(expr_uses_css_kernel),
-        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_css_kernel(v)),
-        Expr::Access { record, .. } => expr_uses_css_kernel(record),
-        Expr::Update { record, fields } => {
-            expr_uses_css_kernel(record) || fields.iter().any(|(_, v)| expr_uses_css_kernel(v))
-        }
-        Expr::BinOp { lhs, rhs, .. } => expr_uses_css_kernel(lhs) || expr_uses_css_kernel(rhs),
-        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
-            args.iter().any(expr_uses_css_kernel)
-        }
-        Expr::Cons { head, tail } => expr_uses_css_kernel(head) || expr_uses_css_kernel(tail),
-        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            expr_uses_css_kernel(list)
-        }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
-            expr_uses_css_kernel(effect) || expr_uses_css_kernel(rest)
-        }
-        Expr::Int(_)
-        | Expr::Float(_)
-        | Expr::Bool(_)
-        | Expr::Str(_)
-        | Expr::Char(_)
-        | Expr::Unit
-        | Expr::CloneVar(_)
-        | Expr::Var(_) => false,
-    }
-}
-
-// ── #111: Std.Auth kernel presence detection ─────────────────────────────────
-
-/// Return `true` when `expr` (or any sub-expression, recursively) contains a
-/// call whose callee is one of the `Std.Auth` kernel variants (`hashPassword`,
-/// `verifyPassword`, `signToken`, `verifyToken`, `register`, `login`,
-/// `setRole`, and companions).
-///
-/// Used by [`Lowerer::run`] to decide whether the emitted project needs
-/// `pub mod auth; pub use auth::*;` appended to `sky_runtime/mod.rs`.
-fn expr_uses_auth_kernel(expr: &Expr) -> bool {
-    match expr {
-        Expr::Call { callee, args } => {
-            let callee_is_auth = matches!(callee, Callee::Kernel(k) if k.is_auth());
-            callee_is_auth || args.iter().any(expr_uses_auth_kernel)
-        }
-        Expr::FuncValue { callee, .. } => {
-            matches!(callee, Callee::Kernel(k) if k.is_auth())
-        }
-        Expr::Apply { func, args } => {
-            expr_uses_auth_kernel(func) || args.iter().any(expr_uses_auth_kernel)
-        }
-        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
-            expr_uses_auth_kernel(value) || expr_uses_auth_kernel(body)
-        }
-        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_auth_kernel(body),
-        Expr::If { cond, then_, else_ } => {
-            expr_uses_auth_kernel(cond) || expr_uses_auth_kernel(then_) || expr_uses_auth_kernel(else_)
-        }
-        Expr::Match(m) => {
-            expr_uses_auth_kernel(m.scrutinee())
-                || m.arms().iter().any(|arm| expr_uses_auth_kernel(&arm.body))
-        }
-        Expr::Tuple(elems) => elems.iter().any(expr_uses_auth_kernel),
-        Expr::List { items, .. } => items.iter().any(expr_uses_auth_kernel),
-        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_auth_kernel(v)),
-        Expr::Access { record, .. } => expr_uses_auth_kernel(record),
-        Expr::Update { record, fields } => {
-            expr_uses_auth_kernel(record) || fields.iter().any(|(_, v)| expr_uses_auth_kernel(v))
-        }
-        Expr::BinOp { lhs, rhs, .. } => expr_uses_auth_kernel(lhs) || expr_uses_auth_kernel(rhs),
-        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
-            args.iter().any(expr_uses_auth_kernel)
-        }
-        Expr::Cons { head, tail } => expr_uses_auth_kernel(head) || expr_uses_auth_kernel(tail),
-        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            expr_uses_auth_kernel(list)
-        }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
-            expr_uses_auth_kernel(effect) || expr_uses_auth_kernel(rest)
-        }
-        Expr::Int(_)
-        | Expr::Float(_)
-        | Expr::Bool(_)
-        | Expr::Str(_)
-        | Expr::Char(_)
-        | Expr::Unit
-        | Expr::CloneVar(_)
-        | Expr::Var(_) => false,
-    }
-}
-
-/// Return `true` when `expr` (or any sub-expression) contains a call to a
-/// Std.Live / Sky.Live app-entry kernel introduced in M7.
-fn expr_uses_live_kernel(expr: &Expr) -> bool {
-    match expr {
-        Expr::Call { callee, args } => {
-            let is_live = matches!(callee, Callee::Kernel(k) if k.is_live());
-            is_live || args.iter().any(expr_uses_live_kernel)
-        }
-        Expr::FuncValue { callee, .. } => matches!(callee, Callee::Kernel(k) if k.is_live()),
-        Expr::Apply { func, args } => {
-            expr_uses_live_kernel(func) || args.iter().any(expr_uses_live_kernel)
-        }
-        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
-            expr_uses_live_kernel(value) || expr_uses_live_kernel(body)
-        }
-        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_live_kernel(body),
-        Expr::If { cond, then_, else_ } => {
-            expr_uses_live_kernel(cond)
-                || expr_uses_live_kernel(then_)
-                || expr_uses_live_kernel(else_)
-        }
-        Expr::Match(m) => {
-            expr_uses_live_kernel(m.scrutinee())
-                || m.arms().iter().any(|arm| expr_uses_live_kernel(&arm.body))
-        }
-        Expr::Tuple(elems) => elems.iter().any(expr_uses_live_kernel),
-        Expr::List { items, .. } => items.iter().any(expr_uses_live_kernel),
-        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_live_kernel(v)),
-        Expr::Access { record, .. } => expr_uses_live_kernel(record),
-        Expr::Update { record, fields } => {
-            expr_uses_live_kernel(record) || fields.iter().any(|(_, v)| expr_uses_live_kernel(v))
-        }
-        Expr::BinOp { lhs, rhs, .. } => expr_uses_live_kernel(lhs) || expr_uses_live_kernel(rhs),
-        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
-            args.iter().any(expr_uses_live_kernel)
-        }
-        Expr::Cons { head, tail } => expr_uses_live_kernel(head) || expr_uses_live_kernel(tail),
-        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            expr_uses_live_kernel(list)
-        }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
-            expr_uses_live_kernel(effect) || expr_uses_live_kernel(rest)
-        }
-        Expr::Int(_)
-        | Expr::Float(_)
-        | Expr::Bool(_)
-        | Expr::Str(_)
-        | Expr::Char(_)
-        | Expr::Unit
-        | Expr::CloneVar(_)
-        | Expr::Var(_) => false,
-    }
-}
-
-/// Return `true` when `expr` (or any sub-expression) contains a call to a
-/// Std.Tui / Sky.Tui app-entry kernel introduced in M7.
-fn expr_uses_tui_kernel(expr: &Expr) -> bool {
-    match expr {
-        Expr::Call { callee, args } => {
-            let is_tui = matches!(callee, Callee::Kernel(k) if k.is_tui());
-            is_tui || args.iter().any(expr_uses_tui_kernel)
-        }
-        Expr::FuncValue { callee, .. } => matches!(callee, Callee::Kernel(k) if k.is_tui()),
-        Expr::Apply { func, args } => {
-            expr_uses_tui_kernel(func) || args.iter().any(expr_uses_tui_kernel)
-        }
-        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
-            expr_uses_tui_kernel(value) || expr_uses_tui_kernel(body)
-        }
-        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_tui_kernel(body),
-        Expr::If { cond, then_, else_ } => {
-            expr_uses_tui_kernel(cond) || expr_uses_tui_kernel(then_) || expr_uses_tui_kernel(else_)
-        }
-        Expr::Match(m) => {
-            expr_uses_tui_kernel(m.scrutinee())
-                || m.arms().iter().any(|arm| expr_uses_tui_kernel(&arm.body))
-        }
-        Expr::Tuple(elems) => elems.iter().any(expr_uses_tui_kernel),
-        Expr::List { items, .. } => items.iter().any(expr_uses_tui_kernel),
-        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_tui_kernel(v)),
-        Expr::Access { record, .. } => expr_uses_tui_kernel(record),
-        Expr::Update { record, fields } => {
-            expr_uses_tui_kernel(record) || fields.iter().any(|(_, v)| expr_uses_tui_kernel(v))
-        }
-        Expr::BinOp { lhs, rhs, .. } => expr_uses_tui_kernel(lhs) || expr_uses_tui_kernel(rhs),
-        Expr::Ctor { args, .. } | Expr::TailRecur { args } => args.iter().any(expr_uses_tui_kernel),
-        Expr::Cons { head, tail } => expr_uses_tui_kernel(head) || expr_uses_tui_kernel(tail),
-        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            expr_uses_tui_kernel(list)
-        }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
-            expr_uses_tui_kernel(effect) || expr_uses_tui_kernel(rest)
-        }
-        Expr::Int(_)
-        | Expr::Float(_)
-        | Expr::Bool(_)
-        | Expr::Str(_)
-        | Expr::Char(_)
-        | Expr::Unit
-        | Expr::CloneVar(_)
-        | Expr::Var(_) => false,
-    }
-}
-
-/// Return `true` when `expr` (or any sub-expression) contains a call to a
-/// Std.Webview / Sky.Webview app-entry kernel introduced in M7.
-fn expr_uses_webview_kernel(expr: &Expr) -> bool {
-    match expr {
-        Expr::Call { callee, args } => {
-            let is_webview = matches!(callee, Callee::Kernel(k) if k.is_webview());
-            is_webview || args.iter().any(expr_uses_webview_kernel)
-        }
-        Expr::FuncValue { callee, .. } => matches!(callee, Callee::Kernel(k) if k.is_webview()),
-        Expr::Apply { func, args } => {
-            expr_uses_webview_kernel(func) || args.iter().any(expr_uses_webview_kernel)
-        }
-        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
-            expr_uses_webview_kernel(value) || expr_uses_webview_kernel(body)
-        }
-        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => expr_uses_webview_kernel(body),
-        Expr::If { cond, then_, else_ } => {
-            expr_uses_webview_kernel(cond)
-                || expr_uses_webview_kernel(then_)
-                || expr_uses_webview_kernel(else_)
-        }
-        Expr::Match(m) => {
-            expr_uses_webview_kernel(m.scrutinee())
-                || m.arms()
-                    .iter()
-                    .any(|arm| expr_uses_webview_kernel(&arm.body))
-        }
-        Expr::Tuple(elems) => elems.iter().any(expr_uses_webview_kernel),
-        Expr::List { items, .. } => items.iter().any(expr_uses_webview_kernel),
-        Expr::Record(fields) => fields.iter().any(|(_, v)| expr_uses_webview_kernel(v)),
-        Expr::Access { record, .. } => expr_uses_webview_kernel(record),
-        Expr::Update { record, fields } => {
-            expr_uses_webview_kernel(record)
-                || fields.iter().any(|(_, v)| expr_uses_webview_kernel(v))
-        }
-        Expr::BinOp { lhs, rhs, .. } => {
-            expr_uses_webview_kernel(lhs) || expr_uses_webview_kernel(rhs)
-        }
-        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
-            args.iter().any(expr_uses_webview_kernel)
-        }
-        Expr::Cons { head, tail } => {
-            expr_uses_webview_kernel(head) || expr_uses_webview_kernel(tail)
-        }
-        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            expr_uses_webview_kernel(list)
-        }
-        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
-            expr_uses_webview_kernel(effect) || expr_uses_webview_kernel(rest)
-        }
-        Expr::Int(_)
-        | Expr::Float(_)
-        | Expr::Bool(_)
-        | Expr::Str(_)
-        | Expr::Char(_)
-        | Expr::Unit
-        | Expr::CloneVar(_)
-        | Expr::Var(_) => false,
+        | Expr::Var(_) => {}
     }
 }
 
@@ -3833,8 +3461,14 @@ impl<'a> Lowerer<'a> {
 
         let mut funcs = Vec::with_capacity(self.m.defs.len());
         let mut entry = None;
-        for def in &self.m.defs {
-            let func = self.lower_def(def)?;
+        for (idx, def) in self.m.defs.iter().enumerate() {
+            // Positional id: `func_ids` was assigned from this very
+            // enumeration order in `new()` under the unique-`(home, name)`
+            // module invariant, so the positional id equals the map-resolved
+            // id — passing it spares `lower_def` a throwaway `Vec<Symbol>`
+            // key allocation per def (efficiency-audit §3 low).
+            let id = FuncId::from_raw(u32::try_from(idx).unwrap_or(u32::MAX));
+            let func = self.lower_def(def, id)?;
             if self.interner.resolve(func.name) == Some("main") {
                 entry = Some(func.id);
             }
@@ -3857,7 +3491,18 @@ impl<'a> Lowerer<'a> {
         //
         // The injection is skipped when no Db kernel is used — a program with
         // no `import Std.Db` is not affected.
-        if funcs.iter().any(|f| expr_uses_db_kernel(&f.body)) {
+        // All nine kernel-family flags are collected in ONE pass over the
+        // function bodies (see [`KernelUsage`]) instead of nine independent
+        // full-AST walks (efficiency-audit §3 medium).
+        let mut kernel_usage = KernelUsage::default();
+        for f in &funcs {
+            if kernel_usage.all_set() {
+                break;
+            }
+            scan_kernel_usage(&f.body, &mut kernel_usage);
+        }
+
+        if kernel_usage.db {
             types_ir.push(TypeDef::Enum(self.synthetic_sqlvalue_enum()));
             types_ir.push(TypeDef::Enum(self.synthetic_sqlfield_enum()));
         }
@@ -3867,13 +3512,13 @@ impl<'a> Lowerer<'a> {
         // M5c: detect whether any TEA kernel call is present. The backend uses
         // this flag to append `pub mod tea; pub use tea::*;` to mod.rs and to
         // add `SkyCmd<M>` / `SkySub<M>` type aliases.
-        let uses_tea = funcs.iter().any(|f| expr_uses_tea_kernel(&f.body));
+        let uses_tea = kernel_usage.tea;
 
         // M6: detect whether any Sky.Http.Server kernel call is present. The
         // backend uses this flag to inject the `server` feature in Cargo.toml
         // and append `pub mod server; pub use server::*; pub mod server_stream;
         // pub use server_stream::*;` to mod.rs.
-        let uses_server = funcs.iter().any(|f| expr_uses_server_kernel(&f.body));
+        let uses_server = kernel_usage.server;
 
         // M7: detect Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview usage.
         // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import
@@ -3882,20 +3527,20 @@ impl<'a> Lowerer<'a> {
         // Sky source only calls `Ui.column`/`Ui.el`/`Ui.text` (kernels that
         // trigger `uses_tui`) and never calls `Ui.layout`/`Ui.layoutWith`
         // (kernels that trigger `uses_ui`).
-        let uses_tui = funcs.iter().any(|f| expr_uses_tui_kernel(&f.body));
-        let uses_ui = funcs.iter().any(|f| expr_uses_ui_kernel(&f.body)) || uses_tui;
-        let uses_live = funcs.iter().any(|f| expr_uses_live_kernel(&f.body));
-        let uses_webview = funcs.iter().any(|f| expr_uses_webview_kernel(&f.body));
+        let uses_tui = kernel_usage.tui;
+        let uses_ui = kernel_usage.ui || uses_tui;
+        let uses_live = kernel_usage.live;
+        let uses_webview = kernel_usage.webview;
 
         // #47: detect Std.Css (Sky.Core.CssSafety) leaf-kernel usage. Independent
         // of `uses_ui` — a pure-Std.Css program uses no render kernel.
-        let uses_css = funcs.iter().any(|f| expr_uses_css_kernel(&f.body));
+        let uses_css = kernel_usage.css;
 
         // #111: detect Std.Auth kernel usage — any of hashPassword, verifyPassword,
         // signToken, verifyToken, register, login, setRole, and companions.  The
         // backend uses this flag to append `pub mod auth; pub use auth::*;` to
         // the emitted `sky_runtime/mod.rs`.
-        let uses_auth = funcs.iter().any(|f| expr_uses_auth_kernel(&f.body));
+        let uses_auth = kernel_usage.auth;
 
         let module = Module {
             name: ModPath(self.m.name.clone()),
@@ -4165,8 +3810,13 @@ impl<'a> Lowerer<'a> {
     /// by full structural equality, so the output order is fixed.
     fn collect_record_types(&self) -> DResult<Vec<IrType>> {
         let mut out: Vec<IrType> = Vec::new();
+        // O(1) dedup gate alongside the ordered Vec (efficiency-audit §3
+        // medium: the former `out.contains(&ir)` was an O(n²) scan over
+        // every region/env record shape). `out` keeps the same ordering and
+        // the same element set — the set only gates insertion.
+        let mut seen: std::collections::HashSet<IrType> = std::collections::HashSet::new();
         for ty in self.types.regions.values().chain(self.types.env.values()) {
-            self.collect_records_in_ty(ty, &mut out)?;
+            self.collect_records_in_ty(ty, &mut out, &mut seen)?;
         }
         Ok(out)
     }
@@ -4174,11 +3824,16 @@ impl<'a> Lowerer<'a> {
     /// Walk a solved [`Ty`], pushing every distinct record shape it contains
     /// (nested records first) into `out`. Non-record shapes recurse into their
     /// children; leaves contribute nothing.
-    fn collect_records_in_ty(&self, ty: &Ty, out: &mut Vec<IrType>) -> DResult<()> {
+    fn collect_records_in_ty(
+        &self,
+        ty: &Ty,
+        out: &mut Vec<IrType>,
+        seen: &mut std::collections::HashSet<IrType>,
+    ) -> DResult<()> {
         match ty {
             Ty::Record(fields, _tail) => {
                 for field_ty in fields.values() {
-                    self.collect_records_in_ty(field_ty, out)?;
+                    self.collect_records_in_ty(field_ty, out, seen)?;
                 }
                 // Only a FULLY-CONCRETE record shape is surfaced here. A record
                 // carrying a type variable is a generic shape that necessarily
@@ -4213,23 +3868,23 @@ impl<'a> Lowerer<'a> {
                     let is_retry_policy = fields
                         .keys()
                         .any(|k| self.interner.resolve(*k) == Some("shouldRetry"));
-                    if (!ir_contains_fun(&ir) || is_retry_policy) && !out.contains(&ir) {
+                    if (!ir_contains_fun(&ir) || is_retry_policy) && seen.insert(ir.clone()) {
                         out.push(ir);
                     }
                 }
             }
             Ty::Tuple(elems) => {
                 for e in elems {
-                    self.collect_records_in_ty(e, out)?;
+                    self.collect_records_in_ty(e, out, seen)?;
                 }
             }
             Ty::Fun(a, b) => {
-                self.collect_records_in_ty(a, out)?;
-                self.collect_records_in_ty(b, out)?;
+                self.collect_records_in_ty(a, out, seen)?;
+                self.collect_records_in_ty(b, out, seen)?;
             }
             Ty::Con { args, .. } => {
                 for a in args {
-                    self.collect_records_in_ty(a, out)?;
+                    self.collect_records_in_ty(a, out, seen)?;
                 }
             }
             Ty::Var(_) | Ty::Unit => {}
@@ -4238,16 +3893,16 @@ impl<'a> Lowerer<'a> {
     }
 
     #[allow(clippy::too_many_lines)] // grew past 100 with the T5 multi-use-clone pre-pass (#104)
-    fn lower_def(&self, def: &canon::Def) -> DResult<Func> {
+    fn lower_def(&self, def: &canon::Def, id: FuncId) -> DResult<Func> {
         // Track the current def's home so every `region_ty(span)` lookup uses the
         // correct `(home, span)` key, matching what the constraint builder wrote.
         *self.current_home.borrow_mut() = def.home().to_vec();
 
+        // `id` is the def's position in `m.defs` — identical to the
+        // `func_ids` entry `new()` recorded for `(home, name)` (the map is
+        // populated from the same enumeration), passed in to avoid a
+        // throwaway `Vec<Symbol>` lookup key per def.
         let name = def.name().value;
-        let id = *self
-            .func_ids
-            .get(&(def.home().to_vec(), name))
-            .ok_or_else(|| bug("sky_lower::lower_def", "missing func id"))?;
 
         let sig_span = def.name().span;
         match def {
@@ -7157,27 +6812,28 @@ impl<'a> Lowerer<'a> {
         self.reject_float_keyed_collection(call_span)?;
 
         // App-entry / Live.route intercepts (Phase-1b/#108) — see the helper.
-        if let Some(intercepted) = self.intercept_live_kernel_call(callee, args)? {
-            return Ok(intercepted);
+        match self.intercept_live_kernel_call(callee, args)? {
+            Intercepted::Done(e) => Ok(e),
+            Intercepted::Fallthrough(peeked) => {
+                self.lower_call_uniform(callee, args, call_span, peeked)
+            }
         }
-
-        self.lower_call_uniform(callee, args, call_span)
     }
 
     /// Kernel-call intercepts that must run BEFORE the uniform arg lowering
     /// of [`Self::lower_call_uniform`] (Phase-1b + #108).
     ///
-    /// Returns `Ok(Some(expr))` when the call was intercepted and fully
-    /// lowered here; `Ok(None)` to fall through to the uniform path.
-    ///
-    /// `lower_callee` is a pure symbol-table lookup (no side effects); the
-    /// uniform path re-calls it for all other callees — that second call is
-    /// safe and deliberate (minimal diff).
+    /// Returns [`Intercepted::Done`] when the call was intercepted and fully
+    /// lowered here; [`Intercepted::Fallthrough`] to continue on the uniform
+    /// path. `lower_callee` is a pure symbol-table lookup (no side effects);
+    /// a fall-through carries the already-resolved [`Callee`] so the uniform
+    /// path doesn't re-run the large dispatch (efficiency-audit §3 medium —
+    /// it used to be deliberately re-called, "safe but minimal-diff").
     fn intercept_live_kernel_call(
         &self,
         callee: &canon::Expr,
         args: &[canon::Expr],
-    ) -> DResult<Option<Expr>> {
+    ) -> DResult<Intercepted> {
         if let canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } = &callee.value {
             let peek = self.lower_callee(callee)?;
             match &peek {
@@ -7192,7 +6848,7 @@ impl<'a> Lowerer<'a> {
                         // piped, call-result) is rejected here with SKY-L0119
                         // rather than reaching emit's spanless `CompilerBug`.
                         let lowered_cfg = self.lower_app_entry_cfg(&peek, arg0)?;
-                        return Ok(Some(Expr::Call {
+                        return Ok(Intercepted::Done(Expr::Call {
                             callee: peek,
                             args: vec![lowered_cfg],
                         }));
@@ -7225,7 +6881,7 @@ impl<'a> Lowerer<'a> {
                     if let Some(arg0) = args.first() {
                         // Borrow `peek` for the gate BEFORE moving it below.
                         let lowered_cfg = self.lower_app_entry_cfg(&peek, arg0)?;
-                        return Ok(Some(Expr::Call {
+                        return Ok(Intercepted::Done(Expr::Call {
                             callee: peek,
                             args: vec![lowered_cfg],
                         }));
@@ -7272,10 +6928,10 @@ impl<'a> Lowerer<'a> {
                             // Non-literal cfg: fall through to uniform path, which
                             // surfaces SKY-L0107 on the function-valued field — a
                             // clear, actionable diagnostic at the right span.
-                            return Ok(None);
+                            return Ok(Intercepted::Fallthrough(Some(peek)));
                         };
                         let lowered_cfg = self.lower_app_cfg_record(fields)?;
-                        return Ok(Some(Expr::Call {
+                        return Ok(Intercepted::Done(Expr::Call {
                             callee: peek,
                             args: vec![lowered_attrs, lowered_cfg],
                         }));
@@ -7291,7 +6947,7 @@ impl<'a> Lowerer<'a> {
                 Callee::Kernel(KernelFn::LiveAppRouted) if args.len() == 1 => {
                     if let Some(arg0) = args.first() {
                         let lowered_cfg = self.lower_app_entry_cfg(&peek, arg0)?;
-                        return Ok(Some(Expr::Call {
+                        return Ok(Intercepted::Done(Expr::Call {
                             callee: peek,
                             args: vec![lowered_cfg],
                         }));
@@ -7315,7 +6971,7 @@ impl<'a> Lowerer<'a> {
                     if let (Some(pattern_e), Some(builder_e)) = (args.first(), args.get(1)) {
                         let lowered_pattern = self.lower_expr(pattern_e)?;
                         let lowered_builder = self.lower_route_builder(builder_e)?;
-                        return Ok(Some(Expr::Call {
+                        return Ok(Intercepted::Done(Expr::Call {
                             callee: peek,
                             args: vec![lowered_pattern, lowered_builder],
                         }));
@@ -7323,19 +6979,26 @@ impl<'a> Lowerer<'a> {
                 }
                 _ => {}
             }
-            // Any other callee: fall through to the uniform path.
-            // `lower_callee` will be called again there — pure, safe.
+            // Any other callee: fall through to the uniform path, carrying
+            // the resolved callee so the dispatch isn't run twice.
+            return Ok(Intercepted::Fallthrough(Some(peek)));
         }
-        Ok(None)
+        Ok(Intercepted::Fallthrough(None))
     }
 
     /// The uniform (non-intercepted) call lowering: lower every argument with
     /// [`Self::lower_expr`], then dispatch on the callee shape.
+    ///
+    /// `peeked` is the callee [`Self::intercept_live_kernel_call`] already
+    /// resolved for a `VarKernel`/`VarTopLevel` callee (or `None` for every
+    /// other callee shape) — reused here instead of re-running the large
+    /// `lower_callee` dispatch per call (efficiency-audit §3 medium).
     fn lower_call_uniform(
         &self,
         callee: &canon::Expr,
         args: &[canon::Expr],
         call_span: Span,
+        peeked: Option<Callee>,
     ) -> DResult<Expr> {
         let lowered_args = args
             .iter()
@@ -7398,7 +7061,10 @@ impl<'a> Lowerer<'a> {
                 }
             }
             canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } => {
-                let resolved = self.lower_callee(callee)?;
+                let resolved = match peeked {
+                    Some(c) => c,
+                    None => self.lower_callee(callee)?,
+                };
                 let arity = self.callee_arity(&resolved)?;
                 match args.len().cmp(&arity) {
                     std::cmp::Ordering::Equal => Ok(Expr::Call {

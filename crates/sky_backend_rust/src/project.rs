@@ -341,7 +341,12 @@ fn runtime_bindings() -> DResult<&'static str> {
 /// Emit the complete project for `program`.
 #[allow(clippy::too_many_lines)]
 pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject> {
-    let mut out = String::new();
+    // Capacity hint only — bytes pushed are identical. `GOLDEN` (the embedded
+    // reference main.rs the preamble/epilogue are cut from) is a sound floor
+    // for the fixed sections; user code grows beyond it via the usual
+    // doubling (efficiency-audit §4 low: this one-shot buffer started at
+    // zero capacity and re-doubled through every fixed-prelude push).
+    let mut out = String::with_capacity(GOLDEN.len() + 4096);
     out.push_str(&preamble()?);
 
     // User types, emitted from the IR.

@@ -431,6 +431,10 @@ fn type_label(msg: &TypeError) -> Option<String> {
             "type {} has no field `{field}`",
             ty_to_string(record)
         )),
+        TypeError::BuiltinRecordUpdate { name } => Some(format!(
+            "`{name}` is a built-in type — its fields can be read (`x.field`), \
+             but it cannot be rebuilt with record-update syntax"
+        )),
         TypeError::CtorPatternArity {
             ctor,
             expected,
@@ -439,7 +443,20 @@ fn type_label(msg: &TypeError) -> Option<String> {
             "`{ctor}` binds {found} field(s) but its declaration has {expected}"
         )),
         TypeError::SuperTypeUnsatisfied { class, found } => {
-            Some(format!("{} is not a {class} type", ty_to_string(found)))
+            if &**class == crate::diagnostic::HOF_KERNEL_RESULT_CLASS {
+                // Tailored sentence: the generic template below would read as
+                // a double negative for this internal arity obligation
+                // ("`a` is not a non-function callback result … type").
+                Some(format!(
+                    "the callback's result type {} may itself be a function — \
+                     Maybe/Result higher-order kernels (map / map2..5 / mapError / \
+                     andMap) apply their callback at one exact arity, so the \
+                     callback must return a plain (non-function) value",
+                    ty_to_string(found)
+                ))
+            } else {
+                Some(format!("{} is not a {class} type", ty_to_string(found)))
+            }
         }
         TypeError::RefutablePatternParameter => {
             Some("this parameter pattern can fail to match".to_string())
@@ -962,6 +979,45 @@ mod tests {
         );
         // No ANSI in the non-tty test environment.
         assert!(!out.contains('\x1b'), "must be plain in tests:\n{out}");
+    }
+
+    #[test]
+    fn hof_kernel_result_super_type_renders_without_double_negative() {
+        // The generic SuperTypeUnsatisfied template ("`X` is not a `<class>`
+        // type") reads as a confusing double negative for the #90 T3
+        // higher-order-kernel callback-result obligation ("`a` is not a
+        // non-function callback result … type"). That class label must render
+        // through the tailored sentence instead (BACKLOG DX row, 2026-07-11).
+        let src = "module Main exposing (main)\n\nmain =\n    foo\n";
+        let d = Diagnostic::Type {
+            span: Span::new(40, 43),
+            msg: TypeError::SuperTypeUnsatisfied {
+                class: crate::diagnostic::HOF_KERNEL_RESULT_CLASS.into(),
+                found: Box::new(TyDoc::Var("a".into())),
+            },
+        };
+        let out = render(&d, "test.sky", src);
+        assert!(
+            !out.contains("is not a non-function"),
+            "double-negative template must not fire for the HOF label:\n{out}"
+        );
+        assert!(
+            out.contains("must return a plain (non-function) value"),
+            "tailored sentence missing:\n{out}"
+        );
+        // Every other class label keeps the generic template.
+        let generic = Diagnostic::Type {
+            span: Span::new(40, 43),
+            msg: TypeError::SuperTypeUnsatisfied {
+                class: "Number".into(),
+                found: Box::new(con("String")),
+            },
+        };
+        let out2 = render(&generic, "test.sky", src);
+        assert!(
+            out2.contains("String is not a Number type"),
+            "generic template regressed:\n{out2}"
+        );
     }
 
     #[test]

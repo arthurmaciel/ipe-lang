@@ -14,6 +14,7 @@
 //! structure) and [`Builder::zonk`] (a settled union-find variable → [`Ty`]).
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use sky_canon::ast as canon;
 use sky_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span, TypeError};
@@ -1124,7 +1125,11 @@ pub struct Builder<'a> {
     /// into one flat def list.  Every `VarTopLevel { module, name }` reference
     /// looks up its home module's entry, not an entry that may belong to a
     /// different module that happens to share the bare name.
-    top_level: BTreeMap<(Vec<Symbol>, Symbol), Ty>,
+    /// Values are `Rc` so a typed top-level reference clones a refcount, not
+    /// the whole annotation `Ty` tree (efficiency-audit §2/§7 medium).
+    /// `instantiate_tracked` only reads the scheme; resolved types are
+    /// byte-identical. Single-threaded solver → `Rc` suffices.
+    top_level: BTreeMap<(Vec<Symbol>, Symbol), Rc<Ty>>,
     /// Body region-var of each untyped top-level binding, read back for `env`.
     ///
     /// Keyed by `(home_module_path, bare_name)` for the same reason as
@@ -1143,7 +1148,13 @@ pub struct Builder<'a> {
     /// by constructor name. A constructor is a (possibly generic) function
     /// `field0 -> … -> fieldN -> T vars`; each use site instantiates the scheme
     /// fresh, exactly as a polymorphic top-level binding does.
-    ctors: BTreeMap<Symbol, CtorScheme>,
+    /// Each value is an `Rc` so per-use-site instantiation clones a refcount,
+    /// not the whole scheme (efficiency-audit §2 medium: the constructor-ref /
+    /// ctor-pattern checks deep-cloned the full `CtorScheme` per use to
+    /// release the `&self` borrow before the `&mut self` instantiate call).
+    /// The `Rc` holds byte-identical data — same fresh vars, same constraints,
+    /// same errors. Fully internal to `Builder`.
+    ctors: BTreeMap<Symbol, Rc<CtorScheme>>,
     /// One entry per typed binding: its `(home, name)` and the rigid (skolem)
     /// variable each of its annotation type variables instantiated to while its
     /// body was checked. Read post-solve to recover each variable's super-type
@@ -1351,7 +1362,10 @@ pub struct Generated {
     /// See [`Builder::regions`] for the rationale.
     pub regions: BTreeMap<(Vec<Symbol>, Span), VarId>,
     pub constraints: Vec<Constraint>,
-    pub top_level: BTreeMap<(Vec<Symbol>, Symbol), Ty>,
+    /// Values stay behind the builder's `Rc`; the read-back (`lib.rs`) unwraps
+    /// them into the public `SolvedTypes::env` shape (refcount is 1 by then —
+    /// every per-reference clone is transient inside constraint generation).
+    pub top_level: BTreeMap<(Vec<Symbol>, Symbol), Rc<Ty>>,
     pub untyped: BTreeMap<(Vec<Symbol>, Symbol), VarId>,
     pub field_accesses: Vec<FieldAccess>,
     pub record_updates: Vec<RecordUpdate>,
@@ -1417,7 +1431,7 @@ impl<'a> Builder<'a> {
         // user `type` cannot shadow these names (the canon §3.2 gate rejects it),
         // so the module-union loop below never collides with them.
         for (name, scheme) in builder.builtins.ctor_schemes() {
-            builder.ctors.insert(name, scheme);
+            builder.ctors.insert(name, Rc::new(scheme));
         }
 
         // Register every data constructor's scheme up front, so a `VarCtor`
@@ -1460,10 +1474,10 @@ impl<'a> Builder<'a> {
                 }
                 builder.ctors.insert(
                     ctor.name,
-                    CtorScheme {
+                    Rc::new(CtorScheme {
                         arg_tys,
                         result: result.clone(),
-                    },
+                    }),
                 );
             }
         }
@@ -1523,7 +1537,7 @@ impl<'a> Builder<'a> {
                         raw
                     };
                     let normalized = builder.normalize_annotation_ty(expanded, name.span)?;
-                    builder.top_level.insert((home_key, name.value), normalized);
+                    builder.top_level.insert((home_key, name.value), Rc::new(normalized));
                 }
                 canon::Def::Untyped { name, .. } => {
                     let v = builder.flex()?;
@@ -2780,17 +2794,36 @@ impl<'a> Builder<'a> {
             } => self.constrain_var_ctor(home, *type_name, *name)?,
             canon::Expr_::Call(callee, args) => {
                 let callee_var = self.constrain_expr(local, callee)?;
-                let mut arg_vars = Vec::with_capacity(args.len());
+                // Each argument gets a FRESH param var rather than flowing its
+                // own var straight into the callee's arrow shape. Two payoffs
+                // (diagnostic-orientation fix, BACKLOG 2026-07-10 row):
+                //  1. the callee-vs-shape constraint below is solved FIRST, so
+                //     each param var adopts the callee's DECLARED param type;
+                //  2. the per-arg constraint then unifies found=actual-arg
+                //     against expected=declared-param AT THE ARG'S SPAN —
+                //     `Task.fail "str"` reads "expected Error, found String",
+                //     never the inversion (and blames the argument, not the
+                //     callee name).
+                // A non-function callee still reports found=callee's type,
+                // expected=`a -> b` via the callee-vs-shape constraint.
+                let mut arg_pairs = Vec::with_capacity(args.len());
                 for a in args {
-                    arg_vars.push(self.constrain_expr(local, a)?);
+                    let arg_var = self.constrain_expr(local, a)?;
+                    let param_var = self.flex()?;
+                    arg_pairs.push((a.span, arg_var, param_var));
                 }
                 let ret = self.flex()?;
-                // Fold a right-associative arrow: a0 -> a1 -> … -> ret.
-                let mut expected = ret;
-                for av in arg_vars.into_iter().rev() {
-                    expected = self.structure(FlatType::Fun(av, expected))?;
+                // Fold a right-associative arrow over the fresh param vars:
+                // p0 -> p1 -> … -> ret.
+                let mut fun_shape = ret;
+                for (_, _, param_var) in arg_pairs.iter().rev() {
+                    fun_shape = self.structure(FlatType::Fun(*param_var, fun_shape))?;
                 }
-                self.eq(callee.span, callee_var, expected);
+                // Order matters: callee-vs-shape first (see above).
+                self.eq(callee.span, callee_var, fun_shape);
+                for (arg_span, arg_var, param_var) in arg_pairs {
+                    self.eq(arg_span, arg_var, param_var);
+                }
                 ret
             }
             canon::Expr_::Case(scrut, branches) => self.constrain_case(local, scrut, branches)?,
@@ -6004,6 +6037,20 @@ pub fn promote_untyped_boundaries(
     }
     for ru in &generated.record_updates {
         obligation_roots.insert(lift!(uf.find(ru.record)));
+        // Symmetric to `fa.result` above: each updated field's VALUE var is
+        // pinned to the record's concrete field type by
+        // [`crate::resolve_record_updates`], which runs AFTER this pass. At
+        // this point it can still be a residual plain-`Flex` root (e.g. the
+        // `n` parameter in `setName r n = { r | name = n }`), so without this
+        // exclusion it would be quantified into the def's scheme and later
+        // pinned — producing a stale quantified symbol that structurally
+        // appears nowhere in the resolved `params`/`ret`. The lowerer's
+        // `used_generics` filter independently strips such a symbol
+        // (defense-in-depth, empirically verified), but the primary
+        // obligation-exclusion mechanism must be complete in its own right.
+        for &(_, value_var) in &ru.fields {
+            obligation_roots.insert(lift!(uf.find(value_var)));
+        }
     }
     for rw in &generated.route_witness_checks {
         obligation_roots.insert(lift!(uf.find(rw.builder_var)));
@@ -6583,7 +6630,9 @@ mod registry_phase_c_tests {
             K::DbDecMap4,
             K::DbDecRequired,
             K::DbDecOptional,
-            K::DbDecMoney,
+            // `DbDecMoney` is FIRST_SCHEMED, not relocated — it is Ipê-new
+            // (#34), so no byte-faithful legacy `kernel_ty` oracle ever
+            // existed for it (taxonomy fix, independent-review row 2026-07-11).
             // Set (10) — base scheme; set_elem obligation layered in constrain_var_kernel
             K::SetEmpty,
             K::SetSize,
@@ -7335,6 +7384,11 @@ mod registry_phase_c_tests {
             K::SqlLike,
             K::DbFindWhere,
             K::DbDeleteWhere,
+            // `Db.Decode.money` (#34) — Ipê-NEW kernel (the ancestor has no
+            // DbDec money route), so it closed a genuine hole rather than
+            // relocating a legacy `kernel_ty` scheme. Its DbDec siblings are
+            // RELOCATED; this one is deliberately not (hole XOR relocation).
+            K::DbDecMoney,
             // ── Sky.Core.Secret (backlog #44; 3) ─────────────────────────────
             K::SecretFromString,
             K::SecretReveal,

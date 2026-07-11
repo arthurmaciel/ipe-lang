@@ -168,7 +168,11 @@ pub fn render_html<M>(node: &Html<M>) -> String {
 /// legitimate UI nests anywhere near this deep.
 const MAX_HTML_DEPTH: usize = 1024;
 
-fn render_into<M>(node: &Html<M>, s: &mut String) {
+/// Render `node` directly into an existing accumulator. `pub(crate)` so the
+/// SSE diff's whole-subtree replace (`live/diff.rs::render_children`) can
+/// write every child into one shared String instead of allocating a
+/// throwaway String per child (efficiency-audit §6 medium).
+pub(crate) fn render_into<M>(node: &Html<M>, s: &mut String) {
     render_into_ctx(node, s, None, false, 0)
 }
 
@@ -437,21 +441,44 @@ fn render_into_ctx<M>(
 }
 
 fn escape_text(t: &str) -> String {
-    // `&` first (so the inserted `&xxx;` entities aren't re-escaped), then the
-    // remaining metacharacters. The single quote `'` is escaped too — Go's
-    // html.EscapeString covers the full `& ' < > "` set, and a missed `'` is an
-    // attribute-breakout XSS hole when the result lands in a single-quoted attr.
-    t.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('\'', "&#39;")
+    // The single quote `'` is escaped too — Go's html.EscapeString covers the
+    // full `& ' < > "` set, and a missed `'` is an attribute-breakout XSS hole
+    // when the result lands in a single-quoted attr.
+    escape_html(t, false)
 }
 
 fn escape_attr(t: &str) -> String {
     // `"` → `&#34;` (NOT `&quot;`) to match Go's html.EscapeString byte-for-byte
     // (GOROOT/src/html/escape.go uses the numeric entity). Both are valid HTML;
     // the numeric form is what the Go renderer emits, so equiv tests byte-compare.
-    escape_text(t).replace('"', "&#34;")
+    escape_html(t, true)
+}
+
+/// Shared single-pass escaper behind [`escape_text`] / [`escape_attr`].
+///
+/// Replaces the former 4–5 sequential allocating `.replace()` passes
+/// (efficiency-audit §6 high). Byte-identical to the multi-pass form: the
+/// multi-pass order only mattered so the `&` of an inserted `&amp;`-style
+/// entity wasn't re-escaped by a later pass — a single original→output map
+/// never re-scans its own output, so the escape set and every emitted entity
+/// are unchanged. The metacharacter-free common case returns one plain copy
+/// without any scanning passes.
+fn escape_html(t: &str, escape_quote: bool) -> String {
+    if !t.contains(['&', '<', '>', '\'', '"']) {
+        return t.to_owned();
+    }
+    let mut out = String::with_capacity(t.len() + 8);
+    for c in t.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '\'' => out.push_str("&#39;"),
+            '"' if escape_quote => out.push_str("&#34;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// True when `name` is safe to emit UNESCAPED as a tag name, attribute key, or
