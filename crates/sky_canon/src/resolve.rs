@@ -442,11 +442,47 @@ pub fn canonicalise_module(
 /// Same set as [`canonicalise_module`], plus a fail-closed
 /// [`Diagnostic::CompilerBug`] when an [`ModuleOrigin::EmbeddedStdlib`] module has
 /// an un-annotated top-level binding.
-#[allow(clippy::too_many_lines)] // qualifier_paths pass added ~20 lines; refactor tracked in #todo
 pub fn canonicalise_module_with_origin(
     m: &src::Module,
     expected_path: &[Symbol],
     deps: &BTreeMap<Vec<Symbol>, crate::ModuleExports>,
+    origin: ModuleOrigin,
+    interner: &mut Interner,
+) -> DResult<(canon::Module, crate::ModuleExports)> {
+    // Legacy entry point: dep exports arrive as an owned map and the
+    // known-module universe for SKY-N0020 did-you-mean IS that map's key set —
+    // the pre-incremental behaviour, preserved for non-driver callers.
+    let dep_refs: BTreeMap<Vec<Symbol>, &crate::ModuleExports> =
+        deps.iter().map(|(k, v)| (k.clone(), v)).collect();
+    let known_modules: BTreeSet<Box<str>> = deps
+        .keys()
+        .map(|p| path_to_dot_string(interner, p))
+        .collect();
+    canonicalise_module_in_project(m, expected_path, &dep_refs, &known_modules, origin, interner)
+}
+
+/// Canonicalise a module against per-dep export references plus an explicit
+/// known-module universe (the incremental driver's entry point).
+///
+/// Identical semantics to [`canonicalise_module_with_origin`] except:
+/// * `deps` holds *references* to the importers' dep interfaces (the salsa
+///   `module_interface` query memos) rather than owned clones, and is expected
+///   to contain exactly this module's resolved imports — the only entries the
+///   pre-incremental accumulated map ever observably consulted;
+/// * `known_modules` (dot-joined module paths) supplies the SKY-N0020
+///   did-you-mean candidate list, decoupling the *suggestion universe* (all
+///   modules in the project) from the *injection map* (this module's imports).
+///   Strings only — suggestion building must never intern (interning here
+///   would perturb build-wide symbol numbering).
+///
+/// # Errors
+/// Same set as [`canonicalise_module_with_origin`].
+#[allow(clippy::too_many_lines)] // qualifier_paths pass added ~20 lines; refactor tracked in #todo
+pub fn canonicalise_module_in_project(
+    m: &src::Module,
+    expected_path: &[Symbol],
+    deps: &BTreeMap<Vec<Symbol>, &crate::ModuleExports>,
+    known_modules: &BTreeSet<Box<str>>,
     origin: ModuleOrigin,
     interner: &mut Interner,
 ) -> DResult<(canon::Module, crate::ModuleExports)> {
@@ -526,13 +562,11 @@ pub fn canonicalise_module_with_origin(
         }
         // SKY-N0020: dep module must have been discovered + canonicalised before
         // this module in topological order.
-        let dep = deps.get(dep_path).ok_or_else(|| {
+        let dep = *deps.get(dep_path).ok_or_else(|| {
             let name = path_to_dot_string(interner, dep_path);
-            // Offer did-you-mean by collecting all known dep paths as dot strings.
-            let sugg: Box<[Box<str>]> = deps
-                .keys()
-                .map(|p| path_to_dot_string(interner, p))
-                .collect();
+            // Offer did-you-mean over the caller-supplied known-module universe
+            // (strings only — never intern on this path).
+            let sugg: Box<[Box<str>]> = known_modules.iter().cloned().collect();
             Diagnostic::Name {
                 span: import.name.span,
                 msg: NameError::ModuleNotFound {
