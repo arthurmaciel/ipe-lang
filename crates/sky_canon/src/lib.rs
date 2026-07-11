@@ -1627,6 +1627,136 @@ mod tests {
         );
     }
 
+    // ---------------------------------------------------------------------
+    // #102 — a LOCAL `type X` / `type alias X` shadowing a dep-imported `X`
+    // must be rejected at the declaration with SKY-N0012 (`DuplicateType`),
+    // not a downstream SKY-T0001. See `canonicalise_with_env`'s dep-shadow
+    // pre-pass and docs/architecture/class4-pattern-lowering-fix-spec-2026-07-09.md
+    // (item D).
+    // ---------------------------------------------------------------------
+
+    /// Canonicalise a `Dep` source (no deps of its own), then canonicalise a
+    /// `Main` source with `Dep`'s exports available for import. Returns the
+    /// diagnostic (if any) from canonicalising `Main`. Returns `None` from the
+    /// parse/Dep-canon steps rather than panicking, per the no-panic gate.
+    fn canon_main_with_dep(dep_src: &str, main_src: &str) -> Option<Diagnostic> {
+        let mut i = Interner::new();
+        let dep_parsed = sky_parse::parse_module(dep_src, &mut i).ok()?;
+        let dep_expected = dep_parsed.name.value.clone();
+        let empty: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        let (_dep_m, dep_exports) =
+            canonicalise_module(&dep_parsed, &dep_expected, &empty, &mut i).ok()?;
+
+        let mut deps: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        deps.insert(dep_exports.path.clone(), dep_exports);
+
+        let main_parsed = sky_parse::parse_module(main_src, &mut i).ok()?;
+        let main_expected = main_parsed.name.value.clone();
+        canonicalise_module(&main_parsed, &main_expected, &deps, &mut i).err()
+    }
+
+    #[test]
+    fn local_type_shadowing_dep_imported_type_is_duplicate_type() {
+        let err = canon_main_with_dep(
+            "module Dep exposing (Color(..))\n\
+             type Color = Red | Green | Blue\n",
+            "module Main exposing (main)\n\
+             import Dep exposing (Color(..))\n\
+             import Std.Log exposing (println)\n\n\
+             type Color = Warm | Cool\n\n\
+             describe : Color -> String\n\
+             describe c =\n    case c of\n        Warm -> \"warm\"\n        Cool -> \"cool\"\n\n\
+             main =\n    println (describe Warm)\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::DuplicateType { .. },
+                    ..
+                })
+            ),
+            "local `type Color` shadowing imported Dep.Color must be a \
+             DuplicateType (SKY-N0012) at the declaration, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn local_type_alias_shadowing_dep_imported_type_is_duplicate_type() {
+        // Same shape, but the LOCAL declaration is a `type alias`, proving the
+        // alias-side gap is ALSO closed.
+        let err = canon_main_with_dep(
+            "module Dep exposing (Color(..))\n\
+             type Color = Red | Green | Blue\n",
+            "module Main exposing (main)\n\
+             import Dep exposing (Color(..))\n\
+             import Std.Log exposing (println)\n\n\
+             type alias Color = Int\n\n\
+             main =\n    println \"hi\"\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::DuplicateType { .. },
+                    ..
+                })
+            ),
+            "local `type alias Color` shadowing imported Dep.Color must be a \
+             DuplicateType (SKY-N0012) at the declaration, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn two_modules_each_declaring_unrelated_same_named_type_without_import_is_fine() {
+        // Non-regression control: `Dep` declares `type Color` but `Main` never
+        // imports it, so `type_home_map` in `Main`'s resolution never gains a
+        // `Dep.Color` entry — the dep-shadow pre-pass sees `None` and nothing
+        // rejects. `Main`'s own unrelated `type Color` compiles cleanly.
+        let err = canon_main_with_dep(
+            "module Dep exposing (Color(..))\n\
+             type Color = Red | Green | Blue\n",
+            "module Main exposing (main)\n\
+             import Std.Log exposing (println)\n\n\
+             type Color = Warm | Cool\n\n\
+             describe : Color -> String\n\
+             describe c =\n    case c of\n        Warm -> \"warm\"\n        Cool -> \"cool\"\n\n\
+             main =\n    println (describe Warm)\n",
+        );
+        assert!(
+            err.is_none(),
+            "an unrelated same-named local type with NO import of the dep must \
+             compile cleanly, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn same_module_duplicate_type_still_uses_first_declared_span() {
+        // The EXISTING same-module duplicate path (the unchanged `seen_types`
+        // loop) is untouched by the #102 dep-shadow pre-pass: two `type Color`
+        // declarations in ONE module still report the FIRST-declared span, not
+        // the `Span::DUMMY` the dep-shadow path uses.
+        let err = canon_err(
+            "module Main exposing (main)\n\
+             type Color = Warm\n\
+             type Color = Cool\n\n\
+             main =\n    println \"hi\"\n",
+        );
+        let Some(Diagnostic::Name {
+            msg: NameError::DuplicateType { first, .. },
+            ..
+        }) = err
+        else {
+            assert!(false_marker(), "expected DuplicateType, got {err:?}");
+            return;
+        };
+        assert_ne!(
+            first,
+            sky_diagnostics::Span::DUMMY,
+            "same-module duplicate must carry the first-declared span, not DUMMY"
+        );
+    }
+
     /// **Phase-A/E tripwire: registry ↔ canon parity, now a full subset gate.**
     ///
     /// Forward direction (registry → canon): for every
