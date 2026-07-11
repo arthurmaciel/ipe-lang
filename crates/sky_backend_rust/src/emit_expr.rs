@@ -972,32 +972,18 @@ fn emit_http_call(
         }
         KernelFn::HttpRequest => {
             // Http.request : HttpRequest -> Task Error HttpResponse
-            // args[0] = req : HttpRequest (synthesised record struct)
+            // args[0] = req : HttpRequest
             //
-            // Resolve the request struct field set for {body, followRedirects,
-            // headers, maxRedirects, method, timeout, url} (alphabetical).
-            let req_key: Vec<String> = vec![
-                "body".to_owned(),
-                "followRedirects".to_owned(),
-                "headers".to_owned(),
-                "maxRedirects".to_owned(),
-                "method".to_owned(),
-                "timeout".to_owned(),
-                "url".to_owned(),
-            ];
-            let req_struct =
-                ctx.record_struct_by_key(&req_key)
-                    .map_err(|_| Diagnostic::CompilerBug {
-                        where_: "sky_backend_rust::emit_http_call",
-                        detail: "no synthesised struct for HttpRequest fieldset \
-                             {body, followRedirects, headers, maxRedirects, method, timeout, url}; \
-                             the lowerer must surface the HttpRequest record type"
-                            .to_owned(),
-                    })?;
-            // Suppress the unused warning — the struct name is only needed for
-            // the diagnostic above; field access uses the `__req` binding below.
-            let _ = &req_struct.name;
-
+            // `HttpRequest` is the opaque nominal type `ir_type_from_ty`
+            // folds any solved record shape matching the canonical
+            // {body, followRedirects, headers, maxRedirects, method, timeout,
+            // url} field set into (`sky_lower::lower::ir_type_from_ty`'s
+            // HTTP_REQUEST_FIELDS special case) — it is ALWAYS backed by
+            // `sky_runtime::HttpRequest`, never a backend-synthesised
+            // `record_by_fieldset` struct (which is only populated for
+            // shapes the special case does NOT intercept). So `req_expr`'s
+            // emitted Rust value already has the runtime's field names —
+            // no `record_struct_by_key` lookup needed here.
             let req_expr = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "sky_backend_rust::emit_http_call",
                 detail: "HttpRequest expects exactly 1 argument (req record)".to_owned(),
@@ -1070,31 +1056,20 @@ fn emit_http_builder_call(
         return Ok(None);
     };
 
-    // Resolve the synthesised struct for the HttpRequest fieldset
-    // {body, followRedirects, headers, maxRedirects, method, timeout, url}.
-    // The field set is sorted alphabetically and matches the `req_key` in
-    // `emit_http_call`. The builder always returns this same struct type.
-    let req_key: Vec<String> = vec![
-        "body".to_owned(),
-        "followRedirects".to_owned(),
-        "headers".to_owned(),
-        "maxRedirects".to_owned(),
-        "method".to_owned(),
-        "timeout".to_owned(),
-        "url".to_owned(),
-    ];
-    let req_name = ctx
-        .record_struct_by_key(&req_key)
-        .map_err(|_| Diagnostic::CompilerBug {
-            where_: "sky_backend_rust::emit_http_builder_call",
-            detail: "no synthesised struct for HttpRequest fieldset \
-                 {body, followRedirects, headers, maxRedirects, method, timeout, url}; \
-                 the lowerer must surface the HttpRequest record type before emission"
-                .to_owned(),
-        })?
-        .name
-        .clone();
-
+    // `HttpRequest` is the opaque nominal type `ir_type_from_ty` folds any
+    // solved record shape matching the canonical {body, followRedirects,
+    // headers, maxRedirects, method, timeout, url} field set into
+    // (`sky_lower::lower::ir_type_from_ty`'s HTTP_REQUEST_FIELDS special
+    // case) — it is ALWAYS backed by `sky_runtime::HttpRequest`, never a
+    // backend-synthesised `record_by_fieldset` struct. Looking that struct up
+    // here used to be REQUIRED for `HttpDefaultRequest`'s literal, but the
+    // struct only exists by accident (when some OTHER signature in the
+    // program happens to also carry the same 7-field shape as a plain,
+    // non-opaque record — e.g. an explicitly-annotated function parameter).
+    // A program whose only `HttpRequest` consumer reads a field or calls
+    // `Http.request`/`HttpStream.open` — never spelling the fieldset out in
+    // an annotation — synthesised no such struct and hit SKY-I0001. Emitting
+    // the fixed runtime type name directly removes the dependency entirely.
     match k {
         KernelFn::HttpDefaultRequest => {
             // defaultRequest : String -> HttpRequest  — inline struct literal
@@ -1104,7 +1079,7 @@ fn emit_http_builder_call(
             })?;
             let url_s = emit_expr_at(ctx, url, indent, child, generics)?;
             Ok(Some(format!(
-                "{req_name} {{ body: String::new(), followRedirects: true, \
+                "sky_runtime::HttpRequest {{ body: String::new(), followRedirects: true, \
                  headers: Vec::new(), maxRedirects: 10i64, \
                  method: \"GET\".to_string(), timeout: 30000i64, url: {url_s} }}"
             )))
