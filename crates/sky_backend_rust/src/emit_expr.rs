@@ -190,6 +190,9 @@ fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSet<Symbol>) 
             collect_free_vars(head, out);
             collect_free_vars(tail, out);
         }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            collect_free_vars(list, out);
+        }
         Expr::Record(fields) => {
             for (_, e) in fields {
                 collect_free_vars(e, out);
@@ -290,14 +293,25 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
             let new_arms = arms
                 .into_iter()
                 .map(|arm| {
-                    let new_body = if pat_binds_target(&arm.pat, target) {
+                    let binds = pat_binds_target(&arm.pat, target);
+                    let new_body = if binds {
                         arm.body
                     } else {
                         clone_free_target(arm.body, target)
                     };
+                    // Preserve the #158 C2 guard, rewriting it too when the arm
+                    // pattern does not bind `target`.
+                    let new_guard = arm.guard.map(|g| {
+                        if binds {
+                            g
+                        } else {
+                            clone_free_target(g, target)
+                        }
+                    });
                     Arm {
                         pat: arm.pat,
                         body: new_body,
+                        guard: new_guard,
                     }
                 })
                 .collect();
@@ -326,6 +340,15 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
         Expr::Cons { head, tail } => Expr::Cons {
             head: Box::new(clone_free_target(*head, target)),
             tail: Box::new(clone_free_target(*tail, target)),
+        },
+        Expr::ListIndexClone { list, index } => Expr::ListIndexClone {
+            list: Box::new(clone_free_target(*list, target)),
+            index,
+        },
+        Expr::ListLenCheck { list, len, exact } => Expr::ListLenCheck {
+            list: Box::new(clone_free_target(*list, target)),
+            len,
+            exact,
         },
         Expr::Record(fields) => Expr::Record(
             fields
@@ -512,6 +535,9 @@ fn scan_free_target_into(expr: &Expr, target: Symbol, count: &mut usize, has_clo
             scan_free_target_into(head, target, count, has_clonevar);
             scan_free_target_into(tail, target, count, has_clonevar);
         }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            scan_free_target_into(list, target, count, has_clonevar);
+        }
         Expr::Record(fields) => {
             for (_, e) in fields {
                 scan_free_target_into(e, target, count, has_clonevar);
@@ -608,14 +634,23 @@ fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
             let new_arms = arms
                 .into_iter()
                 .map(|arm| {
-                    let new_body = if pat_binds_target(&arm.pat, target) {
+                    let binds = pat_binds_target(&arm.pat, target);
+                    let new_body = if binds {
                         arm.body
                     } else {
                         substitute_var(arm.body, target, replacement)
                     };
+                    let new_guard = arm.guard.map(|g| {
+                        if binds {
+                            g
+                        } else {
+                            substitute_var(g, target, replacement)
+                        }
+                    });
                     Arm {
                         pat: arm.pat,
                         body: new_body,
+                        guard: new_guard,
                     }
                 })
                 .collect();
@@ -644,6 +679,15 @@ fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
         Expr::Cons { head, tail } => Expr::Cons {
             head: Box::new(substitute_var(*head, target, replacement)),
             tail: Box::new(substitute_var(*tail, target, replacement)),
+        },
+        Expr::ListIndexClone { list, index } => Expr::ListIndexClone {
+            list: Box::new(substitute_var(*list, target, replacement)),
+            index,
+        },
+        Expr::ListLenCheck { list, len, exact } => Expr::ListLenCheck {
+            list: Box::new(substitute_var(*list, target, replacement)),
+            len,
+            exact,
         },
         Expr::Record(fields) => Expr::Record(
             fields
@@ -5478,6 +5522,21 @@ pub fn emit_expr_at(
             let t = emit_expr_at(ctx, tail, indent, child, generics)?;
             Ok(format!("sky_runtime::list::sky_list_cons({h}, {t})"))
         }
+        Expr::ListIndexClone { list, index } => {
+            // Clone the element at a constant index — the arm guard already
+            // proved `list.len() > index` (#158 C2), so the Rust index is in
+            // bounds by construction. `.clone()` keeps the list intact for the
+            // sibling tail binder.
+            let l = emit_expr_at(ctx, list, indent, child, generics)?;
+            Ok(format!("({l})[{index}].clone()"))
+        }
+        Expr::ListLenCheck { list, len, exact } => {
+            // Borrowing list-length guard (#158 C2). `.len()` never moves the
+            // bound `Vec`, so this is legal in an arm-guard position.
+            let l = emit_expr_at(ctx, list, indent, child, generics)?;
+            let op = if *exact { "==" } else { ">=" };
+            Ok(format!("({l}).len() {op} {len}"))
+        }
         // The record arms own several `Vec`/`String` locals; keeping their
         // bodies in dedicated functions (not inlined into this match) holds
         // `emit_expr_at`'s own stack frame small, so the depth guard — not a
@@ -5749,7 +5808,17 @@ fn emit_match(
         } else {
             format!("{{ {prelude}{body} }}")
         };
-        arms.push(format!("{arm_indent}{pat} => {arm_body},"));
+        // A `Some` guard (#158 C2) renders as a native Rust `if <guard>` on the
+        // arm — `false` falls through to the next arm, matching Sky's refutable
+        // nested-list semantics. `None` keeps the pre-existing `{pat} => …`
+        // shape byte-identical.
+        match &arm.guard {
+            Some(g) => {
+                let guard = emit_expr_at(ctx, g, indent + 1, child, generics)?;
+                arms.push(format!("{arm_indent}{pat} if {guard} => {arm_body},"));
+            }
+            None => arms.push(format!("{arm_indent}{pat} => {arm_body},")),
+        }
     }
     Ok(format!(
         "match {scrut} {{\n{}\n{close_indent}}}",
@@ -6780,8 +6849,17 @@ fn emit_expr_tail(
                 } else {
                     format!("{}{prelude}\n{body}", indent_of(indent + 2))
                 };
+                // Same `if <guard>` fall-through as the value-context emitter
+                // (#158 C2); `None` keeps the pre-existing shape byte-identical.
+                let guard_clause = match &arm.guard {
+                    Some(g) => {
+                        let guard = emit_expr_at(ctx, g, indent + 1, child, generics)?;
+                        format!(" if {guard}")
+                    }
+                    None => String::new(),
+                };
                 arms.push(format!(
-                    "{arm_indent}{patstr} => {{\n{inner}\n{arm_indent}}}"
+                    "{arm_indent}{patstr}{guard_clause} => {{\n{inner}\n{arm_indent}}}"
                 ));
             }
             Ok(format!(

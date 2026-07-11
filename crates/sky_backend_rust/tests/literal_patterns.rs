@@ -94,6 +94,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
                 args: vec![payload],
             },
             body: Expr::Int(1),
+            guard: None,
         },
         Arm {
             pat: Pat::Ctor {
@@ -103,6 +104,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
                 args: vec![],
             },
             body: Expr::Int(0),
+            guard: None,
         },
     ];
     let f_fn = Func {
@@ -258,6 +260,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
             args: vec![Pat::Alias(Box::new(Pat::Var(x)), y)],
         },
         body: Expr::Var(y),
+        guard: None,
     }];
     let f_fn = Func {
         id: FuncId::from_raw(0),

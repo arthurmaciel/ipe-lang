@@ -1450,6 +1450,15 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
         }
         Expr::List { elem, items } => write_list(out, elem, items, interner, level),
         Expr::Cons { head, tail } => write_cons(out, head, tail, interner, level),
+        Expr::ListIndexClone { list, index } => {
+            line(out, level, &format!("ListIndexClone [{index}]"));
+            write_expr(out, list, interner, level + 1);
+        }
+        Expr::ListLenCheck { list, len, exact } => {
+            let op = if *exact { "==" } else { ">=" };
+            line(out, level, &format!("ListLenCheck len {op} {len}"));
+            write_expr(out, list, interner, level + 1);
+        }
         Expr::Record(fields) => write_record(out, fields, interner, level),
         Expr::Access { record, field } => {
             line(
@@ -1640,8 +1649,12 @@ fn write_match(out: &mut String, m: &Match, interner: &Interner, level: usize) {
     line(out, level, "Match");
     line(out, level + 1, "scrutinee");
     write_expr(out, m.scrutinee(), interner, level + 2);
-    for Arm { pat, body } in m.arms() {
+    for Arm { pat, body, guard } in m.arms() {
         line(out, level + 1, &format!("arm {}", pat_name(interner, pat)));
+        if let Some(g) = guard {
+            line(out, level + 2, "guard");
+            write_expr(out, g, interner, level + 3);
+        }
         write_expr(out, body, interner, level + 2);
     }
 }
@@ -1695,6 +1708,7 @@ mod tests {
                     lhs: Box::new(Expr::Var(count)),
                     rhs: Box::new(Expr::Int(1)),
                 },
+                guard: None,
             },
             Arm {
                 pat: Pat::Ctor {
@@ -1708,6 +1722,7 @@ mod tests {
                     lhs: Box::new(Expr::Var(count)),
                     rhs: Box::new(Expr::Int(1)),
                 },
+                guard: None,
             },
         ];
         let tick_func = Func {
@@ -2188,6 +2203,7 @@ program
                     args: vec![Pat::Var(x)],
                 },
                 body: Expr::Var(x),
+                guard: None,
             },
             Arm {
                 pat: Pat::Ctor {
@@ -2197,6 +2213,7 @@ program
                     args: vec![],
                 },
                 body: Expr::Int(0),
+                guard: None,
             },
         ];
         let program = Program {
@@ -2286,6 +2303,7 @@ program
                 args: vec![Pat::Tuple(vec![Pat::Var(a), Pat::Var(b)])],
             },
             body: Expr::Var(a),
+            guard: None,
         }];
         let program = Program {
             modules: vec![Module {
