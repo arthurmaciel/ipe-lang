@@ -4864,7 +4864,10 @@ impl<'a> Builder<'a> {
             // literal would also unify — acceptable for Phase-0.
             //
             // `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
-            K::UiBreakpoint => fun(
+            // `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
+            // (same shape — `breakpoint` delegates to `mediaQuery` at runtime;
+            // `mediaQuery` is the raw-query escape hatch.)
+            K::UiBreakpoint | K::UiMediaQuery => fun(
                 string(),
                 fun(list(attr(var(0))), fun(elem_t(var(0)), elem_t(var(0)))),
             ),
@@ -7066,6 +7069,9 @@ mod registry_phase_c_tests {
             K::UiGridTracksRaw,
             // #154: Breakpoint
             K::UiBreakpoint,
+            // `Ui.mediaQuery` — the last of the #76/#45 20-kernel batch, wired
+            // 2026-07-11 once the `style_inject::build_mq` consumer existed.
+            K::UiMediaQuery,
             K::UiMobile,
             K::UiTablet,
             K::UiDesktop,
