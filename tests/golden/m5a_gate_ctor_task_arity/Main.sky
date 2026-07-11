@@ -1,0 +1,11 @@
+module Main exposing (main)
+
+-- A mis-arity `Task` reached through a CONSTRUCTOR FIELD type
+-- (`Boxed (Task Error a Bool)`) never passes through `normalize_annotation_ty`,
+-- so E1's annotation-path gate does not fire. Before #32 this ICE'd at
+-- `ir_type_from_canon`'s `"Task"` catch-all `CompilerBug`; now `lower_enum`'s
+-- Gate 0a fails closed with the SAME clean SKY-T0016 diagnostic.
+type Boxed a = Boxed (Task Error a Bool)
+
+main =
+    println "test"
