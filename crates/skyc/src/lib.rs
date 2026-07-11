@@ -343,9 +343,13 @@ fn compile_modules(
         }
     })?;
 
-    // Canonicalise each module in dep-first order.
-    let mut dep_exports: BTreeMap<Vec<sky_intern::Symbol>, sky_canon::ModuleExports> =
-        BTreeMap::new();
+    // Canonicalise each module in dep-first order through the salsa query
+    // graph (incremental Phase 2). Each `canonicalize` demand runs
+    // parse → resolve_imports → module_interface(dep) → canon; demanding in
+    // topo order keeps every dep memoized before its importers ask for it,
+    // so the interning sequence — and therefore emitted bytes — matches the
+    // pre-salsa driver exactly (golden-suite-enforced). The trust origin now
+    // rides the `SourceFile` input (set above from `injected`).
     let mut canon_modules: Vec<sky_canon::ast::Module> = Vec::new();
     let mut entry_name: Vec<sky_intern::Symbol> = Vec::new();
 
@@ -367,46 +371,26 @@ fn compile_modules(
             diag,
         };
 
-        // Memoized parse (locks the shared interner internally — no guard may
-        // be live here).
-        let parsed = sky_db::parse(&db, file_handle).map_err(&pipeline_err)?;
-
-        // Everything below this point in the iteration is non-salsa; one
-        // guard covers the interning + canonicalisation of this module.
-        let mut interner = shared_interner.lock();
-
-        let expected_path: Vec<sky_intern::Symbol> = m
-            .module_path
-            .iter()
-            .map(|s| interner.intern(s))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(&pipeline_err)?;
-
-        // The trust tag: EmbeddedStdlib IFF this exact module path was injected
-        // from the embed table. A user file squatting on `Std.Foo` is NOT in
-        // `injected` (injection skipped it on the pre-existing-key guard), so it
-        // is `User` and stays SKY-N0025-rejected.
-        let origin = if injected.contains(&m.module_path) {
-            sky_canon::ModuleOrigin::EmbeddedStdlib
-        } else {
-            sky_canon::ModuleOrigin::User
-        };
-
-        let (canon_mod, exports) = sky_canon::canonicalise_module_with_origin(
-            &parsed,
-            &expected_path,
-            &dep_exports,
-            origin,
-            &mut interner,
-        )
-        .map_err(&pipeline_err)?;
+        // Memoized canonicalisation (locks the shared interner internally —
+        // no guard may be live here). A dep's own diagnostic never surfaces
+        // here mis-blamed: deps precede `m` in topo order, so a red dep
+        // already errored at its own iteration with its own file.
+        let canonical =
+            sky_db::canonicalize(&db, source_root, file_handle).map_err(&pipeline_err)?;
 
         if m.module_path == entry_path {
-            entry_name.clone_from(&expected_path);
+            // Lookups, not appends: the entry's own canonicalize interned
+            // its expected path already.
+            let mut interner = shared_interner.lock();
+            entry_name = m
+                .module_path
+                .iter()
+                .map(|s| interner.intern(s))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(&pipeline_err)?;
         }
 
-        dep_exports.insert(expected_path, exports);
-        canon_modules.push(canon_mod);
+        canon_modules.push(canonical.module.clone());
     }
 
     // Link → infer → lower → emit on the merged module. Blame link/lower/emit
