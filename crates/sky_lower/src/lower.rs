@@ -7277,6 +7277,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbDecSucceed
                 // `fail : String -> Decoder a`
                 | KernelFn::DbDecFail
+                // `money : String -> Decoder (Decimal, String)` (#34)
+                | KernelFn::DbDecMoney
                 // ── TEA arity-1 (M5c) ─────────────────────────────────────────
                 // `Cmd.batch : List (Cmd msg) -> Cmd msg`
                 | KernelFn::CmdBatch
@@ -8892,6 +8894,7 @@ impl<'a> Lowerer<'a> {
                     ("Db.Decode", "int") => Ok(Callee::Kernel(KernelFn::DbDecInt)),
                     ("Db.Decode", "float") => Ok(Callee::Kernel(KernelFn::DbDecFloat)),
                     ("Db.Decode", "bool") => Ok(Callee::Kernel(KernelFn::DbDecBool)),
+                    ("Db.Decode", "money") => Ok(Callee::Kernel(KernelFn::DbDecMoney)),
                     ("Db.Decode", "nullable") => Ok(Callee::Kernel(KernelFn::DbDecNullable)),
                     ("Db.Decode", "map") => Ok(Callee::Kernel(KernelFn::DbDecMap)),
                     ("Db.Decode", "andThen") => Ok(Callee::Kernel(KernelFn::DbDecAndThen)),

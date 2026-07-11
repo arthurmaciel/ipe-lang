@@ -629,6 +629,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::DbDecMap4 => "Db.Decode.map4",
         KernelFn::DbDecRequired => "Db.Decode.required",
         KernelFn::DbDecOptional => "Db.Decode.optional",
+        KernelFn::DbDecMoney => "Db.Decode.money",
         // ── Std.Db.Sql — SqlFragment builder (backlog #61) ───────────────────
         KernelFn::SqlColumn => "Sql.column",
         KernelFn::SqlParam => "Sql.param",
