@@ -192,7 +192,9 @@ fn strip_markers<M>(attrs: &mut Vec<Attribute<M>>, markers: &[&str]) {
 // policy, one place). Imported below so the Std.Ui pseudo-class / media-query
 // `<style>` path and the Std.Css / styleNode `<style>` sink share the identical
 // close-tag stripper.
-use super::super::css_safety::strip_style_close;
+use super::super::css_safety::{
+    SafeCssMediaQuery, SafeCssValue, sink_safe_declaration_list, strip_style_close,
+};
 
 fn build_mq<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
     let query = attr_get(attrs, "data-sky-mq-q").unwrap_or_default();
@@ -200,9 +202,17 @@ fn build_mq<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
     if query.is_empty() || rules.is_empty() {
         return String::new();
     }
+    // Sink-side re-validation. The markers are raw String attributes a caller
+    // can FORGE via `Ui.htmlAttribute`, bypassing the producer's
+    // `SafeCssMediaQuery` / `SafeCssValue` gates — so validate at THIS boundary
+    // and drop the whole block fail-closed on any breakout. `strip_style_close`
+    // stays as sink-final belt-and-braces below.
+    let (safe_query, safe_rules) =
+        match (SafeCssMediaQuery::parse(&query), sink_safe_declaration_list(&rules)) {
+            (Some(q), Some(r)) => (q.as_str().to_owned(), strip_style_close(r)),
+            _ => return String::new(),
+        };
     let selector = format!("[sky-id=\"{sky_id}\"]");
-    let safe_rules = strip_style_close(&rules);
-    let safe_query = strip_style_close(&query);
     format!("@media {safe_query} {{ {selector} {{ {safe_rules} }} }}")
 }
 
@@ -225,7 +235,13 @@ fn build_pc<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
             Some(x) => x,
             None => continue,
         };
-        let safe_css = strip_style_close(css);
+        // Sink-side re-validation (forgeable marker — see `build_mq`). A
+        // declaration that fails drops THIS pseudo-rule only; sibling rules and
+        // the element still render.
+        let safe_css = match sink_safe_declaration_list(css) {
+            Some(c) => strip_style_close(c),
+            None => continue,
+        };
         if hover_gated {
             out.push_str(&format!(
                 "@media (hover: hover) {{ {selector}{pseudo} {{ {safe_css} }} }} "
@@ -259,7 +275,13 @@ fn build_tr<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
         .unwrap_or_default()
         .as_str()
         != "0";
-    let safe_rules = strip_style_close(&rules);
+    // Sink-side re-validation (forgeable marker — see `build_mq`). The
+    // transition value is a single declaration value; a breakout drops the
+    // whole block fail-closed.
+    let safe_rules = match SafeCssValue::parse(&rules) {
+        Some(v) => strip_style_close(v.as_str()),
+        None => return String::new(),
+    };
     let selector = format!("[sky-id=\"{sky_id}\"]");
     if respect {
         format!(
@@ -423,10 +445,18 @@ mod tests {
             ),
         ];
         let css = build_pc("r_0_button", &attrs);
+        // Post-2026-07-11 sink hardening: the forged rule carries a ruleset
+        // breakout (`}`) + `</style>`; `sink_safe_declaration_list` now drops the
+        // whole pseudo-rule FAIL-CLOSED (stronger than the old strip-only
+        // contract that let the sanitised `:hover` block through).
         assert!(!css.contains("</style"), "breakout not stripped: {css}");
         assert!(
-            css.contains("@media (hover: hover)") && css.contains(":hover"),
-            "{css}"
+            !css.to_ascii_lowercase().contains("<script"),
+            "script leaked: {css}"
+        );
+        assert_eq!(
+            css, "",
+            "forged breakout pseudo-rule must drop fail-closed: {css}"
         );
     }
 
@@ -440,8 +470,15 @@ mod tests {
             ),
         ];
         let css = build_mq("r0", &attrs);
+        // Post-2026-07-11 sink hardening: both markers carry a `</style>`
+        // breakout, so `SafeCssMediaQuery` (query) and `sink_safe_declaration_list`
+        // (rules) each reject and `build_mq` drops the whole @media block
+        // fail-closed — stronger than the old strip-then-still-emit contract.
         assert!(!css.contains("</style"), "{css}");
-        assert!(css.contains("@media"), "{css}");
+        assert_eq!(
+            css, "",
+            "forged breakout @media block must drop fail-closed: {css}"
+        );
     }
 
     // Snapshot port of ../sky fixture `70-style-injection`: the exact raw
@@ -463,7 +500,13 @@ mod tests {
             !css.to_ascii_lowercase().contains("</style><script"),
             "{css}"
         );
-        assert!(css.contains("@media"), "{css}");
+        // Post-2026-07-11 sink hardening: the query carries a `</style><script>`
+        // breakout → `SafeCssMediaQuery` rejects it → `build_mq` drops the whole
+        // @media block fail-closed (even though the rules half is legit).
+        assert_eq!(
+            css, "",
+            "forged breakout query must drop the whole @media block: {css}"
+        );
     }
 
     #[test]
@@ -745,6 +788,86 @@ mod tests {
         assert!(!low.contains("@media"), "gated query must emit no rule: {s}");
         assert!(!low.contains("@import"), "at-rule must not survive: {s}");
         assert!(s.contains("still here"), "child must still render: {s}");
+    }
+
+    // ── Sink-side forgery gates (2026-07-11 review finding) ───────────────
+    // The style markers are raw String attributes a caller can FORGE via
+    // `Ui.htmlAttribute "data-sky-mq-rules" "…"`, bypassing the producer's
+    // SafeCssValue / SafeCssMediaQuery gates entirely. The sink builders must
+    // re-validate (parse, don't validate at the real boundary) and drop the
+    // block fail-closed. `strip_style_close` alone did NOT catch `{ } ; @import`.
+
+    #[test]
+    fn build_mq_sink_drops_forged_rules_breakout() {
+        // Forged rules containing a ruleset breakout + at-rule injection.
+        let attrs = vec![
+            attr("data-sky-mq-q", "screen"),
+            attr(
+                "data-sky-mq-rules",
+                "color:red } [sky-id=\"x\"] { } @import url(//evil/x.css)",
+            ),
+        ];
+        assert_eq!(
+            build_mq("r.0", &attrs),
+            "",
+            "forged breakout rules must drop the whole @media block"
+        );
+    }
+
+    #[test]
+    fn build_mq_sink_drops_forged_query_breakout() {
+        let attrs = vec![
+            attr("data-sky-mq-q", "screen { } [x] { }"),
+            attr("data-sky-mq-rules", "color:red"),
+        ];
+        assert_eq!(
+            build_mq("r.0", &attrs),
+            "",
+            "forged breakout query must drop the whole @media block"
+        );
+    }
+
+    #[test]
+    fn build_mq_sink_keeps_legit_markers() {
+        let attrs = vec![
+            attr("data-sky-mq-q", "(min-width: 768px)"),
+            attr("data-sky-mq-rules", "background-color:rgba(18,18,24,1)"),
+        ];
+        let out = build_mq("r.0", &attrs);
+        assert!(
+            out.contains("@media (min-width: 768px) { [sky-id=\"r.0\"]"),
+            "legit query + selector must survive: {out}"
+        );
+        assert!(
+            out.contains("background-color:rgba(18,18,24,1)"),
+            "legit rules must survive byte-identical: {out}"
+        );
+    }
+
+    #[test]
+    fn build_tr_sink_drops_forged_breakout() {
+        let attrs = vec![attr(
+            "data-sky-tr-rules",
+            "x } [y] { color:red } @import url(evil)",
+        )];
+        assert_eq!(
+            build_tr("r.0", &attrs),
+            "",
+            "forged transition breakout must drop the block"
+        );
+    }
+
+    #[test]
+    fn build_pc_sink_drops_forged_breakout() {
+        let attrs = vec![attr(
+            "data-sky-pc-rules",
+            "h|color:red } [x] { } @import url(evil)",
+        )];
+        assert_eq!(
+            build_pc("r.0", &attrs),
+            "",
+            "forged pseudo-class breakout must drop that rule"
+        );
     }
 
     #[test]
