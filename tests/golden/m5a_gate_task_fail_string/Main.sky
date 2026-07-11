@@ -1,0 +1,12 @@
+module Main exposing (main)
+
+-- `Task.fail "plain string"` must be REJECTED: the class-7 fix pins
+-- `Task.fail : Error -> Task Error a` (was over-polymorphic `fun(var(1),
+-- task(var(0)))`, which let a bare `String` argument HM-check and then blow
+-- up the emitted `cargo build` with E0308 — SkyError vs String — a
+-- "compilation successful, cargo build fails" class violation). A bare
+-- string literal is no longer a valid `Task.fail` argument; callers must
+-- build an `Error` via `Error.unexpected` / `Error.io` / etc.
+
+main =
+    Task.fail "plain string"

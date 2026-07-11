@@ -674,6 +674,31 @@ API-shape review):
   - Nested constructor-payload patterns (A13).
   - Mutual / let-rec tail-call optimization is out of scope for the current TCO
     (self-recursion only).
+- **`Task` error-channel scheme is monomorphic (`fail`/`mapError`/`onError`)**
+  — Sky declares `fail : e -> Task e a` (`../sky/sky-stdlib/Sky/Core/Task.sky:51`),
+  polymorphic in the error type. ipê pins all three combinators to the
+  concrete `Error` type: `fail : Error -> Task Error a`,
+  `mapError : (Error -> Error) -> Task Error a -> Task Error a`,
+  `onError : (Error -> Task Error a) -> Task Error a -> Task Error a`
+  (`crates/sky_types/src/constrain.rs`, `K::TaskFail`/`K::TaskMapError`/
+  `K::TaskOnError`; `crates/skyc/stdlib/Sky/Core/Task.sky:33`). Rationale: the
+  Rust runtime's task error channel is monomorphic end-to-end — every emitted
+  wrapper is `SkyTask<A> = SkyTask<SkyError, A>` (`SkyError` is a real 11-kind
+  enum since backlog #85/#160, not a type alias), and the project's own house
+  rules forbid `Task String a` in public surfaces. Before this pin,
+  `K::TaskFail`'s scheme was `fun(var(1), task(var(0)))` — over-polymorphic
+  relative to `task`'s implicit single fixed error slot — so `Task.fail
+  "plain string"` HM-checked and then failed the emitted `cargo build` with
+  E0308 (`expected SkyError, found String`): a "compilation successful, then
+  `cargo build` fails" class violation. `mapError`/`onError` were already
+  pinned; `fail`'s pin closes the family. Regression:
+  `crates/skyc/tests/golden_m5b_db.rs::db_transaction`,
+  `crates/skyc/tests/golden_m5a_task.rs::{error_channel,
+  task_map_error_lambda}`, plus a negative `SKY-T0001` check-only test
+  (`Task.fail "oops"` must be rejected). **Sanctioned:** yes — the polymorphic
+  reading was unimplementable on this backend; it only ever produced
+  ill-typed Rust, never a working program.
+
 - **Numeric literals in `{{...}}` interpolation** — ipê's interpolation
   mini-parser (`resolve_simple_interp_ref`) recognises an integer/float literal
   argument, e.g. `{{String.fromInt 54}}` lowers to `String.fromInt 54` and
@@ -752,7 +777,8 @@ API-shape review):
 - **Architectural divergences:** 18 (A1–A18). A8 and A13 are reference-ahead on
   completeness. A15–A17 are seal-gate entries. A18 is the WS phantom-`msg`
   type-var entry added with task #127.
-- **Stdlib/surface divergences:** 4 API-shape + 4 front-end capability gaps +
+- **Stdlib/surface divergences:** 5 API-shape (added `Task` error-channel
+  monomorphism, class-7 fix 2026-07-10) + 4 front-end capability gaps +
   2 new gate-forced surface constraints (SKY-L0119, SKY-L0117).
 
 ## Could not confirm / verify
