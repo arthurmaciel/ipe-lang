@@ -163,29 +163,39 @@ fn assert_parity(label: &str, warm: &CompileOutcome, cold: &CompileOutcome) {
                 "[{label}] Cargo.toml diverged — {}",
                 first_diff(&w.cargo_toml, &c.cargo_toml)
             );
+            // Collect rather than assert-per-iteration: avoids indexing /
+            // unwrap on the `get` result (both clippy-denied in this
+            // workspace) while still surfacing every divergence, not just
+            // the first.
+            let mut missing_in_cold: Vec<&str> = Vec::new();
+            let mut divergent: Vec<String> = Vec::new();
             for (rel, w_text) in &w.files {
-                let Some(c_text) = c.files.get(rel) else {
-                    // Unreachable given the `w_keys == c_keys` assertion above
-                    // (already failed the test if the key sets diverge) — an
-                    // `assert!` keeps the failure a test outcome, never a
-                    // production-shaped `unreachable!` panic.
-                    assert!(false, "[{label}] key sets already compared equal");
-                    continue;
-                };
-                assert!(
-                    w_text == c_text,
-                    "[{label}] {} diverged between warm and cold builds — {}",
-                    rel.as_str(),
-                    first_diff(w_text, c_text)
-                );
+                match c.files.get(rel) {
+                    Some(c_text) if w_text == c_text => {}
+                    Some(c_text) => divergent.push(format!(
+                        "{} — {}",
+                        rel.as_str(),
+                        first_diff(w_text, c_text)
+                    )),
+                    None => missing_in_cold.push(rel.as_str()),
+                }
             }
+            assert!(
+                missing_in_cold.is_empty(),
+                "[{label}] key sets already compared equal but missing from cold output: {missing_in_cold:?}"
+            );
+            assert!(
+                divergent.is_empty(),
+                "[{label}] file(s) diverged between warm and cold builds: {divergent:?}"
+            );
         }
         (Err(w), Err(c)) => {
             assert_eq!(w, c, "[{label}] diagnostics diverged between warm and cold");
         }
         (w, c) => {
-            assert!(
-                false,
+            assert_eq!(
+                w.is_ok(),
+                c.is_ok(),
                 "[{label}] build status diverged: warm ok={} cold ok={}\nwarm: {:?}\ncold: {:?}",
                 w.is_ok(),
                 c.is_ok(),
