@@ -558,6 +558,41 @@ mod tests {
         }
     }
 
+    /// #113 spec §1.4 end-to-end: the FULL pipeline from a Rust
+    /// `Attribute::AttrPseudoRule` (as `Background.hoverColor` constructs it)
+    /// through `ui_layout` → `assign_sky_ids` → `apply_style_injections` →
+    /// `render_html` must produce a sky-id-scoped `<style>` rule and leave NO
+    /// `data-sky-pc-rules` marker in the final HTML. Closes the "two halves
+    /// each tested, whole pipeline never composed" gap flagged by the
+    /// independent review of the 2026-07-10 Std.Ui/Html kernel batch.
+    #[test]
+    fn end_to_end_ui_hover_color_renders_scoped_style_and_leaves_no_marker() {
+        use crate::sky_runtime::html::{assign_sky_ids, render_html};
+        use crate::sky_runtime::ui::element::{Color, Element};
+        use crate::sky_runtime::ui::helpers::ui_bg_hover_color_;
+        use crate::sky_runtime::ui::render::ui_layout;
+
+        let attrs = vec![ui_bg_hover_color_::<()>(Color::Rgba(0, 92, 215, 1.0))];
+        let elem: Element<()> = Element::Text("hover me".to_owned());
+        let mut html = ui_layout(attrs, elem);
+        assign_sky_ids(&mut html, "r");
+        apply_style_injections(&mut html);
+        let s = render_html(&html);
+        assert!(
+            !s.contains("data-sky-pc-rules"),
+            "marker must be consumed, never leak into final HTML: {s}"
+        );
+        assert!(s.contains("<style"), "scoped <style> block must render: {s}");
+        assert!(
+            s.contains(":hover") && s.contains("background-color:rgba(0,92,215,1)"),
+            "hover rule with the exact CSS must render: {s}"
+        );
+        assert!(
+            s.contains("@media (hover: hover)"),
+            "hover rules must be wrapped in the touch-device guard: {s}"
+        );
+    }
+
     #[test]
     fn idempotent_second_run_adds_no_duplicate_style() {
         let mut tree: Html<()> = Html::HElement(
