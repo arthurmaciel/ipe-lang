@@ -2109,6 +2109,98 @@ mod tests {
     }
 
     #[test]
+    fn call_arg_mismatch_expected_is_declared_param_found_is_actual_arg() {
+        // `Task.fail : Error -> Task Error a` called with a `String` argument:
+        // the DECLARED parameter type is the *expected* side and the user's
+        // actual argument the *found* side — "expected Error, found String",
+        // never the inversion. Regression for the BACKLOG diagnostic-
+        // orientation row (2026-07-10 review of the db_crud/Task.fail pin):
+        // the Call arm used to constrain `eq(callee_var, arrow-of-arg-types)`,
+        // which put the actual argument on unify's *expected* side.
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   main =\n    Task.fail \"plain string\"\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::TypeMismatch { .. },
+                    ..
+                })
+            ),
+            "Task.fail \"str\" must be a TypeMismatch, got {r:?}"
+        );
+        let Err(Diagnostic::Type {
+            msg: TypeError::TypeMismatch {
+                expected, found, ..
+            },
+            ..
+        }) = r
+        else {
+            return;
+        };
+        assert_eq!(
+            *expected,
+            con_doc("Error"),
+            "declared param type must be the expected side"
+        );
+        assert_eq!(
+            *found,
+            con_doc("String"),
+            "actual argument type must be the found side"
+        );
+    }
+
+    #[test]
+    fn calling_a_non_function_keeps_function_shape_on_expected_side() {
+        // Calling a non-function value: the *expected* side stays the
+        // function shape the call site demands, the *found* side the callee's
+        // actual (non-function) type. Locks the companion orientation so the
+        // per-arg fix above cannot silently flip this arm.
+        // (`String`, not an integer literal — a bare `5` is a polymorphic
+        // Number var and would render as a type variable, not a Con.)
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   main =\n    let x = \"s\" in x 1\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            matches!(
+                r,
+                Err(Diagnostic::Type {
+                    msg: TypeError::TypeMismatch { .. },
+                    ..
+                })
+            ),
+            "calling a String must be a TypeMismatch, got {r:?}"
+        );
+        let Err(Diagnostic::Type {
+            msg: TypeError::TypeMismatch {
+                expected, found, ..
+            },
+            ..
+        }) = r
+        else {
+            return;
+        };
+        assert!(
+            matches!(*expected, sky_diagnostics::TyDoc::Fun(..)),
+            "the call-shape (a function type) must be the expected side, got {expected:?}"
+        );
+        assert_eq!(
+            *found,
+            con_doc("String"),
+            "the non-function callee's type must be the found side"
+        );
+    }
+
+    #[test]
     fn if_branches_unify_to_the_annotated_return() {
         // A well-typed `if`: condition `Bool`, both branches `Int`, agreeing
         // with the `Int` return annotation.
