@@ -1,0 +1,27 @@
+module Main exposing (main)
+
+-- Regression fixture for the WS `onError` Box-into-Arc E0308 SEAL hole.
+-- `Ws.withOnError`'s callback is `WebSocketServer -> Error -> Task Error ()`,
+-- i.e. IR `Fun([WebSocketServer, Error], Task Unit)`. Its runtime setter
+-- `ws_server_with_on_error` takes `Arc<dyn Fn(WsHandle, E) -> …>`, so the
+-- callback MUST box with `Arc::new`. Before the fix `wants_arc_ctor` /
+-- `render_type` only matched `[WebSocketServer, Str]` (onMessage), so onError
+-- fell to the generic `Box<dyn Fn>` arm and skyc-0 then cargo-failed E0308.
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Sky.Core.Error exposing (Error)
+import Sky.Http.Server as Server
+import Sky.Http.Server exposing (Request, Response)
+import Sky.Http.Server.WebSocket as Ws
+
+handleWs : Request -> Task Error Response
+handleWs req =
+    Ws.upgrade req (Ws.defaultCfg |> Ws.withOnError onError)
+
+onError : Ws.WebSocketServer -> Error -> Task Error ()
+onError _ _ =
+    Task.succeed ()
+
+main =
+    Server.listen 8033 [ Server.get "/ws" handleWs ]
