@@ -6258,14 +6258,18 @@ fn zonk_underflow() -> Diagnostic {
 // Phase C — kernel-registry migration tripwires
 // ===========================================================================
 
-#[cfg(test)]
 impl<'a> Builder<'a> {
-    /// Minimal [`Builder`] for exercising the pure scheme table
-    /// ([`Self::stdlib_scheme`]) in tests. Only `uf`, `interner`, and
-    /// `builtins` are load-bearing for that method; every other field is empty.
-    /// Pre-intern any needed strings BEFORE taking the immutable borrow into
-    /// `interner`.
-    fn for_scheme_test(
+    /// Minimal [`Builder`] for reading the pure scheme table
+    /// ([`Self::stdlib_scheme`]) outside a full inference run. Only `uf`,
+    /// `interner`, and `builtins` are load-bearing for that method; every
+    /// other field is empty. Pre-intern any needed strings BEFORE taking the
+    /// immutable borrow into `interner`.
+    ///
+    /// Consumers: the registry tripwire tests below and
+    /// [`kernel_type_table`] (the salsa Task-9 `kernel_types()` query's
+    /// single source of schemes — one code path, so the query can never
+    /// drift from what inference actually uses).
+    fn for_scheme_table(
         uf: &'a mut UnionFind<Content>,
         interner: &'a Interner,
         builtins: Builtins,
@@ -6290,6 +6294,36 @@ impl<'a> Builder<'a> {
             pending_instantiations: Vec::new(),
         }
     }
+}
+
+/// Materialize the full kernel type-scheme table: every [`StdlibKernel`]
+/// variant paired with its inference scheme, in `StdlibKernel::ALL` order,
+/// skipping variants the registry deliberately never schemes (routed /
+/// unlowered buckets — those fail closed with SKY-L0108 at their call sites).
+///
+/// This is the *lift* behind the salsa `kernel_types()` query (incremental
+/// plan Task 9): the table is read through the SAME [`Builder::stdlib_scheme`]
+/// method inference uses, so the memoized table can never drift from what
+/// constraint generation actually applies. The schemes are pure functions of
+/// the interned builtin names — no union-find state is created or consumed.
+///
+/// Interning note: [`Builtins::new`] interns the builtin type/constructor
+/// names (idempotent lookups when they are already interned — which is the
+/// case whenever any parse/canon of stdlib-shaped source has run first).
+///
+/// # Errors
+/// Propagates the interner-capacity diagnostic from [`Builtins::new`] (the
+/// only fallible step; the scheme reads themselves are total).
+pub fn kernel_type_table(
+    interner: &mut Interner,
+) -> Result<Vec<(StdlibKernel, Ty)>, Diagnostic> {
+    let builtins = Builtins::new(interner)?;
+    let mut uf: UnionFind<Content> = UnionFind::new();
+    let builder = Builder::for_scheme_table(&mut uf, interner, builtins);
+    Ok(StdlibKernel::ALL
+        .iter()
+        .filter_map(|&k| builder.stdlib_scheme(k).map(|ty| (k, ty)))
+        .collect())
 }
 
 #[cfg(test)]
@@ -7345,7 +7379,7 @@ mod registry_phase_c_tests {
         let mut interner = Interner::new();
         let builtins = make_builder(&mut interner);
         let mut uf = UnionFind::<Content>::new();
-        let builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+        let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
 
         for &k in KNOWN_UNBACKED {
             assert!(
@@ -7425,7 +7459,7 @@ mod registry_phase_c_tests {
         let mut interner = Interner::new();
         let builtins = make_builder(&mut interner);
         let mut uf = UnionFind::<Content>::new();
-        let builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+        let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
         for &k in FIRST_SCHEMED {
             assert!(
                 !RELOCATED.contains(&k),
@@ -7449,7 +7483,7 @@ mod registry_phase_c_tests {
         let mut interner = Interner::new();
         let builtins = make_builder(&mut interner);
         let mut uf = UnionFind::<Content>::new();
-        let builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+        let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
 
         for &k in StdlibKernel::ALL {
             let migrated = builder.stdlib_scheme(k).is_some();
@@ -7474,7 +7508,7 @@ mod registry_phase_c_tests {
         let mut interner = Interner::new();
         let builtins = make_builder(&mut interner);
         let mut uf = UnionFind::<Content>::new();
-        let builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+        let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
 
         let unschemed: Vec<StdlibKernel> = StdlibKernel::ALL
             .iter()
@@ -7588,7 +7622,7 @@ mod registry_phase_c_tests {
         let mut interner = Interner::new();
         let builtins = make_builder(&mut interner);
         let mut uf = UnionFind::<Content>::new();
-        let builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+        let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
 
         let mut covered = 0;
         for &k in StdlibKernel::ALL {
@@ -7679,7 +7713,7 @@ mod aud13_solver_var_tag_tests {
 
         let builtins = make_builder(&mut interner);
         let mut uf = UnionFind::<Content>::new();
-        let mut builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+        let mut builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
 
         // Tagged: the SAME raw as `any`'s interned symbol, but marked
         // solver-space. Two references through one `vars` map must resolve
@@ -7715,7 +7749,7 @@ mod aud13_solver_var_tag_tests {
 
         let builtins = make_builder(&mut interner);
         let mut uf = UnionFind::<Content>::new();
-        let mut builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+        let mut builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
 
         let untagged = Ty::Var(any_raw);
         let mut vars = BTreeMap::new();

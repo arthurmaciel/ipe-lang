@@ -39,6 +39,7 @@ use sky_canon::ast as canon;
 use sky_diagnostics::{DResult, Diagnostic, Span, TypeError};
 use sky_intern::{Interner, Symbol};
 
+pub use constrain::kernel_type_table;
 pub use solve::{BUDGET_ENV, Budget, DEFAULT_SOLVER_BUDGET};
 pub use ty::{RowTail, Ty, TyBounds};
 

@@ -3818,8 +3818,10 @@ dependencies = [
  "sky_canon",
  "sky_diagnostics",
  "sky_intern",
+ "sky_kernels",
  "sky_parse",
  "sky_syntax",
+ "sky_types",
 ]
 
 [[package]]

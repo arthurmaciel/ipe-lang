@@ -67,13 +67,10 @@ pub struct ImportEdge {
     pub to: Vec<String>,
 }
 
-/// An import cycle detected during topological sort.
-#[derive(Clone, Debug)]
-pub struct CycleError {
-    /// The cycle, in the order the DFS discovered it. The first and last element
-    /// are the same module (the back-edge target).
-    pub path: Vec<String>,
-}
+/// An import cycle detected during topological sort. The single definition
+/// lives in [`sky_db`] (beside the shared topo algorithm); re-exported here
+/// for the driver and existing callers.
+pub use sky_db::CycleError;
 
 // ---------------------------------------------------------------------------
 // Manifest parsing
@@ -275,27 +272,19 @@ fn is_module_segment(s: &str) -> bool {
 // Import graph + topological sort
 // ---------------------------------------------------------------------------
 
-/// Three-colour DFS node state. Declared at module scope so no items appear
-/// after statements inside the function body (clippy `items_after_statements`).
-#[derive(PartialEq)]
-enum Color {
-    White,
-    Gray,
-    Black,
-}
-
-/// DFS stack frame: (`module_path`, `remaining_deps`, `dfs_path_for_cycle_report`).
-type DfsFrame = (Vec<String>, Vec<Vec<String>>, Vec<String>);
-
 /// Build a dependency-first topological order of `modules`, given a function
 /// `imports_of(module_path) -> Vec<Vec<String>>` that returns the modules each
 /// source module imports.
 ///
-/// Only modules whose path appears in `module_set` are followed; stdlib /
+/// Only modules whose path appears in the module set are followed; stdlib /
 /// kernel imports (e.g. `List`, `String`) are silently ignored.
 ///
 /// Returns the modules in dep-first order (i.e. a module's deps come before
 /// it in the returned slice). The entry module (`["Main"]`) is always last.
+///
+/// Delegates to [`sky_db::topological_order_paths`] — the single topo-sort
+/// algorithm, shared with the memoized `sky_db::topo_order` query so the
+/// two orders can never drift.
 ///
 /// # Errors
 /// Returns [`CycleError`] when an import cycle is detected.
@@ -307,95 +296,19 @@ pub fn topological_order<F>(
 where
     F: Fn(&[String]) -> Vec<Vec<String>>,
 {
-    // Build the module set for fast membership testing.
-    let module_set: BTreeSet<Vec<String>> = modules.iter().map(|m| m.module_path.clone()).collect();
+    let paths: Vec<Vec<String>> = modules.iter().map(|m| m.module_path.clone()).collect();
+    let order = sky_db::topological_order_paths(&paths, entry_path, imports_of)?;
 
-    // Map from module_path → DiscoveredModule for output reconstruction.
-    let module_map: BTreeMap<Vec<String>, &DiscoveredModule> =
-        modules.iter().map(|m| (m.module_path.clone(), m)).collect();
-
-    let mut color: BTreeMap<Vec<String>, Color> = modules
-        .iter()
-        .map(|m| (m.module_path.clone(), Color::White))
-        .collect();
-
-    let mut result: Vec<DiscoveredModule> = Vec::new();
-    // Explicit stack avoids recursion-stack overflow on deep dep graphs.
-    let mut stack: Vec<DfsFrame> = Vec::new();
-
-    // We start the DFS from `entry_path` so we only visit modules reachable
-    // from the entry. Unknown modules (not in `module_set`) are skipped —
-    // the caller's `canonicalise_module` will emit SKY-N0020 for them.
-    let entry_deps = imports_of(entry_path)
-        .into_iter()
-        .filter(|d| module_set.contains(d))
-        .collect();
-    if let Some(color_entry) = color.get_mut(entry_path) {
-        *color_entry = Color::Gray;
-    }
-    stack.push((
-        entry_path.to_vec(),
-        entry_deps,
-        vec![format_path(entry_path)],
-    ));
-
-    while let Some((node, mut deps, dfs_path)) = stack.pop() {
-        if let Some(next_dep) = deps.pop() {
-            // Re-push the current node with remaining deps.
-            stack.push((node, deps, dfs_path.clone()));
-
-            match color.get(&next_dep) {
-                Some(Color::Gray) => {
-                    // Back edge → cycle. Build the cycle path.
-                    let target = format_path(&next_dep);
-                    let mut cycle_path = dfs_path;
-                    cycle_path.push(target);
-                    return Err(CycleError { path: cycle_path });
-                }
-                Some(Color::Black) | None => {
-                    // Black: already fully visited — skip.
-                    // None: not in module_set (stdlib import) — skip; SKY-N0020
-                    // will fire if it's a real local dep that's missing.
-                }
-                Some(Color::White) => {
-                    // First visit — push with its deps.
-                    let sub_deps: Vec<Vec<String>> = imports_of(&next_dep)
-                        .into_iter()
-                        .filter(|d| module_set.contains(d))
-                        .collect();
-                    if let Some(c) = color.get_mut(&next_dep) {
-                        *c = Color::Gray;
-                    }
-                    let mut sub_path = dfs_path.clone();
-                    sub_path.push(format_path(&next_dep));
-                    stack.push((next_dep, sub_deps, sub_path));
-                }
-            }
-        } else {
-            // All deps processed — mark node Black and record it.
-            if let Some(c) = color.get_mut(&node) {
-                *c = Color::Black;
-            }
-            if let Some(&m) = module_map.get(&node) {
-                result.push(m.clone());
-            }
-        }
-    }
-
-    // Ensure every module reachable from the graph is included, even if not
-    // reachable from entry (e.g. isolated modules — they get appended after).
-    // In practice this handles orphaned modules gracefully.
+    // Map each ordered path back to its DiscoveredModule (last claimant wins
+    // on a duplicate module path, matching the pre-delegation collect()).
+    let mut module_map: BTreeMap<&[String], &DiscoveredModule> = BTreeMap::new();
     for m in modules {
-        if !matches!(color.get(&m.module_path), Some(Color::Black)) {
-            result.push(m.clone());
-        }
+        module_map.insert(m.module_path.as_slice(), m);
     }
-
-    Ok(result)
-}
-
-fn format_path(path: &[String]) -> String {
-    path.join(".")
+    Ok(order
+        .iter()
+        .filter_map(|p| module_map.get(p.as_slice()).map(|&m| m.clone()))
+        .collect())
 }
 
 // ---------------------------------------------------------------------------

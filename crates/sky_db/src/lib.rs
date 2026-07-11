@@ -380,6 +380,308 @@ pub fn module_interface(
     Ok(Arc::new(canonical.exports.clone()))
 }
 
+// ---------------------------------------------------------------------------
+// Tracked queries (Phase 3: topo_order + linked_program + kernel_types)
+// ---------------------------------------------------------------------------
+
+/// An import cycle detected during topological ordering.
+///
+/// `path` holds the dot-joined module names along the DFS path, ending with
+/// the back-edge target (so the first and last entries name the same module
+/// when the cycle closes on the DFS root).
+#[derive(Clone, Debug)]
+pub struct CycleError {
+    /// The cycle, in DFS-discovery order (dot-joined module names).
+    pub path: Vec<String>,
+}
+
+/// DFS stack frame: (`module_path`, `remaining_deps`, `dfs_path_for_cycle_report`).
+type DfsFrame = (Vec<String>, Vec<Vec<String>>, Vec<String>);
+
+/// Three-colour DFS node state.
+#[derive(PartialEq)]
+enum Color {
+    White,
+    Gray,
+    Black,
+}
+
+/// Build a dependency-first topological order of `modules` (module paths),
+/// given `imports_of(module_path)` returning the modules each source module
+/// imports.
+///
+/// This is the SINGLE topo-sort algorithm: the driver's
+/// `skyc::project::topological_order` delegates here (mapping its
+/// `DiscoveredModule`s to paths and back), and the memoized [`topo_order`]
+/// query calls it directly — one code path, so the two orders can never
+/// drift.
+///
+/// Only modules whose path appears in `modules` are followed; stdlib /
+/// kernel imports are silently ignored. The DFS starts from `entry_path`, so
+/// the traversal (and therefore the dep-first prefix of the result) is
+/// independent of the order of `modules`; modules NOT reachable from the
+/// entry are appended afterwards in `modules` order.
+///
+/// # Errors
+/// Returns [`CycleError`] when an import cycle is detected — this gate is
+/// what keeps a cyclic graph away from the recursive `canonicalize` /
+/// `module_interface` demands (whose direct misuse would hit salsa's
+/// dependency-cycle panic).
+pub fn topological_order_paths<F>(
+    modules: &[Vec<String>],
+    entry_path: &[String],
+    imports_of: F,
+) -> Result<Vec<Vec<String>>, CycleError>
+where
+    F: Fn(&[String]) -> Vec<Vec<String>>,
+{
+    let module_set: BTreeSet<&[String]> = modules.iter().map(Vec::as_slice).collect();
+
+    let mut color: BTreeMap<&[String], Color> = modules
+        .iter()
+        .map(|m| (m.as_slice(), Color::White))
+        .collect();
+
+    let mut result: Vec<Vec<String>> = Vec::new();
+    // Explicit stack avoids recursion-stack overflow on deep dep graphs.
+    let mut stack: Vec<DfsFrame> = Vec::new();
+
+    // Start the DFS from `entry_path` so we only visit modules reachable from
+    // the entry. Unknown modules (not in `module_set`) are skipped — the
+    // caller's canonicalisation emits SKY-N0020 for them.
+    let entry_deps = imports_of(entry_path)
+        .into_iter()
+        .filter(|d| module_set.contains(d.as_slice()))
+        .collect();
+    if let Some(color_entry) = color.get_mut(entry_path) {
+        *color_entry = Color::Gray;
+    }
+    stack.push((
+        entry_path.to_vec(),
+        entry_deps,
+        vec![entry_path.join(".")],
+    ));
+
+    while let Some((node, mut deps, dfs_path)) = stack.pop() {
+        if let Some(next_dep) = deps.pop() {
+            // Re-push the current node with remaining deps.
+            stack.push((node, deps, dfs_path.clone()));
+
+            match color.get(next_dep.as_slice()) {
+                Some(Color::Gray) => {
+                    // Back edge → cycle. Build the cycle path.
+                    let target = next_dep.join(".");
+                    let mut cycle_path = dfs_path;
+                    cycle_path.push(target);
+                    return Err(CycleError { path: cycle_path });
+                }
+                Some(Color::Black) | None => {
+                    // Black: already fully visited — skip.
+                    // None: not in module_set (stdlib import) — skip; SKY-N0020
+                    // fires later if it's a real local dep that's missing.
+                }
+                Some(Color::White) => {
+                    // First visit — push with its deps.
+                    let sub_deps: Vec<Vec<String>> = imports_of(&next_dep)
+                        .into_iter()
+                        .filter(|d| module_set.contains(d.as_slice()))
+                        .collect();
+                    if let Some(c) = color.get_mut(next_dep.as_slice()) {
+                        *c = Color::Gray;
+                    }
+                    let mut sub_path = dfs_path.clone();
+                    sub_path.push(next_dep.join("."));
+                    stack.push((next_dep, sub_deps, sub_path));
+                }
+            }
+        } else {
+            // All deps processed — mark node Black and record it.
+            if let Some(c) = color.get_mut(node.as_slice()) {
+                *c = Color::Black;
+            }
+            result.push(node);
+        }
+    }
+
+    // Modules not reachable from the entry (isolated / orphaned) are appended
+    // after the reachable prefix, in `modules` order.
+    for m in modules {
+        if !matches!(color.get(m.as_slice()), Some(Color::Black)) {
+            // Mark Black so a duplicate entry in `modules` is appended once.
+            if let Some(c) = color.get_mut(m.as_slice()) {
+                *c = Color::Black;
+            }
+            result.push(m.clone());
+        }
+    }
+
+    Ok(result)
+}
+
+/// The memoized dep-first module order of the whole project, or the
+/// SKY-N0021 import-cycle diagnostic.
+pub type TopoOrderResult = Result<Arc<Vec<Vec<String>>>, Diagnostic>;
+
+/// The project's dependency-first module order, rooted at `entry`.
+///
+/// Depends on `files(root)` plus [`imports`] of every file — so an edit that
+/// does not change any module's import list backdates every import memo and
+/// this order validates without re-sorting. Modules unreachable from the
+/// entry are appended after the reachable prefix in sorted module-path order
+/// (`SourceRoot.files` is a `BTreeMap`).
+///
+/// Cycle handling: returns the SKY-N0021 diagnostic as a **value**. This
+/// query itself never recurses (the DFS is internal, `imports` is per-file),
+/// so demanding it on a cyclic graph is safe — which is exactly why
+/// [`linked_program`] routes through it BEFORE demanding any `canonicalize`.
+#[salsa::tracked]
+pub fn topo_order(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> TopoOrderResult {
+    let files = root.files(db);
+    let module_paths: Vec<Vec<String>> = files.keys().cloned().collect();
+    let entry_path = entry.module_path(db);
+    topological_order_paths(&module_paths, entry_path, |path| {
+        files
+            .get(path)
+            .map(|file| (*imports(db, *file)).clone())
+            .unwrap_or_default()
+    })
+    .map(Arc::new)
+    .map_err(|cycle| Diagnostic::Name {
+        span: sky_diagnostics::Span::DUMMY,
+        msg: sky_diagnostics::NameError::ImportCycle {
+            path: cycle
+                .path
+                .into_iter()
+                .map(String::into_boxed_str)
+                .collect(),
+        },
+    })
+}
+
+/// The whole-program output of the canonicalisation tier: every module
+/// canonicalised and merged (`sky_canon::link`) into the single module the
+/// back half (infer → lower → emit) consumes.
+#[derive(Clone, PartialEq, Debug)]
+pub struct LinkedProgram {
+    /// The entry module's interned path (what `link` keyed the merge on).
+    pub entry_name: Vec<Symbol>,
+    /// The merged whole-program module.
+    pub module: sky_canon::ast::Module,
+}
+
+/// The memoized result of linking the whole program.
+pub type LinkedProgramResult = Result<Arc<LinkedProgram>, Diagnostic>;
+
+/// Assemble the per-module [`canonicalize`] results into the linked
+/// whole-program module (incremental plan Task 11 — the COARSE spine).
+///
+/// Deliberately coarse: any edit that re-canonicalises any module re-links
+/// the world (link output value-equality still backdates dependents-to-be).
+/// The point is the query **seam**: Phase 4's per-module `typecheck` /
+/// `lower` refinement replaces the consumer side of this query without the
+/// driver changing shape, and the Task-18 parity gate guards that
+/// refinement.
+///
+/// Demand order: modules are canonicalised in the [`topo_order`] dep-first
+/// order, which on a cold database reproduces the driver's interning
+/// sequence exactly (byte-identity SEAL). The cycle gate runs FIRST, so a
+/// cyclic graph yields the SKY-N0021 diagnostic as a value — never salsa's
+/// dependency-cycle panic — even on a direct demand.
+#[salsa::tracked]
+pub fn linked_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LinkedProgramResult {
+    let order = topo_order(db, root, entry)?;
+    let files = root.files(db);
+    let mut modules: Vec<sky_canon::ast::Module> = Vec::with_capacity(order.len());
+    for path in order.iter() {
+        let Some(file) = files.get(path) else {
+            // Unreachable by construction: `topo_order` only emits keys of
+            // `files(root)`. Fail loud as a value, never panic.
+            return Err(Diagnostic::CompilerBug {
+                where_: "sky_db.linked_program",
+                detail: format!("topo order names unknown module {}", path.join(".")),
+            });
+        };
+        let canonical = canonicalize(db, root, *file)?;
+        modules.push(canonical.module.clone());
+    }
+
+    // One lock scope for the entry-path interning (lookups — the entry's own
+    // canonicalize already interned it) and the link pass (which only reads).
+    let mut interner = db.interner().lock();
+    let entry_name: Vec<Symbol> = entry
+        .module_path(db)
+        .iter()
+        .map(|segment| interner.intern(segment))
+        .collect::<Result<_, _>>()?;
+    let module = sky_canon::link::link(entry_name.clone(), modules, &interner)?;
+    Ok(Arc::new(LinkedProgram { entry_name, module }))
+}
+
+/// The memoized kernel type-scheme table.
+pub type KernelTypesResult = Result<Arc<Vec<(sky_kernels::StdlibKernel, sky_types::Ty)>>, Diagnostic>;
+
+/// The kernel type-scheme table (incremental plan Task 9): every schemed
+/// [`sky_kernels::StdlibKernel`] paired with the inference scheme
+/// constraint generation applies at its call sites, materialized once per
+/// database via [`sky_types::kernel_type_table`] (the same code path
+/// inference reads — no second scheme table to drift).
+///
+/// Keyed on `root` as the forward seam: when FFI package interfaces become
+/// salsa inputs (plan Task 2's parked `ffi_package_interface(PackageId)`),
+/// this query unions them in per project and re-executes only when a package
+/// interface changes. Today it reads no input at all, so it never re-executes
+/// within a database revision history — proven by the Phase-3 granularity
+/// test (source edits do not re-derive the table).
+#[salsa::tracked]
+pub fn kernel_types(db: &dyn Db, root: SourceRoot) -> KernelTypesResult {
+    // `root` is deliberately unread today (see the doc above); silence the
+    // unused-binding without changing the key shape.
+    let _ = root;
+    let mut interner = db.interner().lock();
+    sky_types::kernel_type_table(&mut interner).map(Arc::new)
+}
+
+// ---------------------------------------------------------------------------
+// Driver-boundary input reconciliation
+// ---------------------------------------------------------------------------
+
+/// Reconcile the database inputs against `desired` — the driver-computed
+/// "module path → (text, origin)" map for the current build (user sources +
+/// injected stdlib closure).
+///
+/// Boundary discipline (same family as [`set_text_if_changed`]): existing
+/// files are updated ONLY when their text/origin actually changed, new files
+/// get fresh [`SourceFile`] inputs, and `root.files` is re-set only when the
+/// membership (or any handle) changed — a byte-identical re-sync dirties
+/// nothing. Removed module paths simply drop out of the map; their orphaned
+/// `SourceFile` inputs stay in the database (unreachable from any query once
+/// no resolution points at them).
+pub fn sync_source_root(
+    db: &mut SkyDatabase,
+    root: SourceRoot,
+    desired: &BTreeMap<Vec<String>, (String, ModuleOrigin)>,
+) {
+    let current = root.files(db).clone();
+    let mut next: BTreeMap<Vec<String>, SourceFile> = BTreeMap::new();
+    for (path, (text, origin)) in desired {
+        if let Some(&file) = current.get(path) {
+            set_text_if_changed(db, file, text);
+            if file.origin(db) != *origin {
+                file.set_origin(db).to(*origin);
+            }
+            next.insert(path.clone(), file);
+        } else {
+            next.insert(
+                path.clone(),
+                SourceFile::new(db, path.clone(), text.clone(), *origin),
+            );
+        }
+    }
+    if next != current {
+        root.set_files(db).to(next);
+    }
+}
+
 /// Extract `import A.B.C` module paths from raw source.
 ///
 /// Primary path: [`sky_parse::scan_import_paths`] — a token-level scan using
