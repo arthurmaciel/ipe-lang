@@ -74,6 +74,16 @@
 //!   `DbFindManyByField` (arity fixed by #70) — previously verified only via
 //!   direct runtime source inspection, never a real `skyc build` + `cargo
 //!   build` + run.
+//! * `m5b_db_decode_money` — backlog #34: `Db.Decode.money "amount"` inside a
+//!   `Db.queryDecode` pipeline decodes the `"CODE AMOUNT"` TEXT column
+//!   `SqlMoney` writes on INSERT back into `(Decimal, String)`, and a
+//!   malformed value (no space separator) is a total `Task Err`, never a
+//!   panic, caught via `Task.onError`. Output: `"USD 12.34\nmalformed:caught"`.
+//!   Proves the kernel-registration recipe closed the gap end-to-end (canon
+//!   allowlist, `StdlibKernel` decl, constrain scheme, lower dispatch, emit,
+//!   pretty-print) — before this fix `Db.Decode.money` was rejected at
+//!   canonicalisation as an unknown qualified name even though the runtime
+//!   function was already implemented and unit-tested.
 //!
 //! Run:
 //!
@@ -367,4 +377,26 @@ fn db_poly_params_e2e() {
 #[test]
 fn db_find_by_field() {
     assert_runs_and_matches_oracle("m5b_db_find_by_field");
+}
+
+// ── Db.Decode.money — backlog #34 kernel-registration fix ────────────────────
+
+/// `Db.Decode.money "amount"` decodes a `"CODE AMOUNT"` TEXT column
+/// (`SqlMoney`'s lossless serialisation) back into `(Decimal, String)`, and a
+/// malformed value is a total `Task Err` — never a panic — caught via
+/// `Task.onError`. Output: `"USD 12.34\nmalformed:caught"`.
+///
+/// Proves the #34 kernel-registration recipe closed the gap end-to-end: canon
+/// `Db.Decode` allowlist, `StdlibKernel::DbDecMoney` decl, constrain.rs
+/// scheme, `sky_lower` arity-1 dispatch, `sky_backend_rust` standard-path
+/// emit, `sky_ir` pretty-print.
+///
+/// Sanctioned divergence (tagged `divergence`, not `sanctioned`): the Rust
+/// backend's `Db.Decode.money` returns `Decoder (Decimal, String)`, not the
+/// Go backend's `Decoder Money` — `Money`/`Currency` are project-generated
+/// Rust types unnameable from the shared runtime crate. See
+/// `docs/divergences-from-sky.md` (`B-DbDecMoney`).
+#[test]
+fn db_decode_money() {
+    assert_runs_and_matches_oracle("m5b_db_decode_money");
 }

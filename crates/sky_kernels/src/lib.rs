@@ -613,6 +613,7 @@ pub enum StdlibKernel {
     DbDecMap4,
     DbDecRequired,
     DbDecOptional,
+    DbDecMoney,
     // ── TEA: Cmd / Sub / Time.every (wired M5c) ─────────────────────────────
     CmdNone,
     CmdBatch,
@@ -1870,6 +1871,7 @@ impl StdlibKernel {
             Self::DbDecMap4 => d("Db.Decode", "map4", 5, Db, "db_decode_map4"),
             Self::DbDecRequired => d("Db.Decode", "required", 3, Db, "db_decode_required"),
             Self::DbDecOptional => d("Db.Decode", "optional", 4, Db, "db_decode_optional"),
+            Self::DbDecMoney => d("Db.Decode", "money", 1, Db, "db_decode_money"),
             // ── TEA: Cmd / Sub / Time.every (wired M5c) ─────────────────────
             Self::CmdNone => d("Cmd", "none", 0, Tea, "cmd_none"),
             Self::CmdBatch => d("Cmd", "batch", 1, Tea, "cmd_batch"),
@@ -2890,6 +2892,7 @@ impl StdlibKernel {
         Self::DbDecMap4,
         Self::DbDecRequired,
         Self::DbDecOptional,
+        Self::DbDecMoney,
         // TEA: Cmd / Sub / Time.every
         Self::CmdNone,
         Self::CmdBatch,
@@ -3425,6 +3428,7 @@ impl StdlibKernel {
                 | Self::DbDecMap4
                 | Self::DbDecRequired
                 | Self::DbDecOptional
+                | Self::DbDecMoney
                 // ── Std.Db.Sql (backlog #61) — classified `Db` like
                 // `Db.Decode.*` above: no live connection is touched by the
                 // combinators, but the runtime types they build on
