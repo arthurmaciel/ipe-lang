@@ -1874,6 +1874,58 @@ mod tests {
         );
     }
 
+    /// Regression for the `RecordUpdate.fields` obligation-exclusion gap
+    /// (BACKLOG "Boundary Scheme Promotion — `obligation_roots`" Low row,
+    /// symmetric to the `fa.result` gap): a cross-module untyped record-update
+    /// helper's field VALUE var (`n` in `setName r n = { r | name = n }`) is
+    /// pinned by `resolve_record_updates` AFTER `promote_untyped_boundaries`
+    /// runs, so it must be excluded from quantification like `ru.record`
+    /// itself. Pre-fix, the scheme quantified it (a quantified-then-later-
+    /// pinned var — the exact E0283 class the `fa.result` fix closed), and
+    /// only the lowerer's `used_generics` backstop kept the emitted Rust
+    /// building. This test pins the PRIMARY mechanism: the promoted scheme
+    /// for `setName` must quantify nothing.
+    #[test]
+    fn record_update_field_value_var_is_excluded_from_quantification() {
+        let lib = (
+            "Lib1",
+            "module Lib1 exposing (setName)\n\n\
+             setName r n =\n    { r | name = n }\n",
+        );
+        let main = (
+            "Main",
+            "module Main exposing (main)\n\n\
+             import Sky.Core.Prelude exposing (..)\n\
+             import Lib1 exposing (setName)\n\n\
+             main =\n    println ((setName { name = \"Ada\" } \"Bea\").name)\n",
+        );
+        let Some((m, mut i)) = link_modules(&[lib, main]) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            r.is_ok(),
+            "a single-record-type cross-module use of an untyped record-update \
+             helper must typecheck: {r:?}"
+        );
+        let Ok(solved) = r else { return };
+        let Ok(lib1) = i.intern("Lib1") else { return };
+        let Ok(set_name) = i.intern("setName") else { return };
+        // An all-monomorphic scheme is skipped when `untyped_type_params` is
+        // populated (empty `quantified` ⇒ no entry), so the post-fix success
+        // signal is "no entry OR an empty entry"; pre-fix the gap produced a
+        // one-symbol entry for the field VALUE var.
+        let quantified = solved.untyped_type_params.get(&(vec![lib1], set_name));
+        assert!(
+            quantified.is_none_or(Vec::is_empty),
+            "setName's promoted scheme must quantify NOTHING — both `r` \
+             (`ru.record`) and `n` (the field VALUE var, pinned later by \
+             resolve_record_updates) are obligation roots; a non-empty list \
+             means a quantified-then-later-pinned var leaked into the scheme \
+             (the E0283 stale-generic class): {quantified:?}"
+        );
+    }
+
     /// Test matrix item 7: a `Super`-bounded untyped helper (`plus a b = a +
     /// b`) used at `Int` in one module and `Float` in another must still be
     /// rejected — Divergence D2: `Super`-bounded residual vars stay
