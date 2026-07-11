@@ -1,0 +1,6 @@
+# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
+main_sky_sha256 = 29c990aef3040065f3bb8c7b945090aac44bb8aab34b72817db24dc9281a474b
+go_sky_version = sky v0.16.29
+exit_code = 0
+oracle_divergence = true
+divergence_reason = Go oracle failed: Go `sky build` exited Some(1): -- Discovering modules Found 5 module(s) -- Parsing Sky.Core.String: 36 declarations Sky.Core.Maybe: 11 declarations Sky.Core.Error: 17 declarations Std.Log: 9 declarations Main: 2 declarations -- Canonicalising Names resolved -- Type Checking cross-module externals: 73 Types OK (5 bindings) Monomorphisation: 3 instances across 2 polymorphic callees HM infer (deps): 101 functions typed -- Generating Go Wrote sky-out/main.go [DCE] caller-side rt.* identifiers: 22 Sky lowering succeeded Running go build... Sky lowering succeeded but `go build` failed: # sky-app ./main.go:109: invalid operation: cannot call g (variable of interface type any): any is not a function; using skyc output as the reference

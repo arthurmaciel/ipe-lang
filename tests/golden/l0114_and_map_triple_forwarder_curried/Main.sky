@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #90 T3: TRIPLE forwarder — the escape chain is arbitrarily deep; the
+-- fail-closed arm rejects at the FIRST hop (`am1` inside `am2`), so depth
+-- adds nothing an attacker can use.
+am1 : Result e a -> Result e (a -> b) -> Result e b
+am1 x f =
+    Result.andMap x f
+
+am2 : Result e a -> Result e (a -> b) -> Result e b
+am2 x f =
+    am1 x f
+
+am3 : Result e a -> Result e (a -> b) -> Result e b
+am3 x f =
+    am2 x f
+
+add3 : Int -> Int -> Int -> Int
+add3 a b c =
+    a + b + c
+
+main =
+    case am3 (Ok 1) (Ok add3) of
+        Ok _ -> println "ok"
+        Err _ -> println "err"

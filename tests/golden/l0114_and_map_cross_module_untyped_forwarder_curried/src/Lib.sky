@@ -1,0 +1,14 @@
+module Lib exposing (am2)
+
+import Sky.Core.Prelude exposing (..)
+
+-- #90 T3: cross-module UNANNOTATED double forwarder — `am2` goes through
+-- Boundary Scheme Promotion (`promote_untyped_boundaries`), quantifying the
+-- escaped payload-result var; the obligation check inside `Lib` sees a bare
+-- variable and fails CLOSED.
+am1 : Result e a -> Result e (a -> b) -> Result e b
+am1 x f =
+    Result.andMap x f
+
+am2 x f =
+    am1 x f

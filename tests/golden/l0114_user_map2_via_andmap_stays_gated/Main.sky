@@ -1,0 +1,25 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #90 T3, the 13th shape (found by this pass's adversarial self-review,
+-- NOT by any earlier attempt or review): a user-written applicative
+-- `map2` over `Result.map` + `Result.andMap`. `Result.map f x`'s callback
+-- result instantiates to the annotation skolem chain `b -> c` — an arrow —
+-- which under the 4th attempt (andMap-only obligation, fail-open on
+-- variables) sailed through and reached `cargo build` as E0277 EVEN AT A
+-- SAFE ARITY-2 USE, because `myMap2`'s own `c` was never checked anywhere.
+-- The generalized `Result.map` obligation rejects the definition itself.
+myMap2 : (a -> b -> c) -> Result e a -> Result e b -> Result e c
+myMap2 f x y =
+    Result.andMap y (Result.map f x)
+
+add : Int -> Int -> Int
+add a b =
+    a + b
+
+main =
+    case myMap2 add (Ok 1) (Ok 2) of
+        Ok n -> println (String.fromInt n)
+        Err _ -> println "err"
