@@ -78,6 +78,13 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::ErrorKind => "sky_runtime::error::SkyErrorKind".to_owned(),
         IrType::Error => "sky_runtime::error::SkyError".to_owned(),
         IrType::ErrorDetails => "sky_runtime::error::SkyErrorDetails".to_owned(),
+        // The NOMINAL error-payload types (SEAL fix 2026-07-11): rendered as
+        // the runtime's concrete structs, so a pattern-bound payload and any
+        // position naming these types agree on ONE Rust type — never a
+        // project-local synthesized record struct.
+        IrType::ErrorInfo => "sky_runtime::error::SkyErrorInfo".to_owned(),
+        IrType::PanicInfo => "sky_runtime::error::SkyPanicInfo".to_owned(),
+        IrType::TypeInfo => "sky_runtime::error::SkyTypeInfo".to_owned(),
         IrType::SqlFragment => "sky_runtime::db::SqlFragment".to_owned(),
         IrType::Secret => "sky_runtime::secret::Secret".to_owned(),
         IrType::Int => "i64".to_owned(),

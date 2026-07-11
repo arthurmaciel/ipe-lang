@@ -271,13 +271,18 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::Secret
         // `Order` is a plain three-variant data enum — an admissible leaf.
         // `Decimal` is a Copy newtype — an admissible leaf.
-        // `ErrorKind`/`Error`/`ErrorDetails` derive serde — admissible leaves
-        // (e.g. a Model's `historyError : Maybe Error` field).
+        // `ErrorKind`/`Error`/`ErrorDetails` and the nominal error-payload
+        // leaves (`ErrorInfo`/`PanicInfo`/`TypeInfo`, SEAL fix 2026-07-11)
+        // derive serde — admissible leaves (e.g. a Model's `historyError :
+        // Maybe Error` field).
         | IrType::Order
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
         | IrType::Int
         | IrType::Float
         | IrType::Bool

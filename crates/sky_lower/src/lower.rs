@@ -360,12 +360,17 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::LiveReq
         // `Order` (LT/EQ/GT) is a primitive leaf — no embedded function.
         // `Decimal` is a Copy newtype — no embedded function.
-        // `ErrorKind`/`Error`/`ErrorDetails` are leaves — no embedded function.
+        // `ErrorKind`/`Error`/`ErrorDetails` and the nominal error-payload
+        // leaves (`ErrorInfo`/`PanicInfo`/`TypeInfo`, SEAL fix 2026-07-11)
+        // are leaves — no embedded function.
         | IrType::Order
         | IrType::Decimal
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
         // `SqlFragment` is an opaque query-building value — no embedded function.
         // `Secret` is an opaque sealed string wrapper — no embedded function.
         | IrType::SqlFragment
@@ -424,7 +429,9 @@ fn clone_class(t: &IrType) -> CloneClass {
         // heap-allocated `String` + `Vec<SqlParam>`).
         // `Secret` is `#[derive(Clone)]` (no Copy — carries a heap-allocated
         // `String`; hand-written `PartialEq`, not derived — see its own doc).
-        IrType::Str | IrType::Bytes | IrType::Json | IrType::Db | IrType::UiPlain(_) | IrType::LiveReq | IrType::Error | IrType::ErrorDetails | IrType::SqlFragment | IrType::Secret => {
+        // The nominal error-payload types derive Clone (not Copy — each
+        // carries heap-allocated `String`s; SEAL fix 2026-07-11).
+        IrType::Str | IrType::Bytes | IrType::Json | IrType::Db | IrType::UiPlain(_) | IrType::LiveReq | IrType::Error | IrType::ErrorDetails | IrType::ErrorInfo | IrType::PanicInfo | IrType::TypeInfo | IrType::SqlFragment | IrType::Secret => {
             CloneClass::CloneOk
         }
         // Runtime-verified Clone server/http opaques (audited 2026-07-05):
@@ -4769,6 +4776,13 @@ impl<'a> Lowerer<'a> {
                 // `ErrorInfo.details : Maybe ErrorDetails` (backlog #85
                 // follow-up). Backed by `sky_runtime::error::SkyErrorDetails`.
                 "ErrorDetails" => Ok(IrType::ErrorDetails),
+                // The NOMINAL error-payload types (SEAL fix 2026-07-11) —
+                // annotatable via canon's `EXTRA_BUILTIN_TYPE_NAMES`. Backed
+                // by `sky_runtime::error::{SkyErrorInfo, SkyPanicInfo,
+                // SkyTypeInfo}`.
+                "ErrorInfo" => Ok(IrType::ErrorInfo),
+                "PanicInfo" => Ok(IrType::PanicInfo),
+                "TypeInfo" => Ok(IrType::TypeInfo),
                 "Char" => Ok(IrType::Char),
                 // `Bytes` is a built-in distinct primitive (Vec<u8> on Rust;
                 // distinct from String). Divergence from Sky: Sky aliases
@@ -5467,6 +5481,15 @@ impl<'a> Lowerer<'a> {
                 // `ErrorDetails` — mirrors the `ir_type_from_canon` arm added at
                 // the same time (backlog #85 follow-up).
                 "ErrorDetails" => Ok(IrType::ErrorDetails),
+                // The NOMINAL error-payload types (SEAL fix 2026-07-11) —
+                // backed by `sky_runtime::error::{SkyErrorInfo, SkyPanicInfo,
+                // SkyTypeInfo}`. Pattern-bound payloads (`Error _ info ->` /
+                // `FfiPanic p ->`) get these solved Cons, so unannotated
+                // helpers over them lower to the runtime types and agree with
+                // their call sites.
+                "ErrorInfo" => Ok(IrType::ErrorInfo),
+                "PanicInfo" => Ok(IrType::PanicInfo),
+                "TypeInfo" => Ok(IrType::TypeInfo),
                 "Char" => Ok(IrType::Char),
                 // ── Kernel-implicit opaque server / Sky.Live types (#152) ────────
                 // Mirror of the `ir_type_from_canon` arms added at the same
@@ -11229,6 +11252,11 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
+        // Nominal error-payload leaves (SEAL fix 2026-07-11) — monomorphic,
+        // no generics to collect.
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
