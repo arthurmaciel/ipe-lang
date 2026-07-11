@@ -9099,8 +9099,12 @@ impl<'a> Lowerer<'a> {
                 // `Html.node : String -> List (Attribute msg) -> List (Html msg) -> Html msg`
                 | KernelFn::HtmlNode
                 // `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
-                // Phase-0 passthrough — see runtime ui_breakpoint_
-                | KernelFn::UiBreakpoint,
+                // (delegates to Ui.mediaQuery at runtime — see ui_breakpoint_)
+                | KernelFn::UiBreakpoint
+                // `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
+                // Raw-query escape hatch — marker-carrying wrapper consumed by
+                // live::style_inject::build_mq (see ui_media_query_).
+                | KernelFn::UiMediaQuery,
             ) => Ok(3),
             // Arity 4: `Ui.rgba r g b a`.
             Callee::Kernel(
@@ -10179,6 +10183,7 @@ impl<'a> Lowerer<'a> {
                     }
                     // #154: Ui.breakpoint + Breakpoint constants
                     ("Ui", "breakpoint") => Ok(Callee::Kernel(KernelFn::UiBreakpoint)),
+                    ("Ui", "mediaQuery") => Ok(Callee::Kernel(KernelFn::UiMediaQuery)),
                     ("Ui", "mobile") => Ok(Callee::Kernel(KernelFn::UiMobile)),
                     ("Ui", "tablet") => Ok(Callee::Kernel(KernelFn::UiTablet)),
                     ("Ui", "desktop") => Ok(Callee::Kernel(KernelFn::UiDesktop)),

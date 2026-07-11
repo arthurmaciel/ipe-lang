@@ -797,6 +797,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiTransitionRaw => "Ui.transitionRaw",
         KernelFn::UiGridTracksRaw => "Ui.gridTracksRaw",
         KernelFn::UiBreakpoint => "Ui.breakpoint",
+        KernelFn::UiMediaQuery => "Ui.mediaQuery",
         KernelFn::UiMobile => "Ui.mobile",
         KernelFn::UiTablet => "Ui.tablet",
         KernelFn::UiDesktop => "Ui.desktop",

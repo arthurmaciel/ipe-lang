@@ -965,6 +965,75 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ui_media_query_emits_wrapper_with_mq_markers() {
+        // `Ui.mediaQuery "(min-width: 768px)" [Background.color …] child` must
+        // wrap the child in a <div> carrying data-sky-mq-q (the verbatim
+        // query) + data-sky-mq-rules (the attrs folded through
+        // build_style_string) — the wire pair
+        // `sky_runtime::live::style_inject::build_mq` decodes into a
+        // sky-id-scoped <style> block post-`assign_sky_ids`.
+        let elem = super::super::helpers::ui_media_query_::<TestMsg>(
+            "(min-width: 768px)".to_owned(),
+            vec![Attribute::AttrBgColor(Color::Rgba(18, 18, 24, 1.0))],
+            Element::Text("responsive".to_owned()),
+        );
+        let html = ui_layout(vec![], elem);
+        let s = render_html(&html);
+        assert!(
+            s.contains("data-sky-mq-q=\"(min-width: 768px)\""),
+            "mediaQuery query marker missing/malformed: {s}"
+        );
+        assert!(
+            s.contains("data-sky-mq-rules=\"background-color:rgba(18,18,24,1)\""),
+            "mediaQuery rules marker missing/malformed: {s}"
+        );
+        assert!(s.contains("responsive"), "child must render: {s}");
+    }
+
+    #[test]
+    fn ui_breakpoint_delegates_to_media_query_markers() {
+        // `Ui.breakpoint Ui.mobile [...] child` is upstream-defined as
+        // `mediaQuery (breakpointToQuery bp) ...`; with Breakpoint = String
+        // in this port the delegation must emit the same marker pair (the
+        // pre-2026-07-11 Phase-0 passthrough stub emitted nothing).
+        let elem = super::super::helpers::ui_breakpoint_::<TestMsg>(
+            super::super::helpers::ui_mobile_::<TestMsg>(),
+            vec![Attribute::AttrBgColor(Color::Rgba(1, 2, 3, 1.0))],
+            Element::Text("m".to_owned()),
+        );
+        let html = ui_layout(vec![], elem);
+        let s = render_html(&html);
+        assert!(
+            s.contains("data-sky-mq-q=\"(max-width: 767px)\""),
+            "breakpoint must emit the Ui.mobile media-query marker: {s}"
+        );
+        assert!(
+            s.contains("data-sky-mq-rules=\"background-color:rgba(1,2,3,1)\""),
+            "breakpoint rules marker missing: {s}"
+        );
+    }
+
+    /// SECURITY: a breakout media-query string must be neutralised at the
+    /// producer — the `SafeCssMediaQuery` gate drops BOTH markers (fail-closed:
+    /// no styling), while the wrapper + child still render.
+    #[test]
+    fn ui_media_query_breakout_query_drops_markers_fail_closed() {
+        let elem = super::super::helpers::ui_media_query_::<TestMsg>(
+            "(min-width: 1px) { } </style><script>alert(1)</script> @import url(evil)".to_owned(),
+            vec![Attribute::AttrBgColor(Color::Rgba(18, 18, 24, 1.0))],
+            Element::Text("safe".to_owned()),
+        );
+        let html = ui_layout(vec![], elem);
+        let s = render_html(&html);
+        assert!(
+            !s.contains("data-sky-mq-q") && !s.contains("data-sky-mq-rules"),
+            "breakout query must drop BOTH markers: {s}"
+        );
+        assert!(!s.contains("<script"), "script must never render: {s}");
+        assert!(s.contains("safe"), "child must still render: {s}");
+    }
+
     // ── UI CSS-escaping hardening (value-as-data attrs; spec §6.1) ─────────
 
     /// Every previously-ungated raw-string arm must DROP a value carrying the
