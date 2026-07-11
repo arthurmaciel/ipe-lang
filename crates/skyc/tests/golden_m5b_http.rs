@@ -120,3 +120,67 @@ fn http_builders() {
 fn http_response_fields() {
     assert_runs_and_matches_oracle("m5b_http_response_fields");
 }
+
+// ── `HttpRequest` opaque-type regression (no signature ever spells the
+// ── fieldset out) ─────────────────────────────────────────────────────────
+
+/// SKY-I0001 regression: `Http.defaultRequest url` builds an `HttpRequest`
+/// whose ONLY consumer is a field read (`req.url`) — no `Http.request` call,
+/// and no OTHER function signature in the program spells out the
+/// `{body, followRedirects, headers, maxRedirects, method, timeout, url}`
+/// fieldset as an explicit annotation.
+///
+/// Root cause: `sky_lower::lower::ir_type_from_ty` folds any solved record
+/// matching that exact 7-field shape into the opaque `IrType::HttpRequest`
+/// (so `Http.request` / `HttpStream.open` call sites see the runtime type),
+/// regardless of what the value's OTHER consumers do. But
+/// `emit_http_builder_call`'s `HttpDefaultRequest` arm used to look up a
+/// backend-SYNTHESISED struct via `record_struct_by_key` to build the struct
+/// literal — a struct that is only registered when some signature
+/// independently carries the same fieldset as a plain (non-opaque) record
+/// (e.g. `m5b_http_builders`'s explicitly-annotated `printReq` parameter).
+/// With no such signature anywhere in the program, no struct was ever
+/// registered and the lookup raised SKY-I0001, even though the value's
+/// runtime type was correctly known throughout. The fix emits
+/// `sky_runtime::HttpRequest { ... }` directly — the fixed, canonical name —
+/// instead of resolving a name through the record-shape registry.
+///
+/// This is the default-gate (emit-only, no `SKY_E2E`) companion to
+/// `http_response_fields` above: it needs only `skyc::build` to succeed and
+/// inspects the emitted Rust text, so it runs without a cargo build and
+/// cannot be silently reintroduced without failing `cargo nextest` (unlike
+/// the `SKY_E2E`-gated golden, which is invisible to the default gate).
+#[test]
+fn http_default_request_emits_without_signature_consumer() {
+    let root = repo_root();
+    let entry = golden_dir(&root, "m5b_http_response_fields").join("Main.sky");
+    let out = std::env::temp_dir().join("skyc_m5b_http_default_request_no_sig_emit");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        // Mirrors the byte goldens' resolve dependency — skip rather than
+        // false-fail when the runtime dir can't be resolved in this
+        // environment.
+        return;
+    };
+
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "skyc build must succeed for a HttpRequest built via \
+         Http.defaultRequest whose only consumer is a field read (no \
+         Http.request call, no signature spelling out the fieldset); \
+         got: {:?}",
+        built.err()
+    );
+
+    let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
+        .expect("emitted src/main.rs must exist");
+    assert!(
+        main_rs.contains("sky_runtime::HttpRequest {"),
+        "Http.defaultRequest must construct the canonical \
+         `sky_runtime::HttpRequest` struct directly, not a backend-\
+         synthesised record struct resolved through `record_struct_by_key`.\n\
+         --- src/main.rs ---\n{main_rs}"
+    );
+}
