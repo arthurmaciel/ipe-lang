@@ -1,0 +1,28 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+type alias Person =
+    { name : String, age : Int }
+
+
+-- #158 residual-scope probe: a record sub-pattern nested TWO levels deep
+-- (`Ok (Just {name})`). The constraint generator records a region on EVERY
+-- level of `PCtor` recursion, so the inner record's field set should be
+-- recoverable "for free". This fixture proves (or disproves) that claim.
+f : Result String (Maybe Person) -> String
+f r =
+    case r of
+        Ok (Just { name }) ->
+            name
+
+        Ok Nothing ->
+            "empty"
+
+        Err _ ->
+            "none"
+
+
+main =
+    println (f (Ok (Just { name = "Ada", age = 30 })))

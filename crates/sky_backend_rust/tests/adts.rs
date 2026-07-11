@@ -101,6 +101,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
                 args: vec![Pat::Var(x)],
             },
             body: Expr::Var(x),
+            guard: None,
         },
         Arm {
             pat: Pat::Ctor {
@@ -110,6 +111,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
                 args: vec![],
             },
             body: Expr::Int(0),
+            guard: None,
         },
     ];
     let unwrap_fn = Func {
@@ -239,6 +241,7 @@ fn tree_sum_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
                 args: vec![],
             },
             body: Expr::Int(0),
+            guard: None,
         },
         Arm {
             pat: Pat::Ctor {
@@ -256,6 +259,7 @@ fn tree_sum_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
                 }),
                 rhs: Box::new(call_sum(right)),
             },
+            guard: None,
         },
     ];
     Ok(Func {
@@ -426,6 +430,7 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
                 args: vec![Pat::Var(radius)],
             },
             body: Expr::Var(radius),
+            guard: None,
         },
         Arm {
             pat: Pat::Ctor {
@@ -435,6 +440,7 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
                 args: vec![Pat::Var(w), Pat::Wildcard],
             },
             body: Expr::Var(w),
+            guard: None,
         },
     ];
     let _ = h; // `h` intentionally elided by the wildcard sub-pattern.
