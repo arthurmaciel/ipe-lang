@@ -24,9 +24,9 @@ pub use code::{
 };
 pub use diagnostic::{
     AppShape, Applicability, CaseDefect, Construct, DResult, Diagnostic, Expected, ExpectedSet,
-    ExposingDefect, Feature, HeaderDefect, HelpLine, Hint, IfDefect, LetDefect, LowerError,
-    ModelLeaf, NameError, ParseError, SpanRole, Suggestion, TokenKind, TyDoc, TypeDeclDefect,
-    TypeError,
+    ExposingDefect, Feature, HOF_KERNEL_RESULT_CLASS, HeaderDefect, HelpLine, Hint, IfDefect,
+    LetDefect, LowerError, ModelLeaf, NameError, ParseError, SpanRole, Suggestion, TokenKind,
+    TyDoc, TypeDeclDefect, TypeError,
 };
 pub use render::render;
 pub use span::{Located, Span};

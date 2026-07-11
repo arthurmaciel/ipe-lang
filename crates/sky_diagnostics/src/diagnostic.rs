@@ -415,6 +415,17 @@ pub enum NameError {
     DuplicateQualifier { qualifier: Box<str>, first: Span },
 }
 
+/// Class label for the #90 T3 higher-order-kernel callback-result obligation.
+///
+/// `Maybe`/`Result` `map`/`map2..5`/`mapError`/`andMap` apply their callback
+/// at one exact arity, so the callback's result must not itself be a
+/// function. Shared between the constructor (`sky_types::super_unsatisfied`)
+/// and the renderer's tailored [`TypeError::SuperTypeUnsatisfied`] sentence so
+/// the two sites cannot drift — the generic "`X` is not a `<class>` type"
+/// template would read as a confusing double negative for this label.
+pub const HOF_KERNEL_RESULT_CLASS: &str =
+    "non-function callback result (Maybe/Result higher-order kernel)";
+
 /// Errors raised during type inference / checking.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TypeError {
@@ -473,7 +484,10 @@ pub enum TypeError {
     /// at a type that does not provide those operations (`double True`, where
     /// `double` needs `Number`), or at a type that stays non-concrete (the
     /// obligation cannot be propagated across the use). `class` names the
-    /// super-type; `found` is the offending type. [SKY-T0014]
+    /// super-type; `found` is the offending type. A `class` equal to
+    /// [`HOF_KERNEL_RESULT_CLASS`] renders through a tailored sentence — the
+    /// generic "`X` is not a `<class>` type" template reads as a confusing
+    /// double negative for that internal arity obligation. [SKY-T0014]
     SuperTypeUnsatisfied { class: Box<str>, found: Box<TyDoc> },
     /// A **parameter** pattern (lambda param, function-def head, or `let`
     /// binder) is **refutable** — it can fail to match some value of its type
