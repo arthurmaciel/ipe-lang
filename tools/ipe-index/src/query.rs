@@ -70,8 +70,10 @@ pub fn cmd_locate(db: &str, name: &str) -> Result<()> {
         writeln_bp!("{file}:{line}:{col}  {kind}");
         found = true;
     }
-    // Also show kernel info if the name matches a kernel
-    let kern_rows: Vec<(String, String, Option<String>, Option<String>, Option<String>)> = {
+    // Also show kernel info if the name matches a kernel.
+    // `(name, parity, hs_route_loc, go_impl_loc, rust_impl_loc)`.
+    type KernRow = (String, String, Option<String>, Option<String>, Option<String>);
+    let kern_rows: Vec<KernRow> = {
         let mut kst = s.conn.prepare(
             "SELECT name, parity, hs_route_loc, go_impl_loc, rust_impl_loc FROM kernels WHERE name LIKE ?1 OR hs_route LIKE ?1"
         )?;
@@ -452,8 +454,8 @@ fn resolve_rust_import(src: &str, dst: &str, known: &HashSet<String>) -> Option<
     let crate_root = find_crate_root(src_path)?;
 
     // Build candidate path segments by stripping `crate::` and splitting on `::`.
-    let rel = if dst.starts_with("crate::") {
-        &dst["crate::".len()..]
+    let rel = if let Some(stripped) = dst.strip_prefix("crate::") {
+        stripped
     } else if dst.starts_with("super::") {
         // super:: refers to parent module — too ambiguous to resolve reliably.
         return None;
