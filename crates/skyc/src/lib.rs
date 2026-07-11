@@ -288,11 +288,46 @@ fn compile_modules(
     // source — the ONLY inputs that earn `ModuleOrigin::EmbeddedStdlib` below.
     let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
 
+    // Salsa database (incremental Phase 1 — see
+    // docs/architecture/salsa-incremental-compilation-2026-07-11.md). The
+    // driver parses external state ONCE into typed inputs here (`SourceFile`
+    // per module + the `SourceRoot` file set); the front-end `imports`/`parse`
+    // stages below are demanded as memoized queries. The database is cold and
+    // per-invocation, and queries are demanded in the fixed topo order, so the
+    // interning sequence — and therefore emitted bytes — is identical to the
+    // pre-salsa pipeline (golden-suite-enforced).
+    let db = sky_db::SkyDatabase::new();
+    let file_handles: BTreeMap<Vec<String>, sky_db::SourceFile> = sources
+        .iter()
+        .map(|(mod_path, (_, src))| {
+            // The trust tag: EmbeddedStdlib IFF this exact module path was
+            // injected from the embed table. A user file squatting on `Std.Foo`
+            // is NOT in `injected` (injection skipped it on the
+            // pre-existing-key guard), so it is `User` and stays
+            // SKY-N0025-rejected.
+            let origin = if injected.contains(mod_path) {
+                sky_canon::ModuleOrigin::EmbeddedStdlib
+            } else {
+                sky_canon::ModuleOrigin::User
+            };
+            (
+                mod_path.clone(),
+                sky_db::SourceFile::new(&db, mod_path.clone(), src.clone(), origin),
+            )
+        })
+        .collect();
+    let source_root = sky_db::SourceRoot::new(&db, file_handles);
+    // The build-wide interner is owned by the database (Option 3a) so the
+    // parse query and the non-salsa passes share one symbol table. NEVER hold
+    // a lock guard across a salsa query demand (the mutex is not reentrant).
+    let shared_interner = sky_db::Db::interner(&db).clone();
+
     // Build the import graph, then topologically sort (dep-first, cycle = N0021).
     let topo = project::topological_order(&discovered, entry_path, |mod_path| {
-        sources
+        source_root
+            .files(&db)
             .get(mod_path)
-            .map(|(_, src)| project::extract_imports_from_source(src))
+            .map(|file| (*sky_db::imports(&db, *file)).clone())
             .unwrap_or_default()
     })
     .map_err(|cycle| {
@@ -308,15 +343,23 @@ fn compile_modules(
         }
     })?;
 
-    // Canonicalise each module in dep-first order.
-    let mut interner = sky_intern::Interner::new();
-    let mut dep_exports: BTreeMap<Vec<sky_intern::Symbol>, sky_canon::ModuleExports> =
-        BTreeMap::new();
+    // Canonicalise each module in dep-first order through the salsa query
+    // graph (incremental Phase 2). Each `canonicalize` demand runs
+    // parse → resolve_imports → module_interface(dep) → canon; demanding in
+    // topo order keeps every dep memoized before its importers ask for it,
+    // so the interning sequence — and therefore emitted bytes — matches the
+    // pre-salsa driver exactly (golden-suite-enforced). The trust origin now
+    // rides the `SourceFile` input (set above from `injected`).
     let mut canon_modules: Vec<sky_canon::ast::Module> = Vec::new();
     let mut entry_name: Vec<sky_intern::Symbol> = Vec::new();
 
     for m in &topo {
         let Some((path, src)) = sources.get(&m.module_path) else {
+            return Err(CliError::Usage(
+                "internal: module in topo order not in source map",
+            ));
+        };
+        let Some(file_handle) = source_root.files(&db).get(&m.module_path).copied() else {
             return Err(CliError::Usage(
                 "internal: module in topo order not in source map",
             ));
@@ -328,40 +371,26 @@ fn compile_modules(
             diag,
         };
 
-        let parsed = sky_parse::parse_module(src, &mut interner).map_err(&pipeline_err)?;
-
-        let expected_path: Vec<sky_intern::Symbol> = m
-            .module_path
-            .iter()
-            .map(|s| interner.intern(s))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(&pipeline_err)?;
-
-        // The trust tag: EmbeddedStdlib IFF this exact module path was injected
-        // from the embed table. A user file squatting on `Std.Foo` is NOT in
-        // `injected` (injection skipped it on the pre-existing-key guard), so it
-        // is `User` and stays SKY-N0025-rejected.
-        let origin = if injected.contains(&m.module_path) {
-            sky_canon::ModuleOrigin::EmbeddedStdlib
-        } else {
-            sky_canon::ModuleOrigin::User
-        };
-
-        let (canon_mod, exports) = sky_canon::canonicalise_module_with_origin(
-            &parsed,
-            &expected_path,
-            &dep_exports,
-            origin,
-            &mut interner,
-        )
-        .map_err(&pipeline_err)?;
+        // Memoized canonicalisation (locks the shared interner internally —
+        // no guard may be live here). A dep's own diagnostic never surfaces
+        // here mis-blamed: deps precede `m` in topo order, so a red dep
+        // already errored at its own iteration with its own file.
+        let canonical =
+            sky_db::canonicalize(&db, source_root, file_handle).map_err(&pipeline_err)?;
 
         if m.module_path == entry_path {
-            entry_name.clone_from(&expected_path);
+            // Lookups, not appends: the entry's own canonicalize interned
+            // its expected path already.
+            let mut interner = shared_interner.lock();
+            entry_name = m
+                .module_path
+                .iter()
+                .map(|s| interner.intern(s))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(&pipeline_err)?;
         }
 
-        dep_exports.insert(expected_path, exports);
-        canon_modules.push(canon_mod);
+        canon_modules.push(canonical.module.clone());
     }
 
     // Link → infer → lower → emit on the merged module. Blame link/lower/emit
@@ -379,6 +408,12 @@ fn compile_modules(
         src: entry_src.clone(),
         diag,
     };
+
+    // No salsa query is demanded from here on: link → infer → lower → emit
+    // are whole-program (pre-Phase-2) passes, so one guard on the shared
+    // interner covers the whole tail. The guard binds as `interner` so the
+    // pass call sites read exactly as they did pre-salsa.
+    let mut interner = shared_interner.lock();
 
     // The link step now gates cross-module type-identity duplicates
     // `(home, name)` (#100), so it is fallible; blame a duplicate on the entry
@@ -510,6 +545,9 @@ fn compile_modules(
         .with_db_driver(db_driver)
         .emit(&program)
         .map_err(span_attributed_err)?;
+    // Emit was the guard's last consumer; release it before the filesystem
+    // writes below (clippy::significant_drop_tightening).
+    drop(interner);
 
     // Vendor the runtime module tree FIRST, then write the emitted files. The
     // backend emits a trimmed `sky_runtime/mod.rs` + `config.rs`; writing the
@@ -543,7 +581,8 @@ fn compile_modules(
 /// The build pipeline:
 /// 1. Parse `sky.toml` to locate the source root.
 /// 2. Discover every `*.sky` file under `src/`.
-/// 3. Scan each file for `import` lines to build the import graph.
+/// 3. Scan each file for `import` declarations (token-level lexer scan) to
+///    build the import graph.
 /// 4. Topological sort — fail closed on a cycle (SKY-N0021).
 /// 5. Canonicalise each module in dep-first order (SKY-N0020 / N0022 / N0023 /
 ///    N0024 / N0025 gate).
