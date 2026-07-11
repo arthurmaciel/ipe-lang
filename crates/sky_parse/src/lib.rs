@@ -31,6 +31,36 @@ pub fn parse_module(src: &str, interner: &mut Interner) -> DResult<Module> {
     p.parse_module()
 }
 
+/// Token-level scan of the module paths named by `import` in `src`.
+///
+/// Lexes `src` with the real lexer and returns the dotted path of every
+/// `Ident` token that immediately follows an `import` keyword token — exactly
+/// the token shape [`parse_module`]'s import parser consumes (one `import`
+/// token, then one dotted-identifier token; the layout filter never splices
+/// tokens between them). Because the parser reads this same token stream,
+/// every import edge in a successfully parsed module's AST appears in this
+/// scan. The scan may *over*-approximate (an `import` keyword token outside
+/// the header is a parse error, not an edge) but can never miss an AST edge —
+/// the load-bearing property for the driver's SKY-N0021 import-cycle gate.
+///
+/// Returns `None` when `src` does not lex. An unlexable module cannot parse,
+/// so it contributes no AST import edges; callers may substitute a heuristic
+/// scan for ordering purposes only.
+#[must_use]
+pub fn scan_import_paths(src: &str) -> Option<Vec<Vec<String>>> {
+    let toks = lexer::lex(src).ok()?;
+    let mut out: Vec<Vec<String>> = Vec::new();
+    for pair in toks.windows(2) {
+        let [first, second] = pair else { continue };
+        if first.kind == lexer::Tok::Import
+            && let lexer::Tok::Ident(text) = &second.kind
+        {
+            out.push(text.split('.').map(str::to_owned).collect());
+        }
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 // Triple-string lexer tests use `toks[0]` after asserting `toks.len() == 1`.
 // The index is provably in-bounds at that point; suppressing the lint is

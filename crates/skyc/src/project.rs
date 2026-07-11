@@ -478,8 +478,11 @@ pub fn inject_compiled_std_closure(
 /// Extract the module paths named by `import` declarations from raw Sky source
 /// text, without a full parse.
 ///
-/// This is a best-effort line scanner used by the topo-sort driver to build
-/// the import graph before any canonicalisation runs. It recognises:
+/// This is a token-level scan (real lexer — its edge set is a
+/// superset-or-equal of the AST's import edges, so the SKY-N0021 cycle gate
+/// cannot be bypassed by lexer-legal-but-unusual spelling such as
+/// `import\tB`) used by the topo-sort driver to build the import graph
+/// before any canonicalisation runs. It recognises:
 ///
 /// ```sky
 /// import Lib.Utils

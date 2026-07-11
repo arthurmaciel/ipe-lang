@@ -285,9 +285,23 @@ byte-identical emit. Enforced by the 140+ golden byte-diff tests.
    favour of AST imports changes error ordering for unparseable modules and
    waits for the Task-18 parity gate.
 3. **Import cycles**: the driver's topo sort still rejects cycles (SKY-N0021)
-   before any `canonicalize` demand. A *direct* demand on a cyclic graph
-   (test/LSP misuse) hits salsa's cycle panic — fail-loud, never a stale or
-   silently-fixpointed value.
+   before any `canonicalize` demand. The gate is sound only because the topo
+   sort's edge set is a **superset-or-equal of the AST import edges** the
+   `canonicalize` demand walk follows. The original pre-parse line scan did
+   NOT have that property (it required the literal prefix `"import "`, so
+   lexer-legal edges like `import\tB` or `import {- c -} B` were
+   scan-invisible; a cycle completed by such an edge bypassed SKY-N0021 and
+   reached salsa's dependency-cycle panic on the production path — adversarial
+   finding M1). Fixed by replacing the line scan with a token-level scan via
+   the real lexer (`sky_parse::scan_import_paths`): the parser consumes the
+   same token stream, so every AST edge appears in the scan; over-approximation
+   (an `import` token outside the header) is harmless for cycle detection.
+   Source that does not lex falls back to the historical line scan for
+   ordering only — an unlexable module cannot parse and contributes no AST
+   edges. Regression tests: `skyc/tests/adversarial_scan_gap_cycle.rs`,
+   `sky_db/tests/adversarial_review.rs`. A *direct* demand on a cyclic graph
+   (test/LSP misuse, bypassing the driver's gate) still hits salsa's cycle
+   panic — fail-loud, never a stale or silently-fixpointed value.
 
 ### 7.5 Phase-2 decisions ledger
 

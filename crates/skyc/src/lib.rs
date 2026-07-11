@@ -581,7 +581,8 @@ fn compile_modules(
 /// The build pipeline:
 /// 1. Parse `sky.toml` to locate the source root.
 /// 2. Discover every `*.sky` file under `src/`.
-/// 3. Scan each file for `import` lines to build the import graph.
+/// 3. Scan each file for `import` declarations (token-level lexer scan) to
+///    build the import graph.
 /// 4. Topological sort — fail closed on a cycle (SKY-N0021).
 /// 5. Canonicalise each module in dep-first order (SKY-N0020 / N0022 / N0023 /
 ///    N0024 / N0025 gate).
