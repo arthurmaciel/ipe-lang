@@ -7568,7 +7568,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbExec
                 // `DbQuery : Db -> String -> List SqlValue -> Task Error (List Row)`
                 | KernelFn::DbQuery
-                // `DbInsertRow : Db -> String -> List (String, String) -> Task Error Int`
+                // `DbInsertRow : Db -> String -> Dict String String -> Task Error Int`
                 | KernelFn::DbInsertRow
                 // `DbGetById : Db -> String -> String -> Task Error (Maybe Row)`
                 | KernelFn::DbGetById
@@ -7604,7 +7604,7 @@ impl<'a> Lowerer<'a> {
                 // ── Db arity-4 (M5b-db) ───────────────────────────────────────
                 // `DbQueryDecode : Db -> String -> List SqlValue -> Decoder a -> Task Error (List a)`
                 | KernelFn::DbQueryDecode
-                // `DbUpdateById : Db -> String -> String -> List (String, String) -> Task Error Int`
+                // `DbUpdateById : Db -> String -> String -> Dict String String -> Task Error Int`
                 | KernelFn::DbUpdateById
                 // `DbFindOneByField : Db -> String -> String -> String -> Task Error (Maybe Row)`
                 | KernelFn::DbFindOneByField

@@ -1558,10 +1558,11 @@ fn emit_db_call(
                 project_fields(&fields_s)
             )))
         }
-        // ── DbInsertRow: (conn, table, row: List (String, String)) ─────────────
-        // The runtime function takes `row: HashMap<String, String>` while the
-        // Sky type is `List (String, String)` (Vec<(String, String)> in Rust).
-        // Emit `.into_iter().collect()` to convert at the call site.
+        // ── DbInsertRow: (conn, table, row: Dict String String) ────────────────
+        // The Sky surface is upstream-parity `Dict String String` (bdbc572);
+        // `Dict String String` already lowers to `HashMap<String, String>`
+        // (the runtime function's own parameter type), so `row_s` passes
+        // straight through with no conversion.
         KernelFn::DbInsertRow => {
             let conn_e = arg!(0, "conn")?;
             let table_e = arg!(1, "table")?;
@@ -1571,11 +1572,11 @@ fn emit_db_call(
             let row_s = emit_expr_at(ctx, row_e, indent, child, generics)?;
             let fn_name = crate::naming::kernel_name(*k);
             Ok(Some(format!(
-                "{fn_name}({conn_s}.clone(), {table_s}, ({row_s}).into_iter().collect::<HashMap<String, String>>())"
+                "{fn_name}({conn_s}.clone(), {table_s}, {row_s})"
             )))
         }
-        // ── DbUpdateById: (conn, table, id, row: List (String, String)) ────────
-        // Same HashMap conversion needed.
+        // ── DbUpdateById: (conn, table, id, row: Dict String String) ───────────
+        // Same no-conversion-needed rationale as DbInsertRow above.
         KernelFn::DbUpdateById => {
             let conn_e = arg!(0, "conn")?;
             let table_e = arg!(1, "table")?;
@@ -1587,7 +1588,7 @@ fn emit_db_call(
             let row_s = emit_expr_at(ctx, row_e, indent, child, generics)?;
             let fn_name = crate::naming::kernel_name(*k);
             Ok(Some(format!(
-                "{fn_name}({conn_s}.clone(), {table_s}, {id_s}, ({row_s}).into_iter().collect::<HashMap<String, String>>())"
+                "{fn_name}({conn_s}.clone(), {table_s}, {id_s}, {row_s})"
             )))
         }
         // ── DbWithTransaction: (conn, body: Db -> Task e a) → Task e a ────────
