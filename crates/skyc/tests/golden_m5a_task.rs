@@ -14,8 +14,10 @@
 //!   `Task.succeed` lifts a pure value; `Task.andThen` chains the effectful
 //!   continuation.  Expected output: `42`.
 //!
-//! * `m5a_error_channel` — `Task.onError println (Task.fail "recovered")`.
-//!   `Task.fail` creates a failed task; `Task.onError` recovers it.
+//! * `m5a_error_channel` — `Task.onError (\e -> println "recovered") (Task.fail
+//!   (Error.unexpected "an error"))`. `Task.fail` creates a failed task;
+//!   `Task.onError` recovers it. `Task.fail` is pinned to `Error -> Task Error
+//!   a` (class-7 fix), so the argument is an `Error`, not a bare `String`.
 //!   Expected output: `recovered`.
 //!
 //! * `m5a_task_signed_helper` — `greet : String -> Task Error ()` signed top-level
@@ -92,8 +94,9 @@ fn task_combinators() {
 
 // ── Error channel ────────────────────────────────────────────────────────────
 
-/// `Task.onError println (Task.fail "recovered")` must create a failed task
-/// and recover via `onError`, printing `recovered` on stdout.
+/// `Task.onError (\e -> println "recovered") (Task.fail (Error.unexpected "an
+/// error"))` must create a failed task and recover via `onError`, printing
+/// `recovered` on stdout.
 #[test]
 fn error_channel() {
     assert_runs_and_matches_oracle("m5a_error_channel");
@@ -114,10 +117,12 @@ fn task_signed_helper() {
 
 // ── onError / mapError lambda ─────────────────────────────────────────────────
 
-/// `Task.onError (\e -> println "recovered") (Task.fail "an error")` exercises
-/// the `mapError`/`onError` `kernel_ty` fix: the handler parameter `e` must be
-/// inferred as `Error` (not a free `var(1)`) so the unused-lambda-param path
-/// doesn't trigger SKY-L0102 ("polymorphic parameter").
+/// `Task.onError (\e -> println "recovered") (Task.fail (Error.unexpected "an
+/// error"))` exercises the `mapError`/`onError` `kernel_ty` fix: the handler
+/// parameter `e` must be inferred as `Error` (not a free `var(1)`) so the
+/// unused-lambda-param path doesn't trigger SKY-L0102 ("polymorphic
+/// parameter"). `Task.fail` is pinned to `Error -> Task Error a`, hence the
+/// `Error.unexpected` wrap rather than a bare string literal.
 /// Expected output: `recovered`.
 #[test]
 fn task_map_error_lambda() {

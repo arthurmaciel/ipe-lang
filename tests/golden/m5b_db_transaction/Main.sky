@@ -1,5 +1,7 @@
 module Main exposing (main)
 
+import Sky.Core.Error as Error
+
 -- M5b-db golden: withTransaction COMMIT path and ROLLBACK-on-error path.
 -- Uses a file-backed SQLite DB (/tmp/sky_txn_golden.db) so all pool connections
 -- share the same persisted database — independent sequential transactions can
@@ -46,7 +48,7 @@ main =
                                                 "INSERT INTO log VALUES (?)"
                                                 [ SqlString "world" ]
                                     in
-                                    Task.fail "rollback-test"
+                                    Task.fail (Error.unexpected "rollback-test")
                                 )
                             )
                         )

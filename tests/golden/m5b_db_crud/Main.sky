@@ -1,8 +1,9 @@
 module Main exposing (main)
 
 -- M5b-db golden: insertRow → getById → updateById → deleteById CRUD cycle.
--- Exercises the Vec<(String,String)>→HashMap<String,String> conversion emitted
--- by emit_db_call for DbInsertRow and DbUpdateById (M5b-db fix).
+-- Exercises the upstream-parity `Dict String String` row surface for
+-- DbInsertRow / DbUpdateById (bdbc572); `Dict String String` lowers directly
+-- to `HashMap<String, String>` with no runtime conversion.
 
 main =
     Task.andThen
@@ -17,13 +18,18 @@ main =
                         _ =
                             Db.insertRow txconn
                                 "fruits"
-                                [ ( "id", "1" ), ( "name", "apple" ), ( "qty", "5" ) ]
+                                (Dict.fromList
+                                    [ ( "id", "1" ), ( "name", "apple" ), ( "qty", "5" ) ]
+                                )
                     in
                     Task.andThen
                         (\before ->
                             let
                                 _ =
-                                    Db.updateById txconn "fruits" "1" [ ( "qty", "10" ) ]
+                                    Db.updateById txconn
+                                        "fruits"
+                                        "1"
+                                        (Dict.fromList [ ( "qty", "10" ) ])
                             in
                             Task.andThen
                                 (\after ->
