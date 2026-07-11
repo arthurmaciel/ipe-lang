@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+-- #142/AUD-09 type-directed Copy elision on record-field access.
+--
+-- `c.count` (Int — Rust `Copy`) is read TWICE: the emitted Rust must read it
+-- BARE (no `.clone()`); the read itself is the copy.  `c.label` (String —
+-- heap-backed) is also read twice: the emitted Rust MUST keep `.clone()` on
+-- it, or the second read is a use-after-move (E0382).
+--
+-- Expected output: "6|xx"
+
+
+type alias Counter = { count : Int, label : String }
+
+
+render : Counter -> String
+render c =
+    String.fromInt (c.count + c.count) ++ "|" ++ c.label ++ c.label
+
+
+main =
+    println (render { count = 3, label = "x" })
