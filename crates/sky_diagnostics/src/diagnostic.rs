@@ -22,7 +22,7 @@ use crate::code::{
     SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015,
     SKY_P0016, SKY_P0017, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041,
     SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004,
-    SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_T0015, Severity,
+    SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_T0015, SKY_T0016, Severity,
 };
 use crate::span::Span;
 
@@ -484,6 +484,14 @@ pub enum TypeError {
     /// emitted panic arm, no `DoS`/500 surface). The offending sub-pattern's span
     /// rides on the wrapping [`Diagnostic::Type`]. [SKY-T0015]
     RefutablePatternParameter,
+    /// A `Task` type constructor applied to a number of type arguments other than
+    /// 1 (the internal unary form `Task a`) or 2 (the canonical user annotation
+    /// `Task Error a`). Reachable from source because canonicalisation validates
+    /// arity only for type *aliases* (`NameError::AliasArity`), never for a
+    /// non-alias type-constructor application like `Task Error Int Bool` (3 args)
+    /// or a bare `Task` (0 args). Converts a former `CompilerBug` ICE into a clean
+    /// fail-closed diagnostic naming the found argument count. [SKY-T0016]
+    TaskArity { found: usize },
 }
 
 /// A language feature that the Milestone-0 lowerer does not yet support. Each
@@ -889,7 +897,8 @@ impl Diagnostic {
                 | TypeError::NoSuchField { .. }
                 | TypeError::CtorPatternArity { .. }
                 | TypeError::SuperTypeUnsatisfied { .. }
-                | TypeError::RefutablePatternParameter => Severity::Error,
+                | TypeError::RefutablePatternParameter
+                | TypeError::TaskArity { .. } => Severity::Error,
             },
             Self::CompilerBug { .. } => Severity::Bug,
         }
@@ -985,6 +994,7 @@ const fn type_code(msg: &TypeError) -> Code {
         TypeError::CtorPatternArity { .. } => SKY_T0013,
         TypeError::SuperTypeUnsatisfied { .. } => SKY_T0014,
         TypeError::RefutablePatternParameter => SKY_T0015,
+        TypeError::TaskArity { .. } => SKY_T0016,
     }
 }
 
@@ -1144,7 +1154,8 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
         | TypeError::RedundantCaseBranch { .. }
         | TypeError::NoSuchField { .. }
         | TypeError::CtorPatternArity { .. }
-        | TypeError::SuperTypeUnsatisfied { .. } => Vec::new(),
+        | TypeError::SuperTypeUnsatisfied { .. }
+        | TypeError::TaskArity { .. } => Vec::new(),
     }
 }
 
