@@ -234,14 +234,23 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             "ServerHandler<SkyError>".to_owned()
         }
         // WsServerCfg callback fields store Arc<dyn Fn + Send + Sync>; emit the
-        // matching type so the WS adapter functions compile.  The two shapes are:
+        // matching type so the WS adapter functions compile.  The three shapes are:
         //   onConnect / onClose  →  Fn(WsHandle) -> SkyTask<()>
-        //   onMessage  / onError →  Fn(WsHandle, String) -> SkyTask<()>
+        //   onMessage            →  Fn(WsHandle, String) -> SkyTask<()>
+        //   onError              →  Fn(WsHandle, Error)  -> SkyTask<()>
+        // `onError`'s second param is the error type, NOT String — its runtime
+        // setter `ws_server_with_on_error` takes `Arc<dyn Fn(WsHandle, E) -> …>`,
+        // so it MUST render as `Arc<…>` here (and box with `Arc::new` in
+        // `wants_arc_ctor`, whose pattern is kept in lock-step). Omitting the
+        // `[WebSocketServer, Error]` shape rendered it as the generic `Box<dyn Fn>`
+        // below and passed a `Box` into that `Arc` param → skyc-0-then-cargo-fail
+        // E0308 for any `onError` callback.
         // This arm MUST appear before the generic `Fun` arm so it takes priority.
         IrType::Fun(params, ret)
             if matches!(
                 params.as_slice(),
-                [IrType::WebSocketServer] | [IrType::WebSocketServer, IrType::Str]
+                [IrType::WebSocketServer]
+                    | [IrType::WebSocketServer, IrType::Str | IrType::Error]
             ) && matches!(ret.as_ref(), IrType::Task(inner) if matches!(inner.as_ref(), IrType::Unit)) =>
         {
             let mut parts = Vec::with_capacity(params.len());

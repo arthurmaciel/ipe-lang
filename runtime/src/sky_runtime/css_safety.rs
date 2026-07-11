@@ -174,6 +174,42 @@ impl<'a> SafeCssValue<'a> {
     }
 }
 
+/// Sink-side re-validation of a `;`-joined CSS declaration list — the payload
+/// carried by the `data-sky-mq-rules` / `data-sky-pc-rules` style markers.
+///
+/// The PRODUCER (`ui_media_query_` / `ui_on_pseudo_`) builds this string from
+/// [`SafeCssValue`]-gated declarations, but a caller can FORGE the marker
+/// directly with `Ui.htmlAttribute "data-sky-mq-rules" "…}[x]{@import url(…)"`,
+/// which never passes through the producer at all. The raw marker String is
+/// therefore the real untrusted boundary — parse, don't validate — so the SINK
+/// must re-validate rather than trust an upstream that a generic `htmlAttribute`
+/// escape hatch can side-step.
+///
+/// Splits on `;` and checks each non-empty declaration through the shared
+/// [`SafeCssValue`] policy (which rejects `; { } </ /* @import` and the
+/// script-sink keywords in both raw and CSS-escape-decoded forms). Returns the
+/// ORIGINAL, unmodified slice when EVERY declaration is safe (byte-identical to
+/// the producer output — no reformat); drops the WHOLE block (`None`,
+/// fail-closed) the moment any declaration carries a breakout. A block of only
+/// empty declarations yields `None`.
+///
+/// `cfg(feature = "live")`-gated: its only callers are the `live` style sink's
+/// `build_mq` / `build_pc` (`live/style_inject.rs`), which are themselves under
+/// that feature — so the helper is dead code in a runtime built without `live`.
+#[cfg(feature = "live")]
+pub(crate) fn sink_safe_declaration_list(rules: &str) -> Option<&str> {
+    let mut any = false;
+    for decl in rules.split(';') {
+        let d = decl.trim();
+        if d.is_empty() {
+            continue;
+        }
+        SafeCssValue::parse(d)?;
+        any = true;
+    }
+    if any { Some(rules) } else { None }
+}
+
 /// A validated CSS selector / media-query string (NEW — strict, drop-on-doubt).
 ///
 /// Allowed charset: ASCII letters, digits, and the CSS structural set
