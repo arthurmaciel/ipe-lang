@@ -614,6 +614,9 @@ pub fn linked_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> Linke
         .map(|segment| interner.intern(segment))
         .collect::<Result<_, _>>()?;
     let module = sky_canon::link::link(entry_name.clone(), modules, &interner)?;
+    // Link was the guard's last consumer; release it before constructing the
+    // return value (clippy::significant_drop_tightening).
+    drop(interner);
     Ok(Arc::new(LinkedProgram { entry_name, module }))
 }
 
@@ -639,6 +642,34 @@ pub fn kernel_types(db: &dyn Db, root: SourceRoot) -> KernelTypesResult {
     let _ = root;
     let mut interner = db.interner().lock();
     sky_types::kernel_type_table(&mut interner).map(Arc::new)
+}
+
+/// The identifier words of one module's source text — the per-file slice of
+/// the fresh-name collision universe (`Interner::set_fresh_avoid`).
+///
+/// Primary path: [`sky_parse::scan_identifier_words`] (real lexer — exactly
+/// the identifier strings the parser interns, plus `{{…}}` interpolation
+/// words). Fallback for source that does not lex: a raw word scan over the
+/// whole text — a sound over-approximation (an unlexable module never
+/// reaches lowering anyway; totality keeps the query panic-free).
+///
+/// Keyed on `file`'s text only, so the union the driver builds re-validates
+/// cheaply: an edit that adds no new identifier words backdates this memo.
+#[salsa::tracked]
+pub fn identifier_words(db: &dyn Db, file: SourceFile) -> Arc<BTreeSet<String>> {
+    let text = file.text(db);
+    Arc::new(sky_parse::scan_identifier_words(text).unwrap_or_else(|| raw_word_scan(text)))
+}
+
+/// Every maximal `[A-Za-z0-9_]+` run in `src` — the totality fallback for
+/// [`identifier_words`]. Over-approximates identifiers (comments and string
+/// contents contribute words), which is the sound direction for a collision
+/// universe.
+fn raw_word_scan(src: &str) -> BTreeSet<String> {
+    src.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

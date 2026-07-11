@@ -6269,7 +6269,7 @@ impl<'a> Builder<'a> {
     /// [`kernel_type_table`] (the salsa Task-9 `kernel_types()` query's
     /// single source of schemes — one code path, so the query can never
     /// drift from what inference actually uses).
-    fn for_scheme_table(
+    const fn for_scheme_table(
         uf: &'a mut UnionFind<Content>,
         interner: &'a Interner,
         builtins: Builtins,
@@ -6296,10 +6296,12 @@ impl<'a> Builder<'a> {
     }
 }
 
-/// Materialize the full kernel type-scheme table: every [`StdlibKernel`]
-/// variant paired with its inference scheme, in `StdlibKernel::ALL` order,
-/// skipping variants the registry deliberately never schemes (routed /
-/// unlowered buckets — those fail closed with SKY-L0108 at their call sites).
+/// Materialize the full kernel type-scheme table.
+///
+/// Every [`StdlibKernel`] variant paired with its inference scheme, in
+/// `StdlibKernel::ALL` order, skipping variants the registry deliberately
+/// never schemes (routed / unlowered buckets — those fail closed with
+/// SKY-L0108 at their call sites).
 ///
 /// This is the *lift* behind the salsa `kernel_types()` query (incremental
 /// plan Task 9): the table is read through the SAME [`Builder::stdlib_scheme`]

@@ -337,3 +337,154 @@ byte-identical emit. Enforced by the 140+ golden byte-diff tests.
 | `resolve_imports_delete_module` | green → remove dep from the set → red (never a stale green) |
 | `resolve_imports_rename_module` | rename dep module → importer red; fix the `import` line → green |
 | `stdlib_shadow_stays_rejected` | user file at `Std.…` stays SKY-N0025-rejected; same path with driver-vouched `EmbeddedStdlib` origin canonicalises |
+
+---
+
+## 8. Phase 3 — implemented (2026-07-11)
+
+Phase 3 = plan Tasks **18 (the parity gate — stood up FIRST, as mandated),
+9, and 11**. Headline result: **the clean-vs-incremental parity gate is
+GREEN** — warm-database rebuilds emit byte-identical output to cold builds
+across the full golden corpus, closing §3.3's recorded warm-db limitation.
+
+### 8.1 Task 18 — the parity gate, and what it caught
+
+`crates/skyc/tests/clean_vs_incremental_parity.rs`. Both sides drive
+`skyc::compile_prepared` — THE production pipeline (see §8.3) — never a
+copy:
+
+- **cold side**: fresh db built from the final source state (exactly what a
+  one-shot `skyc build` does);
+- **warm side**: ONE database reused across a scripted edit sequence,
+  inputs reconciled per state via the new `sky_db::sync_source_root`
+  driver-boundary helper.
+
+Coverage: every fixture under `tests/golden/*` (4 shards, ~5 s each) runs a
+probe-edit → revert sequence (`parity_probe_golden_fixtures_shard{0..3}`)
+— the probe appends a never-before-seen top-level identifier to `Main`, so
+the warm db re-parses and interns it at a *tail* symbol id where a cold
+build interns it mid-parse (the sharpest numbering probe) — plus
+`parity_multimodule_adversarial_edits`: body-only edit, export widening,
+export type flip (red AND green), module add, module delete, module
+rename. Byte-identical file sets + contents, and identical rendered
+diagnostics on red states.
+
+**The finding (gate red on first run, as it should be).** The suspected
+hazard — symbol *numbering* leaking into emitted bytes — does NOT occur on
+this corpus. What DID leak was the lowerer's fresh-name pools:
+`Interner::fresh_symbols` skipped any candidate already **interned**, so a
+warm rebuild skipped the previous build's own `eta_0…` and minted
+`eta_16…` into the emitted Rust (caught on `i121_firstclass_curried`,
+`eta_16/eta_17` vs `eta_0/eta_1`) — interner-as-untracked-state inside
+lowering. All six pools (`eta_`, `cap_`, `arg_`, `anyp_`, `destr_thunk_`,
+`ncons_`) had the defect.
+
+**Root-cause fix (not a workaround).** The collision universe for fresh
+names is now a **pure function of the build's source inputs**:
+
+- `sky_parse::scan_identifier_words` — real-lexer scan collecting every
+  `Ident` token (full dotted text + segments) plus words inside triple-
+  string `{{…}}` interpolation regions: a guaranteed superset of every
+  identifier string the parser interns, with no per-AST-node walker that
+  could silently under-approximate. Comments and plain string contents
+  contribute nothing (matching what the parser interns — this is what
+  keeps cold-build bytes unchanged; several goldens name `eta_0` in
+  comments).
+- `sky_db::identifier_words(file)` — the memoized per-file slice (raw
+  word-scan fallback for unlexable text, sound over-approximation).
+- `Interner::set_fresh_avoid(set)` — the driver installs the program-wide
+  union before the lowering tail; `fresh_symbols` consults the set instead
+  of table membership. Unset ⇒ historical whole-table behaviour (unit
+  tests, per-build embedders) — equivalent on a cold interner.
+
+Re-minting a pool name on a warm interner returns the same append-only
+symbol, so warm and cold builds emit identical names. Proven at the
+interner level (`fresh_symbols_avoid_set_*` tests) and end-to-end by the
+gate, including the sticky-removal corner (an `eta_0` user identifier
+added then removed frees the candidate again — per-build set, never
+sticky).
+
+**Residual precision statement.** `sky_types`' `mint_synth_symbol`
+(generalized type-var names for untyped-def schemes) still consults
+interner membership. The gate is green over the full corpus, so those
+names demonstrably do not reach emitted bytes today; if a future change
+routes them into emit, the gate is the tripwire, and the same
+avoid-set mechanism is the prepared fix.
+
+### 8.2 Task 9 — `kernel_types()`
+
+`sky_types::kernel_type_table(&mut Interner)` materializes every schemed
+`StdlibKernel` paired with its inference scheme, read through the SAME
+`stdlib_scheme` method inference uses (the test-only minimal builder was
+un-gated as `Builder::for_scheme_table`) — one code path, so the memoized
+table can never drift from what constraint generation applies.
+`sky_db::kernel_types(db, root)` wraps it as a tracked query, keyed on
+`SourceRoot` as the forward seam for the parked per-package
+`ffi_package_interface` inputs (plan Task 2): when FFI arrives, the query
+unions them in with no graph redesign. Proven: memoized, and source edits
+never re-derive it (`kernel_types_memoized_and_source_independent`).
+Not yet demanded on the production path — infer still derives schemes
+internally; the query is the Phase-4 seam for per-module `typecheck`.
+
+### 8.3 Task 11 — the coarse `linked_program()` spine
+
+- `sky_db::topological_order_paths` is now the SINGLE topo algorithm
+  (moved from `skyc::project`, which delegates); the memoized
+  `topo_order(db, root, entry)` query runs it over the `SourceRoot` keys
+  with `imports`-query edges. A cycle returns the SKY-N0021 diagnostic as
+  a **value** — and because `linked_program` gates on `topo_order` before
+  any `canonicalize` demand, a direct demand on a cyclic graph now yields
+  the diagnostic instead of salsa's dependency-cycle panic (strict
+  fail-loud improvement over Phase 2's recorded behaviour).
+- `linked_program(db, root, entry)` assembles every per-module
+  `canonicalize` memo in topo order and links (`LinkedProgram
+  { entry_name, module }`). Deliberately coarse: any semantic edit
+  re-links the world; byte-equal re-saves and repeat demands execute
+  nothing (`linked_program_memoized_coarse_floor`). This is the seam
+  Phase 4's per-module `typecheck`/`lower` refines under the now-standing
+  parity gate.
+- Driver restructure: `compile_modules` = inject → `create_source_root`
+  → **`compile_prepared`** (the in-memory production core: topo → blame
+  loop → `linked_program` → infer → lower → emit) →
+  `write_emitted_project`. `compile_prepared` is public precisely so the
+  parity gate drives the real pipeline.
+
+Ordering note (recorded behavioural delta, golden-arbitrated green):
+modules **unreachable from the entry** are now appended in sorted
+module-path order (`SourceRoot` keys) rather than discovery order. The
+DFS-reachable prefix — which determines interning order and linked def
+order for every reachable module — is order-independent and unchanged.
+
+### 8.4 Phase-3 decisions ledger
+
+1. **Gate first.** Task 18 was stood up before wiring anything new into
+   production, went red on its first run, and the divergence it caught
+   (fresh-name pools) was fixed at the root rather than recorded as a gap.
+2. **Fresh-name determinism via source-derived avoid set** — chosen over
+   (a) a canon-AST symbol walker (a missed arm silently under-approximates
+   → capture bug; the token scan cannot under-approximate) and (b) a
+   reserved `__sky_`-prefix namespace (would re-bless every golden's
+   expected bytes wholesale).
+3. **`kernel_types` keyed on `SourceRoot`** — reads nothing from it today
+   (documented); the key is the join point where per-project FFI package
+   interfaces will enter.
+4. **Coarse spine cost**: one extra whole-program module clone per build
+   (the linked module leaves its memo by clone). Accepted for Phase 3;
+   Phase 4's per-module refinement subsumes it.
+5. **Warm-reuse status change**: with the gate green, warm-db reuse
+   graduates from "test-only" (§3.3) to *gate-proven on the golden
+   corpus*. Production still builds cold-per-invocation; `ipe watch`
+   (Phase 7) is what will consume warm reuse, behind this gate in CI.
+
+### 8.5 Phase-3 proof tests
+
+| Test | Asserts |
+|---|---|
+| `skyc::clean_vs_incremental_parity` (5 tests) | THE gate — see §8.1 |
+| `sky_db::phase3_spine topo_order_dep_first_and_memoized` | dep-first order; repeat demand memoized |
+| `topo_order_cycle_is_a_value_not_a_panic` | SKY-N0021 as value from both `topo_order` and `linked_program` on a cyclic graph |
+| `linked_program_links_all_modules` | whole-program merge carries every module's defs + the entry name |
+| `linked_program_memoized_coarse_floor` | repeat demand + byte-equal re-save execute nothing; semantic dep edit re-links (the documented coarse floor) |
+| `kernel_types_memoized_and_source_independent` | memoized; source edits never re-derive; query table == direct `kernel_type_table` read |
+| `sync_source_root_noop_add_remove` | byte-identical re-sync dirties nothing; module add/remove flows through the file set |
+| `sky_intern fresh_symbols_avoid_set_*` (3 tests) | warm re-mint stability, user-identifier dodging, per-build (non-sticky) semantics |

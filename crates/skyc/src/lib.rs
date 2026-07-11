@@ -342,8 +342,9 @@ pub fn create_source_root(
     sky_db::SourceRoot::new(db, file_handles)
 }
 
-/// The in-memory compile core over an already-populated database: topo order
-/// → per-module canonicalisation (memoized, blame-attributed) →
+/// The in-memory compile core over an already-populated database.
+///
+/// topo order → per-module canonicalisation (memoized, blame-attributed) →
 /// [`sky_db::linked_program`] (the coarse Phase-3 spine) → infer → lower →
 /// emit. Returns the emitted project without touching the filesystem.
 ///
@@ -442,11 +443,23 @@ pub fn compile_prepared(
         sky_db::linked_program(db, source_root, entry_file).map_err(&pipeline_err)?;
     let linked = &linked_program.module;
 
+    // The fresh-name collision universe for this build: the identifier words
+    // of the CURRENT program — a pure function of the source inputs, so the
+    // lowering pools (`eta_*`, `cap_*`, …) mint the SAME names on a warm
+    // (reused) database as on a cold one. Interner-membership minting would
+    // skip the previous build's pool names and drift the emitted bytes — the
+    // exact divergence the Task-18 parity gate caught.
+    let mut fresh_avoid: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for file in source_root.files(db).values() {
+        fresh_avoid.extend(sky_db::identifier_words(db, *file).iter().cloned());
+    }
+
     // No salsa query is demanded from here on: infer → lower → emit are
     // whole-program (pre-Phase-4) passes, so one guard on the shared
     // interner covers the whole tail. The guard binds as `interner` so the
     // pass call sites read exactly as they did pre-salsa.
     let mut interner = shared_interner.lock();
+    interner.set_fresh_avoid(fresh_avoid);
 
     // Build a module-home → (file, src) map used to attribute infer diagnostics
     // to the correct dep source file (#144).  Intern each String module-path
@@ -568,10 +581,14 @@ pub fn compile_prepared(
     };
     let program =
         sky_lower::lower(linked, &types, &mut interner).map_err(span_attributed_err)?;
-    RustBackend::new(&interner)
+    let emitted = RustBackend::new(&interner)
         .with_db_driver(db_driver)
         .emit(&program)
-        .map_err(span_attributed_err)
+        .map_err(span_attributed_err)?;
+    // Emit was the guard's last consumer; release it before returning
+    // (clippy::significant_drop_tightening).
+    drop(interner);
+    Ok(emitted)
 }
 
 /// Write an emitted project to `out_dir`, vendoring the runtime module tree
