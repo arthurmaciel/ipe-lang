@@ -991,9 +991,60 @@ fn canonicalise_with_env(
 ) -> DResult<canon::Module> {
     let home = env.home.clone();
 
+    // #102: a LOCAL type/alias declaration whose name already has a
+    // `type_home_map` entry from a DIFFERENT home is a dep-imported type being
+    // shadowed. Reject it here, at the declaration, with the SAME
+    // `NameError::DuplicateType` (SKY-N0012) `inject_dep_type` already uses for a
+    // dep-vs-dep clash — closing the asymmetry where THAT clash was caught
+    // cleanly but this one silently mis-registered the environment (the local
+    // ctors won, but the type-home map kept pointing at the dep's home),
+    // surfacing three functions later as an unrelated SKY-T0001 type mismatch
+    // (docs/architecture/class4-pattern-lowering-fix-spec-2026-07-09.md, item D).
+    //
+    // This standalone pre-pass READS `type_home_map` but does NOT yet write this
+    // module's own entries — the two loops below still own that. Running it first
+    // (unions before aliases, both before the `entry/or_insert` loop mutates the
+    // map) avoids a two-declarations-in-one-module case spuriously seeing its own
+    // freshly-inserted entry and misreporting a shadow. Same-module duplicates
+    // (`type X = A; type X = B` in ONE module) are still caught — with a better,
+    // first-declared span — by the `seen_types` loops below, which run after this
+    // pre-pass has already ruled out the dep-shadow case.
+    for u in &m.unions {
+        let type_name = u.value.name.value;
+        if let Some(existing) = type_home_map.get(&type_name)
+            && existing.as_slice() != home.as_slice()
+        {
+            return Err(Diagnostic::Name {
+                span: u.value.name.span,
+                msg: NameError::DuplicateType {
+                    name: name_str(interner, type_name)?,
+                    // No source span survives from the dep side here — matches
+                    // `inject_dep_type`'s established convention for this clash.
+                    first: Span::DUMMY,
+                },
+            });
+        }
+    }
+    for a in &m.aliases {
+        let alias_name = a.value.name.value;
+        if let Some(existing) = type_home_map.get(&alias_name)
+            && existing.as_slice() != home.as_slice()
+        {
+            return Err(Diagnostic::Name {
+                span: a.value.name.span,
+                msg: NameError::DuplicateType {
+                    name: name_str(interner, alias_name)?,
+                    first: Span::DUMMY,
+                },
+            });
+        }
+    }
+
     // Add this module's own types to the type-home map. Dep-imported types were
-    // already added by inject_dep_exports before this call; using `entry/or_insert`
-    // means a local type that shadows an import's type is registered as LOCAL.
+    // already added by inject_dep_exports before this call; the dep-shadow
+    // pre-pass above has already rejected any local type whose name clashes with
+    // a DIFFERENT home, so `entry/or_insert` here only ever inserts a genuinely
+    // local (or same-home) type.
     for u in &m.unions {
         type_home_map
             .entry(u.value.name.value)
