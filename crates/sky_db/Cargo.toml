@@ -9,6 +9,7 @@ sky_intern = { path = "../sky_intern" }
 sky_diagnostics = { path = "../sky_diagnostics" }
 sky_syntax = { path = "../sky_syntax" }
 sky_parse = { path = "../sky_parse" }
+sky_canon = { path = "../sky_canon" }
 
 [lints]
 workspace = true

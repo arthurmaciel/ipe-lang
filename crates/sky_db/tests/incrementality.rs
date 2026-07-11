@@ -62,6 +62,7 @@ fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
         db,
         path.iter().map(|s| (*s).to_owned()).collect(),
         text.to_owned(),
+        sky_db::ModuleOrigin::User,
     )
 }
 
