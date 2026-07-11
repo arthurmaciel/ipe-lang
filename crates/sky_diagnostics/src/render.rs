@@ -431,6 +431,10 @@ fn type_label(msg: &TypeError) -> Option<String> {
             "type {} has no field `{field}`",
             ty_to_string(record)
         )),
+        TypeError::BuiltinRecordUpdate { name } => Some(format!(
+            "`{name}` is a built-in type — its fields can be read (`x.field`), \
+             but it cannot be rebuilt with record-update syntax"
+        )),
         TypeError::CtorPatternArity {
             ctor,
             expected,
