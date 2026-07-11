@@ -163,10 +163,18 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     // Lowerer arm: `ir_type_from_canon` `"ErrorDetails" => IrType::ErrorDetails`.
     // (`ErrorKind` — registered the same way at the same lowerer site — is a
     // PRE-EXISTING gap in this list, not introduced here; left alone to stay
-    // strictly additive. `PanicInfo`/`TypeInfo` are NOT added: like
-    // `ErrorInfo`, they are anonymous structural records with no dedicated
-    // `IrType` leaf, so they never need the empty-home sentinel here.)
+    // strictly additive.)
     "ErrorDetails",
+    // `Sky.Core.Error`'s NOMINAL payload types (SEAL fix 2026-07-11 —
+    // `docs/architecture/error-record-literal-seal-fix-2026-07-11.md`).
+    // Previously anonymous structural records; now opaque nominal Cons backed
+    // by `sky_runtime::error::{SkyPanicInfo, SkyTypeInfo, SkyErrorInfo}`, so
+    // annotations such as `describePanic : PanicInfo -> String` must resolve.
+    // Lowerer arms: `ir_type_from_canon` / `ir_type_from_ty`
+    // `"PanicInfo" => IrType::PanicInfo` (etc.).
+    "PanicInfo",
+    "TypeInfo",
+    "ErrorInfo",
 ];
 
 /// Kernel-implicit Prelude type names (#576) that are globally in scope in

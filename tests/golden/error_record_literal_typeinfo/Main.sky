@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+-- SEAL fix 2026-07-11: `TypeInfo` is a NOMINAL opaque type backed by the
+-- runtime's `SkyTypeInfo`. A bare record literal must be REJECTED at `skyc`
+-- time (SKY-T0001). See tests/golden/error_record_literal_panicinfo/.
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+describe : ErrorDetails -> String
+describe details =
+    case details of
+        TypeMismatch t ->
+            "TypeMismatch " ++ t.expected ++ " vs " ++ t.actual
+
+        _ ->
+            "other"
+
+
+main =
+    println (describe (TypeMismatch { expected = "Int", actual = "String" }))
