@@ -300,9 +300,19 @@ fn compile_modules(
     let file_handles: BTreeMap<Vec<String>, sky_db::SourceFile> = sources
         .iter()
         .map(|(mod_path, (_, src))| {
+            // The trust tag: EmbeddedStdlib IFF this exact module path was
+            // injected from the embed table. A user file squatting on `Std.Foo`
+            // is NOT in `injected` (injection skipped it on the
+            // pre-existing-key guard), so it is `User` and stays
+            // SKY-N0025-rejected.
+            let origin = if injected.contains(mod_path) {
+                sky_canon::ModuleOrigin::EmbeddedStdlib
+            } else {
+                sky_canon::ModuleOrigin::User
+            };
             (
                 mod_path.clone(),
-                sky_db::SourceFile::new(&db, mod_path.clone(), src.clone()),
+                sky_db::SourceFile::new(&db, mod_path.clone(), src.clone(), origin),
             )
         })
         .collect();
