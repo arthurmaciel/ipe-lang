@@ -3,7 +3,8 @@
 -- All functions are aliased to the runtime kernel via `Ffi.kernel`. The HM
 -- type schemes below govern how the type-checker treats each combinator
 -- when user code calls `Task.<fn>`. `Error` in the type signatures is the
--- implicit error channel — always `SkyError = String` at the Rust level.
+-- implicit error channel — the real `SkyError` enum at the Rust level
+-- (`SkyError::Error(kind, info)`, backlog #85/#160), not a plain `String`.
 module Sky.Core.Task exposing
     ( succeed, fail
     , map, andThen

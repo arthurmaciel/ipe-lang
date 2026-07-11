@@ -3787,7 +3787,7 @@ impl<'a> Builder<'a> {
 
             // ── Task ──
             K::TaskSucceed => fun(var(0), task(var(0))),
-            K::TaskFail => fun(var(1), task(var(0))),
+            K::TaskFail => fun(error_ty(), task(var(0))),
             K::TaskMap => fun(fun(var(0), var(1)), fun(task(var(0)), task(var(1)))),
             K::TaskAndThen => fun(fun(var(0), task(var(1))), fun(task(var(0)), task(var(1)))),
             K::TaskMapError => fun(fun(error_ty(), error_ty()), fun(task(var(0)), task(var(0)))),
