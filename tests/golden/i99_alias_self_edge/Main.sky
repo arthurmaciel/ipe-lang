@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.String as String
+import Std.Log exposing (println)
+
+-- #99 self-edge regression (found by the #99 review, f15): an `as`-alias
+-- over a CYCLIC self-edge (recursive) constructor field is boxed
+-- (`Box<Self>`) in the emitted enum. The clone-rebuild path must re-derive
+-- the alias binder AND inner binder from the UNBOXED temp — pre-fix both
+-- stayed `Box<Tree>` (skyc-0, cargo-E0308). Here the arm reads BOTH `child`
+-- (the recursed value) and `w` (the whole aliased subtree).
+type Tree
+    = Leaf String
+    | Node Tree
+
+size : Tree -> Int
+size t =
+    case t of
+        Leaf s ->
+            String.length s
+
+        Node (child as w) ->
+            1 + size child + size w
+
+
+main =
+    -- Node (Node (Leaf "hi")): outer Node arm reads child + w, each recurses
+    -- into Node (Leaf "hi") -> 1 + size (Leaf "hi") + size (Leaf "hi")
+    --   = 1 + (1 + 2 + 2) + (1 + 2 + 2) = 1 + 5 + 5 = 11
+    println (String.fromInt (size (Node (Node (Leaf "hi")))))
