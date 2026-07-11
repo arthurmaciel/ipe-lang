@@ -90,6 +90,13 @@ pub fn lower(
     // otherwise conflict within one expression.
     let any_param_site_count = lower::count_any_param_sites(m, interner);
     let any_param_binders = interner.fresh_symbols("anyp_", any_param_site_count)?;
+    // #125: one fresh thunk-binder symbol per syntactic destructure-binder
+    // `let` / single-arm product `case` site, consumed only when the bound
+    // value's solved type contains a Decoder (the type gate runs post-solve,
+    // inside the lowerer; this count is purely syntactic, so it over-counts
+    // harmlessly).
+    let destructure_thunk_binders =
+        interner.fresh_symbols("destr_thunk_", lower::count_destructure_thunk_sites(m))?;
     // The built-in `Maybe` / `Result` types + constructors are Prelude
     // built-ins (no `type` declaration), so the lowerer needs their symbols to
     // seed the variant-set / arity tables it would otherwise read from
@@ -157,6 +164,7 @@ pub fn lower(
             cap_params,
             param_binders,
             any_param_binders,
+            destructure_thunk_binders,
         },
         &builtins,
     )
