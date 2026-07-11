@@ -245,7 +245,7 @@ pub fn main_apply<T1: Clone, T2: Clone>(f: Box<dyn Fn(T1) -> T2 + Send + 'static
     (f)(x)
 }
 pub fn sky_main() -> SkyTask<()> {
-    ({ let n = main_identity(40); ({ let flag = main_identity((1 == 1)); ({ let c = main_const(2, (5 == 5)); ({ let r = main_apply(Box::new(move |k: i64| -> i64 { (k + 0) }), (if flag { (n + c) } else { n })); log_println(string_from_int(r)) }) }) }) })
+    ({ let n = main_identity(40); ({ let flag = main_identity((1 == 1)); ({ let c = main_const(2, (5 == 5)); ({ let r = main_apply({ let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + 'static> = Box::new(move |k: i64| -> i64 { (k + 0) }); __sky_fn }, (if flag { (n + c) } else { n })); log_println(string_from_int(r)) }) }) }) })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
