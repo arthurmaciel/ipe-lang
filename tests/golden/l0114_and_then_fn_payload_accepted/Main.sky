@@ -1,0 +1,18 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #90 T3 boundary pin: `Result.andThen` needs NO obligation — its callback
+-- result is `Con`-headed in the scheme itself, so a curried callback is a
+-- plain type mismatch, while a callback legitimately RETURNING `Ok fn`
+-- (an arity-1 inner lambda) is sound: the payload's flat representation is
+-- consistent end-to-end and the extracted function computes correctly.
+step : Int -> Result String (Int -> Int)
+step n =
+    Ok (\b -> n + b)
+
+main =
+    case Result.andThen step (Ok 40) of
+        Ok g -> println (String.fromInt (g 2))
+        Err _ -> println "err"

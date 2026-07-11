@@ -1,0 +1,19 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #90 T3 (5th attempt, generalized): `Maybe.map` with a CURRIED callback —
+-- the callback's result `b` instantiates to a residual arrow, but the
+-- runtime kernel applies the callback at exactly one argument
+-- (`FnOnce(A) -> B`) while the IR flattens `add` to one 2-parameter `Fun`.
+-- Same hazard class as `andMap`'s — the 4th attempt gated only `andMap`
+-- and this sibling reached `cargo build` as E0277.
+add : Int -> Int -> Int
+add a b =
+    a + b
+
+main =
+    case Maybe.map add (Just 1) of
+        Just g -> println (String.fromInt (g 2))
+        Nothing -> println "none"

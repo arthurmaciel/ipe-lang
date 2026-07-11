@@ -482,11 +482,42 @@ fn emitted_bound_satisfied(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bo
                     && args.len() == 1
                     && interner.resolve(*name) == Some("List")
         );
+    // #90 T3: the higher-order-kernel callback-result obligation (`map` /
+    // `map2..5` / `mapError` / `andMap` over `Maybe`/`Result` — see
+    // `TyBounds::HOF_KERNEL_RESULT`). Deliberately SHALLOW on structure —
+    // only the HEAD is checked (`Ty::Fun` directly, not nested anywhere) —
+    // unlike `ty_is_equatable`'s deep walk:
+    // `Result e (List (Int -> Int))` is a different, already-gated hazard
+    // (collections of functions), not the kernels' arity restriction, which
+    // only cares whether the callback's final RESULT itself is an arrow.
+    //
+    // A bare `Ty::Var` fails CLOSED, exactly like every sibling obligation in
+    // this function and per this function's own doc-comment contract ("a
+    // non-concrete type — a bare variable the obligation escaped into —
+    // satisfies nothing"). This is load-bearing for the seal: an ANNOTATED
+    // DOUBLE FORWARDER (`am2 x f = am1 x f` over `am1 x f = Result.andMap x
+    // f`, both with explicit signatures) instantiates `am1`'s obligated `b`
+    // to `am2`'s OWN fresh annotation skolem — a bare variable at this
+    // check. `check_scheme_applications` is a one-shot check, not a
+    // bound-transfer: `am2` itself never touches the kernel, so it records
+    // no obligation of its own, and a fail-OPEN here (the 4th-attempt bug,
+    // reverted in 2a7b0d6) let an arity-2 payload flow unguarded to `main`'s
+    // call of `am2` and reach `cargo build` as E0308. Failing closed rejects
+    // the inner `am1` reference itself — the same conservative behaviour
+    // `Math.min`'s `ord` obligation already shows on the identical
+    // double-forwarder shape ("a is not a Comparable type" at both hops).
+    // The precision loss (a legitimately-arity-1 annotated double forwarder
+    // is also rejected) is the SAME documented loss every sibling bound
+    // accepts; genuine cross-binding obligation propagation is a follow-up
+    // design for ALL bounds at once — see
+    // `docs/architecture/ctor-payload-andmap-arity-gate-design.md` §6.
+    let not_curried_ok = !matches!(ty, Ty::Fun(_, _) | Ty::Var(_));
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
         && (!bounds.has_eq() || ty_is_equatable(ty))
         && (!bounds.has_comparable_key() || key_ok)
         && (!bounds.has_append() || appendable_ok)
+        && (!bounds.has_hof_kernel_result() || not_curried_ok)
 }
 
 /// Whether a resolved concrete type satisfies super-type obligations `bounds`
@@ -526,6 +557,13 @@ pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) 
         // since every non-function type derives `SkyStringify`.
         && (!bounds.has_show() || ty_is_equatable(ty))
         && (!bounds.has_append() || appendable_ok)
+        // #90 T3: see `emitted_bound_satisfied`'s matching comment — same
+        // structurally-shallow, fail-closed-on-`Ty::Var` check, reused for
+        // the concrete-pin path. (A `Content::Structure` root cannot zonk to
+        // a bare head `Ty::Var`, so the `Ty::Var` arm is unreachable here —
+        // kept anyway so the two predicates cannot drift apart again; drift
+        // in exactly one arm is what caused the 4th revert incident.)
+        && (!bounds.has_hof_kernel_result() || !matches!(ty, Ty::Fun(_, _) | Ty::Var(_)))
 }
 
 /// Whether a resolved type derives Rust's `PartialEq`: true for every fully
@@ -568,6 +606,16 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
     }
     if bounds.has_append() {
         classes.push("Appendable");
+    }
+    // #90 T3: the higher-order-kernel callback-result obligation. Named
+    // distinctly from the other classes (it is not a Sky super-type a user
+    // annotates against — it is an internal arity restriction on the
+    // callback-result slot of `Maybe`/`Result`'s `map`/`map2..5`/`mapError`/
+    // `andMap` kernels): the callback's final result must not itself be a
+    // function, because the runtime kernel applies the callback at one exact
+    // arity while the IR flattens curried functions.
+    if bounds.has_hof_kernel_result() {
+        classes.push("non-function callback result (Maybe/Result higher-order kernel)");
     }
     let class = if classes.is_empty() {
         "Equatable".to_owned()

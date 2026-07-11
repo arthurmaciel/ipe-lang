@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #90 T3, documented PRECISION LOSS (design doc §3.3, extended in the 5th
+-- attempt): an annotated double forwarder whose eventual payload is a SAFE
+-- arity-1 function is nonetheless rejected, because the obligation fails
+-- closed on the bare annotation skolem it escapes into at the `am1`
+-- reference inside `am2` — cross-binding obligation propagation is not yet
+-- supported for ANY bound (`Math.min`'s `ord` behaves identically on this
+-- shape). Workarounds: call the kernel (or the single forwarder `am1`)
+-- directly, or pin the intermediate forwarder to concrete types. This
+-- fixture pins the CLEAN diagnostic — the alternative (fail-open) was a
+-- cargo-fail on the curried sibling, and soundness outranks completeness.
+am1 : Result e a -> Result e (a -> b) -> Result e b
+am1 x f =
+    Result.andMap x f
+
+am2 : Result e a -> Result e (a -> b) -> Result e b
+am2 x f =
+    am1 x f
+
+inc : Int -> Int
+inc n =
+    n + 1
+
+main =
+    case am2 (Ok 41) (Ok inc) of
+        Ok n -> println (String.fromInt n)
+        Err _ -> println "err"

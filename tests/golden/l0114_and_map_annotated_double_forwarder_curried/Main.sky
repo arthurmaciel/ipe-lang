@@ -1,0 +1,30 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #90 T3, the 12th shape (the one that broke the 4th attempt, revert
+-- 2a7b0d6): an ANNOTATED DOUBLE FORWARDER. `am1`'s obligated `b`
+-- instantiates to `am2`'s own fresh annotation skolem when `am1` is
+-- referenced inside `am2`'s body; `check_scheme_applications` is a one-shot
+-- check (no bound transfer), so under the 4th attempt's fail-OPEN
+-- `Ty::Var` arm the arity-2 payload flowed unguarded to `main`'s call of
+-- `am2` and reached `cargo build` as E0308. Under the fail-CLOSED arm the
+-- inner `am1` reference is rejected — the same conservative behaviour
+-- `Math.min`'s `ord` obligation shows on the identical shape.
+am1 : Result e a -> Result e (a -> b) -> Result e b
+am1 x f =
+    Result.andMap x f
+
+am2 : Result e a -> Result e (a -> b) -> Result e b
+am2 x f =
+    am1 x f
+
+add3 : Int -> Int -> Int -> Int
+add3 a b c =
+    a + b + c
+
+main =
+    case am2 (Ok 1) (Ok add3) of
+        Ok _ -> println "ok"
+        Err _ -> println "err"
