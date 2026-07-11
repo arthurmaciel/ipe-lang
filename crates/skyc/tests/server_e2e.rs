@@ -153,15 +153,37 @@ fn spawn_and_wait_ready(
     exe: &std::path::Path,
     port: u16,
 ) -> Result<ProcessGuard, BoxError> {
-    let mut child = Command::new(exe)
-        .env("SKY_SERVER_PORT", port.to_string())
+    spawn_and_wait_ready_with_env(test_name, exe, port, &[])
+}
+
+/// Same as `spawn_and_wait_ready`, plus caller-supplied extra environment
+/// variables on the child (e.g. `SKY_TRUSTED_PROXY` / `ENV` for the #63c
+/// CSRF-cookie `Secure`-gating E2E tests, which need a real subprocess
+/// because the runtime's `SKY_TRUSTED_PROXY` trust decision is cached in a
+/// process-wide `OnceLock` — an in-process unit test cannot toggle it
+/// per-test the way `csrf_set_cookie_value`'s pure-function unit tests can).
+///
+/// # Errors
+///
+/// Returns an error if the binary cannot be spawned or the ready signal does
+/// not appear within the timeout.
+fn spawn_and_wait_ready_with_env(
+    test_name: &str,
+    exe: &std::path::Path,
+    port: u16,
+    extra_env: &[(&str, &str)],
+) -> Result<ProcessGuard, BoxError> {
+    let mut cmd = Command::new(exe);
+    cmd.env("SKY_SERVER_PORT", port.to_string())
         .env("SKY_HTTP_BIND", "127.0.0.1")
         .stderr(Stdio::piped())
-        .stdout(Stdio::null())
-        .spawn()
-        .map_err(|e| -> BoxError {
-            format!("{test_name}: cannot spawn server binary: {e}").into()
-        })?;
+        .stdout(Stdio::null());
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().map_err(|e| -> BoxError {
+        format!("{test_name}: cannot spawn server binary: {e}").into()
+    })?;
 
     let stderr = child
         .stderr
@@ -784,6 +806,170 @@ fn csrf_legit_post_with_matching_token_allowed() -> Result<(), BoxError> {
     assert_eq!(
         post_resp.body, "ok",
         "{test_name}: response body must be the wrapped handler's own response"
+    );
+
+    Ok(())
+}
+
+/// #63c — real HTTP-level proof that `Middleware.withCsrf`'s minted cookie
+/// `Secure` attribute is gated on the REQUEST-scoped TLS signal
+/// (`X-Forwarded-Proto: https`, only honoured when the operator opts in via
+/// `SKY_TRUSTED_PROXY`), not just a process-wide `ENV` snapshot — closing
+/// the same ENV-vs-TLS gap already fixed for the Sky.Live session cookie
+/// (`runtime/src/sky_runtime/live/mod.rs::page_response`,
+/// `request_is_https`). The `server.rs` side needed a real design
+/// adaptation (not a copy-paste of the session-cookie fix): the signal has
+/// to be captured from `ServerRequest.headers` BEFORE `middleware_with_csrf`
+/// moves the request into the wrapped handler, then threaded through as a
+/// plain `bool` capture into the async block that stamps the cookie after
+/// the handler's `Task` resolves.
+///
+/// Scenario (a): `SKY_TRUSTED_PROXY=1`, `ENV` unset (dev mode), GET carries
+/// `X-Forwarded-Proto: https` -> the minted `sky_csrf` cookie gets `Secure`
+/// even though `ENV` never claims production. Proves the request-scoped
+/// signal alone (independent of `ENV`) can flip the gate on.
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, or HTTP error as a test error.
+#[test]
+fn csrf_cookie_secure_behind_trusted_tls_proxy() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+    let test_name = "csrf_cookie_secure_behind_trusted_tls_proxy";
+
+    let exe = compile_and_build(test_name, SKY_CSRF_PROGRAM)?;
+    let port = pick_ephemeral_port()?;
+    let _guard =
+        spawn_and_wait_ready_with_env(test_name, &exe, port, &[("SKY_TRUSTED_PROXY", "1")])?;
+    let addr = format!("127.0.0.1:{port}");
+
+    let get_req = "GET /action HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Forwarded-Proto: https\r\nConnection: close\r\n\r\n";
+    let get_resp = send_raw_request(test_name, &addr, get_req)?;
+    assert_eq!(
+        get_resp.status, 200,
+        "{test_name}: GET must succeed\n--- body ---\n{}",
+        get_resp.body
+    );
+    let set_cookie = get_resp
+        .headers
+        .iter()
+        .find(|(k, _)| k == "set-cookie")
+        .map(|(_, v)| v.clone())
+        .ok_or_else(|| -> BoxError {
+            format!("{test_name}: GET response missing a Set-Cookie header").into()
+        })?;
+
+    assert!(
+        set_cookie.contains("; Secure"),
+        "{test_name}: TLS-detected request (trusted proxy + X-Forwarded-Proto: https) must set Secure, even with ENV unset\n--- Set-Cookie ---\n{set_cookie}"
+    );
+
+    Ok(())
+}
+
+/// #63c scenario (b): same trusted-proxy opt-in as scenario (a), but THIS
+/// specific request does NOT carry `X-Forwarded-Proto: https` (the ordinary
+/// plain-HTTP loopback case) — the cookie must NOT get `Secure`.
+/// Dev-mode-correct: a plain-HTTP connection must never be told by the
+/// browser to require HTTPS on future requests, or local dev breaks.
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, or HTTP error as a test error.
+#[test]
+fn csrf_cookie_not_secure_when_request_not_tls_detected() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+    let test_name = "csrf_cookie_not_secure_when_request_not_tls_detected";
+
+    let exe = compile_and_build(test_name, SKY_CSRF_PROGRAM)?;
+    let port = pick_ephemeral_port()?;
+    // SKY_TRUSTED_PROXY is set (the opt-in is active), but the GET below
+    // never sends X-Forwarded-Proto — this specific request is not
+    // TLS-detected.
+    let _guard =
+        spawn_and_wait_ready_with_env(test_name, &exe, port, &[("SKY_TRUSTED_PROXY", "1")])?;
+    let addr = format!("127.0.0.1:{port}");
+
+    let get_req = "GET /action HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    let get_resp = send_raw_request(test_name, &addr, get_req)?;
+    assert_eq!(
+        get_resp.status, 200,
+        "{test_name}: GET must succeed\n--- body ---\n{}",
+        get_resp.body
+    );
+    let set_cookie = get_resp
+        .headers
+        .iter()
+        .find(|(k, _)| k == "set-cookie")
+        .map(|(_, v)| v.clone())
+        .ok_or_else(|| -> BoxError {
+            format!("{test_name}: GET response missing a Set-Cookie header").into()
+        })?;
+
+    assert!(
+        !set_cookie.contains("; Secure"),
+        "{test_name}: a plain-HTTP request (no X-Forwarded-Proto) must NOT get Secure\n--- Set-Cookie ---\n{set_cookie}"
+    );
+
+    Ok(())
+}
+
+/// #63c scenario (c) — the exact combined-gate semantics established by the
+/// session-cookie fix: `ENV=production` is an UNCONDITIONAL floor.  Even
+/// when THIS specific request is not TLS-detected (no `SKY_TRUSTED_PROXY`
+/// opt-in here at all), a production deploy must still get `Secure` —
+/// production assumes TLS termination happens somewhere in front of it.
+/// This matches `server_with_cookie`'s pre-existing production gate and
+/// `live/mod.rs::page_response`'s `csrf::cookies_secure() ||
+/// request_is_https(headers)` OR-gate: production forces `Secure`
+/// regardless of the request-scoped signal; the request-scoped signal only
+/// ADDS `Secure` in the non-production case (scenario (a) above). A
+/// same-request AND of "production" with "not TLS-detected" must NOT
+/// produce a non-Secure cookie — that would be a downgrade regression
+/// versus the PRE-fix behavior (which was ENV-only and always Secure in
+/// production).
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, or HTTP error as a test error.
+#[test]
+fn csrf_cookie_secure_when_env_production_regardless_of_tls_signal() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+    let test_name = "csrf_cookie_secure_when_env_production_regardless_of_tls_signal";
+
+    let exe = compile_and_build(test_name, SKY_CSRF_PROGRAM)?;
+    let port = pick_ephemeral_port()?;
+    // ENV=production, no SKY_TRUSTED_PROXY at all -> request_is_https() is
+    // always false in this process, yet Secure must still fire off the
+    // unconditional production floor.
+    let _guard = spawn_and_wait_ready_with_env(test_name, &exe, port, &[("ENV", "production")])?;
+    let addr = format!("127.0.0.1:{port}");
+
+    let get_req = "GET /action HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    let get_resp = send_raw_request(test_name, &addr, get_req)?;
+    assert_eq!(
+        get_resp.status, 200,
+        "{test_name}: GET must succeed\n--- body ---\n{}",
+        get_resp.body
+    );
+    let set_cookie = get_resp
+        .headers
+        .iter()
+        .find(|(k, _)| k == "set-cookie")
+        .map(|(_, v)| v.clone())
+        .ok_or_else(|| -> BoxError {
+            format!("{test_name}: GET response missing a Set-Cookie header").into()
+        })?;
+
+    assert!(
+        set_cookie.contains("; Secure"),
+        "{test_name}: ENV=production must force Secure even when this request isn't TLS-detected\n--- Set-Cookie ---\n{set_cookie}"
     );
 
     Ok(())
