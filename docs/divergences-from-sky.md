@@ -387,18 +387,32 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   by the #87 derive-demotion fixpoint and the type checker's
   `ty_is_equatable`/serde/#91-Model use-site gates, so no unsound use reaches
   `cargo`.
-- **The curried-`andMap` gate is now a genuine TYPE-LEVEL obligation, not an
-  AST-shape match (2026-07-10, re-landed a fourth time after three same-day
-  revert incidents on the third attempt — see the history note below).**
-  `sky_types::ty::TyBounds::and_map_payload()` (a bit alongside `SetElem`/
-  `DictKey`/`Show`) is tied to `Maybe.andMap`/`Result.andMap`'s
-  payload-RESULT scheme variable (`b` in `Con (a -> b)`) at
+- **The curried-callback gate is now a genuine TYPE-LEVEL obligation, not an
+  AST-shape match (2026-07-10, re-landed a FIFTH time — the 4th attempt was
+  reverted the same day for a fail-open `Ty::Var` arm; see the history note
+  below).** `sky_types::ty::TyBounds::hof_kernel_result()` (a bit alongside
+  `SetElem`/`DictKey`/`Show`) is tied to the callback-RESULT scheme variable
+  of EVERY `Maybe`/`Result` higher-order kernel — `map`, `map2..5`,
+  `mapError`, `andMap` (13 kernels; slot table
+  `constrain::Builder::hof_result_slot_for`, drift-pinned by the
+  `hof_result_slots_match_scheme_shapes` unit test) — at
   `constrain_var_kernel`, exactly mirroring the pre-existing `Math.min`/
-  `Set`/`Dict`-key obligation mechanism. Because the obligation is minted
-  once per kernel REFERENCE (not per call-node), it survives arbitrary
-  Sky-level aliasing by construction — direct call, piped, `let`-bound,
-  bare-value top-level re-export, higher-order argument, record-field
-  extraction — with no AST-shape enumeration anywhere. A lowering-time
+  `Set`/`Dict`-key obligation mechanism INCLUDING its fail-closed treatment
+  of a bare variable the obligation escaped into (the 4th attempt's
+  `andMap`-only, fail-open-on-`Ty::Var` version let an ANNOTATED DOUBLE
+  FORWARDER reach `cargo build` as E0308, and let the whole
+  `map`/`map2..5`/`mapError` family through entirely — a user applicative
+  `map2` over `Result.map`+`Result.andMap` cargo-failed even at a safe
+  arity). Because the obligation is minted once per kernel REFERENCE (not
+  per call-node), it survives arbitrary Sky-level aliasing by construction —
+  direct call, piped, `let`-bound, bare-value top-level re-export,
+  higher-order argument, record-field extraction, and every forwarder
+  nesting depth — with no AST-shape enumeration anywhere.
+  `Maybe.andThen`/`Result.andThen`/`Result.traverse` need no obligation:
+  their callback results are `Con`-headed in the scheme itself, so a curried
+  callback is already a plain type mismatch (pinned by the
+  `l0114_and_then_fn_payload_accepted` fixture, which also proves a callback
+  legitimately returning `Ok fn` stays accepted and computes correctly). A lowering-time
   backstop (`reject_curried_andmap_payload`, re-anchored inside
   `lower_callee` itself — the single funnel EVERY kernel/top-level reference
   resolves through, not just the `Call`-node arm the three reverted attempts
@@ -424,9 +438,17 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   the fixture matrix hits this path, confirmed empirically. An ANNOTATED
   GENERIC FORWARDER around `andMap` instead lifts the obligation onto its
   own annotation skolem, re-verified per external call site, surfacing the
-  friendlier `SKY-T0014` (`SuperTypeUnsatisfied`, "single-argument
-  function"). Both are clean Sky diagnostics; the pipeline never emits Rust
-  that `cargo` rejects either way.
+  friendlier `SKY-T0014` (`SuperTypeUnsatisfied`, "non-function callback
+  result (Maybe/Result higher-order kernel)"). Both are clean Sky
+  diagnostics; the pipeline never emits Rust that `cargo` rejects either
+  way. One documented conservatism (5th attempt): when the obligated result
+  escapes into ANOTHER binding's generic variable — an annotated forwarder
+  OF a forwarder, or a cross-module unannotated forwarder's promoted scheme
+  — the check fails CLOSED and rejects the inner reference even when every
+  eventual payload would have been arity-safe, exactly as `Math.min`'s
+  Comparable bound already does on the identical shape. Cross-binding
+  obligation propagation (for ALL bounds at once, with matching trait-bound
+  emission) is the filed follow-up that would recover those programs.
 - **Go-oracle relationship:** for a NON-CAPTURING payload closure and a plain
   `Ok f |> Result.andMap x` / `Just f |> Maybe.andMap x` chain, the reference
   Go compiler (`sky` v0.16.29) has an existing codegen bug (the same

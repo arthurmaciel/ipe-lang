@@ -1,0 +1,24 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #90 T3: ETA-REDUCED annotated forwarder (`am2 = am1`, no params) — the
+-- bare reference to `am1` still records a SchemeApp whose obligated `b`
+-- lands on `am2`'s annotation skolem; fail-closed rejects it there.
+am1 : Result e a -> Result e (a -> b) -> Result e b
+am1 x f =
+    Result.andMap x f
+
+am2 : Result e a -> Result e (a -> b) -> Result e b
+am2 =
+    am1
+
+add3 : Int -> Int -> Int -> Int
+add3 a b c =
+    a + b + c
+
+main =
+    case am2 (Ok 1) (Ok add3) of
+        Ok _ -> println "ok"
+        Err _ -> println "err"

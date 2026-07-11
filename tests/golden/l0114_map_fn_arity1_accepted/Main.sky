@@ -1,0 +1,15 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- #90 T3 green twin: `Result.map` with an exact-arity-1 callback must stay
+-- accepted — the obligation binds only the callback's final result.
+inc : Int -> Int
+inc n =
+    n + 1
+
+main =
+    case Result.map inc (Ok 41) of
+        Ok n -> println (String.fromInt n)
+        Err _ -> println "err"

@@ -2400,6 +2400,49 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// The raw scheme-var id of the CALLBACK-RESULT slot of a `Maybe`/`Result`
+    /// higher-order kernel — the variable that must not itself instantiate to
+    /// a function ([`TyBounds::hof_kernel_result`], #90 T3).
+    ///
+    /// Slot ids follow each kernel's scheme in [`Self::stdlib_scheme`] and are
+    /// asserted against those schemes by
+    /// `hof_result_slots_match_scheme_shapes` (this module's tests): `map`'s
+    /// `(a -> b)` result `b` is `var(1)`; `mapError`'s `(e -> f)` result `f`
+    /// is `var(1)`; `mapN`'s `(a -> … -> v)` final result `v` is `var(N)`;
+    /// `andMap`'s payload `Con (a -> b)` result `b` is `var(1)`.
+    ///
+    /// Deliberately EXCLUDED, with reasons:
+    /// * `MaybeAndThen` / `ResultAndThen` / `ResultTraverse` — their callback
+    ///   results are `Con`-headed in the scheme itself (`a -> Maybe b`, `a ->
+    ///   Result e b`), so a curried callback is already a plain type mismatch
+    ///   (`Fun` vs `Con`); there is no bare var for an arrow to escape into.
+    /// * `MaybeWithDefault` / `ResultWithDefault` / `MaybeCombine` /
+    ///   `ResultCombine` — no callback is applied by the kernel; a
+    ///   function-valued payload flows through by value in its (consistently
+    ///   flattened) representation, which is sound.
+    /// * `Task` / `Cmd` / `Sub` / `Decoder` kernels — out of #90's scope:
+    ///   their heads were ALREADY exempted from the ctor-payload region gate
+    ///   before #90 (`is_opaque_boxed_wrapper`), so any curried-callback
+    ///   hazard there is pre-existing and independently tracked (the
+    ///   `Decoder` family in particular must NOT be gated — its runtime has
+    ///   genuine `curry1..curry10` currying support the applicative decoder
+    ///   pipeline depends on).
+    fn hof_result_slot_for(k: StdlibKernel) -> Option<u32> {
+        use StdlibKernel as K;
+        match k {
+            K::MaybeMap
+            | K::ResultMap
+            | K::ResultMapError
+            | K::MaybeAndMap
+            | K::ResultAndMap => Some(1),
+            K::MaybeMap2 | K::ResultMap2 => Some(2),
+            K::MaybeMap3 | K::ResultMap3 => Some(3),
+            K::MaybeMap4 | K::ResultMap4 => Some(4),
+            K::MaybeMap5 | K::ResultMap5 => Some(5),
+            _ => None,
+        }
+    }
+
     /// The type of a kernel reference (`Math.min`, `Set.insert`, …).
     ///
     /// Most kernels take the declarative scheme from [`Self::stdlib_scheme`] via
@@ -2525,33 +2568,35 @@ impl<'a> Builder<'a> {
                 }
                 return Ok(var);
             }
-            // `andMap` curried-payload obligation (#90 T3, primary/Tier-2
-            // mechanism — see `docs/architecture/ctor-payload-andmap-arity-gate-design.md`).
-            // `Maybe.andMap : Maybe a -> Maybe (a -> b) -> Maybe b` /
-            // `Result.andMap : Result e a -> Result e (a -> b) -> Result e b`
-            // fully apply the wrapped function to exactly one argument
-            // (`FnOnce(A) -> B`); a CURRIED (arity ≥ 2) payload function
-            // instantiates `b` to a residual arrow, which has no sound
-            // lowering. Tie the payload-result raw scheme-var `1` (`b` in
-            // both schemes) to a fresh super-typed variable carrying the
-            // `and_map_payload` obligation — same `stdlib_scheme` + tie shape
-            // as the Dict/Set key obligation above, so this is a genuine
-            // TYPE-LEVEL check that survives arbitrary Sky-level aliasing
-            // (direct call, piped, `let`-bound, bare-value re-export,
-            // higher-order argument, record-field extraction, import alias)
-            // by construction — the obligation is attached to the union-find
-            // variable `constrain_var_kernel` mints for THIS `andMap`
-            // reference, not to any particular AST shape a later use might
-            // take.
-            if matches!(k, StdlibKernel::MaybeAndMap | StdlibKernel::ResultAndMap) {
+            // Higher-order-kernel callback-result obligation (#90 T3,
+            // primary/Tier-2 mechanism — see
+            // `docs/architecture/ctor-payload-andmap-arity-gate-design.md`).
+            // Every `Maybe`/`Result` higher-order kernel FULLY APPLIES its
+            // callback at runtime (`FnOnce(..) -> R` with an exact arity),
+            // while the IR flattens a curried Sky function into one
+            // multi-parameter `Fun` — so a callback with residual arity (its
+            // final result var instantiates to another arrow) has no sound
+            // lowering and would reach `cargo build` as E0277/E0308. Tie the
+            // callback's final-result raw scheme-var (see
+            // [`Self::hof_result_slot_for`]) to a fresh super-typed variable
+            // carrying the `hof_kernel_result` obligation — same
+            // `stdlib_scheme` + tie shape as the Dict/Set key obligation
+            // above, so this is a genuine TYPE-LEVEL check that survives
+            // arbitrary Sky-level aliasing (direct call, piped, `let`-bound,
+            // bare-value re-export, higher-order argument, record-field
+            // extraction, import alias) by construction — the obligation is
+            // attached to the union-find variable `constrain_var_kernel`
+            // mints for THIS kernel reference, not to any particular AST
+            // shape a later use might take.
+            if let Some(slot) = Self::hof_result_slot_for(k) {
                 let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
-                if let Some(&payload_result_var) = vars.get(&1) {
-                    let s = self.super_var(TyBounds::and_map_payload(), span)?;
-                    self.eq(span, payload_result_var, s);
+                if let Some(&callback_result_var) = vars.get(&slot) {
+                    let s = self.super_var(TyBounds::hof_kernel_result(), span)?;
+                    self.eq(span, callback_result_var, s);
                 }
                 return Ok(var);
             }
@@ -7475,6 +7520,89 @@ mod registry_phase_c_tests {
         assert_eq!(
             Builder::kernel_scheme_or_unsupported(Some(a.clone()), Some(b), span),
             Ok(a),
+        );
+    }
+
+    /// #90 T3 (5th attempt) — the [`Builder::hof_result_slot_for`] table
+    /// cannot drift from the scheme shapes in [`Builder::stdlib_scheme`]: for
+    /// every table entry, the slot's raw var must be exactly the FINAL RESULT
+    /// of the kernel's callback arrow (the arrow the runtime kernel fully
+    /// applies). A drifted slot would tie the obligation to the WRONG scheme
+    /// variable — silently unsound (the hazard var escapes unchecked while an
+    /// innocent var gets over-constrained) — which is precisely the failure
+    /// class this item was reverted for four times.
+    #[test]
+    fn hof_result_slots_match_scheme_shapes() {
+        fn arrow_final(mut t: &Ty) -> &Ty {
+            while let Ty::Fun(_, r) = t {
+                t = r;
+            }
+            t
+        }
+
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        let mut uf = UnionFind::<Content>::new();
+        let builder = Builder::for_scheme_test(&mut uf, &interner, builtins);
+
+        let mut covered = 0;
+        for &k in StdlibKernel::ALL {
+            let Some(slot) = Builder::hof_result_slot_for(k) else {
+                continue;
+            };
+            covered += 1;
+            let scheme = builder.stdlib_scheme(k);
+            assert!(
+                scheme.is_some(),
+                "{k:?} carries a hof_kernel_result obligation and must be schemed",
+            );
+            let Some(scheme) = scheme else { continue };
+
+            // Locate the callback arrow: for the map family it is the
+            // scheme's FIRST parameter; for `andMap` it is the unique arrow
+            // inside the SECOND parameter's `Con` payload
+            // (`Con (a -> b)` in `Maybe (a -> b)` / `Result e (a -> b)`).
+            let cb: Option<&Ty> = match k {
+                StdlibKernel::MaybeAndMap | StdlibKernel::ResultAndMap => {
+                    if let Ty::Fun(_, rest) = &scheme
+                        && let Ty::Fun(second, _) = rest.as_ref()
+                        && let Ty::Con { args, .. } = second.as_ref()
+                    {
+                        args.iter().find(|a| matches!(a, Ty::Fun(_, _)))
+                    } else {
+                        None
+                    }
+                }
+                _ => {
+                    if let Ty::Fun(first, _) = &scheme {
+                        Some(first.as_ref())
+                    } else {
+                        None
+                    }
+                }
+            };
+            assert!(
+                matches!(cb, Some(Ty::Fun(_, _))),
+                "{k:?}: could not locate the callback arrow in its scheme — \
+                 the scheme shape changed; re-derive hof_result_slot_for",
+            );
+            let Some(cb) = cb else { continue };
+            assert_eq!(
+                arrow_final(cb),
+                &Ty::Var(slot),
+                "{k:?}: hof_result_slot_for says raw var {slot} but the \
+                 callback arrow's final result is a different type — the \
+                 obligation would bind the WRONG variable",
+            );
+        }
+        // Freeze the covered set's size so silently dropping a kernel from
+        // the table (obligation removed → hazard reopened) fails loudly.
+        assert_eq!(
+            covered, 13,
+            "hof_result_slot_for must cover exactly the 13 Maybe/Result \
+             higher-order kernels (map ×2, map2..5 ×8, mapError ×1, andMap \
+             ×2); adding/removing a member must update this pin AND the \
+             fixtures",
         );
     }
 }
