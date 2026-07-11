@@ -78,3 +78,18 @@ fn task_fail_string_literal_is_sky_t0001() {
         sky_diagnostics::SKY_T0001,
     );
 }
+
+/// #32 (E1): a `Task` ANNOTATION with the wrong arity (`Task Error Int Bool`,
+/// three type arguments) must surface a clean SKY-T0016 diagnostic — NOT the
+/// former generic `CompilerBug` ICE ("please report"). Reachable from source
+/// because canonicalisation validates arity only for type *aliases*, never for a
+/// non-alias constructor application like `Task`. `normalize_annotation_ty`'s
+/// mis-arity arm now fails closed with `TypeError::TaskArity`.
+#[test]
+fn task_annotation_arity_three_is_sky_t0016_not_ice() {
+    assert_gate(
+        "m5a_gate_task_arity_three",
+        "m5a_gate_task_arity_three_emit",
+        sky_diagnostics::SKY_T0016,
+    );
+}

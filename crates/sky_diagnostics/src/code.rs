@@ -154,6 +154,8 @@ pub const SKY_T0013: Code = Code("SKY-T0013");
 pub const SKY_T0014: Code = Code("SKY-T0014");
 /// a parameter / binder pattern is refutable (must be irrefutable)
 pub const SKY_T0015: Code = Code("SKY-T0015");
+/// a `Task` type is applied to the wrong number of arguments (not 1 or 2)
+pub const SKY_T0016: Code = Code("SKY-T0016");
 
 // ---------------------------------------------------------------------------
 // Lower / not-yet-supported (SKY-L####)
@@ -315,6 +317,7 @@ pub fn title(c: Code) -> &'static str {
         SKY_T0013 => "constructor pattern binds the wrong number of fields",
         SKY_T0014 => "this type does not support the required operations",
         SKY_T0015 => "parameter pattern must be irrefutable",
+        SKY_T0016 => "`Task` applied to the wrong number of type arguments",
         SKY_L0100 => "pattern kind not supported yet",
         SKY_L0101 => "operator not supported yet",
         SKY_L0102 => "polymorphic value's type could not be determined",
@@ -420,6 +423,7 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         SKY_T0013 => Some(include_str!("../explain/SKY-T0013.md")),
         SKY_T0014 => Some(include_str!("../explain/SKY-T0014.md")),
         SKY_T0015 => Some(include_str!("../explain/SKY-T0015.md")),
+        SKY_T0016 => Some(include_str!("../explain/SKY-T0016.md")),
         SKY_L0100 => Some(include_str!("../explain/SKY-L0100.md")),
         SKY_L0101 => Some(include_str!("../explain/SKY-L0101.md")),
         SKY_L0102 => Some(include_str!("../explain/SKY-L0102.md")),
@@ -475,7 +479,8 @@ pub const ALL_CODES: &[Code] = &[
     SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_N0020, SKY_N0021,
     SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_N0027, SKY_T0001, SKY_T0002,
     SKY_T0003,
-    SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_T0015, SKY_L0100,
+    SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_T0015, SKY_T0016,
+    SKY_L0100,
     SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108,
     SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113, SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117,
     SKY_L0118, SKY_L0119, SKY_L0120, SKY_L0121, SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125,
@@ -489,8 +494,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn taxonomy_has_eighty_eight_codes() {
-        assert_eq!(ALL_CODES.len(), 88); // #90: +SKY-L0127; #99: +SKY-L0128
+    fn taxonomy_has_eighty_nine_codes() {
+        assert_eq!(ALL_CODES.len(), 89); // #90: +SKY-L0127; #99: +SKY-L0128; #32: +SKY-T0016
     }
 
     #[test]
@@ -508,7 +513,7 @@ mod tests {
             assert!(s.starts_with("SKY-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 88); // #90: +SKY-L0127; #99: +SKY-L0128
+        assert_eq!(seen.len(), 89); // #90: +SKY-L0127; #99: +SKY-L0128; #32: +SKY-T0016
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.
