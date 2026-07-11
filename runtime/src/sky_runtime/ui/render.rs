@@ -998,7 +998,7 @@ mod tests {
         // in this port the delegation must emit the same marker pair (the
         // pre-2026-07-11 Phase-0 passthrough stub emitted nothing).
         let elem = super::super::helpers::ui_breakpoint_::<TestMsg>(
-            super::super::helpers::ui_mobile_::<TestMsg>(),
+            super::super::helpers::ui_mobile_(),
             vec![Attribute::AttrBgColor(Color::Rgba(1, 2, 3, 1.0))],
             Element::Text("m".to_owned()),
         );

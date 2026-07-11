@@ -1215,33 +1215,41 @@ pub fn ui_behind_<M: Clone>(elem: Element<M>) -> Attribute<M> {
 // block.  (The pre-2026-07-11 Phase-0 no-op-passthrough stub is gone; see
 // docs/architecture/ui-mediaquery-design-2026-07-11.md.)
 
+// NOTE (2026-07-11): these six breakpoint constants return a bare `String`
+// with NO `M` in the signature, so they take NO type parameter. A phantom
+// `<M>` here was a latent bug — an unconstrained type param can't be inferred
+// and produces `E0282: type annotations needed` the moment the value flows
+// into a real consumer (which it now does, once `ui_breakpoint_` delegates to
+// `ui_media_query_` instead of ignoring its query arg). The codegen emits
+// `ui_mobile_()` (no turbofish), so a non-generic fn is exactly what's needed.
+
 /// `Ui.mobile : String` — CSS media query `(max-width: 767px)`.
-pub fn ui_mobile_<M>() -> String {
+pub fn ui_mobile_() -> String {
     "(max-width: 767px)".to_owned()
 }
 
 /// `Ui.tablet : String` — CSS media query `(min-width: 768px) and (max-width: 1023px)`.
-pub fn ui_tablet_<M>() -> String {
+pub fn ui_tablet_() -> String {
     "(min-width: 768px) and (max-width: 1023px)".to_owned()
 }
 
 /// `Ui.desktop : String` — CSS media query `(min-width: 1024px)`.
-pub fn ui_desktop_<M>() -> String {
+pub fn ui_desktop_() -> String {
     "(min-width: 1024px)".to_owned()
 }
 
 /// `Ui.darkMode : String` — CSS media query `(prefers-color-scheme: dark)`.
-pub fn ui_dark_mode_<M>() -> String {
+pub fn ui_dark_mode_() -> String {
     "(prefers-color-scheme: dark)".to_owned()
 }
 
 /// `Ui.lightMode : String` — CSS media query `(prefers-color-scheme: light)`.
-pub fn ui_light_mode_<M>() -> String {
+pub fn ui_light_mode_() -> String {
     "(prefers-color-scheme: light)".to_owned()
 }
 
 /// `Ui.reducedMotion : String` — CSS media query `(prefers-reduced-motion: reduce)`.
-pub fn ui_reduced_motion_<M>() -> String {
+pub fn ui_reduced_motion_() -> String {
     "(prefers-reduced-motion: reduce)".to_owned()
 }
 
