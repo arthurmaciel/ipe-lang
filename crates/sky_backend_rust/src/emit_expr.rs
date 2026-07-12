@@ -7320,6 +7320,58 @@ fn elide_task_run_tail(expr: &Expr) -> Option<Expr> {
     }
 }
 
+/// [`emit_func`]'s `sky_main` synchronous-body wrap decision.
+///
+/// When `sky_main` was NOT elided (its body is not — or not uniformly in
+/// every tail position — a `Task.run` call), the function currently returns
+/// its declared value type directly, but the entry-point epilogue calls
+/// `block_on(sky_main())`, which requires `sky_main` to return `SkyTask<A>`
+/// (an unevaluated future), never a resolved value.
+///
+/// Two declared-return shapes reach here, and BOTH wrap the body rather than
+/// change its VALUE — `sky_main`'s body already runs to completion
+/// synchronously either way (a bare `task_run()` call blocks in place); the
+/// wrap only reshapes the return type so `block_on` type-checks:
+///
+/// * `func.ret == Unit` — Sky CLI programs that use synchronous `task_run()`
+///   calls (instead of building a top-level Task pipeline). The caller wraps:
+///   `let _r = { <original body> }; task_succeed(())` — `sky_main` returns
+///   `SkyTask<()>`, discarding the body's (unit) value. Signalled by the
+///   returned `wrap_unit = true`.
+/// * `func.ret == Result(_, A)` with elision declined — the argv-dispatch
+///   idiom's MIXED-arm sibling gap (adversarial-review Finding B): some
+///   `case` tail leaves call `Task.run` (blocks synchronously, producing a
+///   real `Result e a`), OTHER tail leaves are a plain `Result`-typed
+///   expression with no `Task.run` at all (`Err e -> Err e` in a
+///   validate-then-run idiom, e.g. `case validate () of Err e -> Err e; Ok
+///   cfg -> app cfg |> Task.run`). `elide_task_run_tail` correctly declines a
+///   partial elision (mismatched Task/Result arm shapes cannot render as one
+///   `match` of a single type) — but the body AS A WHOLE already evaluates
+///   synchronously to one uniform `Result e a`. The caller wraps:
+///   `task_from_result({ <original body> })` — `sky_main` returns `SkyTask<A>`,
+///   an ALREADY-RESOLVED future carrying the body's actual computed
+///   `Ok`/`Err`, so `block_on` unwraps it back to the exact `SkyResult<E, A>`
+///   the un-wrapped body would have produced directly; `fn main`'s
+///   `Ok(_)`/`Err(e)` epilogue match sees identical values. Signalled by
+///   `Some(Task(ok_ty))` in the returned `Option`.
+///
+/// Returns `(wrap_unit, wrap_result_ok_ty)` — at most one is ever set (`Unit`
+/// and `Result` are disjoint [`IrType`] shapes).
+fn sky_main_wrap_decision(
+    name: &str,
+    elided_ret: Option<&IrType>,
+    func_ret: &IrType,
+) -> (bool, Option<IrType>) {
+    if name != "sky_main" || elided_ret.is_some() {
+        return (false, None);
+    }
+    match func_ret {
+        IrType::Unit => (true, None),
+        IrType::Result(_err_ty, ok_ty) => (false, Some(IrType::Task(ok_ty.clone()))),
+        _ => (false, None),
+    }
+}
+
 /// Emit a whole function item, including its trailing newline.
 ///
 /// Shape: `pub fn <name>[<generics>](<params>) -> <ret> {\n    <body>\n}\n`. A
@@ -7369,24 +7421,19 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     };
 
     // ── sky_main synchronous-body wrap ────────────────────────────────────────
-    // When sky_main was NOT elided (its body is not a bare Task.run call) AND
-    // the declared return type is `()`, the function currently returns `()` but
-    // the entry-point epilogue calls `block_on(sky_main())`, which requires
-    // `sky_main` to return `SkyTask<A>`.
-    //
-    // Sky CLI programs that use synchronous `task_run()` calls (instead of
-    // building a top-level Task pipeline) fall here.  Wrap the body:
-    //   let _r = { <original body> };
-    //   task_succeed(())
-    // so sky_main returns `SkyTask<()>` — block_on sees a resolved future and
-    // the synchronous task_run() calls have already run during sky_main().
-    let sky_main_wrap = name == "sky_main" && elided_ret.is_none() && func.ret == IrType::Unit;
-    let unit_task_owned: Option<IrType> = if sky_main_wrap {
+    // When sky_main was NOT elided, `block_on(sky_main())` still needs
+    // `SkyTask<A>`. See `sky_main_wrap_decision`'s doc comment for the full
+    // rationale (the CLI `task_run()`-calls idiom AND Finding B's mixed-arm
+    // sibling gap).
+    let (sky_main_wrap_unit, sky_main_wrap_result_ok_ty) =
+        sky_main_wrap_decision(&name, elided_ret.as_ref(), &func.ret);
+    let sky_main_wrap = sky_main_wrap_unit || sky_main_wrap_result_ok_ty.is_some();
+    let wrapped_task_owned: Option<IrType> = if sky_main_wrap_unit {
         Some(IrType::Task(Box::new(IrType::Unit)))
     } else {
-        None
+        sky_main_wrap_result_ok_ty
     };
-    let ret_ty: &IrType = unit_task_owned
+    let ret_ty: &IrType = wrapped_task_owned
         .as_ref()
         .unwrap_or_else(|| elided_ret.as_ref().unwrap_or(&func.ret));
 
@@ -7466,10 +7513,18 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // falls through), so it unifies with any `-> R` — no `break value`. A
     // non-`TailLoop` body (the common case) routes to the ordinary value emitter,
     // which is exhaustive and fail-closed for any stray TCO node.
-    let body = if sky_main_wrap {
-        // Wrap the synchronous body so sky_main returns SkyTask<()>.
+    let body = if sky_main_wrap_unit {
+        // Wrap the synchronous body so sky_main returns SkyTask<()>; the
+        // body's own (unit) value is discarded, only its side effects matter.
         let inner = emit_expr(ctx, body_expr, 1, generics)?;
         format!("let _r = {{ {inner} }};\n    task_succeed(())")
+    } else if sky_main_wrap {
+        // Mixed-arm Task.run-elision-declined wrap (Finding B): the body
+        // already evaluates synchronously to a `Result e a` — carry that
+        // ACTUAL value into an already-resolved `SkyTask<a>` rather than
+        // discarding it, so `fn main`'s Ok/Err match sees the real outcome.
+        let inner = emit_expr(ctx, body_expr, 1, generics)?;
+        format!("task_from_result({{ {inner} }})")
     } else {
         match body_expr {
             Expr::TailLoop {
