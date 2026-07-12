@@ -824,6 +824,29 @@ impl<'a> EmitCtx<'a> {
         self.record_name_by_key(&key)
     }
 
+    /// Is a synthesised struct registered for this (unsorted) field-name set?
+    ///
+    /// Used by [`emit_expr::emit_record`]'s `HttpRequest` name-shape shortcut
+    /// to defer to the lowerer's authoritative, TYPE-AWARE decision before
+    /// falling back to its own field-NAME-only heuristic: `sky_lower`'s
+    /// `ir_type_from_ty` (consulted transitively via
+    /// `Lowerer::collect_records_in_ty`, which populates `module.records`,
+    /// which THIS registry is built from — see `collect_record_shapes`
+    /// above) folds a genuinely `HttpRequest`-shaped value to the opaque
+    /// `IrType::HttpRequest`, which never reaches `collect_record_shapes` as
+    /// an `IrType::Record` — so a REAL `HttpRequest` literal never gets an
+    /// entry here. Conversely, a record that merely shares the 7 canonical
+    /// field NAMES with unrelated field TYPES (e.g. all-`Int`) is correctly
+    /// classified as a plain record by the (now type-aware) lowerer, so it
+    /// DOES get a registered struct here — checking this registry FIRST lets
+    /// `emit_record` use that correctly-typed struct instead of mislabelling
+    /// the literal `HttpRequest` by name alone.
+    fn has_record_struct_for(&self, field_names: &[String]) -> bool {
+        let mut key = field_names.to_vec();
+        key.sort();
+        self.record_by_fieldset.contains_key(&key)
+    }
+
     /// Resolve a (sorted) field-name set to its synthesised struct name.
     fn record_name_by_key(&self, key: &[String]) -> DResult<&str> {
         Ok(self.record_struct_by_key(key)?.name.as_str())
