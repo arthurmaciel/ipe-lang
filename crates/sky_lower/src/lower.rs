@@ -920,53 +920,31 @@ fn rewrite_captured_clones(
                 )?),
             })
         }
-        Expr::Match(m) => {
-            let (scrutinee, arms) = m.into_parts();
-            let new_scrutinee = Box::new(rewrite_captured_clones(
-                clone_set,
-                noncl_set,
-                lambda_span,
-                *scrutinee,
-                depth,
-            )?);
-            let new_arms = arms
-                .into_iter()
-                .map(|arm| {
-                    let new_body =
-                        if pat_binds_any_in(&arm.pat, clone_set)
-                            || pat_binds_any_in(&arm.pat, noncl_set)
-                        {
-                            let inner_clone: BTreeSet<Symbol> = clone_set
-                                .iter()
-                                .copied()
-                                .filter(|&s| !pat_binds_symbol(&arm.pat, s))
-                                .collect();
-                            let inner_noncl: BTreeSet<Symbol> = noncl_set
-                                .iter()
-                                .copied()
-                                .filter(|&s| !pat_binds_symbol(&arm.pat, s))
-                                .collect();
-                            rewrite_captured_clones(
-                                &inner_clone,
-                                &inner_noncl,
-                                lambda_span,
-                                arm.body,
-                                depth,
-                            )?
-                        } else {
-                            rewrite_captured_clones(
-                                clone_set,
-                                noncl_set,
-                                lambda_span,
-                                arm.body,
-                                depth,
-                            )?
-                        };
-                    Ok(Arm { pat: arm.pat, body: new_body, guard: arm.guard })
-                })
-                .collect::<DResult<Vec<_>>>()?;
-            Ok(Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms)))
-        }
+        Expr::Match(m) => Ok(Expr::Match(m.try_map_bodies(
+            |scrutinee| {
+                rewrite_captured_clones(clone_set, noncl_set, lambda_span, scrutinee, depth)
+            },
+            |pat, body, guard| {
+                let new_body = if pat_binds_any_in(pat, clone_set)
+                    || pat_binds_any_in(pat, noncl_set)
+                {
+                    let inner_clone: BTreeSet<Symbol> = clone_set
+                        .iter()
+                        .copied()
+                        .filter(|&s| !pat_binds_symbol(pat, s))
+                        .collect();
+                    let inner_noncl: BTreeSet<Symbol> = noncl_set
+                        .iter()
+                        .copied()
+                        .filter(|&s| !pat_binds_symbol(pat, s))
+                        .collect();
+                    rewrite_captured_clones(&inner_clone, &inner_noncl, lambda_span, body, depth)?
+                } else {
+                    rewrite_captured_clones(clone_set, noncl_set, lambda_span, body, depth)?
+                };
+                Ok((new_body, guard))
+            },
+        )?)),
         Expr::If { cond, then_, else_ } => Ok(Expr::If {
             cond: Box::new(rewrite_captured_clones(
                 clone_set, noncl_set, lambda_span, *cond, depth,
@@ -1046,11 +1024,16 @@ fn rewrite_captured_clones(
                 })
                 .collect::<DResult<Vec<_>>>()?,
         )),
-        Expr::Access { record, field } => Ok(Expr::Access {
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Ok(Expr::Access {
             record: Box::new(rewrite_captured_clones(
                 clone_set, noncl_set, lambda_span, *record, depth,
             )?),
             field,
+            field_ty,
         }),
         Expr::Update { record, fields } => Ok(Expr::Update {
             record: Box::new(rewrite_captured_clones(
@@ -1692,21 +1675,21 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
             Expr::Destructure { binder, value: new_value, body: new_body }
         }
         Expr::Match(m) => {
-            let (scrutinee, arms) = m.into_parts();
-            let new_scrutinee =
-                Box::new(rewrite_multiuse_clones(sym, remaining, *scrutinee));
-            let new_arms = arms
-                .into_iter()
-                .map(|arm| {
-                    let new_body = if pat_binds_symbol(&arm.pat, sym) {
-                        arm.body
+            // `remaining` is one `&mut` counter threaded through scrutinee and
+            // bodies — rewrite the scrutinee first (DFS order, as before), then
+            // map the bodies with an identity scrutinee_map (E0524 otherwise).
+            let m = m.map_scrutinee(|scrutinee| rewrite_multiuse_clones(sym, remaining, scrutinee));
+            Expr::Match(m.map_bodies(
+                |scrutinee| scrutinee,
+                |pat, body, guard| {
+                    let new_body = if pat_binds_symbol(pat, sym) {
+                        body
                     } else {
-                        rewrite_multiuse_clones(sym, remaining, arm.body)
+                        rewrite_multiuse_clones(sym, remaining, body)
                     };
-                    Arm { pat: arm.pat, body: new_body, guard: arm.guard }
-                })
-                .collect();
-            Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms))
+                    (new_body, guard)
+                },
+            ))
         }
         Expr::Call { callee, args } => Expr::Call {
             callee,
@@ -1761,9 +1744,14 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
         // Access-under-record uses).  A VarLocal found here becomes CloneVar
         // unless it is the last overall use, in which case it stays bare (the
         // borrow keeps the original value alive for subsequent uses).
-        Expr::Access { record, field } => Expr::Access {
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Expr::Access {
             record: Box::new(rewrite_multiuse_clones(sym, remaining, *record)),
             field,
+            field_ty,
         },
         // `Update.record` is always wrapped in `(record).clone()` by `emit_update`
         // (a borrow via `Clone::clone(&self)`).  Only the field VALUES are consuming
@@ -2413,39 +2401,30 @@ fn rewrite_var_free_occurrences(
             then_: Box::new(rewrite_var_free_occurrences(target, *then_, on_hit)),
             else_: Box::new(rewrite_var_free_occurrences(target, *else_, on_hit)),
         },
-        Expr::Match(m) => {
-            let (scrutinee, arms) = m.into_parts();
-            let new_scrutinee = Box::new(rewrite_var_free_occurrences(target, *scrutinee, on_hit));
-            let new_arms = arms
-                .into_iter()
-                .map(|arm| {
-                    let binds = pat_binds_symbol(&arm.pat, target);
-                    let new_body = if binds {
-                        arm.body
+        Expr::Match(m) => Expr::Match(m.map_bodies(
+            |scrutinee| rewrite_var_free_occurrences(target, scrutinee, on_hit),
+            |pat, body, guard| {
+                let binds = pat_binds_symbol(pat, target);
+                let new_body = if binds {
+                    body
+                } else {
+                    rewrite_var_free_occurrences(target, body, on_hit)
+                };
+                // A C2 arm guard is evaluated in the same scope as its body;
+                // rewrite free occurrences of `target` there too when the arm
+                // pattern does not shadow it (guards over a fresh length-check
+                // var normally reference no outer capture, but staying uniform
+                // keeps this rewrite total for any future guard shape).
+                let new_guard = guard.map(|g| {
+                    if binds {
+                        g
                     } else {
-                        rewrite_var_free_occurrences(target, arm.body, on_hit)
-                    };
-                    // A C2 arm guard is evaluated in the same scope as its body;
-                    // rewrite free occurrences of `target` there too when the arm
-                    // pattern does not shadow it (guards over a fresh length-check
-                    // var normally reference no outer capture, but staying uniform
-                    // keeps this rewrite total for any future guard shape).
-                    let new_guard = arm.guard.map(|g| {
-                        if binds {
-                            g
-                        } else {
-                            rewrite_var_free_occurrences(target, g, on_hit)
-                        }
-                    });
-                    Arm {
-                        pat: arm.pat,
-                        body: new_body,
-                        guard: new_guard,
+                        rewrite_var_free_occurrences(target, g, on_hit)
                     }
-                })
-                .collect();
-            Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms))
-        }
+                });
+                (new_body, new_guard)
+            },
+        )),
         Expr::Call { callee, args } => Expr::Call {
             callee,
             args: args
@@ -2479,9 +2458,14 @@ fn rewrite_var_free_occurrences(
                 .map(|(sym, e)| (sym, rewrite_var_free_occurrences(target, e, on_hit)))
                 .collect(),
         ),
-        Expr::Access { record, field } => Expr::Access {
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Expr::Access {
             record: Box::new(rewrite_var_free_occurrences(target, *record, on_hit)),
             field,
+            field_ty,
         },
         Expr::Update { record, fields } => Expr::Update {
             record: Box::new(rewrite_var_free_occurrences(target, *record, on_hit)),
@@ -2791,6 +2775,23 @@ pub struct Lowerer<'a> {
     /// Monotonic cursor into [`Self::nested_cons_binders`], mirroring
     /// [`Self::param_cursor`]'s shape exactly.
     nested_cons_cursor: Cell<usize>,
+    /// Pre-minted, collision-free `String` binder names for the sibling
+    /// nested-string-literal desugaring — a `PStr` sub-pattern DIRECTLY
+    /// nested in a `PCtor` arm payload (`Just "live"`) lowers to a fresh
+    /// `String` binder in that ctor-arg slot plus an arm guard
+    /// (`binder == "live"`), instead of a bare literal pattern. Rust cannot
+    /// literal-match a `&str` pattern against an owned `String` ctor FIELD
+    /// (`SkyMaybe::Just(String)`) the way it can against a raw `&str`
+    /// scrutinee — the same "a Vec/String enum field cannot be pattern-
+    /// matched inline" shape [`Self::nested_cons_binders`] documents, applied
+    /// to `String` instead of `List`. Sized by
+    /// [`count_nested_strlit_payload_sites`] (an upper bound over every
+    /// `case`-arm head) and handed out through [`Self::nested_strlit_cursor`]
+    /// as a GLOBALLY-unique supply, mirroring [`Self::param_binders`].
+    nested_strlit_binders: Vec<Symbol>,
+    /// Monotonic cursor into [`Self::nested_strlit_binders`], mirroring
+    /// [`Self::param_cursor`]'s shape exactly.
+    nested_strlit_cursor: Cell<usize>,
     /// Home module path of the def currently being lowered.  Set at the start of
     /// each [`Self::lower_def`] call; read by [`Self::region_ty`] to key the
     /// region map as `(home, span)` — matching the discriminant the constraint
@@ -3190,6 +3191,90 @@ pub fn count_nested_cons_payload_sites(m: &canon::Module) -> usize {
         .sum()
 }
 
+/// Count `case`-arm sites that need a fresh payload binder for the sibling
+/// nested-string-literal desugaring: a `PStr` sub-pattern that is a DIRECT
+/// argument of a `PCtor` arm head (`Just "live"`, `Ok "done"`). Each such
+/// argument lowers to one fresh `String` binder plus an arm guard
+/// (`binder == "live"`) — the same "an enum FIELD cannot be inline-pattern-
+/// matched" shape [`count_nested_cons_payload_sites`] documents for
+/// `PList`/`PCons`, mirrored here for `PStr` (a ctor's `String` field cannot
+/// take a bare `&str` literal pattern the way a top-level `String`
+/// scrutinee's `.as_str()` coercion allows).
+///
+/// The count is deliberately an UPPER BOUND, exactly mirroring
+/// [`count_nested_cons_payload_sites`]'s policy: it walks every `case` arm
+/// HEAD in the module and counts every nested `PStr` argument regardless of
+/// whether that arm ultimately takes this desugaring path. An over-count is
+/// harmless — unused pool entries are simply never handed out.
+pub fn count_nested_strlit_payload_sites(m: &canon::Module) -> usize {
+    fn direct_strlit_args(pat: &canon::Pattern_) -> usize {
+        match pat {
+            canon::Pattern_::PCtor { args, .. } => args
+                .iter()
+                .map(|a| {
+                    usize::from(matches!(a.value, canon::Pattern_::PStr(_)))
+                        + direct_strlit_args(&a.value)
+                })
+                .sum(),
+            canon::Pattern_::PTuple(elems) => {
+                elems.iter().map(|e| direct_strlit_args(&e.value)).sum()
+            }
+            canon::Pattern_::PAlias(inner, _) => direct_strlit_args(&inner.value),
+            _ => 0,
+        }
+    }
+    fn walk_expr(e: &canon::Expr) -> usize {
+        match &e.value {
+            canon::Expr_::Let(bindings, body) => {
+                bindings.iter().map(|b| walk_expr(&b.body)).sum::<usize>() + walk_expr(body)
+            }
+            canon::Expr_::Case(scrut, branches) => {
+                walk_expr(scrut)
+                    + branches
+                        .iter()
+                        .map(|b| direct_strlit_args(&b.pat.value) + walk_expr(&b.body))
+                        .sum::<usize>()
+            }
+            canon::Expr_::Lambda(_, body) => walk_expr(body),
+            canon::Expr_::Call(callee, args) => {
+                walk_expr(callee) + args.iter().map(walk_expr).sum::<usize>()
+            }
+            canon::Expr_::Binop { lhs, rhs, .. } => walk_expr(lhs) + walk_expr(rhs),
+            canon::Expr_::If(branches, else_expr) => {
+                branches
+                    .iter()
+                    .map(|(c, b)| walk_expr(c) + walk_expr(b))
+                    .sum::<usize>()
+                    + walk_expr(else_expr)
+            }
+            canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
+                elems.iter().map(walk_expr).sum()
+            }
+            canon::Expr_::Cons(head, tail) => walk_expr(head) + walk_expr(tail),
+            canon::Expr_::Record(fields) => fields.iter().map(|(_, v)| walk_expr(v)).sum(),
+            canon::Expr_::Access(record, _) => walk_expr(record),
+            canon::Expr_::Update(base, fields) => {
+                walk_expr(base) + fields.iter().map(|(_, v)| walk_expr(v)).sum::<usize>()
+            }
+            canon::Expr_::VarLocal(_)
+            | canon::Expr_::VarTopLevel { .. }
+            | canon::Expr_::VarKernel { .. }
+            | canon::Expr_::VarCtor { .. }
+            | canon::Expr_::Int(_)
+            | canon::Expr_::Float(_)
+            | canon::Expr_::Str(_)
+            | canon::Expr_::Char(_)
+            | canon::Expr_::Unit => 0,
+        }
+    }
+    m.defs
+        .iter()
+        .map(|d| match d {
+            canon::Def::Typed { body, .. } | canon::Def::Untyped { body, .. } => walk_expr(body),
+        })
+        .sum()
+}
+
 /// Every pre-minted, collision-free synthetic-symbol pool [`Lowerer::new`]
 /// needs — bundled into one argument so the constructor stays under
 /// clippy's arg-count ceiling. Each field is documented at its matching
@@ -3202,6 +3287,7 @@ pub struct SymbolPools {
     pub any_param_binders: Vec<Symbol>,
     pub destructure_thunk_binders: Vec<Symbol>,
     pub nested_cons_binders: Vec<Symbol>,
+    pub nested_strlit_binders: Vec<Symbol>,
 }
 
 /// `(params, prologue, ret, any_syms_minted)` — [`Lowerer::split_typed_sig`]'s
@@ -3229,6 +3315,7 @@ impl<'a> Lowerer<'a> {
             any_param_binders,
             destructure_thunk_binders,
             nested_cons_binders,
+            nested_strlit_binders,
         } = pools;
         let mut func_ids = BTreeMap::new();
         for (idx, def) in m.defs.iter().enumerate() {
@@ -3394,6 +3481,8 @@ impl<'a> Lowerer<'a> {
             destructure_thunk_cursor: Cell::new(0),
             nested_cons_binders,
             nested_cons_cursor: Cell::new(0),
+            nested_strlit_binders,
+            nested_strlit_cursor: Cell::new(0),
             current_home: std::cell::RefCell::new(Vec::new()),
             current_poly_tvars: std::cell::RefCell::new(BTreeMap::new()),
             fn_is_async: Cell::new(false),
@@ -3466,6 +3555,23 @@ impl<'a> Lowerer<'a> {
             )
         })?;
         self.nested_cons_cursor.set(i + 1);
+        Ok(sym)
+    }
+
+    /// Hand out the next globally-unique nested-string-literal payload binder
+    /// from [`Self::nested_strlit_binders`]. Mirrors
+    /// [`Self::fresh_nested_cons_binder`] exactly; sized by
+    /// [`count_nested_strlit_payload_sites`] (an upper bound), so an overrun
+    /// is an internal invariant violation, never an index panic.
+    fn fresh_nested_strlit_binder(&self) -> DResult<Symbol> {
+        let i = self.nested_strlit_cursor.get();
+        let sym = *self.nested_strlit_binders.get(i).ok_or_else(|| {
+            bug(
+                "sky_lower::fresh_nested_strlit_binder",
+                "nested-string-literal-payload binder pool exhausted",
+            )
+        })?;
+        self.nested_strlit_cursor.set(i + 1);
         Ok(sym)
     }
 
@@ -6437,10 +6543,27 @@ impl<'a> Lowerer<'a> {
                 });
                 Ok(Expr::Record(lowered))
             }
-            canon::Expr_::Access(record, field) => Ok(Expr::Access {
-                record: Box::new(self.lower_expr(record)?),
-                field: *field,
-            }),
+            canon::Expr_::Access(record, field) => {
+                // #142/AUD-09 type-directed Copy elision: thread the field's
+                // solved type (the Access expression's own region type) into
+                // the IR so the backend can skip `.clone()` on `Copy` scalars.
+                // `ir_type_from_ty` may legitimately fail for a still-generic
+                // field type inside a polymorphic body (same tolerance as
+                // `lower_case`'s T5 rewrite) — do NOT fail closed: the field's
+                // concreteness was never load-bearing before this change. The
+                // `IrType::Generic` fallback is classified non-`Copy` by the
+                // backend, which conservatively KEEPS the `.clone()` —
+                // semantically identical to the previous unconditional clone.
+                let field_ty = self
+                    .region_ty(e.span)
+                    .and_then(|ty| self.ir_type_from_ty(ty, e.span).ok())
+                    .unwrap_or(IrType::Generic(*field));
+                Ok(Expr::Access {
+                    record: Box::new(self.lower_expr(record)?),
+                    field: *field,
+                    field_ty,
+                })
+            }
             canon::Expr_::Update(base, fields) => self.lower_update(base, fields),
             canon::Expr_::Case(scrut, branches) => self.lower_case(scrut, branches),
             // A top-level binding or kernel named as a bare *value* (passed,
@@ -8097,11 +8220,16 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FileRename
                 // ── Http arity-2 (M5b) ────────────────────────────────────────
                 // `HttpPost` : String -> String -> Task Error HttpResponse
-                // `HttpWithMethod` / `HttpWithTimeout` / `HttpWithBody` : pure builders
+                // `HttpWithMethod` / `HttpWithTimeout` / `HttpWithBody` /
+                // `HttpWithUrl` / `HttpWithFollowRedirects` /
+                // `HttpWithMaxRedirects` : pure builders
                 | KernelFn::HttpPost
                 | KernelFn::HttpWithMethod
                 | KernelFn::HttpWithTimeout
                 | KernelFn::HttpWithBody
+                | KernelFn::HttpWithUrl
+                | KernelFn::HttpWithFollowRedirects
+                | KernelFn::HttpWithMaxRedirects
                 // ── Db arity-2 (M5b-db) ───────────────────────────────────────
                 // `DbOpen : String -> String -> Task Error Db`
                 | KernelFn::DbOpen
@@ -9515,6 +9643,13 @@ impl<'a> Lowerer<'a> {
                     ("Http", "withTimeout") => Ok(Callee::Kernel(KernelFn::HttpWithTimeout)),
                     ("Http", "withBody") => Ok(Callee::Kernel(KernelFn::HttpWithBody)),
                     ("Http", "withHeader") => Ok(Callee::Kernel(KernelFn::HttpWithHeader)),
+                    ("Http", "withUrl") => Ok(Callee::Kernel(KernelFn::HttpWithUrl)),
+                    ("Http", "withFollowRedirects") => {
+                        Ok(Callee::Kernel(KernelFn::HttpWithFollowRedirects))
+                    }
+                    ("Http", "withMaxRedirects") => {
+                        Ok(Callee::Kernel(KernelFn::HttpWithMaxRedirects))
+                    }
                     // ── Db kernels (M5b-db) ──────────────────────────────────
                     // ── Sql kernels (#61 SqlFragment combinators) ──────────
                     ("Sql", "column") => Ok(Callee::Kernel(KernelFn::SqlColumn)),
@@ -10203,10 +10338,28 @@ impl<'a> Lowerer<'a> {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
             canon::Pattern_::PAnything => Ok(Pat::Wildcard),
             // Literal leaves (M3b-3) lower to the matching refutable IR leaf.
+            // Int / Bool / Char are `Copy` — a literal pattern against an owned
+            // FIELD of one of those types is ordinary, sound Rust regardless of
+            // nesting depth, so they lower unconditionally.
             canon::Pattern_::PInt(n) => Ok(Pat::Int(*n)),
             canon::Pattern_::PBool(b) => Ok(Pat::Bool(*b)),
             canon::Pattern_::PChar(c) => Ok(Pat::Char(c.clone())),
-            canon::Pattern_::PStr(s) => Ok(Pat::Str(s.clone())),
+            // A `String` literal is the ONE leaf that is NOT sound to lower
+            // unconditionally here. A direct `PStr` ctor-arg (`Just "live"`) is
+            // intercepted BEFORE reaching this function by
+            // `desugar_ctor_nested_special_args` (fresh `String` binder + arm
+            // guard — see that function's doc comment). Reaching a `PStr` HERE
+            // means it is nested some OTHER way — two levels deep in a ctor
+            // payload (`Just (Just "x")`), inside a tuple nested in a ctor
+            // payload, or as a list/slice literal element — every one of those
+            // positions is an owned `String` FIELD, and Rust cannot literal-
+            // match a `&str` pattern against an owned `String` field the way it
+            // can coerce a top-level `String` SCRUTINEE via `.as_str()`
+            // (`m0-24-tui-kitchen-sink` SEAL violation sibling —
+            // `SkyMaybe::Just(SkyMaybe::Just("x"))` is E0308, `expected String,
+            // found &str`). Fail-closed (SKY-L0116), the exact sibling of the
+            // PList / PCons gate below. Class 4 item C2 / #158.
+            canon::Pattern_::PStr(_) => Err(unsupported(p.span, Feature::NestedCtorDiscrimination)),
             // An alias `inner as name` lowers to the IR binding-with-subpattern.
             canon::Pattern_::PAlias(inner, name) => Ok(Pat::Alias(
                 Box::new(self.lower_payload_pat(inner)?),
@@ -10846,12 +10999,13 @@ impl<'a> Lowerer<'a> {
             .iter()
             .map(|br| {
                 // #158 C2: a ctor arm head nesting a supportable list / cons
-                // sub-pattern (`Just (h :: t)`) desugars to a fresh `Vec` binder
-                // in that arg slot PLUS an arm guard PLUS body-prelude bindings.
+                // sub-pattern (`Just (h :: t)`) OR a string-literal sub-pattern
+                // (`Just "live"`) desugars to a fresh binder in that arg slot PLUS
+                // an arm guard PLUS (for the list case) body-prelude bindings.
                 // `None` → the ordinary `lower_arm_pat` path (which keeps a
                 // still-unsupported nested list fail-closed SKY-L0116).
                 let (arm_pat, arm_guard, nested_bindings) =
-                    match self.desugar_ctor_nested_lists(&br.pat)? {
+                    match self.desugar_ctor_nested_special_args(&br.pat)? {
                         Some((pat, guard, bindings)) => (pat, guard, bindings),
                         None => (self.lower_arm_pat(&br.pat)?, None, Vec::new()),
                     };
@@ -11157,29 +11311,46 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Class 4 item C2 (#158) — desugar a `case`-arm HEAD that nests a list /
-    /// cons sub-pattern DIRECTLY inside a constructor payload (`Just (h :: t)`,
-    /// `Ok [a, b]`) into a fresh `Vec` binder in that ctor-arg slot PLUS an
-    /// arm-level length guard PLUS a body-prelude that recovers the named head /
-    /// tail bindings by index / `List.drop`.
+    /// Class 4 item C2 (#158) — desugar a `case`-arm HEAD that nests, DIRECTLY
+    /// inside a constructor payload, either:
+    ///
+    /// * a list / cons sub-pattern (`Just (h :: t)`, `Ok [a, b]`) into a fresh
+    ///   `Vec` binder in that ctor-arg slot PLUS an arm-level length guard PLUS
+    ///   a body-prelude that recovers the named head / tail bindings by index /
+    ///   `List.drop`; or
+    /// * a string-literal sub-pattern (`Just "live"`, `Ok "done"`) into a fresh
+    ///   `String` binder PLUS an arm-level equality guard (`binder == "live"`)
+    ///   — the sibling shape: Rust cannot literal-match a `&str` pattern
+    ///   against an owned `String` ctor FIELD (`SkyMaybe::Just(String)`) the
+    ///   way it can coerce a top-level `String` SCRUTINEE to `&str`
+    ///   (`m0-24-tui-kitchen-sink` SEAL violation — `SkyMaybe::Just("live")`
+    ///   is E0308, `expected String, found &str`).
+    ///
+    /// Both shapes share one root cause: an enum FIELD (`Vec<T>` / `String`)
+    /// cannot be pattern-matched inline the way a raw scrutinee of that type
+    /// can (via `.as_slice()` / `.as_str()` coercion at the `match` head), so
+    /// both desugar to a fresh binder in that ctor-arg slot plus an arm guard
+    /// that re-derives the refutability the bare pattern would have expressed.
     ///
     /// Returns `Ok(None)` when `p` is not a `PCtor` head OR none of its direct
-    /// args is a supportable nested list (the caller then lowers the arm the
-    /// ordinary way — a nested list reached via `lower_payload_pat` stays
-    /// fail-closed SKY-L0116, e.g. two levels deep). Returns
-    /// `Ok(Some((ir_pat, guard, bindings)))` otherwise, where `bindings` are
-    /// prepended to the arm body as a right-nested `Expr::Let` chain in order
-    /// (head element clones, which BORROW the fresh `Vec`, precede the tail
-    /// `List.drop`, which MOVES it — so ownership is sound).
+    /// args is a supportable nested list / string literal (the caller then
+    /// lowers the arm the ordinary way — a nested list reached via
+    /// `lower_payload_pat` stays fail-closed SKY-L0116, e.g. two levels deep).
+    /// Returns `Ok(Some((ir_pat, guard, bindings)))` otherwise, where
+    /// `bindings` are prepended to the arm body as a right-nested `Expr::Let`
+    /// chain in order (head element clones, which BORROW the fresh `Vec`,
+    /// precede the tail `List.drop`, which MOVES it — so ownership is sound;
+    /// the string-literal shape contributes no `bindings`, only a guard).
     ///
-    /// SUPPORTED nested shapes are exactly the two verified repros: a `PCons`
-    /// chain / `PList` whose every element sub-pattern AND open tail is a plain
-    /// `PVar` / `PAnything` binder. Any refutable element (a literal / ctor /
-    /// deeper list) makes that argument NOT desugarable here — it falls back to
-    /// `lower_payload_pat` and stays fail-closed (residual scope, documented in
-    /// the spec).
+    /// SUPPORTED nested list shapes are exactly the two verified repros: a
+    /// `PCons` chain / `PList` whose every element sub-pattern AND open tail
+    /// is a plain `PVar` / `PAnything` binder. Any refutable element (a
+    /// literal / ctor / deeper list) makes that argument NOT desugarable here
+    /// — it falls back to `lower_payload_pat` and stays fail-closed (residual
+    /// scope, documented in the spec). The string-literal shape has no such
+    /// residual scope — every direct `PStr` ctor arg desugars.
     #[allow(clippy::type_complexity)]
-    fn desugar_ctor_nested_lists(
+    fn desugar_ctor_nested_special_args(
         &self,
         p: &canon::Pattern,
     ) -> DResult<Option<(Pat, Option<Expr>, Vec<(Symbol, Expr)>)>> {
@@ -11193,11 +11364,12 @@ impl<'a> Lowerer<'a> {
         else {
             return Ok(None);
         };
-        // Does any direct arg nest a SUPPORTABLE list / cons sub-pattern? If not,
-        // leave the arm to the ordinary `lower_arm_pat` path.
-        let has_desugarable = args
-            .iter()
-            .any(|a| Self::simple_nested_list(a).is_some());
+        // Does any direct arg nest a SUPPORTABLE list / cons sub-pattern, or a
+        // string-literal sub-pattern? If not, leave the arm to the ordinary
+        // `lower_arm_pat` path.
+        let has_desugarable = args.iter().any(|a| {
+            Self::simple_nested_list(a).is_some() || matches!(a.value, canon::Pattern_::PStr(_))
+        });
         if !has_desugarable {
             return Ok(None);
         }
@@ -11205,7 +11377,21 @@ impl<'a> Lowerer<'a> {
         let mut guards: Vec<Expr> = Vec::new();
         let mut bindings: Vec<(Symbol, Expr)> = Vec::new();
         for a in args {
-            if let Some(flat) = Self::simple_nested_list(a) {
+            if let canon::Pattern_::PStr(lit) = &a.value {
+                // A string-literal ctor payload (`Just "live"`) cannot be a
+                // bare Rust literal pattern against the owned `String` field
+                // (E0308: expected String, found &str). Desugar to a fresh
+                // `String` binder plus an arm guard comparing it to the
+                // literal — `String`'s std `PartialEq<&str>` impl makes the
+                // guard's `==` valid Rust without any extra `.as_str()`.
+                let fresh = self.fresh_nested_strlit_binder()?;
+                ir_args.push(Pat::Var(fresh));
+                guards.push(Expr::BinOp {
+                    op: BinOp::Eq,
+                    lhs: Box::new(Expr::Var(fresh)),
+                    rhs: Box::new(Expr::Str(lit.clone())),
+                });
+            } else if let Some(flat) = Self::simple_nested_list(a) {
                 // Binding a head element (`h`) or the tail (`t`) needs the
                 // element type to be `Clone` — `ListIndexClone` clones an element
                 // and `List.drop` returns an owned `Vec`. Every CONCRETE element
@@ -11733,6 +11919,7 @@ mod tests {
                 any_param_binders: vec![],
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
+                nested_strlit_binders: vec![],
             },
             &builtins,
         );
@@ -11848,6 +12035,7 @@ mod tests {
                 any_param_binders: vec![],
                 destructure_thunk_binders: vec![],
                 nested_cons_binders: vec![],
+                nested_strlit_binders: vec![],
             },
             &builtins,
         );

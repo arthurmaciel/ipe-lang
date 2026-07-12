@@ -454,25 +454,30 @@ pub fn compile_prepared(
         fresh_avoid.extend(sky_db::identifier_words(db, *file).iter().cloned());
     }
 
-    // No salsa query is demanded from here on: infer → lower → emit are
-    // whole-program (pre-Phase-4) passes, so one guard on the shared
-    // interner covers the whole tail. The guard binds as `interner` so the
-    // pass call sites read exactly as they did pre-salsa.
-    let mut interner = shared_interner.lock();
-    interner.set_fresh_avoid(fresh_avoid);
-
-    // Build a module-home → (file, src) map used to attribute infer diagnostics
-    // to the correct dep source file (#144).  Intern each String module-path
-    // segment so the keys match the Symbol-keyed `home` fields on linked defs.
-    let mut home_to_source: BTreeMap<Vec<sky_intern::Symbol>, (PathBuf, String)> =
-        BTreeMap::new();
-    for (str_path, (file, src)) in sources {
-        let sym_path: Result<Vec<_>, _> =
-            str_path.iter().map(|s| interner.intern(s)).collect();
-        if let Ok(sym_path) = sym_path {
-            home_to_source.insert(sym_path, (file.clone(), src.clone()));
+    // Short lock scope: set the fresh-name avoid-set (must happen before
+    // `lower_program` may execute below) and build the module-home →
+    // (file, src) blame map (#144) by interning each String module-path
+    // segment — lookups against symbols `canonicalize` already interned, so
+    // this cannot append a new symbol and cannot perturb interning order.
+    // The guard is dropped before any further salsa query is demanded: the
+    // interner mutex is not reentrant, and `typecheck`/`lower_program` each
+    // take their own lock internally (Phase 4 — see `sky_db::typecheck`).
+    let home_to_source: BTreeMap<Vec<sky_intern::Symbol>, (PathBuf, String)> = {
+        let mut interner = shared_interner.lock();
+        interner.set_fresh_avoid(fresh_avoid);
+        let mut map = BTreeMap::new();
+        for (str_path, (file, src)) in sources {
+            let sym_path: Result<Vec<_>, _> =
+                str_path.iter().map(|s| interner.intern(s)).collect();
+            if let Ok(sym_path) = sym_path {
+                map.insert(sym_path, (file.clone(), src.clone()));
+            }
         }
-    }
+        // The guard's last consumer was the loop above; release it before
+        // returning the map (clippy::significant_drop_tightening).
+        drop(interner);
+        map
+    };
 
     // Given a diagnostic span, find the most tightly enclosing def in `linked`
     // and return that def's (file, src).  Defs preserve their original `home`
@@ -548,7 +553,12 @@ pub fn compile_prepared(
     // generation, field-access pass, exhaustiveness) we fall back to the existing
     // heuristic, preserving the behaviour for every error class that pre-dates
     // this fix.
-    let types = sky_types::infer_attributed(linked, &mut interner).map_err(|(diag, home)| {
+    //
+    // `sky_db::typecheck` (incremental Phase 4, plan Task 12) is the memoized
+    // SEAM over `sky_types::infer_attributed`: same whole-program computation,
+    // now skippable on a warm no-op rebuild. No interner guard is held across
+    // this demand — the query takes its own lock internally.
+    let types = sky_db::typecheck(db, source_root, entry_file).map_err(|(diag, home)| {
         let span = diag_span(&diag);
         let (file, src) = if home.is_empty() {
             source_for_span(span)
@@ -579,15 +589,18 @@ pub fn compile_prepared(
         let (file, src) = source_for_span(diag_span(&diag));
         CliError::Pipeline { file, src, diag }
     };
+    // `sky_db::lower_program` (Phase 4, plan Task 13) — the memoized SEAM over
+    // `sky_lower::lower`, keyed the same way and re-demanding `typecheck`
+    // above (a guaranteed memo hit within this revision).
     let program =
-        sky_lower::lower(linked, &types, &mut interner).map_err(span_attributed_err)?;
-    let emitted = RustBackend::new(&interner)
-        .with_db_driver(db_driver)
-        .emit(&program)
-        .map_err(span_attributed_err)?;
-    // Emit was the guard's last consumer; release it before returning
-    // (clippy::significant_drop_tightening).
-    drop(interner);
+        sky_db::lower_program(db, source_root, entry_file).map_err(span_attributed_err)?;
+    let emitted = {
+        let interner = shared_interner.lock();
+        RustBackend::new(&interner)
+            .with_db_driver(db_driver)
+            .emit(&program)
+            .map_err(span_attributed_err)?
+    };
     Ok(emitted)
 }
 

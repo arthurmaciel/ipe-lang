@@ -644,6 +644,77 @@ pub fn kernel_types(db: &dyn Db, root: SourceRoot) -> KernelTypesResult {
     sky_types::kernel_type_table(&mut interner).map(Arc::new)
 }
 
+// ---------------------------------------------------------------------------
+// Tracked queries (Phase 4: typecheck + lower — the coarse per-program SEAM)
+// ---------------------------------------------------------------------------
+
+/// The memoized result of type-checking [`linked_program`]'s whole-program
+/// merge, or the failing diagnostic paired with its constraint's home module
+/// path (see [`sky_types::infer_attributed`]).
+pub type TypecheckResult = Result<Arc<sky_types::SolvedTypes>, (Diagnostic, Vec<Symbol>)>;
+
+/// Type-check the linked whole-program module (incremental plan Task 12).
+///
+/// **This is the coarse per-program SEAM, not per-module typecheck.** Keyed on
+/// `(root, entry)` and depending on [`linked_program`], so it inherits exactly
+/// the same coarseness: an edit anywhere in the reachable module graph
+/// re-executes this query in full, same as it would re-run
+/// `sky_types::infer_attributed` today. What changes is that the result is now
+/// **memoized**: a repeat demand, or a demand after a byte-equal re-save,
+/// executes nothing — before this query existed, `compile_prepared` called
+/// `infer_attributed` as a plain function on every single build, so a warm
+/// no-op rebuild still re-ran the whole solver. This query is what makes that
+/// waste visible to salsa (and therefore skippable).
+///
+/// Why not genuinely per-module: `sky_types::infer_attributed` builds ONE
+/// [`sky_types::unionfind`]-backed constraint graph over the ENTIRE linked
+/// module (`Builder::run`), and its post-solve passes — Boundary Scheme
+/// Promotion, the field-access/record-update deferred-resolution fixpoint,
+/// routed-`Live.app` witness checks — all operate over that single joint
+/// constraint set. Splitting this into a true `typecheck(ModuleId)` query
+/// would require re-deriving Sky's cross-module generalization semantics on
+/// top of a scoped per-module solve seeded from deps' TYPED interfaces
+/// (schemes, not just the canon-level `ModuleExports` [`module_interface`]
+/// carries today) — a structural redesign of `constrain.rs`, not a
+/// refactor. See the Phase-4 section of
+/// `docs/architecture/salsa-incremental-compilation-2026-07-11.md` for the
+/// full analysis and the recorded follow-up scope.
+#[salsa::tracked]
+pub fn typecheck(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> TypecheckResult {
+    let linked = linked_program(db, root, entry).map_err(|d| (d, Vec::new()))?;
+    let mut interner = db.interner().lock();
+    sky_types::infer_attributed(&linked.module, &mut interner).map(Arc::new)
+}
+
+/// The memoized result of lowering [`linked_program`]'s whole-program merge
+/// against [`typecheck`]'s solved types into the backend-agnostic IR.
+pub type LowerResult = Result<Arc<sky_ir::Program>, Diagnostic>;
+
+/// Lower the linked whole-program module (incremental plan Task 13).
+///
+/// **Coarse per-program SEAM**, the [`typecheck`] sibling: depends on
+/// [`linked_program`] and [`typecheck`], so it re-executes exactly when
+/// either would have re-run `sky_lower::lower` today, but now as a memoized
+/// salsa node — a repeat demand or a no-op re-save executes nothing.
+///
+/// Why not genuinely per-module: beyond inheriting `typecheck`'s coupling
+/// (lowering reads [`sky_types::SolvedTypes`], itself whole-program),
+/// `sky_lower::lower` mints its fresh-symbol pools (`eta_`, `cap_`, `arg_`,
+/// …) sized from whole-program facts — `lower::max_def_arity(m)` and
+/// `lower::count_destructure_param_sites(m)` walk every def in the merged
+/// module. A per-module lowering pass would need those pools either resized
+/// per module (risking the exact numbering the golden-oracle SEAL pins — see
+/// the Phase-3 fresh-name-pool finding) or restructured into a
+/// composable/incremental allocation scheme. Recorded as Phase-4 follow-up
+/// scope, not attempted here.
+#[salsa::tracked]
+pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerResult {
+    let linked = linked_program(db, root, entry)?;
+    let types = typecheck(db, root, entry).map_err(|(diag, _home)| diag)?;
+    let mut interner = db.interner().lock();
+    sky_lower::lower(&linked.module, &types, &mut interner).map(Arc::new)
+}
+
 /// The identifier words of one module's source text — the per-file slice of
 /// the fresh-name collision universe (`Interner::set_fresh_avoid`).
 ///

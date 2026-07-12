@@ -128,6 +128,7 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
         body: Expr::Access {
             record: Box::new(Expr::Var(par)),
             field: x,
+            field_ty: IrType::Int,
         },
     };
     // main = Log.println (String.fromInt (getX (bumpX (mk 1))))
@@ -242,10 +243,11 @@ fn synthesises_nested_record_structs() -> DResult<()> {
         home: ModPath(vec![]),
         type_params: vec![],
         params: vec![(par, outer)],
-        ret: xy,
+        ret: xy.clone(),
         body: Expr::Access {
             record: Box::new(Expr::Var(par)),
             field: inner,
+            field_ty: xy,
         },
     };
     let prog = program(main_mod, vec![f_fn], None);
@@ -288,6 +290,7 @@ fn literal_with_unknown_shape_fails_fast() -> DResult<()> {
         body: Expr::Access {
             record: Box::new(Expr::Record(vec![(x, Expr::Int(1))])),
             field: x,
+            field_ty: IrType::Int,
         },
     };
     let prog = program(main_mod, vec![f_fn], None);
