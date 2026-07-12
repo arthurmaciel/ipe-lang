@@ -22,6 +22,14 @@ sky_lower = { path = "../sky_lower" }
 sky_ir = { path = "../sky_ir" }
 sky_backend = { path = "../sky_backend" }
 sky_backend_rust = { path = "../sky_backend_rust" }
+# Phase 7 (`crate::watch` — Tasks 21-25): the confined watcher + process
+# supervisor primitives, and the two crates `watch.rs` drives directly —
+# `salsa` for `Cancelled::catch`/`Setter` (Task 25's cancellation) and
+# `notify` for the raw filesystem watch (Task 21). Same salsa pin as
+# `sky_db` (`crates/sky_db/Cargo.toml`) — one version across the workspace.
+sky_watch = { path = "../sky_watch" }
+salsa = "=0.27.2"
+notify = "8"
 # Phase 6 (Task 19/20): the on-disk build cache (`src/cache.rs`) — content
 # hashing of the whole-project key + the compiler/toolchain version-epoch,
 # and JSON (de)serialization of the cached `EmittedProject`. Same version
