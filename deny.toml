@@ -1,0 +1,88 @@
+# cargo-deny configuration — supply-chain gate (RustSec advisories + license
+# compliance + dependency-source pinning). Read by `cargo deny check` in
+# .github/workflows/security.yml. See docs/architecture/ci-and-hosting.md for
+# how this fits the rest of the CI posture (fmt/clippy/test/miri/e2e in ci.yml).
+#
+# `runtime`'s Cargo.toml gates most third-party deps (rsa, sqlx, redis, ...)
+# behind optional Cargo features (default = []) — CI's `test` job only builds
+# the default feature set. Enabling `full` here (mirroring ci.yml's
+# `runtime-full-features` job: `cargo nextest run -p sky-runtime-rust
+# --features full`) makes the supply-chain graph match what actually ships in
+# a real deployment, not just the narrow default-feature slice — otherwise an
+# advisory affecting an optional dep (e.g. the `rsa` entry below) silently
+# drops out of the scanned graph. Deliberately NOT `all-features = true`:
+# `webview` (wry/tao) is explicitly excluded from `full` (see runtime/
+# Cargo.toml's `[features]` comment — "NOT in `full`; default/CI builds
+# compile the cross-platform stub instead") because it pulls a large,
+# platform-gated GTK3/WebKitGTK binding surface (MPL-2.0-licensed cssparser,
+# multiple `unmaintained` gtk-rs advisories) that no CI job or generated
+# project actually builds by default; scanning it here would be noise against
+# a feature surface this repo doesn't ship.
+[graph]
+all-features = false
+no-default-features = false
+features = ["full"]
+
+# https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — rsa 0.9.x "Marvin Attack" (PKCS#1 v1.5 timing
+    # sidechannel). No fixed upstream release exists (the advisory's own
+    # Solution field says "no fixed upgrade available"); pulled in via
+    # `runtime`'s optional `crypto` feature for Sky.Core.Jwt RS256 sign/verify
+    # (jsonwebtoken -> rsa) — see runtime/src/sky_runtime/jwt.rs +
+    # runtime/src/sky_runtime/crypto.rs. Exposure is limited to SIGN (private
+    # key) + VERIFY (public key); the Marvin attack targets the PKCS#1 v1.5
+    # DECRYPTION oracle, which this codebase never exercises. Accepted +
+    # tracked; revisit when `rsa` ships a fix or a vetted constant-time
+    # RS256 alternative replaces it (2026-07-12).
+    "RUSTSEC-2023-0071",
+]
+
+# https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html
+# The full set of licenses actually present across the workspace's
+# `--features full` dependency tree (verified via `cargo deny check licenses`
+# against this Cargo.lock, 2026-07-12) — every entry below is load-bearing,
+# not a speculative default. Notable non-obvious entries: ISC / "Apache-2.0
+# AND ISC" (ring, rustls-webpki, untrusted, simple_asn1 — the rustls/JWT TLS
+# stack), CDLA-Permissive-2.0 (webpki-roots — Mozilla's CA root bundle
+# license), 0BSD (quoted_printable, pulled in by lettre for MIME encoding).
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = false
+
+# https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html
+# Advisory-only posture (warn, not deny) — a large workspace with many
+# independent crate families (parser/types/backend/runtime/tools) legitimately
+# pulls in duplicate transitive versions (e.g. two `syn` majors via different
+# proc-macro crates); a hard `deny` here would be noise, not signal.
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+# https://embarkstudios.github.io/cargo-deny/checks/sources/cfg.html
+# Every dependency MUST come from the official crates.io index — no ad-hoc git
+# dependencies, no unvetted alternate registries. This is the actual
+# supply-chain-attack gate: a compromised/typosquatted git source is a live
+# vector cargo-audit's CVE-database check does not cover.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
