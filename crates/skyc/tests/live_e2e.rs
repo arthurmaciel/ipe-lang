@@ -481,6 +481,24 @@ fn extract_hid_near_text(html: &str, text: &str) -> Option<String> {
     Some(after[..end].to_string())
 }
 
+/// Extract the `data-sky-hid` attribute value from the FIRST `<tag …>` open
+/// tag in `html` (e.g. `"form"`) — used for elements (like `<form>`) that
+/// don't necessarily wrap a distinguishing text node directly.
+///
+/// Returns `None` when the tag or the attribute is not present.
+fn extract_hid_for_open_tag(html: &str, tag: &str) -> Option<String> {
+    let open_marker = format!("<{tag} ");
+    let tag_pos = html.find(&open_marker)?;
+    let after_tag = &html[tag_pos..];
+    let tag_end = after_tag.find('>')?;
+    let tag_slice = &after_tag[..tag_end];
+    let attr_prefix = "data-sky-hid=\"";
+    let hid_pos = tag_slice.find(attr_prefix)?;
+    let after = &tag_slice[hid_pos + attr_prefix.len()..];
+    let end = after.find('"')?;
+    Some(after[..end].to_string())
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// `GET /` on a Sky.Live counter app returns an HTML page containing the
@@ -911,5 +929,198 @@ fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), Box
         "live_pubsub_record_payload_build_only",
         SKY_PUBSUB_RECORD_PAYLOAD,
     )?;
+    Ok(())
+}
+
+/// #162 regression — the CANONICAL CLAUDE.md "forms with passwords" idiom:
+/// `Ui.form [Ui.onSubmit DoSignIn] [...]` where `DoSignIn : Creds -> Msg` is a
+/// TYPED-RECORD payload constructor (not a bare Msg). This is the exact shape
+/// `examples/19-skyforum`'s `View/Login.sky` and `examples/27-multi-session-chat`
+/// use in production.
+///
+/// Before the fix: `skyc build` exits 0, but the emitted crate fails `cargo
+/// build` with E0277 — `ui_on_submit_`'s generic bound `F: Fn(T) -> M + Send +
+/// Sync + 'static` was never satisfiable because the emit site passed the
+/// codegen's boxed closure value (`Box<dyn Fn(T) -> M + Send + 'static>` — the
+/// generic `IrType::Fun` rendering, which never claims `+Sync`) straight
+/// through as `F`. A trait object's auto-trait set is exactly its bound list,
+/// so that box could never satisfy `+ Sync` regardless of what it captured —
+/// a genuine skyc-accept/cargo-reject SEAL violation on the single
+/// most-recommended Sky.Live form pattern. Fixed by re-wrapping the boxed
+/// value in a freshly-declared closure at the `KernelFn::UiOnSubmit` /
+/// `HtmlEventShape::Raw` emit sites (`sky_backend_rust::emit_expr`) instead of
+/// forwarding the box itself — see that arm's comment for the full mechanism.
+const SKY_ONSUBMIT_TYPED_RECORD: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type alias Creds =
+    { username : String
+    , password : String
+    }
+
+type Msg
+    = DoSignIn Creds
+
+type alias Model =
+    { lastUsername : String
+    }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { lastUsername = "" }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        DoSignIn creds ->
+            ( { model | lastUsername = creds.username }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (Ui.column []
+            [ Ui.form
+                [ Ui.onSubmit DoSignIn ]
+                [ Ui.input [ Ui.name "username" ]
+                , Ui.input [ Ui.name "password" ]
+                , Ui.input [ Ui.htmlAttribute "type" "submit" ]
+                ]
+            , Ui.text model.lastUsername
+            ])
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = DoSignIn { username = "", password = "" }
+        }
+"#;
+
+/// #162 seal — BUILD-ONLY: the typed-record `Ui.onSubmit` form must compile
+/// end-to-end. A successful `skyc` + `cargo build` IS the assertion — before
+/// the fix this was `skyc` exit 0 then `cargo build` E0277 (`dyn Fn(Creds) ->
+/// MainMsg + Send` cannot be shared between threads safely).
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn live_onsubmit_typed_record_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build(
+        "live_onsubmit_typed_record_build_only",
+        SKY_ONSUBMIT_TYPED_RECORD,
+    )?;
+    Ok(())
+}
+
+/// #162 seal — FULL E2E: submitting the typed-record form over the wire must
+/// dispatch `DoSignIn` with the DECODED `Creds` record, proving the fix is not
+/// merely a compile-time patch that leaves the handler undispatchable at
+/// runtime (the historical failure mode of the pre-#109/#156 `OnRaw` variant).
+///
+/// ## Wire protocol exercised
+///
+/// 1. `GET /` → session cookie + the `<form>`'s `data-sky-hid`.
+/// 2. `POST /_sky/event` with
+///    `{"id":"<hid>","event":"submit","args":[{"username":"alice","password":"s3cr3t"}],"sessionId":""}`
+///    — mirrors what the browser's delegated form-submit binder sends
+///    (`live/mod.rs`'s `event == "submit"` branch treats `args[0]` as the
+///    form-data object).
+/// 3. A second `GET /` with the session cookie must show `>alice<` — proving
+///    `resolve_form` → `decode_form_or_warn::<Creds>` → `DoSignIn` → `update`
+///    ran end-to-end with the CONCRETE decoded record, not a type-erased or
+///    dropped payload.
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, HTTP, or assertion error.
+#[test]
+fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let test_name = "live_onsubmit_typed_record";
+    let exe = compile_and_build(test_name, SKY_ONSUBMIT_TYPED_RECORD)?;
+    let port = pick_ephemeral_port()?;
+    let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
+    let addr = format!("127.0.0.1:{port}");
+
+    // ── Step 1: GET / — initial page, extract session cookie + form hid ─────
+    let (raw_headers, body) = http_send(test_name, &addr, "GET", "/", &[], None)?;
+
+    let sid = extract_cookie(&raw_headers, "sky_sid").ok_or_else(|| -> BoxError {
+        format!(
+            "{test_name}: no sky_sid cookie in GET / response\n\
+             --- raw headers ---\n{raw_headers}"
+        )
+        .into()
+    })?;
+
+    let hid = extract_hid_for_open_tag(&body, "form").ok_or_else(|| -> BoxError {
+        format!(
+            "{test_name}: could not find data-sky-hid on <form> in GET / body\n\
+             --- first 2000 bytes ---\n{}",
+            &body[..body.len().min(2000)]
+        )
+        .into()
+    })?;
+
+    // ── Step 2: POST /_sky/event — submit with the typed-record form data ──
+    let event_body = format!(
+        r#"{{"id":"{hid}","event":"submit","args":[{{"username":"alice","password":"s3cr3t"}}],"sessionId":""}}"#
+    );
+    let cookie_header = format!("sky_sid={sid}");
+    let (_, post_body) = http_send(
+        test_name,
+        &addr,
+        "POST",
+        "/_sky/event",
+        &[
+            ("Content-Type", "application/json"),
+            ("Cookie", &cookie_header),
+        ],
+        Some(event_body.as_bytes()),
+    )?;
+
+    assert!(
+        post_body.contains("patches"),
+        "{test_name}: POST /_sky/event (submit) did not return a patches ACK\nbody: {post_body}"
+    );
+
+    // ── Step 3: wait for async model update ─────────────────────────────────
+    std::thread::sleep(Duration::from_millis(200));
+
+    // ── Step 4: GET / with session cookie — should show the decoded username
+    let (_, body2) = http_send(
+        test_name,
+        &addr,
+        "GET",
+        "/",
+        &[("Cookie", &cookie_header)],
+        None,
+    )?;
+
+    assert!(
+        body2.contains(">alice<"),
+        "{test_name}: DoSignIn was not dispatched with the decoded Creds \
+         record (expected the re-rendered page to contain the username \
+         \"alice\")\n--- first 2000 bytes of second GET / ---\n{}",
+        &body2[..body2.len().min(2000)]
+    );
+
     Ok(())
 }

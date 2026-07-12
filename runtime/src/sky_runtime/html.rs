@@ -880,6 +880,23 @@ pub fn html_on_bool_<M>(
 /// Despite the historical name (kept to avoid an unrelated rename touching
 /// `naming.rs` / emit-site literals / parity tooling), this is no longer a
 /// "raw" escape hatch — it fully participates in typed dispatch.
+///
+/// #162: the `F: ... + Sync` bound below is genuinely required (`Event`'s
+/// `OnForm` slot stores `Arc<dyn Fn(FormData) -> Option<M> + Send + Sync>` —
+/// the VNode tree is shared across the live session's dispatch table, so the
+/// handler must be safely readable from any thread that services a request).
+/// It is NOT enough for the caller to hand a `'static` closure whose captures
+/// all happen to be `Sync`: if the emitted Sky closure is first boxed as a
+/// trait object (`Box<dyn Fn(T) -> M + Send + 'static>` — the codegen's
+/// generic first-class-function-value rendering, which deliberately omits
+/// `+Sync` since most Fn-value consumers only need `Send`) and THAT box is
+/// passed straight through as `F`, the call fails: a trait object's
+/// auto-trait set is exactly its bound list, so `Box<dyn ... + Send>` is
+/// never `Sync` regardless of what the boxed closure actually captures. The
+/// codegen call site (`sky_backend_rust::emit_expr`'s `HtmlEventShape::Raw`
+/// arm) closes this by re-wrapping the boxed value in a freshly-declared
+/// closure at the call site instead of forwarding the box itself — see that
+/// arm's comment for the full mechanism.
 #[cfg(feature = "live")]
 #[must_use]
 pub fn html_on_raw_<M, T, F>(name: String, payload: F) -> Attribute<M>
