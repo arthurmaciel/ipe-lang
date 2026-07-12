@@ -100,6 +100,51 @@ fn task_arg_bug() -> Diagnostic {
     )
 }
 
+/// The canonical 7-field `HttpRequest` record shape, alphabetically sorted:
+/// `body`, `followRedirects`, `headers`, `maxRedirects`, `method`, `timeout`,
+/// `url`.
+///
+/// Shared by [`Lowerer::ir_type_from_ty`]'s structural fold (solved/inferred
+/// `Ty::Record` regions — e.g. a `Http.defaultRequest |> withMethod |> …`
+/// builder chain) AND [`Lowerer::ir_type_from_canon`]'s record arm
+/// (user-written anonymous-record annotations — e.g.
+/// `printReq : { body : String, ... } -> String`). Both paths MUST apply the
+/// identical test so a genuinely `HttpRequest`-shaped value resolves to the
+/// same `IrType::HttpRequest` / `sky_runtime::HttpRequest` regardless of
+/// which path its type reached emission through — a value built via the
+/// former and consumed via the latter (or vice versa) used to diverge
+/// (SKY-I0001 follow-up), one side folding to the opaque runtime type, the
+/// other falling back to a backend-synthesised struct with a different name.
+const HTTP_REQUEST_FIELDS: &[&str] = &[
+    "body",
+    "followRedirects",
+    "headers",
+    "maxRedirects",
+    "method",
+    "timeout",
+    "url",
+];
+
+/// Does `field_names` match [`HTTP_REQUEST_FIELDS`] exactly (same NAMES, same
+/// count — sorts `field_names` in place)?
+///
+/// Intentionally name-only, mirroring the pre-existing structural-fold test
+/// precisely: do not widen this to also check field TYPES (closing that gap
+/// is a separate, already-tracked false-positive hardening item — a
+/// same-named-but-differently-typed record wrongly folding to `HttpRequest`)
+/// and do not narrow it further (that would reopen the very two-path
+/// divergence this helper exists to close).
+fn is_http_request_field_shape(field_names: &mut [&str]) -> bool {
+    if field_names.len() != HTTP_REQUEST_FIELDS.len() {
+        return false;
+    }
+    field_names.sort_unstable();
+    field_names
+        .iter()
+        .zip(HTTP_REQUEST_FIELDS.iter())
+        .all(|(a, b)| *a == *b)
+}
+
 /// Does this solved [`Ty`] contain a free type variable anywhere? Used to keep
 /// the lowerer's record-shape collection to fully-concrete shapes — a
 /// variable-bearing (generic) record reaches the backend through a signature,
@@ -5210,7 +5255,25 @@ impl<'a> Lowerer<'a> {
             // pass-through and the backend synthesises a GENERIC struct for the
             // shape (M2c). Keyed by field name in a [`BTreeMap`] to match the
             // backend's field-set canonicalisation.
+            //
+            // Special case: apply the SAME `HttpRequest`-shape test as
+            // `ir_type_from_ty`'s structural fold (via the shared
+            // [`is_http_request_field_shape`] helper) BEFORE falling back to
+            // a synthesised record struct. Without this, a user-written
+            // anonymous-record annotation spelling out the canonical
+            // `HttpRequest` fieldset (e.g. `printReq : { body : String, ... }
+            // -> String`) resolves to a backend-synthesised struct name while
+            // a builder-chain VALUE of the same shape resolves to
+            // `IrType::HttpRequest` via the structural fold — the two-path
+            // divergence surfaces as an E0308 type mismatch at the call site.
             canon::Type::Record(fields) => {
+                let mut field_names: Vec<&str> = fields
+                    .iter()
+                    .filter_map(|(sym, _)| self.interner.resolve(*sym))
+                    .collect();
+                if is_http_request_field_shape(&mut field_names) {
+                    return Ok(IrType::HttpRequest);
+                }
                 let mut ir_fields = BTreeMap::new();
                 for (name, fty) in fields {
                     ir_fields.insert(*name, self.ir_type_from_canon(fty, generics)?);
@@ -5937,31 +6000,21 @@ impl<'a> Lowerer<'a> {
             // `http_request` kernels see the correct runtime type, rather than a
             // backend-synthesised struct with an auto-generated name.
             Ty::Record(fields, _tail) => {
-                const HTTP_REQUEST_FIELDS: &[&str] = &[
-                    "body",
-                    "followRedirects",
-                    "headers",
-                    "maxRedirects",
-                    "method",
-                    "timeout",
-                    "url",
-                ];
                 // `BTreeMap<Symbol, _>` iterates in Symbol-integer order (intern
                 // assignment order), NOT in alphabetical order.  Collect names,
-                // sort them, then compare to the alphabetically-sorted constant.
-                if fields.len() == HTTP_REQUEST_FIELDS.len() {
-                    let mut field_names: Vec<&str> = fields
-                        .keys()
-                        .filter_map(|sym| self.interner.resolve(*sym))
-                        .collect();
-                    field_names.sort_unstable();
-                    let is_http_request = field_names
-                        .iter()
-                        .zip(HTTP_REQUEST_FIELDS.iter())
-                        .all(|(a, b)| *a == *b);
-                    if is_http_request {
-                        return Ok(IrType::HttpRequest);
-                    }
+                // then let the shared [`is_http_request_field_shape`] helper
+                // sort + compare against [`HTTP_REQUEST_FIELDS`] — the same
+                // test `ir_type_from_canon`'s record arm applies to a
+                // user-written anonymous-record ANNOTATION, so a genuinely
+                // HttpRequest-shaped value agrees on `IrType::HttpRequest`
+                // regardless of which path (solved region vs. annotation) its
+                // type reached emission through.
+                let mut field_names: Vec<&str> = fields
+                    .keys()
+                    .filter_map(|sym| self.interner.resolve(*sym))
+                    .collect();
+                if is_http_request_field_shape(&mut field_names) {
+                    return Ok(IrType::HttpRequest);
                 }
                 let mut lowered = BTreeMap::new();
                 for (name, field_ty) in fields {
