@@ -187,7 +187,7 @@ survives across revisions on a production path (Phase 2+).
 | **5 (implemented — see §10; 14+16 shipped, 15 recorded-not-forced, 17 deferred)** | 14–17 | `program_metadata()` (conservative, re-runs every build — LOCKED) — shipped; emit→cargo bridge (content-gated atomic write + manifest prune) — shipped at today's whole-project emit granularity; per-file `emit_rust_file` — genuinely blocked (no `RustFileId` domain exists in the backend today), recorded as a scoped continuation, not forced; config projections — deferred |
 | **17 (implemented — see §11)** | 17 | `BuildConfig` salsa input (narrowed to `db_driver`, the one field with a real consumer) + `emit_project(root, entry, config)` — the coarse SEAM over `RustBackend::emit`, replacing Phase 4/5's last remaining plain-function call in `compile_prepared` |
 | **6 (implemented — see §12; deliberate EmittedProject-level divergence from literal "lowered IR")** | 19, 20 | On-disk build cache: whole-project content-address key + version-epoch directory (compiler-binary hash + rustc fingerprint) gate — "refuse, don't guess" by construction (stale entries are a different, unreachable address, never a runtime check) |
-| 7 | 21–25 | `ipe watch` (confined watcher, debounce, last-good state machine, L0+ continuity, cancellation) |
+| **7 (implemented — see §13; Tasks 21/22/23/25 shipped in full, Task 24 split: watch-scoped sqlite default shipped, `ModelSchemaTag`/bincode hardening + proactive reload frame recorded as a genuine, honestly-scoped continuation)** | 21–25 | `ipe watch` (confined watcher, debounce, last-good state machine, L0+ continuity, cancellation) |
 | 8 | 26 | LSP seam — same db, same queries, editor-buffer inputs |
 
 ## 6. Phase-1 decisions ledger (rust-analyzer-idiomatic defaults, recorded)
@@ -1308,3 +1308,494 @@ would have reintroduced exactly this hole).
 | `skyc::on_disk_cache_hit_serves_a_tampered_entry_verbatim` | the mission proof — a tampered on-disk entry is served VERBATIM, proving the driver reads and trusts the cache rather than merely reproducing a deterministic answer |
 | `skyc::cache_dir_none_disables_caching_entirely` | `cache_dir: None` never creates a cache directory and always reports `Miss` |
 | `skyc::clean_vs_incremental_parity` / `adversarial_review_parity_probe` (re-run) | still green — the cache sits entirely outside `compile_prepared`; the parity gate's call shape is untouched by Phase 6 |
+
+---
+
+## 13. Phase 7 — `ipe watch` (Tasks 21-25): confined watcher, debounce,
+## last-good state machine, cancellation — shipped; L0+ split, one half
+## honestly scoped as a continuation
+
+Phase 7 = plan Tasks **21 (confined watcher), 22 (debounce + minimal
+recompute), 23 (process state machine), 24 (L0+ session continuity), 25
+(salsa cancellation)**. This is the first phase whose entire point is to be
+a CONSUMER of Phases 1-6's incremental engine rather than another producer
+of salsa queries — the mission brief's own framing ("a naive re-run-from-
+scratch watch mode would defeat the entire point") is the design constraint
+every decision below is checked against.
+
+Same discipline as every prior phase: survey the design doc's literal
+wording and this session's own investigation BEFORE writing anything, ship
+the largest SOUND slice, and record a genuinely blocked or genuinely
+cross-cutting piece honestly rather than force a fake-coarse version of it.
+Tasks 21/22/23/25 shipped in full — none of them hit a blocker. Task 24
+split cleanly into a watch-scoped half (shipped) and a runtime/backend-
+cutting half (recorded, not forced — see §13.6).
+
+### 13.1 Two new pieces of code, cleanly layered
+
+- **`crates/sky_watch`** (new crate) — salsa-agnostic, reusable primitives:
+  `scope.rs` (Task 21 — `WatchedPath`/`WatchScope`), `coalesce.rs` (Task 22's
+  debounce half — `coalesce_loop`), `process.rs` (Task 23 —
+  `SupervisorState`/`LastGoodBinary`/readiness probing). Depends only on
+  `notify` (the confined watcher) and `sha2` (content-hash, same pin as
+  `skyc`'s own build cache). Knows nothing about `sky_db`, `SkyDatabase`, or
+  the compile pipeline — every primitive here is unit-tested in isolation
+  (13 tests, no `cargo build` in the loop, sub-second).
+- **`crates/skyc/src/watch.rs`** (new module in the existing driver crate) —
+  the salsa-aware orchestrator: owns the `SkyDatabase`, wires `sky_watch`'s
+  primitives to `compile_prepared`/`write_emitted_project` (Phases 1-6's own
+  production pipeline — no divergent copy), and implements Task 22's
+  recompute half, Task 24's watch-scoped default, and Task 25's
+  cancellation. New CLI subcommand: `skyc watch <entry> [--out <dir>]
+  [--runtime <dir>] [--port <n>]`.
+
+**Why two crates, not one.** `sky_watch`'s primitives (a confined path
+allowlist, a debounce coalescer, a process supervisor) are useful — and
+independently testable — without any salsa knowledge at all; folding them
+into `skyc` would make Task 21's own soundness properties (symlink
+foreclosure, bounded event intake) untestable without paying a `cargo
+build`'s cost per test. `watch.rs` stays inside `skyc` because it needs
+private items (`write_emitted_project`, `find_manifest_for_sky_file`) that
+child modules of the SAME crate see for free (Rust's privacy is module-tree
+based) — exporting them as `pub(crate)`-vs-a-new-crate boundary would have
+been a bigger, riskier refactor of already-tested one-shot driver code for
+zero benefit.
+
+### 13.2 Task 21 — the confined watcher (`sky_watch::scope`)
+
+`WatchedPath` has exactly ONE constructor, `confine(root, candidate)`,
+which canonicalises both paths and REFUSES (returns `None`, never
+panics/clamps) anything that doesn't resolve inside the canonical root —
+closing H18's symlink-escape hazard by construction, not by a runtime
+check a future edit could accidentally skip. `WatchScope::build(root,
+entry_dir)` assembles the design doc's exact allowlist — `sky.toml` (if
+present), the entry module's directory (recursive), `tests/` (if present)
+— and counts every in-scope `.sky` file up front, hard-refusing
+(`ScopeError::TooManyFiles`) past `MAX_WATCHED_FILES` (200,000) rather than
+silently truncating (the DoS-guard half of H18).
+
+**Directories, not inodes.** `WatchScope::roots_to_watch()` hands `notify`
+directory paths (`RecursiveMode::Recursive`), never individual files — an
+editor's tmp-write-then-rename creates a NEW inode notify would miss if it
+were watching the old file's inode directly.
+
+**Generated dirs excluded by construction.** `is_excluded_dir_name` /
+`under_excluded_dir` cover `target/`, `.git/`, `node_modules/`, `dist/`,
+`.ipe/` (the project-local incremental state dir the design doc reserves),
+`.skyc-cache/` (Phase 6's on-disk build cache — see §12.4's default
+location), and `sky-out/` (the conventional build-output dir this repo's
+example projects use) — `WatchScope::is_relevant` checks this BEFORE
+canonicalising, so an excluded-dir event storm (a `cargo build` writing
+thousands of files under `target/`) never even reaches the canonicalise-
+and-confine step, let alone the debounce queue.
+
+**The `~/.cache/ipe/ffi/rust/*.ipei` + `kernel.json` interface-file watch
+(H13) is NOT wired in Phase 7.** Surveyed and recorded: the FFI subsystem
+itself (`ipe add`/`ipe install`, the `.ipei`/`kernel.json` interface
+format, and the `ffi_package_interface(PackageId)` salsa input the design
+doc's Q1b table reserves) does not exist yet in this Rust port at all — the
+FFI port is a separate, not-yet-scheduled tier (tracked in this project's
+own memory ledger as blocked on the M4 kernel registry). `WatchScope`'s
+allowlist mechanism is READY for this the moment FFI lands (add one more
+root to `roots_to_watch`, gated the same read-only way), but wiring a
+watch path for interface files that cannot yet be produced would be dead
+surface — the exact anti-pattern Phase 1 §3.2 named and every subsequent
+phase has kept naming.
+
+**A real bug the E2E suite caught (H18-adjacent, recorded here rather than
+silently fixed): raw ACCESS events are a self-triggering rebuild-storm
+hazard, not just path filtering.** `WatchScope::is_relevant` (Task 21)
+filters by PATH; it does not — did not, before this finding — filter by
+EVENT KIND. `notify`'s Linux (inotify) backend reports `Access(Open)`
+events for a file's mere OPEN/READ, not only for writes. The orchestrator's
+own `resolve_project_sources` (Task 22) opens every in-scope `.sky` file
+AND reads the watched directory on EVERY rebuild cycle — so a watch
+session, on its own, generated an unbounded storm of `Access` events for
+the very files/directories its own rebuild had just read, each one queued
+as a fresh "settled batch" by the debounce coalescer (which is doing
+exactly its job — coalescing a burst into one batch — the bug was one
+layer upstream, in what counted as an event worth coalescing at all), each
+rebuild generating another read, another `Access` event, forever. First
+end-to-end test run (`watch_rebuild_on_save_swaps_the_running_binary`)
+never completed a single warm-rebuild cycle inside its 120 s budget;
+`eprintln!`-instrumenting the raw `notify` callback (temporarily, removed
+once the root cause was found) showed 50+ `Access(Open(Any))` events for
+`Main.sky` and its parent directory with ZERO source edits from the test.
+Root-cause fix, not a workaround: the raw-event callback now rejects
+`EventKind::Access(_)` and `EventKind::Other` (`event.kind.is_access()` +
+an explicit `Other` match) BEFORE a path ever reaches
+`WatchScope::is_relevant` — a narrow EXCLUSION of the two kinds that can
+NEVER represent a content change, not a broad allowlist that could
+silently drop a real future event kind (`Create`/`Modify`/`Remove`/`Any`
+— the "imprecise backend" catch-all — all still pass through unchanged).
+Confirmed fixed by re-running the same instrumented reproduction: the
+flood is gone, the cold build completes, `/_sky/readyz` passes, and the
+warm rebuild on a real source edit proceeds normally. This is exactly the
+class of hazard `is_relevant`'s own doc comment already worried about
+generically ("drop excluded-dir events at the source") but had not
+considered along the EVENT-KIND axis — recorded here, not merely fixed
+silently, per this project's own no-deferral / spotted-is-filed
+discipline.
+
+### 13.3 Task 22 — debounce + minimal recompute
+
+**Debounce** (`sky_watch::coalesce_loop`) is a quiescence-window-bounded-
+by-a-hard-cap coalescer, exactly the design doc's shape: resets on every
+new event (default 100 ms), but flushes unconditionally once 450 ms have
+elapsed since the batch's first event, so a continuous trickle (format-on-
+save chains, a multi-file `git stash pop`) still eventually fires. No
+busy-polling — the loop blocks on `recv_timeout` computed as
+`min(quiescence_remaining, cap_remaining)`. Proven by 4 tests, including a
+literal reproduction of the "continuous trickle only the hard cap can
+flush" scenario with real wall-clock timing (tight windows, so the whole
+suite runs in under half a second).
+
+**Minimal recompute.** `watch.rs`'s orchestrator does NOT diff which paths
+changed — every settled batch triggers a full re-resolution of the project
+(`resolve_project_sources`, a directory walk over the ALREADY-bounded
+watched-file set) fed through `sky_db::sync_source_root`, whose own
+byte-equal-no-op boundary (§3.2) is what actually does the dirty-vs-clean
+filtering. This is a deliberate simplification over hand-tracking changed
+paths: `sync_source_root` already has to re-derive "did this specific
+file's text change" correctly for the parity gate to hold, so re-deriving
+the WHOLE file set on every batch costs one bounded directory walk and
+introduces no second source of truth for "what changed." Salsa's red-green
+algorithm underneath (Phases 2-6) is what actually delivers the minimal
+recompute — a body-only edit still only re-canonicalises one module,
+re-links, and (per Phase 4's documented coarse floor) re-typechecks/
+re-lowers/re-emits the whole program, exactly as a warm `skyc build` would.
+
+**Never overlapping cargo builds.** The orchestrator is strictly
+single-flight at BOTH layers: a superseding settled batch (a) blocks on
+`sync_source_root` until any in-flight compile worker unwinds via salsa
+cancellation (§13.5) before spawning a new one, and (b) immediately kills
+(`Child::kill`, non-blocking) any in-flight `cargo build` child process,
+whose own waiter thread reports `CargoOutcome::Killed` (silently dropped,
+never surfaced as a build failure) rather than racing a stale completion
+against the new cycle. Every completion event is tagged with a monotonic
+`generation: u64`; the orchestrator drops any event whose generation
+doesn't match its current counter — the concrete mechanism behind "a stale
+completion from an already-superseded cycle is silently ignored."
+
+**`cargo build` did not exist as an orchestration step before Phase 7** —
+confirmed by the design doc's own note (§Q2: "`skyc` today stops at emit
+and never invokes cargo… `ipe watch` must add the cargo-build + run
+orchestration that does not exist yet"). `watch.rs`'s `spawn_cargo_build`
+is that missing piece: `cargo build --message-format=json` in `out_dir`,
+JSON-parsed for the produced `executable` artifact path (a small,
+independent re-implementation of the SAME parsing `tools/oracle`'s
+`build_rust_binary` already does for the golden-test harness — kept
+separate deliberately, since `oracle` is a dev-dependency-only test utility
+and `skyc`'s shipped binary must not depend on it; see `crates/skyc/
+Cargo.toml`'s own comment on this). No shared warm-target-dir / `sccache`
+wiring is added beyond what the ambient `cargo` invocation already picks up
+from the user's own `~/.cargo/config.toml` — matching how the existing
+`SKY_E2E`-gated golden tests already get their warm-target-dir speed
+(nothing Phase-7-specific to configure).
+
+### 13.4 Task 23 — the process supervisor (`sky_watch::process`)
+
+`SupervisorState` has exactly two variants — `NotRunning { last_good:
+Option<LastGoodBinary> }` and `Running { child: Child, artifact:
+LastGoodBinary }` — so "a child is running but nobody proved it good" and
+"marked good but the process handle is stale" are BOTH unrepresentable,
+not merely avoided by convention. `Running` is only ever constructed
+inside `apply_green`, after `spawn_and_await_ready` has already passed its
+readiness probe — mirroring the design doc's own framing ("`LastGoodBinary`
+is only constructible for a build+process that passed readiness…
+parse-don't-validate at the process boundary").
+
+`apply_green` implements the design doc's exact diagram: byte-identical-
+binary short-circuit (no restart, no churn) → stop-old (bounded grace,
+`Child::kill` escalation) → spawn-new → await-readiness → `Running`, OR on
+readiness failure → `RespawnLastGood` (re-execs the ON-DISK
+`last_good.artifact_path`, never the already-dead `Child` handle — H15's
+own framing, "captures artifact path + content hash, not a live-process
+handle, so recovery survives the old process already being dead"). A RED
+build (a compile error OR a `cargo build` failure) never calls
+`apply_green` at all — `SupervisorState` simply isn't touched, which is
+what "the last-good binary stays alive on any failing rebuild" (INV-3)
+means AT THE TYPE LEVEL: there is no code path from `NotRunning`/`Running`
+back to itself that a red build can reach.
+
+**Readiness, scoped honestly.** The design doc bifurcates readiness as
+"`/_sky/readyz` for Sky.Live; alive + optional health for CLI." This Rust
+port's runtime (`runtime/src/sky_runtime/live/observability.rs`) DOES
+already expose `/_sky/readyz` for Sky.Live apps — confirmed by direct
+inspection, not assumed — so `watch.rs` detects a Sky.Live project (the
+emitted `src/main.rs` containing the literal, compiler-controlled string
+`sky_runtime::live::live_app` — deterministic text, not user input, so a
+substring check is sound here) and probes the real endpoint over a raw
+HTTP GET. Every OTHER app shape (`Sky.Http.Server`, which has no readiness
+endpoint in this port yet, AND whose listen port is a Sky-source-level
+argument this driver cannot statically know — confirmed by inspecting
+`runtime/src/sky_runtime/server.rs`, which has no `readyz`/`healthz`
+route at all) falls back to `AliveGrace { grace }`: ready once the process
+has stayed alive past a bounded grace window. This is the HONEST
+application of the design doc's own bifurcation, not a weakened stand-in
+for a `Sky.Http.Server`-specific readyz endpoint that does not exist to
+probe.
+
+**Recorded, narrower gap: one-shot CLI programs.** `AliveGrace`'s
+"still-alive-after-grace ⇒ ready" model assumes a LONG-RUNNING process. A
+genuine one-shot `Sky.Cli` program (prints something, exits 0) would be
+judged "failed readiness" by this exact probe, because it exits before the
+grace window elapses — `apply_green` would then treat it as a broken
+build and attempt `RespawnLastGood`. `ipe watch` today is therefore
+scoped to LONG-RUNNING app shapes (Sky.Live, Sky.Http.Server, Sky.Tui) —
+the shapes the design doc's own Q2/Q3/Q4 discussion is about (rebuild +
+RESTART implies a persistent process). A "rebuild and re-run once" mode
+for one-shot CLI/batch programs is a genuinely different supervision model
+(no process to keep alive between builds at all), not a corner case of
+the state machine shipped here; recorded as a scoped, NOT-forced
+continuation rather than silently mis-classifying a clean CLI exit as a
+build failure.
+
+**Stop, without a second `unsafe` site.** `stop_gracefully` uses ONLY the
+safe, portable `Child::kill` (SIGKILL) as its hard-stop escalation. A true
+graceful SIGTERM needs a raw `kill(2)` call, and this project has exactly
+ONE sanctioned `unsafe` block in the entire runtime (`console_proxy`'s
+`PR_SET_PDEATHSIG`, per `PRINCIPLES.md`) — `sky_watch` deliberately does
+not open a second one. The bounded-down-window property (H15) holds
+either way (the grace window still elapses before the hard SIGKILL); the
+cost is that a target already wired to `sky_runtime::live`'s own graceful
+SIGTERM/drain handler (§ "Connection status banner" et al. in the
+templates docs) is never given the CHANCE to drain gracefully from the
+watcher's own stop signal specifically — only from its own process
+lifecycle otherwise. Recorded here, not silently absorbed.
+
+### 13.5 Task 25 — cancellation hooks salsa's own mechanism, verified against
+### the pinned source AND proven end to end
+
+The brief asked, explicitly: does salsa offer a built-in cancellation
+mechanism this should hook into? **Yes — verified directly against the
+pinned `salsa=0.27.2` source** (`src/storage.rs`'s `cancel_others`,
+`src/cancelled.rs`'s `Cancelled` enum + `Cancelled::catch`): any `&mut
+SkyDatabase` mutation (every `#[salsa::input]` setter, including
+`sky_db::sync_source_root`) routes through `zalsa_mut()`, which sets a
+cancellation flag and BLOCKS until every OTHER `Storage` handle (a
+`.clone()` of the database — exactly what a compile worker thread holds)
+has been dropped. A query running on a cancelled snapshot unwinds via
+`panic::resume_unwind(Cancelled)` the next time it checks — at every
+tracked-function boundary (confirmed against salsa's own `WillCheckCancellation`
+event, which its test suite fires around each demand).
+
+**The orchestrator's shape follows directly from this, with zero new
+synchronisation primitives:** the orchestrator thread NEVER runs a salsa
+query itself — it only mutates inputs. A compile is always run on a FRESH
+thread holding a `.clone()` of `db_main`, wrapped in
+`salsa::Cancelled::catch(AssertUnwindSafe(...))`. When a new settled batch
+arrives mid-build, `sync_source_root(&mut db_main, …)` is called
+immediately; that call BLOCKS (invisibly, from the orchestrator's own
+point of view — no manual wait-and-poll needed) until the in-flight
+worker's query unwinds and drops its cloned `Storage`, then returns. The
+worker reports `Err(Cancelled)`, which the orchestrator maps to
+`CompileOutcome::Cancelled` (never surfaced to the user — a superseding
+edit is not a failure) and simply does not act on; a fresh worker is
+spawned against the just-synced state. This is exactly rust-analyzer's own
+documented cancellation pattern, arrived at independently by reading the
+salsa source rather than copying rust-analyzer's implementation.
+
+**Proven deterministically, not by racing wall-clock timing against warm
+salsa recompute** (which is, by design, fast — the whole point of the
+salsa port — making a real end-to-end file-save race an UNRELIABLE test
+window). `crates/skyc/tests/watch_cancellation.rs`
+(`compile_worker_is_cancelled_by_a_concurrent_input_edit`) registers an
+event callback on the WORKER's database that signals the FIRST
+`WillExecute`; the main thread waits for that signal (guaranteeing the
+worker has AT LEAST one more tracked-query checkpoint ahead of it — a
+two-module program has many), THEN issues the cancelling edit on the
+ORIGINAL (non-cloned) db handle via the SAME `sky_db::set_text_if_changed`
+the orchestrator's `sync_source_root` calls internally, and asserts the
+worker's `compile_prepared` result is `Err(Cancelled::Local |
+Cancelled::PendingWrite)` — never `Ok(..)`. A negative-control sibling test
+(`the_same_fixture_compiles_cleanly_without_a_concurrent_edit`) proves the
+fixture itself is valid, so the cancellation in the main test is
+attributable to the edit, not a fixture defect. Both tests run in
+milliseconds (no `cargo build` in the loop) and are part of the default,
+non-`SKY_E2E`-gated suite.
+
+### 13.6 Task 24 — L0+ continuity: watch-scoped half shipped, hardening half
+### recorded as a genuine cross-cutting continuation
+
+"L0" and "L0+" are this project's OWN terminology (design doc §Q3, LOCKED,
+NOT reopened by Phase 7): **L0** = rebuild + process restart + SSE
+auto-reconnect + persisted-session restore, the v1 floor. **L0+** = L0 +
+a proactive `event: reload` SSE frame (skips the reconnect-wait) +
+readiness-gated handoff + a `sqlite` dev-store default (packaged
+together as "v1, recommended"). L1/L2 (true in-process hot state
+preservation via an interpreter tier) are explicitly out of scope for the
+Rust-AOT path (design doc §Q3) and untouched by Phase 7.
+
+**What Phase 7 needed to newly investigate: does the Rust port's runtime
+already have the machinery L0/L0+ assume?** Surveyed directly (not
+assumed) before writing anything:
+
+- **`SKY_LIVE_STORE` / `SKY_LIVE_STORE_PATH` are ALREADY wired end to
+  end** — `crates/sky_backend_rust/src/emit_live.rs` emits code reading
+  both env vars (default `"memory"`); `runtime/src/sky_runtime/live/
+  store.rs`'s `choose_store` dispatches on the value (`memory` / `sqlite`
+  / `postgres` / `redis`, each behind its own compile feature). This means
+  the WATCH-SCOPED half of Task 24 — "watch defaults the dev session
+  store to sqlite; warns if the app configures memory" — needed ZERO
+  runtime or backend changes: it is purely an env-injection decision at
+  the point `watch.rs` spawns the child process.
+- **`/_sky/readyz` exists for Sky.Live** (used directly by Task 23's
+  readiness probe, §13.4) — confirming the "readiness-gated handoff" half
+  of L0+ is achievable with the runtime as it stands today.
+- **The persisted session blob uses `serde_json`, not the design doc's
+  `[ModelSchemaTag header][bincode body]` shape** (`SqliteStore::get`/
+  `set` in `store.rs`) — this is the ONE piece of L0+'s "recommended
+  packaging" that does NOT already exist and is NOT confined to watch
+  tooling.
+- **There is no per-session-enumeration capability on `SessionStore`** (no
+  "list every active sid" method on the trait, across FOUR backend impls:
+  memory/sqlite/postgres/redis) — meaning the proactive `event: reload`
+  SSE frame (the OTHER L0+-only element) has no broadcast mechanism to
+  attach to today.
+
+**Shipped: the watch-scoped default (`watch.rs::child_env`).** When
+spawning the child, `ipe watch` injects `SKY_LIVE_STORE=sqlite` +
+`SKY_LIVE_STORE_PATH=<out_dir>/../.ipe-watch-sessions.db` UNLESS the
+caller's own environment already sets `SKY_LIVE_STORE` (respected
+verbatim in that case); `warn_if_memory_store` prints a one-time warning
+at watch startup if the user has explicitly configured `memory`. This
+directly satisfies the test-first bullet the plan itself names for this
+task ("Watch defaults Sky.Live dev session store to sqlite; if the app
+configures memory, watch warns") and, combined with the ALREADY-EXISTING
+SqliteStore + the ALREADY-EXISTING SSE auto-reconnect the browser's own
+runtime JS ships with, delivers the L0 floor in full: rebuild + restart +
+SSE auto-reconnect + persisted-session restore, end to end, proven by
+`watch_rebuild_on_save_swaps_the_running_binary`'s own restart cycle
+(§13.7).
+
+**Recorded, NOT forced: the `ModelSchemaTag`/bincode hardening (H22/H24)
+and the proactive `event: reload` frame.** Both surveyed to the point of
+having a concrete plan, and both judged to require backend/runtime changes
+that reach FAR beyond "watch tooling" — exactly the "looks like progress
+but isn't" trap Phase 5 §10.2 and Phase 6 §12.1 already named and refused
+to fall into:
+
+1. **`ModelSchemaTag` needs new backend emission.** The design doc's
+   `H(compiler_revision, structural_hash(Model type))` tag requires
+   `sky_backend_rust` to compute and emit a structural hash of the Model
+   type's fields (names, `_fieldIndex` order, resolved types recursively)
+   as a constant in EVERY emitted `main.rs` — a new backend responsibility
+   that changes `main.rs`'s content for every Sky.Live golden fixture,
+   which means re-baselining a slice of the 140+-test golden-oracle SEAL
+   as part of what is supposed to be a watch-tooling task. The backend
+   DOES already walk the Model's field structure when emitting the
+   struct, so this is not blocked in the Phase-5-Task-15 sense (no
+   missing domain) — it is IN-SCOPE-BUT-CROSS-CUTTING: a real, bounded
+   design task that touches the golden suite and deserves its own
+   reviewed session, not a rushed addition under a "watch mode" mission
+   umbrella.
+2. **The store format change (JSON → length-prefixed schema-tag header +
+   bincode body) is a behavioural change to EVERY Sky.Live app's session
+   persistence, not just sessions restarted under `ipe watch`.** Swapping
+   `SqliteStore`'s (and `PostgresStore`'s) wire format needs its own
+   correctness argument and test coverage independent of watch — sessions
+   persisted by a deployed app restarting for unrelated reasons (a
+   `systemd` restart, a Cloud Run cold start) go through the exact same
+   code path.
+3. **The proactive `event: reload` frame needs a NEW `SessionStore`
+   capability** (enumerate active sids, or an equivalent broadcast
+   registry) implemented identically across FOUR backend impls
+   (`MemoryStore`/`SqliteStore`/`PostgresStore`/`RedisStore`), then wired
+   into `live_shutdown_signal`'s existing graceful-drain path
+   (`runtime/src/sky_runtime/live/mod.rs`) to push the frame to every open
+   SSE connection before the connection closes. This is real, valuable,
+   additive runtime work — but it is RUNTIME work (every Sky.Live app
+   gets it, not just watch-triggered restarts), not watch-tooling work,
+   and the current `SessionStore` trait genuinely has no seam for it
+   today (confirmed by reading `store.rs`'s trait definition end to end,
+   not assumed).
+
+**Why the honest floor here is still real, not degraded.** The Rust
+port's `SqliteStore::get` already fails SOFT on any deserialize error
+(`serde_json::from_str(&blob).ok()?` — a `?` early-return, never a
+panic), so H22's "truncated blob → drop session → fresh `init`, never a
+panic" property ALREADY HOLDS today, independent of Phase 7. What is
+genuinely missing is H24's narrower, harder property — REJECTING a
+structurally-different-but-syntactically-valid JSON blob (extra/missing
+optional fields silently filled/dropped) BEFORE attempting to use it —
+which is real, but is the ONE property in this whole phase that could not
+be honestly claimed without the backend/runtime work above. Recorded here
+with the same rigor as every other honest gap in this document, with a
+concrete next-session starting point (item 1 above is the prerequisite;
+items 2 and 3 follow from it).
+
+### 13.7 Phase-7 proof tests
+
+| Test | Asserts |
+|---|---|
+| `sky_watch::scope::tests` (7 tests) | `WatchedPath::confine` accepts a descendant, rejects an outside path, rejects a symlink escaping root (H18); `WatchScope::build` excludes `target/`/`.git/`, refuses an entry dir outside root, accepts `sky.toml` + rejects an unrelated extension, survives a delete-event path (file no longer exists but is still recognisable as in-scope) |
+| `sky_watch::coalesce::tests` (4 tests) | a 20-event burst coalesces to ONE batch; a byte-identical resend of the same path still yields one entry; a continuous 40ms-interval trickle only flushes at the ~150ms hard cap (real wall-clock, tight windows); a disconnected raw channel stops the loop promptly (no hang) |
+| `sky_watch::process::tests` (5 tests) | `LastGoodBinary::hash` is deterministic and content-sensitive; `SupervisorState::fresh()` starts `NotRunning`; `apply_green` spawns a long-running process and reports `Spawned`; a byte-identical candidate reports `UnchangedBinary` with no restart; a restart candidate that fails readiness respawns the ORIGINAL last-good artifact through the SAME path-aware `spawn` closure (the ledger item 9 regression proof — unix-gated, shells out to `/bin/sleep` + `/bin/false`) |
+| `skyc::watch_cancellation compile_worker_is_cancelled_by_a_concurrent_input_edit` | THE Task-25 mission proof — see §13.5 |
+| `skyc::watch_cancellation the_same_fixture_compiles_cleanly_without_a_concurrent_edit` | negative control — the fixture is valid on its own |
+| `skyc::watch_integration watch_rebuild_on_save_swaps_the_running_binary` (`SKY_E2E=1`) | a real cold build+spawn serves v1; editing the source triggers a warm rebuild that swaps the running binary to serve v2 — the full Task 21→25 pipeline, end to end, against a real `Sky.Http.Server` fixture and a real spawned process |
+| `skyc::watch_integration watch_keeps_last_good_binary_alive_on_a_syntax_error` (`SKY_E2E=1`) | INV-3, end to end — a deliberate parse error leaves the v1 server running and responding; fixing the source recovers to v2 |
+| `skyc::watch_integration watch_coalesces_a_rapid_double_save_into_one_rebuild` (`SKY_E2E=1`) | two writes 20ms apart (inside the configured 120ms quiescence window) produce exactly ONE `WatchEvent::RebuildStarted` and the LAST write (v3) is what ships — Task 22's debounce property proven against the real orchestrator, not just the isolated `sky_watch::coalesce` unit tests |
+
+### 13.8 Phase-7 decisions ledger
+
+1. **Two crates, salsa-agnostic vs salsa-aware** — `sky_watch` (Tasks
+   21/23's primitives) has zero `sky_db` dependency and is independently,
+   cheaply testable; `crates/skyc/src/watch.rs` (Tasks 22/24/25) is where
+   salsa awareness lives, reusing `compile_prepared` unchanged (§13.1).
+2. **Rescan-and-let-`sync_source_root`-filter, not hand-tracked changed
+   paths** — one source of truth for "what actually changed" (§13.3).
+3. **Generation-tagged events over a single unified channel** — the
+   orchestrator thread does exactly one blocking `recv()`, no busy-poll,
+   no risk of two event sources racing on separate wakeups; stale
+   (superseded) completions are dropped by generation mismatch, not by
+   timing (§13.3, §13.6's proof test).
+4. **Cancellation hooks salsa's OWN mechanism (`zalsa_mut()`'s
+   block-until-clones-drop + `Cancelled::catch`), zero new sync
+   primitives** — verified against the pinned source, proven
+   deterministically via an event-callback synchronisation point rather
+   than a wall-clock race (§13.5).
+5. **`AliveGrace` over a guessed port for `Sky.Http.Server` readiness** —
+   the honest application of the design doc's CLI-vs-Sky.Live readiness
+   bifurcation, given this port's runtime has no `Sky.Http.Server` readyz
+   endpoint and no reliable way to learn the app's listen port statically
+   (§13.4).
+6. **One-shot CLI program supervision is a recorded, narrower scope gap**
+   — `ipe watch` targets long-running app shapes; a "rebuild and re-run
+   once" model for one-shot programs is a different supervision model,
+   not shipped here (§13.4).
+7. **Task 24 split at the exact boundary the survey found** — the
+   watch-scoped env-injection default ships in full (needed zero backend/
+   runtime changes, because `SKY_LIVE_STORE`/`readyz` already existed);
+   the `ModelSchemaTag`/bincode hardening and the proactive reload frame
+   are recorded as a reviewed-session-worthy continuation, not forced
+   under this phase's budget (§13.6).
+8. **No second `unsafe` site** — `stop_gracefully` uses only safe
+   `Child::kill`; a true SIGTERM would need a second raw `kill(2)` call
+   next to `console_proxy`'s sole sanctioned one (§13.4).
+9. **`apply_green`'s `spawn` closure is keyed on the target path, not
+   captured once** — found by the E2E suite, then generalised (not
+   patched locally): the FIRST shape (`spawn: impl Fn() -> Command`,
+   closing over one fixed candidate path) silently dropped every env var
+   (port, `SKY_LIVE_STORE`) on the `RespawnLastGood` recovery path, because
+   `respawn_command` rebuilt a bare `Command::new(artifact_path)` with none
+   of the caller's configuration. The fix changed the signature to `spawn:
+   impl Fn(&Path) -> Command` so `watch.rs`'s ONE closure
+   (`move |path| spawn_command(path, &env)`) serves BOTH the fresh
+   candidate and the last-good fallback identically — `respawn_command` is
+   deleted, not patched, closing the whole path-blind-Command class rather
+   than special-casing this one call site (§13.4, proof:
+   `apply_green_falls_back_to_last_good_when_a_restart_candidate_fails_readiness`
+   in `crates/sky_watch/src/process.rs`).
+10. **`notify` ACCESS events are excluded at the raw-callback boundary, not
+    downstream** — found by the E2E suite (the FIRST end-to-end run never
+    completed a single rebuild cycle; instrumenting the raw callback showed
+    a `Main.sky`-open storm with zero real edits), root-caused to the
+    orchestrator's own file reads being observable as `Access(Open)` events
+    on Linux/inotify, and fixed by rejecting `EventKind::Access`/`Other`
+    BEFORE `WatchScope::is_relevant` ever runs — a narrow exclusion of the
+    two kinds that structurally cannot represent a content change, chosen
+    over a positive allowlist so a genuinely new future `EventKind` variant
+    still passes through by default (under-invalidation is the higher-cost
+    failure mode per this project's own principle order) (§13.2).
