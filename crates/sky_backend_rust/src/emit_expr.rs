@@ -4925,6 +4925,21 @@ fn emit_ui_call(
         // type recovered by Rust generic inference on the emitted handler
         // closure `f_s` — no emit-site code change was needed for #109/#156,
         // only the runtime function's signature (never `Arc<dyn Any>`).
+        //
+        // #162: `ui_on_submit_`'s generic bound is `F: Fn(T) -> M + Send +
+        // Sync + 'static`, but `f_s` here is a `Box<dyn Fn(T) -> M + Send +
+        // 'static>` trait object (the generic `IrType::Fun` rendering in
+        // `emit_types.rs` never claims `+Sync`) — passed straight through as
+        // `F`, that box can never satisfy `+ Sync` regardless of what the
+        // closure inside captures (a trait object's auto-trait set is
+        // exactly its bound list). Wrap in a freshly-declared closure
+        // (`move |_x| ({f_s})(_x)`) the same way the `HtmlEvent` String/Bool
+        // arms above do: `f_s`'s box-construction is re-embedded as SOURCE
+        // inside the wrapper's body, so it is built anew on every call
+        // rather than captured — the wrapper's own Send+Sync-ness then
+        // depends only on the Sky closure's legitimate `move` captures
+        // (Send+'static by construction), not on the erased trait-object
+        // type.
         KernelFn::UiOnSubmit => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -4934,7 +4949,7 @@ fn emit_ui_call(
             };
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
             Ok(Some(format!(
-                "sky_runtime::ui::helpers::ui_on_submit_({f_s})"
+                "sky_runtime::ui::helpers::ui_on_submit_(move |_x| ({f_s})(_x))"
             )))
         }
 
@@ -4974,8 +4989,31 @@ fn emit_ui_call(
                     "sky_runtime::html::html_on_bool_({name:?}.to_owned(), \
                      ::std::sync::Arc::new(move |_x| ({payload_s})(_x)))"
                 ),
+                // #162: `html_on_raw_`'s own signature requires
+                // `F: Fn(T) -> M + Send + Sync + 'static` (the runtime's
+                // `Event::OnForm` slot is `Arc<dyn Fn(FormData) -> Option<M> +
+                // Send + Sync>`, shared across the live session's dispatch
+                // table — see `html.rs`'s `Event` doc comment). But
+                // `payload_s` here is a `Box<dyn Fn(T) -> M + Send + 'static>`
+                // trait object (the generic `IrType::Fun` rendering in
+                // `emit_types.rs`, which never claims `+Sync` for a boxed
+                // first-class function value) — a trait object's auto-trait
+                // set is exactly what its bound lists, so passing that Box
+                // value THROUGH unchanged as `F` can never satisfy `+ Sync`
+                // regardless of what the closure inside actually captures.
+                // The `String`/`Bool` arms above dodge this by re-embedding
+                // `payload_s`'s SOURCE inside a freshly-declared wrapping
+                // closure (`move |_x| ({payload_s})(_x)`) rather than passing
+                // the boxed VALUE itself — the box is constructed anew each
+                // call, inside the wrapping closure's body, so it is never
+                // part of the wrapping closure's captured environment and
+                // the wrapping closure's own Send+Sync-ness depends only on
+                // whatever the Sky closure itself legitimately captures
+                // (`move` locals, all Send+'static by construction). Apply
+                // the same technique here so `F` is this freshly-Sync outer
+                // closure, not the non-Sync boxed trait object.
                 sky_ir::HtmlEventShape::Raw => format!(
-                    "sky_runtime::html::html_on_raw_({name:?}.to_owned(), {payload_s})"
+                    "sky_runtime::html::html_on_raw_({name:?}.to_owned(), move |_x| ({payload_s})(_x))"
                 ),
             };
             Ok(Some(call))
@@ -6820,9 +6858,18 @@ fn render_record_pat(ctx: &EmitCtx, fields: &[(Symbol, Pat)]) -> DResult<String>
 }
 
 /// Field names of the `HttpRequest` runtime struct, sorted alphabetically.
-/// Used by [`emit_record`] to detect `HttpRequest` literals and bypass the
-/// synthesised-struct lookup (the type is defined in `sky_runtime::http_client`,
-/// not emitted by the backend).
+/// Used by [`emit_record`] as a FALLBACK to detect `HttpRequest` literals and
+/// bypass the synthesised-struct lookup (the type is defined in
+/// `sky_runtime::http_client`, not emitted by the backend) — consulted only
+/// when [`EmitCtx::has_record_struct_for`] finds no registered struct for the
+/// literal's field-name set. See that method's doc comment for why the two
+/// checks must run in THIS order (registry first, name-only fallback
+/// second): `sky_backend_rust` has no access to `sky_lower`'s `Ty` /
+/// `canon::Type` (no cross-crate dependency), so it cannot re-run the
+/// lowerer's now-TYPE-AWARE `HttpRequest`-shape test
+/// (`sky_lower::lower::is_http_request_shape`) directly here — deferring to
+/// the registry is how this call site stays in sync with that test without
+/// duplicating it.
 const HTTP_REQUEST_FIELDS: &[&str] = &[
     "body",
     "followRedirects",
@@ -6854,17 +6901,35 @@ fn emit_record(
         key.push(ctx.resolve_ident(*sym)?.to_owned());
     }
     let struct_name: String = {
-        let mut sorted = key.clone();
-        sorted.sort();
-        let is_http_request = sorted.len() == HTTP_REQUEST_FIELDS.len()
-            && sorted
-                .iter()
-                .zip(HTTP_REQUEST_FIELDS.iter())
-                .all(|(a, b)| a.as_str() == *b);
-        if is_http_request {
-            "HttpRequest".to_owned()
-        } else {
+        // Prefer an actual synthesised struct when one is registered for
+        // this exact field-name set — that reflects `sky_lower`'s
+        // authoritative, TYPE-AWARE decision (see
+        // `EmitCtx::has_record_struct_for`'s doc comment). Only fall back to
+        // the field-NAME-only `HttpRequest` heuristic when NO struct is
+        // registered, which is precisely the signature of a genuine
+        // `HttpRequest` literal (the lowerer intercepts it into the opaque
+        // `IrType::HttpRequest` before it ever reaches the struct registry).
+        // This ordering closes the false-positive class where an unrelated
+        // record sharing the 7 canonical field NAMES with unrelated field
+        // TYPES (e.g. all-`Int`) used to be mislabelled `HttpRequest` here
+        // even after `sky_lower` had already registered a correctly-typed
+        // struct for it — the exact two-path divergence this shortcut used
+        // to reintroduce.
+        if ctx.has_record_struct_for(&key) {
             ctx.record_name_for_literal(&key)?.to_owned()
+        } else {
+            let mut sorted = key.clone();
+            sorted.sort();
+            let is_http_request = sorted.len() == HTTP_REQUEST_FIELDS.len()
+                && sorted
+                    .iter()
+                    .zip(HTTP_REQUEST_FIELDS.iter())
+                    .all(|(a, b)| a.as_str() == *b);
+            if is_http_request {
+                "HttpRequest".to_owned()
+            } else {
+                ctx.record_name_for_literal(&key)?.to_owned()
+            }
         }
     };
     let mut parts = Vec::with_capacity(fields.len());
