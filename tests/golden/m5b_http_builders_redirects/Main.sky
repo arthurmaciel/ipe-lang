@@ -1,0 +1,35 @@
+module Main exposing (main)
+
+import Sky.Core.Http as Http
+
+
+-- #33 §6.2 — the three Go-parity builders added on top of the M5b set:
+-- Http.withUrl / Http.withFollowRedirects / Http.withMaxRedirects.
+-- Each is a single-field record update on HttpRequest; the chain below
+-- overrides every one of the defaultRequest values they own
+-- (url "http://example.com" -> "http://example.org",
+--  followRedirects True -> False, maxRedirects 10 -> 3).
+--
+-- Expected output (hand-verified against the Go reference semantics —
+-- record-update-only, no runtime behaviour):
+--   http://example.org
+--   noredirect
+--   3
+
+
+printReq : { body : String, followRedirects : Bool, headers : List ( String, String ), maxRedirects : Int, method : String, timeout : Int, url : String } -> String
+printReq req =
+    String.join "\n"
+        [ req.url
+        , if req.followRedirects then "redirect" else "noredirect"
+        , String.fromInt req.maxRedirects
+        ]
+
+
+main =
+    println
+        (printReq
+            (Http.withMaxRedirects 3
+                (Http.withFollowRedirects False
+                    (Http.withUrl "http://example.org"
+                        (Http.defaultRequest "http://example.com")))))
