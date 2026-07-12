@@ -11588,7 +11588,7 @@ impl<'a> Lowerer<'a> {
                         // is untouched — byte-identical to the pre-fix lowering.
                         let mut value = value;
                         if let Some(ref ir_ty) = ty_opt {
-                            if false && matches!(ir_ty, IrType::Fun(..)) && needs_shared_capture(*name, &acc)
+                            if matches!(ir_ty, IrType::Fun(..)) && needs_shared_capture(*name, &acc)
                             {
                                 acc = force_shared_capture_clones(*name, acc);
                                 if let Expr::Lambda { params, ret, body } = value {
