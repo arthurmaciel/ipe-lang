@@ -187,6 +187,20 @@ impl TyBounds {
     /// hazard. Fails CLOSED on a bare variable, exactly like every sibling
     /// bit. See `docs/architecture/ctor-payload-andmap-arity-gate-design.md`.
     const HOF_KERNEL_RESULT: u16 = 1 << 9;
+    /// The SQL-bind-parameter obligation: this variable is the ELEMENT type of
+    /// a `List a` argument bound into `Db.exec` / `Db.query` / `Db.queryDecode`'s
+    /// params position (raw scheme-var 0 for `exec`/`query`, var 1 for
+    /// `queryDecode`). The Rust runtime can bind a bare `String` / `Int` /
+    /// `Float` / `Bool` or the `SqlValue` ADT as a SQL parameter (each has a
+    /// `From<T> for SqlParam` impl in `sky_runtime::db`); nothing else does.
+    /// Backend realises this as `T{n}: Into<sky_runtime::db::SqlParam>` (#165).
+    /// Mirrors the Set/Dict comparable-key obligation shape: attached to a
+    /// kernel's scheme var, propagated through union-find unification, and
+    /// (unlike the comparable-key obligations) defaulted to `SqlValue` when a
+    /// call-site instantiation is left completely unconstrained (an empty
+    /// `List a` argument) — see the `sql_param` arm of the numeric-defaulting
+    /// loop in `crate::lib`.
+    const SQL_PARAM: u16 = 1 << 10;
 
     /// No obligation — a structurally-parametric variable.
     pub const EMPTY: Self = Self(0);
@@ -257,6 +271,11 @@ impl TyBounds {
     pub const fn hof_kernel_result() -> Self {
         Self(Self::HOF_KERNEL_RESULT)
     }
+    /// The SQL-bind-parameter obligation — see [`Self::SQL_PARAM`].
+    #[must_use]
+    pub const fn sql_param() -> Self {
+        Self(Self::SQL_PARAM)
+    }
 
     /// Whether this set carries no obligation at all.
     #[must_use]
@@ -308,6 +327,12 @@ impl TyBounds {
     #[must_use]
     pub const fn has_hof_kernel_result(self) -> bool {
         self.0 & Self::HOF_KERNEL_RESULT != 0
+    }
+    /// Whether the SQL-bind-parameter obligation is set — see
+    /// [`Self::SQL_PARAM`].
+    #[must_use]
+    pub const fn has_sql_param(self) -> bool {
+        self.0 & Self::SQL_PARAM != 0
     }
     /// Whether this variable carries a Sky `comparable`-key obligation — used as
     /// a `Set` element or a `Dict` key. Both are satisfied by exactly the Sky
@@ -440,7 +465,10 @@ mod aud13_tag_tests {
     fn tag_is_detectable_and_preserves_the_id_bits() {
         for raw in [0u32, 1, 42, 1_000_000, u32::MAX >> 1] {
             let tagged = tag_solver_var(raw);
-            assert!(is_solver_var(tagged), "tagged raw must report as solver-space");
+            assert!(
+                is_solver_var(tagged),
+                "tagged raw must report as solver-space"
+            );
             assert_eq!(
                 tagged & !(1u32 << 31),
                 raw,
