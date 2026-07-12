@@ -168,8 +168,8 @@ pub fn unify(
             // against. All other obligations (Eq, Ord, Stringify, comparable-key)
             // lower as pure generic trait bounds, always valid Rust, so they may
             // accumulate across rigidity and survive as trait bounds on the param.
-            let concrete_dispatch = b1.has_number() || b2.has_number()
-                || b1.has_append() || b2.has_append();
+            let concrete_dispatch =
+                b1.has_number() || b2.has_number() || b1.has_append() || b2.has_append();
             let can_union = (r1 == r2) || !concrete_dispatch;
             if can_union {
                 uf.union(
@@ -339,9 +339,7 @@ fn unify_flat(
             // and the filter already proved `fs2.contains_key(name)`.
             for name in fs1.keys().filter(|k| fs2.contains_key(*k)) {
                 // Unreachable else: both keys are confirmed present.
-                let Some((v1, v2)) =
-                    fs1.get(name).copied().zip(fs2.get(name).copied())
-                else {
+                let Some((v1, v2)) = fs1.get(name).copied().zip(fs2.get(name).copied()) else {
                     continue;
                 };
                 unify(uf, budget, interner, span, v1, v2)?;
@@ -588,7 +586,8 @@ mod tests {
     use crate::unionfind::UnionFind;
 
     fn super_var(uf: &mut UnionFind<Content>, rigid: bool, bounds: TyBounds) -> VarId {
-        uf.fresh(Content::Super { rigid, bounds }).expect("fresh var")
+        uf.fresh(Content::Super { rigid, bounds })
+            .expect("fresh var")
     }
 
     fn do_unify(
@@ -654,7 +653,10 @@ mod tests {
         let mut uf = UnionFind::new();
         let a = super_var(&mut uf, false, TyBounds::eq());
         let b = super_var(&mut uf, false, TyBounds::ord());
-        assert!(do_unify(&mut uf, a, b).is_ok(), "same-rigidity must always union");
+        assert!(
+            do_unify(&mut uf, a, b).is_ok(),
+            "same-rigidity must always union"
+        );
         let rep = uf.find(a).expect("find");
         let content = uf.content(rep).expect("content");
         assert_eq!(

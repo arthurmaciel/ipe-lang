@@ -474,19 +474,26 @@ fn f9_decoder_thunk_capture() {
 
 // ── F10 — generic curried fn → SKY-L0126 (T5 deferred) ───────────────────────
 
-/// `pairWith : a -> b -> (a, b)`, def-arity 1.  The function carries free type
-/// variables `a` and `b`; the lowerer rejects it at the polymorphism gate
-/// (`SKY-L0102`) before T3 reaches the lambda-body capture analysis.  With T5
-/// implemented, the generic `a` would gain a `Clone` bound and the polymorphism
-/// gate would yield, allowing the lambda to compile cleanly (or surface
-/// `SKY-L0126` if the clone bound is still absent).  For now the expected
-/// diagnostic is `SKY-L0102` — still a clean error rather than a silent
-/// cargo-fail (E0593).
+/// `pairWith : a -> b -> (a, b)`, def-arity 1.  `x`'s declared type `a` lowers
+/// cleanly at `pairWith`'s OWN def-head (the polymorphism gate,
+/// `current_poly_tvars`, is populated for `pairWith`'s own quantified vars
+/// before `lower_def` recurses into the body — #164's `poly_tvar_symbol` fix
+/// closed a tagged/untagged solver-var-ID mismatch that used to make this
+/// SAME lookup miss for a captured-site (zonked, tagged) region read, which
+/// masked this gate behind a spurious `SKY-L0102` here). With the def-head
+/// lookup now succeeding, lowering reaches the lambda body `\y -> (x, y)`,
+/// where `x : a` is captured NonClone (`clone_class(Generic) => NonClone`)
+/// and read outside callee position (inside a `Tuple`) — T3's capture-clone
+/// gate fires `SKY-L0126` (`Feature::NonCloneCapture`). With T5 implemented,
+/// the generic `a` would gain a `Clone` bound and this gate would yield,
+/// allowing the lambda to compile cleanly. For now the expected diagnostic
+/// is `SKY-L0126` — still a clean error rather than a silent cargo-fail
+/// (E0507/E0525).
 #[test]
-fn f10_generic_curried_gate_l0125() {
+fn f10_generic_curried_gate_l0126() {
     assert_skyc_gate(
         "i121_generic_curried",
         "i121_generic_curried_gate",
-        sky_diagnostics::SKY_L0102,
+        sky_diagnostics::SKY_L0126,
     );
 }
