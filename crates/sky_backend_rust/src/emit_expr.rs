@@ -238,7 +238,9 @@ fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSet<Symbol>) 
                 collect_free_vars(e, out);
             }
         }
-        Expr::Lambda { params, body, .. } | Expr::TailLoop { params, body } => {
+        Expr::Lambda { params, body, .. }
+        | Expr::SharedLambda { params, body, .. }
+        | Expr::TailLoop { params, body } => {
             let mut body_free = std::collections::BTreeSet::new();
             collect_free_vars(body, &mut body_free);
             for (s, _) in params {
@@ -403,6 +405,18 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
                 Box::new(clone_free_target(*body, target))
             };
             Expr::Lambda {
+                params,
+                ret,
+                body: new_body,
+            }
+        }
+        Expr::SharedLambda { params, ret, body } => {
+            let new_body = if params.iter().any(|(s, _)| *s == target) {
+                body
+            } else {
+                Box::new(clone_free_target(*body, target))
+            };
+            Expr::SharedLambda {
                 params,
                 ret,
                 body: new_body,
@@ -579,7 +593,9 @@ fn scan_free_target_into(expr: &Expr, target: Symbol, count: &mut usize, has_clo
                 scan_free_target_into(e, target, count, has_clonevar);
             }
         }
-        Expr::Lambda { params, body, .. } | Expr::TailLoop { params, body } => {
+        Expr::Lambda { params, body, .. }
+        | Expr::SharedLambda { params, body, .. }
+        | Expr::TailLoop { params, body } => {
             if !params.iter().any(|(s, _)| *s == target) {
                 scan_free_target_into(body, target, count, has_clonevar);
             }
@@ -738,6 +754,18 @@ fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
                 Box::new(substitute_var(*body, target, replacement))
             };
             Expr::Lambda {
+                params,
+                ret,
+                body: new_body,
+            }
+        }
+        Expr::SharedLambda { params, ret, body } => {
+            let new_body = if params.iter().any(|(s, _)| *s == target) {
+                body
+            } else {
+                Box::new(substitute_var(*body, target, replacement))
+            };
+            Expr::SharedLambda {
                 params,
                 ret,
                 body: new_body,
@@ -5710,6 +5738,9 @@ pub fn emit_expr_at(
         Expr::Lambda { params, ret, body } => {
             emit_lambda(ctx, params, ret, body, indent, depth, generics)
         }
+        Expr::SharedLambda { params, ret, body } => {
+            emit_shared_lambda(ctx, params, ret, body, indent, depth, generics)
+        }
         Expr::Apply { func, args } => emit_apply(ctx, func, args, indent, depth, generics),
         Expr::FuncValue { callee, ty } => emit_func_value(ctx, callee, ty, generics),
         Expr::Match(m) => emit_match(ctx, m, indent, depth, generics),
@@ -7320,6 +7351,47 @@ fn emit_lambda(
     let ctor = if wants_arc_ctor(&fun_ty) { "Arc" } else { "Box" };
     Ok(format!(
         "{{ let __sky_fn: {typed} = {ctor}::new({inner}); __sky_fn }}"
+    ))
+}
+
+/// Emit a `let`-bound closure literal that [`sky_lower`]'s capture analysis
+/// (`needs_shared_capture`, #164 E0507 fix) proved is captured-by-move into
+/// 2+ nested/sibling closures, and therefore must be reference-counted
+/// (`Arc`) rather than uniquely owned (`Box`) so the corresponding
+/// `Expr::CloneVar` reads at every extra capture site (`Arc::clone`, a cheap
+/// pointer bump) actually compile.
+///
+/// Unlike [`emit_lambda`], this does NOT go through `wants_arc_ctor` /
+/// `render_type`'s generic `IrType::Fun` arm — that arm renders
+/// `Box<dyn Fn(..) -> R + Send + 'static>` (no `Sync`), which would make the
+/// `Arc<..>` wrapper itself neither `Send` nor `Sync` (`impl Send/Sync for
+/// Arc<T>` both require `T: Send + Sync`) — silently breaking every
+/// enclosing closure's OWN `Send + Sync` bound. The trait-object bound here
+/// is built directly with the `+ Sync` `Arc<dyn Fn>` needs, mirroring the
+/// runtime's existing `ServerHandler` / `WsServerCfg` Arc-callback shapes
+/// (`emit_types.rs`) at the type-string level.
+#[inline(never)]
+fn emit_shared_lambda(
+    ctx: &EmitCtx,
+    params: &[(Symbol, IrType)],
+    ret: &IrType,
+    body: &Expr,
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+) -> DResult<String> {
+    let inner = emit_lambda_unboxed(ctx, params, ret, body, indent, depth, generics)?;
+    let mut parts = Vec::with_capacity(params.len());
+    for (_, ty) in params {
+        parts.push(render_type(ctx, ty, generics)?);
+    }
+    let ret_s = render_type(ctx, ret, generics)?;
+    let typed = format!(
+        "::std::sync::Arc<dyn Fn({}) -> {ret_s} + Send + Sync + 'static>",
+        parts.join(", ")
+    );
+    Ok(format!(
+        "{{ let __sky_fn: {typed} = ::std::sync::Arc::new({inner}); __sky_fn }}"
     ))
 }
 

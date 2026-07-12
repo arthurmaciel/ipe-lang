@@ -252,6 +252,11 @@ fn walk_expr(expr: &Expr, direct_calls: &mut BTreeSet<FuncId>, types: &mut BTree
             ret: _,
             body,
         }
+        | Expr::SharedLambda {
+            params: _,
+            ret: _,
+            body,
+        }
         | Expr::TailLoop { params: _, body } => {
             walk_expr(body, direct_calls, types);
         }

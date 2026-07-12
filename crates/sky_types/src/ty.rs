@@ -106,6 +106,28 @@ pub const fn tag_solver_var(id: VarId) -> u32 {
     id | SOLVER_VAR_TAG
 }
 
+/// Strip [`SOLVER_VAR_TAG`] from a [`Ty::Var`] raw, recovering the bare
+/// union-find [`VarId`]. A no-op on a raw that was never tagged.
+///
+/// SEAL fix (#164): `SolvedTypes::poly_var_map`'s "typed-rigids" entries
+/// (`sky_types::lib.rs` around line 347) are keyed by the BARE union-find
+/// representative — a typed binding's own `params`/`ret` are read straight
+/// from its annotation, never zonked, so they were never tagged in the first
+/// place. But a `Ty::Var` read back from a ZONKED region (`SolvedTypes::regions`,
+/// e.g. a nested lambda's return-type slot inside that same typed binding's
+/// body) IS tagged, because `zonk` always tags an unresolved representative
+/// before storing it. Consumers in `sky_lower` that probe `current_poly_tvars`
+/// with a region-sourced raw MUST strip the tag first (or try both forms) or
+/// the lookup silently misses for every typed (not boundary-scheme-promoted)
+/// enclosing binding — the exact gap that let `withErrorReporting : String ->
+/// Task Error a -> Task Error a`'s internal closures fall back to
+/// `IrType::Json` instead of `IrType::Generic(a)`, an E0308 exit-0-then-
+/// cargo-fail (examples/18-job-queue).
+#[must_use]
+pub const fn untag_solver_var(raw: u32) -> u32 {
+    raw & !SOLVER_VAR_TAG
+}
+
 /// True iff a [`Ty::Var`] raw is solver-representative space (tagged by
 /// [`tag_solver_var`]) rather than an annotation-symbol raw. Callers that
 /// resolve a `Ty::Var` raw through the interner (e.g. the wildcard-`"any"`
@@ -440,7 +462,10 @@ mod aud13_tag_tests {
     fn tag_is_detectable_and_preserves_the_id_bits() {
         for raw in [0u32, 1, 42, 1_000_000, u32::MAX >> 1] {
             let tagged = tag_solver_var(raw);
-            assert!(is_solver_var(tagged), "tagged raw must report as solver-space");
+            assert!(
+                is_solver_var(tagged),
+                "tagged raw must report as solver-space"
+            );
             assert_eq!(
                 tagged & !(1u32 << 31),
                 raw,

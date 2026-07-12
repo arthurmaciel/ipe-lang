@@ -132,7 +132,10 @@ pub fn build_and_run_emitted_with_stdin(
         };
     };
     let wrote = stdin.write_all(stdin_bytes);
-    assert!(wrote.is_ok(), "{golden_name}: failed to write stdin: {wrote:?}");
+    assert!(
+        wrote.is_ok(),
+        "{golden_name}: failed to write stdin: {wrote:?}"
+    );
     drop(stdin); // close stdin so the child's reader sees EOF after these bytes
 
     let output = child.wait_with_output();
