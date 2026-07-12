@@ -248,6 +248,15 @@ impl BoundSet {
     const ORD_TOTAL: u16 = 1 << 7;
     const HASH: u16 = 1 << 8;
     const SHOW: u16 = 1 << 9;
+    /// The SQL-bind-parameter bound (#165): realises the type checker's
+    /// `TyBounds::sql_param` obligation as Rust `Into<sky_runtime::db::SqlParam>`
+    /// — a generic wrapper around `Db.exec` / `Db.query` / `Db.queryDecode`
+    /// (`Database.exec label sql args` in `examples/17-skymon`'s `Std.Db`
+    /// access layer) needs this bound on its own emitted type parameter so its
+    /// body's `SqlParam::from`-style projection type-checks for the CALLER's
+    /// concrete element type, not just the one instantiation the function
+    /// happened to be lowered against.
+    const SQL_PARAM: u16 = 1 << 10;
 
     /// The empty bound set: an unconstrained, structurally-parametric variable.
     pub const UNBOUNDED: Self = Self(0);
@@ -332,6 +341,13 @@ impl BoundSet {
         Self(self.0 | Self::CLONE)
     }
 
+    /// This set with the SQL-bind-parameter (`Into<SqlParam>`) bound — see
+    /// [`Self::SQL_PARAM`].
+    #[must_use]
+    pub const fn with_sql_param(self) -> Self {
+        Self(self.0 | Self::SQL_PARAM)
+    }
+
     /// Whether the `Add` bound is set.
     #[must_use]
     pub const fn has_add(self) -> bool {
@@ -378,6 +394,13 @@ impl BoundSet {
     #[must_use]
     pub const fn has_clone(self) -> bool {
         self.0 & Self::CLONE != 0
+    }
+
+    /// Whether the SQL-bind-parameter (`Into<SqlParam>`) bound is set — see
+    /// [`Self::SQL_PARAM`].
+    #[must_use]
+    pub const fn has_sql_param(self) -> bool {
+        self.0 & Self::SQL_PARAM != 0
     }
 }
 
@@ -2160,7 +2183,11 @@ mod tests {
         let mut seen = 0_u32;
         let res: Result<Match, &str> = m.try_map_bodies(Ok, |_, b, g| {
             seen += 1;
-            if seen == 2 { Err("second arm fails") } else { Ok((b, g)) }
+            if seen == 2 {
+                Err("second arm fails")
+            } else {
+                Ok((b, g))
+            }
         });
         assert_eq!(res, Err("second arm fails"));
         Ok(())

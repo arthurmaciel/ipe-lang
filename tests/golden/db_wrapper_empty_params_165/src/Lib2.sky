@@ -1,0 +1,13 @@
+module Lib2 exposing (insertWidget)
+
+import Lib1
+
+
+-- Calls `Lib1.execOrLog` with a `List SqlValue` (the typed mixed-param
+-- path), cross-module — matches `examples/17-skymon`'s `Lib.Alerts` /
+-- `Lib.Monitors` calling into `Lib.Database`.
+insertWidget =
+    Lib1.execOrLog
+        "Lib2.insertWidget"
+        "INSERT INTO items (id, name) VALUES (?, ?)"
+        [ SqlString "1", SqlString "widget" ]
