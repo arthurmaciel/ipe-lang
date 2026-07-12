@@ -1140,10 +1140,20 @@ pub fn ui_form_<M: Clone>(
 /// (`live::form::decode_form_or_warn` — type-directed per-field coercion, NOT
 /// a JSON path), matching the Go backend's `json.Unmarshal` semantics at the
 /// record-shape level (case-insensitive field-name match, missing field ⇒
-/// zero value). `F: Fn(T) -> M + Send + Sync + 'static` is always satisfied
-/// by emitted Sky function types (they are `'static` enum constructors or
-/// pure closures with no borrows) — a strictly narrower requirement than the
-/// `A: Any` bound this replaces (#109/#156).
+/// zero value). `F: Fn(T) -> M + Send + Sync + 'static` is a strictly
+/// narrower requirement than the `A: Any` bound this replaces (#109/#156).
+///
+/// #162: `Send + Sync` is NOT automatically satisfied merely because the
+/// underlying Sky closure only captures `'static` enum constructors / owned
+/// data — if the codegen's generic first-class-function-value rendering has
+/// already boxed the closure as `Box<dyn Fn(T) -> M + Send + 'static>`
+/// (deliberately `+Send`-only; most `Fn`-value consumers need no more) and
+/// that box is forwarded to this function AS-IS, the call fails: a trait
+/// object's auto-trait set is exactly its bound list, so the box is never
+/// `Sync` no matter what it captures. The codegen call site
+/// (`sky_backend_rust::emit_expr`'s `KernelFn::UiOnSubmit` arm) closes this
+/// by re-wrapping the boxed value in a freshly-declared closure at the call
+/// site rather than forwarding the box itself.
 #[cfg(feature = "live")]
 pub fn ui_on_submit_<M, T, F>(f: F) -> Attribute<M>
 where
