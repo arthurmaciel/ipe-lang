@@ -577,6 +577,9 @@ fn clone_class(t: &IrType) -> CloneClass {
     match t {
         // Scalars — primitive Copy types.
         // `Decimal` is `#[derive(Copy)]` — treat as CopyLeaf.
+        // StreamWriter is `#[derive(Clone, Copy)]` — an i64 id wrapper
+        // (server_stream.rs:38). Bare capture is sound.
+        // #127: `WsHandle` is `#[derive(Clone, Copy)]` — an i64 id wrapper.
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -584,7 +587,9 @@ fn clone_class(t: &IrType) -> CloneClass {
         | IrType::Unit
         | IrType::Order
         | IrType::Decimal
-        | IrType::ErrorKind => CloneClass::CopyLeaf,
+        | IrType::ErrorKind
+        | IrType::StreamWriter
+        | IrType::WebSocketServer => CloneClass::CopyLeaf,
         // Runtime-verified Clone types.
         // Str(String), Bytes(Vec<u8>), Json(serde_json::Value), Db(Arc-backed),
         // UiPlain (element.rs derives Clone), LiveReq (req.rs derives Clone).
@@ -598,6 +603,11 @@ fn clone_class(t: &IrType) -> CloneClass {
         // `String`; hand-written `PartialEq`, not derived — see its own doc).
         // The nominal error-payload types derive Clone (not Copy — each
         // carries heap-allocated `String`s; SEAL fix 2026-07-11).
+        // Runtime-verified Clone server/http opaques (audited 2026-07-05):
+        // ServerRequest/ServerResponse/ServerCookie (server.rs:33/50/59),
+        // ServerRoute (server.rs:136), HttpRequest (http_client.rs:64) all
+        // `#[derive(Clone, …)]`.
+        // #127: `WsServerCfg` holds Arc<dyn Fn> callbacks — Clone via Arc.
         IrType::Str
         | IrType::Bytes
         | IrType::Json
@@ -610,22 +620,13 @@ fn clone_class(t: &IrType) -> CloneClass {
         | IrType::PanicInfo
         | IrType::TypeInfo
         | IrType::SqlFragment
-        | IrType::Secret => CloneClass::CloneOk,
-        // Runtime-verified Clone server/http opaques (audited 2026-07-05):
-        // ServerRequest/ServerResponse/ServerCookie (server.rs:33/50/59),
-        // ServerRoute (server.rs:136), HttpRequest (http_client.rs:64) all
-        // `#[derive(Clone, …)]`.
-        // #127: `WsServerCfg` holds Arc<dyn Fn> callbacks — Clone via Arc.
-        IrType::ServerRequest
+        | IrType::Secret
+        | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
         | IrType::ServerCookie
         | IrType::HttpRequest
         | IrType::WebSocketServerCfg => CloneClass::CloneOk,
-        // StreamWriter is `#[derive(Clone, Copy)]` — an i64 id wrapper
-        // (server_stream.rs:38). Bare capture is sound.
-        // #127: `WsHandle` is `#[derive(Clone, Copy)]` — an i64 id wrapper.
-        IrType::StreamWriter | IrType::WebSocketServer => CloneClass::CopyLeaf,
         // Non-Clone: function-typed, task, decoder, Cmd, Sub.
         // Also Generic(_) until T5 (which injects `T: Clone`).
         IrType::Fun(_, _)
@@ -5468,7 +5469,6 @@ impl<'a> Lowerer<'a> {
                 // consistency. Added by #138 to support bare `Value` annotations
                 // on user functions (kernel-implicit Prelude type, #576).
                 // `Claims` (D-00) maps to the same opaque JSON accumulator.
-                "Value" | "Claims" => Ok(IrType::Json),
                 // ── Kernel-implicit opaque server / Sky.Live types (#152) ────────
                 // These names are registered in `KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES`
                 // in sky_canon so they pass N0002 without an explicit import.
@@ -5478,7 +5478,9 @@ impl<'a> Lowerer<'a> {
                 // `VNode` — Sky.Live virtual-DOM node.
                 // All map to `IrType::Json` (universal opaque serde_json::Value) so
                 // they can flow through the runtime without a dedicated Rust struct.
-                "Handler" | "Middleware" | "Session" | "Store" | "VNode" => Ok(IrType::Json),
+                "Value" | "Claims" | "Handler" | "Middleware" | "Session" | "Store" | "VNode" => {
+                    Ok(IrType::Json)
+                }
                 // ── JWT builder types (#152 / D-00) ─────────────────────────────
                 // `Algorithm` — JWT signing algorithm descriptor encoded as a
                 // `String` ("HS256:<secret>" or "RS256:<pem>").

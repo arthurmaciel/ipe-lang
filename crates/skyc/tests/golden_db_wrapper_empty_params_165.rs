@@ -1,7 +1,7 @@
 //! BACKLOG #165 regression — `examples/17-skymon`'s `cargo build` failure.
 //!
 //! Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build`
-//! with 6x E0277 (`the trait bound `SqlParam: From<T1>` is not satisfied`)
+//! with 6x E0277 (the trait bound `SqlParam: From<T1>` is not satisfied)
 //! and 3x E0283 (`type annotations needed` / `cannot infer type of the type
 //! parameter T declared on the struct Vec`) at every
 //! `lib_database_query_or_log(label, queryStr, Vec::new())` call site (an

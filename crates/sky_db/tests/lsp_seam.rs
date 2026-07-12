@@ -77,7 +77,7 @@ const ENTRY_TYPE_ERROR: &str = "module Main exposing (main)\n\nimport A exposing
 /// database `!Send`, this line fails to compile rather than the property
 /// silently regressing.
 const _: fn() = || {
-    fn assert_send<T: Send>() {}
+    const fn assert_send<T: Send>() {}
     assert_send::<SkyDatabase>();
 };
 
@@ -120,7 +120,10 @@ fn lsp_shaped_buffer_edit_drives_diagnostics_and_navigation_in_memory() {
         sky_db::resolve_imports(&db, root, entry).expect("resolve_imports must succeed");
     assert_eq!(resolutions.len(), 1);
     assert!(
-        matches!(resolutions[0].1, ImportResolution::Resolved(resolved) if resolved == a),
+        matches!(
+            resolutions.first(),
+            Some((_, ImportResolution::Resolved(resolved))) if *resolved == a
+        ),
         "go-to-def target for `import A` must resolve to the A buffer's own SourceFile handle"
     );
 
