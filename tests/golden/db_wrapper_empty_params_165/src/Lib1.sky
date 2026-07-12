@@ -1,0 +1,70 @@
+module Lib1 exposing (queryOrLog, execOrLog)
+
+import Sky.Core.System as System
+
+
+-- BACKLOG #165 regression: a Sky-defined WRAPPER function around `Db.exec` /
+-- `Db.query` (never the kernel called directly) forwards its own polymorphic
+-- `args : List a` parameter straight into the kernel's params position —
+-- exactly `examples/17-skymon`'s `Lib.Database.exec` / `.query` /
+-- `.execOrLog` / `.queryOrLog` shape, including the module-level MEMOIZED
+-- `conn` binding (closed over by `exec`/`query`, never threaded as a
+-- parameter — matching the real fixture and sidestepping the orthogonal
+-- multi-use-`Db`-lambda-parameter clone gap a threaded `conn` parameter
+-- would hit).
+--
+-- Called cross-module (from `Lib2` AND `Main`, both with a `List SqlValue`
+-- `args`, AND with the empty list `[]`), so `args`'s type variable is
+-- exercised across module boundaries exactly like the production bug.
+--
+-- Before the #165 fix, calling either wrapper with an EMPTY list (`[]`, no
+-- bind parameters — the DDL statement and the no-bind-params SELECT below)
+-- left:
+--
+--   * the wrapper's OWN emitted Rust generic with no
+--     `Into<sky_runtime::db::SqlParam>` bound — so its body's `Db.exec`/
+--     `Db.query` projection (`.map(SqlParam::from)`) failed `cargo build`
+--     with E0277 ("the trait bound `SqlParam: From<T1>` is not satisfied");
+--   * the empty-list call SITE with a bare, ambiguous `Vec::new()` argument —
+--     E0283 ("type annotations needed").
+--
+-- `skyc` accepted the program (exit 0) while `cargo build` on the emitted
+-- Rust rejected it — a skyc-accepts/cargo-rejects SEAL violation.
+conn =
+    case Task.run (Db.open "sqlite" "/tmp/sky_db_wrapper_empty_params_165_golden.db") of
+        Ok c ->
+            c
+
+        Err e ->
+            System.exit 1
+
+
+query queryStr args =
+    Task.run (Db.query conn queryStr args)
+
+
+exec queryStr args =
+    case Task.run (Db.exec conn queryStr args) of
+        Ok _ ->
+            Ok ()
+
+        Err e ->
+            Err e
+
+
+queryOrLog label queryStr args =
+    case query queryStr args of
+        Ok rows ->
+            rows
+
+        Err e ->
+            []
+
+
+execOrLog label queryStr args =
+    case exec queryStr args of
+        Ok _ ->
+            ()
+
+        Err e ->
+            ()
