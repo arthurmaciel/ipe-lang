@@ -103,6 +103,12 @@ pub fn lower(
     // ordering the `anyp_` pool documents above.
     let nested_cons_site_count = lower::count_nested_cons_payload_sites(m);
     let nested_cons_binders = interner.fresh_symbols("ncons_", nested_cons_site_count)?;
+    // Sibling desugaring: one fresh `String` payload binder per `case`-arm site
+    // that nests a string-literal sub-pattern directly inside a constructor
+    // payload (`Just "live"`). Same two-borrow ordering as the `ncons_` pool
+    // above.
+    let nested_strlit_site_count = lower::count_nested_strlit_payload_sites(m);
+    let nested_strlit_binders = interner.fresh_symbols("nstrlit_", nested_strlit_site_count)?;
     // The built-in `Maybe` / `Result` types + constructors are Prelude
     // built-ins (no `type` declaration), so the lowerer needs their symbols to
     // seed the variant-set / arity tables it would otherwise read from
@@ -172,6 +178,7 @@ pub fn lower(
             any_param_binders,
             destructure_thunk_binders,
             nested_cons_binders,
+            nested_strlit_binders,
         },
         &builtins,
     )
