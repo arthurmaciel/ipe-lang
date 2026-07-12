@@ -2,6 +2,7 @@
 name = "sky_backend_rust"
 edition.workspace = true
 version.workspace = true
+license.workspace = true
 
 [dependencies]
 sky_ir = { path = "../sky_ir" }
