@@ -77,15 +77,9 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
     let (sources, injected) = prepared(user);
     let db = sky_db::SkyDatabase::new();
     let root = skyc::create_source_root(&db, &sources, &injected);
-    skyc::compile_prepared(
-        &db,
-        root,
-        &sources,
-        &entry_path(),
-        Path::new("<parity>"),
-        sky_backend_rust::DbDriver::Sqlite,
-    )
-    .map_err(|e| e.to_string())
+    let config = sky_db::BuildConfig::new(&db, sky_backend_rust::DbDriver::Sqlite);
+    skyc::compile_prepared(&db, root, &sources, &entry_path(), Path::new("<parity>"), config)
+        .map_err(|e| e.to_string())
 }
 
 /// The warm side: ONE database reused across the whole edit sequence, inputs
@@ -93,6 +87,12 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
 struct WarmSession {
     db: sky_db::SkyDatabase,
     root: Option<sky_db::SourceRoot>,
+    // A STABLE `BuildConfig` handle across the whole sequence — Phase-5
+    // §10.2's own recorded warning: constructing a fresh `BuildConfig` per
+    // `compile_prepared` call would give `emit_project` a different memo key
+    // every demand, silently defeating the seam's memoization on the warm
+    // side (the gate would never actually exercise a cache hit for emit).
+    config: Option<sky_db::BuildConfig>,
 }
 
 impl WarmSession {
@@ -100,6 +100,7 @@ impl WarmSession {
         Self {
             db: sky_db::SkyDatabase::new(),
             root: None,
+            config: None,
         }
     }
 
@@ -124,15 +125,11 @@ impl WarmSession {
             self.root = Some(root);
             root
         };
-        skyc::compile_prepared(
-            &self.db,
-            root,
-            &sources,
-            &entry_path(),
-            Path::new("<parity>"),
-            sky_backend_rust::DbDriver::Sqlite,
-        )
-        .map_err(|e| e.to_string())
+        let config = *self
+            .config
+            .get_or_insert_with(|| sky_db::BuildConfig::new(&self.db, sky_backend_rust::DbDriver::Sqlite));
+        skyc::compile_prepared(&self.db, root, &sources, &entry_path(), Path::new("<parity>"), config)
+            .map_err(|e| e.to_string())
     }
 }
 

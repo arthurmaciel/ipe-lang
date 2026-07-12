@@ -22,6 +22,13 @@ sky_lower = { path = "../sky_lower" }
 sky_ir = { path = "../sky_ir" }
 sky_backend = { path = "../sky_backend" }
 sky_backend_rust = { path = "../sky_backend_rust" }
+# Phase 6 (Task 19/20): the on-disk build cache (`src/cache.rs`) — content
+# hashing of the whole-project key + the compiler/toolchain version-epoch,
+# and JSON (de)serialization of the cached `EmittedProject`. Same version
+# pins as `tools/oracle` (already resolved in the workspace lockfile).
+sha2 = "0.10"
+hex = "0.4"
+serde_json = "1"
 
 [dev-dependencies]
 # Cached Go-oracle format + staleness gate + the shared build/run-emitted core

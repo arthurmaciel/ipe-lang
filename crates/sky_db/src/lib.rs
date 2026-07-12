@@ -719,6 +719,92 @@ pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerR
     sky_lower::lower(&linked.module, &types, &mut interner).map(Arc::new)
 }
 
+// ---------------------------------------------------------------------------
+// Tracked queries (Task 17 / Phase 5 continuation: `BuildConfig` + emit_project)
+// ---------------------------------------------------------------------------
+
+/// The build-wide, driver-supplied configuration that affects **emission**
+/// but nothing upstream of it — today exactly the `sky.toml [database]
+/// driver` selection.
+///
+/// This is the incremental plan's `project_config()` seam (design doc Q1b),
+/// deliberately narrowed to the ONE field that has a real tracked-query
+/// consumer today ([`emit_project`]) rather than the full parsed-`sky.toml`
+/// shape the design doc sketches (`entry`, `codegen_flags`, `[log]`
+/// fields, …). Phase 1 §3.2 already named the discipline this follows:
+/// "reserved seams stay design-level until their phase" — a `ProjectConfig`
+/// with fields nothing reads is exactly the dead-surface trap that section
+/// warns against. `db_driver` earns its place because [`emit_project`]
+/// genuinely reads it (routing `RustBackend::with_db_driver`), and nothing
+/// upstream of emission (`canonicalize`, `typecheck`, `lower_program`) is
+/// affected by the SQL driver choice — `sky.toml`'s `driver` key changes the
+/// emitted `Cargo.toml`/`sky_runtime/config.rs` shape only.
+///
+/// **Field-granularity, honestly scoped.** Salsa's `#[salsa::input]` macro
+/// already tracks reads PER FIELD (verified against the `salsa-0.27.2`
+/// source: `IngredientImpl::field` reports a tracked read keyed on
+/// `(ingredient_index.successor(field_index), id)`, not on the whole
+/// struct) — so a struct with two build-relevant fields would already get
+/// the design doc's "editing field A doesn't invalidate a query that only
+/// reads field B" property for free, with no hand-rolled projection query
+/// needed. `BuildConfig` has exactly ONE field today because no second
+/// field has a real consumer yet (the same gate `db_driver` itself had to
+/// clear) — so the MULTI-field half of the field-granularity story
+/// (`config_entry()` vs `config_log_level()` both projected off one
+/// `ProjectConfig`) is honestly out of scope until a second field earns its
+/// place. What this DOES prove today or scope, and what the
+/// `emit_project_config_change_does_not_retrigger_lower` test asserts, is
+/// the field's other half: a `BuildConfig`-only change never re-executes
+/// [`linked_program`] / [`typecheck`] / [`lower_program`] — config lives on
+/// its own input, entirely separate from [`SourceRoot`]/[`SourceFile`].
+#[salsa::input]
+pub struct BuildConfig {
+    /// The SQL driver the emitted project targets (`sky.toml [database]
+    /// driver`). See [`sky_backend_rust::DbDriver`].
+    pub db_driver: sky_backend_rust::DbDriver,
+}
+
+/// The memoized result of emitting the linked, lowered program to Rust
+/// source text.
+pub type EmitResult = Result<Arc<sky_backend::EmittedProject>, Diagnostic>;
+
+/// Emit [`lower_program`]'s IR to a Rust [`sky_backend::EmittedProject`]
+/// (incremental plan Task 17's real consumer / Phase-5 §10.2 continuation
+/// item 2).
+///
+/// **Coarse per-program SEAM**, the [`lower_program`] sibling: depends on
+/// [`lower_program`] (the IR) and [`BuildConfig::db_driver`] (the ONE
+/// emit-relevant config field), so it re-executes exactly when either would
+/// have re-run [`sky_backend_rust::RustBackend::emit`] today — but now as a
+/// memoized salsa node. Before this query existed, `compile_prepared` called
+/// `RustBackend::emit` as a plain function on every single build (Phase 4's
+/// own finding for `typecheck`/`lower_program`, one layer further down the
+/// pipeline): a warm no-op rebuild still re-ran the whole backend pass.
+///
+/// Depending on `config` (not just `root`/`entry`) is what makes the
+/// field-granularity property observable: a `db_driver` edit re-executes
+/// THIS query without touching [`linked_program`] / [`typecheck`] /
+/// [`lower_program`] at all — proven by
+/// `emit_project_config_change_does_not_retrigger_lower`
+/// (`crates/sky_db/tests/phase6_build_config.rs`).
+#[salsa::tracked]
+pub fn emit_project(
+    db: &dyn Db,
+    root: SourceRoot,
+    entry: SourceFile,
+    config: BuildConfig,
+) -> EmitResult {
+    use sky_backend::Backend as _;
+
+    let program = lower_program(db, root, entry)?;
+    let driver = config.db_driver(db);
+    let interner = db.interner().lock();
+    sky_backend_rust::RustBackend::new(&interner)
+        .with_db_driver(driver)
+        .emit(&program)
+        .map(Arc::new)
+}
+
 /// The identifier words of one module's source text — the per-file slice of
 /// the fresh-name collision universe (`Interner::set_fresh_avoid`).
 ///
