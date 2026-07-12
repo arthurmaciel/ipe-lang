@@ -112,6 +112,7 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
         body: Expr::Access {
             record: Box::new(Expr::Var(r)),
             field: value,
+            field_ty: IrType::Generic(b),
         },
     };
     // main = println (String.fromInt (unwrap (wrap 42)))

@@ -24,9 +24,12 @@ module Sky.Core.Http exposing
     , post
     , request
     , withBody
+    , withFollowRedirects
     , withHeader
+    , withMaxRedirects
     , withMethod
     , withTimeout
+    , withUrl
     )
 
 
@@ -103,6 +106,18 @@ withTimeout t req =
 withBody : String -> HttpRequest -> HttpRequest
 withBody b req =
     { req | body = b }
+
+withUrl : String -> HttpRequest -> HttpRequest
+withUrl u req =
+    { req | url = u }
+
+withFollowRedirects : Bool -> HttpRequest -> HttpRequest
+withFollowRedirects f req =
+    { req | followRedirects = f }
+
+withMaxRedirects : Int -> HttpRequest -> HttpRequest
+withMaxRedirects n req =
+    { req | maxRedirects = n }
 
 
 -- `withHeader k v req` prepends `(k, v)` to `req.headers` — matching the

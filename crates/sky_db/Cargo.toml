@@ -12,6 +12,8 @@ sky_parse = { path = "../sky_parse" }
 sky_canon = { path = "../sky_canon" }
 sky_types = { path = "../sky_types" }
 sky_kernels = { path = "../sky_kernels" }
+sky_lower = { path = "../sky_lower" }
+sky_ir = { path = "../sky_ir" }
 
 [lints]
 workspace = true
