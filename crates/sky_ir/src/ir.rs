@@ -9,11 +9,15 @@ use sky_intern::Symbol;
 
 /// A dotted module path, e.g. `Main` or `Sky.Core.Io`, as interned segments in
 /// source order.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(
+    Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub struct ModPath(pub Vec<Symbol>);
 
 /// A function identifier, unique within a [`Program`].
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub struct FuncId(pub u32);
 
 impl FuncId {
@@ -32,7 +36,7 @@ impl FuncId {
 //
 // `Eq` is not derived: a module's functions hold [`Expr`] bodies that may carry
 // a float literal (only `PartialEq`).
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Program {
     pub modules: Vec<Module>,
 }
@@ -42,7 +46,7 @@ pub struct Program {
 //
 // `Eq` is not derived: `funcs` hold [`Expr`] bodies that may carry a float
 // literal (only `PartialEq`).
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Module {
     pub name: ModPath,
@@ -132,7 +136,7 @@ pub struct Module {
 /// A user-declared type. The IR models user types as enums (Sky's `type`
 /// declarations); a nullary-only enum is the M0 case, a payload-carrying and/or
 /// generic enum the M3a case.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum TypeDef {
     Enum(EnumDef),
 }
@@ -144,7 +148,7 @@ pub enum TypeDef {
 /// non-generic enum (`type Msg = Increment | Decrement`) has every variant's
 /// `fields` empty and an empty `type_params` — that path stays byte-identical to
 /// the M0 backend output.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EnumDef {
     pub name: Symbol,
     /// The module that DEFINES this type (its *home*), not the entry module the
@@ -178,7 +182,7 @@ pub struct EnumDef {
 /// type is the enum being declared (direct self-recursion) is rendered boxed by
 /// the backend so the Rust enum stays finite-sized; the IR carries the bare
 /// recursive type and leaves the boxing to emission.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Variant {
     pub name: Symbol,
     pub fields: Vec<IrType>,
@@ -228,7 +232,9 @@ pub struct Variant {
 /// The `with_*` builders set a flag and return the updated set, so a bound set
 /// is assembled fluently (`BoundSet::UNBOUNDED.with_add().with_copy()`); the
 /// `has_*` predicates read one flag back.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Debug, Default, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct BoundSet(u16);
 
 impl BoundSet {
@@ -380,7 +386,7 @@ impl BoundSet {
 //
 // `Eq` is not derived: `body` is an [`Expr`] that may carry a float literal
 // (only `PartialEq`).
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Func {
     pub id: FuncId,
     pub name: Symbol,
@@ -419,7 +425,7 @@ pub struct Func {
 /// `collect_record_types`) can dedup via a `HashSet` gate instead of an
 /// O(n²) `Vec::contains` scan (efficiency-audit §3 medium). The derive is
 /// inert — it emits no IR and changes no equality semantics.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum IrType {
     Int,
     Float,
@@ -797,7 +803,7 @@ pub enum IrType {
 /// Used inside [`IrType::Ui`] to select the correct Rust path at emission time.
 /// The set is intentionally small to keep the pattern match exhaustive without a
 /// catch-all.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum UiCtor {
     /// `Html msg` — a rendered HTML tree (`sky_runtime::html::Html<M>`).
     Html,
@@ -825,7 +831,7 @@ pub enum UiCtor {
 ///
 /// Used inside [`IrType::UiPlain`] to select the correct Rust path at emission
 /// time.  The set is closed (eight variants).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum UiPlain {
     /// `Length` — `sky_runtime::ui::element::Length`.
     Length,
@@ -1111,7 +1117,7 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
 /// check, and would make illegal IR representable.
 // `Eq` is not derived: [`Expr::Float`] carries an `f64`, which is only
 // `PartialEq` (IEEE-754). No consumer keys a map / set on an [`Expr`].
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
     Int(i64),
     /// A boolean literal `True` / `False` used as a VALUE. Sky's `Bool` is the
@@ -1358,7 +1364,7 @@ pub enum Expr {
 }
 
 /// The target of a [`Expr::Call`].
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Callee {
     Func(FuncId),
     Kernel(KernelFn),
@@ -1386,7 +1392,7 @@ pub use sky_kernels::HtmlEventShape;
 /// arithmetic, comparison, and boolean operators. `Append` (`++`) carries
 /// string concatenation; list `++` and `::` are deferred until the list type
 /// lands.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum BinOp {
     Add,
     Sub,
@@ -1415,7 +1421,7 @@ pub enum BinOp {
 /// One arm of a [`Match`]: a constructor pattern and the body it guards.
 //
 // `Eq` is not derived: `body` is an [`Expr`], only `PartialEq` (float literals).
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Arm {
     pub pat: Pat,
     pub body: Expr,
@@ -1470,7 +1476,7 @@ impl Arm {
 /// M3b-3 adds the refutable literal leaves ([`Pat::Int`], [`Pat::Bool`],
 /// [`Pat::Char`], [`Pat::Str`]) and the alias / `as` binder ([`Pat::Alias`]).
 /// Cons / list patterns remain M4 and are rejected upstream at lowering.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Pat {
     /// A variable binder — binds the matched value (a constructor payload field)
     /// to a name.
@@ -1689,6 +1695,79 @@ pub fn is_product_shaped(pat: &Pat) -> bool {
 pub struct Match {
     scrutinee: Box<Expr>,
     arms: Vec<Arm>,
+}
+
+/// Serialises as the plain `{ scrutinee, arms }` shape via the public
+/// accessors — no invariant to preserve on the way OUT (any value that
+/// exists has already been validated by [`Match::new`]/[`Match::new_flat`]
+/// at construction time).
+impl serde::Serialize for Match {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(serde::Serialize)]
+        struct MatchRef<'a> {
+            scrutinee: &'a Expr,
+            arms: &'a [Arm],
+        }
+        MatchRef {
+            scrutinee: self.scrutinee(),
+            arms: self.arms(),
+        }
+        .serialize(serializer)
+    }
+}
+
+/// **Deliberately hand-written, never `#[derive(Deserialize)]`** — `Match`'s
+/// fields are private specifically because the sole way to obtain one is
+/// [`Match::new`]/[`Match::new_flat`], which prove the arm set is
+/// structurally exhaustive at construction time (see the type's own doc). A
+/// derived impl would reconstruct `Match { scrutinee, arms }` directly from
+/// untrusted bytes, bypassing that proof entirely — the exact same "parse,
+/// don't validate" gap `sky_backend::RelPath`'s hand-written `Deserialize`
+/// closes for path-traversal.
+///
+/// This impl re-validates through [`Match::new_flat`] rather than
+/// re-deriving [`Match::new`]'s stricter ctor-exhaustive-cover check,
+/// because `new_flat`'s NECESSARY-condition backstop (trailing catch-all /
+/// complete `Bool` cover / all-constructor-headed / all-list-shaped /
+/// all-product-shaped) is a **provable superset** of what `new` guarantees:
+/// every arm `Match::new` accepts has `Pat::Ctor` as its literal arm head
+/// (`new`'s own hard requirement — a non-`Ctor` head is rejected before the
+/// exhaustiveness check even runs), so `is_ctor_headed` holds for every arm
+/// and `new_flat`'s `all_ctor_headed` branch always accepts it. A `Match`
+/// built via `new_flat` trivially re-validates through the same function
+/// (pure, deterministic over the same arms). So EVERY legitimately
+/// constructed `Match` in the whole compiler round-trips through this
+/// impl unchanged, while an EMPTY arm list or an open-literal cover with no
+/// trailing catch-all is rejected exactly as it would be at original
+/// construction time.
+///
+/// **Honestly scoped gap.** `new_flat`'s `all_ctor_headed` branch (unlike
+/// `Match::new` itself) does not re-verify that the ctor-headed arms cover
+/// EVERY variant of the scrutinee's enum — `Match` carries no external
+/// "complete variant set" of its own to check against (that list lives on
+/// the `EnumDef` elsewhere in the `Program`, not on `Match`), and `new_flat`
+/// deliberately trusts the upstream Maranget check for that shape (see its
+/// own doc). So a tampered entry that DROPS one arm from an otherwise-
+/// exhaustive ctor cover (while keeping every remaining arm ctor-headed)
+/// is NOT caught here. This is not a silent-corruption or RCE risk: the
+/// missing-variant gap surfaces the moment the relocated `Program` reaches
+/// `RustBackend::emit` as a plain Rust `match` with a missing arm, which
+/// `cargo build` rejects with E0004 — a loud, safe failure, never wrong
+/// output. Closing it fully would require deserializing the WHOLE
+/// `Program` first and cross-checking every `Match` against its scrutinee
+/// enum's `EnumDef` in a second pass — recorded here as a possible future
+/// hardening, not attempted because the current gap already fails safe.
+impl<'de> serde::Deserialize<'de> for Match {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct RawMatch {
+            scrutinee: Expr,
+            arms: Vec<Arm>,
+        }
+        let raw = RawMatch::deserialize(deserializer)?;
+        Self::new_flat(raw.scrutinee, raw.arms)
+            .map_err(|diag| serde::de::Error::custom(format!("{diag:?}")))
+    }
 }
 
 impl Match {
@@ -3026,10 +3105,7 @@ mod tests {
             IrType::LiveReq,
         ];
         for t in bad {
-            assert!(
-                !ir_type_is_serde(&t, &all_serde),
-                "{t:?} must NOT be serde"
-            );
+            assert!(!ir_type_is_serde(&t, &all_serde), "{t:?} must NOT be serde");
         }
     }
 
@@ -3083,7 +3159,10 @@ mod tests {
             ir_type_is_derivable(&t, &all_serde),
             "Secret IS derivable (Clone + PartialEq)"
         );
-        assert!(!ir_type_is_serde(&t, &all_serde), "Secret must NOT be serde");
+        assert!(
+            !ir_type_is_serde(&t, &all_serde),
+            "Secret must NOT be serde"
+        );
     }
 
     /// #44 derive-blast-radius regression: a record `{ apiKey : Secret, label :
@@ -3131,6 +3210,374 @@ mod tests {
             args: vec![],
         };
         assert!(ir_type_is_serde(&e, &|_, _| true), "serde enum passes");
-        assert!(!ir_type_is_serde(&e, &|_, _| false), "non-serde enum poisons");
+        assert!(
+            !ir_type_is_serde(&e, &|_, _| false),
+            "non-serde enum poisons"
+        );
+    }
+}
+
+/// Phase 6.5 (symbol-relocation persistence) — `sky_ir`-level round-trip and
+/// cross-process id-drift proof for whole-`Program` `serde` persistence.
+///
+/// Complements `sky_intern`'s `Symbol`-level proof
+/// (`serialize_then_deserialize_survives_cross_process_id_drift`) with the
+/// SAME property one layer up, over a realistic `Program` value that
+/// exercises every `Symbol`-carrying shape: `ModPath`, `EnumDef`/`Variant`
+/// names, `Func` `name`/`params`/`type_params`, a `Match` (the one hand-written
+/// `serde` impl in this crate), `Pat::Ctor`/`Pat::Var`, and a record literal
+/// (`Vec<(Symbol, Expr)>`).
+#[cfg(test)]
+mod serde_persistence_tests {
+    use std::sync::{Arc, Mutex};
+
+    use sky_diagnostics::DResult;
+    use sky_intern::{Interner, SerdeInternerGuard};
+
+    use super::{
+        Arm, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module, Pat,
+        Program, TypeDef, Variant,
+    };
+    use crate::pretty::pretty;
+
+    /// Build a small but representative `Program`: one enum (`Msg`), one
+    /// entry function whose body pattern-matches the enum via a genuine
+    /// [`Match`] node and constructs a record literal — every
+    /// `Symbol`-carrying IR shape this module's doc names, in one value.
+    fn sample_program(i: &mut Interner) -> DResult<Program> {
+        let msg_ty = i.intern("Msg")?;
+        let inc = i.intern("Increment")?;
+        let dec = i.intern("Decrement")?;
+        let main_sym = i.intern("main")?;
+        let main_mod = i.intern("Main")?;
+        let msg_param = i.intern("msg")?;
+        let count_field = i.intern("count")?;
+
+        let scrutinee = Expr::Var(msg_param);
+        let arms = vec![
+            Arm::new(
+                Pat::Ctor {
+                    home: ModPath(vec![]),
+                    ty: msg_ty,
+                    variant: inc,
+                    args: vec![],
+                },
+                // A record literal `{ count = 1 }` — exercises
+                // `Vec<(Symbol, Expr)>`.
+                Expr::Record(vec![(count_field, Expr::Int(1))]),
+            ),
+            Arm::new(
+                Pat::Ctor {
+                    home: ModPath(vec![]),
+                    ty: msg_ty,
+                    variant: dec,
+                    args: vec![],
+                },
+                Expr::Record(vec![(count_field, Expr::Int(0))]),
+            ),
+        ];
+        let body = Expr::Match(Match::new(scrutinee, arms, &[inc, dec])?);
+
+        let func = Func {
+            id: FuncId::from_raw(0),
+            name: main_sym,
+            home: ModPath(vec![]),
+            type_params: vec![],
+            params: vec![(msg_param, IrType::Generic(msg_param))],
+            ret: IrType::Unit,
+            body,
+        };
+        Ok(Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![TypeDef::Enum(EnumDef {
+                    home: ModPath(vec![]),
+                    name: msg_ty,
+                    type_params: vec![],
+                    variants: vec![
+                        Variant {
+                            name: inc,
+                            fields: vec![],
+                        },
+                        Variant {
+                            name: dec,
+                            fields: vec![],
+                        },
+                    ],
+                })],
+                funcs: vec![func],
+                entry: Some(FuncId::from_raw(0)),
+                records: vec![],
+                uses_tea: false,
+                uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
+                uses_css: false,
+                uses_auth: false,
+            }],
+        })
+    }
+
+    #[test]
+    fn round_trips_within_one_interner() -> DResult<()> {
+        let mut plain = Interner::new();
+        let program = sample_program(&mut plain)?;
+        let interner = Arc::new(Mutex::new(plain));
+
+        let json = {
+            let _guard = SerdeInternerGuard::install(Arc::clone(&interner));
+            serde_json::to_string(&program).expect("serialize must succeed")
+        };
+        let round_tripped: Program = {
+            let _guard = SerdeInternerGuard::install(Arc::clone(&interner));
+            serde_json::from_str(&json).expect("deserialize must succeed")
+        };
+        assert_eq!(
+            program, round_tripped,
+            "same interner: ids AND strings agree"
+        );
+        Ok(())
+    }
+
+    /// A tampered [`Callee::Kernel`] entry must not silently coerce — the
+    /// derived `Deserialize` on the closed `StdlibKernel` enum rejects any
+    /// tag it does not recognise (proof that the whole-`Program` `serde`
+    /// surface fails closed on structurally-invalid input, not just on a
+    /// poisoned `Symbol`).
+    #[test]
+    fn deserialize_rejects_unknown_kernel_tag() -> DResult<()> {
+        let mut plain = Interner::new();
+        let f = plain.intern("f")?;
+        let interner = Arc::new(Mutex::new(plain));
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![f]),
+                types: vec![],
+                funcs: vec![Func {
+                    id: FuncId::from_raw(0),
+                    name: f,
+                    home: ModPath(vec![]),
+                    type_params: vec![],
+                    params: vec![],
+                    ret: IrType::Unit,
+                    body: Expr::Call {
+                        callee: Callee::Kernel(KernelFn::LogPrintln),
+                        args: vec![],
+                    },
+                }],
+                entry: None,
+                records: vec![],
+                uses_tea: false,
+                uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
+                uses_css: false,
+                uses_auth: false,
+            }],
+        };
+        let json = {
+            let _guard = SerdeInternerGuard::install(Arc::clone(&interner));
+            serde_json::to_string(&program).expect("serialize must succeed")
+        };
+        let tampered = json.replace("\"LogPrintln\"", "\"NotARealKernelVariant\"");
+        let _guard = SerdeInternerGuard::install(Arc::clone(&interner));
+        let result: Result<Program, _> = serde_json::from_str(&tampered);
+        assert!(
+            result.is_err(),
+            "an unknown kernel tag must be rejected, never silently coerced"
+        );
+        Ok(())
+    }
+
+    /// A tampered `Match` with an EMPTIED arm list must be rejected at
+    /// deserialize time via [`Match::new_flat`]'s structural backstop —
+    /// proof that `Match`'s hand-written `Deserialize` actually revalidates
+    /// rather than trusting the disk bytes verbatim.
+    #[test]
+    fn deserialize_rejects_emptied_tampered_match() -> DResult<()> {
+        let mut plain = Interner::new();
+        let program = sample_program(&mut plain)?;
+        let interner = Arc::new(Mutex::new(plain));
+        let json = {
+            let _guard = SerdeInternerGuard::install(Arc::clone(&interner));
+            serde_json::to_string(&program).expect("serialize must succeed")
+        };
+
+        // Parse back into a generic JSON value and empty the arm list
+        // entirely — `Match::new_flat` rejects an arm-less match outright
+        // ("flat match has no arms").
+        let mut value: serde_json::Value =
+            serde_json::from_str(&json).expect("must parse as generic JSON");
+        let arms = value
+            .pointer_mut("/modules/0/funcs/0/body/Match/arms")
+            .and_then(serde_json::Value::as_array_mut)
+            .expect("Match.arms must be a JSON array at the expected path");
+        assert_eq!(
+            arms.len(),
+            2,
+            "sample_program must have built a 2-arm Match"
+        );
+        arms.clear();
+        let tampered = serde_json::to_string(&value).expect("re-serialize must succeed");
+
+        let _guard = SerdeInternerGuard::install(Arc::clone(&interner));
+        let result: Result<Program, _> = serde_json::from_str(&tampered);
+        assert!(
+            result.is_err(),
+            "an emptied tampered Match arm list must be rejected, \
+             never silently accepted as a valid Program"
+        );
+        Ok(())
+    }
+
+    /// **Honestly scoped gap, verified rather than merely documented.**
+    /// Dropping ONE arm from an otherwise-exhaustive ctor-headed cover is
+    /// NOT caught by [`Match`]'s `Deserialize` (see that impl's own doc for
+    /// why: `new_flat`'s `all_ctor_headed` branch trusts the upstream
+    /// Maranget check and does not re-verify full variant coverage, and
+    /// `Match` carries no external "complete variant set" to check
+    /// against). This test pins that boundary explicitly so a future
+    /// change to `new_flat`'s semantics is forced to reconsider it, rather
+    /// than silently regressing this deserializer's actual coverage
+    /// without anyone noticing. The gap is safe: the resulting `Program`
+    /// still cannot reach a `cargo build` success — `RustBackend::emit`
+    /// renders the missing arm as a genuine Rust exhaustiveness gap, which
+    /// `cargo build` rejects with E0004 (a loud failure, never silently
+    /// wrong output).
+    #[test]
+    fn deserialize_accepts_single_arm_ctor_headed_match_new_flat_does_not_reverify_full_coverage()
+    -> DResult<()> {
+        let mut plain = Interner::new();
+        let program = sample_program(&mut plain)?;
+        let interner = Arc::new(Mutex::new(plain));
+        let json = {
+            let _guard = SerdeInternerGuard::install(Arc::clone(&interner));
+            serde_json::to_string(&program).expect("serialize must succeed")
+        };
+
+        let mut value: serde_json::Value =
+            serde_json::from_str(&json).expect("must parse as generic JSON");
+        let arms = value
+            .pointer_mut("/modules/0/funcs/0/body/Match/arms")
+            .and_then(serde_json::Value::as_array_mut)
+            .expect("Match.arms must be a JSON array at the expected path");
+        arms.truncate(1);
+        let tampered = serde_json::to_string(&value).expect("re-serialize must succeed");
+
+        let _guard = SerdeInternerGuard::install(Arc::clone(&interner));
+        let result: Result<Program, _> = serde_json::from_str(&tampered);
+        assert!(
+            result.is_ok(),
+            "documents the known `new_flat` scope boundary: a single \
+             ctor-headed arm still passes `all_ctor_headed`, since \
+             `new_flat` does not itself re-check variant coverage"
+        );
+        Ok(())
+    }
+
+    /// **The mission proof.** Proves a `Program` deserialized through the
+    /// relocation pass, into a reader interner whose id-assignment history
+    /// has NOTHING in common with the writer's, is structurally/
+    /// name-identical to a Program built by a totally independent, never-
+    /// serialized construction — i.e. behaves exactly as if it had been
+    /// freshly lowered in THAT reader process, which is the property this
+    /// whole persistence design exists to guarantee.
+    ///
+    /// A same-process round trip (the test above) cannot distinguish "the
+    /// relocation pass correctly re-interns by string" from "the id
+    /// happened to survive by coincidence" — a fresh interner given the
+    /// exact same sequence of `intern` calls in the exact same order would
+    /// trivially reproduce the same ids either way. This test deliberately
+    /// diverges every interner's history (different noise, different
+    /// counts, different orders) so a raw-id relocation bug WOULD manifest
+    /// as a wrong resolved name somewhere in the structural dump — then
+    /// asserts the dumps are identical anyway, comparing by RESOLVED NAME
+    /// (via `sky_ir::pretty::pretty`, not raw `Symbol` equality, since two
+    /// independently-built-then-relocated `Program`s are not expected to
+    /// share numeric ids — only meaning).
+    #[test]
+    fn program_survives_cross_process_symbol_id_drift() -> DResult<()> {
+        // "Process A" (the writer): pollute with noise unrelated to the
+        // program, then build + serialize.
+        let mut interner_a = Interner::new();
+        for noise in ["alpha", "beta", "gamma"] {
+            interner_a.intern(noise)?;
+        }
+        let program_a = sample_program(&mut interner_a)?;
+        let interner_a = Arc::new(Mutex::new(interner_a));
+        let json = {
+            let _guard = SerdeInternerGuard::install(Arc::clone(&interner_a));
+            serde_json::to_string(&program_a).expect("serialize must succeed")
+        };
+
+        // "Process B" (the reader): pollute with a DIFFERENT set of noise,
+        // in a different order and count, before deserializing — forces
+        // genuine id drift relative to process A for every relocated
+        // symbol.
+        let mut interner_b = Interner::new();
+        for noise in ["zzz_one", "zzz_two", "zzz_three", "zzz_four", "zzz_five"] {
+            interner_b.intern(noise)?;
+        }
+        let interner_b = Arc::new(Mutex::new(interner_b));
+        let program_b: Program = {
+            let _guard = SerdeInternerGuard::install(Arc::clone(&interner_b));
+            serde_json::from_str(&json).expect("deserialize must succeed")
+        };
+
+        // "Process C" (ground truth): a COMPLETELY independent construction
+        // that never touches serialization at all — the value a genuine
+        // fresh `lower_program()` call would produce in yet another
+        // process. Its interner has its OWN unrelated history too.
+        let mut interner_c = Interner::new();
+        for noise in ["unrelated_1", "unrelated_2"] {
+            interner_c.intern(noise)?;
+        }
+        let program_c = sample_program(&mut interner_c)?;
+
+        // The raw entry-function-name ids MUST differ across all three —
+        // proves the drift is real, not an accident of matching histories.
+        let entry_name_raw = |p: &Program| -> u32 {
+            p.modules
+                .first()
+                .and_then(|m| m.funcs.first())
+                .expect("sample_program always builds one module with one func")
+                .name
+                .as_raw()
+        };
+        let raw_a = entry_name_raw(&program_a);
+        let raw_b = entry_name_raw(&program_b);
+        let raw_c = entry_name_raw(&program_c);
+        assert!(
+            raw_a != raw_b && raw_b != raw_c && raw_a != raw_c,
+            "the three interners' differing histories must produce three \
+             different raw ids for this test to actually probe drift \
+             (got a={raw_a}, b={raw_b}, c={raw_c})"
+        );
+
+        // Yet the STRUCTURAL, NAME-RESOLVED content is identical: the
+        // relocated `program_b` (interner_b) reads exactly like the
+        // never-serialized `program_c` (interner_c).
+        let dump_b = {
+            let guard = interner_b
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            pretty(&program_b, &guard)
+        };
+        let dump_c = pretty(&program_c, &interner_c);
+        assert_eq!(
+            dump_b, dump_c,
+            "a Program relocated across a simulated process boundary must be \
+             structurally/name-identical to a fresh, never-serialized \
+             construction in an unrelated interner"
+        );
+        // Sanity: the dump actually contains the meaningful names (not an
+        // accidental empty-string comparison).
+        assert!(dump_b.contains("Increment") && dump_b.contains("Decrement"));
+        assert!(dump_b.contains("main"));
+        Ok(())
     }
 }

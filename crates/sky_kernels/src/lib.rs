@@ -21,7 +21,7 @@
 
 /// Classification of a kernel variant by which compiler / runtime subsystem
 /// owns its emission.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum KernelClass {
     /// String, Char, Math, List, Maybe, Result, Dict, Set, Bytes, Encoding,
     /// Json*, Crypto, Uuid, Jwt, Task combinators, Io, Time (non-TEA),
@@ -56,7 +56,7 @@ pub enum KernelClass {
 /// rather than re-deriving it from the kernel name at each site — keeps the
 /// scheme and the emit in lockstep and makes an unhandled shape a
 /// non-exhaustive-match error.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum HtmlEventShape {
     /// Zero wire args — the `Msg` dispatches as-is. `msg -> Attribute msg`.
     /// Constructs `Event::OnMsg(name, msg)`.
@@ -111,7 +111,7 @@ pub struct StdlibDecl {
 /// the `canon_equals_registry` tripwire test in `sky_canon`).  Variants
 /// intentionally absent from `ALL` have their qualifier noted in the `decl()`
 /// doc section below.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum StdlibKernel {
     // ── Log ─────────────────────────────────────────────────────────────────
     LogPrintln,

@@ -3838,6 +3838,8 @@ version = "0.0.0"
 name = "sky_intern"
 version = "0.0.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "sky_diagnostics",
 ]
 
@@ -3845,6 +3847,8 @@ dependencies = [
 name = "sky_ir"
 version = "0.0.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "sky_diagnostics",
  "sky_intern",
  "sky_kernels",
@@ -3853,6 +3857,9 @@ dependencies = [
 [[package]]
 name = "sky_kernels"
 version = "0.0.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "sky_lower"
