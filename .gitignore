@@ -37,3 +37,5 @@ docs/architecture/progdev-cost-ledger.tsv
 /tools/ipe-index/target/
 .claude
 skills-lock.json
+
+scripts/progressive-development/.backlog.lock

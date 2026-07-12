@@ -14,8 +14,15 @@
 # anything renders to a committed .md file anymore.
 #
 # Usage:
-#   backlog.sh list [--status pending|claimed|done] [--phase "P1,P2"]   # JSONL rows, one per line
-#   backlog.sh show [--status pending|claimed|done] [--phase "P1,P2"]   # human-readable table, stdout only
+#   backlog.sh list [--status pending|claimed|done] [--phase "P1;P2"]   # JSONL rows, one per line
+#   backlog.sh show [--status pending|claimed|done] [--phase "P1;P2"]   # human-readable table, stdout only
+#
+# NOTE: --phase multi-value separator is `;`, NOT `,` — one canonical phase
+# name ("CI, oracle & publish") contains a literal comma, so splitting on
+# comma would silently break filtering on that exact phase (found + fixed
+# 2026-07-12: an empty-but-no-error result on `--phase "CI, oracle & publish"`
+# is exactly the silent-wrong-answer failure mode this project's principles
+# forbid — caught while building the first status report off this tool).
 #   backlog.sh add --priority P --phase PH --task T --notes N [--spec S]
 #   backlog.sh claim <id> [<id>...]
 #   backlog.sh unclaim <id> [<id>...]
@@ -65,7 +72,7 @@ _filtered() { # --status S --phase "P1,P2" -> jq rows on stdout
         | if [ -n "$status" ]; then jq -c --arg s "$status" 'select(.status == $s)'; else cat; fi \
         | if [ -n "$phase" ]; then
               jq -c --arg phases "$phase" '
-                  (.phase) as $p | ($phases | split(",")) as $want | select($want | index($p))'
+                  (.phase) as $p | ($phases | split(";")) as $want | select($want | index($p))'
           else cat; fi
 }
 
