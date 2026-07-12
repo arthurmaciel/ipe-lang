@@ -1799,3 +1799,163 @@ items 2 and 3 follow from it).
     over a positive allowlist so a genuinely new future `EventKind` variant
     still passes through by default (under-invalidation is the higher-cost
     failure mode per this project's own principle order) (§13.2).
+
+### 13.9 Independent adversarial review follow-up — three bugs closed, all three E2E scenarios proven to complete
+
+The mechanism-level design in §13.1-13.8 was independently re-verified sound,
+but the full-workspace gate (`cargo nextest run --workspace`, clippy clean)
+had never actually exercised the three `SKY_E2E=1` scenarios in
+`crates/skyc/tests/watch_integration.rs` to a genuine pass — every previous
+attempt (implementer + two reviewers) either hung past nextest's SIGTERM
+ceiling or was never run to completion. This session root-caused and closed
+three real bugs, then ran every scenario to completion (see the proof table
+below) — the thing that had not been achieved before.
+
+**Bug 1 — shutdown deadlock (`crates/skyc/src/watch.rs::run_inner`).** The
+`notify::Watcher` local (`watcher`) is the SOLE owner of a live `raw_tx`
+clone (moved into its own event callback at construction; never `.clone()`d
+anywhere else in the file — confirmed by grep before the fix, not assumed).
+`sky_watch::coalesce_loop`'s blocking `raw_rx.recv()` can only return once
+EVERY `raw_tx` sender has dropped. Pre-fix, `watcher` lived until the
+function's own implicit end-of-scope drop — which happens AFTER
+`coalesce_handle.join()` in the shutdown sequence — so that `join()` blocked
+forever: notify's own internal watch thread stayed parked, `raw_rx` never
+observed a disconnect, and the whole shutdown wedged. Live evidence
+(captured this session, `/tmp/p7review/e2e_scenario1.log` /
+`e2e_watch.log`): both `watch_rebuild_on_save_swaps_the_running_binary` and
+`watch_coalesces_a_rapid_double_save_into_one_rebuild` printed `[ipe watch]
+app restarted` (proving the SCENARIO itself had already succeeded) and then
+hung for the full 300-480s nextest ceiling before being SIGTERM'd — the
+deadlock was purely in `stop_and_join`'s shutdown path, not in the feature
+under test. **Fix**: `drop(watcher)` explicit, placed immediately after the
+orchestrator's main event loop breaks and BEFORE `coalesce_handle.join()` —
+so the notify thread's teardown is initiated (and, for `WatchHandle`'s own
+new bounded wait — see Bug 3 below — actually awaited) before anything
+downstream depends on `raw_rx` disconnecting.
+
+**Bug 2 — a genuine (load-dependent, now closed) coalescing race, not a
+logic bug in the debounce algorithm itself.** `sky_watch::coalesce_loop`'s
+quiescence/hard-cap arithmetic was re-derived from first principles and is
+correct (its own 4 unit tests already proved this with tight, real
+wall-clock windows); a direct `notify`-only probe program (unloaded system)
+showed a same-file double-write's raw events arriving within ~20ms of each
+other, comfortably inside the 120ms quiescence the E2E fixture configures.
+The race is real but sits ONE LAYER UP, in the writer's own syscall
+sequence: `std::fs::write` (and most editors' save path) is
+`open(O_TRUNC) → write() → close()`, NOT one atomic filesystem operation.
+`open(O_TRUNC)` alone can fire `Modify(Data)` — a truncate IS a data
+change — the INSTANT the file is emptied, strictly BEFORE the writer's own
+`write()` call lands the new bytes. Under enough scheduling pressure on the
+WRITING thread, the gap between that truncate and the following `write()`
+can exceed the debounce window. **Reproduced empirically, not merely
+theorised**: pinning all 8 cores at 100% (`yes > /dev/null` ×8) plus a
+concurrent real `cargo build` made
+`watch_coalesces_a_rapid_double_save_into_one_rebuild` fail 3/3 times
+pre-fix — every failure showed the EXACT signature the review described
+(`[ipe watch] error[SKY-P0020]: malformed module header` — a genuinely
+EMPTY on-disk read — immediately followed by a correct green rebuild, and
+`rebuilds_after - rebuilds_before == 2`). An unloaded system never
+reproduced it in 10+ runs, which is consistent with (and explains) why this
+was hard to pin down across multiple review passes. Both of the review's
+own candidate directions were checked against the actual code before
+choosing a fix: (a) "does the pipeline wait the FULL debounce window before
+reading?" — yes, confirmed: `resolve_project_sources` is only ever called
+from the `OrchestratorEvent::FsBatch` arm, which only ever fires from
+`coalesce_loop`'s settled output; there is no early-read bypass anywhere in
+the call graph. (b) "is there a premature read fast-path?" — none found.
+**Fix (root-cause, not a widened timing margin or a retry-on-empty-file
+hack)**: the raw-callback filter previously rejected EVERY
+`EventKind::Access` variant, including `Access(Close(Write))` — the ONE
+signal that is only ever emitted once a WRITE-mode file handle is actually
+`close()`d, which, by the writing process's own fd lifecycle, can only
+happen AFTER its `write()` call has returned. `resolve_project_sources`
+only ever opens `.sky` files for READING (never writing), so it can never
+itself produce a `Close(Write)` event — letting this one variant through
+cannot reopen the Task-21 self-trigger hole (§13.8 ledger item 10) that
+motivated excluding `Access` in the first place. With `Close(Write)` now
+passed through to the coalescer exactly like any other mutating event, a
+truncate-then-write sequence that spans MORE than the nominal quiescence
+window still gets folded into the SAME batch — closed by construction
+(keyed off the syscall that is a write-completion PROOF), not by widening a
+margin and hoping it is wide enough. Re-verified under the IDENTICAL 8-core
+stress harness post-fix: 5/5 passes (first 3 under full stress before the
+load-generating processes were torn down for the remaining checks).
+
+**Bug 3 — supervised-child leak on abnormal `WatchHandle` exit.**
+Pre-fix, `WatchHandle` had no `Drop` impl at all — an embedder that let a
+`WatchHandle` fall out of scope without calling `stop()` (a caller bug, or a
+panic unwinding through a scope holding one) left the orchestrator thread
+blocked forever on `evt_rx.recv()` with no way to ever receive a
+`Shutdown` event, and the supervised child process (a real `sky-app` server
+holding a real port) orphaned permanently. `sky_watch`'s process-group
+defence (`PR_SET_PDEATHSIG`) used elsewhere in this workspace
+(`runtime/src/sky_runtime/live/console_proxy.rs`, the ONE sanctioned
+`unsafe` site — see `PRINCIPLES.md`) is NOT available here: both `skyc` and
+`sky_watch` are `#![forbid(unsafe_code)]`, so a second `unsafe`
+`pre_exec`/`prctl` site is off the table by construction, not merely by
+convention. **Fix**: `WatchHandle` now carries a `done_rx` (paired with a
+`done_tx` the `spawn()` wrapper closure sends on — and, being owned solely
+by that closure, drops — the INSTANT `run_inner` returns, on EVERY exit
+path, not just the clean one). `stop()` and the new `impl Drop for
+WatchHandle` share one synchronous, bounded implementation
+(`wait_for_shutdown`): signal the orchestrator, then block up to
+`SHUTDOWN_WAIT_BUDGET` (20s — generously above the realistic worst case,
+`RestartTimeouts::default().graceful_stop`'s 3s plus slack) until the
+orchestrator confirms teardown is DONE, not merely requested. Since
+`stop_tx.send`/`recv_timeout` are both plain synchronous calls (no
+`.await`, no async runtime dependency), this is sound to run directly from
+`drop` — Rust always runs `Drop` during ordinary unwinding, so this closes
+both the "forgot to call `stop()`" and the "panicked while holding one"
+shapes the review named. Separately investigated and recorded rather than
+implemented: whether `ipe watch`'s own CLI-direct invocation path (`skyc::
+watch::run`, no `WatchHandle` at all) needs an OS signal handler for
+Ctrl-C/SIGTERM. It does not, for the common case — the spawned child
+inherits the SAME process group as the parent by default (`spawn_command`/
+`spawn_cargo_build` never call `.process_group()`), so an interactive
+terminal's Ctrl-C already SIGINTs the whole foreground process group,
+child included, with no code change needed. A supervisor that sends SIGTERM
+to only the `skyc` PID (systemd, a container orchestrator without process-
+group propagation) would still orphan the child — a real, narrower gap,
+recorded here rather than silently left undocumented, but out of THIS
+review's explicitly-scoped bug (the embedder/`WatchHandle` leak) and not
+implementable without either the forbidden `unsafe` `PDEATHSIG` route or a
+substantially larger signal-handling floor (`ctrlc`/`signal-hook` + making
+`run()`'s blocking call interruptible) than three-bug-fix scope justifies.
+
+**Proof — all three E2E scenarios run to completion, sequentially, this
+session** (`SKY_E2E=1 cargo nextest run -p skyc --test watch_integration
+--test-threads 1 <name>`, one at a time):
+
+| Scenario | Result |
+|---|---|
+| `watch_rebuild_on_save_swaps_the_running_binary` | PASS, 15.6s |
+| `watch_keeps_last_good_binary_alive_on_a_syntax_error` | PASS, 21.2s |
+| `watch_coalesces_a_rapid_double_save_into_one_rebuild` | PASS, 15.7s |
+| `dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child` (new, Bug 3) | PASS, 12.6s (run concurrently with the other 3) |
+
+All four also pass together under nextest's default concurrency (4/4,
+24.4s wall). Pre-fix, scenarios 1 and 3 never completed at all (hung past
+the SIGTERM ceiling every time); scenario 3 additionally failed
+deterministically 3/3 under CPU stress before the Bug-2 fix.
+
+**New regression test** — `dropping_a_watch_handle_without_stop_still_reaps_
+the_supervised_child` (`crates/skyc/tests/watch_integration.rs`,
+Linux-only): starts a real watch session, confirms the child is serving,
+locates its PID via `/proc/<pid>/environ` (matching the `SKY_LIVE_PORT`
+`ipe watch` itself injects — deliberately NOT matching on the executable's
+on-disk path, which moves under `CARGO_TARGET_DIR` overrides, e.g. this
+workspace's own per-agent-lane isolation convention), drops the
+`WatchHandle` WITHOUT calling `stop()`, and asserts the PID is no longer
+live (`/proc/<pid>` gone — proving the child was both killed AND
+`wait()`-reaped, not merely signalled) the instant `drop()` returns, with no
+polling loop needed on the test's side (the bounded, synchronous `Drop`
+wait already did the waiting).
+
+**Local scoped verification this session** (deliberately NOT the full
+`--workspace` gate — that is the orchestrator's own independently-dispatched
+review's job): `cargo check --workspace --all-targets` clean;
+`cargo clippy -p skyc -p sky_watch --all-targets -- -D warnings` clean
+(one `clippy::doc_markdown` pedantic fix along the way — backticked
+`` `stop()` `` in a doc comment); every `crates/skyc/tests/watch_*.rs` E2E
+scenario passes both sequentially and concurrently, repeatedly, including
+under deliberate CPU stress for the coalescing fix specifically.
