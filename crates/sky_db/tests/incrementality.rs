@@ -114,7 +114,11 @@ fn byte_equal_resave_noop() {
     );
 
     // And a REAL change does set + re-execute.
-    assert!(set_text_if_changed(&mut db, a, "module A exposing (a)\n\na = 9\n"));
+    assert!(set_text_if_changed(
+        &mut db,
+        a,
+        "module A exposing (a)\n\na = 9\n"
+    ));
     assert!(parse(&db, a).is_ok());
     assert_eq!(log.executions_of("parse"), 1);
 }

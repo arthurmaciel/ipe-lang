@@ -106,7 +106,9 @@ fn lambda_view_routed_app_cargo_builds() {
     }
     lambda_view_routed_app_emits_live_app_routed();
 
-    let target = std::env::temp_dir().join("r4").join("m7_lambda_view_routed");
+    let target = std::env::temp_dir()
+        .join("r4")
+        .join("m7_lambda_view_routed");
     let build = std::process::Command::new("cargo")
         .arg("build")
         .env("CARGO_TARGET_DIR", &target)

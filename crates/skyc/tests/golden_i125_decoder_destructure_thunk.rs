@@ -54,7 +54,11 @@ fn assert_skyc_ok(name: &str) -> PathBuf {
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
     let Ok(runtime) = runtime else { return out };
     let built = skyc::build(&entry, &out, &runtime);
-    assert!(built.is_ok(), "#125: {name} must be skyc-0: {:?}", built.err());
+    assert!(
+        built.is_ok(),
+        "#125: {name} must be skyc-0: {:?}",
+        built.err()
+    );
     out
 }
 

@@ -50,9 +50,7 @@ fn assert_rejected_with(
             );
             Ok(())
         }
-        Err(other) => {
-            Err(format!("{test_name}: expected {expected_code}, got {other:?}").into())
-        }
+        Err(other) => Err(format!("{test_name}: expected {expected_code}, got {other:?}").into()),
     }
 }
 
@@ -386,7 +384,11 @@ fn live_msg_with_fn_is_rejected() -> Result<(), BoxError> {
 
 #[test]
 fn live_lambda_update_with_cmd_msg_is_rejected() -> Result<(), BoxError> {
-    assert_rejected_with("live_lambda_update_cmd_msg", LIVE_LAMBDA_UPDATE_CMD_MSG, "SKY-L0125")
+    assert_rejected_with(
+        "live_lambda_update_cmd_msg",
+        LIVE_LAMBDA_UPDATE_CMD_MSG,
+        "SKY-L0125",
+    )
 }
 
 #[test]

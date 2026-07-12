@@ -82,7 +82,7 @@ fn error_details_roundtrip_runs_and_prints_expected_output() {
     );
 
     let expected = [
-        "Io: disk full | details=none", // base — no details attached
+        "Io: disk full | details=none",           // base — no details attached
         "Io: disk full | details=HttpStatus 404", // Error.withDetails (HttpStatus 404)
         "Io: disk full | details=JsonDecode unexpected token", // Error.withDetails (JsonDecode ..)
         "Io: disk full | details=Custom custom detail", // Error.withDetails (Custom ..)

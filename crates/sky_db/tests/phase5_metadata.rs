@@ -148,8 +148,8 @@ fn program_metadata_short_circuits_on_lower_error() {
     let entry = file(&db, &["Entry"], RED_ENTRY);
     let root = root_of(&db, &[(&["Entry"], entry)]);
 
-    let lower_err = sky_db::lower_program(&db, root, entry)
-        .expect_err("ill-typed program must fail to lower");
+    let lower_err =
+        sky_db::lower_program(&db, root, entry).expect_err("ill-typed program must fail to lower");
     let meta_err = sky_db::program_metadata(&db, root, entry)
         .expect_err("program_metadata must refuse to analyse an unlowered program");
     assert_eq!(
@@ -225,13 +225,24 @@ fn program_metadata_reachability_is_transitive() {
         .first()
         .expect("lower_program must produce at least one module");
 
-    assert!(meta.reachable_funcs.contains(&find_func_id(&db, module, "main")));
-    assert!(meta.reachable_funcs.contains(&find_func_id(&db, module, "mid")));
     assert!(
-        meta.reachable_funcs.contains(&find_func_id(&db, module, "leaf")),
+        meta.reachable_funcs
+            .contains(&find_func_id(&db, module, "main"))
+    );
+    assert!(
+        meta.reachable_funcs
+            .contains(&find_func_id(&db, module, "mid"))
+    );
+    assert!(
+        meta.reachable_funcs
+            .contains(&find_func_id(&db, module, "leaf")),
         "reachability must transit through an intermediate call, not just direct callees"
     );
-    assert!(!meta.reachable_funcs.contains(&find_func_id(&db, module, "dead")));
+    assert!(
+        !meta
+            .reachable_funcs
+            .contains(&find_func_id(&db, module, "dead"))
+    );
 }
 
 /// Look up a lowered function's [`sky_ir::FuncId`] by its source name.

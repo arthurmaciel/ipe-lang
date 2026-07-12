@@ -115,7 +115,11 @@ fn emit_project_memoized_coarse_floor() {
     // Repeat demand: memo hit.
     log.clear();
     assert!(sky_db::emit_project(&db, root, b, config).is_ok());
-    assert_eq!(log.executions_of("emit_project("), 0, "repeat demand memoized");
+    assert_eq!(
+        log.executions_of("emit_project("),
+        0,
+        "repeat demand memoized"
+    );
 
     // Byte-equal re-save: boundary no-op, nothing executes anywhere in the
     // chain (parse -> canonicalize -> linked_program -> typecheck ->
@@ -184,7 +188,11 @@ fn emit_project_config_change_does_not_retrigger_lower() {
     // Repeat with the SAME (already-updated) config: full memo hit again.
     log.clear();
     assert!(sky_db::emit_project(&db, root, b, config).is_ok());
-    assert_eq!(log.executions_of("emit_project("), 0, "repeat demand memoized");
+    assert_eq!(
+        log.executions_of("emit_project("),
+        0,
+        "repeat demand memoized"
+    );
 }
 
 /// The other direction: a plain source edit (config untouched) re-executes
@@ -221,8 +229,8 @@ fn emit_project_short_circuits_on_lower_error() {
     let root = root_of(&db, &[(&["Entry"], entry)]);
     let config = BuildConfig::new(&db, DbDriver::Sqlite);
 
-    let lower_err = sky_db::lower_program(&db, root, entry)
-        .expect_err("ill-typed program must fail to lower");
+    let lower_err =
+        sky_db::lower_program(&db, root, entry).expect_err("ill-typed program must fail to lower");
     let emit_err =
         sky_db::emit_project(&db, root, entry, config).expect_err("must propagate lower's error");
     assert_eq!(

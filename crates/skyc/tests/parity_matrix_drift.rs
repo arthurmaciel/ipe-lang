@@ -18,19 +18,20 @@ use std::process::Command;
 /// Path to the workspace root — detected from `CARGO_MANIFEST_DIR`.
 fn workspace_root() -> std::path::PathBuf {
     // CARGO_MANIFEST_DIR for skyc is `crates/skyc/`; workspace root is two levels up.
-    let manifest = std::env::var("CARGO_MANIFEST_DIR")
-        .unwrap_or_else(|_| ".".to_string());
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
     std::path::PathBuf::from(manifest)
         .parent()
         .and_then(|p| p.parent())
-        .map_or_else(|| std::path::PathBuf::from("."), std::path::Path::to_path_buf)
+        .map_or_else(
+            || std::path::PathBuf::from("."),
+            std::path::Path::to_path_buf,
+        )
 }
 
 /// Find the parity-matrix binary: check the Cargo target directory first, then PATH.
 fn find_binary() -> Option<std::path::PathBuf> {
     // Honour CARGO_TARGET_DIR if set.
-    let target_dir = std::env::var("CARGO_TARGET_DIR")
-        .unwrap_or_else(|_| "target".to_string());
+    let target_dir = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
     let target = std::path::PathBuf::from(&target_dir);
 
     // Try debug build first, then release.

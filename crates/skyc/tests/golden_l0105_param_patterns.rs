@@ -31,7 +31,9 @@ fn repo_root() -> PathBuf {
 }
 
 fn fixture_dir(root: &Path) -> PathBuf {
-    root.join("tests").join("golden").join("l0105_param_patterns")
+    root.join("tests")
+        .join("golden")
+        .join("l0105_param_patterns")
 }
 
 #[test]

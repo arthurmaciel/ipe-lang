@@ -68,7 +68,10 @@ fn user_color_via_hof_resolves_to_own_enum() {
     }
 
     let root = repo_root();
-    let dir = root.join("tests").join("golden").join("i101_user_color_hof");
+    let dir = root
+        .join("tests")
+        .join("golden")
+        .join("i101_user_color_hof");
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i101_user_color_hof_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -118,7 +121,9 @@ fn user_color_via_hof_resolves_to_own_enum() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("background-color:rgba(0,128,255,1)"),
+        outcome
+            .stdout
+            .contains("background-color:rgba(0,128,255,1)"),
         "genuine Std.Ui Color must still render its CSS; got:\n{}",
         outcome.stdout
     );

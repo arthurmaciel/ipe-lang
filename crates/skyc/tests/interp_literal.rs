@@ -30,7 +30,11 @@ fn repo_root() -> PathBuf {
 }
 
 fn golden_entry(name: &str) -> PathBuf {
-    repo_root().join("tests").join("golden").join(name).join("Main.sky")
+    repo_root()
+        .join("tests")
+        .join("golden")
+        .join(name)
+        .join("Main.sky")
 }
 
 /// skyc must ACCEPT the program — no SKY-I0001 ICE on a literal interpolation

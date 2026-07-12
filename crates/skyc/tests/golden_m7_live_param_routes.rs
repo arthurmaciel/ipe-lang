@@ -292,7 +292,10 @@ fn param_route_solo_cargo_builds_and_delivers_param() {
     let _ = child.kill();
     let _ = child.wait();
 
-    assert!(ready, "#108 hole 3: emitted binary must reach `listening on`");
+    assert!(
+        ready,
+        "#108 hole 3: emitted binary must reach `listening on`"
+    );
     assert!(
         response.contains("user:42"),
         "#108 hole 3: GET /u/42 must deliver the captured `:param` to the \

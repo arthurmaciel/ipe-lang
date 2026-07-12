@@ -608,7 +608,10 @@ import String
         }];
 
         let injected = super::inject_compiled_std_closure(&mut sources, &mut discovered);
-        assert!(injected.is_empty(), "no compiled-source import → nothing injected");
+        assert!(
+            injected.is_empty(),
+            "no compiled-source import → nothing injected"
+        );
         assert_eq!(sources.len(), 1, "sources untouched");
     }
 

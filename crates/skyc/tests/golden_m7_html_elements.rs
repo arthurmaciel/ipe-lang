@@ -53,8 +53,8 @@ fn html_element_family_renders_correct_tags() {
 
     // Container elements render their own open + close tag (NOT collapsed to <p>).
     for open in [
-        "<section", "<nav", "<h1", "<table", "<thead", "<tbody", "<tr", "<th",
-        "<td", "<ul", "<li", "<header", "<footer", "<a",
+        "<section", "<nav", "<h1", "<table", "<thead", "<tbody", "<tr", "<th", "<td", "<ul", "<li",
+        "<header", "<footer", "<a",
     ] {
         assert!(
             html.contains(open),
@@ -62,8 +62,17 @@ fn html_element_family_renders_correct_tags() {
         );
     }
     for close in [
-        "</section>", "</nav>", "</h1>", "</table>", "</tr>", "</td>", "</ul>",
-        "</li>", "</header>", "</footer>", "</a>",
+        "</section>",
+        "</nav>",
+        "</h1>",
+        "</table>",
+        "</tr>",
+        "</td>",
+        "</ul>",
+        "</li>",
+        "</header>",
+        "</footer>",
+        "</a>",
     ] {
         assert!(
             html.contains(close),

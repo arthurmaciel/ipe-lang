@@ -96,7 +96,10 @@ fn ctor_reorder_punches_through_the_firewall() {
 
     let before_iface = module_interface(&db, root, a);
     let before_b = canonicalize(&db, root, b);
-    assert!(before_b.is_ok(), "importer must canonicalise, got {before_b:?}");
+    assert!(
+        before_b.is_ok(),
+        "importer must canonicalise, got {before_b:?}"
+    );
 
     log.clear();
     a.set_text(&mut db).to(ADT_DEP_REORDERED.to_owned());
@@ -110,7 +113,10 @@ fn ctor_reorder_punches_through_the_firewall() {
     );
 
     let after_b = canonicalize(&db, root, b);
-    assert!(after_b.is_ok(), "importer must re-canonicalise green, got {after_b:?}");
+    assert!(
+        after_b.is_ok(),
+        "importer must re-canonicalise green, got {after_b:?}"
+    );
     assert_eq!(
         log.executions_of("canonicalize("),
         2,
@@ -125,7 +131,8 @@ fn ctor_reorder_punches_through_the_firewall() {
 
 const GRAND_DEP_C: &str = "module C exposing (P)\n\ntype alias P = { x : Int }\n";
 const GRAND_DEP_C_WIDENED: &str = "module C exposing (P)\n\ntype alias P = { x : Int, y : Int }\n";
-const MID_DEP_A: &str = "module A exposing (M)\n\nimport C exposing (P)\n\ntype alias M = { p : P }\n";
+const MID_DEP_A: &str =
+    "module A exposing (M)\n\nimport C exposing (P)\n\ntype alias M = { p : P }\n";
 const GRAND_IMPORTER_B: &str =
     "module B exposing (f)\n\nimport A exposing (M)\n\nf : M -> Int\nf m = m.p.x\n";
 
@@ -143,7 +150,10 @@ fn transitive_alias_body_edit_reaches_grand_importer() {
 
     let before_a_iface = module_interface(&db, root, a);
     let warm = canonicalize(&db, root, b);
-    assert!(warm.is_ok(), "grand importer must canonicalise, got {warm:?}");
+    assert!(
+        warm.is_ok(),
+        "grand importer must canonicalise, got {warm:?}"
+    );
 
     log.clear();
     c.set_text(&mut db).to(GRAND_DEP_C_WIDENED.to_owned());
@@ -182,9 +192,8 @@ fn transitive_private_edit_still_firewalls() {
     assert!(warm.is_ok());
 
     log.clear();
-    c.set_text(&mut db).to(
-        "module C exposing (P)\n\ntype alias P = { x : Int }\n\nhidden = 2\n".to_owned(),
-    );
+    c.set_text(&mut db)
+        .to("module C exposing (P)\n\ntype alias P = { x : Int }\n\nhidden = 2\n".to_owned());
     let after = canonicalize(&db, root, b);
     assert_eq!(
         log.executions_of("canonicalize("),

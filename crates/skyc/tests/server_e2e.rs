@@ -357,9 +357,9 @@ fn send_raw_request(test_name: &str, addr: &str, request: &str) -> Result<RawRes
     let sep = response.find("\r\n\r\n").ok_or_else(|| -> BoxError {
         format!("{test_name}: no header/body separator in response\n--- raw ---\n{response}").into()
     })?;
-    let head = response.get(..sep).ok_or_else(|| -> BoxError {
-        format!("{test_name}: cannot slice response head").into()
-    })?;
+    let head = response
+        .get(..sep)
+        .ok_or_else(|| -> BoxError { format!("{test_name}: cannot slice response head").into() })?;
     let body = response.get(sep + 4..).unwrap_or("").to_owned();
 
     let mut lines = head.split("\r\n");
@@ -369,7 +369,8 @@ fn send_raw_request(test_name: &str, addr: &str, request: &str) -> Result<RawRes
         .nth(1)
         .and_then(|s| s.parse::<u16>().ok())
         .ok_or_else(|| -> BoxError {
-            format!("{test_name}: cannot parse status code from status line: {status_line:?}").into()
+            format!("{test_name}: cannot parse status code from status line: {status_line:?}")
+                .into()
         })?;
 
     let headers = lines
@@ -670,8 +671,7 @@ fn csrf_forged_post_without_token_rejected() -> Result<(), BoxError> {
     let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
     let addr = format!("127.0.0.1:{port}");
 
-    let request =
-        "POST /action HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let request = "POST /action HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
     let resp = send_raw_request(test_name, &addr, request)?;
 
     assert_eq!(

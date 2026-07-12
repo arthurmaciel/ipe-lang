@@ -40,7 +40,9 @@ fn repo_root() -> PathBuf {
 }
 
 fn fixture_dir(root: &Path) -> PathBuf {
-    root.join("tests").join("golden").join("l0105_alias_move_seal")
+    root.join("tests")
+        .join("golden")
+        .join("l0105_alias_move_seal")
 }
 
 #[test]
@@ -132,5 +134,9 @@ fn end_to_end_builds_and_prints_the_concatenation() {
         "pqpqrsrstutuhcdcd",
         "concatenated whole+parts across PARAM/CASE/LET/NESTED positions"
     );
-    assert_eq!(outcome.exit_code, Some(0), "clean exit — the E0382 seal holds");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "clean exit — the E0382 seal holds"
+    );
 }
