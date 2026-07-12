@@ -100,9 +100,25 @@ fn task_arg_bug() -> Diagnostic {
     )
 }
 
-/// The canonical 7-field `HttpRequest` record shape, alphabetically sorted:
-/// `body`, `followRedirects`, `headers`, `maxRedirects`, `method`, `timeout`,
-/// `url`.
+/// The expected TYPE shape of one field of the canonical `HttpRequest`
+/// record — `String` / `Bool` / `Int` / `List (String, String)` (the
+/// header-pair list). Ground truth mirrors
+/// `sky_types::constrain::Builder`'s `http_request()` closure
+/// (`crates/sky_types/src/constrain.rs` ~L3583) and its
+/// `normalize_annotation_ty` twin (~L2264) — the ONLY two places in the
+/// compiler that actually construct an `HttpRequest`'s field types.
+#[derive(Clone, Copy)]
+enum HttpFieldTy {
+    Str,
+    Bool,
+    Int,
+    /// `List (String, String)`.
+    StrPairList,
+}
+
+/// The canonical `HttpRequest` record shape as `(field name, expected field
+/// TYPE)` pairs, alphabetically sorted by name: `body`, `followRedirects`,
+/// `headers`, `maxRedirects`, `method`, `timeout`, `url`.
 ///
 /// Shared by [`Lowerer::ir_type_from_ty`]'s structural fold (solved/inferred
 /// `Ty::Record` regions — e.g. a `Http.defaultRequest |> withMethod |> …`
@@ -115,34 +131,133 @@ fn task_arg_bug() -> Diagnostic {
 /// former and consumed via the latter (or vice versa) used to diverge
 /// (SKY-I0001 follow-up), one side folding to the opaque runtime type, the
 /// other falling back to a backend-synthesised struct with a different name.
-const HTTP_REQUEST_FIELDS: &[&str] = &[
-    "body",
-    "followRedirects",
-    "headers",
-    "maxRedirects",
-    "method",
-    "timeout",
-    "url",
+///
+/// Checking field TYPES here (not just names, as the pre-fix version did) is
+/// load-bearing: Sky's row-polymorphic record types are purely structural —
+/// the `HttpRequest` alias is expanded to a plain structural record at
+/// annotation-normalisation time (`normalize_annotation_ty`), so NO nominal
+/// alias identity survives into either `Ty` (post-solve) or `canon::Type`
+/// (pre-solve annotation) for the lowerer to key off. A genuinely nominal
+/// check is therefore not reachable at this layer without threading alias
+/// identity through canonicalisation + solving — a much larger change that
+/// no alias in this compiler currently receives. Field-TYPE-plus-NAME
+/// matching is the strongest test achievable here: an unrelated record that
+/// merely shares the 7 field NAMES with unrelated field TYPES (e.g. all-
+/// `Int`) no longer folds to `IrType::HttpRequest` (the false-positive this
+/// row exists to close), while a record that is structurally IDENTICAL to
+/// `HttpRequest` (same names AND same types) still folds — arguably the
+/// sound answer under a purely structural type system.
+const HTTP_REQUEST_FIELD_TYPES: &[(&str, HttpFieldTy)] = &[
+    ("body", HttpFieldTy::Str),
+    ("followRedirects", HttpFieldTy::Bool),
+    ("headers", HttpFieldTy::StrPairList),
+    ("maxRedirects", HttpFieldTy::Int),
+    ("method", HttpFieldTy::Str),
+    ("timeout", HttpFieldTy::Int),
+    ("url", HttpFieldTy::Str),
 ];
 
-/// Does `field_names` match [`HTTP_REQUEST_FIELDS`] exactly (same NAMES, same
-/// count — sorts `field_names` in place)?
-///
-/// Intentionally name-only, mirroring the pre-existing structural-fold test
-/// precisely: do not widen this to also check field TYPES (closing that gap
-/// is a separate, already-tracked false-positive hardening item — a
-/// same-named-but-differently-typed record wrongly folding to `HttpRequest`)
-/// and do not narrow it further (that would reopen the very two-path
-/// divergence this helper exists to close).
-fn is_http_request_field_shape(field_names: &mut [&str]) -> bool {
-    if field_names.len() != HTTP_REQUEST_FIELDS.len() {
+/// Does this solved [`Ty`] match `expected` — one leaf of
+/// [`HTTP_REQUEST_FIELD_TYPES`]? Built-in leaf types (`String` / `Bool` /
+/// `Int` / `List`) are `Ty::Con` with an empty `module` (built-ins have no
+/// user-defined home) — checked defensively alongside the name, though
+/// SKY-N0026 (see `sky_canon::resolve`) already forbids a user type from
+/// shadowing these reserved names, so the module check can never fire in
+/// practice.
+fn ty_matches_http_field(ty: &Ty, expected: HttpFieldTy, interner: &Interner) -> bool {
+    match (expected, ty) {
+        (HttpFieldTy::Str, Ty::Con { module, name, args }) => {
+            module.is_empty() && args.is_empty() && interner.resolve(*name) == Some("String")
+        }
+        (HttpFieldTy::Bool, Ty::Con { module, name, args }) => {
+            module.is_empty() && args.is_empty() && interner.resolve(*name) == Some("Bool")
+        }
+        (HttpFieldTy::Int, Ty::Con { module, name, args }) => {
+            module.is_empty() && args.is_empty() && interner.resolve(*name) == Some("Int")
+        }
+        (HttpFieldTy::StrPairList, Ty::Con { module, name, args }) => {
+            module.is_empty()
+                && interner.resolve(*name) == Some("List")
+                && matches!(
+                    args.as_slice(),
+                    [Ty::Tuple(elems)] if matches!(
+                        elems.as_slice(),
+                        [a, b]
+                            if ty_matches_http_field(a, HttpFieldTy::Str, interner)
+                                && ty_matches_http_field(b, HttpFieldTy::Str, interner)
+                    )
+                )
+        }
+        _ => false,
+    }
+}
+
+/// The [`canon::Type`] twin of [`ty_matches_http_field`] — same test, applied
+/// to a pre-solve user-written annotation rather than a post-solve `Ty`. Kept
+/// as a structurally parallel (not shared/generic) function because
+/// `canon::Type::Con`'s field is named `home` where `Ty::Con`'s is `module`;
+/// unifying them behind a trait would obscure more than it would save for
+/// two four-case matches.
+fn canon_ty_matches_http_field(ty: &canon::Type, expected: HttpFieldTy, interner: &Interner) -> bool {
+    match (expected, ty) {
+        (HttpFieldTy::Str, canon::Type::Con { home, name, args }) => {
+            home.is_empty() && args.is_empty() && interner.resolve(*name) == Some("String")
+        }
+        (HttpFieldTy::Bool, canon::Type::Con { home, name, args }) => {
+            home.is_empty() && args.is_empty() && interner.resolve(*name) == Some("Bool")
+        }
+        (HttpFieldTy::Int, canon::Type::Con { home, name, args }) => {
+            home.is_empty() && args.is_empty() && interner.resolve(*name) == Some("Int")
+        }
+        (HttpFieldTy::StrPairList, canon::Type::Con { home, name, args }) => {
+            home.is_empty()
+                && interner.resolve(*name) == Some("List")
+                && matches!(
+                    args.as_slice(),
+                    [canon::Type::Tuple(elems)] if matches!(
+                        elems.as_slice(),
+                        [a, b]
+                            if canon_ty_matches_http_field(a, HttpFieldTy::Str, interner)
+                                && canon_ty_matches_http_field(b, HttpFieldTy::Str, interner)
+                    )
+                )
+        }
+        _ => false,
+    }
+}
+
+/// Does `fields` (collected as `(resolved name, &Ty)` pairs, one per record
+/// field) match the canonical `HttpRequest` shape — same field NAMES *and*
+/// same field TYPES as [`HTTP_REQUEST_FIELD_TYPES`]? Sorts `fields` by name
+/// in place: the `BTreeMap<Symbol, _>` callers iterate over sorts by
+/// Symbol-integer intern order, NOT alphabetical order, so the caller cannot
+/// pre-sort before resolving names.
+fn is_http_request_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bool {
+    if fields.len() != HTTP_REQUEST_FIELD_TYPES.len() {
         return false;
     }
-    field_names.sort_unstable();
-    field_names
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    fields
         .iter()
-        .zip(HTTP_REQUEST_FIELDS.iter())
-        .all(|(a, b)| *a == *b)
+        .zip(HTTP_REQUEST_FIELD_TYPES.iter())
+        .all(|((name, ty), (expected_name, expected_ty))| {
+            *name == *expected_name && ty_matches_http_field(ty, *expected_ty, interner)
+        })
+}
+
+/// The [`canon::Type`] twin of [`is_http_request_shape`] — see that
+/// function's doc comment.
+fn is_http_request_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &Interner) -> bool {
+    if fields.len() != HTTP_REQUEST_FIELD_TYPES.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    fields
+        .iter()
+        .zip(HTTP_REQUEST_FIELD_TYPES.iter())
+        .all(|((name, ty), (expected_name, expected_ty))| {
+            *name == *expected_name && canon_ty_matches_http_field(ty, *expected_ty, interner)
+        })
 }
 
 /// Does this solved [`Ty`] contain a free type variable anywhere? Used to keep
@@ -5258,20 +5373,21 @@ impl<'a> Lowerer<'a> {
             //
             // Special case: apply the SAME `HttpRequest`-shape test as
             // `ir_type_from_ty`'s structural fold (via the shared
-            // [`is_http_request_field_shape`] helper) BEFORE falling back to
-            // a synthesised record struct. Without this, a user-written
-            // anonymous-record annotation spelling out the canonical
-            // `HttpRequest` fieldset (e.g. `printReq : { body : String, ... }
-            // -> String`) resolves to a backend-synthesised struct name while
-            // a builder-chain VALUE of the same shape resolves to
-            // `IrType::HttpRequest` via the structural fold — the two-path
-            // divergence surfaces as an E0308 type mismatch at the call site.
+            // [`is_http_request_canon_shape`] helper — NAMES *and* TYPES)
+            // BEFORE falling back to a synthesised record struct. Without
+            // this, a user-written anonymous-record annotation spelling out
+            // the canonical `HttpRequest` fieldset (e.g. `printReq : { body :
+            // String, ... } -> String`) resolves to a backend-synthesised
+            // struct name while a builder-chain VALUE of the same shape
+            // resolves to `IrType::HttpRequest` via the structural fold — the
+            // two-path divergence surfaces as an E0308 type mismatch at the
+            // call site.
             canon::Type::Record(fields) => {
-                let mut field_names: Vec<&str> = fields
+                let mut named_fields: Vec<(&str, &canon::Type)> = fields
                     .iter()
-                    .filter_map(|(sym, _)| self.interner.resolve(*sym))
+                    .filter_map(|(sym, fty)| self.interner.resolve(*sym).map(|n| (n, fty)))
                     .collect();
-                if is_http_request_field_shape(&mut field_names) {
+                if is_http_request_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::HttpRequest);
                 }
                 let mut ir_fields = BTreeMap::new();
@@ -6001,19 +6117,21 @@ impl<'a> Lowerer<'a> {
             // backend-synthesised struct with an auto-generated name.
             Ty::Record(fields, _tail) => {
                 // `BTreeMap<Symbol, _>` iterates in Symbol-integer order (intern
-                // assignment order), NOT in alphabetical order.  Collect names,
-                // then let the shared [`is_http_request_field_shape`] helper
-                // sort + compare against [`HTTP_REQUEST_FIELDS`] — the same
-                // test `ir_type_from_canon`'s record arm applies to a
-                // user-written anonymous-record ANNOTATION, so a genuinely
-                // HttpRequest-shaped value agrees on `IrType::HttpRequest`
-                // regardless of which path (solved region vs. annotation) its
-                // type reached emission through.
-                let mut field_names: Vec<&str> = fields
-                    .keys()
-                    .filter_map(|sym| self.interner.resolve(*sym))
+                // assignment order), NOT in alphabetical order.  Collect
+                // (name, type) pairs, then let the shared
+                // [`is_http_request_shape`] helper sort + compare NAMES *and*
+                // TYPES against [`HTTP_REQUEST_FIELD_TYPES`] — the same test
+                // `ir_type_from_canon`'s record arm applies to a user-written
+                // anonymous-record ANNOTATION, so a genuinely HttpRequest-
+                // shaped value agrees on `IrType::HttpRequest` regardless of
+                // which path (solved region vs. annotation) its type reached
+                // emission through, while an unrelated record that merely
+                // shares the 7 field NAMES (different field TYPES) does not.
+                let mut named_fields: Vec<(&str, &Ty)> = fields
+                    .iter()
+                    .filter_map(|(sym, fty)| self.interner.resolve(*sym).map(|n| (n, fty)))
                     .collect();
-                if is_http_request_field_shape(&mut field_names) {
+                if is_http_request_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::HttpRequest);
                 }
                 let mut lowered = BTreeMap::new();
