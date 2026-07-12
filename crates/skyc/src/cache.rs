@@ -110,10 +110,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
 use sky_backend::EmittedProject;
 use sky_backend_rust::DbDriver;
+use sky_intern::{Interner, SerdeInternerGuard};
+use sky_ir::Program;
 
 /// Domain-separation tag for the content-address hash — bumped whenever the
 /// key's ingredient set changes shape (never for a value change within the
@@ -170,6 +173,54 @@ pub fn compute_project_key(
 
     // `BTreeMap` iteration is already sorted by key — deterministic across
     // runs and independent of insertion order.
+    let sources_len = u64::try_from(sources.len()).unwrap_or(u64::MAX);
+    hasher.update(sources_len.to_le_bytes());
+    for (path, (_fs_path, text)) in sources {
+        let path_len = u64::try_from(path.len()).unwrap_or(u64::MAX);
+        hasher.update(path_len.to_le_bytes());
+        for segment in path {
+            update_str(&mut hasher, segment);
+        }
+        let origin_tag: u8 = u8::from(injected.contains(path));
+        hasher.update([origin_tag]);
+        update_str(&mut hasher, text);
+    }
+
+    hex::encode(hasher.finalize())
+}
+
+/// Domain-separation tag for the Phase 6.5 lowered-IR content-address key —
+/// distinct from [`KEY_TAG`] because this tier's key excludes `db_driver`
+/// (see [`compute_ir_key`]'s doc for why).
+const IR_KEY_TAG: &[u8] = b"skyc-build-cache-ir-key-v1";
+
+/// Compute the content-address key for the Phase 6.5 lowered-IR cache tier:
+/// a pure function of every input that determines
+/// [`sky_db::lower_program`]'s output.
+///
+/// Deliberately NARROWER than [`compute_project_key`]: `db_driver` only
+/// affects the FINAL emit stage (`sky_db::emit_project` reads
+/// `config.db_driver`), never `linked_program`/`typecheck`/`lower_program`
+/// (see `docs/architecture/salsa-incremental-compilation-2026-07-11.md`
+/// §11.2/§13) — so an IR-tier key that included it would over-invalidate: a
+/// `[database] driver` edit in `sky.toml` would needlessly miss a perfectly
+/// reusable `Program`, even though the ONLY thing that changed is read by
+/// the emit stage this tier deliberately sits upstream of.
+#[must_use]
+pub fn compute_ir_key(
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+    injected: &BTreeSet<Vec<String>>,
+    entry_path: &[String],
+) -> String {
+    let mut hasher = Sha256::new();
+    update_len_prefixed(&mut hasher, IR_KEY_TAG);
+
+    let entry_len = u64::try_from(entry_path.len()).unwrap_or(u64::MAX);
+    hasher.update(entry_len.to_le_bytes());
+    for segment in entry_path {
+        update_str(&mut hasher, segment);
+    }
+
     let sources_len = u64::try_from(sources.len()).unwrap_or(u64::MAX);
     hasher.update(sources_len.to_le_bytes());
     for (path, (_fs_path, text)) in sources {
@@ -300,6 +351,107 @@ pub fn store(cache_root: &Path, epoch: &str, key: &str, project: &EmittedProject
     }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 6.5: the lowered-IR cache tier
+// ---------------------------------------------------------------------------
+//
+// Sits ONE STAGE EARLIER than the `EmittedProject` tier above: a hit here
+// skips parse -> canon -> link -> infer -> lower ENTIRELY (no
+// `sky_db::SkyDatabase` is even constructed — see `compile_modules_observed`
+// in `crate::lib`), running only `RustBackend::emit` over the recovered
+// `sky_ir::Program` before falling through to the SAME
+// `write_emitted_project`/tier-1-`store` path a full pipeline run uses. A
+// hit here is therefore a smaller win than an `EmittedProject`-tier hit
+// (emit still runs), but covers the case an `EmittedProject`-tier miss does
+// NOT: a `db_driver`-only edit (SQL driver flip in `sky.toml`), where the
+// SAME `Program` this tier caches is still exactly reusable even though the
+// `EmittedProject` tier's key (which folds in `db_driver`) misses.
+//
+// **The relocation pass.** `sky_ir::Program` embeds `sky_intern::Symbol`
+// pervasively — a raw index into the WRITING process's interner, meaningless
+// against any other. `sky_intern::Symbol`'s `serde` impls close this by
+// serialising the symbol's resolved STRING and re-interning it into an
+// AMBIENT interner installed via `SerdeInternerGuard::install` (see that
+// type's own module doc for the full design + the cross-process id-drift
+// proof). Every (de)serialize call in this section installs a guard around
+// exactly one `Program` (de)serialize call, so a `Program` deserialized here
+// behaves identically to a fresh `sky_lower::lower` output IN THE CALLING
+// PROCESS's interner — never a raw-id mismatch.
+//
+// **Security.** `sky_intern::Symbol::deserialize` validates every embedded
+// string through `sky_intern::is_valid_symbol_text` before interning it —
+// closing the SAME class of hole `RelPath`'s hand-written `Deserialize`
+// closes for path traversal, applied to identifier text instead of paths
+// (a poisoned symbol string could otherwise splice arbitrary Rust source
+// into the next `RustBackend::emit` call, since the backend trusts an
+// interned string verbatim when emitting identifiers). `sky_ir::Match`
+// similarly carries a hand-written `Deserialize` that re-validates through
+// `Match::new_flat`'s structural backstop rather than trusting the arm list
+// verbatim. Every failure mode here — corrupt JSON, a poisoned `Symbol`
+// string, a malformed `Match` — is `None`/silently-swallowed, the SAME
+// "corrupt entry -> discard" contract the `EmittedProject` tier established.
+
+fn ir_entry_file_path(cache_root: &Path, epoch: &str, key: &str) -> PathBuf {
+    cache_root.join(epoch).join(format!("{key}.ir.json"))
+}
+
+/// Look up a cached lowered [`Program`] for `key` under `epoch`, relocating
+/// every embedded `Symbol` into `interner` (the RELOCATION PASS — see this
+/// section's module doc). Every failure mode (missing file, unreadable,
+/// corrupt JSON, a `Symbol` text that fails `sky_intern::is_valid_symbol_text`,
+/// a `Match` arm list `Match::new_flat` rejects) is a plain cache MISS —
+/// `None`, never an error — matching the `EmittedProject` tier's contract
+/// exactly ([`try_load`]).
+#[must_use]
+pub fn try_load_ir(
+    cache_root: &Path,
+    epoch: &str,
+    key: &str,
+    interner: &Arc<Mutex<Interner>>,
+) -> Option<Program> {
+    let path = ir_entry_file_path(cache_root, epoch, key);
+    let bytes = fs::read(&path).ok()?;
+    let _guard = SerdeInternerGuard::install(Arc::clone(interner));
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Best-effort store of a successfully lowered [`Program`]. Same
+/// advisory/atomic-write contract as [`store`]: every failure (directory
+/// creation, resolve/serialize, write, rename) is silently swallowed — a
+/// cache-write failure must never turn a successful build into a reported
+/// failure. PID-suffixed tmp name for the same concurrent-writer safety
+/// [`store`]'s own doc explains.
+pub fn store_ir(
+    cache_root: &Path,
+    epoch: &str,
+    key: &str,
+    program: &Program,
+    interner: &Arc<Mutex<Interner>>,
+) {
+    let path = ir_entry_file_path(cache_root, epoch, key);
+    let Some(dir) = path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let json = {
+        let _guard = SerdeInternerGuard::install(Arc::clone(interner));
+        serde_json::to_vec(program)
+    };
+    let Ok(json) = json else {
+        return;
+    };
+    let tmp = path.with_extension(format!("ir.json.{}.tmp", std::process::id()));
+    if fs::write(&tmp, &json).is_err() {
+        let _ = fs::remove_file(&tmp);
+        return;
+    }
+    if fs::rename(&tmp, &path).is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,11 +462,17 @@ mod tests {
         let mut sources = BTreeMap::new();
         sources.insert(
             vec!["Main".to_owned()],
-            (PathBuf::from("Main.sky"), "module Main exposing (main)\n".to_owned()),
+            (
+                PathBuf::from("Main.sky"),
+                "module Main exposing (main)\n".to_owned(),
+            ),
         );
         sources.insert(
             vec!["Std".to_owned(), "Prelude".to_owned()],
-            (PathBuf::from("<embedded>"), "module Std.Prelude exposing (x)\nx = 1\n".to_owned()),
+            (
+                PathBuf::from("<embedded>"),
+                "module Std.Prelude exposing (x)\nx = 1\n".to_owned(),
+            ),
         );
         let injected = BTreeSet::from([vec!["Std".to_owned(), "Prelude".to_owned()]]);
         (sources, injected)
@@ -367,7 +525,10 @@ mod tests {
         let mut added = sources.clone();
         added.insert(
             vec!["Extra".to_owned()],
-            (PathBuf::from("Extra.sky"), "module Extra exposing (y)\ny = 2\n".to_owned()),
+            (
+                PathBuf::from("Extra.sky"),
+                "module Extra exposing (y)\ny = 2\n".to_owned(),
+            ),
         );
         let with_extra = compute_project_key(&added, &injected, &entry(), DbDriver::Sqlite);
         assert_ne!(base, with_extra, "adding a module must change the key");
@@ -375,7 +536,10 @@ mod tests {
         let mut removed = sources;
         removed.remove(&vec!["Std".to_owned(), "Prelude".to_owned()]);
         let without_prelude = compute_project_key(&removed, &injected, &entry(), DbDriver::Sqlite);
-        assert_ne!(base, without_prelude, "removing a module must change the key");
+        assert_ne!(
+            base, without_prelude,
+            "removing a module must change the key"
+        );
     }
 
     #[test]
@@ -428,7 +592,10 @@ mod tests {
             cargo_toml: "[package]\nname = \"x\"\n".to_owned(),
         };
 
-        assert!(try_load(&cache_root, "epoch-a", "key-a").is_none(), "empty cache misses");
+        assert!(
+            try_load(&cache_root, "epoch-a", "key-a").is_none(),
+            "empty cache misses"
+        );
         store(&cache_root, "epoch-a", "key-a", &project);
         let loaded = try_load(&cache_root, "epoch-a", "key-a");
         assert_eq!(loaded, Some(project));
@@ -443,7 +610,8 @@ mod tests {
 
     #[test]
     fn try_load_treats_corrupt_entry_as_a_miss() {
-        let dir = std::env::temp_dir().join(format!("skyc-cache-test-corrupt-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("skyc-cache-test-corrupt-{}", std::process::id()));
         let cache_root = dir.join("cache-root-corrupt");
         let path = entry_file_path(&cache_root, "epoch", "key");
         fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir must succeed");
@@ -465,12 +633,16 @@ mod tests {
         // rejects_a_poisoned_key`); this test proves the cache layer
         // inherits that rejection via `.ok()` rather than accidentally
         // routing around it.
-        let dir = std::env::temp_dir().join(format!("skyc-cache-test-poison-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("skyc-cache-test-poison-{}", std::process::id()));
         let cache_root = dir.join("cache-root-poison");
         let path = entry_file_path(&cache_root, "epoch", "key");
         fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir must succeed");
-        fs::write(&path, br#"{"files":{"../../etc/passwd":"pwned"},"cargo_toml":""}"#)
-            .expect("write must succeed");
+        fs::write(
+            &path,
+            br#"{"files":{"../../etc/passwd":"pwned"},"cargo_toml":""}"#,
+        )
+        .expect("write must succeed");
 
         assert!(try_load(&cache_root, "epoch", "key").is_none());
 
@@ -488,5 +660,283 @@ mod tests {
         let out_dir = Path::new("/tmp/skyc-cache-dir-does-not-need-to-exist");
         let default = env_cache_dir(out_dir);
         assert_eq!(default, Some(out_dir.join(".skyc-cache")));
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 6.5 — the lowered-IR cache tier
+    // -----------------------------------------------------------------
+
+    fn sample_ir_program(i: &mut Interner) -> sky_diagnostics::DResult<Program> {
+        use sky_ir::{
+            Arm, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module,
+            Pat, TypeDef, Variant,
+        };
+
+        let msg_ty = i.intern("Msg")?;
+        let inc = i.intern("Increment")?;
+        let dec = i.intern("Decrement")?;
+        let main_sym = i.intern("main")?;
+        let main_mod = i.intern("Main")?;
+        let msg_param = i.intern("msg")?;
+
+        let body = Expr::Match(Match::new(
+            Expr::Var(msg_param),
+            vec![
+                Arm::new(
+                    Pat::Ctor {
+                        home: ModPath(vec![]),
+                        ty: msg_ty,
+                        variant: inc,
+                        args: vec![],
+                    },
+                    Expr::Call {
+                        callee: Callee::Kernel(KernelFn::LogPrintln),
+                        args: vec![],
+                    },
+                ),
+                Arm::new(
+                    Pat::Ctor {
+                        home: ModPath(vec![]),
+                        ty: msg_ty,
+                        variant: dec,
+                        args: vec![],
+                    },
+                    Expr::Call {
+                        callee: Callee::Kernel(KernelFn::LogPrintln),
+                        args: vec![],
+                    },
+                ),
+            ],
+            &[inc, dec],
+        )?);
+
+        Ok(Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![TypeDef::Enum(EnumDef {
+                    home: ModPath(vec![]),
+                    name: msg_ty,
+                    type_params: vec![],
+                    variants: vec![
+                        Variant {
+                            name: inc,
+                            fields: vec![],
+                        },
+                        Variant {
+                            name: dec,
+                            fields: vec![],
+                        },
+                    ],
+                })],
+                funcs: vec![Func {
+                    id: FuncId::from_raw(0),
+                    name: main_sym,
+                    home: ModPath(vec![]),
+                    type_params: vec![],
+                    params: vec![(msg_param, IrType::Generic(msg_param))],
+                    ret: IrType::Unit,
+                    body,
+                }],
+                entry: Some(FuncId::from_raw(0)),
+                records: vec![],
+                uses_tea: false,
+                uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
+                uses_css: false,
+                uses_auth: false,
+            }],
+        })
+    }
+
+    #[test]
+    fn compute_ir_key_is_deterministic_and_excludes_db_driver() {
+        let (sources, injected) = sample_sources();
+        let a = compute_ir_key(&sources, &injected, &entry());
+        let b = compute_ir_key(&sources, &injected, &entry());
+        assert_eq!(a, b, "same inputs must hash to the same IR key");
+
+        // Unlike `compute_project_key`, `compute_ir_key` must be blind to
+        // `db_driver` entirely — it isn't even a parameter, so there is
+        // nothing to vary here; this test pins the SIGNATURE difference
+        // itself (a `db_driver`-only rebuild reuses the SAME IR key).
+        assert_eq!(
+            compute_ir_key(&sources, &injected, &entry()),
+            a,
+            "compute_ir_key has no db_driver parameter to vary"
+        );
+    }
+
+    #[test]
+    fn compute_ir_key_changes_with_source_text() {
+        let (mut sources, injected) = sample_sources();
+        let base = compute_ir_key(&sources, &injected, &entry());
+        if let Some(main) = sources.get_mut(&vec!["Main".to_owned()]) {
+            main.1.push_str("\n-- comment\n");
+        }
+        let edited = compute_ir_key(&sources, &injected, &entry());
+        assert_ne!(base, edited, "a body edit must change the IR key");
+    }
+
+    #[test]
+    fn ir_store_and_load_round_trip_within_one_interner() -> sky_diagnostics::DResult<()> {
+        let mut plain = Interner::new();
+        let program = sample_ir_program(&mut plain)?;
+        let interner = Arc::new(Mutex::new(plain));
+
+        let dir = std::env::temp_dir().join(format!("skyc-ir-cache-test-{}", std::process::id()));
+        let cache_root = dir.join("cache-root-ir-round-trip");
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(
+            try_load_ir(&cache_root, "epoch-a", "key-a", &interner).is_none(),
+            "empty cache misses"
+        );
+        store_ir(&cache_root, "epoch-a", "key-a", &program, &interner);
+        let loaded = try_load_ir(&cache_root, "epoch-a", "key-a", &interner);
+        assert_eq!(loaded, Some(program));
+
+        // Different epoch/key must not see the entry — same structural
+        // separation as the `EmittedProject` tier.
+        assert!(try_load_ir(&cache_root, "epoch-b", "key-a", &interner).is_none());
+        assert!(try_load_ir(&cache_root, "epoch-a", "key-b", &interner).is_none());
+
+        let _ = fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// **Cross-process id-drift proof, at the on-disk cache boundary.**
+    /// Stores a `Program` written through one interner, then loads it
+    /// through a COMPLETELY DIFFERENT, differently-polluted interner (the
+    /// scenario a real `skyc build` -> `skyc build` sequence produces: a
+    /// fresh `Interner::new()` per invocation). Asserts the relocated
+    /// `Program`'s structural content (via `sky_ir::pretty::pretty`,
+    /// resolved-name comparison — not raw `Symbol` equality, which is not
+    /// expected to survive the boundary) matches a Program built fresh in
+    /// the reader's own, unrelated interner.
+    #[test]
+    fn ir_cache_hit_survives_cross_process_symbol_id_drift() -> sky_diagnostics::DResult<()> {
+        let dir = std::env::temp_dir().join(format!("skyc-ir-cache-drift-{}", std::process::id()));
+        let cache_root = dir.join("cache-root-drift");
+        let _ = fs::remove_dir_all(&dir);
+
+        // "Process A" (the writer): noise, then build + store.
+        let mut interner_a = Interner::new();
+        for noise in ["foo", "bar", "baz", "qux"] {
+            interner_a.intern(noise)?;
+        }
+        let program_a = sample_ir_program(&mut interner_a)?;
+        let interner_a = Arc::new(Mutex::new(interner_a));
+        store_ir(&cache_root, "epoch", "key", &program_a, &interner_a);
+
+        // "Process B" (the reader): DIFFERENT noise, different count/order.
+        let mut interner_b = Interner::new();
+        for noise in ["zzz_1", "zzz_2"] {
+            interner_b.intern(noise)?;
+        }
+        let interner_b = Arc::new(Mutex::new(interner_b));
+        let program_b =
+            try_load_ir(&cache_root, "epoch", "key", &interner_b).expect("must be a cache hit");
+
+        // "Process C" (ground truth): independent construction, never
+        // touches the cache at all.
+        let mut interner_c = Interner::new();
+        interner_c.intern("unrelated")?;
+        let program_c = sample_ir_program(&mut interner_c)?;
+
+        let dump_b = {
+            let guard = interner_b
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            sky_ir::pretty(&program_b, &guard)
+        };
+        let dump_c = sky_ir::pretty(&program_c, &interner_c);
+        assert_eq!(
+            dump_b, dump_c,
+            "an IR-cache entry loaded through a differently-polluted \
+             interner must be structurally/name-identical to a fresh, \
+             never-cached construction"
+        );
+        assert!(dump_b.contains("Increment") && dump_b.contains("main"));
+
+        let _ = fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn ir_try_load_treats_corrupt_entry_as_a_miss() {
+        let dir =
+            std::env::temp_dir().join(format!("skyc-ir-cache-corrupt-{}", std::process::id()));
+        let cache_root = dir.join("cache-root-corrupt");
+        let path = ir_entry_file_path(&cache_root, "epoch", "key");
+        fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir must succeed");
+        fs::write(&path, b"not valid json at all {{{").expect("write must succeed");
+
+        let interner = Arc::new(Mutex::new(Interner::new()));
+        assert!(
+            try_load_ir(&cache_root, "epoch", "key", &interner).is_none(),
+            "corrupt entry must be discarded as a miss, never a panic or error propagation"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A poisoned `Symbol` text (would-be Rust-injection payload) inside an
+    /// otherwise-valid-JSON IR cache entry must be rejected as a whole-entry
+    /// miss — proving the on-disk boundary inherits `sky_intern::Symbol`'s
+    /// deserialize-time validation rather than accidentally routing around
+    /// it (the same class of proof `try_load_treats_a_poisoned_relpath_
+    /// entry_as_a_miss` gives for the `EmittedProject` tier).
+    #[test]
+    fn ir_try_load_treats_a_poisoned_symbol_entry_as_a_miss() {
+        let dir = std::env::temp_dir().join(format!("skyc-ir-cache-poison-{}", std::process::id()));
+        let cache_root = dir.join("cache-root-poison");
+        let path = ir_entry_file_path(&cache_root, "epoch", "key");
+        fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir must succeed");
+        // A syntactically-valid `Program` shape whose module name embeds an
+        // injection-shaped payload instead of a legal identifier.
+        fs::write(
+            &path,
+            br#"{"modules":[{"name":["x; std::process::exit(1); //"],"types":[],"funcs":[],"entry":null,"records":[],"uses_tea":false,"uses_server":false,"uses_ui":false,"uses_live":false,"uses_tui":false,"uses_webview":false,"uses_css":false,"uses_auth":false}]}"#,
+        )
+        .expect("write must succeed");
+
+        let interner = Arc::new(Mutex::new(Interner::new()));
+        assert!(
+            try_load_ir(&cache_root, "epoch", "key", &interner).is_none(),
+            "a poisoned Symbol text must be rejected — whole entry discarded, never partially trusted"
+        );
+        // The poisoned text must never have reached the interner.
+        let resolved: Option<String> = {
+            let guard = interner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard
+                .resolve(sky_intern::Symbol::from_raw(0))
+                .map(str::to_owned)
+        };
+        assert!(
+            resolved.is_none(),
+            "a rejected symbol text must never be interned"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ir_env_extension_does_not_collide_with_emitted_project_tier() {
+        // The two tiers must write to DIFFERENT files under the same
+        // `(cache_root, epoch, key)` triple — proven structurally rather
+        // than by inspection, so a future accidental filename collision
+        // (one tier silently overwriting the other) is caught immediately.
+        let cache_root = Path::new("/tmp/x");
+        let a = entry_file_path(cache_root, "epoch", "key");
+        let b = ir_entry_file_path(cache_root, "epoch", "key");
+        assert_ne!(
+            a, b,
+            "the EmittedProject and lowered-IR tiers must use distinct file paths"
+        );
     }
 }
