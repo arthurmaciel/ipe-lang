@@ -1308,3 +1308,296 @@ would have reintroduced exactly this hole).
 | `skyc::on_disk_cache_hit_serves_a_tampered_entry_verbatim` | the mission proof — a tampered on-disk entry is served VERBATIM, proving the driver reads and trusts the cache rather than merely reproducing a deterministic answer |
 | `skyc::cache_dir_none_disables_caching_entirely` | `cache_dir: None` never creates a cache directory and always reports `Miss` |
 | `skyc::clean_vs_incremental_parity` / `adversarial_review_parity_probe` (re-run) | still green — the cache sits entirely outside `compile_prepared`; the parity gate's call shape is untouched by Phase 6 |
+
+---
+
+## 13. Phase 6.5 — symbol-relocation persistence: the literal lowered-IR
+## cache, closing §12.1's recorded gap for real
+
+Phase 6.5 revisits §12.1's Phase-6 divergence — "cache `EmittedProject`, not
+the literal `sky_ir::Program`, because `Symbol` is process-local" — and
+closes it completely rather than leaving it recorded. Headline result:
+`skyc build` now has a SECOND, earlier on-disk cache tier keyed on
+`sky_db::lower_program`'s own inputs (source + entry, deliberately
+EXCLUDING `db_driver`), so a cache hit here skips parse → canon → link →
+infer → lower entirely — no `sky_db::SkyDatabase` is even constructed — and
+only `RustBackend::emit` runs over the recovered `Program`. This is
+STRICTLY more coverage than the Task-19 `EmittedProject` tier: a
+`db_driver`-only edit (a `sky.toml [database] driver` flip) MISSES the
+`EmittedProject` tier (whose key folds in `db_driver`, correctly — it is a
+real emit-stage input) but HITS this tier, because `linked_program` /
+`typecheck` / `lower_program` never read `db_driver` at all.
+
+### 13.1 The relocation pass — design and where it lives
+
+The blocker was never "can `sky_ir::Program` be serialized" — every field
+is either a plain value or a `sky_intern::Symbol`, and `Symbol` is a raw
+`u32` index into ONE process's `sky_intern::Interner`. The blocker was:
+`Symbol`'s numeric value is process-local, so a naive
+`#[derive(Deserialize)]` reconstructing a `Symbol(raw_id)` directly from
+disk would silently corrupt every name in a `Program` loaded by a DIFFERENT
+process than the one that wrote it (interning order — and therefore id
+assignment — depends on parse order, which is not stable across process
+invocations).
+
+**Chosen design: ambient-interner, resolve-to-string persistence**
+(`crates/sky_intern/src/lib.rs`), NOT the two-pass symbol-table/index
+alternative the mission brief also sketched. `sky_intern::Symbol` gets
+hand-written `serde::Serialize`/`Deserialize` impls:
+
+- **`Serialize`** resolves `self` against an AMBIENT interner (installed
+  via `SerdeInternerGuard::install(Arc<Mutex<Interner>>)`, a thread-local
+  RAII guard) and writes the resolved STRING — never the raw id.
+- **`Deserialize`** reads the string, validates it through
+  `sky_intern::is_valid_symbol_text` (§13.3), and RE-INTERNS it into the
+  SAME ambient interner — the relocation pass. The returned `Symbol`'s
+  numeric id is whatever the CURRENT process's interner assigns; it is not
+  expected to match the writer's id, only the resolved string.
+
+Every OTHER `sky_ir` type (`Program`, `Module`, `EnumDef`, `Func`, `IrType`,
+`Expr`, `Pat`, `Arm`, `Callee`, `BinOp`, `ModPath`, `FuncId`, `BoundSet`,
+`UiCtor`, `UiPlain` — every type in `crates/sky_ir/src/ir.rs`'s public
+surface except `Match`) gets a PLAIN `#[derive(Serialize, Deserialize)]`,
+completely unmodified beyond the derive attribute — because `Symbol`
+already does the ambient-context resolution, every containing type's
+derived impl "just works" without threading any context itself.
+`sky_kernels::StdlibKernel` (embedded via `Callee::Kernel`) and
+`HtmlEventShape`/`KernelClass` also derive plainly — every variant is a
+bare unit tag, no `Symbol` inside.
+
+**Why ambient (thread-local) context, not `DeserializeSeed`.** `serde`'s
+proper context-carrying mechanism is `DeserializeSeed`, but it does not
+compose through `#[derive(Deserialize)]`: a derived impl always calls
+`T::deserialize()` on each field, never a seed, so threading a seed through
+`Vec<Symbol>` / `BTreeMap<Symbol, IrType>` / every enum variant nested
+three levels deep would require hand-writing `Deserialize` for roughly
+twenty IR types instead of one. Ambient thread-local context (installed
+immediately before, uninstalled immediately after, via `Drop`) is the
+standard workaround real interned-string systems use for exactly this
+shape (the same pattern `string_cache`/`lasso`-style interners use for
+serde integration) — genuinely call-scoped (never a true global — two
+unrelated builds never share state), introduces zero `unsafe` code (the
+crate stays `#![forbid(unsafe_code)]`; the mechanism is a `thread_local!`
+`RefCell<Vec<Arc<Mutex<Interner>>>>` STACK, so a nested install/drop
+composes safely even though nothing in this compiler nests today), and a
+missing guard fails as a descriptive `serde` error (never a panic, never a
+silently-wrong `Symbol`) — a programmer-error class of bug, not a
+soundness hole reachable from untrusted input.
+
+### 13.2 `Match`'s hand-written impl — the one type that isn't a plain derive
+
+`sky_ir::Match`'s fields are PRIVATE by design: the only way to build one
+is `Match::new`/`Match::new_flat`, which prove the arm set is structurally
+exhaustive at construction time (`Match` is "illegal states unrepresentable
+by construction", per `sky_ir`'s own crate doc). A derived `Deserialize`
+would reconstruct `Match { scrutinee, arms }` directly from untrusted
+bytes, bypassing that proof — the SAME "parse, don't validate" gap
+`sky_backend::RelPath`'s hand-written `Deserialize` closes for path
+traversal (Phase 6 §12.6), now closed for `Match` too.
+
+`Match`'s `Deserialize` re-validates through `Match::new_flat` — proven
+(not merely asserted) to be a superset of what `Match::new` guarantees:
+every arm `Match::new` accepts has `Pat::Ctor` as its literal head (`new`'s
+own hard requirement), so `is_ctor_headed` holds for every such arm and
+`new_flat`'s `all_ctor_headed` branch always accepts it; a `Match` built
+via `new_flat` trivially re-validates through the same pure function. So
+every legitimately constructed `Match` in the whole compiler round-trips
+unchanged, while an EMPTY arm list or an open-literal cover with no
+trailing catch-all is rejected exactly as it would be at original
+construction time.
+
+**Honestly scoped gap, verified rather than merely asserted.**
+`new_flat`'s `all_ctor_headed` branch does not itself re-verify that the
+ctor-headed arms cover EVERY variant of the scrutinee's enum — `Match`
+carries no external "complete variant set" of its own (that list lives on
+the `EnumDef` elsewhere in the `Program`), and `new_flat` deliberately
+trusts the upstream Maranget check for that shape. A tampered entry that
+drops ONE arm from an otherwise-exhaustive ctor cover (keeping every
+remaining arm ctor-headed) is NOT caught at this boundary. Pinned by its
+own regression test
+(`deserialize_accepts_single_arm_ctor_headed_match_new_flat_does_not_reverify_full_coverage`)
+so a future change to `new_flat`'s semantics is forced to reconsider this
+boundary rather than silently regress it. The gap is SAFE, not silent: the
+resulting `Program` still cannot reach a `cargo build` success —
+`RustBackend::emit` renders the missing arm as a genuine Rust
+exhaustiveness gap, and `cargo build` rejects it with E0004 (a loud
+failure, never wrong output). Closing it fully would need a second,
+whole-`Program` pass cross-checking every `Match` against its scrutinee's
+`EnumDef` — recorded as a possible future hardening, not attempted because
+the current gap already fails safe.
+
+### 13.3 Security: `is_valid_symbol_text` — the deserialize-boundary gate
+
+`sky_intern::Interner::intern` accepts ANY string by design (a pure
+append-only table with no opinion about identifier shapes — every REAL
+caller only ever passes lexer-scanned or compiler-synthesised text, so
+validating there would be pure overhead on the hot in-process path). But a
+persisted cache entry is untrusted input from the moment it is read off
+disk, and `sky_backend_rust`'s identifier emission (`resolve_ident` /
+`emit_ident` / `naming::mangle_reserved`) trusts an interned string
+VERBATIM — no sanitisation of its own, confirmed by reading the emit path
+end to end before writing anything. A poisoned `Symbol` string like
+`"x; std::process::exit(1); //"` could therefore splice arbitrary Rust
+source into the next build's `main.rs`, reached the moment `cargo build`
+compiles it — a real RCE-shaped risk via a writable build-cache directory,
+not a hypothetical.
+
+`sky_intern::is_valid_symbol_text` closes this: every `Symbol` string is
+validated BEFORE interning, against the FULL union of legitimate shapes
+surveyed across the whole compiler (a dedicated read-only agent pass,
+before writing any code) — one or more ASCII identifier segments
+(`[A-Za-z_][A-Za-z0-9_]*`, the exact grammar `sky_parse`'s lexer enforces
+for `Tok::Ident`) optionally dot-joined for a qualified path, covering
+every non-lexer-scanned shape too (`fresh_symbols`' `<prefix><n>` pools,
+`sky_types`' single-letter-plus-digit type-variable mint, the handful of
+hardcoded dot-embedding qualifier aliases). Rejection is whole-entry, not
+partial: `try_load_ir` returns `None` (a plain cache miss) the moment ANY
+embedded `Symbol` fails validation — the same "corrupt entry -> discard,
+never partially trusted" contract Phase 6 established for `RelPath`.
+
+### 13.4 Wiring — what a hit skips, and where the tier sits
+
+`crates/skyc/src/cache.rs`'s "Phase 6.5" section adds `compute_ir_key`
+(deliberately narrower than `compute_project_key` — no `db_driver`
+parameter at all, since `lower_program` never reads it),
+`try_load_ir`/`store_ir` (installing a `SerdeInternerGuard` around exactly
+one `Program` (de)serialize call each), sharing the SAME version-epoch
+(`derive_epoch`) the `EmittedProject` tier uses — deliberately: the IR
+format is at least as sensitive to a stale compiler binary as the emitted
+text is, and reusing one epoch scheme is simpler and strictly sound
+(over-invalidating on a toolchain change costs nothing real).
+
+`compile_modules_observed` (`crates/skyc/src/lib.rs`) tries the
+`EmittedProject` tier first (unchanged); on a miss, tries the IR tier
+BEFORE constructing any `sky_db::SkyDatabase`:
+
+```
+EmittedProject-tier hit  → write output                              (CacheOutcome::Hit)
+EmittedProject-tier miss, IR-tier hit
+    → fresh Interner + SerdeInternerGuard
+    → deserialize Program (relocation pass; poisoned entry ⇒ None)
+    → RustBackend::new(&interner).with_db_driver(db_driver).emit(&program)
+    → on success: warm the EmittedProject tier too, write output      (CacheOutcome::IrHit)
+    → on any failure: fall through (advisory, never a build failure)
+EmittedProject-tier miss, IR-tier miss
+    → full pipeline (SkyDatabase, parse → … → emit)
+    → store EmittedProject (unchanged) AND store the lowered Program
+      (sky_db::lower_program is a PURE MEMO HIT here — it already ran
+      transitively via emit_project's dependency chain — so this costs
+      only the relocation-pass serialize)                             (CacheOutcome::Miss)
+```
+
+`sky_db::SharedInterner::as_arc(&self) -> &Arc<Mutex<Interner>>` is the one
+new public accessor on `sky_db` this required — exposing the handle the
+ambient guard needs, alongside the pre-existing `.lock()` for callers that
+just want a guard.
+
+### 13.5 Cross-process id-drift correctness — the proof, three layers deep
+
+A same-process round trip cannot distinguish "the relocation pass
+correctly re-interns by string" from "the id happened to survive by
+coincidence" (a fresh interner given the exact same `intern` call sequence
+trivially reproduces the same ids either way). Every layer of this design
+therefore has a test that DELIBERATELY diverges the writer's and reader's
+interner histories (different noise strings, different counts, different
+orders) before comparing — so a raw-id relocation bug WOULD manifest as a
+wrong resolved name, not just a coincidentally-matching one:
+
+1. **`sky_intern::serde_persistence_tests::
+   serialize_then_deserialize_survives_cross_process_id_drift`** — a single
+   `Symbol` ("Increment") interned into a noise-polluted writer interner,
+   serialized, then deserialized into a differently-noise-polluted reader
+   interner; asserts the raw ids DIFFER (proving drift is real) yet
+   `reader_interner.resolve(reader_symbol) == Some("Increment")` (proving
+   semantic identity survives regardless).
+2. **`sky_ir::ir::serde_persistence_tests::
+   program_survives_cross_process_symbol_id_drift`** — the same property
+   one layer up, over a whole hand-built `Program` (enum + `Match` +
+   record literal — every `Symbol`-carrying IR shape in one value).
+   Compares THREE independently-noise-polluted interners (writer / reader /
+   a "ground truth" that never touches serialization at all) via
+   `sky_ir::pretty::pretty` — a pure, total, name-resolving renderer that
+   already existed for the `--emit-ir` developer flag — rather than raw
+   `Program == Program` equality, because two independently-relocated
+   `Program`s are not expected to share numeric ids, only meaning.
+3. **`skyc::cache::tests::ir_cache_hit_survives_cross_process_symbol_id_drift`**
+   — the same three-interner/`pretty`-comparison proof at the ON-DISK cache
+   boundary (`store_ir` then `try_load_ir` through unrelated interners).
+4. **`skyc::tests::on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim`**
+   — the END-TO-END mission proof, mirroring Phase 6's own
+   `on_disk_cache_hit_serves_a_tampered_entry_verbatim` one tier earlier:
+   compile once through the REAL `compile_modules_observed` driver
+   (populates both tiers), tamper the on-disk IR entry's literal body
+   (`Expr::Int(1)` → `Expr::Int(42)`, a value no fresh compile of the same
+   source could ever produce), force an `EmittedProject`-tier miss (a
+   `db_driver` flip) so the IR-tier fast path is the one actually
+   exercised, and assert the SENTINEL reaches the materialised `main.rs` —
+   proof the driver reads, relocates, AND RE-EMITS the on-disk entry,
+   never silently recompiling or discarding the tamper.
+5. **`skyc::tests::ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit`**
+   — the coverage proof: a `db_driver`-only edit against a warm cache
+   MISSES the `EmittedProject` tier but HITS the IR tier
+   (`CacheOutcome::IrHit`), the concrete case this tier exists to cover
+   that Task 19's tier structurally cannot.
+
+### 13.6 Phase-6.5 decisions ledger
+
+1. **Ambient (thread-local) interner context over a two-pass symbol
+   table/index scheme** — dramatically less code (every `sky_ir` type
+   gets a ONE-LINE derive-attribute addition, no shadow types, no
+   hand-written conversion functions to keep in sync as `sky_ir` grows),
+   equally sound (both approaches ultimately resolve-then-re-intern by
+   string), and self-updating (a new `Symbol`-carrying field on an
+   existing type, or a wholly new derive-annotated type, needs NO
+   persistence-layer change at all — only `Match`, the one type with a
+   private-field construction invariant, needed a hand-written impl).
+2. **`Match` re-validates through `new_flat`, not a bespoke exhaustiveness
+   re-derivation** — reuses the EXISTING structural backstop (one code
+   path, provably a superset of what legitimate `Match` values satisfy)
+   rather than inventing a second exhaustiveness checker that could drift
+   from the first. The resulting gap (single-arm-drop from a ctor-complete
+   cover) is recorded honestly with its own pinning regression test rather
+   than silently claimed away.
+3. **IR-tier key excludes `db_driver` entirely** — not merely "the same key
+   minus one field": `compute_ir_key` has no `db_driver` PARAMETER at all,
+   making the exclusion a compile-time fact rather than a runtime
+   convention that could silently drift back in.
+4. **Same version epoch for both tiers** — one hash scheme, one directory
+   prefix, reused rather than re-derived; over-invalidating the IR tier on
+   an (unlikely, but real) case where only the emit stage's Rust codegen
+   changed but the IR format didn't is accepted as strictly sound (costs a
+   cache miss, never a wrong answer).
+5. **`is_valid_symbol_text` lives in `sky_intern`, checked at deserialize
+   time only** — `Interner::intern` itself stays permissive (a pure
+   append-only table, zero validation overhead on the hot in-process
+   path); the persistence boundary is the ONLY place untrusted text can
+   enter the symbol table, so that is the only place the check needs to
+   run.
+6. **Advisory, best-effort, fail-open on emit failure** — a relocated
+   `Program` that (for any reason) fails to re-emit falls through to the
+   full pipeline rather than reporting a build failure, matching every
+   other cache-tier failure mode in this design (missing, corrupt,
+   poisoned, unwritable) established since Phase 6.
+
+### 13.7 Phase-6.5 proof tests
+
+| Test | Asserts |
+|---|---|
+| `sky_intern::serde_persistence_tests valid_symbol_text_accepts_every_real_shape` / `_rejects_every_poisoned_shape` | the deserialize-boundary grammar, both directions |
+| `serialize_then_deserialize_survives_cross_process_id_drift` | §13.5 layer 1 — the `Symbol`-level mission proof |
+| `serialize_without_ambient_interner_fails_closed` / `deserialize_without_ambient_interner_fails_closed` | a missing guard is a `serde` error, never a panic |
+| `deserialize_rejects_poisoned_symbol_text` / `deserialize_rejects_forged_control_character_payloads` | injection-shaped and control-character payloads rejected, never interned |
+| `nested_guards_restore_the_outer_interner_on_drop` | the ambient stack composes safely under nesting |
+| `sky_ir::ir::serde_persistence_tests round_trips_within_one_interner` | same-interner round trip preserves both ids and strings |
+| `program_survives_cross_process_symbol_id_drift` | §13.5 layer 2 — the whole-`Program` mission proof |
+| `deserialize_rejects_unknown_kernel_tag` | a forged `StdlibKernel` tag is rejected, never silently coerced |
+| `deserialize_rejects_emptied_tampered_match` | `Match`'s hand-written `Deserialize` actually revalidates |
+| `deserialize_accepts_single_arm_ctor_headed_match_new_flat_does_not_reverify_full_coverage` | §13.2's honestly-scoped gap, pinned as a regression test |
+| `skyc::cache::tests compute_ir_key_is_deterministic_and_excludes_db_driver` / `compute_ir_key_changes_with_source_text` | the IR-tier key's own ingredients |
+| `ir_store_and_load_round_trip_within_one_interner` | the on-disk IR tier's basic round trip |
+| `ir_cache_hit_survives_cross_process_symbol_id_drift` | §13.5 layer 3 |
+| `ir_try_load_treats_corrupt_entry_as_a_miss` / `ir_try_load_treats_a_poisoned_symbol_entry_as_a_miss` | corrupt JSON and a poisoned `Symbol` string are both plain misses |
+| `ir_env_extension_does_not_collide_with_emitted_project_tier` | the two tiers' on-disk filenames cannot alias each other |
+| `skyc::tests on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim` | §13.5 layer 4 — the END-TO-END mission proof, through the real driver |
+| `ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit` | §13.5 layer 5 — the coverage proof (`CacheOutcome::IrHit` on a driver-only edit) |
+| `skyc::tests` (full suite, re-run) / `skyc::cache::tests` (full suite, re-run) | still green — zero regressions on every pre-existing Phase 1–6 test |

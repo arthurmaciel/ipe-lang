@@ -30,7 +30,6 @@ use sky_diagnostics::{
 };
 use sky_intern::Interner;
 
-
 /// A driver-level error. Distinct from a compiler [`Diagnostic`]: it also covers
 /// filesystem failures and command-line misuse, neither of which is a property
 /// of the Sky program being compiled.
@@ -266,11 +265,17 @@ fn find_manifest_for_sky_file(sky_file: &Path) -> Option<PathBuf> {
 /// not need it and discards it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum CacheOutcome {
-    /// A matching, same-epoch entry was found on disk; the whole compile
-    /// pipeline (parse through emit) was skipped.
+    /// A matching, same-epoch [`sky_backend::EmittedProject`] entry was
+    /// found on disk; the whole compile pipeline (parse through emit) was
+    /// skipped.
     Hit,
-    /// No usable entry existed (cache disabled, epoch undeterminable, key
-    /// miss, or corrupt entry) — the full pipeline ran.
+    /// No `EmittedProject`-tier entry existed, but a matching, same-epoch
+    /// Phase 6.5 lowered-[`sky_ir::Program`] entry was — parse through
+    /// lower were skipped; only `RustBackend::emit` ran over the relocated
+    /// IR (see `crate::cache`'s "Phase 6.5" module doc section).
+    IrHit,
+    /// No usable entry existed at either tier (cache disabled, epoch
+    /// undeterminable, key miss, or corrupt entry) — the full pipeline ran.
     Miss,
 }
 
@@ -359,6 +364,47 @@ fn compile_modules_observed(
         );
     }
 
+    // Phase 6.5: the lowered-IR cache tier (see `crate::cache`'s module doc
+    // section for the full design). A hit here skips parse -> canon -> link
+    // -> infer -> lower ENTIRELY — no `SkyDatabase` is constructed at all —
+    // running only `RustBackend::emit` over the relocated `Program` before
+    // falling through to the SAME disk-write + tier-1-warming path a full
+    // pipeline run uses. The `ir_key` deliberately excludes `db_driver`
+    // (`compute_ir_key`'s own doc explains why), so this tier can still hit
+    // when the `EmittedProject` tier just missed on a `db_driver`-only edit.
+    if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref()) {
+        let ir_key = cache::compute_ir_key(&sources, &injected, entry_path);
+        let fresh_interner: std::sync::Arc<std::sync::Mutex<sky_intern::Interner>> =
+            std::sync::Arc::new(std::sync::Mutex::new(sky_intern::Interner::new()));
+        if let Some(program) = cache::try_load_ir(root, epoch, &ir_key, &fresh_interner) {
+            use sky_backend::Backend as _;
+            let emit_result = {
+                let guard = fresh_interner
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                sky_backend_rust::RustBackend::new(&guard)
+                    .with_db_driver(db_driver)
+                    .emit(&program)
+            };
+            if let Ok(emitted) = emit_result {
+                // Warm the (cheaper-to-hit) EmittedProject tier for the
+                // next build too — advisory, best-effort, same as every
+                // other cache-write in this module.
+                cache::store(root, epoch, &cache_key, &emitted);
+                return (
+                    write_emitted_project(&emitted, out_dir, runtime_dir),
+                    CacheOutcome::IrHit,
+                );
+            }
+            // A relocated Program that fails to emit is never a build
+            // failure from this fast path — fall through to the full
+            // pipeline exactly as a tier-2 miss would. This should not
+            // happen for a genuinely-cached (not tampered, not epoch-
+            // mismatched) entry, but the advisory contract holds
+            // regardless of why.
+        }
+    }
+
     // Salsa database (incremental Phase 1 — see
     // docs/architecture/salsa-incremental-compilation-2026-07-11.md). The
     // driver parses external state ONCE into typed inputs here (`SourceFile`
@@ -383,6 +429,26 @@ fn compile_modules_observed(
 
     if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref()) {
         cache::store(root, epoch, &cache_key, &emitted);
+        // Phase 6.5: also store the lowered `Program` at the IR tier.
+        // `sky_db::lower_program` is a PURE MEMO HIT here — it already ran
+        // (transitively, via `compile_prepared`'s `emit_project` demand
+        // chain) inside the salsa database above, so this costs nothing
+        // beyond the lookup + relocation-pass serialize. Best-effort: an
+        // entry-file lookup failure or a serialize failure never turns a
+        // successful build into a reported failure (same advisory contract
+        // as the `EmittedProject` tier's own store).
+        if let Some(entry_file) = source_root.files(&db).get(entry_path).copied()
+            && let Ok(program) = sky_db::lower_program(&db, source_root, entry_file)
+        {
+            let ir_key = cache::compute_ir_key(&sources, &injected, entry_path);
+            cache::store_ir(
+                root,
+                epoch,
+                &ir_key,
+                &program,
+                sky_db::Db::interner(&db).as_arc(),
+            );
+        }
     }
 
     (
@@ -2296,6 +2362,214 @@ main =
             "materialized output must be the TAMPERED cache entry, not a fresh \
              recompile — proves the driver actually reads and trusts the \
              on-disk cache: {written}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Walk `cache_root/<epoch>/*.ir.json` and return the single Phase 6.5
+    /// lowered-IR entry file a build just wrote. Mirrors
+    /// [`find_single_cache_entry`], but matches on the `.ir.json` suffix
+    /// specifically — `Path::extension()` alone cannot tell `key.json` from
+    /// `key.ir.json` apart (both report `json`), so a build that populated
+    /// BOTH tiers in the same epoch directory needs the suffix check to
+    /// find the right one.
+    fn find_single_ir_cache_entry(cache_root: &Path) -> Option<PathBuf> {
+        for epoch_entry in fs::read_dir(cache_root).ok()?.flatten() {
+            let epoch_dir = epoch_entry.path();
+            if !epoch_dir.is_dir() {
+                continue;
+            }
+            for file_entry in fs::read_dir(&epoch_dir).ok()?.flatten() {
+                let path = file_entry.path();
+                if path
+                    .file_name()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .is_some_and(|n| n.ends_with(".ir.json"))
+                {
+                    return Some(path);
+                }
+            }
+        }
+        None
+    }
+
+    /// **End-to-end proof that a `db_driver`-only edit reuses the Phase 6.5
+    /// lowered-IR tier instead of a full recompile.** The `EmittedProject`
+    /// tier's key folds in `db_driver` (a real dependency of the FINAL emit
+    /// stage), so it correctly MISSES on a driver flip — but
+    /// `linked_program`/`typecheck`/`lower_program` never read `db_driver`
+    /// at all, so the SAME lowered `Program` is still exactly reusable. This
+    /// is the concrete case the IR tier exists to cover that the
+    /// `EmittedProject` tier structurally cannot.
+    #[test]
+    fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
+        let Ok(runtime) = resolve_runtime() else {
+            return;
+        };
+        let tmp = std::env::temp_dir().join(format!("skyc-ir-cache-driver-{}", std::process::id()));
+        let cache_dir = tmp.join("cache");
+        let out_a = tmp.join("out-a");
+        let out_b = tmp.join("out-b");
+        let _ = fs::remove_dir_all(&tmp);
+
+        let entry_path = vec!["Main".to_owned()];
+        let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        sources.insert(
+            entry_path.clone(),
+            (
+                PathBuf::from("<p>/Main.sky"),
+                "module Main exposing (main)\n\nmain = 1\n".to_owned(),
+            ),
+        );
+        let discovered = vec![project::DiscoveredModule {
+            path: PathBuf::from("<p>/Main.sky"),
+            module_path: entry_path.clone(),
+        }];
+
+        let (result_a, outcome_a) = compile_modules_observed(
+            sources.clone(),
+            discovered.clone(),
+            &entry_path,
+            &out_a,
+            &runtime,
+            Path::new("<p>"),
+            sky_backend_rust::DbDriver::Sqlite,
+            Some(&cache_dir),
+        );
+        assert!(
+            result_a.is_ok(),
+            "first (cold, Sqlite) compile must succeed: {:?}",
+            result_a.err()
+        );
+        assert_eq!(
+            outcome_a,
+            CacheOutcome::Miss,
+            "first compile against an empty cache dir must be a miss"
+        );
+        assert!(
+            find_single_ir_cache_entry(&cache_dir).is_some(),
+            "the cold compile must have populated the IR tier"
+        );
+
+        // Same source, DIFFERENT driver, same cache dir: the EmittedProject
+        // tier's key changes (driver is part of it) so it misses, but the
+        // IR tier's key does not depend on driver — it must hit.
+        let (result_b, outcome_b) = compile_modules_observed(
+            sources,
+            discovered,
+            &entry_path,
+            &out_b,
+            &runtime,
+            Path::new("<p>"),
+            sky_backend_rust::DbDriver::Postgres,
+            Some(&cache_dir),
+        );
+        assert!(
+            result_b.is_ok(),
+            "second (Postgres) compile must succeed: {:?}",
+            result_b.err()
+        );
+        assert_eq!(
+            outcome_b,
+            CacheOutcome::IrHit,
+            "a db_driver-only edit must hit the IR tier, not re-run the full pipeline nor \
+             merely miss everything"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// **The IR-tier end-to-end tamper proof**, mirroring
+    /// [`on_disk_cache_hit_serves_a_tampered_entry_verbatim`] one tier
+    /// earlier: compile once (populates BOTH tiers), tamper the ON-DISK
+    /// lowered-IR entry's literal body (`main`'s `Expr::Int(1)` ->
+    /// `Expr::Int(42)`) with a value no fresh compile of the SAME source
+    /// could ever produce, then force an IR-tier hit (a `db_driver` flip,
+    /// which misses the `EmittedProject` tier deterministically) and assert
+    /// the SENTINEL VALUE reaches the materialised `main.rs` — proof the
+    /// driver actually reads, relocates, and RE-EMITS the on-disk IR entry
+    /// rather than silently recompiling or ignoring the tamper.
+    #[test]
+    fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
+        let Ok(runtime) = resolve_runtime() else {
+            return;
+        };
+        let tmp = std::env::temp_dir().join(format!("skyc-ir-cache-tamper-{}", std::process::id()));
+        let cache_dir = tmp.join("cache");
+        let out_a = tmp.join("out-a");
+        let out_b = tmp.join("out-b");
+        let _ = fs::remove_dir_all(&tmp);
+
+        let entry_path = vec!["Main".to_owned()];
+        let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        sources.insert(
+            entry_path.clone(),
+            (
+                PathBuf::from("<p>/Main.sky"),
+                "module Main exposing (main)\n\nmain = 1\n".to_owned(),
+            ),
+        );
+        let discovered = vec![project::DiscoveredModule {
+            path: PathBuf::from("<p>/Main.sky"),
+            module_path: entry_path.clone(),
+        }];
+
+        let (result_a, outcome_a) = compile_modules_observed(
+            sources.clone(),
+            discovered.clone(),
+            &entry_path,
+            &out_a,
+            &runtime,
+            Path::new("<p>"),
+            sky_backend_rust::DbDriver::Sqlite,
+            Some(&cache_dir),
+        );
+        assert!(
+            result_a.is_ok(),
+            "first (cold) compile must succeed: {:?}",
+            result_a.err()
+        );
+        assert_eq!(outcome_a, CacheOutcome::Miss);
+
+        let ir_json_path =
+            find_single_ir_cache_entry(&cache_dir).expect("cold compile must write an IR entry");
+        let stored = fs::read_to_string(&ir_json_path).expect("IR entry must be readable");
+        // Verified shape via a one-off print during development:
+        // `{"modules":[{"name":["Main"],...,"funcs":[{...,"body":{"Int":1}}],...}]}`.
+        assert!(
+            stored.contains("\"body\":{\"Int\":1}"),
+            "unexpected IR JSON shape, cannot safely tamper: {stored}"
+        );
+        let tampered = stored.replace("\"body\":{\"Int\":1}", "\"body\":{\"Int\":42}");
+        fs::write(&ir_json_path, &tampered).expect("tamper write must succeed");
+
+        // Force the EmittedProject tier to miss (driver flip) so the
+        // IR-tier fast path is the one actually exercised.
+        let (result_b, outcome_b) = compile_modules_observed(
+            sources,
+            discovered,
+            &entry_path,
+            &out_b,
+            &runtime,
+            Path::new("<p>"),
+            sky_backend_rust::DbDriver::Postgres,
+            Some(&cache_dir),
+        );
+        assert!(
+            result_b.is_ok(),
+            "second (tampered IR, hit) compile must succeed: {:?}",
+            result_b.err()
+        );
+        assert_eq!(outcome_b, CacheOutcome::IrHit);
+
+        let main_rs = fs::read_to_string(out_b.join("src/main.rs")).expect("main.rs must exist");
+        assert!(
+            main_rs.contains("42"),
+            "materialized output must be re-EMITTED FROM the tampered IR entry \
+             (contains the literal 42), proving the driver reads/relocates/re-emits \
+             the on-disk lowered-IR cache rather than recompiling or discarding the \
+             tamper: {main_rs}"
         );
 
         let _ = fs::remove_dir_all(&tmp);

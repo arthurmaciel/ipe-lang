@@ -77,6 +77,20 @@ impl SharedInterner {
     pub fn lock(&self) -> MutexGuard<'_, Interner> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    /// The underlying `Arc<Mutex<Interner>>` handle.
+    ///
+    /// Exists alongside [`Self::lock`] for callers that need the Arc ITSELF
+    /// rather than a guard — specifically `skyc::cache`'s Phase 6.5
+    /// on-disk lowered-IR tier, which installs this database's interner as
+    /// the ambient `serde` context for `sky_intern::Symbol`
+    /// (`sky_intern::SerdeInternerGuard::install`) around a
+    /// `sky_ir::Program` (de)serialize call. Cloning the `Arc` is cheap (a
+    /// refcount bump); the underlying table is unaffected.
+    #[must_use]
+    pub const fn as_arc(&self) -> &Arc<Mutex<Interner>> {
+        &self.0
+    }
 }
 
 // ---------------------------------------------------------------------------
