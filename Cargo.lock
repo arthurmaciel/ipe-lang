@@ -3785,6 +3785,8 @@ dependencies = [
 name = "sky_backend"
 version = "0.0.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "sky_diagnostics",
  "sky_ir",
 ]
@@ -3815,6 +3817,8 @@ name = "sky_db"
 version = "0.0.0"
 dependencies = [
  "salsa",
+ "sky_backend",
+ "sky_backend_rust",
  "sky_canon",
  "sky_diagnostics",
  "sky_intern",
@@ -3894,7 +3898,10 @@ dependencies = [
 name = "skyc"
 version = "0.0.0"
 dependencies = [
+ "hex",
  "oracle",
+ "serde_json",
+ "sha2",
  "sky_backend",
  "sky_backend_rust",
  "sky_canon",

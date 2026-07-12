@@ -15,6 +15,7 @@
 //!
 //! Errors are typed ([`CliError`]); no operation panics or unwraps.
 
+mod cache;
 pub mod project;
 pub mod stdlib;
 
@@ -24,8 +25,6 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use sky_backend::Backend;
-use sky_backend_rust::RustBackend;
 use sky_diagnostics::{
     ALL_CODES, Applicability, Diagnostic, HelpLine, Suggestion, explain_page, render, title,
 };
@@ -261,6 +260,20 @@ fn find_manifest_for_sky_file(sky_file: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Whether [`compile_modules_observed`] served a Phase-6 on-disk build-cache
+/// hit or ran the full compile pipeline. Exists for tests and future CLI
+/// verbosity — [`compile_modules`] (used by every stable entry point) does
+/// not need it and discards it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CacheOutcome {
+    /// A matching, same-epoch entry was found on disk; the whole compile
+    /// pipeline (parse through emit) was skipped.
+    Hit,
+    /// No usable entry existed (cache disabled, epoch undeterminable, key
+    /// miss, or corrupt entry) — the full pipeline ran.
+    Miss,
+}
+
 /// The shared multi-module compile core: inject the compiled-source stdlib
 /// closure, topologically order the graph, canonicalise each module dep-first
 /// (with its unforgeable [`sky_canon::ModuleOrigin`]), link, then infer → lower →
@@ -273,8 +286,50 @@ fn find_manifest_for_sky_file(sky_file: &Path) -> Option<PathBuf> {
 /// # Errors
 /// [`CliError::Pipeline`] carrying the first compiler diagnostic; [`CliError::Io`]
 /// on any filesystem failure.
-#[allow(clippy::too_many_lines)]
 fn compile_modules(
+    sources: BTreeMap<Vec<String>, (PathBuf, String)>,
+    discovered: Vec<project::DiscoveredModule>,
+    entry_path: &[String],
+    out_dir: &Path,
+    runtime_dir: &Path,
+    blame_path: &Path,
+    db_driver: sky_backend_rust::DbDriver,
+) -> Result<(), CliError> {
+    let cache_dir = cache::env_cache_dir(out_dir);
+    compile_modules_observed(
+        sources,
+        discovered,
+        entry_path,
+        out_dir,
+        runtime_dir,
+        blame_path,
+        db_driver,
+        cache_dir.as_deref(),
+    )
+    .0
+}
+
+/// [`compile_modules`]'s full implementation, with the Phase-6 on-disk build
+/// cache's root made an EXPLICIT parameter (`None` disables the cache
+/// entirely) rather than read from the environment internally — the
+/// dependency-injection seam this module's tests use instead of
+/// `std::env::set_var` (which is `unsafe` as of the standard library's
+/// current signature, and this crate is `#![forbid(unsafe_code)]`; a
+/// same-process env mutation would also be a cross-test race under a
+/// shared-process runner, though `cargo nextest` avoids that specific
+/// hazard by isolating tests into their own processes — the explicit
+/// parameter avoids both concerns at once).
+///
+/// Cache flow (Phase 6, Tasks 19/20 — see `crate::cache`'s module doc for
+/// the full design): the content-address key and version-epoch are computed
+/// BEFORE any salsa database exists (driver-boundary only — INV-1: no
+/// `std::fs` on a tracked path). On a hit, the ENTIRE compile pipeline
+/// (parse through emit) is skipped; only [`write_emitted_project`] runs,
+/// materialising the cached [`sky_backend::EmittedProject`] verbatim. On a
+/// miss, the pipeline runs exactly as it always has, and a successful
+/// result is best-effort stored for the next invocation.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn compile_modules_observed(
     mut sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     mut discovered: Vec<project::DiscoveredModule>,
     entry_path: &[String],
@@ -282,11 +337,27 @@ fn compile_modules(
     runtime_dir: &Path,
     blame_path: &Path,
     db_driver: sky_backend_rust::DbDriver,
-) -> Result<(), CliError> {
+    cache_dir: Option<&Path>,
+) -> (Result<(), CliError>, CacheOutcome) {
     // Inject the transitive compiled-source stdlib closure. `injected` is the
     // driver's unforgeable record of which module paths are trusted stdlib
     // source — the ONLY inputs that earn `ModuleOrigin::EmbeddedStdlib` below.
     let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
+
+    // Phase 6: the on-disk build cache. `epoch` folds in BOTH the running
+    // `skyc` binary's own content hash and the active `rustc`'s fingerprint
+    // (Task 20 — see `cache::derive_epoch`'s doc for why this makes
+    // "refuse, don't guess" structural rather than a runtime check).
+    let cache_key = cache::compute_project_key(&sources, &injected, entry_path, db_driver);
+    let epoch = cache_dir.and_then(|_| cache::derive_epoch());
+    if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref())
+        && let Some(emitted) = cache::try_load(root, epoch, &cache_key)
+    {
+        return (
+            write_emitted_project(&emitted, out_dir, runtime_dir),
+            CacheOutcome::Hit,
+        );
+    }
 
     // Salsa database (incremental Phase 1 — see
     // docs/architecture/salsa-incremental-compilation-2026-07-11.md). The
@@ -298,17 +369,26 @@ fn compile_modules(
     // identical to the pre-salsa pipeline (golden-suite-enforced).
     let db = sky_db::SkyDatabase::new();
     let source_root = create_source_root(&db, &sources, &injected);
+    // The Task-17 config input (see `sky_db::BuildConfig`'s doc for why this
+    // is narrowed to `db_driver` rather than the full `sky.toml` shape). A
+    // fresh `BuildConfig` per one-shot invocation is fine here — unlike the
+    // clean-vs-incremental parity gate's warm sequence, this driver never
+    // re-demands `emit_project` against a second config instance.
+    let config = sky_db::BuildConfig::new(&db, db_driver);
 
-    let emitted = compile_prepared(
-        &db,
-        source_root,
-        &sources,
-        entry_path,
-        blame_path,
-        db_driver,
-    )?;
+    let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config) {
+        Ok(emitted) => emitted,
+        Err(e) => return (Err(e), CacheOutcome::Miss),
+    };
 
-    write_emitted_project(&emitted, out_dir, runtime_dir)
+    if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref()) {
+        cache::store(root, epoch, &cache_key, &emitted);
+    }
+
+    (
+        write_emitted_project(&emitted, out_dir, runtime_dir),
+        CacheOutcome::Miss,
+    )
 }
 
 /// Create the salsa inputs for one build: a [`sky_db::SourceFile`] per module
@@ -355,6 +435,14 @@ pub fn create_source_root(
 ///
 /// `sources` is consulted for diagnostic blame only (module path → file/src).
 ///
+/// `config` is the Task-17 [`sky_db::BuildConfig`] handle — callers that
+/// re-demand `compile_prepared` across a warm sequence (the Task-18 parity
+/// gate) MUST hold one stable `BuildConfig` across the sequence rather than
+/// constructing a fresh one per call, or `emit_project`'s memo key never
+/// matches between calls and the seam's memoization is silently defeated
+/// (Phase-5 §10.2's own recorded warning, now closed by threading `config`
+/// in from the caller instead of constructing it here).
+///
 /// # Errors
 /// [`CliError::Pipeline`] carrying the first compiler diagnostic.
 #[allow(clippy::too_many_lines)]
@@ -364,7 +452,7 @@ pub fn compile_prepared(
     sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
     entry_path: &[String],
     blame_path: &Path,
-    db_driver: sky_backend_rust::DbDriver,
+    config: sky_db::BuildConfig,
 ) -> Result<sky_backend::EmittedProject, CliError> {
     // The build-wide interner is owned by the database (Option 3a) so the
     // parse query and the non-salsa passes share one symbol table. NEVER hold
@@ -589,31 +677,32 @@ pub fn compile_prepared(
         let (file, src) = source_for_span(diag_span(&diag));
         CliError::Pipeline { file, src, diag }
     };
-    // `sky_db::lower_program` (Phase 4, plan Task 13) — the memoized SEAM over
-    // `sky_lower::lower`, keyed the same way and re-demanding `typecheck`
-    // above (a guaranteed memo hit within this revision).
-    let program =
-        sky_db::lower_program(db, source_root, entry_file).map_err(span_attributed_err)?;
-
     // `sky_db::program_metadata` (Phase 5, plan Task 14) — the whole-program
-    // DCE-reachability seam over `lower_program`. Demanded here, on the
-    // production path, purely as a FORWARD SEAM: nothing downstream consumes
-    // its value yet (no pruning pass exists — see the query's own doc for the
-    // honestly-recorded scope), matching the Phase-3 `kernel_types` precedent
-    // (materialized and proven memoized before it has a real consumer). The
-    // demand costs nothing observable in emitted bytes — the point is to put
-    // the query on the same path the clean-vs-incremental parity gate drives,
-    // so a future divergence in this analysis cannot go undetected.
+    // DCE-reachability seam over `lower_program` (Phase 4, plan Task 13).
+    // Its own dependency on `lower_program` is what forces the lowering pass
+    // to execute here; a standalone `lower_program` demand alongside this one
+    // would be a redundant duplicate of the SAME memoized query (its error
+    // maps through the same `span_attributed_err` closure either way).
+    // Demanded here, on the production path, purely as a FORWARD SEAM:
+    // nothing downstream consumes its value yet (no pruning pass exists —
+    // see the query's own doc for the honestly-recorded scope), matching the
+    // Phase-3 `kernel_types` precedent (materialized and proven memoized
+    // before it has a real consumer). The demand costs nothing observable in
+    // emitted bytes — the point is to put the query on the same path the
+    // clean-vs-incremental parity gate drives, so a future divergence in this
+    // analysis cannot go undetected.
     sky_db::program_metadata(db, source_root, entry_file).map_err(span_attributed_err)?;
 
-    let emitted = {
-        let interner = shared_interner.lock();
-        RustBackend::new(&interner)
-            .with_db_driver(db_driver)
-            .emit(&program)
-            .map_err(span_attributed_err)?
-    };
-    Ok(emitted)
+    // `sky_db::emit_project` (Task 17 / Phase-5 §10.2 continuation item 2) —
+    // the memoized SEAM over `RustBackend::emit`, keyed on `(root, entry,
+    // config)`. A repeat demand or a no-op re-save (source unchanged AND
+    // `config.db_driver` unchanged) executes nothing; a `db_driver`-only
+    // edit re-executes this query without re-touching `linked_program` /
+    // `typecheck` / `lower_program` at all (proven by
+    // `crates/sky_db/tests/phase6_build_config.rs`).
+    let emitted = sky_db::emit_project(db, source_root, entry_file, config)
+        .map_err(span_attributed_err)?;
+    Ok((*emitted).clone())
 }
 
 /// Write an emitted project to `out_dir`, vendoring the runtime module tree
@@ -2078,6 +2167,181 @@ main =
             "home-discriminant regression: type error in Lib must blame `Lib.sky`, \
              not `{file_name}`; full path: {}",
             file.display()
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 6 (Tasks 19/20) — on-disk build cache end-to-end proof
+    // -----------------------------------------------------------------
+
+    /// Walk `cache_root/<epoch>/*.json` and return the single entry file a
+    /// fresh build just wrote. The epoch name is unpredictable from a test's
+    /// perspective (it folds in the running binary's own content hash), so
+    /// this has to search rather than construct the path directly.
+    fn find_single_cache_entry(cache_root: &Path) -> Option<PathBuf> {
+        for epoch_entry in fs::read_dir(cache_root).ok()?.flatten() {
+            let epoch_dir = epoch_entry.path();
+            if !epoch_dir.is_dir() {
+                continue;
+            }
+            for file_entry in fs::read_dir(&epoch_dir).ok()?.flatten() {
+                let path = file_entry.path();
+                if path.extension().and_then(std::ffi::OsStr::to_str) == Some("json") {
+                    return Some(path);
+                }
+            }
+        }
+        None
+    }
+
+    /// The end-to-end proof that `compile_modules_observed` actually
+    /// CONSULTS and TRUSTS the on-disk cache, not merely that two identical
+    /// builds happen to agree (which determinism alone would already give,
+    /// without proving the cache was read at all).
+    ///
+    /// Strategy: compile once (a genuine cache miss, populates the cache),
+    /// locate the single entry the build just wrote, and TAMPER with its
+    /// `cargo_toml` field with a sentinel no fresh compile of the SAME
+    /// source could ever produce. Compile again with the SAME inputs and
+    /// the SAME cache dir; if the driver reads and trusts the cache, the
+    /// second build's `Cargo.toml` carries the sentinel verbatim. If it
+    /// silently recompiled instead, the sentinel is gone.
+    #[test]
+    fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
+        const SENTINEL: &str = "# CACHE-HIT-SENTINEL\n";
+
+        let Ok(runtime) = resolve_runtime() else {
+            return; // No in-repo runtime tree in this environment — see other tests' pattern.
+        };
+
+        let tmp = std::env::temp_dir().join(format!("skyc-cache-e2e-{}", std::process::id()));
+        let cache_dir = tmp.join("cache");
+        let out_a = tmp.join("out-a");
+        let out_b = tmp.join("out-b");
+        let _ = fs::remove_dir_all(&tmp);
+
+        let entry_path = vec!["Main".to_owned()];
+        let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        sources.insert(
+            entry_path.clone(),
+            (
+                PathBuf::from("<cache-e2e>/Main.sky"),
+                "module Main exposing (main)\n\nmain = 1\n".to_owned(),
+            ),
+        );
+        let discovered = vec![project::DiscoveredModule {
+            path: PathBuf::from("<cache-e2e>/Main.sky"),
+            module_path: entry_path.clone(),
+        }];
+
+        let (result_a, outcome_a) = compile_modules_observed(
+            sources.clone(),
+            discovered.clone(),
+            &entry_path,
+            &out_a,
+            &runtime,
+            Path::new("<cache-e2e>"),
+            sky_backend_rust::DbDriver::Sqlite,
+            Some(&cache_dir),
+        );
+        assert!(
+            result_a.is_ok(),
+            "first (cold) compile must succeed: {:?}",
+            result_a.err()
+        );
+        assert_eq!(
+            outcome_a,
+            CacheOutcome::Miss,
+            "first compile against an empty cache dir must be a miss"
+        );
+
+        let entry_json = find_single_cache_entry(&cache_dir)
+            .expect("first build must have written exactly one cache entry");
+        let stored = fs::read_to_string(&entry_json).expect("cache entry must be readable");
+        let mut cached: sky_backend::EmittedProject =
+            serde_json::from_str(&stored).expect("cache entry must deserialize");
+        cached.cargo_toml = format!("{SENTINEL}{}", cached.cargo_toml);
+        fs::write(
+            &entry_json,
+            serde_json::to_vec(&cached).expect("re-serialize must succeed"),
+        )
+        .expect("tamper write must succeed");
+
+        let (result_b, outcome_b) = compile_modules_observed(
+            sources,
+            discovered,
+            &entry_path,
+            &out_b,
+            &runtime,
+            Path::new("<cache-e2e>"),
+            sky_backend_rust::DbDriver::Sqlite,
+            Some(&cache_dir),
+        );
+        assert!(
+            result_b.is_ok(),
+            "second (cache-hit) compile must succeed: {:?}",
+            result_b.err()
+        );
+        assert_eq!(
+            outcome_b,
+            CacheOutcome::Hit,
+            "second compile with byte-identical inputs must hit the cache"
+        );
+
+        let written = fs::read_to_string(out_b.join("Cargo.toml")).expect("Cargo.toml must exist");
+        assert!(
+            written.starts_with(SENTINEL),
+            "materialized output must be the TAMPERED cache entry, not a fresh \
+             recompile — proves the driver actually reads and trusts the \
+             on-disk cache: {written}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A cache disabled via `cache_dir: None` never touches disk for
+    /// caching purposes and always runs the full pipeline — the same
+    /// behaviour as the pre-Phase-6 driver.
+    #[test]
+    fn cache_dir_none_disables_caching_entirely() {
+        let Ok(runtime) = resolve_runtime() else {
+            return;
+        };
+        let tmp = std::env::temp_dir().join(format!("skyc-cache-disabled-{}", std::process::id()));
+        let out_dir = tmp.join("out");
+        let _ = fs::remove_dir_all(&tmp);
+
+        let entry_path = vec!["Main".to_owned()];
+        let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        sources.insert(
+            entry_path.clone(),
+            (
+                PathBuf::from("<cache-e2e>/Main.sky"),
+                "module Main exposing (main)\n\nmain = 1\n".to_owned(),
+            ),
+        );
+        let discovered = vec![project::DiscoveredModule {
+            path: PathBuf::from("<cache-e2e>/Main.sky"),
+            module_path: entry_path.clone(),
+        }];
+
+        let (result, outcome) = compile_modules_observed(
+            sources,
+            discovered,
+            &entry_path,
+            &out_dir,
+            &runtime,
+            Path::new("<cache-e2e>"),
+            sky_backend_rust::DbDriver::Sqlite,
+            None,
+        );
+        assert!(result.is_ok(), "compile must succeed: {:?}", result.err());
+        assert_eq!(outcome, CacheOutcome::Miss, "a disabled cache is always reported as a miss");
+        assert!(
+            !tmp.join(".skyc-cache").exists(),
+            "no cache directory should be created when caching is disabled"
         );
 
         let _ = fs::remove_dir_all(&tmp);

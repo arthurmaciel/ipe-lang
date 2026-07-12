@@ -67,20 +67,17 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
     let (sources, injected) = prepared(user);
     let db = sky_db::SkyDatabase::new();
     let root = skyc::create_source_root(&db, &sources, &injected);
-    skyc::compile_prepared(
-        &db,
-        root,
-        &sources,
-        &entry_path(),
-        Path::new("<advparity>"),
-        sky_backend_rust::DbDriver::Sqlite,
-    )
-    .map_err(|e| e.to_string())
+    let config = sky_db::BuildConfig::new(&db, sky_backend_rust::DbDriver::Sqlite);
+    skyc::compile_prepared(&db, root, &sources, &entry_path(), Path::new("<advparity>"), config)
+        .map_err(|e| e.to_string())
 }
 
 struct WarmSession {
     db: sky_db::SkyDatabase,
     root: Option<sky_db::SourceRoot>,
+    // Stable across the whole session — see the twin comment in
+    // `clean_vs_incremental_parity.rs`.
+    config: Option<sky_db::BuildConfig>,
 }
 
 impl WarmSession {
@@ -88,6 +85,7 @@ impl WarmSession {
         Self {
             db: sky_db::SkyDatabase::new(),
             root: None,
+            config: None,
         }
     }
 
@@ -125,19 +123,21 @@ impl WarmSession {
     fn demand(&self, user: &UserSources) -> CompileOutcome {
         let (sources, _) = prepared(user);
         let root = self.root.expect("root must exist before demand()");
-        skyc::compile_prepared(
-            &self.db,
-            root,
-            &sources,
-            &entry_path(),
-            Path::new("<advparity>"),
-            sky_backend_rust::DbDriver::Sqlite,
-        )
-        .map_err(|e| e.to_string())
+        let config = self
+            .config
+            .expect("config must exist before demand() (set by sync_only via compile())");
+        skyc::compile_prepared(&self.db, root, &sources, &entry_path(), Path::new("<advparity>"), config)
+            .map_err(|e| e.to_string())
     }
 
     fn compile(&mut self, user: &UserSources) -> CompileOutcome {
         self.sync_only(user);
+        if self.config.is_none() {
+            self.config = Some(sky_db::BuildConfig::new(
+                &self.db,
+                sky_backend_rust::DbDriver::Sqlite,
+            ));
+        }
         self.demand(user)
     }
 }

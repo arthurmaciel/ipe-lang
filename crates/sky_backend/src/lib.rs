@@ -103,6 +103,34 @@ impl Borrow<str> for RelPath {
     }
 }
 
+/// Serialises as the bare inner path string — the counterpart
+/// [`Deserialize`](serde::Deserialize) impl below is what re-establishes the
+/// safety invariant on the way back in.
+impl serde::Serialize for RelPath {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+/// **Deliberately hand-written, never `#[derive(Deserialize)]`.** A derived
+/// impl would reconstruct `RelPath(raw_string)` directly from the untrusted
+/// bytes, bypassing [`RelPath::new`]'s path-traversal validation entirely —
+/// exactly the "parse, don't validate" boundary this newtype exists to
+/// enforce (see the type's own doc). This matters concretely for Phase 6's
+/// on-disk build cache (`skyc::cache`): a corrupted or tampered cache file
+/// is untrusted input from the moment it is read off disk, so a `RelPath`
+/// key inside a deserialized [`EmittedProject`] MUST re-run the same
+/// rejection an in-process backend emission would. Routing through
+/// `RelPath::new` here is what makes that true — a malicious `"../../etc/
+/// passwd"` entry in a poisoned cache file is rejected at deserialize time,
+/// never reaching `fs::write`.
+impl<'de> serde::Deserialize<'de> for RelPath {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Self::new(raw).map_err(|diag| serde::de::Error::custom(format!("{diag:?}")))
+    }
+}
+
 /// An emitted project, fully materialised in memory.
 ///
 /// `files` maps a validated project-relative [`RelPath`] to its file contents. A
@@ -110,7 +138,7 @@ impl Borrow<str> for RelPath {
 /// depend on hash ordering. The [`RelPath`] key type enforces that no key can
 /// escape the output directory at the disk boundary (see [`RelPath`]).
 /// `cargo_toml` is the manifest emitted at the project root.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct EmittedProject {
     /// Validated relative path -> file contents. Deterministic iteration order.
     pub files: BTreeMap<RelPath, String>,
@@ -202,6 +230,64 @@ mod tests {
         );
         assert_eq!(files.get("nope.rs"), None);
         Ok(())
+    }
+
+    #[test]
+    fn relpath_serde_round_trips_ordinary_paths() -> DResult<()> {
+        let rel = RelPath::new("src/sky_runtime/mod.rs")?;
+        let json = serde_json::to_string(&rel).expect("serialize must succeed");
+        assert_eq!(json, "\"src/sky_runtime/mod.rs\"");
+        let back: RelPath = serde_json::from_str(&json).expect("deserialize must succeed");
+        assert_eq!(back, rel);
+        Ok(())
+    }
+
+    /// The security-critical property: `RelPath`'s `Deserialize` impl is
+    /// hand-written specifically so a malicious/corrupted on-disk cache
+    /// entry (Phase 6) cannot smuggle a path-traversal key past
+    /// `RelPath::new`'s validation. A naive `#[derive(Deserialize)]` would
+    /// have let this test fail.
+    #[test]
+    fn relpath_deserialize_rejects_escaping_paths() {
+        for bad in ["../../etc/passwd", "/abs.rs", "a/../../b"] {
+            let json = serde_json::to_string(bad).expect("string always serializes");
+            let result: Result<RelPath, _> = serde_json::from_str(&json);
+            assert!(
+                result.is_err(),
+                "RelPath deserialize must reject {bad:?}, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn emitted_project_serde_round_trips() -> DResult<()> {
+        let mut files = BTreeMap::new();
+        files.insert(RelPath::new("src/main.rs")?, "fn main() {}".to_owned());
+        files.insert(
+            RelPath::new("src/sky_runtime/mod.rs")?,
+            "pub mod config;\n".to_owned(),
+        );
+        let project = EmittedProject {
+            files,
+            cargo_toml: "[package]\nname = \"app\"\n".to_owned(),
+        };
+        let json = serde_json::to_string(&project).expect("serialize must succeed");
+        let back: EmittedProject = serde_json::from_str(&json).expect("deserialize must succeed");
+        assert_eq!(back, project);
+        Ok(())
+    }
+
+    /// A cache entry that has been tampered with to carry an escaping key
+    /// must fail to deserialize as a WHOLE `EmittedProject` — never silently
+    /// drop the bad entry and materialize the rest.
+    #[test]
+    fn emitted_project_deserialize_rejects_a_poisoned_key() {
+        let poisoned = r#"{"files":{"../../etc/passwd":"pwned"},"cargo_toml":""}"#;
+        let result: Result<EmittedProject, _> = serde_json::from_str(poisoned);
+        assert!(
+            result.is_err(),
+            "a poisoned RelPath key must fail the whole deserialize, got {result:?}"
+        );
     }
 
     #[test]

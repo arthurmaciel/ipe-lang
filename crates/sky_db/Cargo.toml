@@ -14,6 +14,8 @@ sky_types = { path = "../sky_types" }
 sky_kernels = { path = "../sky_kernels" }
 sky_lower = { path = "../sky_lower" }
 sky_ir = { path = "../sky_ir" }
+sky_backend = { path = "../sky_backend" }
+sky_backend_rust = { path = "../sky_backend_rust" }
 
 [lints]
 workspace = true
