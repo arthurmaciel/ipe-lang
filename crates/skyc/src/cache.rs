@@ -1,0 +1,492 @@
+//! Phase 6 (Tasks 19/20) — the on-disk build cache.
+//!
+//! Spec: `docs/architecture/salsa-incremental-compilation-2026-07-11.md`
+//! §12. Design doc: `docs/architecture/incremental-compilation-and-watch.md`
+//! §"Cross-session persistence" (**LOCKED, Option B**).
+//!
+//! Everything in-process from Phases 1-5 is proven memoized, but nothing
+//! survives ACROSS process invocations — every `skyc build` still starts a
+//! cold [`sky_db::SkyDatabase`]. This module closes that gap for the
+//! coarse, whole-project granularity that genuinely exists today
+//! (`sky_db::emit_project`'s output — see this module's own doc section
+//! below for why that is a deliberate, documented divergence from the
+//! design doc's literal "persist per-module lowered IR" wording).
+//!
+//! ## What is cached, and why not literally "lowered IR"
+//!
+//! The design doc's Option-B locks in persisting `sky_ir` (the lowered IR)
+//! to `.ipe/lowered/`. Phase 4 already established that `sky_lower::lower`
+//! always produces exactly ONE whole-program [`sky_ir::Program`], so "per
+//! module" was never on the table (same finding, one phase later). The
+//! DEEPER blocker for persisting `sky_ir::Program` itself, specifically:
+//! every [`sky_intern::Symbol`] embedded in the IR (`Var`, `Ctor`, record
+//! field names, `IrType::Generic`, …) is a raw index into THIS process's
+//! [`sky_intern::Interner`] — meaningless, and NOT merely "differently
+//! numbered", in a fresh process with a fresh, empty interner. Making that
+//! sound requires a relocation pass: serialize every embedded `Symbol` as
+//! its resolved STRING, and on load, re-intern each string into the
+//! CURRENT process's interner and rewrite every `Symbol` occurrence to the
+//! newly-assigned id — a walker over every `Symbol`-carrying site in
+//! `sky_ir::ir` (far more sites than [`sky_db::program_metadata`]'s
+//! `Ctor`-only walk touches: `Var`, `CloneVar`, `Access`, record field
+//! keys, `FuncSig` params/generics, `EnumDef`/`TypeDef` fields, …) plus
+//! full `serde` coverage across ~20 IR types. That is a genuine, multi-
+//! session redesign — the SAME "looks like progress but isn't" trap Phase
+//! 5 §10.2 named for `emit_rust_file(RustFileId)`, not a corner to cut
+//! inside this session's budget.
+//!
+//! **What ships instead**: [`sky_backend::EmittedProject`] — the output of
+//! [`sky_db::emit_project`] — is cached. It is pure `String` data (no
+//! `Symbol`, no interner dependency whatsoever: `RelPath` wraps a `String`,
+//! `files` maps `RelPath -> String`, `cargo_toml` is a `String`), so it
+//! serializes and deserializes losslessly with zero cross-process identity
+//! risk. The practical win is AT LEAST as large as literal IR caching would
+//! give for `skyc build`'s actual use case (a cold-start cache hit skips
+//! parse -> canon -> link -> infer -> lower -> emit ENTIRELY, not just
+//! infer -> lower -> emit), at the cost of not serving a hypothetical
+//! future interpreter tier that wants to consume `sky_ir` directly (design
+//! doc §"Why `sky_ir` is the cut-point") — that tier does not exist yet
+//! (Q3, unscheduled), so the cost is paid by nobody today. This divergence
+//! is deliberate and recorded here, not silently substituted.
+//!
+//! ## Content address (the cache KEY)
+//!
+//! [`compute_project_key`] hashes, with explicit length-prefixed framing
+//! (never delimiter-joined — a delimiter that can appear inside a module
+//! segment or source text would make two distinct projects collide) so
+//! there is no ambiguity between e.g. `[["AB"], ["C"]]` and `[["A"], ["BC"]]`:
+//!
+//! - the entry module path,
+//! - the SQL driver ([`sky_backend_rust::DbDriver`]),
+//! - every in-scope module's path, trust origin (injected stdlib vs. user
+//!   source — the module-IDENTITY axis the design doc's cache-key-
+//!   completeness note calls out: an add/delete/rename of a module MUST
+//!   yield a different key, never a stale hit), and full source text.
+//!
+//! `blame_path` (diagnostic-only) and the vendored runtime tree are
+//! deliberately NOT part of the key: neither affects [`EmittedProject`]'s
+//! content (blame only shapes error rendering on a FAILED compile, which is
+//! never cached; the runtime tree is copied by `write_emitted_project`
+//! independently of the cache, exactly as it always was).
+//!
+//! ## Version epoch (Task 20 — toolchain refuse-don't-guess)
+//!
+//! [`derive_epoch`] hashes the CURRENTLY RUNNING `skyc` binary's own bytes
+//! (`compiler_revision()`, matching the design doc's row verbatim: "content
+//! hash seeded from the `ipe` binary's own build hash") together with the
+//! active `rustc`'s `-vV` output (`toolchain_fingerprint()`). The epoch is a
+//! DIRECTORY PREFIX (`<cache_root>/<epoch>/<key>.json`), not a value
+//! compared after a hit — so "refuse, don't guess" is achieved BY
+//! CONSTRUCTION, the same mechanism the design doc's FFI cache uses ("stale
+//! entry has a different address -> unreachable miss", H1/H4 in the hazard
+//! ledger): a `cargo build`/`cargo install` of `skyc` OR a `rustup update`
+//! moves every subsequent build to a DIFFERENT directory, so entries from
+//! the old compiler/toolchain pairing are never even looked up, let alone
+//! trusted. There is nothing to "refuse" at lookup time because the stale
+//! entries are structurally unreachable.
+//!
+//! Either probe failing (no `current_exe`, no `rustc` on `PATH`) disables
+//! the cache for that invocation ([`derive_epoch`] returns `None`) — never a
+//! guess, never a build failure: a compile just runs uncached, exactly as
+//! every build did before this module existed.
+//!
+//! **Not yet ported**: `ipe watch`'s specific mid-session UX (hard-refuse a
+//! REBUILD with `toolchain changed (was A, now B) — restart 'ipe watch'`
+//! while keeping the last-good binary alive) needs a live watch session to
+//! refuse INTO — that session doesn't exist yet (design doc Phase 7,
+//! unscheduled here). What Task 20 delivers now is the sound FOUNDATION
+//! Phase 7 builds that UX on: the version-epoch gate itself.
+//!
+//! ## Advisory semantics (never a build failure)
+//!
+//! Every cache operation is best-effort: a missing directory, a corrupt
+//! entry, or a write failure (permissions, full disk) is treated as "cache
+//! unavailable for this build" and silently falls through to a full
+//! compile — matching the design doc's own "Entries are advisory: hash
+//! miss -> recompute, corrupt entry -> discard." A cache-write failure
+//! after a SUCCESSFUL compile must never turn that success into a reported
+//! build failure.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
+use sky_backend::EmittedProject;
+use sky_backend_rust::DbDriver;
+
+/// Domain-separation tag for the content-address hash — bumped whenever the
+/// key's ingredient set changes shape (never for a value change within the
+/// same shape; that is what the hash itself captures).
+const KEY_TAG: &[u8] = b"skyc-build-cache-key-v1";
+
+/// Domain-separation tag for the version-epoch hash.
+const EPOCH_TAG: &[u8] = b"skyc-build-cache-epoch-v1";
+
+/// Hash `bytes` into `hasher` with an explicit little-endian length prefix,
+/// so two distinct inputs can never concatenate into the same byte stream
+/// (the classic delimiter-collision hazard: `["AB", "C"]` vs `["A", "BC"]`
+/// must hash differently, and would if segments were simply joined).
+fn update_len_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
+    let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    hasher.update(len.to_le_bytes());
+    hasher.update(bytes);
+}
+
+fn update_str(hasher: &mut Sha256, s: &str) {
+    update_len_prefixed(hasher, s.as_bytes());
+}
+
+/// Compute the content-address key for one build: a pure function of every
+/// input that determines [`EmittedProject`]'s bytes (see the module doc's
+/// "Content address" section for exactly what is, and is not, included).
+///
+/// `sources` is the driver's `module_path -> (fs_path, text)` map AFTER
+/// [`crate::project::inject_compiled_std_closure`] has run (so it already
+/// includes the injected stdlib closure's text) — the fs path itself is
+/// deliberately unhashed, matching [`sky_db::SourceFile`]'s own input shape
+/// (module path + text + origin; never the on-disk path).
+#[must_use]
+pub fn compute_project_key(
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+    injected: &BTreeSet<Vec<String>>,
+    entry_path: &[String],
+    db_driver: DbDriver,
+) -> String {
+    let mut hasher = Sha256::new();
+    update_len_prefixed(&mut hasher, KEY_TAG);
+
+    let entry_len = u64::try_from(entry_path.len()).unwrap_or(u64::MAX);
+    hasher.update(entry_len.to_le_bytes());
+    for segment in entry_path {
+        update_str(&mut hasher, segment);
+    }
+
+    let driver_tag: u8 = match db_driver {
+        DbDriver::Sqlite => 0,
+        DbDriver::Postgres => 1,
+    };
+    hasher.update([driver_tag]);
+
+    // `BTreeMap` iteration is already sorted by key — deterministic across
+    // runs and independent of insertion order.
+    let sources_len = u64::try_from(sources.len()).unwrap_or(u64::MAX);
+    hasher.update(sources_len.to_le_bytes());
+    for (path, (_fs_path, text)) in sources {
+        let path_len = u64::try_from(path.len()).unwrap_or(u64::MAX);
+        hasher.update(path_len.to_le_bytes());
+        for segment in path {
+            update_str(&mut hasher, segment);
+        }
+        let origin_tag: u8 = u8::from(injected.contains(path));
+        hasher.update([origin_tag]);
+        update_str(&mut hasher, text);
+    }
+
+    hex::encode(hasher.finalize())
+}
+
+/// The whole-project content hash of the CURRENTLY RUNNING `skyc` binary's
+/// bytes — the design doc's `compiler_revision()`. `None` when the running
+/// executable cannot be located or read (never a hard error: the cache is
+/// simply unavailable for this invocation).
+fn compiler_revision_hash() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let bytes = fs::read(&exe).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Some(hex::encode(hasher.finalize()))
+}
+
+/// The active `rustc`'s `-vV` output, hashed — the design doc's
+/// `toolchain_fingerprint()`. `None` when `rustc` is not on `PATH` or exits
+/// non-zero.
+fn toolchain_fingerprint_hash() -> Option<String> {
+    let output = std::process::Command::new("rustc").arg("-vV").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(&output.stdout);
+    Some(hex::encode(hasher.finalize()))
+}
+
+/// Derive the version-epoch directory name for this process, or `None` when
+/// either probe is unavailable (cache disabled for this invocation — see
+/// the module doc's "Advisory semantics" section).
+#[must_use]
+pub fn derive_epoch() -> Option<String> {
+    let compiler_revision = compiler_revision_hash()?;
+    let toolchain = toolchain_fingerprint_hash()?;
+    let mut hasher = Sha256::new();
+    update_len_prefixed(&mut hasher, EPOCH_TAG);
+    update_str(&mut hasher, &compiler_revision);
+    update_str(&mut hasher, &toolchain);
+    Some(hex::encode(hasher.finalize()))
+}
+
+/// The default cache root for a build writing to `out_dir`, honouring the
+/// `SKY_BUILD_CACHE` / `SKY_BUILD_CACHE_DIR` environment overrides.
+///
+/// - `SKY_BUILD_CACHE=0` (also `off` / `false`) disables the cache entirely.
+/// - `SKY_BUILD_CACHE_DIR=<path>` overrides the default location.
+/// - Otherwise: `<out_dir>/.skyc-cache` — colocated with the build output
+///   so `rm -rf <out_dir>` (the existing "force a clean rebuild" ritual)
+///   also resets the cache, with no new mental model to learn.
+#[must_use]
+pub fn env_cache_dir(out_dir: &Path) -> Option<PathBuf> {
+    if matches!(
+        std::env::var("SKY_BUILD_CACHE").as_deref(),
+        Ok("0" | "off" | "false")
+    ) {
+        return None;
+    }
+    if let Ok(dir) = std::env::var("SKY_BUILD_CACHE_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    Some(out_dir.join(".skyc-cache"))
+}
+
+fn entry_file_path(cache_root: &Path, epoch: &str, key: &str) -> PathBuf {
+    cache_root.join(epoch).join(format!("{key}.json"))
+}
+
+/// Look up a cached [`EmittedProject`] for `key` under `epoch`. Every
+/// failure mode (missing file, unreadable, corrupt JSON, an entry that
+/// deserializes but fails `RelPath`'s validation) is a plain cache MISS —
+/// `None`, never an error, matching "corrupt entry -> discard".
+#[must_use]
+pub fn try_load(cache_root: &Path, epoch: &str, key: &str) -> Option<EmittedProject> {
+    let path = entry_file_path(cache_root, epoch, key);
+    let bytes = fs::read(&path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Best-effort store of a successfully compiled [`EmittedProject`] under
+/// `key`/`epoch`. Every failure (directory creation, serialize, write,
+/// rename) is silently swallowed — a cache-write failure must never turn a
+/// successful build into a reported failure. Writes atomically (tmp file +
+/// rename) so a concurrent reader (a second `skyc build` racing this one)
+/// never observes a partially-written entry; a torn read is impossible, a
+/// missing-then-appearing file is the only visible race, which `try_load`
+/// already treats as an ordinary miss.
+///
+/// The tmp file name is suffixed with this process's PID (mirroring
+/// `write_atomic`'s existing convention) so two CONCURRENT `skyc build`
+/// invocations computing the SAME key never write to the same tmp path —
+/// without that, two racing writers could interleave into one file before
+/// either renamed it, corrupting the entry a third reader might load in
+/// between (a real hazard the single shared-name `entry.json.tmp` form
+/// would have had, distinct from the deliberately-tolerated "a fresh entry
+/// was written between my miss-check and now" race).
+pub fn store(cache_root: &Path, epoch: &str, key: &str, project: &EmittedProject) {
+    let path = entry_file_path(cache_root, epoch, key);
+    let Some(dir) = path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let Ok(json) = serde_json::to_vec(project) else {
+        return;
+    };
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    if fs::write(&tmp, &json).is_err() {
+        let _ = fs::remove_file(&tmp);
+        return;
+    }
+    if fs::rename(&tmp, &path).is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type TestSources = BTreeMap<Vec<String>, (PathBuf, String)>;
+
+    fn sample_sources() -> (TestSources, BTreeSet<Vec<String>>) {
+        let mut sources = BTreeMap::new();
+        sources.insert(
+            vec!["Main".to_owned()],
+            (PathBuf::from("Main.sky"), "module Main exposing (main)\n".to_owned()),
+        );
+        sources.insert(
+            vec!["Std".to_owned(), "Prelude".to_owned()],
+            (PathBuf::from("<embedded>"), "module Std.Prelude exposing (x)\nx = 1\n".to_owned()),
+        );
+        let injected = BTreeSet::from([vec!["Std".to_owned(), "Prelude".to_owned()]]);
+        (sources, injected)
+    }
+
+    fn entry() -> Vec<String> {
+        vec!["Main".to_owned()]
+    }
+
+    #[test]
+    fn key_is_deterministic() {
+        let (sources, injected) = sample_sources();
+        let a = compute_project_key(&sources, &injected, &entry(), DbDriver::Sqlite);
+        let b = compute_project_key(&sources, &injected, &entry(), DbDriver::Sqlite);
+        assert_eq!(a, b, "same inputs must hash to the same key");
+    }
+
+    #[test]
+    fn key_changes_with_source_text() {
+        let (mut sources, injected) = sample_sources();
+        let base = compute_project_key(&sources, &injected, &entry(), DbDriver::Sqlite);
+        if let Some(main) = sources.get_mut(&vec!["Main".to_owned()]) {
+            main.1.push_str("\n-- comment\n");
+        }
+        let edited = compute_project_key(&sources, &injected, &entry(), DbDriver::Sqlite);
+        assert_ne!(base, edited, "a body edit must change the key");
+    }
+
+    #[test]
+    fn key_changes_with_db_driver() {
+        let (sources, injected) = sample_sources();
+        let sqlite = compute_project_key(&sources, &injected, &entry(), DbDriver::Sqlite);
+        let postgres = compute_project_key(&sources, &injected, &entry(), DbDriver::Postgres);
+        assert_ne!(sqlite, postgres, "the SQL driver is part of the key");
+    }
+
+    #[test]
+    fn key_changes_with_entry_path() {
+        let (sources, injected) = sample_sources();
+        let a = compute_project_key(&sources, &injected, &["Main".to_owned()], DbDriver::Sqlite);
+        let b = compute_project_key(&sources, &injected, &["Other".to_owned()], DbDriver::Sqlite);
+        assert_ne!(a, b, "the entry module path is part of the key");
+    }
+
+    #[test]
+    fn key_changes_with_module_add_and_remove() {
+        let (sources, injected) = sample_sources();
+        let base = compute_project_key(&sources, &injected, &entry(), DbDriver::Sqlite);
+
+        let mut added = sources.clone();
+        added.insert(
+            vec!["Extra".to_owned()],
+            (PathBuf::from("Extra.sky"), "module Extra exposing (y)\ny = 2\n".to_owned()),
+        );
+        let with_extra = compute_project_key(&added, &injected, &entry(), DbDriver::Sqlite);
+        assert_ne!(base, with_extra, "adding a module must change the key");
+
+        let mut removed = sources;
+        removed.remove(&vec!["Std".to_owned(), "Prelude".to_owned()]);
+        let without_prelude = compute_project_key(&removed, &injected, &entry(), DbDriver::Sqlite);
+        assert_ne!(base, without_prelude, "removing a module must change the key");
+    }
+
+    #[test]
+    fn key_changes_with_module_origin() {
+        // Same path + text, different trust origin (injected vs. user) —
+        // the design doc's module-identity axis. This can't happen through
+        // the real driver (a path is injected or it isn't), but the key
+        // function must still be sensitive to it: origin affects
+        // canonicalisation (SKY-N0025), and the module doc's own "when in
+        // doubt, include it" principle applies.
+        let (sources, _injected) = sample_sources();
+        let no_injection: BTreeSet<Vec<String>> = BTreeSet::new();
+        let all_injected: BTreeSet<Vec<String>> = sources.keys().cloned().collect();
+        let a = compute_project_key(&sources, &no_injection, &entry(), DbDriver::Sqlite);
+        let b = compute_project_key(&sources, &all_injected, &entry(), DbDriver::Sqlite);
+        assert_ne!(a, b, "the trust-origin flag is part of the key");
+    }
+
+    #[test]
+    fn key_is_delimiter_collision_safe() {
+        // ["AB", "C"] and ["A", "BC"] must NOT collide even though a naive
+        // "join with no delimiter" scheme would produce the same bytes.
+        let mut left = BTreeMap::new();
+        left.insert(
+            vec!["AB".to_owned(), "C".to_owned()],
+            (PathBuf::from("x"), String::new()),
+        );
+        let mut right = BTreeMap::new();
+        right.insert(
+            vec!["A".to_owned(), "BC".to_owned()],
+            (PathBuf::from("x"), String::new()),
+        );
+        let empty: BTreeSet<Vec<String>> = BTreeSet::new();
+        let a = compute_project_key(&left, &empty, &[], DbDriver::Sqlite);
+        let b = compute_project_key(&right, &empty, &[], DbDriver::Sqlite);
+        assert_ne!(a, b, "differently-segmented module paths must not collide");
+    }
+
+    #[test]
+    fn store_and_load_round_trip() {
+        let dir = std::env::temp_dir().join(format!("skyc-cache-test-{}", std::process::id()));
+        let cache_root = dir.join("cache-root-round-trip");
+        let mut files = BTreeMap::new();
+        files.insert(
+            sky_backend::RelPath::new("src/main.rs").expect("valid path"),
+            "fn main() {}".to_owned(),
+        );
+        let project = EmittedProject {
+            files,
+            cargo_toml: "[package]\nname = \"x\"\n".to_owned(),
+        };
+
+        assert!(try_load(&cache_root, "epoch-a", "key-a").is_none(), "empty cache misses");
+        store(&cache_root, "epoch-a", "key-a", &project);
+        let loaded = try_load(&cache_root, "epoch-a", "key-a");
+        assert_eq!(loaded, Some(project));
+
+        // A different epoch or key must NOT see the stored entry — the
+        // version-epoch/content-address separation is structural.
+        assert!(try_load(&cache_root, "epoch-b", "key-a").is_none());
+        assert!(try_load(&cache_root, "epoch-a", "key-b").is_none());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn try_load_treats_corrupt_entry_as_a_miss() {
+        let dir = std::env::temp_dir().join(format!("skyc-cache-test-corrupt-{}", std::process::id()));
+        let cache_root = dir.join("cache-root-corrupt");
+        let path = entry_file_path(&cache_root, "epoch", "key");
+        fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir must succeed");
+        fs::write(&path, b"not valid json at all {{{").expect("write must succeed");
+
+        assert!(
+            try_load(&cache_root, "epoch", "key").is_none(),
+            "corrupt entry must be discarded as a miss, never a panic or error propagation"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn try_load_treats_a_poisoned_relpath_entry_as_a_miss() {
+        // Even a syntactically-valid JSON document with a semantically
+        // unsafe `RelPath` key must be discarded, not partially trusted —
+        // proven at the `sky_backend` level (`emitted_project_deserialize_
+        // rejects_a_poisoned_key`); this test proves the cache layer
+        // inherits that rejection via `.ok()` rather than accidentally
+        // routing around it.
+        let dir = std::env::temp_dir().join(format!("skyc-cache-test-poison-{}", std::process::id()));
+        let cache_root = dir.join("cache-root-poison");
+        let path = entry_file_path(&cache_root, "epoch", "key");
+        fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir must succeed");
+        fs::write(&path, br#"{"files":{"../../etc/passwd":"pwned"},"cargo_toml":""}"#)
+            .expect("write must succeed");
+
+        assert!(try_load(&cache_root, "epoch", "key").is_none());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn env_cache_dir_respects_disable_and_override() {
+        // Pure-function shape avoided here on purpose: `env_cache_dir` reads
+        // process env, so this test only checks the UNSET default (the
+        // env-mutation cases are exercised end-to-end in
+        // `crates/skyc/src/lib.rs`'s cache integration tests via the
+        // explicit-cache-dir seam, never via `std::env::set_var` — see that
+        // module's doc for why).
+        let out_dir = Path::new("/tmp/skyc-cache-dir-does-not-need-to-exist");
+        let default = env_cache_dir(out_dir);
+        assert_eq!(default, Some(out_dir.join(".skyc-cache")));
+    }
+}
