@@ -15,15 +15,29 @@ normaliser collapses so a diff shows only behaviourally-meaningful divergences:
   * pseudo-class / media-query / animation / transition STYLE DELIVERY — Go emits
     a scoped <style> child; Rust emits `data-sky-*-rules` attributes the client
     turns into CSS. Same visual; drop both delivery forms.
-  * SVG chart coordinates — MASKED. They carry a KNOWN Go float→int truncation
-    (Math.min/max + bar-height AsInt; upstream anzellai/sky PR #136). Compared
-    structurally, not by value, until that fix syncs. TODO: un-mask the SVG_COORD
-    values once the Go fix lands so coordinate regressions are caught too.
+  * SVG chart coordinates — NUMERICALLY CANONICALISED, not masked. The upstream
+    Go bug this used to hide (`Math.min`/`Math.max` truncating Float args to Int,
+    anzellai/sky PR #136) landed a fix in Go `v0.17.1`; the pinned oracle
+    (`tools/oracle/README.md`, currently `v0.17.3`) is newer, so the Go side no
+    longer produces truncated coordinates. `Sky.Core.String.fromFloat` in this
+    repo's Rust runtime (`runtime/src/sky_runtime/string.rs`) is a byte-for-byte
+    port of Go's `strconv.FormatFloat(f, 'g', -1, 64)`, verified against real
+    oracle probes — so there is no float-*formatting* divergence between the two
+    backends to paper over either. A blanket `'#'` mask on every SVG coordinate
+    was therefore a Rule-1 false-green hole (BACKLOG #110 sub-item 1): a genuine
+    skyc coordinate regression (wrong scale, off-by-one, wrong precision) would
+    render as an empty diff. Numeric tokens inside a coordinate-bearing SVG attr
+    (`d`, `x`, `y`, `points`, `viewBox`, …) are rounded to a fixed tolerance
+    (`SVG_COORD_TOLERANCE_DIGITS`) and re-serialised canonically: this still
+    collapses harmless sub-tolerance float noise (`12.000000` vs `12`) but a
+    genuine VALUE difference beyond that tolerance still trips a MISMATCH. See
+    `norm_svg_coord` below.
 
 What SURVIVES normalisation (the meaningful surface a regression test must guard):
 element structure + nesting, text content (e.g. a <textarea>'s value as content),
-inline `style=` layout, user attrs (data-test-id, href, …), and which events each
-element handles. The textarea-value and console-badge regressions both surface here.
+inline `style=` layout, user attrs (data-test-id, href, …), which events each
+element handles, and now SVG coordinate VALUES (within tolerance). The textarea-
+value and console-badge regressions both surface here.
 
 Usage:  equiv_normalize_html.py <page.html>   # prints the canonical #sky-root form
 """
@@ -46,6 +60,46 @@ SVG_COORD = {'d', 'x', 'y', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy', 'r', 'rx', 'ry',
              'width', 'height', 'points', 'fill-opacity', 'stroke-width',
              'offset', 'viewbox', 'dx', 'dy'}
 SVG_TAGS = ('svg', 'path', 'rect', 'circle', 'line', 'polyline', 'polygon', 'text', 'g')
+
+# Numeric-token matcher for SVG coordinate-bearing attrs. Handles the SVG path
+# mini-language's number grammar (leading-dot forms like `.5`, signs, no
+# thousands separators, optional exponent) embedded inside command letters /
+# commas / whitespace, e.g. `d="M 10.5,20 L -3.2e1 .5 Z"`.
+_SVG_NUM_RE = re.compile(r'-?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?')
+
+# Sub-tolerance float noise (e.g. `12.000000` vs `12`, or a theoretical ULP-
+# level libm difference) collapses at this many decimal digits; a real
+# coordinate bug (wrong scale, off-by-one, wrong precision) differs by many
+# orders of magnitude more than 1e-6 of a pixel and still trips a MISMATCH.
+SVG_COORD_TOLERANCE_DIGITS = 6
+
+
+def _canon_svg_num(token, ndigits=SVG_COORD_TOLERANCE_DIGITS):
+    """Round one numeric token to a fixed tolerance and re-serialise it in a
+    canonical (trailing-zero-free, no-negative-zero) decimal form. Falls back
+    to the raw token on anything `float()` can't parse (NaN/Inf spellings,
+    stray text) — never silently equalises unparsable content."""
+    try:
+        f = float(token)
+    except (ValueError, OverflowError):
+        return token
+    if f != f or f in (float('inf'), float('-inf')):  # NaN / Inf: never mask
+        return token
+    r = round(f, ndigits)
+    if r == 0:
+        r = 0.0  # collapse -0.0 -> 0.0
+    s = ('%.*f' % (ndigits, r)).rstrip('0').rstrip('.')
+    return s if s not in ('', '-') else '0'
+
+
+def norm_svg_coord(v):
+    """Canonicalise every numeric token inside an SVG coordinate attribute
+    value (a lone number, or a mixed string like `d`'s path-command grammar or
+    `points`'s coordinate-pair list) to SVG_COORD_TOLERANCE_DIGITS of decimal
+    precision. Non-numeric characters (command letters, commas, whitespace,
+    `%` on a percentage) pass through untouched. Replaces the pre-fix blanket
+    `'#'` mask — see the module docstring's SVG-coordinate bullet."""
+    return _SVG_NUM_RE.sub(lambda m: _canon_svg_num(m.group(0)), v)
 
 
 def norm_skyid(v):
@@ -101,7 +155,7 @@ class Norm(HTMLParser):
             if k in SKYID_KEYS:
                 v = norm_skyid(v)
             elif in_svg and k in SVG_COORD:
-                v = '#'  # mask known-divergent chart coords (Go bug, PR #136)
+                v = norm_svg_coord(v)  # tolerance-round, don't mask (BACKLOG #110.1)
             norm.append((k, v))
         if events:
             norm.append(('data-events', ','.join(sorted(events))))
