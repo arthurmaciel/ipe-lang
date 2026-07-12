@@ -34,6 +34,8 @@
 //! reuse stays confined to tests until the clean-vs-incremental parity gate
 //! (plan Task 18) exists.
 
+mod metadata;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -44,6 +46,8 @@ use sky_intern::{Interner, Symbol};
 /// type without a direct `sky_canon` dependency.
 pub use sky_canon::{ModuleExports, ModuleOrigin};
 use sky_syntax::Module;
+
+pub use metadata::{program_metadata, ProgramMetadata, ProgramMetadataResult};
 
 // ---------------------------------------------------------------------------
 // The shared interner (plan Task 3, Option 3a)
