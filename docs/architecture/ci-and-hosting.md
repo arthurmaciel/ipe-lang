@@ -25,6 +25,33 @@ Woodpecker agent, no systemd service, no "if the dev box is off, CI queues."
    git is portable; we can move CI later if values/independence demand it.
 3. **Jobs** (parallel): `fmt`, `clippy -D`, `test` (nextest + doctests), `miri`
    (compiler crates), `e2e` (sharded `nextest --partition`, `SKY_E2E=1`).
+3.5. **Supply-chain security is a separate workflow** (`.github/workflows/
+   security.yml`, added 2026-07-12): `cargo-audit` (RustSec advisory scan
+   against `Cargo.lock`, config at `.cargo/audit.toml`) and `cargo-deny`
+   (license compliance + dependency-source pinning + duplicate-version
+   report, config at `deny.toml`, scanned against the `--features full`
+   graph to match `runtime-full-features`). Both are lockfile/metadata-only
+   — no compilation, seconds to run — and both **gate** (fail the workflow
+   on a real finding), not advisory-only: PRINCIPLES.md ranks Security
+   ahead of Correctness, and both tools support a documented, justified
+   ignore-list for the unfixable case (see the one current entry,
+   RUSTSEC-2023-0071, in `.cargo/audit.toml`), so gating doesn't risk a
+   permanently-red CI over an advisory with no available fix. Miri stays in
+   `ci.yml` (it's about undefined behaviour in code we write, not
+   third-party dependency metadata) and deliberately stays scoped to the
+   handful of crates where it's load-bearing (`sky_intern`, `sky_ir`,
+   `sky_types`, `sky_lower`, `sky_diagnostics`, `sky_backend_rust` — all
+   `#![forbid(unsafe_code)]`, so Miri's value there is catching UB
+   triggered indirectly through a dependency's own `unsafe`, plus Stacked/
+   Tree-Borrows aliasing violations in code using `Rc`/`RefCell`-style
+   interior mutability, not scanning for a nonexistent `unsafe` block of
+   ours). `sky_db` (the salsa incremental-compilation database) was
+   evaluated and rejected as a Miri target: a scoped
+   `cargo +nightly miri test -p sky_db` run timed out after 280s on the
+   FIRST of 3 tests (salsa's internal machinery — thread pools / generation
+   counters — makes Miri's interpretation overhead impractical for that
+   crate), confirming the existing narrow scope is deliberate, not an
+   oversight.
 4. **Parity needs no Go toolchain in CI** — it rides the **cached Go oracle**
    (committed `expected_go.txt`; see `e2e-and-oracle-caching.md`). A Go panic is
    recorded as an `oracle_divergence`, never cached as "correct" (the Go oracle
