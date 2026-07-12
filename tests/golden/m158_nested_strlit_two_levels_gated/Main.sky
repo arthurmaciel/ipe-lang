@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+-- Adversarial-review sibling gap (Finding A) of the #158 C2 string-literal
+-- ctor-payload desugaring: a `PStr` sub-pattern nested TWO levels deep in a
+-- ctor payload (`Just (Just "x")`). The direct-arg desugaring
+-- (`desugar_ctor_nested_special_args`) only intercepts a `PStr` that is a
+-- DIRECT arg of the top-level `PCtor` arm head (`Just "x"` at depth 1) — it
+-- rewrites that to a fresh `String` binder + an arm guard. A `PStr` reached
+-- via the INNER ctor's payload recursion (`lower_payload_pat`) used to fall
+-- through to an unguarded `PStr(s) => Ok(Pat::Str(s.clone()))`, emitting
+-- `SkyMaybe::Just(SkyMaybe::Just("x"))` — a `&str` literal pattern against an
+-- owned `String` ctor FIELD, E0308 at `cargo build` despite `skyc` exit 0.
+--
+-- This shape now stays fail-closed with a clean SKY-L0116 diagnostic, mirroring
+-- the sibling PList / PCons gate at the same nested-payload recursion site —
+-- never accept-then-cargo-fail.
+f : Maybe (Maybe String) -> String
+f nested =
+    case nested of
+        Just (Just "x") ->
+            "matched"
+
+        _ ->
+            "other"
+
+
+main =
+    println (f (Just (Just "x")))
