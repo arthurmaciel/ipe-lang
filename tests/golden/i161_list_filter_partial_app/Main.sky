@@ -1,0 +1,46 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+-- #161 regression. `List.filter` / `List.any` called with a predicate that
+-- is ITSELF a partial application — a closure capturing another value, the
+-- exact shape the bug report used (`List.filter (isVisible session) items`)
+-- — used to fail `cargo build` with E0277: emitted closures always lower to
+-- a boxed `Box<dyn Fn(..) -> .. + Send>` trait object (which can never be
+-- `Clone`, a fundamental Rust limitation on `dyn Fn`), but
+-- `sky_runtime::list::list_filter` / `list_any` declared their predicate
+-- parameter `impl Fn(T0) -> bool + Clone` — a bound the implementations
+-- never actually needed (each calls the predicate through a shared `&self`
+-- borrow, never cloning it). The fix drops the spurious `Clone` bound from
+-- every affected `Sky.Core.List` HOF kernel; this fixture pins the
+-- partial-application shape end-to-end (skyc accepts it AND the emitted
+-- Rust both compiles and runs to the expected output).
+
+isAbove : Int -> Int -> Bool
+isAbove threshold x =
+    x > threshold
+
+
+main =
+    let
+        items =
+            [ 1, 2, 3, 4, 5, 6 ]
+
+        -- `isAbove 3` is a partial application: a closure over `threshold`
+        -- that itself closes over another already-boxed Sky function value.
+        aboveThree =
+            List.filter (isAbove 3) items
+
+        anyAboveFive =
+            List.any (isAbove 5) items
+
+        noneAboveTen =
+            List.any (isAbove 10) items
+    in
+    println
+        (String.fromInt (List.length aboveThree)
+            ++ (if anyAboveFive then "T" else "F")
+            ++ (if noneAboveTen then "T" else "F")
+        )
