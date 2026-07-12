@@ -184,7 +184,7 @@ survives across revisions on a production path (Phase 2+).
 | **2 (DONE — see §7)** | 5 (AST imports), 6, 7, 8 | `resolve_imports` closed-enum edge (add/delete/rename/shadow), `module_interface` firewall + completeness gate, `canonicalize(ModuleId)` tracked |
 | 3 | 9, 11, 18 | `kernel_types()`, coarse whole-program spine (`linked_program()` wrapping link→infer→lower→emit), **stand up the clean-vs-incremental parity gate EARLY** |
 | **4 (implemented — see §9; coarse fallback, NOT per-module)** | 12, 13 | per-module `typecheck`/`lower` (riskiest; gated by 18; coarse floor is the sanctioned fallback) |
-| 5 | 14–17 | `program_metadata()` (conservative, re-runs every build — LOCKED), per-file emit, emit→cargo bridge (content-gated atomic write + manifest prune), config projections |
+| **5 (implemented — see §10; 14+16 shipped, 15 recorded-not-forced, 17 deferred)** | 14–17 | `program_metadata()` (conservative, re-runs every build — LOCKED) — shipped; emit→cargo bridge (content-gated atomic write + manifest prune) — shipped at today's whole-project emit granularity; per-file `emit_rust_file` — genuinely blocked (no `RustFileId` domain exists in the backend today), recorded as a scoped continuation, not forced; config projections — deferred |
 | 6 | 19, 20 | Option-B persisted lowered-IR cache (whole-project content address, version-epoch), toolchain refuse-don't-guess |
 | 7 | 21–25 | `ipe watch` (confined watcher, debounce, last-good state machine, L0+ continuity, cancellation) |
 | 8 | 26 | LSP seam — same db, same queries, editor-buffer inputs |
@@ -670,3 +670,272 @@ In priority order, matching the two coupling sources found in §9.1:
 | `lower_program_memoized_coarse_floor` | same shape one layer down; `typecheck` and `lower_program` re-execute in lockstep on a dep edit |
 | `lower_program_short_circuits_on_typecheck_error` | a red program never reaches `sky_lower::lower` — `lower_program`'s error is `typecheck`'s own diagnostic, verbatim |
 | `skyc::clean_vs_incremental_parity` (5 tests, re-run) | still green — zero golden-file changes, proving the lock-scope restructuring preserved the exact interning sequence |
+
+---
+
+## 10. Phase 5 — `program_metadata()` shipped; per-file emit + emit→cargo
+## bridge SPLIT: bridge shipped, per-file emit is a recorded, NOT-forced gap
+
+Phase 5 = plan Tasks **14, 15, 16, 17**. Unlike every prior phase, Task 15
+(`emit_rust_file(RustFileId)`) is **not** shipped even in a coarse-fallback
+shape — the survey (mandatory before writing anything, same discipline as
+Phase 4 §9.1) found that the *precondition* for a coarse `emit_rust_file`
+fallback does not exist yet, and forcing one into place this session would
+have meant either inventing a backend redesign well outside a single
+session's sound-review budget, or shipping a query that is named
+`emit_rust_file` but is not actually per-file — exactly the "looks like
+progress but isn't" trap this project's non-negotiables forbid. What shipped
+instead: Task 14 in full, Task 16 in full (at the granularity that genuinely
+exists today), Task 15 recorded as a precisely-scoped gap for the next
+session, Task 17 not attempted (budget spent on 14/16 and the Task-15
+survey).
+
+### 10.1 Task 14 — `program_metadata()`, shipped as designed
+
+`sky_db::program_metadata(db, root, entry)` (`crates/sky_db/src/metadata.rs`)
+is a tracked query depending **directly** on [`lower_program`] (Phase 4's
+coarse per-program seam) — never firewalled behind an interface summary.
+This gets the design spec's own H6 lock ("Global DCE/mono firewalled behind
+interfaces → dead-fn-promoted-to-live not re-emitted") **by construction**:
+because `lower_program` is itself the coarse whole-program spine, ANY
+semantic edit anywhere already re-executes it, and therefore already
+re-executes `program_metadata` too — no special "never firewall this"
+mechanism needed, the coarseness inherited from Phase 4 already has the
+locked property. What downstream consumers gain from this being a *salsa*
+query rather than a plain function call is exactly what the design doc
+promises: early-cutting on a byte-identical `ProgramMetadata` output
+(`Arc<ProgramMetadata>: PartialEq` backdating) even though the query itself
+always re-executes.
+
+**What it computes, and the honestly-recorded scope limit.** Confirmed by
+reading `sky_lower::lower` end to end (Phase 4 already established
+`Program { modules: vec![module] }` — always exactly one lowered
+`sky_ir::Module`; §9.1's finding still holds): `ProgramMetadata` carries
+
+- `reachable_funcs: BTreeSet<FuncId>` — a genuine fixpoint over the
+  whole-program call graph (`Expr::Call`'s `Callee::Func` AND
+  `Expr::FuncValue`'s first-class references), seeded from the module's
+  `entry: Option<FuncId>` (set when `sky_lower::lower` finds a def literally
+  named `main`). Proven by three tests: a function nothing reachable calls is
+  excluded (`program_metadata_excludes_unreached_function`), a
+  transitively-reachable function two calls deep is included
+  (`program_metadata_reachability_is_transitive`), and a program with no
+  `main` binding falls back to "every function reachable" — the sound,
+  never-under-report direction for a set nothing consumes for pruning yet
+  (`program_metadata_no_entry_falls_back_to_conservative_reachable_everything`).
+- `reachable_types: BTreeSet<(ModPath, Symbol)>` — every enum type
+  CONSTRUCTED (`Expr::Ctor`) or PATTERN-MATCHED (`Pat::Ctor`) inside a
+  reachable function body. **Deliberately NOT closed over declared
+  `EnumDef` variant field types** — a type reachable only via an
+  unconstructed/unmatched payload field would be missed. Sound today ONLY
+  because `program_metadata` is a forward seam, not yet a dependency of any
+  pruning pass (the same status Phase 3's `kernel_types` shipped with — see
+  §8.2). A future consumer that actually PRUNES dead code from emission MUST
+  close this over `EnumDef` field types first; recorded here so the gap is
+  never silently assumed away.
+
+Both walkers (`walk_expr` over all 24 `Expr` variants, `walk_pat` over all 8
+`Pat` variants) are EXHAUSTIVE matches — no wildcard arm — so a future IR
+variant cannot be silently under-walked; the compiler forces this file to be
+revisited when `sky_ir::Expr` or `sky_ir::Pat` grows a case (the same
+discipline `CLAUDE.md` §8 requires of the Go/Haskell compiler's AST walkers,
+applied here to the Rust IR).
+
+**Wired onto the production path as a forward seam.** `compile_prepared`
+(`crates/skyc/src/lib.rs`) now demands `sky_db::program_metadata` right after
+`lower_program`, before emission — mirroring `kernel_types`'s Phase-3
+"materialized before it has a real consumer" status. Nothing downstream
+reads its value (no pruning pass exists), so this demand changes ZERO
+emitted bytes; the point is purely to put the query on the same path the
+clean-vs-incremental parity gate drives, so a future divergence in this
+analysis (a panic, an infinite loop, a wrong diagnostic) cannot go
+undetected. Proof: `crates/sky_db/tests/phase5_metadata.rs`, 5 tests (memo
+hits, dep-edit re-execution, the reachability computation itself, the
+lower-error short-circuit, the no-entry fallback).
+
+### 10.2 Task 15 — `emit_rust_file(RustFileId)`: genuinely blocked, not forced
+
+The design table's shape (`docs/architecture/incremental-compilation-and-
+watch.md` row `emit_rust_file(RustFileId)`) requires a `RustFileId` domain —
+one Rust file per Sky module, so a body edit to ONE module changes only that
+file's text. Reading `sky_backend_rust::project::emit_program` end to end
+(the mandatory survey before writing anything) found this domain **does not
+exist anywhere in the pipeline today**, for two independent, compounding
+reasons — the second is a NEW finding beyond what Phase 4 §9.1 already
+recorded for lowering:
+
+1. **Phase 4's finding still applies one layer further down.**
+   `sky_lower::lower` always produces exactly ONE `sky_ir::Module`
+   (`Program { modules: vec![module] }`) regardless of how many Sky source
+   modules were linked — so there is no `program_ir_module(ModuleId)` to key
+   `emit_rust_file`'s `owner` dependency on, mirroring the exact
+   whole-program IR coupling §9.1 documented for typecheck/lower.
+2. **NEW: the backend itself emits ONE `src/main.rs`, not one file per Sky
+   module, even given a hypothetical per-module IR.**
+   `emit_program` (`crates/sky_backend_rust/src/project.rs:332`) iterates
+   `program.modules` and concatenates EVERY module's types then EVERY
+   module's funcs into a single growing `String`, written once as
+   `files.insert(RelPath::new("src/main.rs")?, out)`. The only OTHER files
+   ever produced are two small, program-wide-flag-driven runtime shims
+   (`sky_runtime/mod.rs`, `sky_runtime/config.rs`) — neither varies per Sky
+   module either. There is currently no `RustFileId` value space to iterate
+   at all, coarse or fine.
+
+**Why this is not forced into a fake-coarse fallback (unlike Phase 4).**
+Phase 4 had a real, safe fallback available: `typecheck`/`lower_program`
+already existed as plain whole-program functions, so wrapping them in a
+tracked query cost nothing and genuinely proved memoization. There is no
+equivalent safe move here: the only way to give `emit_rust_file` a REAL
+per-file domain is to split `emit_program`'s monolithic `main.rs` into
+one `.rs` per Sky module — which requires, at minimum, (a) `mod`
+declarations and cross-module `pub`/`use` visibility in the emitted Rust
+(today every def is a bare top-level item in ONE file, so cross-module name
+resolution is free — splitting reintroduces a whole visibility design), (b)
+an ownership rule for `EmitCtx::record_structs()` — the deduplicated,
+program-wide closed-record-shape table — deciding which Rust file a shared
+synthesised struct lives in when two different Sky modules construct the
+same shape, (c) relocating the fixed kernel-wrapper prelude / `main()`
+entry / TEA-alias block that today anchors the single file, and (d) **every
+one of the 140+ `golden_*` byte-diff tests currently pins ONE
+`src/main.rs`** — splitting the file boundary is a breaking change to the
+golden-oracle SEAL itself, not an additive one, so the parity-gate-first
+discipline (§8.4 decision 1: "Gate first... went red on its first run") has
+no smaller slice to stand up first. Each of (a)–(d) needs its own design +
+review pass; attempting any of them inside this session's remaining budget
+would mean either skipping the review this project's principles order
+(security > correctness > soundness > efficiency > completeness >
+readability) demands, or shipping something that LOOKS like Task 15 but
+changes no observable incrementality property — the "unsound-looking-like-
+progress" trap the mission brief explicitly forbids.
+
+**Recorded, not shipped.** `emit_rust_file` does not exist in `sky_db`.
+`compile_prepared`'s call to `RustBackend::emit` is UNCHANGED from Phase 4 —
+still a plain function call, not wrapped in any tracked query — because
+wrapping the CURRENT whole-project `emit` in a coarse seam (the `emit_project`
+shape a literal reading of "ship the sound floor" might suggest) turned out
+to need its OWN new salsa input (`DbDriver`'s selection has no existing
+input home — Phase 1 §3.2 explicitly trimmed `project_config()` for having
+zero consumers, and Task 17 is exactly where that input belongs) threaded
+through EVERY call site of `compile_prepared`, INCLUDING the Task-18 parity
+gate itself (`crates/skyc/tests/clean_vs_incremental_parity.rs`) — touching
+the gate's call shape for a memoization win with no real per-call-site
+value (a fresh salsa input recreated on every warm-side call would defeat
+the very memoization being proven) was judged not worth the risk this
+session. **Continuation scope for the next session, in priority order:**
+
+1. Land Task 17's `project_config()` (or a narrower `BuildConfig { db_driver
+   }` input) FIRST — a small, low-risk, purely-additive input with a clear
+   consumer (item 2) — before attempting anything emit-shaped, exactly the
+   "don't force the risky part" ordering this session used.
+2. THEN wrap `RustBackend::emit` in a coarse `sky_db::emit_project(root,
+   entry, config)` tracked query (real Phase-4-style value: a repeat/no-op
+   demand skips the whole backend pass) — update the parity gate's two call
+   sites to hold a STABLE `BuildConfig` handle across a warm sequence
+   (created once, like `SourceRoot`) rather than recreating one per call, so
+   the seam's memoization is actually exercised by the gate, not silently
+   defeated by a fresh input identity each demand.
+3. ONLY THEN attempt the real `emit_rust_file(RustFileId)` split — its own
+   multi-session design pass (mod/visibility scheme, record-struct ownership
+   rule, golden-suite re-baseline strategy), reviewed against the Task-18
+   gate before touching the production path, mirroring exactly how Phase 4
+   staged lowering's fresh-symbol-pool sizing as future work rather than
+   improvising it.
+
+### 10.3 Task 16 — the emit→cargo bridge, shipped at the granularity that
+### exists today
+
+`crates/skyc/src/lib.rs`'s `write_emitted_project` is now three functions
+implementing the content-gated-write + manifest-driven-prune shape at the
+CURRENT emit granularity (whole-project `EmittedProject` + the vendored
+runtime tree) — the per-file split blocked in §10.2 is not a precondition
+for this: the "manifest" the bridge reconciles against is simply the
+complete set of paths a build produces, however many files that is today.
+
+- **`build_emit_manifest`** assembles `BTreeMap<PathBuf, String>` — every
+  path this build intends to produce, relative to `out_dir`, mapped to its
+  exact text — from three sources, in the SAME precedence
+  `write_emitted_project` always used (vendor-then-emit, so the backend's
+  trimmed `mod.rs`/`config.rs` win over the fuller source-tree copies): the
+  vendored runtime tree (read recursively via the new `collect_dir_text`),
+  `Cargo.toml`, and `emitted.files`. Every file this driver ever writes is
+  UTF-8 Rust/TOML source, so `String` (not raw bytes) is the honest content
+  type here — a non-UTF-8 file under `runtime_dir` surfaces as an
+  `CliError::Io`, never a panic (`fs::read_to_string`'s own error path).
+- **`reconcile_emitted_project`** writes each manifest entry via
+  **`write_if_changed`** (H8): reads the existing file first and skips the
+  write entirely when the content already matches, so an unchanged warm
+  rebuild touches NO mtimes and therefore never bumps `cargo`'s own
+  incremental-build invalidation. The actual write reuses the PRE-EXISTING
+  `write_atomic` helper (previously only used by `sky doctor --fix`'s
+  patch-application path) rather than a second, parallel atomic-write
+  implementation — one tmp-then-rename code path, with its established
+  cleanup-on-rename-failure behaviour, now serves both callers.
+- **`prune_orphaned_files`** (H7) walks `out_dir/src` AFTER every write and
+  deletes any file whose path is not a manifest key — an orphaned/stale
+  `.rs` left over from a deleted Sky module, or a file removed from the
+  vendored runtime tree upstream, can no longer linger and silently keep
+  compiling. Scope is deliberately confined to `out_dir/src`: the walk never
+  touches the project root, so `Cargo.lock`, a `target/` build-cache
+  directory, or anything else `cargo` itself manages there is structurally
+  unreachable from this pass — the manifest only ever claims `src/**` plus
+  `Cargo.toml`, so pruning outside `src/` would be pruning against a
+  manifest that was never authoritative for that scope in the first place.
+  Directories themselves are never removed (only files) — leaving an empty
+  directory behind is harmless (`cargo` does not care) and keeps this pass's
+  blast radius to exactly "stale file", nothing structural.
+
+The old `copy_dir` (unconditional recursive `fs::copy`, no staleness check,
+no prune) is deleted — `collect_dir_text` + the reconciler replace it
+end to end. Behavioural delta on a byte-identical rebuild: previously every
+vendored + emitted file was rewritten unconditionally (bumping every mtime
+even when nothing changed); now nothing is written at all. On a build that
+DOES change (any first build, or any edit), output is byte-identical to
+before — the golden-oracle SEAL and the Task-18 parity gate do not compare
+mtimes, only content, so this is invisible to both and requires no gate
+changes.
+
+### 10.4 Task 17 — not attempted
+
+Session budget went to the Task 14 implementation + proof, the Task 15
+survey (whose negative finding — "the precondition doesn't exist" — took
+real investigation to establish soundly rather than assumed), and Task 16's
+implementation + review. `project_config()` field-granular projections are
+recorded as the Task-15-continuation's first step (§10.2 item 1) rather than
+attempted standalone here — landing it without a consumer would repeat the
+exact "reserved surface nothing reads is dead surface that can silently rot"
+trap Phase 1 §3.2 explicitly named as its reason to trim inputs to have real
+consumers.
+
+### 10.5 Phase-5 decisions ledger
+
+1. **`program_metadata` gets its "never firewalled" property from
+   `lower_program`'s existing coarseness, not from a new mechanism** — the
+   cheapest possible way to satisfy H6, and the only way that could not
+   itself introduce a NEW under-invalidation risk (a bespoke "always dirty"
+   flag would be one more thing to keep sound).
+2. **`reachable_types` is not closed over `EnumDef` field types** —
+   documented gap, sound only while nothing consumes it for pruning (mirrors
+   `kernel_types`'s Phase-3 status exactly).
+3. **Task 15 is a recorded gap, not a forced fallback** — the first Phase in
+   this effort where "ship the sound floor" concluded "there is no floor
+   here yet, only design work" rather than "wrap the existing function."
+   Distinguishing these two outcomes honestly is itself the discipline this
+   project's non-negotiables require.
+4. **Task 16 needed zero backend changes** — proof that the emit→cargo
+   bridge and the per-file emit split are genuinely INDEPENDENT concerns;
+   Task 16 does not become easier or harder once Task 15 eventually lands
+   (the manifest shape is agnostic to how many files it contains).
+5. **`write_atomic` reuse over a parallel implementation** — one atomic-write
+   code path for both `sky doctor --fix` and the emit→cargo bridge; a second
+   implementation is a second place for a rename-on-failure bug to hide.
+
+### 10.6 Phase-5 proof tests
+
+| Test | Asserts |
+|---|---|
+| `sky_db::phase5_metadata program_metadata_memoized_coarse_floor` | repeat demand + byte-equal re-save execute nothing; dep body edit re-executes (coarse floor, same shape as Phase 4) |
+| `program_metadata_short_circuits_on_lower_error` | never reaches the structural walk on ill-typed input; surfaces `lower_program`'s own diagnostic verbatim |
+| `program_metadata_excludes_unreached_function` | a function nothing reachable calls is absent from `reachable_funcs` — the actual DCE-reachability proof |
+| `program_metadata_reachability_is_transitive` | a function reachable only via an intermediate call is included |
+| `program_metadata_no_entry_falls_back_to_conservative_reachable_everything` | no `main` binding → every function reachable (never under-reports) |
+| `skyc::clean_vs_incremental_parity` (5 tests, re-run) | still green — `program_metadata`'s production-path demand and the emit→cargo bridge rewrite change zero emitted bytes |
