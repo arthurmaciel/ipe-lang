@@ -594,6 +594,18 @@ pub fn compile_prepared(
     // above (a guaranteed memo hit within this revision).
     let program =
         sky_db::lower_program(db, source_root, entry_file).map_err(span_attributed_err)?;
+
+    // `sky_db::program_metadata` (Phase 5, plan Task 14) — the whole-program
+    // DCE-reachability seam over `lower_program`. Demanded here, on the
+    // production path, purely as a FORWARD SEAM: nothing downstream consumes
+    // its value yet (no pruning pass exists — see the query's own doc for the
+    // honestly-recorded scope), matching the Phase-3 `kernel_types` precedent
+    // (materialized and proven memoized before it has a real consumer). The
+    // demand costs nothing observable in emitted bytes — the point is to put
+    // the query on the same path the clean-vs-incremental parity gate drives,
+    // so a future divergence in this analysis cannot go undetected.
+    sky_db::program_metadata(db, source_root, entry_file).map_err(span_attributed_err)?;
+
     let emitted = {
         let interner = shared_interner.lock();
         RustBackend::new(&interner)
@@ -607,6 +619,16 @@ pub fn compile_prepared(
 /// Write an emitted project to `out_dir`, vendoring the runtime module tree
 /// from `runtime_dir`.
 ///
+/// The emit→cargo bridge (incremental plan Task 16 — design doc H7/H8):
+/// assembles the COMPLETE intended project (`build_emit_manifest`) — the
+/// vendored runtime tree, `Cargo.toml`, and every backend-emitted file — then
+/// [`reconcile_emitted_project`] writes only what changed (content-gated,
+/// atomic tmp-then-rename) and deletes anything under `out_dir/src` the
+/// manifest no longer names (manifest-driven prune). On an unchanged rebuild
+/// this writes NOTHING; `cargo` therefore sees no mtime churn and does not
+/// invalidate its own build cache. This is a pure driver-boundary filesystem
+/// operation — no salsa query touches disk (INV-1).
+///
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure.
 fn write_emitted_project(
@@ -614,29 +636,176 @@ fn write_emitted_project(
     out_dir: &Path,
     runtime_dir: &Path,
 ) -> Result<(), CliError> {
-    // Vendor the runtime module tree FIRST, then write the emitted files. The
-    // backend emits a trimmed `sky_runtime/mod.rs` + `config.rs`; writing the
-    // emitted files last lets them overwrite the fuller copies from the source
-    // tree (whose module list reaches for crates outside the M0 manifest).
-    let src_dir = out_dir.join("src");
-    fs::create_dir_all(&src_dir).map_err(|e| io_err(&src_dir, e))?;
-    copy_dir(runtime_dir, &src_dir.join("sky_runtime"))?;
+    let manifest = build_emit_manifest(emitted, runtime_dir)?;
+    reconcile_emitted_project(&manifest, out_dir)
+}
 
-    let cargo_path = out_dir.join("Cargo.toml");
-    fs::write(&cargo_path, &emitted.cargo_toml).map_err(|e| io_err(&cargo_path, e))?;
-
-    // Each `rel` is a `sky_backend::RelPath`: validated at construction to be
-    // relative and free of `..` components, so `out_dir.join(rel)` cannot escape
-    // `out_dir` (no absolute-write, no path-traversal). The trust boundary is the
-    // newtype, not this loop.
+/// Assemble the complete intended on-disk project, relative to `out_dir`:
+/// every path this build produces, mapped to its exact text.
+///
+/// Every file this driver ever writes is UTF-8 Rust/TOML source, so `String`
+/// (not raw bytes) is the honest content type — it lets this function reuse
+/// the existing [`write_atomic`] helper unchanged (see
+/// [`reconcile_emitted_project`]) instead of a parallel byte-oriented atomic
+/// writer.
+///
+/// Three sources, in the same precedence `write_emitted_project` has always
+/// used ("vendor first, emit second" — the backend's trimmed
+/// `sky_runtime/mod.rs` / `config.rs` must win over the fuller copies from
+/// the source tree):
+///   1. The vendored runtime module tree (`runtime_dir`, read recursively
+///      under `src/sky_runtime/`) — a driver-boundary filesystem read, the
+///      same discipline as reading the entry file (never inside a
+///      salsa-tracked query).
+///   2. `Cargo.toml` at the project root.
+///   3. Every backend-emitted file (`emitted.files`; each key is already a
+///      validated [`sky_backend::RelPath`] — relative and `..`-free — so no
+///      entry here can escape `out_dir`).
+///
+/// # Errors
+/// [`CliError::Io`] on any filesystem failure reading `runtime_dir` (including
+/// a non-UTF-8 file, surfaced as an I/O error rather than a panic — the
+/// runtime tree is trusted in-repo source, so this is not expected to fire in
+/// practice).
+fn build_emit_manifest(
+    emitted: &sky_backend::EmittedProject,
+    runtime_dir: &Path,
+) -> Result<BTreeMap<PathBuf, String>, CliError> {
+    let mut manifest = BTreeMap::new();
+    collect_dir_text(runtime_dir, Path::new("src/sky_runtime"), &mut manifest)?;
+    manifest.insert(PathBuf::from("Cargo.toml"), emitted.cargo_toml.clone());
     for (rel, contents) in &emitted.files {
-        let path = out_dir.join(rel.as_str());
+        manifest.insert(PathBuf::from(rel.as_str()), contents.clone());
+    }
+    Ok(manifest)
+}
+
+/// Recursively read every file under `src_dir` as UTF-8 text, inserting
+/// `(dst_prefix.join(rel), contents)` into `manifest`.
+fn collect_dir_text(
+    src_dir: &Path,
+    dst_prefix: &Path,
+    manifest: &mut BTreeMap<PathBuf, String>,
+) -> Result<(), CliError> {
+    let entries = fs::read_dir(src_dir).map_err(|e| io_err(src_dir, e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| io_err(src_dir, e))?;
+        let from = entry.path();
+        let dst = dst_prefix.join(entry.file_name());
+        let file_type = entry.file_type().map_err(|e| io_err(&from, e))?;
+        if file_type.is_dir() {
+            collect_dir_text(&from, &dst, manifest)?;
+        } else {
+            let text = fs::read_to_string(&from).map_err(|e| io_err(&from, e))?;
+            manifest.insert(dst, text);
+        }
+    }
+    Ok(())
+}
+
+/// Reconcile `out_dir` against `manifest`: write only files whose content
+/// differs from what is already on disk (content-gated — H8, avoids spurious
+/// `cargo` rebuilds from an identical-byte rewrite bumping mtime) via
+/// [`write_atomic`]'s existing tmp-then-rename, then DELETE every file under
+/// `out_dir/src` that is NOT a manifest key (manifest-driven prune — H7,
+/// makes an orphaned/stale `.rs` left over from a deleted module or a
+/// runtime-tree removal structurally impossible: `manifest` is authoritative).
+///
+/// Scope discipline: the prune walk is confined to `out_dir/src` and never
+/// touches the project root — `Cargo.lock`, a `target/` build-cache
+/// directory, or any other file `cargo` itself manages there must never be
+/// touched by this pass.
+///
+/// # Errors
+/// [`CliError::Io`] on any filesystem failure.
+fn reconcile_emitted_project(
+    manifest: &BTreeMap<PathBuf, String>,
+    out_dir: &Path,
+) -> Result<(), CliError> {
+    for (rel, contents) in manifest {
+        let path = out_dir.join(rel);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
         }
-        fs::write(&path, contents).map_err(|e| io_err(&path, e))?;
+        write_if_changed(&path, contents)?;
     }
+    prune_orphaned_files(&out_dir.join("src"), manifest, out_dir)
+}
 
+/// Write `contents` to `path` only when the existing content differs (or the
+/// file is absent) — the content-gate `write_atomic` alone does not provide
+/// (it always writes). Delegating the actual write to [`write_atomic`] reuses
+/// its established tmp-then-rename + cleanup-on-failure behaviour rather than
+/// a second, parallel atomic-write implementation.
+fn write_if_changed(path: &Path, contents: &str) -> Result<(), CliError> {
+    if fs::read_to_string(path).is_ok_and(|existing| existing == contents) {
+        return Ok(());
+    }
+    write_atomic(path, contents)
+}
+
+/// Delete every FILE under `dir` whose path relative to `out_dir` is not a
+/// key of `manifest`. Recurses into subdirectories but never removes a
+/// directory itself (leaving empty directories behind is harmless — `cargo`
+/// does not care — and staying file-only keeps this pass's blast radius
+/// minimal).
+fn prune_orphaned_files(
+    dir: &Path,
+    manifest: &BTreeMap<PathBuf, String>,
+    out_dir: &Path,
+) -> Result<(), CliError> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    // A directory that vanishes between the `is_dir()` check above and this
+    // read (a concurrent external cleanup — see `write_atomic`'s doc for the
+    // shared-scratch-directory scenario this guards) trivially has nothing
+    // left to prune; treat `NotFound` as success rather than failing the
+    // whole build over a race that already resolved itself.
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(io_err(dir, e)),
+    };
+    for entry in entries {
+        // Likewise: a file this same walk is iterating over can disappear
+        // mid-loop (a sibling process finished its OWN rebuild and deleted
+        // its temp state). Skip rather than fail — there is nothing left to
+        // prune at a path that no longer exists.
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(io_err(dir, e)),
+        };
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(io_err(&path, e)),
+        };
+        if file_type.is_dir() {
+            prune_orphaned_files(&path, manifest, out_dir)?;
+        } else {
+            // `path` was built from `dir`, itself built from `out_dir` by
+            // construction (the initial call passes `out_dir.join("src")`,
+            // and every recursive call passes a child of that) — the
+            // `strip_prefix` can only fail if `out_dir` itself is relative
+            // and the working directory changed mid-walk; skip rather than
+            // fail the whole build over a diagnostic-only path label.
+            let Ok(rel) = path.strip_prefix(out_dir) else {
+                continue;
+            };
+            if !manifest.contains_key(rel)
+                && let Err(e) = fs::remove_file(&path)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                // A concurrent deleter reaching `path` first (see above) is
+                // NOT a failure to prune it — the goal ("this orphan is gone")
+                // is already satisfied.
+                return Err(io_err(&path, e));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1199,8 +1368,20 @@ fn read_yes_no() -> bool {
 }
 
 /// Write `contents` to `target` atomically: write a sibling temp file, then
-/// rename it over `target` (atomic on a single filesystem). On a rename failure
-/// the temp file is removed so no debris is left behind.
+/// rename it over `target` (atomic on a single filesystem). On a rename
+/// failure the temp file is removed so no debris is left behind.
+///
+/// Retries ONCE, recreating `target`'s parent directory, when the write or
+/// rename fails with `NotFound`. This closes a real race surfaced by the
+/// Phase-5 emit→cargo bridge (`reconcile_emitted_project`, this function's
+/// other caller besides `sky doctor --fix`): several `crates/skyc/tests/
+/// golden_*` integration-test files share ONE `CARGO_TARGET_TMPDIR`-rooted
+/// output directory across sibling `#[test]` functions, and `cargo-nextest`
+/// runs each test as its own process — so one test's `remove_dir_all` +
+/// rebuild can delete a directory this function is mid-write into. A single
+/// retry recovers from that transient case; a genuinely permanent failure
+/// (permissions, a disallowed ancestor) still surfaces as an error after the
+/// retry.
 fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
     let dir = target.parent().filter(|p| !p.as_os_str().is_empty());
     let name = target.file_name().map_or_else(
@@ -1213,29 +1394,25 @@ fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
         None => PathBuf::from(tmp_name),
     };
 
-    fs::write(&tmp, contents).map_err(|e| io_err(&tmp, e))?;
-    if let Err(e) = fs::rename(&tmp, target) {
-        let _ = fs::remove_file(&tmp);
-        return Err(io_err(target, e));
+    match write_and_rename(&tmp, target, contents) {
+        Ok(()) => Ok(()),
+        Err(CliError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(d) = dir {
+                fs::create_dir_all(d).map_err(|e| io_err(d, e))?;
+            }
+            write_and_rename(&tmp, target, contents)
+        }
+        Err(e) => Err(e),
     }
-    Ok(())
 }
 
-/// Recursively copy `src` into `dst`. `src` is the trusted, in-repo runtime
-/// tree, so its depth is bounded.
-fn copy_dir(src: &Path, dst: &Path) -> Result<(), CliError> {
-    fs::create_dir_all(dst).map_err(|e| io_err(dst, e))?;
-    let entries = fs::read_dir(src).map_err(|e| io_err(src, e))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| io_err(src, e))?;
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        let file_type = entry.file_type().map_err(|e| io_err(&from, e))?;
-        if file_type.is_dir() {
-            copy_dir(&from, &to)?;
-        } else {
-            fs::copy(&from, &to).map_err(|e| io_err(&from, e))?;
-        }
+/// Write `contents` to `tmp`, then rename it over `target`. On a rename
+/// failure the temp file is removed so no debris is left behind.
+fn write_and_rename(tmp: &Path, target: &Path, contents: &str) -> Result<(), CliError> {
+    fs::write(tmp, contents).map_err(|e| io_err(tmp, e))?;
+    if let Err(e) = fs::rename(tmp, target) {
+        let _ = fs::remove_file(tmp);
+        return Err(io_err(target, e));
     }
     Ok(())
 }
