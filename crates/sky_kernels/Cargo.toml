@@ -5,10 +5,14 @@ version.workspace = true
 
 # ── DAG constraint ──────────────────────────────────────────────────────────
 # `sky_kernels` is a LEAF crate.  Only `sky_intern` and `sky_diagnostics` are
-# permitted as dependencies.  NO dependency on `sky_ir`, `sky_types`, or
-# `sky_backend_rust` is ever allowed — those crates import `sky_kernels`, and
-# a reverse edge would create a cycle.
+# permitted as in-workspace dependencies.  NO dependency on `sky_ir`,
+# `sky_types`, or `sky_backend_rust` is ever allowed — those crates import
+# `sky_kernels`, and a reverse edge would create a cycle. `serde` is an
+# external leaf dependency (no in-workspace edge), added so `StdlibKernel`
+# can derive `Serialize`/`Deserialize` for the Phase 6.5 on-disk lowered-IR
+# cache (`sky_ir::Callee::Kernel` embeds a `StdlibKernel`).
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 
 [lints]
 workspace = true
