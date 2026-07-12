@@ -7392,19 +7392,21 @@ fn elide_task_run_tail(expr: &Expr) -> Option<Expr> {
             })
         }
         Expr::Match(m) => {
-            let mut new_arms = Vec::with_capacity(m.arms().len());
-            for arm in m.arms() {
-                let new_body = elide_task_run_tail(&arm.body)?;
-                new_arms.push(Arm {
-                    pat: arm.pat.clone(),
-                    body: new_body,
-                    guard: arm.guard.clone(),
-                });
-            }
-            Some(Expr::Match(Match::from_parts_unchecked(
-                Box::new(m.scrutinee().clone()),
-                new_arms,
-            )))
+            // Sealed rebuild via `try_map_bodies` (AUD-09): the scrutinee and
+            // every arm's pattern/guard pass through UNCHANGED (by
+            // construction, not by convention), so exhaustiveness is
+            // preserved with no re-derivation needed — only each arm's body
+            // is transformed, and any single arm declining the elision
+            // (`elide_task_run_tail` returning `None`) must fail the WHOLE
+            // match's elision, matching this function's existing `?`-based
+            // all-or-nothing contract on every other tail-position arm.
+            m.clone()
+                .try_map_bodies(Ok::<_, ()>, |_pat, body, guard| {
+                    let new_body = elide_task_run_tail(&body).ok_or(())?;
+                    Ok((new_body, guard))
+                })
+                .ok()
+                .map(Expr::Match)
         }
         // Every other expression shape is a genuine value in tail position
         // (not a control-flow construct that merely forwards to a nested tail
