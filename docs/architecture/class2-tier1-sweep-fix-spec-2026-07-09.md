@@ -185,22 +185,34 @@ documented gap, not net-new wiring:
    diff of *normalized* HTML (attribute-sorted, sky-id-collapsed), not raw
    server output. `scripts/lib/checks.sh:283-320` (`exercise_server_equiv`) is
    the call site if you need to confirm the wiring.
-2. **Residual Rule-1 hardening (documented, not yet done):**
-   `scripts/lib/equiv_normalize_html.py:104` still masks every SVG coordinate
-   attr (`d`/`x`/`y`/`cx`/`cy`/`r`/…) to the literal string `'#'` inside any
-   `<svg>` subtree (`SVG_COORD` set at line 45, mask applied at line 104,
-   comment: *"mask known-divergent chart coords (Go bug, PR #136)"`). This was
-   copied verbatim from `../sky` where it exists to hide a **known Go bug**. Per
-   `go-oracle-fixture-corpus-plan.md` §3.3 and §6 ("HARDEN (Rule 1)"), this is a
-   **false-green hole for skyc**: a genuine skyc SVG-coordinate regression would
-   render as an empty diff. Fix: do not blanket-mask; instead compare SVG
-   coordinates against a stored-correct snapshot (or drop the mask entirely and
-   accept that this ONE fixture may show a legitimate `oracle_divergence` against
-   the known-buggy Go output, tagged per `divergence-policy.md`). This is a
-   small, scoped fix to `equiv_normalize_html.py`'s `SVG_COORD` handling — file
-   it as its own follow-up if you don't have time to land it in this pass, but
-   note it explicitly (do not silently leave the mask in place without a filed
-   item, per CLAUDE.md §4).
+2. **Residual Rule-1 hardening — CLOSED.** `scripts/lib/equiv_normalize_html.py`
+   no longer masks every SVG coordinate attr (`d`/`x`/`y`/`cx`/`cy`/`r`/…) to
+   the literal string `'#'`. Findings + fix:
+   - The upstream Go bug the mask hid (`Math.min`/`Math.max` truncating Float
+     args to Int, anzellai/sky PR #136, mis-scaling `Std.Ui.Chart`
+     sparkline/heatmap) landed a fix in Go **`v0.17.1`** (`736c3a23`,
+     2026-07-01) — *before* the pinned oracle (`tools/oracle/README.md`,
+     currently `v0.17.3`). The oracle skyc diffs against no longer produces
+     truncated coordinates.
+   - `Sky.Core.String.fromFloat` in this repo's Rust runtime
+     (`runtime/src/sky_runtime/string.rs`) is a byte-for-byte port of Go's
+     `strconv.FormatFloat(f, 'g', -1, 64)`, verified against real oracle
+     probes (see that file's doc comment + `reference-audit.md` item 27) — so
+     there is no float-*formatting* divergence between the two backends to
+     paper over either. `Std.Ui.Chart`'s coordinate arithmetic
+     (`crates/skyc/stdlib/Std/Ui/Chart.sky`) uses only `+ - * /` and
+     `Math.min`/`Math.max` — no transcendental functions — so given the same
+     inputs both backends produce bit-identical IEEE-754 results.
+   - **Fix landed:** `norm_svg_coord` (numeric-token regex + per-token
+     tolerance rounding to `SVG_COORD_TOLERANCE_DIGITS = 6` decimal places,
+     re-serialised canonically) replaces the blanket mask. A genuine
+     coordinate VALUE difference (wrong scale, off-by-one, wrong precision)
+     still trips a real diff; only sub-tolerance float-formatting noise
+     collapses. Regression suite: `scripts/lib/test_equiv_normalize_html.py`
+     — `OldMaskWasAFalseGreenHoleTests.test_old_mask_would_have_hidden_a_
+     coordinate_regression` demonstrates the old `'#'` mask collapsing a real
+     80-vs-999 SVG bar-height difference to an empty diff, and the new
+     normalizer catching the same regression. BACKLOG #110 sub-item 1.
 
 ### 3.2 Item 2 — wire the tui-grid normalizer
 
