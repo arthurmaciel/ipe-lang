@@ -161,6 +161,231 @@ impl Interner {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Cross-process persistence: `Symbol`'s ambient-interner `serde` impls
+// ---------------------------------------------------------------------------
+//
+// A [`Symbol`] is a raw `u32` index into ONE process's [`Interner`] — its
+// numeric value is meaningless (not merely "differently numbered") against
+// any other interner, including a fresh one in a later `skyc` invocation.
+// Persisting a `Symbol` to disk therefore requires a RELOCATION pass: write
+// its resolved STRING, and on load, re-intern that string into the
+// CURRENT process's interner (a fresh append) and use whatever numeric id
+// that re-intern hands back. This is the standard technique real
+// interned-string systems use for cross-session persistence (the same
+// shape `rust-analyzer`/`string-cache` use for their own interners).
+//
+// ## Why ambient (thread-local) context, not `DeserializeSeed`
+//
+// `serde`'s context-carrying alternative to `Deserialize` is
+// [`serde::de::DeserializeSeed`], but it does not compose through
+// `#[derive(Deserialize)]`: a derived impl on a struct/enum ALWAYS calls
+// `T::deserialize` on each field, never a seed — so a `Vec<Symbol>` nested
+// three levels deep inside a derived `sky_ir` type has no way to receive a
+// seed without every intermediate container (`Vec`, `BTreeMap`, `Option`,
+// every enum variant) ALSO being hand-written to thread it through. Given
+// how pervasively `Symbol` appears across `sky_ir` (function names, type
+// names, field names, pattern binders, …), that would mean hand-writing
+// `Deserialize` for roughly twenty IR types instead of one — exactly the
+// "more mechanical, less error-prone" trade-off this design favours the
+// other way.
+//
+// Ambient (thread-local) context is the standard workaround: install the
+// interner for the duration of one (de)serialize call via a scope guard,
+// let `#[derive(Serialize, Deserialize)]` work completely unmodified on
+// every `sky_ir` type, and have ONLY `Symbol` itself consult the ambient
+// slot. This is sound because:
+//
+// - the interner is genuinely call-scoped (installed immediately before
+//   the (de)serialize call, uninstalled immediately after via `Drop`),
+//   never a true global — two unrelated builds never share state;
+// - the stack shape (not a single `Option`) lets a nested (de)serialize
+//   call install its own interner and restore the outer one on drop,
+//   though nothing in this compiler nests today — the cost of the safety
+//   margin is one `Vec::push`/`pop`;
+// - it introduces NO `unsafe` code (this crate is `#![forbid(unsafe_code)]`
+//   and stays that way) — a thread-local `RefCell` is the entire mechanism.
+//
+// ## Security: a persisted `Symbol` string is untrusted input
+//
+// `Interner::intern` accepts ANY string by design (it is a pure append-only
+// table with no opinion about identifier shapes — see its own doc). The
+// backend, however, trusts an interned string VERBATIM when emitting Rust
+// identifiers (`sky_backend_rust`'s `resolve_ident`/`emit_ident` do not
+// sanitise; `naming::mangle_reserved` only appends `_` on an EXACT keyword
+// match). A cache file is written by a previous, possibly-compromised or
+// tampered, process — so a poisoned entry containing e.g. `"x; std::process
+// ::exit(1); //"` as a `Symbol`'s text could splice arbitrary Rust source
+// into the next build's emitted `main.rs`, reached the moment `cargo build`
+// compiles it. [`Symbol::deserialize`] therefore validates every string
+// through [`is_valid_symbol_text`] BEFORE interning it, mirroring
+// `sky_backend::RelPath`'s hand-written `Deserialize` (reject, don't trust)
+// for the exact same "untrusted disk boundary" reason.
+
+use std::cell::RefCell;
+use std::sync::{Arc, Mutex, PoisonError};
+
+thread_local! {
+    static SERDE_INTERNER_STACK: RefCell<Vec<Arc<Mutex<Interner>>>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Whether `s` is a legal [`Symbol`] text.
+///
+/// The FULL union of shapes any legitimate compiler-internal string ever
+/// takes across the whole pipeline: one or more ASCII identifier segments
+/// (`[A-Za-z_][A-Za-z0-9_]*` — the SAME grammar `sky_parse`'s lexer
+/// enforces for `Tok::Ident` via `is_ident_start`/`is_ident_continue`,
+/// `crates/sky_parse/src/lexer.rs`), optionally dot-joined for a qualified
+/// path segment (`lex_ident`'s greedy `.seg` continuation scan, same file)
+/// — never leading, trailing, or doubled.
+///
+/// This single grammar also covers every non-lexer-scanned shape a
+/// `Symbol` is ever built from: [`Interner::fresh_symbols`]' `<prefix><n>`
+/// pools (`eta_0`, `cap_3`, …), `sky_types`' single-letter-plus-digit
+/// type-variable mint (`a`, `a1`, `z12`, …), and the handful of hardcoded
+/// compiler-internal qualifier aliases that embed a literal dot (`"Db.
+/// Decode"`) — every one of those already fits `[A-Za-z_][A-Za-z0-9_]*`
+/// segments joined by `.`.
+///
+/// `Interner::intern` itself deliberately does NOT enforce this predicate
+/// (it is a pure append-only table with no opinion about identifier
+/// shapes — every real caller only ever calls it with a lexer-scanned or
+/// compiler-synthesised string, so validation would be pure overhead on
+/// the hot in-process path). This predicate exists ONLY as the
+/// deserialize-boundary gate for a persisted cache entry, where a forged
+/// string is untrusted input that could otherwise reach
+/// `sky_backend_rust`'s identifier emission unsanitised (see this module's
+/// doc section above).
+#[must_use]
+pub fn is_valid_symbol_text(s: &str) -> bool {
+    const fn is_start(c: char) -> bool {
+        c.is_ascii_alphabetic() || c == '_'
+    }
+    const fn is_continue(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '_'
+    }
+    // `"".split('.')` yields one empty segment, which already fails the
+    // `chars.next()` check below — this early return is purely a
+    // documentation aid, not load-bearing.
+    if s.is_empty() {
+        return false;
+    }
+    s.split('.').all(|seg| {
+        let mut chars = seg.chars();
+        chars.next().is_some_and(is_start) && chars.all(is_continue)
+    })
+}
+
+/// RAII guard installing an ambient interner for [`Symbol`]'s `serde` impls.
+///
+/// Installs `interner` as the ambient context [`Symbol`]'s
+/// `serde::Serialize`/`Deserialize` impls resolve/re-intern through, on the
+/// CURRENT THREAD, for the guard's lifetime. See this module's doc section
+/// for why ambient thread-local context is the sound choice here.
+///
+/// A missing guard is not a soundness hole: [`Symbol::serialize`]/
+/// [`Symbol::deserialize`] both fail with a descriptive `serde` error
+/// rather than panicking or silently producing a bogus symbol — a
+/// programmer-error class of bug (a persistence call site forgot to
+/// install the guard), never triggerable by untrusted input.
+#[must_use = "the ambient interner is uninstalled when this guard drops"]
+pub struct SerdeInternerGuard(());
+
+impl SerdeInternerGuard {
+    /// Install `interner` as the ambient serde context.
+    pub fn install(interner: Arc<Mutex<Interner>>) -> Self {
+        SERDE_INTERNER_STACK.with(|stack| stack.borrow_mut().push(interner));
+        Self(())
+    }
+}
+
+impl Drop for SerdeInternerGuard {
+    fn drop(&mut self) {
+        SERDE_INTERNER_STACK.with(|stack| {
+            stack.borrow_mut().pop();
+        });
+    }
+}
+
+/// Run `f` with a reference to the innermost ambient interner, or return
+/// `None` when no [`SerdeInternerGuard`] is currently installed on this
+/// thread.
+fn with_ambient_interner<R>(f: impl FnOnce(&Arc<Mutex<Interner>>) -> R) -> Option<R> {
+    SERDE_INTERNER_STACK.with(|stack| stack.borrow().last().map(f))
+}
+
+/// Serialises as the `Symbol`'s resolved STRING (never the raw numeric id —
+/// see this module's doc section for why a raw id cannot survive a process
+/// boundary). Requires an ambient interner ([`SerdeInternerGuard::install`])
+/// that can resolve `self`; both failure modes (no guard installed, or a
+/// forged/cross-interner `Symbol` the ambient interner never handed out)
+/// are reported as a `serde` error, never a panic.
+impl serde::Serialize for Symbol {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let resolved = with_ambient_interner(|interner| {
+            let guard = interner.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.resolve(*self).map(str::to_owned)
+        });
+        match resolved {
+            None => Err(serde::ser::Error::custom(
+                "sky_intern::Symbol::serialize: no ambient interner installed \
+                 (missing SerdeInternerGuard::install)",
+            )),
+            Some(None) => Err(serde::ser::Error::custom(
+                "sky_intern::Symbol::serialize: symbol resolves to no string in \
+                 the ambient interner (a forged or cross-interner Symbol)",
+            )),
+            Some(Some(text)) => serializer.serialize_str(&text),
+        }
+    }
+}
+
+/// **Deliberately hand-written, never `#[derive(Deserialize)]`** — mirrors
+/// `sky_backend::RelPath`'s hand-written `Deserialize` for the same reason:
+/// a derived impl on a bare `u32` newtype would reconstruct a raw,
+/// meaningless cross-process index directly from untrusted bytes. This impl
+/// instead reads the resolved STRING, validates it via
+/// [`is_valid_symbol_text`] (rejecting a poisoned/tampered entry — see this
+/// module's doc section's security note), and re-interns it into the
+/// CURRENT process's ambient interner ([`SerdeInternerGuard::install`]) —
+/// the relocation pass. The returned `Symbol`'s numeric id is whatever this
+/// process's interner assigns; it is NOT expected to match the id the
+/// writing process had, only the resolved STRING (semantic identity, the
+/// only identity a `Symbol` carries once you cross a process boundary).
+impl<'de> serde::Deserialize<'de> for Symbol {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let text = String::deserialize(deserializer)?;
+        if !is_valid_symbol_text(&text) {
+            return Err(serde::de::Error::custom(format!(
+                "sky_intern::Symbol::deserialize: invalid symbol text {text:?} \
+                 (must be one or more ASCII identifier segments \
+                 `[A-Za-z_][A-Za-z0-9_]*` joined by a single `.`)"
+            )));
+        }
+        let interned = with_ambient_interner(|interner| {
+            let mut guard = interner.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.intern(&text)
+        });
+        match interned {
+            None => Err(serde::de::Error::custom(
+                "sky_intern::Symbol::deserialize: no ambient interner installed \
+                 (missing SerdeInternerGuard::install)",
+            )),
+            Some(Err(diag)) => Err(serde::de::Error::custom(format!(
+                "sky_intern::Symbol::deserialize: intern failed: {diag:?}"
+            ))),
+            Some(Ok(sym)) => Ok(sym),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -277,6 +502,232 @@ mod tests {
             Some("eta_0"),
             "freed once the program stops naming it (cold-build equivalence)"
         );
+        Ok(())
+    }
+}
+
+/// Tests for `Symbol`'s cross-process `serde` persistence — the relocation
+/// pass this module's doc section describes. Kept in a separate `mod` (not
+/// folded into the existing `tests` module above) since these need
+/// `serde_json` and exercise a materially different concern (persistence
+/// soundness across simulated process boundaries, not interner mechanics).
+#[cfg(test)]
+mod serde_persistence_tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    #[test]
+    fn valid_symbol_text_accepts_every_real_shape() {
+        // Plain lexer-scanned identifiers.
+        assert!(is_valid_symbol_text("Increment"));
+        assert!(is_valid_symbol_text("count"));
+        assert!(is_valid_symbol_text("_private"));
+        // Dot-joined qualified segments (a single `Tok::Ident` can itself
+        // contain dots — `sky_parse::lexer::lex_ident`).
+        assert!(is_valid_symbol_text("Module.Sub.name"));
+        assert!(is_valid_symbol_text("Db.Decode"));
+        // Fresh/synthetic pool names (`Interner::fresh_symbols`).
+        assert!(is_valid_symbol_text("eta_0"));
+        assert!(is_valid_symbol_text("cap_12"));
+        assert!(is_valid_symbol_text("destr_thunk_3"));
+        // Type-variable mint shapes (`sky_types::doc::letters`).
+        assert!(is_valid_symbol_text("a"));
+        assert!(is_valid_symbol_text("a1"));
+        assert!(is_valid_symbol_text("z12"));
+    }
+
+    #[test]
+    fn valid_symbol_text_rejects_every_poisoned_shape() {
+        assert!(!is_valid_symbol_text(""), "empty string");
+        assert!(!is_valid_symbol_text("."), "bare dot");
+        assert!(!is_valid_symbol_text(".leading"), "leading dot");
+        assert!(!is_valid_symbol_text("trailing."), "trailing dot");
+        assert!(!is_valid_symbol_text("a..b"), "doubled dot");
+        assert!(!is_valid_symbol_text("1abc"), "digit-leading segment");
+        assert!(!is_valid_symbol_text("a b"), "embedded space");
+        assert!(!is_valid_symbol_text("a;b"), "embedded semicolon");
+        assert!(!is_valid_symbol_text("a{b}"), "embedded braces");
+        assert!(!is_valid_symbol_text("a\nb"), "embedded newline");
+        assert!(!is_valid_symbol_text("a\0b"), "embedded NUL byte");
+        assert!(
+            !is_valid_symbol_text("x; std::process::exit(1); //"),
+            "Rust-injection-shaped payload"
+        );
+        assert!(
+            !is_valid_symbol_text("naïve"),
+            "non-ASCII (lexer is ASCII-only)"
+        );
+    }
+
+    #[test]
+    fn round_trips_within_one_interner() -> sky_diagnostics::DResult<()> {
+        let mut plain = Interner::new();
+        let sym = plain.intern("Increment")?;
+        let interner = Arc::new(Mutex::new(plain));
+
+        let json = {
+            let _guard = SerdeInternerGuard::install(Arc::clone(&interner));
+            serde_json::to_string(&sym).expect("serialize must succeed")
+        };
+        assert_eq!(json, "\"Increment\"");
+
+        let round_tripped: Symbol = {
+            let _guard = SerdeInternerGuard::install(Arc::clone(&interner));
+            serde_json::from_str(&json).expect("deserialize must succeed")
+        };
+        assert_eq!(round_tripped, sym, "same interner: id AND string agree");
+        Ok(())
+    }
+
+    /// **The mission proof.** A same-process round trip (the test above)
+    /// cannot distinguish "the relocation pass correctly re-interns by
+    /// string" from "the id happened to survive by coincidence" — both
+    /// interners would assign id 0 to the first symbol either way. This
+    /// test deliberately makes the WRITE-side and READ-side interner
+    /// states diverge (different, differently-ordered noise interned into
+    /// each) so a raw-id bug WOULD manifest as a wrong resolved string,
+    /// then asserts the resolved string is correct regardless.
+    #[test]
+    fn serialize_then_deserialize_survives_cross_process_id_drift() -> sky_diagnostics::DResult<()>
+    {
+        // "Process A" (the writer): intern some unrelated names first, so
+        // "Increment" lands at a NON-ZERO, process-A-specific id.
+        let mut interner_a = Interner::new();
+        interner_a.intern("foo")?;
+        interner_a.intern("bar")?;
+        interner_a.intern("baz")?;
+        let sym_a = interner_a.intern("Increment")?;
+        let interner_a = Arc::new(Mutex::new(interner_a));
+
+        let json = {
+            let _guard = SerdeInternerGuard::install(Arc::clone(&interner_a));
+            serde_json::to_string(&sym_a).expect("serialize must succeed")
+        };
+        assert_eq!(
+            json, "\"Increment\"",
+            "serializes as the resolved string, not a raw id"
+        );
+
+        // "Process B" (the reader): a FRESH interner polluted with a
+        // DIFFERENT set of names, in a different order, so "Increment"
+        // would land at a DIFFERENT numeric id than in process A even
+        // once re-interned — id drift is real, not hypothetical.
+        let mut interner_b = Interner::new();
+        interner_b.intern("zzz_noise_1")?;
+        interner_b.intern("zzz_noise_2")?;
+        let interner_b = Arc::new(Mutex::new(interner_b));
+        let sym_b: Symbol = {
+            let _guard = SerdeInternerGuard::install(Arc::clone(&interner_b));
+            serde_json::from_str(&json).expect("deserialize must succeed")
+        };
+
+        // The raw ids MUST differ (proves the drift scenario is genuine,
+        // not accidentally identical) ...
+        assert_ne!(
+            sym_a.as_raw(),
+            sym_b.as_raw(),
+            "the two interners' differing noise must produce different raw ids \
+             for this test to actually probe drift"
+        );
+        // ... yet the semantic identity — what the symbol RESOLVES TO in
+        // its OWN process's interner — must be identical. This is the
+        // property that makes a persisted `sky_ir::Program` behave
+        // identically to a freshly-lowered one across a process boundary.
+        let resolved_b: Option<String> = {
+            let guard = interner_b
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.resolve(sym_b).map(str::to_owned)
+        };
+        assert_eq!(
+            resolved_b.as_deref(),
+            Some("Increment"),
+            "relocated symbol must resolve to the SAME string in the reader's \
+             own interner, despite the numeric id having drifted"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_without_ambient_interner_fails_closed() -> sky_diagnostics::DResult<()> {
+        let mut i = Interner::new();
+        let sym = i.intern("x")?;
+        // No `SerdeInternerGuard::install` call anywhere in this scope.
+        let err = serde_json::to_string(&sym).expect_err("must fail without ambient context");
+        assert!(err.to_string().contains("no ambient interner installed"));
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_without_ambient_interner_fails_closed() {
+        let err: Result<Symbol, _> = serde_json::from_str("\"x\"");
+        let err = err.expect_err("must fail without ambient context");
+        assert!(err.to_string().contains("no ambient interner installed"));
+    }
+
+    #[test]
+    fn deserialize_rejects_poisoned_symbol_text() {
+        let interner = Arc::new(Mutex::new(Interner::new()));
+        let _guard = SerdeInternerGuard::install(Arc::clone(&interner));
+        let err: Result<Symbol, _> = serde_json::from_str("\"x; std::process::exit(1); //\"");
+        assert!(
+            err.is_err(),
+            "an injection-shaped symbol text must be rejected at deserialize time"
+        );
+        // The poisoned text must never have reached `intern` at all — the
+        // interner stays empty.
+        let resolved_zero: Option<String> = {
+            let guard = interner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.resolve(Symbol::from_raw(0)).map(str::to_owned)
+        };
+        assert!(
+            resolved_zero.is_none(),
+            "a rejected symbol text must never be interned"
+        );
+    }
+
+    #[test]
+    fn deserialize_rejects_forged_control_character_payloads() {
+        let interner = Arc::new(Mutex::new(Interner::new()));
+        let _guard = SerdeInternerGuard::install(Arc::clone(&interner));
+        for poisoned in [
+            "\"\"",
+            "\"a\\nb\"",
+            "\"a\\u0000b\"",
+            "\".leading\"",
+            "\"a..b\"",
+        ] {
+            let err: Result<Symbol, _> = serde_json::from_str(poisoned);
+            assert!(err.is_err(), "must reject poisoned payload {poisoned}");
+        }
+    }
+
+    #[test]
+    fn nested_guards_restore_the_outer_interner_on_drop() -> sky_diagnostics::DResult<()> {
+        let mut outer_i = Interner::new();
+        let outer_sym = outer_i.intern("outer")?;
+        let outer = Arc::new(Mutex::new(outer_i));
+
+        let mut inner_i = Interner::new();
+        let inner_sym = inner_i.intern("inner")?;
+        let inner = Arc::new(Mutex::new(inner_i));
+
+        let outer_guard = SerdeInternerGuard::install(Arc::clone(&outer));
+        let outer_json = serde_json::to_string(&outer_sym).expect("outer serialize must succeed");
+        {
+            let _inner_guard = SerdeInternerGuard::install(Arc::clone(&inner));
+            let inner_json =
+                serde_json::to_string(&inner_sym).expect("inner serialize must succeed");
+            assert_eq!(inner_json, "\"inner\"");
+        }
+        // The inner guard dropped; the outer interner must be ambient again.
+        let restored_json =
+            serde_json::to_string(&outer_sym).expect("outer serialize after inner drop");
+        assert_eq!(restored_json, outer_json);
+        drop(outer_guard);
         Ok(())
     }
 }

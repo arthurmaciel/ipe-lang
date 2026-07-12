@@ -7,6 +7,15 @@ version.workspace = true
 sky_intern = { path = "../sky_intern" }
 sky_diagnostics = { path = "../sky_diagnostics" }
 sky_kernels = { path = "../sky_kernels" }
+# Phase 6.5 (symbol-relocation persistence): every `sky_ir` type derives
+# `Serialize`/`Deserialize` (relying on `sky_intern::Symbol`'s ambient-
+# interner impls for the embedded `Symbol` fields) so `sky_ir::Program` can
+# round-trip through the on-disk lowered-IR cache (`skyc::cache`). `Match`
+# gets a hand-written impl instead of `#[derive]` — see its own doc.
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
 
 [lints]
 workspace = true

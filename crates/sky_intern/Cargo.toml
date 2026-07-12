@@ -5,6 +5,15 @@ version.workspace = true
 
 [dependencies]
 sky_diagnostics = { path = "../sky_diagnostics" }
+# Phase 6.5 (symbol-relocation persistence): `Symbol`'s ambient-interner
+# `serde::Serialize`/`Deserialize` impls — see the type's own doc for why a
+# derived impl is impossible (a `Symbol` is a process-local interner index)
+# and why the relocation pass lives here rather than at a persistence
+# boundary crate.
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
 
 [lints]
 workspace = true
