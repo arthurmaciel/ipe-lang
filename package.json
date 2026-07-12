@@ -1,0 +1,9 @@
+{
+  "name": "ipe-verify-tooling",
+  "private": true,
+  "type": "module",
+  "description": "Dev-tooling dep for scripts/web-verify.mjs (the `scenario`-mode Go≡Rust equivalence driver — see scripts/lib/checks.sh's exercise_live). Not part of the compiler/runtime; node_modules is gitignored. Ported from ../sky/package.json (docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md §3.3).",
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}
