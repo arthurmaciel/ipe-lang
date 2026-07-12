@@ -4925,6 +4925,21 @@ fn emit_ui_call(
         // type recovered by Rust generic inference on the emitted handler
         // closure `f_s` — no emit-site code change was needed for #109/#156,
         // only the runtime function's signature (never `Arc<dyn Any>`).
+        //
+        // #162: `ui_on_submit_`'s generic bound is `F: Fn(T) -> M + Send +
+        // Sync + 'static`, but `f_s` here is a `Box<dyn Fn(T) -> M + Send +
+        // 'static>` trait object (the generic `IrType::Fun` rendering in
+        // `emit_types.rs` never claims `+Sync`) — passed straight through as
+        // `F`, that box can never satisfy `+ Sync` regardless of what the
+        // closure inside captures (a trait object's auto-trait set is
+        // exactly its bound list). Wrap in a freshly-declared closure
+        // (`move |_x| ({f_s})(_x)`) the same way the `HtmlEvent` String/Bool
+        // arms above do: `f_s`'s box-construction is re-embedded as SOURCE
+        // inside the wrapper's body, so it is built anew on every call
+        // rather than captured — the wrapper's own Send+Sync-ness then
+        // depends only on the Sky closure's legitimate `move` captures
+        // (Send+'static by construction), not on the erased trait-object
+        // type.
         KernelFn::UiOnSubmit => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -4934,7 +4949,7 @@ fn emit_ui_call(
             };
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
             Ok(Some(format!(
-                "sky_runtime::ui::helpers::ui_on_submit_({f_s})"
+                "sky_runtime::ui::helpers::ui_on_submit_(move |_x| ({f_s})(_x))"
             )))
         }
 
@@ -4974,8 +4989,31 @@ fn emit_ui_call(
                     "sky_runtime::html::html_on_bool_({name:?}.to_owned(), \
                      ::std::sync::Arc::new(move |_x| ({payload_s})(_x)))"
                 ),
+                // #162: `html_on_raw_`'s own signature requires
+                // `F: Fn(T) -> M + Send + Sync + 'static` (the runtime's
+                // `Event::OnForm` slot is `Arc<dyn Fn(FormData) -> Option<M> +
+                // Send + Sync>`, shared across the live session's dispatch
+                // table — see `html.rs`'s `Event` doc comment). But
+                // `payload_s` here is a `Box<dyn Fn(T) -> M + Send + 'static>`
+                // trait object (the generic `IrType::Fun` rendering in
+                // `emit_types.rs`, which never claims `+Sync` for a boxed
+                // first-class function value) — a trait object's auto-trait
+                // set is exactly what its bound lists, so passing that Box
+                // value THROUGH unchanged as `F` can never satisfy `+ Sync`
+                // regardless of what the closure inside actually captures.
+                // The `String`/`Bool` arms above dodge this by re-embedding
+                // `payload_s`'s SOURCE inside a freshly-declared wrapping
+                // closure (`move |_x| ({payload_s})(_x)`) rather than passing
+                // the boxed VALUE itself — the box is constructed anew each
+                // call, inside the wrapping closure's body, so it is never
+                // part of the wrapping closure's captured environment and
+                // the wrapping closure's own Send+Sync-ness depends only on
+                // whatever the Sky closure itself legitimately captures
+                // (`move` locals, all Send+'static by construction). Apply
+                // the same technique here so `F` is this freshly-Sync outer
+                // closure, not the non-Sync boxed trait object.
                 sky_ir::HtmlEventShape::Raw => format!(
-                    "sky_runtime::html::html_on_raw_({name:?}.to_owned(), {payload_s})"
+                    "sky_runtime::html::html_on_raw_({name:?}.to_owned(), move |_x| ({payload_s})(_x))"
                 ),
             };
             Ok(Some(call))
