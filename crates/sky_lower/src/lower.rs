@@ -21,8 +21,8 @@ use sky_canon::ast as canon;
 use sky_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{
-    is_dispatch_free, is_irrefutable, Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, FuncId,
-    IrType, KernelFn, Match, ModPath, Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant,
+    Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
+    Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant, is_dispatch_free, is_irrefutable,
 };
 use sky_types::{SolvedTypes, Ty, TyBounds};
 
@@ -198,7 +198,11 @@ fn ty_matches_http_field(ty: &Ty, expected: HttpFieldTy, interner: &Interner) ->
 /// `canon::Type::Con`'s field is named `home` where `Ty::Con`'s is `module`;
 /// unifying them behind a trait would obscure more than it would save for
 /// two four-case matches.
-fn canon_ty_matches_http_field(ty: &canon::Type, expected: HttpFieldTy, interner: &Interner) -> bool {
+fn canon_ty_matches_http_field(
+    ty: &canon::Type,
+    expected: HttpFieldTy,
+    interner: &Interner,
+) -> bool {
     match (expected, ty) {
         (HttpFieldTy::Str, canon::Type::Con { home, name, args }) => {
             home.is_empty() && args.is_empty() && interner.resolve(*name) == Some("String")
@@ -237,12 +241,11 @@ fn is_http_request_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> boo
         return false;
     }
     fields.sort_unstable_by_key(|(name, _)| *name);
-    fields
-        .iter()
-        .zip(HTTP_REQUEST_FIELD_TYPES.iter())
-        .all(|((name, ty), (expected_name, expected_ty))| {
+    fields.iter().zip(HTTP_REQUEST_FIELD_TYPES.iter()).all(
+        |((name, ty), (expected_name, expected_ty))| {
             *name == *expected_name && ty_matches_http_field(ty, *expected_ty, interner)
-        })
+        },
+    )
 }
 
 /// The [`canon::Type`] twin of [`is_http_request_shape`] — see that
@@ -252,12 +255,11 @@ fn is_http_request_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &I
         return false;
     }
     fields.sort_unstable_by_key(|(name, _)| *name);
-    fields
-        .iter()
-        .zip(HTTP_REQUEST_FIELD_TYPES.iter())
-        .all(|((name, ty), (expected_name, expected_ty))| {
+    fields.iter().zip(HTTP_REQUEST_FIELD_TYPES.iter()).all(
+        |((name, ty), (expected_name, expected_ty))| {
             *name == *expected_name && canon_ty_matches_http_field(ty, *expected_ty, interner)
-        })
+        },
+    )
 }
 
 /// Does this solved [`Ty`] contain a free type variable anywhere? Used to keep
@@ -575,9 +577,14 @@ fn clone_class(t: &IrType) -> CloneClass {
     match t {
         // Scalars — primitive Copy types.
         // `Decimal` is `#[derive(Copy)]` — treat as CopyLeaf.
-        IrType::Int | IrType::Float | IrType::Bool | IrType::Char | IrType::Unit | IrType::Order | IrType::Decimal | IrType::ErrorKind => {
-            CloneClass::CopyLeaf
-        }
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Order
+        | IrType::Decimal
+        | IrType::ErrorKind => CloneClass::CopyLeaf,
         // Runtime-verified Clone types.
         // Str(String), Bytes(Vec<u8>), Json(serde_json::Value), Db(Arc-backed),
         // UiPlain (element.rs derives Clone), LiveReq (req.rs derives Clone).
@@ -591,9 +598,19 @@ fn clone_class(t: &IrType) -> CloneClass {
         // `String`; hand-written `PartialEq`, not derived — see its own doc).
         // The nominal error-payload types derive Clone (not Copy — each
         // carries heap-allocated `String`s; SEAL fix 2026-07-11).
-        IrType::Str | IrType::Bytes | IrType::Json | IrType::Db | IrType::UiPlain(_) | IrType::LiveReq | IrType::Error | IrType::ErrorDetails | IrType::ErrorInfo | IrType::PanicInfo | IrType::TypeInfo | IrType::SqlFragment | IrType::Secret => {
-            CloneClass::CloneOk
-        }
+        IrType::Str
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::Db
+        | IrType::UiPlain(_)
+        | IrType::LiveReq
+        | IrType::Error
+        | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
+        | IrType::SqlFragment
+        | IrType::Secret => CloneClass::CloneOk,
         // Runtime-verified Clone server/http opaques (audited 2026-07-05):
         // ServerRequest/ServerResponse/ServerCookie (server.rs:33/50/59),
         // ServerRoute (server.rs:136), HttpRequest (http_client.rs:64) all
@@ -923,16 +940,36 @@ fn rewrite_captured_clones(
                     }
                 })
                 .collect::<DResult<Vec<_>>>()?;
-            Ok(Expr::Apply { func: new_func, args: new_args })
+            Ok(Expr::Apply {
+                func: new_func,
+                args: new_args,
+            })
         }
         Expr::BinOp { op, lhs, rhs } => Ok(Expr::BinOp {
             op,
-            lhs: Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *lhs, depth)?),
-            rhs: Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *rhs, depth)?),
+            lhs: Box::new(rewrite_captured_clones(
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *lhs,
+                depth,
+            )?),
+            rhs: Box::new(rewrite_captured_clones(
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *rhs,
+                depth,
+            )?),
         }),
         Expr::Let { name, value, body } => {
-            let new_value =
-                Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *value, depth)?);
+            let new_value = Box::new(rewrite_captured_clones(
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *value,
+                depth,
+            )?);
             if clone_set.contains(&name) || noncl_set.contains(&name) {
                 let inner_clone: BTreeSet<Symbol> =
                     clone_set.iter().copied().filter(|&s| s != name).collect();
@@ -963,9 +1000,18 @@ fn rewrite_captured_clones(
                 })
             }
         }
-        Expr::Destructure { binder, value, body } => {
-            let new_value =
-                Box::new(rewrite_captured_clones(clone_set, noncl_set, lambda_span, *value, depth)?);
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            let new_value = Box::new(rewrite_captured_clones(
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *value,
+                depth,
+            )?);
             if pat_binds_any_in(&binder, clone_set) || pat_binds_any_in(&binder, noncl_set) {
                 let inner_clone: BTreeSet<Symbol> = clone_set
                     .iter()
@@ -1019,10 +1065,16 @@ fn rewrite_captured_clones(
         // already empty and no spurious L0126 is emitted (#151).
         Expr::Lambda { params, ret, body } => {
             let param_names: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
-            let inner_clone: BTreeSet<Symbol> =
-                clone_set.iter().copied().filter(|s| !param_names.contains(s)).collect();
-            let inner_noncl: BTreeSet<Symbol> =
-                noncl_set.iter().copied().filter(|s| !param_names.contains(s)).collect();
+            let inner_clone: BTreeSet<Symbol> = clone_set
+                .iter()
+                .copied()
+                .filter(|s| !param_names.contains(s))
+                .collect();
+            let inner_noncl: BTreeSet<Symbol> = noncl_set
+                .iter()
+                .copied()
+                .filter(|s| !param_names.contains(s))
+                .collect();
             Ok(Expr::Lambda {
                 params,
                 ret,
@@ -1062,13 +1114,25 @@ fn rewrite_captured_clones(
         )?)),
         Expr::If { cond, then_, else_ } => Ok(Expr::If {
             cond: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *cond, depth,
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *cond,
+                depth,
             )?),
             then_: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *then_, depth,
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *then_,
+                depth,
             )?),
             else_: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *else_, depth,
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *else_,
+                depth,
             )?),
         }),
         // Call: kernel / top-level function application.
@@ -1111,21 +1175,37 @@ fn rewrite_captured_clones(
         }),
         Expr::Cons { head, tail } => Ok(Expr::Cons {
             head: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *head, depth,
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *head,
+                depth,
             )?),
             tail: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *tail, depth,
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *tail,
+                depth,
             )?),
         }),
         Expr::ListIndexClone { list, index } => Ok(Expr::ListIndexClone {
             list: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *list, depth,
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *list,
+                depth,
             )?),
             index,
         }),
         Expr::ListLenCheck { list, len, exact } => Ok(Expr::ListLenCheck {
             list: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *list, depth,
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *list,
+                depth,
             )?),
             len,
             exact,
@@ -1145,14 +1225,22 @@ fn rewrite_captured_clones(
             field_ty,
         } => Ok(Expr::Access {
             record: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *record, depth,
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *record,
+                depth,
             )?),
             field,
             field_ty,
         }),
         Expr::Update { record, fields } => Ok(Expr::Update {
             record: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *record, depth,
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *record,
+                depth,
             )?),
             fields: fields
                 .into_iter()
@@ -1164,21 +1252,42 @@ fn rewrite_captured_clones(
         }),
         Expr::TaskSeq { effect, rest } => Ok(Expr::TaskSeq {
             effect: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *effect, depth,
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *effect,
+                depth,
             )?),
             rest: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *rest, depth,
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *rest,
+                depth,
             )?),
         }),
         Expr::TaskSeqSync { effect, rest } => Ok(Expr::TaskSeqSync {
             effect: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *effect, depth,
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *effect,
+                depth,
             )?),
             rest: Box::new(rewrite_captured_clones(
-                clone_set, noncl_set, lambda_span, *rest, depth,
+                clone_set,
+                noncl_set,
+                lambda_span,
+                *rest,
+                depth,
             )?),
         }),
-        Expr::Ctor { home, ty, variant, args } => Ok(Expr::Ctor {
+        Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args,
+        } => Ok(Expr::Ctor {
             home,
             ty,
             variant,
@@ -1193,10 +1302,16 @@ fn rewrite_captured_clones(
         // TailLoop is NOT a new closure scope — do NOT increment depth here.
         Expr::TailLoop { params, body } => {
             let param_names: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
-            let inner_clone: BTreeSet<Symbol> =
-                clone_set.iter().copied().filter(|s| !param_names.contains(s)).collect();
-            let inner_noncl: BTreeSet<Symbol> =
-                noncl_set.iter().copied().filter(|s| !param_names.contains(s)).collect();
+            let inner_clone: BTreeSet<Symbol> = clone_set
+                .iter()
+                .copied()
+                .filter(|s| !param_names.contains(s))
+                .collect();
+            let inner_noncl: BTreeSet<Symbol> = noncl_set
+                .iter()
+                .copied()
+                .filter(|s| !param_names.contains(s))
+                .collect();
             Ok(Expr::TailLoop {
                 params,
                 body: Box::new(rewrite_captured_clones(
@@ -1271,9 +1386,17 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
         }
         Expr::Let { name, value, body } => {
             lambda_body_refs_sym(sym, value)
-                || if *name == sym { false } else { lambda_body_refs_sym(sym, body) }
+                || if *name == sym {
+                    false
+                } else {
+                    lambda_body_refs_sym(sym, body)
+                }
         }
-        Expr::Destructure { binder, value, body } => {
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
             lambda_body_refs_sym(sym, value)
                 || if pat_binds_symbol(binder, sym) {
                     false
@@ -1284,8 +1407,7 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
         Expr::Match(m) => {
             lambda_body_refs_sym(sym, m.scrutinee())
                 || m.arms().iter().any(|arm| {
-                    !pat_binds_symbol(&arm.pat, sym)
-                        && lambda_body_refs_sym(sym, &arm.body)
+                    !pat_binds_symbol(&arm.pat, sym) && lambda_body_refs_sym(sym, &arm.body)
                 })
         }
         Expr::TailLoop { params, body } => {
@@ -1305,8 +1427,7 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
         }
         Expr::Call { args, .. } => args.iter().any(|a| lambda_body_refs_sym(sym, a)),
         Expr::Apply { func, args } => {
-            lambda_body_refs_sym(sym, func)
-                || args.iter().any(|a| lambda_body_refs_sym(sym, a))
+            lambda_body_refs_sym(sym, func) || args.iter().any(|a| lambda_body_refs_sym(sym, a))
         }
         Expr::Tuple(items) => items.iter().any(|e| lambda_body_refs_sym(sym, e)),
         Expr::List { items, .. } => items.iter().any(|e| lambda_body_refs_sym(sym, e)),
@@ -1319,9 +1440,7 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
         Expr::Record(fields) => fields.iter().any(|(_, e)| lambda_body_refs_sym(sym, e)),
         // Update.record is wrapped in `.clone()` by emit_update (borrow, not move).
         // Only the field value expressions are consuming captures.
-        Expr::Update { fields, .. } => {
-            fields.iter().any(|(_, e)| lambda_body_refs_sym(sym, e))
-        }
+        Expr::Update { fields, .. } => fields.iter().any(|(_, e)| lambda_body_refs_sym(sym, e)),
         Expr::Ctor { args, .. } => args.iter().any(|a| lambda_body_refs_sym(sym, a)),
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             lambda_body_refs_sym(sym, effect) || lambda_body_refs_sym(sym, rest)
@@ -1409,8 +1528,9 @@ fn find_first_varlocal_span(sym: Symbol, body: &canon::Expr) -> Option<Span> {
         // Compound forms — recurse left-to-right.
         canon::Expr_::Call(f, args) => find_first_varlocal_span(sym, f)
             .or_else(|| args.iter().find_map(|a| find_first_varlocal_span(sym, a))),
-        canon::Expr_::Binop { lhs, rhs, .. } => find_first_varlocal_span(sym, lhs)
-            .or_else(|| find_first_varlocal_span(sym, rhs)),
+        canon::Expr_::Binop { lhs, rhs, .. } => {
+            find_first_varlocal_span(sym, lhs).or_else(|| find_first_varlocal_span(sym, rhs))
+        }
         canon::Expr_::Let(bindings, body) => {
             for lb in bindings {
                 if let Some(s) = find_first_varlocal_span(sym, &lb.body) {
@@ -1422,25 +1542,28 @@ fn find_first_varlocal_span(sym: Symbol, body: &canon::Expr) -> Option<Span> {
         canon::Expr_::If(branches, else_) => branches
             .iter()
             .find_map(|(c, t)| {
-                find_first_varlocal_span(sym, c)
-                    .or_else(|| find_first_varlocal_span(sym, t))
+                find_first_varlocal_span(sym, c).or_else(|| find_first_varlocal_span(sym, t))
             })
             .or_else(|| find_first_varlocal_span(sym, else_)),
-        canon::Expr_::Case(scrut, arms) => find_first_varlocal_span(sym, scrut)
-            .or_else(|| arms.iter().find_map(|a| find_first_varlocal_span(sym, &a.body))),
+        canon::Expr_::Case(scrut, arms) => find_first_varlocal_span(sym, scrut).or_else(|| {
+            arms.iter()
+                .find_map(|a| find_first_varlocal_span(sym, &a.body))
+        }),
         canon::Expr_::Tuple(items) | canon::Expr_::List(items) => {
             items.iter().find_map(|e| find_first_varlocal_span(sym, e))
         }
-        canon::Expr_::Cons(h, t) => find_first_varlocal_span(sym, h)
-            .or_else(|| find_first_varlocal_span(sym, t)),
-        canon::Expr_::Lambda(_, e) | canon::Expr_::Access(e, _) => {
-            find_first_varlocal_span(sym, e)
+        canon::Expr_::Cons(h, t) => {
+            find_first_varlocal_span(sym, h).or_else(|| find_first_varlocal_span(sym, t))
         }
-        canon::Expr_::Record(fields) => {
-            fields.iter().find_map(|(_, e)| find_first_varlocal_span(sym, e))
-        }
-        canon::Expr_::Update(base, fields) => find_first_varlocal_span(sym, base)
-            .or_else(|| fields.iter().find_map(|(_, e)| find_first_varlocal_span(sym, e))),
+        canon::Expr_::Lambda(_, e) | canon::Expr_::Access(e, _) => find_first_varlocal_span(sym, e),
+        canon::Expr_::Record(fields) => fields
+            .iter()
+            .find_map(|(_, e)| find_first_varlocal_span(sym, e)),
+        canon::Expr_::Update(base, fields) => find_first_varlocal_span(sym, base).or_else(|| {
+            fields
+                .iter()
+                .find_map(|(_, e)| find_first_varlocal_span(sym, e))
+        }),
     }
 }
 
@@ -1466,20 +1589,28 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
         Expr::Lambda { body, .. } => usize::from(lambda_body_refs_sym(sym, body)),
         Expr::Let { name, value, body } => {
             let in_value = count_var_uses(sym, value);
-            let in_body =
-                if *name == sym { 0 } else { count_var_uses(sym, body) };
+            let in_body = if *name == sym {
+                0
+            } else {
+                count_var_uses(sym, body)
+            };
             in_value + in_body
         }
-        Expr::Destructure { binder, value, body } => {
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
             let in_value = count_var_uses(sym, value);
-            let in_body =
-                if pat_binds_symbol(binder, sym) { 0 } else { count_var_uses(sym, body) };
+            let in_body = if pat_binds_symbol(binder, sym) {
+                0
+            } else {
+                count_var_uses(sym, body)
+            };
             in_value + in_body
         }
         Expr::If { cond, then_, else_ } => {
-            count_var_uses(sym, cond)
-                + count_var_uses(sym, then_)
-                + count_var_uses(sym, else_)
+            count_var_uses(sym, cond) + count_var_uses(sym, then_) + count_var_uses(sym, else_)
         }
         Expr::Match(m) => {
             let in_scrut = count_var_uses(sym, m.scrutinee());
@@ -1496,31 +1627,25 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
                 .sum();
             in_scrut + in_arms
         }
-        Expr::BinOp { lhs, rhs, .. } => {
-            count_var_uses(sym, lhs) + count_var_uses(sym, rhs)
-        }
+        Expr::BinOp { lhs, rhs, .. } => count_var_uses(sym, lhs) + count_var_uses(sym, rhs),
         Expr::Call { args, .. } => args.iter().map(|a| count_var_uses(sym, a)).sum(),
         Expr::Apply { func, args } => {
-            count_var_uses(sym, func)
-                + args.iter().map(|a| count_var_uses(sym, a)).sum::<usize>()
+            count_var_uses(sym, func) + args.iter().map(|a| count_var_uses(sym, a)).sum::<usize>()
         }
         Expr::Tuple(items) => items.iter().map(|e| count_var_uses(sym, e)).sum(),
         Expr::List { items, .. } => items.iter().map(|e| count_var_uses(sym, e)).sum(),
-        Expr::Cons { head, tail } => {
-            count_var_uses(sym, head) + count_var_uses(sym, tail)
-        }
+        Expr::Cons { head, tail } => count_var_uses(sym, head) + count_var_uses(sym, tail),
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             count_var_uses(sym, list)
         }
-        Expr::Record(fields) => {
-            fields.iter().map(|(_, e)| count_var_uses(sym, e)).sum()
-        }
+        Expr::Record(fields) => fields.iter().map(|(_, e)| count_var_uses(sym, e)).sum(),
         // `Update.record` — `emit_update` wraps it as `(record).clone()`, which
         // BORROWS the record (`.clone()` takes `&self`).  `sym` is NOT moved here.
         // Only the new FIELD VALUES (fields.values) are consuming positions.
-        Expr::Update { fields, .. } => {
-            fields.iter().map(|(_, e)| count_var_uses(sym, e)).sum::<usize>()
-        }
+        Expr::Update { fields, .. } => fields
+            .iter()
+            .map(|(_, e)| count_var_uses(sym, e))
+            .sum::<usize>(),
         Expr::Ctor { args, .. } => args.iter().map(|a| count_var_uses(sym, a)).sum(),
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             count_var_uses(sym, effect) + count_var_uses(sym, rest)
@@ -1587,7 +1712,11 @@ fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
             };
             in_value + in_body
         }
-        Expr::Destructure { binder, value, body } => {
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
             let in_value = count_fn_value_uses(sym, value);
             let in_body = if pat_binds_symbol(binder, sym) {
                 0
@@ -1643,10 +1772,14 @@ fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
             count_fn_value_uses(sym, list)
         }
-        Expr::Record(fields) => fields.iter().map(|(_, e)| count_fn_value_uses(sym, e)).sum(),
-        Expr::Update { fields, .. } => {
-            fields.iter().map(|(_, e)| count_fn_value_uses(sym, e)).sum::<usize>()
-        }
+        Expr::Record(fields) => fields
+            .iter()
+            .map(|(_, e)| count_fn_value_uses(sym, e))
+            .sum(),
+        Expr::Update { fields, .. } => fields
+            .iter()
+            .map(|(_, e)| count_fn_value_uses(sym, e))
+            .sum::<usize>(),
         Expr::Ctor { args, .. } => args.iter().map(|a| count_fn_value_uses(sym, a)).sum(),
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             count_fn_value_uses(sym, effect) + count_fn_value_uses(sym, rest)
@@ -1778,16 +1911,28 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
             } else {
                 Box::new(rewrite_multiuse_clones(sym, remaining, *body))
             };
-            Expr::Let { name, value: new_value, body: new_body }
+            Expr::Let {
+                name,
+                value: new_value,
+                body: new_body,
+            }
         }
-        Expr::Destructure { binder, value, body } => {
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
             let new_value = Box::new(rewrite_multiuse_clones(sym, remaining, *value));
             let new_body = if pat_binds_symbol(&binder, sym) {
                 body
             } else {
                 Box::new(rewrite_multiuse_clones(sym, remaining, *body))
             };
-            Expr::Destructure { binder, value: new_value, body: new_body }
+            Expr::Destructure {
+                binder,
+                value: new_value,
+                body: new_body,
+            }
         }
         Expr::Match(m) => {
             // `remaining` is one `&mut` counter threaded through scrutinee and
@@ -1819,7 +1964,10 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
                 .into_iter()
                 .map(|a| rewrite_multiuse_clones(sym, remaining, a))
                 .collect();
-            Expr::Apply { func: new_func, args: new_args }
+            Expr::Apply {
+                func: new_func,
+                args: new_args,
+            }
         }
         Expr::Tuple(items) => Expr::Tuple(
             items
@@ -1878,7 +2026,12 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
                 .map(|(k, v)| (k, rewrite_multiuse_clones(sym, remaining, v)))
                 .collect(),
         },
-        Expr::Ctor { home, ty, variant, args } => Expr::Ctor {
+        Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args,
+        } => Expr::Ctor {
             home,
             ty,
             variant,
@@ -2428,11 +2581,7 @@ const fn unsupported(span: Span, feature: Feature) -> Diagnostic {
 fn pat_binds_symbol(pat: &Pat, target: Symbol) -> bool {
     match pat {
         Pat::Var(s) => *s == target,
-        Pat::Wildcard
-        | Pat::Int(_)
-        | Pat::Bool(_)
-        | Pat::Char(_)
-        | Pat::Str(_) => false,
+        Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => false,
         Pat::Alias(inner, s) => *s == target || pat_binds_symbol(inner, target),
         Pat::Ctor { args, .. } => args.iter().any(|p| pat_binds_symbol(p, target)),
         Pat::Tuple(elems) => elems.iter().any(|p| pat_binds_symbol(p, target)),
@@ -2498,7 +2647,11 @@ fn rewrite_var_free_occurrences(
                 body: new_body,
             }
         }
-        Expr::Destructure { binder, value, body } => {
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
             let new_value = Box::new(rewrite_var_free_occurrences(target, *value, on_hit));
             let new_body = if pat_binds_symbol(&binder, target) {
                 body
@@ -2547,12 +2700,18 @@ fn rewrite_var_free_occurrences(
                 .map(|a| rewrite_var_free_occurrences(target, a, on_hit))
                 .collect(),
         },
-        Expr::Tuple(items) => {
-            Expr::Tuple(items.into_iter().map(|e| rewrite_var_free_occurrences(target, e, on_hit)).collect())
-        }
+        Expr::Tuple(items) => Expr::Tuple(
+            items
+                .into_iter()
+                .map(|e| rewrite_var_free_occurrences(target, e, on_hit))
+                .collect(),
+        ),
         Expr::List { elem, items } => Expr::List {
             elem,
-            items: items.into_iter().map(|e| rewrite_var_free_occurrences(target, e, on_hit)).collect(),
+            items: items
+                .into_iter()
+                .map(|e| rewrite_var_free_occurrences(target, e, on_hit))
+                .collect(),
         },
         Expr::Cons { head, tail } => Expr::Cons {
             head: Box::new(rewrite_var_free_occurrences(target, *head, on_hit)),
@@ -2595,11 +2754,18 @@ fn rewrite_var_free_occurrences(
             } else {
                 Box::new(rewrite_var_free_occurrences(target, *body, on_hit))
             };
-            Expr::Lambda { params, ret, body: new_body }
+            Expr::Lambda {
+                params,
+                ret,
+                body: new_body,
+            }
         }
         Expr::Apply { func, args } => Expr::Apply {
             func: Box::new(rewrite_var_free_occurrences(target, *func, on_hit)),
-            args: args.into_iter().map(|a| rewrite_var_free_occurrences(target, a, on_hit)).collect(),
+            args: args
+                .into_iter()
+                .map(|a| rewrite_var_free_occurrences(target, a, on_hit))
+                .collect(),
         },
         Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
             effect: Box::new(rewrite_var_free_occurrences(target, *effect, on_hit)),
@@ -2609,11 +2775,19 @@ fn rewrite_var_free_occurrences(
             effect: Box::new(rewrite_var_free_occurrences(target, *effect, on_hit)),
             rest: Box::new(rewrite_var_free_occurrences(target, *rest, on_hit)),
         },
-        Expr::Ctor { home, ty, variant, args } => Expr::Ctor {
+        Expr::Ctor {
             home,
             ty,
             variant,
-            args: args.into_iter().map(|a| rewrite_var_free_occurrences(target, a, on_hit)).collect(),
+            args,
+        } => Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args: args
+                .into_iter()
+                .map(|a| rewrite_var_free_occurrences(target, a, on_hit))
+                .collect(),
         },
         // TailLoop/TailRecur are produced by a separate TCO pass that runs
         // AFTER lower_let, so they never appear in the IR at the point this
@@ -2625,10 +2799,16 @@ fn rewrite_var_free_occurrences(
             } else {
                 Box::new(rewrite_var_free_occurrences(target, *body, on_hit))
             };
-            Expr::TailLoop { params, body: new_body }
+            Expr::TailLoop {
+                params,
+                body: new_body,
+            }
         }
         Expr::TailRecur { args } => Expr::TailRecur {
-            args: args.into_iter().map(|a| rewrite_var_free_occurrences(target, a, on_hit)).collect(),
+            args: args
+                .into_iter()
+                .map(|a| rewrite_var_free_occurrences(target, a, on_hit))
+                .collect(),
         },
     }
 }
@@ -3041,9 +3221,7 @@ pub fn count_destructure_param_sites(m: &canon::Module) -> usize {
     }
     fn walk_expr(e: &canon::Expr) -> usize {
         match &e.value {
-            canon::Expr_::Lambda(params, body) => {
-                non_var_params(params) + walk_expr(body)
-            }
+            canon::Expr_::Lambda(params, body) => non_var_params(params) + walk_expr(body),
             // Recurse into every sub-expression that can host a lambda.
             canon::Expr_::Call(callee, args) => {
                 walk_expr(callee) + args.iter().map(walk_expr).sum::<usize>()
@@ -3149,10 +3327,7 @@ pub fn count_any_param_sites(m: &canon::Module, interner: &Interner) -> usize {
 /// index panic.
 pub fn count_destructure_thunk_sites(m: &canon::Module) -> usize {
     const fn is_thunk_countable_binding(pat: &canon::Pattern_) -> bool {
-        !matches!(
-            pat,
-            canon::Pattern_::PVar(_) | canon::Pattern_::PAnything
-        )
+        !matches!(pat, canon::Pattern_::PVar(_) | canon::Pattern_::PAnything)
     }
     fn is_destructure_headed(pat: &canon::Pattern_) -> bool {
         match pat {
@@ -3993,9 +4168,9 @@ impl<'a> Lowerer<'a> {
                 .task_arity_in_canon(a)
                 .or_else(|| self.task_arity_in_canon(b)),
             canon::Type::Tuple(elems) => elems.iter().find_map(|e| self.task_arity_in_canon(e)),
-            canon::Type::Record(fields) => {
-                fields.iter().find_map(|(_, ty)| self.task_arity_in_canon(ty))
-            }
+            canon::Type::Record(fields) => fields
+                .iter()
+                .find_map(|(_, ty)| self.task_arity_in_canon(ty)),
             canon::Type::Var(_) | canon::Type::Unit => None,
         }
     }
@@ -4030,8 +4205,7 @@ impl<'a> Lowerer<'a> {
                 let mut vars = BTreeSet::new();
                 collect_type_vars(arg, &mut vars);
                 if !vars.iter().all(|v| {
-                    type_params.contains(v)
-                        || self.interner.resolve(*v).is_some_and(|n| n == "any")
+                    type_params.contains(v) || self.interner.resolve(*v).is_some_and(|n| n == "any")
                 }) {
                     return Err(unsupported(ctor.span, Feature::Polymorphism));
                 }
@@ -4249,27 +4423,27 @@ impl<'a> Lowerer<'a> {
                 // block (next) so that the `ir_type_from_ty(body_ty)` call in
                 // the any-ret fix (after the installation) already runs with the
                 // correct current_poly_tvars.
-                let any_ui_msg_injection: Option<(u32, Symbol)> =
-                    if let IrType::Generic(sym) = &ret {
-                        if self.interner.resolve(*sym) == Some("any") {
-                            self.types
-                                .regions
-                                .get(&(def.home().to_vec(), body.span))
-                                .and_then(|body_ty| {
-                                    let Ty::Con { args, .. } = body_ty else {
-                                        return None;
-                                    };
-                                    let Some(Ty::Var(uv)) = args.first() else {
-                                        return None;
-                                    };
-                                    Some((*uv, *sym))
-                                })
-                        } else {
-                            None
-                        }
+                let any_ui_msg_injection: Option<(u32, Symbol)> = if let IrType::Generic(sym) = &ret
+                {
+                    if self.interner.resolve(*sym) == Some("any") {
+                        self.types
+                            .regions
+                            .get(&(def.home().to_vec(), body.span))
+                            .and_then(|body_ty| {
+                                let Ty::Con { args, .. } = body_ty else {
+                                    return None;
+                                };
+                                let Some(Ty::Var(uv)) = args.first() else {
+                                    return None;
+                                };
+                                Some((*uv, *sym))
+                            })
                     } else {
                         None
-                    };
+                    }
+                } else {
+                    None
+                };
                 // Install the binding's generic type-variable map so
                 // `ir_type_from_ty_ui_msg` can distinguish a `Ty::Var` that is an
                 // enclosing generic (→ `IrType::Generic`) from one that is a
@@ -4460,7 +4634,10 @@ impl<'a> Lowerer<'a> {
                     .env
                     .get(&(def.home().to_vec(), name))
                     .ok_or_else(|| {
-                        bug("sky_lower::lower_def", "no inferred type for unannotated fn")
+                        bug(
+                            "sky_lower::lower_def",
+                            "no inferred type for unannotated fn",
+                        )
                     })?;
                 // Boundary Scheme Promotion: if this def generalized at its
                 // home module's boundary (a non-empty `untyped_type_params`
@@ -4476,7 +4653,12 @@ impl<'a> Lowerer<'a> {
                 let quantified_syms = self.types.untyped_type_params.get(&poly_key);
                 let is_generalized = quantified_syms.is_some_and(|v| !v.is_empty());
                 let saved_poly_tvars = if is_generalized {
-                    let poly = self.types.poly_var_map.get(&poly_key).cloned().unwrap_or_default();
+                    let poly = self
+                        .types
+                        .poly_var_map
+                        .get(&poly_key)
+                        .cloned()
+                        .unwrap_or_default();
                     let mut slot = self.current_poly_tvars.borrow_mut();
                     let saved = slot.clone();
                     *slot = poly;
@@ -4687,6 +4869,17 @@ impl<'a> Lowerer<'a> {
         }
         if b.has_dict_key() {
             set = set.with_hash().with_ord_total().with_clone();
+        }
+        // SQL-bind-parameter obligation (#165): a `List a` argument forwarded
+        // into `Db.exec` / `Db.query` / `Db.queryDecode`'s params position
+        // needs the backend's `Into<sky_runtime::db::SqlParam>` bound so a
+        // generic Sky wrapper around those kernels (`Database.exec label sql
+        // args` in `examples/17-skymon`) emits a Rust generic `cargo` can
+        // actually satisfy at every call site, instead of an unbounded `T1`
+        // that only worked by accident for the one instantiation lowering
+        // happened to see.
+        if b.has_sql_param() {
+            set = set.with_sql_param();
         }
         // Number / Comparable operations move their operand (`Add::add(self)`,
         // and the body reuses it), so the parameter must be `Copy`. Equality
@@ -5218,7 +5411,10 @@ impl<'a> Lowerer<'a> {
                         })?,
                         generics,
                     )?;
-                    Ok(IrType::Ui { ctor: UiCtor::Label, msg: Box::new(msg) })
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::Label,
+                        msg: Box::new(msg),
+                    })
                 }
                 "Placeholder" if args.len() == 1 => {
                     let msg = self.ir_type_from_canon(
@@ -5230,7 +5426,10 @@ impl<'a> Lowerer<'a> {
                         })?,
                         generics,
                     )?;
-                    Ok(IrType::Ui { ctor: UiCtor::Placeholder, msg: Box::new(msg) })
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::Placeholder,
+                        msg: Box::new(msg),
+                    })
                 }
                 "RadioOption" if args.len() == 1 => {
                     let msg = self.ir_type_from_canon(
@@ -5242,7 +5441,10 @@ impl<'a> Lowerer<'a> {
                         })?,
                         generics,
                     )?;
-                    Ok(IrType::Ui { ctor: UiCtor::RadioOption, msg: Box::new(msg) })
+                    Ok(IrType::Ui {
+                        ctor: UiCtor::RadioOption,
+                        msg: Box::new(msg),
+                    })
                 }
                 _ if self
                     .enum_variants
@@ -5276,9 +5478,7 @@ impl<'a> Lowerer<'a> {
                 // `VNode` — Sky.Live virtual-DOM node.
                 // All map to `IrType::Json` (universal opaque serde_json::Value) so
                 // they can flow through the runtime without a dedicated Rust struct.
-                "Handler" | "Middleware" | "Session" | "Store" | "VNode" => {
-                    Ok(IrType::Json)
-                }
+                "Handler" | "Middleware" | "Session" | "Store" | "VNode" => Ok(IrType::Json),
                 // ── JWT builder types (#152 / D-00) ─────────────────────────────
                 // `Algorithm` — JWT signing algorithm descriptor encoded as a
                 // `String` ("HS256:<secret>" or "RS256:<pem>").
@@ -6280,10 +6480,8 @@ impl<'a> Lowerer<'a> {
             Ty::Con { name, args, .. } if !args.is_empty() => {
                 match self.resolve(*name)? {
                     "Maybe" if args.len() == 1 => {
-                        let elem = self.ir_type_from_ty_json(
-                            args.first().ok_or_else(maybe_arg_bug)?,
-                            span,
-                        )?;
+                        let elem = self
+                            .ir_type_from_ty_json(args.first().ok_or_else(maybe_arg_bug)?, span)?;
                         Ok(IrType::Maybe(Box::new(elem)))
                     }
                     "Result" if args.len() == 2 => {
@@ -6306,24 +6504,18 @@ impl<'a> Lowerer<'a> {
                         } else {
                             self.ir_type_from_ty_json(err_ty, span)?
                         };
-                        let ok = self.ir_type_from_ty_json(
-                            args.get(1).ok_or_else(result_arg_bug)?,
-                            span,
-                        )?;
+                        let ok = self
+                            .ir_type_from_ty_json(args.get(1).ok_or_else(result_arg_bug)?, span)?;
                         Ok(IrType::Result(Box::new(err), Box::new(ok)))
                     }
                     "List" if args.len() == 1 => {
-                        let elem = self.ir_type_from_ty_json(
-                            args.first().ok_or_else(list_arg_bug)?,
-                            span,
-                        )?;
+                        let elem = self
+                            .ir_type_from_ty_json(args.first().ok_or_else(list_arg_bug)?, span)?;
                         Ok(IrType::List(Box::new(elem)))
                     }
                     "Task" if args.len() == 1 => {
-                        let inner = self.ir_type_from_ty_json(
-                            args.first().ok_or_else(task_arg_bug)?,
-                            span,
-                        )?;
+                        let inner = self
+                            .ir_type_from_ty_json(args.first().ok_or_else(task_arg_bug)?, span)?;
                         Ok(IrType::Task(Box::new(inner)))
                     }
                     "Cmd" if args.len() == 1 => {
@@ -6351,24 +6543,18 @@ impl<'a> Lowerer<'a> {
                         Ok(IrType::Sub(Box::new(inner)))
                     }
                     "Set" if args.len() == 1 => {
-                        let elem = self.ir_type_from_ty_json(
-                            args.first().ok_or_else(set_arg_bug)?,
-                            span,
-                        )?;
+                        let elem =
+                            self.ir_type_from_ty_json(args.first().ok_or_else(set_arg_bug)?, span)?;
                         if matches!(elem, IrType::Float) {
                             return Err(unsupported(span, Feature::FloatKeyedCollection));
                         }
                         Ok(IrType::Set(Box::new(elem)))
                     }
                     "Dict" if args.len() == 2 => {
-                        let k = self.ir_type_from_ty_json(
-                            args.first().ok_or_else(dict_arg_bug)?,
-                            span,
-                        )?;
-                        let v = self.ir_type_from_ty_json(
-                            args.get(1).ok_or_else(dict_arg_bug)?,
-                            span,
-                        )?;
+                        let k = self
+                            .ir_type_from_ty_json(args.first().ok_or_else(dict_arg_bug)?, span)?;
+                        let v =
+                            self.ir_type_from_ty_json(args.get(1).ok_or_else(dict_arg_bug)?, span)?;
                         if matches!(k, IrType::Float) {
                             return Err(unsupported(span, Feature::FloatKeyedCollection));
                         }
@@ -6943,7 +7129,11 @@ impl<'a> Lowerer<'a> {
     /// primary Tier-2 type-checker obligation (see [`Self::lower_callee`]'s
     /// doc comment) — a bug in the Tier-2 wiring should not silently reopen
     /// this hazard.
-    fn reject_curried_andmap_payload(&self, resolved: &Callee, callee: &canon::Expr) -> DResult<()> {
+    fn reject_curried_andmap_payload(
+        &self,
+        resolved: &Callee,
+        callee: &canon::Expr,
+    ) -> DResult<()> {
         if !matches!(
             resolved,
             Callee::Kernel(KernelFn::MaybeAndMap | KernelFn::ResultAndMap)
@@ -7170,8 +7360,7 @@ impl<'a> Lowerer<'a> {
                     | KernelFn::TuiProgram
                     | KernelFn::WebviewApp
                     | KernelFn::CliProgram,
-                ) if args.len() == 1 =>
-                {
+                ) if args.len() == 1 => {
                     if let Some(arg0) = args.first() {
                         // Borrow `peek` for the gate BEFORE moving it below.
                         let lowered_cfg = self.lower_app_entry_cfg(&peek, arg0)?;
@@ -7214,8 +7403,7 @@ impl<'a> Lowerer<'a> {
                     | KernelFn::InputSlider
                     | KernelFn::InputRadio
                     | KernelFn::InputRadioRow,
-                ) if args.len() == 2 =>
-                {
+                ) if args.len() == 2 => {
                     if let (Some(attrs_arg), Some(cfg_arg)) = (args.first(), args.get(1)) {
                         let lowered_attrs = self.lower_expr(attrs_arg)?;
                         let canon::Expr_::Record(fields) = &cfg_arg.value else {
@@ -7621,9 +7809,14 @@ impl<'a> Lowerer<'a> {
         //   let cap_0 = expr_0 in let cap_1 = expr_1 in <lambda>
         // which evaluates the args left-to-right before the closure is built,
         // matching Sky's pure-functional semantics.
-        let result = hoisted.into_iter().rev().fold(lambda, |inner, (cap_sym, original)| {
-            Expr::Let { name: cap_sym, value: Box::new(original), body: Box::new(inner) }
-        });
+        let result = hoisted
+            .into_iter()
+            .rev()
+            .fold(lambda, |inner, (cap_sym, original)| Expr::Let {
+                name: cap_sym,
+                value: Box::new(original),
+                body: Box::new(inner),
+            });
         Ok(result)
     }
 
@@ -7759,9 +7952,14 @@ impl<'a> Lowerer<'a> {
         };
         // T4 (#130): wrap any hoisted let-bindings around the lambda.
         // Folding in reverse preserves left-to-right evaluation order.
-        let result = hoisted.into_iter().rev().fold(lambda, |inner, (cap_sym, original)| {
-            Expr::Let { name: cap_sym, value: Box::new(original), body: Box::new(inner) }
-        });
+        let result = hoisted
+            .into_iter()
+            .rev()
+            .fold(lambda, |inner, (cap_sym, original)| Expr::Let {
+                name: cap_sym,
+                value: Box::new(original),
+                body: Box::new(inner),
+            });
         Ok(result)
     }
 
@@ -7826,7 +8024,11 @@ impl<'a> Lowerer<'a> {
             .map(|(&sym, ty)| (sym, ty.clone()))
             .collect();
         // Direct args: the first `def_arity` eta params go to the inner Call.
-        let direct_args: Vec<Expr> = eta_syms.iter().take(def_arity).map(|&s| Expr::Var(s)).collect();
+        let direct_args: Vec<Expr> = eta_syms
+            .iter()
+            .take(def_arity)
+            .map(|&s| Expr::Var(s))
+            .collect();
         // Inner Call: `callee(eta_0, …, eta_{k-1})` — returns the inner closure.
         let inner_call = Expr::Call {
             callee,
@@ -7834,7 +8036,11 @@ impl<'a> Lowerer<'a> {
         };
         // Apply: pass the remaining eta params to the returned closure.
         // `def_arity == 0` ⇒ `apply_args == eta_syms[0..]` (all params).
-        let apply_args: Vec<Expr> = eta_syms.iter().skip(def_arity).map(|&s| Expr::Var(s)).collect();
+        let apply_args: Vec<Expr> = eta_syms
+            .iter()
+            .skip(def_arity)
+            .map(|&s| Expr::Var(s))
+            .collect();
         let body = Expr::Apply {
             func: Box::new(inner_call),
             args: apply_args,
@@ -9416,10 +9622,10 @@ impl<'a> Lowerer<'a> {
                     ("Basics", "toString") => Ok(Callee::Kernel(KernelFn::BasicsToString)),
                     // ── Basics numerics (#115) ────────────────────────────────
                     ("Basics", "negate") => Ok(Callee::Kernel(KernelFn::BasicsNegate)),
-                    ("Basics", "abs")    => Ok(Callee::Kernel(KernelFn::BasicsAbs)),
-                    ("Basics", "sqrt")   => Ok(Callee::Kernel(KernelFn::BasicsSqrt)),
-                    ("Basics", "min")    => Ok(Callee::Kernel(KernelFn::BasicsMin)),
-                    ("Basics", "max")    => Ok(Callee::Kernel(KernelFn::BasicsMax)),
+                    ("Basics", "abs") => Ok(Callee::Kernel(KernelFn::BasicsAbs)),
+                    ("Basics", "sqrt") => Ok(Callee::Kernel(KernelFn::BasicsSqrt)),
+                    ("Basics", "min") => Ok(Callee::Kernel(KernelFn::BasicsMin)),
+                    ("Basics", "max") => Ok(Callee::Kernel(KernelFn::BasicsMax)),
                     // `compare : comparable -> comparable -> Order` (#123)
                     ("Basics", "compare") => Ok(Callee::Kernel(KernelFn::BasicsCompare)),
                     // ── end Basics numerics (#115) ────────────────────────────
@@ -9448,9 +9654,7 @@ impl<'a> Lowerer<'a> {
                     ("Error", "withDetails") => Ok(Callee::Kernel(KernelFn::ErrorWithDetails)),
                     // ── CssSafety kernels (Sky.Core.CssSafety — Std.Css leaf
                     //    security kernels, #47) ──────────────────────────────
-                    ("CssSafety", "safeValue") => {
-                        Ok(Callee::Kernel(KernelFn::CssSafetySafeValue))
-                    }
+                    ("CssSafety", "safeValue") => Ok(Callee::Kernel(KernelFn::CssSafetySafeValue)),
                     ("CssSafety", "safePropName") => {
                         Ok(Callee::Kernel(KernelFn::CssSafetySafePropName))
                     }
@@ -10147,12 +10351,8 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "htmlAttribute") => Ok(Callee::Kernel(KernelFn::UiHtmlAttribute)),
                     ("Ui", "name") => Ok(Callee::Kernel(KernelFn::UiName)),
                     ("Ui", "style") => Ok(Callee::Kernel(KernelFn::UiStyle)),
-                    ("Ui", "transitionRaw") => {
-                        Ok(Callee::Kernel(KernelFn::UiTransitionRaw))
-                    }
-                    ("Ui", "gridTracksRaw") => {
-                        Ok(Callee::Kernel(KernelFn::UiGridTracksRaw))
-                    }
+                    ("Ui", "transitionRaw") => Ok(Callee::Kernel(KernelFn::UiTransitionRaw)),
+                    ("Ui", "gridTracksRaw") => Ok(Callee::Kernel(KernelFn::UiGridTracksRaw)),
                     // #154: Ui.breakpoint + Breakpoint constants
                     ("Ui", "breakpoint") => Ok(Callee::Kernel(KernelFn::UiBreakpoint)),
                     ("Ui", "mediaQuery") => Ok(Callee::Kernel(KernelFn::UiMediaQuery)),
@@ -10188,9 +10388,7 @@ impl<'a> Lowerer<'a> {
                     ("Border", "focusColor") => Ok(Callee::Kernel(KernelFn::BorderFocusColor)),
                     ("Border", "activeColor") => Ok(Callee::Kernel(KernelFn::BorderActiveColor)),
                     ("Border", "hoverWidth") => Ok(Callee::Kernel(KernelFn::BorderHoverWidth)),
-                    ("Border", "hoverRounded") => {
-                        Ok(Callee::Kernel(KernelFn::BorderHoverRounded))
-                    }
+                    ("Border", "hoverRounded") => Ok(Callee::Kernel(KernelFn::BorderHoverRounded)),
                     ("Font", "weight") => Ok(Callee::Kernel(KernelFn::FontWeight)),
                     ("Font", "semiBold") => Ok(Callee::Kernel(KernelFn::FontSemiBold)),
                     ("Font", "regular") => Ok(Callee::Kernel(KernelFn::FontRegular)),
@@ -10216,11 +10414,9 @@ impl<'a> Lowerer<'a> {
                     ("Font", "disabledColor") => Ok(Callee::Kernel(KernelFn::FontDisabledColor)),
                     ("Font", "hoverSize") => Ok(Callee::Kernel(KernelFn::FontHoverSize)),
                     ("Attr", "tabindex") => Ok(Callee::Kernel(KernelFn::HtmlAttrTabindex)),
-                    ("Attr", "rows")     => Ok(Callee::Kernel(KernelFn::HtmlAttrRows)),
+                    ("Attr", "rows") => Ok(Callee::Kernel(KernelFn::HtmlAttrRows)),
                     // ── #117: Std.Ui.Region sub-module ───────────────────────
-                    ("Region", "mainContent") => {
-                        Ok(Callee::Kernel(KernelFn::RegionMainContent))
-                    }
+                    ("Region", "mainContent") => Ok(Callee::Kernel(KernelFn::RegionMainContent)),
                     ("Region", "navigation") => Ok(Callee::Kernel(KernelFn::RegionNavigation)),
                     ("Region", "footer") => Ok(Callee::Kernel(KernelFn::RegionFooter)),
                     ("Region", "aside") => Ok(Callee::Kernel(KernelFn::RegionAside)),
@@ -10267,14 +10463,14 @@ impl<'a> Lowerer<'a> {
                     ("Input", "radio") => Ok(Callee::Kernel(KernelFn::InputRadio)),
                     ("Input", "radioRow") => Ok(Callee::Kernel(KernelFn::InputRadioRow)),
                     // ── #146: Std.Ui.Lazy sub-module ──────────────────────────
-                    ("Lazy", "lazy")  => Ok(Callee::Kernel(KernelFn::LazyLazy)),
+                    ("Lazy", "lazy") => Ok(Callee::Kernel(KernelFn::LazyLazy)),
                     ("Lazy", "lazy2") => Ok(Callee::Kernel(KernelFn::LazyLazy2)),
                     ("Lazy", "lazy3") => Ok(Callee::Kernel(KernelFn::LazyLazy3)),
                     ("Lazy", "lazy4") => Ok(Callee::Kernel(KernelFn::LazyLazy4)),
                     ("Lazy", "lazy5") => Ok(Callee::Kernel(KernelFn::LazyLazy5)),
                     // ── Std.Ui.Keyed ──────────────────────────────────────────
                     ("Keyed", "column") => Ok(Callee::Kernel(KernelFn::KeyedColumn)),
-                    ("Keyed", "row")    => Ok(Callee::Kernel(KernelFn::KeyedRow)),
+                    ("Keyed", "row") => Ok(Callee::Kernel(KernelFn::KeyedRow)),
                     // ── M7: Std.Live / Sky.Live app-entry kernels ─────────────
                     ("Live", "app") => Ok(Callee::Kernel(KernelFn::LiveApp)),
                     ("Live", "appRouted") => Ok(Callee::Kernel(KernelFn::LiveAppRouted)),
@@ -10288,15 +10484,11 @@ impl<'a> Lowerer<'a> {
                     // ── #111: Std.Cli / Sky.Cli app-entry kernel ──────────────
                     ("Cli", "program") => Ok(Callee::Kernel(KernelFn::CliProgram)),
                     // ── #111: Std.Auth / Sky.Auth — auth helpers ──────────────
-                    ("Auth", "hashPassword") => {
-                        Ok(Callee::Kernel(KernelFn::AuthHashPassword))
-                    }
+                    ("Auth", "hashPassword") => Ok(Callee::Kernel(KernelFn::AuthHashPassword)),
                     ("Auth", "hashPasswordCost") => {
                         Ok(Callee::Kernel(KernelFn::AuthHashPasswordCost))
                     }
-                    ("Auth", "verifyPassword") => {
-                        Ok(Callee::Kernel(KernelFn::AuthVerifyPassword))
-                    }
+                    ("Auth", "verifyPassword") => Ok(Callee::Kernel(KernelFn::AuthVerifyPassword)),
                     ("Auth", "passwordStrength") => {
                         Ok(Callee::Kernel(KernelFn::AuthPasswordStrength))
                     }
@@ -10339,46 +10531,46 @@ impl<'a> Lowerer<'a> {
                     ("Ws", "broadcast") => Ok(Callee::Kernel(KernelFn::WsBroadcast)),
                     ("Ws", "closeClient") => Ok(Callee::Kernel(KernelFn::WsCloseClient)),
                     // ── Std.Decimal ───────────────────────────────────────────
-                    ("Decimal", "zero")        => Ok(Callee::Kernel(KernelFn::DecZero)),
-                    ("Decimal", "one")         => Ok(Callee::Kernel(KernelFn::DecOne)),
-                    ("Decimal", "oneHundred")  => Ok(Callee::Kernel(KernelFn::DecOneHundred)),
-                    ("Decimal", "fromString")  => Ok(Callee::Kernel(KernelFn::DecFromString)),
-                    ("Decimal", "fromInt")     => Ok(Callee::Kernel(KernelFn::DecFromInt)),
-                    ("Decimal", "fromFloat")   => Ok(Callee::Kernel(KernelFn::DecFromFloat)),
-                    ("Decimal", "fromMinor")   => Ok(Callee::Kernel(KernelFn::DecFromMinor)),
-                    ("Decimal", "toString")    => Ok(Callee::Kernel(KernelFn::DecToString)),
+                    ("Decimal", "zero") => Ok(Callee::Kernel(KernelFn::DecZero)),
+                    ("Decimal", "one") => Ok(Callee::Kernel(KernelFn::DecOne)),
+                    ("Decimal", "oneHundred") => Ok(Callee::Kernel(KernelFn::DecOneHundred)),
+                    ("Decimal", "fromString") => Ok(Callee::Kernel(KernelFn::DecFromString)),
+                    ("Decimal", "fromInt") => Ok(Callee::Kernel(KernelFn::DecFromInt)),
+                    ("Decimal", "fromFloat") => Ok(Callee::Kernel(KernelFn::DecFromFloat)),
+                    ("Decimal", "fromMinor") => Ok(Callee::Kernel(KernelFn::DecFromMinor)),
+                    ("Decimal", "toString") => Ok(Callee::Kernel(KernelFn::DecToString)),
                     ("Decimal", "toStringFixed") => Ok(Callee::Kernel(KernelFn::DecToStringFixed)),
-                    ("Decimal", "toFloat")     => Ok(Callee::Kernel(KernelFn::DecToFloat)),
-                    ("Decimal", "toInt")       => Ok(Callee::Kernel(KernelFn::DecToInt)),
-                    ("Decimal", "toMinor")     => Ok(Callee::Kernel(KernelFn::DecToMinor)),
-                    ("Decimal", "add")         => Ok(Callee::Kernel(KernelFn::DecAdd)),
-                    ("Decimal", "sub")         => Ok(Callee::Kernel(KernelFn::DecSub)),
-                    ("Decimal", "mul")         => Ok(Callee::Kernel(KernelFn::DecMul)),
-                    ("Decimal", "div")         => Ok(Callee::Kernel(KernelFn::DecDiv)),
-                    ("Decimal", "mod")         => Ok(Callee::Kernel(KernelFn::DecMod)),
-                    ("Decimal", "neg")         => Ok(Callee::Kernel(KernelFn::DecNeg)),
-                    ("Decimal", "abs")         => Ok(Callee::Kernel(KernelFn::DecAbs)),
-                    ("Decimal", "floor")       => Ok(Callee::Kernel(KernelFn::DecFloor)),
-                    ("Decimal", "ceil")        => Ok(Callee::Kernel(KernelFn::DecCeil)),
-                    ("Decimal", "round")       => Ok(Callee::Kernel(KernelFn::DecRound)),
+                    ("Decimal", "toFloat") => Ok(Callee::Kernel(KernelFn::DecToFloat)),
+                    ("Decimal", "toInt") => Ok(Callee::Kernel(KernelFn::DecToInt)),
+                    ("Decimal", "toMinor") => Ok(Callee::Kernel(KernelFn::DecToMinor)),
+                    ("Decimal", "add") => Ok(Callee::Kernel(KernelFn::DecAdd)),
+                    ("Decimal", "sub") => Ok(Callee::Kernel(KernelFn::DecSub)),
+                    ("Decimal", "mul") => Ok(Callee::Kernel(KernelFn::DecMul)),
+                    ("Decimal", "div") => Ok(Callee::Kernel(KernelFn::DecDiv)),
+                    ("Decimal", "mod") => Ok(Callee::Kernel(KernelFn::DecMod)),
+                    ("Decimal", "neg") => Ok(Callee::Kernel(KernelFn::DecNeg)),
+                    ("Decimal", "abs") => Ok(Callee::Kernel(KernelFn::DecAbs)),
+                    ("Decimal", "floor") => Ok(Callee::Kernel(KernelFn::DecFloor)),
+                    ("Decimal", "ceil") => Ok(Callee::Kernel(KernelFn::DecCeil)),
+                    ("Decimal", "round") => Ok(Callee::Kernel(KernelFn::DecRound)),
                     ("Decimal", "roundHalfUp") => Ok(Callee::Kernel(KernelFn::DecRoundHalfUp)),
-                    ("Decimal", "truncate")    => Ok(Callee::Kernel(KernelFn::DecTruncate)),
-                    ("Decimal", "compare")     => Ok(Callee::Kernel(KernelFn::DecCompare)),
-                    ("Decimal", "eq")          => Ok(Callee::Kernel(KernelFn::DecEq)),
-                    ("Decimal", "neq")         => Ok(Callee::Kernel(KernelFn::DecNeq)),
-                    ("Decimal", "lt")          => Ok(Callee::Kernel(KernelFn::DecLt)),
-                    ("Decimal", "lte")         => Ok(Callee::Kernel(KernelFn::DecLte)),
-                    ("Decimal", "gt")          => Ok(Callee::Kernel(KernelFn::DecGt)),
-                    ("Decimal", "gte")         => Ok(Callee::Kernel(KernelFn::DecGte)),
-                    ("Decimal", "min")         => Ok(Callee::Kernel(KernelFn::DecMin)),
-                    ("Decimal", "max")         => Ok(Callee::Kernel(KernelFn::DecMax)),
-                    ("Decimal", "isZero")      => Ok(Callee::Kernel(KernelFn::DecIsZero)),
-                    ("Decimal", "isPositive")  => Ok(Callee::Kernel(KernelFn::DecIsPositive)),
-                    ("Decimal", "isNegative")  => Ok(Callee::Kernel(KernelFn::DecIsNegative)),
-                    ("Decimal", "percentOf")   => Ok(Callee::Kernel(KernelFn::DecPercentOf)),
-                    ("Decimal", "addPercent")  => Ok(Callee::Kernel(KernelFn::DecAddPercent)),
-                    ("Decimal", "subPercent")  => Ok(Callee::Kernel(KernelFn::DecSubPercent)),
-                    ("Decimal", "formatWith")  => Ok(Callee::Kernel(KernelFn::DecFormatWith)),
+                    ("Decimal", "truncate") => Ok(Callee::Kernel(KernelFn::DecTruncate)),
+                    ("Decimal", "compare") => Ok(Callee::Kernel(KernelFn::DecCompare)),
+                    ("Decimal", "eq") => Ok(Callee::Kernel(KernelFn::DecEq)),
+                    ("Decimal", "neq") => Ok(Callee::Kernel(KernelFn::DecNeq)),
+                    ("Decimal", "lt") => Ok(Callee::Kernel(KernelFn::DecLt)),
+                    ("Decimal", "lte") => Ok(Callee::Kernel(KernelFn::DecLte)),
+                    ("Decimal", "gt") => Ok(Callee::Kernel(KernelFn::DecGt)),
+                    ("Decimal", "gte") => Ok(Callee::Kernel(KernelFn::DecGte)),
+                    ("Decimal", "min") => Ok(Callee::Kernel(KernelFn::DecMin)),
+                    ("Decimal", "max") => Ok(Callee::Kernel(KernelFn::DecMax)),
+                    ("Decimal", "isZero") => Ok(Callee::Kernel(KernelFn::DecIsZero)),
+                    ("Decimal", "isPositive") => Ok(Callee::Kernel(KernelFn::DecIsPositive)),
+                    ("Decimal", "isNegative") => Ok(Callee::Kernel(KernelFn::DecIsNegative)),
+                    ("Decimal", "percentOf") => Ok(Callee::Kernel(KernelFn::DecPercentOf)),
+                    ("Decimal", "addPercent") => Ok(Callee::Kernel(KernelFn::DecAddPercent)),
+                    ("Decimal", "subPercent") => Ok(Callee::Kernel(KernelFn::DecSubPercent)),
+                    ("Decimal", "formatWith") => Ok(Callee::Kernel(KernelFn::DecFormatWith)),
                     // A kernel beyond the wired set.
                     // [SKY-L0108, feature: kernels]
                     (q, m) => {
@@ -11150,19 +11342,14 @@ impl<'a> Lowerer<'a> {
                     // unsupported / not-yet-modelled types — treat
                     // any error as "skip T5 for this symbol".
                     if n > 1
-                        && let Some(span) =
-                            find_first_varlocal_span(sym, &br.body)
+                        && let Some(span) = find_first_varlocal_span(sym, &br.body)
                         && let Some(ty) = self.region_ty(span)
                         && let Ok(ir_ty) = self.ir_type_from_ty(ty, span)
                     {
                         match clone_class(&ir_ty) {
                             CloneClass::CloneOk => {
                                 let mut remaining = n;
-                                arm_body = rewrite_multiuse_clones(
-                                    sym,
-                                    &mut remaining,
-                                    arm_body,
-                                );
+                                arm_body = rewrite_multiuse_clones(sym, &mut remaining, arm_body);
                             }
                             // T4 (#90): a fn-carrying, non-Clone arm-bound
                             // variable (`case Just f of Just f -> …`) has no
@@ -11217,7 +11404,10 @@ impl<'a> Lowerer<'a> {
         // clean diagnostic rather than an accept-then-cargo-fail.
         let has_guarded_arm = arms.iter().any(|a| a.guard.is_some());
         if has_guarded_arm && !arms.last().is_some_and(|a| is_irrefutable(&a.pat)) {
-            return Err(unsupported(first.pat.span, Feature::NestedCtorDiscrimination));
+            return Err(unsupported(
+                first.pat.span,
+                Feature::NestedCtorDiscrimination,
+            ));
         }
 
         // A list `case` that BINDS a value (a head element or a rest list) needs
@@ -11359,10 +11549,7 @@ impl<'a> Lowerer<'a> {
         }
         for (arm, br) in arms.iter().zip(branches.iter()) {
             if Self::arm_has_dispatch_needing_alias(&arm.pat) {
-                return Err(unsupported(
-                    br.pat.span,
-                    Feature::AliasOverRefutablePayload,
-                ));
+                return Err(unsupported(br.pat.span, Feature::AliasOverRefutablePayload));
             }
         }
         Ok(())
@@ -11383,10 +11570,9 @@ impl<'a> Lowerer<'a> {
             canon::Pattern_::PBool(b) => Ok(Pat::Bool(*b)),
             canon::Pattern_::PChar(c) => Ok(Pat::Char(c.clone())),
             canon::Pattern_::PStr(s) => Ok(Pat::Str(s.clone())),
-            canon::Pattern_::PAlias(inner, name) => Ok(Pat::Alias(
-                Box::new(self.lower_arm_pat(inner)?),
-                name.value,
-            )),
+            canon::Pattern_::PAlias(inner, name) => {
+                Ok(Pat::Alias(Box::new(self.lower_arm_pat(inner)?), name.value))
+            }
             canon::Pattern_::PCtor {
                 home,
                 type_name,
@@ -11518,8 +11704,7 @@ impl<'a> Lowerer<'a> {
                 // SKY-L0102 polymorphic-element gate the top-level list path
                 // applies (here the list lives at the ctor sub-pattern's span,
                 // whose `List T` region the constraint generator now records).
-                if flat.binds_a_value()
-                    && matches!(self.list_elem_ir(a.span)?, IrType::Generic(_))
+                if flat.binds_a_value() && matches!(self.list_elem_ir(a.span)?, IrType::Generic(_))
                 {
                     return Err(unsupported(a.span, Feature::Polymorphism));
                 }
@@ -12177,4 +12362,3 @@ mod tests {
         );
     }
 }
-

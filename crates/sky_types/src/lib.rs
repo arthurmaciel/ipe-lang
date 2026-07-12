@@ -44,7 +44,7 @@ pub use solve::{BUDGET_ENV, Budget, DEFAULT_SOLVER_BUDGET};
 pub use ty::{RowTail, Ty, TyBounds};
 
 use constrain::{
-    Builder, FieldAccess, RecordUpdate, RoutedLiveCheck, RouteWitnessCheck, SchemeApp,
+    Builder, FieldAccess, RecordUpdate, RouteWitnessCheck, RoutedLiveCheck, SchemeApp,
     promote_untyped_boundaries, zonk,
 };
 use doc::{VarNamer, ty_to_doc};
@@ -281,6 +281,19 @@ fn infer_with_budget_attributed(
     // emitted type parameter. (Ordering-only flex variables are left generic, as
     // before — they carry no numeric obligation to default.)
     let int_sym = lift!(interner.intern("Int"));
+    // SQL-bind-parameter defaulting (#165): the element variable of a `List a`
+    // argument bound into `Db.exec` / `Db.query` / `Db.queryDecode`'s params
+    // position that the program never pinned to a concrete type (an empty
+    // `[]` literal at that call site, e.g. `Database.queryOrLog label sql []`
+    // in `examples/17-skymon`). Left un-defaulted, the lowerer's wildcard-`any`
+    // convention would resolve it to `IrType::Json` (`serde_json::Value`,
+    // which has no `Into<SqlParam>` impl) and the emitted `Vec::new()` call
+    // argument would carry zero type evidence — trading today's E0283 for an
+    // equally unresolvable `cargo` failure. Defaulting to Sky's own `SqlValue`
+    // ADT instead keeps the call sound end-to-end: `SqlValue` already has a
+    // generated `Into<SqlParam>` impl (`sky_backend_rust::project`), so an
+    // empty params list becomes a concretely-typed empty `Vec<SqlValue>`.
+    let sqlvalue_sym = lift!(interner.intern("SqlValue"));
     for (v, orig_bounds, span) in &generated.super_vars {
         let root = lift!(uf.find(*v));
         match lift!(uf.content(root)) {
@@ -292,15 +305,48 @@ fn infer_with_budget_attributed(
                 rigid: false,
                 bounds,
             } if bounds.has_number() => {
-                let int_ty = Ty::Con { module: Vec::new(), name: int_sym, args: Vec::new() };
+                let int_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: int_sym,
+                    args: Vec::new(),
+                };
                 if !concrete_super_ok(interner, bounds, &int_ty) {
-                    return Err((super_unsatisfied(interner, bounds, &int_ty, *span), Vec::new()));
+                    return Err((
+                        super_unsatisfied(interner, bounds, &int_ty, *span),
+                        Vec::new(),
+                    ));
                 }
                 lift!(uf.set_content(
                     root,
                     Content::Structure(FlatType::Con {
                         module: Vec::new(),
                         name: int_sym,
+                        args: Vec::new(),
+                    }),
+                ));
+            }
+            // An unpinned SQL-bind-parameter flex defaults to `SqlValue` — see
+            // the doc comment above `sqlvalue_sym`.
+            Content::Super {
+                rigid: false,
+                bounds,
+            } if bounds.has_sql_param() => {
+                let sqlvalue_ty = Ty::Con {
+                    module: Vec::new(),
+                    name: sqlvalue_sym,
+                    args: Vec::new(),
+                };
+                if !concrete_super_ok(interner, bounds, &sqlvalue_ty) {
+                    return Err((
+                        super_unsatisfied(interner, bounds, &sqlvalue_ty, *span),
+                        Vec::new(),
+                    ));
+                }
+                lift!(uf.set_content(
+                    root,
+                    Content::Structure(FlatType::Con {
+                        module: Vec::new(),
+                        name: sqlvalue_sym,
                         args: Vec::new(),
                     }),
                 ));
@@ -321,7 +367,10 @@ fn infer_with_budget_attributed(
             Content::Structure(_) => {
                 let ty = lift!(zonk(&mut uf, budget, root));
                 if !concrete_super_ok(interner, *orig_bounds, &ty) {
-                    return Err((super_unsatisfied(interner, *orig_bounds, &ty, *span), Vec::new()));
+                    return Err((
+                        super_unsatisfied(interner, *orig_bounds, &ty, *span),
+                        Vec::new(),
+                    ));
                 }
             }
         }
@@ -338,8 +387,7 @@ fn infer_with_budget_attributed(
     // placeholder" when lowering attribute-list element types inside polymorphic
     // functions.
     let mut bounds: BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<Symbol, TyBounds>> = BTreeMap::new();
-    let mut poly_var_map: BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<u32, Symbol>> =
-        BTreeMap::new();
+    let mut poly_var_map: BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<u32, Symbol>> = BTreeMap::new();
     for ((home, def_name), var_rigids) in &generated.typed_rigids {
         let mut var_bounds = BTreeMap::new();
         let mut rep_to_sym: BTreeMap<u32, Symbol> = BTreeMap::new();
@@ -411,7 +459,12 @@ fn infer_with_budget_attributed(
     let mut env: BTreeMap<(Vec<Symbol>, Symbol), Ty> = generated
         .top_level
         .into_iter()
-        .map(|(k, v)| (k, std::rc::Rc::try_unwrap(v).unwrap_or_else(|rc| (*rc).clone())))
+        .map(|(k, v)| {
+            (
+                k,
+                std::rc::Rc::try_unwrap(v).unwrap_or_else(|rc| (*rc).clone()),
+            )
+        })
         .collect();
     for (name, var) in generated.untyped {
         env.insert(name, lift!(zonk(&mut uf, budget, var)));
@@ -526,12 +579,19 @@ fn emitted_bound_satisfied(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bo
     // design for ALL bounds at once — see
     // `docs/architecture/ctor-payload-andmap-arity-gate-design.md` §6.
     let not_curried_ok = !matches!(ty, Ty::Fun(_, _) | Ty::Var(_));
+    // SQL-bind-parameter obligation (#165): satisfied by exactly the Sky
+    // types the runtime has a `From<T> for SqlParam` impl for — the bare
+    // scalars `sky_runtime::db` binds directly, plus the `SqlValue` ADT
+    // itself (whose generated `From` impl covers the typed-mixed-param
+    // case). Matches [`concrete_super_ok`]'s `sql_param_ok`.
+    let sql_param_ok = matches!(prim, Some("Int" | "Float" | "String" | "Bool" | "SqlValue"));
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
         && (!bounds.has_eq() || ty_is_equatable(ty))
         && (!bounds.has_comparable_key() || key_ok)
         && (!bounds.has_append() || appendable_ok)
         && (!bounds.has_hof_kernel_result() || not_curried_ok)
+        && (!bounds.has_sql_param() || sql_param_ok)
 }
 
 /// Whether a resolved concrete type satisfies super-type obligations `bounds`
@@ -559,6 +619,10 @@ pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) 
                     && args.len() == 1
                     && interner.resolve(*name) == Some("List")
         );
+    // SQL-bind-parameter obligation (#165) pinned directly to a concrete
+    // type: the runtime's `From<T> for SqlParam` set — `String` / `Int` /
+    // `Float` / `Bool`, plus the `SqlValue` ADT itself.
+    let sql_param_ok = matches!(prim, Some("Int" | "Float" | "String" | "Bool" | "SqlValue"));
     // A `Set` element / `Dict` key pinned directly to a concrete type: the Sky
     // `comparable` scalar set, exactly as ordering. `Float` satisfies the Sky
     // typing here; the Rust-backend `f64`-as-key reality is gated at lowering.
@@ -578,6 +642,7 @@ pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) 
         // kept anyway so the two predicates cannot drift apart again; drift
         // in exactly one arm is what caused the 4th revert incident.)
         && (!bounds.has_hof_kernel_result() || !matches!(ty, Ty::Fun(_, _) | Ty::Var(_)))
+        && (!bounds.has_sql_param() || sql_param_ok)
 }
 
 /// Whether a resolved type derives Rust's `PartialEq`: true for every fully
@@ -987,7 +1052,7 @@ fn field_access_state(
             Peek::ErrCon(*name)
         }
         Content::Flex => Peek::Deferred, // not settled yet
-        _ => Peek::Missing, // rigid / super / non-record structure — error
+        _ => Peek::Missing,              // rigid / super / non-record structure — error
     };
     Ok(match peek {
         Peek::Record(v) => found_or_missing(v),
@@ -1036,7 +1101,9 @@ fn resolve_deferred(
         for fa in &pending_fa {
             let root = lift!(uf.find(fa.record));
             // See [`field_access_state`] for the encoding + borrow discipline.
-            match lift!(field_access_state(uf, req_fields, err_fields, root, fa.field)) {
+            match lift!(field_access_state(
+                uf, req_fields, err_fields, root, fa.field
+            )) {
                 FieldState::Deferred => {
                     next_fa.push(fa);
                 }
@@ -1598,7 +1665,12 @@ mod tests {
             matches!(main_def, Some(canon::Def::Untyped { .. })),
             "main is untyped"
         );
-        let Some(canon::Def::Untyped { body, home: main_home, .. }) = main_def else {
+        let Some(canon::Def::Untyped {
+            body,
+            home: main_home,
+            ..
+        }) = main_def
+        else {
             return;
         };
 
@@ -1668,7 +1740,12 @@ mod tests {
             matches!(update_def, Some(canon::Def::Typed { .. })),
             "update is typed"
         );
-        let Some(canon::Def::Typed { body, home: update_home, .. }) = update_def else {
+        let Some(canon::Def::Typed {
+            body,
+            home: update_home,
+            ..
+        }) = update_def
+        else {
             return;
         };
         assert!(
@@ -2037,7 +2114,9 @@ mod tests {
         );
         let Ok(solved) = r else { return };
         let Ok(lib1) = i.intern("Lib1") else { return };
-        let Ok(set_name) = i.intern("setName") else { return };
+        let Ok(set_name) = i.intern("setName") else {
+            return;
+        };
         // An all-monomorphic scheme is skipped when `untyped_type_params` is
         // populated (empty `quantified` ⇒ no entry), so the post-fix success
         // signal is "no entry OR an empty entry"; pre-fix the gap produced a
@@ -2523,7 +2602,10 @@ mod tests {
             return;
         };
         let r = infer(&m, &mut i);
-        assert!(r.is_ok(), "irrefutable params must pass the gate, got {r:?}");
+        assert!(
+            r.is_ok(),
+            "irrefutable params must pass the gate, got {r:?}"
+        );
     }
 
     #[test]
