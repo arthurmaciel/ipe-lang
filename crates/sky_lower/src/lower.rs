@@ -10272,10 +10272,28 @@ impl<'a> Lowerer<'a> {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
             canon::Pattern_::PAnything => Ok(Pat::Wildcard),
             // Literal leaves (M3b-3) lower to the matching refutable IR leaf.
+            // Int / Bool / Char are `Copy` — a literal pattern against an owned
+            // FIELD of one of those types is ordinary, sound Rust regardless of
+            // nesting depth, so they lower unconditionally.
             canon::Pattern_::PInt(n) => Ok(Pat::Int(*n)),
             canon::Pattern_::PBool(b) => Ok(Pat::Bool(*b)),
             canon::Pattern_::PChar(c) => Ok(Pat::Char(c.clone())),
-            canon::Pattern_::PStr(s) => Ok(Pat::Str(s.clone())),
+            // A `String` literal is the ONE leaf that is NOT sound to lower
+            // unconditionally here. A direct `PStr` ctor-arg (`Just "live"`) is
+            // intercepted BEFORE reaching this function by
+            // `desugar_ctor_nested_special_args` (fresh `String` binder + arm
+            // guard — see that function's doc comment). Reaching a `PStr` HERE
+            // means it is nested some OTHER way — two levels deep in a ctor
+            // payload (`Just (Just "x")`), inside a tuple nested in a ctor
+            // payload, or as a list/slice literal element — every one of those
+            // positions is an owned `String` FIELD, and Rust cannot literal-
+            // match a `&str` pattern against an owned `String` field the way it
+            // can coerce a top-level `String` SCRUTINEE via `.as_str()`
+            // (`m0-24-tui-kitchen-sink` SEAL violation sibling —
+            // `SkyMaybe::Just(SkyMaybe::Just("x"))` is E0308, `expected String,
+            // found &str`). Fail-closed (SKY-L0116), the exact sibling of the
+            // PList / PCons gate below. Class 4 item C2 / #158.
+            canon::Pattern_::PStr(_) => Err(unsupported(p.span, Feature::NestedCtorDiscrimination)),
             // An alias `inner as name` lowers to the IR binding-with-subpattern.
             canon::Pattern_::PAlias(inner, name) => Ok(Pat::Alias(
                 Box::new(self.lower_payload_pat(inner)?),

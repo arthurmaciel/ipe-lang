@@ -1,0 +1,46 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Error as Error
+import Sky.Core.Task as Task
+import Std.Log exposing (println)
+
+-- Adversarial-review sibling gap (Finding B) of the case-branched entry-point
+-- Task.run elision (`tui_entry_case_taskrun`, same BACKLOG "24-tui-kitchen-
+-- sink" row): a `case`-dispatched `sky_main` where SOME tail leaves call
+-- `Task.run` and OTHER tail leaves are a plain `Result`-typed expression —
+-- the realistic validate-then-run idiom (`Err e -> Err e; Ok cfg -> app cfg
+-- |> Task.run`).
+--
+-- `elide_task_run_tail` correctly DECLINES to elide here (a partial elision
+-- would leave some arms Task-shaped and others Result-shaped, which cannot
+-- render as one Rust `match` of a single type) — but nothing else made the
+-- crate compile: `sky_main`'s declared return type stayed `SkyResult<E, A>`
+-- while the `fn main` epilogue's `block_on(sky_main())` unconditionally
+-- requires `SkyTask<A>` (E0308: expected `Pin<Box<dyn Future…>>`, found
+-- `SkyResult<…>`) — the identical failure mode as the original bug, despite
+-- `skyc build` exiting 0.
+--
+-- Closed by widening `emit_func`'s `sky_main_wrap` fallback (previously only
+-- `func.ret == Unit`) to also cover `func.ret == Result(_, A)` with elision
+-- declined: the body already evaluates synchronously to one uniform
+-- `Result e a` (Task.run blocks in place; the non-Task arm is a bare Result
+-- value), so it wraps in `task_from_result({ <original body> })` — an
+-- ALREADY-RESOLVED `SkyTask<a>` carrying the body's actual computed value,
+-- not a discarded one.
+validate : Int -> Result Error Int
+validate n =
+    if n < 0 then
+        Err (Error.unexpected "negative input")
+
+    else
+        Ok n
+
+
+main =
+    case validate 5 of
+        Err e ->
+            Err e
+
+        Ok cfg ->
+            println ("validated " ++ String.fromInt cfg) |> Task.run

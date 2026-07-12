@@ -143,3 +143,24 @@ fn nested_cons_generic_elem_accepted() {
 fn nested_cons_no_fallback_stays_gated() {
     assert_gated("m158_nested_cons_no_fallback_gated", sky_diagnostics::SKY_L0116);
 }
+
+/// Adversarial-review sibling gap (Finding A): a `PStr` sub-pattern nested TWO
+/// levels deep in a ctor payload (`Just (Just "x")`) — one hop past the
+/// direct-arg string-literal desugaring's scope (`Just "x"` at depth 1, which
+/// `nested_strlit_ctor_payload_accepted` below confirms still works). Must
+/// stay fail-closed with SKY-L0116, never accept-then-cargo-fail (was
+/// silently accepted pre-fix, emitting `SkyMaybe::Just(SkyMaybe::Just("x"))`
+/// — E0308 at `cargo build`, expected `String` found `&str`).
+#[test]
+fn nested_strlit_two_levels_stays_gated() {
+    assert_gated("m158_nested_strlit_two_levels_gated", sky_diagnostics::SKY_L0116);
+}
+
+/// Companion positive control: the depth-1 direct-arg string-literal ctor
+/// payload (`Just "live"`) that the #158 C2 desugaring DOES support must still
+/// be accepted and run correctly — guards the sibling-gap fix above from
+/// over-tightening the gate.
+#[test]
+fn nested_strlit_ctor_payload_accepted() {
+    assert_accepted_runs("m158_nested_strlit_ctor_payload", "live");
+}
