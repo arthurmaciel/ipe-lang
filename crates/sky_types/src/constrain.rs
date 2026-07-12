@@ -23,7 +23,9 @@ use sky_kernels::StdlibKernel;
 
 use crate::doc::{VarNamer, canon_type_to_doc, ty_to_doc};
 use crate::solve::{Budget, Constraint};
-use crate::ty::{Content, FlatType, RowTail, Ty, TyBounds, from_canon, is_solver_var, tag_solver_var};
+use crate::ty::{
+    Content, FlatType, RowTail, Ty, TyBounds, from_canon, is_solver_var, tag_solver_var,
+};
 use crate::unify::unify;
 use crate::unionfind::{UnionFind, VarId};
 
@@ -38,14 +40,30 @@ const STAGE: &str = "sky_types::constrain";
 /// the Haskell/Go backend carries `any` payloads as dynamic `interface{}`; the
 /// Rust backend pins them to `Dict String String`, the sole concrete carrier that
 /// satisfies `Clone + Debug + PartialEq + Serialize + DeserializeOwned`.
-fn pin_any_in_ty(ty: Ty, union_vars: &[Symbol], interner: &Interner, dict: Symbol, string: Symbol) -> Ty {
+fn pin_any_in_ty(
+    ty: Ty,
+    union_vars: &[Symbol],
+    interner: &Interner,
+    dict: Symbol,
+    string: Symbol,
+) -> Ty {
     match ty {
         Ty::Var(v) => {
-            let is_any = interner.resolve(Symbol::from_raw(v)).is_some_and(|n| n == "any");
+            let is_any = interner
+                .resolve(Symbol::from_raw(v))
+                .is_some_and(|n| n == "any");
             let is_declared = union_vars.iter().any(|uv| uv.as_raw() == v);
             if is_any && !is_declared {
-                let mk_str = || Ty::Con { module: Vec::new(), name: string, args: Vec::new() };
-                Ty::Con { module: Vec::new(), name: dict, args: vec![mk_str(), mk_str()] }
+                let mk_str = || Ty::Con {
+                    module: Vec::new(),
+                    name: string,
+                    args: Vec::new(),
+                };
+                Ty::Con {
+                    module: Vec::new(),
+                    name: dict,
+                    args: vec![mk_str(), mk_str()],
+                }
             } else {
                 Ty::Var(v)
             }
@@ -57,14 +75,23 @@ fn pin_any_in_ty(ty: Ty, union_vars: &[Symbol], interner: &Interner, dict: Symbo
         Ty::Con { module, name, args } => Ty::Con {
             module,
             name,
-            args: args.into_iter().map(|a| pin_any_in_ty(a, union_vars, interner, dict, string)).collect(),
+            args: args
+                .into_iter()
+                .map(|a| pin_any_in_ty(a, union_vars, interner, dict, string))
+                .collect(),
         },
         Ty::Unit => Ty::Unit,
         Ty::Tuple(elems) => Ty::Tuple(
-            elems.into_iter().map(|e| pin_any_in_ty(e, union_vars, interner, dict, string)).collect(),
+            elems
+                .into_iter()
+                .map(|e| pin_any_in_ty(e, union_vars, interner, dict, string))
+                .collect(),
         ),
         Ty::Record(fields, tail) => Ty::Record(
-            fields.into_iter().map(|(k, v)| (k, pin_any_in_ty(v, union_vars, interner, dict, string))).collect(),
+            fields
+                .into_iter()
+                .map(|(k, v)| (k, pin_any_in_ty(v, union_vars, interner, dict, string)))
+                .collect(),
             tail,
         ),
     }
@@ -1502,14 +1529,19 @@ impl<'a> Builder<'a> {
             // `link::link` merges them into a single flat def list.
             let home_key = def.home().to_vec();
             match def {
-                canon::Def::Typed { name, ty, patterns, .. } => {
+                canon::Def::Typed {
+                    name, ty, patterns, ..
+                } => {
                     let raw = from_canon(ty);
                     // ex15: a binding annotated `Handler` is really
                     // `Request -> Task Response` at call sites.  The internal
                     // constrain_def pass already expands Handler for the body so
                     // `req` gets type `Request`; here we must also expand for the
                     // top_level table so callers (e.g. Server.get) unify correctly.
-                    let expanded = if let Ty::Con { name: tname, args, .. } = &raw {
+                    let expanded = if let Ty::Con {
+                        name: tname, args, ..
+                    } = &raw
+                    {
                         if *tname == builder.builtins.handler
                             && args.is_empty()
                             && !patterns.is_empty()
@@ -1537,7 +1569,9 @@ impl<'a> Builder<'a> {
                         raw
                     };
                     let normalized = builder.normalize_annotation_ty(expanded, name.span)?;
-                    builder.top_level.insert((home_key, name.value), Rc::new(normalized));
+                    builder
+                        .top_level
+                        .insert((home_key, name.value), Rc::new(normalized));
                 }
                 canon::Def::Untyped { name, .. } => {
                     let v = builder.flex()?;
@@ -1992,8 +2026,14 @@ impl<'a> Builder<'a> {
                 // is kept as an owned `canon::Type` so `cursor` (a reference) can
                 // point into it when the annotation is `Handler`.
                 let handler_expansion: Option<canon::Type> = {
-                    if let canon::Type::Con { name: tname, args, .. } = ty {
-                        if *tname == self.builtins.handler && args.is_empty() && !patterns.is_empty() {
+                    if let canon::Type::Con {
+                        name: tname, args, ..
+                    } = ty
+                    {
+                        if *tname == self.builtins.handler
+                            && args.is_empty()
+                            && !patterns.is_empty()
+                        {
                             let task_resp = canon::Type::Con {
                                 home: Vec::new(),
                                 name: self.builtins.task,
@@ -2027,8 +2067,7 @@ impl<'a> Builder<'a> {
                 };
                 let mut rigid_vars = BTreeMap::new();
                 let mut local = BTreeMap::new();
-                let mut cursor: &canon::Type =
-                    handler_expansion.as_ref().unwrap_or(ty);
+                let mut cursor: &canon::Type = handler_expansion.as_ref().unwrap_or(ty);
                 for pat in patterns {
                     let (arg_ty, rest) = match cursor {
                         canon::Type::Lambda(a, b) => (a.as_ref(), b.as_ref()),
@@ -2258,9 +2297,7 @@ impl<'a> Builder<'a> {
                             found: args.len(),
                         },
                     })
-                } else if args.is_empty()
-                    && self.interner.resolve(name) == Some("HttpRequest")
-                {
+                } else if args.is_empty() && self.interner.resolve(name) == Some("HttpRequest") {
                     // `HttpRequest` is a stdlib type alias for a structural record
                     // (`{ body, followRedirects, headers, maxRedirects, method,
                     // timeout, url }`).  The Rust port has no Sky-source stdlib
@@ -2269,7 +2306,11 @@ impl<'a> Builder<'a> {
                     // here so user annotations like `upstreamRequest : HttpRequest`
                     // unify with the structural record that kernels such as
                     // `HttpStreamOpen` / `HttpGet` / `HttpPost` expect.
-                    let mk = |n: Symbol| Ty::Con { module: Vec::new(), name: n, args: Vec::new() };
+                    let mk = |n: Symbol| Ty::Con {
+                        module: Vec::new(),
+                        name: n,
+                        args: Vec::new(),
+                    };
                     let string = || mk(self.builtins.string);
                     let int = || mk(self.builtins.int);
                     let bool_ty = || mk(self.builtins.bool);
@@ -2281,20 +2322,24 @@ impl<'a> Builder<'a> {
                     let mut req_fields = BTreeMap::new();
                     req_fields.insert(self.builtins.http_f_body, string());
                     req_fields.insert(self.builtins.http_f_follow_redirects, bool_ty());
-                    req_fields
-                        .insert(self.builtins.http_f_headers, list(Ty::Tuple(vec![string(), string()])));
+                    req_fields.insert(
+                        self.builtins.http_f_headers,
+                        list(Ty::Tuple(vec![string(), string()])),
+                    );
                     req_fields.insert(self.builtins.http_f_max_redirects, int());
                     req_fields.insert(self.builtins.http_f_method, string());
                     req_fields.insert(self.builtins.http_f_timeout, int());
                     req_fields.insert(self.builtins.http_f_url, string());
                     Ok(Ty::Record(req_fields, RowTail::Closed))
-                } else if args.is_empty()
-                    && self.interner.resolve(name) == Some("HttpResponse")
-                {
+                } else if args.is_empty() && self.interner.resolve(name) == Some("HttpResponse") {
                     // `HttpResponse` is a stdlib type alias for `{ body : String,
                     // headers : Dict String String, status : Int }`.  Expand for the
                     // same reason as `HttpRequest` above.
-                    let mk = |n: Symbol| Ty::Con { module: Vec::new(), name: n, args: Vec::new() };
+                    let mk = |n: Symbol| Ty::Con {
+                        module: Vec::new(),
+                        name: n,
+                        args: Vec::new(),
+                    };
                     let string = || mk(self.builtins.string);
                     let int = || mk(self.builtins.int);
                     let dict = |k: Ty, v: Ty| Ty::Con {
@@ -2304,8 +2349,7 @@ impl<'a> Builder<'a> {
                     };
                     let mut resp_fields = BTreeMap::new();
                     resp_fields.insert(self.builtins.http_f_body, string());
-                    resp_fields
-                        .insert(self.builtins.http_f_headers, dict(string(), string()));
+                    resp_fields.insert(self.builtins.http_f_headers, dict(string(), string()));
                     resp_fields.insert(self.builtins.http_f_status, int());
                     Ok(Ty::Record(resp_fields, RowTail::Closed))
                 } else {
@@ -2459,11 +2503,9 @@ impl<'a> Builder<'a> {
     const fn hof_result_slot_for(k: StdlibKernel) -> Option<u32> {
         use StdlibKernel as K;
         match k {
-            K::MaybeMap
-            | K::ResultMap
-            | K::ResultMapError
-            | K::MaybeAndMap
-            | K::ResultAndMap => Some(1),
+            K::MaybeMap | K::ResultMap | K::ResultMapError | K::MaybeAndMap | K::ResultAndMap => {
+                Some(1)
+            }
             K::MaybeMap2 | K::ResultMap2 => Some(2),
             K::MaybeMap3 | K::ResultMap3 => Some(3),
             K::MaybeMap4 | K::ResultMap4 => Some(4),
@@ -2575,7 +2617,10 @@ impl<'a> Builder<'a> {
             // (not stdlib_scheme + tie): only the argument position is bounded.
             // This is the shared lever for the whole Stringify-bounded family
             // (Log.*With / Debug.toString) — wire those the same way.
-            if matches!(k, StdlibKernel::BasicsToString | StdlibKernel::ErrorToString) {
+            if matches!(
+                k,
+                StdlibKernel::BasicsToString | StdlibKernel::ErrorToString
+            ) {
                 let s = self.super_var(TyBounds::show(), span)?;
                 let string_ty = self.string_var()?;
                 return self.structure(FlatType::Fun(s, string_ty));
@@ -2594,6 +2639,38 @@ impl<'a> Builder<'a> {
                 if let Some(&key_var) = vars.get(&0) {
                     let s = self.super_var(bound, span)?;
                     self.eq(span, key_var, s);
+                }
+                return Ok(var);
+            }
+            // `Db.exec` / `Db.query` / `Db.queryDecode`: the params-LIST
+            // ELEMENT (raw scheme-var 0 for `exec`/`query`; var 1 for
+            // `queryDecode`, whose var 0 is the decoder's result type — see
+            // the scheme comments above) carries the SQL-bind-parameter
+            // obligation. Same `stdlib_scheme` + tie shape as the Set/Dict
+            // key obligation directly above: only the params-element
+            // position is bounded, so a generic wrapper around `Db.exec` /
+            // `Db.query` (`Database.exec label queryStr args` in
+            // `examples/17-skymon`) lifts `Into<SqlParam>` onto its own
+            // emitted Rust generic (closing the E0277 half of #165), and an
+            // empty-list call site whose element type is otherwise
+            // completely unconstrained defaults to `SqlValue` at solve time
+            // instead of the wildcard-`any` fallback (closing the E0283
+            // half — see the `sql_param` arm of the numeric-defaulting loop
+            // in `crate::lib`), rather than emitting a bare `Vec::new()`
+            // `cargo` cannot infer.
+            if matches!(
+                k,
+                StdlibKernel::DbExec | StdlibKernel::DbQuery | StdlibKernel::DbQueryDecode
+            ) {
+                let raw_idx = u32::from(matches!(k, StdlibKernel::DbQueryDecode));
+                let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
+                    span,
+                    msg: LowerError::Unsupported(Feature::Kernels),
+                })?;
+                let (var, vars) = self.instantiate_tracked(&ty)?;
+                if let Some(&params_var) = vars.get(&raw_idx) {
+                    let s = self.super_var(TyBounds::sql_param(), span)?;
+                    self.eq(span, params_var, s);
                 }
                 return Ok(var);
             }
@@ -2671,9 +2748,7 @@ impl<'a> Builder<'a> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
-                if let (Some(&model_var), Some(&not_found_var)) =
-                    (vars.get(&0), vars.get(&2))
-                {
+                if let (Some(&model_var), Some(&not_found_var)) = (vars.get(&0), vars.get(&2)) {
                     self.routed_live_checks.push(RoutedLiveCheck {
                         model_var,
                         not_found_var,
@@ -2700,9 +2775,7 @@ impl<'a> Builder<'a> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
-                if let (Some(&page_var), Some(&builder_var)) =
-                    (vars.get(&0), vars.get(&1))
-                {
+                if let (Some(&page_var), Some(&builder_var)) = (vars.get(&0), vars.get(&1)) {
                     self.route_witness_checks.push(RouteWitnessCheck {
                         builder_var,
                         page_var,
@@ -2907,8 +2980,7 @@ impl<'a> Builder<'a> {
             // record-param's complete field set from its solved type (one path
             // shared with the typed-def sites).  Keyed by `(current_home, span)`
             // to prevent cross-module span collisions.
-            self.regions
-                .insert((self.current_home.clone(), p.span), v);
+            self.regions.insert((self.current_home.clone(), p.span), v);
             param_vars.push(v);
         }
         let mut arrow = self.constrain_expr(&lam_local, body)?;
@@ -5835,7 +5907,11 @@ fn copy_var(
                     }
                     Content::Structure(FlatType::Con { module, name, args }) => {
                         let arity = args.len();
-                        work.push(CopyVarTask::BuildCon { module, name, arity });
+                        work.push(CopyVarTask::BuildCon {
+                            module,
+                            name,
+                            arity,
+                        });
                         for a in args.into_iter().rev() {
                             work.push(CopyVarTask::Visit(a));
                         }
@@ -5863,7 +5939,11 @@ fn copy_var(
                 };
                 results.push(uf.fresh(Content::Structure(FlatType::Fun(a, b)))?);
             }
-            CopyVarTask::BuildCon { module, name, arity } => {
+            CopyVarTask::BuildCon {
+                module,
+                name,
+                arity,
+            } => {
                 let split = results
                     .len()
                     .checked_sub(arity)
@@ -6072,7 +6152,11 @@ pub fn promote_untyped_boundaries(
 
     for home in &generated.module_order {
         // (a) Discharge this module's OUTGOING cross-module references.
-        for pi in generated.pending_instantiations.iter().filter(|pi| &pi.use_home == home) {
+        for pi in generated
+            .pending_instantiations
+            .iter()
+            .filter(|pi| &pi.use_home == home)
+        {
             let Some(scheme) = schemes.get(&pi.source) else {
                 // module_order is dependency-first, and a `PendingInstantiation`
                 // only exists for a key already present in `untyped` — so the
@@ -6101,7 +6185,8 @@ pub fn promote_untyped_boundaries(
         // (b) Generalize this module's own untyped defs.
         for (key, &shared) in generated.untyped.iter().filter(|(k, _)| &k.0 == home) {
             let root = lift!(uf.find(shared));
-            let candidates = reachable_flex_roots(uf, budget, root).map_err(|d| (d, key.0.clone()))?;
+            let candidates =
+                reachable_flex_roots(uf, budget, root).map_err(|d| (d, key.0.clone()))?;
             let mut quantified = BTreeMap::new();
             for r in candidates {
                 if obligation_roots.contains(&r) {
@@ -6366,9 +6451,7 @@ impl<'a> Builder<'a> {
 /// # Errors
 /// Propagates the interner-capacity diagnostic from [`Builtins::new`] (the
 /// only fallible step; the scheme reads themselves are total).
-pub fn kernel_type_table(
-    interner: &mut Interner,
-) -> Result<Vec<(StdlibKernel, Ty)>, Diagnostic> {
+pub fn kernel_type_table(interner: &mut Interner) -> Result<Vec<(StdlibKernel, Ty)>, Diagnostic> {
     let builtins = Builtins::new(interner)?;
     let mut uf: UnionFind<Content> = UnionFind::new();
     let builder = Builder::for_scheme_table(&mut uf, interner, builtins);
@@ -7413,9 +7496,7 @@ mod registry_phase_c_tests {
     /// `stdlib_scheme_total_over_reachable` until then.
     const REACHABLE_BUT_UNLOWERED: &[StdlibKernel] = {
         use StdlibKernel as K;
-        &[
-            K::LiveAppRouted,
-        ]
+        &[K::LiveAppRouted]
     };
 
     /// KNOWN-UNBACKED kernels: present in `StdlibKernel::ALL` (so they carry a
