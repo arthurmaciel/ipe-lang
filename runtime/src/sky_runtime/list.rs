@@ -98,14 +98,35 @@ pub fn sky_list_cons<T>(x: T, xs: Vec<T>) -> Vec<T> {
     std::iter::once(x).chain(xs).collect()
 }
 
-pub fn list_foldl<T0, T1>(f: impl Fn(T0, T1) -> T1 + Clone, init: T1, list: Vec<T0>) -> T1 {
+// #161 root cause (this file's 8 HOF kernels below, pre-fix): every one of
+// these declared `f: impl Fn(..) -> .. + Clone` on the CALLBACK itself, but
+// not one implementation ever clones `f` — each calls it through a shared
+// `&self` borrow (directly, or via a wrapping closure that MOVES `f` in
+// once), which only needs `Fn`/`FnMut`, never `Clone`. Rust's blanket impl
+// (every `Fn` is also `FnMut`) covers every call shape below (`for` loop,
+// `Iterator::map`/`filter`/`any`/`all`/`flat_map`). The bound was
+// over-declared (plausibly copy-pasted from the ELEMENT-clone bound the
+// neighbouring `T0: Clone` / `A: Clone` params legitimately need — see
+// `list_filter`'s `x.clone()` and `list_sort_by`'s doc comment) and never
+// caught because every fixture that reached these kernels used a
+// non-capturing or primitive-only-capturing lambda, whose emitted
+// `Box<dyn Fn(..) -> .. + Send>` HAPPENS to compile against a bound it
+// doesn't need... except `Box<dyn Fn>` is NEVER `Clone` (trait objects can't
+// derive it), so the FIRST closure — of ANY shape, capturing or not — hit
+// the bound and failed E0277. Codegen always boxes lambda VALUES this way
+// (`sky_backend_rust::emit_expr::emit_lambda`), so the true fix is here, not
+// at any call site: drop the unneeded `Clone` bound so the boxed trait
+// object satisfies `impl Fn(..) -> ..` directly, the same way it already
+// satisfies every OTHER HOF kernel's `impl Fn` / `impl FnOnce` bound
+// elsewhere in this crate (none of which carry a stray `+ Clone`).
+pub fn list_foldl<T0, T1>(f: impl Fn(T0, T1) -> T1, init: T1, list: Vec<T0>) -> T1 {
     let mut acc = init;
     for item in list {
         acc = f(item, acc);
     }
     acc
 }
-pub fn list_foldr<T0, T1>(f: impl Fn(T0, T1) -> T1 + Clone, init: T1, list: Vec<T0>) -> T1 {
+pub fn list_foldr<T0, T1>(f: impl Fn(T0, T1) -> T1, init: T1, list: Vec<T0>) -> T1 {
     let mut acc = init;
     // `into_iter().rev()` yields OWNED items, so no clone (and no `T0: Clone`
     // bound) is needed — matching `sky_list_cons`'s move-only-friendly shape.
@@ -136,28 +157,31 @@ pub fn list_range(lo: i64, hi: i64) -> Vec<i64> {
     }
     (lo..=hi).collect()
 }
-pub fn list_indexed_map<T0, T1>(f: impl Fn(i64, T0) -> T1 + Clone, list: Vec<T0>) -> Vec<T1> {
+pub fn list_indexed_map<T0, T1>(f: impl Fn(i64, T0) -> T1, list: Vec<T0>) -> Vec<T1> {
     list.into_iter()
         .enumerate()
         .map(|(i, x)| f(i as i64, x))
         .collect()
 }
-pub fn list_concat_map<T0, T1>(f: impl Fn(T0) -> Vec<T1> + Clone, list: Vec<T0>) -> Vec<T1> {
+pub fn list_concat_map<T0, T1>(f: impl Fn(T0) -> Vec<T1>, list: Vec<T0>) -> Vec<T1> {
     list.into_iter().flat_map(f).collect()
 }
 pub fn list_zip<T0, T1>(a: Vec<T0>, b: Vec<T1>) -> Vec<(T0, T1)> {
     a.into_iter().zip(b).collect()
 }
-pub fn list_filter<T0: Clone>(f: impl Fn(T0) -> bool + Clone, list: Vec<T0>) -> Vec<T0> {
+// `T0: Clone` here is a genuine ELEMENT-clone bound (`x.clone()` below feeds
+// the predicate while the original `x` flows into the kept output) — NOT the
+// closure-Clone bug #161 removed above. Keep it.
+pub fn list_filter<T0: Clone>(f: impl Fn(T0) -> bool, list: Vec<T0>) -> Vec<T0> {
     list.into_iter().filter(|x| f(x.clone())).collect()
 }
 pub fn list_member<T0: PartialEq>(x: T0, list: Vec<T0>) -> bool {
     list.contains(&x)
 }
-pub fn list_any<T0>(f: impl Fn(T0) -> bool + Clone, list: Vec<T0>) -> bool {
+pub fn list_any<T0>(f: impl Fn(T0) -> bool, list: Vec<T0>) -> bool {
     list.into_iter().any(f)
 }
-pub fn list_all<T0>(f: impl Fn(T0) -> bool + Clone, list: Vec<T0>) -> bool {
+pub fn list_all<T0>(f: impl Fn(T0) -> bool, list: Vec<T0>) -> bool {
     list.into_iter().all(f)
 }
 
@@ -165,8 +189,10 @@ pub fn list_all<T0>(f: impl Fn(T0) -> bool + Clone, list: Vec<T0>) -> bool {
 /// satisfying the predicate, or `Nothing`. The predicate is by-value
 /// `Fn(T0) -> bool` (the shape codegen emits — same as `list_filter`), so the
 /// element is cloned before testing and the original returned on a hit.
-/// Iterative (short-circuits); total.
-pub fn list_find<T0: Clone>(f: impl Fn(T0) -> bool + Clone, list: Vec<T0>) -> SkyMaybe<T0> {
+/// Iterative (short-circuits); total. `T0: Clone` is the same element-clone
+/// bound as `list_filter`; the predicate itself carries no `Clone` bound
+/// (#161 — see the note above `list_foldl`).
+pub fn list_find<T0: Clone>(f: impl Fn(T0) -> bool, list: Vec<T0>) -> SkyMaybe<T0> {
     for x in list {
         if f(x.clone()) {
             return SkyMaybe::Just(x);
@@ -262,6 +288,50 @@ pub fn list_sort_with<A: Clone>(cmp: impl Fn(A, A) -> i64, list: Vec<A>) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #161 regression: every HOF kernel in this file must accept the EXACT
+    // shape `sky_backend_rust::emit_expr::emit_lambda` emits for every Sky
+    // closure VALUE — a boxed, non-`Clone` trait object
+    // `Box<dyn Fn(..) -> .. + Send>` — directly, with no `.clone()` at the
+    // call site. Before the fix, `f: impl Fn(T0) -> bool + Clone` (etc.)
+    // rejected this exact shape at compile time (E0277: `Box<dyn Fn(..) +
+    // Send>: Clone` is not satisfied) for EVERY closure, not just ones that
+    // capture another closure (a partial application). Building the trait
+    // object here the same way codegen does — and never calling `.clone()`
+    // on it — pins both halves of the fix: the bound is gone, AND nothing
+    // downstream secretly still needs the value to be `Clone`.
+    #[test]
+    fn hof_kernels_accept_boxed_non_clone_closure() {
+        // A predicate that is itself a partial application over a captured
+        // value — the exact "closure capturing a value, boxed" shape from
+        // the #161 bug report (`List.filter (isVisible session) items`).
+        let threshold: i64 = 3;
+        let above: Box<dyn Fn(i64) -> bool + Send> = Box::new(move |x| x > threshold);
+        assert_eq!(list_filter(above, vec![1, 2, 3, 4, 5]), vec![4, 5]);
+
+        let above: Box<dyn Fn(i64) -> bool + Send> = Box::new(move |x| x > threshold);
+        assert!(list_any(above, vec![1, 2, 3, 4, 5]));
+
+        let above: Box<dyn Fn(i64) -> bool + Send> = Box::new(move |x| x > threshold);
+        assert!(!list_all(above, vec![1, 2, 3, 4, 5]));
+
+        let above: Box<dyn Fn(i64) -> bool + Send> = Box::new(move |x| x > threshold);
+        assert_eq!(list_find(above, vec![1, 2, 3, 4, 5]), SkyMaybe::Just(4));
+
+        let max_fn: Box<dyn Fn(i64, i64) -> i64 + Send> =
+            Box::new(|v, acc| if v > acc { v } else { acc });
+        assert_eq!(list_foldl(max_fn, i64::MIN, vec![1, 5, 3]), 5);
+
+        let max_fn: Box<dyn Fn(i64, i64) -> i64 + Send> =
+            Box::new(|v, acc| if v > acc { v } else { acc });
+        assert_eq!(list_foldr(max_fn, i64::MIN, vec![1, 5, 3]), 5);
+
+        let plus_i: Box<dyn Fn(i64, i64) -> i64 + Send> = Box::new(|i, x| i + x);
+        assert_eq!(list_indexed_map(plus_i, vec![10, 20, 30]), vec![10, 21, 32]);
+
+        let dupe: Box<dyn Fn(i64) -> Vec<i64> + Send> = Box::new(|x| vec![x, x]);
+        assert_eq!(list_concat_map(dupe, vec![1, 2]), vec![1, 1, 2, 2]);
+    }
 
     // SOUNDNESS regression (no-panic thesis): a comparator that is NOT a strict
     // weak ordering makes std's sort panic since Rust 1.81. A well-typed Sky
