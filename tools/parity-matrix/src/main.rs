@@ -93,6 +93,10 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     "http_with_body",
     "http_with_header",
     "http_with_timeout",
+    // #33 §6.2 Go-parity builders — inline clone-and-reassign emission.
+    "http_with_url",
+    "http_with_follow_redirects",
+    "http_with_max_redirects",
     "live_route",
     "sky_cli_program_",
     "ui_layout_with",

@@ -65,6 +65,39 @@ fn expr_value_is_non_clone(expr: &Expr) -> bool {
     }
 }
 
+/// Is `ty` a Rust type that is UNCONDITIONALLY `Copy` in every emission this
+/// backend produces? Mirrors `sky_lower::lower::clone_class`'s `CopyLeaf`
+/// classification exactly (kept duplicated across the crate boundary per this
+/// file's established convention — see [`pat_bound_symbols`]'s doc comment).
+///
+/// Deliberately conservative: a `Generic(_)` type parameter is bounded only by
+/// `Clone` (`emit_func` injects `Clone`, never `Copy`), so it must return
+/// `false` even though a caller might monomorphize it to a Copy type at some
+/// call site — the backend has no per-call-site visibility here. A user
+/// `Enum`/`Record` also returns `false`: synthesized enums/structs derive
+/// `Clone`, not `Copy`. `StreamWriter`/`WebSocketServer` are
+/// `#[derive(Clone, Copy)]` i64 id wrappers (`server_stream.rs` / websocket
+/// server), matching `clone_class`'s own `CopyLeaf` arm for them.
+///
+/// Used by the `Expr::Access` emission arm for #142/AUD-09's type-directed
+/// Copy elision — see
+/// `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §3.
+const fn ir_type_is_definitely_copy(ty: &IrType) -> bool {
+    matches!(
+        ty,
+        IrType::Int
+            | IrType::Float
+            | IrType::Bool
+            | IrType::Char
+            | IrType::Unit
+            | IrType::Order
+            | IrType::Decimal
+            | IrType::ErrorKind
+            | IrType::StreamWriter
+            | IrType::WebSocketServer
+    )
+}
+
 /// Collect every symbol a pattern binds (recursively) into `out`. Mirrors
 /// `sky_lower::pat_binds_symbol`'s traversal shape but gathers the full bound
 /// set in one pass rather than testing membership of one target.
@@ -287,36 +320,27 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
             then_: Box::new(clone_free_target(*then_, target)),
             else_: Box::new(clone_free_target(*else_, target)),
         },
-        Expr::Match(m) => {
-            let (scrutinee, arms) = m.into_parts();
-            let new_scrutinee = Box::new(clone_free_target(*scrutinee, target));
-            let new_arms = arms
-                .into_iter()
-                .map(|arm| {
-                    let binds = pat_binds_target(&arm.pat, target);
-                    let new_body = if binds {
-                        arm.body
+        Expr::Match(m) => Expr::Match(m.map_bodies(
+            |scrutinee| clone_free_target(scrutinee, target),
+            |pat, body, guard| {
+                let binds = pat_binds_target(pat, target);
+                let new_body = if binds {
+                    body
+                } else {
+                    clone_free_target(body, target)
+                };
+                // Preserve the #158 C2 guard, rewriting it too when the arm
+                // pattern does not bind `target`.
+                let new_guard = guard.map(|g| {
+                    if binds {
+                        g
                     } else {
-                        clone_free_target(arm.body, target)
-                    };
-                    // Preserve the #158 C2 guard, rewriting it too when the arm
-                    // pattern does not bind `target`.
-                    let new_guard = arm.guard.map(|g| {
-                        if binds {
-                            g
-                        } else {
-                            clone_free_target(g, target)
-                        }
-                    });
-                    Arm {
-                        pat: arm.pat,
-                        body: new_body,
-                        guard: new_guard,
+                        clone_free_target(g, target)
                     }
-                })
-                .collect();
-            Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms))
-        }
+                });
+                (new_body, new_guard)
+            },
+        )),
         Expr::Call { callee, args } => Expr::Call {
             callee,
             args: args
@@ -356,9 +380,14 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
                 .map(|(s, e)| (s, clone_free_target(e, target)))
                 .collect(),
         ),
-        Expr::Access { record, field } => Expr::Access {
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Expr::Access {
             record: Box::new(clone_free_target(*record, target)),
             field,
+            field_ty,
         },
         Expr::Update { record, fields } => Expr::Update {
             record: Box::new(clone_free_target(*record, target)),
@@ -628,34 +657,25 @@ fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
             then_: Box::new(substitute_var(*then_, target, replacement)),
             else_: Box::new(substitute_var(*else_, target, replacement)),
         },
-        Expr::Match(m) => {
-            let (scrutinee, arms) = m.into_parts();
-            let new_scrutinee = Box::new(substitute_var(*scrutinee, target, replacement));
-            let new_arms = arms
-                .into_iter()
-                .map(|arm| {
-                    let binds = pat_binds_target(&arm.pat, target);
-                    let new_body = if binds {
-                        arm.body
+        Expr::Match(m) => Expr::Match(m.map_bodies(
+            |scrutinee| substitute_var(scrutinee, target, replacement),
+            |pat, body, guard| {
+                let binds = pat_binds_target(pat, target);
+                let new_body = if binds {
+                    body
+                } else {
+                    substitute_var(body, target, replacement)
+                };
+                let new_guard = guard.map(|g| {
+                    if binds {
+                        g
                     } else {
-                        substitute_var(arm.body, target, replacement)
-                    };
-                    let new_guard = arm.guard.map(|g| {
-                        if binds {
-                            g
-                        } else {
-                            substitute_var(g, target, replacement)
-                        }
-                    });
-                    Arm {
-                        pat: arm.pat,
-                        body: new_body,
-                        guard: new_guard,
+                        substitute_var(g, target, replacement)
                     }
-                })
-                .collect();
-            Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms))
-        }
+                });
+                (new_body, new_guard)
+            },
+        )),
         Expr::Call { callee, args } => Expr::Call {
             callee,
             args: args
@@ -695,9 +715,14 @@ fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
                 .map(|(s, e)| (s, substitute_var(e, target, replacement)))
                 .collect(),
         ),
-        Expr::Access { record, field } => Expr::Access {
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Expr::Access {
             record: Box::new(substitute_var(*record, target, replacement)),
             field,
+            field_ty,
         },
         Expr::Update { record, fields } => Expr::Update {
             record: Box::new(substitute_var(*record, target, replacement)),
@@ -1029,14 +1054,17 @@ fn emit_http_call(
 /// Handle Http builder kernel calls that emit inline struct construction or
 /// clone-and-reassign record updates.
 ///
-/// Returns `Some(emitted)` for the five pure builder kernels:
+/// Returns `Some(emitted)` for the eight pure builder kernels:
 ///
 /// * **`HttpDefaultRequest url`** — emits a struct literal with sensible
 ///   defaults: `method = "GET"`, `body = ""`, `headers = []`,
 ///   `timeout = 30000`, `followRedirects = true`, `maxRedirects = 10`.
 ///
 /// * **`HttpWithMethod m req`**, **`HttpWithTimeout t req`**,
-///   **`HttpWithBody b req`** — each emits a clone-and-reassign block
+///   **`HttpWithBody b req`**, **`HttpWithUrl u req`**,
+///   **`HttpWithFollowRedirects f req`**, **`HttpWithMaxRedirects n req`**
+///   (last three: Go parity, #33 §6.2) — each emits a clone-and-reassign
+///   block
 ///   (`{ let mut __sky_rec = (req).clone(); __sky_rec.field = val; __sky_rec }`)
 ///   matching the `emit_update` pattern so the source record is moved once.
 ///
@@ -1050,7 +1078,7 @@ fn emit_http_call(
 /// standard call path. Factored out of `emit_expr_at` to keep its stack frame
 /// small (same rationale as `emit_http_call`).
 #[inline(never)]
-#[allow(clippy::too_many_lines)] // 5 match arms × ~20 lines = inherently verbose but linear
+#[allow(clippy::too_many_lines)] // 8 match arms × ~20 lines = inherently verbose but linear
 fn emit_http_builder_call(
     ctx: &EmitCtx,
     callee: &Callee,
@@ -1064,7 +1092,10 @@ fn emit_http_builder_call(
         | KernelFn::HttpWithMethod
         | KernelFn::HttpWithTimeout
         | KernelFn::HttpWithBody
-        | KernelFn::HttpWithHeader),
+        | KernelFn::HttpWithHeader
+        | KernelFn::HttpWithUrl
+        | KernelFn::HttpWithFollowRedirects
+        | KernelFn::HttpWithMaxRedirects),
     ) = callee
     else {
         return Ok(None);
@@ -1160,6 +1191,57 @@ fn emit_http_builder_call(
                  __sky_rec.body = {b_s}; __sky_rec }}"
             )))
         }
+        KernelFn::HttpWithUrl => {
+            // withUrl : String -> HttpRequest -> HttpRequest (#33 §6.2)
+            let u = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithUrl expects 2 arguments (url, req)".to_owned(),
+            })?;
+            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithUrl expects 2 arguments (url, req)".to_owned(),
+            })?;
+            let u_s = emit_expr_at(ctx, u, indent, child, generics)?;
+            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({req_s}).clone(); \
+                 __sky_rec.url = {u_s}; __sky_rec }}"
+            )))
+        }
+        KernelFn::HttpWithFollowRedirects => {
+            // withFollowRedirects : Bool -> HttpRequest -> HttpRequest (#33 §6.2)
+            let f = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithFollowRedirects expects 2 arguments (flag, req)".to_owned(),
+            })?;
+            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithFollowRedirects expects 2 arguments (flag, req)".to_owned(),
+            })?;
+            let f_s = emit_expr_at(ctx, f, indent, child, generics)?;
+            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({req_s}).clone(); \
+                 __sky_rec.followRedirects = {f_s}; __sky_rec }}"
+            )))
+        }
+        KernelFn::HttpWithMaxRedirects => {
+            // withMaxRedirects : Int -> HttpRequest -> HttpRequest (#33 §6.2)
+            let n = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithMaxRedirects expects 2 arguments (n, req)".to_owned(),
+            })?;
+            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithMaxRedirects expects 2 arguments (n, req)".to_owned(),
+            })?;
+            let n_s = emit_expr_at(ctx, n, indent, child, generics)?;
+            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({req_s}).clone(); \
+                 __sky_rec.maxRedirects = {n_s}; __sky_rec }}"
+            )))
+        }
         KernelFn::HttpWithHeader => {
             // withHeader : String -> String -> HttpRequest -> HttpRequest
             // PREPENDS (key, value) — matches Go reference `(k,v) :: req.headers`.
@@ -1184,7 +1266,7 @@ fn emit_http_builder_call(
             )))
         }
         // Unreachable: the guard at the top of this function constrains `k` to the
-        // five variants matched above. The `_ =>` arm keeps Rust's exhaustiveness
+        // eight variants matched above. The `_ =>` arm keeps Rust's exhaustiveness
         // checker satisfied without introducing a catch-all over the full `KernelFn`
         // set (which would violate the no-catch-all principle for the logic above).
         _ => Ok(None),
@@ -5578,24 +5660,36 @@ pub fn emit_expr_at(
         // `emit_expr_at`'s own stack frame small, so the depth guard — not a
         // native overflow — is what bounds a deep `BinOp`/`Call` spine.
         Expr::Record(fields) => emit_record(ctx, fields, indent, depth, generics),
-        Expr::Access { record, field } => {
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => {
             // Field access `<record>.<field>`. The base is parenthesised so a
             // record literal in record position (`{ ... }.field`) is never
             // misparsed; the field ident is keyword-mangled to match the struct.
             //
-            // `.clone()` is emitted unconditionally: Sky is a purely-functional
-            // language with value semantics, so every field read is logically a
-            // copy.  In Rust, a `Copy` field's `.clone()` compiles down to a
-            // bitwise copy (no heap allocation), so this is zero-cost for ints /
-            // bools / function pointers.  For heap-allocated types (String, Vec,
-            // user structs) the clone allocates, but it prevents partial-move
-            // errors when the same owner or field is accessed more than once in
-            // the same expression — a common pattern in Sky (e.g. `view` and
-            // `update` both read `model.someField`).  The Rust compiler will
-            // elide redundant clones under standard optimisation passes.
+            // Type-directed Copy elision (#142/AUD-09 — see
+            // `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md`
+            // §3): Sky is a purely-functional language with value semantics,
+            // so every field read is logically a copy.  A field whose solved
+            // type is UNCONDITIONALLY `Copy` in the emitted Rust (Int / Float
+            // / Bool / Char / Unit / Order / Decimal / ErrorKind / the Copy
+            // id-wrapper opaques) is read bare — the read IS the copy.  Every
+            // other field (heap-backed String / Vec / synthesized structs /
+            // generics) keeps `.clone()`: rustc does NOT elide a `.clone()`
+            // call on a heap type, and the clone is what prevents partial-move
+            // errors when the same owner or field is accessed more than once
+            // (e.g. `view` and `update` both read `model.someField`).  The
+            // audit's second half — last-use analysis to elide the clone on a
+            // heap field's FINAL read — is explicitly deferred (spec §3.5).
             let base = emit_expr_at(ctx, record, indent, child, generics)?;
             let field = ctx.emit_ident(*field)?;
-            Ok(format!("({base}).{field}.clone()"))
+            if ir_type_is_definitely_copy(field_ty) {
+                Ok(format!("({base}).{field}"))
+            } else {
+                Ok(format!("({base}).{field}.clone()"))
+            }
         }
         Expr::Update { record, fields } => {
             emit_update(ctx, record, fields, indent, depth, generics)
