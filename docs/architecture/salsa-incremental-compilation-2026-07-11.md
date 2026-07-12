@@ -185,7 +185,8 @@ survives across revisions on a production path (Phase 2+).
 | 3 | 9, 11, 18 | `kernel_types()`, coarse whole-program spine (`linked_program()` wrapping link→infer→lower→emit), **stand up the clean-vs-incremental parity gate EARLY** |
 | **4 (implemented — see §9; coarse fallback, NOT per-module)** | 12, 13 | per-module `typecheck`/`lower` (riskiest; gated by 18; coarse floor is the sanctioned fallback) |
 | **5 (implemented — see §10; 14+16 shipped, 15 recorded-not-forced, 17 deferred)** | 14–17 | `program_metadata()` (conservative, re-runs every build — LOCKED) — shipped; emit→cargo bridge (content-gated atomic write + manifest prune) — shipped at today's whole-project emit granularity; per-file `emit_rust_file` — genuinely blocked (no `RustFileId` domain exists in the backend today), recorded as a scoped continuation, not forced; config projections — deferred |
-| 6 | 19, 20 | Option-B persisted lowered-IR cache (whole-project content address, version-epoch), toolchain refuse-don't-guess |
+| **17 (implemented — see §11)** | 17 | `BuildConfig` salsa input (narrowed to `db_driver`, the one field with a real consumer) + `emit_project(root, entry, config)` — the coarse SEAM over `RustBackend::emit`, replacing Phase 4/5's last remaining plain-function call in `compile_prepared` |
+| **6 (implemented — see §12; deliberate EmittedProject-level divergence from literal "lowered IR")** | 19, 20 | On-disk build cache: whole-project content-address key + version-epoch directory (compiler-binary hash + rustc fingerprint) gate — "refuse, don't guess" by construction (stale entries are a different, unreachable address, never a runtime check) |
 | 7 | 21–25 | `ipe watch` (confined watcher, debounce, last-good state machine, L0+ continuity, cancellation) |
 | 8 | 26 | LSP seam — same db, same queries, editor-buffer inputs |
 
@@ -823,23 +824,21 @@ value (a fresh salsa input recreated on every warm-side call would defeat
 the very memoization being proven) was judged not worth the risk this
 session. **Continuation scope for the next session, in priority order:**
 
-1. Land Task 17's `project_config()` (or a narrower `BuildConfig { db_driver
-   }` input) FIRST — a small, low-risk, purely-additive input with a clear
-   consumer (item 2) — before attempting anything emit-shaped, exactly the
-   "don't force the risky part" ordering this session used.
-2. THEN wrap `RustBackend::emit` in a coarse `sky_db::emit_project(root,
-   entry, config)` tracked query (real Phase-4-style value: a repeat/no-op
-   demand skips the whole backend pass) — update the parity gate's two call
-   sites to hold a STABLE `BuildConfig` handle across a warm sequence
-   (created once, like `SourceRoot`) rather than recreating one per call, so
-   the seam's memoization is actually exercised by the gate, not silently
-   defeated by a fresh input identity each demand.
+1. ~~Land Task 17's `project_config()` (or a narrower `BuildConfig { db_driver
+   }` input) FIRST~~ — **DONE, see §11.** Landed as exactly the narrower
+   `BuildConfig { db_driver }` shape this item names.
+2. ~~THEN wrap `RustBackend::emit` in a coarse `sky_db::emit_project(root,
+   entry, config)` tracked query~~ — **DONE, see §11.** Both parity-gate call
+   sites (`clean_vs_incremental_parity.rs` AND
+   `adversarial_review_parity_probe.rs`, the latter not enumerated here but
+   the same shape) now hold a stable `BuildConfig` handle exactly as this
+   item specifies.
 3. ONLY THEN attempt the real `emit_rust_file(RustFileId)` split — its own
    multi-session design pass (mod/visibility scheme, record-struct ownership
    rule, golden-suite re-baseline strategy), reviewed against the Task-18
    gate before touching the production path, mirroring exactly how Phase 4
    staged lowering's fresh-symbol-pool sizing as future work rather than
-   improvising it.
+   improvising it. **Still not attempted** — unchanged status after §11/§12.
 
 ### 10.3 Task 16 — the emit→cargo bridge, shipped at the granularity that
 ### exists today
@@ -894,7 +893,7 @@ before — the golden-oracle SEAL and the Task-18 parity gate do not compare
 mtimes, only content, so this is invisible to both and requires no gate
 changes.
 
-### 10.4 Task 17 — not attempted
+### 10.4 Task 17 — not attempted this session; landed next session, see §11
 
 Session budget went to the Task 14 implementation + proof, the Task 15
 survey (whose negative finding — "the precondition doesn't exist" — took
@@ -905,6 +904,13 @@ attempted standalone here — landing it without a consumer would repeat the
 exact "reserved surface nothing reads is dead surface that can silently rot"
 trap Phase 1 §3.2 explicitly named as its reason to trim inputs to have real
 consumers.
+
+**Update (next session, §11):** landed as `sky_db::BuildConfig` +
+`sky_db::emit_project`, narrowed to the ONE field (`db_driver`) that clears
+the real-consumer bar — see §11 for the full shape and for why the
+MULTI-field half of "field-granularity" (two config fields independently
+firewalled against each other) stays out of scope until a second field
+earns its place the same way `db_driver` had to.
 
 ### 10.5 Phase-5 decisions ledger
 
@@ -939,3 +945,366 @@ consumers.
 | `program_metadata_reachability_is_transitive` | a function reachable only via an intermediate call is included |
 | `program_metadata_no_entry_falls_back_to_conservative_reachable_everything` | no `main` binding → every function reachable (never under-reports) |
 | `skyc::clean_vs_incremental_parity` (5 tests, re-run) | still green — `program_metadata`'s production-path demand and the emit→cargo bridge rewrite change zero emitted bytes |
+
+---
+
+## 11. Task 17 — `BuildConfig` + `emit_project`, landed with a real consumer
+
+Task 17 = plan Task 17 (`project_config()` field-granular projections),
+carried forward from §10.4's "not attempted" status. Landed as
+`sky_db::BuildConfig` (one field: `db_driver`) + `sky_db::emit_project` — a
+genuine salsa input with a genuine tracked-query consumer, not the
+"reserved surface nothing reads" shape Phase 1 §3.2 named as the anti-
+pattern to avoid.
+
+### 11.1 Why narrowed to one field, and what that costs honestly
+
+The design doc's `project_config()` (§Q1b) sketches a full parsed-`sky.toml`
+shape (`entry`, `codegen_flags`, `[log]` fields, …) with **thin per-field
+projection queries** interposed so editing one field's consumer doesn't
+retrigger a query that reads a different field. Reading the actual
+`salsa-0.27.2` source before writing anything (this phase's own survey
+discipline) found that this projection-query layer is **already built into
+salsa's `#[salsa::input]` macro** — verified at
+`salsa-macro-rules-0.27.2/src/setup_input_struct.rs` +
+`salsa-0.27.2/src/input.rs`: each field getter calls
+`IngredientImpl::field`, which reports a tracked read keyed on
+`(ingredient_index.successor(field_index), id)` — **per field**, not per
+struct (`type Revisions = [Revision; N]`, one revision slot per field, set
+independently by each field's setter). So a `BuildConfig` with TWO
+build-relevant fields would already get "editing field A never invalidates
+a query that only reads field B" for free, no hand-rolled `config_entry()`
+/ `config_log_level()` projection queries needed — this is a genuine,
+load-bearing finding about the salsa version this project is pinned to,
+recorded here so a future session does not re-derive the design doc's
+projection-query mechanism as new work when salsa already provides it.
+
+What this does NOT change: `BuildConfig` still has exactly ONE field today,
+because no second field has a real tracked-query consumer yet — the SAME
+bar `db_driver` itself had to clear (Phase 1 §3.2's discipline, applied
+again). Adding `entry`/`codegen_flags`/`[log]` fields with no consumer
+would be exactly the dead-surface trap this doc keeps naming. So the
+MULTI-field half of "field-granularity" (two fields on the SAME struct,
+independently firewalled from each other) is honestly unproven today — not
+because it wouldn't work (salsa gives it for free, per the finding above),
+but because there is nothing yet to prove it WITH. What IS proven, by
+`emit_project_config_change_does_not_retrigger_lower`
+(`crates/sky_db/tests/phase6_build_config.rs`), is the other half of the
+same property: a `BuildConfig`-only edit never retriggers `linked_program`
+/ `typecheck` / `lower_program` — config lives on its own input, entirely
+separate from `SourceRoot`/`SourceFile`.
+
+### 11.2 `emit_project` — the real consumer
+
+`sky_db::emit_project(db, root, entry, config)` (`crates/sky_db/src/
+lib.rs`) is the Phase-4-shaped coarse SEAM over `RustBackend::emit`,
+exactly the pattern `typecheck`/`lower_program` established one layer up:
+depends on `lower_program(root, entry)` for the IR and
+`config.db_driver(db)` for the ONE emit-relevant config field, and replaces
+what was, before this task, the LAST remaining plain-function call in
+`compile_prepared` (every earlier stage — parse through lower — was already
+a tracked query; only the final `RustBackend::new(&interner).emit(&program)`
+call had never been wrapped). `compile_prepared`'s signature changed from a
+raw `db_driver: DbDriver` parameter to a `config: BuildConfig` handle,
+constructed once by the caller.
+
+**The stable-handle trap, closed at the call sites.** Phase 5 §10.2 item 2
+already named the hazard: a `BuildConfig` constructed FRESH on every
+`compile_prepared` call gets a new salsa `Id` each time, so `emit_project`'s
+memo key never matches across calls and the seam's memoization is silently
+defeated. `compile_modules` (the one-shot production driver) constructs one
+`BuildConfig` per build — fine, it never re-demands. The Task-18 parity
+gate's `WarmSession` (`clean_vs_incremental_parity.rs` AND
+`adversarial_review_parity_probe.rs`) now holds `config: Option<BuildConfig>`
+alongside its existing `root: Option<SourceRoot>`, created once via
+`get_or_insert_with` and reused across the whole warm edit sequence — the
+SAME lazy-stable-handle shape `root` already used, applied to `config` too.
+
+### 11.3 Task-17 decisions ledger
+
+1. **`BuildConfig` narrowed to `db_driver`** — the one field that clears
+   the "has a real tracked-query consumer" bar; a broader `ProjectConfig`
+   stays design-level until a second field earns its place (§11.1).
+2. **Per-field tracking is salsa-native, not hand-rolled** — verified
+   against the pinned `=0.27.2` source; no projection-query boilerplate
+   needed for the property the design doc describes.
+3. **`config` is a caller-supplied, stable handle, not constructed inside
+   `compile_prepared`** — closes the exact warm-sequence memoization trap
+   Phase 5 §10.2 recorded in advance.
+4. **`db_driver` never reaches `linked_program`/`typecheck`/`lower_program`**
+   — those queries take no `BuildConfig` dependency at all; only
+   `emit_project` reads it. This is what makes the config-vs-source
+   isolation observable (§11.1's proof test), not an incidental side effect.
+
+### 11.4 Task-17 proof tests (`crates/sky_db/tests/phase6_build_config.rs`)
+
+| Test | Asserts |
+|---|---|
+| `emit_project_memoized_coarse_floor` | repeat demand + byte-equal re-save execute nothing; dep body edit re-executes end to end (same shape as every prior seam) |
+| `emit_project_config_change_does_not_retrigger_lower` | a `db_driver`-only edit re-executes `emit_project` but ZERO executions of `linked_program`/`typecheck`/`lower_program` — the mission proof |
+| `emit_project_source_edit_retriggers_lower_and_emit` | the other direction: a plain source edit (config untouched) re-executes the whole chain through to `emit_project` |
+| `emit_project_short_circuits_on_lower_error` | never reaches `RustBackend::emit` on ill-typed input; surfaces `lower_program`'s own diagnostic verbatim |
+| `skyc::clean_vs_incremental_parity` (5 tests, re-run) | still green — the `compile_prepared` signature change (`db_driver` → `config`) and the `emit_project` wiring change zero emitted bytes |
+| `skyc::adversarial_review_parity_probe` (4 tests, re-run) | still green |
+
+---
+
+## 12. Phase 6 — on-disk build cache (Tasks 19/20), at `EmittedProject`
+## granularity: a deliberate, recorded divergence from literal "lowered IR"
+
+Phase 6 = plan Tasks **19, 20**. Headline result: `skyc build` now survives
+ACROSS process invocations for the first time — Phases 1–5 proved every
+front-end/back-end stage memoizes correctly WITHIN one process's salsa
+database, but every `skyc build` still started that database cold. A
+same-project, same-toolchain rebuild with no source changes now skips the
+ENTIRE compile pipeline (parse through emit) via a content-addressed,
+version-epoch-gated on-disk cache (`crates/skyc/src/cache.rs`).
+
+Same discipline as Phase 4 (§9.1) and Phase 5 (§10.2): survey the design
+doc's literal wording BEFORE writing anything, and when the literal shape
+hits a genuine soundness blocker, ship the largest SOUND slice and record
+the gap honestly rather than force a fake-coarse version of the blocked
+shape.
+
+### 12.1 The survey: why literal "persisted lowered IR" is blocked, and
+### what ships instead
+
+The design doc's Option-B (`docs/architecture/incremental-compilation-and-
+watch.md` §"Cross-session persistence", LOCKED) says: persist per-module
+lowered IR to `.ipe/lowered/`. Two compounding findings, read before writing
+anything:
+
+1. **Phase 4's finding still applies.** `sky_lower::lower` always produces
+   exactly ONE whole-program `sky_ir::Program` (`Program { modules:
+   vec![module] }`) — there was never a `ModuleId`-keyed IR to persist "per
+   module." This much was already known from Phase 4 §9.1 / Phase 5 §10.2.
+2. **NEW: `Symbol` identity does not survive a process boundary.**
+   `sky_ir::ir` embeds `sky_intern::Symbol` pervasively — `Var`, `Ctor`,
+   record field keys (`BTreeMap<Symbol, IrType>`), `FuncSig` params and
+   generics, `EnumDef`/`TypeDef` fields, and more (confirmed by a direct
+   grep across `crates/sky_ir/src/ir.rs`: dozens of `Symbol`-carrying
+   sites, far beyond the `Ctor`-only surface `sky_db::program_metadata`'s
+   walker touches). A `Symbol` is a raw `u32` index into THIS PROCESS's
+   `sky_intern::Interner` — meaningless (not merely differently numbered)
+   against a fresh process's empty interner. Making a persisted
+   `sky_ir::Program` sound requires a relocation pass: serialize every
+   embedded `Symbol` as its resolved STRING, and on load, re-intern each
+   string into the CURRENT process's interner and rewrite every occurrence
+   to the newly-assigned id — an exhaustive walker over every
+   `Symbol`-carrying IR site (this project's own non-negotiable #8: "New
+   AST nodes require explicit walker arms"), plus full `serde` coverage
+   across roughly twenty IR types. That is a genuine, multi-session
+   redesign, not a corner cuttable inside this session's budget — the SAME
+   "looks like progress but isn't" trap Phase 5 §10.2 named for
+   `emit_rust_file(RustFileId)`.
+
+**What ships instead**: `sky_backend::EmittedProject` — the output of
+Task 17's `sky_db::emit_project` — is cached. It is pure `String` data
+(`RelPath` wraps a `String`; `files: BTreeMap<RelPath, String>`;
+`cargo_toml: String`) with **zero** dependency on any interner or `Symbol`,
+so it serializes and deserializes losslessly with no cross-process identity
+risk whatsoever — no relocation pass needed, because there is nothing left
+to relocate by the time `RustBackend::emit` has already resolved every
+`Symbol` to its final Rust identifier text.
+
+**Why this is not a lesser win, for `skyc build`'s actual use case.** A
+cache hit at the `EmittedProject` level skips parse → canon → link → infer
+→ lower → emit ENTIRELY — strictly MORE work skipped than a literal
+lowered-IR cache would give (which would still re-run `RustBackend::emit`
+on every hit). The cost is real but narrow: this cache cannot serve a
+hypothetical future interpreter tier that wants to consume `sky_ir`
+directly (design doc §"Why `sky_ir` is the cut-point", motivating Q3) —
+that tier is unscheduled and does not exist, so the cost is paid by nobody
+today. This substitution is recorded here as a deliberate, reasoned
+divergence, not a silent one — if/when literal IR-level caching becomes
+necessary (the interpreter tier lands), the relocation-pass design above is
+the scoped starting point, and this cache's content-address + version-epoch
+machinery (§12.2/§12.3) carries over unchanged — only the CACHED VALUE TYPE
+changes, not the addressing scheme.
+
+### 12.2 The content-address key (Task 19)
+
+`cache::compute_project_key` (`crates/skyc/src/cache.rs`) hashes, with
+explicit little-endian length-prefixed framing for every variable-length
+field (never delimiter-joined — proven by
+`key_is_delimiter_collision_safe`, which checks `[["AB"],["C"]]` and
+`[["A"],["BC"]]` hash to DIFFERENT keys):
+
+- the entry module path,
+- the SQL driver (`sky_backend_rust::DbDriver`),
+- every in-scope module's path, trust origin (injected stdlib vs. user
+  source), and full source text.
+
+This mirrors the design doc's own cache-key-completeness note for the
+persisted cache (ties GAP-1): module IDENTITY (not just content) is in the
+key, so an add/delete/rename of a module yields a genuinely different
+address, never a stale hit that silently resurrects a deleted module.
+Proven by `key_changes_with_module_add_and_remove` and
+`key_changes_with_module_origin`. `blame_path` (diagnostic-rendering only)
+and the vendored runtime tree are deliberately EXCLUDED from the key —
+neither affects `EmittedProject`'s content (a failed compile is never
+cached at all; the runtime tree is copied by `write_emitted_project`
+independently of the cache, unchanged from Task 16).
+
+### 12.3 The version epoch — "refuse, don't guess" by construction (Task 20)
+
+`cache::derive_epoch` hashes TWO independent probes, both re-derived fresh
+at the start of every invocation (driver-boundary only, never inside a
+salsa-tracked path — INV-1 holds: no `std::fs`/subprocess spawn on any
+tracked query):
+
+- **`compiler_revision()`** — a content hash of the CURRENTLY RUNNING
+  `skyc` binary's own bytes (`std::env::current_exe()` + `sha2`), matching
+  the design doc's row verbatim: "content hash seeded from the `ipe`
+  binary's own build hash." This is the axis that actually matters most in
+  THIS repo's dev loop: `[workspace.package] version = "0.0.0"` never
+  bumps, so a version-string-only epoch would have silently reused a stale
+  cache across every `cargo build`/`cargo install` of `skyc` itself during
+  active development — exactly the under-invalidation this project's
+  principles order ranks above any efficiency gain. Hashing the actual
+  binary bytes closes that gap unconditionally, with no manual version-bump
+  discipline required.
+- **`toolchain_fingerprint()`** — a hash of `rustc -vV`'s stdout, the
+  design doc's `toolchain_fingerprint()` row.
+
+The epoch is used as a DIRECTORY PREFIX
+(`<cache_root>/<epoch>/<key>.json`), never compared as a value after a
+lookup. This is what makes "refuse, don't guess" structural rather than a
+runtime check, mirroring the design doc's own FFI-cache hazard-ledger
+entries (H1/H4: "stale entry has a different address → unreachable miss"):
+a `cargo build` of `skyc`, or a `rustup update`, moves every subsequent
+build to a DIFFERENT directory. There is nothing to "refuse" at lookup
+time — old entries are not merely stale, they are unreachable by
+construction; the driver never even looks in the old directory. Either
+probe failing (no `current_exe`, no `rustc` on `PATH`) disables the cache
+entirely for that invocation (`derive_epoch` returns `None`) — never a
+guess, never a build failure, matching the design doc's "Entries are
+advisory" framing extended one step earlier (probe-unavailable, not just
+entry-corrupt, is advisory too).
+
+**Honestly scoped against the design doc's full Task-20 ask.** The design
+doc's toolchain-fingerprint row is written for `ipe watch`'s LIVE SESSION
+behaviour: hard-refuse a REBUILD mid-session with `toolchain changed (was
+A, now B) — restart 'ipe watch'`, keeping the last-good binary alive. That
+UX needs a live watch session to refuse INTO — Phase 7 (unscheduled here).
+What Task 20 delivers now, for the one-shot `skyc build` driver that exists
+today, is the version-epoch gate ITSELF — the sound foundation Phase 7's
+watch-specific UX builds on, not a lesser version of it.
+
+### 12.4 Wiring — the driver-boundary-only cache check
+
+`compile_modules` (`crates/skyc/src/lib.rs`) delegates to a new
+`compile_modules_observed`, which computes the cache key + epoch BEFORE any
+`sky_db::SkyDatabase` is constructed. On a hit, the WHOLE salsa pipeline is
+bypassed entirely — no database, no `SourceRoot`, nothing — only
+`write_emitted_project` runs, materialising the cached `EmittedProject`
+verbatim. On a miss, the pipeline runs exactly as it always has (unchanged
+from Task 17's wiring), and a successful result is best-effort stored for
+the next invocation. A cache-WRITE failure (permissions, full disk) never
+turns a successful compile into a reported build failure — matching
+`write_atomic`'s own established failure-isolation discipline, applied to
+an entirely optional, advisory side channel.
+
+**Dependency injection over environment mutation, for testability.** The
+cache root is an EXPLICIT `Option<&Path>` parameter on
+`compile_modules_observed` (`None` disables the cache), resolved from
+`SKY_BUILD_CACHE` / `SKY_BUILD_CACHE_DIR` env vars ONLY at the stable
+`compile_modules`/`build`/`build_with_sibling_discovery`/`build_project`
+entry points (`cache::env_cache_dir`). This was a deliberate design choice,
+not an accident of convenience: `std::env::set_var` is `unsafe` as of the
+current standard library signature, and this crate is
+`#![forbid(unsafe_code)]`; threading the cache root explicitly instead
+sidesteps that entirely, avoids any same-process env-mutation race (moot
+under `cargo nextest`'s per-test-process isolation, but avoided anyway),
+and gives every test in `crates/skyc/src/cache.rs` and the
+`on_disk_cache_hit_serves_a_tampered_entry_verbatim` end-to-end proof a
+deterministic, parallel-safe handle with no global state at all.
+
+**Default cache location: colocated with `out_dir`.** `<out_dir>/
+.skyc-cache` — chosen so the EXISTING "force a clean rebuild" ritual
+(`rm -rf <out_dir>`) also resets the cache, with no new mental model or
+second directory to remember to clean. `SKY_BUILD_CACHE_DIR` overrides this
+for a shared/global cache location; `SKY_BUILD_CACHE=0` disables the cache
+outright.
+
+### 12.5 The end-to-end proof — not just determinism
+
+Two identical builds producing identical output does NOT by itself prove a
+cache was consulted (a correct, deterministic compiler would produce the
+same bytes twice regardless). `on_disk_cache_hit_serves_a_tampered_entry_
+verbatim` (`crates/skyc/src/lib.rs`'s test module) closes that gap
+directly: compile once (a genuine miss, populates the cache), locate the
+single entry the build just wrote, TAMPER with its `cargo_toml` field with
+a sentinel no fresh compile of the SAME source could ever produce, then
+compile again with the SAME inputs and cache dir. The second build's
+`Cargo.toml` carries the sentinel VERBATIM — proof the driver actually
+reads and trusts the on-disk entry, not merely that it recomputed the same
+answer twice.
+
+### 12.6 Security: `RelPath`'s `Deserialize` cannot be derived
+
+`sky_backend::RelPath`'s whole reason to exist is that `RelPath::new` is
+the ONLY constructor, and it rejects any path that could escape the output
+directory (absolute, `..`-bearing, Windows drive-letter-rooted) — the
+"parse, don't validate" boundary between in-memory emission and the disk
+writer. A NAIVE `#[derive(Deserialize)]` on `RelPath` would reconstruct
+`RelPath(raw_string)` directly from untrusted bytes, bypassing that
+validation entirely: a poisoned/corrupted cache file could smuggle a
+`"../../etc/passwd"` key straight into `EmittedProject::files`, and from
+there into `fs::write` on the NEXT process's cache-hit path. `RelPath` gets
+hand-written `Serialize`/`Deserialize` impls instead — `Deserialize` routes
+through `String::deserialize` then `RelPath::new`, so the SAME validation a
+fresh in-process emission gets is enforced on every value that ever crosses
+the disk boundary. Proven by `emitted_project_deserialize_rejects_a_
+poisoned_key` (`sky_backend`) and `try_load_treats_a_poisoned_relpath_
+entry_as_a_miss` (`skyc::cache`) — the second test specifically checks the
+CACHE LAYER inherits the rejection via `Result::ok()` rather than
+accidentally routing around it (e.g. a hypothetical raw-bytes fallback path
+would have reintroduced exactly this hole).
+
+### 12.7 Phase-6 decisions ledger
+
+1. **Cache the `EmittedProject`, not the literal `sky_ir::Program`** — a
+   deliberate, recorded substitution for the design doc's literal "lowered
+   IR" wording, forced by `Symbol`'s process-local identity (§12.1). Not a
+   lesser win for `skyc build`'s actual use case (MORE work is skipped, not
+   less); the one thing it cannot serve (an unscheduled future interpreter
+   tier) is paid for by nobody today.
+2. **Version epoch = compiler-binary content hash + rustc fingerprint, both
+   re-derived every invocation, both driver-boundary-only** — no reliance
+   on the workspace's own (never-bumped, `"0.0.0"`) version string, which
+   would have been a real, silent under-invalidation risk in THIS repo's
+   fast-iterating dev loop specifically.
+3. **Epoch as a directory prefix, not a post-lookup comparison** — makes
+   "refuse, don't guess" structural (an unreachable address) rather than a
+   runtime check that could itself have a bug. Mirrors the design doc's own
+   FFI-cache addressing scheme (H1/H4).
+4. **Advisory, best-effort, driver-boundary-only, dependency-injected** —
+   every cache failure mode (missing, corrupt, poisoned, unwritable) is a
+   plain miss/no-op, never a build failure; the cache root is an explicit
+   parameter, never read from env inside the testable core, avoiding both
+   `unsafe` `env::set_var` and any same-process test race.
+5. **`RelPath` keeps hand-written `Deserialize`** — the ONE place in this
+   phase where `#[derive]` would have been actively unsound, not merely
+   less precise; documented at the type itself, not just in this ledger.
+6. **Content key excludes `blame_path` and the vendored runtime tree** —
+   neither affects `EmittedProject`'s bytes; including them would be
+   over-invalidation for zero correctness benefit.
+
+### 12.8 Phase-6 proof tests
+
+| Test | Asserts |
+|---|---|
+| `skyc::cache::tests key_is_deterministic` | same inputs hash to the same key |
+| `key_changes_with_source_text` / `key_changes_with_db_driver` / `key_changes_with_entry_path` | each key ingredient is load-bearing |
+| `key_changes_with_module_add_and_remove` | module-identity (not just content) is in the key — the design doc's cache-key-completeness note |
+| `key_changes_with_module_origin` | the trust-origin axis is in the key |
+| `key_is_delimiter_collision_safe` | `[["AB"],["C"]]` vs `[["A"],["BC"]]` hash differently — no delimiter-join ambiguity |
+| `store_and_load_round_trip` | write then read reproduces the value; a different epoch or key sees nothing |
+| `try_load_treats_corrupt_entry_as_a_miss` | invalid JSON is a miss, never a panic/propagated error |
+| `try_load_treats_a_poisoned_relpath_entry_as_a_miss` | a syntactically-valid-but-unsafe `RelPath` entry is discarded whole, not partially trusted |
+| `env_cache_dir_respects_disable_and_override` | the env-var resolution the STABLE entry points use |
+| `sky_backend relpath_deserialize_rejects_escaping_paths` / `emitted_project_deserialize_rejects_a_poisoned_key` | §12.6's security property, at the type level |
+| `skyc::on_disk_cache_hit_serves_a_tampered_entry_verbatim` | the mission proof — a tampered on-disk entry is served VERBATIM, proving the driver reads and trusts the cache rather than merely reproducing a deterministic answer |
+| `skyc::cache_dir_none_disables_caching_entirely` | `cache_dir: None` never creates a cache directory and always reports `Miss` |
+| `skyc::clean_vs_incremental_parity` / `adversarial_review_parity_probe` (re-run) | still green — the cache sits entirely outside `compile_prepared`; the parity gate's call shape is untouched by Phase 6 |
