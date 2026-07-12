@@ -16,6 +16,7 @@ pub mod error;
 pub mod ffi_polyfills;
 pub mod file;
 pub mod http_client;
+pub mod http_header;
 pub mod io;
 mod ssrf;
 pub mod json;

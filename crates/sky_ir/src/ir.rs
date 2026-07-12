@@ -1254,10 +1254,20 @@ pub enum Expr {
     /// literal's synthesised Rust struct from its field-name set; Rust names its
     /// struct-literal fields, so the emitted construction is order-independent.
     Record(Vec<(Symbol, Self)>),
-    /// A record field access `record.field`.
+    /// A record field access `record.field`. `field_ty` is the field's own
+    /// solved type — carried so the Rust backend can decide, WITHOUT any
+    /// textual heuristic, whether the read needs a `.clone()` (a heap-backed
+    /// field) or can skip it (a Rust-`Copy` scalar) — see #142/AUD-09's
+    /// type-directed Copy-elision fix,
+    /// `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §3.
+    /// When the lowerer cannot resolve a concrete field type (a still-generic
+    /// field inside a polymorphic body), it falls back to
+    /// [`IrType::Generic`], which the backend classifies as non-`Copy` and
+    /// therefore conservatively KEEPS the `.clone()`.
     Access {
         record: Box<Self>,
         field: Symbol,
+        field_ty: IrType,
     },
     /// A record update `{ record | x = e1, ... }`: a copy of `record` with the
     /// listed fields replaced. `fields` lists only the changed fields, as
@@ -1849,26 +1859,98 @@ impl Match {
         &self.arms
     }
 
-    /// Decompose the `Match` into its raw parts for structural transformation.
+    /// Rebuild this `Match` by transforming its scrutinee and every arm's
+    /// body/guard, leaving every arm's PATTERN — and the arm count and order —
+    /// completely untouched.
     ///
-    /// Used by `sky_lower`'s `rewrite_var_to_apply` to rewrite arm bodies
-    /// in-place without re-running the structural validation in
-    /// [`Self::new`] / [`Self::new_flat`] (the pattern shapes are unchanged,
-    /// so all invariants those constructors verify still hold).
+    /// [`Self::new`]/[`Self::new_flat`]'s exhaustiveness invariant is a
+    /// property of the pattern SHAPES alone (see their doc comments), so a
+    /// transformation that only ever touches `scrutinee`, [`Arm::body`], and
+    /// [`Arm::guard`] (an expression evaluated in the arm's scope, not a
+    /// pattern shape) can never invalidate it. This is the sound, sealed
+    /// replacement for the former `pub fn from_parts_unchecked` escape hatch
+    /// (AUD-09), which took a raw `Vec<Arm>` and could rebuild a `Match` with
+    /// an empty arm list (`match x {}` — rustc E0004, no Sky diagnostic) or a
+    /// reordered/dropped-arm list. `pub(crate)`-sealing was not viable
+    /// instead, because every caller of the old function lived in a different
+    /// crate (`sky_lower`, `sky_backend_rust`).
+    ///
+    /// `arm_map` receives `(pattern, body, guard)` per arm and returns the
+    /// new `(body, guard)`; the pattern is read-only by construction.
+    ///
+    /// When a pass threads one `&mut` accumulator through BOTH the scrutinee
+    /// and the arm bodies (two closures cannot share a unique borrow —
+    /// E0524), rewrite the scrutinee first via [`Self::map_scrutinee`] and
+    /// then map the bodies with an identity `scrutinee_map`.
     #[must_use]
-    pub fn into_parts(self) -> (Box<Expr>, Vec<Arm>) {
-        (self.scrutinee, self.arms)
+    pub fn map_bodies(
+        self,
+        scrutinee_map: impl FnOnce(Expr) -> Expr,
+        mut arm_map: impl FnMut(&Pat, Expr, Option<Expr>) -> (Expr, Option<Expr>),
+    ) -> Self {
+        let new_scrutinee = Box::new(scrutinee_map(*self.scrutinee));
+        let new_arms = self
+            .arms
+            .into_iter()
+            .map(|arm| {
+                let (body, guard) = arm_map(&arm.pat, arm.body, arm.guard);
+                Arm {
+                    pat: arm.pat,
+                    body,
+                    guard,
+                }
+            })
+            .collect();
+        Self {
+            scrutinee: new_scrutinee,
+            arms: new_arms,
+        }
     }
 
-    /// Rebuild a `Match` from raw parts without re-running structural
-    /// validation. Only safe when the patterns are unmodified — the structural
-    /// invariants checked by [`Self::new`] / [`Self::new_flat`] are over the
-    /// arm pattern shapes, not over the arm bodies. Body rewrites (e.g.
-    /// variable-to-apply substitution) never change pattern shapes, so this
-    /// stays sound.
+    /// Rebuild this `Match` with a transformed scrutinee, leaving every arm
+    /// completely untouched. Shape-preserving by construction — the arm
+    /// vector is never even iterated. Companion to [`Self::map_bodies`] for
+    /// passes that thread a single `&mut` accumulator through scrutinee and
+    /// bodies sequentially (see `map_bodies`'s doc).
     #[must_use]
-    pub const fn from_parts_unchecked(scrutinee: Box<Expr>, arms: Vec<Arm>) -> Self {
-        Self { scrutinee, arms }
+    pub fn map_scrutinee(self, scrutinee_map: impl FnOnce(Expr) -> Expr) -> Self {
+        Self {
+            scrutinee: Box::new(scrutinee_map(*self.scrutinee)),
+            arms: self.arms,
+        }
+    }
+
+    /// Fallible sibling of [`Self::map_bodies`] for passes that can fail
+    /// (e.g. depth-limited clone-capture rewriting). Same shape invariant:
+    /// only `scrutinee`, [`Arm::body`], and [`Arm::guard`] are transformed;
+    /// each arm's `pat` is carried through untouched, and a failure
+    /// short-circuits before any arm is lost or reordered.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the first error `scrutinee_map` or `arm_map` returns.
+    pub fn try_map_bodies<E>(
+        self,
+        scrutinee_map: impl FnOnce(Expr) -> Result<Expr, E>,
+        mut arm_map: impl FnMut(&Pat, Expr, Option<Expr>) -> Result<(Expr, Option<Expr>), E>,
+    ) -> Result<Self, E> {
+        let new_scrutinee = Box::new(scrutinee_map(*self.scrutinee)?);
+        let new_arms = self
+            .arms
+            .into_iter()
+            .map(|arm| {
+                let (body, guard) = arm_map(&arm.pat, arm.body, arm.guard)?;
+                Ok(Arm {
+                    pat: arm.pat,
+                    body,
+                    guard,
+                })
+            })
+            .collect::<Result<Vec<_>, E>>()?;
+        Ok(Self {
+            scrutinee: new_scrutinee,
+            arms: new_arms,
+        })
     }
 }
 
@@ -1933,6 +2015,113 @@ mod tests {
         let rendered = format!("{res:?}");
         assert!(rendered.contains("Match"));
         Ok(())
+    }
+
+    /// Build the canonical 2-arm exhaustive `Match` the AUD-09 combinator
+    /// tests transform (`case msg of Increment -> count ; Decrement -> count`).
+    fn two_arm_match(i: &mut Interner) -> DResult<Match> {
+        let (ty, inc, dec) = msg_enum(i)?;
+        let count = i.intern("count")?;
+        let arms = vec![
+            Arm {
+                pat: Pat::Ctor {
+                    home: ModPath(vec![]),
+                    ty,
+                    variant: inc,
+                    args: vec![],
+                },
+                body: Expr::Var(count),
+                guard: None,
+            },
+            Arm {
+                pat: Pat::Ctor {
+                    home: ModPath(vec![]),
+                    ty,
+                    variant: dec,
+                    args: vec![],
+                },
+                body: Expr::Var(count),
+                guard: None,
+            },
+        ];
+        Match::new(Expr::Var(i.intern("msg")?), arms, &[inc, dec])
+    }
+
+    /// AUD-09: `map_bodies` must carry every arm's pattern (and the arm
+    /// count/order) through untouched — an identity transform round-trips, and
+    /// a body-rewriting transform changes ONLY the bodies.
+    #[test]
+    fn map_bodies_preserves_arm_patterns_and_count() -> DResult<()> {
+        let mut i = Interner::new();
+        let m = two_arm_match(&mut i)?;
+        let before_pats: Vec<Pat> = m.arms().iter().map(|a| a.pat.clone()).collect();
+
+        // Identity transform: everything structurally equal.
+        let id = m.clone().map_bodies(|s| s, |_, b, g| (b, g));
+        assert_eq!(id.arms().len(), 2);
+        let id_pats: Vec<Pat> = id.arms().iter().map(|a| a.pat.clone()).collect();
+        assert_eq!(id_pats, before_pats);
+        assert_eq!(id, m);
+
+        // Real body rewrite: bodies change, patterns/count/order do not.
+        let rewritten = m.map_bodies(|s| s, |_, _, g| (Expr::Int(9), g));
+        assert_eq!(rewritten.arms().len(), 2);
+        let new_pats: Vec<Pat> = rewritten.arms().iter().map(|a| a.pat.clone()).collect();
+        assert_eq!(new_pats, before_pats);
+        assert!(rewritten.arms().iter().all(|a| a.body == Expr::Int(9)));
+        Ok(())
+    }
+
+    /// AUD-09: `try_map_bodies` short-circuits on the first arm error — the
+    /// whole call is `Err`, no partial/corrupted `Match` is observable.
+    #[test]
+    fn try_map_bodies_short_circuits_on_err() -> DResult<()> {
+        let mut i = Interner::new();
+        let m = two_arm_match(&mut i)?;
+        let mut seen = 0_u32;
+        let res: Result<Match, &str> = m.try_map_bodies(Ok, |_, b, g| {
+            seen += 1;
+            if seen == 2 { Err("second arm fails") } else { Ok((b, g)) }
+        });
+        assert_eq!(res, Err("second arm fails"));
+        Ok(())
+    }
+
+    /// AUD-09: a scrutinee error short-circuits BEFORE any arm transform runs.
+    #[test]
+    fn try_map_bodies_scrutinee_error_short_circuits_before_any_arm_runs() -> DResult<()> {
+        let mut i = Interner::new();
+        let m = two_arm_match(&mut i)?;
+        let mut arm_ran = false;
+        let res: Result<Match, &str> = m.try_map_bodies(
+            |_| Err("scrutinee fails"),
+            |_, b, g| {
+                arm_ran = true;
+                Ok((b, g))
+            },
+        );
+        assert_eq!(res, Err("scrutinee fails"));
+        assert!(!arm_ran, "arm_map must never run after a scrutinee error");
+        Ok(())
+    }
+
+    /// AUD-09 seal: `from_parts_unchecked` must never be reintroduced. Any
+    /// caller that needs to rebuild a `Match` after a body-only rewrite must
+    /// use `map_bodies`/`try_map_bodies`, which cannot change arm patterns or
+    /// arm count/order. (The test's own name spells the sealed identifier
+    /// differently so the scan below does not trip on itself.)
+    #[test]
+    fn no_raw_parts_match_escape_hatch_reintroduced() {
+        let src = include_str!("ir.rs");
+        for (idx, line) in src.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or(line);
+            assert!(
+                !code.contains(concat!("from_parts_", "unchecked")),
+                "AUD-09 seal reintroduced at ir.rs:{} — rebuild via \
+                 Match::map_bodies/try_map_bodies instead: {line:?}",
+                idx + 1,
+            );
+        }
     }
 
     #[test]
@@ -2359,6 +2548,7 @@ mod tests {
         let access = Expr::Access {
             record: Box::new(Expr::Var(p)),
             field: x,
+            field_ty: IrType::Int,
         };
         assert_eq!(access, access.clone());
         assert!(format!("{access:?}").contains("Access"));

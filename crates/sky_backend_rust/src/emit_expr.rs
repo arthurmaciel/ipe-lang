@@ -65,6 +65,39 @@ fn expr_value_is_non_clone(expr: &Expr) -> bool {
     }
 }
 
+/// Is `ty` a Rust type that is UNCONDITIONALLY `Copy` in every emission this
+/// backend produces? Mirrors `sky_lower::lower::clone_class`'s `CopyLeaf`
+/// classification exactly (kept duplicated across the crate boundary per this
+/// file's established convention — see [`pat_bound_symbols`]'s doc comment).
+///
+/// Deliberately conservative: a `Generic(_)` type parameter is bounded only by
+/// `Clone` (`emit_func` injects `Clone`, never `Copy`), so it must return
+/// `false` even though a caller might monomorphize it to a Copy type at some
+/// call site — the backend has no per-call-site visibility here. A user
+/// `Enum`/`Record` also returns `false`: synthesized enums/structs derive
+/// `Clone`, not `Copy`. `StreamWriter`/`WebSocketServer` are
+/// `#[derive(Clone, Copy)]` i64 id wrappers (`server_stream.rs` / websocket
+/// server), matching `clone_class`'s own `CopyLeaf` arm for them.
+///
+/// Used by the `Expr::Access` emission arm for #142/AUD-09's type-directed
+/// Copy elision — see
+/// `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §3.
+const fn ir_type_is_definitely_copy(ty: &IrType) -> bool {
+    matches!(
+        ty,
+        IrType::Int
+            | IrType::Float
+            | IrType::Bool
+            | IrType::Char
+            | IrType::Unit
+            | IrType::Order
+            | IrType::Decimal
+            | IrType::ErrorKind
+            | IrType::StreamWriter
+            | IrType::WebSocketServer
+    )
+}
+
 /// Collect every symbol a pattern binds (recursively) into `out`. Mirrors
 /// `sky_lower::pat_binds_symbol`'s traversal shape but gathers the full bound
 /// set in one pass rather than testing membership of one target.
@@ -287,36 +320,27 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
             then_: Box::new(clone_free_target(*then_, target)),
             else_: Box::new(clone_free_target(*else_, target)),
         },
-        Expr::Match(m) => {
-            let (scrutinee, arms) = m.into_parts();
-            let new_scrutinee = Box::new(clone_free_target(*scrutinee, target));
-            let new_arms = arms
-                .into_iter()
-                .map(|arm| {
-                    let binds = pat_binds_target(&arm.pat, target);
-                    let new_body = if binds {
-                        arm.body
+        Expr::Match(m) => Expr::Match(m.map_bodies(
+            |scrutinee| clone_free_target(scrutinee, target),
+            |pat, body, guard| {
+                let binds = pat_binds_target(pat, target);
+                let new_body = if binds {
+                    body
+                } else {
+                    clone_free_target(body, target)
+                };
+                // Preserve the #158 C2 guard, rewriting it too when the arm
+                // pattern does not bind `target`.
+                let new_guard = guard.map(|g| {
+                    if binds {
+                        g
                     } else {
-                        clone_free_target(arm.body, target)
-                    };
-                    // Preserve the #158 C2 guard, rewriting it too when the arm
-                    // pattern does not bind `target`.
-                    let new_guard = arm.guard.map(|g| {
-                        if binds {
-                            g
-                        } else {
-                            clone_free_target(g, target)
-                        }
-                    });
-                    Arm {
-                        pat: arm.pat,
-                        body: new_body,
-                        guard: new_guard,
+                        clone_free_target(g, target)
                     }
-                })
-                .collect();
-            Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms))
-        }
+                });
+                (new_body, new_guard)
+            },
+        )),
         Expr::Call { callee, args } => Expr::Call {
             callee,
             args: args
@@ -356,9 +380,14 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
                 .map(|(s, e)| (s, clone_free_target(e, target)))
                 .collect(),
         ),
-        Expr::Access { record, field } => Expr::Access {
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Expr::Access {
             record: Box::new(clone_free_target(*record, target)),
             field,
+            field_ty,
         },
         Expr::Update { record, fields } => Expr::Update {
             record: Box::new(clone_free_target(*record, target)),
@@ -628,34 +657,25 @@ fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
             then_: Box::new(substitute_var(*then_, target, replacement)),
             else_: Box::new(substitute_var(*else_, target, replacement)),
         },
-        Expr::Match(m) => {
-            let (scrutinee, arms) = m.into_parts();
-            let new_scrutinee = Box::new(substitute_var(*scrutinee, target, replacement));
-            let new_arms = arms
-                .into_iter()
-                .map(|arm| {
-                    let binds = pat_binds_target(&arm.pat, target);
-                    let new_body = if binds {
-                        arm.body
+        Expr::Match(m) => Expr::Match(m.map_bodies(
+            |scrutinee| substitute_var(scrutinee, target, replacement),
+            |pat, body, guard| {
+                let binds = pat_binds_target(pat, target);
+                let new_body = if binds {
+                    body
+                } else {
+                    substitute_var(body, target, replacement)
+                };
+                let new_guard = guard.map(|g| {
+                    if binds {
+                        g
                     } else {
-                        substitute_var(arm.body, target, replacement)
-                    };
-                    let new_guard = arm.guard.map(|g| {
-                        if binds {
-                            g
-                        } else {
-                            substitute_var(g, target, replacement)
-                        }
-                    });
-                    Arm {
-                        pat: arm.pat,
-                        body: new_body,
-                        guard: new_guard,
+                        substitute_var(g, target, replacement)
                     }
-                })
-                .collect();
-            Expr::Match(Match::from_parts_unchecked(new_scrutinee, new_arms))
-        }
+                });
+                (new_body, new_guard)
+            },
+        )),
         Expr::Call { callee, args } => Expr::Call {
             callee,
             args: args
@@ -695,9 +715,14 @@ fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
                 .map(|(s, e)| (s, substitute_var(e, target, replacement)))
                 .collect(),
         ),
-        Expr::Access { record, field } => Expr::Access {
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Expr::Access {
             record: Box::new(substitute_var(*record, target, replacement)),
             field,
+            field_ty,
         },
         Expr::Update { record, fields } => Expr::Update {
             record: Box::new(substitute_var(*record, target, replacement)),
@@ -1015,14 +1040,17 @@ fn emit_http_call(
 /// Handle Http builder kernel calls that emit inline struct construction or
 /// clone-and-reassign record updates.
 ///
-/// Returns `Some(emitted)` for the five pure builder kernels:
+/// Returns `Some(emitted)` for the eight pure builder kernels:
 ///
 /// * **`HttpDefaultRequest url`** — emits a struct literal with sensible
 ///   defaults: `method = "GET"`, `body = ""`, `headers = []`,
 ///   `timeout = 30000`, `followRedirects = true`, `maxRedirects = 10`.
 ///
 /// * **`HttpWithMethod m req`**, **`HttpWithTimeout t req`**,
-///   **`HttpWithBody b req`** — each emits a clone-and-reassign block
+///   **`HttpWithBody b req`**, **`HttpWithUrl u req`**,
+///   **`HttpWithFollowRedirects f req`**, **`HttpWithMaxRedirects n req`**
+///   (last three: Go parity, #33 §6.2) — each emits a clone-and-reassign
+///   block
 ///   (`{ let mut __sky_rec = (req).clone(); __sky_rec.field = val; __sky_rec }`)
 ///   matching the `emit_update` pattern so the source record is moved once.
 ///
@@ -1036,7 +1064,7 @@ fn emit_http_call(
 /// standard call path. Factored out of `emit_expr_at` to keep its stack frame
 /// small (same rationale as `emit_http_call`).
 #[inline(never)]
-#[allow(clippy::too_many_lines)] // 5 match arms × ~20 lines = inherently verbose but linear
+#[allow(clippy::too_many_lines)] // 8 match arms × ~20 lines = inherently verbose but linear
 fn emit_http_builder_call(
     ctx: &EmitCtx,
     callee: &Callee,
@@ -1050,7 +1078,10 @@ fn emit_http_builder_call(
         | KernelFn::HttpWithMethod
         | KernelFn::HttpWithTimeout
         | KernelFn::HttpWithBody
-        | KernelFn::HttpWithHeader),
+        | KernelFn::HttpWithHeader
+        | KernelFn::HttpWithUrl
+        | KernelFn::HttpWithFollowRedirects
+        | KernelFn::HttpWithMaxRedirects),
     ) = callee
     else {
         return Ok(None);
@@ -1135,6 +1166,57 @@ fn emit_http_builder_call(
                  __sky_rec.body = {b_s}; __sky_rec }}"
             )))
         }
+        KernelFn::HttpWithUrl => {
+            // withUrl : String -> HttpRequest -> HttpRequest (#33 §6.2)
+            let u = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithUrl expects 2 arguments (url, req)".to_owned(),
+            })?;
+            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithUrl expects 2 arguments (url, req)".to_owned(),
+            })?;
+            let u_s = emit_expr_at(ctx, u, indent, child, generics)?;
+            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({req_s}).clone(); \
+                 __sky_rec.url = {u_s}; __sky_rec }}"
+            )))
+        }
+        KernelFn::HttpWithFollowRedirects => {
+            // withFollowRedirects : Bool -> HttpRequest -> HttpRequest (#33 §6.2)
+            let f = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithFollowRedirects expects 2 arguments (flag, req)".to_owned(),
+            })?;
+            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithFollowRedirects expects 2 arguments (flag, req)".to_owned(),
+            })?;
+            let f_s = emit_expr_at(ctx, f, indent, child, generics)?;
+            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({req_s}).clone(); \
+                 __sky_rec.followRedirects = {f_s}; __sky_rec }}"
+            )))
+        }
+        KernelFn::HttpWithMaxRedirects => {
+            // withMaxRedirects : Int -> HttpRequest -> HttpRequest (#33 §6.2)
+            let n = args.first().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithMaxRedirects expects 2 arguments (n, req)".to_owned(),
+            })?;
+            let req = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::emit_http_builder_call",
+                detail: "HttpWithMaxRedirects expects 2 arguments (n, req)".to_owned(),
+            })?;
+            let n_s = emit_expr_at(ctx, n, indent, child, generics)?;
+            let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
+            Ok(Some(format!(
+                "{{ let mut __sky_rec = ({req_s}).clone(); \
+                 __sky_rec.maxRedirects = {n_s}; __sky_rec }}"
+            )))
+        }
         KernelFn::HttpWithHeader => {
             // withHeader : String -> String -> HttpRequest -> HttpRequest
             // PREPENDS (key, value) — matches Go reference `(k,v) :: req.headers`.
@@ -1159,7 +1241,7 @@ fn emit_http_builder_call(
             )))
         }
         // Unreachable: the guard at the top of this function constrains `k` to the
-        // five variants matched above. The `_ =>` arm keeps Rust's exhaustiveness
+        // eight variants matched above. The `_ =>` arm keeps Rust's exhaustiveness
         // checker satisfied without introducing a catch-all over the full `KernelFn`
         // set (which would violate the no-catch-all principle for the logic above).
         _ => Ok(None),
@@ -5553,24 +5635,36 @@ pub fn emit_expr_at(
         // `emit_expr_at`'s own stack frame small, so the depth guard — not a
         // native overflow — is what bounds a deep `BinOp`/`Call` spine.
         Expr::Record(fields) => emit_record(ctx, fields, indent, depth, generics),
-        Expr::Access { record, field } => {
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => {
             // Field access `<record>.<field>`. The base is parenthesised so a
             // record literal in record position (`{ ... }.field`) is never
             // misparsed; the field ident is keyword-mangled to match the struct.
             //
-            // `.clone()` is emitted unconditionally: Sky is a purely-functional
-            // language with value semantics, so every field read is logically a
-            // copy.  In Rust, a `Copy` field's `.clone()` compiles down to a
-            // bitwise copy (no heap allocation), so this is zero-cost for ints /
-            // bools / function pointers.  For heap-allocated types (String, Vec,
-            // user structs) the clone allocates, but it prevents partial-move
-            // errors when the same owner or field is accessed more than once in
-            // the same expression — a common pattern in Sky (e.g. `view` and
-            // `update` both read `model.someField`).  The Rust compiler will
-            // elide redundant clones under standard optimisation passes.
+            // Type-directed Copy elision (#142/AUD-09 — see
+            // `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md`
+            // §3): Sky is a purely-functional language with value semantics,
+            // so every field read is logically a copy.  A field whose solved
+            // type is UNCONDITIONALLY `Copy` in the emitted Rust (Int / Float
+            // / Bool / Char / Unit / Order / Decimal / ErrorKind / the Copy
+            // id-wrapper opaques) is read bare — the read IS the copy.  Every
+            // other field (heap-backed String / Vec / synthesized structs /
+            // generics) keeps `.clone()`: rustc does NOT elide a `.clone()`
+            // call on a heap type, and the clone is what prevents partial-move
+            // errors when the same owner or field is accessed more than once
+            // (e.g. `view` and `update` both read `model.someField`).  The
+            // audit's second half — last-use analysis to elide the clone on a
+            // heap field's FINAL read — is explicitly deferred (spec §3.5).
             let base = emit_expr_at(ctx, record, indent, child, generics)?;
             let field = ctx.emit_ident(*field)?;
-            Ok(format!("({base}).{field}.clone()"))
+            if ir_type_is_definitely_copy(field_ty) {
+                Ok(format!("({base}).{field}"))
+            } else {
+                Ok(format!("({base}).{field}.clone()"))
+            }
         }
         Expr::Update { record, fields } => {
             emit_update(ctx, record, fields, indent, depth, generics)
@@ -7221,6 +7315,134 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
     format!(": {}", traits.join(" + "))
 }
 
+/// Recursively elide a `Task.run` / `Task.perform` call in EVERY tail
+/// position of `expr`, returning the rewritten expression only when ALL tail
+/// leaves are such a call. `None` when even one tail leaf is not — a partial
+/// elision would leave some arms `Task<A>`-shaped and others
+/// `Result<E, A>`-shaped, which cannot render as one Rust `match`/`if` with a
+/// single type, so this is deliberately all-or-nothing.
+///
+/// Mirrors [`emit_func`]'s original flat single-call elision (a bare
+/// `Call(TaskRun, [inner])` whole-function body) generalised through the
+/// control-flow constructs that legally appear in a tail position: `Match`
+/// (`case`), `If`, and `Let` / `Destructure` (only their BODY is a tail
+/// position — the bound `value` is left untouched and un-recursed-into).
+/// `Match` is rebuilt via [`Match::from_parts_unchecked`]: only arm BODIES
+/// change here, never the arm patterns, so the exhaustiveness proof
+/// [`Match::new`] / [`Match::new_flat`] already ran stays valid.
+fn elide_task_run_tail(expr: &Expr) -> Option<Expr> {
+    match expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::TaskRun | KernelFn::TaskPerform),
+            args,
+        } => {
+            let [inner] = args.as_slice() else {
+                return None;
+            };
+            Some(inner.clone())
+        }
+        Expr::If { cond, then_, else_ } => {
+            let then_e = elide_task_run_tail(then_)?;
+            let else_e = elide_task_run_tail(else_)?;
+            Some(Expr::If {
+                cond: cond.clone(),
+                then_: Box::new(then_e),
+                else_: Box::new(else_e),
+            })
+        }
+        Expr::Let { name, value, body } => {
+            let body_e = elide_task_run_tail(body)?;
+            Some(Expr::Let {
+                name: *name,
+                value: value.clone(),
+                body: Box::new(body_e),
+            })
+        }
+        Expr::Destructure { binder, value, body } => {
+            let body_e = elide_task_run_tail(body)?;
+            Some(Expr::Destructure {
+                binder: binder.clone(),
+                value: value.clone(),
+                body: Box::new(body_e),
+            })
+        }
+        Expr::Match(m) => {
+            // Sealed rebuild via `try_map_bodies` (AUD-09): the scrutinee and
+            // every arm's pattern/guard pass through UNCHANGED (by
+            // construction, not by convention), so exhaustiveness is
+            // preserved with no re-derivation needed — only each arm's body
+            // is transformed, and any single arm declining the elision
+            // (`elide_task_run_tail` returning `None`) must fail the WHOLE
+            // match's elision, matching this function's existing `?`-based
+            // all-or-nothing contract on every other tail-position arm.
+            m.clone()
+                .try_map_bodies(Ok::<_, ()>, |_pat, body, guard| {
+                    let new_body = elide_task_run_tail(&body).ok_or(())?;
+                    Ok((new_body, guard))
+                })
+                .ok()
+                .map(Expr::Match)
+        }
+        // Every other expression shape is a genuine value in tail position
+        // (not a control-flow construct that merely forwards to a nested tail
+        // position), so it either IS the whole elidable call (handled above)
+        // or it is not elidable at all.
+        _ => None,
+    }
+}
+
+/// [`emit_func`]'s `sky_main` synchronous-body wrap decision.
+///
+/// When `sky_main` was NOT elided (its body is not — or not uniformly in
+/// every tail position — a `Task.run` call), the function currently returns
+/// its declared value type directly, but the entry-point epilogue calls
+/// `block_on(sky_main())`, which requires `sky_main` to return `SkyTask<A>`
+/// (an unevaluated future), never a resolved value.
+///
+/// Two declared-return shapes reach here, and BOTH wrap the body rather than
+/// change its VALUE — `sky_main`'s body already runs to completion
+/// synchronously either way (a bare `task_run()` call blocks in place); the
+/// wrap only reshapes the return type so `block_on` type-checks:
+///
+/// * `func.ret == Unit` — Sky CLI programs that use synchronous `task_run()`
+///   calls (instead of building a top-level Task pipeline). The caller wraps:
+///   `let _r = { <original body> }; task_succeed(())` — `sky_main` returns
+///   `SkyTask<()>`, discarding the body's (unit) value. Signalled by the
+///   returned `wrap_unit = true`.
+/// * `func.ret == Result(_, A)` with elision declined — the argv-dispatch
+///   idiom's MIXED-arm sibling gap (adversarial-review Finding B): some
+///   `case` tail leaves call `Task.run` (blocks synchronously, producing a
+///   real `Result e a`), OTHER tail leaves are a plain `Result`-typed
+///   expression with no `Task.run` at all (`Err e -> Err e` in a
+///   validate-then-run idiom, e.g. `case validate () of Err e -> Err e; Ok
+///   cfg -> app cfg |> Task.run`). `elide_task_run_tail` correctly declines a
+///   partial elision (mismatched Task/Result arm shapes cannot render as one
+///   `match` of a single type) — but the body AS A WHOLE already evaluates
+///   synchronously to one uniform `Result e a`. The caller wraps:
+///   `task_from_result({ <original body> })` — `sky_main` returns `SkyTask<A>`,
+///   an ALREADY-RESOLVED future carrying the body's actual computed
+///   `Ok`/`Err`, so `block_on` unwraps it back to the exact `SkyResult<E, A>`
+///   the un-wrapped body would have produced directly; `fn main`'s
+///   `Ok(_)`/`Err(e)` epilogue match sees identical values. Signalled by
+///   `Some(Task(ok_ty))` in the returned `Option`.
+///
+/// Returns `(wrap_unit, wrap_result_ok_ty)` — at most one is ever set (`Unit`
+/// and `Result` are disjoint [`IrType`] shapes).
+fn sky_main_wrap_decision(
+    name: &str,
+    elided_ret: Option<&IrType>,
+    func_ret: &IrType,
+) -> (bool, Option<IrType>) {
+    if name != "sky_main" || elided_ret.is_some() {
+        return (false, None);
+    }
+    match func_ret {
+        IrType::Unit => (true, None),
+        IrType::Result(_err_ty, ok_ty) => (false, Some(IrType::Task(ok_ty.clone()))),
+        _ => (false, None),
+    }
+}
+
 /// Emit a whole function item, including its trailing newline.
 ///
 /// Shape: `pub fn <name>[<generics>](<params>) -> <ret> {\n    <body>\n}\n`. A
@@ -7243,39 +7465,46 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // to return `SkyTask<A>` (an unevaluated future), NOT `SkyResult<E, A>`.
     // Elide the outer `task_run(...)` wrapper: use the inner task expression as
     // the body and convert the return type from `Result(Error, A)` to `Task(A)`.
-    let (body_expr, elided_ret): (&Expr, Option<IrType>) = if name == "sky_main"
-        && let Expr::Call {
-            callee: Callee::Kernel(k),
-            args,
-        } = &func.body
-        && matches!(k, KernelFn::TaskRun | KernelFn::TaskPerform)
-        && let [inner] = args.as_slice()
+    //
+    // This is not always a FLAT `Call(TaskRun, …)` body — the Sky.Tui / Sky.Live
+    // `argv`-dispatch idiom branches on `System.args` before picking which app to
+    // run, e.g. `main = case List.head argsList of Just "live" -> Live.app cfg
+    // |> Task.run; _ -> Tui.app cfg |> Task.run`. Every arm still tail-calls
+    // `Task.run`, so the SAME elision must apply — otherwise `sky_main` keeps
+    // its `SkyResult<E, A>` return type and `block_on(sky_main())` mismatches
+    // exactly as the flat case would (a real SEAL violation found on
+    // `examples/24-tui-kitchen-sink`, BACKLOG "24-tui-kitchen-sink").
+    // `elide_task_run_tail` recurses through every tail-position control-flow
+    // construct (`Match` / `If` / `Let` / `Destructure`) and elides ONLY when
+    // EVERY leaf in tail position is a `Task.run` / `Task.perform` call — a
+    // partial elision is never produced, so the rewritten body always has a
+    // single uniform `Task<A>` shape.
+    let elided: Option<(Expr, IrType)> = if name == "sky_main"
         && let IrType::Result(_, ok_ty) = &func.ret
     {
-        (inner, Some(IrType::Task(ok_ty.clone())))
-    } else {
-        (&func.body, None)
-    };
-
-    // ── sky_main synchronous-body wrap ────────────────────────────────────────
-    // When sky_main was NOT elided (its body is not a bare Task.run call) AND
-    // the declared return type is `()`, the function currently returns `()` but
-    // the entry-point epilogue calls `block_on(sky_main())`, which requires
-    // `sky_main` to return `SkyTask<A>`.
-    //
-    // Sky CLI programs that use synchronous `task_run()` calls (instead of
-    // building a top-level Task pipeline) fall here.  Wrap the body:
-    //   let _r = { <original body> };
-    //   task_succeed(())
-    // so sky_main returns `SkyTask<()>` — block_on sees a resolved future and
-    // the synchronous task_run() calls have already run during sky_main().
-    let sky_main_wrap = name == "sky_main" && elided_ret.is_none() && func.ret == IrType::Unit;
-    let unit_task_owned: Option<IrType> = if sky_main_wrap {
-        Some(IrType::Task(Box::new(IrType::Unit)))
+        elide_task_run_tail(&func.body).map(|body| (body, IrType::Task(ok_ty.clone())))
     } else {
         None
     };
-    let ret_ty: &IrType = unit_task_owned
+    let (body_expr, elided_ret): (&Expr, Option<IrType>) = match &elided {
+        Some((body, ret)) => (body, Some(ret.clone())),
+        None => (&func.body, None),
+    };
+
+    // ── sky_main synchronous-body wrap ────────────────────────────────────────
+    // When sky_main was NOT elided, `block_on(sky_main())` still needs
+    // `SkyTask<A>`. See `sky_main_wrap_decision`'s doc comment for the full
+    // rationale (the CLI `task_run()`-calls idiom AND Finding B's mixed-arm
+    // sibling gap).
+    let (sky_main_wrap_unit, sky_main_wrap_result_ok_ty) =
+        sky_main_wrap_decision(&name, elided_ret.as_ref(), &func.ret);
+    let sky_main_wrap = sky_main_wrap_unit || sky_main_wrap_result_ok_ty.is_some();
+    let wrapped_task_owned: Option<IrType> = if sky_main_wrap_unit {
+        Some(IrType::Task(Box::new(IrType::Unit)))
+    } else {
+        sky_main_wrap_result_ok_ty
+    };
+    let ret_ty: &IrType = wrapped_task_owned
         .as_ref()
         .unwrap_or_else(|| elided_ret.as_ref().unwrap_or(&func.ret));
 
@@ -7355,10 +7584,18 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // falls through), so it unifies with any `-> R` — no `break value`. A
     // non-`TailLoop` body (the common case) routes to the ordinary value emitter,
     // which is exhaustive and fail-closed for any stray TCO node.
-    let body = if sky_main_wrap {
-        // Wrap the synchronous body so sky_main returns SkyTask<()>.
+    let body = if sky_main_wrap_unit {
+        // Wrap the synchronous body so sky_main returns SkyTask<()>; the
+        // body's own (unit) value is discarded, only its side effects matter.
         let inner = emit_expr(ctx, body_expr, 1, generics)?;
         format!("let _r = {{ {inner} }};\n    task_succeed(())")
+    } else if sky_main_wrap {
+        // Mixed-arm Task.run-elision-declined wrap (Finding B): the body
+        // already evaluates synchronously to a `Result e a` — carry that
+        // ACTUAL value into an already-resolved `SkyTask<a>` rather than
+        // discarding it, so `fn main`'s Ok/Err match sees the real outcome.
+        let inner = emit_expr(ctx, body_expr, 1, generics)?;
+        format!("task_from_result({{ {inner} }})")
     } else {
         match body_expr {
             Expr::TailLoop {
