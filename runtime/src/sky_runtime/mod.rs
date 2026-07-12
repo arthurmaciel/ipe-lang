@@ -114,9 +114,13 @@ pub use uuid_kernel::*;
 pub mod secret;
 pub use secret::*;
 
-// Canonical HTTP header-name casing, shared by Sky.Live and Sky.Http.Server.
-// `live` implies `server`, so gating on `server` covers both request paths.
-#[cfg(feature = "server")]
+// Canonical HTTP header-name casing, shared by Sky.Live, Sky.Http.Server AND
+// the outbound `http_client` response path (#33 §6.1 — `http_client` does NOT
+// imply `server`, so `server`-only gating would break an `http_client`-only
+// build). Gated on the union of its consumers; a default-features build
+// omits it (dead code otherwise). The EMITTED project's `mod.rs` declares it
+// unconditionally (base module set — `http_client` is always emitted).
+#[cfg(any(feature = "server", feature = "http_client"))]
 pub mod http_header;
 #[cfg(feature = "server")]
 pub mod server;

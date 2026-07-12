@@ -647,7 +647,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // (not the standard callee_name path) because they need a `task_map`
         // conversion closure; these names are still registered here so
         // `kernel_name` is total over all KernelFn variants (no _ catch-all).
-        // The five builder kernels (`HttpDefaultRequest` / `HttpWith*`) likewise
+        // The eight builder kernels (`HttpDefaultRequest` / `HttpWith*`) likewise
         // emit through `emit_http_builder_call` rather than the standard
         // `callee_name` path; their entries here keep the function total.
         KernelFn::HttpGet => "http_get",
@@ -659,6 +659,9 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HttpWithTimeout => "http_with_timeout",
         KernelFn::HttpWithBody => "http_with_body",
         KernelFn::HttpWithHeader => "http_with_header",
+        KernelFn::HttpWithUrl => "http_with_url",
+        KernelFn::HttpWithFollowRedirects => "http_with_follow_redirects",
+        KernelFn::HttpWithMaxRedirects => "http_with_max_redirects",
         // ── Db kernels (M5b-db) ─────────────────────────────────────────────
         // `DbExec`/`DbQuery`/`DbQueryDecode` → `db_exec_params` / `db_query_params` /
         // `db_query_decode_params`.  The Sky surface type is polymorphic
@@ -1278,6 +1281,15 @@ mod tests {
         assert_eq!(kernel_name(KernelFn::HttpWithTimeout), "http_with_timeout");
         assert_eq!(kernel_name(KernelFn::HttpWithBody), "http_with_body");
         assert_eq!(kernel_name(KernelFn::HttpWithHeader), "http_with_header");
+        assert_eq!(kernel_name(KernelFn::HttpWithUrl), "http_with_url");
+        assert_eq!(
+            kernel_name(KernelFn::HttpWithFollowRedirects),
+            "http_with_follow_redirects"
+        );
+        assert_eq!(
+            kernel_name(KernelFn::HttpWithMaxRedirects),
+            "http_with_max_redirects"
+        );
     }
 
     #[test]
