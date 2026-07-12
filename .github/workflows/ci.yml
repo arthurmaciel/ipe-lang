@@ -102,6 +102,21 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run -p sky-runtime-rust --features full
 
+  # Scoped deliberately, not exhaustively. All 6 targets are
+  # `#![forbid(unsafe_code)]`, so Miri's value here is catching UB triggered
+  # indirectly through a DEPENDENCY's own `unsafe` (interning/IR/union-find
+  # data structures are exactly the kind of code that leans on library
+  # invariants) plus Stacked/Tree-Borrows aliasing violations, not scanning
+  # for a nonexistent `unsafe` block of ours. `sky_db` (the salsa
+  # incremental-compilation database — the other candidate with genuinely
+  # complex invariants, per docs/architecture/ci-and-hosting.md §3.5) was
+  # evaluated and rejected: `cargo +nightly miri test -p sky_db` timed out
+  # after 280s on the FIRST of 3 tests (salsa's internal thread-pool/
+  # generation-counter machinery is impractical under Miri's interpretation
+  # overhead). `skyc`/`sky_canon`/`sky_parse`/`sky_backend`/`runtime` are
+  # out of scope for a different reason: they spawn real subprocesses / do
+  # real I/O (E2E tests, `sky_backend::cache`'s on-disk cache, the runtime's
+  # HTTP/DB/websocket kernels), which Miri can't interpret at all.
   miri:
     runs-on: ubuntu-latest
     steps:
