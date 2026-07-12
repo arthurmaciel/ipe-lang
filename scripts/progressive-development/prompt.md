@@ -20,12 +20,12 @@ force-push, rewrite history, or touch `main`/`master` outside the progressive-de
 ## Read state first (these are volatile — read them every time)
 1. `git rev-parse --abbrev-ref HEAD` — confirm you are on a `progressive-development/*` branch. If not, STOP and write an escalation (see below); do nothing else.
 2. `git status --short` — the tree MUST be clean. If dirty AND you are the single writer on a shared sequential checkout (autopilot.sh), run `git stash` (a prior iteration left a mess) and note it in the log. If dirty AND you are one of several PARALLEL orchestrated lanes (each in its own worktree), do NOT `git stash` — `refs/stash` is SHARED across every worktree of one repo, so concurrent lanes stashing at the same time can collide and silently swap/lose each other's diffs. A freshly-created lane worktree should never be dirty at start; treat it as a worktree-isolation violation and abort/escalate instead.
-3. `BACKLOG.md` (repo root) — the work list.
+3. `scripts/progressive-development/backlog.sh show --status pending` — the work list (JSONL-backed, no markdown mirror).
 4. `docs/architecture/progressive-development-log.md` — what prior iterations did (outcomes + per-item attempt counts).
 5. `docs/architecture/progressive-development-escalations.md` — items already escalated; do NOT retry these.
 
 ## Pick exactly ONE item — eligibility (all must hold)
-- It is a row of the root `BACKLOG.md` table whose **Notes** column contains the literal tag **[progdev-safe]**.
+- It is a row in `scripts/progressive-development/backlog.jsonl` whose **notes** field contains the literal tag **[progdev-safe]**.
 - It is **mechanical**: wire a known-missing kernel across the layers, fix a fixture, register a module — work with a clear Haskell/Go reference (`../sky`, READ-ONLY). NOT a design decision.
 - It is **NOT** in any of these excluded classes → if the best-available item is one of these, escalate it and pick another, or if none remain, exit with `PROGDEV: DRY`:
   - Security tier (Secret type, SqlFragment, CSRF, fuzzer — anything touching auth/secrets/SQL/crypto).
@@ -65,7 +65,7 @@ freshly-built `skyc` and confirm its original diagnostic is gone (note the
 NEW blocker for the backlog).
 
 ## Land or discard — then log — then exit
-- **Green** → update `BACKLOG.md` (delete the row, or update its Notes to record the new blocker), `git add -A`, `git commit` with a message stating root cause + fix + new blocker. Append a `LANDED` line to `progressive-development-log.md`. Exit `PROGDEV: LANDED <sha>`.
+- **Green** → `scripts/progressive-development/backlog.sh close <id> --done-at $(date +%F)` (or, if the item isn't fully closed, edit its `notes` field in the JSONL to record the new blocker), `git add -A`, `git commit` with a message stating root cause + fix + new blocker. Append a `LANDED` line to `progressive-development-log.md`. Exit `PROGDEV: LANDED <sha>`.
 - **Red** (gate failed, or you couldn't reach a clean fix) → `git reset --hard HEAD` (discard all changes — the pawl holds), append a `FAILED` line to `progressive-development-log.md` with the item id, the attempt number, and the CONCRETE reason/error (so the next iteration reads it and tries differently or hits the 3-attempt cap). Exit `PROGDEV: FAILED <item>`.
 - **Excluded/none eligible** → append an entry to `progressive-development-escalations.md` (item + why it's excluded + a fix sketch if you have one) and exit `PROGDEV: ESCALATED <item>`, or `PROGDEV: DRY` if there is genuinely no eligible mechanical work left.
 

@@ -7,15 +7,17 @@ durable plan of record: finish the compiler + backend + runtime first,
 then the parked FFI subsystem, then the post-completion program, then
 the longer-horizon standing work.
 
-**Pending work is mirrored in [`BACKLOG.md`](BACKLOG.md)** — the flat,
-pending-only SSOT table the progressive-development loop consumes. The
-eight canonical road-map phase names used in both files are defined
-here: **Sweep to green** · **Security hardening** · **CI, oracle &
-publish** · **Hardening follow-ups** · **FFI** · **Post-completion** ·
-**Longer-horizon** · **Designed targets**. Sections A (phases 1–4),
-B (FFI), C (Post-completion), D (Longer-horizon), and E (Designed
-targets) below carry the same rows, with a `Done at` column recording
-what has already landed.
+**Pending work lives in `scripts/progressive-development/backlog.jsonl`**
+(query via `scripts/progressive-development/backlog.sh list`/`show`) — the
+flat, pending-only SSOT the progressive-development loop reads/writes
+directly. No markdown mirror of it exists (dropped 2026-07-12 — the JSONL
+*is* the working data). The eight canonical road-map phase names used
+there are defined here: **Sweep to green** · **Security hardening** ·
+**CI, oracle & publish** · **Hardening follow-ups** · **FFI** ·
+**Post-completion** · **Longer-horizon** · **Designed targets**.
+Sections A (phases 1–4), B (FFI), C (Post-completion), D
+(Longer-horizon), and E (Designed targets) below carry the same rows,
+with a `Done at` column recording what has already landed.
 
 **Principles order.** security > correctness > soundness > efficiency
 > completeness > readability. Every decision below is resolved in
@@ -39,7 +41,7 @@ by two agents in a round), each behind the full non-negotiable gate
 are never skipped to save time; speed comes from partitioning, not from
 relaxing rigour. Mechanical, reference-backed items are additionally
 eligible for the autonomous progressive-development loop (rows tagged
-`[progdev-safe]` in `BACKLOG.md`).
+`[progdev-safe]` in `scripts/progressive-development/backlog.jsonl`).
 
 ---
 

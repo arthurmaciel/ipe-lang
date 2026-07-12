@@ -3,7 +3,8 @@
 **This file is the loop's COMPLETE instruction set.** The repo's large
 `CLAUDE.md` is written for interactive general-purpose work and is NOT your
 contract — this is. Where they conflict, follow this. Everything else you need
-is the root `BACKLOG.md` + the `../sky` reference + the code you touch.
+is `scripts/progressive-development/backlog.jsonl` (query via `backlog.sh`)
++ the `../sky` reference + the code you touch.
 
 (Distilled from `CLAUDE.md` §7 core-principles + §8 non-regression + the seal.
 If the human meant a different specific subset, they will edit this file.)
