@@ -1,0 +1,61 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+import Lib1
+import Lib2
+
+
+-- BACKLOG #165 regression (see `Lib1.sky` for the full incident writeup).
+-- File-backed SQLite DB (`Lib1.conn`) so every pool connection shares the
+-- same persisted database; `CREATE TABLE IF NOT EXISTS` + `DELETE FROM`
+-- keeps re-runs idempotent.
+--
+-- Exercises `Lib1.execOrLog` / `Lib1.queryOrLog` cross-module (from `Lib2`
+-- AND `Main`) at BOTH the empty list `[]` (the exact #165 trigger — DDL and
+-- a no-bind-params SELECT) and a non-empty `List SqlValue` (the typed
+-- mixed-param path). `args` stays `List SqlValue` at every non-empty call
+-- site so the fixture isolates the ONE variable #165 is actually about:
+-- empty vs. non-empty, not cross-call-site type diversity (a separate,
+-- already-covered concern — `tests/golden/m5b_db_poly_params`).
+--
+-- Expected output: "gadget,widget" (two rows, ordered by name).
+main =
+    let
+        -- (a) empty params — the #165 trigger.
+        _ =
+            Lib1.execOrLog
+                "Main.setup"
+                "CREATE TABLE IF NOT EXISTS items (id TEXT, name TEXT)"
+                []
+
+        _ =
+            Lib1.execOrLog
+                "Main.reset"
+                "DELETE FROM items"
+                []
+
+        -- List SqlValue, via Lib2 (cross-module).
+        _ =
+            Lib2.insertWidget
+
+        -- List SqlValue, called directly from Main (not through Lib2) —
+        -- proves `args` is genuinely reusable across DIFFERENT cross-module
+        -- call sites, not just Lib2's.
+        _ =
+            Lib1.execOrLog
+                "Main.insertGadget"
+                "INSERT INTO items (id, name) VALUES (?, ?)"
+                [ SqlString "2", SqlString "gadget" ]
+
+        -- (a) again — the SAME empty-params shape reading back.
+        rows =
+            Lib1.queryOrLog
+                "Main.getItems"
+                "SELECT name FROM items ORDER BY name"
+                []
+    in
+    println
+        (String.join ","
+            (List.map (\row -> Db.getString "name" row) rows)
+        )

@@ -185,7 +185,11 @@ fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSet<Symbol>) 
             body_free.remove(name);
             out.extend(body_free);
         }
-        Expr::Destructure { binder, value, body } => {
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
             collect_free_vars(value, out);
             let mut bound = std::collections::BTreeSet::new();
             pat_bound_symbols(binder, &mut bound);
@@ -302,7 +306,11 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
                 body: new_body,
             }
         }
-        Expr::Destructure { binder, value, body } => {
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
             let new_value = Box::new(clone_free_target(*value, target));
             let new_body = if pat_binds_target(&binder, target) {
                 body
@@ -423,7 +431,12 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
             effect: Box::new(clone_free_target(*effect, target)),
             rest: Box::new(clone_free_target(*rest, target)),
         },
-        Expr::Ctor { home, ty, variant, args } => Expr::Ctor {
+        Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args,
+        } => Expr::Ctor {
             home,
             ty,
             variant,
@@ -478,9 +491,7 @@ fn pat_binds_target(pat: &Pat, target: Symbol) -> bool {
 /// don't interfere with each other regardless of order (a `CloneVar` leaf is
 /// never re-matched by a later target's pass).
 fn clone_targets_in_expr(expr: Expr, targets: &std::collections::BTreeSet<Symbol>) -> Expr {
-    targets
-        .iter()
-        .fold(expr, |e, &t| clone_free_target(e, t))
+    targets.iter().fold(expr, |e, &t| clone_free_target(e, t))
 }
 
 /// Shadow-aware scan of `expr` for a `let`-bound `target`'s free occurrences,
@@ -519,8 +530,13 @@ fn scan_free_target_into(expr: &Expr, target: Symbol, count: &mut usize, has_clo
                 *has_clonevar = true;
             }
         }
-        Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::Str(_) | Expr::Char(_)
-        | Expr::Unit | Expr::FuncValue { .. } => {}
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => {}
         Expr::Ctor { args, .. } | Expr::Call { args, .. } | Expr::TailRecur { args } => {
             for a in args {
                 scan_free_target_into(a, target, count, has_clonevar);
@@ -536,7 +552,11 @@ fn scan_free_target_into(expr: &Expr, target: Symbol, count: &mut usize, has_clo
                 scan_free_target_into(body, target, count, has_clonevar);
             }
         }
-        Expr::Destructure { binder, value, body } => {
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
             scan_free_target_into(value, target, count, has_clonevar);
             if !pat_binds_target(binder, target) {
                 scan_free_target_into(body, target, count, has_clonevar);
@@ -639,7 +659,11 @@ fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
                 body: new_body,
             }
         }
-        Expr::Destructure { binder, value, body } => {
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
             let new_value = Box::new(substitute_var(*value, target, replacement));
             let new_body = if pat_binds_target(&binder, target) {
                 body
@@ -758,7 +782,12 @@ fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
             effect: Box::new(substitute_var(*effect, target, replacement)),
             rest: Box::new(substitute_var(*rest, target, replacement)),
         },
-        Expr::Ctor { home, ty, variant, args } => Expr::Ctor {
+        Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args,
+        } => Expr::Ctor {
             home,
             ty,
             variant,
@@ -1358,13 +1387,13 @@ fn emit_task_retry_call(
             // `exponentialBackoff maxAttempts baseMs` — exponential, kind=1.
             let n = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "sky_backend_rust::emit_task_retry_call",
-                detail:
-                    "TaskExponentialBackoff expects 2 arguments (maxAttempts, baseMs)".to_owned(),
+                detail: "TaskExponentialBackoff expects 2 arguments (maxAttempts, baseMs)"
+                    .to_owned(),
             })?;
             let ms = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "sky_backend_rust::emit_task_retry_call",
-                detail:
-                    "TaskExponentialBackoff expects 2 arguments (maxAttempts, baseMs)".to_owned(),
+                detail: "TaskExponentialBackoff expects 2 arguments (maxAttempts, baseMs)"
+                    .to_owned(),
             })?;
             let n_s = emit_expr_at(ctx, n, indent, child, generics)?;
             let ms_s = emit_expr_at(ctx, ms, indent, child, generics)?;
@@ -1436,13 +1465,11 @@ fn emit_task_retry_call(
             // `retryOn pred policy` / `withRetryOn pred policy` — move-update shouldRetry.
             let pred = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "sky_backend_rust::emit_task_retry_call",
-                detail: "TaskRetryOn/TaskWithRetryOn expects 2 arguments (pred, policy)"
-                    .to_owned(),
+                detail: "TaskRetryOn/TaskWithRetryOn expects 2 arguments (pred, policy)".to_owned(),
             })?;
             let policy = args.get(1).ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "sky_backend_rust::emit_task_retry_call",
-                detail: "TaskRetryOn/TaskWithRetryOn expects 2 arguments (pred, policy)"
-                    .to_owned(),
+                detail: "TaskRetryOn/TaskWithRetryOn expects 2 arguments (pred, policy)".to_owned(),
             })?;
             let pred_s = emit_expr_at(ctx, pred, indent, child, generics)?;
             let policy_s = emit_expr_at(ctx, policy, indent, child, generics)?;
@@ -1524,24 +1551,44 @@ fn emit_db_call(
     //
     // `project_params(s)` — `List a` → `Vec<SqlParam>`
     //
-    // Uses `sky_runtime::db::SqlParam::from` so the projection works for ANY
-    // Sky type that implements `From<T> for SqlParam`:
-    //   • `String` / `i64` / `f64` / `bool` — `From` impls live in the runtime
-    //     (`sky_runtime::db`).
-    //   • `StdDbSqlValue` (generated) — `From` impl emitted by
-    //     `sky_backend_rust::project::emit_db_projection_impls`.
+    // Maps via `Into::into` (NOT `SqlParam::from`) and collects into the
+    // EXPLICIT `Vec<sky_runtime::db::SqlParam>` (not `Vec<_>`), so the
+    // projection compiles both for a concrete element type AND for a still-
+    // generic one:
+    //   • `String` / `i64` / `f64` / `bool` / `StdDbSqlValue` — each has a
+    //     `From<T> for SqlParam` impl in the runtime (the generated one is
+    //     emitted by `sky_backend_rust::project::emit_db_projection_impls`);
+    //     std's blanket `impl<T, U: From<T>> Into<U> for T` makes `.into()`
+    //     resolve identically to the old `SqlParam::from(x)` call for every
+    //     one of them — no behaviour change for a concrete element type.
+    //   • A still-generic `T{n}` (a Sky wrapper function forwarding its own
+    //     `List a` parameter into `Db.exec` / `Db.query` / `Db.queryDecode`,
+    //     e.g. `Database.exec label sql args` in `examples/17-skymon`) can
+    //     only be bounded via the STANDARD `<T{n}: Trait>` generic-parameter
+    //     list — a `where SqlParam: From<T{n}>` clause bounds the WRONG type
+    //     (`SqlParam`, not `T{n}`) and cannot be expressed that way. The
+    //     lowerer's `BoundSet::SQL_PARAM` (#165) instead emits `T{n}: …
+    //     Into<sky_runtime::db::SqlParam>` (see `render_bounds`), which
+    //     `.into()` — but NOT `SqlParam::from` — can actually call inside a
+    //     still-generic function body.
     // This mirrors `exec : Db -> String -> List a -> Task Error Int` (polymorphic
     // `List a`, not fixed to `List SqlValue`).
     let project_params = |s: &str| {
         // Empty-list fast path: `Vec::new()` has no elements, so Rust cannot
-        // infer which `From<T> for SqlParam` impl to use — the turbofish form
-        // names the element type explicitly and skips the map/collect entirely.
+        // infer which `Into<SqlParam>` impl to use — the turbofish form names
+        // the element type explicitly and skips the map/collect entirely.
+        // Kept as defence-in-depth (#165's type-checker defaulting normally
+        // gives an empty Sky `[]` literal a concrete `SqlValue` element type
+        // before it ever reaches this closure — see the `sql_param` arm of
+        // the numeric-defaulting loop in `sky_types::lib` — but a bare
+        // `Vec::new()` remains a possible input from any other empty-list
+        // source, e.g. a Sky-level `List.filter (always False) xs`).
         if s == "Vec::new()" {
             return "Vec::<sky_runtime::db::SqlParam>::new()".to_string();
         }
         format!(
-            "({s}).into_iter().map(sky_runtime::db::SqlParam::from)\
-             .collect::<Vec<_>>()"
+            "({s}).into_iter().map(::core::convert::Into::into)\
+             .collect::<Vec<sky_runtime::db::SqlParam>>()"
         )
     };
     // `project_fields(s)` — `List (String, SqlField)` → `Vec<(String, Option<SqlParam>)>`
@@ -2011,15 +2058,13 @@ fn emit_tea_call(
         // ── M6 reserved: NOT emittable yet ───────────────────────────────────────
         // If a program somehow reaches one of these kernels through lower_callee
         // routing, that is a compiler invariant violation — hard error.
-        KernelFn::PubSubPublish | KernelFn::PubSubPublishNoEcho => {
-            Err(Diagnostic::CompilerBug {
-                where_: "sky_backend_rust::emit_tea_call",
-                detail: format!(
-                    "M6-reserved TEA kernel {k:?} reached emit — \
+        KernelFn::PubSubPublish | KernelFn::PubSubPublishNoEcho => Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_tea_call",
+            detail: format!(
+                "M6-reserved TEA kernel {k:?} reached emit — \
                      PubSub qualifier not yet in QUALIFIERS"
-                ),
-            })
-        }
+            ),
+        }),
         // Any other `k.is_tea()` variant not listed above is a new wired variant
         // that needs an explicit arm.  The `is_tea()` guard at the top of this
         // function means this arm is a hard compile-time-visible gap rather than
@@ -2573,7 +2618,9 @@ fn emit_ui_call(
                 });
             };
             let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            Ok(Some(format!("sky_runtime::ui::helpers::ui_on_left_({elem})")))
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_left_({elem})"
+            )))
         }
 
         // `Ui.onRight : Element msg -> Attribute msg`
@@ -2585,7 +2632,9 @@ fn emit_ui_call(
                 });
             };
             let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            Ok(Some(format!("sky_runtime::ui::helpers::ui_on_right_({elem})")))
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_on_right_({elem})"
+            )))
         }
 
         // `Ui.inFront : Element msg -> Attribute msg`
@@ -2597,7 +2646,9 @@ fn emit_ui_call(
                 });
             };
             let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            Ok(Some(format!("sky_runtime::ui::helpers::ui_in_front_({elem})")))
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_in_front_({elem})"
+            )))
         }
 
         // `Ui.behind : Element msg -> Attribute msg`
@@ -2609,7 +2660,9 @@ fn emit_ui_call(
                 });
             };
             let elem = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            Ok(Some(format!("sky_runtime::ui::helpers::ui_behind_({elem})")))
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_behind_({elem})"
+            )))
         }
 
         // `Ui.button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } -> Element msg`
@@ -3252,10 +3305,7 @@ fn emit_ui_call(
             let [rec_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::BorderInnerShadow",
-                    detail: format!(
-                        "Border.innerShadow requires 1 argument, got {}",
-                        args.len()
-                    ),
+                    detail: format!("Border.innerShadow requires 1 argument, got {}", args.len()),
                 });
             };
             let Expr::Record(fields) = rec_e else {
@@ -3361,15 +3411,13 @@ fn emit_ui_call(
         // ── #76 Tier 1: extended Std.Ui / Font / Background / Border builders ──
 
         // Ui namespace — nullary aspect-ratio attrs
-        KernelFn::UiSquare => {
-            Ok(Some("sky_runtime::ui::helpers::ui_square_()".to_owned()))
-        }
-        KernelFn::UiWidescreen => {
-            Ok(Some("sky_runtime::ui::helpers::ui_widescreen_()".to_owned()))
-        }
-        KernelFn::UiCinemascope => {
-            Ok(Some("sky_runtime::ui::helpers::ui_cinemascope_()".to_owned()))
-        }
+        KernelFn::UiSquare => Ok(Some("sky_runtime::ui::helpers::ui_square_()".to_owned())),
+        KernelFn::UiWidescreen => Ok(Some(
+            "sky_runtime::ui::helpers::ui_widescreen_()".to_owned(),
+        )),
+        KernelFn::UiCinemascope => Ok(Some(
+            "sky_runtime::ui::helpers::ui_cinemascope_()".to_owned(),
+        )),
 
         // `Ui.name : String -> Attribute msg`
         KernelFn::UiName => {
@@ -3403,10 +3451,7 @@ fn emit_ui_call(
             let [s_e, respect_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::UiTransitionRaw",
-                    detail: format!(
-                        "Ui.transitionRaw requires 2 arguments, got {}",
-                        args.len()
-                    ),
+                    detail: format!("Ui.transitionRaw requires 2 arguments, got {}", args.len()),
                 });
             };
             let s = emit_expr_at(ctx, s_e, indent, child, generics)?;
@@ -3421,10 +3466,7 @@ fn emit_ui_call(
             let [cols_e, rows_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::UiGridTracksRaw",
-                    detail: format!(
-                        "Ui.gridTracksRaw requires 2 arguments, got {}",
-                        args.len()
-                    ),
+                    detail: format!("Ui.gridTracksRaw requires 2 arguments, got {}", args.len()),
                 });
             };
             let cols = emit_expr_at(ctx, cols_e, indent, child, generics)?;
@@ -3453,10 +3495,7 @@ fn emit_ui_call(
             let [w_e, h_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::UiAspectRatioWH",
-                    detail: format!(
-                        "Ui.aspectRatioWH requires 2 arguments, got {}",
-                        args.len()
-                    ),
+                    detail: format!("Ui.aspectRatioWH requires 2 arguments, got {}", args.len()),
                 });
             };
             let w = emit_expr_at(ctx, w_e, indent, child, generics)?;
@@ -3471,10 +3510,7 @@ fn emit_ui_call(
             let [k_e, v_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::UiHtmlAttribute",
-                    detail: format!(
-                        "Ui.htmlAttribute requires 2 arguments, got {}",
-                        args.len()
-                    ),
+                    detail: format!("Ui.htmlAttribute requires 2 arguments, got {}", args.len()),
                 });
             };
             let k = emit_expr_at(ctx, k_e, indent, child, generics)?;
@@ -3485,26 +3521,16 @@ fn emit_ui_call(
         }
 
         // #154: Breakpoint constants — `Ui.mobile` / `Ui.tablet` / … : String (0-arity)
-        KernelFn::UiMobile => {
-            Ok(Some("sky_runtime::ui::helpers::ui_mobile_()".to_owned()))
-        }
-        KernelFn::UiTablet => {
-            Ok(Some("sky_runtime::ui::helpers::ui_tablet_()".to_owned()))
-        }
-        KernelFn::UiDesktop => {
-            Ok(Some("sky_runtime::ui::helpers::ui_desktop_()".to_owned()))
-        }
-        KernelFn::UiDarkMode => {
-            Ok(Some("sky_runtime::ui::helpers::ui_dark_mode_()".to_owned()))
-        }
-        KernelFn::UiLightMode => {
-            Ok(Some("sky_runtime::ui::helpers::ui_light_mode_()".to_owned()))
-        }
-        KernelFn::UiReducedMotion => {
-            Ok(Some(
-                "sky_runtime::ui::helpers::ui_reduced_motion_()".to_owned(),
-            ))
-        }
+        KernelFn::UiMobile => Ok(Some("sky_runtime::ui::helpers::ui_mobile_()".to_owned())),
+        KernelFn::UiTablet => Ok(Some("sky_runtime::ui::helpers::ui_tablet_()".to_owned())),
+        KernelFn::UiDesktop => Ok(Some("sky_runtime::ui::helpers::ui_desktop_()".to_owned())),
+        KernelFn::UiDarkMode => Ok(Some("sky_runtime::ui::helpers::ui_dark_mode_()".to_owned())),
+        KernelFn::UiLightMode => Ok(Some(
+            "sky_runtime::ui::helpers::ui_light_mode_()".to_owned(),
+        )),
+        KernelFn::UiReducedMotion => Ok(Some(
+            "sky_runtime::ui::helpers::ui_reduced_motion_()".to_owned(),
+        )),
 
         // #76: PseudoClass constants — `Ui.hover` / `Ui.focus` / … : PseudoClass (0-arity)
         KernelFn::UiHover => Ok(Some("sky_runtime::ui::helpers::ui_hover_()".to_owned())),
@@ -3513,9 +3539,7 @@ fn emit_ui_call(
             "sky_runtime::ui::helpers::ui_focus_visible_()".to_owned(),
         )),
         KernelFn::UiActive => Ok(Some("sky_runtime::ui::helpers::ui_active_()".to_owned())),
-        KernelFn::UiDisabled => Ok(Some(
-            "sky_runtime::ui::helpers::ui_disabled_()".to_owned(),
-        )),
+        KernelFn::UiDisabled => Ok(Some("sky_runtime::ui::helpers::ui_disabled_()".to_owned())),
 
         // `Ui.onPseudo : PseudoClass -> List (Attribute msg) -> Attribute msg` (#76)
         // — generic escape hatch: folds `attrs` into one CSS rules-string and
@@ -3541,10 +3565,7 @@ fn emit_ui_call(
             let [q_e, a_e, el_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::UiBreakpoint",
-                    detail: format!(
-                        "Ui.breakpoint requires 3 arguments, got {}",
-                        args.len()
-                    ),
+                    detail: format!("Ui.breakpoint requires 3 arguments, got {}", args.len()),
                 });
             };
             let q = emit_expr_at(ctx, q_e, indent, child, generics)?;
@@ -3566,10 +3587,7 @@ fn emit_ui_call(
             let [q_e, a_e, el_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::UiMediaQuery",
-                    detail: format!(
-                        "Ui.mediaQuery requires 3 arguments, got {}",
-                        args.len()
-                    ),
+                    detail: format!("Ui.mediaQuery requires 3 arguments, got {}", args.len()),
                 });
             };
             let q = emit_expr_at(ctx, q_e, indent, child, generics)?;
@@ -3643,25 +3661,22 @@ fn emit_ui_call(
         }
 
         // Border namespace — nullary style attrs
-        KernelFn::BorderSolid => {
-            Ok(Some("sky_runtime::ui::helpers::ui_border_solid_()".to_owned()))
-        }
-        KernelFn::BorderDashed => {
-            Ok(Some("sky_runtime::ui::helpers::ui_border_dashed_()".to_owned()))
-        }
-        KernelFn::BorderDotted => {
-            Ok(Some("sky_runtime::ui::helpers::ui_border_dotted_()".to_owned()))
-        }
+        KernelFn::BorderSolid => Ok(Some(
+            "sky_runtime::ui::helpers::ui_border_solid_()".to_owned(),
+        )),
+        KernelFn::BorderDashed => Ok(Some(
+            "sky_runtime::ui::helpers::ui_border_dashed_()".to_owned(),
+        )),
+        KernelFn::BorderDotted => Ok(Some(
+            "sky_runtime::ui::helpers::ui_border_dotted_()".to_owned(),
+        )),
 
         // Border pseudo-class attrs
         KernelFn::BorderHoverColor => {
             let [c_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::BorderHoverColor",
-                    detail: format!(
-                        "Border.hoverColor requires 1 argument, got {}",
-                        args.len()
-                    ),
+                    detail: format!("Border.hoverColor requires 1 argument, got {}", args.len()),
                 });
             };
             let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
@@ -3673,10 +3688,7 @@ fn emit_ui_call(
             let [c_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::BorderFocusColor",
-                    detail: format!(
-                        "Border.focusColor requires 1 argument, got {}",
-                        args.len()
-                    ),
+                    detail: format!("Border.focusColor requires 1 argument, got {}", args.len()),
                 });
             };
             let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
@@ -3688,10 +3700,7 @@ fn emit_ui_call(
             let [c_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::BorderActiveColor",
-                    detail: format!(
-                        "Border.activeColor requires 1 argument, got {}",
-                        args.len()
-                    ),
+                    detail: format!("Border.activeColor requires 1 argument, got {}", args.len()),
                 });
             };
             let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
@@ -3703,10 +3712,7 @@ fn emit_ui_call(
             let [n_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::BorderHoverWidth",
-                    detail: format!(
-                        "Border.hoverWidth requires 1 argument, got {}",
-                        args.len()
-                    ),
+                    detail: format!("Border.hoverWidth requires 1 argument, got {}", args.len()),
                 });
             };
             let n = emit_expr_at(ctx, n_e, indent, child, generics)?;
@@ -3777,10 +3783,7 @@ fn emit_ui_call(
             let [v_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::FontLetterSpacing",
-                    detail: format!(
-                        "Font.letterSpacing requires 1 argument, got {}",
-                        args.len()
-                    ),
+                    detail: format!("Font.letterSpacing requires 1 argument, got {}", args.len()),
                 });
             };
             let v = emit_expr_at(ctx, v_e, indent, child, generics)?;
@@ -3870,10 +3873,7 @@ fn emit_ui_call(
             let [c_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::FontDisabledColor",
-                    detail: format!(
-                        "Font.disabledColor requires 1 argument, got {}",
-                        args.len()
-                    ),
+                    detail: format!("Font.disabledColor requires 1 argument, got {}", args.len()),
                 });
             };
             let c = emit_expr_at(ctx, c_e, indent, child, generics)?;
@@ -4009,15 +4009,11 @@ fn emit_ui_call(
                 });
             };
             let d = emit_expr_at(ctx, d_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "sky_runtime::ui::helpers::ui_describe_({d})"
-            )))
+            Ok(Some(format!("sky_runtime::ui::helpers::ui_describe_({d})")))
         }
 
         // Nullary `Description` constructors (arity 0).
-        KernelFn::UiDescMain => Ok(Some(
-            "sky_runtime::ui::helpers::ui_desc_main_()".to_owned(),
-        )),
+        KernelFn::UiDescMain => Ok(Some("sky_runtime::ui::helpers::ui_desc_main_()".to_owned())),
         KernelFn::UiDescNavigation => Ok(Some(
             "sky_runtime::ui::helpers::ui_desc_navigation_()".to_owned(),
         )),
@@ -4063,7 +4059,6 @@ fn emit_ui_call(
         }
 
         // ── Std.Ui.Input (#124) — Label constructors ──────────────────────────
-
         KernelFn::InputLabelAbove => {
             let [attrs_e, el_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -4148,7 +4143,6 @@ fn emit_ui_call(
         }
 
         // ── Std.Ui.Input (#124) — text-family controls ────────────────────────
-
         KernelFn::InputText
         | KernelFn::InputEmail
         | KernelFn::InputUsername
@@ -4158,7 +4152,10 @@ fn emit_ui_call(
             let [attrs_e, cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::InputText",
-                    detail: format!("Input.text/email/… requires 2 arguments, got {}", args.len()),
+                    detail: format!(
+                        "Input.text/email/… requires 2 arguments, got {}",
+                        args.len()
+                    ),
                 });
             };
             let Expr::Record(fields) = cfg_e else {
@@ -4276,8 +4273,7 @@ fn emit_ui_call(
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::InputCheckbox",
-                    detail: "Input.checkbox cfg must be an inline record literal in Phase 0"
-                        .into(),
+                    detail: "Input.checkbox cfg must be an inline record literal in Phase 0".into(),
                 });
             };
             let on_change_e = lookup_field(
@@ -4325,8 +4321,7 @@ fn emit_ui_call(
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::InputSlider",
-                    detail: "Input.slider cfg must be an inline record literal in Phase 0"
-                        .into(),
+                    detail: "Input.slider cfg must be an inline record literal in Phase 0".into(),
                 });
             };
             let on_change_e = lookup_field(
@@ -4451,8 +4446,7 @@ fn emit_ui_call(
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "sky_backend_rust::emit_ui_call::InputRadioRow",
-                    detail: "Input.radioRow cfg must be an inline record literal in Phase 0"
-                        .into(),
+                    detail: "Input.radioRow cfg must be an inline record literal in Phase 0".into(),
                 });
             };
             let on_change_e = lookup_field(
@@ -4722,10 +4716,12 @@ fn emit_ui_call(
                     detail: format!("{k:?} container requires 2 arguments, got {}", args.len()),
                 });
             };
-            let tag = k.html_element_tag().ok_or_else(|| Diagnostic::CompilerBug {
-                where_: "sky_backend_rust::emit_ui_call::HtmlContainer",
-                detail: format!("{k:?} is_html_container but html_element_tag returned None"),
-            })?;
+            let tag = k
+                .html_element_tag()
+                .ok_or_else(|| Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlContainer",
+                    detail: format!("{k:?} is_html_container but html_element_tag returned None"),
+                })?;
             let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
             let children = emit_expr_at(ctx, children_e, indent, child, generics)?;
             Ok(Some(format!(
@@ -4741,10 +4737,12 @@ fn emit_ui_call(
                     detail: format!("{k:?} void element requires 1 argument, got {}", args.len()),
                 });
             };
-            let tag = k.html_element_tag().ok_or_else(|| Diagnostic::CompilerBug {
-                where_: "sky_backend_rust::emit_ui_call::HtmlVoid",
-                detail: format!("{k:?} is_html_void but html_element_tag returned None"),
-            })?;
+            let tag = k
+                .html_element_tag()
+                .ok_or_else(|| Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::HtmlVoid",
+                    detail: format!("{k:?} is_html_void but html_element_tag returned None"),
+                })?;
             let attrs = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
             Ok(Some(format!(
                 "sky_runtime::ui::helpers::html_node_({tag:?}.to_owned(), {attrs}, ::std::vec::Vec::new())"
@@ -4978,9 +4976,9 @@ fn emit_ui_call(
             };
             let payload_s = emit_expr_at(ctx, payload_e, indent, child, generics)?;
             let call = match shape {
-                sky_ir::HtmlEventShape::Msg => format!(
-                    "sky_runtime::html::html_on_msg_({name:?}.to_owned(), {payload_s})"
-                ),
+                sky_ir::HtmlEventShape::Msg => {
+                    format!("sky_runtime::html::html_on_msg_({name:?}.to_owned(), {payload_s})")
+                }
                 sky_ir::HtmlEventShape::String => format!(
                     "sky_runtime::html::html_on_string_({name:?}.to_owned(), \
                      ::std::sync::Arc::new(move |_x| ({payload_s})(_x)))"
@@ -5145,14 +5143,11 @@ fn emit_ui_call(
         // internal error (the `k.is_cli()` guard above already filtered), so
         // promote it to a `CompilerBug`.
         KernelFn::CliProgram => {
-            let s =
-                crate::emit_cli::emit_cli_call(ctx, callee, args, indent, child, generics)?
-                    .ok_or_else(|| Diagnostic::CompilerBug {
-                        where_: "sky_backend_rust::emit_ui_call",
-                        detail: format!(
-                            "emit_cli returned None for Cli kernel {k:?} — missing arm"
-                        ),
-                    })?;
+            let s = crate::emit_cli::emit_cli_call(ctx, callee, args, indent, child, generics)?
+                .ok_or_else(|| Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call",
+                    detail: format!("emit_cli returned None for Cli kernel {k:?} — missing arm"),
+                })?;
             Ok(Some(s))
         }
 
@@ -5352,47 +5347,48 @@ fn emit_json_decoder_call(
         return Ok(Some(format!("{name}::<SkyError>()")));
     }
     // ── succeed(arg) — JsonDecSucceed and DbDecSucceed share decode_succeed ───
-    if matches!(callee, Callee::Kernel(KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed))
-        && let Some(arg) = args.first()
+    if matches!(
+        callee,
+        Callee::Kernel(KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed)
+    ) && let Some(arg) = args.first()
     {
         match arg {
-                // Case 1: named function (FuncValue) — curry{n}(fn_name)
-                Expr::FuncValue {
-                    callee: fn_callee,
-                    ty: IrType::Fun(params, _),
-                } if !params.is_empty() => {
-                    let n = params.len();
-                    if n > 10 {
-                        return Err(Diagnostic::Lower {
-                            span: Span::DUMMY,
-                            msg: LowerError::DecodeSucceedArityTooHigh { n },
-                        });
-                    }
-                    let fn_name = callee_name(ctx, fn_callee)?;
-                    return Ok(Some(format!("decode_succeed(curry{n}({fn_name}))")));
+            // Case 1: named function (FuncValue) — curry{n}(fn_name)
+            Expr::FuncValue {
+                callee: fn_callee,
+                ty: IrType::Fun(params, _),
+            } if !params.is_empty() => {
+                let n = params.len();
+                if n > 10 {
+                    return Err(Diagnostic::Lower {
+                        span: Span::DUMMY,
+                        msg: LowerError::DecodeSucceedArityTooHigh { n },
+                    });
                 }
-                // Case 2: lambda — curry{n}(move |params| -> ret { body })
-                Expr::Lambda { params, ret, body } if !params.is_empty() => {
-                    let n = params.len();
-                    if n > 10 {
-                        return Err(Diagnostic::Lower {
-                            span: Span::DUMMY,
-                            msg: LowerError::DecodeSucceedArityTooHigh { n },
-                        });
-                    }
-                    let closure =
-                        emit_lambda_unboxed(ctx, params, ret, body, indent, child, generics)?;
-                    return Ok(Some(format!("decode_succeed(curry{n}({closure}))")));
+                let fn_name = callee_name(ctx, fn_callee)?;
+                return Ok(Some(format!("decode_succeed(curry{n}({fn_name}))")));
+            }
+            // Case 2: lambda — curry{n}(move |params| -> ret { body })
+            Expr::Lambda { params, ret, body } if !params.is_empty() => {
+                let n = params.len();
+                if n > 10 {
+                    return Err(Diagnostic::Lower {
+                        span: Span::DUMMY,
+                        msg: LowerError::DecodeSucceedArityTooHigh { n },
+                    });
                 }
-                // Case 3: any other value — factory-wrap so it is called per run.
-                // Turbofish `<SkyError, _>` pins the error type when there is no
-                // surrounding pipeline to drive inference (E0283 otherwise).
-                other => {
-                    let val = emit_expr_at(ctx, other, indent, child, generics)?;
-                    return Ok(Some(format!(
-                        "decode_succeed::<SkyError, _>({{ let __sky_succeed = {val}; Box::new(move || __sky_succeed.clone()) }})"
-                    )));
-                }
+                let closure = emit_lambda_unboxed(ctx, params, ret, body, indent, child, generics)?;
+                return Ok(Some(format!("decode_succeed(curry{n}({closure}))")));
+            }
+            // Case 3: any other value — factory-wrap so it is called per run.
+            // Turbofish `<SkyError, _>` pins the error type when there is no
+            // surrounding pipeline to drive inference (E0283 otherwise).
+            other => {
+                let val = emit_expr_at(ctx, other, indent, child, generics)?;
+                return Ok(Some(format!(
+                    "decode_succeed::<SkyError, _>({{ let __sky_succeed = {val}; Box::new(move || __sky_succeed.clone()) }})"
+                )));
+            }
         }
     }
     // ── JsonDecList — wrap argument in factory closure ────────────────────────
@@ -5455,9 +5451,12 @@ pub fn emit_expr_at(
         Expr::Unit => Ok("()".to_owned()),
         Expr::Var(sym) => ctx.emit_ident(*sym),
         Expr::CloneVar(sym) => Ok(format!("{}.clone()", ctx.emit_ident(*sym)?)),
-        Expr::Ctor { home, ty, variant, args } => {
-            emit_ctor(ctx, home, *ty, *variant, args, indent, depth, generics)
-        }
+        Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args,
+        } => emit_ctor(ctx, home, *ty, *variant, args, indent, depth, generics),
         Expr::BinOp { op, lhs, rhs } => {
             let l = emit_expr_at(ctx, lhs, indent, child, generics)?;
             let r = emit_expr_at(ctx, rhs, indent, child, generics)?;
@@ -5509,8 +5508,7 @@ pub fn emit_expr_at(
             // the old text-level passes could corrupt a string literal or a
             // record field name that happened to spell the same identifier.
             let (occurrences, has_clonevar) = scan_free_target(body, *name);
-            let needs_inline =
-                occurrences > 1 && expr_value_is_non_clone(value) && !has_clonevar;
+            let needs_inline = occurrences > 1 && expr_value_is_non_clone(value) && !has_clonevar;
             if needs_inline {
                 let inlined_body = substitute_var((**body).clone(), *name, value);
                 let inlined_s = emit_expr_at(ctx, &inlined_body, indent, child, generics)?;
@@ -5598,8 +5596,7 @@ pub fn emit_expr_at(
                 if let Some(result) = emit_tea_call(ctx, callee, args, indent, child, generics)? {
                     return Ok(result);
                 }
-                if let Some(result) =
-                    emit_server_call(ctx, callee, args, indent, child, generics)?
+                if let Some(result) = emit_server_call(ctx, callee, args, indent, child, generics)?
                 {
                     return Ok(result);
                 }
@@ -6088,7 +6085,13 @@ fn emit_match_scrutinee(
     } else {
         scrut_expr
     };
-    Ok((scrut, ScrutMode::Whole { str_mode, list_mode }))
+    Ok((
+        scrut,
+        ScrutMode::Whole {
+            str_mode,
+            list_mode,
+        },
+    ))
 }
 
 /// Render one match-arm head to its Rust pattern plus any leading rebind/unbox
@@ -6114,7 +6117,13 @@ fn emit_whole_arm_head(
     str_mode: bool,
     list_mode: bool,
 ) -> DResult<(String, String)> {
-    if let Pat::Ctor { home, ty, variant, args } = pat {
+    if let Pat::Ctor {
+        home,
+        ty,
+        variant,
+        args,
+    } = pat
+    {
         emit_ctor_arm_pat(ctx, home, *ty, *variant, args)
     } else if str_mode || list_mode {
         // STR/LIST mode: the scrutinee IS a reference (`.as_str()` /
@@ -6496,12 +6505,21 @@ fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
             }
             Ok(format!("({})", subs.join(", ")))
         }
-        Pat::Ctor { home, ty, variant, args } => {
+        Pat::Ctor {
+            home,
+            ty,
+            variant,
+            args,
+        } => {
             // A built-in `Maybe` / `Result` pattern routes to the runtime enum
             // path; otherwise it is a user enum resolved by `enum_name`.
             let path = match ctx.builtin_runtime_enum(home, *ty) {
                 Some(runtime) => format!("{runtime}::{}", ctx.emit_ident(*variant)?),
-                None => format!("{}::{}", ctx.enum_name(home, *ty)?, ctx.emit_ident(*variant)?),
+                None => format!(
+                    "{}::{}",
+                    ctx.enum_name(home, *ty)?,
+                    ctx.emit_ident(*variant)?
+                ),
             };
             if args.is_empty() {
                 Ok(path)
@@ -6651,7 +6669,11 @@ fn render_arm_pat_alias_safe(
         } => {
             let path = match ctx.builtin_runtime_enum(home, *ty) {
                 Some(runtime) => format!("{runtime}::{}", ctx.emit_ident(*variant)?),
-                None => format!("{}::{}", ctx.enum_name(home, *ty)?, ctx.emit_ident(*variant)?),
+                None => format!(
+                    "{}::{}",
+                    ctx.enum_name(home, *ty)?,
+                    ctx.emit_ident(*variant)?
+                ),
             };
             if args.is_empty() {
                 Ok(path)
@@ -7137,7 +7159,12 @@ fn emit_apply(
     // are evaluated and bound, then the body executes in the same scope.  Free
     // variables from the outer scope are used directly — no capture, no
     // ownership transfer.
-    if let Expr::Lambda { params, ret: _, body } = func {
+    if let Expr::Lambda {
+        params,
+        ret: _,
+        body,
+    } = func
+    {
         // Sanity: arity must match arg count (lower invariant).
         debug_assert_eq!(
             params.len(),
@@ -7317,7 +7344,11 @@ fn emit_lambda(
     // NOT on the rendered string — `render_type` emits `ServerHandler<E>` as the
     // alias name, so a `starts_with("Arc<")` test would misclassify it as Box
     // and E0308 the handler-lambda shape.
-    let ctor = if wants_arc_ctor(&fun_ty) { "Arc" } else { "Box" };
+    let ctor = if wants_arc_ctor(&fun_ty) {
+        "Arc"
+    } else {
+        "Box"
+    };
     Ok(format!(
         "{{ let __sky_fn: {typed} = {ctor}::new({inner}); __sky_fn }}"
     ))
@@ -7332,8 +7363,8 @@ fn emit_lambda(
 /// `T{n}` — the arithmetic `::core::ops` traits take `Output = T{n}` so the
 /// operation stays closed over the parameter's type (`x + x : T{n}`). The trait
 /// order is fixed (`Add`, `Sub`, `Mul`, `PartialOrd`, `PartialEq`, `Ord`,
-/// `Hash`, `Copy`, `Clone`) so the emission is deterministic regardless of how
-/// the bound set was assembled.
+/// `Hash`, `Copy`, `Clone`, `Into<SqlParam>`) so the emission is deterministic
+/// regardless of how the bound set was assembled.
 fn render_bounds(bounds: BoundSet, n: usize) -> String {
     if bounds.is_unbounded() {
         return String::new();
@@ -7376,6 +7407,14 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
     }
     if bounds.has_clone() {
         traits.push("Clone".to_owned());
+    }
+    if bounds.has_sql_param() {
+        // SQL-bind-parameter obligation (#165): the runtime's `SqlParam::from`
+        // family is realised as `Into<SqlParam>` on the emitted generic (not a
+        // `where SqlParam: From<T{n}>` clause) so it composes with the ordinary
+        // `<T{n}: Bound1 + Bound2>` list this function already builds — no
+        // separate `where`-clause plumbing needed in [`emit_func`].
+        traits.push("Into<sky_runtime::db::SqlParam>".to_owned());
     }
     format!(": {}", traits.join(" + "))
 }
@@ -7423,7 +7462,11 @@ fn elide_task_run_tail(expr: &Expr) -> Option<Expr> {
                 body: Box::new(body_e),
             })
         }
-        Expr::Destructure { binder, value, body } => {
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
             let body_e = elide_task_run_tail(body)?;
             Some(Expr::Destructure {
                 binder: binder.clone(),
