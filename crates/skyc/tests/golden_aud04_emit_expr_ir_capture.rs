@@ -44,7 +44,11 @@ fn repo_root() -> PathBuf {
 /// — #2 and #4 — are fixed, since those failed at `cargo build` pre-fix).
 fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     let root = repo_root();
-    let entry = root.join("tests").join("golden").join(fixture).join("Main.sky");
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join(fixture)
+        .join("Main.sky");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
@@ -68,7 +72,11 @@ fn assert_e2e_output(fixture: &str, expect_contains: &str) {
         return;
     }
     let root = repo_root();
-    let entry = root.join("tests").join("golden").join(fixture).join("Main.sky");
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join(fixture)
+        .join("Main.sky");
     let out = std::env::temp_dir().join(format!("skyc_{fixture}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 

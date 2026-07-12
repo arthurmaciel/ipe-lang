@@ -36,7 +36,9 @@ fn out(name: &str) -> PathBuf {
 /// Before the fix this returned exit 0 (seal violation).
 #[test]
 fn append_and_number_on_same_var_is_sky_t0014() {
-    let Ok(rt) = skyc::resolve_runtime() else { return };
+    let Ok(rt) = skyc::resolve_runtime() else {
+        return;
+    };
     let o = out("aud12_append_number");
     let _ = std::fs::remove_dir_all(&o);
     let built = skyc::build(&golden("aud12_append_number"), &o, &rt);
@@ -55,7 +57,9 @@ fn append_and_number_on_same_var_is_sky_t0014() {
 /// compile — the fix must not over-tighten the defaulting rule.
 #[test]
 fn number_only_var_still_defaults_to_int() {
-    let Ok(rt) = skyc::resolve_runtime() else { return };
+    let Ok(rt) = skyc::resolve_runtime() else {
+        return;
+    };
     let o = out("aud12_number_only");
     let _ = std::fs::remove_dir_all(&o);
     let built = skyc::build(&golden("aud12_number_only"), &o, &rt);

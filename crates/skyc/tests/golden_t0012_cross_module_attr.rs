@@ -63,10 +63,7 @@ fn t0012_field_error_attributes_to_owning_module() {
     let Err(err) = try_build("t0012_cross_module_attr") else {
         return;
     };
-    assert!(
-        err.contains("SKY-T0012"),
-        "expected SKY-T0012, got:\n{err}"
-    );
+    assert!(err.contains("SKY-T0012"), "expected SKY-T0012, got:\n{err}");
     assert!(
         err.contains("Dep.sky:15"),
         "field error must attribute to the owning module Dep.sky:15, got:\n{err}"

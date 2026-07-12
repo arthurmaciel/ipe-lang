@@ -130,7 +130,11 @@ fn f1_firstclass_curried_and_shadow() {
     );
 
     let outcome = support::build_and_run_emitted("i121_firstclass_curried", &out);
-    assert_eq!(outcome.exit_code, Some(0), "must exit 0 (was E0593 + E0507)");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "must exit 0 (was E0593 + E0507)"
+    );
     // let g = mk; g "first" "second" → Home "first" "second" → "first second"
     assert!(
         outcome.stdout.contains("first second"),
@@ -182,7 +186,11 @@ fn f2_firstclass_arity0() {
     );
 
     let outcome = support::build_and_run_emitted("i121_firstclass_arity0", &out);
-    assert_eq!(outcome.exit_code, Some(0), "must exit 0 (was E0593 for arity-0 def)");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "must exit 0 (was E0593 for arity-0 def)"
+    );
     assert!(
         outcome.stdout.contains("hello world"),
         "arity-0 nullary handler must print 'hello world'; got:\n{}",
@@ -222,7 +230,11 @@ fn f3_partial_noncopy() {
     );
 
     let outcome = support::build_and_run_emitted("i121_partial_noncopy", &out);
-    assert_eq!(outcome.exit_code, Some(0), "must exit 0 (was E0525 on partial)");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "must exit 0 (was E0525 on partial)"
+    );
     // f called twice: f "!" → "hello!" and f "?" → "hello?"
     assert!(
         outcome.stdout.contains("hello!"),
@@ -269,7 +281,11 @@ fn f4_lambda_capture_noncopy_and_f11_shadow() {
     );
 
     let outcome = support::build_and_run_emitted("i121_lambda_capture_noncopy", &out);
-    assert_eq!(outcome.exit_code, Some(0), "must exit 0 (was E0525 on capture)");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "must exit 0 (was E0525 on capture)"
+    );
     // tag "sky-" ["one","two"] → mapped = ["sky-one","sky-two"], shadow prefix = "2"
     // output: "sky-one,sky-two[2]"
     assert!(
@@ -321,7 +337,11 @@ fn f5_capture_fn_called_control() {
     );
 
     let outcome = support::build_and_run_emitted("i121_capture_fn_called", &out);
-    assert_eq!(outcome.exit_code, Some(0), "control must exit 0 (was green before fix)");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "control must exit 0 (was green before fix)"
+    );
     assert!(
         outcome.stdout.contains("2, 3, 4"),
         "add-1 mapped over [1,2,3] must print '2, 3, 4'; got:\n{}",
@@ -374,7 +394,11 @@ fn f7_succeed_curried() {
     );
 
     let outcome = support::build_and_run_emitted("i121_succeed_curried", &out);
-    assert_eq!(outcome.exit_code, Some(0), "must exit 0 (was E0593 in curry2 bound)");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "must exit 0 (was E0593 in curry2 bound)"
+    );
     assert!(
         outcome.stdout.contains("val:99"),
         "decoder pipeline must produce 'val:99'; got:\n{}",
@@ -415,7 +439,11 @@ fn f8_curried_three_arrows() {
     );
 
     let outcome = support::build_and_run_emitted("i121_curried_three_arrows", &out);
-    assert_eq!(outcome.exit_code, Some(0), "must exit 0 (was E0593 three-arrow)");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "must exit 0 (was E0593 three-arrow)"
+    );
     assert!(
         outcome.stdout.contains("sky:7:F"),
         "let-store of mk3 must produce 'sky:7:F'; got:\n{}",

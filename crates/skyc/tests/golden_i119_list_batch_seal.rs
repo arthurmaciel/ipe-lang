@@ -52,7 +52,12 @@ fn filter_map_keeps_just_results() {
     }
     let dir = compile_golden("i119_filter_map_seal");
     let out = support::build_and_run_emitted("i119_filter_map_seal", &dir);
-    assert_eq!(out.exit_code, Some(0), "must exit 0; got {:?}", out.exit_code);
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "must exit 0; got {:?}",
+        out.exit_code
+    );
     assert!(
         out.stdout.contains("2,5,10"),
         "filterMap must keep only positive numbers; got: {:?}",
@@ -69,7 +74,12 @@ fn sort_by_stable_by_age() {
     }
     let dir = compile_golden("i119_sort_by_seal");
     let out = support::build_and_run_emitted("i119_sort_by_seal", &dir);
-    assert_eq!(out.exit_code, Some(0), "must exit 0; got {:?}", out.exit_code);
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "must exit 0; got {:?}",
+        out.exit_code
+    );
     assert!(
         out.stdout.contains("Alice,Bob,Charlie"),
         "sortBy must produce stable ascending sort by age; got: {:?}",

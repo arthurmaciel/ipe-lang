@@ -39,8 +39,7 @@ fn assert_skyc_exit0(label: &str, entry_rel: &str) {
         eprintln!("SKIP {label}: entry not found at {}", entry.display());
         return;
     }
-    let out =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{label}_skyc_out"));
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{label}_skyc_out"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = skyc::resolve_runtime() else {
@@ -68,7 +67,10 @@ fn ex17_skymon_exits_zero() {
 /// `ir_type_from_canon` path.
 #[test]
 fn ex10_live_component_exits_zero() {
-    assert_skyc_exit0("ex10_live_component", "examples/10-live-component/src/Main.sky");
+    assert_skyc_exit0(
+        "ex10_live_component",
+        "examples/10-live-component/src/Main.sky",
+    );
 }
 
 /// Example 19 (skyforum) — 8-module Sky.Live app.

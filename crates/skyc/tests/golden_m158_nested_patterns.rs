@@ -34,7 +34,10 @@ fn repo_root() -> PathBuf {
 }
 
 fn fixture_entry(root: &Path, name: &str) -> PathBuf {
-    root.join("tests").join("golden").join(name).join("Main.sky")
+    root.join("tests")
+        .join("golden")
+        .join(name)
+        .join("Main.sky")
 }
 
 fn built_code(root: &Path, name: &str) -> (Result<(), CliError>, PathBuf) {
@@ -68,7 +71,11 @@ fn assert_accepted_runs(name: &str, expected_stdout: &str) {
         "{name}: emitted crate must build and exit 0; stdout:\n{}",
         outcome.stdout
     );
-    assert_eq!(outcome.stdout.trim(), expected_stdout, "{name}: wrong runtime output");
+    assert_eq!(
+        outcome.stdout.trim(),
+        expected_stdout,
+        "{name}: wrong runtime output"
+    );
 }
 
 /// Assert `name` stays fail-closed with `expected` — a clean diagnostic, never
@@ -141,7 +148,10 @@ fn nested_cons_generic_elem_accepted() {
 /// it stays SKY-L0116 rather than an accept-then-cargo-fail.
 #[test]
 fn nested_cons_no_fallback_stays_gated() {
-    assert_gated("m158_nested_cons_no_fallback_gated", sky_diagnostics::SKY_L0116);
+    assert_gated(
+        "m158_nested_cons_no_fallback_gated",
+        sky_diagnostics::SKY_L0116,
+    );
 }
 
 /// Adversarial-review sibling gap (Finding A): a `PStr` sub-pattern nested TWO
@@ -153,7 +163,10 @@ fn nested_cons_no_fallback_stays_gated() {
 /// — E0308 at `cargo build`, expected `String` found `&str`).
 #[test]
 fn nested_strlit_two_levels_stays_gated() {
-    assert_gated("m158_nested_strlit_two_levels_gated", sky_diagnostics::SKY_L0116);
+    assert_gated(
+        "m158_nested_strlit_two_levels_gated",
+        sky_diagnostics::SKY_L0116,
+    );
 }
 
 /// Companion positive control: the depth-1 direct-arg string-literal ctor

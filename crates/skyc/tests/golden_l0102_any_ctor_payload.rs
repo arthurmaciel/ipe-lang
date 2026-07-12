@@ -46,11 +46,18 @@ fn repo_root() -> PathBuf {
 }
 
 fn fixture_entry(root: &Path, name: &str) -> PathBuf {
-    root.join("tests").join("golden").join(name).join("Main.sky")
+    root.join("tests")
+        .join("golden")
+        .join(name)
+        .join("Main.sky")
 }
 
 fn fixture_src_entry(root: &Path, name: &str) -> PathBuf {
-    root.join("tests").join("golden").join(name).join("src").join("Main.sky")
+    root.join("tests")
+        .join("golden")
+        .join(name)
+        .join("src")
+        .join("Main.sky")
 }
 
 /// Build-only seal: `BroadcastMsg any` — skyc exit 0 AND cargo build green.

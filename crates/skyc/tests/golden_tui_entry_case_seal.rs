@@ -164,7 +164,10 @@ fn tui_entry_case_taskrun_builds_and_runs() {
     let entry = fixture_entry(&root);
     let _ = std::fs::remove_dir_all(&out);
     let built = skyc::build(&entry, &out, &runtime);
-    assert!(built.is_ok(), "tui_entry_case_taskrun: must be accepted, got: {built:?}");
+    assert!(
+        built.is_ok(),
+        "tui_entry_case_taskrun: must be accepted, got: {built:?}"
+    );
 
     if std::env::var("SKY_E2E").is_err() {
         return;

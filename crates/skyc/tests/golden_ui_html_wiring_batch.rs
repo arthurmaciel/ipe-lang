@@ -55,7 +55,10 @@ fn repo_root() -> PathBuf {
 /// `SKY_E2E=1`.
 fn build_run_ui_html_wiring_batch() -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
-    let dir = root.join("tests").join("golden").join("ui_html_wiring_batch");
+    let dir = root
+        .join("tests")
+        .join("golden")
+        .join("ui_html_wiring_batch");
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join("skyc_ui_html_wiring_batch_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -159,7 +162,10 @@ fn ui_html_wiring_batch_compiles_builds_and_renders_correctly() {
     }
 
     // ── Ui.image ───────────────────────────────────────────────────────────────
-    assert!(ui.contains("<img"), "Ui.image must render <img>\n--- ui ---\n{ui}");
+    assert!(
+        ui.contains("<img"),
+        "Ui.image must render <img>\n--- ui ---\n{ui}"
+    );
     assert!(
         ui.contains("src=\"a.png\"") && ui.contains("alt=\"alt text\""),
         "Ui.image src/alt malformed\n--- ui ---\n{ui}"

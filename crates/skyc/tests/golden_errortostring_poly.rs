@@ -33,12 +33,19 @@ fn repo_root() -> PathBuf {
 }
 
 fn golden_entry(root: &Path, name: &str) -> PathBuf {
-    root.join("tests").join("golden").join(name).join("Main.sky")
+    root.join("tests")
+        .join("golden")
+        .join(name)
+        .join("Main.sky")
 }
 
 fn try_build(entry: &Path) -> Result<PathBuf, skyc::CliError> {
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(entry.parent().and_then(|p| p.file_name()).unwrap_or_default());
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(
+        entry
+            .parent()
+            .and_then(|p| p.file_name())
+            .unwrap_or_default(),
+    );
     let _ = std::fs::remove_dir_all(&out);
     let Ok(runtime) = skyc::resolve_runtime() else {
         return Ok(out);
@@ -177,7 +184,10 @@ fn annotation_rigid_plus_literal_still_fails() {
 #[test]
 fn standard_libs_errortostring_blocker_gone() {
     let root = repo_root();
-    let manifest = root.join("examples").join("00-standard-libs").join("sky.toml");
+    let manifest = root
+        .join("examples")
+        .join("00-standard-libs")
+        .join("sky.toml");
     if !manifest.exists() {
         return;
     }

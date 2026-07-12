@@ -81,12 +81,12 @@ fn error_adt_roundtrip_runs_and_prints_expected_output() {
     );
 
     let expected = [
-        "Io: disk full",       // Error.toString e1 -- kind-classified, not a bare echo
-        "disk full",           // info.message from the Error kind info pattern (closes #160)
-        "Io",                  // case kind of Io -> "Io" -- ErrorKind pattern match
-        "not-retryable",       // Error.isRetryable e1 (Io) -- false
-        "retryable",           // Error.isRetryable e2 (Timeout) -- true
-        "Io: custom message",  // Error.withMessage keeps the kind, replaces the message
+        "Io: disk full",      // Error.toString e1 -- kind-classified, not a bare echo
+        "disk full",          // info.message from the Error kind info pattern (closes #160)
+        "Io",                 // case kind of Io -> "Io" -- ErrorKind pattern match
+        "not-retryable",      // Error.isRetryable e1 (Io) -- false
+        "retryable",          // Error.isRetryable e2 (Timeout) -- true
+        "Io: custom message", // Error.withMessage keeps the kind, replaces the message
         "done",
     ];
     for line in expected {

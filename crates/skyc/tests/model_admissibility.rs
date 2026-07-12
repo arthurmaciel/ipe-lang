@@ -46,9 +46,7 @@ fn assert_rejected_with(
             );
             Ok(())
         }
-        Err(other) => {
-            Err(format!("{test_name}: expected {expected_code}, got {other:?}").into())
-        }
+        Err(other) => Err(format!("{test_name}: expected {expected_code}, got {other:?}").into()),
     }
 }
 

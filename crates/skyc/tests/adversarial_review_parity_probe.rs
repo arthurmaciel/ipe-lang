@@ -68,8 +68,15 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
     let db = sky_db::SkyDatabase::new();
     let root = skyc::create_source_root(&db, &sources, &injected);
     let config = sky_db::BuildConfig::new(&db, sky_backend_rust::DbDriver::Sqlite);
-    skyc::compile_prepared(&db, root, &sources, &entry_path(), Path::new("<advparity>"), config)
-        .map_err(|e| e.to_string())
+    skyc::compile_prepared(
+        &db,
+        root,
+        &sources,
+        &entry_path(),
+        Path::new("<advparity>"),
+        config,
+    )
+    .map_err(|e| e.to_string())
 }
 
 struct WarmSession {
@@ -126,8 +133,15 @@ impl WarmSession {
         let config = self
             .config
             .expect("config must exist before demand() (set by sync_only via compile())");
-        skyc::compile_prepared(&self.db, root, &sources, &entry_path(), Path::new("<advparity>"), config)
-            .map_err(|e| e.to_string())
+        skyc::compile_prepared(
+            &self.db,
+            root,
+            &sources,
+            &entry_path(),
+            Path::new("<advparity>"),
+            config,
+        )
+        .map_err(|e| e.to_string())
     }
 
     fn compile(&mut self, user: &UserSources) -> CompileOutcome {
@@ -171,11 +185,9 @@ fn assert_parity(label: &str, warm: &CompileOutcome, cold: &CompileOutcome) {
             for (rel, w_text) in &w.files {
                 match c.files.get(rel) {
                     Some(c_text) if w_text == c_text => {}
-                    Some(c_text) => divergent.push(format!(
-                        "{} — {}",
-                        rel.as_str(),
-                        first_diff(w_text, c_text)
-                    )),
+                    Some(c_text) => {
+                        divergent.push(format!("{} — {}", rel.as_str(), first_diff(w_text, c_text)))
+                    }
                     None => missing_in_cold.push(rel.as_str()),
                 }
             }
@@ -287,7 +299,11 @@ fn adversarial_two_syncs_one_demand() {
     let mut warm = WarmSession::new();
     // Establish a warm baseline with one real demand first (matches how a
     // real dev session always starts from a compiled state).
-    assert_parity("presync/baseline", &warm.compile(&base), &cold_compile(&base));
+    assert_parity(
+        "presync/baseline",
+        &warm.compile(&base),
+        &cold_compile(&base),
+    );
 
     // Now sync TWICE with no demand between: base -> intermediate -> back to
     // base, then demand exactly once.
@@ -348,7 +364,10 @@ fn sanity_all_probe_states_actually_compile_ok() {
     let r1 = cold_compile(&base);
     let r2 = cold_compile(&collide);
     assert!(r1.is_ok(), "BASE must compile OK, got: {r1:?}");
-    assert!(r2.is_ok(), "WITH_ETA0_COLLISION must compile OK, got: {r2:?}");
+    assert!(
+        r2.is_ok(),
+        "WITH_ETA0_COLLISION must compile OK, got: {r2:?}"
+    );
     let f1 = r1.unwrap();
     let f2 = r2.unwrap();
     // The two programs must actually differ in emitted bytes (proves this

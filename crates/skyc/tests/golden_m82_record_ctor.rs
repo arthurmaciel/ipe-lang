@@ -326,7 +326,11 @@ fn record_ctor_cross_module_end_to_end() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
     let built = skyc::build_project(&manifest, &out, &runtime);
-    assert!(built.is_ok(), "cross-module build failed: {:?}", built.err());
+    assert!(
+        built.is_ok(),
+        "cross-module build failed: {:?}",
+        built.err()
+    );
 
     let outcome = support::build_and_run_emitted("m82_record_ctor_xmod", &out);
     assert_eq!(

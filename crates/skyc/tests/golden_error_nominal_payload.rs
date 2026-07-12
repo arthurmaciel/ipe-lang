@@ -88,8 +88,8 @@ fn error_nominal_payload_runs_and_prints_expected_output() {
     );
 
     let expected = [
-        "plain: disk full",         // no details — unannotated describeInfo path
-        "Custom custom detail",     // Error.withDetails (Custom ..)
+        "plain: disk full",     // no details — unannotated describeInfo path
+        "Custom custom detail", // Error.withDetails (Custom ..)
         "done",
     ];
     for line in expected {

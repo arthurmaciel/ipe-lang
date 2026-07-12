@@ -60,8 +60,7 @@ fn try_build(name: &str) -> Result<(), String> {
         eprintln!("SKIP {name}: runtime not available");
         return Ok(());
     };
-    skyc::build_with_sibling_discovery(&entry, &out, &runtime)
-        .map_err(|e| e.to_string())
+    skyc::build_with_sibling_discovery(&entry, &out, &runtime).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -75,10 +74,7 @@ fn try_build(name: &str) -> Result<(), String> {
 fn i138_empty_home_bridge_fails_n0002() {
     let err = try_build("i138_empty_home_bridge")
         .expect_err("i138_empty_home_bridge must fail (Token is not in scope)");
-    assert!(
-        err.contains("SKY-N0002"),
-        "expected SKY-N0002, got:\n{err}"
-    );
+    assert!(err.contains("SKY-N0002"), "expected SKY-N0002, got:\n{err}");
     assert!(
         !err.contains("SKY-I0001"),
         "must NOT be an ICE (SKY-I0001), got:\n{err}"
@@ -89,12 +85,9 @@ fn i138_empty_home_bridge_fails_n0002() {
 /// separate repro that caught a distinct ICE path in the original heuristic.
 #[test]
 fn i138_optbridge_fails_n0002() {
-    let err = try_build("i138_optbridge")
-        .expect_err("i138_optbridge must fail (Token is not in scope)");
-    assert!(
-        err.contains("SKY-N0002"),
-        "expected SKY-N0002, got:\n{err}"
-    );
+    let err =
+        try_build("i138_optbridge").expect_err("i138_optbridge must fail (Token is not in scope)");
+    assert!(err.contains("SKY-N0002"), "expected SKY-N0002, got:\n{err}");
     assert!(
         !err.contains("SKY-I0001"),
         "must NOT be an ICE (SKY-I0001), got:\n{err}"
@@ -122,6 +115,7 @@ fn i138_kernel_implicit_positive_exits_zero() {
 /// after the `enum_variants` guard.
 #[test]
 fn i138_kernel_implicit_value_exits_zero() {
-    try_build("i138_kernel_implicit_value")
-        .expect("i138_kernel_implicit_value must compile (Value is a kernel-implicit Prelude type)");
+    try_build("i138_kernel_implicit_value").expect(
+        "i138_kernel_implicit_value must compile (Value is a kernel-implicit Prelude type)",
+    );
 }

@@ -907,6 +907,9 @@ fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), Box
         return Ok(());
     }
 
-    let _exe = compile_and_build("live_pubsub_record_payload_build_only", SKY_PUBSUB_RECORD_PAYLOAD)?;
+    let _exe = compile_and_build(
+        "live_pubsub_record_payload_build_only",
+        SKY_PUBSUB_RECORD_PAYLOAD,
+    )?;
     Ok(())
 }

@@ -78,8 +78,15 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
     let db = sky_db::SkyDatabase::new();
     let root = skyc::create_source_root(&db, &sources, &injected);
     let config = sky_db::BuildConfig::new(&db, sky_backend_rust::DbDriver::Sqlite);
-    skyc::compile_prepared(&db, root, &sources, &entry_path(), Path::new("<parity>"), config)
-        .map_err(|e| e.to_string())
+    skyc::compile_prepared(
+        &db,
+        root,
+        &sources,
+        &entry_path(),
+        Path::new("<parity>"),
+        config,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// The warm side: ONE database reused across the whole edit sequence, inputs
@@ -125,11 +132,18 @@ impl WarmSession {
             self.root = Some(root);
             root
         };
-        let config = *self
-            .config
-            .get_or_insert_with(|| sky_db::BuildConfig::new(&self.db, sky_backend_rust::DbDriver::Sqlite));
-        skyc::compile_prepared(&self.db, root, &sources, &entry_path(), Path::new("<parity>"), config)
-            .map_err(|e| e.to_string())
+        let config = *self.config.get_or_insert_with(|| {
+            sky_db::BuildConfig::new(&self.db, sky_backend_rust::DbDriver::Sqlite)
+        });
+        skyc::compile_prepared(
+            &self.db,
+            root,
+            &sources,
+            &entry_path(),
+            Path::new("<parity>"),
+            config,
+        )
+        .map_err(|e| e.to_string())
     }
 }
 
@@ -169,11 +183,9 @@ fn assert_parity(label: &str, warm: &CompileOutcome, cold: &CompileOutcome) {
             for (rel, w_text) in &w.files {
                 match c.files.get(rel) {
                     Some(c_text) if w_text == c_text => {}
-                    Some(c_text) => divergent.push(format!(
-                        "{} — {}",
-                        rel.as_str(),
-                        first_diff(w_text, c_text)
-                    )),
+                    Some(c_text) => {
+                        divergent.push(format!("{} — {}", rel.as_str(), first_diff(w_text, c_text)))
+                    }
                     None => missing_in_cold.push(rel.as_str()),
                 }
             }
@@ -385,11 +397,7 @@ fn parity_multimodule_adversarial_edits() {
         ),
         (
             "module-added",
-            sources_of(&[
-                (main, MAIN_WITH_EXTRA),
-                (util, UTIL_V1),
-                (extra, EXTRA_MOD),
-            ]),
+            sources_of(&[(main, MAIN_WITH_EXTRA), (util, UTIL_V1), (extra, EXTRA_MOD)]),
         ),
         (
             "module-deleted",

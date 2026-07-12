@@ -113,7 +113,11 @@ fn topo_order_dep_first_and_memoized() {
     log.clear();
     let again = topo_order(&db, root, b).expect("still ordered");
     assert_eq!(*again, *order);
-    assert_eq!(log.executions_of("topo_order("), 0, "repeat demand memoized");
+    assert_eq!(
+        log.executions_of("topo_order("),
+        0,
+        "repeat demand memoized"
+    );
 }
 
 /// An import cycle is returned as the SKY-N0021 diagnostic value — this query
