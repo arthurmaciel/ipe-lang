@@ -188,7 +188,7 @@ survives across revisions on a production path (Phase 2+).
 | **17 (implemented — see §11)** | 17 | `BuildConfig` salsa input (narrowed to `db_driver`, the one field with a real consumer) + `emit_project(root, entry, config)` — the coarse SEAM over `RustBackend::emit`, replacing Phase 4/5's last remaining plain-function call in `compile_prepared` |
 | **6 (implemented — see §12; deliberate EmittedProject-level divergence from literal "lowered IR")** | 19, 20 | On-disk build cache: whole-project content-address key + version-epoch directory (compiler-binary hash + rustc fingerprint) gate — "refuse, don't guess" by construction (stale entries are a different, unreachable address, never a runtime check) |
 | **7 (implemented — see §13; Tasks 21/22/23/25 shipped in full, Task 24 split: watch-scoped sqlite default shipped, `ModelSchemaTag`/bincode hardening + proactive reload frame recorded as a genuine, honestly-scoped continuation)** | 21–25 | `ipe watch` (confined watcher, debounce, last-good state machine, L0+ continuity, cancellation) |
-| 8 | 26 | LSP seam — same db, same queries, editor-buffer inputs |
+| **8 (implemented — see §15; seam + integration test only, per the plan's own scoping)** | 26 | LSP seam — same db, same queries, editor-buffer inputs; confirms (a) `SourceFile`/`sync_source_root` already accept in-memory buffer text with zero `sky_db` changes, (b) `SkyDatabase` is `Send` (compile-time-asserted) and reusable across a request-loop-shaped worker pattern, (c) salsa cancellation (Task 25's mechanism) fires identically on the LSP's own `typecheck` demand, not just `ipe watch`'s `compile_prepared` — the LSP feature itself (BACKLOG row E.3) is NOT this task |
 
 ## 6. Phase-1 decisions ledger (rust-analyzer-idiomatic defaults, recorded)
 
@@ -2249,3 +2249,177 @@ review's job): `cargo check --workspace --all-targets` clean;
 `` `stop()` `` in a doc comment); every `crates/skyc/tests/watch_*.rs` E2E
 scenario passes both sequentially and concurrently, repeatedly, including
 under deliberate CPU stress for the coalescing fix specifically.
+
+## 15. Phase 8 — LSP handoff seam (Task 26): seam + integration test only,
+## per the plan's own scope fence — this is NOT the LSP feature
+
+Phase 8 = plan Task **26**, the plan's own "Phase F — LSP handoff seam"
+(`docs/superpowers/plans/2026-07-03-incremental-salsa.md`, lines ~556–599).
+This is the LAST phase of the incremental-compilation project (BACKLOG
+row D.1's own phase table, §5 above). Its goal, quoted verbatim from the
+plan because scope discipline is the entire point of this phase: "Document +
+expose the seam so Tier-3 #4 (LSP) reuses the SAME salsa db, queries, and
+cancellation — watch and LSP share one incremental engine (no second
+front-end)… This task is seam + integration test only; the LSP feature
+itself is Tier-3 #4 [tracked separately as BACKLOG row E.3]."
+
+Every other phase in this document shipped a query, an input, or an
+on-disk artifact. Phase 8 ships **zero production code** in `sky_db` — the
+honest outcome, not a corner cut. §15.1 below is the survey that justifies
+why; §15.2 is the integration test that proves it; §15.3/§15.4 are the
+decisions ledger and proof-tests table every prior phase carries.
+
+### 15.1 The survey: does `sky_db` already support the LSP's access pattern?
+
+The plan's own test-first spec for Task 26 names the exact pattern to
+prove: "an integration test that drives the db like an LSP would:
+`set_source_text` on an open buffer, demand `typecheck(ModuleId)` for
+diagnostics, demand `parse`/`resolve_imports` for navigation, cancel on the
+next keystroke — all without touching disk." Three questions, surveyed
+against the actual Phase 1–7 code (`crates/sky_db/src/lib.rs`,
+`crates/skyc/src/watch.rs`) before writing anything, exactly the discipline
+every prior phase in this document opens with:
+
+1. **Can inputs be set from an in-memory buffer instead of a disk read?**
+   Yes, already. [`sky_db::SourceFile`] (§3.2, Phase 1) is a plain
+   `#[salsa::input]` struct holding `text: String` — nothing about the
+   input's SHAPE cares where the string came from. The driver-boundary
+   helpers [`sky_db::set_text_if_changed`] (byte-equal no-op boundary) and
+   [`sky_db::sync_source_root`] (whole-file-set reconciliation) are already
+   generic over "some caller-computed `(path, text, origin)` map" — `ipe
+   watch`'s `resolve_project_sources` (§14.1) happens to fill that map from
+   `std::fs::read_to_string`, but nothing in `sky_db` requires that. An LSP
+   driver fills the identical map from `didOpen`/`didChange` buffer
+   contents instead. Zero new API needed — the seam the plan's own Task-26
+   "Do" section describes ("the LSP sets `source_text` from unsaved editor
+   buffers… while `ipe watch` sets it from disk — same inputs, same
+   queries, different drivers") was already true the moment Phase 1 chose
+   `text: String` as the input's shape rather than, say, a `PathBuf` the
+   query would `read_to_string` itself (which would have been the
+   INVALIDATE-not-PARSE shape this project's own two fundamental rules
+   forbid).
+2. **Is `SkyDatabase` `Send` and safe to reuse across a request-loop-shaped
+   access pattern (repeated demand → mutate input → re-demand)?** Yes,
+   already, and already load-bearing: `crates/skyc/src/watch.rs`'s Task-22
+   orchestrator has cloned `SkyDatabase` into a freshly-spawned
+   `thread::spawn` closure on every rebuild cycle since Phase 7 shipped
+   (§14.1's "compile worker thread… holds a CLONED `sky_db::SkyDatabase`
+   handle") — that code would not compile if `SkyDatabase` were `!Send`
+   (`thread::spawn` requires `F: Send + 'static`). Phase 8 adds a
+   compile-time assertion (`crates/sky_db/tests/lsp_seam.rs`'s `const _: fn()
+   = || { fn assert_send<T: Send>() {} assert_send::<SkyDatabase>(); };`)
+   so a future change to `SharedInterner` or the `salsa::Storage<Self>`
+   field that accidentally regressed `Send` fails to COMPILE rather than
+   silently losing this property — the only genuinely new, if minimal,
+   code this phase ships.
+3. **Does salsa cancellation fire on ANY tracked-query demand, or only on
+   the specific call chain `ipe watch` happens to use
+   (`compile_prepared`)?** Fires on any tracked-query demand — verified by
+   demonstration, not by re-reading salsa's source a second time (§14.5
+   already did that against the pinned `salsa=0.27.2` source). Task 25's
+   mechanism (`zalsa_mut()` blocking until every other `Storage` clone
+   drops; a query on a cancelled snapshot unwinding via
+   `panic::resume_unwind(Cancelled)` at its next tracked-function boundary)
+   is a property of the DATABASE and its `#[salsa::input]` setters, not of
+   `compile_prepared`'s particular call graph. §15.2's cancellation test
+   demands [`sky_db::typecheck`] DIRECTLY — the LSP's own diagnostics
+   query, never routing through `skyc::compile_prepared` at all — and
+   observes the identical `Cancelled::Local | Cancelled::PendingWrite`
+   outcome Phase 7's own proof (`crates/skyc/tests/watch_cancellation.rs`)
+   established for the watch path.
+
+**Conclusion, stated as plainly as the survey supports**: nothing in
+`sky_db` needed to change. The "seam" the plan's Task 26 asks to be
+"exposed" was already exposed by Phase 1's own input design (`text:
+String`, not a path) and Phase 7's own cancellation wiring (a database
+property, not a `watch.rs`-specific hack). What Task 26 asks this phase to
+DO — beyond the one `Send` compile-time assertion — is prove it with a
+test and record the handoff in this document, which is exactly what §15.2
+and this section are.
+
+### 15.2 The integration test (`crates/sky_db/tests/lsp_seam.rs`)
+
+Two tests, both driving `sky_db` directly (no dependency on `skyc` at
+all — this is deliberately narrower than `crates/skyc/tests/
+watch_cancellation.rs`'s dependency footprint, because the seam being
+proved belongs to `sky_db` itself, not to `skyc`'s driver wiring around
+it):
+
+1. **`lsp_shaped_buffer_edit_drives_diagnostics_and_navigation_in_memory`**
+   — opens a two-module in-memory buffer (`SourceFile::new`, no `Path`
+   anywhere in the test — the structural, not merely observed, proof that
+   nothing routes through a file-reading path), demands `typecheck` for
+   diagnostics and `parse`/`resolve_imports` for navigation (asserting the
+   `import A` edge resolves to `A`'s own `SourceFile` handle — the go-to-def
+   shape), edits the buffer in place to introduce a real type error (the
+   "keystroke"), re-demands and observes the new diagnostic immediately,
+   then edits again to fix it and confirms every query (diagnostics AND
+   navigation) converges back to clean on the SAME database instance.
+2. **`lsp_diagnostics_query_is_cancelled_by_the_next_keystroke_and_converges_to_latest_state`**
+   — the plan's own cancellation acceptance criterion, verbatim: "start a
+   long query on thread 1; `set_source_text` on thread 2; assert thread 1's
+   query unwinds with salsa's `Cancelled` and the db converges to the
+   latest input state; no stale result is committed." Deterministic (same
+   technique as §14.5/Task 25's own proof — an event callback signals the
+   worker's first `WillExecute`, so the cancelling edit is guaranteed to
+   land while checkpoints remain ahead of it, never racing wall-clock
+   timing against warm salsa recompute). The worker demands
+   [`sky_db::typecheck`] directly; after the join confirms
+   `Err(Cancelled::Local | Cancelled::PendingWrite)`, a plain fresh demand
+   on the (still-alive) original db handle — no retry loop, no manual
+   recovery step — observes the EDITED buffer's diagnostic, proving
+   convergence rather than merely proving the unwind.
+
+### 15.3 Phase-8 decisions ledger
+
+1. **Zero `sky_db` production-code changes, ONE compile-time assertion** —
+   the honest outcome of §15.1's survey, not a corner cut: Phase 1's input
+   shape (`text: String`) and Phase 7's cancellation wiring (a database
+   property) already gave the LSP everything the plan's Task 26 asks for.
+   The single new line (`assert_send::<SkyDatabase>()`) upgrades an
+   IMPLICIT property (inferred from `watch.rs` happening to compile) to an
+   EXPLICIT, independently-checked one.
+2. **The proof test depends on `sky_db` only, not `skyc`** — deliberately
+   narrower than `watch_cancellation.rs`. The seam this phase proves
+   belongs to the database itself (any tracked query, demanded from any
+   driver); routing the proof through `skyc::compile_prepared` would have
+   conflated "the database supports this" with "`skyc`'s driver happens to
+   exercise it," which is a weaker claim than the one this phase needs to
+   record for a not-yet-built LSP driver to rely on.
+3. **`typecheck`, not a hypothetical per-module query, is the diagnostics
+   seam the LSP inherits** — Phase 4 (§9) already recorded, as a
+   deliberate, non-forced scope decision, that `typecheck`/`lower_program`
+   are the coarse WHOLE-PROGRAM seam, not `typecheck(ModuleId)`. The
+   original plan's Task-26 prose ("the `sky_ir` cut-point + per-module
+   `typecheck` are exactly the queries the LSP needs") describes the
+   plan's aspirational end state; this phase records the honest current
+   one — an LSP built on today's `sky_db` gets whole-program diagnostics
+   per open-buffer edit (correct, and already memoized/incremental at the
+   granularity Phase 4 shipped), not per-module incremental re-typechecking.
+   Closing that gap is Phase 4's own recorded follow-up (§9's "genuinely
+   cross-cutting… not attempted here"), not something Phase 8 can or
+   should re-open under a seam-only budget.
+4. **No new input for "open" vs "closed" buffer state** — an LSP's
+   `didOpen`/`didClose` lifecycle is a DRIVER-side concept (which module
+   paths currently have an editor buffer backing them), not a `sky_db`
+   concept. `sync_source_root`'s existing map-reconciliation shape (§3.2's
+   `SourceFile`/`SourceRoot` design) already handles "a module enters or
+   leaves the tracked set" via ordinary map insert/remove — an LSP driver
+   feeding it buffer state instead of disk state needs no new `sky_db`
+   primitive, matching this document's running discipline (Phase 1 §3.2:
+   "reserved seams stay design-level until their phase") of not inventing
+   a `BufferState` input with no query that reads it.
+5. **The LSP feature itself stays BACKLOG row E.3, untouched** — this
+   phase closes out D.1's own 8-phase scope (§5's table) but does not
+   start, scaffold, or stub `crates/sky_lsp` (no such crate exists after
+   this phase), JSON-RPC framing, or editor protocol handling. That is a
+   separate, not-yet-scheduled "Designed targets" item per this project's
+   own backlog discipline.
+
+### 15.4 Phase-8 proof tests (`crates/sky_db/tests/lsp_seam.rs`)
+
+| Test | Asserts |
+|---|---|
+| `lsp_shaped_buffer_edit_drives_diagnostics_and_navigation_in_memory` | in-memory `SourceFile` inputs (no `Path`/`std::fs` anywhere in the test) drive `typecheck` diagnostics + `parse`/`resolve_imports` navigation; an in-place buffer edit is observed by an immediate re-demand (new diagnostic, then clean again after a second edit) |
+| `lsp_diagnostics_query_is_cancelled_by_the_next_keystroke_and_converges_to_latest_state` | THE Task-26 mission proof — a `typecheck` demand on a worker thread is cancelled (`Cancelled::Local \| Cancelled::PendingWrite`) by a concurrent edit on the original db handle, and a fresh demand immediately afterward observes the edited buffer, never a stale result |
+| `const _: fn() = || { assert_send::<SkyDatabase>(); }` | compile-time-only: `SkyDatabase` is `Send`, so an LSP request loop can hand a cloned handle to a worker thread per demand — this line fails to COMPILE, not merely fails a test, if that property ever regresses |
