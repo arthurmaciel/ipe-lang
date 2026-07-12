@@ -734,7 +734,7 @@ reading `sky_lower::lower` end to end (Phase 4 already established
   close this over `EnumDef` field types first; recorded here so the gap is
   never silently assumed away.
 
-Both walkers (`walk_expr` over all 24 `Expr` variants, `walk_pat` over all 8
+Both walkers (`walk_expr` over all 30 `Expr` variants, `walk_pat` over all 11
 `Pat` variants) are EXHAUSTIVE matches — no wildcard arm — so a future IR
 variant cannot be silently under-walked; the compiler forces this file to be
 revisited when `sky_ir::Expr` or `sky_ir::Pat` grows a case (the same
