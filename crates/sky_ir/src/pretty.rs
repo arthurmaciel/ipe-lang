@@ -1480,7 +1480,12 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
             write_expr(out, record, interner, level + 1);
         }
         Expr::Update { record, fields } => write_update(out, record, fields, interner, level),
-        Expr::Lambda { params, ret, body } => write_lambda(out, params, ret, body, interner, level),
+        Expr::Lambda { params, ret, body } => {
+            write_lambda(out, "Lambda", params, ret, body, interner, level);
+        }
+        Expr::SharedLambda { params, ret, body } => {
+            write_lambda(out, "SharedLambda", params, ret, body, interner, level);
+        }
         Expr::Apply { func, args } => write_apply(out, func, args, interner, level),
         Expr::FuncValue { callee, ty } => line(
             out,
@@ -1619,6 +1624,7 @@ fn write_update(
 /// body one level deeper. Split from [`write_expr`] to keep that match small.
 fn write_lambda(
     out: &mut String,
+    label: &str,
     params: &[(Symbol, IrType)],
     ret: &IrType,
     body: &Expr,
@@ -1639,7 +1645,7 @@ fn write_lambda(
     line(
         out,
         level,
-        &format!("Lambda ({rendered}) -> {}", ir_type_name(interner, ret)),
+        &format!("{label} ({rendered}) -> {}", ir_type_name(interner, ret)),
     );
     write_expr(out, body, interner, level + 1);
 }
