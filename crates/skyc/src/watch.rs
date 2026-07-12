@@ -25,6 +25,10 @@
 //!    file on every rebuild, and without this exclusion that OPEN is
 //!    itself an observable event that would queue another rebuild forever
 //!    (see the Phase-7 spec addendum's "a real bug the E2E suite caught").
+//!    One Access sub-variant, `Close(Write)`, is deliberately EXEMPTED from
+//!    that rejection — it is the write-completion proof a debounce window
+//!    alone cannot substitute for; see the callback's own doc comment and
+//!    the Phase-7 spec addendum's coalescing-race write-up for why.
 //! 2. **coalesce thread** — [`sky_watch::coalesce_loop`] turns that raw
 //!    stream into settled batches (Task 22's debounce half).
 //! 3. **compile worker thread** (spawned fresh per rebuild cycle) — holds a
@@ -82,8 +86,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -343,20 +347,91 @@ enum OrchestratorEvent {
     Shutdown,
 }
 
+/// Upper bound on how long [`WatchHandle::stop`] (and, transitively,
+/// [`WatchHandle`]'s `Drop` safety net) will block waiting for the
+/// orchestrator thread to confirm it has actually finished tearing down
+/// (child process killed/reaped, watcher + coalesce threads joined) —
+/// never an unbounded wait (CLAUDE.md §3's "every long-running command MUST
+/// be timeout-bounded"). Generously above the realistic worst case: a
+/// `graceful_stop` of [`sky_watch::RestartTimeouts::default`]'s 3 s, plus
+/// slack for the cargo-kill waiter's poll loop, the compile worker's salsa
+/// unwind, and the coalesce thread's join — all of which are themselves
+/// individually bounded and normally complete in well under a second once
+/// shutdown starts.
+const SHUTDOWN_WAIT_BUDGET: Duration = Duration::from_secs(20);
+
 /// A handle to a running [`spawn`]ed watch session.
 ///
 /// Lets the caller request a clean shutdown from another thread — the seam
 /// integration tests use to stop `ipe watch` deterministically instead of
 /// relying on a process signal.
+///
+/// `Drop` is a genuine safety net, not merely `stop()` called for you: an
+/// embedder that lets a `WatchHandle` fall out of scope WITHOUT calling
+/// `stop()` first — a bug in the embedder's own code, a panic unwinding
+/// through a scope that holds one, an early `return`/`?` — must never leak
+/// the supervised child process (a whole spawned `sky-app` server binding a
+/// real port) as an orphan. `stop()` and `Drop::drop` therefore share one
+/// synchronous, bounded implementation: signal the orchestrator, then block
+/// (up to [`SHUTDOWN_WAIT_BUDGET`]) until it confirms teardown is done —
+/// not merely requested.
 pub struct WatchHandle {
     stop_tx: mpsc::Sender<()>,
+    /// Signalled by the orchestrator thread's own wrapper (see [`spawn`])
+    /// once `run_inner` has returned — i.e. AFTER `SupervisorState::shutdown`
+    /// has killed/reaped the supervised child and every helper thread has
+    /// been joined. `Mutex<Option<..>>` rather than a bare `Receiver` so
+    /// `stop()` can take `&self` (matching its pre-existing public
+    /// signature) while still being able to drain the receiver exactly
+    /// once; a second `stop()`/`Drop` call after the first successful wait
+    /// finds `None` and is a harmless no-op, matching `stop()`'s existing
+    /// idempotency contract.
+    done_rx: Mutex<Option<mpsc::Receiver<()>>>,
 }
 
 impl WatchHandle {
-    /// Request a clean shutdown. Idempotent (a second call is a harmless
-    /// no-op once the receiver has already disconnected).
+    /// Request a clean shutdown and BLOCK (bounded by
+    /// [`SHUTDOWN_WAIT_BUDGET`]) until the orchestrator thread confirms it
+    /// has actually finished — not merely until the request was sent.
+    /// Idempotent: a second call, or a call after `Drop` already waited
+    /// (impossible through the public API, since `Drop` consumes `self`,
+    /// but relevant to `Drop`'s own internal reuse of this method) is a
+    /// harmless no-op.
     pub fn stop(&self) {
         let _ = self.stop_tx.send(());
+        self.wait_for_shutdown();
+    }
+
+    /// Block until the orchestrator's done-signal arrives, or
+    /// [`SHUTDOWN_WAIT_BUDGET`] elapses — whichever comes first. Draining
+    /// (`Option::take`) the receiver makes this safe to call more than
+    /// once: every call after the first successful wait (or a prior
+    /// `Drop`) is a no-op.
+    fn wait_for_shutdown(&self) {
+        let mut guard = self
+            .done_rx
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(rx) = guard.take() {
+            let _ = rx.recv_timeout(SHUTDOWN_WAIT_BUDGET);
+        }
+    }
+}
+
+impl Drop for WatchHandle {
+    /// The safety net described on the type itself: guarantees the
+    /// supervised child process is torn down even when the embedder never
+    /// called `stop()` — including when a panic unwinds through a scope
+    /// holding a `WatchHandle`. Rust always runs `Drop` during ordinary
+    /// unwinding (this is not the `abort` panic strategy), so this fires on
+    /// both the "forgot to call `stop()`" and the "panicked while holding
+    /// one" cases the review flagged. `stop_tx.send` and
+    /// `recv_timeout` are both plain, synchronous, non-blocking-by-default
+    /// calls (no `.await`, nothing that needs an async runtime), so this is
+    /// sound to run directly from `drop`.
+    fn drop(&mut self) {
+        let _ = self.stop_tx.send(());
+        self.wait_for_shutdown();
     }
 }
 
@@ -372,8 +447,25 @@ impl WatchHandle {
 #[must_use]
 pub fn spawn(opts: WatchOptions) -> (thread::JoinHandle<Result<(), CliError>>, WatchHandle) {
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
-    let handle = thread::spawn(move || run_inner(&opts, Some(stop_rx)));
-    (handle, WatchHandle { stop_tx })
+    // `done_tx` is moved into the spawned thread's own closure (never handed
+    // to `run_inner` itself) and is unconditionally dropped the instant that
+    // closure returns — on EVERY exit path (the clean `Ok(())` after full
+    // shutdown, or an early setup-failure `Err`), not just the happy path.
+    // `WatchHandle::wait_for_shutdown` therefore unblocks promptly even if
+    // `run_inner` fails before ever reaching its main loop.
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let handle = thread::spawn(move || {
+        let result = run_inner(&opts, Some(stop_rx));
+        let _ = done_tx.send(());
+        result
+    });
+    (
+        handle,
+        WatchHandle {
+            stop_tx,
+            done_rx: Mutex::new(Some(done_rx)),
+        },
+    )
 }
 
 enum CompileOutcome {
@@ -433,21 +525,63 @@ fn run_inner(
         notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             let Ok(event) = res else { return };
             // Reject non-mutating ACCESS events (open/read/execute) and the
-            // watch-internal `Other` kind. This is load-bearing, not an
-            // optimisation: the orchestrator's own `resolve_project_sources`
-            // OPENS every in-scope `.sky` file (and reads the watched
-            // directory) on EVERY rebuild cycle. Some backends (Linux
-            // inotify, by default) report that open/read as an
-            // `Access(Open)` event — without this filter, the watcher would
-            // observe its own read, queue another rebuild, read again to
-            // service it, and so on forever (a self-triggering rebuild
-            // storm this was caught by, not merely guarded against
-            // speculatively). `Create`/`Modify`/`Remove`/`Any` (the
-            // "imprecise backend" catch-all) all still pass through — this
-            // is a narrow, explicit exclusion of the two kinds that can
-            // NEVER represent a content change, not a broad allowlist that
-            // could silently drop a real future event kind.
-            if event.kind.is_access() || matches!(event.kind, notify::EventKind::Other) {
+            // watch-internal `Other` kind — EXCEPT `Access(Close(Write))`,
+            // which is deliberately let through (see below). This is
+            // load-bearing, not an optimisation: the orchestrator's own
+            // `resolve_project_sources` OPENS every in-scope `.sky` file
+            // (and reads the watched directory) on EVERY rebuild cycle.
+            // Some backends (Linux inotify, by default) report that
+            // open/read as an `Access(Open)`/`Access(Close(Read))` event —
+            // without this filter, the watcher would observe its own read,
+            // queue another rebuild, read again to service it, and so on
+            // forever (a self-triggering rebuild storm this was caught by,
+            // not merely guarded against speculatively). `resolve_project_
+            // sources` only ever opens `.sky` files for READING, so it can
+            // never itself produce the one Access variant this filter
+            // exempts (`Close(Write)` — see below); the exemption cannot
+            // reopen the self-trigger hole.
+            //
+            // `Close(Write)` exemption (independent review, coalescing
+            // race): `std::fs::write` — and most editors' "atomic-ish"
+            // save path — is `open(O_TRUNC) → write() → close()`, which is
+            // NOT one atomic filesystem operation. `open(O_TRUNC)` alone
+            // can fire `Modify(Data)` (truncating IS a data change) the
+            // instant the file is EMPTIED, strictly BEFORE the writer's own
+            // `write()` call actually lands the new bytes. Under enough
+            // scheduling pressure on the WRITING process/thread (verified:
+            // 8-way CPU saturation + a concurrent real `cargo build`
+            // reproduces this reliably; a quiet system does not), the gap
+            // between that `open(O_TRUNC)` and the following `write()` can
+            // exceed the debounce quiescence window — the coalescer, having
+            // received only the truncate's `Modify(Data)` and nothing more
+            // within its window, correctly (by ITS OWN local contract)
+            // considers the batch settled and fires a rebuild that reads a
+            // GENUINELY EMPTY file on disk (`SKY-P0020` "malformed module
+            // header"), followed shortly by a second, correct rebuild once
+            // the writer finally catches up and closes the file. Previously
+            // filtering out EVERY `Access` variant (including
+            // `Close(Write)`) discarded the one signal that is only ever
+            // emitted once a write-mode file handle is actually `close()`d
+            // — which, by the writing process's own fd lifecycle, can only
+            // happen AFTER its `write()` call returns. Letting that specific
+            // event back through means the coalescer's quiescence timer
+            // resets on it exactly like any other mutating event, so a
+            // truncate-then-write sequence that spans MORE than the nominal
+            // debounce window still gets folded into the SAME batch — closed
+            // by construction (keyed off the syscall that is a
+            // write-completion PROOF), not by widening a timing margin and
+            // hoping it's wide enough. `Create`/`Modify`/`Remove`/`Any` (the
+            // "imprecise backend" catch-all) all still pass through
+            // unconditionally, same as before.
+            let is_write_close = matches!(
+                event.kind,
+                notify::EventKind::Access(notify::event::AccessKind::Close(
+                    notify::event::AccessMode::Write
+                ))
+            );
+            if !is_write_close
+                && (event.kind.is_access() || matches!(event.kind, notify::EventKind::Other))
+            {
                 return;
             }
             for path in event.paths {
@@ -712,6 +846,23 @@ fn run_inner(
             OrchestratorEvent::Shutdown => break,
         }
     }
+
+    // Explicitly drop the notify watcher — and with it, its owned `raw_tx`
+    // clone — BEFORE waiting on `coalesce_handle` below. `raw_tx` is moved
+    // (never `.clone()`d — see `mpsc::channel` above) into `watcher`'s own
+    // event callback, so `watcher` is the SOLE owner of a live sender.
+    // `sky_watch::coalesce_loop`'s blocking `raw_rx.recv()` only returns
+    // once every `raw_tx` sender has been dropped; leaving `watcher` to die
+    // via its ordinary end-of-function scope drop (i.e. AFTER
+    // `coalesce_handle.join()` below) means that `join()` blocks FOREVER —
+    // notify's own internal OS-watch thread stays parked (`epoll_wait`),
+    // `raw_rx` never observes a disconnect, and the whole shutdown wedges.
+    // Confirmed live via `/proc/<pid>/task/*/wchan` before this fix: the
+    // notify thread parked in `ep_poll` while every sibling thread sat in
+    // `futex_wait_queue_me`, and both `watch_rebuild_on_save_swaps_…` and
+    // `watch_coalesces_a_rapid_double_save_…` hung past their nextest
+    // SIGTERM ceiling as a direct result.
+    drop(watcher);
 
     if let Some(child) = cargo_child.take()
         && let Ok(mut child) = child.lock()
