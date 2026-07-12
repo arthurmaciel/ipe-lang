@@ -162,7 +162,11 @@ fn compute_program_metadata(program: &Program) -> ProgramMetadata {
 /// Long by necessity, not by neglect: one match arm per [`Expr`] variant is
 /// exactly the exhaustiveness this file's module doc requires.
 #[allow(clippy::too_many_lines)]
-fn walk_expr(expr: &Expr, direct_calls: &mut BTreeSet<FuncId>, types: &mut BTreeSet<(ModPath, Symbol)>) {
+fn walk_expr(
+    expr: &Expr,
+    direct_calls: &mut BTreeSet<FuncId>,
+    types: &mut BTreeSet<(ModPath, Symbol)>,
+) {
     match expr {
         Expr::Int(_)
         | Expr::Bool(_)
@@ -187,7 +191,11 @@ fn walk_expr(expr: &Expr, direct_calls: &mut BTreeSet<FuncId>, types: &mut BTree
             walk_expr(lhs, direct_calls, types);
             walk_expr(rhs, direct_calls, types);
         }
-        Expr::Let { name: _, value, body } => {
+        Expr::Let {
+            name: _,
+            value,
+            body,
+        } => {
             walk_expr(value, direct_calls, types);
             walk_expr(body, direct_calls, types);
         }
@@ -226,7 +234,12 @@ fn walk_expr(expr: &Expr, direct_calls: &mut BTreeSet<FuncId>, types: &mut BTree
             walk_expr(head, direct_calls, types);
             walk_expr(tail, direct_calls, types);
         }
-        Expr::ListIndexClone { list, index: _ } | Expr::ListLenCheck { list, len: _, exact: _ } => {
+        Expr::ListIndexClone { list, index: _ }
+        | Expr::ListLenCheck {
+            list,
+            len: _,
+            exact: _,
+        } => {
             walk_expr(list, direct_calls, types);
         }
         Expr::Record(fields) => {
@@ -278,7 +291,11 @@ fn walk_expr(expr: &Expr, direct_calls: &mut BTreeSet<FuncId>, types: &mut BTree
 
 /// Walk one match arm: its pattern (for constructed/matched types), its
 /// optional guard, and its body.
-fn walk_arm(arm: &Arm, direct_calls: &mut BTreeSet<FuncId>, types: &mut BTreeSet<(ModPath, Symbol)>) {
+fn walk_arm(
+    arm: &Arm,
+    direct_calls: &mut BTreeSet<FuncId>,
+    types: &mut BTreeSet<(ModPath, Symbol)>,
+) {
     walk_pat(&arm.pat, types);
     if let Some(guard) = &arm.guard {
         walk_expr(guard, direct_calls, types);

@@ -216,7 +216,10 @@ fn tui_onkey_record_typechecks() {
         let sky_dir = std::env::temp_dir().join(format!("tui_onkey_{label}_sky"));
         let _ = std::fs::remove_dir_all(&sky_dir);
         let created = std::fs::create_dir_all(&sky_dir);
-        assert!(created.is_ok(), "{label}: cannot create temp dir: {created:?}");
+        assert!(
+            created.is_ok(),
+            "{label}: cannot create temp dir: {created:?}"
+        );
 
         let entry = sky_dir.join("Main.sky");
         let wrote = std::fs::write(&entry, source);

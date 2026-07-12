@@ -73,8 +73,7 @@ fn record_pattern_in_ctor_payload_accepted() {
         .join("golden")
         .join("m3b2_gate_record_payload")
         .join("Main.sky");
-    let out =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m3b2_gate_record_payload_emit");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m3b2_gate_record_payload_emit");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = skyc::resolve_runtime() else {
@@ -110,8 +109,7 @@ fn redundant_nested_arm_is_sky_t0011_warning_build_succeeds() {
         .join("golden")
         .join("m3b2_gate_redundant_nested")
         .join("Main.sky");
-    let out =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m3b2_gate_redundant_nested_emit");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m3b2_gate_redundant_nested_emit");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = skyc::resolve_runtime() else {

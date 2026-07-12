@@ -62,4 +62,3 @@ fn ctor_pattern_arity_is_sky_t0013() {
         sky_diagnostics::SKY_T0013,
     );
 }
-

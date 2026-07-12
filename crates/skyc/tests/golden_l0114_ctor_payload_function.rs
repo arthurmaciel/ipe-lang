@@ -93,11 +93,18 @@ fn repo_root() -> PathBuf {
 }
 
 fn fixture_entry(root: &Path, name: &str) -> PathBuf {
-    root.join("tests").join("golden").join(name).join("Main.sky")
+    root.join("tests")
+        .join("golden")
+        .join(name)
+        .join("Main.sky")
 }
 
 fn fixture_src_entry(root: &Path, name: &str) -> PathBuf {
-    root.join("tests").join("golden").join(name).join("src").join("Main.sky")
+    root.join("tests")
+        .join("golden")
+        .join(name)
+        .join("src")
+        .join("Main.sky")
 }
 
 /// Build `name`'s `Main.sky` and return the diagnostic code if the pipeline
@@ -126,13 +133,21 @@ fn result_and_map_fn_payload_accepted() {
         return;
     }
     let (built, out) = built_code(&root, "l0114_result_and_map_fn_payload");
-    assert!(built.is_ok(), "Ok f |> Result.andMap must be accepted: {built:?}");
+    assert!(
+        built.is_ok(),
+        "Ok f |> Result.andMap must be accepted: {built:?}"
+    );
 
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("l0114_result_and_map_fn_payload", &out);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0; stdout:\n{}", outcome.stdout);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "exit 0; stdout:\n{}",
+        outcome.stdout
+    );
     assert_eq!(outcome.stdout.trim(), "3");
 }
 
@@ -145,13 +160,21 @@ fn maybe_and_map_fn_payload_accepted() {
         return;
     }
     let (built, out) = built_code(&root, "l0114_maybe_and_map_fn_payload");
-    assert!(built.is_ok(), "Just f |> Maybe.andMap must be accepted: {built:?}");
+    assert!(
+        built.is_ok(),
+        "Just f |> Maybe.andMap must be accepted: {built:?}"
+    );
 
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("l0114_maybe_and_map_fn_payload", &out);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0; stdout:\n{}", outcome.stdout);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "exit 0; stdout:\n{}",
+        outcome.stdout
+    );
     assert_eq!(outcome.stdout.trim(), "42");
 }
 
@@ -187,7 +210,12 @@ fn let_bound_fn_payload_accepted() {
         return;
     }
     let outcome = support::build_and_run_emitted("l0114_let_bound_fn_payload", &out);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0; stdout:\n{}", outcome.stdout);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "exit 0; stdout:\n{}",
+        outcome.stdout
+    );
     assert_eq!(outcome.stdout.trim(), "42");
 }
 
@@ -210,7 +238,12 @@ fn let_bound_maybe_fn_payload_accepted() {
         return;
     }
     let outcome = support::build_and_run_emitted("l0114_let_bound_maybe_fn_payload", &out);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0; stdout:\n{}", outcome.stdout);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "exit 0; stdout:\n{}",
+        outcome.stdout
+    );
     assert_eq!(outcome.stdout.trim(), "42");
 }
 
@@ -224,13 +257,21 @@ fn ctor_decl_fn_payload_accepted() {
         return;
     }
     let (built, out) = built_code(&root, "l0114_ctor_decl_fn_payload");
-    assert!(built.is_ok(), "declared fn-typed ctor payload must be accepted: {built:?}");
+    assert!(
+        built.is_ok(),
+        "declared fn-typed ctor payload must be accepted: {built:?}"
+    );
 
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("l0114_ctor_decl_fn_payload", &out);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0; stdout:\n{}", outcome.stdout);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "exit 0; stdout:\n{}",
+        outcome.stdout
+    );
     assert_eq!(outcome.stdout.trim(), "retry");
 }
 
@@ -244,13 +285,21 @@ fn fn_extracted_called_twice_accepted() {
         return;
     }
     let (built, out) = built_code(&root, "l0114_fn_extracted_called_twice");
-    assert!(built.is_ok(), "calling an extracted fn twice must be accepted: {built:?}");
+    assert!(
+        built.is_ok(),
+        "calling an extracted fn twice must be accepted: {built:?}"
+    );
 
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("l0114_fn_extracted_called_twice", &out);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0; stdout:\n{}", outcome.stdout);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "exit 0; stdout:\n{}",
+        outcome.stdout
+    );
     assert_eq!(outcome.stdout.trim(), "5");
 }
 
@@ -457,13 +506,21 @@ fn lambda_param_call_twice_accepted() {
         return;
     }
     let (built, out) = built_code(&root, "l0127_lambda_param_call_twice_accepted");
-    assert!(built.is_ok(), "calling a lambda param twice must be accepted: {built:?}");
+    assert!(
+        built.is_ok(),
+        "calling a lambda param twice must be accepted: {built:?}"
+    );
 
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("l0127_lambda_param_call_twice_accepted", &out);
-    assert_eq!(outcome.exit_code, Some(0), "exit 0; stdout:\n{}", outcome.stdout);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "exit 0; stdout:\n{}",
+        outcome.stdout
+    );
     assert_eq!(outcome.stdout.trim(), "5");
 }
 
@@ -533,7 +590,11 @@ fn assert_accepted_runs(name: &str, expected_stdout: &str) {
         "{name}: emitted crate must build and exit 0; stdout:\n{}",
         outcome.stdout
     );
-    assert_eq!(outcome.stdout.trim(), expected_stdout, "{name}: wrong runtime output");
+    assert_eq!(
+        outcome.stdout.trim(),
+        expected_stdout,
+        "{name}: wrong runtime output"
+    );
 }
 
 /// THE 12TH SHAPE — the one that broke the 4th attempt (revert `2a7b0d6`):
@@ -605,8 +666,10 @@ fn and_map_cross_module_untyped_forwarder_curried_rejected() {
     if skyc::resolve_runtime().is_err() {
         return;
     }
-    let entry =
-        fixture_src_entry(&root, "l0114_and_map_cross_module_untyped_forwarder_curried");
+    let entry = fixture_src_entry(
+        &root,
+        "l0114_and_map_cross_module_untyped_forwarder_curried",
+    );
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("l0114_and_map_cross_module_untyped_forwarder_curried_emit");
     let _ = std::fs::remove_dir_all(&out);

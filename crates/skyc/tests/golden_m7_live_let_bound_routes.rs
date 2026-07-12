@@ -37,8 +37,7 @@ fn run_skyc() -> Option<Result<(), skyc::CliError>> {
         .join("golden")
         .join("m7_live_let_bound_routes")
         .join("Main.sky");
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("m7_live_let_bound_routes_emit");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_let_bound_routes_emit");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = skyc::resolve_runtime() else {

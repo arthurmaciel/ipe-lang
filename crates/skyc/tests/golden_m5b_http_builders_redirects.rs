@@ -48,8 +48,7 @@ fn redirect_builders_compile_and_run() {
     // Emission regression: each builder must emit its clone-and-reassign
     // block targeting the right field (not fall through to an undefined
     // `http_with_url(...)` call, which would be a SEAL breach at cargo).
-    let emitted =
-        std::fs::read_to_string(out.join("src").join("main.rs")).unwrap_or_default();
+    let emitted = std::fs::read_to_string(out.join("src").join("main.rs")).unwrap_or_default();
     for needle in [
         "__sky_rec.url = ",
         "__sky_rec.followRedirects = ",

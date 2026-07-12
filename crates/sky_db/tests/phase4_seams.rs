@@ -190,7 +190,11 @@ fn lower_program_memoized_coarse_floor() {
     // Repeat demand: both memo-hit.
     log.clear();
     assert!(sky_db::lower_program(&db, root, b).is_ok());
-    assert_eq!(log.executions_of("lower_program("), 0, "repeat demand memoized");
+    assert_eq!(
+        log.executions_of("lower_program("),
+        0,
+        "repeat demand memoized"
+    );
     assert_eq!(log.executions_of("typecheck("), 0);
 
     // Byte-equal re-save: still nothing executes.

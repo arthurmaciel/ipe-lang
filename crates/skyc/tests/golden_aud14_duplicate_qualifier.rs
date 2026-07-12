@@ -79,7 +79,10 @@ fn distinct_modules_sharing_an_explicit_alias_is_rejected() {
         ..
     } = diag
     else {
-        assert!(false_marker(), "expected NameError::DuplicateQualifier, got: {err}");
+        assert!(
+            false_marker(),
+            "expected NameError::DuplicateQualifier, got: {err}"
+        );
         return;
     };
     assert_eq!(&**qualifier, "Utils");

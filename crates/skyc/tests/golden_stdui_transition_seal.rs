@@ -112,7 +112,11 @@ fn transition_e2e_builds_and_renders_shorthand() {
         return;
     }
     let (emit, res) = build_transition_project();
-    assert!(res.is_ok(), "transition E2E build must succeed: {:?}", res.err());
+    assert!(
+        res.is_ok(),
+        "transition E2E build must succeed: {:?}",
+        res.err()
+    );
 
     let outcome = support::build_and_run_emitted("stdui_transition_seal", &emit);
     assert_eq!(

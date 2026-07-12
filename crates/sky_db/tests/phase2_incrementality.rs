@@ -95,7 +95,8 @@ fn files_map(files: &[(&[&str], SourceFile)]) -> BTreeMap<Vec<String>, SourceFil
 
 const DEP_A: &str = "module A exposing (visible)\n\nvisible = 1\n\nhidden = 2\n";
 const DEP_A_BODY_EDIT: &str = "module A exposing (visible)\n\nvisible = 1\n\nhidden = 3\n";
-const DEP_A_EXPORT_EDIT: &str = "module A exposing (visible, hidden)\n\nvisible = 1\n\nhidden = 2\n";
+const DEP_A_EXPORT_EDIT: &str =
+    "module A exposing (visible, hidden)\n\nvisible = 1\n\nhidden = 2\n";
 const IMPORTER_B: &str = "module B exposing (b)\n\nimport A exposing (visible)\n\nb = visible\n";
 const UNRELATED_C: &str = "module C exposing (c)\n\nc = 10\n";
 const UNRELATED_C_EDIT: &str = "module C exposing (c)\n\nc = 11\n";
@@ -141,7 +142,11 @@ fn module_interface_firewall() {
 
     let warm = canonicalize(&db, root, b);
     assert!(warm.is_ok(), "importer must canonicalise on the warm run");
-    assert_eq!(log.executions_of("canonicalize("), 2, "warm run canons A + B");
+    assert_eq!(
+        log.executions_of("canonicalize("),
+        2,
+        "warm run canons A + B"
+    );
 
     // Body-only edit to A: `hidden` (a PRIVATE, unexported binding) changes.
     log.clear();
@@ -327,7 +332,11 @@ fn resolve_imports_rename_module() {
 #[test]
 fn stdlib_shadow_stays_rejected() {
     let (db, _log) = logged_db();
-    let squatter = file(&db, &["Std", "Fake"], "module Std.Fake exposing (x)\n\nx = 1\n");
+    let squatter = file(
+        &db,
+        &["Std", "Fake"],
+        "module Std.Fake exposing (x)\n\nx = 1\n",
+    );
     let root = root_of(&db, &[(&["Std", "Fake"], squatter)]);
     let red = canonicalize(&db, root, squatter);
     assert!(
