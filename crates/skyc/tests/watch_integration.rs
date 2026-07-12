@@ -165,6 +165,57 @@ fn stop_and_join(
     )
 }
 
+/// Find a live process whose `/proc/<pid>/environ` contains the exact
+/// `key=value` pair `ipe watch` injects into its supervised child's
+/// environment (`watch::child_env` sets `SKY_LIVE_PORT`/`SKY_SERVER_PORT`
+/// to the configured port — see `watch.rs`). Matching on the environment
+/// rather than `cmdline`/the executable PATH is deliberate: the emitted
+/// binary's actual on-disk location depends on where `cargo build` puts it
+/// (honouring `CARGO_TARGET_DIR` if the test-runner's own environment sets
+/// one — exactly the isolation convention this workspace's agent lanes
+/// use), so asserting anything about that path here would make the test
+/// depend on incidental build-cache configuration rather than the one thing
+/// this test actually needs: an unambiguous handle on the correct PID.
+/// `/proc/<pid>/environ` entries are NUL-separated, and NUL (0x00) is valid
+/// single-byte UTF-8, so `String::from_utf8_lossy` preserves it verbatim —
+/// matching `"KEY=VALUE\0"` (trailing NUL included) rules out a value that
+/// merely starts with the same digits as another test's port. Linux-only:
+/// the whole bug-3 regression below needs `/proc` for a black-box
+/// PID-liveness check without adding any new production API surface just
+/// for a test.
+#[cfg(target_os = "linux")]
+fn find_pid_by_environ_kv(key: &str, value: &str) -> Option<u32> {
+    let needle = format!("{key}={value}\0");
+    for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Ok(environ) = std::fs::read(entry.path().join("environ")) else {
+            continue;
+        };
+        if String::from_utf8_lossy(&environ).contains(&needle) {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+/// Whether `pid` still names a live process. `/proc/<pid>` disappears the
+/// moment the process is BOTH dead AND reaped (a zombie still has an entry
+/// until its parent `wait()`s it) — which is exactly the property the
+/// bug-3 regression needs: `SupervisorState::shutdown`'s `stop_gracefully`
+/// calls `child.wait()` after killing it, so a lingering `/proc/<pid>` here
+/// would mean the child was signalled but never actually reaped, not merely
+/// "not yet observed dead".
+#[cfg(target_os = "linux")]
+fn pid_is_alive(pid: u32) -> bool {
+    std::path::Path::new(&format!("/proc/{pid}")).exists()
+}
+
 #[test]
 fn watch_rebuild_on_save_swaps_the_running_binary() -> Result<(), BoxError> {
     if std::env::var("SKY_E2E").is_err() {
@@ -272,4 +323,70 @@ fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError
     );
 
     stop_and_join(&handle, join)
+}
+
+/// Bug-3 regression: an embedder that lets a [`WatchHandle`] fall out of
+/// scope WITHOUT ever calling `stop()` — the exact shape of a caller bug, or
+/// a panic unwinding through a scope that holds one — must not leak the
+/// supervised child process as an orphan. `Drop for WatchHandle` is the
+/// safety net; this proves it actually reaps the child, not merely that it
+/// compiles.
+///
+/// Linux-only (`/proc`-based PID liveness — see `find_pid_by_environ_kv`/
+/// `pid_is_alive`): no new production API surface was added just to make
+/// this observable from a black-box test.
+#[cfg(target_os = "linux")]
+#[test]
+fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        eprintln!("skipping (set SKY_E2E=1 to run)");
+        return Ok(());
+    }
+    let (sky_dir, out_dir) = fresh_dirs("drop_reaps_child")?;
+    write_main(&sky_dir, &server_fixture("v1"))?;
+
+    let sink = EventSink::default();
+    let port = 19155;
+    let (join, handle) = start_watch(&sky_dir.join("Main.sky"), &out_dir, port, &sink)?;
+
+    assert!(
+        wait_for_body(port, "v1", Duration::from_secs(120)),
+        "initial cold build+spawn must serve v1"
+    );
+
+    // `watch::child_env` sets `SKY_LIVE_PORT=<port>` in the supervised
+    // child's own environment, unique to this test's port — a stronger
+    // handle on the right PID than the executable's on-disk path (which
+    // moves if the test-runner's own environment sets `CARGO_TARGET_DIR`).
+    let child_pid = find_pid_by_environ_kv("SKY_LIVE_PORT", &port.to_string())
+        .expect("the supervised child process must be discoverable via /proc once v1 is serving");
+    assert!(
+        pid_is_alive(child_pid),
+        "sanity: the child must be alive right after v1 is confirmed serving"
+    );
+
+    // Simulate the abnormal-exit shape the bug report describes: drop the
+    // `WatchHandle` directly, never calling `stop()`. `Drop::drop` is the
+    // ONLY thing standing between this and an orphaned `sky-app` server
+    // holding a real port open forever.
+    drop(handle);
+
+    // `Drop`'s synchronous wait-for-shutdown (bounded by
+    // `SHUTDOWN_WAIT_BUDGET` inside `watch.rs`) means the child is
+    // GUARANTEED fully reaped by the time `drop(handle)` above returns — no
+    // polling loop needed here, unlike a fire-and-forget shutdown request
+    // would require.
+    assert!(
+        !pid_is_alive(child_pid),
+        "WatchHandle::drop must reap the supervised child even when stop() was never called \
+         (it must have been both killed AND wait()ed — a lingering zombie also fails this)"
+    );
+
+    // The orchestrator thread has also fully exited by now (`Drop` waited
+    // for its own done-signal, which only fires after `run_inner` returns)
+    // — this join is a formality, not a wait.
+    join.join().map_or_else(
+        |_| Err("watch thread panicked".into()),
+        |result| result.map_err(|e| -> BoxError { e.to_string().into() }),
+    )
 }
