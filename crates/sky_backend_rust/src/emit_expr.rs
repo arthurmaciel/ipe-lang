@@ -6820,9 +6820,18 @@ fn render_record_pat(ctx: &EmitCtx, fields: &[(Symbol, Pat)]) -> DResult<String>
 }
 
 /// Field names of the `HttpRequest` runtime struct, sorted alphabetically.
-/// Used by [`emit_record`] to detect `HttpRequest` literals and bypass the
-/// synthesised-struct lookup (the type is defined in `sky_runtime::http_client`,
-/// not emitted by the backend).
+/// Used by [`emit_record`] as a FALLBACK to detect `HttpRequest` literals and
+/// bypass the synthesised-struct lookup (the type is defined in
+/// `sky_runtime::http_client`, not emitted by the backend) — consulted only
+/// when [`EmitCtx::has_record_struct_for`] finds no registered struct for the
+/// literal's field-name set. See that method's doc comment for why the two
+/// checks must run in THIS order (registry first, name-only fallback
+/// second): `sky_backend_rust` has no access to `sky_lower`'s `Ty` /
+/// `canon::Type` (no cross-crate dependency), so it cannot re-run the
+/// lowerer's now-TYPE-AWARE `HttpRequest`-shape test
+/// (`sky_lower::lower::is_http_request_shape`) directly here — deferring to
+/// the registry is how this call site stays in sync with that test without
+/// duplicating it.
 const HTTP_REQUEST_FIELDS: &[&str] = &[
     "body",
     "followRedirects",
@@ -6854,17 +6863,35 @@ fn emit_record(
         key.push(ctx.resolve_ident(*sym)?.to_owned());
     }
     let struct_name: String = {
-        let mut sorted = key.clone();
-        sorted.sort();
-        let is_http_request = sorted.len() == HTTP_REQUEST_FIELDS.len()
-            && sorted
-                .iter()
-                .zip(HTTP_REQUEST_FIELDS.iter())
-                .all(|(a, b)| a.as_str() == *b);
-        if is_http_request {
-            "HttpRequest".to_owned()
-        } else {
+        // Prefer an actual synthesised struct when one is registered for
+        // this exact field-name set — that reflects `sky_lower`'s
+        // authoritative, TYPE-AWARE decision (see
+        // `EmitCtx::has_record_struct_for`'s doc comment). Only fall back to
+        // the field-NAME-only `HttpRequest` heuristic when NO struct is
+        // registered, which is precisely the signature of a genuine
+        // `HttpRequest` literal (the lowerer intercepts it into the opaque
+        // `IrType::HttpRequest` before it ever reaches the struct registry).
+        // This ordering closes the false-positive class where an unrelated
+        // record sharing the 7 canonical field NAMES with unrelated field
+        // TYPES (e.g. all-`Int`) used to be mislabelled `HttpRequest` here
+        // even after `sky_lower` had already registered a correctly-typed
+        // struct for it — the exact two-path divergence this shortcut used
+        // to reintroduce.
+        if ctx.has_record_struct_for(&key) {
             ctx.record_name_for_literal(&key)?.to_owned()
+        } else {
+            let mut sorted = key.clone();
+            sorted.sort();
+            let is_http_request = sorted.len() == HTTP_REQUEST_FIELDS.len()
+                && sorted
+                    .iter()
+                    .zip(HTTP_REQUEST_FIELDS.iter())
+                    .all(|(a, b)| a.as_str() == *b);
+            if is_http_request {
+                "HttpRequest".to_owned()
+            } else {
+                ctx.record_name_for_literal(&key)?.to_owned()
+            }
         }
     };
     let mut parts = Vec::with_capacity(fields.len());
