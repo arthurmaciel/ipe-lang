@@ -18,6 +18,7 @@
 mod cache;
 pub mod project;
 pub mod stdlib;
+pub mod watch;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -1063,6 +1064,7 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
 /// The top-level usage hint, listing every subcommand and flag.
 const USAGE: &str = "usage:\n  \
      skyc build <entry.sky|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
+     skyc watch <entry.sky|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
      skyc explain [<CODE>]\n  \
      skyc fix <entry.sky> [--yes]";
 
@@ -1073,10 +1075,46 @@ const USAGE: &str = "usage:\n  \
 pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     match args.split_first() {
         Some((cmd, rest)) if cmd == "build" => run_build(rest),
+        Some((cmd, rest)) if cmd == "watch" => run_watch(rest),
         Some((cmd, rest)) if cmd == "explain" => run_explain(rest),
         Some((cmd, rest)) if cmd == "fix" => run_fix(rest),
         _ => Err(CliError::Usage(USAGE)),
     }
+}
+
+/// `skyc watch <entry> [--out <dir>] [--runtime <dir>] [--port <n>]` — Phase
+/// 7 of the incremental-compilation plan (`crate::watch`). Never returns
+/// `Err` for a build failure (INV-3: a red build is logged, not fatal);
+/// only misuse / setup failures propagate.
+fn run_watch(rest: &[String]) -> Result<(), CliError> {
+    let mut it = rest.iter();
+    let entry = it.next().ok_or(CliError::Usage(USAGE))?.clone();
+    let mut out: Option<String> = None;
+    let mut runtime: Option<String> = None;
+    let mut port: u16 = 8000;
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--out" => out = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
+            "--runtime" => runtime = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
+            "--port" => {
+                let raw = it.next().ok_or(CliError::Usage(USAGE))?;
+                port = raw
+                    .parse()
+                    .map_err(|_| CliError::UsageOwned(format!("watch: invalid --port value: {raw}")))?;
+            }
+            _ => return Err(CliError::Usage(USAGE)),
+        }
+    }
+
+    let out_dir = out.map_or_else(|| PathBuf::from("sky-out").join("rust"), PathBuf::from);
+    let runtime_dir = match runtime {
+        Some(r) => PathBuf::from(r),
+        None => resolve_runtime()?,
+    };
+
+    let mut opts = watch::WatchOptions::new(PathBuf::from(entry), out_dir, runtime_dir);
+    opts.port = port;
+    watch::run(&opts)
 }
 
 /// `skyc build <entry.sky> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]`.

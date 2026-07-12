@@ -1,0 +1,15 @@
+[package]
+name = "sky_watch"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+# Task 21 (confined watcher). Directory-level (not inode-level) watching —
+# editors save via tmp-write + rename, so an inode watch misses the new file.
+notify = "8"
+# Task 23's `LastGoodBinary` content hash. Same pin as `skyc`'s own build
+# cache (`crates/skyc/Cargo.toml`) — one version across the workspace.
+sha2 = "0.10"
+
+[lints]
+workspace = true
