@@ -3560,6 +3560,23 @@ fn emit_ui_call(
             )))
         }
 
+        // `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg`
+        KernelFn::UiAnimateRaw => {
+            let [name_e, shorthand_e, keyframes_e, respect_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_ui_call::UiAnimateRaw",
+                    detail: format!("Ui.animateRaw requires 4 arguments, got {}", args.len()),
+                });
+            };
+            let name = emit_expr_at(ctx, name_e, indent, child, generics)?;
+            let shorthand = emit_expr_at(ctx, shorthand_e, indent, child, generics)?;
+            let keyframes = emit_expr_at(ctx, keyframes_e, indent, child, generics)?;
+            let respect = emit_expr_at(ctx, respect_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "sky_runtime::ui::helpers::ui_animate_raw_({name}, {shorthand}, {keyframes}, {respect})"
+            )))
+        }
+
         // `Ui.aspectRatio : Float -> Attribute msg`
         KernelFn::UiAspectRatio => {
             let [r_e] = args else {
