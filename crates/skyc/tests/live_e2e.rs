@@ -1327,3 +1327,223 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 
     Ok(())
 }
+
+// ── #170 — onSubmit COMPOUND-literal payloads (record / tuple / list) ─────────
+//
+// #167 closed the bare nullary-`Ctor` onSubmit payload (`onSubmit Confirm`,
+// `Confirm : Msg`). The same emit gate (`is_definitely_not_callable`) left
+// three sibling literal shapes on the wrap-and-call path even though they are
+// EQUALLY provably-non-callable structural values: a record literal
+// (`{ … }`), a tuple literal (`(…, …)`), and a list literal (`[…]`).
+//
+// `HtmlOnSubmit`'s payload type is `var(1)` in `constrain.rs`'s
+// `HtmlEventShape::Raw` arm — decoupled from `msg`, hence UNCONSTRAINED — so
+// these shapes type-check in skyc; the well-typed, SEAL-relevant program is one
+// whose `Msg` type IS that record / tuple / list (`type alias Msg = { … }`
+// etc), where the literal is a genuine `Msg` value. Before #170 each such
+// program was `skyc` exit 0 then `cargo build` E0618 ("expected function,
+// found …") — the emit site unconditionally wrapped the value in
+// `(payload_s)(_x)`. #170 extends `is_definitely_not_callable` to the three
+// compound literal variants (`Expr::Record` / `Expr::Tuple` / `Expr::List`),
+// routing them to `html_on_raw_fixed_` (fixed dispatch, no decode) — sealing
+// the class. A successful `skyc` + `cargo build` IS the assertion.
+
+/// #170 — `onSubmit` payload is a RECORD literal, `Msg` is a record alias.
+const SKY_ONSUBMIT_RECORD_LITERAL: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Html exposing (..)
+import Std.Html.Attributes exposing (..)
+import Std.Html.Events exposing (onSubmit)
+
+type alias Msg =
+    { action : String }
+
+type alias Model =
+    { last : String }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { last = "" }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    ( { model | last = msg.action }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    div []
+        [ form
+            [ onSubmit { action = "confirmed" } ]
+            [ button [ type_ "submit" ] [ text "Go" ] ]
+        , text model.last
+        ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = { action = "" }
+        }
+"#;
+
+/// #170 — `onSubmit` payload is a TUPLE literal, `Msg` is a tuple alias.
+const SKY_ONSUBMIT_TUPLE_LITERAL: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Html exposing (..)
+import Std.Html.Attributes exposing (..)
+import Std.Html.Events exposing (onSubmit)
+
+type alias Msg =
+    ( String, Int )
+
+type alias Model =
+    { last : String }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { last = "" }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    let
+        ( label, _n ) =
+            msg
+    in
+    ( { model | last = label }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    div []
+        [ form
+            [ onSubmit ( "confirmed", 1 ) ]
+            [ button [ type_ "submit" ] [ text "Go" ] ]
+        , text model.last
+        ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = ( "", 0 )
+        }
+"#;
+
+/// #170 — `onSubmit` payload is a LIST literal, `Msg` is a list alias.
+const SKY_ONSUBMIT_LIST_LITERAL: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Html exposing (..)
+import Std.Html.Attributes exposing (..)
+import Std.Html.Events exposing (onSubmit)
+
+type alias Msg =
+    List String
+
+type alias Model =
+    { count : Int }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    ( { model | count = List.length msg }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    div []
+        [ form
+            [ onSubmit [ "a", "b", "c" ] ]
+            [ button [ type_ "submit" ] [ text "Go" ] ]
+        , text (String.fromInt model.count)
+        ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = [ "" ]
+        }
+"#;
+
+/// #170 seal — BUILD-ONLY: a RECORD-literal `onSubmit` payload must compile
+/// end-to-end. A successful `skyc` + `cargo build` IS the assertion — before
+/// the fix this was `skyc` exit 0 then `cargo build` E0618.
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn live_onsubmit_record_literal_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build(
+        "live_onsubmit_record_literal_build_only",
+        SKY_ONSUBMIT_RECORD_LITERAL,
+    )?;
+    Ok(())
+}
+
+/// #170 seal — BUILD-ONLY: a TUPLE-literal `onSubmit` payload must compile
+/// end-to-end (see [`SKY_ONSUBMIT_TUPLE_LITERAL`]).
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn live_onsubmit_tuple_literal_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build(
+        "live_onsubmit_tuple_literal_build_only",
+        SKY_ONSUBMIT_TUPLE_LITERAL,
+    )?;
+    Ok(())
+}
+
+/// #170 seal — BUILD-ONLY: a LIST-literal `onSubmit` payload must compile
+/// end-to-end (see [`SKY_ONSUBMIT_LIST_LITERAL`]).
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build(
+        "live_onsubmit_list_literal_build_only",
+        SKY_ONSUBMIT_LIST_LITERAL,
+    )?;
+    Ok(())
+}
