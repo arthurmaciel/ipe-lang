@@ -4960,6 +4960,15 @@ impl<'a> Builder<'a> {
             // grid-template-columns (first arg) and grid-template-rows (second arg).
             // Native surface backing `Std.Ui.Grid.columns`/`rows`/`tracks`.
             K::UiGridTracksRaw => fun(string(), fun(string(), attr(var(0)))),
+            // `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg`
+            // — keyframe-animation name, the animation shorthand tail
+            // (`<dur>ms <easing> <delay>ms <iter> <fill>`), the `@keyframes`
+            // body, and a respect-`prefers-reduced-motion` flag. Native surface
+            // backing `Std.Ui.Animation.attribute`.
+            K::UiAnimateRaw => fun(
+                string(),
+                fun(string(), fun(string(), fun(bool_ty(), attr(var(0))))),
+            ),
 
             // #154: Ui.breakpoint + Breakpoint constants.
             //
@@ -7241,6 +7250,7 @@ mod registry_phase_c_tests {
             K::UiStyle,
             K::UiTransitionRaw,
             K::UiGridTracksRaw,
+            K::UiAnimateRaw,
             // #154: Breakpoint
             K::UiBreakpoint,
             // `Ui.mediaQuery` — the last of the #76/#45 20-kernel batch, wired

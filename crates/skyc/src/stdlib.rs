@@ -266,6 +266,23 @@ const STD_UI_TRANSITION: &str = include_str!("../stdlib/Std/Ui/Transition.sky");
 /// invariant holds. Unblocks `26-ui-showcase` (SKY-N0004: Std.Ui.Transform).
 const STD_UI_TRANSFORM: &str = include_str!("../stdlib/Std/Ui/Transform.sky");
 
+/// `Std.Ui.Animation` — typed CSS keyframe-animation `Iterations`/`FillMode`
+/// ADTs + `Spec` record + `attribute`/`defaultSpec`/`with*` builders.
+///
+/// Pure-Sky; the `animateRaw` primitive is a native `Std.Ui` kernel
+/// (`KernelFn::UiAnimateRaw`, `String -> String -> String -> Bool -> Attribute`)
+/// that constructs `AttrAnimation name shorthand keyframes respect`, rendered
+/// by `runtime/src/sky_runtime/ui/render.rs` (inline `animation:` property) and
+/// injected as an `@keyframes` block by `live::style_inject::build_anim`.
+/// Ported from `../sky/sky-stdlib/Std/Ui/Animation.sky`; the reference's
+/// `import Std.Ui exposing (animateRaw)` is qualified to `Ui.animateRaw`
+/// (mirrors the `Std.Ui.Transition` port's `Ui.transitionRaw` call).
+/// Depends on the sibling `Std.Ui.Transition` (`Easing`) and `Std.Ui.Transform`
+/// (`Prop`/`propsToCss`) ports.
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+/// Unblocks `26-ui-showcase` (SKY-N0004: Std.Ui.Animation — Animation.attribute).
+const STD_UI_ANIMATION: &str = include_str!("../stdlib/Std/Ui/Animation.sky");
+
 /// `Std.Money` — currency-typed Money on `Std.Decimal` + ISO 4217 enum.
 ///
 /// Compiled pure-Sky source: defines the `Money` / `Currency` ADTs and
@@ -320,6 +337,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Std.Ui.Transform",
         source: STD_UI_TRANSFORM,
+    },
+    CompiledStdModule {
+        dotted: "Std.Ui.Animation",
+        source: STD_UI_ANIMATION,
     },
     CompiledStdModule {
         dotted: "Std.Money",

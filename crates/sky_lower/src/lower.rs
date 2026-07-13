@@ -10208,10 +10208,15 @@ impl<'a> Lowerer<'a> {
                 // live::style_inject::build_mq (see ui_media_query_).
                 | KernelFn::UiMediaQuery,
             ) => Ok(3),
-            // Arity 4: `Ui.rgba r g b a`.
+            // Arity 4: `Ui.rgba r g b a`, `Ui.animateRaw name shorthand kf respect`.
             Callee::Kernel(
                 // `Ui.rgba : Int -> Int -> Int -> Float -> Color`
-                KernelFn::UiRgba,
+                KernelFn::UiRgba
+                // `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg`
+                // Native surface backing `Std.Ui.Animation.attribute` — carries the
+                // keyframe name, animation shorthand tail, `@keyframes` body, and the
+                // respect-`prefers-reduced-motion` flag (see ui_animate_raw_).
+                | KernelFn::UiAnimateRaw,
             ) => Ok(4),
             // ── #111: Std.Auth / Stream / HttpStream — fail-closed kernels ──
             // These kernels are registered in the qualifier table but have no
@@ -11284,6 +11289,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "style") => Ok(Callee::Kernel(KernelFn::UiStyle)),
                     ("Ui", "transitionRaw") => Ok(Callee::Kernel(KernelFn::UiTransitionRaw)),
                     ("Ui", "gridTracksRaw") => Ok(Callee::Kernel(KernelFn::UiGridTracksRaw)),
+                    ("Ui", "animateRaw") => Ok(Callee::Kernel(KernelFn::UiAnimateRaw)),
                     // #154: Ui.breakpoint + Breakpoint constants
                     ("Ui", "breakpoint") => Ok(Callee::Kernel(KernelFn::UiBreakpoint)),
                     ("Ui", "mediaQuery") => Ok(Callee::Kernel(KernelFn::UiMediaQuery)),

@@ -736,6 +736,25 @@ pub fn ui_grid_tracks_raw_<M>(cols: String, rows: String) -> Attribute<M> {
     Attribute::AttrGridTracks(cols, rows)
 }
 
+/// `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg` — the
+/// keyframe-animation `name`, the animation shorthand TAIL (built by
+/// `Std.Ui.Animation.buildShorthandTail`: `<dur>ms <easing> <delay>ms <iter>
+/// <fill>`, without the leading name token), the `@keyframes` BODY (built by
+/// `Std.Ui.Animation.buildKeyframesBody`), and a respect-`prefers-reduced-motion`
+/// flag. Mirrors `ui_transition_raw_`. The live style-injection pass
+/// (`live::style_inject::build_anim`) auto-suffixes `name` with the element's
+/// sky-id (so two `"fadeIn"`s with different keyframes don't collide), gates the
+/// rule behind `@media (prefers-reduced-motion: no-preference)` when `respect =
+/// True`, and validates the keyframes body through `sink_safe_keyframes_body`.
+pub fn ui_animate_raw_<M>(
+    name: String,
+    shorthand_tail: String,
+    keyframes_body: String,
+    respect: bool,
+) -> Attribute<M> {
+    Attribute::AttrAnimation(name, shorthand_tail, keyframes_body, respect)
+}
+
 /// `Ui.aspectRatio : Float -> Attribute msg`
 pub fn ui_aspect_ratio_<M>(r: f64) -> Attribute<M> {
     Attribute::AttrStyle("aspect-ratio".into(), format!("{r}"))
