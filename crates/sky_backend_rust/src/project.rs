@@ -14,17 +14,18 @@
 //! <epilogue: 139..>            Ffi.kernel polyfill, list helpers, entry point
 //! ```
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use sky_backend::{EmittedProject, RelPath};
 use sky_diagnostics::{DResult, Diagnostic};
-use sky_ir::{Program, TypeDef};
+use sky_ir::Program;
 
 use crate::EmitCtx;
 use crate::crate_specs;
 use crate::emit_expr::emit_func;
 use crate::emit_types::{emit_enum, emit_record_struct};
 use crate::preamble::{epilogue, preamble};
+use crate::rust_file::{Partitioned, RustFileId, partition_items};
 
 /// The golden M0 program, embedded at compile time. The fixed runtime-bindings
 /// block (kernel wrappers, golden lines 45–127) is an exact substring of it.
@@ -302,6 +303,25 @@ fn anchor_missing(anchor: &str) -> Diagnostic {
     }
 }
 
+/// Look up `file_id`'s bucket in `buckets` via `.get` (never `[]` — indexing
+/// panics on a missing key, and `clippy::indexing_slicing` is denied in this
+/// workspace). Every `file_id` this is called with comes from
+/// `Partitioned::type_order`/`func_order` themselves (built by
+/// `partition_items` from the SAME map, `emit_program`'s only caller), so a
+/// miss here can only mean an internal invariant violation — surfaced as
+/// [`Diagnostic::CompilerBug`], never a panic.
+fn bucket_or_bug<'p>(
+    buckets: &'p BTreeMap<RustFileId, (Vec<&'p sky_ir::EnumDef>, Vec<&'p sky_ir::Func>)>,
+    file_id: &RustFileId,
+) -> DResult<&'p (Vec<&'p sky_ir::EnumDef>, Vec<&'p sky_ir::Func>)> {
+    buckets.get(file_id).ok_or_else(|| Diagnostic::CompilerBug {
+        where_: "sky_backend_rust::project::emit_program",
+        detail: "type_order/func_order references a home missing from partition_items' own \
+                 buckets — internal invariant violation"
+            .to_owned(),
+    })
+}
+
 /// The fixed kernel-wrapper prelude emitted between the user types and the user
 /// functions (golden lines 45–127).
 ///
@@ -330,6 +350,14 @@ fn runtime_bindings() -> DResult<&'static str> {
 /// Emit the complete project for `program`.
 #[allow(clippy::too_many_lines)]
 pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject> {
+    // Task 3 (design doc §2.2/independent-review finding): fail closed if a
+    // synthesised record struct's name collides with a user enum's name, a
+    // function name, or (once real `mod` declarations exist — Milestone C)
+    // a `mod_ident`. Milestone A never writes more than one file, so no
+    // `mod` items exist yet — an empty set is the honest state of the
+    // world, not a loophole; Milestone C passes the real `mod_ident` set.
+    ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())?;
+
     // Capacity hint only — bytes pushed are identical. `GOLDEN` (the embedded
     // reference main.rs the preamble/epilogue are cut from) is a sound floor
     // for the fixed sections; user code grows beyond it via the usual
@@ -338,10 +366,54 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     let mut out = String::with_capacity(GOLDEN.len() + 4096);
     out.push_str(&preamble()?);
 
-    // User types, emitted from the IR.
-    for module in &program.modules {
-        for ty in &module.types {
-            let TypeDef::Enum(def) = ty;
+    // User types, emitted from the IR — routed through `partition_items`
+    // (Task 5, design doc §3.1/§5): the partition function's output is
+    // proven byte-identical in ORDER and CONTENT to the direct per-module
+    // walk it replaces, for every existing (single-Sky-module) golden.
+    // Milestone A does not yet write multiple files — everything still
+    // lands in the one growing `out: String`.
+    let Partitioned {
+        buckets,
+        type_order,
+        func_order,
+    } = partition_items(program, ctx.interner);
+
+    // Determinism fix (regression found by `parity_multimodule_adversarial_
+    // edits`'s `module-added` step, closed same session as Task 5). `buckets`'
+    // OWN `BTreeMap<RustFileId, _>` key order sorts `ModPath` by its derived
+    // `Ord`, which compares interned `Symbol`s by their RAW `u32` id. That id
+    // is NOT stable between a warm (incrementally reused) database and a cold
+    // (freshly rebuilt) one for the SAME final program state — the documented
+    // warm-db symbol-numbering limitation `clean_vs_incremental_parity.rs`'s
+    // own top doc comment records. Iterating `buckets` directly is fine for
+    // lookups / the totality proof (Task 4), but is an UNSOUND final
+    // byte-emission order the moment two or more distinct real Sky-module
+    // `home`s exist in one program — the `module-added` adversarial step is
+    // the first scenario in the suite to exercise exactly that shape
+    // (`Lib.Util` + `Lib.Extra`), and warm vs. cold interned those two
+    // modules' symbols in a different relative order, so the raw map order
+    // silently flipped which module's functions landed first.
+    //
+    // Fix: walk `type_order` (below) instead of `buckets`' own key order —
+    // `partition_items` builds it by FIRST-ENCOUNTER position over
+    // `program.modules[..].types`'s own vector order, which is a
+    // linker-computed topological order proven warm/cold-stable by
+    // `parity_multimodule_adversarial_edits` itself (that gate ran directly
+    // against the pre-Task-5 code, with no `partition_items` involved at
+    // all, and passed). See [`Partitioned`]'s own doc comment for the full
+    // story, including why this is NOT simply an alphabetical sort
+    // (`tests/golden/mm_diamond`'s `D`-before-`C`-before-`B` topological
+    // order is neither symbol-id nor lexical order). A single-bucket
+    // program (every existing golden pre-this-fixture) has nothing to
+    // reorder, so this is a byte-identical no-op for them.
+    for file_id in &type_order {
+        let (enums, _) = bucket_or_bug(&buckets, file_id)?;
+        for &def in enums {
+            out.push_str(&emit_enum(ctx, def)?);
+        }
+    }
+    if let Some((spine_enums, _)) = buckets.get(&RustFileId::Spine) {
+        for &def in spine_enums {
             out.push_str(&emit_enum(ctx, def)?);
         }
     }
@@ -379,9 +451,20 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     }
     out.push('\n');
 
-    // User functions, emitted from the IR.
-    for module in &program.modules {
-        for func in &module.funcs {
+    // User functions, emitted from the IR — routed through the SAME
+    // `partition_items` result computed above, walked via `func_order` (its
+    // OWN first-encounter order over `program.modules[..].funcs`, tracked
+    // independently of `type_order` — see [`Partitioned`]'s doc comment for
+    // why the two orders can genuinely differ). No `Spine` ordering rule is
+    // needed here: `partition_items` never routes a `Func` into the `Spine`
+    // bucket (only the SqlValue/SqlField enum special case does, and enums
+    // and funcs are disjoint Rust namespaces — design doc §2.2), so funcs
+    // land purely in `SkyModule` buckets. A byte-identical no-op reordering
+    // for every existing single-Sky-module golden, where there is only one
+    // bucket.
+    for file_id in &func_order {
+        let (_, funcs) = bucket_or_bug(&buckets, file_id)?;
+        for &func in funcs {
             out.push_str(&emit_func(ctx, func)?);
         }
     }
@@ -774,8 +857,7 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
     // Fail-open (no CompilerBug guard): when the program uses Live but NOT Db, the
     // sqlx dep is absent from the manifest and the `replacen` is a no-op, which is
     // correct — a Live-only program does not need the `postgres` feature.
-    const SQLX_SQLITE_FEATURES: &str =
-        "features = [\"runtime-tokio-rustls\", \"sqlite\"]";
+    const SQLX_SQLITE_FEATURES: &str = "features = [\"runtime-tokio-rustls\", \"sqlite\"]";
     const SQLX_POSTGRES_FEATURES: &str =
         "features = [\"runtime-tokio-rustls\", \"sqlite\", \"postgres\"]";
     // Versions + names from the SSOT; these three are bare `name = "ver"` deps.
@@ -1301,7 +1383,8 @@ mod tests {
     #[test]
     fn live_only_toml_no_postgres() {
         let server_base = server_cargo_toml(CARGO_TOML).expect("server_cargo_toml must succeed");
-        let out = live_cargo_toml(&server_base).expect("live_cargo_toml on non-db base must succeed");
+        let out =
+            live_cargo_toml(&server_base).expect("live_cargo_toml on non-db base must succeed");
         assert!(
             !out.contains("\"postgres\""),
             "a Live-only (no Db) manifest must NOT contain the postgres feature: {out}"
@@ -1320,7 +1403,10 @@ mod tests {
             out.contains(r#"features = ["runtime-tokio-rustls", "sqlite"]"#),
             "sqlite driver must keep the sqlite sqlx feature, not add postgres: {out}"
         );
-        assert!(!out.contains(r#""postgres"]"#), "sqlite driver must not enable postgres: {out}");
+        assert!(
+            !out.contains(r#""postgres"]"#),
+            "sqlite driver must not enable postgres: {out}"
+        );
     }
 
     /// The actual structural fix under test: `driver = "postgres"` must
