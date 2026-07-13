@@ -11852,14 +11852,17 @@ impl<'a> Lowerer<'a> {
                 let canon::Pattern_::PTuple(cols) = &br.pat.value else {
                     return false;
                 };
-                cols.iter().any(|c| {
-                    matches!(
-                        c.value,
-                        canon::Pattern_::PStr(_)
-                            | canon::Pattern_::PList(_)
-                            | canon::Pattern_::PCons(_, _)
-                    )
-                })
+                // A coercing sub-pattern (`PStr` / `PList` / `PCons`) needs the
+                // coerced-column path REGARDLESS of how deeply it is nested. The
+                // by-value whole `match` applies no coercion at ANY depth, so a
+                // `&str` / `&[T]` sub-pattern against an owned `String` / `Vec`
+                // leaf `cargo`-fails. Recurse through every structural column
+                // (nested tuple / ctor args / alias inner / list & cons elements)
+                // — a top-level `PStr` in a ctor-argument column is already caught
+                // by the refutable-ctor gate, but a `PStr` / `PCons` nested inside
+                // a nested-TUPLE column would otherwise slip through the previous
+                // top-level-only check (#174 fix-up: probes E + G).
+                cols.iter().any(Self::col_needs_coercion)
             });
             return Ok(!any_col_needs_coercion);
         };
@@ -11884,6 +11887,46 @@ impl<'a> Lowerer<'a> {
             }
         }
         Ok(true)
+    }
+
+    /// Does this tuple COLUMN (or any structural sub-pattern nested inside it)
+    /// contain a coercing leaf — a string literal (`PStr`), a list literal
+    /// (`PList`), or a cons (`PCons`) — that the coercion-free by-value whole
+    /// `match` cannot lower soundly?
+    ///
+    /// The by-value whole path (non-literal tuple scrutinee) matches the tuple
+    /// value directly and applies NO per-column `.as_str()` / `.as_slice()`
+    /// coercion at ANY depth. A `&str` / `&[T]` sub-pattern against an owned
+    /// `String` / `Vec` leaf therefore `cargo`-fails (E0308 / E0529). The old
+    /// gate inspected only the top-level columns, so a coercing leaf nested
+    /// inside a nested-`PTuple` column (or a ctor argument, an alias inner, or a
+    /// list / cons element) slipped through to the by-value `match` and produced
+    /// a skyc-0-then-cargo-fail (#174 fix-up: probes E + G). Recurse through every
+    /// structural sub-pattern so the whole column tree is checked; a coercing leaf
+    /// found anywhere fails closed to SKY-L0115 — exactly as a top-level coercing
+    /// column already does.
+    fn col_needs_coercion(pat: &canon::Pattern) -> bool {
+        match &pat.value {
+            // Coercing leaves — the shapes that require the coerced-column path.
+            canon::Pattern_::PStr(_) | canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => {
+                true
+            }
+            // Structural sub-patterns — recurse into every child. `PList` / `PCons`
+            // are handled by the leaf arm above (they are themselves coercing), so
+            // only the remaining nesting shapes appear here.
+            canon::Pattern_::PTuple(cols) => cols.iter().any(Self::col_needs_coercion),
+            canon::Pattern_::PCtor { args, .. } => args.iter().any(Self::col_needs_coercion),
+            canon::Pattern_::PAlias(inner, _) => Self::col_needs_coercion(inner),
+            // Non-coercing leaves — a wildcard, variable, record field-pun (binds
+            // names only, no nested sub-patterns), or a scalar literal all match by
+            // value with no coercion.
+            canon::Pattern_::PAnything
+            | canon::Pattern_::PVar(_)
+            | canon::Pattern_::PRecord(_)
+            | canon::Pattern_::PInt(_)
+            | canon::Pattern_::PBool(_)
+            | canon::Pattern_::PChar(_) => false,
+        }
     }
 
     /// Does this canonical arm pattern BIND at least one value (a variable /

@@ -1,0 +1,38 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+-- #174 fix-up — PROBE G. A coercing leaf (a CONS sub-pattern, `PCons`) nested
+-- inside a nested-TUPLE column on a VARIABLE (non-literal) tuple scrutinee.
+--
+-- `v : ( ( List Int, Int ), Tag )`. The first column is a nested tuple whose
+-- first sub-column slices the list with `x :: _`. The by-value whole `match`
+-- applies NO coercion, so the emitted `match v { (([x, ..], n), A) => … }` binds
+-- a slice pattern against an owned `Vec` element → cargo E0529.
+--
+-- Before the fix-up the coercion-needs gate inspected only the TOP-LEVEL columns,
+-- so this nested `PCons` slipped through to the coercion-free by-value path and
+-- produced skyc-0-then-cargo-fail. The gate now recurses into the nested tuple,
+-- finds the `PCons` leaf, and fails closed to SKY-L0115.
+type Tag
+    = A
+    | B
+
+
+classify : ( ( List Int, Int ), Tag ) -> Int
+classify v =
+    case v of
+        ( ( x :: _, n ), A ) ->
+            x + n
+
+        ( ( _, n ), A ) ->
+            n + 1
+
+        ( ( _, n ), B ) ->
+            n + 2
+
+
+main =
+    println (String.fromInt (classify ( ( [ 9 ], 5 ), A )))
