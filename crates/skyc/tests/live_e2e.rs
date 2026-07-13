@@ -159,6 +159,72 @@ main =
         }
 "#;
 
+/// #176 seal — BUILD-ONLY: a routed `Std.Live` app whose `subscriptions` cfg
+/// field is an INLINE LAMBDA (`\_ -> Sub.none`) rather than a top-level `fn`
+/// reference must compile end-to-end.
+///
+/// `live_app_routed`'s four function slots (`FInit`/`FUpdate`/`FView`/`FSubs`)
+/// are GENERIC type params bounded `Fn(..) -> R + Send + Sync + 'static`. A
+/// top-level `subscriptions` reference emits as a bare `fn` item (implicitly
+/// `Send + Sync`), so `examples/09` / `34` always built. But an inline lambda
+/// went through the general `emit_expr_at` path, which pins it to
+/// `Box<dyn Fn(..) -> R + Send + 'static>` — a trait object that carries `Send`
+/// but NOT `Sync`. That failed the slot's `Sync` bound: `skyc` exit 0 then
+/// `cargo build` E0277 (`dyn Fn(..) -> SkySub<Msg> + Send cannot be shared
+/// between threads safely`), the SEAL break `examples/10-live-component` hit.
+///
+/// The fix emits an inline-lambda live-cfg callback UNBOXED (`move |_| -> R
+/// { .. }`), so rustc monomorphizes the generic slot to the concrete closure
+/// type whose auto-derived `Send + Sync` satisfies the bound — the same shape
+/// the sibling `set_page` and `Route::new` builder closures already use.
+///
+/// A successful `skyc` + `cargo build` IS the assertion.
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+const SKY_LIVE_LAMBDA_SUBS: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Msg = Increment | Decrement
+
+type Page = HomePage
+
+type alias Model = { count : Int, page : Page }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0, page = HomePage }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+        Decrement ->
+            ( { model | count = model.count - 1 }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (Ui.column []
+            [ Ui.el [ Ui.onClick Increment ] (Ui.text "+")
+            , Ui.text (String.fromInt model.count)
+            ])
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = \_ -> Sub.none
+        , routes = [ Live.route "/" HomePage ]
+        , notFound = HomePage
+        }
+"#;
+
 /// A routed Sky.Live app: two pages, nullary page ctors, `routes`/`notFound`
 /// supplied. The Model carries a `page` field → `emit_live_app_inner` takes
 /// the T5 routed branch and emits `live_app_routed` instead of `live_app`.
@@ -606,6 +672,26 @@ fn live_html_helper_record_build_only() -> Result<(), BoxError> {
     }
 
     let _exe = compile_and_build("live_html_helper", SKY_LIVE_HTML_HELPER)?;
+    Ok(())
+}
+
+/// #176 seal — BUILD-ONLY: an inline-lambda `subscriptions` cfg field on a
+/// routed `Live.app` must compile end-to-end. See `SKY_LIVE_LAMBDA_SUBS` for
+/// the full rationale — before the fix this was `skyc` exit 0 then `cargo build`
+/// E0277 (`dyn Fn(..) -> SkySub<Msg> + Send cannot be shared between threads
+/// safely`) because the lambda was pinned to `Box<dyn Fn + Send>` (no `Sync`)
+/// instead of being emitted unboxed into the generic `FSubs` slot.
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn live_lambda_subscriptions_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build("live_lambda_subs", SKY_LIVE_LAMBDA_SUBS)?;
     Ok(())
 }
 
