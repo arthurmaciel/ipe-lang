@@ -7446,7 +7446,7 @@ fn emit_func_value(
 /// curry path in [`emit_json_decoder_call`] (wraps it in `curry{n}(…)` instead).
 /// `depth` is the lambda's own IR-nesting level; the body is emitted one level
 /// deeper.
-fn emit_lambda_unboxed(
+pub fn emit_lambda_unboxed(
     ctx: &EmitCtx,
     params: &[(Symbol, IrType)],
     ret: &IrType,
