@@ -25,6 +25,7 @@ use crate::crate_specs;
 use crate::emit_expr::emit_func;
 use crate::emit_types::{emit_enum, emit_record_struct};
 use crate::preamble::{epilogue, preamble};
+use crate::rust_file;
 use crate::rust_file::{Partitioned, RustFileId, partition_items};
 
 /// The golden M0 program, embedded at compile time. The fixed runtime-bindings
@@ -350,156 +351,223 @@ fn runtime_bindings() -> DResult<&'static str> {
 /// Emit the complete project for `program`.
 #[allow(clippy::too_many_lines)]
 pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject> {
+    // Partition every user item by the Rust file it belongs in (Task 4). The
+    // number of DISTINCT `RustFileId::SkyModule` buckets — NEVER counting the
+    // always-possible `Spine` bucket (§3.3: "counts `SkyModule` buckets only,
+    // never `Spine`") — is the trigger for the real per-module split:
+    //   • 0 or 1 distinct SkyModule bucket → the Spine-collapse invariant
+    //     fires and we emit today's byte-identical single `src/main.rs`.
+    //   • 2+ → the real split materialises (`emit_spine` + one
+    //     `emit_module_file` per bucket + the `main.rs` barrel lines).
+    let partition = partition_items(program, ctx.interner);
+
+    // The DISTINCT `SkyModule` homes, in first-encounter (linker/topological)
+    // order — the SAME warm/cold-stable order `type_order`/`func_order` use
+    // (see [`Partitioned`]). A module can appear in `func_order` but not
+    // `type_order` (e.g. a func-only module like `mm_diamond`'s `D`), so the
+    // union is taken with `type_order` first, then any func-only home appended
+    // in its own first-encounter position. This ordered list drives BOTH the
+    // deterministic barrel lines and the per-module file emission.
+    let mut module_homes: Vec<RustFileId> = Vec::new();
+    let mut seen: BTreeSet<RustFileId> = BTreeSet::new();
+    for id in partition
+        .type_order
+        .iter()
+        .chain(partition.func_order.iter())
+    {
+        if seen.insert(id.clone()) {
+            module_homes.push(id.clone());
+        }
+    }
+
     // Task 3 (design doc §2.2/independent-review finding): fail closed if a
     // synthesised record struct's name collides with a user enum's name, a
-    // function name, or (once real `mod` declarations exist — Milestone C)
-    // a `mod_ident`. Milestone A never writes more than one file, so no
-    // `mod` items exist yet — an empty set is the honest state of the
-    // world, not a loophole; Milestone C passes the real `mod_ident` set.
-    ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())?;
+    // function name, or a `mod_ident`. In the single-file collapse case no
+    // `mod` declarations are written, so the honest set is empty; in the real
+    // split every `SkyModule` bucket contributes its `mod_ident` (§2.1.1's new
+    // namespace, whose intra-set uniqueness `assert_mod_idents_unique` already
+    // guarantees — this check is the DISJOINTNESS obligation against the
+    // record-struct namespace).
+    let mod_idents: BTreeSet<String> = if module_homes.len() >= 2 {
+        module_homes
+            .iter()
+            .filter_map(|id| match id {
+                RustFileId::SkyModule(home) => {
+                    Some(rust_file::resolve_mod_ident(home, ctx.interner))
+                }
+                RustFileId::Spine => None,
+            })
+            .collect::<DResult<BTreeSet<String>>>()?
+    } else {
+        BTreeSet::new()
+    };
+    ctx.assert_record_structs_disjoint_from_type_namespace(&mod_idents)?;
 
-    // Capacity hint only — bytes pushed are identical. `GOLDEN` (the embedded
-    // reference main.rs the preamble/epilogue are cut from) is a sound floor
-    // for the fixed sections; user code grows beyond it via the usual
-    // doubling (efficiency-audit §4 low: this one-shot buffer started at
-    // zero capacity and re-doubled through every fixed-prelude push).
-    let mut out = String::with_capacity(GOLDEN.len() + 4096);
-    out.push_str(&preamble()?);
+    // The emitted Rust source files (`src/main.rs` plus, in the real split,
+    // one `src/sky_mods/<ident>.rs` per module). The manifest + runtime-module
+    // files below are file-count-agnostic and shared by both branches.
+    let mut rust_sources: Vec<(RelPath, String)> = Vec::new();
 
-    // User types, emitted from the IR — routed through `partition_items`
-    // (Task 5, design doc §3.1/§5): the partition function's output is
-    // proven byte-identical in ORDER and CONTENT to the direct per-module
-    // walk it replaces, for every existing (single-Sky-module) golden.
-    // Milestone A does not yet write multiple files — everything still
-    // lands in the one growing `out: String`.
-    let Partitioned {
-        buckets,
-        type_order,
-        func_order,
-    } = partition_items(program, ctx.interner);
-
-    // Determinism fix (regression found by `parity_multimodule_adversarial_
-    // edits`'s `module-added` step, closed same session as Task 5). `buckets`'
-    // OWN `BTreeMap<RustFileId, _>` key order sorts `ModPath` by its derived
-    // `Ord`, which compares interned `Symbol`s by their RAW `u32` id. That id
-    // is NOT stable between a warm (incrementally reused) database and a cold
-    // (freshly rebuilt) one for the SAME final program state — the documented
-    // warm-db symbol-numbering limitation `clean_vs_incremental_parity.rs`'s
-    // own top doc comment records. Iterating `buckets` directly is fine for
-    // lookups / the totality proof (Task 4), but is an UNSOUND final
-    // byte-emission order the moment two or more distinct real Sky-module
-    // `home`s exist in one program — the `module-added` adversarial step is
-    // the first scenario in the suite to exercise exactly that shape
-    // (`Lib.Util` + `Lib.Extra`), and warm vs. cold interned those two
-    // modules' symbols in a different relative order, so the raw map order
-    // silently flipped which module's functions landed first.
-    //
-    // Fix: walk `type_order` (below) instead of `buckets`' own key order —
-    // `partition_items` builds it by FIRST-ENCOUNTER position over
-    // `program.modules[..].types`'s own vector order, which is a
-    // linker-computed topological order proven warm/cold-stable by
-    // `parity_multimodule_adversarial_edits` itself (that gate ran directly
-    // against the pre-Task-5 code, with no `partition_items` involved at
-    // all, and passed). See [`Partitioned`]'s own doc comment for the full
-    // story, including why this is NOT simply an alphabetical sort
-    // (`tests/golden/mm_diamond`'s `D`-before-`C`-before-`B` topological
-    // order is neither symbol-id nor lexical order). A single-bucket
-    // program (every existing golden pre-this-fixture) has nothing to
-    // reorder, so this is a byte-identical no-op for them.
-    for file_id in &type_order {
-        let (enums, _) = bucket_or_bug(&buckets, file_id)?;
-        for &def in enums {
-            out.push_str(&emit_enum(ctx, def)?);
+    if module_homes.len() >= 2 {
+        // ── The real per-Sky-module split (§2.1/§3.3) ────────────────────────
+        // `main.rs` = the Spine tier (preamble, SqlValue/SqlField enums,
+        // record structs, DB-projection impls, kernel-wrapper prelude, epilogue,
+        // `fn main()`) + the flat glob barrel that re-exports every module's
+        // items at the crate root.
+        let mut main_rs = emit_spine(ctx, program)?;
+        // Barrel lines (§2.1), one pair per distinct SkyModule home, in the
+        // deterministic first-encounter order computed above:
+        //   #[path = "sky_mods/sky_mod_<home>.rs"]
+        //   mod sky_mod_<home>;
+        //   pub(crate) use sky_mod_<home>::*;
+        // The `#[path]` attribute is load-bearing: `main.rs` is the crate root,
+        // so a BARE `mod sky_mod_<home>;` would resolve to a crate-root sibling
+        // `src/sky_mod_<home>.rs`, NOT the `src/sky_mods/<ident>.rs` file this
+        // design places (§2.1). `#[path]` is resolved relative to the declaring
+        // file's directory (`src/`), so it points the module at the real file
+        // under `sky_mods/` — closing an E0583 "file not found for module"
+        // exit-0-then-cargo-fail (THE SEAL) that a bare `mod` decl would ship.
+        // Because every user name is already globally unique (§1.3) and this
+        // re-exports every module at the crate root, each per-module file's
+        // `use crate::*;` sees every Spine item and every other module's item.
+        main_rs.push('\n');
+        for id in &module_homes {
+            let RustFileId::SkyModule(home) = id else {
+                continue;
+            };
+            let ident = rust_file::resolve_mod_ident(home, ctx.interner)?;
+            // Built via `push_str` fragments rather than one `push_str(&format!)`
+            // to satisfy `clippy::format_push_string` (denied via pedantic) —
+            // no intermediate allocation, same bytes.
+            main_rs.push_str("#[path = \"sky_mods/");
+            main_rs.push_str(&ident);
+            main_rs.push_str(".rs\"]\nmod ");
+            main_rs.push_str(&ident);
+            main_rs.push_str(";\npub(crate) use ");
+            main_rs.push_str(&ident);
+            main_rs.push_str("::*;\n");
         }
-    }
-    if let Some((spine_enums, _)) = buckets.get(&RustFileId::Spine) {
-        for &def in spine_enums {
-            out.push_str(&emit_enum(ctx, def)?);
+        rust_sources.push((RelPath::new("src/main.rs")?, main_rs));
+
+        // One `src/sky_mods/<ident>.rs` per module, carrying ONLY that home's
+        // `pub(crate)` items behind a `use crate::*;` glob header.
+        for id in &module_homes {
+            let RustFileId::SkyModule(home) = id else {
+                continue;
+            };
+            let ident = rust_file::resolve_mod_ident(home, ctx.interner)?;
+            let file = emit_module_file(ctx, program, id)?;
+            rust_sources.push((RelPath::new(format!("src/sky_mods/{ident}.rs"))?, file));
         }
-    }
-    // Synthesised record structs, one per distinct closed record shape. Item
-    // order is irrelevant in Rust, so these can reference one another freely;
-    // a program with no records emits nothing here, keeping output unchanged.
-    for rec in ctx.record_structs() {
-        out.push_str(&emit_record_struct(ctx, rec)?);
-    }
+    } else {
+        // ── The Spine-collapse invariant (§3.3) ──────────────────────────────
+        // Exactly ONE distinct `SkyModule` bucket (or none): inline that one
+        // module's types/funcs into a single `src/main.rs`, byte-for-byte
+        // identical to the pre-Milestone-C output. THIS BRANCH IS
+        // LOAD-BEARING — every existing single-module golden must stay
+        // byte-identical (§5 Task 13's zero-blast-radius gate). It reproduces
+        // the exact inline layout of the pre-split code: preamble, user types
+        // (via `type_order`), Spine enums, record structs, DB-projection
+        // impls, kernel-wrapper prelude, user funcs (via `func_order`),
+        // epilogue, G3.
+        let Partitioned {
+            buckets,
+            type_order,
+            func_order,
+        } = &partition;
 
-    // M5b-db: boundary-projection impl blocks.  When the program uses Db
-    // kernels, the lowerer injected synthetic `SqlValue` / `SqlField` enums.
-    // The Db call sites need to project Sky ADT values to the runtime's
-    // concrete `SqlParam` / `Option<SqlParam>`.  These impls are emitted
-    // immediately after the user types (and their record-struct companions) so
-    // they are visible to every subsequent function body.
-    if ctx.uses_db {
-        out.push_str(&emit_db_projection_impls(ctx)?);
-    }
+        // Capacity hint only — bytes pushed are identical. `GOLDEN` (the
+        // embedded reference main.rs the preamble/epilogue are cut from) is a
+        // sound floor for the fixed sections; user code grows beyond it via the
+        // usual doubling.
+        let mut out = String::with_capacity(GOLDEN.len() + 4096);
+        out.push_str(&preamble()?);
 
-    out.push('\n');
-
-    // Fixed kernel-wrapper prelude (SkyError, SkyTask<A>, Decoder<T>, wrappers).
-    out.push_str(runtime_bindings()?);
-
-    // M5c: when the program uses TEA kernels, add the SkyCmd<M> / SkySub<M>
-    // type aliases immediately after the other top-level type aliases.
-    if ctx.uses_tea {
-        out.push_str(TEA_TYPE_ALIASES);
-    }
-    // #111: when the program uses Std.Auth kernels, append concrete wrappers
-    // that specialise E = SkyError so call sites compile without turbofish.
-    if ctx.uses_auth {
-        out.push_str(AUTH_WRAPPERS);
-    }
-    out.push('\n');
-
-    // User functions, emitted from the IR — routed through the SAME
-    // `partition_items` result computed above, walked via `func_order` (its
-    // OWN first-encounter order over `program.modules[..].funcs`, tracked
-    // independently of `type_order` — see [`Partitioned`]'s doc comment for
-    // why the two orders can genuinely differ). No `Spine` ordering rule is
-    // needed here: `partition_items` never routes a `Func` into the `Spine`
-    // bucket (only the SqlValue/SqlField enum special case does, and enums
-    // and funcs are disjoint Rust namespaces — design doc §2.2), so funcs
-    // land purely in `SkyModule` buckets. A byte-identical no-op reordering
-    // for every existing single-Sky-module golden, where there is only one
-    // bucket.
-    for file_id in &func_order {
-        let (_, funcs) = bucket_or_bug(&buckets, file_id)?;
-        for &func in funcs {
-            out.push_str(&emit_func(ctx, func)?);
+        // User types, walked via `type_order` — `partition_items`'s
+        // FIRST-ENCOUNTER order over `program.modules[..].types`, a
+        // warm/cold-stable linker topological order (NOT alphabetical, NOT
+        // symbol-id — see [`Partitioned`]'s doc comment). A single-bucket
+        // program has nothing to reorder; this is a byte-identical no-op.
+        for file_id in type_order {
+            let (enums, _) = bucket_or_bug(buckets, file_id)?;
+            for &def in enums {
+                out.push_str(&emit_enum(ctx, def)?);
+            }
         }
-    }
-    out.push('\n');
-
-    out.push_str(&epilogue()?);
-
-    // ── G3: Webview main-thread entry switch ──────────────────────────────────
-    // Sky.Webview's `tao` event loop requires the process's TRUE main thread on
-    // every OS (macOS: Cocoa NSApplication hard-requires it; Windows: expected;
-    // Linux/GTK: safe on main thread). The standard entry uses `block_on` (which
-    // spawns a detached OS thread); Webview MUST use `block_on_current_thread`
-    // (a current-thread tokio runtime polled inline on the calling — main —
-    // thread).
-    //
-    // Implementation: anchor-asserted `replacen` that emits `CompilerBug` and
-    // aborts if the anchor is absent (fail-loud, never a silent no-op). A silent
-    // no-op here would ship a well-typed Webview app that silently runs the event
-    // loop off the main thread, crashing at first paint on macOS.
-    if ctx.uses_webview {
-        const BLOCK_ON_ANCHOR: &str = "block_on(sky_main())";
-        const BLOCK_ON_THREAD_REPLACEMENT: &str = "block_on_current_thread(sky_main())";
-        let replaced = out.replacen(BLOCK_ON_ANCHOR, BLOCK_ON_THREAD_REPLACEMENT, 1);
-        if replaced == out {
-            return Err(Diagnostic::CompilerBug {
-                where_: "sky_backend_rust::project::emit_program::G3_block_on",
-                detail: format!(
-                    "G3 webview entry-switch: anchor {BLOCK_ON_ANCHOR:?} not found in \
-                     emitted output — epilogue golden has drifted; Sky.Webview REQUIRES \
-                     block_on_current_thread (tao/Cocoa NSApplication mandates the \
-                     process main thread on macOS; omitting the switch is a runtime crash)"
-                ),
-            });
+        if let Some((spine_enums, _)) = buckets.get(&RustFileId::Spine) {
+            for &def in spine_enums {
+                out.push_str(&emit_enum(ctx, def)?);
+            }
         }
-        out = replaced;
+        // Synthesised record structs, one per distinct closed record shape.
+        // Item order is irrelevant in Rust, so these can reference one another
+        // freely; a program with no records emits nothing here.
+        for rec in ctx.record_structs() {
+            out.push_str(&emit_record_struct(ctx, rec)?);
+        }
+
+        // M5b-db: boundary-projection impl blocks.  When the program uses Db
+        // kernels, the lowerer injected synthetic `SqlValue` / `SqlField`
+        // enums.  The Db call sites need to project Sky ADT values to the
+        // runtime's concrete `SqlParam` / `Option<SqlParam>`.
+        if ctx.uses_db {
+            out.push_str(&emit_db_projection_impls(ctx)?);
+        }
+
+        out.push('\n');
+
+        // Fixed kernel-wrapper prelude (SkyError, SkyTask<A>, Decoder<T>, …).
+        out.push_str(runtime_bindings()?);
+
+        // M5c: TEA kernels → the SkyCmd<M> / SkySub<M> type aliases.
+        if ctx.uses_tea {
+            out.push_str(TEA_TYPE_ALIASES);
+        }
+        // #111: Std.Auth kernels → concrete E = SkyError wrappers.
+        if ctx.uses_auth {
+            out.push_str(AUTH_WRAPPERS);
+        }
+        out.push('\n');
+
+        // User functions, walked via `func_order` (its OWN first-encounter
+        // order over `program.modules[..].funcs`). `partition_items` never
+        // routes a `Func` into `Spine`, so funcs land purely in `SkyModule`
+        // buckets.
+        for file_id in func_order {
+            let (_, funcs) = bucket_or_bug(buckets, file_id)?;
+            for &func in funcs {
+                out.push_str(&emit_func(ctx, func)?);
+            }
+        }
+        out.push('\n');
+
+        out.push_str(&epilogue()?);
+
+        // ── G3: Webview main-thread entry switch ──────────────────────────────
+        // Sky.Webview's `tao` event loop requires the process's TRUE main
+        // thread on every OS. The standard entry uses `block_on`; Webview MUST
+        // use `block_on_current_thread`. (In the real split, `emit_spine`
+        // performs this same switch on its own — the anchor lives in the
+        // epilogue, which is Spine-only.)
+        if ctx.uses_webview {
+            const BLOCK_ON_ANCHOR: &str = "block_on(sky_main())";
+            const BLOCK_ON_THREAD_REPLACEMENT: &str = "block_on_current_thread(sky_main())";
+            let replaced = out.replacen(BLOCK_ON_ANCHOR, BLOCK_ON_THREAD_REPLACEMENT, 1);
+            if replaced == out {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::project::emit_program::G3_block_on",
+                    detail: format!(
+                        "G3 webview entry-switch: anchor {BLOCK_ON_ANCHOR:?} not found in \
+                         emitted output — epilogue golden has drifted; Sky.Webview REQUIRES \
+                         block_on_current_thread (tao/Cocoa NSApplication mandates the \
+                         process main thread on macOS; omitting the switch is a runtime crash)"
+                    ),
+                });
+            }
+            out = replaced;
+        }
+
+        rust_sources.push((RelPath::new("src/main.rs")?, out));
     }
 
     // ── Manifest + runtime module files ──────────────────────────────────────
@@ -626,7 +694,13 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     };
 
     let mut files = BTreeMap::new();
-    files.insert(RelPath::new("src/main.rs")?, out);
+    // The emitted Rust source files: `src/main.rs` always, plus one
+    // `src/sky_mods/<ident>.rs` per module in the real-split case. In the
+    // single-file collapse case `rust_sources` holds exactly the one
+    // byte-identical `src/main.rs`.
+    for (path, text) in rust_sources {
+        files.insert(path, text);
+    }
     files.insert(RelPath::new("src/sky_runtime/mod.rs")?, runtime_mod_rs);
     files.insert(
         RelPath::new("src/sky_runtime/config.rs")?,
