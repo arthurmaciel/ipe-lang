@@ -78,7 +78,13 @@ pub fn to_snake_case(s: &str) -> String {
 /// The dotted module prefix rendered with `_` separators (`["Sky","Core","Io"]`
 /// → `Sky_Core_Io`). This matches `moduleNameToRust` (dots → underscores) when
 /// the path is supplied as already-split segments.
-fn module_prefix(module: &[&str]) -> String {
+///
+/// `pub` (rather than private) since Phase 5's `rust_file::mod_ident`
+/// (design doc §2.1.1) reuses this exact fold for the NEW `ModPath -> Rust
+/// mod identifier` namespace. `naming` stays a private module, so `pub`
+/// here is crate-scoped in practice (`clippy::redundant_pub_crate` — a
+/// `pub(crate)` item inside a private module is equivalent to `pub`).
+pub fn module_prefix(module: &[&str]) -> String {
     module.join("_")
 }
 
