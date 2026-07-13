@@ -48,7 +48,16 @@ migrated=0
 skipped=0
 
 for file in "${files[@]}"; do
-    python3 - "$file" <<'PY'
+    # NOTE: `set -e` is in force. The per-file python heredoc uses its EXIT CODE
+    # as a signal (0 = migrated, 2 = skip/nonstandard, other = hard error), so we
+    # MUST NOT let a non-zero exit abort the whole batch before `rc=$?` is read.
+    # Guard the invocation with `|| rc=$?`: on exit 0 the `||` short-circuits and
+    # `rc` is set to 0 below; on any non-zero exit `rc` captures it and the loop
+    # continues to classify it. Without this guard, the first nonstandard golden
+    # (exit 2) killed the entire script before a single canonical file after it
+    # could be migrated, and the summary counters were never reached.
+    rc=0
+    python3 - "$file" <<'PY' || rc=$?
 import re
 import sys
 
@@ -68,8 +77,16 @@ original = src
 #         "emitted main.rs must equal the golden byte-for-byte"
 #     );
 #
-# `out`, `golden` and the message text must match exactly — anything else is a
-# nonstandard shape we refuse to touch.
+# `out` and `golden` (the variable names) and the whole structural block must
+# match exactly — only the human-readable assert MESSAGE is allowed to vary
+# (some goldens run this block from a `assert_byte_identical(name)` helper and
+# word the message `... for {name} ...`). The message is a diagnostic string,
+# not load-bearing for the assertion's meaning, so matching it verbatim is
+# needless brittleness; matching its stable `emitted main.rs ... byte-for-byte`
+# skeleton keeps the rewrite exact where it matters (the compared operands) and
+# tolerant where it does not. Anything that diverges structurally (different
+# variable names, `.expect()` instead of `.ok()`, `assert_eq!(emitted, want)`
+# on raw strings, more than one such block) is still refused for hand migration.
 block_re = re.compile(
     r'''[ \t]*let\ emitted\ =\ std::fs::read_to_string\(out\.join\("src"\)\.join\("main\.rs"\)\);\n'''
     r'''[ \t]*let\ want\ =\ std::fs::read_to_string\(&golden\);\n'''
@@ -77,7 +94,7 @@ block_re = re.compile(
     r'''[ \t]*assert_eq!\(\n'''
     r'''[ \t]*emitted\.ok\(\),\n'''
     r'''[ \t]*want\.ok\(\),\n'''
-    r'''[ \t]*"emitted\ main\.rs\ must\ equal\ the\ golden\ byte-for-byte",?\n'''
+    r'''[ \t]*"emitted\ main\.rs\ [^"\n]*byte-for-byte",?\n'''
     r'''[ \t]*\);'''
 )
 
@@ -126,7 +143,10 @@ else:
     print(f"SKIP {path} (unchanged)")
     sys.exit(2)
 PY
-    rc=$?
+    # `rc` was captured by the `|| rc=$?` guard on the heredoc invocation above
+    # (0 when python exited 0 and the `||` was not taken; the python exit code
+    # otherwise). Do NOT re-read `$?` here — the `|| rc=$?` compound always
+    # succeeds, so `$?` would be 0 and clobber a genuine skip/error signal.
     if [[ $rc -eq 0 ]]; then
         migrated=$((migrated + 1))
     elif [[ $rc -eq 2 ]]; then
