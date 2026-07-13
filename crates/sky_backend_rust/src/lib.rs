@@ -118,6 +118,31 @@ impl<'a> RustBackend<'a> {
     }
 }
 
+/// The DISTINCT Sky-module `home`s the backend would emit an OWN Rust file for.
+///
+/// Every [`rust_file::RustFileId::SkyModule`] bucket [`rust_file::
+/// partition_items`] produces, `Spine` excluded (`Spine` is not a per-module
+/// home — it is the always-present entry file). This is the `home`-set
+/// quantifier Milestone D's `sky_db::program_rust_file_ids` wraps in a
+/// tracked query (spec §4.2): a Sky-module add/delete changes this set, making
+/// "which files exist" a first-class, salsa-observable value.
+///
+/// Order-agnostic by construction (`BTreeSet`) — callers that need the
+/// warm/cold-stable EMISSION order use [`rust_file::partition_items`]'s
+/// `type_order`/`func_order` directly ([`project::emit_program`] does); this
+/// set answers only the membership question.
+#[must_use]
+pub fn rust_file_homes(program: &Program, interner: &Interner) -> BTreeSet<ModPath> {
+    rust_file::partition_items(program, interner)
+        .buckets
+        .into_keys()
+        .filter_map(|id| match id {
+            rust_file::RustFileId::SkyModule(home) => Some(home),
+            rust_file::RustFileId::Spine => None,
+        })
+        .collect()
+}
+
 impl Backend for RustBackend<'_> {
     fn name(&self) -> &'static str {
         "rust"
