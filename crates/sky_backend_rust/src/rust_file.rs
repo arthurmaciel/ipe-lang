@@ -2,8 +2,20 @@
 //! (Phase-5 continuation — see `docs/architecture/
 //! phase5-emit-rust-file-design-2026-07-12.md` §2.1). NOT yet a salsa
 //! type — that is Milestone D (§4.1).
+//!
+//! `mod_ident`/`resolve_mod_ident`/`assert_mod_idents_unique` (Task 2's
+//! fail-closed duplicate-`mod`-name gate) are complete and unit-tested here,
+//! but have no PRODUCTION caller yet — Milestone A never writes more than
+//! one file, so no `mod` items exist for two of them to collide over (see
+//! `project.rs::emit_program`'s own comment on this point). They gain their
+//! real caller in Milestone C, once `emit_program` actually partitions
+//! output across multiple `SkyModule` files. This is staged-ahead-of-use,
+//! not dead code in the "nobody knows if this works" sense — it is
+//! deliberately built and proven correct before its caller exists, matching
+//! this crate's TDD-per-task convention.
+#![allow(dead_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use sky_diagnostics::{DResult, Diagnostic, NameError, Span};
 use sky_intern::Interner;
@@ -86,8 +98,57 @@ pub fn assert_mod_idents_unique(ids: &[RustFileId], interner: &Interner) -> DRes
     Ok(())
 }
 
+/// The result of [`partition_items`]: every item bucketed by its
+/// [`RustFileId`] home, plus the two DETERMINISTIC emission orders
+/// `project::emit_program` walks the `SkyModule` buckets in.
+///
+/// # Why `type_order`/`func_order` exist, and why NOT `buckets`' own key order
+///
+/// `buckets`' own `BTreeMap<RustFileId, _>` iteration order sorts `ModPath`
+/// by its derived `Ord`, which compares interned [`sky_intern::Symbol`]s by
+/// their RAW `u32` id — an id that is NOT stable between a warm
+/// (incrementally reused) database and a cold (freshly rebuilt) one for the
+/// SAME final program (the documented warm-db symbol-numbering limitation,
+/// `clean_vs_incremental_parity.rs`'s own top doc comment). Iterating
+/// `buckets` directly is fine for lookups / the totality proof (Task 4), but
+/// is an UNSOUND final byte-emission order the moment two or more distinct
+/// real Sky-module `home`s are present in one program — caught by
+/// `parity_multimodule_adversarial_edits`'s `module-added` step (regression
+/// found in Milestone A review, closed same session).
+///
+/// It is ALSO not what an existing multi-module golden expects:
+/// `tests/golden/mm_diamond` (`D` imported by BOTH `B` and `C`, both
+/// imported by `Main`) emits `D`'s function BEFORE `C`'s and `B`'s — the
+/// LINKER's topological order (the shared leaf dependency compiles first),
+/// not an alphabetical or symbol-id one. Confirmed NOT alphabetical either:
+/// `B` < `C` < `D` lexically, but the golden is `D`, `C`, `B`.
+///
+/// `type_order`/`func_order` instead record each distinct `SkyModule`
+/// `home`'s FIRST-ENCOUNTER position while walking `program.modules[..].
+/// types` / `.funcs` in THEIR OWN vector order — exactly the traversal the
+/// pre-Task-5 code walked directly (two independent `for module in &program.
+/// modules { for x in &module.x { ... } }` loops), and every existing golden
+/// (single- AND multi-module) was captured against. `program.modules`'s own
+/// vector order is a linker-computed topological order, proven warm/cold-
+/// stable by `parity_multimodule_adversarial_edits` itself (that gate ran
+/// directly against the pre-Task-5 direct-walk code on `master`, with no
+/// `partition_items` in the loop at all, and passed) — first-encounter order
+/// over it is therefore ALSO warm/cold-stable. Two separate orders (not one
+/// combined order) because the old code's two independent loops could, in
+/// principle, see a different cross-module home sequence for types than for
+/// funcs — e.g. a home whose ONLY items are functions (like `D` in
+/// `mm_diamond`, which declares no types at all) contributes nothing to the
+/// type walk's order.
+#[derive(Debug)]
+pub struct Partitioned<'p> {
+    pub buckets: BTreeMap<RustFileId, (Vec<&'p EnumDef>, Vec<&'p Func>)>,
+    pub type_order: Vec<RustFileId>,
+    pub func_order: Vec<RustFileId>,
+}
+
 /// Partition every [`EnumDef`] and [`Func`] in `program` by the
-/// [`RustFileId`] it is declared in.
+/// [`RustFileId`] it is declared in — see [`Partitioned`] for the full
+/// shape, including the two emission-order fields.
 ///
 /// Proven TOTAL (Task 4): every item in `program.modules[..].types /
 /// .funcs` appears in EXACTLY ONE output bucket — no drop, no duplicate.
@@ -104,11 +165,14 @@ pub fn assert_mod_idents_unique(ids: &[RustFileId], interner: &Interner) -> DRes
 /// the generic empty-home fallback runs, reusing the exact detection idiom
 /// `EmitCtx::build`'s `uses_db` scan already applies
 /// (`crate::lib`'s `uses_db` / `sqlvalue_rust_name` / `sqlfield_rust_name`).
-pub fn partition_items<'p>(
-    program: &'p Program,
-    interner: &Interner,
-) -> BTreeMap<RustFileId, (Vec<&'p EnumDef>, Vec<&'p Func>)> {
+/// (SqlValue/SqlField route to `Spine`, never a `SkyModule` bucket, so they
+/// never enter `type_order` either — same invariant as `buckets`.)
+pub fn partition_items<'p>(program: &'p Program, interner: &Interner) -> Partitioned<'p> {
     let mut out: BTreeMap<RustFileId, (Vec<&'p EnumDef>, Vec<&'p Func>)> = BTreeMap::new();
+    let mut type_order: Vec<RustFileId> = Vec::new();
+    let mut type_seen: BTreeSet<RustFileId> = BTreeSet::new();
+    let mut func_order: Vec<RustFileId> = Vec::new();
+    let mut func_seen: BTreeSet<RustFileId> = BTreeSet::new();
     for module in &program.modules {
         for ty in &module.types {
             let TypeDef::Enum(def) = ty;
@@ -130,7 +194,11 @@ pub fn partition_items<'p>(
             } else {
                 def.home.clone()
             };
-            out.entry(RustFileId::SkyModule(home)).or_default().0.push(def);
+            let file_id = RustFileId::SkyModule(home);
+            if type_seen.insert(file_id.clone()) {
+                type_order.push(file_id.clone());
+            }
+            out.entry(file_id).or_default().0.push(def);
         }
         for func in &module.funcs {
             let home = if func.home.0.is_empty() {
@@ -138,10 +206,18 @@ pub fn partition_items<'p>(
             } else {
                 func.home.clone()
             };
-            out.entry(RustFileId::SkyModule(home)).or_default().1.push(func);
+            let file_id = RustFileId::SkyModule(home);
+            if func_seen.insert(file_id.clone()) {
+                func_order.push(file_id.clone());
+            }
+            out.entry(file_id).or_default().1.push(func);
         }
     }
-    out
+    Partitioned {
+        buckets: out,
+        type_order,
+        func_order,
+    }
 }
 
 #[cfg(test)]
@@ -282,11 +358,14 @@ mod tests {
         let program = Program {
             modules: vec![module],
         };
-        let buckets = partition_items(&program, &interner);
+        let Partitioned { buckets, .. } = partition_items(&program, &interner);
 
         let total_enums: usize = buckets.values().map(|(e, _)| e.len()).sum();
         let total_funcs: usize = buckets.values().map(|(_, f)| f.len()).sum();
-        assert_eq!(total_enums, 2, "every EnumDef must land in exactly one bucket");
+        assert_eq!(
+            total_enums, 2,
+            "every EnumDef must land in exactly one bucket"
+        );
         assert_eq!(total_funcs, 2, "every Func must land in exactly one bucket");
         assert_eq!(
             buckets.len(),
@@ -331,13 +410,17 @@ mod tests {
         let program = Program {
             modules: vec![module],
         };
-        let buckets = partition_items(&program, &interner);
+        let Partitioned { buckets, .. } = partition_items(&program, &interner);
 
         let total_enums: usize = buckets.values().map(|(e, _)| e.len()).sum();
         let total_funcs: usize = buckets.values().map(|(_, f)| f.len()).sum();
         assert_eq!(total_enums, 1);
         assert_eq!(total_funcs, 1);
-        assert_eq!(buckets.len(), 1, "a single-home program must collapse to one bucket");
+        assert_eq!(
+            buckets.len(),
+            1,
+            "a single-home program must collapse to one bucket"
+        );
         Ok(())
     }
 
@@ -366,10 +449,12 @@ mod tests {
         let program = Program {
             modules: vec![module],
         };
-        let buckets = partition_items(&program, &interner);
+        let Partitioned { buckets, .. } = partition_items(&program, &interner);
 
         let key = RustFileId::SkyModule(ModPath(vec![main_mod]));
-        let (enums, _) = buckets.get(&key).expect("expected the Main-name fallback bucket");
+        let (enums, _) = buckets
+            .get(&key)
+            .expect("expected the Main-name fallback bucket");
         assert_eq!(enums.len(), 1);
         assert!(!buckets.contains_key(&RustFileId::Spine));
         Ok(())
@@ -412,13 +497,96 @@ mod tests {
         let program = Program {
             modules: vec![module],
         };
-        let buckets = partition_items(&program, &interner);
+        let Partitioned { buckets, .. } = partition_items(&program, &interner);
 
-        let (spine_enums, _) = buckets.get(&RustFileId::Spine).expect("expected a Spine bucket");
-        assert_eq!(spine_enums.len(), 2, "both SqlValue and SqlField must route to Spine");
+        let (spine_enums, _) = buckets
+            .get(&RustFileId::Spine)
+            .expect("expected a Spine bucket");
+        assert_eq!(
+            spine_enums.len(),
+            2,
+            "both SqlValue and SqlField must route to Spine"
+        );
         assert!(
             !buckets.contains_key(&RustFileId::SkyModule(ModPath(vec![main_mod]))),
             "SqlValue/SqlField must NEVER fall into the generic empty-home module fallback"
+        );
+        Ok(())
+    }
+
+    /// Regression test for the `mm_diamond`-class ordering bug (Milestone A
+    /// review, same session): `type_order`/`func_order` must follow
+    /// `program.modules`'s OWN vector (linker/topological) order, never an
+    /// alphabetical or `mod_ident`-string sort. `Zeta` is placed BEFORE
+    /// `Alpha` in `program.modules` — reverse alphabetical — specifically so
+    /// a regression back to alphabetical sorting fails this test instead of
+    /// silently reappearing. `Zeta` also declares a func but NO type, so
+    /// `type_order` and `func_order` genuinely diverge (proving the two
+    /// orders are tracked independently, not derived from one shared list).
+    #[test]
+    fn partition_items_orders_by_first_encounter_not_alphabetically() -> DResult<()> {
+        let mut interner = Interner::new();
+        let zeta_mod = interner.intern("Zeta")?;
+        let alpha_mod = interner.intern("Alpha")?;
+        let alpha_ty = interner.intern("AlphaType")?;
+        let alpha_variant = interner.intern("AlphaVariant")?;
+        let zeta_fn = interner.intern("zetaFn")?;
+        let alpha_fn = interner.intern("alphaFn")?;
+
+        let mut zeta = empty_module(ModPath(vec![zeta_mod]));
+        zeta.funcs = vec![Func {
+            id: FuncId::from_raw(0),
+            name: zeta_fn,
+            home: ModPath(vec![zeta_mod]),
+            type_params: vec![],
+            params: vec![],
+            ret: IrType::Int,
+            body: sky_ir::Expr::Int(0),
+        }];
+
+        let mut alpha = empty_module(ModPath(vec![alpha_mod]));
+        alpha.types = vec![TypeDef::Enum(EnumDef {
+            name: alpha_ty,
+            home: ModPath(vec![alpha_mod]),
+            type_params: vec![],
+            variants: vec![Variant {
+                name: alpha_variant,
+                fields: vec![],
+            }],
+        })];
+        alpha.funcs = vec![Func {
+            id: FuncId::from_raw(1),
+            name: alpha_fn,
+            home: ModPath(vec![alpha_mod]),
+            type_params: vec![],
+            params: vec![],
+            ret: IrType::Int,
+            body: sky_ir::Expr::Int(0),
+        }];
+
+        // `Zeta` FIRST in `program.modules` — reverse alphabetical order.
+        let program = Program {
+            modules: vec![zeta, alpha],
+        };
+        let Partitioned {
+            type_order,
+            func_order,
+            ..
+        } = partition_items(&program, &interner);
+
+        let zeta_id = RustFileId::SkyModule(ModPath(vec![zeta_mod]));
+        let alpha_id = RustFileId::SkyModule(ModPath(vec![alpha_mod]));
+
+        assert_eq!(
+            type_order,
+            vec![alpha_id.clone()],
+            "Zeta declares no types, so it must be absent from type_order entirely"
+        );
+        assert_eq!(
+            func_order,
+            vec![zeta_id, alpha_id],
+            "func_order must follow program.modules's own vector order (Zeta first), \
+             NOT an alphabetical sort (which would put Alpha first)"
         );
         Ok(())
     }
