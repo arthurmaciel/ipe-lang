@@ -5407,11 +5407,22 @@ fn emit_ui_call(
 /// payload-constructor reference into a genuine [`Expr::Lambda`] before it
 /// ever reaches here, so an `Expr::Ctor` at this position is a concrete enum
 /// VALUE, never a function. The leaf literals are equally obviously not
-/// callable. Every other shape (`Lambda`, `SharedLambda`, `FuncValue`, `Var`,
-/// `Apply`, `Call`, …) is left alone — conservative default, since those CAN
-/// legitimately be a function value (a let-bound handler, a named decoder
-/// function, a lambda literal) and mis-classifying one as "not callable"
-/// would regress the working typed-record decode idiom.
+/// callable. The three COMPOUND literal shapes — a record literal
+/// (`Expr::Record`), a tuple literal (`Expr::Tuple`), and a list literal
+/// (`Expr::List`) — are structural data constructors too: a `{ … }` /
+/// `(…, …)` / `[…]` VALUE is never a function, so `(payload_s)(_x)` on one is
+/// the same E0618 "expected function" cargo-fail the nullary-`Ctor` case hit
+/// (#170). `HtmlOnSubmit`'s payload type is `var(1)` in `constrain.rs`'s
+/// `HtmlEventShape::Raw` arm — fully decoupled from `msg`, hence UNCONSTRAINED
+/// — so a record / tuple / list literal type-checks in skyc as legitimately as
+/// the bare-`Ctor` case did, and (when the app's `Msg` type IS that record /
+/// tuple / list shape) must lower to the same `html_on_raw_fixed_`
+/// fixed-dispatch path rather than the wrap-and-call one. Every other shape
+/// (`Lambda`, `SharedLambda`, `FuncValue`, `Var`, `Apply`, `Call`, …) is left
+/// alone — conservative default, since those CAN legitimately be a function
+/// value (a let-bound handler, a named decoder function, a lambda literal) and
+/// mis-classifying one as "not callable" would regress the working
+/// typed-record decode idiom.
 const fn is_definitely_not_callable(e: &Expr) -> bool {
     matches!(
         e,
@@ -5422,6 +5433,9 @@ const fn is_definitely_not_callable(e: &Expr) -> bool {
             | Expr::Str(_)
             | Expr::Char(_)
             | Expr::Unit
+            | Expr::Record(_)
+            | Expr::Tuple(_)
+            | Expr::List { .. }
     )
 }
 
