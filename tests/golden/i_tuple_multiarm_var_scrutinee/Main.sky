@@ -1,0 +1,71 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.List as List
+import Std.Log exposing (println)
+
+
+-- #174 — a multi-arm / refutable tuple `case` on a NON-literal (variable)
+-- scrutinee. This is the `Sky.Test.summarise` shape (`case pair of ( _, Passed )
+-- -> … ; ( name, Failed _ ) -> …`). Before #174 only a LITERAL-tuple scrutinee
+-- could drive a tuple `match`, so a variable scrutinee fell fail-closed as
+-- SKY-L0115. It now lowers to a by-value whole `match pair { (_, Passed) => …,
+-- (name, Failed(_)) => … }` — no per-column coercion, matches the tuple value
+-- directly. skyc-0 ⟹ cargo-0.
+type Outcome
+    = Passed
+    | Failed Int
+
+
+-- Exact `Sky.Test.summarise` shape: a variable scrutinee, a wildcard column, and
+-- a refutable ctor column across two arms.
+countFailure : ( Int, Outcome ) -> Int
+countFailure pair =
+    case pair of
+        ( _, Passed ) ->
+            0
+
+        ( name, Failed _ ) ->
+            name
+
+
+-- A tuple-with-LITERAL-element column (`0` in column 0) on a variable scrutinee.
+-- The literal matches by value against the whole tuple.
+classifyPair : ( Int, Bool ) -> Int
+classifyPair pair =
+    case pair of
+        ( 0, _ ) ->
+            10
+
+        ( _, True ) ->
+            20
+
+        ( _, False ) ->
+            30
+
+
+-- A NESTED-tuple column on a variable scrutinee. On the by-value whole path
+-- there is no coercion, so a nested tuple matches soundly (it stays fail-closed
+-- on the literal-tuple coerced-column path).
+nested : ( Int, ( Bool, Int ) ) -> Int
+nested triple =
+    case triple of
+        ( a, ( True, b ) ) ->
+            a + b
+
+        ( a, ( False, _ ) ) ->
+            a
+
+
+main =
+    let
+        f = countFailure ( 7, Failed 1 )
+        p = countFailure ( 3, Passed )
+        c1 = classifyPair ( 0, True )
+        c2 = classifyPair ( 5, True )
+        c3 = classifyPair ( 5, False )
+        n1 = nested ( 100, ( True, 5 ) )
+        n2 = nested ( 200, ( False, 9 ) )
+    in
+    -- 7 + 0 + 10 + 20 + 30 + 105 + 200 == 372
+    println (String.fromInt (f + p + c1 + c2 + c3 + n1 + n2))

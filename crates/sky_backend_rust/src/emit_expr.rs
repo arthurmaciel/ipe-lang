@@ -6217,17 +6217,18 @@ fn emit_match_scrutinee(
     generics: GenericScope,
 ) -> DResult<(String, ScrutMode)> {
     let child = depth + 1;
-    // TUPLE mode: a multi-arm product `case`. The lowerer guarantees the
-    // scrutinee is a literal tuple of the arm arity, so the scrutinee is built
-    // column-by-column with each column's own slice / `&str` coercion — the only
-    // sound way to match `[a, rest @ ..]` (needs `&[T]`) against a `Vec` element.
-    if let Some(arity) = tuple_arm_arity(m.arms()) {
-        let Expr::Tuple(elems) = m.scrutinee() else {
-            return Err(Diagnostic::CompilerBug {
-                where_: "sky_backend_rust::emit_match_scrutinee",
-                detail: "tuple-headed match without a literal-tuple scrutinee".to_owned(),
-            });
-        };
+    // COERCED-COLUMN TUPLE mode: a multi-arm product `case` on a LITERAL-tuple
+    // scrutinee. The scrutinee is built column-by-column with each column's own
+    // slice / `&str` coercion — the only sound way to match `[a, rest @ ..]`
+    // (needs `&[T]`) against a `Vec` element, or a string literal against a
+    // `String` element. A NON-literal scrutinee whose arms are still tuple heads
+    // (`case pair of (_, Passed) -> …`) carries no coercing column — the lowerer's
+    // `tuple_case_supported` fail-closes any such column on the non-literal path —
+    // so it falls through to WHOLE mode below, which matches the tuple value
+    // directly (`match pair { (_, Passed) => … }`) via the alias-safe renderer.
+    if let Some(arity) = tuple_arm_arity(m.arms())
+        && let Expr::Tuple(elems) = m.scrutinee()
+    {
         if elems.len() != arity {
             return Err(Diagnostic::CompilerBug {
                 where_: "sky_backend_rust::emit_match_scrutinee",
