@@ -116,18 +116,18 @@ fn i125_decoder_case_destructure_reuse_compiles_and_runs() {
 fn i125_non_decoder_destructure_fast_path_byte_identical() {
     let out = assert_skyc_ok("m3b2_let_destructure");
     let root = repo_root();
-    let golden = golden_dir(&root, "m3b2_let_destructure").join("main.rs");
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"));
-    let want = std::fs::read_to_string(&golden);
-    assert!(emitted.is_ok() && want.is_ok(), "both files must read");
-    let emitted = emitted.unwrap_or_default();
+    let golden_dir = golden_dir(&root, "m3b2_let_destructure");
+    // Seal half: the emitted source must carry no thunk binder. Read the emitted
+    // `main.rs` directly for this `!contains` check — the directory-diff helper
+    // below cannot express a substring assertion.
+    let emitted = std::fs::read_to_string(out.join("src").join("main.rs")).unwrap_or_default();
     assert!(
         !emitted.contains("destr_thunk"),
         "#125 must not thunk a Decoder-free destructure"
     );
-    assert_eq!(
-        Some(emitted),
-        want.ok(),
-        "non-Decoder destructure emission must be byte-identical to the pre-#125 golden"
-    );
+    // Byte-diff half: emitted `src/main.rs` must equal the checked-in pre-#125
+    // golden `main.rs` — routed through the shared directory-diff helper (which
+    // compares `<out>/src/main.rs` against `<golden_dir>/main.rs`), replacing the
+    // former hand-rolled `assert_eq!(Some(emitted), want.ok(), ..)`.
+    support::assert_emitted_project_matches_golden_dir(&out, &golden_dir);
 }
