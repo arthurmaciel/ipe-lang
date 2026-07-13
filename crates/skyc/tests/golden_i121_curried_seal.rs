@@ -510,7 +510,7 @@ fn f9_decoder_thunk_capture() {
 /// SAME lookup miss for a captured-site (zonked, tagged) region read, which
 /// masked this gate behind a spurious `SKY-L0102` here). With the def-head
 /// lookup now succeeding, lowering reaches the lambda body `\y -> (x, y)`,
-/// where `x : a` is captured NonClone (`clone_class(Generic) => NonClone`)
+/// where `x : a` is captured `NonClone` (`clone_class(Generic) => NonClone`)
 /// and read outside callee position (inside a `Tuple`) — T3's capture-clone
 /// gate fires `SKY-L0126` (`Feature::NonCloneCapture`). With T5 implemented,
 /// the generic `a` would gain a `Clone` bound and this gate would yield,
