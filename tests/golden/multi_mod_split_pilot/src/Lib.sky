@@ -1,0 +1,57 @@
+module Lib exposing (Status(..), label, seedAndCount)
+
+import Sky.Core.Prelude exposing (..)
+
+
+{-| A small user enum owned by `Lib` — its Rust name (`LibStatus`) proves the
+home-qualified naming §1.3 records as already-existing behaviour.
+-}
+type Status
+    = Empty
+    | Seeded
+
+
+{-| A pure helper owned by `Lib` (Rust name `lib_label`).
+-}
+label : Status -> String
+label status =
+    case status of
+        Empty ->
+            "empty"
+
+        Seeded ->
+            "seeded"
+
+
+{-| A real `Std.Db` call owned by `Lib` — creates a trivial table, inserts two
+typed rows via `SqlValue` params, and counts them. Its presence makes the
+program's `uses_db` true, so the backend injects the synthetic
+`SqlValue`/`SqlField` enums (§2.2) alongside this multi-module split.
+-}
+seedAndCount : Task Error Int
+seedAndCount =
+    Task.andThen
+        (\conn ->
+            Db.withTransaction conn
+                (\txconn ->
+                    let
+                        _ =
+                            Db.execRaw txconn
+                                "CREATE TABLE widgets (name TEXT, qty INTEGER)"
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO widgets (name, qty) VALUES (?, ?)"
+                                [ SqlString "gear", SqlInt 4 ]
+
+                        _ =
+                            Db.exec txconn
+                                "INSERT INTO widgets (name, qty) VALUES (?, ?)"
+                                [ SqlString "cog", SqlInt 2 ]
+                    in
+                    Task.map
+                        (\rows -> List.length rows)
+                        (Db.query txconn "SELECT name, qty FROM widgets" [])
+                )
+        )
+        (Db.open "sqlite" "sqlite::memory:")

@@ -83,6 +83,39 @@ impl<'a> RustBackend<'a> {
         self.db_driver = driver;
         self
     }
+
+    /// Render the `Spine` tier's Rust text for `program` — the program-wide
+    /// entry file content (see [`project::emit_spine`] for the full
+    /// specification). ADDITIVE Milestone-C entry point: NOT on the public
+    /// emission path ([`Backend::emit`] still produces a single file). Builds
+    /// the [`EmitCtx`] the same way [`Backend::emit`] does, then delegates.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any [`Diagnostic`] from [`EmitCtx::build`] or
+    /// [`project::emit_spine`].
+    pub fn emit_spine(&self, program: &Program) -> DResult<String> {
+        let ctx = EmitCtx::build(self.interner, program, self.db_driver)?;
+        project::emit_spine(&ctx, program)
+    }
+
+    /// Render one `SkyModule(home)` file's Rust text for `program` (see
+    /// [`project::emit_module_file`]). ADDITIVE Milestone-C entry point: NOT
+    /// on the public emission path. Builds the [`EmitCtx`] the same way
+    /// [`Backend::emit`] does, then delegates.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any [`Diagnostic`] from [`EmitCtx::build`] or
+    /// [`project::emit_module_file`].
+    pub fn emit_module_file(
+        &self,
+        program: &Program,
+        home: &ModPath,
+    ) -> DResult<String> {
+        let ctx = EmitCtx::build(self.interner, program, self.db_driver)?;
+        project::emit_module_file(&ctx, program, &rust_file::RustFileId::SkyModule(home.clone()))
+    }
 }
 
 impl Backend for RustBackend<'_> {
