@@ -97,9 +97,10 @@ pub enum Ty {
 /// bit can never collide with a genuine id from either space.
 const SOLVER_VAR_TAG: u32 = 1 << 31;
 
-/// Tag a solver [`VarId`] (from [`crate::constrain::zonk`]) for storage in a
-/// [`Ty::Var`], marking it as solver-representative space so
-/// `instantiate_in`'s wildcard-`"any"` check cannot misinterpret it as an
+/// Tag a solver [`VarId`] for storage in a [`Ty::Var`].
+///
+/// Marks it as solver-representative space (from [`crate::constrain::zonk`])
+/// so `instantiate_in`'s wildcard-`"any"` check cannot misinterpret it as an
 /// annotation symbol.
 #[must_use]
 pub const fn tag_solver_var(id: VarId) -> u32 {
@@ -128,11 +129,13 @@ pub const fn untag_solver_var(raw: u32) -> u32 {
     raw & !SOLVER_VAR_TAG
 }
 
-/// True iff a [`Ty::Var`] raw is solver-representative space (tagged by
-/// [`tag_solver_var`]) rather than an annotation-symbol raw. Callers that
-/// resolve a `Ty::Var` raw through the interner (e.g. the wildcard-`"any"`
-/// check) MUST skip that resolution when this returns true — a tagged raw is
-/// structurally guaranteed to never be a real interned symbol.
+/// True iff a [`Ty::Var`] raw is solver-representative space.
+///
+/// I.e. tagged by [`tag_solver_var`] rather than an annotation-symbol raw.
+/// Callers that resolve a `Ty::Var` raw through the interner (e.g. the
+/// wildcard-`"any"` check) MUST skip that resolution when this returns
+/// true — a tagged raw is structurally guaranteed to never be a real
+/// interned symbol.
 #[must_use]
 pub const fn is_solver_var(raw: u32) -> bool {
     raw & SOLVER_VAR_TAG != 0
