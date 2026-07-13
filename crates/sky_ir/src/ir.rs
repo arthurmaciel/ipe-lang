@@ -494,6 +494,29 @@ pub enum IrType {
     /// nullary `Fn() -> R`, distinct from `ret` alone. The lowerer is the sole
     /// producer; the backend stays total over any parameter vector it receives.
     Fun(Vec<Self>, Box<Self>),
+    /// A CURRIED chain of one-shot closures `T0 -> (T1 -> ( ... -> R))`,
+    /// carried as its parameter list (one per curry level, in application
+    /// order) and the FINAL, non-function return type.
+    ///
+    /// Distinct from [`Self::Fun`] (a flattened, re-callable
+    /// `Box<dyn Fn(T0, T1, ...) -> R>`): this variant renders as NESTED
+    /// `Box<dyn FnOnce(Ti) -> { next level or R } + Send>` boxes, one level
+    /// of currying per parameter. Introduced for #164 (`f7_succeed_curried`)
+    /// to type the `next_decoder` slot of the `JsonDec.Pipeline`/`Db.Decode`
+    /// curried-combinator kernels (`decode_pipeline_required` /
+    /// `decode_pipeline_optional` / `decode_pipeline_required_at` /
+    /// `db_decode_required` / `db_decode_optional`), whose hand-written Rust
+    /// signatures deliberately require a `Box<dyn FnOnce>` chain — each
+    /// level is consumed exactly once per pipeline `run` (matching the
+    /// `curryN` runtime helpers' factory-produced chains) — never the
+    /// re-callable `Fn` boxing the generic [`Self::Fun`] path emits. Only
+    /// ever produced by `eta_expand_partial`'s special-cased handling of
+    /// those five kernels; every other position keeps the ordinary,
+    /// flattened [`Self::Fun`] shape.
+    ///
+    /// Invariant: `params` is non-empty (a chain of zero levels is just
+    /// `ret` itself, never constructed as `FnOnceChain`).
+    FnOnceChain(Vec<Self>, Box<Self>),
     /// A generic type parameter — a Sky type variable used STRUCTURALLY
     /// (pass-through, no operation applied to it) in a fully-parametric
     /// top-level function (M2a). The carried [`Symbol`] is the source type
@@ -947,6 +970,9 @@ pub fn ir_type_is_derivable(
         | IrType::Decoder(_)
         | IrType::Db
         | IrType::Fun(_, _)
+        // A curried `Box<dyn FnOnce>` chain is exactly as non-derivable as
+        // `Fun` (it renders to the same family of boxed trait objects).
+        | IrType::FnOnceChain(_, _)
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -1064,6 +1090,8 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::Decoder(_)
         | IrType::Db
         | IrType::Fun(_, _)
+        // Same family as `Fun` — a boxed `FnOnce` chain is never serde.
+        | IrType::FnOnceChain(_, _)
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -2123,7 +2151,11 @@ mod tests {
         let mut seen = 0_u32;
         let res: Result<Match, &str> = m.try_map_bodies(Ok, |_, b, g| {
             seen += 1;
-            if seen == 2 { Err("second arm fails") } else { Ok((b, g)) }
+            if seen == 2 {
+                Err("second arm fails")
+            } else {
+                Ok((b, g))
+            }
         });
         assert_eq!(res, Err("second arm fails"));
         Ok(())
@@ -3068,10 +3100,7 @@ mod tests {
             IrType::LiveReq,
         ];
         for t in bad {
-            assert!(
-                !ir_type_is_serde(&t, &all_serde),
-                "{t:?} must NOT be serde"
-            );
+            assert!(!ir_type_is_serde(&t, &all_serde), "{t:?} must NOT be serde");
         }
     }
 
@@ -3125,7 +3154,10 @@ mod tests {
             ir_type_is_derivable(&t, &all_serde),
             "Secret IS derivable (Clone + PartialEq)"
         );
-        assert!(!ir_type_is_serde(&t, &all_serde), "Secret must NOT be serde");
+        assert!(
+            !ir_type_is_serde(&t, &all_serde),
+            "Secret must NOT be serde"
+        );
     }
 
     /// #44 derive-blast-radius regression: a record `{ apiKey : Secret, label :
@@ -3173,6 +3205,9 @@ mod tests {
             args: vec![],
         };
         assert!(ir_type_is_serde(&e, &|_, _| true), "serde enum passes");
-        assert!(!ir_type_is_serde(&e, &|_, _| false), "non-serde enum poisons");
+        assert!(
+            !ir_type_is_serde(&e, &|_, _| false),
+            "non-serde enum poisons"
+        );
     }
 }

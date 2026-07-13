@@ -188,6 +188,17 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
             parts.push(ir_type_name(interner, ret));
             parts.join(" -> ")
         }
+        // Same source-like arrow rendering as `Fun` — the FnOnce-vs-Fn
+        // distinction is a backend Rust-emission concern, invisible at the
+        // IR pretty-printer's source-facing level.
+        IrType::FnOnceChain(params, ret) => {
+            let mut parts: Vec<String> = params.iter().map(|t| ir_type_name(interner, t)).collect();
+            if parts.is_empty() {
+                parts.push("()".to_owned());
+            }
+            parts.push(ir_type_name(interner, ret));
+            parts.join(" -> ")
+        }
         IrType::Order => "Order".to_owned(),
         IrType::Decimal => "Decimal".to_owned(),
         IrType::ErrorKind => "ErrorKind".to_owned(),
@@ -319,10 +330,10 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::BasicsToString => "Basics.toString",
         // ── Basics numerics (#115) ──────────────────────────────────────────
         KernelFn::BasicsNegate => "Basics.negate",
-        KernelFn::BasicsAbs    => "Basics.abs",
-        KernelFn::BasicsSqrt   => "Basics.sqrt",
-        KernelFn::BasicsMin    => "Basics.min",
-        KernelFn::BasicsMax    => "Basics.max",
+        KernelFn::BasicsAbs => "Basics.abs",
+        KernelFn::BasicsSqrt => "Basics.sqrt",
+        KernelFn::BasicsMin => "Basics.min",
+        KernelFn::BasicsMax => "Basics.max",
         // ── end Basics numerics (#115) ──────────────────────────────────────
         // ── Error kernels (Sky.Core.Error — minimal `Error = String` slice, #86) ─
         KernelFn::ErrorUnexpected => "Error.unexpected",
@@ -853,7 +864,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlAttrRows => "Attr.rows",
         // ── Std.Ui.Keyed ──────────────────────────────────────────────────────
         KernelFn::KeyedColumn => "Keyed.column",
-        KernelFn::KeyedRow    => "Keyed.row",
+        KernelFn::KeyedRow => "Keyed.row",
         // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
         KernelFn::RegionMainContent => "Region.mainContent",
         KernelFn::RegionNavigation => "Region.navigation",
@@ -1060,7 +1071,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::InputRadio => "Input.radio",
         KernelFn::InputRadioRow => "Input.radioRow",
         // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────
-        KernelFn::LazyLazy  => "Lazy.lazy",
+        KernelFn::LazyLazy => "Lazy.lazy",
         KernelFn::LazyLazy2 => "Lazy.lazy2",
         KernelFn::LazyLazy3 => "Lazy.lazy3",
         KernelFn::LazyLazy4 => "Lazy.lazy4",
@@ -1089,46 +1100,46 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiInFront => "Ui.inFront",
         KernelFn::UiBehind => "Ui.behind",
         // ── Std.Decimal ───────────────────────────────────────────────────────
-        KernelFn::DecZero        => "Decimal.zero",
-        KernelFn::DecOne         => "Decimal.one",
-        KernelFn::DecOneHundred  => "Decimal.oneHundred",
-        KernelFn::DecFromString  => "Decimal.fromString",
-        KernelFn::DecFromInt     => "Decimal.fromInt",
-        KernelFn::DecFromFloat   => "Decimal.fromFloat",
-        KernelFn::DecFromMinor   => "Decimal.fromMinor",
-        KernelFn::DecToString    => "Decimal.toString",
+        KernelFn::DecZero => "Decimal.zero",
+        KernelFn::DecOne => "Decimal.one",
+        KernelFn::DecOneHundred => "Decimal.oneHundred",
+        KernelFn::DecFromString => "Decimal.fromString",
+        KernelFn::DecFromInt => "Decimal.fromInt",
+        KernelFn::DecFromFloat => "Decimal.fromFloat",
+        KernelFn::DecFromMinor => "Decimal.fromMinor",
+        KernelFn::DecToString => "Decimal.toString",
         KernelFn::DecToStringFixed => "Decimal.toStringFixed",
-        KernelFn::DecToFloat     => "Decimal.toFloat",
-        KernelFn::DecToInt       => "Decimal.toInt",
-        KernelFn::DecToMinor     => "Decimal.toMinor",
-        KernelFn::DecAdd         => "Decimal.add",
-        KernelFn::DecSub         => "Decimal.sub",
-        KernelFn::DecMul         => "Decimal.mul",
-        KernelFn::DecDiv         => "Decimal.div",
-        KernelFn::DecMod         => "Decimal.mod",
-        KernelFn::DecNeg         => "Decimal.neg",
-        KernelFn::DecAbs         => "Decimal.abs",
-        KernelFn::DecFloor       => "Decimal.floor",
-        KernelFn::DecCeil        => "Decimal.ceil",
-        KernelFn::DecRound       => "Decimal.round",
+        KernelFn::DecToFloat => "Decimal.toFloat",
+        KernelFn::DecToInt => "Decimal.toInt",
+        KernelFn::DecToMinor => "Decimal.toMinor",
+        KernelFn::DecAdd => "Decimal.add",
+        KernelFn::DecSub => "Decimal.sub",
+        KernelFn::DecMul => "Decimal.mul",
+        KernelFn::DecDiv => "Decimal.div",
+        KernelFn::DecMod => "Decimal.mod",
+        KernelFn::DecNeg => "Decimal.neg",
+        KernelFn::DecAbs => "Decimal.abs",
+        KernelFn::DecFloor => "Decimal.floor",
+        KernelFn::DecCeil => "Decimal.ceil",
+        KernelFn::DecRound => "Decimal.round",
         KernelFn::DecRoundHalfUp => "Decimal.roundHalfUp",
-        KernelFn::DecTruncate    => "Decimal.truncate",
-        KernelFn::DecCompare     => "Decimal.compare",
-        KernelFn::DecEq          => "Decimal.eq",
-        KernelFn::DecNeq         => "Decimal.neq",
-        KernelFn::DecLt          => "Decimal.lt",
-        KernelFn::DecLte         => "Decimal.lte",
-        KernelFn::DecGt          => "Decimal.gt",
-        KernelFn::DecGte         => "Decimal.gte",
-        KernelFn::DecMin         => "Decimal.min",
-        KernelFn::DecMax         => "Decimal.max",
-        KernelFn::DecIsZero      => "Decimal.isZero",
-        KernelFn::DecIsPositive  => "Decimal.isPositive",
-        KernelFn::DecIsNegative  => "Decimal.isNegative",
-        KernelFn::DecPercentOf   => "Decimal.percentOf",
-        KernelFn::DecAddPercent  => "Decimal.addPercent",
-        KernelFn::DecSubPercent  => "Decimal.subPercent",
-        KernelFn::DecFormatWith  => "Decimal.formatWith",
+        KernelFn::DecTruncate => "Decimal.truncate",
+        KernelFn::DecCompare => "Decimal.compare",
+        KernelFn::DecEq => "Decimal.eq",
+        KernelFn::DecNeq => "Decimal.neq",
+        KernelFn::DecLt => "Decimal.lt",
+        KernelFn::DecLte => "Decimal.lte",
+        KernelFn::DecGt => "Decimal.gt",
+        KernelFn::DecGte => "Decimal.gte",
+        KernelFn::DecMin => "Decimal.min",
+        KernelFn::DecMax => "Decimal.max",
+        KernelFn::DecIsZero => "Decimal.isZero",
+        KernelFn::DecIsPositive => "Decimal.isPositive",
+        KernelFn::DecIsNegative => "Decimal.isNegative",
+        KernelFn::DecPercentOf => "Decimal.percentOf",
+        KernelFn::DecAddPercent => "Decimal.addPercent",
+        KernelFn::DecSubPercent => "Decimal.subPercent",
+        KernelFn::DecFormatWith => "Decimal.formatWith",
     }
 }
 
@@ -1165,7 +1176,9 @@ fn pat_name(interner: &Interner, pat: &Pat) -> String {
                 .join(", ");
             format!("({inner})")
         }
-        Pat::Ctor { ty, variant, args, .. } => {
+        Pat::Ctor {
+            ty, variant, args, ..
+        } => {
             let head = format!(
                 "{}.{}",
                 sym_name(interner, *ty),
@@ -1389,8 +1402,14 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
         Expr::Char(c) => line(out, level, &format!("Char '{c}'")),
         Expr::Unit => line(out, level, "Unit"),
         Expr::Var(sym) => line(out, level, &format!("Var {}", sym_name(interner, *sym))),
-        Expr::CloneVar(sym) => line(out, level, &format!("CloneVar {}", sym_name(interner, *sym))),
-        Expr::Ctor { ty, variant, args, .. } => {
+        Expr::CloneVar(sym) => line(
+            out,
+            level,
+            &format!("CloneVar {}", sym_name(interner, *sym)),
+        ),
+        Expr::Ctor {
+            ty, variant, args, ..
+        } => {
             line(
                 out,
                 level,
