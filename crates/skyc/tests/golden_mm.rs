@@ -54,21 +54,16 @@ fn runtime() -> PathBuf {
 #[test]
 fn mm_local_pkg_emits_byte_identical_main_rs() {
     let fixture = golden_dir("mm_local_pkg");
-    let golden = fixture.join("main.rs");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("mm_local_pkg");
     let _ = std::fs::remove_dir_all(&out);
 
     let res = skyc::build_project(&fixture.join("sky.toml"), &out, &runtime());
     assert!(res.is_ok(), "build_project failed: {:?}", res.err());
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
-    let want = std::fs::read_to_string(&golden)
-        .expect("golden main.rs must exist — regenerate with skyc if missing");
-    assert_eq!(
-        emitted, want,
-        "emitted main.rs must equal the golden byte-for-byte"
-    );
+    // Emitted `src/main.rs` must equal the checked-in golden `main.rs`, routed
+    // through the shared directory-diff helper (replaces the hand-rolled
+    // `read_to_string` + `assert_eq!` pair).
+    support::assert_emitted_project_matches_golden_dir(&out, &fixture);
 }
 
 // ---------------------------------------------------------------------------
@@ -78,22 +73,21 @@ fn mm_local_pkg_emits_byte_identical_main_rs() {
 #[test]
 fn mm_diamond_emits_byte_identical_main_rs() {
     let fixture = golden_dir("mm_diamond");
-    let golden = fixture.join("main.rs");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("mm_diamond");
     let _ = std::fs::remove_dir_all(&out);
 
     let res = skyc::build_project(&fixture.join("sky.toml"), &out, &runtime());
     assert!(res.is_ok(), "build_project failed: {:?}", res.err());
 
+    // Byte-diff half: emitted `src/main.rs` must equal the golden `main.rs`,
+    // routed through the shared directory-diff helper.
+    support::assert_emitted_project_matches_golden_dir(&out, &fixture);
+
+    // Seal half: D's `base` function must appear exactly once (D compiled once,
+    // shared by B and C). Read the emitted source directly for this substring
+    // count — the directory-diff helper cannot express it.
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
-    let want = std::fs::read_to_string(&golden).expect("golden main.rs must exist");
-    assert_eq!(
-        emitted, want,
-        "emitted main.rs must equal the golden byte-for-byte"
-    );
-
-    // D's `base` function must appear exactly once: once compiled, shared by B and C.
     let count = emitted.matches("fn d_base").count();
     assert_eq!(
         count, 1,
