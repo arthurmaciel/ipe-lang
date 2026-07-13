@@ -4,15 +4,18 @@
 //!
 //! This is the ONE fixture that exercises the multi-module split AND the
 //! `SqlValue`/`SqlField` Spine-routing (design doc §2.2) together. Milestone C
-//! (Task 12, a separate follow-up) flips `emit_program` to real per-module
-//! output and rewrites these goldens into the Spine + `sky_mods/*` shape; for
-//! now the golden is the HONEST current single-file baseline (home-qualified
-//! names like `lib_label`/`main_summary` are already present today — §1.3,
-//! existing behaviour, not new emission).
+//! (Task 12) has flipped `emit_program` to real per-module output: the golden
+//! is now the Spine-only `main.rs` (preamble + `SqlValue`/`SqlField` enums +
+//! DB-projection impls + kernel-wrapper prelude + `fn main()` + the
+//! `mod`/`pub(crate) use` barrel) PLUS one `sky_mods/<ident>.rs` per Sky module
+//! (`sky_mod_lib.rs`, `sky_mod_main.rs`). The home-qualified names
+//! (`lib_label`/`main_summary`, `LibStatus`) are §1.3 existing behaviour; the
+//! new emission is the file split itself.
 //!
-//! Modelled on `golden_m0.rs`, but using the shared directory-diff helper
-//! `support::assert_emitted_project_matches_golden_dir` from the start (this
-//! fixture is NEW — it never used the retired hand-rolled assertion).
+//! Modelled on `golden_m0.rs`, using the shared directory-diff helper
+//! `support::assert_emitted_project_matches_golden_dir` for `main.rs` +
+//! `Cargo.toml`, extended by a fixture-local `sky_mods/*.rs` byte-diff for the
+//! split's per-module files.
 
 use std::path::{Path, PathBuf};
 
@@ -38,8 +41,70 @@ fn runtime() -> PathBuf {
     skyc::resolve_runtime().expect("runtime must resolve for the pilot golden test")
 }
 
+/// Byte-diff every checked-in `sky_mods/<name>.rs` golden against its
+/// counterpart under `<out>/src/sky_mods/`. Milestone C (Task 12) flips
+/// `emit_program` to real per-module output, so the pilot golden now carries
+/// one `sky_mods/*.rs` file per Sky module (`sky_mod_lib.rs`,
+/// `sky_mod_main.rs`) alongside the Spine-only `main.rs`. The shared
+/// `assert_emitted_project_matches_golden_dir` helper only diffs `main.rs` +
+/// `Cargo.toml`; this fixture-local check extends that to the split's new
+/// per-module files, so the multi-file output is proven byte-for-byte, not
+/// merely that `main.rs` shrank. Under-emission (a golden module file with no
+/// emitted counterpart) and content drift both fail loudly.
+fn assert_module_files_match_golden(out: &Path, golden_dir: &Path) {
+    let golden_mods = golden_dir.join("sky_mods");
+    let emitted_mods = out.join("src").join("sky_mods");
+    let entries = std::fs::read_dir(&golden_mods).unwrap_or_else(|e| {
+        panic!(
+            "golden sky_mods dir unreadable at {}: {e}",
+            golden_mods.display()
+        )
+    });
+
+    let mut mismatches = Vec::new();
+    let mut compared = 0usize;
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|e| panic!("golden sky_mods entry unreadable: {e}"));
+        let name = entry.file_name();
+        let want_path = golden_mods.join(&name);
+        let got_path = emitted_mods.join(&name);
+        match (
+            std::fs::read_to_string(&want_path),
+            std::fs::read_to_string(&got_path),
+        ) {
+            (Ok(want), Ok(got)) if want == got => compared += 1,
+            (Ok(want), Ok(got)) => mismatches.push(format!(
+                "sky_mods/{}: emitted != golden ({} vs {} bytes)",
+                name.to_string_lossy(),
+                got.len(),
+                want.len(),
+            )),
+            (_, Err(e)) => mismatches.push(format!(
+                "sky_mods/{}: emitted missing or unreadable at {}: {e}",
+                name.to_string_lossy(),
+                got_path.display(),
+            )),
+            (Err(e), _) => mismatches.push(format!(
+                "sky_mods/{}: golden missing or unreadable at {}: {e}",
+                name.to_string_lossy(),
+                want_path.display(),
+            )),
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "sky_mods golden mismatch:\n{}",
+        mismatches.join("\n"),
+    );
+    assert!(
+        compared >= 2,
+        "expected at least the two pilot module files (sky_mod_lib.rs, sky_mod_main.rs) to be \
+         compared, only {compared} matched — the split may have silently stopped materialising"
+    );
+}
+
 #[test]
-fn emits_byte_identical_single_file_main_rs_today() {
+fn emits_split_spine_and_per_module_files() {
     let fixture = fixture_dir();
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("multi_mod_split_pilot");
     let _ = std::fs::remove_dir_all(&out);
@@ -48,10 +113,18 @@ fn emits_byte_identical_single_file_main_rs_today() {
     assert!(res.is_ok(), "build_project failed: {:?}", res.err());
 
     // Directory-diff the emitted project against the checked-in golden dir:
-    // asserts the emitted `src/main.rs` AND the golden `Cargo.toml` match
-    // byte-for-byte. At TODAY's single-file shape this is the whole emitted
-    // Rust surface for the two-module + Std.Db program.
+    // asserts the emitted Spine-only `src/main.rs` AND the golden `Cargo.toml`
+    // match byte-for-byte (Milestone C, Task 12 — `main.rs` is now the Spine
+    // tier: preamble, SqlValue/SqlField enums + DB-projection impls, the
+    // kernel-wrapper prelude, `fn main()`, and the `mod`/`pub(crate) use`
+    // barrel — NOT the user modules' own types/funcs).
     support::assert_emitted_project_matches_golden_dir(&out, &fixture);
+
+    // …plus the per-Sky-module files the real split now emits under
+    // `src/sky_mods/`. `sky_mod_lib.rs`'s Db call site references
+    // `MainSqlValue`/`MainSqlField` variants resolving via `use crate::*;`
+    // back to the Spine's declarations — the file-level proof of §2.2's fix.
+    assert_module_files_match_golden(&out, &fixture);
 }
 
 /// Full spine (gated on `SKY_E2E=1`): compile, build the emitted Cargo

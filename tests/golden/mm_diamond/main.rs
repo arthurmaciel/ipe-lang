@@ -235,18 +235,6 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     sky_runtime::http_client::http_parse_query(raw)
 }
 
-pub fn d_base() -> i64 {
-    42
-}
-pub fn c_from_c() -> i64 {
-    (d_base() + 2)
-}
-pub fn b_from_b() -> i64 {
-    (d_base() + 1)
-}
-pub fn sky_main() -> SkyTask<()> {
-    log_println(string_from_int((b_from_b() + c_from_c())))
-}
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
 // the codegen routes Ffi.kernel calls directly, but some construction
@@ -282,3 +270,16 @@ fn main() {
         }
     }
 }
+
+#[path = "sky_mods/sky_mod_d.rs"]
+mod sky_mod_d;
+pub(crate) use sky_mod_d::*;
+#[path = "sky_mods/sky_mod_c.rs"]
+mod sky_mod_c;
+pub(crate) use sky_mod_c::*;
+#[path = "sky_mods/sky_mod_b.rs"]
+mod sky_mod_b;
+pub(crate) use sky_mod_b::*;
+#[path = "sky_mods/sky_mod_main.rs"]
+mod sky_mod_main;
+pub(crate) use sky_mod_main::*;

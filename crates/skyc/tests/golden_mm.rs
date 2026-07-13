@@ -84,10 +84,12 @@ fn mm_diamond_emits_byte_identical_main_rs() {
     support::assert_emitted_project_matches_golden_dir(&out, &fixture);
 
     // Seal half: D's `base` function must appear exactly once (D compiled once,
-    // shared by B and C). Read the emitted source directly for this substring
-    // count — the directory-diff helper cannot express it.
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    // shared by B and C). D is a genuine own-home module, so the per-Sky-module
+    // split (Phase 5 Milestone C) places `d_base` in `src/sky_mods/sky_mod_d.rs`
+    // — scan the WHOLE emitted Sky-side tree (main.rs + sky_mods/*.rs) for the
+    // count, robust to that placement. The directory-diff helper above cannot
+    // express a substring-count assertion, so this reads the source directly.
+    let emitted = support::read_all_emitted_src(&out);
     let count = emitted.matches("fn d_base").count();
     assert_eq!(
         count, 1,
