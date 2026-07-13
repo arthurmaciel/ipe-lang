@@ -255,11 +255,31 @@ fn chunk_subscribed() -> &'static Mutex<HashSet<i64>> {
 /// `Errored e` on a read fault. Subscribing to an unknown / already-drained id
 /// is a no-op (matches the stdlib contract). `E` is pinned to `SkyError` at the
 /// call site; `Errored` builds it via `From<String>`.
+/// #166: `to_msg` is moved exclusively into the ONE detached `tokio::spawn`
+/// task below (never behind a shared `Arc`, never read from two threads at
+/// once) -- the same shape as the sibling `sub_subscribe_topic` (`pubsub.rs`),
+/// whose doc comment states the identical rationale. `Send` is therefore the
+/// full and correct contract; `Sync` is NOT required. A prior version of this
+/// bound over-declared `+ Sync`, which the codegen's generic first-class-
+/// function-value rendering (`Box<dyn Fn(..) -> .. + Send + 'static>` --
+/// deliberately `+Send`-only, since a trait object's auto-trait set is
+/// exactly its bound list) could never satisfy regardless of what the boxed
+/// closure captured, so every `Http.Stream.chunks` subscription failed
+/// `cargo build` with E0277 despite `skyc` accepting the program (a THE-SEAL
+/// violation). Fixed by relaxing the bound to match the actual (Send-only)
+/// usage -- NOT by re-wrapping the box in a fresh closure at the emit site
+/// (the technique #162 used for `html_on_raw_` / `ui_on_submit_` / `Ui.on*`),
+/// because THOSE runtime slots are genuinely `Arc<dyn Fn + Send + Sync>`
+/// shared across a live session's concurrently-serviced dispatch table -- a
+/// structurally different, stronger requirement this kernel never has. See
+/// the #166 fix commit message for the blast-radius audit of every sibling
+/// kernel that routes through the same shared generic N-arg call-emit
+/// fallback.
 pub fn sub_subscribe_stream<E, M, F>(sid: SkyStreamId, to_msg: F) -> SkySub<M>
 where
     E: From<String> + Send + 'static,
     M: Send + 'static,
-    F: Fn(ChunkEvent<E>) -> M + Send + Sync + 'static,
+    F: Fn(ChunkEvent<E>) -> M + Send + 'static,
 {
     let id = sid.0;
     SkySub::Source(Box::new(move |emit| {
