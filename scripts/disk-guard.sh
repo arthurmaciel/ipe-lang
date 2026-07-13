@@ -3,28 +3,49 @@
 # sessions, sibling to mem-guard.sh.
 #
 # Background: this session runs several parallel `git worktree` build lanes,
-# each with its own CARGO_TARGET_DIR under ~/.cache/sky-rust-target-<lane>.
-# A cold multi-lane rebuild can burn 15-30GB per lane; left unwatched, disk
-# has hit <6GB free multiple times in one session, each time requiring a
-# human-in-the-loop reclaim. This watchdog polls free disk space on `/` and
-# reclaims disposable Cargo/sccache caches BEFORE the disk fills, in a fixed
-# safety order, without ever touching git-tracked source or a target dir
-# with a live compiler process still writing to it.
+# each with its own ad-hoc CARGO_TARGET_DIR under ~/.cache/ — NOT always
+# named `sky-rust-target-<lane>`: agent-dispatched verification passes this
+# session invented their own names too (`verify-clippy164`,
+# `verify-phase5-final`, `review-a8fa9c4-target`, ...). A cold multi-lane
+# rebuild can burn 15-30GB per lane; left unwatched, disk has hit <2GB free
+# multiple times in one session. This watchdog polls free disk space on `/`
+# and reclaims disposable Cargo/sccache caches BEFORE the disk fills, in a
+# fixed safety order, without ever touching git-tracked source or a target
+# dir with a live compiler process still writing to it.
 #
-# Load-bearing safety invariant: this script ONLY ever deletes paths under
-# ~/.cache/sky-rust-target-* and ~/.cache/sccache — disposable build caches
-# that regenerate on the next `cargo build`. It NEVER touches a repo
-# worktree, `.git`, or any tracked file. Reclaiming a target dir never loses
-# WORK (work lives in git commits) — it only costs a future rebuild.
+# 2026-07-13 incident: disk hit 1GB free mid-session because this script's
+# reclaim tiers ONLY iterated a static `~/.cache/sky-rust-target-*` glob —
+# every one of the ad-hoc-named scratch dirs above was structurally
+# invisible to it, so the only thing it could ever reclaim was `sccache`
+# (a few MB) while ~50GB of genuinely dead cargo target dirs sat right next
+# to it. Root-cause fix: identify a reclaimable dir by CONTENT, not name.
+# Every `cargo build`/`check`/`nextest` invocation writes a `CACHEDIR.TAG`
+# file into the root of its `CARGO_TARGET_DIR` (a documented, stable Cargo
+# behavior — the same marker backup tools use to skip cache directories) —
+# `looks_like_cargo_target_dir()` below checks for exactly that file. A
+# directory's NAME no longer matters; its structure does.
+#
+# Load-bearing safety invariant: this script ONLY ever deletes ~/.cache/sccache
+# or a DIRECT CHILD of ~/.cache that structurally IS a cargo target
+# directory (owns a `CACHEDIR.TAG`) — never a repo worktree, `.git`, or any
+# tracked file (none of those ever contain that marker). Reclaiming a target
+# dir never loses WORK (work lives in git commits) — it only costs a future
+# rebuild.
 #
 # Sandbox enforcement: every deletion routes through safe_rm_rf(), the ONLY
 # function permitted to call `rm -rf`. It re-derives and re-validates the
 # path from scratch at the point of destruction (never trusts a caller) —
 # canonicalizes via `realpath -m` (so a symlink can't smuggle a path outside
 # ~/.cache), requires the resolved path's PARENT be exactly the resolved
-# ~/.cache (not a prefix/substring match), and requires the basename match
-# the allowlist exactly (`sky-rust-target-*` or `sccache`). Refuses on any
-# empty/unset-variable/`/`/`$HOME` input. See safe_rm_rf()'s own comment.
+# ~/.cache (not a prefix/substring match), and requires EITHER the basename
+# be exactly `sccache` OR the resolved path contain a `CACHEDIR.TAG` file at
+# its root. Refuses on any empty/unset-variable/`/`/`$HOME` input, and
+# refuses (does not even check CACHEDIR.TAG) for a handful of hard-denied
+# basenames that must never be treated as scratch even if something
+# mistakenly wrote a stray CACHEDIR.TAG into them (`sky-rust-target` itself
+# — the main shared warm cache — is NOT hard-denied; it is still eligible,
+# just like any other target dir, sorted by size like everything else in
+# tier 3). See safe_rm_rf()'s own comment.
 #
 # Usage:
 #   ./scripts/disk-guard.sh                             # foreground, logs to stderr + /tmp/disk-guard.log
@@ -68,7 +89,6 @@ DRY="${DISK_GUARD_DRY:-}"
 
 CACHE_ROOT="${HOME}/.cache"
 SCCACHE_DIR="${CACHE_ROOT}/sccache"
-TARGET_GLOB="${CACHE_ROOT}/sky-rust-target-*"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 log() {
@@ -84,6 +104,38 @@ free_gb() {
 path_is_live() {
     local path="$1"
     pgrep -f -- "$path" > /dev/null 2>&1
+}
+
+# True (0) if $1 is structurally a cargo CARGO_TARGET_DIR — the ONLY signal
+# this script trusts to identify a reclaimable directory, replacing the old
+# name-glob approach that missed every ad-hoc-named scratch target dir this
+# session's agents invented. Cargo writes `CACHEDIR.TAG` at the ROOT of
+# every target dir on first use, regardless of what the directory is
+# named — BUT `CACHEDIR.TAG` is a generic freedesktop.org convention many
+# unrelated tools also use (verified live on this host: `~/.cache/fontconfig`
+# carries one too) — so file PRESENCE alone is not cargo-specific enough.
+# Cargo's own tag file contains the literal line
+# "# This file is a cache directory tag created by cargo." — checking for
+# that exact substring is what actually narrows this to cargo target dirs.
+looks_like_cargo_target_dir() {
+    local dir="$1"
+    [[ -f "$dir/CACHEDIR.TAG" ]] && grep -qF 'created by cargo' "$dir/CACHEDIR.TAG" 2>/dev/null
+}
+
+# Every direct child of ~/.cache that structurally looks like a cargo
+# target dir, one per line — the dynamic replacement for the old static
+# `sky-rust-target-*` glob. Finds `verify-clippy164`, `master-gate-target`,
+# `review-a8fa9c4-target`, the bare `sky-rust-target`, or anything else a
+# future agent names its `CARGO_TARGET_DIR`, with zero name-pattern
+# maintenance required going forward.
+discover_target_dirs() {
+    local dir
+    for dir in "$CACHE_ROOT"/*/; do
+        dir="${dir%/}"
+        [[ -d "$dir" ]] || continue
+        [[ "$(basename -- "$dir")" == "sccache" ]] && continue   # handled as its own tier
+        looks_like_cargo_target_dir "$dir" && printf '%s\n' "$dir"
+    done
 }
 
 # Substring-match $1 (a dir basename) against every line in PROTECT_FILE.
@@ -155,8 +207,8 @@ safe_rm_rf() {
     fi
 
     base="$(basename -- "$real")"
-    if [[ "$base" != sky-rust-target-* && "$base" != "sccache" ]]; then
-        log "REFUSED (basename '$base' not in allowlist: sky-rust-target-*, sccache) reason=$reason"
+    if [[ "$base" != "sccache" ]] && ! looks_like_cargo_target_dir "$real"; then
+        log "REFUSED ('$real' is not sccache and has no CACHEDIR.TAG at its root — not structurally a cargo target dir) reason=$reason"
         return 1
     fi
 
@@ -210,23 +262,31 @@ reclaim_pass() {
     fi
     [[ "$(free_gb)" -ge "$RECLAIM_GB" ]] && return 0
 
-    # Tier 2: orphaned target dirs (no worktree left).
+    # Tier 2: orphaned target dirs (no worktree left). Only meaningful for
+    # dirs that follow the `sky-rust-target-<lane>` naming convention —
+    # is_orphaned() itself returns false for anything else, so ad-hoc-named
+    # scratch dirs (which have no "lane" to be orphaned FROM) safely fall
+    # through to tier 3 instead.
     local dir
-    for dir in $TARGET_GLOB; do
-        [[ -d "$dir" ]] || continue
+    while IFS= read -r dir; do
+        [[ -z "$dir" ]] && continue
         [[ "$(free_gb)" -ge "$RECLAIM_GB" ]] && return 0
         is_orphaned "$dir" && reclaim_dir "$dir" "orphaned (no worktree)" || true
-    done
+    done < <(discover_target_dirs)
     [[ "$(free_gb)" -ge "$RECLAIM_GB" ]] && return 0
 
-    # Tier 3: non-protected active lanes, largest first.
+    # Tier 3: non-protected target dirs, largest first — the tier that
+    # catches everything: ad-hoc-named verification/review scratch dirs,
+    # abandoned lane targets that weren't caught by tier 2 because their
+    # worktree happens to still exist, all of it, sorted by size so the
+    # biggest win lands first.
     while IFS= read -r dir; do
         [[ -z "$dir" ]] && continue
         [[ "$(free_gb)" -ge "$RECLAIM_GB" ]] && return 0
         local base; base="$(basename "$dir")"
         is_protected "$base" && continue
-        reclaim_dir "$dir" "active lane, non-protected" || true
-    done < <(du -sk $TARGET_GLOB 2>/dev/null | sort -rn | awk '{ $1=""; sub(/^ /,""); print }')
+        reclaim_dir "$dir" "non-protected target dir" || true
+    done < <(discover_target_dirs | xargs -r du -sk 2>/dev/null | sort -rn | awk '{ $1=""; sub(/^ /,""); print }')
     [[ "$(free_gb)" -ge "$RECLAIM_GB" ]] && return 0
 
     # Tier 4: PANIC only — protected dirs too.
@@ -234,8 +294,8 @@ reclaim_pass() {
         while IFS= read -r dir; do
             [[ -z "$dir" ]] && continue
             [[ "$(free_gb)" -ge "$RECLAIM_GB" ]] && return 0
-            reclaim_dir "$dir" "PANIC: protected lane, last resort" || true
-        done < <(du -sk $TARGET_GLOB 2>/dev/null | sort -rn | awk '{ $1=""; sub(/^ /,""); print }')
+            reclaim_dir "$dir" "PANIC: protected target dir, last resort" || true
+        done < <(discover_target_dirs | xargs -r du -sk 2>/dev/null | sort -rn | awk '{ $1=""; sub(/^ /,""); print }')
     fi
 }
 

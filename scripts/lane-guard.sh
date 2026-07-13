@@ -30,7 +30,7 @@
 #   nohup ./scripts/lane-guard.sh --loop >/tmp/lane-guard.out 2>&1 & disown   # background daemon
 #
 # Tunables (env vars, all optional):
-#   LANE_GUARD_INTERVAL     poll interval when run with --loop (seconds).  default 900 (15 min)
+#   LANE_GUARD_INTERVAL     poll interval when run with --loop (seconds).  default 1800 (30 min)
 #   LANE_GUARD_LOG          log file path.                                 default /tmp/lane-guard.log
 #   LANE_GUARD_STATE_DIR    per-lane last-seen state (commit hash + max     default /tmp/lane-guard-state
 #                           source mtime), used to detect "nothing moved
@@ -53,7 +53,7 @@
 
 set -euo pipefail
 
-INTERVAL="${LANE_GUARD_INTERVAL:-900}"
+INTERVAL="${LANE_GUARD_INTERVAL:-1800}"
 LOG="${LANE_GUARD_LOG:-/tmp/lane-guard.log}"
 STATE_DIR="${LANE_GUARD_STATE_DIR:-/tmp/lane-guard-state}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

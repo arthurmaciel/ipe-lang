@@ -157,7 +157,22 @@ reclaim_disk() {
     for d in "$HOME"/.cache/*target*; do
         [ -d "$d" ] || continue
         local keep=0 k; for k in $KEEP_TARGETS; do [ "$(basename "$d")" = "$k" ] && keep=1; done
-        [ "$keep" -eq 0 ] && { log "  rm $(basename "$d") ($(du -sh "$d" 2>/dev/null | cut -f1))"; rm -rf "$d"; }
+        [ "$keep" -eq 1 ] && continue
+        # 2026-07-13: this call site is now UNCONDITIONAL (fired proactively
+        # after every landed mechanical batch / guardian item, not just when
+        # disk_free_gb dips below DISK_FLOOR) — see the two call sites'
+        # comments. That makes the pre-existing no-liveness-check gap a real
+        # hazard it wasn't before: a concurrent orchestrate.sh lane can have
+        # its OWN CARGO_TARGET_DIR (not in $KEEP_TARGETS) actively open at
+        # the exact moment a DIFFERENT lane's completion triggers this
+        # reclaim. Skip anything a live process still references — mirrors
+        # disk-guard.sh's path_is_live() gate; a live writer always wins
+        # over a disk-space goal.
+        if pgrep -f -- "$d" >/dev/null 2>&1; then
+            log "  skip $(basename "$d") (live process still references it)"
+            continue
+        fi
+        log "  rm $(basename "$d") ($(du -sh "$d" 2>/dev/null | cut -f1))"; rm -rf "$d"
     done
     git worktree prune 2>/dev/null
     rm -rf /tmp/sky-fuzz.* /tmp/sky-fuzz-neg.* /tmp/orch-*.log 2>/dev/null
@@ -322,6 +337,15 @@ while :; do
         log "mechanical batch: ${#batch[@]} item(s) → orchestrate.sh"
         PROGDEV_TS="auto-c$cycle" "$HERE/orchestrate.sh" "${batch[@]}" 2>&1 | sed 's/^/    /'
         for d in "${batch[@]}"; do mark ATTEMPTED mechanical "$d"; done  # sweep re-surfaces genuine misses
+        # Proactive hygiene (2026-07-13): orchestrate.sh already removes its OWN
+        # lane worktrees/branches on exit, but their CARGO_TARGET_DIRs (tens of
+        # GB apiece under real workloads) were only ever reclaimed reactively,
+        # when a LATER cycle's ensure_disk happened to notice free space below
+        # DISK_FLOOR. That "clean up eventually, once it's already a crisis"
+        # pattern is exactly what let free space hit 1GB mid-session once —
+        # reclaim unconditionally, right here, every cycle a batch lands,
+        # before disk pressure has a chance to build.
+        reclaim_disk
         continue
     fi
 
@@ -459,6 +483,7 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
             guardian_failed "$class" "$gdesc" "$gbr" "gate failed after merge. tail: $(tail -12 /tmp/autopilot-gate.log 2>/dev/null | tr '\n' ' ' | cut -c1-400)"
         fi
         git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null
+        reclaim_disk   # proactive per-item hygiene — see the mechanical-batch call site's comment
     done
     git worktree prune
     # persistent per-cycle cost ledger — cumulative agent $ from this run's logs,
