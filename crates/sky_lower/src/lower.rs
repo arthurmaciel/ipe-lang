@@ -7422,7 +7422,33 @@ impl<'a> Lowerer<'a> {
     fn lower_expr(&self, e: &canon::Expr) -> DResult<Expr> {
         self.reject_function_through_type_var(e)?;
         match &e.value {
-            canon::Expr_::Int(n) => Ok(Expr::Int(*n)),
+            // A "number"-polymorphic Int literal (`canon::Expr_::Int`, per
+            // `constrain_expr`'s `Expr_::Int(_) => self.super_var(TyBounds::add(), span)`)
+            // whose SOLVED region type came out `Float` — e.g. `pct 100` where
+            // `pct : Float -> Length` (`Std/Css.sky`) — must render as an f64
+            // Rust literal (`100.0`), not the bare integer literal `100`. Rust's
+            // own literal inference cannot bridge this: an unsuffixed integer
+            // literal's type is always drawn from `{integer}` (never `{float}`),
+            // so passing `100` where `f64` is expected is a hard `E0308`
+            // regardless of context — the SAME class of skyc-exit-0-then-
+            // cargo-fail SEAL violation as #167's onSubmit bug, just in the
+            // numeric-literal-defaulting subsystem instead of event-handler
+            // codegen. `is_concrete_float` is the existing helper
+            // `reject_float_keyed_collection` already uses for this exact
+            // "did HM solve this to the builtin Float?" question.
+            canon::Expr_::Int(n) => {
+                if let Some(ty) = self.region_ty(e.span)
+                    && self.is_concrete_float(ty)?
+                {
+                    #[allow(clippy::cast_precision_loss)] // Sky Int literals are source-text
+                    // decimal digits; the round-trip through f64 changes nothing a Sky
+                    // author could have written more precisely — same domain as `Float`
+                    // literals parsed directly.
+                    Ok(Expr::Float(*n as f64))
+                } else {
+                    Ok(Expr::Int(*n))
+                }
+            }
             canon::Expr_::Float(f) => Ok(Expr::Float(*f)),
             canon::Expr_::Str(s) => Ok(Expr::Str(s.clone())),
             canon::Expr_::Char(c) => Ok(Expr::Char(c.clone())),

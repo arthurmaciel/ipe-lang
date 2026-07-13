@@ -923,6 +923,40 @@ pub fn html_on_raw_<M, T, F: Fn(T) -> M>(_name: String, _payload: F) -> Attribut
     Attribute::NoAttr
 }
 
+/// `Std.Html.Events.onSubmit` BARE-VALUE shape (#167) — dispatch a FIXED
+/// `msg`, ignoring the submitted `FormData` entirely. Complements
+/// `html_on_raw_` (the typed-record decode shape above): the "form fields
+/// are already synced into Model via `onInput`/`onChange`; submit just
+/// triggers a fixed action" idiom (`onSubmit DoSignUp` where `DoSignUp : Msg`
+/// carries no payload — `examples/12-skyvote`'s Auth/Submit/Detail pages).
+///
+/// Deliberately does NOT route through `decode_form_or_warn` — there is no
+/// payload type to decode into (the dispatched value is fixed regardless of
+/// form content), and picking an arbitrary placeholder decode target would
+/// risk a spurious decode failure on a real form's field data silently
+/// swallowing the submit (`decode_form_or_warn` returns `None` — "dispatch no
+/// Msg" — on any decode error). Always fires.
+///
+/// `M: Clone` is not a new requirement: every `Sky.Live` `Msg` type is
+/// already `Clone` by construction (`HandlerIndex<M: Clone>` — every wire
+/// event handler, including plain `onClick`'s `Event::OnMsg`, already clones
+/// the dispatched value).
+#[cfg(feature = "live")]
+#[must_use]
+pub fn html_on_raw_fixed_<M: Clone + Send + Sync + 'static>(name: String, msg: M) -> Attribute<M> {
+    Attribute::EventAttr(Event::OnForm(
+        name,
+        std::sync::Arc::new(move |_fd: FormData| Some(msg.clone())),
+    ))
+}
+
+/// Non-`live` builds — same degrade-to-no-op rationale as `html_on_raw_`
+/// above.
+#[cfg(not(feature = "live"))]
+pub fn html_on_raw_fixed_<M>(_name: String, _msg: M) -> Attribute<M> {
+    Attribute::NoAttr
+}
+
 /// `Ffi.callPure "htmlEscapeText"` — HTML-escape a string for text content.
 /// Routes through the same escaper as render so the escape set (`& ' < > "`,
 /// matching Go's html.EscapeString for the text subset) can never drift.
