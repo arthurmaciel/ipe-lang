@@ -14,8 +14,74 @@
 //! `sky_backend_rust::RustFileId` (§4.1). The rest of the file (Tasks 15/16)
 //! proves the tracked queries built on it.
 
-use sky_db::{Db as _, RustFileId, SkyDatabase};
+use std::sync::{Arc, Mutex, PoisonError};
+
+use sky_backend_rust::DbDriver;
+use sky_db::{
+    BuildConfig, Db as _, ModuleOrigin, RustFileId, SkyDatabase, SourceFile, SourceRoot,
+};
 use sky_ir::ModPath;
+
+/// A shared, poison-safe log of executed-query debug keys — the same
+/// `WillExecute`-event proof mechanism every prior seam's memoization test
+/// uses (`phase6_build_config.rs`).
+#[derive(Clone, Default)]
+struct EventLog(Arc<Mutex<Vec<String>>>);
+
+impl EventLog {
+    fn push(&self, entry: String) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(entry);
+    }
+
+    fn executions_of(&self, needle: &str) -> usize {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|e| e.contains(needle))
+            .count()
+    }
+
+    fn clear(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+}
+
+fn logged_db() -> (SkyDatabase, EventLog) {
+    let log = EventLog::default();
+    let sink = log.clone();
+    let db = SkyDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
+        if let salsa::EventKind::WillExecute { database_key } = event.kind {
+            sink.push(format!("{database_key:?}"));
+        }
+    }));
+    (db, log)
+}
+
+fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
+    SourceFile::new(
+        db,
+        path.iter().map(|s| (*s).to_owned()).collect(),
+        text.to_owned(),
+        ModuleOrigin::User,
+    )
+}
+
+fn root_of(db: &SkyDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
+    SourceRoot::new(
+        db,
+        files
+            .iter()
+            .map(|(path, f)| (path.iter().map(|s| (*s).to_owned()).collect(), *f))
+            .collect(),
+    )
+}
 
 /// Intern a `ModPath` through the database's shared interner — the same table
 /// every salsa query resolves symbols against, so a `ModPath` built here is
@@ -59,4 +125,178 @@ fn rust_file_id_interns_distinct_homes_distinctly() {
 
     // The stored field round-trips.
     assert_eq!(id_lib.home(&db), mod_path(&db, &["Lib"]));
+}
+
+// ---------------------------------------------------------------------------
+// Task 15 — program_rust_file_ids / emit_spine_file / emit_rust_file
+// (spec §4.2 + §4.3's honest divergence: assert on VALUE-equality, not
+// zero-executions, since emit_rust_file is forced to re-run whenever its
+// coarse `lower_program` dependency's value changes)
+// ---------------------------------------------------------------------------
+
+// A two-module program: `Lib` owns `helper`, `Main` owns `answer` and imports
+// `Lib`. Both are genuine distinct `home`s, so the backend emits an own Rust
+// file for each — exactly the multi-home shape Milestone D's per-file
+// incrementality is built on.
+const LIB: &str = "module Lib exposing (helper)\n\nhelper : Int\nhelper = 41\n";
+const LIB_BODY_EDIT: &str = "module Lib exposing (helper)\n\nhelper : Int\nhelper = 40\n";
+const MAIN_IMPORTS_LIB: &str =
+    "module Main exposing (answer)\n\nimport Lib exposing (helper)\n\nanswer : Int\nanswer = helper + 1\n";
+const MAIN_EDIT: &str =
+    "module Main exposing (answer)\n\nimport Lib exposing (helper)\n\nanswer : Int\nanswer = helper + 2\n";
+const EXTRA: &str = "module Extra exposing (bonus)\n\nbonus : Int\nbonus = 7\n";
+const MAIN_IMPORTS_BOTH: &str = "module Main exposing (answer)\n\n\
+    import Lib exposing (helper)\n\
+    import Extra exposing (bonus)\n\n\
+    answer : Int\nanswer = helper + bonus\n";
+
+fn two_module_root(db: &SkyDatabase) -> (SourceRoot, SourceFile, SourceFile) {
+    let lib = file(db, &["Lib"], LIB);
+    let main = file(db, &["Main"], MAIN_IMPORTS_LIB);
+    let root = root_of(db, &[(&["Lib"], lib), (&["Main"], main)]);
+    (root, lib, main)
+}
+
+/// Look up the salsa `RustFileId` for a module path — intern its `home`
+/// (interning dedups, so this yields the SAME id `emit_manifest` would demand),
+/// after asserting it is genuinely one of the program's emitted homes.
+/// Panics (test-only) if absent — a missing home is itself a bug the
+/// assertion should surface loudly.
+#[allow(clippy::expect_used)]
+fn file_id_for<'db>(
+    db: &'db SkyDatabase,
+    root: SourceRoot,
+    entry: SourceFile,
+    segs: &[&str],
+) -> RustFileId<'db> {
+    let target = mod_path(db, segs);
+    let homes =
+        sky_db::program_rust_file_ids(db, root, entry).expect("program must produce file ids");
+    assert!(
+        homes.contains(&target),
+        "expected {segs:?} to be one of the program's emitted homes"
+    );
+    RustFileId::new(db, target)
+}
+
+#[test]
+#[allow(clippy::expect_used)]
+fn emit_spine_file_memoized_coarse_floor() {
+    let (mut db, log) = logged_db();
+    let (root, _lib, main) = two_module_root(&db);
+    let config = BuildConfig::new(&db, DbDriver::Sqlite);
+
+    let spine = sky_db::emit_spine_file(&db, root, main, config).expect("spine must render");
+    assert!(!spine.is_empty(), "spine text must be non-empty");
+    assert_eq!(log.executions_of("emit_spine_file("), 1);
+
+    // Repeat demand: memo hit.
+    log.clear();
+    assert!(sky_db::emit_spine_file(&db, root, main, config).is_ok());
+    assert_eq!(
+        log.executions_of("emit_spine_file("),
+        0,
+        "repeat demand memoized"
+    );
+
+    // Byte-equal re-save: boundary no-op, nothing executes.
+    log.clear();
+    assert!(!sky_db::set_text_if_changed(&mut db, main, MAIN_IMPORTS_LIB));
+    assert!(sky_db::emit_spine_file(&db, root, main, config).is_ok());
+    assert_eq!(log.executions_of("emit_spine_file("), 0);
+
+    // A dependency (source) edit re-executes the coarse floor.
+    log.clear();
+    assert!(sky_db::set_text_if_changed(&mut db, main, MAIN_EDIT));
+    assert!(sky_db::emit_spine_file(&db, root, main, config).is_ok());
+    assert_eq!(
+        log.executions_of("emit_spine_file("),
+        1,
+        "a semantic edit re-executes the coarse spine seam"
+    );
+    assert_eq!(log.executions_of("lower_program("), 1);
+}
+
+/// §4.3's red-green proof. A body edit to module A forces `lower_program` to
+/// re-execute (coarse floor, unchanged), which in turn forces
+/// `emit_rust_file(B)` to re-run — so we do NOT assert zero executions for B.
+/// The USEFUL invariant, the one that preserves `cargo`'s per-compilation-unit
+/// incrementality, is that B's produced STRING comes out byte-identical
+/// (salsa backdates B's memo, `emit_manifest`/`write_if_changed` skip B's
+/// write). We assert exactly that.
+#[test]
+#[allow(clippy::expect_used)]
+fn emit_rust_file_memoized_per_file() {
+    let (mut db, _log) = logged_db();
+    let (root, lib, main) = two_module_root(&db);
+    let config = BuildConfig::new(&db, DbDriver::Sqlite);
+
+    // Interned ids carry `db`'s borrow, so they cannot be held across a
+    // `&mut db` edit — but interning is stable (same `home` -> same id across
+    // revisions), so re-deriving after the edit yields the SAME salsa key. We
+    // therefore capture the "before" strings, drop the ids, mutate, then
+    // re-derive.
+    let (lib_before, main_before) = {
+        let file_lib = file_id_for(&db, root, main, &["Lib"]);
+        let file_main = file_id_for(&db, root, main, &["Main"]);
+        let lib = sky_db::emit_rust_file(&db, root, main, config, file_lib)
+            .expect("Lib file must render");
+        let main = sky_db::emit_rust_file(&db, root, main, config, file_main)
+            .expect("Main file must render");
+        (lib, main)
+    };
+    assert_ne!(
+        lib_before, main_before,
+        "the two module files must have distinct text"
+    );
+
+    // Edit ONLY Lib's body (helper = 41 -> 40): no signature/export change.
+    assert!(sky_db::set_text_if_changed(&mut db, lib, LIB_BODY_EDIT));
+
+    let file_lib = file_id_for(&db, root, main, &["Lib"]);
+    let file_main = file_id_for(&db, root, main, &["Main"]);
+    let lib_after = sky_db::emit_rust_file(&db, root, main, config, file_lib)
+        .expect("Lib re-renders after its own body edit");
+    let main_after = sky_db::emit_rust_file(&db, root, main, config, file_main)
+        .expect("Main re-renders (forced by lower_program) after Lib's edit");
+
+    assert_ne!(
+        lib_before, lib_after,
+        "Lib's OWN body edit must change Lib's emitted text"
+    );
+    assert_eq!(
+        main_before, main_after,
+        "the UNRELATED module Main's emitted text must be byte-identical after \
+         a body edit to Lib (§4.3 red-green: salsa backdates, the on-disk write skips)"
+    );
+}
+
+#[test]
+#[allow(clippy::expect_used)]
+fn program_rust_file_ids_tracks_module_add_delete() {
+    let (mut db, _log) = logged_db();
+    let lib = file(&db, &["Lib"], LIB);
+    let main = file(&db, &["Main"], MAIN_IMPORTS_LIB);
+
+    let root2 = root_of(&db, &[(&["Lib"], lib), (&["Main"], main)]);
+    let ids2 = sky_db::program_rust_file_ids(&db, root2, main).expect("two-module program");
+    assert_eq!(ids2.len(), 2, "two distinct homes -> two RustFileIds");
+
+    // Add a third module `Extra` with a distinct home; wire `Main` to import
+    // it so it is reachable (unreachable modules are DCE'd out of the program).
+    let extra = file(&db, &["Extra"], EXTRA);
+    assert!(sky_db::set_text_if_changed(&mut db, main, MAIN_IMPORTS_BOTH));
+    let root3 = root_of(&db, &[(&["Lib"], lib), (&["Main"], main), (&["Extra"], extra)]);
+
+    let ids3 = sky_db::program_rust_file_ids(&db, root3, main).expect("three-module program");
+    assert_eq!(
+        ids3.len(),
+        3,
+        "adding a reachable third module grows the RustFileId set by one"
+    );
+    assert_eq!(
+        ids3.len(),
+        ids2.len() + 1,
+        "the set grew by exactly one on the module add"
+    );
 }
