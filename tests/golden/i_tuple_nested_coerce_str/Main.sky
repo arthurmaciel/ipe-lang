@@ -1,0 +1,39 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+-- #174 fix-up — PROBE E. A coercing leaf (a string LITERAL, `PStr`) nested
+-- inside a nested-TUPLE column on a VARIABLE (non-literal) tuple scrutinee.
+--
+-- `v : ( ( String, Int ), Tag )`. The first column is a nested tuple whose first
+-- sub-column matches the string literal `"x"`. The by-value whole `match` applies
+-- NO coercion, so the emitted `match v { (("x", n), A) => … }` binds `&str "x"`
+-- against an owned `String` element → cargo E0308.
+--
+-- Before the fix-up the coercion-needs gate inspected only the TOP-LEVEL columns
+-- (neither of which is a `PStr` / `PList` / `PCons`), so this slipped through to
+-- the coercion-free by-value path and produced skyc-0-then-cargo-fail. The gate
+-- now recurses into the nested tuple, finds the `PStr` leaf, and fails closed to
+-- SKY-L0115 — an honest skyc-fail, never an exit-0-then-cargo-fail.
+type Tag
+    = A
+    | B
+
+
+classify : ( ( String, Int ), Tag ) -> Int
+classify v =
+    case v of
+        ( ( "x", n ), A ) ->
+            n
+
+        ( ( _, n ), A ) ->
+            n + 1
+
+        ( ( _, n ), B ) ->
+            n + 2
+
+
+main =
+    println (String.fromInt (classify ( ( "x", 5 ), A )))
