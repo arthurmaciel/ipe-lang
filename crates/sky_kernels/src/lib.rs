@@ -3973,6 +3973,71 @@ impl StdlibKernel {
         })
     }
 
+    /// `true` for a kernel whose Rust runtime consumer requires its
+    /// function-valued argument to be `Send + Sync` — either an
+    /// `Arc<dyn Fn(..) -> .. + Send + Sync + 'static>` runtime slot
+    /// (`ui_on_input_`/`ui_on_change_`/…, `html_on_string_`/`html_on_bool_`/
+    /// `html_on_raw_`) or a generic `F: .. + Send + Sync + 'static` bound
+    /// (`ui_on_submit_`, `server_stream_stream`) — NOT merely `Send`
+    /// (`Box<dyn Fn(..) -> .. + Send + 'static>`, which is how a generic
+    /// `IrType::Fun` renders in `emit_types.rs`).
+    ///
+    /// **BACKLOG #168.** The emit-site "re-wrap the payload in a
+    /// freshly-declared closure" technique
+    /// (`sky_backend_rust::emit_expr`'s `KernelFn::UiOnSubmit` /
+    /// `HtmlEventShape::Raw` / `StreamStream` arms, #162/#166) only launders a
+    /// MISSING `+Sync` bound when the payload is constructed INLINE at the call
+    /// site (a literal `Lambda`/`FuncValue` — the box is rebuilt fresh, as
+    /// source, inside the wrapper's body on every call, so it never enters the
+    /// wrapper's own captured environment). A `Var`/`CloneVar` referencing an
+    /// ALREADY-BUILT `let`-bound closure is a different shape: the wrapper
+    /// closure captures that already-existing value BY MOVE, and Rust's
+    /// auto-trait inference is structural over every captured field — a
+    /// captured `Box<dyn Fn + Send>` (never `+Sync`) makes the wrapper itself
+    /// non-`Sync`, no matter how the wrapper's body is written. Re-wrapping
+    /// cannot launder a missing trait bound on a value that already exists.
+    ///
+    /// This predicate is consulted by
+    /// `sky_lower::flows_into_sync_kernel_call` (from `lower_let_pvar`,
+    /// alongside the pre-existing #164 `needs_shared_capture` nested/sibling
+    /// check) to decide whether a `let`-bound function-typed local must be
+    /// promoted to `Expr::SharedLambda` — emitted as
+    /// `Arc<dyn Fn(..) -> .. + Send + Sync + 'static>` — even for a single,
+    /// non-nested use. Unlike `needs_shared_capture`'s trigger (2+ competing
+    /// closure captures), a SINGLE occurrence here is already sufficient: the
+    /// runtime callback slot's `+Sync` bound applies however many times the
+    /// value is referenced.
+    ///
+    /// Deliberately excludes the WebSocket server-config callbacks and the
+    /// `Sky.Http.Server` request-handler shape: both are ALREADY immune by a
+    /// different, structural mechanism —
+    /// `sky_backend_rust::emit_expr::wants_arc_ctor` recognises their FIXED
+    /// closure shape at the closure's OWN construction site and boxes with
+    /// `Arc::new` there, regardless of inline-vs-`let`-bound. `Ui.on*` /
+    /// `Std.Html.Events.on*` / `Stream.stream` have no such fixed structural
+    /// shape (their callback's argument/return type is the app's own
+    /// polymorphic `msg`), so they need this USAGE-SITE detection instead.
+    #[must_use]
+    pub const fn requires_sync_capture(self) -> bool {
+        matches!(
+            self,
+            Self::UiOnInput
+                | Self::UiOnChange
+                | Self::UiOnKeyDown
+                | Self::UiOnKeyUp
+                | Self::UiOnFile
+                | Self::UiOnBool
+                | Self::UiOnSubmit
+                | Self::HtmlOnInput
+                | Self::HtmlOnChange
+                | Self::HtmlOnKeyDown
+                | Self::HtmlOnKeyUp
+                | Self::HtmlOnBool
+                | Self::HtmlOnSubmit
+                | Self::StreamStream
+        )
+    }
+
     /// `true` for a `Std.Html.Attributes` string-valued fixed-key builder
     /// (`class`/`id`/… — `String -> Attribute msg`). Used by the backend emit
     /// arm to route through `html_named_attr_` with the wire key from

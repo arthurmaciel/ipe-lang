@@ -1682,6 +1682,156 @@ fn needs_shared_capture(sym: Symbol, expr: &Expr) -> bool {
     depths.iter().any(|&d| d >= 2) || depths.iter().filter(|&&d| d >= 1).count() >= 2
 }
 
+// ── BACKLOG #168: usage-site (not nesting-site) shared-capture trigger ─────
+//
+// `needs_shared_capture` (above) closes the #164 class: a `let`-bound closure
+// moved into 2+ competing closure environments. It does NOT cover a narrower,
+// DIFFERENT class — a single, non-nested (depth-0) reference to a `let`-bound
+// closure passed straight into a kernel call whose runtime consumer itself
+// requires `Send + Sync` (`KernelFn::requires_sync_capture`, e.g.
+// `Ui.onSubmit` / `Ui.onInput` / `Std.Html.Events.on*` / `Stream.stream`).
+// #162's emit-site "re-wrap in a freshly-declared closure" technique only
+// launders a missing `+Sync` bound when the payload is constructed INLINE at
+// the call site; a `Var(sym)` referencing an ALREADY-BUILT `Box<dyn Fn +
+// Send>` local just moves that non-Sync value into the wrapper's capture
+// environment, which does not make the wrapper `Sync` — wrapping cannot
+// launder a missing trait bound on a value that already exists. The only
+// sound fix is to change the LET-BOUND VALUE's own static type from `Box<dyn
+// Fn + Send>` to `Arc<dyn Fn + Send + Sync>` at its declaration, exactly as
+// `needs_shared_capture` already does for its own trigger — so `lower_let_pvar`
+// ORs this predicate into the same `Expr::SharedLambda` promotion path.
+
+/// Does `sym` occur ANYWHERE inside `expr` as a live `Var`/`CloneVar` leaf
+/// (any lambda-nesting depth, no boundary exemptions)? Used only to test
+/// whether a specific kernel-call ARGUMENT subtree mentions `sym` —
+/// deliberately over-inclusive (a false positive costs one harmless
+/// `Arc`/`.clone()`; a false negative would leave a real E0277 unfixed).
+fn expr_mentions_sym(sym: Symbol, expr: &Expr) -> bool {
+    let mut depths = Vec::new();
+    collect_lambda_capture_depths(sym, expr, 0, &mut depths);
+    !depths.is_empty()
+}
+
+/// Does `sym` (a `let`-bound, function-typed local) flow — anywhere in
+/// `expr`, transparently through every nested scope INCLUDING lambda bodies
+/// AND `let`-alias chains of arbitrary length — into an argument of a kernel
+/// call whose runtime consumer requires `Send + Sync`
+/// (`KernelFn::requires_sync_capture`)? See the module comment above for the
+/// bug class this closes (BACKLOG #168).
+///
+/// Traversal mirrors [`collect_lambda_capture_depths`] (recurse into every
+/// `Expr` variant, lambda bodies included — a sync-requiring call reachable
+/// only through a nested closure still needs the same promotion), but asks a
+/// structurally different question at each node, so it is its own walker.
+/// Enumerated exhaustively (no `_` catch-all) so a future `Expr` variant is a
+/// compile error here, not a silently-missed flow (SEAL discipline).
+///
+/// ── Alias-chain resolution ──────────────────────────────────────────────
+///
+/// Matching `sym` by literal identity alone misses an ALIASED reference —
+/// `let inner = handler in ... let outer = inner in Ui.onSubmit outer`. When
+/// the detector runs for `handler`, only `outer` is a direct `Call` argument,
+/// and `outer` is a different symbol; `lower_let_pvar`'s `if let Expr::Lambda
+/// = value` promotion guard is a no-op on an alias binding (its RHS is a bare
+/// `Var`, not a closure literal), so a hit at the alias site would promote
+/// nothing. The fix must reach the ROOT `handler` binding — the one place a
+/// real `Expr::Lambda` exists. The `Expr::Let` arm makes the walk
+/// alias-transparent: a bare `let name = sym` (or `let name = <CloneVar sym>`)
+/// rebinding introduces `name` as an ADDITIONAL tracked symbol for the rest of
+/// `body`, so a hit via `name` counts as a hit via `sym`. Each alias hop only
+/// re-walks `body` — a strict subtree of the current node — so the walk is
+/// structurally decreasing and always terminates; a chain of any length is
+/// resolved by induction. The alias bindings themselves stay un-promoted
+/// (their RHS is a `Var`, not a closure): Rust's type inference propagates the
+/// root's new `Arc<dyn Fn + Send + Sync>` static type through each subsequent
+/// single-owner move, so promoting only the root is both necessary and
+/// sufficient.
+fn flows_into_sync_kernel_call(sym: Symbol, expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, args } => {
+            let hit_here = matches!(callee, Callee::Kernel(k) if k.requires_sync_capture())
+                && args.iter().any(|a| expr_mentions_sym(sym, a));
+            hit_here || args.iter().any(|a| flows_into_sync_kernel_call(sym, a))
+        }
+        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+            !params.iter().any(|(s, _)| *s == sym) && flows_into_sync_kernel_call(sym, body)
+        }
+        Expr::Let { name, value, body } => {
+            // A bare `let name = sym` alias re-binding: a hit reachable via
+            // `name` in `body` is equally a hit reachable via `sym`.
+            let is_alias_of_sym = *name != sym
+                && matches!(value.as_ref(), Expr::Var(v) | Expr::CloneVar(v) if *v == sym);
+            flows_into_sync_kernel_call(sym, value)
+                || (*name != sym
+                    && (flows_into_sync_kernel_call(sym, body)
+                        || (is_alias_of_sym && flows_into_sync_kernel_call(*name, body))))
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            flows_into_sync_kernel_call(sym, value)
+                || (!pat_binds_symbol(binder, sym) && flows_into_sync_kernel_call(sym, body))
+        }
+        Expr::Match(m) => {
+            flows_into_sync_kernel_call(sym, m.scrutinee())
+                || m.arms().iter().any(|arm| {
+                    !pat_binds_symbol(&arm.pat, sym) && flows_into_sync_kernel_call(sym, &arm.body)
+                })
+        }
+        Expr::TailLoop { params, body } => {
+            !params.iter().any(|(s, _)| *s == sym) && flows_into_sync_kernel_call(sym, body)
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            flows_into_sync_kernel_call(sym, lhs) || flows_into_sync_kernel_call(sym, rhs)
+        }
+        Expr::If { cond, then_, else_ } => {
+            flows_into_sync_kernel_call(sym, cond)
+                || flows_into_sync_kernel_call(sym, then_)
+                || flows_into_sync_kernel_call(sym, else_)
+        }
+        Expr::Apply { func, args } => {
+            flows_into_sync_kernel_call(sym, func)
+                || args.iter().any(|a| flows_into_sync_kernel_call(sym, a))
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            items.iter().any(|e| flows_into_sync_kernel_call(sym, e))
+        }
+        Expr::Cons { head, tail } => {
+            flows_into_sync_kernel_call(sym, head) || flows_into_sync_kernel_call(sym, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            flows_into_sync_kernel_call(sym, list)
+        }
+        Expr::Record(fields) => fields
+            .iter()
+            .any(|(_, e)| flows_into_sync_kernel_call(sym, e)),
+        Expr::Update { record, fields } => {
+            flows_into_sync_kernel_call(sym, record)
+                || fields
+                    .iter()
+                    .any(|(_, e)| flows_into_sync_kernel_call(sym, e))
+        }
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            args.iter().any(|a| flows_into_sync_kernel_call(sym, a))
+        }
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            flows_into_sync_kernel_call(sym, effect) || flows_into_sync_kernel_call(sym, rest)
+        }
+        Expr::Access { record, .. } => flows_into_sync_kernel_call(sym, record),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. } => false,
+    }
+}
+
 /// Does `sym` appear as a live `Var`/`CloneVar` leaf DIRECTLY in `expr`
 /// (i.e. NOT hidden behind a further-nested `Lambda`/`SharedLambda`
 /// boundary)? Unlike [`lambda_body_refs_sym`] (which treats nested lambdas
@@ -11951,10 +12101,27 @@ impl<'a> Lowerer<'a> {
             // or whose only capture is a single non-nested closure (the
             // common, already-sound case), is untouched — byte-identical to
             // the pre-fix lowering.
+            //
+            // #168 fix (same `Arc` promotion, a DIFFERENT trigger): a
+            // NonClone function-typed binding passed — even a SINGLE,
+            // non-nested time, and through any number of `let`-alias hops —
+            // into a kernel-call argument whose runtime consumer itself
+            // requires `Send + Sync` (`Ui.onSubmit` / `Ui.onInput` /
+            // `Std.Html.Events.on*` / `Stream.stream`, see
+            // `KernelFn::requires_sync_capture`) has the same soundness gap:
+            // the emit-site "re-wrap in a freshly-declared closure" technique
+            // (#162) only launders the missing `+Sync` bound when the payload
+            // is built INLINE at the call site, never when it is a `Var` read
+            // of an already-built `Box<dyn Fn + Send>` local (capturing an
+            // already-non-Sync value cannot make the capturing wrapper `Sync`).
+            // `flows_into_sync_kernel_call` detects this at depth 0 — where
+            // `needs_shared_capture` intentionally stays silent, a single
+            // non-nested capture being the common sound case for THAT trigger —
+            // and ORs into the same promotion path.
             let mut value = value;
             if let Some(ref ir_ty) = ty_opt
                 && matches!(ir_ty, IrType::Fun(..))
-                && needs_shared_capture(name, &acc)
+                && (needs_shared_capture(name, &acc) || flows_into_sync_kernel_call(name, &acc))
             {
                 acc = force_shared_capture_clones(name, acc);
                 if let Expr::Lambda { params, ret, body } = value {
