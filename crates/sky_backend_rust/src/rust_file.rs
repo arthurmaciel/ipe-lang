@@ -55,7 +55,16 @@ pub fn mod_ident(home: &[&str]) -> String {
 /// resolve is never reachable on the real driver path (only malformed
 /// hand-built test IR) — surfaced as a [`Diagnostic::CompilerBug`], never a
 /// panic.
-fn resolve_mod_ident(home: &ModPath, interner: &Interner) -> DResult<String> {
+///
+/// Reachable outside this module since Milestone C:
+/// [`crate::project::emit_program`] needs it to compute both the
+/// `src/sky_mods/<mod_ident>.rs` file paths and the `main.rs` barrel lines
+/// (`#[path = …] mod <ident>;` / `pub(crate) use <ident>::*;`) for each
+/// [`RustFileId::SkyModule`] bucket, from the SAME fold
+/// [`assert_mod_idents_unique`] proves collision-free. (`pub` here is
+/// module-scoped — `rust_file` is a private module, so this is not part of the
+/// crate's external API.)
+pub fn resolve_mod_ident(home: &ModPath, interner: &Interner) -> DResult<String> {
     let segs = home
         .0
         .iter()
