@@ -734,6 +734,33 @@ pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerR
 }
 
 // ---------------------------------------------------------------------------
+// Milestone D — per-Rust-file salsa domain
+// (spec: `docs/architecture/phase5-emit-rust-file-design-2026-07-12.md` §4.1)
+// ---------------------------------------------------------------------------
+
+/// One Rust source file the backend emits for a Sky module's OWN
+/// declarations (§4.1). A genuine `#[salsa::interned]` key: interning the
+/// same `home` twice returns the same salsa id, so a per-file emit query
+/// keyed on it memoizes independently of every OTHER file.
+///
+/// **Distinct from [`sky_backend_rust`]'s own `RustFileId`.** That backend
+/// type (Task 1) is a plain, non-interned `enum { Spine, SkyModule(ModPath) }`
+/// used internally for partitioning; it never reaches salsa. This one is the
+/// salsa domain: it carries ONLY a `home` (`Spine` is NOT a `RustFileId` —
+/// it is always present and never added/removed by a module add/delete, so it
+/// is produced by the separate [`emit_spine_file`] query, §4.2).
+///
+/// [`sky_ir::ModPath`] already derives `Clone + Eq + Ord + Hash`
+/// (`crates/sky_ir/src/ir.rs`) — usable as a `#[salsa::interned]` field with
+/// no new trait work.
+#[salsa::interned(debug)]
+pub struct RustFileId {
+    /// The Sky module's defining path (`sky_ir::Func::home` /
+    /// `EnumDef::home`'s value) — never empty on the real driver path.
+    pub home: sky_ir::ModPath,
+}
+
+// ---------------------------------------------------------------------------
 // Tracked queries (Task 17 / Phase 5 continuation: `BuildConfig` + emit_project)
 // ---------------------------------------------------------------------------
 
