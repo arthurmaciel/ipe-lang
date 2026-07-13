@@ -635,6 +635,163 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     Ok(EmittedProject { files, cargo_toml })
 }
 
+/// Render the `Spine` tier's text for `program` — everything that is
+/// program-wide rather than Sky-module-owned (design doc §2.1/§2.3):
+/// the preamble banner, the `Spine` bucket's `EnumDef`s (the synthetic
+/// `SqlValue`/`SqlField` Db built-ins — §2.2), the synthesised record
+/// structs, the DB boundary-projection impls, the fixed kernel-wrapper
+/// prelude, the TEA/Auth alias blocks, the epilogue, and `fn main()`.
+///
+/// Deliberately does NOT emit either module's own `Func`/`EnumDef` — those
+/// belong to their [`emit_module_file`] output. The `Spine`-bucket enums are
+/// rendered immediately before the record structs, reproducing the ordering
+/// rule [`emit_program`] already established (user types then `SqlValue` then
+/// `SqlField` then record structs then the DB-projection impls).
+///
+/// **This function is NOT on the public emission path** — [`emit_program`]
+/// (still single-file) does not call it. It is the additive Milestone-C
+/// rendering entry point that Task 12 will wire in; landing it separately
+/// keeps `emit_program` byte-for-byte unchanged while its new output tier is
+/// proven in isolation (`tests/split_emit.rs`).
+///
+/// # Errors
+///
+/// Propagates any [`Diagnostic`] from the reused `preamble`/`emit_enum`/
+/// `emit_record_struct`/`emit_db_projection_impls`/`runtime_bindings`/
+/// `epilogue` rendering, and the G3 Webview anchor assertion.
+pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
+    let mut out = String::with_capacity(GOLDEN.len() + 4096);
+    out.push_str(&preamble()?);
+
+    let Partitioned { buckets, .. } = partition_items(program, ctx.interner);
+
+    // The Spine bucket's `SqlValue`/`SqlField` enums, in insertion order —
+    // rendered where the user types would sit in the single-file layout, i.e.
+    // immediately before the record structs (§2.2's ordering rule). No
+    // `SkyModule` bucket enums are emitted here — those are `emit_module_file`.
+    if let Some((spine_enums, _)) = buckets.get(&RustFileId::Spine) {
+        for &def in spine_enums {
+            out.push_str(&emit_enum(ctx, def)?);
+        }
+    }
+    for rec in ctx.record_structs() {
+        out.push_str(&emit_record_struct(ctx, rec)?);
+    }
+    if ctx.uses_db {
+        out.push_str(&emit_db_projection_impls(ctx)?);
+    }
+
+    out.push('\n');
+
+    out.push_str(runtime_bindings()?);
+    if ctx.uses_tea {
+        out.push_str(TEA_TYPE_ALIASES);
+    }
+    if ctx.uses_auth {
+        out.push_str(AUTH_WRAPPERS);
+    }
+    out.push('\n');
+
+    // The spine carries NO user functions — they are `emit_module_file`'s.
+    // The blank line the single-file layout emits between the functions and
+    // the epilogue is preserved so the spine's fixed-section spacing matches.
+    out.push('\n');
+
+    out.push_str(&epilogue()?);
+
+    // ── G3: Webview main-thread entry switch ──────────────────────────────
+    // The `block_on(sky_main())` anchor lives in the epilogue, which is
+    // Spine-only — so under the split this scan sees a strictly smaller
+    // haystack than the whole concatenated `main.rs` (design doc §2.3).
+    if ctx.uses_webview {
+        const BLOCK_ON_ANCHOR: &str = "block_on(sky_main())";
+        const BLOCK_ON_THREAD_REPLACEMENT: &str = "block_on_current_thread(sky_main())";
+        let replaced = out.replacen(BLOCK_ON_ANCHOR, BLOCK_ON_THREAD_REPLACEMENT, 1);
+        if replaced == out {
+            return Err(Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::project::emit_spine::G3_block_on",
+                detail: format!(
+                    "G3 webview entry-switch: anchor {BLOCK_ON_ANCHOR:?} not found in \
+                     emitted spine — epilogue golden has drifted; Sky.Webview REQUIRES \
+                     block_on_current_thread"
+                ),
+            });
+        }
+        out = replaced;
+    }
+
+    Ok(out)
+}
+
+/// Render the `SkyModule(home)` file's text for one Sky module's OWN
+/// declarations (design doc §2.1): ONLY that `home`'s `EnumDef`s + `Func`s,
+/// each `pub(crate)`-visible (not the bare `pub` the single-file layout uses,
+/// since these now live inside a `mod` block), opening with the flat-barrel
+/// `use crate::*;` glob so every `Spine`/other-module item is in scope.
+///
+/// A `home` with no items in `program` (never the real driver path — every
+/// `SkyModule` file materialises FROM a non-empty bucket) yields just the
+/// `use crate::*;` header.
+///
+/// **This function is NOT on the public emission path** — see [`emit_spine`].
+///
+/// # Errors
+///
+/// Propagates any [`Diagnostic`] from the reused `emit_enum`/`emit_func`
+/// rendering.
+pub fn emit_module_file(ctx: &EmitCtx, program: &Program, home: &RustFileId) -> DResult<String> {
+    let Partitioned { buckets, .. } = partition_items(program, ctx.interner);
+
+    let mut out = String::new();
+    // Every module file opens with the flat glob barrel (§2.1): because
+    // `main.rs` re-exports every module's items at the crate root and every
+    // name is already globally unique, `use crate::*;` gives this file every
+    // Spine item and every other module's item with zero per-symbol
+    // bookkeeping.
+    out.push_str("use crate::*;\n\n");
+
+    if let Some((enums, funcs)) = buckets.get(home) {
+        for &def in enums {
+            out.push_str(&pub_crate_item(&emit_enum(ctx, def)?));
+        }
+        for &func in funcs {
+            out.push_str(&pub_crate_item(&emit_func(ctx, func)?));
+        }
+    }
+
+    Ok(out)
+}
+
+/// Narrow a rendered top-level item's leading `pub ` visibility to
+/// `pub(crate) `, for emission inside a `mod` block (design doc §2.1).
+///
+/// `emit_enum`/`emit_func` render user items with a bare `pub ` prefix (a
+/// top-level `main.rs` declaration). Inside a per-module `mod` file the crate
+/// root re-exports them via a glob barrel, so `pub(crate)` is both sufficient
+/// and correct. Operates on the FIRST `pub enum `/`pub fn ` occurrence only —
+/// an enum's trailing `impl … SkyStringify` block carries no `pub`, and a
+/// rendered item's declaration keyword is always at its head (or immediately
+/// after a leading `#[derive(...)]` line for an enum) — so this narrows
+/// exactly the one declaration keyword, never a substring inside a body.
+fn pub_crate_item(rendered: &str) -> String {
+    if let Some(rest) = rendered.strip_prefix("pub enum ") {
+        return format!("pub(crate) enum {rest}");
+    }
+    if let Some(rest) = rendered.strip_prefix("pub fn ") {
+        return format!("pub(crate) fn {rest}");
+    }
+    // An enum whose derivability gate emitted a `#[derive(...)]` line before
+    // `pub enum` — narrow the first `\npub enum ` after that attribute.
+    if let Some(pos) = rendered.find("\npub enum ") {
+        let mut result = String::with_capacity(rendered.len() + 8);
+        result.push_str(rendered.get(..pos + 1).unwrap_or(""));
+        result.push_str("pub(crate) enum ");
+        result.push_str(rendered.get(pos + 1 + "pub enum ".len()..).unwrap_or(""));
+        return result;
+    }
+    rendered.to_owned()
+}
+
 /// Build the db-enabled `Cargo.toml` from the base M0 manifest by:
 ///
 /// 1. Adding `"db"` to the `default` feature list.
