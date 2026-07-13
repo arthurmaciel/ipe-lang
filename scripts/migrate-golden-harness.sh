@@ -77,8 +77,16 @@ original = src
 #         "emitted main.rs must equal the golden byte-for-byte"
 #     );
 #
-# `out`, `golden` and the message text must match exactly — anything else is a
-# nonstandard shape we refuse to touch.
+# `out` and `golden` (the variable names) and the whole structural block must
+# match exactly — only the human-readable assert MESSAGE is allowed to vary
+# (some goldens run this block from a `assert_byte_identical(name)` helper and
+# word the message `... for {name} ...`). The message is a diagnostic string,
+# not load-bearing for the assertion's meaning, so matching it verbatim is
+# needless brittleness; matching its stable `emitted main.rs ... byte-for-byte`
+# skeleton keeps the rewrite exact where it matters (the compared operands) and
+# tolerant where it does not. Anything that diverges structurally (different
+# variable names, `.expect()` instead of `.ok()`, `assert_eq!(emitted, want)`
+# on raw strings, more than one such block) is still refused for hand migration.
 block_re = re.compile(
     r'''[ \t]*let\ emitted\ =\ std::fs::read_to_string\(out\.join\("src"\)\.join\("main\.rs"\)\);\n'''
     r'''[ \t]*let\ want\ =\ std::fs::read_to_string\(&golden\);\n'''
@@ -86,7 +94,7 @@ block_re = re.compile(
     r'''[ \t]*assert_eq!\(\n'''
     r'''[ \t]*emitted\.ok\(\),\n'''
     r'''[ \t]*want\.ok\(\),\n'''
-    r'''[ \t]*"emitted\ main\.rs\ must\ equal\ the\ golden\ byte-for-byte",?\n'''
+    r'''[ \t]*"emitted\ main\.rs\ [^"\n]*byte-for-byte",?\n'''
     r'''[ \t]*\);'''
 )
 
