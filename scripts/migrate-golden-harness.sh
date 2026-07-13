@@ -48,7 +48,16 @@ migrated=0
 skipped=0
 
 for file in "${files[@]}"; do
-    python3 - "$file" <<'PY'
+    # NOTE: `set -e` is in force. The per-file python heredoc uses its EXIT CODE
+    # as a signal (0 = migrated, 2 = skip/nonstandard, other = hard error), so we
+    # MUST NOT let a non-zero exit abort the whole batch before `rc=$?` is read.
+    # Guard the invocation with `|| rc=$?`: on exit 0 the `||` short-circuits and
+    # `rc` is set to 0 below; on any non-zero exit `rc` captures it and the loop
+    # continues to classify it. Without this guard, the first nonstandard golden
+    # (exit 2) killed the entire script before a single canonical file after it
+    # could be migrated, and the summary counters were never reached.
+    rc=0
+    python3 - "$file" <<'PY' || rc=$?
 import re
 import sys
 
@@ -126,7 +135,10 @@ else:
     print(f"SKIP {path} (unchanged)")
     sys.exit(2)
 PY
-    rc=$?
+    # `rc` was captured by the `|| rc=$?` guard on the heredoc invocation above
+    # (0 when python exited 0 and the `||` was not taken; the python exit code
+    # otherwise). Do NOT re-read `$?` here — the `|| rc=$?` compound always
+    # succeeds, so `$?` would be 0 and clobber a genuine skip/error signal.
     if [[ $rc -eq 0 ]]; then
         migrated=$((migrated + 1))
     elif [[ $rc -eq 2 ]]; then
