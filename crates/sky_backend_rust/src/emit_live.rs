@@ -501,18 +501,36 @@ fn routed_page_field<'a>(ctx: &EmitCtx, view_e: &'a Expr) -> Option<(&'a IrType,
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Emit a cfg-field expression for `live_app`.
+/// Emit a cfg-field expression for `live_app` / `live_app_routed`.
 ///
-/// For a named function reference ([`Expr::FuncValue`]), emits the raw callee
-/// name (e.g. `Main_init`) rather than a boxed closure.  A named function item
-/// satisfies `Fn(...) + Send + Sync + 'static` via the compiler's blanket impl,
-/// whereas a `Box<dyn Fn(...) + Send + Sync>` would be a distinct type requiring
-/// explicit bounds that the `emit_func_value` path does not add.
+/// The runtime entry's four function-typed slots (`FInit`/`FUpdate`/`FView`/
+/// `FSubs`) are GENERIC type parameters bounded `Fn(...) -> R + Send + Sync +
+/// 'static` — NOT `Box<dyn Fn>` slots. rustc monomorphizes each to the concrete
+/// argument type, so the emitted value must satisfy `Send + Sync` *by its own
+/// type*, not by an annotation.
 ///
-/// For any other expression (lambda, local variable, etc.) falls back to the
-/// general [`emit_expr_at`] emitter.  A lambda that does not capture `Send`
-/// data will surface a cargo error with a clear trait-bound message — the correct
-/// fail-closed behaviour.
+/// Two shapes satisfy that via the compiler's blanket impl:
+/// - A named function reference ([`Expr::FuncValue`]) — emit the raw callee name
+///   (e.g. `main_init`); a `fn` item is `Send + Sync + 'static` implicitly.
+/// - An inline lambda ([`Expr::Lambda`]/[`Expr::SharedLambda`]) — emit the
+///   *unboxed* closure (`move |p: T| -> R { body }`), letting rustc infer
+///   `Send + Sync` from its captures. This mirrors how the sibling `set_page`
+///   closure and each `Route::new` page-builder closure are emitted in this same
+///   call — all passed unboxed into a generic slot.
+///
+/// The general [`emit_expr_at`] path is WRONG for these slots: it pins a lambda
+/// to `Box<dyn Fn(...) -> R + Send + 'static>` (see `emit_lambda`). That trait
+/// object carries `Send` but NOT `Sync`, so it fails the slot's `Sync` bound —
+/// an exit-0-then-cargo-fail SEAL break (`E0277`, #176: subscription
+/// `\_ -> Sub.none` in `examples/10-live-component`). Emitting the closure
+/// unboxed keeps the concrete closure type, whose auto-derived `Send + Sync`
+/// satisfies the bound.
+///
+/// For any other expression shape (a local variable holding a first-class
+/// function value, etc.) falls back to [`emit_expr_at`]. Such a value is already
+/// typed by its binding site; if it is not `Send + Sync` the cargo error carries
+/// a clear trait-bound message — the correct fail-closed behaviour, and a shape
+/// the reference frontend also cannot produce for these slots.
 fn emit_live_fn(
     ctx: &EmitCtx,
     e: &Expr,
@@ -520,12 +538,20 @@ fn emit_live_fn(
     child: u16,
     generics: GenericScope,
 ) -> DResult<String> {
-    if let Expr::FuncValue { callee, .. } = e {
-        // Raw function-item reference: satisfies Send + Sync + 'static implicitly.
-        return crate::emit_expr::callee_name(ctx, callee);
+    match e {
+        Expr::FuncValue { callee, .. } => {
+            // Raw function-item reference: satisfies Send + Sync + 'static implicitly.
+            crate::emit_expr::callee_name(ctx, callee)
+        }
+        // Inline lambda: emit the UNBOXED closure so it monomorphizes the generic
+        // slot to its concrete closure type (auto Send + Sync from captures),
+        // never the Sync-erasing `Box<dyn Fn + Send>` the general path would pin.
+        Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } => {
+            crate::emit_expr::emit_lambda_unboxed(ctx, params, ret, body, indent, child, generics)
+        }
+        // Fallback: general emitter (local var holding a function value, etc.).
+        _ => emit_expr_at(ctx, e, indent, child, generics),
     }
-    // Fallback: general emitter (lambda, local var, etc.).
-    emit_expr_at(ctx, e, indent, child, generics)
 }
 
 /// Find a record field by its Sky source name in an IR field list.
