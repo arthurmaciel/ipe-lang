@@ -3,9 +3,11 @@
 //! phase5-emit-rust-file-design-2026-07-12.md` §2.1). NOT yet a salsa
 //! type — that is Milestone D (§4.1).
 
+use std::collections::BTreeMap;
+
 use sky_diagnostics::{DResult, Diagnostic, NameError, Span};
 use sky_intern::Interner;
-use sky_ir::ModPath;
+use sky_ir::{EnumDef, Func, ModPath, Program, TypeDef};
 
 use crate::naming;
 
@@ -84,10 +86,69 @@ pub fn assert_mod_idents_unique(ids: &[RustFileId], interner: &Interner) -> DRes
     Ok(())
 }
 
+/// Partition every [`EnumDef`] and [`Func`] in `program` by the
+/// [`RustFileId`] it is declared in.
+///
+/// Proven TOTAL (Task 4): every item in `program.modules[..].types /
+/// .funcs` appears in EXACTLY ONE output bucket — no drop, no duplicate.
+///
+/// **`SqlValue`/`SqlField` Spine special case (design doc §2.2).** These two
+/// synthetic enums (`sky_lower::lower`'s `synthetic_sqlvalue_enum` /
+/// `synthetic_sqlfield_enum`) carry the empty canonical `home` — the SAME
+/// documented Prelude-built-in home every OTHER hand-built-IR item with an
+/// empty `home` carries. Left unpatched, the generic empty-home fallback
+/// below would route them into whichever `SkyModule` bucket the program's
+/// entry-point module happens to own — contradicting §2.2's decision that
+/// they are fixed to `Spine`, unconditionally, alongside the DB-projection
+/// impl blocks that reference them. So they are detected BY NAME, before
+/// the generic empty-home fallback runs, reusing the exact detection idiom
+/// `EmitCtx::build`'s `uses_db` scan already applies
+/// (`crate::lib`'s `uses_db` / `sqlvalue_rust_name` / `sqlfield_rust_name`).
+pub fn partition_items<'p>(
+    program: &'p Program,
+    interner: &Interner,
+) -> BTreeMap<RustFileId, (Vec<&'p EnumDef>, Vec<&'p Func>)> {
+    let mut out: BTreeMap<RustFileId, (Vec<&'p EnumDef>, Vec<&'p Func>)> = BTreeMap::new();
+    for module in &program.modules {
+        for ty in &module.types {
+            let TypeDef::Enum(def) = ty;
+            // §2.2 fix: SqlValue/SqlField are Prelude built-ins (empty
+            // canon home, see lower.rs's own doc comment on
+            // synthetic_sqlvalue_enum) that the DB-projection impl blocks
+            // (ALWAYS Spine, per §2.2) reference. Force them into Spine
+            // BY NAME, before the generic empty-home fallback below would
+            // otherwise route them into whichever module happens to be
+            // `Module.name` — reuses the exact detection idiom `uses_db`
+            // already applies.
+            let resolved = interner.resolve(def.name);
+            if matches!(resolved, Some("SqlValue" | "SqlField")) {
+                out.entry(RustFileId::Spine).or_default().0.push(def);
+                continue;
+            }
+            let home = if def.home.0.is_empty() {
+                module.name.clone()
+            } else {
+                def.home.clone()
+            };
+            out.entry(RustFileId::SkyModule(home)).or_default().0.push(def);
+        }
+        for func in &module.funcs {
+            let home = if func.home.0.is_empty() {
+                module.name.clone()
+            } else {
+                func.home.clone()
+            };
+            out.entry(RustFileId::SkyModule(home)).or_default().1.push(func);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use sky_diagnostics::DResult;
     use sky_intern::Interner;
+    use sky_ir::{EnumDef, Func, FuncId, IrType, Module, Variant};
 
     use super::*;
 
@@ -141,5 +202,224 @@ mod tests {
             RustFileId::SkyModule(ModPath(vec![main])),
         ];
         assert_mod_idents_unique(&ids, &interner)
+    }
+
+    /// Shared no-op module builder for the `partition_items` fixtures below
+    /// — every flag `false`, no types/funcs/records, `entry: None`. Callers
+    /// override `types`/`funcs`/`records`.
+    fn empty_module(name: ModPath) -> Module {
+        Module {
+            name,
+            types: vec![],
+            funcs: vec![],
+            entry: None,
+            records: vec![],
+            uses_tea: false,
+            uses_server: false,
+            uses_ui: false,
+            uses_live: false,
+            uses_tui: false,
+            uses_webview: false,
+            uses_css: false,
+            uses_auth: false,
+        }
+    }
+
+    #[test]
+    fn partition_items_is_total_across_two_homes() -> DResult<()> {
+        let mut interner = Interner::new();
+        let lib_mod = interner.intern("Lib")?;
+        let main_mod = interner.intern("Main")?;
+        let lib_ty = interner.intern("Color")?;
+        let main_ty = interner.intern("Msg")?;
+        let red = interner.intern("Red")?;
+        let increment = interner.intern("Increment")?;
+        let lib_fn = interner.intern("helper")?;
+        let main_fn = interner.intern("update")?;
+
+        let mut module = empty_module(ModPath(vec![main_mod]));
+        module.types = vec![
+            TypeDef::Enum(EnumDef {
+                name: lib_ty,
+                home: ModPath(vec![lib_mod]),
+                type_params: vec![],
+                variants: vec![Variant {
+                    name: red,
+                    fields: vec![],
+                }],
+            }),
+            TypeDef::Enum(EnumDef {
+                name: main_ty,
+                home: ModPath(vec![main_mod]),
+                type_params: vec![],
+                variants: vec![Variant {
+                    name: increment,
+                    fields: vec![],
+                }],
+            }),
+        ];
+        module.funcs = vec![
+            Func {
+                id: FuncId::from_raw(0),
+                name: lib_fn,
+                home: ModPath(vec![lib_mod]),
+                type_params: vec![],
+                params: vec![],
+                ret: IrType::Int,
+                body: sky_ir::Expr::Int(0),
+            },
+            Func {
+                id: FuncId::from_raw(1),
+                name: main_fn,
+                home: ModPath(vec![main_mod]),
+                type_params: vec![],
+                params: vec![],
+                ret: IrType::Int,
+                body: sky_ir::Expr::Int(0),
+            },
+        ];
+
+        let program = Program {
+            modules: vec![module],
+        };
+        let buckets = partition_items(&program, &interner);
+
+        let total_enums: usize = buckets.values().map(|(e, _)| e.len()).sum();
+        let total_funcs: usize = buckets.values().map(|(_, f)| f.len()).sum();
+        assert_eq!(total_enums, 2, "every EnumDef must land in exactly one bucket");
+        assert_eq!(total_funcs, 2, "every Func must land in exactly one bucket");
+        assert_eq!(
+            buckets.len(),
+            2,
+            "two distinct non-empty homes must produce exactly two SkyModule buckets"
+        );
+        assert!(!buckets.contains_key(&RustFileId::Spine));
+        Ok(())
+    }
+
+    #[test]
+    fn partition_items_is_total_for_a_single_module_fixture() -> DResult<()> {
+        // Mirrors `tests/golden.rs`'s `build_m0` shape: one module, every
+        // item's `home` matches the module's own name — the case every
+        // existing (pre-Milestone-C) golden fixture is in.
+        let mut interner = Interner::new();
+        let main_mod = interner.intern("Main")?;
+        let msg_ty = interner.intern("Msg")?;
+        let increment = interner.intern("Increment")?;
+        let update = interner.intern("update")?;
+
+        let mut module = empty_module(ModPath(vec![main_mod]));
+        module.types = vec![TypeDef::Enum(EnumDef {
+            name: msg_ty,
+            home: ModPath(vec![main_mod]),
+            type_params: vec![],
+            variants: vec![Variant {
+                name: increment,
+                fields: vec![],
+            }],
+        })];
+        module.funcs = vec![Func {
+            id: FuncId::from_raw(0),
+            name: update,
+            home: ModPath(vec![main_mod]),
+            type_params: vec![],
+            params: vec![],
+            ret: IrType::Int,
+            body: sky_ir::Expr::Int(0),
+        }];
+
+        let program = Program {
+            modules: vec![module],
+        };
+        let buckets = partition_items(&program, &interner);
+
+        let total_enums: usize = buckets.values().map(|(e, _)| e.len()).sum();
+        let total_funcs: usize = buckets.values().map(|(_, f)| f.len()).sum();
+        assert_eq!(total_enums, 1);
+        assert_eq!(total_funcs, 1);
+        assert_eq!(buckets.len(), 1, "a single-home program must collapse to one bucket");
+        Ok(())
+    }
+
+    #[test]
+    fn partition_items_routes_empty_home_to_module_name_fallback() -> DResult<()> {
+        let mut interner = Interner::new();
+        let main_mod = interner.intern("Main")?;
+        let msg_ty = interner.intern("Msg")?;
+        let increment = interner.intern("Increment")?;
+
+        let mut module = empty_module(ModPath(vec![main_mod]));
+        // `home` empty simulates hand-built test IR (never the real driver
+        // path, which always sets `home` — see `EnumDef::home`'s own doc
+        // comment). The existing naming-layer fallback (module name) must
+        // still apply for anything that is NOT SqlValue/SqlField.
+        module.types = vec![TypeDef::Enum(EnumDef {
+            name: msg_ty,
+            home: ModPath(vec![]),
+            type_params: vec![],
+            variants: vec![Variant {
+                name: increment,
+                fields: vec![],
+            }],
+        })];
+
+        let program = Program {
+            modules: vec![module],
+        };
+        let buckets = partition_items(&program, &interner);
+
+        let key = RustFileId::SkyModule(ModPath(vec![main_mod]));
+        let (enums, _) = buckets.get(&key).expect("expected the Main-name fallback bucket");
+        assert_eq!(enums.len(), 1);
+        assert!(!buckets.contains_key(&RustFileId::Spine));
+        Ok(())
+    }
+
+    #[test]
+    fn partition_items_forces_sqlvalue_and_sqlfield_into_spine() -> DResult<()> {
+        let mut interner = Interner::new();
+        let main_mod = interner.intern("Main")?;
+        let sqlvalue = interner.intern("SqlValue")?;
+        let sqlfield = interner.intern("SqlField")?;
+        let sql_string = interner.intern("SqlString")?;
+
+        let mut module = empty_module(ModPath(vec![main_mod]));
+        // `SqlValue`/`SqlField` carry the empty canonical Prelude-built-in
+        // home (`sky_lower::lower`'s `synthetic_sqlvalue_enum` /
+        // `synthetic_sqlfield_enum`) — matching the real driver path exactly,
+        // not merely simulating hand-built IR (design doc §2.2).
+        module.types = vec![
+            TypeDef::Enum(EnumDef {
+                name: sqlvalue,
+                home: ModPath(vec![]),
+                type_params: vec![],
+                variants: vec![Variant {
+                    name: sql_string,
+                    fields: vec![],
+                }],
+            }),
+            TypeDef::Enum(EnumDef {
+                name: sqlfield,
+                home: ModPath(vec![]),
+                type_params: vec![],
+                variants: vec![Variant {
+                    name: sql_string,
+                    fields: vec![],
+                }],
+            }),
+        ];
+
+        let program = Program {
+            modules: vec![module],
+        };
+        let buckets = partition_items(&program, &interner);
+
+        let (spine_enums, _) = buckets.get(&RustFileId::Spine).expect("expected a Spine bucket");
+        assert_eq!(spine_enums.len(), 2, "both SqlValue and SqlField must route to Spine");
+        assert!(
+            !buckets.contains_key(&RustFileId::SkyModule(ModPath(vec![main_mod]))),
+            "SqlValue/SqlField must NEVER fall into the generic empty-home module fallback"
+        );
+        Ok(())
     }
 }
