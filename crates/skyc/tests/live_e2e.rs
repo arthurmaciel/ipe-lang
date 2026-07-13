@@ -1124,3 +1124,206 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 
     Ok(())
 }
+
+/// #167 regression — the "ignore form data, always dispatch this fixed
+/// action" idiom: `Std.Html.Events.onSubmit Confirm` where `Confirm : Msg`
+/// carries NO payload (a nullary constructor, not a decoder function). This
+/// is the exact shape `examples/12-skyvote`'s `Page/AuthPage.sky` /
+/// `Page/Submit.sky` / `Page/Detail.sky` use throughout (`onSubmit
+/// DoSignUp` / `DoSignIn` / `SubmitIdea` / `SubmitComment`) — form fields
+/// are already synced into `Model` via `onInput`/`onChange`; `onSubmit`
+/// just triggers the action, ignoring the posted `FormData` entirely.
+///
+/// Before the fix: `skyc build` exits 0 (`HtmlOnSubmit`'s Sky-level scheme
+/// deliberately leaves the argument type unconstrained — decoupled from
+/// `msg`, see `constrain.rs`'s `HtmlEventShape::Raw` arm — so a Msg-typed
+/// value type-checks fine there), but the emitted crate fails `cargo
+/// build` with E0618 ("expected function, found `MainMsg`") — the emit
+/// site unconditionally treated the argument as a callable decoder
+/// (`(payload_s)(_x)`), but a bare nullary constructor reference lowers to
+/// a plain `Expr::Ctor` VALUE (`lower_expr`'s `VarCtor` arm), never a
+/// function. Fixed by routing a provably-non-callable argument shape to
+/// the new `html_on_raw_fixed_` runtime helper (dispatches the fixed value
+/// directly, no decode attempt) instead of `html_on_raw_`
+/// (`sky_backend_rust::emit_expr`'s `is_definitely_not_callable` gate).
+const SKY_ONSUBMIT_BARE_MSG: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Html exposing (..)
+import Std.Html.Attributes exposing (..)
+import Std.Html.Events exposing (onSubmit, onInput)
+
+type Msg
+    = UpdateName String
+    | Confirm
+
+type alias Model =
+    { name : String
+    , confirmed : Bool
+    }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { name = "", confirmed = False }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        UpdateName n ->
+            ( { model | name = n }, Cmd.none )
+
+        Confirm ->
+            ( { model | confirmed = True }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    div []
+        [ form
+            [ onSubmit Confirm ]
+            [ input [ type_ "text", name "name", value model.name, onInput UpdateName ]
+            , button [ type_ "submit" ] [ text "Go" ]
+            ]
+        , text
+            (if model.confirmed then
+                "confirmed:" ++ model.name
+
+             else
+                "not-confirmed"
+            )
+        ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Confirm
+        }
+"#;
+
+/// #167 seal — BUILD-ONLY: the bare-Msg `onSubmit` form must compile
+/// end-to-end. A successful `skyc` + `cargo build` IS the assertion —
+/// before the fix this was `skyc` exit 0 then `cargo build` E0618.
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn live_onsubmit_bare_msg_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build("live_onsubmit_bare_msg_build_only", SKY_ONSUBMIT_BARE_MSG)?;
+    Ok(())
+}
+
+/// #167 seal — FULL E2E: submitting the bare-Msg form over the wire must
+/// dispatch `Confirm` regardless of the posted `FormData` — proving the fix
+/// is not merely a compile-time patch that leaves the handler
+/// undispatchable (or, worse, silently swallowed by a decode failure — see
+/// `html_on_raw_fixed_`'s doc for why it deliberately does NOT route
+/// through `decode_form_or_warn`). The POSTed form body deliberately
+/// carries a REAL field value (`name=alice`, matching the `<input
+/// name="name">` in the view) to prove the fixed dispatch survives
+/// non-empty form data, not just the trivial empty-body case.
+///
+/// ## Wire protocol exercised
+///
+/// 1. `GET /` → session cookie + the `<form>`'s `data-sky-hid`.
+/// 2. `POST /_sky/event` with
+///    `{"id":"<hid>","event":"submit","args":[{"name":"alice"}],"sessionId":""}`
+///    — mirrors what the browser's delegated form-submit binder sends.
+/// 3. A second `GET /` with the session cookie must show the "confirmed:"
+///    marker — proving `resolve_form` → `html_on_raw_fixed_`'s closure →
+///    `Confirm` → `update` ran end-to-end, dispatching the FIXED value
+///    (not the posted `name` field, which `update`'s `Confirm` arm never
+///    reads — `model.name` stays empty since no separate `onInput` event
+///    was sent, so `"confirmed:alice"` would be a FALSE pass here; the
+///    assertion below checks the "confirmed:" prefix only).
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, HTTP, or assertion error.
+#[test]
+fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let test_name = "live_onsubmit_bare_msg";
+    let exe = compile_and_build(test_name, SKY_ONSUBMIT_BARE_MSG)?;
+    let port = pick_ephemeral_port()?;
+    let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
+    let addr = format!("127.0.0.1:{port}");
+
+    // ── Step 1: GET / — initial page, extract session cookie + form hid ─────
+    let (raw_headers, body) = http_send(test_name, &addr, "GET", "/", &[], None)?;
+
+    let sid = extract_cookie(&raw_headers, "sky_sid").ok_or_else(|| -> BoxError {
+        format!(
+            "{test_name}: no sky_sid cookie in GET / response\n\
+             --- raw headers ---\n{raw_headers}"
+        )
+        .into()
+    })?;
+
+    let hid = extract_hid_for_open_tag(&body, "form").ok_or_else(|| -> BoxError {
+        format!(
+            "{test_name}: could not find data-sky-hid on <form> in GET / body\n\
+             --- first 2000 bytes ---\n{}",
+            &body[..body.len().min(2000)]
+        )
+        .into()
+    })?;
+
+    // ── Step 2: POST /_sky/event — submit with REAL (but ignored) form data ─
+    let event_body =
+        format!(r#"{{"id":"{hid}","event":"submit","args":[{{"name":"alice"}}],"sessionId":""}}"#);
+    let cookie_header = format!("sky_sid={sid}");
+    let (_, post_body) = http_send(
+        test_name,
+        &addr,
+        "POST",
+        "/_sky/event",
+        &[
+            ("Content-Type", "application/json"),
+            ("Cookie", &cookie_header),
+        ],
+        Some(event_body.as_bytes()),
+    )?;
+
+    assert!(
+        post_body.contains("patches"),
+        "{test_name}: POST /_sky/event (submit) did not return a patches ACK\nbody: {post_body}"
+    );
+
+    // ── Step 3: wait for async model update ─────────────────────────────────
+    std::thread::sleep(Duration::from_millis(200));
+
+    // ── Step 4: GET / with session cookie — should show the fixed dispatch ──
+    let (_, body2) = http_send(
+        test_name,
+        &addr,
+        "GET",
+        "/",
+        &[("Cookie", &cookie_header)],
+        None,
+    )?;
+
+    assert!(
+        body2.contains("confirmed:"),
+        "{test_name}: Confirm was not dispatched on bare-Msg onSubmit \
+         (expected the re-rendered page to contain \"confirmed:\")\n\
+         --- first 2000 bytes of second GET / ---\n{}",
+        &body2[..body2.len().min(2000)]
+    );
+
+    Ok(())
+}

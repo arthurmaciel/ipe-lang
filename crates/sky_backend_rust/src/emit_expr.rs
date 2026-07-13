@@ -5094,6 +5094,41 @@ fn emit_ui_call(
                 // (`move` locals, all Send+'static by construction). Apply
                 // the same technique here so `F` is this freshly-Sync outer
                 // closure, not the non-Sync boxed trait object.
+                //
+                // #167: `onSubmit`'s Sky-level scheme (`constrain.rs`'s
+                // `HtmlEventShape::Raw` arm) deliberately leaves the argument
+                // type UNCONSTRAINED (decoupled from `msg`) so the typed-
+                // record decode idiom above works. That also legitimately
+                // types a BARE (non-function) `msg` value — the canonical
+                // "form fields already synced into Model via onInput/
+                // onChange; submit just triggers a fixed action" idiom
+                // (`onSubmit DoSignUp` with `DoSignUp : Msg` carrying no
+                // payload — `examples/12-skyvote`'s Auth/Submit/Detail
+                // pages). `payload_s` there renders as the bare enum value
+                // itself (e.g. `MainMsg::DoSignUp`), which is NOT callable —
+                // `(payload_s)(_x)` is E0618 ("expected function, found
+                // MainMsg"), a skyc-exit-0-then-cargo-fail SEAL violation.
+                // `lower_expr`'s `VarCtor` arm already proves the shape: a
+                // NULLARY constructor reference lowers straight to
+                // `Expr::Ctor { args: [] }` (a saturated value), while a
+                // PAYLOAD constructor reference used as a value is
+                // eta-expanded into a genuine `Expr::Lambda` there — so
+                // `Expr::Ctor` reaching this position (any arity — `Ctor`
+                // is always fully saturated by construction, see its doc)
+                // is PROVABLY not a function. Route it (and the other
+                // leaf-literal shapes that are equally provably not
+                // callable) to `html_on_raw_fixed_`, which dispatches the
+                // fixed value directly and never attempts to decode
+                // `FormData` into a placeholder type (that would risk a
+                // spurious decode failure silently swallowing a real
+                // form's submit — see that fn's doc). Every other shape
+                // (`Lambda`, `FuncValue`, `Var`, `Apply`, `Call`, …) keeps
+                // today's wrap-and-call path unchanged — conservative
+                // default, since those CAN legitimately be a function
+                // value (a let-bound handler, a named decoder function).
+                sky_ir::HtmlEventShape::Raw if is_definitely_not_callable(payload_e) => format!(
+                    "sky_runtime::html::html_on_raw_fixed_({name:?}.to_owned(), {payload_s})"
+                ),
                 sky_ir::HtmlEventShape::Raw => format!(
                     "sky_runtime::html::html_on_raw_({name:?}.to_owned(), move |_x| ({payload_s})(_x))"
                 ),
@@ -5359,6 +5394,35 @@ fn emit_ui_call(
             ),
         }),
     }
+}
+
+/// #167 — is `e` PROVABLY not a callable value, so `(e)(_x)` cannot possibly
+/// compile? Used to route `HtmlEventShape::Raw` (`onSubmit`)'s argument to
+/// `html_on_raw_fixed_` (dispatch the value directly) instead of
+/// `html_on_raw_` (call it as a decoder).
+///
+/// [`Expr::Ctor`] is always a SATURATED constructor application regardless of
+/// arity (its doc: "args are the payload expressions, one per declared
+/// field") — `lower_expr`'s `VarCtor` arm eta-expands any *unsaturated*
+/// payload-constructor reference into a genuine [`Expr::Lambda`] before it
+/// ever reaches here, so an `Expr::Ctor` at this position is a concrete enum
+/// VALUE, never a function. The leaf literals are equally obviously not
+/// callable. Every other shape (`Lambda`, `SharedLambda`, `FuncValue`, `Var`,
+/// `Apply`, `Call`, …) is left alone — conservative default, since those CAN
+/// legitimately be a function value (a let-bound handler, a named decoder
+/// function, a lambda literal) and mis-classifying one as "not callable"
+/// would regress the working typed-record decode idiom.
+const fn is_definitely_not_callable(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::Ctor { .. }
+            | Expr::Int(_)
+            | Expr::Bool(_)
+            | Expr::Float(_)
+            | Expr::Str(_)
+            | Expr::Char(_)
+            | Expr::Unit
+    )
 }
 
 /// Emit an expression. `indent` is the indentation level (in 4-space units) of
