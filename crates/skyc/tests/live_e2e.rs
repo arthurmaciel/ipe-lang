@@ -1547,3 +1547,179 @@ fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
     )?;
     Ok(())
 }
+
+/// #168 fixture — a `let`-bound LOCAL closure dispatched via `Ui.onSubmit`.
+///
+/// `let handler = \c -> DoSignIn c in ... Ui.onSubmit handler ...`. Before the
+/// fix, `skyc` exited 0 but the emitted `handler` was declared
+/// `Box<dyn Fn(Creds) -> MainMsg + Send + 'static>` (never `+ Sync`) and the
+/// `ui_on_submit_(move |_x| (handler)(_x))` wrapper captured that non-`Sync`
+/// box by move → `cargo build` E0277 (`dyn Fn(..) -> MainMsg + Send` cannot be
+/// shared between threads safely). The fix (`sky_lower::lower_let_pvar` +
+/// `flows_into_sync_kernel_call`) promotes the let-bound closure to
+/// `Arc<dyn Fn + Send + Sync>` at its declaration.
+const SKY_ONSUBMIT_LET_BOUND_HANDLER: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type alias Creds =
+    { username : String
+    , password : String
+    }
+
+type Msg
+    = DoSignIn Creds
+
+type alias Model =
+    { lastUsername : String
+    }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { lastUsername = "" }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        DoSignIn creds ->
+            ( { model | lastUsername = creds.username }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    let
+        handler = \c -> DoSignIn c
+    in
+    Ui.layout []
+        (Ui.column []
+            [ Ui.form
+                [ Ui.onSubmit handler ]
+                [ Ui.input [ Ui.name "username" ]
+                , Ui.input [ Ui.name "password" ]
+                , Ui.input [ Ui.htmlAttribute "type" "submit" ]
+                ]
+            , Ui.text model.lastUsername
+            ])
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = DoSignIn { username = "", password = "" }
+        }
+"#;
+
+/// #168 fixture — a MULTI-HOP `let`-alias chain from the root closure to the
+/// `Ui.onSubmit` call (`handler` → `inner` → `outer`).
+///
+/// The `onSubmit` argument (`outer`) is two aliases removed from the closure
+/// literal (`handler`). Only promoting the ROOT `handler` binding to
+/// `Arc<dyn Fn + Send + Sync>` is both necessary (the alias bindings carry no
+/// closure literal to promote) and sufficient (Rust type inference propagates
+/// the `Arc` type through each single-owner move), so
+/// `flows_into_sync_kernel_call` must be alias-transparent to reach the root.
+const SKY_ONSUBMIT_LET_ALIAS_CHAIN: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type alias Creds =
+    { username : String
+    , password : String
+    }
+
+type Msg
+    = DoSignIn Creds
+
+type alias Model =
+    { lastUsername : String
+    }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { lastUsername = "" }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        DoSignIn creds ->
+            ( { model | lastUsername = creds.username }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    let
+        handler = \c -> DoSignIn c
+        inner = handler
+        outer = inner
+    in
+    Ui.layout []
+        (Ui.column []
+            [ Ui.form
+                [ Ui.onSubmit outer ]
+                [ Ui.input [ Ui.name "username" ]
+                , Ui.input [ Ui.htmlAttribute "type" "submit" ]
+                ]
+            , Ui.text model.lastUsername
+            ])
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = DoSignIn { username = "", password = "" }
+        }
+"#;
+
+/// #168 seal — BUILD-ONLY: a single-hop `let`-bound `Ui.onSubmit` handler must
+/// compile end-to-end. A successful `skyc` + `cargo build` IS the assertion —
+/// before the fix this was `skyc` exit 0 then `cargo build` E0277.
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn live_onsubmit_let_bound_handler_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build(
+        "live_onsubmit_let_bound_handler_build_only",
+        SKY_ONSUBMIT_LET_BOUND_HANDLER,
+    )?;
+    Ok(())
+}
+
+/// #168 seal — BUILD-ONLY: a MULTI-HOP `let`-alias chain into `Ui.onSubmit`
+/// must compile end-to-end (see [`SKY_ONSUBMIT_LET_ALIAS_CHAIN`]). Guards the
+/// alias-transparent branch of `flows_into_sync_kernel_call`.
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn live_onsubmit_let_alias_chain_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build(
+        "live_onsubmit_let_alias_chain_build_only",
+        SKY_ONSUBMIT_LET_ALIAS_CHAIN,
+    )?;
+    Ok(())
+}
