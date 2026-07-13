@@ -5022,6 +5022,19 @@ fn emit_ui_call(
         // depends only on the Sky closure's legitimate `move` captures
         // (Send+'static by construction), not on the erased trait-object
         // type.
+        //
+        // #168: this re-wrap ONLY helps when `f_e` is an INLINE
+        // `Lambda`/`FuncValue` here (the box is rebuilt as source inside the
+        // wrapper body, never captured). When `f_e` is `Expr::Var(sym)`
+        // referencing a PREVIOUSLY `let`-bound closure, `f_s` is the bare
+        // identifier, and `move |_x| (handler)(_x)` MOVES the already-built
+        // `Box<dyn Fn + Send>` into the wrapper's captures — a non-`Sync`
+        // capture makes the wrapper non-`Sync`, so no emit-site fix is
+        // possible for that shape (the box already exists by the time this arm
+        // runs). The real fix is upstream in `sky_lower::lower_let_pvar`:
+        // `flows_into_sync_kernel_call` promotes the LET-BOUND VALUE itself to
+        // `Expr::SharedLambda` (`Arc<dyn Fn + Send + Sync>`), so `f_s` here is
+        // already `Send + Sync` — no change needed in this arm.
         KernelFn::UiOnSubmit => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
