@@ -26,8 +26,94 @@
 //! the tool WRITES the cache via the same code the tests READ it through.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+/// The `sky-rust` workspace root (two levels up from this crate's manifest).
+///
+/// Shared so every golden test resolves the golden tree the same way, rather
+/// than each file carrying its own hand-rolled duplicate. Canonicalises the
+/// `../..` join so downstream path comparisons see a normalised absolute path;
+/// if canonicalisation fails (e.g. a component does not exist), the
+/// un-normalised join is returned unchanged — the directory the tests read
+/// always exists in a checked-out tree, so the fallback is never the green
+/// path.
+#[must_use]
+#[allow(dead_code)] // adopted file-by-file as goldens migrate to the shared helper
+pub fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+/// Assert every byte-comparable golden output under `golden_dir` matches its
+/// counterpart in the emitted project rooted at `emitted_out`, byte-for-byte.
+///
+/// This is the directory-diff replacement for each golden's former ad hoc
+/// `read_to_string(<out>/src/main.rs)` + `assert_eq!(_, <golden>/main.rs)`
+/// pair. It preserves that assertion's discriminating power exactly — a golden
+/// `main.rs` is always compared — and, where a golden dir ALSO checks in a
+/// root `Cargo.toml`, it additionally compares that manifest, catching
+/// manifest drift the single-file assertion could not.
+///
+/// **Scope is manifest-authoritative, not a blind recursive diff.** A golden
+/// dir carries OTHER, non-emitted fixture files (`Main.sky`, `expected_go.txt`,
+/// `oracle.meta`, and a partial `sky_runtime/` reference tree) that the emitted
+/// project does not reproduce at those paths; the walk is scoped to exactly the
+/// golden's byte-diffable emitted artifacts (`main.rs` -> `<out>/src/main.rs`,
+/// and `Cargo.toml` -> `<out>/Cargo.toml` WHEN the golden dir checks one in),
+/// so an unrelated fixture file can never be misread as a mismatch. Both
+/// under-emission (a missing emitted file) and content drift fail loudly, each
+/// with the offending relative path.
+///
+/// # Panics
+///
+/// Fails the calling test (via `assert!`) if any compared file is
+/// missing/unreadable or differs from its golden counterpart, surfacing every
+/// offending path in one message.
+#[allow(dead_code)] // adopted file-by-file as goldens migrate to the shared helper
+pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir: &Path) {
+    // (golden-relative name, emitted path). `main.rs` is always compared;
+    // `Cargo.toml` only when the golden dir checks one in — mirroring what the
+    // hand-rolled per-file assertions did (all compared `main.rs`; only `m0`
+    // carried a golden manifest, other goldens do not).
+    let mut pairs: Vec<(&str, PathBuf)> =
+        vec![("main.rs", emitted_out.join("src").join("main.rs"))];
+    if golden_dir.join("Cargo.toml").is_file() {
+        pairs.push(("Cargo.toml", emitted_out.join("Cargo.toml")));
+    }
+
+    let mut mismatches = Vec::new();
+    for (rel, emitted_path) in &pairs {
+        let want_path = golden_dir.join(rel);
+        match (
+            std::fs::read_to_string(&want_path),
+            std::fs::read_to_string(emitted_path),
+        ) {
+            (Ok(want_text), Ok(got_text)) if want_text == got_text => {}
+            (Ok(want_text), Ok(got_text)) => mismatches.push(format!(
+                "{rel}: emitted != golden ({} vs {} bytes)\n  emitted: {}\n  golden:  {}",
+                got_text.len(),
+                want_text.len(),
+                emitted_path.display(),
+                want_path.display(),
+            )),
+            (Err(e), _) => mismatches.push(format!(
+                "{rel}: golden missing or unreadable at {}: {e}",
+                want_path.display()
+            )),
+            (_, Err(e)) => mismatches.push(format!(
+                "{rel}: emitted missing or unreadable at {}: {e}",
+                emitted_path.display()
+            )),
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "golden mismatch under {}:\n{}",
+        golden_dir.display(),
+        mismatches.join("\n")
+    );
+}
 
 /// Outcome of building and running an emitted Sky project.
 // Fields are only accessed from E2E test functions (`build_and_run_emitted`
