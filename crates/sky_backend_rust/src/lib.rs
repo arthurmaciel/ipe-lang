@@ -26,6 +26,7 @@ mod emit_webview;
 mod naming;
 mod preamble;
 mod project;
+mod rust_file;
 
 use std::collections::{BTreeMap, BTreeSet};
 
