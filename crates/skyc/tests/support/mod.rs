@@ -85,10 +85,44 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
     // `Cargo.toml` only when the golden dir checks one in — mirroring what the
     // hand-rolled per-file assertions did (all compared `main.rs`; only `m0`
     // carried a golden manifest, other goldens do not).
-    let mut pairs: Vec<(&str, PathBuf)> =
-        vec![("main.rs", emitted_out.join("src").join("main.rs"))];
+    let mut pairs: Vec<(String, PathBuf)> = vec![(
+        "main.rs".to_owned(),
+        emitted_out.join("src").join("main.rs"),
+    )];
     if golden_dir.join("Cargo.toml").is_file() {
-        pairs.push(("Cargo.toml", emitted_out.join("Cargo.toml")));
+        pairs.push(("Cargo.toml".to_owned(), emitted_out.join("Cargo.toml")));
+    }
+
+    // Per-Sky-module split files (Phase 5 Milestone C): when the emitted
+    // project splits into `src/sky_mods/<mod>.rs`, each is compared byte-for-byte
+    // against `<golden_dir>/sky_mods/<mod>.rs`. The comparison is SYMMETRIC —
+    // the union of the emitted set and the golden set is walked, so an emitted
+    // file the golden lacks (under-checked-in) AND a golden file the split no
+    // longer emits (stale/over-checked-in) both fail loudly, mirroring
+    // `prune_orphaned_files`'s manifest-is-authoritative discipline. A program
+    // that collapses to a single file (the §3.3 Spine-collapse invariant) has
+    // no `sky_mods/` on EITHER side, so this adds nothing for those goldens.
+    let mut sky_mod_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for dir in [
+        emitted_out.join("src").join("sky_mods"),
+        golden_dir.join("sky_mods"),
+    ] {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                if path.extension().is_some_and(|x| x == "rs")
+                    && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                {
+                    sky_mod_names.insert(name.to_owned());
+                }
+            }
+        }
+    }
+    for name in &sky_mod_names {
+        pairs.push((
+            format!("sky_mods/{name}"),
+            emitted_out.join("src").join("sky_mods").join(name),
+        ));
     }
 
     let mut mismatches = Vec::new();
@@ -122,6 +156,65 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
         golden_dir.display(),
         mismatches.join("\n")
     );
+}
+
+/// Concatenate the text of every emitted Sky-side `.rs` file under
+/// `<emitted_out>/src` — `src/main.rs` plus every `src/sky_mods/*.rs` the
+/// per-Sky-module split (Phase 5 Milestone C) may have written — into ONE
+/// string, so a substring assertion is robust to WHICH file the split placed
+/// a symbol in.
+///
+/// The vendored `src/sky_runtime/` tree is deliberately EXCLUDED: it is the
+/// fixed kernel runtime, identical for every program, and a substring test
+/// asserting "the emitted program carries symbol X" means X in the emitted
+/// USER/stdlib-source code, never a coincidental match inside the runtime
+/// shim. Scoping to `main.rs` + `sky_mods/*.rs` keeps that discrimination
+/// exactly as sharp as the old `read_to_string(src/main.rs)` had it while no
+/// longer caring whether the split relocated X out of `main.rs` into a
+/// `sky_mods/<mod>.rs` file (the correct new multi-file behaviour).
+///
+/// # Panics
+///
+/// Fails the calling test (via `assert!`) if `src/main.rs` is missing or
+/// unreadable — a green path always emits it, so its absence is a real
+/// failure, never silently a no-op empty haystack. A missing `sky_mods/`
+/// directory is NOT a failure: the Spine-collapse invariant (§3.3) legitimately
+/// emits no `sky_mods/` for a single-home program.
+#[must_use]
+#[allow(dead_code)] // adopted file-by-file as substring goldens migrate to the shared helper
+pub fn read_all_emitted_src(emitted_out: &Path) -> String {
+    let src = emitted_out.join("src");
+    let main_rs = src.join("main.rs");
+    let main_text = std::fs::read_to_string(&main_rs);
+    assert!(
+        main_text.is_ok(),
+        "emitted main.rs must exist and be readable at {}: {:?}",
+        main_rs.display(),
+        main_text.as_ref().err(),
+    );
+    let mut combined = main_text.unwrap_or_default();
+
+    // Append every `src/sky_mods/*.rs` the split may have written, in a
+    // deterministic (sorted) order so the concatenation is stable across
+    // filesystems that hand back directory entries in arbitrary order. If the
+    // program collapsed to a single file, this directory does not exist and
+    // the loop is a no-op.
+    let sky_mods = src.join("sky_mods");
+    if let Ok(entries) = std::fs::read_dir(&sky_mods) {
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+            .collect();
+        files.sort();
+        for path in files {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                combined.push('\n');
+                combined.push_str(&text);
+            }
+        }
+    }
+    combined
 }
 
 /// Outcome of building and running an emitted Sky project.
