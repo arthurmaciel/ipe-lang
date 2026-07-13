@@ -26,6 +26,7 @@ mod emit_webview;
 mod naming;
 mod preamble;
 mod project;
+mod rust_file;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -749,6 +750,67 @@ impl<'a> EmitCtx<'a> {
     /// Every synthesised record struct, in emission order.
     pub(crate) fn record_structs(&self) -> &[RecordStruct] {
         &self.record_structs
+    }
+
+    /// Is `name` the Rust name of some user enum this program declares?
+    ///
+    /// A thin accessor over [`Self::enum_names`] so callers outside this
+    /// module never need to know that map's internal key shape.
+    pub(crate) fn contains_type_name(&self, name: &str) -> bool {
+        self.enum_names.values().any(|n| n == name)
+    }
+
+    /// Fail closed if any synthesised [`RecordStruct`]'s ALREADY-CHOSEN name
+    /// (i.e. after [`unique_struct_name`]'s existing intra-category
+    /// collision bumping, which stays the right tool for two record shapes
+    /// that coincidentally camel-case to the same base) collides with an
+    /// enum name, a function name, or a caller-supplied `mod_ident`.
+    ///
+    /// **Why this check exists (independent-review finding, Phase 5 design
+    /// doc §2.2/Task 3).** `RecordStruct` and `EnumDef` both render as Rust
+    /// `struct`/`enum` items and share Rust's TYPE namespace (`mod` items
+    /// share it too — the same namespace `mod_ident`'s collision gate
+    /// polices). Today's single-file backend never cross-checks a record
+    /// struct's name against [`Self::enum_names`] — a collision there
+    /// currently surfaces as a loud `cargo`-time `E0428`, never a silent
+    /// mis-emit. Under a future flat glob-reexport barrel splitting `EnumDef`s
+    /// and `RecordStruct`s across different files, Rust's name-resolution
+    /// precedence (local definition wins over a glob `use`) would turn that
+    /// SAME collision into a SILENT SHADOW instead of a loud error. This gate
+    /// closes that gap now, before any file-splitting code exists, so "the
+    /// flat namespace is sound" is true by construction rather than by an
+    /// untested assumption.
+    ///
+    /// `func_names` is included for defense-in-depth even though the
+    /// value/type namespace split means a record-struct/func collision is
+    /// not strictly load-bearing today — cheap, and it stops relying on an
+    /// implicit "func-name casing convention never collides" invariant a
+    /// future `naming.rs` change could silently violate.
+    ///
+    /// Fails closed with `Diagnostic::Name::DuplicateValue` — mirroring
+    /// [`crate::rust_file::assert_mod_idents_unique`]'s own choice for
+    /// `mod_ident` collisions (mirror, not auto-rename, for a namespace-wide
+    /// collision), rather than [`unique_struct_name`]'s intra-category
+    /// auto-suffix behaviour.
+    pub(crate) fn assert_record_structs_disjoint_from_type_namespace(
+        &self,
+        mod_idents: &BTreeSet<String>,
+    ) -> DResult<()> {
+        for rec in &self.record_structs {
+            let collides = self.contains_type_name(&rec.name)
+                || self.func_names.values().any(|n| n == &rec.name)
+                || mod_idents.contains(&rec.name);
+            if collides {
+                return Err(Diagnostic::Name {
+                    span: Span::DUMMY,
+                    msg: NameError::DuplicateValue {
+                        name: rec.name.clone().into_boxed_str(),
+                        first: Span::DUMMY,
+                    },
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Render a record TYPE at a USE SITE to its Rust spelling, keyed by its
@@ -1820,4 +1882,138 @@ fn resolve_sym(interner: &Interner, sym: Symbol) -> DResult<&str> {
             where_: "sky_backend_rust::resolve_sym",
             detail: format!("symbol {} not present in interner", sym.as_raw()),
         })
+}
+
+#[cfg(test)]
+mod record_struct_namespace_tests {
+    use sky_ir::{EnumDef, Module, Variant};
+
+    use super::*;
+
+    /// Task 3 (independent-review finding): a record shape whose synthesised
+    /// name collides with a user enum's Rust name must fail closed, not
+    /// silently coexist (today's single-file backend never cross-checks
+    /// `RecordStruct` names against `enum_names`/`func_names` — a
+    /// pre-existing gap that only manifests once file-splitting lets a local
+    /// declaration silently shadow a glob-reexported one).
+    ///
+    /// `naming::enum_name(&["Rec"], "XY")` folds to `"RecXY"` — module home
+    /// `["Rec"]`, type name `"XY"`. Separately, a record literal with fields
+    /// `{x, y}` (`naming::record_struct_name(&["x", "y"])`, asserted
+    /// byte-for-byte "`RecXY`" by `naming::record_struct_names_from_field_sets`)
+    /// synthesises a struct with the SAME Rust name — a real, constructible
+    /// collision, not a hedged placeholder.
+    #[test]
+    fn record_struct_colliding_with_enum_name_fails_closed() -> DResult<()> {
+        let mut interner = Interner::new();
+        let rec_mod = interner.intern("Rec")?;
+        let xy_ty = interner.intern("XY")?;
+        let a_ctor = interner.intern("A")?;
+        let b_ctor = interner.intern("B")?;
+        let x_field = interner.intern("x")?;
+        let y_field = interner.intern("y")?;
+
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![rec_mod]),
+                types: vec![TypeDef::Enum(EnumDef {
+                    name: xy_ty,
+                    home: ModPath(vec![rec_mod]),
+                    type_params: vec![],
+                    variants: vec![
+                        Variant {
+                            name: a_ctor,
+                            fields: vec![],
+                        },
+                        Variant {
+                            name: b_ctor,
+                            fields: vec![],
+                        },
+                    ],
+                })],
+                funcs: vec![],
+                entry: None,
+                records: vec![IrType::Record(BTreeMap::from([
+                    (x_field, IrType::Int),
+                    (y_field, IrType::Int),
+                ]))],
+                uses_tea: false,
+                uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
+                uses_css: false,
+                uses_auth: false,
+            }],
+        };
+
+        // `EmitCtx::build` itself must still succeed today — the
+        // record-vs-enum collision is a PRE-EXISTING gap `build` does not
+        // check; this task adds the check as a SEPARATE, explicit gate.
+        let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite)?;
+        assert_eq!(ctx.record_structs().len(), 1);
+        assert_eq!(
+            ctx.record_structs().first().map(|r| r.name.as_str()),
+            Some("RecXY")
+        );
+        assert!(ctx.contains_type_name("RecXY"));
+
+        let result = ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new());
+        assert!(
+            matches!(
+                result,
+                Err(Diagnostic::Name {
+                    msg: NameError::DuplicateValue { .. },
+                    ..
+                })
+            ),
+            "expected a fail-closed DuplicateValue collision, got {result:?}"
+        );
+        Ok(())
+    }
+
+    /// The common case (no record/enum name collision) must stay unaffected
+    /// — the new gate is purely additive.
+    #[test]
+    fn disjoint_record_structs_do_not_fail_closed() -> DResult<()> {
+        let mut interner = Interner::new();
+        let main_mod = interner.intern("Main")?;
+        let msg_ty = interner.intern("Msg")?;
+        let increment = interner.intern("Increment")?;
+        let a_field = interner.intern("a")?;
+        let b_field = interner.intern("b")?;
+
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![TypeDef::Enum(EnumDef {
+                    name: msg_ty,
+                    home: ModPath(vec![main_mod]),
+                    type_params: vec![],
+                    variants: vec![Variant {
+                        name: increment,
+                        fields: vec![],
+                    }],
+                })],
+                funcs: vec![],
+                entry: None,
+                records: vec![IrType::Record(BTreeMap::from([
+                    (a_field, IrType::Int),
+                    (b_field, IrType::Int),
+                ]))],
+                uses_tea: false,
+                uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
+                uses_css: false,
+                uses_auth: false,
+            }],
+        };
+
+        let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite)?;
+        ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())
+    }
 }
