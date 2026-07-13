@@ -3,9 +3,9 @@ module Main exposing (main)
 -- F10 (#121 seal). `pairWith : a -> b -> (a, b)` has def-arity 1.
 -- T6 fires for the first-class reify site (Fun([Str, Int], (Str, Int))).
 -- But inside the def body `\y -> (x, y)`, `x` has generic type `a`.
--- With T5 deferred, `clone_class(Generic)` → NonClone → SKY-L0125 fired
--- by T3.  Expected outcome: skyc-fail SKY-L0125 (upgrade from cargo-fail
--- E0593).  Green requires T5 (injects `Clone` bound on `a`) + T6.
+-- With T5 deferred, `clone_class(Generic)` -> NonClone -> SKY-L0126 fired
+-- by T3.  Expected outcome: skyc-fail SKY-L0126 (upgrade from cargo-fail
+-- E0507/E0525).  Green requires T5 (injects `Clone` bound on `a`) + T6.
 
 
 pairWith : a -> b -> (a, b)

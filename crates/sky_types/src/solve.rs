@@ -147,8 +147,7 @@ pub fn solve_attributed(
     constraints: &[Constraint],
 ) -> Result<(), (Diagnostic, Vec<Symbol>)> {
     for c in constraints {
-        unify(uf, budget, interner, c.span, c.lhs, c.rhs)
-            .map_err(|diag| (diag, c.home.clone()))?;
+        unify(uf, budget, interner, c.span, c.lhs, c.rhs).map_err(|diag| (diag, c.home.clone()))?;
     }
     Ok(())
 }

@@ -7,7 +7,7 @@
 
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::Symbol;
-use sky_ir::{ir_type_is_derivable, EnumDef, IrType, UiCtor, UiPlain};
+use sky_ir::{EnumDef, IrType, UiCtor, UiPlain, ir_type_is_derivable};
 
 use crate::naming::mangle_reserved;
 use crate::{EmitCtx, RecordStruct};
@@ -107,8 +107,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             // `StreamId` is handled by the `enum_name` override in `EmitCtx`
             // (returns `"SkyStreamId"`), so it falls through to the normal
             // non-generic path below.
-            if home.0.is_empty() && args.is_empty()
-                && ctx.resolve_ident(*name) == Ok("ChunkEvent")
+            if home.0.is_empty() && args.is_empty() && ctx.resolve_ident(*name) == Ok("ChunkEvent")
             {
                 return Ok("ChunkEvent<SkyError>".to_owned());
             }
@@ -249,8 +248,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Fun(params, ret)
             if matches!(
                 params.as_slice(),
-                [IrType::WebSocketServer]
-                    | [IrType::WebSocketServer, IrType::Str | IrType::Error]
+                [IrType::WebSocketServer] | [IrType::WebSocketServer, IrType::Str | IrType::Error]
             ) && matches!(ret.as_ref(), IrType::Task(inner) if matches!(inner.as_ref(), IrType::Unit)) =>
         {
             let mut parts = Vec::with_capacity(params.len());
@@ -282,6 +280,41 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
                 "Box<dyn Fn({}) -> {ret} + Send + 'static>",
                 parts.join(", ")
             )
+        }
+        // #164 (`f7_succeed_curried`): a curried chain of ONE-SHOT closures,
+        // one `Box<dyn FnOnce>` level per parameter — distinct from `Fun`'s
+        // flattened, re-callable `Box<dyn Fn(T0, T1, ...) -> R>`. Rendered
+        // from the INSIDE out: the last parameter's box wraps the bare
+        // return type; every earlier parameter's box wraps the box built
+        // for the levels after it. Matches exactly the nesting the
+        // `curryN` runtime helpers construct (`curry2` → `Box<dyn
+        // FnOnce(A1) -> Box<dyn FnOnce(A2) -> R + Send> + Send>`), which is
+        // what the `next_decoder` parameter of `decode_pipeline_required` /
+        // `decode_pipeline_optional` / `decode_pipeline_required_at` /
+        // `db_decode_required` / `db_decode_optional` actually requires.
+        IrType::FnOnceChain(params, ret) => {
+            let Some((last, init)) = params.split_last() else {
+                // Invariant violation (see the variant's doc comment): the
+                // sole producer, `eta_expand_partial`, never constructs a
+                // zero-parameter chain. Fail closed rather than silently
+                // rendering `ret` bare (which would not be a function type).
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_types::render_type",
+                    detail: "IrType::FnOnceChain with an empty parameter list".to_owned(),
+                });
+            };
+            let mut acc = render_type(ctx, ret, generics)?;
+            acc = format!(
+                "Box<dyn FnOnce({}) -> {acc} + Send + 'static>",
+                render_type(ctx, last, generics)?
+            );
+            for param in init.iter().rev() {
+                acc = format!(
+                    "Box<dyn FnOnce({}) -> {acc} + Send + 'static>",
+                    render_type(ctx, param, generics)?
+                );
+            }
+            acc
         }
         // A generic type variable renders as the function's corresponding Rust
         // generic (`T1`, `T2`, …), resolved by position in the quantification

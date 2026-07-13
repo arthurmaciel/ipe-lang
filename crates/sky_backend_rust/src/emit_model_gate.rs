@@ -18,8 +18,8 @@
 //! `SKY-L0120` diagnostic naming the offending field — converting the
 //! `cargo`-fail into a clean `skyc` error (MAKE INVALID STATES UNREPRESENTABLE).
 
-use sky_diagnostics::{AppShape, Diagnostic, DResult, LowerError, ModelLeaf, Span};
-use sky_ir::{ir_type_is_derivable, ir_type_is_serde, Expr, IrType};
+use sky_diagnostics::{AppShape, DResult, Diagnostic, LowerError, ModelLeaf, Span};
+use sky_ir::{Expr, IrType, ir_type_is_derivable, ir_type_is_serde};
 
 use crate::EmitCtx;
 
@@ -206,7 +206,7 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
     }
     let next = fuel - 1;
     match ty {
-        IrType::Fun(_, _) => ModelLeaf::Function,
+        IrType::Fun(_, _) | IrType::FnOnceChain(_, _) => ModelLeaf::Function,
         IrType::Cmd(_) => ModelLeaf::Command,
         IrType::Sub(_) => ModelLeaf::Subscription,
         IrType::Task(_) => ModelLeaf::Task,
