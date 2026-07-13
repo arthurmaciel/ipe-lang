@@ -49,6 +49,33 @@ fn bug(where_: &'static str, detail: impl Into<String>) -> Diagnostic {
     }
 }
 
+/// Peel exactly `arity` arrows off `fn_ty`, returning `(arg_tys, ret_ty)` —
+/// each argument type in source order, then the trailing result type.
+///
+/// Shared by `eta_expand_partial` and `eta_expand_partial_ctor` to recover
+/// per-parameter and return types for the missing eta-lambda parameters from
+/// the callee's already-solved region type. An arrow shallower than `arity`
+/// is unreachable for well-typed input (inference unified the callee against
+/// an `arity`-deep arrow), so it surfaces as a [`Diagnostic::CompilerBug`]
+/// (`bug(bug_where, bug_detail)`), not a missing feature.
+fn peel_arrow_arity<'a>(
+    fn_ty: &'a Ty,
+    arity: usize,
+    bug_where: &'static str,
+    bug_detail: &'static str,
+) -> DResult<(Vec<&'a Ty>, &'a Ty)> {
+    let mut cur = fn_ty;
+    let mut arg_tys: Vec<&Ty> = Vec::with_capacity(arity);
+    for _ in 0..arity {
+        let Ty::Fun(arg, rest) = cur else {
+            return Err(bug(bug_where, bug_detail));
+        };
+        arg_tys.push(arg);
+        cur = rest.as_ref();
+    }
+    Ok((arg_tys, cur))
+}
+
 /// The `Maybe a` type carries exactly one argument; an arity-1 guard cleared it,
 /// so a missing first argument here is an unreachable internal invariant.
 fn maybe_arg_bug() -> Diagnostic {
@@ -1589,7 +1616,7 @@ fn collect_lambda_capture_depths(sym: Symbol, expr: &Expr, cur_depth: u32, depth
             collect_lambda_capture_depths(sym, then_, cur_depth, depths);
             collect_lambda_capture_depths(sym, else_, cur_depth, depths);
         }
-        Expr::Call { args, .. } => {
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
             for a in args {
                 collect_lambda_capture_depths(sym, a, cur_depth, depths);
             }
@@ -1623,19 +1650,9 @@ fn collect_lambda_capture_depths(sym: Symbol, expr: &Expr, cur_depth: u32, depth
                 collect_lambda_capture_depths(sym, e, cur_depth, depths);
             }
         }
-        Expr::Ctor { args, .. } => {
-            for a in args {
-                collect_lambda_capture_depths(sym, a, cur_depth, depths);
-            }
-        }
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             collect_lambda_capture_depths(sym, effect, cur_depth, depths);
             collect_lambda_capture_depths(sym, rest, cur_depth, depths);
-        }
-        Expr::TailRecur { args } => {
-            for a in args {
-                collect_lambda_capture_depths(sym, a, cur_depth, depths);
-            }
         }
         Expr::Access { record, .. } => {
             collect_lambda_capture_depths(sym, record, cur_depth, depths);
@@ -1651,14 +1668,14 @@ fn collect_lambda_capture_depths(sym: Symbol, expr: &Expr, cur_depth: u32, depth
 }
 
 /// Does `sym` (a `let`-bound, function-typed local) need `Arc`-based shared
-/// capture treatment? True when SOME occurrence is nested >= 2 lambda levels
-/// deep (the outer closure must move-capture it to hand off to the inner
-/// closure, which ALSO move-captures it) OR there are >= 2 DISTINCT depth
-/// >= 1 occurrences (two independent closures each move-capturing the same
-/// symbol -- the sibling-closure analogue of the same E0507/E0382 class). A
-/// single depth-1 occurrence (the common, already-sound case) returns
-/// `false`, so ordinary single-capture closures stay byte-identical
-/// `Box<dyn Fn>`.
+/// capture treatment? True when some occurrence is nested at least 2 lambda
+/// levels deep (the outer closure must move-capture it to hand off to the
+/// inner closure, which ALSO move-captures it) OR there are at least 2
+/// distinct depth-at-least-1 occurrences (two independent closures each
+/// move-capturing the same symbol -- the sibling-closure analogue of the
+/// same E0507/E0382 class). A single depth-1 occurrence (the common,
+/// already-sound case) returns `false`, so ordinary single-capture closures
+/// stay byte-identical `Box<dyn Fn>`.
 fn needs_shared_capture(sym: Symbol, expr: &Expr) -> bool {
     let mut depths = Vec::new();
     collect_lambda_capture_depths(sym, expr, 0, &mut depths);
@@ -1676,9 +1693,6 @@ fn needs_shared_capture(sym: Symbol, expr: &Expr) -> bool {
 fn sym_referenced_directly(sym: Symbol, expr: &Expr) -> bool {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => *s == sym,
-        // A further-nested closure boundary — its own captures are its own
-        // concern, not a DIRECT reference of the lambda we are testing.
-        Expr::Lambda { .. } | Expr::SharedLambda { .. } => false,
         Expr::Let { name, value, body } => {
             sym_referenced_directly(sym, value)
                 || (*name != sym && sym_referenced_directly(sym, body))
@@ -1733,7 +1747,11 @@ fn sym_referenced_directly(sym: Symbol, expr: &Expr) -> bool {
         }
         Expr::TailRecur { args } => args.iter().any(|a| sym_referenced_directly(sym, a)),
         Expr::Access { record, .. } => sym_referenced_directly(sym, record),
-        Expr::Int(_)
+        // A further-nested closure boundary — its own captures are its own
+        // concern, not a DIRECT reference of the lambda we are testing.
+        Expr::Lambda { .. }
+        | Expr::SharedLambda { .. }
+        | Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
         | Expr::Str(_)
@@ -1795,52 +1813,14 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
         Expr::SharedLambda { params, ret, body } => {
             wrap_shared_lambda_if_needed(sym, Expr::SharedLambda { params, ret, body })
         }
-        Expr::Let { name, value, body } => {
-            let value = Box::new(force_shared_capture_clones(sym, *value));
-            let body = if name == sym {
-                body
-            } else {
-                Box::new(force_shared_capture_clones(sym, *body))
-            };
-            Expr::Let { name, value, body }
-        }
+        Expr::Let { name, value, body } => force_shared_capture_clones_let(sym, name, *value, body),
         Expr::Destructure {
             binder,
             value,
             body,
-        } => {
-            let value = Box::new(force_shared_capture_clones(sym, *value));
-            let body = if pat_binds_symbol(&binder, sym) {
-                body
-            } else {
-                Box::new(force_shared_capture_clones(sym, *body))
-            };
-            Expr::Destructure {
-                binder,
-                value,
-                body,
-            }
-        }
-        Expr::Match(m) => Expr::Match(m.map_bodies(
-            |scrutinee| force_shared_capture_clones(sym, scrutinee),
-            |pat, body, guard| {
-                let body = if pat_binds_symbol(pat, sym) {
-                    body
-                } else {
-                    force_shared_capture_clones(sym, body)
-                };
-                (body, guard)
-            },
-        )),
-        Expr::TailLoop { params, body } => {
-            let shadowed = params.iter().any(|(s, _)| *s == sym);
-            let body = if shadowed {
-                body
-            } else {
-                Box::new(force_shared_capture_clones(sym, *body))
-            };
-            Expr::TailLoop { params, body }
-        }
+        } => force_shared_capture_clones_destructure(sym, binder, *value, body),
+        Expr::Match(m) => force_shared_capture_clones_match(sym, m),
+        Expr::TailLoop { params, body } => force_shared_capture_clones_tail_loop(sym, params, body),
         Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
             op,
             lhs: Box::new(force_shared_capture_clones(sym, *lhs)),
@@ -1853,30 +1833,16 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
         },
         Expr::Call { callee, args } => Expr::Call {
             callee,
-            args: args
-                .into_iter()
-                .map(|a| force_shared_capture_clones(sym, a))
-                .collect(),
+            args: force_shared_capture_clones_all(sym, args),
         },
         Expr::Apply { func, args } => Expr::Apply {
             func: Box::new(force_shared_capture_clones(sym, *func)),
-            args: args
-                .into_iter()
-                .map(|a| force_shared_capture_clones(sym, a))
-                .collect(),
+            args: force_shared_capture_clones_all(sym, args),
         },
-        Expr::Tuple(items) => Expr::Tuple(
-            items
-                .into_iter()
-                .map(|e| force_shared_capture_clones(sym, e))
-                .collect(),
-        ),
+        Expr::Tuple(items) => Expr::Tuple(force_shared_capture_clones_all(sym, items)),
         Expr::List { elem, items } => Expr::List {
             elem,
-            items: items
-                .into_iter()
-                .map(|e| force_shared_capture_clones(sym, e))
-                .collect(),
+            items: force_shared_capture_clones_all(sym, items),
         },
         Expr::Cons { head, tail } => Expr::Cons {
             head: Box::new(force_shared_capture_clones(sym, *head)),
@@ -1891,12 +1857,7 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
             len,
             exact,
         },
-        Expr::Record(fields) => Expr::Record(
-            fields
-                .into_iter()
-                .map(|(name, e)| (name, force_shared_capture_clones(sym, e)))
-                .collect(),
-        ),
+        Expr::Record(fields) => Expr::Record(force_shared_capture_clones_fields(sym, fields)),
         Expr::Access {
             record,
             field,
@@ -1908,10 +1869,7 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
         },
         Expr::Update { record, fields } => Expr::Update {
             record: Box::new(force_shared_capture_clones(sym, *record)),
-            fields: fields
-                .into_iter()
-                .map(|(name, e)| (name, force_shared_capture_clones(sym, e)))
-                .collect(),
+            fields: force_shared_capture_clones_fields(sym, fields),
         },
         Expr::Ctor {
             home,
@@ -1922,10 +1880,7 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
             home,
             ty,
             variant,
-            args: args
-                .into_iter()
-                .map(|a| force_shared_capture_clones(sym, a))
-                .collect(),
+            args: force_shared_capture_clones_all(sym, args),
         },
         Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
             effect: Box::new(force_shared_capture_clones(sym, *effect)),
@@ -1936,12 +1891,102 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
             rest: Box::new(force_shared_capture_clones(sym, *rest)),
         },
         Expr::TailRecur { args } => Expr::TailRecur {
-            args: args
-                .into_iter()
-                .map(|a| force_shared_capture_clones(sym, a))
-                .collect(),
+            args: force_shared_capture_clones_all(sym, args),
         },
     }
+}
+
+/// Map [`force_shared_capture_clones`] over every element of an `Expr` list —
+/// shared by every [`force_shared_capture_clones`] arm that just recurses
+/// into a `Vec<Expr>` (call/ctor/tail-recur args, tuple/list items).
+fn force_shared_capture_clones_all(sym: Symbol, items: Vec<Expr>) -> Vec<Expr> {
+    items
+        .into_iter()
+        .map(|e| force_shared_capture_clones(sym, e))
+        .collect()
+}
+
+/// Map [`force_shared_capture_clones`] over every field VALUE of a record
+/// literal/update (`Record`, `Update.fields`), leaving field names untouched.
+fn force_shared_capture_clones_fields(
+    sym: Symbol,
+    fields: Vec<(Symbol, Expr)>,
+) -> Vec<(Symbol, Expr)> {
+    fields
+        .into_iter()
+        .map(|(name, e)| (name, force_shared_capture_clones(sym, e)))
+        .collect()
+}
+
+/// [`force_shared_capture_clones`]'s `Let` arm: recurse into `value`
+/// unconditionally, and into `body` unless this `let` itself shadows `sym`.
+fn force_shared_capture_clones_let(
+    sym: Symbol,
+    name: Symbol,
+    value: Expr,
+    body: Box<Expr>,
+) -> Expr {
+    let value = Box::new(force_shared_capture_clones(sym, value));
+    let body = if name == sym {
+        body
+    } else {
+        Box::new(force_shared_capture_clones(sym, *body))
+    };
+    Expr::Let { name, value, body }
+}
+
+/// [`force_shared_capture_clones`]'s `Destructure` arm: recurse into `value`
+/// unconditionally, and into `body` unless `binder` shadows `sym`.
+fn force_shared_capture_clones_destructure(
+    sym: Symbol,
+    binder: Pat,
+    value: Expr,
+    body: Box<Expr>,
+) -> Expr {
+    let value = Box::new(force_shared_capture_clones(sym, value));
+    let body = if pat_binds_symbol(&binder, sym) {
+        body
+    } else {
+        Box::new(force_shared_capture_clones(sym, *body))
+    };
+    Expr::Destructure {
+        binder,
+        value,
+        body,
+    }
+}
+
+/// [`force_shared_capture_clones`]'s `TailLoop` arm: recurse into `body`
+/// unless `params` shadow `sym`.
+fn force_shared_capture_clones_tail_loop(
+    sym: Symbol,
+    params: Vec<(Symbol, IrType)>,
+    body: Box<Expr>,
+) -> Expr {
+    let shadowed = params.iter().any(|(s, _)| *s == sym);
+    let body = if shadowed {
+        body
+    } else {
+        Box::new(force_shared_capture_clones(sym, *body))
+    };
+    Expr::TailLoop { params, body }
+}
+
+/// [`force_shared_capture_clones`]'s `Match` arm: recurse into the
+/// scrutinee unconditionally, and into each arm's body unless that arm's
+/// pattern itself shadows `sym`.
+fn force_shared_capture_clones_match(sym: Symbol, m: Match) -> Expr {
+    Expr::Match(m.map_bodies(
+        |scrutinee| force_shared_capture_clones(sym, scrutinee),
+        |pat, body, guard| {
+            let body = if pat_binds_symbol(pat, sym) {
+                body
+            } else {
+                force_shared_capture_clones(sym, body)
+            };
+            (body, guard)
+        },
+    ))
 }
 
 /// Helper for [`force_shared_capture_clones`]'s `Lambda`/`SharedLambda` arms:
@@ -2283,21 +2328,7 @@ fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
             count_fn_value_uses(sym, lhs) + count_fn_value_uses(sym, rhs)
         }
         Expr::Call { args, .. } => args.iter().map(|a| count_fn_value_uses(sym, a)).sum(),
-        // The one arm that differs from `count_var_uses`: a direct-callee
-        // `Apply { func: Var(sym) | CloneVar(sym), .. }` borrows, not moves.
-        Expr::Apply { func, args } => {
-            let func_uses = if matches!(func.as_ref(), Expr::Var(s) | Expr::CloneVar(s) if *s == sym)
-            {
-                0
-            } else {
-                count_fn_value_uses(sym, func)
-            };
-            func_uses
-                + args
-                    .iter()
-                    .map(|a| count_fn_value_uses(sym, a))
-                    .sum::<usize>()
-        }
+        Expr::Apply { func, args } => count_fn_value_uses_apply(sym, func, args),
         Expr::Tuple(items) => items.iter().map(|e| count_fn_value_uses(sym, e)).sum(),
         Expr::List { items, .. } => items.iter().map(|e| count_fn_value_uses(sym, e)).sum(),
         Expr::Cons { head, tail } => {
@@ -2335,6 +2366,23 @@ fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
         | Expr::Unit
         | Expr::FuncValue { .. } => 0,
     }
+}
+
+/// [`count_fn_value_uses`]'s `Apply` arm — the one arm that differs from
+/// `count_var_uses`: a direct-callee `Apply { func: Var(sym) | CloneVar(sym),
+/// .. }` borrows, not moves (a `Box<dyn Fn>` call is `Fn::call(&self, ..)`),
+/// so that occurrence is not counted; every other position is.
+fn count_fn_value_uses_apply(sym: Symbol, func: &Expr, args: &[Expr]) -> usize {
+    let func_uses = if matches!(func, Expr::Var(s) | Expr::CloneVar(s) if *s == sym) {
+        0
+    } else {
+        count_fn_value_uses(sym, func)
+    };
+    func_uses
+        + args
+            .iter()
+            .map(|a| count_fn_value_uses(sym, a))
+            .sum::<usize>()
 }
 
 /// T4 (#90): fail closed with [`Feature::FunctionValueReuse`] (SKY-L0127) if
@@ -6962,13 +7010,10 @@ impl<'a> Lowerer<'a> {
             // violation, so it surfaces as a `Diagnostic::Lower` with the span
             // — never a `CompilerBug` for well-typed input.
             // [SKY-L0102, feature: polymorphism]
-            Ty::Var(v) => {
-                if let Some(sym) = self.poly_tvar_symbol(*v) {
-                    Ok(IrType::Generic(sym))
-                } else {
-                    Err(unsupported(span, Feature::Polymorphism))
-                }
-            }
+            Ty::Var(v) => self.poly_tvar_symbol(*v).map_or_else(
+                || Err(unsupported(span, Feature::Polymorphism)),
+                |sym| Ok(IrType::Generic(sym)),
+            ),
         }
     }
 
@@ -7010,13 +7055,9 @@ impl<'a> Lowerer<'a> {
             // uf_rep → annotation var symbol for the current enclosing function.
             // An empty map (unannotated or non-polymorphic context) always falls
             // through to `IrType::Unit`.
-            Ty::Var(v) => {
-                if let Some(sym) = self.poly_tvar_symbol(*v) {
-                    Ok(IrType::Generic(sym))
-                } else {
-                    Ok(IrType::Unit)
-                }
-            }
+            Ty::Var(v) => self
+                .poly_tvar_symbol(*v)
+                .map_or(Ok(IrType::Unit), |sym| Ok(IrType::Generic(sym))),
             // All other forms delegate to the strict helper — a concrete `Msg`
             // type becomes `IrType::Enum(Msg)`, `()` becomes `IrType::Unit`, etc.
             _ => self.ir_type_from_ty(t, span),
@@ -7061,13 +7102,9 @@ impl<'a> Lowerer<'a> {
             // is `JsonVal` — UNLESS it's the enclosing polymorphic binding's
             // own generic (see the SEAL-fix doc comment above), in which case
             // it must render as that binding's Rust generic instead.
-            Ty::Var(v) => {
-                if let Some(sym) = self.poly_tvar_symbol(*v) {
-                    Ok(IrType::Generic(sym))
-                } else {
-                    Ok(IrType::Json)
-                }
-            }
+            Ty::Var(v) => self
+                .poly_tvar_symbol(*v)
+                .map_or(Ok(IrType::Json), |sym| Ok(IrType::Generic(sym))),
             // Recursively handle compound types so embedded `Ty::Var`s also
             // map to `IrType::Json`.
             Ty::Tuple(elems) => {
@@ -8347,25 +8384,12 @@ impl<'a> Lowerer<'a> {
                 "no inferred type for a partially-applied callee",
             )
         })?;
-        // Peel exactly `arity` arrows: the argument types in order, then the
-        // trailing result type R.
-        let mut cur = fn_ty;
-        let mut arg_tys: Vec<&Ty> = Vec::with_capacity(arity);
-        for _ in 0..arity {
-            let Ty::Fun(arg, rest) = cur else {
-                // The callee's type has fewer arrows than its declared arity —
-                // ruled out for well-typed input (inference unified the callee
-                // against an `arity`-deep arrow), so this is an invariant
-                // violation, not a missing feature.
-                return Err(bug(
-                    "sky_lower::eta_expand_partial",
-                    "callee type has fewer arrows than its arity",
-                ));
-            };
-            arg_tys.push(arg);
-            cur = rest.as_ref();
-        }
-        let ret_ty = cur;
+        let (arg_tys, ret_ty) = peel_arrow_arity(
+            fn_ty,
+            arity,
+            "sky_lower::eta_expand_partial",
+            "callee type has fewer arrows than its arity",
+        )?;
 
         let supplied = lowered_args.len();
         // The missing parameters are argument positions `supplied..arity`.
@@ -8599,21 +8623,12 @@ impl<'a> Lowerer<'a> {
                 "no inferred type for a partially-applied constructor",
             )
         })?;
-        // Peel exactly `arity` arrows: collect each argument type in order,
-        // then the trailing result type R.
-        let mut cur = fn_ty;
-        let mut arg_tys: Vec<&Ty> = Vec::with_capacity(arity);
-        for _ in 0..arity {
-            let Ty::Fun(arg, rest) = cur else {
-                return Err(bug(
-                    "sky_lower::eta_expand_partial_ctor",
-                    "constructor type has fewer arrows than its arity",
-                ));
-            };
-            arg_tys.push(arg);
-            cur = rest.as_ref();
-        }
-        let ret_ty = cur;
+        let (arg_tys, ret_ty) = peel_arrow_arity(
+            fn_ty,
+            arity,
+            "sky_lower::eta_expand_partial_ctor",
+            "constructor type has fewer arrows than its arity",
+        )?;
 
         let supplied = lowered_args.len();
         let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
@@ -11818,115 +11833,123 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// [`Self::lower_let`]'s `PVar` arm: the F2 decoder-thunk wrap when the
+    /// binding's solved type is `Decoder T`, else the T5 multi-use-clone /
+    /// T4 fn-value-reuse-gate / #164 shared-capture treatment for an
+    /// ordinary single-name binding.
+    fn lower_let_pvar(
+        &self,
+        name: Symbol,
+        b: &canon::LetBinding,
+        value: Expr,
+        acc: Expr,
+    ) -> DResult<Expr> {
+        // F2 — Decoder thunk: `Decoder` is `!Clone` and every function that
+        // consumes it does so by value.  When the binding's solved type is
+        // `Decoder T`, wrap the value in a zero-arg lambda so the decoder is
+        // rebuilt on each use, and rewrite every `Var(name)` read in the body
+        // to `Apply(Var(name), [])` (emitted as `(d)()`).
+        if let Some(dec_ty) = self.decoder_ir_type(b.body.span) {
+            // T3 (#121): apply capture-clone rewrite to the thunk body before
+            // wrapping. The thunk has zero params so all free VarLocals in
+            // b.body are outer captures. CloneOk captures must `.clone()` to
+            // keep the thunk `Fn`; NonClone captures in callee position are
+            // fine.
+            let thunk_body = {
+                let captures = self.captured_locals(&[], &b.body);
+                let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
+                let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
+                for (sym, ir_ty) in captures {
+                    match ir_ty.as_ref().map(clone_class) {
+                        Some(CloneClass::CloneOk) => {
+                            clone_set.insert(sym);
+                        }
+                        Some(CloneClass::NonClone) => {
+                            noncl_set.insert(sym);
+                        }
+                        Some(CloneClass::CopyLeaf) | None => {}
+                    }
+                }
+                rewrite_captured_clones(&clone_set, &noncl_set, b.body.span, value, 0)?
+            };
+            let thunk = Expr::Lambda {
+                params: vec![],
+                ret: dec_ty,
+                body: Box::new(thunk_body),
+            };
+            let thunked_body = rewrite_var_to_apply(name, acc);
+            Ok(Expr::Let {
+                name,
+                value: Box::new(thunk),
+                body: Box::new(thunked_body),
+            })
+        } else {
+            // T5 (#104 / #112): multi-use-clone rewrite for CloneOk
+            // let-bindings.  When the bound value is of `CloneOk` type (e.g.
+            // String) and the body references it more than once, rewrite all
+            // but the last occurrence to `CloneVar(name)`. This prevents
+            // E0382 (use of moved value) in emitted Rust where each
+            // `Var(name)` lowers to a bare identifier that moves the value.
+            //
+            // batch-xm rekeyed `types.regions` to `(home, span)`;
+            // `region_ty` builds the composite key from current_home.
+            let ty_opt = self
+                .region_ty(b.body.span)
+                .and_then(|ty| self.ir_type_from_ty(ty, b.body.span).ok());
+            let mut acc = if let Some(ref ir_ty) = ty_opt {
+                if matches!(clone_class(ir_ty), CloneClass::CloneOk) {
+                    let n = count_var_uses(name, &acc);
+                    if n > 1 {
+                        let mut remaining = n;
+                        rewrite_multiuse_clones(name, &mut remaining, acc)
+                    } else {
+                        acc
+                    }
+                } else {
+                    // T4 (#90): a fn-carrying, non-Clone let-binding has no
+                    // sound multi-use rewrite — fail closed on reuse instead.
+                    reject_fn_value_reuse(name, ir_ty, &acc, b.body.span)?;
+                    acc
+                }
+            } else {
+                acc
+            };
+
+            // #164 E0507 fix: a NonClone function-typed binding referenced
+            // across 2+ nested `move`-closure boundaries (or 2+ separate
+            // closures) in the rest of this scope cannot be a bare
+            // `Box<dyn Fn>` — see `needs_shared_capture`'s doc comment for
+            // the full rationale. Promote it to an `Arc`-boxed
+            // `Expr::SharedLambda` and rewrite every nested-closure read to
+            // `CloneVar` (`Arc::clone`). A binding that is NOT function-typed,
+            // or whose only capture is a single non-nested closure (the
+            // common, already-sound case), is untouched — byte-identical to
+            // the pre-fix lowering.
+            let mut value = value;
+            if let Some(ref ir_ty) = ty_opt
+                && matches!(ir_ty, IrType::Fun(..))
+                && needs_shared_capture(name, &acc)
+            {
+                acc = force_shared_capture_clones(name, acc);
+                if let Expr::Lambda { params, ret, body } = value {
+                    value = Expr::SharedLambda { params, ret, body };
+                }
+            }
+
+            Ok(Expr::Let {
+                name,
+                value: Box::new(value),
+                body: Box::new(acc),
+            })
+        }
+    }
+
     fn lower_let(&self, bindings: &[canon::LetBinding], body: &canon::Expr) -> DResult<Expr> {
         let mut acc = self.lower_expr(body)?;
         for b in bindings.iter().rev() {
             let value = self.lower_expr(&b.body)?;
             acc = match &b.pat.value {
-                canon::Pattern_::PVar(name) => {
-                    // F2 — Decoder thunk: `Decoder` is `!Clone` and every
-                    // function that consumes it does so by value.  When the
-                    // binding's solved type is `Decoder T`, wrap the value in a
-                    // zero-arg lambda so the decoder is rebuilt on each use, and
-                    // rewrite every `Var(name)` read in the body to
-                    // `Apply(Var(name), [])` (emitted as `(d)()`).
-                    if let Some(dec_ty) = self.decoder_ir_type(b.body.span) {
-                        // T3 (#121): apply capture-clone rewrite to the thunk
-                        // body before wrapping. The thunk has zero params so
-                        // all free VarLocals in b.body are outer captures.
-                        // CloneOk captures must `.clone()` to keep the thunk
-                        // `Fn`; NonClone captures in callee position are fine.
-                        let thunk_body = {
-                            let captures = self.captured_locals(&[], &b.body);
-                            let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
-                            let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
-                            for (sym, ir_ty) in captures {
-                                match ir_ty.as_ref().map(clone_class) {
-                                    Some(CloneClass::CloneOk) => {
-                                        clone_set.insert(sym);
-                                    }
-                                    Some(CloneClass::NonClone) => {
-                                        noncl_set.insert(sym);
-                                    }
-                                    Some(CloneClass::CopyLeaf) | None => {}
-                                }
-                            }
-                            rewrite_captured_clones(&clone_set, &noncl_set, b.body.span, value, 0)?
-                        };
-                        let thunk = Expr::Lambda {
-                            params: vec![],
-                            ret: dec_ty,
-                            body: Box::new(thunk_body),
-                        };
-                        let thunked_body = rewrite_var_to_apply(*name, acc);
-                        Expr::Let {
-                            name: *name,
-                            value: Box::new(thunk),
-                            body: Box::new(thunked_body),
-                        }
-                    } else {
-                        // T5 (#104 / #112): multi-use-clone rewrite for CloneOk
-                        // let-bindings.  When the bound value is of `CloneOk` type
-                        // (e.g. String) and the body references it more than once,
-                        // rewrite all but the last occurrence to `CloneVar(name)`.
-                        // This prevents E0382 (use of moved value) in emitted Rust
-                        // where each `Var(name)` lowers to a bare identifier that
-                        // moves the value.
-                        //
-                        // batch-xm rekeyed `types.regions` to `(home, span)`;
-                        // `region_ty` builds the composite key from current_home.
-                        let ty_opt = self
-                            .region_ty(b.body.span)
-                            .and_then(|ty| self.ir_type_from_ty(ty, b.body.span).ok());
-                        let mut acc = if let Some(ref ir_ty) = ty_opt {
-                            if matches!(clone_class(ir_ty), CloneClass::CloneOk) {
-                                let n = count_var_uses(*name, &acc);
-                                if n > 1 {
-                                    let mut remaining = n;
-                                    rewrite_multiuse_clones(*name, &mut remaining, acc)
-                                } else {
-                                    acc
-                                }
-                            } else {
-                                // T4 (#90): a fn-carrying, non-Clone
-                                // let-binding has no sound multi-use
-                                // rewrite — fail closed on reuse instead.
-                                reject_fn_value_reuse(*name, ir_ty, &acc, b.body.span)?;
-                                acc
-                            }
-                        } else {
-                            acc
-                        };
-
-                        // #164 E0507 fix: a NonClone function-typed binding
-                        // referenced across 2+ nested `move`-closure boundaries
-                        // (or 2+ separate closures) in the rest of this scope
-                        // cannot be a bare `Box<dyn Fn>` — see
-                        // `needs_shared_capture`'s doc comment for the full
-                        // rationale. Promote it to an `Arc`-boxed
-                        // `Expr::SharedLambda` and rewrite every nested-closure
-                        // read to `CloneVar` (`Arc::clone`). A binding that is
-                        // NOT function-typed, or whose only capture is a single
-                        // non-nested closure (the common, already-sound case),
-                        // is untouched — byte-identical to the pre-fix lowering.
-                        let mut value = value;
-                        if let Some(ref ir_ty) = ty_opt {
-                            if matches!(ir_ty, IrType::Fun(..)) && needs_shared_capture(*name, &acc)
-                            {
-                                acc = force_shared_capture_clones(*name, acc);
-                                if let Expr::Lambda { params, ret, body } = value {
-                                    value = Expr::SharedLambda { params, ret, body };
-                                }
-                            }
-                        }
-
-                        Expr::Let {
-                            name: *name,
-                            value: Box::new(value),
-                            body: Box::new(acc),
-                        }
-                    }
-                }
+                canon::Pattern_::PVar(name) => self.lower_let_pvar(*name, b, value, acc)?,
                 // F1 (auto-force): `let _ = <task>` — if the discarded value is
                 // Task-typed, sequence it so the future is awaited rather than
                 // silently dropped. Non-Task wildcards keep the plain
