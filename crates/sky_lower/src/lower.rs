@@ -487,7 +487,8 @@ fn collect_type_vars(t: &canon::Type, out: &mut BTreeSet<Symbol>) {
 /// field is the fail-closed first-class gap.
 fn ir_contains_fun(ty: &IrType) -> bool {
     match ty {
-        IrType::Fun(_, _) => true,
+        // A curried `FnOnce` chain is the same boxed-closure family as `Fun`.
+        IrType::Fun(_, _) | IrType::FnOnceChain(_, _) => true,
         // `SkyTask<E,A>`, `SkyCmd<M>`, `SkySub<M>` are opaque runtime types; the
         // inner type parameter might itself embed a function, so recurse.
         IrType::Task(inner) | IrType::Cmd(inner) | IrType::Sub(inner) => ir_contains_fun(inner),
@@ -630,6 +631,9 @@ fn clone_class(t: &IrType) -> CloneClass {
         // Non-Clone: function-typed, task, decoder, Cmd, Sub.
         // Also Generic(_) until T5 (which injects `T: Clone`).
         IrType::Fun(_, _)
+        // A curried `FnOnce` chain is the same boxed-closure family as `Fun` —
+        // and doubly so here: it is LITERALLY consume-once by construction.
+        | IrType::FnOnceChain(_, _)
         | IrType::Task(_)
         | IrType::Decoder(_)
         | IrType::Cmd(_)
@@ -1088,6 +1092,36 @@ fn rewrite_captured_clones(
                 )?),
             })
         }
+        // #164: `Expr::SharedLambda` is produced by `lower_let` strictly
+        // AFTER every `rewrite_captured_clones` call for its scope has
+        // already run, so this arm is never actually reached in practice —
+        // kept total (mirroring the `Lambda` arm exactly) so a future
+        // producer change fails loudly via a type error, not silently via
+        // an unhandled-variant panic.
+        Expr::SharedLambda { params, ret, body } => {
+            let param_names: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
+            let inner_clone: BTreeSet<Symbol> = clone_set
+                .iter()
+                .copied()
+                .filter(|s| !param_names.contains(s))
+                .collect();
+            let inner_noncl: BTreeSet<Symbol> = noncl_set
+                .iter()
+                .copied()
+                .filter(|s| !param_names.contains(s))
+                .collect();
+            Ok(Expr::SharedLambda {
+                params,
+                ret,
+                body: Box::new(rewrite_captured_clones(
+                    &inner_clone,
+                    &inner_noncl,
+                    lambda_span,
+                    *body,
+                    depth + 1,
+                )?),
+            })
+        }
         Expr::Match(m) => Ok(Expr::Match(m.try_map_bodies(
             |scrutinee| {
                 rewrite_captured_clones(clone_set, noncl_set, lambda_span, scrutinee, depth)
@@ -1378,7 +1412,7 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
         // Nested lambda: descend unless it shadows `sym` via a parameter.
         // A nested `move` closure that captures `sym` causes the outer closure
         // to capture `sym` too.
-        Expr::Lambda { params, body, .. } => {
+        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
             if params.iter().any(|(s, _)| *s == sym) {
                 false // sym shadowed by inner lambda param
             } else {
@@ -1458,6 +1492,501 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
         | Expr::Char(_)
         | Expr::Unit
         | Expr::FuncValue { .. } => false,
+    }
+}
+
+// ── Shared (Arc) capture rewrite, #164 E0507 fix ─────────────────────────────
+//
+// `rewrite_captured_clones`'s depth==0 bare-callee exemption for a NonClone
+// (function-typed) capture is sound only when the capturing lambda is not
+// ITSELF nested inside another lambda that also captures the same symbol.
+// Each `lower_lambda` call classifies its OWN captures independently, with
+// no visibility into ancestor closures, so a symbol captured by BOTH an
+// outer `move` closure and an inner `move` closure nested within it hits
+// the exemption in the INNER closure's own (isolated) analysis and is left
+// as a bare `Var`. The outer closure then needs to hand that value to the
+// inner closure's `move` capture -- moving it a SECOND time out of a field
+// that is only `&self`-borrowed inside `Fn::call` -- `cannot move out of
+// ... a captured variable in an Fn closure` (E0507). Two SIBLING lambdas
+// (not nested, but both independently capturing the same NonClone symbol)
+// hit the analogous E0382 for the same underlying reason.
+//
+// Fix: after a `let`-bound function-typed value's WHOLE remaining scope has
+// been lowered (`lower_let`'s `PVar` arm, once every later sibling binding
+// has already folded around it), check whether the symbol is referenced at
+// lambda-nesting depth >= 2, or at depth >= 1 in 2+ distinct places
+// (`needs_shared_capture`). If so:
+//   * every read of the symbol at lambda-nesting depth >= 1 is rewritten to
+//     `CloneVar` (`force_shared_capture_clones`) -- a depth-0 (non-nested)
+//     read stays bare, since calling through an `Arc<dyn Fn>` auto-derefs
+//     exactly like `Box<dyn Fn>` and needs no clone;
+//   * the let-bound closure LITERAL itself is wrapped in `Expr::SharedLambda`
+//     so the backend boxes it with `Arc::new` (`+ Send + Sync` trait-object
+//     bound) instead of `Box::new` -- `Arc<T>: Clone`, so the inserted
+//     `.clone()` calls above compile. A single depth-1 occurrence (the
+//     common, already-sound case -- e.g. `Task.andThen (\\ts -> insertRow db
+//     ts)`) stays untouched: byte-identical `Box<dyn Fn>`, zero behaviour
+//     change for the steady-state pattern this fix must not regress.
+
+/// Record, into `depths`, the LAMBDA-NESTING DEPTH (relative to `expr`'s own
+/// scope) of every live (non-shadowed) `Var(sym)` / `CloneVar(sym)` occurrence
+/// in `expr`. `cur_depth` is the number of `Lambda` / `SharedLambda`
+/// boundaries already crossed to reach `expr`. Mirrors
+/// [`lambda_body_refs_sym`]'s shadowing discipline exactly, generalised from
+/// a boolean "does it occur" to "at what depth does it occur, possibly more
+/// than once". `Expr::Update.record` is walked too (unlike
+/// `lambda_body_refs_sym`, which treats it as borrow-only for a DIFFERENT
+/// question) -- a false positive here only costs an unneeded (but harmless)
+/// `Arc`/`.clone()`, whereas a false negative would leave a real E0507/E0382
+/// unfixed, so this walker is deliberately the more conservative of the two.
+fn collect_lambda_capture_depths(sym: Symbol, expr: &Expr, cur_depth: u32, depths: &mut Vec<u32>) {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) => {
+            if *s == sym {
+                depths.push(cur_depth);
+            }
+        }
+        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+            if !params.iter().any(|(s, _)| *s == sym) {
+                collect_lambda_capture_depths(sym, body, cur_depth + 1, depths);
+            }
+        }
+        Expr::Let { name, value, body } => {
+            collect_lambda_capture_depths(sym, value, cur_depth, depths);
+            if *name != sym {
+                collect_lambda_capture_depths(sym, body, cur_depth, depths);
+            }
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            collect_lambda_capture_depths(sym, value, cur_depth, depths);
+            if !pat_binds_symbol(binder, sym) {
+                collect_lambda_capture_depths(sym, body, cur_depth, depths);
+            }
+        }
+        Expr::Match(m) => {
+            collect_lambda_capture_depths(sym, m.scrutinee(), cur_depth, depths);
+            for arm in m.arms() {
+                if !pat_binds_symbol(&arm.pat, sym) {
+                    collect_lambda_capture_depths(sym, &arm.body, cur_depth, depths);
+                }
+            }
+        }
+        Expr::TailLoop { params, body } => {
+            if !params.iter().any(|(s, _)| *s == sym) {
+                collect_lambda_capture_depths(sym, body, cur_depth, depths);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_lambda_capture_depths(sym, lhs, cur_depth, depths);
+            collect_lambda_capture_depths(sym, rhs, cur_depth, depths);
+        }
+        Expr::If { cond, then_, else_ } => {
+            collect_lambda_capture_depths(sym, cond, cur_depth, depths);
+            collect_lambda_capture_depths(sym, then_, cur_depth, depths);
+            collect_lambda_capture_depths(sym, else_, cur_depth, depths);
+        }
+        Expr::Call { args, .. } => {
+            for a in args {
+                collect_lambda_capture_depths(sym, a, cur_depth, depths);
+            }
+        }
+        Expr::Apply { func, args } => {
+            collect_lambda_capture_depths(sym, func, cur_depth, depths);
+            for a in args {
+                collect_lambda_capture_depths(sym, a, cur_depth, depths);
+            }
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            for e in items {
+                collect_lambda_capture_depths(sym, e, cur_depth, depths);
+            }
+        }
+        Expr::Cons { head, tail } => {
+            collect_lambda_capture_depths(sym, head, cur_depth, depths);
+            collect_lambda_capture_depths(sym, tail, cur_depth, depths);
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            collect_lambda_capture_depths(sym, list, cur_depth, depths);
+        }
+        Expr::Record(fields) => {
+            for (_, e) in fields {
+                collect_lambda_capture_depths(sym, e, cur_depth, depths);
+            }
+        }
+        Expr::Update { record, fields } => {
+            collect_lambda_capture_depths(sym, record, cur_depth, depths);
+            for (_, e) in fields {
+                collect_lambda_capture_depths(sym, e, cur_depth, depths);
+            }
+        }
+        Expr::Ctor { args, .. } => {
+            for a in args {
+                collect_lambda_capture_depths(sym, a, cur_depth, depths);
+            }
+        }
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            collect_lambda_capture_depths(sym, effect, cur_depth, depths);
+            collect_lambda_capture_depths(sym, rest, cur_depth, depths);
+        }
+        Expr::TailRecur { args } => {
+            for a in args {
+                collect_lambda_capture_depths(sym, a, cur_depth, depths);
+            }
+        }
+        Expr::Access { record, .. } => {
+            collect_lambda_capture_depths(sym, record, cur_depth, depths);
+        }
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => {}
+    }
+}
+
+/// Does `sym` (a `let`-bound, function-typed local) need `Arc`-based shared
+/// capture treatment? True when SOME occurrence is nested >= 2 lambda levels
+/// deep (the outer closure must move-capture it to hand off to the inner
+/// closure, which ALSO move-captures it) OR there are >= 2 DISTINCT depth
+/// >= 1 occurrences (two independent closures each move-capturing the same
+/// symbol -- the sibling-closure analogue of the same E0507/E0382 class). A
+/// single depth-1 occurrence (the common, already-sound case) returns
+/// `false`, so ordinary single-capture closures stay byte-identical
+/// `Box<dyn Fn>`.
+fn needs_shared_capture(sym: Symbol, expr: &Expr) -> bool {
+    let mut depths = Vec::new();
+    collect_lambda_capture_depths(sym, expr, 0, &mut depths);
+    depths.iter().any(|&d| d >= 2) || depths.iter().filter(|&&d| d >= 1).count() >= 2
+}
+
+/// Does `sym` appear as a live `Var`/`CloneVar` leaf DIRECTLY in `expr`
+/// (i.e. NOT hidden behind a further-nested `Lambda`/`SharedLambda`
+/// boundary)? Unlike [`lambda_body_refs_sym`] (which treats nested lambdas
+/// as transparent — the right shape for "will the OUTER `move` closure
+/// capture this"), this one STOPS at a nested lambda boundary and returns
+/// `false` for it: a reference that only exists behind ANOTHER nested
+/// closure is that INNER closure's own concern (it gets its own wrap when
+/// [`force_shared_capture_clones`] reaches it), not this one's.
+fn sym_referenced_directly(sym: Symbol, expr: &Expr) -> bool {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) => *s == sym,
+        // A further-nested closure boundary — its own captures are its own
+        // concern, not a DIRECT reference of the lambda we are testing.
+        Expr::Lambda { .. } | Expr::SharedLambda { .. } => false,
+        Expr::Let { name, value, body } => {
+            sym_referenced_directly(sym, value)
+                || (*name != sym && sym_referenced_directly(sym, body))
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            sym_referenced_directly(sym, value)
+                || (!pat_binds_symbol(binder, sym) && sym_referenced_directly(sym, body))
+        }
+        Expr::Match(m) => {
+            sym_referenced_directly(sym, m.scrutinee())
+                || m.arms().iter().any(|arm| {
+                    !pat_binds_symbol(&arm.pat, sym) && sym_referenced_directly(sym, &arm.body)
+                })
+        }
+        Expr::TailLoop { params, body } => {
+            !params.iter().any(|(s, _)| *s == sym) && sym_referenced_directly(sym, body)
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            sym_referenced_directly(sym, lhs) || sym_referenced_directly(sym, rhs)
+        }
+        Expr::If { cond, then_, else_ } => {
+            sym_referenced_directly(sym, cond)
+                || sym_referenced_directly(sym, then_)
+                || sym_referenced_directly(sym, else_)
+        }
+        Expr::Call { args, .. } => args.iter().any(|a| sym_referenced_directly(sym, a)),
+        Expr::Apply { func, args } => {
+            sym_referenced_directly(sym, func)
+                || args.iter().any(|a| sym_referenced_directly(sym, a))
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            items.iter().any(|e| sym_referenced_directly(sym, e))
+        }
+        Expr::Cons { head, tail } => {
+            sym_referenced_directly(sym, head) || sym_referenced_directly(sym, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            sym_referenced_directly(sym, list)
+        }
+        Expr::Record(fields) => fields.iter().any(|(_, e)| sym_referenced_directly(sym, e)),
+        Expr::Update { record, fields } => {
+            sym_referenced_directly(sym, record)
+                || fields.iter().any(|(_, e)| sym_referenced_directly(sym, e))
+        }
+        Expr::Ctor { args, .. } => args.iter().any(|a| sym_referenced_directly(sym, a)),
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            sym_referenced_directly(sym, effect) || sym_referenced_directly(sym, rest)
+        }
+        Expr::TailRecur { args } => args.iter().any(|a| sym_referenced_directly(sym, a)),
+        Expr::Access { record, .. } => sym_referenced_directly(sym, record),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => false,
+    }
+}
+
+/// Recursively wrap every `Lambda`/`SharedLambda` node whose body DIRECTLY
+/// references `sym` (per [`sym_referenced_directly`]) with a pre-clone
+/// shadow binding: `let sym = sym.clone() in <lambda>`. Every `Var(sym)` /
+/// `CloneVar(sym)` leaf inside the lambda's body is left COMPLETELY
+/// UNCHANGED — ordinary Rust lexical shadowing makes it refer to the fresh
+/// local clone once the wrap is in place, so no leaf rewrite is needed.
+///
+/// This is the actual fix for the E0507 class: a `move` closure ALWAYS
+/// takes its captured free variables BY VALUE regardless of how the body
+/// subsequently uses them (even a bare `.clone()` read inside the closure
+/// does not avoid the closure's OWN move-capture of the ORIGINAL variable).
+/// Rewriting `Var(sym)` reads in place to `CloneVar(sym)` therefore does
+/// NOT fix the bug on its own — the SECOND (nested/sibling) closure's
+/// construction still tries to move the FIRST closure's already-captured
+/// copy out through a `&self`-only-borrowed field. The pre-clone-then-shadow
+/// pattern sidesteps this: the clone is produced from a plain reference
+/// (`Clone::clone(&self)` only needs `&sym`, never ownership) BEFORE the
+/// nested closure literal is constructed, so the nested closure's `move`
+/// captures the FRESH local clone — leaving the outer binding intact for
+/// any other capture site. Mirrors the identical pattern
+/// [`rewrite_multiuse_clones`] already uses for `CloneOk` multi-use
+/// let-bindings (T5, #104/#112), generalised to the case where EVERY
+/// directly-capturing closure needs its own wrap, not just all-but-the-last.
+///
+/// Applying this unconditionally to every directly-capturing lambda is
+/// deliberately over-inclusive rather than a precise minimum-wrap analysis:
+/// an unnecessary `Arc::clone` is a cheap, harmless pointer bump, so the
+/// safe direction to err is "wrap slightly more than strictly required",
+/// never "miss a wrap and leave a real E0507/E0382 unfixed". This function
+/// is only ever invoked (from `lower_let`) after
+/// [`needs_shared_capture`] has already confirmed `sym` genuinely needs
+/// `Arc` treatment, so the common single-capture case (one lambda, no
+/// further nesting, no sibling) never reaches here at all — the let-binding
+/// stays a plain `Expr::Lambda` (`Box<dyn Fn>`), byte-identical to the
+/// pre-fix lowering.
+fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
+    match expr {
+        Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => expr,
+        Expr::Lambda { params, ret, body } => {
+            wrap_shared_lambda_if_needed(sym, Expr::Lambda { params, ret, body })
+        }
+        Expr::SharedLambda { params, ret, body } => {
+            wrap_shared_lambda_if_needed(sym, Expr::SharedLambda { params, ret, body })
+        }
+        Expr::Let { name, value, body } => {
+            let value = Box::new(force_shared_capture_clones(sym, *value));
+            let body = if name == sym {
+                body
+            } else {
+                Box::new(force_shared_capture_clones(sym, *body))
+            };
+            Expr::Let { name, value, body }
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            let value = Box::new(force_shared_capture_clones(sym, *value));
+            let body = if pat_binds_symbol(&binder, sym) {
+                body
+            } else {
+                Box::new(force_shared_capture_clones(sym, *body))
+            };
+            Expr::Destructure {
+                binder,
+                value,
+                body,
+            }
+        }
+        Expr::Match(m) => Expr::Match(m.map_bodies(
+            |scrutinee| force_shared_capture_clones(sym, scrutinee),
+            |pat, body, guard| {
+                let body = if pat_binds_symbol(pat, sym) {
+                    body
+                } else {
+                    force_shared_capture_clones(sym, body)
+                };
+                (body, guard)
+            },
+        )),
+        Expr::TailLoop { params, body } => {
+            let shadowed = params.iter().any(|(s, _)| *s == sym);
+            let body = if shadowed {
+                body
+            } else {
+                Box::new(force_shared_capture_clones(sym, *body))
+            };
+            Expr::TailLoop { params, body }
+        }
+        Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
+            op,
+            lhs: Box::new(force_shared_capture_clones(sym, *lhs)),
+            rhs: Box::new(force_shared_capture_clones(sym, *rhs)),
+        },
+        Expr::If { cond, then_, else_ } => Expr::If {
+            cond: Box::new(force_shared_capture_clones(sym, *cond)),
+            then_: Box::new(force_shared_capture_clones(sym, *then_)),
+            else_: Box::new(force_shared_capture_clones(sym, *else_)),
+        },
+        Expr::Call { callee, args } => Expr::Call {
+            callee,
+            args: args
+                .into_iter()
+                .map(|a| force_shared_capture_clones(sym, a))
+                .collect(),
+        },
+        Expr::Apply { func, args } => Expr::Apply {
+            func: Box::new(force_shared_capture_clones(sym, *func)),
+            args: args
+                .into_iter()
+                .map(|a| force_shared_capture_clones(sym, a))
+                .collect(),
+        },
+        Expr::Tuple(items) => Expr::Tuple(
+            items
+                .into_iter()
+                .map(|e| force_shared_capture_clones(sym, e))
+                .collect(),
+        ),
+        Expr::List { elem, items } => Expr::List {
+            elem,
+            items: items
+                .into_iter()
+                .map(|e| force_shared_capture_clones(sym, e))
+                .collect(),
+        },
+        Expr::Cons { head, tail } => Expr::Cons {
+            head: Box::new(force_shared_capture_clones(sym, *head)),
+            tail: Box::new(force_shared_capture_clones(sym, *tail)),
+        },
+        Expr::ListIndexClone { list, index } => Expr::ListIndexClone {
+            list: Box::new(force_shared_capture_clones(sym, *list)),
+            index,
+        },
+        Expr::ListLenCheck { list, len, exact } => Expr::ListLenCheck {
+            list: Box::new(force_shared_capture_clones(sym, *list)),
+            len,
+            exact,
+        },
+        Expr::Record(fields) => Expr::Record(
+            fields
+                .into_iter()
+                .map(|(name, e)| (name, force_shared_capture_clones(sym, e)))
+                .collect(),
+        ),
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Expr::Access {
+            record: Box::new(force_shared_capture_clones(sym, *record)),
+            field,
+            field_ty,
+        },
+        Expr::Update { record, fields } => Expr::Update {
+            record: Box::new(force_shared_capture_clones(sym, *record)),
+            fields: fields
+                .into_iter()
+                .map(|(name, e)| (name, force_shared_capture_clones(sym, e)))
+                .collect(),
+        },
+        Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args,
+        } => Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args: args
+                .into_iter()
+                .map(|a| force_shared_capture_clones(sym, a))
+                .collect(),
+        },
+        Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
+            effect: Box::new(force_shared_capture_clones(sym, *effect)),
+            rest: Box::new(force_shared_capture_clones(sym, *rest)),
+        },
+        Expr::TaskSeqSync { effect, rest } => Expr::TaskSeqSync {
+            effect: Box::new(force_shared_capture_clones(sym, *effect)),
+            rest: Box::new(force_shared_capture_clones(sym, *rest)),
+        },
+        Expr::TailRecur { args } => Expr::TailRecur {
+            args: args
+                .into_iter()
+                .map(|a| force_shared_capture_clones(sym, a))
+                .collect(),
+        },
+    }
+}
+
+/// Helper for [`force_shared_capture_clones`]'s `Lambda`/`SharedLambda` arms:
+/// `lambda_expr` MUST be one of those two variants. Recurses into the body
+/// first (so a deeper nested lambda gets its own wrap too), then wraps THIS
+/// lambda with a pre-clone shadow IF `sym` is shadowed by neither this
+/// lambda's own params NOR referenced directly in its (already-processed)
+/// body. Un-referenced or shadowed lambdas pass through with only their body
+/// recursively processed (still necessary — a sibling branch deeper in the
+/// SAME body may reference `sym` even if this particular lambda does not).
+fn wrap_shared_lambda_if_needed(sym: Symbol, lambda_expr: Expr) -> Expr {
+    let (shadowed, needs_wrap, rebuilt) = match lambda_expr {
+        Expr::Lambda { params, ret, body } => {
+            let shadowed = params.iter().any(|(s, _)| *s == sym);
+            let needs_wrap = !shadowed && sym_referenced_directly(sym, &body);
+            let body = if shadowed {
+                body
+            } else {
+                Box::new(force_shared_capture_clones(sym, *body))
+            };
+            (shadowed, needs_wrap, Expr::Lambda { params, ret, body })
+        }
+        Expr::SharedLambda { params, ret, body } => {
+            let shadowed = params.iter().any(|(s, _)| *s == sym);
+            let needs_wrap = !shadowed && sym_referenced_directly(sym, &body);
+            let body = if shadowed {
+                body
+            } else {
+                Box::new(force_shared_capture_clones(sym, *body))
+            };
+            (
+                shadowed,
+                needs_wrap,
+                Expr::SharedLambda { params, ret, body },
+            )
+        }
+        other => (true, false, other),
+    };
+    if shadowed || !needs_wrap {
+        return rebuilt;
+    }
+    Expr::Let {
+        name: sym,
+        value: Box::new(Expr::CloneVar(sym)),
+        body: Box::new(rebuilt),
     }
 }
 
@@ -1587,7 +2116,9 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
     match expr {
         // A pre-pass `CloneVar` at the outer scope counts like a bare `Var`.
         Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
-        Expr::Lambda { body, .. } => usize::from(lambda_body_refs_sym(sym, body)),
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+            usize::from(lambda_body_refs_sym(sym, body))
+        }
         Expr::Let { name, value, body } => {
             let in_value = count_var_uses(sym, value);
             let in_body = if *name == sym {
@@ -1703,7 +2234,9 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
 fn count_fn_value_uses(sym: Symbol, expr: &Expr) -> usize {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
-        Expr::Lambda { body, .. } => usize::from(lambda_body_refs_sym(sym, body)),
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+            usize::from(lambda_body_refs_sym(sym, body))
+        }
         Expr::Let { name, value, body } => {
             let in_value = count_fn_value_uses(sym, value);
             let in_body = if *name == sym {
@@ -1882,6 +2415,26 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
                 }
             } else {
                 Expr::Lambda { params, ret, body }
+            }
+        }
+        // #164: `Expr::SharedLambda` mirrors `Expr::Lambda` here — it is
+        // ALSO a `move` closure literal that may capture `sym`, so it needs
+        // the same pre-clone treatment when it is not the last use.
+        Expr::SharedLambda { params, ret, body } => {
+            if lambda_body_refs_sym(sym, &body) {
+                if *remaining > 1 {
+                    *remaining -= 1;
+                    Expr::Let {
+                        name: sym,
+                        value: Box::new(Expr::CloneVar(sym)),
+                        body: Box::new(Expr::SharedLambda { params, ret, body }),
+                    }
+                } else {
+                    *remaining -= 1;
+                    Expr::SharedLambda { params, ret, body }
+                }
+            } else {
+                Expr::SharedLambda { params, ret, body }
             }
         }
         // Non-`sym` Var / CloneVar and all atomic leaves — pass through.
@@ -2109,17 +2662,6 @@ impl FlatNestedList {
     const fn closed(&self) -> bool {
         matches!(self.tail, NestedTail::Closed)
     }
-
-    /// Does this nested list BIND at least one value (a named head element or a
-    /// named open-tail binder)? A fully-wildcard shape (`Just [_, _]`) binds
-    /// nothing, so it needs no element-`Clone` bound and skips the polymorphism
-    /// gate.
-    fn binds_a_value(&self) -> bool {
-        self.prefix
-            .iter()
-            .any(|b| matches!(b, NestedBinder::Named(_)))
-            || matches!(self.tail, NestedTail::Rest(NestedBinder::Named(_)))
-    }
 }
 
 /// Classify a single list-element / tail sub-pattern as a plain binder for the
@@ -2235,7 +2777,7 @@ fn count_self_calls(
             count_self_calls(self_id, arity, body, in_tail, tail, non_tail);
         }
         // Non-tail descents.
-        Expr::Lambda { body, .. } => {
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
             count_self_calls(self_id, arity, body, false, tail, non_tail);
         }
         Expr::BinOp { lhs, rhs, .. } => {
@@ -2503,7 +3045,9 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
                 scan_kernel_usage(&arm.body, usage);
             }
         }
-        Expr::Lambda { body, .. } | Expr::TailLoop { body, .. } => {
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::TailLoop { body, .. } => {
             scan_kernel_usage(body, usage);
         }
         Expr::Cons { head, tail } => {
@@ -2756,6 +3300,18 @@ fn rewrite_var_free_occurrences(
                 Box::new(rewrite_var_free_occurrences(target, *body, on_hit))
             };
             Expr::Lambda {
+                params,
+                ret,
+                body: new_body,
+            }
+        }
+        Expr::SharedLambda { params, ret, body } => {
+            let new_body = if params.iter().any(|(s, _)| *s == target) {
+                body
+            } else {
+                Box::new(rewrite_var_free_occurrences(target, *body, on_hit))
+            };
+            Expr::SharedLambda {
                 params,
                 ret,
                 body: new_body,
@@ -5840,6 +6396,38 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Look up a `Ty::Var` raw union-find representative against
+    /// [`Self::current_poly_tvars`], tolerating either tagged or untagged
+    /// input.
+    ///
+    /// SEAL fix (#164): `SolvedTypes::poly_var_map` populates
+    /// `current_poly_tvars` two different ways depending on the enclosing
+    /// binding's shape — see the doc comment on
+    /// [`sky_types::untag_solver_var`] for the full rationale. In short: a
+    /// **typed** binding's own quantified vars are keyed by the BARE
+    /// union-find representative (its `params`/`ret` are read straight from
+    /// the annotation, never zonked), while a **boundary-scheme-promoted
+    /// untyped** binding's are keyed by the TAGGED representative (their
+    /// region/env types always come back through `zonk`, which tags). A
+    /// `Ty::Var` raw arriving HERE may be either form too — a nested lambda's
+    /// return-type slot (`region_ty`, always zonked/tagged) inside a
+    /// *typed* enclosing function needs to match against that function's
+    /// BARE keys, so a single fixed-representation lookup silently misses.
+    /// Probing both the raw and its tag-toggled form closes that gap
+    /// regardless of which side is tagged.
+    fn poly_tvar_symbol(&self, raw: u32) -> Option<Symbol> {
+        let map = self.current_poly_tvars.borrow();
+        if let Some(&sym) = map.get(&raw) {
+            return Some(sym);
+        }
+        let toggled = if sky_types::is_solver_var(raw) {
+            sky_types::untag_solver_var(raw)
+        } else {
+            sky_types::tag_solver_var(raw)
+        };
+        map.get(&toggled).copied()
+    }
+
     // The match has one arm per Sky builtin type — each arm adds ~5-10 lines;
     // pushing past clippy's 100-line ceiling is unavoidable without splitting on
     // an arbitrary boundary. The allow is narrow: only this function.
@@ -6375,7 +6963,7 @@ impl<'a> Lowerer<'a> {
             // — never a `CompilerBug` for well-typed input.
             // [SKY-L0102, feature: polymorphism]
             Ty::Var(v) => {
-                if let Some(&sym) = self.current_poly_tvars.borrow().get(v) {
+                if let Some(sym) = self.poly_tvar_symbol(*v) {
                     Ok(IrType::Generic(sym))
                 } else {
                     Err(unsupported(span, Feature::Polymorphism))
@@ -6423,7 +7011,7 @@ impl<'a> Lowerer<'a> {
             // An empty map (unannotated or non-polymorphic context) always falls
             // through to `IrType::Unit`.
             Ty::Var(v) => {
-                if let Some(&sym) = self.current_poly_tvars.borrow().get(v) {
+                if let Some(sym) = self.poly_tvar_symbol(*v) {
                     Ok(IrType::Generic(sym))
                 } else {
                     Ok(IrType::Unit)
@@ -6447,14 +7035,39 @@ impl<'a> Lowerer<'a> {
     /// `Cmd.perform` callback) — this helper recurses into every compound
     /// type arm and maps each `Ty::Var` leaf to [`IrType::Json`] rather than
     /// failing with [`Feature::Polymorphism`] (SKY-L0102).
+    ///
+    /// SEAL fix (#164): a `Ty::Var` leaf must first be checked against
+    /// `current_poly_tvars` — the SAME check `ir_type_from_ty` (line ~6176)
+    /// and `ir_type_from_ty_ui_msg` (line ~6224) already perform — before
+    /// falling back to `IrType::Json`. A lambda nested in a polymorphic
+    /// `Def::Typed` body (e.g. `withErrorReporting : String -> Task Error a
+    /// -> Task Error a`'s internal `report`/`logAndFail` closures) has its
+    /// return type solved as the SAME free var as the enclosing function's
+    /// `a`. Mapping it to `IrType::Json` unconditionally emits a closure
+    /// typed `Fn(..) -> SkyTask<JsonVal>` where the call site expects
+    /// `SkyTask<T1>` — an E0308 exit-0-then-cargo-fail. Checking
+    /// `current_poly_tvars` first routes the enclosing-generic case to
+    /// `IrType::Generic(sym)` (`T1`, matching the function's own
+    /// quantification), and only a var with NO enclosing binder — the
+    /// genuinely free `Value = any` case this helper exists for — falls
+    /// through to `IrType::Json`.
     // The match has one arm per compound builtin — each arm adds ~4 lines;
     // pushing past clippy's 100-line ceiling is unavoidable without splitting
     // on an arbitrary boundary.  The allow is narrow: only this function.
     #[allow(clippy::too_many_lines)]
     fn ir_type_from_ty_json(&self, t: &Ty, span: Span) -> DResult<IrType> {
         match t {
-            // The key difference: `Ty::Var` in a JSON context is `JsonVal`.
-            Ty::Var(_) => Ok(IrType::Json),
+            // The key difference: an unresolved `Ty::Var` in a JSON context
+            // is `JsonVal` — UNLESS it's the enclosing polymorphic binding's
+            // own generic (see the SEAL-fix doc comment above), in which case
+            // it must render as that binding's Rust generic instead.
+            Ty::Var(v) => {
+                if let Some(sym) = self.poly_tvar_symbol(*v) {
+                    Ok(IrType::Generic(sym))
+                } else {
+                    Ok(IrType::Json)
+                }
+            }
             // Recursively handle compound types so embedded `Ty::Var`s also
             // map to `IrType::Json`.
             Ty::Tuple(elems) => {
@@ -6585,6 +7198,104 @@ impl<'a> Lowerer<'a> {
             // opaque types, etc.), delegate to the strict helper.
             _ => self.ir_type_from_ty(t, span),
         }
+    }
+
+    /// #164 (`f7_succeed_curried`): render the `next_decoder` argument type
+    /// (or the return type) of a `JsonDec.Pipeline` / `Db.Decode` curried-
+    /// combinator kernel (`JsonDecPRequired` / `JsonDecPOptional` /
+    /// `JsonDecPRequiredAt` / `DbDecRequired` / `DbDecOptional`) as
+    /// `Decoder<FnOnceChain>` instead of the flattened `Decoder<Fun>`
+    /// [`Self::ir_type_from_ty_json`] would produce.
+    ///
+    /// These five kernels' hand-written Rust signatures deliberately require
+    /// a curried chain of ONE-SHOT closures — `Box<dyn FnOnce(T) -> F>`,
+    /// where `F` may itself be another such box — matching exactly what the
+    /// `curryN` runtime helpers construct. The GENERIC `Ty::Fun` → `IrType`
+    /// path ([`Self::ir_type_from_ty_json`] / [`Self::ir_type_from_ty`])
+    /// always FLATTENS a curried arrow chain into one multi-parameter
+    /// `IrType::Fun`, which the backend renders as a re-callable
+    /// `Box<dyn Fn(T0, T1, ...) -> R>` — the right shape for an ordinary
+    /// first-class Sky function value, but the WRONG shape here: it does
+    /// not satisfy `decode_pipeline_required`'s (etc.) `Box<dyn FnOnce>`
+    /// parameter, an E0308 cargo-fail invisible to `skyc` because eta-lambda
+    /// parameter/return types are ANNOTATED (Rust cannot infer a boxed
+    /// trait-object closure's signature from later use), unlike a fully-
+    /// applied direct call to the same kernel (whose argument type Rust
+    /// infers from the argument expression itself — already correct, since
+    /// `decode_succeed(curryN(...))` already produces a real `FnOnce` chain).
+    ///
+    /// Every other `Decoder`-wrapping type position in the compiler keeps
+    /// the ordinary, flattened `Fun` shape; [`Self::eta_expand_partial`] is
+    /// the sole caller, gated to exactly the missing-arg slot (and return
+    /// type) of these five kernels.
+    ///
+    /// Falls back to [`Self::ir_type_from_ty_json`] unchanged when `t` is
+    /// not `Decoder _` at all (defensive — should not occur for these
+    /// kernels' well-typed HM signatures, but never panics on the
+    /// unexpected shape).
+    fn ir_type_from_ty_pipeline_decoder(&self, t: &Ty, span: Span) -> DResult<IrType> {
+        let Ty::Con { name, args, .. } = t else {
+            return self.ir_type_from_ty_json(t, span);
+        };
+        if args.len() != 1 || self.resolve(*name)? != "Decoder" {
+            return self.ir_type_from_ty_json(t, span);
+        }
+        let inner = args.first().ok_or_else(|| {
+            bug(
+                "sky_lower::ir_type_from_ty_pipeline_decoder",
+                "Decoder applied without its element type",
+            )
+        })?;
+        // Peel EVERY leading arrow of the decoder's payload type — not the
+        // ordinary single-level flattening — so a multi-stage pipeline
+        // (`Decoder (String -> Int -> String)`, mid-pipeline) curries one
+        // FnOnce level per remaining arg, terminating at the first
+        // non-function type.
+        let mut params = Vec::new();
+        let mut cur = inner;
+        while let Ty::Fun(arg, rest) = cur {
+            params.push(self.ir_type_from_ty_json(arg, span)?);
+            cur = rest.as_ref();
+        }
+        let ret = self.ir_type_from_ty_json(cur, span)?;
+        if params.is_empty() {
+            // The decoder's payload was not itself a function (the
+            // pipeline's terminal step) — identical to the ordinary
+            // Decoder rendering.
+            Ok(IrType::Decoder(Box::new(ret)))
+        } else {
+            Ok(IrType::Decoder(Box::new(IrType::FnOnceChain(
+                params,
+                Box::new(ret),
+            ))))
+        }
+    }
+
+    /// #164 (`f7_succeed_curried`; #164 follow-up `f11_pipeline_custom_curried`):
+    /// does `resolved` name one of the SIX `JsonDec.Pipeline` / `Db.Decode`
+    /// curried-combinator kernels whose LAST parameter (`next_decoder` /
+    /// `ctor_dec`) needs the [`Self::ir_type_from_ty_pipeline_decoder`]
+    /// treatment rather than the ordinary flattened `Fun` rendering?
+    ///
+    /// Audited exhaustively against every `Decoder<E, Box<dyn FnOnce(_) -> _>>`-
+    /// shaped kernel parameter in `runtime/src/sky_runtime/{json,db}.rs`
+    /// (`decode_pipeline_required` / `_optional` / `_required_at` / `_custom`
+    /// in `json.rs`; `db_decode_required` / `_optional` in `db.rs`) — these six
+    /// are the complete set. `json.rs::decode_and_map` (the helper the two
+    /// `db_decode_*` kernels delegate to) has the same shape but is not itself
+    /// exposed as a Sky kernel, so it needs no gate entry.
+    const fn is_pipeline_next_decoder_kernel(resolved: &Callee) -> bool {
+        matches!(
+            resolved,
+            Callee::Kernel(
+                KernelFn::JsonDecPRequired
+                    | KernelFn::JsonDecPOptional
+                    | KernelFn::JsonDecPRequiredAt
+                    | KernelFn::JsonDecPCustom
+                    | KernelFn::DbDecRequired
+                    | KernelFn::DbDecOptional
+            )
+        )
     }
 
     /// Returns the exact [`IrType::Fun`] for kernels that may appear as
@@ -7782,7 +8493,20 @@ impl<'a> Lowerer<'a> {
             // binder forwarded verbatim to the full kernel call; its concrete
             // Rust type is unified by the compiler from the call site, so
             // `JsonVal` is a sound stand-in for any unconstrained `Ty::Var`.
-            let ir = self.ir_type_from_ty_json(arg_ty, call_span)?;
+            //
+            // #164 (`f7_succeed_curried`): EXCEPT the `next_decoder` slot
+            // (the kernel's LAST argument) of the five JsonDec.Pipeline /
+            // Db.Decode curried-combinator kernels — that one slot needs the
+            // curried `FnOnce`-chain shape, never the flattened `Fun` this
+            // JSON-friendly path would otherwise produce. See
+            // `ir_type_from_ty_pipeline_decoder`'s doc comment.
+            let ir = if Self::is_pipeline_next_decoder_kernel(&resolved)
+                && supplied + offset == arity - 1
+            {
+                self.ir_type_from_ty_pipeline_decoder(arg_ty, call_span)?
+            } else {
+                self.ir_type_from_ty_json(arg_ty, call_span)?
+            };
             params.push((sym, ir));
             call_args.push(Expr::Var(sym));
         }
@@ -7795,7 +8519,21 @@ impl<'a> Lowerer<'a> {
         // `ir_type_from_ty_json` maps the free `Ty::Var` to `IrType::Json`
         // instead — a sound stand-in since the eta-lambda's return slot is
         // type-unified by the kernel signature at the call site.
-        let ret = self.ir_type_from_ty_json(ret_ty, call_span)?;
+        //
+        // #164: the SAME five pipeline kernels also need this treatment on
+        // the wrapper's OWN return type (`Decoder b`) whenever the pipeline
+        // has more `required`/`optional` stages after this one — `b` is
+        // then itself a function type, and this wrapper's return value
+        // becomes the NEXT stage's `next_decoder` argument, so it must
+        // already carry the curried `FnOnce`-chain shape (a terminal `b`
+        // that is not a function degrades to the identical `Decoder<ret>`
+        // either helper would produce — see the empty-`params` branch of
+        // `ir_type_from_ty_pipeline_decoder`).
+        let ret = if Self::is_pipeline_next_decoder_kernel(&resolved) {
+            self.ir_type_from_ty_pipeline_decoder(ret_ty, call_span)?
+        } else {
+            self.ir_type_from_ty_json(ret_ty, call_span)?
+        };
         let body = Expr::Call {
             callee: resolved,
             args: call_args,
@@ -11134,32 +11872,54 @@ impl<'a> Lowerer<'a> {
                         // This prevents E0382 (use of moved value) in emitted Rust
                         // where each `Var(name)` lowers to a bare identifier that
                         // moves the value.
-                        let acc = {
-                            // batch-xm rekeyed `types.regions` to `(home, span)`;
-                            // `region_ty` builds the composite key from current_home.
-                            let ty_opt = self
-                                .region_ty(b.body.span)
-                                .and_then(|ty| self.ir_type_from_ty(ty, b.body.span).ok());
-                            if let Some(ref ir_ty) = ty_opt {
-                                if matches!(clone_class(ir_ty), CloneClass::CloneOk) {
-                                    let n = count_var_uses(*name, &acc);
-                                    if n > 1 {
-                                        let mut remaining = n;
-                                        rewrite_multiuse_clones(*name, &mut remaining, acc)
-                                    } else {
-                                        acc
-                                    }
+                        //
+                        // batch-xm rekeyed `types.regions` to `(home, span)`;
+                        // `region_ty` builds the composite key from current_home.
+                        let ty_opt = self
+                            .region_ty(b.body.span)
+                            .and_then(|ty| self.ir_type_from_ty(ty, b.body.span).ok());
+                        let mut acc = if let Some(ref ir_ty) = ty_opt {
+                            if matches!(clone_class(ir_ty), CloneClass::CloneOk) {
+                                let n = count_var_uses(*name, &acc);
+                                if n > 1 {
+                                    let mut remaining = n;
+                                    rewrite_multiuse_clones(*name, &mut remaining, acc)
                                 } else {
-                                    // T4 (#90): a fn-carrying, non-Clone
-                                    // let-binding has no sound multi-use
-                                    // rewrite — fail closed on reuse instead.
-                                    reject_fn_value_reuse(*name, ir_ty, &acc, b.body.span)?;
                                     acc
                                 }
                             } else {
+                                // T4 (#90): a fn-carrying, non-Clone
+                                // let-binding has no sound multi-use
+                                // rewrite — fail closed on reuse instead.
+                                reject_fn_value_reuse(*name, ir_ty, &acc, b.body.span)?;
                                 acc
                             }
+                        } else {
+                            acc
                         };
+
+                        // #164 E0507 fix: a NonClone function-typed binding
+                        // referenced across 2+ nested `move`-closure boundaries
+                        // (or 2+ separate closures) in the rest of this scope
+                        // cannot be a bare `Box<dyn Fn>` — see
+                        // `needs_shared_capture`'s doc comment for the full
+                        // rationale. Promote it to an `Arc`-boxed
+                        // `Expr::SharedLambda` and rewrite every nested-closure
+                        // read to `CloneVar` (`Arc::clone`). A binding that is
+                        // NOT function-typed, or whose only capture is a single
+                        // non-nested closure (the common, already-sound case),
+                        // is untouched — byte-identical to the pre-fix lowering.
+                        let mut value = value;
+                        if let Some(ref ir_ty) = ty_opt {
+                            if matches!(ir_ty, IrType::Fun(..)) && needs_shared_capture(*name, &acc)
+                            {
+                                acc = force_shared_capture_clones(*name, acc);
+                                if let Expr::Lambda { params, ret, body } = value {
+                                    value = Expr::SharedLambda { params, ret, body };
+                                }
+                            }
+                        }
+
                         Expr::Let {
                             name: *name,
                             value: Box::new(value),
@@ -11699,17 +12459,32 @@ impl<'a> Lowerer<'a> {
                 });
             } else if let Some(flat) = Self::simple_nested_list(a) {
                 // Binding a head element (`h`) or the tail (`t`) needs the
-                // element type to be `Clone` — `ListIndexClone` clones an element
-                // and `List.drop` returns an owned `Vec`. Every CONCRETE element
-                // derives `Clone`; a still-generic element carries no such bound,
-                // so binding one would emit Rust that fails `cargo` — the same
-                // SKY-L0102 polymorphic-element gate the top-level list path
-                // applies (here the list lives at the ctor sub-pattern's span,
-                // whose `List T` region the constraint generator now records).
-                if flat.binds_a_value() && matches!(self.list_elem_ir(a.span)?, IrType::Generic(_))
-                {
-                    return Err(unsupported(a.span, Feature::Polymorphism));
-                }
+                // element type to be `Clone` — `ListIndexClone` clones an
+                // element and `List.drop` returns an owned `Vec`. This site USED
+                // TO reject a still-`IrType::Generic` element on the theory that
+                // a bare type parameter carries no `Clone` bound. That theory
+                // stopped holding once `emit_func` started injecting `Clone`
+                // UNCONDITIONALLY on every one of a function's own quantified
+                // type parameters (T5, #104/#112) — and `list_elem_ir` (via
+                // `poly_tvar_symbol`) only ever resolves a `Ty::Var` to
+                // `IrType::Generic(sym)` when `sym` IS one of the ENCLOSING
+                // typed binding's own quantified vars (`current_poly_tvars`,
+                // installed per-`Func` in `lower_def`). So every
+                // `IrType::Generic` reachable here is, by construction,
+                // `Clone`-bounded at the emitted call site — rejecting it was
+                // stale defence-in-depth, not a real soundness gap.
+                //
+                // #164 regression (`m158::nested_cons_generic_elem_accepted`):
+                // before the `poly_tvar_symbol` SEAL fix, `ir_type_from_ty_json`
+                // unconditionally mapped every free `Ty::Var` to `IrType::Json`
+                // with no `current_poly_tvars` check — so `list_elem_ir` never
+                // actually produced `IrType::Generic` for this shape, and the
+                // (already-stale) gate below never fired. Fixing the `Ty::Var`
+                // lookup so it correctly resolves the enclosing generic exposed
+                // the stale gate as a fresh false-rejection. Deleting the gate
+                // is the root-cause fix — `flat` itself still supplies the
+                // prefix/tail shape used below, so it stays in scope.
+                //
                 // Replace this ctor arg with a fresh `Vec` binder and record the
                 // guard + per-element prelude bindings against it.
                 let fresh = self.fresh_nested_cons_binder()?;
@@ -11953,7 +12728,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
                 collect_ir_generic_syms(v, out);
             }
         }
-        IrType::Fun(params, ret) => {
+        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
             for p in params {
                 collect_ir_generic_syms(p, out);
             }

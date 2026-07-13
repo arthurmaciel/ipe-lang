@@ -26,7 +26,7 @@ use sky_ir::{Callee, Expr, IrType, KernelFn};
 
 use crate::EmitCtx;
 use crate::emit_expr::emit_expr_at;
-use crate::emit_types::{render_type, GenericScope};
+use crate::emit_types::{GenericScope, render_type};
 
 /// Dispatch a `Std.Live` / `Sky.Live` kernel call.
 ///
@@ -207,10 +207,7 @@ fn emit_live_route(
             // is a string literal (the only shape the parser accepts for a
             // route pattern); other shapes are left to cargo for now.
             if let Expr::Str(pat_s) = pattern_e {
-                let param_count = pat_s
-                    .split('/')
-                    .filter(|seg| seg.starts_with(':'))
-                    .count();
+                let param_count = pat_s.split('/').filter(|seg| seg.starts_with(':')).count();
                 let ctor_payload_count = variant_tys.len();
                 if param_count != ctor_payload_count {
                     return Err(Diagnostic::Lower {
@@ -346,11 +343,7 @@ fn emit_live_app_inner(
     // persisted, so Html-carrying Msg is accepted. A Cmd/Sub/Task/function in
     // Msg would cargo-fail; the gate makes it a fail-closed SKY-L0122 error.
     if let Some(msg_ty) = crate::emit_model_gate::msg_ty_of_update(update_e) {
-        crate::emit_model_gate::check_admissible_msg(
-            ctx,
-            msg_ty,
-            sky_diagnostics::AppShape::Live,
-        )?;
+        crate::emit_model_gate::check_admissible_msg(ctx, msg_ty, sky_diagnostics::AppShape::Live)?;
     }
 
     let init_s = emit_live_fn(ctx, init_e, indent, child, generics)?;
@@ -438,15 +431,13 @@ fn emit_live_app_inner(
 fn route_param_get(field_ty: &IrType, i: usize) -> DResult<String> {
     Ok(match field_ty {
         IrType::Str => format!("params.get({i}).cloned().unwrap_or_default()"),
-        IrType::Int => format!(
-            "params.get({i}).and_then(|s| s.parse::<i64>().ok()).unwrap_or_default()"
-        ),
-        IrType::Float => format!(
-            "params.get({i}).and_then(|s| s.parse::<f64>().ok()).unwrap_or_default()"
-        ),
-        IrType::Bool => format!(
-            "params.get({i}).map(|s| s == \"true\").unwrap_or_default()"
-        ),
+        IrType::Int => {
+            format!("params.get({i}).and_then(|s| s.parse::<i64>().ok()).unwrap_or_default()")
+        }
+        IrType::Float => {
+            format!("params.get({i}).and_then(|s| s.parse::<f64>().ok()).unwrap_or_default()")
+        }
+        IrType::Bool => format!("params.get({i}).map(|s| s == \"true\").unwrap_or_default()"),
         other => {
             // Item 3b (#120): upgrade to SKY-L0123. Item 4 (#120): replace
             // `{other:?}` (which leaks internal IR representation like
@@ -588,7 +579,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::List(_) => "List",
         IrType::Tuple(_) => "Tuple",
         IrType::Record(_) => "record",
-        IrType::Fun(_, _) => "function",
+        IrType::Fun(_, _) | IrType::FnOnceChain(_, _) => "function",
         IrType::Generic(_) => "generic",
         IrType::Dict(_, _) => "Dict",
         IrType::Set(_) => "Set",
