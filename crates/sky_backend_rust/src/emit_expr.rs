@@ -2049,6 +2049,19 @@ fn emit_tea_call(
         // `Http.Stream.chunks : Int -> (ChunkEvent -> msg) -> Sub msg`
         // Uses the same generic N-arg emit path as SubSubscribeTopic.
         // The runtime symbol `sub_subscribe_stream` is defined in http_stream.rs.
+        //
+        // #166: this used to E0277 (`Box<dyn Fn(..) -> .. + Send>` passed as
+        // an `F: .. + Send + Sync` bound) because the runtime signature
+        // over-declared `+Sync`. Fixed at the RUNTIME side (relaxed the bound
+        // to Send-only, matching `sub_subscribe_topic`'s already-correct
+        // pattern — see `sub_subscribe_stream`'s doc comment in
+        // `http_stream.rs`), not here: `to_msg` is moved exclusively into one
+        // detached `tokio::spawn` task, never shared behind an `Arc`, so
+        // `Sync` was never structurally required and the emit-site box
+        // pass-through this arm already does is correct as-is. Contrast with
+        // the sibling `KernelFn::StreamStream` (`emit_server_call`), which
+        // DOES need the #162 re-wrap-in-a-fresh-closure technique because its
+        // runtime consumer genuinely stores the handler behind a shared `Arc`.
         KernelFn::HttpStreamChunks => Ok(None),
         // ── M5e wired: Cmd.publish / Cmd.publishNoEcho ───────────────────────────
         // `Cmd.publish : String -> Dict String String -> Cmd msg`
@@ -2145,6 +2158,50 @@ fn emit_server_call(
             Ok(Some(format!("{fn_name}({name_s}, {req_s}.clone())")))
         }
 
+        // `Sky.Http.Server.Stream.stream : String -> (StreamWriter -> Task Error ()) -> Task Error Response`
+        //
+        // #166 (sibling of the `Http.Stream.chunks` fix, found during that
+        // fix's blast-radius review): `server_stream_stream`'s bound is
+        // `H: Fn(StreamWriter) -> SkyTask<E, ()> + Send + Sync + 'static`,
+        // and unlike `sub_subscribe_stream` (relaxed to Send-only — see that
+        // fn's doc comment in `http_stream.rs`), THIS `+Sync` bound is
+        // genuinely required: `server_stream_stream` internally does
+        // `Arc::new(move |w| { let task = handler(w); .. })` and stores that
+        // `Arc` in a process-global `pending_handlers()` registry, popped and
+        // driven later by whichever axum worker thread services the
+        // eventual request (`server_stream.rs`'s `serve_streaming_sentinel`).
+        // Unsizing `Arc<ConcreteClosure>` to the registry's
+        // `Arc<dyn Fn(..) -> .. + Send + Sync>` slot requires the captured
+        // `handler: H` to itself be `Sync` — the same "value must legitimately
+        // live behind a shared `Arc`" shape as `html_on_raw_`'s `Event::OnForm`
+        // slot, not the "moved into exactly one spawned task" shape of
+        // `sub_subscribe_stream` / `sub_subscribe_topic`. But this kernel
+        // reaches codegen through the SAME shared generic N-arg call-emit
+        // fallback that passes the codegen's `Box<dyn Fn(..) -> .. + Send +
+        // 'static>` value straight through as `H` — a trait object's
+        // auto-trait set is exactly its bound list, so that box can never
+        // satisfy `+Sync` regardless of what the boxed closure captures.
+        // Fix: apply the SAME re-wrap technique #162 used for
+        // `html_on_raw_`/`ui_on_submit_` — re-embed the box construction as
+        // SOURCE inside a freshly-declared closure built anew at the call
+        // site, so the wrapper's own Send+Sync-ness depends only on the Sky
+        // closure's legitimate `move` captures, never the erased trait-object
+        // type.
+        KernelFn::StreamStream => {
+            let [ct_e, f_e] = args else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_server_call::StreamStream",
+                    detail: format!("Stream.stream requires exactly 2 arguments, got {}", args.len()),
+                });
+            };
+            let fn_name = kernel_name(*k);
+            let ct_s = emit_expr_at(ctx, ct_e, indent, child, generics)?;
+            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            Ok(Some(format!(
+                "{fn_name}({ct_s}, move |_x| ({f_s})(_x))"
+            )))
+        }
+
         // All remaining server kernels use the standard N-arg call path — no
         // special boxing or argument projection is needed.
         KernelFn::ServerGet
@@ -2170,7 +2227,6 @@ fn emit_server_call(
         | KernelFn::MiddlewareWithCsrf
         | KernelFn::RateLimitAllow
         // ── #111: Sky.Http.Server.Stream (server-side streaming) ─────────────
-        | KernelFn::StreamStream
         | KernelFn::StreamEmit
         | KernelFn::StreamFinish
         | KernelFn::StreamWithContentType
