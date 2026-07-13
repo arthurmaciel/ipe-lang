@@ -31,13 +31,14 @@ fn emits_byte_identical_main_rs_and_vendors_runtime() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed: {:?}", built.err());
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"));
-    let want = std::fs::read_to_string(&golden);
-    assert!(emitted.is_ok() && want.is_ok(), "both files must read");
-    assert_eq!(
-        emitted.ok(),
-        want.ok(),
-        "emitted main.rs must equal the golden byte-for-byte"
+    // Directory-diff the emitted project against the golden dir: asserts the
+    // emitted `src/main.rs` (and the golden's checked-in root `Cargo.toml`)
+    // match byte-for-byte. Replaces the former hand-rolled `read_to_string` +
+    // `assert_eq!` pair — proven equal in discriminating power side by side
+    // before that block was removed.
+    support::assert_emitted_project_matches_golden_dir(
+        &out,
+        golden.parent().expect("golden has a parent dir"),
     );
 
     assert!(
