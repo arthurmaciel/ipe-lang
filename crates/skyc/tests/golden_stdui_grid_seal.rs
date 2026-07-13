@@ -50,8 +50,12 @@ main =
 "#;
 
 #[allow(clippy::expect_used)]
-fn build_grid_project() -> (PathBuf, Result<(), skyc::CliError>) {
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("stdui_grid_seal");
+// `slot` gives each `#[test]` its OWN project dir under CARGO_TARGET_TMPDIR:
+// the two tests here run in parallel by default; a shared path would let one
+// test's `remove_dir_all` race the other's `create_dir_all`. A per-test slot
+// removes the shared-path contention entirely.
+fn build_grid_project(slot: &str) -> (PathBuf, Result<(), skyc::CliError>) {
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("stdui_grid_seal_{slot}"));
     let _ = std::fs::remove_dir_all(&out);
     let src = out.join("src");
     std::fs::create_dir_all(&src).expect("mk grid test project dirs");
@@ -68,7 +72,7 @@ fn build_grid_project() -> (PathBuf, Result<(), skyc::CliError>) {
 #[test]
 #[allow(clippy::expect_used)]
 fn grid_module_resolves_and_emits_kernel() {
-    let (emit, res) = build_grid_project();
+    let (emit, res) = build_grid_project("emit");
     assert!(
         res.is_ok(),
         "skyc build with `import Std.Ui.Grid` must succeed \
@@ -76,8 +80,12 @@ fn grid_module_resolves_and_emits_kernel() {
         res.err()
     );
 
-    let emitted = std::fs::read_to_string(emit.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    // The compiled `Std.Ui.Grid` module lowers to its OWN Rust file under
+    // `src/sky_mods/` once the per-Sky-module split (Phase 5 Milestone C)
+    // fires — this program has two distinct homes (`Main` + `Std.Ui.Grid`).
+    // Scan the WHOLE emitted Sky-side tree (main.rs + sky_mods/*.rs) so the
+    // assertion holds wherever the split correctly placed the helper calls.
+    let emitted = support::read_all_emitted_src(&emit);
 
     // Both entry points lower through the native kernel helper.
     let calls = emitted.matches("ui_grid_tracks_raw_(").count();
@@ -102,7 +110,7 @@ fn grid_e2e_builds_and_renders_grid_css() {
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
-    let (emit, res) = build_grid_project();
+    let (emit, res) = build_grid_project("e2e");
     assert!(res.is_ok(), "grid E2E build must succeed: {:?}", res.err());
 
     let outcome = support::build_and_run_emitted("stdui_grid_seal", &emit);

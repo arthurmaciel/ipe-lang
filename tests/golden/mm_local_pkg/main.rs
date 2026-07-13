@@ -28,19 +28,6 @@ type Value = JsonVal;
 // USER TYPES
 // ===========================================
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum LibColor {
-    Red,
-    Blue,
-}
-impl SkyStringify for LibColor {
-    fn sky_show(&self) -> String {
-        match self {
-            LibColor::Red => "Red".to_string(),
-            LibColor::Blue => "Blue".to_string(),
-        }
-    }
-}
 
 pub use sky_runtime::error::SkyError;
 pub fn str_err(s: &str) -> SkyError {
@@ -248,12 +235,6 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     sky_runtime::http_client::http_parse_query(raw)
 }
 
-pub fn lib_greeting() -> String {
-    "hello from Lib".to_string()
-}
-pub fn sky_main() -> SkyTask<()> {
-    log_println(lib_greeting())
-}
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
 // the codegen routes Ffi.kernel calls directly, but some construction
@@ -289,3 +270,10 @@ fn main() {
         }
     }
 }
+
+#[path = "sky_mods/sky_mod_lib.rs"]
+mod sky_mod_lib;
+pub(crate) use sky_mod_lib::*;
+#[path = "sky_mods/sky_mod_main.rs"]
+mod sky_mod_main;
+pub(crate) use sky_mod_main::*;
