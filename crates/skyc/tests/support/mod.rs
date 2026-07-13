@@ -65,6 +65,15 @@ pub fn repo_root() -> PathBuf {
 /// under-emission (a missing emitted file) and content drift fail loudly, each
 /// with the offending relative path.
 ///
+/// **Migration note — this BROADENS a `main.rs`-only assertion.** Because
+/// `Cargo.toml` is compared whenever the golden dir checks one in, migrating a
+/// test that previously byte-diffed ONLY `main.rs` onto this helper silently
+/// adds a `Cargo.toml` comparison. That is usually desirable (it catches
+/// manifest drift), but it can turn green-on-migration into a real red if the
+/// golden `Cargo.toml` was left stale by an earlier `main.rs`-only test — so a
+/// migration surfacing a `Cargo.toml` mismatch is a genuine finding to fix at
+/// root (refresh the stale manifest), not a helper bug to route around.
+///
 /// # Panics
 ///
 /// Fails the calling test (via `assert!`) if any compared file is
