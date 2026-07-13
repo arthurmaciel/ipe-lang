@@ -7243,11 +7243,19 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// #164 (`f7_succeed_curried`): does `resolved` name one of the five
-    /// `JsonDec.Pipeline` / `Db.Decode` curried-combinator kernels whose
-    /// LAST parameter (`next_decoder` / `ctor_dec`) needs the
-    /// [`Self::ir_type_from_ty_pipeline_decoder`] treatment rather than the
-    /// ordinary flattened `Fun` rendering?
+    /// #164 (`f7_succeed_curried`; #164 follow-up `f11_pipeline_custom_curried`):
+    /// does `resolved` name one of the SIX `JsonDec.Pipeline` / `Db.Decode`
+    /// curried-combinator kernels whose LAST parameter (`next_decoder` /
+    /// `ctor_dec`) needs the [`Self::ir_type_from_ty_pipeline_decoder`]
+    /// treatment rather than the ordinary flattened `Fun` rendering?
+    ///
+    /// Audited exhaustively against every `Decoder<E, Box<dyn FnOnce(_) -> _>>`-
+    /// shaped kernel parameter in `runtime/src/sky_runtime/{json,db}.rs`
+    /// (`decode_pipeline_required` / `_optional` / `_required_at` / `_custom`
+    /// in `json.rs`; `db_decode_required` / `_optional` in `db.rs`) — these six
+    /// are the complete set. `json.rs::decode_and_map` (the helper the two
+    /// `db_decode_*` kernels delegate to) has the same shape but is not itself
+    /// exposed as a Sky kernel, so it needs no gate entry.
     const fn is_pipeline_next_decoder_kernel(resolved: &Callee) -> bool {
         matches!(
             resolved,
@@ -7255,6 +7263,7 @@ impl<'a> Lowerer<'a> {
                 KernelFn::JsonDecPRequired
                     | KernelFn::JsonDecPOptional
                     | KernelFn::JsonDecPRequiredAt
+                    | KernelFn::JsonDecPCustom
                     | KernelFn::DbDecRequired
                     | KernelFn::DbDecOptional
             )
