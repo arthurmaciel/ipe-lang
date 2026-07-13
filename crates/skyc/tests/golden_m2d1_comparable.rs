@@ -22,10 +22,7 @@ use std::path::{Path, PathBuf};
 
 mod support;
 
-fn repo_root() -> PathBuf {
-    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    std::fs::canonicalize(&joined).unwrap_or(joined)
-}
+use support::repo_root;
 
 fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
@@ -53,13 +50,13 @@ fn emits_byte_identical_main_rs() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed: {:?}", built.err());
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"));
-    let want = std::fs::read_to_string(&golden);
-    assert!(emitted.is_ok() && want.is_ok(), "both files must read");
-    assert_eq!(
-        emitted.ok(),
-        want.ok(),
-        "emitted main.rs must equal the golden byte-for-byte"
+    // Directory-diff the emitted project against the golden dir (byte-compares
+    // the emitted `src/main.rs` against the golden `main.rs`). Replaces the
+    // former hand-rolled `read_to_string` + `assert_eq!` pair with the shared
+    // harness helper.
+    support::assert_emitted_project_matches_golden_dir(
+        &out,
+        golden.parent().expect("golden has a parent dir"),
     );
 }
 
