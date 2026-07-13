@@ -494,11 +494,14 @@ uses — Phase 3 §8.4 decision 1):**
    makes "migration complete" a machine-checked property, not a claim.
 
 **Only after step 5 is green does any REAL per-file split happen — and even
-then, only against ONE pilot fixture first** (§3, Milestone C), never a
+then, first against ONE pilot fixture** (§3, Milestone C), never a
 blanket change across all 155 goldens simultaneously. Every existing
-single-Sky-module golden (154 of the 155, everything except the new pilot)
-is expected to need **zero golden-file changes** at all, by construction —
-see the Spine-collapse invariant, §3.3.
+**single-home** golden (one user module importing only kernel modules — the
+vast majority) needs **zero golden-file changes** at all, by construction
+(the Spine-collapse invariant, §3.3). The originally-claimed "154 of the 155,
+everything except the new pilot" was a FALSE premise: ~6 tests / 5 binaries
+are genuinely multi-home and legitimately split alongside the pilot — see the
+corrected §3.3 blast-radius table and §5 Task 13.
 
 ---
 
@@ -522,12 +525,39 @@ changes. Pure test-infrastructure risk.
 
 ### 3.3 Milestone C — the real split, ONE pilot fixture, with the Spine-collapse invariant
 
+> **DESIGN-PREMISE CORRECTION (2026-07-13, Task 13 execution).** This
+> section's original text asserted the Spine-collapse invariant would fire
+> for "every existing golden today, since none of the 155 fixtures are
+> deliberately multi-module at the Rust-emission-relevant level," and that
+> the Milestone C blast radius was therefore ZERO existing goldens (only the
+> new pilot). **That premise was FALSE and is corrected in place below.**
+> Executing Task 13 (the machine-checked blast-radius gate) revealed that
+> **6 tests across 5 golden binaries are genuinely multi-home** and the
+> per-Sky-module split CORRECTLY fires for them — the actual blast radius is
+> ~6 goldens, not zero. Two classes were missed by the original survey: (a)
+> genuine USER multi-module fixtures (`mm_diamond` = B/C/D/Main, `mm_local_pkg`
+> = Lib/Main, `class1_boundary_scheme_field_result` = Lib1/Lib2/Main), each
+> carrying 2+ distinct user `home`s; and (b) programs importing a Layer-3
+> **stdlib** module compiled to Sky source (`Std.Css`, `Std.Ui.Grid`,
+> `Std.Ui.Transition`) — the stdlib module carries its OWN `home` distinct
+> from `Main`, so `partition_items` sees 2 distinct `SkyModule` homes and the
+> split fires. **The decision on discovering this was to ACCEPT the wider-
+> but-correct blast radius, NOT to narrow the split trigger** (e.g. by
+> collapsing stdlib homes into `Main`) — a multi-home program SHOULD emit
+> multi-file Rust; that per-module granularity is the entire point of Phase 5
+> (salsa incremental recompilation in Milestone D). The 6 goldens were
+> regenerated to their correct multi-file shape and SEAL-verified (each split
+> project actually `cargo build`s + runs), not narrowed away. Task 12's code
+> (`ffec21f`) stays as-is; it is sound. See the corrected blast-radius
+> paragraph below and §5 Task 13 for the enumerated list.
+
 **The Spine-collapse invariant (the key correctness rule that keeps this
 narrow):** when a program has exactly ONE distinct `home` across all its
 `SkyModule`-bucketed items (i.e. `partition_items`'s `RustFileId::SkyModule`
-keys partition to a single bucket — true for every existing golden today,
-since none of the 155 fixtures are deliberately multi-module at the
-Rust-emission-relevant level... verified next), `emit_program` collapses
+keys partition to a single bucket — true for a SINGLE-home program: one
+user module that imports only kernel modules, which is the majority of the
+155 fixtures but NOT all of them, see the corrected blast-radius paragraph
+below), `emit_program` collapses
 back to the CURRENT shape: that one module's types/funcs are inlined into
 `Spine` at the SAME position as today (`project.rs`'s existing lines
 342-347/383-387), producing a byte-identical single `src/main.rs`. The real
@@ -549,11 +579,37 @@ does not, by itself, materialise a second file. Only 2+ distinct
 ordering rule that keeps this collapse byte-identical for the existing
 `Std.Db` goldens (`golden_m5b_db`, `golden_m5b_db_gates`, and friends).
 
-This invariant is what makes Milestone C's blast radius small: **154 of
-155 existing goldens are single-Sky-module programs and are asserted to
-need ZERO golden-file changes** (§5 Task 13 makes this a machine-checked
-gate, not a claim). Only a NEW, deliberately-multi-module pilot fixture
-(§5 Tasks 8/11/12) exercises the real split.
+This invariant is what keeps Milestone C's blast radius small — but **small
+is not zero** (corrected premise, verified by executing Task 13's
+machine-checked gate). The VAST MAJORITY of the 155 goldens are single-home
+programs (one user module importing only kernel modules) and need ZERO
+golden-file changes, exactly as designed. But **~6 tests across 5 golden
+binaries are genuinely multi-home and legitimately split**, each regenerated
++ SEAL-verified in Task 13:
+
+| Golden binary | Homes | Kind | Fix applied |
+|---|---|---|---|
+| `golden_mm::mm_diamond_emits_byte_identical_main_rs` | B, C, D, Main | user multi-module (dir-diff) | regenerated golden DIR: Spine-only `main.rs` + barrel + `sky_mods/sky_mod_{b,c,d,main}.rs` |
+| `golden_mm::mm_local_pkg_emits_byte_identical_main_rs` | Lib, Main | user multi-module (dir-diff) | regenerated golden DIR: Spine-only `main.rs` + barrel + `sky_mods/sky_mod_{lib,main}.rs` |
+| `golden_class1_boundary_scheme_field_result` | Lib1, Lib2, Main | user multi-module (substring) | assertion widened to scan whole emitted `src/` tree; visibility prefix dropped (`pub(crate) fn`) |
+| `golden_css_source` | Main, Std.Css | stdlib-source import (substring) | assertion widened to scan whole emitted `src/` tree |
+| `golden_stdui_grid_seal` | Main, Std.Ui.Grid | stdlib-source import (substring) | assertion widened to scan whole emitted `src/` tree |
+| `golden_stdui_transition_seal` | Main, Std.Ui.Transition | stdlib-source import (substring) | assertion widened to scan whole emitted `src/` tree |
+
+(That is 6 tests / 5 binaries — `golden_mm` carries two of the affected
+tests.) The pilot fixture (§5 Tasks 8/11/12) additionally exercises the
+real split against a Db-using user-module program; the stdlib-source split
+(css/grid/transition) is a NEW SEAL surface the pilot did NOT cover, closed
+in Task 13 by building each of those emitted projects under `SKY_E2E` and
+confirming the relocated leaf kernels still resolve via `use crate::*;`.
+
+The `>= 2` split trigger was deliberately NOT narrowed to exclude stdlib
+homes: a Layer-3 stdlib module compiled to Sky source is a real, own-home
+compilation unit, and giving it its own `sky_mods/<mod>.rs` file is exactly
+the per-module granularity Milestone D's salsa incrementality is built on.
+Collapsing stdlib homes into `Main` would be a papering-over workaround that
+throws away that granularity for the sole benefit of a smaller golden diff —
+rejected under the no-deferral / root-cause principle.
 
 **Note on `golden_cross_module_type_res.rs`.** This existing test (multi-
 `.sky`-file examples 16/17) asserts `skyc::build` exits 0 — it does NOT
@@ -1463,39 +1519,81 @@ against ONE pilot fixture at both the byte level and the `cargo build`
 level, INCLUDING the multi-module + `Std.Db` interaction §2.2's fix exists
 to make sound.
 
-### Task 13 — confirm zero blast radius on every OTHER existing golden
+### Task 13 — measure the ACTUAL blast radius; regenerate + SEAL-verify every genuinely-multi-home golden
 
-**Files:** none (verification-only task; may add a short-lived assertion
-script, not committed).
+> **CORRECTED SCOPE (2026-07-13).** This task was ORIGINALLY specified as
+> "confirm ZERO blast radius on every OTHER existing golden," on the §3.3
+> premise that only the pilot was multi-module. Executing it disproved that
+> premise: the FULL golden suite, rebuilt against Task 12's real
+> `emit_program` split, red-fails **6 tests across 5 golden binaries** whose
+> programs are genuinely multi-home (§3.3's corrected blast-radius table).
+> The task's real job is therefore NOT "prove zero changes" but "measure the
+> true blast radius, and for each genuinely-multi-home golden regenerate it
+> to the correct multi-file shape and SEAL-verify it." A red multi-home
+> golden here is the split CORRECTLY firing, not a `partition_items` bug — do
+> NOT narrow the trigger; regenerate the golden. (A red SINGLE-home golden
+> WOULD still be a Spine-collapse-invariant violation — step 4 keeps that
+> distinction.)
+
+**Files:** `tests/golden/mm_diamond/` (regenerate: Spine-only `main.rs` +
+`sky_mods/*.rs`), `tests/golden/mm_local_pkg/` (same), plus test-body edits to
+`crates/skyc/tests/{golden_mm,golden_css_source,golden_class1_boundary_scheme_field_result,golden_stdui_grid_seal,golden_stdui_transition_seal}.rs`
+and the shared `crates/skyc/tests/support/mod.rs` helper.
 
 **Steps:**
 
-1. Run the FULL golden suite:
+1. Run the FULL golden suite against the Task-12 backend:
 
 ```bash
 cargo test -p sky_backend_rust golden
-cargo test -p skyc --test 'golden_*'
+cargo test -p skyc --test 'golden_*' --no-fail-fast
 ```
 
-2. Confirm every one of the 154 non-pilot goldens is STILL green with
-   ZERO golden-file diffs (`git status` / `git diff --stat` on
-   `tests/golden/` shows no changes outside
-   `tests/golden/multi_mod_split_pilot/`).
+2. Enumerate every red test. Partition each into single-home (a real bug —
+   step 4) vs genuinely-multi-home (the split correctly firing — step 3).
+   The verified multi-home set is the §3.3 table: `mm_diamond`, `mm_local_pkg`,
+   `class1_boundary_scheme_field_result` (user multi-module); `css_source`,
+   `stdui_grid_seal`, `stdui_transition_seal` (stdlib-source import).
 
-3. If ANY existing golden goes red or needs a file change, this is a
-   Spine-collapse-invariant violation (§3.3) — STOP, do not "fix" the
-   golden; find and fix the bug in Task 12's `partition_items` branch
-   (the `== 1` distinct-`SkyModule`-bucket case) instead. A red
-   single-module golden here means the invariant this whole staging
-   strategy depends on for its "narrow blast radius" claim is broken, and
-   the claim must be re-verified before proceeding — this is exactly the
-   kind of finding CLAUDE.md's no-deferral principle requires entering the
-   pipeline immediately, not worked around.
+3. For each genuinely-multi-home golden, regenerate to the correct new shape
+   and SEAL-verify (NEVER blind-copy compiler output into a golden):
+   - **dir-diff goldens** (`mm_diamond`, `mm_local_pkg`): regenerate the golden
+     DIR — `main.rs` now Spine-only + barrel, plus one `sky_mods/sky_mod_<mod>.rs`
+     per module. Hand-read each regenerated file once (confirm each per-module
+     file's cross-module + Spine-kernel calls resolve via `use crate::*;`).
+     Extend `support::assert_emitted_project_matches_golden_dir` to compare
+     `sky_mods/*.rs` symmetrically so the split's per-module content is
+     byte-locked. `cargo build` + run the emitted project by hand to confirm
+     THE SEAL (both have runnable `main`s: `mm_diamond` prints 87,
+     `mm_local_pkg` prints "hello from Lib").
+   - **substring goldens** (`css_source`, `class1_*`, `stdui_grid_seal`,
+     `stdui_transition_seal`): the asserted symbol moved from `main.rs` to
+     `sky_mods/<mod>.rs`. Widen each assertion to scan the WHOLE emitted `src/`
+     tree (`main.rs` + `sky_mods/*.rs`) via a new shared
+     `support::read_all_emitted_src` helper — robust to future placement,
+     preferred over hard-coding the new path. Build the css/grid/transition
+     emitted projects under `SKY_E2E=1` to confirm the relocated leaf kernels
+     resolve via `use crate::*;` and the split project cargo-builds — the SEAL
+     for the stdlib-home split, which the pilot (a Db/user-module case) did NOT
+     cover.
 
-**Verify.** `git diff --stat tests/golden/` shows changes ONLY under
-`multi_mod_split_pilot/`.
-**Done when.** The zero-blast-radius claim is a verified fact, not an
-assumption, with a `git diff` artifact to point at in the PR description.
+4. If ANY genuinely-SINGLE-home golden goes red or needs a file change, THAT
+   is a Spine-collapse-invariant violation (§3.3) — STOP, do not "fix" the
+   golden; find and fix the bug in Task 12's `partition_items` branch (the
+   `<= 1` distinct-`SkyModule`-bucket collapse case) instead. This is exactly
+   the kind of finding CLAUDE.md's no-deferral principle requires entering the
+   pipeline immediately, not worked around. (In practice Task 13's execution
+   found ZERO single-home regressions — every red test was a correctly-firing
+   multi-home split.)
+
+**Verify.** Full `golden_*` suite green (0 failed). `git diff --stat
+tests/golden/` shows changes under `multi_mod_split_pilot/` (Task 12) AND the
+regenerated `mm_diamond/` + `mm_local_pkg/` dirs (Task 13) — all hand-read +
+SEAL-verified.
+**Done when.** The true blast radius (~6 goldens) is measured, every
+genuinely-multi-home golden is regenerated + SEAL-verified, and the full suite
+is green — a verified fact backed by a `git diff` artifact and a per-project
+`cargo build` proof, not an assumption.
 
 ### Task 14 — `RustFileId` as a real salsa-interned domain
 
@@ -1655,10 +1753,14 @@ salsa event-stream assertion, not inferred from the query graph's shape.
 4. **The Spine-collapse invariant (a program's `partition_items` output
    has exactly ONE distinct `RustFileId::SkyModule` bucket ⇒ byte-identical
    to today's single-file output; the `Spine` bucket's presence/absence
-   never gates this) is what keeps the rollout narrow** — 154 of 155
-   existing goldens are asserted (Task 13) to need zero changes; only a
-   NEW, deliberately-multi-module, `Std.Db`-using pilot fixture exercises
-   the real split.
+   never gates this) keeps the rollout narrow but NOT zero** — the vast
+   majority of the 155 goldens are single-home (one user module + kernel
+   imports) and need zero changes, but ~6 tests / 5 binaries are genuinely
+   multi-home and legitimately split (Task 13's corrected finding — §3.3's
+   blast-radius table). Those were regenerated + SEAL-verified, NOT narrowed
+   away; the pilot (a `Std.Db` user-module case) plus the stdlib-source
+   splits (`Std.Css`/`Std.Ui.Grid`/`Std.Ui.Transition`) together exercise the
+   real split.
 5. **The golden-harness migration is staged as its own additive,
    independently-provable step (Milestone B) BEFORE any real split
    (Milestone C)** — directly answers the task brief's request for a
@@ -1714,7 +1816,8 @@ salsa event-stream assertion, not inferred from the query graph's shape.
 | `skyc::golden_m0::emits_byte_identical_main_rs_and_vendors_runtime` (Task 7) | The new directory-diff helper has identical discriminating power to the retired single-file `assert_eq!` |
 | `skyc::golden_harness_coverage::every_non_allowlisted_golden_test_calls_the_shared_helper` (Task 9) | Migration completeness is a machine-checked POSITIVE structural proof (every non-allowlisted golden calls the shared helper), not a negative grep a syntactically-different stale pattern could dodge, and not a one-time claim |
 | `skyc::golden_multi_mod_split_pilot::*` (Tasks 11-12) | The real split's byte-level output, the multi-module + `Std.Db` `SqlValue`/`SqlField`-routing interaction (§2.2's fix, previously unverified per independent review), AND (`SKY_E2E`-gated) `cargo build` success on the FIRST genuinely-split fixture |
-| Full golden suite re-run, `git diff --stat tests/golden/` (Task 13) | Zero blast radius: 154/155 existing goldens need no file changes |
+| Full golden suite re-run, `git diff --stat tests/golden/` (Task 13) | Measured blast radius: the vast majority of the 155 goldens need no file changes, but ~6 tests / 5 binaries are genuinely multi-home (§3.3 table) and legitimately split — each regenerated to its correct multi-file shape and SEAL-verified (`cargo build` + run of the split project), not narrowed away. The ORIGINAL "zero blast radius / 154 of 155" claim was a false premise, corrected here in place. |
+| `skyc::{golden_mm,golden_class1_boundary_scheme_field_result,golden_css_source,golden_stdui_grid_seal,golden_stdui_transition_seal}` (Task 13, corrected) | Each genuinely-multi-home golden's post-split output: dir-diff goldens (`mm_diamond`/`mm_local_pkg`) byte-lock Spine-only `main.rs` + barrel + every `sky_mods/*.rs` (symmetric compare); substring goldens scan the whole emitted `src/` tree via `support::read_all_emitted_src`; the css/grid/transition splits `cargo build` under `SKY_E2E` (the stdlib-home SEAL the pilot did not cover) |
 | `sky_db::phase9_emit_rust_file::emit_spine_file_memoized_coarse_floor` / `emit_rust_file_memoized_per_file` / `program_rust_file_ids_tracks_module_add_delete` (Task 15) | Real salsa memoization + the module-add/delete visibility edge, matching every prior phase's proof-test rigor |
 | `sky_db::phase9_emit_rust_file::emit_manifest_matches_emit_project_for_single_module` (Task 16) | The Spine-collapse invariant holds at the SALSA layer, not just the backend layer |
 | `skyc::clean_vs_incremental_parity` + `adversarial_review_parity_probe` (re-run, Task 16) | THE SEAL and the parity gate hold after `compile_prepared` switches to `emit_manifest` |
