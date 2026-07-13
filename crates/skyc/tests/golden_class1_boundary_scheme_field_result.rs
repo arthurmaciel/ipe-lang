@@ -102,16 +102,26 @@ fn class1_field_result_skyc_accepts_and_emits_concrete_getter() {
         built.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    // `Lib1`'s getter lowers to its OWN Rust file under `src/sky_mods/` once
+    // the per-Sky-module split (Phase 5 Milestone C) fires — this is a genuine
+    // 3-module program (`Lib1` + `Lib2` + `Main`). Scan the WHOLE emitted
+    // Sky-side tree (main.rs + sky_mods/*.rs) so both the concrete-signature
+    // assertion and the no-spurious-generic assertion hold wherever the split
+    // correctly placed `lib1_get_name`.
+    let emitted = support::read_all_emitted_src(&out);
 
-    // The getter must lower to a CONCRETE signature. Pre-fix this line read
+    // The getter must lower to a CONCRETE signature. Pre-fix this read
     // `pub fn lib1_get_name<T1: Clone>(r: RecAgeName) -> String {` — an
-    // unused Rust generic that made every call site fail E0283.
+    // unused Rust generic that made every call site fail E0283. Matched
+    // WITHOUT the visibility prefix: once the per-Sky-module split (Phase 5
+    // Milestone C) fires, `Lib1`'s getter lives in `src/sky_mods/sky_mod_lib1.rs`
+    // as a `pub(crate) fn` (module items are crate-visible), no longer the
+    // `pub fn` of the single-file layout — the visibility is orthogonal to the
+    // concrete-signature property this line guards.
     assert!(
-        emitted.contains("pub fn lib1_get_name(r: RecAgeName) -> String {")
-            || emitted.contains("pub fn lib1_get_name(r: RecAgeName) -> String{"),
-        "getName must lower to a concrete (non-generic) signature; got main.rs:\n{emitted}"
+        emitted.contains("fn lib1_get_name(r: RecAgeName) -> String {")
+            || emitted.contains("fn lib1_get_name(r: RecAgeName) -> String{"),
+        "getName must lower to a concrete (non-generic) signature; got emitted src:\n{emitted}"
     );
     assert!(
         !emitted.contains("lib1_get_name<"),

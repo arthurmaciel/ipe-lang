@@ -47,8 +47,13 @@ fn css_source_builds_and_injects_leaf_kernels() {
         res.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    // The compiled `Std.Css` module lowers to its OWN Rust file under
+    // `src/sky_mods/` once the per-Sky-module split (Phase 5 Milestone C)
+    // fires — this program has two distinct homes (`Main` + `Std.Css`). Scan
+    // the WHOLE emitted Sky-side tree (main.rs + sky_mods/*.rs) so both the
+    // presence assertions (render fold + leaf security kernels) and the
+    // negative retired-enum assertion hold wherever the split placed the code.
+    let emitted = support::read_all_emitted_src(&out);
     // The compiled Std.Css render fold is homed + prefixed as compiled source.
     assert!(
         emitted.contains("std_css_stylesheet") && emitted.contains("std_css_render_rule"),
