@@ -130,7 +130,11 @@ fn f1_firstclass_curried_and_shadow() {
     );
 
     let outcome = support::build_and_run_emitted("i121_firstclass_curried", &out);
-    assert_eq!(outcome.exit_code, Some(0), "must exit 0 (was E0593 + E0507)");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "must exit 0 (was E0593 + E0507)"
+    );
     // let g = mk; g "first" "second" → Home "first" "second" → "first second"
     assert!(
         outcome.stdout.contains("first second"),
@@ -182,7 +186,11 @@ fn f2_firstclass_arity0() {
     );
 
     let outcome = support::build_and_run_emitted("i121_firstclass_arity0", &out);
-    assert_eq!(outcome.exit_code, Some(0), "must exit 0 (was E0593 for arity-0 def)");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "must exit 0 (was E0593 for arity-0 def)"
+    );
     assert!(
         outcome.stdout.contains("hello world"),
         "arity-0 nullary handler must print 'hello world'; got:\n{}",
@@ -222,7 +230,11 @@ fn f3_partial_noncopy() {
     );
 
     let outcome = support::build_and_run_emitted("i121_partial_noncopy", &out);
-    assert_eq!(outcome.exit_code, Some(0), "must exit 0 (was E0525 on partial)");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "must exit 0 (was E0525 on partial)"
+    );
     // f called twice: f "!" → "hello!" and f "?" → "hello?"
     assert!(
         outcome.stdout.contains("hello!"),
@@ -269,7 +281,11 @@ fn f4_lambda_capture_noncopy_and_f11_shadow() {
     );
 
     let outcome = support::build_and_run_emitted("i121_lambda_capture_noncopy", &out);
-    assert_eq!(outcome.exit_code, Some(0), "must exit 0 (was E0525 on capture)");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "must exit 0 (was E0525 on capture)"
+    );
     // tag "sky-" ["one","two"] → mapped = ["sky-one","sky-two"], shadow prefix = "2"
     // output: "sky-one,sky-two[2]"
     assert!(
@@ -321,7 +337,11 @@ fn f5_capture_fn_called_control() {
     );
 
     let outcome = support::build_and_run_emitted("i121_capture_fn_called", &out);
-    assert_eq!(outcome.exit_code, Some(0), "control must exit 0 (was green before fix)");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "control must exit 0 (was green before fix)"
+    );
     assert!(
         outcome.stdout.contains("2, 3, 4"),
         "add-1 mapped over [1,2,3] must print '2, 3, 4'; got:\n{}",
@@ -374,7 +394,11 @@ fn f7_succeed_curried() {
     );
 
     let outcome = support::build_and_run_emitted("i121_succeed_curried", &out);
-    assert_eq!(outcome.exit_code, Some(0), "must exit 0 (was E0593 in curry2 bound)");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "must exit 0 (was E0593 in curry2 bound)"
+    );
     assert!(
         outcome.stdout.contains("val:99"),
         "decoder pipeline must produce 'val:99'; got:\n{}",
@@ -415,7 +439,11 @@ fn f8_curried_three_arrows() {
     );
 
     let outcome = support::build_and_run_emitted("i121_curried_three_arrows", &out);
-    assert_eq!(outcome.exit_code, Some(0), "must exit 0 (was E0593 three-arrow)");
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "must exit 0 (was E0593 three-arrow)"
+    );
     assert!(
         outcome.stdout.contains("sky:7:F"),
         "let-store of mk3 must produce 'sky:7:F'; got:\n{}",
@@ -495,5 +523,55 @@ fn f10_generic_curried_gate_l0126() {
         "i121_generic_curried",
         "i121_generic_curried_gate",
         sky_diagnostics::SKY_L0126,
+    );
+}
+
+// ── F11 — curried fn in `JsonDecP.custom` pipeline step (#164 follow-up) ─────
+
+/// `mkPair : String -> (Int -> String)`, def-arity 1, same shape as F7 but the
+/// pipeline's second step is `Pipe.custom` (not `Pipe.required`).  Reproduces
+/// the independent-review-found gap: `is_pipeline_next_decoder_kernel`
+/// (`crates/sky_lower/src/lower.rs`) listed only five of the six
+/// `Decoder<E, Box<dyn FnOnce(_) -> _>>`-shaped kernels, omitting
+/// `KernelFn::JsonDecPCustom`.  Pre-fix: `skyc build` exited 0 but the emitted
+/// `decode_pipeline_custom` call site failed `cargo build` with 2×E0308
+/// (`expected trait 'Fn', found trait 'FnOnce'`) — reproduced and confirmed
+/// against this exact fixture before the one-line gate fix landed.
+#[test]
+fn f11_pipeline_custom_curried() {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+
+    let root = repo_root();
+    let dir = root
+        .join("tests")
+        .join("golden")
+        .join("i121_pipeline_custom_curried");
+    let entry = dir.join("Main.sky");
+    let out = std::env::temp_dir().join("skyc_i121_pipeline_custom_curried_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve for E2E");
+    let Ok(runtime) = runtime else { return };
+
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "skyc build must succeed for i121_pipeline_custom_curried: {:?}",
+        built.err()
+    );
+
+    let outcome = support::build_and_run_emitted("i121_pipeline_custom_curried", &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "must exit 0 (was E0308 x2 at decode_pipeline_custom call site)"
+    );
+    assert!(
+        outcome.stdout.contains("val:99"),
+        "custom-step decoder pipeline must produce 'val:99'; got:\n{}",
+        outcome.stdout
     );
 }
