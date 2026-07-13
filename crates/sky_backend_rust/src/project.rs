@@ -14,7 +14,7 @@
 //! <epilogue: 139..>            Ffi.kernel polyfill, list helpers, entry point
 //! ```
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use sky_backend::{EmittedProject, RelPath};
 use sky_diagnostics::{DResult, Diagnostic};
@@ -330,6 +330,14 @@ fn runtime_bindings() -> DResult<&'static str> {
 /// Emit the complete project for `program`.
 #[allow(clippy::too_many_lines)]
 pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject> {
+    // Task 3 (design doc §2.2/independent-review finding): fail closed if a
+    // synthesised record struct's name collides with a user enum's name, a
+    // function name, or (once real `mod` declarations exist — Milestone C)
+    // a `mod_ident`. Milestone A never writes more than one file, so no
+    // `mod` items exist yet — an empty set is the honest state of the
+    // world, not a loophole; Milestone C passes the real `mod_ident` set.
+    ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())?;
+
     // Capacity hint only — bytes pushed are identical. `GOLDEN` (the embedded
     // reference main.rs the preamble/epilogue are cut from) is a sound floor
     // for the fixed sections; user code grows beyond it via the usual
