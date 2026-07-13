@@ -135,11 +135,7 @@ impl Sigs {
     fn arity(&self, head: &Head) -> usize {
         match head {
             Head::Tuple(n) => *n,
-            Head::Adt(h, c) => self
-                .ctor_arity
-                .get(&(h.clone(), *c))
-                .copied()
-                .unwrap_or(0),
+            Head::Adt(h, c) => self.ctor_arity.get(&(h.clone(), *c)).copied().unwrap_or(0),
             // Literal heads carry no sub-patterns; the empty-list `[]` (`Nil`) is
             // likewise nullary.
             Head::Bool(_) | Head::Int(_) | Head::Char(_) | Head::Str(_) | Head::Nil => 0,
@@ -747,7 +743,9 @@ fn missing_heads(roots: &[Head], sigs: &Sigs) -> Vec<UPat> {
             let mut out: Vec<UPat> = all
                 .iter()
                 .filter(|(name, _)| !present.contains(name))
-                .map(|(name, ar)| UPat::Ctor(Head::Adt(uhome.clone(), *name), vec![UPat::Wild; *ar]))
+                .map(|(name, ar)| {
+                    UPat::Ctor(Head::Adt(uhome.clone(), *name), vec![UPat::Wild; *ar])
+                })
                 .collect();
             if out.is_empty() {
                 out.push(UPat::Wild);

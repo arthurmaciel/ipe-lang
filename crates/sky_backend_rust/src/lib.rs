@@ -1010,7 +1010,9 @@ fn collect_record_shapes(
                 entry.push(fields);
             }
         }
-        IrType::Fun(params, ret) => {
+        // Same treatment as `Fun` — a curried `FnOnce` chain contributes no
+        // struct of its own, but its levels may carry record shapes.
+        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
             // A function type contributes no struct of its own, but its
             // parameter and return types may carry record shapes (e.g. a
             // callback over a record).
@@ -1207,6 +1209,9 @@ fn type_reaches_enum(
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::Fun(_, _)
+        // A curried `FnOnce` chain is the same boxed-trait-object shape as
+        // `Fun` — pointer-sized, no size-cycle risk.
+        | IrType::FnOnceChain(_, _)
         | IrType::Generic(_)
         // M7: nullary plain types and the opaque live request handle are
         // pointer-sized — they cannot form an infinite-size cycle.
@@ -1245,7 +1250,9 @@ fn contains_generic(ty: &IrType) -> bool {
         IrType::Generic(_) => true,
         IrType::Tuple(elems) => elems.iter().any(contains_generic),
         IrType::Record(map) => map.values().any(contains_generic),
-        IrType::Fun(params, ret) => params.iter().any(contains_generic) || contains_generic(ret),
+        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
+            params.iter().any(contains_generic) || contains_generic(ret)
+        }
         IrType::Enum { args, .. } => args.iter().any(contains_generic),
         IrType::Maybe(elem) | IrType::List(elem) => contains_generic(elem),
         IrType::Result(err, ok) => contains_generic(err) || contains_generic(ok),
@@ -1324,7 +1331,7 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
                 collect_generics(v, out);
             }
         }
-        IrType::Fun(params, ret) => {
+        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
             for p in params {
                 collect_generics(p, out);
             }
@@ -1563,6 +1570,18 @@ fn match_template(
         },
         IrType::Fun(tp, tr) => match concrete {
             IrType::Fun(cp, cr) if tp.len() == cp.len() => {
+                for (t, c) in tp.iter().zip(cp.iter()) {
+                    match_template(t, c, subst)?;
+                }
+                match_template(tr, cr, subst)
+            }
+            _ => Err(mismatch()),
+        },
+        // Same structural-shape matching as `Fun` (same arity-checked
+        // parameter list plus return-type recursion) — a curried `FnOnce`
+        // chain template reconciles only against another `FnOnceChain`.
+        IrType::FnOnceChain(tp, tr) => match concrete {
+            IrType::FnOnceChain(cp, cr) if tp.len() == cp.len() => {
                 for (t, c) in tp.iter().zip(cp.iter()) {
                     match_template(t, c, subst)?;
                 }

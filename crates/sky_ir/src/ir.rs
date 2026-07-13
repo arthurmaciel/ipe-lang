@@ -523,6 +523,29 @@ pub enum IrType {
     /// nullary `Fn() -> R`, distinct from `ret` alone. The lowerer is the sole
     /// producer; the backend stays total over any parameter vector it receives.
     Fun(Vec<Self>, Box<Self>),
+    /// A CURRIED chain of one-shot closures `T0 -> (T1 -> ( ... -> R))`,
+    /// carried as its parameter list (one per curry level, in application
+    /// order) and the FINAL, non-function return type.
+    ///
+    /// Distinct from [`Self::Fun`] (a flattened, re-callable
+    /// `Box<dyn Fn(T0, T1, ...) -> R>`): this variant renders as NESTED
+    /// `Box<dyn FnOnce(Ti) -> { next level or R } + Send>` boxes, one level
+    /// of currying per parameter. Introduced for #164 (`f7_succeed_curried`)
+    /// to type the `next_decoder` slot of the `JsonDec.Pipeline`/`Db.Decode`
+    /// curried-combinator kernels (`decode_pipeline_required` /
+    /// `decode_pipeline_optional` / `decode_pipeline_required_at` /
+    /// `db_decode_required` / `db_decode_optional`), whose hand-written Rust
+    /// signatures deliberately require a `Box<dyn FnOnce>` chain — each
+    /// level is consumed exactly once per pipeline `run` (matching the
+    /// `curryN` runtime helpers' factory-produced chains) — never the
+    /// re-callable `Fn` boxing the generic [`Self::Fun`] path emits. Only
+    /// ever produced by `eta_expand_partial`'s special-cased handling of
+    /// those five kernels; every other position keeps the ordinary,
+    /// flattened [`Self::Fun`] shape.
+    ///
+    /// Invariant: `params` is non-empty (a chain of zero levels is just
+    /// `ret` itself, never constructed as `FnOnceChain`).
+    FnOnceChain(Vec<Self>, Box<Self>),
     /// A generic type parameter — a Sky type variable used STRUCTURALLY
     /// (pass-through, no operation applied to it) in a fully-parametric
     /// top-level function (M2a). The carried [`Symbol`] is the source type
@@ -976,6 +999,9 @@ pub fn ir_type_is_derivable(
         | IrType::Decoder(_)
         | IrType::Db
         | IrType::Fun(_, _)
+        // A curried `Box<dyn FnOnce>` chain is exactly as non-derivable as
+        // `Fun` (it renders to the same family of boxed trait objects).
+        | IrType::FnOnceChain(_, _)
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -1093,6 +1119,8 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::Decoder(_)
         | IrType::Db
         | IrType::Fun(_, _)
+        // Same family as `Fun` — a boxed `FnOnce` chain is never serde.
+        | IrType::FnOnceChain(_, _)
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -1313,6 +1341,48 @@ pub enum Expr {
     /// `Box::new(move |p0: T0, ...| -> R { body })`, move-capturing any free
     /// locals. A zero-parameter lambda is a genuine nullary closure.
     Lambda {
+        params: Vec<(Symbol, IrType)>,
+        ret: IrType,
+        body: Box<Self>,
+    },
+    /// A LET-BOUND closure literal that must be reference-counted (`Arc`)
+    /// rather than uniquely owned (`Box`), because the lowerer's capture
+    /// analysis proved the bound symbol is captured-by-move into more than
+    /// one closure environment along some nesting chain (see
+    /// `sky_lower::needs_shared_capture`).
+    ///
+    /// SEAL fix (#164 E0507 pair): `examples/18-job-queue`'s
+    /// `withErrorReporting` (and its `saveSnapshot`/`loadHistory` siblings)
+    /// let-bind a local closure (`logAndFail`, `insertRow`, `selectRecent`)
+    /// that is referenced from INSIDE another, more-deeply-nested closure --
+    /// e.g. `report e = Crypto.randomToken 4 |> Task.andThen (\errId ->
+    /// logAndFail e errId)`. Each `move` closure independently move-captures
+    /// its free locals: the outer `report` closure must own `logAndFail` to
+    /// hand it to the inner `\errId -> ...` closure, which ALSO move-captures
+    /// it to call it. A `Box<dyn Fn>` is not `Clone`, so the inner capture's
+    /// move is illegal against the outer closure's `&self`-borrowed field --
+    /// `cannot move out of ... a captured variable in an Fn closure` (E0507).
+    /// The lowerer's PER-LAMBDA capture classification (`lower_lambda`) has
+    /// no visibility into ANCESTOR closures' captures, so each closure's own
+    /// depth-0 bare-callee exemption fires independently and unsoundly.
+    ///
+    /// Rendering: the backend emits `Arc::new(move |p0: T0, ...| -> R { body
+    /// })` pinned to `Arc<dyn Fn(T0, ...) -> R + Send + Sync + 'static>`
+    /// (`emit_shared_lambda`, mirroring [`Self::Lambda`]'s `emit_lambda` but
+    /// with the `+ Sync` bound Arc needs to itself be `Send + Sync`). Every
+    /// read of the bound symbol at lambda-nesting depth >= 1 relative to its
+    /// binding is rewritten to [`Self::CloneVar`] (`Arc::clone`, cheap
+    /// pointer bump) by `sky_lower::force_shared_capture_clones`; a depth-0
+    /// (non-nested) read stays a bare [`Self::Var`] -- calling through an
+    /// `Arc<dyn Fn>` auto-derefs exactly like `Box<dyn Fn>`, no clone needed.
+    ///
+    /// Produced ONLY by `sky_lower::lower_let`'s `PVar` arm, for a
+    /// function-typed (`IrType::Fun`) let-binding whose capture pre-pass
+    /// fires. Never appears anywhere else (never a `Match` scrutinee, never
+    /// a def-head body, never a bare call-arg lambda) -- the type system
+    /// still models it as an ordinary [`IrType::Fun`]; only its OWN Rust
+    /// pointer representation differs.
+    SharedLambda {
         params: Vec<(Symbol, IrType)>,
         ret: IrType,
         body: Box<Self>,
