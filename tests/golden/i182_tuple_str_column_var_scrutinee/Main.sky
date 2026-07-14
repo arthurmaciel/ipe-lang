@@ -1,0 +1,110 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.String as String
+import Std.Log exposing (println)
+
+
+-- #182 — a VARIABLE (non-literal) tuple scrutinee with a STRING-LITERAL column.
+-- This is the exact shape `Std.Ui.Transform.propsToCss` uses
+-- (`case pair of ( "transform", v ) -> …`), the last blocker for
+-- `Std.Ui.Transform` / `Std.Ui.Animation` / `26-ui-showcase`.
+--
+-- Before #182 the lowerer fail-closed any coercing column (`PStr` / `PList` /
+-- `PCons`) on the by-value whole-tuple path to SKY-L0115. Now a `PStr` column
+-- lowers to a native Rust `match pair { (__sg0, v) if __sg0.as_str() ==
+-- "transform" => … }` — a by-value binder + `as_str()` guard, sound for a
+-- variable scrutinee (mirrors the reference's `renderPatGuarded`). A `PList` /
+-- `PCons` column still fail-closes (only the literal-tuple coerced-column path
+-- can produce the `&[T]` a slice pattern needs).
+
+
+-- (a) variable scrutinee, string-literal column — the `pickTransformPart` shape.
+pickTransformPart : ( String, String ) -> String
+pickTransformPart pair =
+    case pair of
+        ( "transform", v ) ->
+            v
+
+        ( _, _ ) ->
+            "other"
+
+
+-- The `isNotTransform` shape — a wildcard second column, string-literal first.
+isNotTransform : ( String, String ) -> Bool
+isNotTransform pair =
+    case pair of
+        ( "transform", _ ) ->
+            False
+
+        _ ->
+            True
+
+
+-- (c) a `( "x", n )` arm on a `( String, Int )` — string column + int column,
+-- multiple arms so the guard fall-through is exercised.
+classifyKey : ( String, Int ) -> Int
+classifyKey pair =
+    case pair of
+        ( "x", n ) ->
+            n
+
+        ( "y", n ) ->
+            n + 100
+
+        ( _, n ) ->
+            n + 1000
+
+
+-- Two string columns in ONE arm — proves the guards AND together
+-- (`__sg0.as_str() == "a" && __sg1.as_str() == "b"`).
+pairKind : ( String, String ) -> Int
+pairKind pair =
+    case pair of
+        ( "a", "b" ) ->
+            1
+
+        ( "a", _ ) ->
+            2
+
+        ( _, _ ) ->
+            3
+
+
+main =
+    let
+        t1 = pickTransformPart ( "transform", "scale(0.9)" )
+        t2 = pickTransformPart ( "opacity", "0.5" )
+        n1 = isNotTransform ( "transform", "scale(0.9)" )
+        n2 = isNotTransform ( "opacity", "0.5" )
+        c1 = classifyKey ( "x", 5 )
+        c2 = classifyKey ( "y", 5 )
+        c3 = classifyKey ( "z", 5 )
+        k1 = pairKind ( "a", "b" )
+        k2 = pairKind ( "a", "z" )
+        k3 = pairKind ( "q", "z" )
+    in
+    -- t1="scale(0.9)", t2="other", n1=False, n2=True
+    -- c1=5, c2=105, c3=1005 ; k1=1, k2=2, k3=3
+    -- sum of ints = 5 + 105 + 1005 + 1 + 2 + 3 = 1121
+    println
+        (t1
+            ++ "|"
+            ++ t2
+            ++ "|"
+            ++ boolStr n1
+            ++ "|"
+            ++ boolStr n2
+            ++ "|"
+            ++ String.fromInt (c1 + c2 + c3 + k1 + k2 + k3)
+        )
+
+
+boolStr : Bool -> String
+boolStr b =
+    case b of
+        True ->
+            "T"
+
+        False ->
+            "F"

@@ -12270,31 +12270,36 @@ impl<'a> Lowerer<'a> {
                 _ => return Ok(false),
             }
         }
-        // The by-value whole path (non-literal scrutinee) has no per-column
-        // coercion machinery. A column matched against a string literal or sliced
-        // by a cons / list sub-pattern REQUIRES the coerced-column path — which in
-        // turn requires the literal-tuple scrutinee. So a non-literal scrutinee
-        // with any such column stays fail-closed (SKY-L0115) rather than emit a
-        // whole-value `match` that would `cargo`-fail (`&str` / `&[T]` against an
-        // owned `String` / `Vec` element).
+        // The by-value whole path (non-literal scrutinee) matches the tuple value
+        // directly and applies NO per-column `.as_slice()` coercion at any depth.
+        //
+        // A STRING-literal column (`PStr`) IS supported here (#182): the backend
+        // replaces each `PStr` leaf with a fresh binder plus an
+        // `if __sgN.as_str() == "lit"` match guard — a by-value destructure whose
+        // string equality is checked in the guard, sound for a variable scrutinee
+        // exactly as it is for a literal one. This is what lets
+        // `Std.Ui.Transform.propsToCss`'s `case pair of ( "transform", v ) -> …`
+        // lower (the real-world payload; mirrors the reference's `renderPatGuarded`).
+        //
+        // A LIST / CONS column (`PList` / `PCons`) still REQUIRES the coerced-column
+        // path — a slice pattern needs `&[T]` from an owned `Vec`, which only the
+        // literal-tuple scrutinee can produce (there are no element expressions to
+        // `.as_slice()`-wrap a variable tuple column). Such a column at ANY depth
+        // therefore stays fail-closed (SKY-L0115) rather than emit a whole-value
+        // `match` that would `cargo`-fail (`&[T]` against an owned `Vec` element).
         let Some(elems) = literal_elems else {
-            let any_col_needs_coercion = branches.iter().any(|br| {
+            let any_col_needs_literal_tuple_path = branches.iter().any(|br| {
                 let canon::Pattern_::PTuple(cols) = &br.pat.value else {
                     return false;
                 };
-                // A coercing sub-pattern (`PStr` / `PList` / `PCons`) needs the
-                // coerced-column path REGARDLESS of how deeply it is nested. The
-                // by-value whole `match` applies no coercion at ANY depth, so a
-                // `&str` / `&[T]` sub-pattern against an owned `String` / `Vec`
-                // leaf `cargo`-fails. Recurse through every structural column
-                // (nested tuple / ctor args / alias inner / list & cons elements)
-                // — a top-level `PStr` in a ctor-argument column is already caught
-                // by the refutable-ctor gate, but a `PStr` / `PCons` nested inside
-                // a nested-TUPLE column would otherwise slip through the previous
-                // top-level-only check (#174 fix-up: probes E + G).
-                cols.iter().any(Self::col_needs_coercion)
+                // A list / cons sub-pattern needs the coerced-column (literal-tuple)
+                // path REGARDLESS of how deeply it is nested. Recurse through every
+                // structural column (nested tuple / ctor args / alias inner) — a
+                // `PCons` nested inside a nested-TUPLE column would otherwise slip
+                // through a top-level-only check (#174 fix-up: probe G).
+                cols.iter().any(Self::col_needs_literal_tuple_path)
             });
-            return Ok(!any_col_needs_coercion);
+            return Ok(!any_col_needs_literal_tuple_path);
         };
         // Per-column polymorphic-element gate (coerced-column path only): a column
         // bound by a cons / list sub-pattern needs a concrete element type so the
@@ -12320,39 +12325,45 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Does this tuple COLUMN (or any structural sub-pattern nested inside it)
-    /// contain a coercing leaf — a string literal (`PStr`), a list literal
-    /// (`PList`), or a cons (`PCons`) — that the coercion-free by-value whole
-    /// `match` cannot lower soundly?
+    /// contain a leaf — a list literal (`PList`) or a cons (`PCons`) — that ONLY
+    /// the coerced-column (literal-tuple) path can lower soundly, so a variable
+    /// (by-value whole) scrutinee carrying it must stay fail-closed (SKY-L0115)?
     ///
     /// The by-value whole path (non-literal tuple scrutinee) matches the tuple
-    /// value directly and applies NO per-column `.as_str()` / `.as_slice()`
-    /// coercion at ANY depth. A `&str` / `&[T]` sub-pattern against an owned
-    /// `String` / `Vec` leaf therefore `cargo`-fails (E0308 / E0529). The old
-    /// gate inspected only the top-level columns, so a coercing leaf nested
-    /// inside a nested-`PTuple` column (or a ctor argument, an alias inner, or a
-    /// list / cons element) slipped through to the by-value `match` and produced
-    /// a skyc-0-then-cargo-fail (#174 fix-up: probes E + G). Recurse through every
-    /// structural sub-pattern so the whole column tree is checked; a coercing leaf
-    /// found anywhere fails closed to SKY-L0115 — exactly as a top-level coercing
-    /// column already does.
-    fn col_needs_coercion(pat: &canon::Pattern) -> bool {
+    /// value directly and applies NO per-column `.as_slice()` coercion at any
+    /// depth. A slice sub-pattern (`[a, ..]`) needs `&[T]` from an owned `Vec`,
+    /// which only the literal-tuple scrutinee can produce (there are no element
+    /// expressions to `.as_slice()`-wrap a variable tuple column), so a `PList` /
+    /// `PCons` leaf anywhere `cargo`-fails (E0529) on the by-value path — it stays
+    /// fail-closed. (#174 fix-up: probe G — a `PCons` nested inside a nested-`PTuple`
+    /// column slipped through a top-level-only check; this recurses.)
+    ///
+    /// A STRING-literal column (`PStr`) is NOT flagged here (#182): the backend
+    /// renders each `PStr` leaf as a fresh binder plus an `if __sgN.as_str() ==
+    /// "lit"` match guard, which is sound by value regardless of scrutinee shape
+    /// (mirrors the reference's `renderPatGuarded`), so it needs no coerced-column
+    /// path and lowers on the variable-scrutinee path.
+    fn col_needs_literal_tuple_path(pat: &canon::Pattern) -> bool {
         match &pat.value {
-            // Coercing leaves — the shapes that require the coerced-column path.
-            canon::Pattern_::PStr(_) | canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => {
-                true
-            }
+            // List / cons leaves — the shapes that ONLY the coerced-column path can
+            // lower (a slice pattern against an owned `Vec` element).
+            canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => true,
             // Structural sub-patterns — recurse into every child. `PList` / `PCons`
-            // are handled by the leaf arm above (they are themselves coercing), so
-            // only the remaining nesting shapes appear here.
-            canon::Pattern_::PTuple(cols) => cols.iter().any(Self::col_needs_coercion),
-            canon::Pattern_::PCtor { args, .. } => args.iter().any(Self::col_needs_coercion),
-            canon::Pattern_::PAlias(inner, _) => Self::col_needs_coercion(inner),
-            // Non-coercing leaves — a wildcard, variable, record field-pun (binds
-            // names only, no nested sub-patterns), or a scalar literal all match by
-            // value with no coercion.
+            // are handled by the leaf arm above, so only the remaining nesting
+            // shapes appear here.
+            canon::Pattern_::PTuple(cols) => cols.iter().any(Self::col_needs_literal_tuple_path),
+            canon::Pattern_::PCtor { args, .. } => {
+                args.iter().any(Self::col_needs_literal_tuple_path)
+            }
+            canon::Pattern_::PAlias(inner, _) => Self::col_needs_literal_tuple_path(inner),
+            // Leaves the by-value whole path lowers directly — a wildcard, variable,
+            // record field-pun, a scalar literal, or a string literal (handled by the
+            // backend's binder + `as_str()` guard, #182) all match without a
+            // coerced-column path.
             canon::Pattern_::PAnything
             | canon::Pattern_::PVar(_)
             | canon::Pattern_::PRecord(_)
+            | canon::Pattern_::PStr(_)
             | canon::Pattern_::PInt(_)
             | canon::Pattern_::PBool(_)
             | canon::Pattern_::PChar(_) => false,

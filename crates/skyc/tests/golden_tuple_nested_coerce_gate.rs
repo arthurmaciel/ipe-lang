@@ -1,45 +1,50 @@
-//! #174 fix-up — a coercing leaf (`PStr` / `PList` / `PCons`) nested inside a
-//! nested-TUPLE column on a VARIABLE (non-literal) tuple scrutinee must fail
-//! closed to SKY-L0115 at `skyc` time — NOT slip through to the coercion-free
-//! by-value whole `match` and produce a skyc-0-then-cargo-fail.
+//! #174 fix-up + #182 — a coercing leaf nested inside a nested-TUPLE column on a
+//! VARIABLE (non-literal) tuple scrutinee.
 //!
-//! Adversarial review of `3cc891e` found the non-literal-scrutinee gate inspected
-//! only the TOP-LEVEL columns for coercing sub-patterns. A `PStr` / `PCons`
-//! nested inside a nested-`PTuple` column — the very shape the by-value path newly
-//! admits — slipped through:
+//! Two shapes, two outcomes (both SEAL-clean — never skyc-0-then-cargo-fail):
 //!
-//! * PROBE E: `case v of ( ( "x", n ), A ) -> …` on `v : ((String,Int), Tag)` →
-//!   emitted `match v { (("x", n), A) => … }` → cargo E0308 (`&str` vs `String`).
-//! * PROBE G: `case v of ( ( x :: _, n ), A ) -> …` on `v : ((List Int,Int),Tag)`
-//!   → emitted `(([x, ..], n), …)` → cargo E0529 (slice vs `Vec`).
+//! * PROBE E — a string LITERAL (`PStr`) nested in a nested-tuple column:
+//!   `case v of ( ( "x", n ), A ) -> …` on `v : ((String,Int), Tag)`.
+//!   **#182 makes this SUPPORTED.** The backend renders each nested `PStr` leaf as
+//!   a fresh binder plus an `if __sgN.as_str() == "lit"` match guard, so it lowers
+//!   to `match v { ((__sg0, n), Tag::A) if __sg0.as_str() == "x" => … }` — a
+//!   by-value binder + `as_str()` guard, sound for a variable scrutinee (mirrors
+//!   the reference's `renderPatGuarded`). skyc-0 ⟹ cargo-0 ⟹ the right arm fires.
 //!
-//! The gate now recurses through every structural column (nested tuple / ctor
-//! args / alias inner / list & cons elements); a coercing leaf found anywhere
-//! fails closed to SKY-L0115 — an honest skyc-fail, exactly as a top-level
-//! coercing column already does. This test locks both probes so the hole can
-//! never reopen.
+//! * PROBE G — a CONS sub-pattern (`PCons`) nested in a nested-tuple column:
+//!   `case v of ( ( x :: _, n ), A ) -> …` on `v : ((List Int,Int), Tag)`.
+//!   **Still fail-closed to SKY-L0115.** A slice pattern needs `&[T]` from an
+//!   owned `Vec`, which only the literal-tuple coerced-column path can produce
+//!   (there are no element expressions to `.as_slice()`-wrap a variable tuple
+//!   column). So a `PList` / `PCons` column at any depth stays an honest
+//!   skyc-fail, never an exit-0-then-cargo-fail.
 
 use std::path::{Path, PathBuf};
 
 use skyc::CliError;
+
+mod support;
 
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Build the named golden fixture and assert it surfaces exactly SKY-L0115 as a
-/// pipeline diagnostic. A build that SUCCEEDS (the pre-fix-up exit-0 hole), or
-/// fails with any other error, makes `got` differ from `Some(SKY_L0115)` and
-/// fails with a descriptive message — never a panic. A skip occurs only when the
-/// runtime cannot be resolved.
-fn assert_l0115_gate(fixture: &str, out_suffix: &str) {
-    let root = repo_root();
-    let entry = root
+fn fixture_entry(fixture: &str) -> PathBuf {
+    repo_root()
         .join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky");
+        .join("Main.sky")
+}
+
+/// Build the named golden fixture and assert it surfaces exactly SKY-L0115 as a
+/// pipeline diagnostic. A build that SUCCEEDS (an exit-0 hole), or fails with any
+/// other error, makes `got` differ from `Some(SKY_L0115)` and fails with a
+/// descriptive message — never a panic. A skip occurs only when the runtime
+/// cannot be resolved.
+fn assert_l0115_gate(fixture: &str, out_suffix: &str) {
+    let entry = fixture_entry(fixture);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
@@ -54,19 +59,66 @@ fn assert_l0115_gate(fixture: &str, out_suffix: &str) {
     assert_eq!(
         got,
         Some(sky_diagnostics::SKY_L0115),
-        "fixture {fixture}: a coercing sub-pattern nested in a nested-tuple column \
+        "fixture {fixture}: a list / cons sub-pattern nested in a nested-tuple column \
          must fail closed to SKY-L0115 (never skyc-0-then-cargo-fail); got build \
          result {built:?}"
     );
 }
 
-/// PROBE E: a string literal (`PStr`) nested inside a nested-tuple column.
+/// PROBE E: a string literal (`PStr`) nested inside a nested-tuple column now
+/// LOWERS (fast gate — `skyc build` succeeds, #182).
 #[test]
-fn nested_tuple_str_column_is_sky_l0115() {
-    assert_l0115_gate("i_tuple_nested_coerce_str", "tuple_nested_coerce_str_emit");
+fn nested_tuple_str_column_builds() {
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tuple_nested_coerce_str_gate");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+    let built = skyc::build(&fixture_entry("i_tuple_nested_coerce_str"), &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "a string-literal column nested in a nested-tuple column on a variable \
+         scrutinee must build (#182 binder + `as_str()` guard); got {:?}",
+        built.err()
+    );
 }
 
-/// PROBE G: a cons sub-pattern (`PCons`) nested inside a nested-tuple column.
+/// PROBE E seal (`SKY_E2E=1`): the emitted Rust cargo-builds and runs, the right
+/// arm firing. `classify (("x", 5), A)` matches the first arm → prints `5`.
+#[test]
+fn nested_tuple_str_column_cargo_builds_and_runs() {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    let out = std::env::temp_dir().join("skyc_tuple_nested_coerce_str_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+    let built = skyc::build(&fixture_entry("i_tuple_nested_coerce_str"), &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "skyc build must succeed for i_tuple_nested_coerce_str: {:?}",
+        built.err()
+    );
+    let outcome = support::build_and_run_emitted("i_tuple_nested_coerce_str", &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "emitted string-column tuple-match program must exit 0"
+    );
+    assert!(
+        outcome.stdout.contains('5'),
+        "expected '5' (first arm, `(\"x\", 5)`); got:\n{}",
+        outcome.stdout
+    );
+}
+
+/// PROBE G: a cons sub-pattern (`PCons`) nested inside a nested-tuple column stays
+/// fail-closed to SKY-L0115 — only the literal-tuple coerced-column path can
+/// lower a slice column soundly.
 #[test]
 fn nested_tuple_cons_column_is_sky_l0115() {
     assert_l0115_gate(
