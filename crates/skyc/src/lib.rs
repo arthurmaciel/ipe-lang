@@ -760,14 +760,20 @@ pub fn compile_prepared(
     // analysis cannot go undetected.
     sky_db::program_metadata(db, source_root, entry_file).map_err(span_attributed_err)?;
 
-    // `sky_db::emit_project` (Task 17 / Phase-5 §10.2 continuation item 2) —
-    // the memoized SEAM over `RustBackend::emit`, keyed on `(root, entry,
-    // config)`. A repeat demand or a no-op re-save (source unchanged AND
-    // `config.db_driver` unchanged) executes nothing; a `db_driver`-only
-    // edit re-executes this query without re-touching `linked_program` /
-    // `typecheck` / `lower_program` at all (proven by
-    // `crates/sky_db/tests/phase6_build_config.rs`).
-    let emitted = sky_db::emit_project(db, source_root, entry_file, config)
+    // `sky_db::emit_manifest` (Milestone D / Phase-5 §4.4) — the top-level
+    // emit demand, now assembled from the per-`RustFileId` query graph:
+    // `program_rust_file_ids` + `emit_spine_file` + one `emit_rust_file` per
+    // home. For a single-module program it routes straight to `emit_project`
+    // (byte-identical Spine-collapse); for a genuine 2+-home program it
+    // assembles the split from those per-file memos, so a body edit to an
+    // UNRELATED module early-cuts that module's `emit_rust_file` (byte-identical
+    // value → salsa backdate → the on-disk write skips, §4.3). Same
+    // `EmitResult` SHAPE as the former `emit_project` demand, so
+    // `build_emit_manifest`/`reconcile_emitted_project`/`prune_orphaned_files`
+    // need zero changes (§4.4). The no-op-rebuild + `db_driver`-only
+    // memoization properties `phase6_build_config.rs` proves still hold — the
+    // config field flows through unchanged.
+    let emitted = sky_db::emit_manifest(db, source_root, entry_file, config)
         .map_err(span_attributed_err)?;
     Ok((*emitted).clone())
 }
