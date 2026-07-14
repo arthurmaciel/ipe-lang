@@ -1,32 +1,26 @@
 #!/usr/bin/env bash
-# autopilot.sh — the self-refilling autonomous development loop.
+# autopilot.sh — the autonomous development loop over the backlog (backlog.jsonl).
 #
-#   fix → measure → triage → mechanical-burn → guardian-burn → audit → repeat
+#   pick pending item → design → impl → adversarial review → gate → audit → repeat
 #
-# It runs until everything mechanical is burned and every guardian item is either
-# soundly fixed or waiting on a human decision — then STOPS and reports. It never
-# manufactures busy-work.
+# The WORK SOURCE is backlog.jsonl (the SSOT), NOT a sweep. There is NO remeasure/
+# triage refill and NO mechanical-vs-guardian tier: EVERY pending item runs the SAME
+# design→impl→review→gate pipeline. It runs until every actionable backlog item is
+# either soundly fixed or ESCALATED to a human — then STOPS. It never invents work.
 #
-#   mechanical PENDING?  → orchestrate.sh (parallel Sonnet lanes, gate-grade)
-#   none?                → audit the landed digest (Opus, adversarial)
-#                        → remeasure.sh + no-panic FUZZER (deterministic sweep;
-#                          a fuzzer panic = a soundness bug = a new guardian item)
-#                        → triage (Opus, CONSERVATIVE): classify new blockers into
-#                          the queue — mechanical vs guardian; hard-exclude
-#                          security/unsafe/FFI/divergence (never mechanical)
-#   new mechanical?      → loop
-#   only guardian?       → route by CLASS (type-system / runtime / security),
-#                          dispatch a class-specialised Opus guardian (worktree) +
-#                          a class-specific adversarial review + the FUZZER gate;
-#   nothing actionable?  → TERMINAL: stop, emit the landed digest for human audit
+#   pending backlog item? → route by CLASS (a heuristic that only tailors the
+#                           design/review FOCUS + preserves the security HARD-RULE):
+#                           type-system / runtime / security. Dispatch a
+#                           class-specialised Opus guardian (worktree) + a
+#                           class-specific adversarial review + the FUZZER gate.
+#   after each landed item → audit the landed digest (Opus, adversarial).
+#   nothing actionable?   → TERMINAL: stop, emit the landed digest for human audit.
 #
-# SOUNDNESS NOTE: the gate (cargo test) is a sufficient oracle for MECHANICAL work
-# but NOT for type-system/soundness work. Guardian output is therefore verified at
-# soundness-grade: an independent adversarial review (a second Opus told to REFUTE
-# the fix) AND the no-panic fuzzer (scripts/fuzz-well-typed.sh — proven to catch a
-# real panic). The fuzzer is DUAL-ROLE: bug-finder in the measure phase, verifier
-# at the guardian gate. Never trust the gate alone for guardian changes. The human
-# keeps a LIGHT meta-audit of the guardian tier via the digest.
+# SOUNDNESS NOTE: cargo test alone is NOT a sufficient oracle for type-system work.
+# Every item is verified at soundness-grade: an independent adversarial review (a
+# second Opus told to REFUTE the fix) AND the no-panic fuzzer (scripts/
+# fuzz-well-typed.sh — proven to catch a real panic) at the integrate gate. Never
+# trust the gate alone. The human keeps a LIGHT meta-audit via the digest.
 #
 # VERIFICATION MODEL (2026-07-14, distilled from the manual burndown):
 #   * The trust boundary is a SCRIPT'S captured exit code, never an agent's
@@ -36,10 +30,10 @@
 #     LLM is for); the SCRIPT runs the build/test/SEAL and branches on `$?` (the
 #     part that must not be delegated). The gate below (`&&`-chained nextest +
 #     --features full + doctest + clippy + fuzz, revert-on-fail) is that oracle.
-#   * The EXAMPLES SWEEP (remeasure.sh, measure phase) IS the SEAL oracle:
-#     skyc-exit-0 MUST imply the emitted crate cargo-builds. A "fix" that closes
-#     an example only in an agent's report but not for real is re-surfaced RED by
-#     the next remeasure and re-queued — the loop self-corrects, deterministically.
+#   * THE SEAL is the gate oracle: skyc-exit-0 MUST imply the emitted crate
+#     cargo-builds. A "fix" that only an agent's report closes but not for real
+#     fails the gate (nextest + fuzz), is reverted, and re-queued PENDING — the
+#     loop self-corrects, deterministically, off the ledger not a re-sweep.
 #   * Adversarial review = build the COMMITTED branch (cache-hits on unchanged
 #     code are fine — recompiling identical deterministic source yields the same
 #     binary, zero signal), then RUN the SEAL + tests + the reviewer's OWN probes.
@@ -64,7 +58,16 @@ GUARDIAN_MODEL="${PROGDEV_GUARDIAN_MODEL:-claude-opus-4-8}"
 AUTHOR_MODEL="${PROGDEV_AUTHOR_MODEL:-claude-sonnet-4-6}"   # Sonnet implements the design
 DESIGN_MODEL="${PROGDEV_DESIGN_MODEL:-claude-fable-5}"      # v5: Fable designs — out-reasoned Opus on 27 (found the Dict-carrier TypeId soundness fix Opus missed); Sonnet implements
 GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
-QUEUE="docs/architecture/progressive-development-queue.tsv"   # <STATUS>\t<KIND>\t<desc>
+QUEUE="docs/architecture/progressive-development-queue.tsv"   # ATTEMPT LEDGER only (mark/attempts_of) — NOT the work source
+BACKLOG="$HERE/backlog.jsonl"                                 # THE work source: pending items (SSOT)
+# Every pending backlog item runs the SAME pipeline (design→impl→review→gate) —
+# there is NO mechanical-vs-guardian tier. This heuristic only tailors the
+# design/review FOCUS + preserves the security HARD-RULE scrutiny.
+classify() { case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in
+  *auth*|*secret*|*crypto*|*password*|*sql*|*unsafe*|*ffi*|*token*|*jwt*) printf 'guardian-security' ;;
+  *panic*|*e0382*|*e0507*|*e0277*|*e0308*|*cargo-fail*|*seal*|*runtime*|*oracle*) printf 'guardian-runtime' ;;
+  *) printf 'guardian-typesystem' ;;
+esac; }
 RESUME_DIR="docs/architecture/progressive-development-resume"  # gitignored guardian resume artifacts
 GUARDIAN_ATTEMPTS="${PROGDEV_GUARDIAN_ATTEMPTS:-2}"  # v4: 2 resuming attempts, then phase-4 (review-dominated failures → 3rd try low-yield)
 DIGEST="docs/architecture/progressive-development-digest.md"
@@ -274,28 +277,26 @@ START_SHA="$(git rev-parse HEAD)"
 mkdir -p "$(dirname "$QUEUE")"; touch "$QUEUE"
 log "start: base=$BASE start=$START_SHA max_cycles=$MAX_CYCLES max_guardian=$MAX_GUARDIAN"
 
-# queue helpers (append-only history; newest status per desc wins). Actionability:
-# a MECHANICAL item is dropped after 2 attempts (it must not spin the loop). A
-# GUARDIAN item gets up to GUARDIAN_ATTEMPTS *thoughtful* tries — each one RESUMES
-# from the prior attempt's saved artifact rather than restarting cold — and is
-# ESCALATED to a human only after exhausting them. ESCALATED = final (suppressed).
+# Ledger helpers ($QUEUE is now ONLY the attempt ledger, NOT the work source —
+# the work source is $BACKLOG). Every item gets up to GUARDIAN_ATTEMPTS *thoughtful*
+# tries — each RESUMES from the prior attempt's saved artifact rather than restarting
+# cold — then is ESCALATED to a human. ESCALATED = final (suppressed from pending()).
 # This is what lets the loop converge while still giving hard items a real effort.
-pending() { # mechanical: 2 attempts, then suppressed
-    awk -F'\t' -v k="$1" '
-        { st[$3]=$1; kd[$3]=$2
-          if($1=="ESCALATED"||$1=="BLOCKED") dead[$3]=1
-          if($1=="ATTEMPTED") att[$3]++ }
-        END{for(d in st) if(st[d]=="PENDING" && kd[d]==k && !(d in dead) && att[d]<2) print d}' "$QUEUE"
-}
-pending_guardian() { # guardian: up to GUARDIAN_ATTEMPTS resuming tries, then ESCALATED
-    awk -F'\t' -v maxa="$GUARDIAN_ATTEMPTS" '
-        { st[$3]=$1; kd[$3]=$2
-          if($1=="ESCALATED") dead[$3]=1
-          if($1=="ATTEMPTED"||$1=="BLOCKED") att[$3]++ }
-        END{for(d in st) if(st[d]=="PENDING" && kd[d] ~ /^guardian/ && !(d in dead) && att[d]<maxa) print kd[d]"\t"d}' "$QUEUE"
+pending() { # THE work source: every actionable backlog.jsonl item → "<class>\t#<id> <task>"
+    # actionable = status pending + blockers resolved + not ESCALATED + < GUARDIAN_ATTEMPTS tries.
+    # ONE uniform stream (no mechanical/guardian tier); class only tailors focus.
+    command -v jq >/dev/null 2>&1 || return 0
+    jq -r 'select((.id//"")!="" and .status=="pending" and ((.blocked_by//[])|length==0))
+           | "#\(.id) " + ((.task//"") | gsub("[\n\t]";" "))' "$BACKLOG" 2>/dev/null \
+      | while IFS= read -r d; do
+          [ -z "$d" ] && continue
+          # skip if escalated (dead) in the ledger, or already tried GUARDIAN_ATTEMPTS times
+          x="$d" awk -F'\t' 'BEGIN{x=ENVIRON["x"]} $3==x && $1=="ESCALATED"{f=1} END{exit f}' "$QUEUE" 2>/dev/null || continue
+          [ "$(attempts_of "$d")" -lt "${GUARDIAN_ATTEMPTS:-2}" ] && printf '%s\t%s\n' "$(classify "$d")" "$d"
+        done
 }
 mark() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$QUEUE"; }   # status kind desc
-attempts_of() { awk -F'\t' -v d="$1" '$3==d && ($1=="ATTEMPTED"||$1=="BLOCKED"){n++} END{print n+0}' "$QUEUE"; }
+attempts_of() { d="$1" awk -F'\t' 'BEGIN{d=ENVIRON["d"]} $3==d && ($1=="ATTEMPTED"||$1=="BLOCKED"){n++} END{print n+0}' "$QUEUE"; }
 slug_of()     { printf '%s' "$1" | tr -cs 'A-Za-z0-9' '-' | sed 's/^-//;s/-*$//' | cut -c1-64; }
 # Save what a guardian attempt tried (diff + why it didn't land) so the NEXT
 # attempt resumes instead of restarting cold. Gitignored → survives git reset.
@@ -361,7 +362,7 @@ while :; do
 
     # convergence: did the PREVIOUS cycle make progress? (HEAD advanced, or work remains)
     cur_head="$(git rev-parse HEAD)"
-    act="$({ pending mechanical; pending_guardian; } | wc -l | tr -d ' ')"
+    act="$(pending | wc -l | tr -d ' ')"
     if [ -n "$prev_head" ] && [ "$cur_head" = "$prev_head" ] && [ "$act" -eq 0 ]; then
         dry=$((dry+1)); log "no-progress pass $dry/2 (nothing landed, no tractable findings)"
         [ "$dry" -ge 2 ] && { log "converged — 2 dry passes; work done or human-blocked. stopping."; break; }
@@ -371,26 +372,10 @@ while :; do
     prev_head="$cur_head"
     log "cycle $cycle (dry=$dry, actionable=$act)"
 
-    # 1 ── mechanical batch ──────────────────────────────────────────────────
-    mapfile -t mech < <(pending mechanical)
-    if [ "${#mech[@]}" -gt 0 ]; then
-        batch=("${mech[@]:0:${PROGDEV_LANES:-2}}")
-        log "mechanical batch: ${#batch[@]} item(s) → orchestrate.sh"
-        PROGDEV_TS="auto-c$cycle" "$HERE/orchestrate.sh" "${batch[@]}" 2>&1 | sed 's/^/    /'
-        for d in "${batch[@]}"; do mark ATTEMPTED mechanical "$d"; done  # sweep re-surfaces genuine misses
-        # Proactive hygiene (2026-07-13): orchestrate.sh already removes its OWN
-        # lane worktrees/branches on exit, but their CARGO_TARGET_DIRs (tens of
-        # GB apiece under real workloads) were only ever reclaimed reactively,
-        # when a LATER cycle's ensure_disk happened to notice free space below
-        # DISK_FLOOR. That "clean up eventually, once it's already a crisis"
-        # pattern is exactly what let free space hit 1GB mid-session once —
-        # reclaim unconditionally, right here, every cycle a batch lands,
-        # before disk pressure has a chance to build.
-        reclaim_disk
-        continue
-    fi
+    # 1 ── (mechanical tier ABOLISHED) — every backlog item runs the SAME
+    #       design→impl→review→gate pipeline below; no orchestrate.sh fast-path.
 
-    # 2 ── no mechanical: audit what landed, then remeasure + triage ──────────
+    # 2 ── audit what landed (adversarial soundness review of new commits) ────
     if [ "$(git rev-parse HEAD)" != "$START_SHA" ] && [ "$(git rev-parse HEAD)" != "$last_audit" ]; then
         last_audit="$(git rev-parse HEAD)"
         log "digest audit: adversarial review of landed commits (Opus)"
@@ -403,28 +388,12 @@ For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <s
         fi
     fi
 
-    log "remeasure (sweep)"; "$HERE/remeasure.sh" 2>&1 | tail -3 | sed 's/^/    /'
-    # Fuzz-in-measure: the no-panic fuzzer is a BUG-FINDER here — a well-typed
-    # program that panics is a soundness bug, and it becomes a guardian item.
-    log "fuzz (soundness sweep, $FUZZ_ITERS iters)"
-    if "$FUZZ" --iters "$FUZZ_ITERS" --quiet >/tmp/autopilot-fuzz-c$cycle.log 2>&1; then
-        log "fuzz clean"
-    else
-        fdir="$(rg -o '/tmp/sky-fuzz/FAILURES/[^ ]+' /tmp/autopilot-fuzz-c$cycle.log 2>/dev/null | tail -1)"
-        log "FUZZ FOUND A SOUNDNESS BUG → filing a guardian item (artifacts: ${fdir:-see /tmp/autopilot-fuzz-c$cycle.log})"
-        mark PENDING guardian-runtime "SOUNDNESS: the no-panic fuzzer built a well-typed Sky program that PANICKED at runtime — a codegen/runtime soundness bug. Repro artifacts: ${fdir:-/tmp/autopilot-fuzz-c$cycle.log} (src + emitted Rust + run.log). Root-cause it; verify the fix with $FUZZ. HIGHEST priority — this is an 'if-it-compiles-it-works' violation."
-    fi
-    log "triage (Opus, conservative)"
-    agent "$GUARDIAN_MODEL" "You are TRIAGING the Ipê compiler backlog to refill the autonomous work queue. Read docs/architecture/remeasure-snapshot.tsv (current per-example blockers) and the repo. For each blocker NOT already resolved, decide its class and append ONE line per item to $QUEUE in the exact format '<STATUS>\t<KIND>\t<one-line description>' (tab-separated), STATUS=PENDING.
-KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime' | 'guardian-security'. Use 'mechanical' ONLY if it is a clean, reference-backed wire with no design or soundness decision (a missing kernel to wire with an existing template, a module to register, a fixture parse issue). Otherwise pick the guardian CLASS: 'guardian-security' if it touches auth/secrets/crypto/SQL/\`unsafe\`/FFI (HARD RULE — such an item is NEVER mechanical); 'guardian-runtime' for a runtime panic / emitted-code behaviour bug / oracle DIVERGENCE in runtime output; 'guardian-typesystem' for an inferencer/solver/codegen soundness or any other type-checking bug. When UNSURE mechanical-vs-guardian → guardian (a wrong 'mechanical' tag lets an unattended lane hack it). When unsure WHICH guardian class → 'guardian-typesystem'. Each mechanical description must be self-contained enough for a lane to execute (name the kernel/site + the reference template). Do NOT do the work; only classify + append. Print TRIAGE: <n> mechanical, <m> guardian appended." 2>&1 | tee /tmp/autopilot-triage-c$cycle.log | show_agent triage
-
-    mapfile -t mech2 < <(pending mechanical)
-    [ "${#mech2[@]}" -gt 0 ] && { log "triage produced ${#mech2[@]} mechanical item(s) — looping"; continue; }
-
-    # 3 ── guardian tier: dispatch + adversarial review ──────────────────────
-    mapfile -t guard < <(pending_guardian)   # each entry: "<guardian-class>\t<desc>"
+    # 2b ── (remeasure sweep + fuzz + triage ABOLISHED) — the work source is
+    #        backlog.jsonl, so there is no sweep to discover/refill items.
+    # 3 ── dispatch: the UNIFIED pipeline over pending backlog items ──────────
+    mapfile -t guard < <(pending)   # each entry: "<class>\t#<id> <task>" (class = focus only)
     if [ "${#guard[@]}" -eq 0 ]; then log "nothing actionable this pass"; continue; fi
-    log "no mechanical left; ${#guard[@]} guardian item(s). Dispatching up to $MAX_GUARDIAN this run."
+    log "${#guard[@]} backlog item(s) actionable. Dispatching up to $MAX_GUARDIAN this run (same pipeline for all)."
     done_guard=0
     for g in "${guard[@]}"; do
         [ "$done_guard" -ge "$MAX_GUARDIAN" ] && break
