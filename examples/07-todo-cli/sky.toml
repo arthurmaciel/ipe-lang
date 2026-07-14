@@ -1,0 +1,10 @@
+name = "07-todo-cli"
+version = "0.1.0"
+entry = "src/Main.sky"
+
+[source]
+root = "src"
+
+[database]
+driver = "sqlite"
+path = "todos.db"
