@@ -268,14 +268,21 @@ _view_graph() {
     fi
     local ppcfg; ppcfg="$(mktemp)"
     printf '{"args":["--no-sandbox","--disable-setuid-sandbox","--disable-gpu"]}' > "$ppcfg"
+    # Mermaid config: htmlLabels=false emits real SVG <text> (the default
+    # htmlLabels=true buries labels in <foreignObject> HTML that renders blank
+    # outside a browser); monospace matches the terminal board.
+    local mmconf; mmconf="$(mktemp)"
+    printf '{"flowchart":{"htmlLabels":false,"useMaxWidth":false},"themeVariables":{"fontFamily":"monospace"}}' > "$mmconf"
+    # -s 3 = 3x scale (crisp PNG text); -b white = opaque background.
+    local mmargs=(-p "$ppcfg" -c "$mmconf" -s 3 -b white)
 
     if [ -n "$runner" ] \
-        && PUPPETEER_EXECUTABLE_PATH="$browser" $runner -p "$ppcfg" -i "$mmd" -o "$svg" >/dev/null 2>&1 \
-        && PUPPETEER_EXECUTABLE_PATH="$browser" $runner -p "$ppcfg" -i "$mmd" -o "$png" >/dev/null 2>&1; then
-        rm -f "$ppcfg"
+        && PUPPETEER_EXECUTABLE_PATH="$browser" $runner "${mmargs[@]}" -i "$mmd" -o "$svg" >/dev/null 2>&1 \
+        && PUPPETEER_EXECUTABLE_PATH="$browser" $runner "${mmargs[@]}" -i "$mmd" -o "$png" >/dev/null 2>&1; then
+        rm -f "$ppcfg" "$mmconf"
         echo "rendered: $svg + $png  (source: $mmd)" >&2
     else
-        rm -f "$ppcfg"
+        rm -f "$ppcfg" "$mmconf"
         echo "backlog.sh: Mermaid render failed (need mmdc + a Chromium; set MMDC=/path/to/mmdc and/or PUPPETEER_EXECUTABLE_PATH=/path/to/chromium)." >&2
         echo "backlog.sh: wrote $mmd — render manually: mmdc -i $mmd -o backlog.svg" >&2
         cat "$mmd"
