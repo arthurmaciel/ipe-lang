@@ -1256,6 +1256,21 @@ pub enum Expr {
     Call {
         callee: Callee,
         args: Vec<Self>,
+        /// A turbofish pin for a polymorphic kernel whose free result type
+        /// parameter the HM solver left GENUINELY UNCONSTRAINED at this call
+        /// site (a discarded / empty / phantom position). Without it the
+        /// emitted Rust hits `E0282`/`E0283` "type annotations needed" — the
+        /// SEAL-violating exit-0-then-cargo-fail class (#181).
+        ///
+        /// The lowerer sets a non-[`CallPin::None`] value ONLY when the
+        /// relevant parameter's solved type is a free type variable that is
+        /// NOT bound by an enclosing generic function's signature (which would
+        /// already pin it, making an added turbofish a conflict). When the
+        /// type is concrete, rustc infers it from the argument / context, so
+        /// the pin stays [`CallPin::None`] and emission is byte-identical to
+        /// the pre-#181 output. Every IR→IR rewrite that reconstructs a `Call`
+        /// MUST preserve this field.
+        pin: CallPin,
     },
     /// A tuple constructor `(e1, e2, ...)`.
     ///
@@ -1461,6 +1476,65 @@ pub enum Expr {
 pub enum Callee {
     Func(FuncId),
     Kernel(KernelFn),
+}
+
+/// A per-call-site turbofish pin for a polymorphic kernel (#181).
+///
+/// Set when the HM solver left the kernel's free result type parameter
+/// genuinely unconstrained. Each variant names the SEMANTIC default the emitter
+/// renders; the mapping to a concrete `::<…>` suffix lives in the backend
+/// (`emit_expr`), so this enum stays a small, typed decision — never a raw
+/// string in the IR.
+///
+/// The lowerer only ever emits a non-[`Self::None`] variant when the free
+/// parameter is a bare type variable NOT bound by an enclosing generic
+/// signature; a concrete parameter needs no pin (rustc infers it) and stays
+/// [`Self::None`], keeping emission byte-identical to the pre-#181 output.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, Default)]
+pub enum CallPin {
+    /// No turbofish — the common case (rustc infers every type parameter).
+    #[default]
+    None,
+    /// A single free element/value type defaulted to `i64` — `::<i64>`.
+    /// Used by `list_head` / `list_tail` / `set_empty` and the `task_fail`
+    /// main-crate wrapper (`fn task_fail<A>(…) -> SkyTask<A>`, error already
+    /// pinned to `SkyError`).
+    DefaultI64,
+    /// A free key AND value defaulted to a String-keyed i64-valued map —
+    /// `::<String, i64>`. Used by `dict_empty` (`fn dict_empty<K, V>()`).
+    DefaultDict,
+    /// Two inferred leading parameters and a trailing free type defaulted to
+    /// `i64` — `::<_, _, i64>`. Used by `sky_result_map_error<E, F, A>` where
+    /// the `Ok` type `A` is discarded (the value comes only from an `Err`).
+    DefaultResultMapErr,
+    /// A single free error/phantom parameter pinned to the project's canonical
+    /// error type — `::<SkyError>`. Used by `decimal_from_string<E: From<String>>`
+    /// when the `Err` channel is discarded.
+    ErrSkyError,
+}
+
+impl CallPin {
+    /// The turbofish suffix this pin renders immediately after a kernel's name
+    /// (before its `(` argument list): `dict_empty::<String, i64>(…)`, etc.
+    /// [`Self::None`] renders the empty string, so an unpinned call is emitted
+    /// byte-identically to the pre-#181 output.
+    ///
+    /// The concrete default types (`i64` / `String` / `SkyError`) mirror the
+    /// Go/Haskell reference's polymorphic-kernel defaults: a genuinely
+    /// unconstrained parameter has no observable effect on behaviour (the value
+    /// is discarded / the collection is empty / the task never yields), so any
+    /// inhabited default is sound — `i64` and `String` are the reference's
+    /// canonical choices, `SkyError` the project's canonical error type.
+    #[must_use]
+    pub const fn turbofish(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::DefaultI64 => "::<i64>",
+            Self::DefaultDict => "::<String, i64>",
+            Self::DefaultResultMapErr => "::<_, _, i64>",
+            Self::ErrSkyError => "::<SkyError>",
+        }
+    }
 }
 
 /// Every stdlib kernel function known to the Sky compiler.
@@ -2889,7 +2963,9 @@ mod tests {
                 args: vec![Expr::Call {
                     callee: Callee::Kernel(KernelFn::StringFromInt),
                     args: vec![Expr::Int(1)],
+                    pin: CallPin::None,
                 }],
+                pin: CallPin::None,
             },
         };
         let program = Program {
@@ -3332,8 +3408,8 @@ mod serde_persistence_tests {
     use sky_intern::{Interner, SerdeInternerGuard};
 
     use super::{
-        Arm, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module, Pat,
-        Program, TypeDef, Variant,
+        Arm, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
+        Module, Pat, Program, TypeDef, Variant,
     };
     use crate::pretty::pretty;
 
@@ -3462,6 +3538,7 @@ mod serde_persistence_tests {
                     body: Expr::Call {
                         callee: Callee::Kernel(KernelFn::LogPrintln),
                         args: vec![],
+                        pin: CallPin::None,
                     },
                 }],
                 entry: None,

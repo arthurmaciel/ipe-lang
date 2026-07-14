@@ -44,7 +44,9 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::{Interner, Symbol};
-use sky_ir::{Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Pat, Program};
+use sky_ir::{
+    CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Pat, Program,
+};
 
 /// A single-module program with the given funcs and optional entry.
 fn program(name: Symbol, funcs: Vec<Func>, entry: Option<FuncId>) -> Program {
@@ -130,8 +132,11 @@ fn getx_program(interner: &mut Interner) -> DResult<Program> {
                 args: vec![Expr::Call {
                     callee: Callee::Func(FuncId::from_raw(0)),
                     args: vec![Expr::Record(vec![(x, Expr::Int(7)), (y, Expr::Int(2))])],
+                    pin: CallPin::None,
                 }],
+                pin: CallPin::None,
             }],
+            pin: CallPin::None,
         },
     };
 

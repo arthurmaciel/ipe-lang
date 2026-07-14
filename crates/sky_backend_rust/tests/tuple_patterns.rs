@@ -35,8 +35,8 @@ use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::Interner;
 use sky_ir::{
-    Arm, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Pat, Program,
-    TypeDef, Variant,
+    Arm, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Pat,
+    Program, TypeDef, Variant,
 };
 
 fn emit(interner: &Interner, prog: &Program) -> DResult<String> {
@@ -122,8 +122,11 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
                         variant: mk_wrap,
                         args: vec![Expr::Tuple(vec![Expr::Int(3), Expr::Int(4)])],
                     }],
+                    pin: CallPin::None,
                 }],
+                pin: CallPin::None,
             }],
+            pin: CallPin::None,
         },
     };
 

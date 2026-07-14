@@ -15,7 +15,8 @@ mod ir;
 mod pretty;
 
 pub use ir::{
-    Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, FuncId, HtmlEventShape, IrType, KernelFn,
+    Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, Expr, Func, FuncId, HtmlEventShape, IrType,
+    KernelFn,
     Match, ModPath, Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant, ir_type_is_derivable,
     ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };

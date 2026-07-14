@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use sky_canon::ast as canon;
 use sky_diagnostics::{
-    Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0101, SKY_L0102,
-    SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0114, SKY_L0119, Span,
+    Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0101, SKY_L0102, SKY_L0107,
+    SKY_L0108, SKY_L0110, SKY_L0114, SKY_L0119, Span,
 };
 use sky_intern::{Interner, Symbol};
 use sky_ir::{BoundSet, Callee, Expr, FuncId, IrType, KernelFn};
@@ -237,7 +237,11 @@ fn wildcard_parameter_lowers_to_a_fresh_binder() -> DResult<()> {
     };
     let res = run(Vec::new(), vec![def], BTreeMap::new(), &mut i);
     let func = single_func(&res).expect("wildcard-param function must lower cleanly");
-    assert_eq!(func.params.len(), 1, "one synthetic param expected: {res:?}");
+    assert_eq!(
+        func.params.len(),
+        1,
+        "one synthetic param expected: {res:?}"
+    );
     let param_ty = func.params.first().map(|(_, t)| t);
     assert_eq!(param_ty, Some(&IrType::Int), "param type is the annotation");
     assert_eq!(func.ret, IrType::Int, "return type is the annotation tail");
@@ -575,7 +579,10 @@ fn function_in_record_field_via_type_variable_is_unsupported() -> DResult<()> {
         Ty::Fun(Box::new(con(int_name)), Box::new(con(int_name))),
     );
     let mut regions = BTreeMap::new();
-    regions.insert(body_span, Ty::Record(record_fields, sky_types::RowTail::Closed));
+    regions.insert(
+        body_span,
+        Ty::Record(record_fields, sky_types::RowTail::Closed),
+    );
     assert_unsupported(
         run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i),
         Feature::FirstClassFunctions,
@@ -1059,7 +1066,7 @@ fn partial_application_eta_expands_to_a_closure() -> DResult<()> {
     );
     assert_eq!(*ret, IrType::Int, "residual return type");
     // body: add(2, eta_0) — a saturated direct Call to add (FuncId 0).
-    let Expr::Call { callee, args } = body.as_ref() else {
+    let Expr::Call { callee, args, .. } = body.as_ref() else {
         assert!(false_marker(), "eta body is a saturated Call, got {body:?}");
         return Ok(());
     };
@@ -1134,7 +1141,10 @@ fn over_application_saturates_via_apply() -> DResult<()> {
         );
         return Ok(());
     };
-    let Expr::Call { callee, args: head } = func.as_ref() else {
+    let Expr::Call {
+        callee, args: head, ..
+    } = func.as_ref()
+    else {
         assert!(false_marker(), "Apply func is a direct Call, got {func:?}");
         return Ok(());
     };
