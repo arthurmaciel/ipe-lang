@@ -300,8 +300,11 @@ pending() { # THE work source: every actionable backlog.jsonl item → "<class>\
     # actionable = status pending + blockers resolved + not ESCALATED + < GUARDIAN_ATTEMPTS tries.
     # ONE uniform stream (no mechanical/guardian tier); class only tailors focus.
     command -v jq >/dev/null 2>&1 || return 0
-    jq -r 'select((.id//"")!="" and .status=="pending" and (.deferred != true) and ((.blocked_by//[])|length==0))
-           | "#\(.id) " + ((.task//"") | gsub("[\n\t]";" "))' "$BACKLOG" 2>/dev/null \
+    # Actionable work source comes from the backlog.sh interface (the schema
+    # owner): pending, non-deferred, blockers-all-done — emitted as the exact
+    # `#<id> <task>` string this loop uses as the $QUEUE ledger key. autopilot
+    # keeps only its OWN concerns below (classify + ESCALATED/attempt suppression).
+    "$BACKLOG_SH" ready 2>/dev/null \
       | while IFS= read -r d; do
           [ -z "$d" ] && continue
           # skip if escalated (dead) in the ledger, or already tried GUARDIAN_ATTEMPTS times
@@ -331,7 +334,7 @@ reclaim_stale_claims() {
         if [ "$(( now - ce ))" -ge "$CLAIM_TTL" ]; then
             bk unclaim "$id" && log "reclaimed stale claim on #$id (lease > ${CLAIM_TTL}s, owner gone)"
         fi
-    done < <(jq -r 'select((.status//"")=="claimed" and (.claimed_at//"")!="") | "\(.id)\t\(.claimed_at)"' "$BACKLOG" 2>/dev/null)
+    done < <("$BACKLOG_SH" claims 2>/dev/null)   # claimed leases via the interface (schema owner)
 }
 attempts_of() { d="$1" awk -F'\t' 'BEGIN{d=ENVIRON["d"]} $3==d && ($1=="ATTEMPTED"||$1=="BLOCKED"){n++} END{print n+0}' "$QUEUE"; }
 slug_of()     { printf '%s' "$1" | tr -cs 'A-Za-z0-9' '-' | sed 's/^-//;s/-*$//' | cut -c1-64; }
