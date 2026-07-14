@@ -1,0 +1,67 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Std.Html as Html
+import Std.Ui as Ui exposing (Element)
+import Std.Ui.Input as Input
+import Std.Log exposing (println)
+
+
+-- BACKLOG #191 regression — a non-Copy binding captured into an Input `Arc`
+-- callback AND reused by a sibling.
+--
+-- Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build` with
+-- E0382 ("use of moved value: `habit`"). The lowerer pre-clones the checkbox
+-- `onChange` callback's captured `habit` (`let habit = habit.clone(); Lambda`),
+-- but `arc_callback_wrap` then re-wrapped the WHOLE block in
+-- `Arc::new(move |_x| ({ let habit = habit.clone(); … })(_x))` — the outer
+-- `move` still move-captured the FREE outer `habit`, so the sibling
+-- `RemoveHabit habit.id` (button `onPress`) hit use-after-move.
+--
+-- Fix (`emit_arc_callback_field` in `crates/sky_backend_rust`): hoist the
+-- leading capture-clone `let`s OUTSIDE the `Arc`'s `move` closure —
+-- `{ let habit = habit.clone(); Arc::new(move |_x| (INNER)(_x)) }` — so the Arc
+-- owns the pre-made clone and the original binding survives for the sibling.
+type alias Habit =
+    { id : Int
+    , name : String
+    , done : Bool
+    }
+
+
+type Msg
+    = ToggleHabit Int
+    | RemoveHabit Int
+
+
+-- `habit` (non-Copy record) is used in the checkbox `onChange` (Arc callback),
+-- again in `Input.labelRight` (`habit.name`), and again in the button `onPress`
+-- (`RemoveHabit habit.id`) — three consuming sites, so the lowerer pre-clones
+-- the callback capture and #191 fires.
+habitRow : Habit -> Element Msg
+habitRow habit =
+    Ui.row
+        [ Ui.spacing 12 ]
+        [ Input.checkbox
+            []
+            { onChange = \_ -> ToggleHabit habit.id
+            , checked = habit.done
+            , icon = \_ -> Ui.text "x"
+            , label = Input.labelRight [] (Ui.text habit.name)
+            }
+        , Ui.button
+            []
+            { onPress = Just (RemoveHabit habit.id)
+            , label = Ui.text "Remove"
+            }
+        ]
+
+
+main : Task Error ()
+main =
+    let
+        row =
+            habitRow { id = 7, name = "water", done = False }
+    in
+    println (Html.render (Ui.layout [] row))

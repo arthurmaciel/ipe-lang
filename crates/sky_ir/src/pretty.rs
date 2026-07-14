@@ -1301,6 +1301,9 @@ fn bound_suffix(bounds: BoundSet) -> String {
         return String::new();
     }
     let mut parts = Vec::new();
+    if bounds.has_static() {
+        parts.push("'static");
+    }
     if bounds.has_add() {
         parts.push("Add");
     }
