@@ -76,6 +76,8 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Sky", "Core", "Random"], "Random"),
     (&["Sky", "Core", "File"], "File"),
     (&["Sky", "Core", "Http"], "Http"),
+    (&["Sky", "Core", "Path"], "Path"),
+    (&["Sky", "Core", "Regex"], "Regex"),
     // ── Sky.Http.* server surface ───────────────────────────────────────────
     (&["Sky", "Http", "Server"], "Server"),
     (&["Sky", "Http", "Middleware"], "Middleware"),
@@ -95,9 +97,9 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Std", "Ui", "Font"], "Font"),
     (&["Std", "Ui", "Region"], "Region"), // #117
     (&["Std", "Ui", "Input"], "Input"),   // Task #124
-    (&["Std", "Ui", "Lazy"], "Lazy"),    // #146
-    (&["Std", "Ui", "Keyed"], "Keyed"),  // sky-key diff identity
-    (&["Std", "Decimal"], "Decimal"),    // arbitrary-precision decimal arithmetic
+    (&["Std", "Ui", "Lazy"], "Lazy"),     // #146
+    (&["Std", "Ui", "Keyed"], "Keyed"),   // sky-key diff identity
+    (&["Std", "Decimal"], "Decimal"),     // arbitrary-precision decimal arithmetic
     (&["Std", "Html"], "Html"),
     (&["Std", "Html", "Attributes"], "Attr"),
     (&["Std", "Html", "Events"], "Event"),
@@ -455,10 +457,10 @@ impl Env {
             ("println", log, "println"),
             // ── Basics numerics (#115) ──────────────────────────────────────
             ("negate", basics, "negate"),
-            ("abs",    basics, "abs"),
-            ("sqrt",   basics, "sqrt"),
-            ("min",    basics, "min"),
-            ("max",    basics, "max"),
+            ("abs", basics, "abs"),
+            ("sqrt", basics, "sqrt"),
+            ("min", basics, "min"),
+            ("max", basics, "max"),
             // ── end Basics numerics (#115) ──────────────────────────────────
         ] {
             let key = interner.intern(name)?;
@@ -564,15 +566,31 @@ impl Env {
             (
                 "Maybe",
                 &[
-                    "withDefault", "map", "andThen", "map2", "map3", "map4", "map5", "andMap",
+                    "withDefault",
+                    "map",
+                    "andThen",
+                    "map2",
+                    "map3",
+                    "map4",
+                    "map5",
+                    "andMap",
                     "combine",
                 ],
             ),
             (
                 "Result",
                 &[
-                    "withDefault", "map", "andThen", "mapError", "map2", "map3", "map4", "map5",
-                    "andMap", "combine", "traverse",
+                    "withDefault",
+                    "map",
+                    "andThen",
+                    "mapError",
+                    "map2",
+                    "map3",
+                    "map4",
+                    "map5",
+                    "andMap",
+                    "combine",
+                    "traverse",
                 ],
             ),
             // `Sky.Core.Error` — the real `Error ErrorKind ErrorInfo` ADT (backlog
@@ -606,7 +624,12 @@ impl Env {
             // compiled-source `Std.Css`.
             (
                 "CssSafety",
-                &["safeValue", "safePropName", "safeSelector", "stripStyleClose"],
+                &[
+                    "safeValue",
+                    "safePropName",
+                    "safeSelector",
+                    "stripStyleClose",
+                ],
             ),
             // `Std.Log` — qualified form (`import Std.Log as Log`). `println`/
             // `info`/`debug`/`warn`/`error` are backed (task #78); the `*With`
@@ -950,7 +973,10 @@ impl Env {
             // `PubSub.*` still absent — qualifier "PubSub" lands in M6.
             // `Sub.subscribeTopic` is wired (M5d): runtime `sub_subscribe_topic`
             // exists in live/pubsub.rs; emit path uses the standard N-arg route.
-            ("Cmd", &["none", "batch", "perform", "publish", "publishNoEcho"]),
+            (
+                "Cmd",
+                &["none", "batch", "perform", "publish", "publishNoEcho"],
+            ),
             ("Sub", &["none", "batch", "every", "subscribeTopic"]),
             // ── Db kernels (M5b-db) ─────────────────────────────────────────────
             // `Std.Db` — database connection + query surface.
@@ -997,8 +1023,25 @@ impl Env {
             (
                 "Sql",
                 &[
-                    "column", "param", "int", "string", "float", "bool", "eq", "ne", "gt", "lt",
-                    "gte", "lte", "and", "or", "not", "isNull", "isNotNull", "inList", "like",
+                    "column",
+                    "param",
+                    "int",
+                    "string",
+                    "float",
+                    "bool",
+                    "eq",
+                    "ne",
+                    "gt",
+                    "lt",
+                    "gte",
+                    "lte",
+                    "and",
+                    "or",
+                    "not",
+                    "isNull",
+                    "isNotNull",
+                    "inList",
+                    "like",
                 ],
             ),
             // `Std.Db.Decode` — row decoder combinators (M5b-db).
@@ -1283,15 +1326,9 @@ impl Env {
                 ],
             ),
             // ── #146: Std.Ui.Lazy sub-module ─────────────────────────────────────
-            (
-                "Lazy",
-                &["lazy", "lazy2", "lazy3", "lazy4", "lazy5"],
-            ),
+            ("Lazy", &["lazy", "lazy2", "lazy3", "lazy4", "lazy5"]),
             // ── Std.Ui.Keyed — sky-key for diff identity ─────────────────────────
-            (
-                "Keyed",
-                &["column", "row"],
-            ),
+            ("Keyed", &["column", "row"]),
             // ── M7: Std.Html — typed HTML element / text surface ─────────────────
             // `render` / `escapeHtml` / `escapeAttr` / `attrToString` are render
             // kernels; all element-builder names create `Html msg` values.
@@ -1477,15 +1514,45 @@ impl Env {
             (
                 "Decimal",
                 &[
-                    "zero", "one", "oneHundred",
-                    "fromString", "fromInt", "fromFloat", "fromMinor",
-                    "toString", "toStringFixed", "toFloat", "toInt", "toMinor",
-                    "add", "sub", "mul", "div", "mod",
-                    "neg", "abs", "floor", "ceil",
-                    "round", "roundHalfUp", "truncate",
-                    "compare", "eq", "neq", "lt", "lte", "gt", "gte", "min", "max",
-                    "isZero", "isPositive", "isNegative",
-                    "percentOf", "addPercent", "subPercent",
+                    "zero",
+                    "one",
+                    "oneHundred",
+                    "fromString",
+                    "fromInt",
+                    "fromFloat",
+                    "fromMinor",
+                    "toString",
+                    "toStringFixed",
+                    "toFloat",
+                    "toInt",
+                    "toMinor",
+                    "add",
+                    "sub",
+                    "mul",
+                    "div",
+                    "mod",
+                    "neg",
+                    "abs",
+                    "floor",
+                    "ceil",
+                    "round",
+                    "roundHalfUp",
+                    "truncate",
+                    "compare",
+                    "eq",
+                    "neq",
+                    "lt",
+                    "lte",
+                    "gt",
+                    "gte",
+                    "min",
+                    "max",
+                    "isZero",
+                    "isPositive",
+                    "isNegative",
+                    "percentOf",
+                    "addPercent",
+                    "subPercent",
                     "formatWith",
                 ],
             ),
@@ -1623,7 +1690,10 @@ impl Env {
                 };
                 module.insert(func_sym, VarHome::Kernel(id, mod_sym, name_sym));
             }
-            Rc::make_mut(&mut self.qual_vars).entry(qual_sym).or_default().extend(module);
+            Rc::make_mut(&mut self.qual_vars)
+                .entry(qual_sym)
+                .or_default()
+                .extend(module);
         }
 
         for (qual, alias, canonical) in FUNC_ALIASES {
