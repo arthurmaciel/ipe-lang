@@ -2760,6 +2760,149 @@ fn is_wildcard_any_tv(interner: &Interner, tv: Symbol) -> bool {
         .is_some_and(|nm| nm == "any" || nm.starts_with("anyp_"))
 }
 
+/// Does `ty` mention the type variable `tv` anywhere in its structure?
+///
+/// A total structural walk over every compound [`IrType`] carrier — the nullary
+/// leaves (`Int`, `Str`, `ServerRequest`, …) and the non-parametric `UiPlain`
+/// never mention a Sky type variable. Used by [`body_boxes_generic_callback`] to
+/// decide whether a boxed callback's type still depends on the enclosing
+/// generic (#190).
+fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
+    match ty {
+        IrType::Generic(g) => *g == tv,
+        IrType::Task(inner)
+        | IrType::Maybe(inner)
+        | IrType::List(inner)
+        | IrType::Decoder(inner)
+        | IrType::Cmd(inner)
+        | IrType::Sub(inner)
+        | IrType::Set(inner)
+        | IrType::LiveRoute(inner)
+        | IrType::Ui { msg: inner, .. } => ir_type_mentions_generic(inner, tv),
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            ir_type_mentions_generic(a, tv) || ir_type_mentions_generic(b, tv)
+        }
+        IrType::Tuple(items) => items.iter().any(|t| ir_type_mentions_generic(t, tv)),
+        IrType::Enum { args, .. } => args.iter().any(|t| ir_type_mentions_generic(t, tv)),
+        IrType::Record(fields) => fields.values().any(|t| ir_type_mentions_generic(t, tv)),
+        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
+            params.iter().any(|t| ir_type_mentions_generic(t, tv))
+                || ir_type_mentions_generic(ret, tv)
+        }
+        // Nullary leaves + the non-parametric `UiPlain` never carry a tvar.
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::Db
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::StreamWriter
+        | IrType::HttpRequest
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
+        | IrType::UiPlain(_)
+        | IrType::LiveReq
+        | IrType::Order
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error
+        | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
+        | IrType::SqlFragment
+        | IrType::Secret => false,
+    }
+}
+
+/// Does `expr` contain a boxed CALLBACK value — a [`Expr::FuncValue`] or a
+/// [`Expr::Lambda`] / [`Expr::SharedLambda`] — whose OWN type still mentions the
+/// type variable `tv`?
+///
+/// #190: such a callback is emitted boxed as `Box<dyn Fn(..) -> .. + Send +
+/// 'static>` (or `Arc<.. + Send + Sync + 'static>`) — typically the mapper
+/// argument to a higher-order kernel like `List.map`. Coercing the concrete
+/// (but `tv`-generic) `fn`/closure to that `+ 'static` trait object requires
+/// `tv: 'static`, so the enclosing generic must carry the [`BoundSet::STATIC`]
+/// lifetime bound. Without it the emitted body fails E0310. See
+/// [`BoundSet::STATIC`] for why the bound never breaks a real caller.
+///
+/// `FuncValue` carries its flattened `Fun` type directly. A `Lambda` /
+/// `SharedLambda` mentions `tv` iff any of its parameter types or its return
+/// type does — the closure that is boxed has exactly that `Fn(params) -> ret`
+/// shape. The walk descends through every child expression (kernel/user call
+/// args, `Apply`, `Let`, `Match`, list/tuple/record elements, …) and into
+/// lambda BODIES too, since a boxed generic callback can be nested arbitrarily
+/// deep inside the function body. Unlike [`body_calls_kernel_on_param`] there is
+/// no param-shadow discipline to track: the obligation reads the callback's
+/// TYPE, which is independent of which value binders are in scope.
+fn body_boxes_generic_callback(tv: Symbol, expr: &Expr) -> bool {
+    match expr {
+        Expr::FuncValue { ty, .. } => ir_type_mentions_generic(ty, tv),
+        Expr::Lambda { params, ret, body } | Expr::SharedLambda { params, ret, body } => {
+            params.iter().any(|(_, t)| ir_type_mentions_generic(t, tv))
+                || ir_type_mentions_generic(ret, tv)
+                || body_boxes_generic_callback(tv, body)
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            args.iter().any(|a| body_boxes_generic_callback(tv, a))
+        }
+        Expr::Apply { func, args } => {
+            body_boxes_generic_callback(tv, func)
+                || args.iter().any(|a| body_boxes_generic_callback(tv, a))
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            body_boxes_generic_callback(tv, value) || body_boxes_generic_callback(tv, body)
+        }
+        Expr::If { cond, then_, else_ } => {
+            body_boxes_generic_callback(tv, cond)
+                || body_boxes_generic_callback(tv, then_)
+                || body_boxes_generic_callback(tv, else_)
+        }
+        Expr::Match(m) => {
+            body_boxes_generic_callback(tv, m.scrutinee())
+                || m.arms()
+                    .iter()
+                    .any(|arm| body_boxes_generic_callback(tv, &arm.body))
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            body_boxes_generic_callback(tv, lhs) || body_boxes_generic_callback(tv, rhs)
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            items.iter().any(|e| body_boxes_generic_callback(tv, e))
+        }
+        Expr::Cons { head, tail } => {
+            body_boxes_generic_callback(tv, head) || body_boxes_generic_callback(tv, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            body_boxes_generic_callback(tv, list)
+        }
+        Expr::Record(fields) | Expr::Update { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| body_boxes_generic_callback(tv, e)),
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            body_boxes_generic_callback(tv, effect) || body_boxes_generic_callback(tv, rest)
+        }
+        Expr::TailLoop { body, .. } => body_boxes_generic_callback(tv, body),
+        Expr::Access { record, .. } => body_boxes_generic_callback(tv, record),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_) => false,
+    }
+}
+
 /// GENERAL kernel→type-param-bound propagation (#177 `SkyRow` + #186 `Display`,
 /// generalising the original single-purpose `Db.get*`→`SkyRow` walk).
 ///
@@ -2833,6 +2976,16 @@ fn apply_kernel_type_param_bounds(
         // Display — wildcard OR named (#186).
         if fires_on(&display_matcher) {
             *bounds = bounds.with_display();
+        }
+        // `'static` — wildcard OR named (#190). NOT a kernel-on-param obligation:
+        // the tvar appears in the TYPE of a boxed callback (a `FuncValue` /
+        // lambda passed to a HOF like `List.map`), not as an accessed value
+        // binder, so it has its own structural walk over the whole body. `List.map
+        // pairToAttr attrs` in `Std.Live.Head.link` boxes the `T{n}`-generic
+        // `pairToAttr` into `Box<dyn Fn(..) -> Attribute<T{n}> + Send + 'static>`,
+        // which E0310s without `T{n}: 'static`.
+        if body_boxes_generic_callback(*tv, body) {
+            *bounds = bounds.with_static();
         }
     }
 }

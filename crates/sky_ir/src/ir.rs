@@ -292,6 +292,31 @@ impl BoundSet {
     /// to the caller's instantiation, never introducing one where there was
     /// none.
     const DISPLAY: u16 = 1 << 12;
+    /// The `'static` lifetime bound (#190): a generic type-param that flows,
+    /// INSIDE the function body, into a value boxed as a boxed `dyn Fn` trait
+    /// object (`Box<dyn Fn(..) -> .. + Send + 'static>`, or the `Arc` +Sync
+    /// variant) — a callback (`FuncValue` / lambda) passed to a higher-order
+    /// kernel like `List.map` — whose own type still mentions that type-param.
+    /// Coercing a concrete-but-`tv`-generic function item to a `+ 'static` trait
+    /// object requires `tv: 'static`, so the emitted generic must carry it.
+    /// Without it the enclosing generic is only `<T{n}: Clone>` and the box
+    /// coercion fails E0310 ("the parameter type may not live long enough") —
+    /// well-typed to `skyc`, a `cargo build` break (a SEAL violation).
+    ///
+    /// This is a LIFETIME bound, not a trait: it renders as the leading
+    /// `'static` in the bound list (`T{n}: 'static + Clone`), where Rust
+    /// requires lifetime bounds to precede trait bounds. Unlike the trait
+    /// obligations above it is not sourced from a kernel→bound map keyed on a
+    /// PARAM value binder — the type-param appears in the boxed callback's TYPE,
+    /// not as the accessed value — so it has its own structural walk
+    /// (`body_boxes_generic_callback` in `sky_lower`). It lands on wildcard `any`
+    /// AND named tvars alike: every concrete Sky type the caller substitutes is
+    /// `'static` (emitted values never borrow), so `T: 'static` is satisfied by
+    /// every real instantiation — no caller-side failure, matching the reference
+    /// (Go boxes with no lifetime concern). NOT a new SEAL violation: it only
+    /// relocates the pre-existing E0310 from the callee body to a bound that
+    /// makes acceptance-by-`skyc` prove the box coercion type-checks.
+    const STATIC: u16 = 1 << 13;
 
     /// The empty bound set: an unconstrained, structurally-parametric variable.
     pub const UNBOUNDED: Self = Self(0);
@@ -397,6 +422,13 @@ impl BoundSet {
         Self(self.0 | Self::DISPLAY)
     }
 
+    /// This set with the `'static` (boxed-callback trait-object) lifetime bound —
+    /// see [`Self::STATIC`].
+    #[must_use]
+    pub const fn with_static(self) -> Self {
+        Self(self.0 | Self::STATIC)
+    }
+
     /// Whether the `Add` bound is set.
     #[must_use]
     pub const fn has_add(self) -> bool {
@@ -464,6 +496,13 @@ impl BoundSet {
     #[must_use]
     pub const fn has_display(self) -> bool {
         self.0 & Self::DISPLAY != 0
+    }
+
+    /// Whether the `'static` (boxed-callback trait-object) lifetime bound is set
+    /// — see [`Self::STATIC`].
+    #[must_use]
+    pub const fn has_static(self) -> bool {
+        self.0 & Self::STATIC != 0
     }
 }
 

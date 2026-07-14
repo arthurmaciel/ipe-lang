@@ -1,0 +1,49 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Sky.Core.List as List
+import Std.Html as Html exposing (Html)
+import Std.Html.Attributes as Attr exposing (Attribute)
+import Std.Log exposing (println)
+
+
+-- BACKLOG #190 regression — a generic-typed callback boxed as `+ 'static`.
+--
+-- Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build` with
+-- E0310 ("the parameter type `T1` may not live long enough") at the
+-- `Box::new(pair_to_attr)` the `List.map` call emits. `pairToAttr` is generic
+-- over `msg` (its result is `Attribute msg`), so coercing it to the mapper slot
+-- `Box<dyn Fn((String,String)) -> Attribute<msg> + Send + 'static>` requires
+-- `msg: 'static`; the emitted `linkNode`/`pairToAttr` functions carried only
+-- `<T1: Clone>`.
+--
+-- This is EXACTLY the `Std.Live.Head.link` shape — `List.map pairToAttr attrs`
+-- boxes the `msg`-generic `pairToAttr` into a `+ 'static` trait object.
+--
+-- Fix (`BoundSet::STATIC` + `body_boxes_generic_callback` in `sky_lower`): a
+-- generic that flows into a boxed `+ 'static` callback gains the `'static`
+-- lifetime bound. Every concrete Sky type is `'static`, so it never breaks a
+-- caller.
+type Msg
+    = NoOp
+
+
+pairToAttr : (String, String) -> Attribute msg
+pairToAttr pair =
+    Attr.attribute (fst pair) (snd pair)
+
+
+linkNode : List (String, String) -> Html msg
+linkNode attrs =
+    Html.node "link" (List.map pairToAttr attrs) []
+
+
+favicon : Html Msg
+favicon =
+    linkNode [ ( "rel", "icon" ), ( "href", "/favicon.svg" ) ]
+
+
+main : Task Error ()
+main =
+    println (Html.render favicon)
