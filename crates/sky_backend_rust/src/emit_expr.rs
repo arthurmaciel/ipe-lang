@@ -2350,6 +2350,75 @@ fn arc_callback_wrap(f_s: &str) -> String {
     format!("::std::sync::Arc::new(move |_x| ({f_s})(_x))")
 }
 
+/// Emit a `Std.Ui.Input.*` callback field, Arc-wrapping it for the runtime's
+/// `Arc<dyn Fn(_) -> _ + Send + Sync>` slot (see [`arc_callback_wrap`]) while
+/// HOISTING any leading capture-clone `let`s OUTSIDE the `Arc`'s `move` closure.
+///
+/// #191: the lowerer's multi-use-capture rewrite
+/// ([`rewrite_multiuse_clones`]) wraps a callback lambda that captures a
+/// non-`Copy` binding used again by a sibling in a pre-clone
+/// `let sym = sym.clone() in Lambda { … }`. Emitted naively, that whole block
+/// is the string `arc_callback_wrap` wraps, giving
+/// `Arc::new(move |_x| (({ let habit = habit.clone(); … }))(_x))`. The `.clone()`
+/// reads the FREE outer `habit`, but the enclosing `move |_x|` still
+/// move-captures that same outer `habit` — so a later sibling use
+/// (`StateMsg::RemoveHabit((habit).id)`) hits use-after-move (E0382). The
+/// hoist was already correct for a plain (un-Arc-wrapped) callback arg — the
+/// pre-clone `let` sat in the enclosing scope, and only the INNER `move`
+/// captured the clone; the `Arc` re-wrap is what re-introduced the outer
+/// `move`.
+///
+/// Fix: peel the leading pure-alias `let`s (`let n = <Var/CloneVar>`; each a
+/// value-preserving re-bind) off the callback expression and emit them as a
+/// prefix OUTSIDE the `Arc::new`, so the Arc closure owns the pre-made clone
+/// and the original binding survives for later sibling uses:
+///
+/// ```text
+/// { let habit = habit.clone(); ::std::sync::Arc::new(move |_x| ((INNER))(_x)) }
+/// ```
+///
+/// Only a `let` whose value is a bare `Var`/`CloneVar` is peeled — a pure
+/// alias/clone of an outer symbol whose hoist out of the `move` closure is
+/// always semantics-preserving (Sky values are immutable). A `let` binding a
+/// COMPUTED value stays inside, untouched, so no re-ordering of effects or
+/// widening of a capture's scope can occur. When there are no such leading
+/// `let`s the output is byte-identical to the previous
+/// `arc_callback_wrap(&emit_expr_at(..))`.
+fn emit_arc_callback_field(
+    ctx: &EmitCtx,
+    field: &Expr,
+    indent: usize,
+    child: u16,
+    generics: GenericScope,
+) -> DResult<String> {
+    // Peel leading pure-alias `let`s (`let n = Var(v)` / `let n = CloneVar(v)`).
+    let mut hoisted: Vec<(Symbol, &Expr)> = Vec::new();
+    let mut inner = field;
+    while let Expr::Let { name, value, body } = inner {
+        if matches!(value.as_ref(), Expr::Var(_) | Expr::CloneVar(_)) {
+            hoisted.push((*name, value.as_ref()));
+            inner = body.as_ref();
+        } else {
+            break;
+        }
+    }
+    let inner_s = emit_expr_at(ctx, inner, indent, child, generics)?;
+    let arc = arc_callback_wrap(&inner_s);
+    if hoisted.is_empty() {
+        return Ok(arc);
+    }
+    let mut prefix = String::new();
+    for (name, value) in hoisted {
+        let name_s = ctx.emit_ident(name)?;
+        let value_s = emit_expr_at(ctx, value, indent, child, generics)?;
+        write!(prefix, "let {name_s} = {value_s}; ").map_err(|e| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_arc_callback_field",
+            detail: format!("fmt::Write into String failed: {e}"),
+        })?;
+    }
+    Ok(format!("{{ {prefix}{arc} }}"))
+}
+
 /// Handle `Std.Ui` / `Std.Html` kernel calls.
 ///
 /// Phase 0 scope:
@@ -4321,7 +4390,7 @@ fn emit_ui_call(
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
             let on_change_s =
-                arc_callback_wrap(&emit_expr_at(ctx, on_change_e, indent, child, generics)?);
+                emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
             let text_s = emit_expr_at(ctx, text_e, indent, child, generics)?;
             let placeholder_s = emit_expr_at(ctx, placeholder_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
@@ -4384,7 +4453,7 @@ fn emit_ui_call(
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
             let on_change_s =
-                arc_callback_wrap(&emit_expr_at(ctx, on_change_e, indent, child, generics)?);
+                emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
             let text_s = emit_expr_at(ctx, text_e, indent, child, generics)?;
             let placeholder_s = emit_expr_at(ctx, placeholder_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
@@ -4433,8 +4502,8 @@ fn emit_ui_call(
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
             let on_change_s =
-                arc_callback_wrap(&emit_expr_at(ctx, on_change_e, indent, child, generics)?);
-            let icon_s = arc_callback_wrap(&emit_expr_at(ctx, icon_e, indent, child, generics)?);
+                emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
+            let icon_s = emit_arc_callback_field(ctx, icon_e, indent, child, generics)?;
             let checked_s = emit_expr_at(ctx, checked_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
             Ok(Some(format!(
@@ -4494,7 +4563,7 @@ fn emit_ui_call(
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
             let on_change_s =
-                arc_callback_wrap(&emit_expr_at(ctx, on_change_e, indent, child, generics)?);
+                emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
             let value_s = emit_expr_at(ctx, value_e, indent, child, generics)?;
             let min_s = emit_expr_at(ctx, min_e, indent, child, generics)?;
             let max_s = emit_expr_at(ctx, max_e, indent, child, generics)?;
@@ -4560,7 +4629,7 @@ fn emit_ui_call(
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
             let on_change_s =
-                arc_callback_wrap(&emit_expr_at(ctx, on_change_e, indent, child, generics)?);
+                emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
             let options_s = emit_expr_at(ctx, options_e, indent, child, generics)?;
             let selected_s = emit_expr_at(ctx, selected_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
@@ -4609,7 +4678,7 @@ fn emit_ui_call(
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
             let on_change_s =
-                arc_callback_wrap(&emit_expr_at(ctx, on_change_e, indent, child, generics)?);
+                emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
             let options_s = emit_expr_at(ctx, options_e, indent, child, generics)?;
             let selected_s = emit_expr_at(ctx, selected_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
@@ -7760,6 +7829,17 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
         return String::new();
     }
     let mut traits = Vec::new();
+    if bounds.has_static() {
+        // Boxed-callback `'static` lifetime bound (#190): a generic type-param
+        // that flows into a value boxed as `Box<dyn Fn(..) -> .. + Send +
+        // 'static>` (a callback passed to `List.map` etc.) whose own type still
+        // mentions that type-param requires `tv: 'static` for the trait-object
+        // coercion. A LIFETIME bound — Rust requires it to PRECEDE every trait
+        // bound in the list (`T{n}: 'static + Clone`), so it is pushed FIRST.
+        // Satisfied by every concrete Sky type (emitted values never borrow),
+        // so no caller-side failure — see `BoundSet::STATIC`.
+        traits.push("'static".to_owned());
+    }
     if bounds.has_add() {
         traits.push(format!("::core::ops::Add<Output = T{n}>"));
     }
