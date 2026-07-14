@@ -394,6 +394,11 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::DuplicateQualifier { qualifier, .. } => {
             Some(format!("qualifier `{qualifier}` already claimed by another import"))
         }
+        NameError::UnknownKernelAlias {
+            module, function, ..
+        } => Some(format!(
+            "no registered kernel `{module}.{function}`"
+        )),
         NameError::Unknown => None,
     }
 }

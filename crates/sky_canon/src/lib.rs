@@ -74,6 +74,30 @@ pub struct ModuleExports {
     /// e.g. `Piece` (a record-alias from `Chess.Piece`) would be invisible when
     /// an importer of `State` expands `Model`'s body.
     pub scope_aliases: BTreeMap<Symbol, ExportedAlias>,
+    /// Exported Stage-4 kernel aliases: value names whose binding is
+    /// `f = Ffi.kernel "Module_function"`, mapped to the resolved kernel target
+    /// `(StdlibKernel, module, function)`.
+    ///
+    /// A name here is ALSO present in `values` (it is an exported value), but an
+    /// importer must register it as a [`VarHome::Kernel`] — routing every
+    /// `Alias.f` reference straight to the kernel — rather than the default
+    /// `TopLevel(path)`, because the alias emits no top-level body. The
+    /// disjointness with a normal value is by construction: `detect_kernel_alias`
+    /// classifies each binding exactly once.
+    pub kernel_aliases: BTreeMap<Symbol, ExportedKernelAlias>,
+}
+
+/// The resolved target of an exported Stage-4 kernel alias — the `(StdlibKernel,
+/// module, function)` an `Ffi.kernel "Module_function"` binding routes to. See
+/// [`ModuleExports::kernel_aliases`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ExportedKernelAlias {
+    /// The registered kernel this alias routes to.
+    pub id: sky_kernels::StdlibKernel,
+    /// Canonical kernel-module symbol (the `Module` half of the split string).
+    pub module: Symbol,
+    /// Canonical kernel-function symbol (the `function` half of the split).
+    pub function: Symbol,
 }
 
 /// Canonicalise a parsed module into its name-resolved canonical AST.
