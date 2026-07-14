@@ -211,10 +211,19 @@ fn infer_with_budget_attributed(
     // [`RequestFields`]); intern it once here so the immutable-borrow
     // `resolve_deferred` pass can resolve `req.<field>` accesses.
     let req_fields = lift!(RequestFields::build(interner));
+    // The opaque `LiveReq` type (Sky.Live `init`'s per-session request context)
+    // has a fixed field set too (see [`LiveReqFields`]); intern it once here so
+    // `req.path` / `req.cookies` accesses resolve against the runtime struct (#180).
+    let live_req_fields = lift!(LiveReqFields::build(interner));
     // The nominal error-payload types `PanicInfo`/`TypeInfo`/`ErrorInfo`
     // resolve field accesses the same way (SEAL fix 2026-07-11 — see
     // [`ErrorRecordFields`]).
     let err_fields = lift!(ErrorRecordFields::build(interner));
+    let builtin_field_tables = BuiltinFieldTables {
+        req: &req_fields,
+        live_req: &live_req_fields,
+        err: &err_fields,
+    };
     // Unlike the other post-solve passes, `resolve_deferred` returns the failing
     // field-access / record-update's `home` module path so a SKY-T0012 attributes
     // to the source file that actually owns the access — not the byte-offset
@@ -224,8 +233,7 @@ fn infer_with_budget_attributed(
         &mut uf,
         budget,
         interner,
-        &req_fields,
-        &err_fields,
+        &builtin_field_tables,
         &generated.field_accesses,
         &generated.record_updates,
     )?;
@@ -855,6 +863,99 @@ impl RequestFields {
     }
 }
 
+/// The fixed field set of the opaque `LiveReq` type — the per-session request
+/// context passed to a Sky.Live `init` callback (#180).
+///
+/// Mirrors [`RequestFields`] exactly: `LiveReq` is an opaque nullary `Con` at
+/// the type level (so `init : {} -> …` fails closed with SKY-T0001 against the
+/// prescriptive `LiveReq -> (Model, Cmd Msg)` scheme, and no bare record literal
+/// can masquerade as the runtime struct), but its fields stay READABLE. The
+/// deferred [`FieldAccess`] pass resolves `req.path` / `req.cookies` against this
+/// table; the emit side needs no synthesised record — a field access lowers to
+/// `(req).<field>.clone()` (see `emit_expr` `Access`), reading the
+/// `sky_runtime::live::LiveReq` struct directly. Every field name + type here
+/// matches that struct (`path`/`query`/`method` = bare `String`;
+/// `params`/`headers`/`cookies` = `Dict String String`, i.e. `SkyDict<String>`).
+struct LiveReqFields {
+    /// The `"LiveReq"` type-constructor symbol (opaque Sky.Live request Con).
+    con: Symbol,
+    /// The `"String"` type-constructor symbol.
+    string: Symbol,
+    /// The `"Dict"` type-constructor symbol.
+    dict: Symbol,
+    /// field-name symbol → `true` when the field is `Dict String String`,
+    /// `false` when it is a bare `String`.
+    fields: BTreeMap<Symbol, bool>,
+}
+
+impl LiveReqFields {
+    /// Intern the field set once (idempotent). Called with the mutable interner
+    /// before the immutable-borrow [`resolve_deferred`] pass.
+    fn build(interner: &mut Interner) -> DResult<Self> {
+        let con = interner.intern("LiveReq")?;
+        let string = interner.intern("String")?;
+        let dict = interner.intern("Dict")?;
+        let mut fields = BTreeMap::new();
+        // (field name, is `Dict String String`?) — matches
+        // `sky_runtime::live::LiveReq` (see `runtime/src/sky_runtime/live/req.rs`).
+        for (name, is_dict) in [
+            ("path", false),
+            ("query", false),
+            ("method", false),
+            ("params", true),
+            ("headers", true),
+            ("cookies", true),
+        ] {
+            fields.insert(interner.intern(name)?, is_dict);
+        }
+        Ok(Self {
+            con,
+            string,
+            dict,
+            fields,
+        })
+    }
+
+    /// Build the union-find variable for `field`'s type, or `None` when `field`
+    /// is not a member of `LiveReq` (→ a genuine SKY-T0012).
+    fn field_var(&self, uf: &mut UnionFind<Content>, field: Symbol) -> DResult<Option<VarId>> {
+        let string_var = |uf: &mut UnionFind<Content>| {
+            uf.fresh(Content::Structure(FlatType::Con {
+                module: Vec::new(),
+                name: self.string,
+                args: Vec::new(),
+            }))
+        };
+        match self.fields.get(&field) {
+            None => Ok(None),
+            Some(false) => Ok(Some(string_var(uf)?)),
+            Some(true) => {
+                let k = string_var(uf)?;
+                let v = string_var(uf)?;
+                let d = uf.fresh(Content::Structure(FlatType::Con {
+                    module: Vec::new(),
+                    name: self.dict,
+                    args: vec![k, v],
+                }))?;
+                Ok(Some(d))
+            }
+        }
+    }
+}
+
+/// The three fixed-field-table lookups the deferred [`resolve_deferred`] pass
+/// needs, bundled so the resolver helpers thread one reference instead of three
+/// (keeps `resolve_deferred` under clippy's `too_many_arguments` bound and reads
+/// as a single "builtin field tables" capability).
+struct BuiltinFieldTables<'a> {
+    /// Opaque server `Sky.Http.Server.Request` field table.
+    req: &'a RequestFields,
+    /// Opaque Sky.Live `LiveReq` field table (#180).
+    live_req: &'a LiveReqFields,
+    /// Nominal error-payload (`PanicInfo`/`TypeInfo`/`ErrorInfo`) field tables.
+    err: &'a ErrorRecordFields,
+}
+
 /// The field type of a builtin nominal-record field ([`ErrorRecordFields`]).
 #[derive(Clone, Copy)]
 enum ErrFieldTy {
@@ -994,6 +1095,7 @@ enum FieldState {
 enum Peek {
     Record(Option<VarId>),
     Req,
+    LiveReq,
     ErrCon(Symbol),
     Deferred,
     Missing,
@@ -1022,8 +1124,7 @@ enum RuPeek {
 /// simultaneous mutable borrow.
 fn field_access_state(
     uf: &mut UnionFind<Content>,
-    req_fields: &RequestFields,
-    err_fields: &ErrorRecordFields,
+    tables: &BuiltinFieldTables,
     root: VarId,
     field: Symbol,
 ) -> DResult<FieldState> {
@@ -1037,9 +1138,18 @@ fn field_access_state(
         // field against the known table so `req.body` type-checks; the
         // emit reads `runtime::ServerRequest` directly.
         Content::Structure(FlatType::Con { name, args, .. })
-            if *name == req_fields.con && args.is_empty() =>
+            if *name == tables.req.con && args.is_empty() =>
         {
             Peek::Req
+        }
+        // The opaque `LiveReq` Con (Sky.Live `init`'s per-session request)
+        // resolves the same way against its fixed field set (see
+        // [`LiveReqFields`]); `req.path` type-checks, the emit reads
+        // `sky_runtime::live::LiveReq` directly (#180).
+        Content::Structure(FlatType::Con { name, args, .. })
+            if *name == tables.live_req.con && args.is_empty() =>
+        {
+            Peek::LiveReq
         }
         // `PanicInfo` / `TypeInfo` / `ErrorInfo` are opaque nominal Cons
         // (SEAL fix 2026-07-11) whose field sets are fixed (see
@@ -1047,7 +1157,7 @@ fn field_access_state(
         // so `p.message` / `t.expected` / `info.details` type-check; the
         // emit reads the runtime structs' pub fields directly.
         Content::Structure(FlatType::Con { name, args, .. })
-            if err_fields.owns(*name) && args.is_empty() =>
+            if tables.err.owns(*name) && args.is_empty() =>
         {
             Peek::ErrCon(*name)
         }
@@ -1056,8 +1166,9 @@ fn field_access_state(
     };
     Ok(match peek {
         Peek::Record(v) => found_or_missing(v),
-        Peek::Req => found_or_missing(req_fields.field_var(uf, field)?),
-        Peek::ErrCon(name) => found_or_missing(err_fields.field_var(uf, name, field)?),
+        Peek::Req => found_or_missing(tables.req.field_var(uf, field)?),
+        Peek::LiveReq => found_or_missing(tables.live_req.field_var(uf, field)?),
+        Peek::ErrCon(name) => found_or_missing(tables.err.field_var(uf, name, field)?),
         Peek::Deferred => FieldState::Deferred,
         Peek::Missing => FieldState::Missing,
     })
@@ -1067,8 +1178,7 @@ fn resolve_deferred(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
     interner: &Interner,
-    req_fields: &RequestFields,
-    err_fields: &ErrorRecordFields,
+    tables: &BuiltinFieldTables,
     accesses: &[FieldAccess],
     updates: &[RecordUpdate],
 ) -> Result<(), (Diagnostic, Vec<Symbol>)> {
@@ -1101,9 +1211,7 @@ fn resolve_deferred(
         for fa in &pending_fa {
             let root = lift!(uf.find(fa.record));
             // See [`field_access_state`] for the encoding + borrow discipline.
-            match lift!(field_access_state(
-                uf, req_fields, err_fields, root, fa.field
-            )) {
+            match lift!(field_access_state(uf, tables, root, fa.field)) {
                 FieldState::Deferred => {
                     next_fa.push(fa);
                 }
@@ -1126,7 +1234,7 @@ fn resolve_deferred(
             // Deferred → carry to the next pass; Discharged → progress; Error →
             // propagate. Extracted into a helper so this fixpoint driver stays
             // under the readability line-cap.
-            match resolve_one_record_update(uf, budget, interner, req_fields, err_fields, ru)? {
+            match resolve_one_record_update(uf, budget, interner, tables, ru)? {
                 RuOutcome::Deferred => next_ru.push(ru),
                 RuOutcome::Discharged => made_progress = true,
             }
@@ -1184,8 +1292,7 @@ fn resolve_one_record_update(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
     interner: &Interner,
-    req_fields: &RequestFields,
-    err_fields: &ErrorRecordFields,
+    tables: &BuiltinFieldTables,
     ru: &RecordUpdate,
 ) -> Result<RuOutcome, (Diagnostic, Vec<Symbol>)> {
     macro_rules! lift {
@@ -1202,7 +1309,10 @@ fn resolve_one_record_update(
                 .collect(),
         ),
         Content::Structure(FlatType::Con { name, args, .. })
-            if args.is_empty() && (err_fields.owns(*name) || *name == req_fields.con) =>
+            if args.is_empty()
+                && (tables.err.owns(*name)
+                    || *name == tables.req.con
+                    || *name == tables.live_req.con) =>
         {
             RuPeek::BuiltinCon(*name)
         }
