@@ -178,7 +178,7 @@ fn wrap_with_label<M: Clone>(
 
 /// Shared core for `text / email / username / search / currentPassword /
 /// newPassword`. Mirrors `inputBase` in `Std.Ui.Input`.
-fn input_base_<M: Clone + Send + Sync + 'static>(
+fn input_base_<M: Clone>(
     input_type: &'static str,
     autocomplete: Option<&'static str>,
     attrs: Vec<Attribute<M>>,
@@ -208,7 +208,7 @@ fn input_base_<M: Clone + Send + Sync + 'static>(
 }
 
 /// `Input.text`
-pub fn input_text_<M: Clone + Send + Sync + 'static>(
+pub fn input_text_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
@@ -219,7 +219,7 @@ pub fn input_text_<M: Clone + Send + Sync + 'static>(
 }
 
 /// `Input.email`
-pub fn input_email_<M: Clone + Send + Sync + 'static>(
+pub fn input_email_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
@@ -230,7 +230,7 @@ pub fn input_email_<M: Clone + Send + Sync + 'static>(
 }
 
 /// `Input.username`
-pub fn input_username_<M: Clone + Send + Sync + 'static>(
+pub fn input_username_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
@@ -249,7 +249,7 @@ pub fn input_username_<M: Clone + Send + Sync + 'static>(
 }
 
 /// `Input.search`
-pub fn input_search_<M: Clone + Send + Sync + 'static>(
+pub fn input_search_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
@@ -260,7 +260,7 @@ pub fn input_search_<M: Clone + Send + Sync + 'static>(
 }
 
 /// `Input.currentPassword`
-pub fn input_current_password_<M: Clone + Send + Sync + 'static>(
+pub fn input_current_password_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
@@ -279,7 +279,7 @@ pub fn input_current_password_<M: Clone + Send + Sync + 'static>(
 }
 
 /// `Input.newPassword`
-pub fn input_new_password_<M: Clone + Send + Sync + 'static>(
+pub fn input_new_password_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
@@ -300,7 +300,7 @@ pub fn input_new_password_<M: Clone + Send + Sync + 'static>(
 // ---- Multiline --------------------------------------------------------------
 
 /// `Input.multiline`
-pub fn input_multiline_<M: Clone + Send + Sync + 'static>(
+pub fn input_multiline_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
@@ -370,7 +370,7 @@ pub fn input_checkbox_<M: Clone + Send + Sync + 'static>(
 ///
 /// The `onChange` callback receives the `String` representation of the current
 /// slider position (fired on every `oninput` event while the user drags).
-pub fn input_slider_<M: Clone + Send + Sync + 'static>(
+pub fn input_slider_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     value: String,
