@@ -1,0 +1,88 @@
+module Main exposing (main)
+
+-- #199 regression: a non-Copy (CloneOk) binding used BOTH as a closure-capture
+-- into a NESTED `move` closure (`Task.map` / `Task.andThen` continuation nested
+-- inside the pipeline eta-lambda) AND as an outer by-value argument in the SAME
+-- enclosing expression — the 07-todo-cli `addTodo`/`markDone`/`listTodos` shape.
+--
+-- #193 hoisted the OUTER capturing lambda's clone but never descended into its
+-- body, so the inner nested closure moved the shadowed clone out of the outer
+-- `Box<dyn Fn>` closure → E0507 ("cannot move out of a captured variable in an
+-- `Fn` closure"). This fixture pins skyc-0 ⇒ cargo-0 ⇒ correct run for every
+-- sub-shape.
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.List as List
+import Sky.Core.Task as Task
+import Std.Log exposing (println)
+
+
+-- Shape A — param captured into Task.map's nested closure AND consumed by the
+-- outer by-value argument (`fakeExec label` moves `label`, the closure clones
+-- it). Mirrors 07's `addTodo conn "..." [todoTitle] |> Task.map (\_ -> ...)`.
+recordAction : String -> Task Error ()
+recordAction label =
+    fakeExec label
+        |> Task.map
+               (\_ ->
+                   let
+                       _ = println ("Added: " ++ label)
+                       _ = println ("Confirmed: " ++ label)
+                   in
+                       ())
+
+
+-- Shape B — param captured into a Task.andThen nested closure AND consumed
+-- again as an outer by-value argument.
+runPipeline : String -> Task Error ()
+runPipeline conn =
+    fakeConnect conn
+        |> Task.andThen
+               (\_ ->
+                   let
+                       _ = println ("using " ++ conn)
+                   in
+                       recordAction conn)
+
+
+-- Shape C — a LAMBDA PARAM (`rows`) used by value more than once across
+-- mutually-exclusive branches (07's `listTodos \rows -> if isEmpty rows … else … rows`).
+listItems : Task Error ()
+listItems =
+    fakeQuery "select"
+        |> Task.map
+               (\rows ->
+                   if List.isEmpty rows then
+                       let
+                           _ = println "empty"
+                       in
+                           ()
+
+                   else
+                       let
+                           joined = String.join "," rows
+                           _ = println joined
+                       in
+                           ())
+
+
+-- Effect stubs (Task Error _) so no external DB/FFI is needed.
+fakeExec : String -> Task Error Int
+fakeExec label =
+    Task.succeed (String.length label)
+
+
+fakeConnect : String -> Task Error ()
+fakeConnect conn =
+    Task.succeed ()
+
+
+fakeQuery : String -> Task Error (List String)
+fakeQuery q =
+    Task.succeed [ "a", "b" ]
+
+
+main : Task Error ()
+main =
+    runPipeline "db://localhost"
+        |> Task.andThen (\_ -> listItems)

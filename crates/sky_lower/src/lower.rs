@@ -2194,17 +2194,67 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
             variant,
             args: force_shared_capture_clones_all(sym, args),
         },
-        Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
-            effect: Box::new(force_shared_capture_clones(sym, *effect)),
-            rest: Box::new(force_shared_capture_clones(sym, *rest)),
-        },
-        Expr::TaskSeqSync { effect, rest } => Expr::TaskSeqSync {
-            effect: Box::new(force_shared_capture_clones(sym, *effect)),
-            rest: Box::new(force_shared_capture_clones(sym, *rest)),
-        },
+        // #199: `TaskSeq` (auto-forced `let _ = <task>` continuation) emits as
+        // `task_and_then(effect, Box::new(move |_| { rest }))` — the emitter
+        // synthesises a `move` closure around `rest` that is NOT an `Expr::Lambda`
+        // in the IR, so the ordinary `Lambda`-arm wrap never sees it. When `rest`
+        // captures `sym` AND this whole `TaskSeq` is itself inside an enclosing
+        // `move` closure, that synthetic inner closure moves `sym` out of the
+        // enclosing closure's env → E0507 (07-todo-cli `runApp`'s
+        // `initDb conn |> Task.andThen (\_ -> … runCommand conn …)` and every
+        // `let _ = println … in <use sym>` continuation). Wrap the whole node in a
+        // pre-clone `let sym = sym.clone() in TaskSeq{…}`: the wrap sits OUTSIDE
+        // the emitted `task_and_then(…)` (hence outside the synthetic `move |_|`),
+        // so the closure captures the fresh clone while the enclosing closure's
+        // `sym` is only borrowed by `.clone()` — keeping it `Fn`. `effect` is
+        // emitted as the FIRST `task_and_then` arg (outside the closure) and reads
+        // the same shadowed clone, sound for a `CloneOk` value. Only wraps when
+        // `rest` references `sym`; a no-op otherwise, so non-continuation TaskSeqs
+        // stay byte-identical.
+        Expr::TaskSeq { effect, rest } => {
+            let effect = Box::new(force_shared_capture_clones(sym, *effect));
+            let rest = Box::new(force_shared_capture_clones(sym, *rest));
+            let node = Expr::TaskSeq { effect, rest };
+            wrap_task_seq_rest_capture(sym, node)
+        }
+        Expr::TaskSeqSync { effect, rest } => {
+            // The sync variant emits `{ let _ = task_run(effect); rest }` — `rest`
+            // shares ONE scope with `effect` (no synthetic closure), so no
+            // enclosing-closure move hazard exists here. Recurse only.
+            Expr::TaskSeqSync {
+                effect: Box::new(force_shared_capture_clones(sym, *effect)),
+                rest: Box::new(force_shared_capture_clones(sym, *rest)),
+            }
+        }
         Expr::TailRecur { args } => Expr::TailRecur {
             args: force_shared_capture_clones_all(sym, args),
         },
+    }
+}
+
+/// #199: wrap a (already recursively-processed) `TaskSeq` node in a pre-clone
+/// `let sym = sym.clone() in <TaskSeq>` IFF its `rest` continuation directly
+/// references `sym`. The emitter renders `TaskSeq { effect, rest }` as
+/// `task_and_then(effect, Box::new(move |_| { rest }))`; placing the pre-clone
+/// OUTSIDE the whole node emits it BEFORE the `task_and_then(…)` call, hence
+/// outside the synthetic `move |_|` closure, so that closure captures the fresh
+/// clone and any enclosing `move` closure's `sym` is only borrowed by `.clone()`
+/// (kept `Fn`). `sym_referenced_directly` stops at nested `Lambda` boundaries, so
+/// a `sym` used ONLY inside a further-nested real lambda inside `rest` is that
+/// lambda's own concern (it already got its own wrap during recursion) and does
+/// not trigger a redundant TaskSeq wrap here.
+fn wrap_task_seq_rest_capture(sym: Symbol, node: Expr) -> Expr {
+    let (Expr::TaskSeq { rest, .. } | Expr::TaskSeqSync { rest, .. }) = &node else {
+        return node;
+    };
+    if sym_referenced_directly(sym, rest) {
+        Expr::Let {
+            name: sym,
+            value: Box::new(Expr::CloneVar(sym)),
+            body: Box::new(node),
+        }
+    } else {
+        node
     }
 }
 
@@ -3224,6 +3274,23 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
         // captures the clone and the outer `sym` stays alive.
         Expr::Lambda { params, ret, body } => {
             if lambda_body_refs_sym(sym, &body) {
+                // #199: a FURTHER-nested `move` closure inside this lambda's
+                // body that ALSO captures `sym` would move `sym` out of THIS
+                // closure's captured environment on the first call, turning a
+                // `Box<dyn Fn>` into a de-facto `FnOnce` (E0507). This arm only
+                // ever gave THIS lambda a pre-clone wrap and never descended
+                // into its body, so the inner closure was left un-wrapped
+                // (07-todo-cli's `todoTitle` / `conn` / `idStr`: captured into a
+                // `task_map`/`task_and_then` closure nested inside the pipeline
+                // eta-lambda AND consumed by-value in the outer `db_exec` arg).
+                // `force_shared_capture_clones` walks the body and gives every
+                // directly-capturing nested lambda its OWN `let sym = sym.clone()`
+                // wrap, sourced from the fresh owned `sym` this lambda captures.
+                // It is a no-op when there is no nested capturing lambda, so the
+                // steady-state single-closure case stays byte-identical. Applied
+                // in BOTH branches because the nested-capture wrap is independent
+                // of whether THIS lambda is the last use of `sym`.
+                let body = Box::new(force_shared_capture_clones(sym, *body));
                 if *remaining > 1 {
                     *remaining -= 1;
                     // Pre-clone: `let sym = sym.clone() in Lambda { … }`.
@@ -3247,6 +3314,8 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
         // the same pre-clone treatment when it is not the last use.
         Expr::SharedLambda { params, ret, body } => {
             if lambda_body_refs_sym(sym, &body) {
+                // #199: same nested-capture descent as the `Lambda` arm above.
+                let body = Box::new(force_shared_capture_clones(sym, *body));
                 if *remaining > 1 {
                     *remaining -= 1;
                     Expr::Let {
@@ -7243,6 +7312,28 @@ impl<'a> Lowerer<'a> {
                 value: Box::new(Expr::Var(binder_sym)),
                 body: Box::new(body),
             };
+        }
+        // T5 (#199): multi-use-clone rewrite for CloneOk LAMBDA params — the
+        // exact analogue of the def-head param rewrite in `lower_def`. A lambda
+        // parameter of `CloneOk` type (e.g. `\rows -> …`, `rows : List Row`)
+        // used N > 1 times by value in the body must clone all but the
+        // syntactically-last occurrence, else Rust emits E0382 (use of moved
+        // value). This site was previously blind to it: `lower_lambda` ran the
+        // capture-clone rewrite for CAPTURED free locals and `reject_fn_value_reuse`
+        // for non-Clone params, but never the CloneOk multi-use pass its
+        // def-head sibling has (07-todo-cli's `listTodos`:
+        // `\rows -> if List.isEmpty rows then … else … List.map f rows`).
+        // `rewrite_multiuse_clones`'s own `Lambda` arm carries the #199
+        // nested-capture descent, so a param captured into a further-nested
+        // closure is covered by the same walk.
+        for (sym, ir_ty) in &ir_params {
+            if matches!(clone_class(ir_ty), CloneClass::CloneOk) {
+                let n = count_var_uses(*sym, &body);
+                if n > 1 {
+                    let mut remaining = n;
+                    body = rewrite_multiuse_clones(*sym, &mut remaining, body);
+                }
+            }
         }
         // T4 (#90, revert-incident Bug 1): a fn-carrying, non-Clone LAMBDA
         // parameter has no sound multi-use rewrite — fail closed on reuse,
