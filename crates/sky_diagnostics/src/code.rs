@@ -129,6 +129,8 @@ pub const SKY_N0025: Code = Code("SKY-N0025");
 pub const SKY_N0026: Code = Code("SKY-N0026");
 /// two imports register the same qualifier against different dep modules
 pub const SKY_N0027: Code = Code("SKY-N0027");
+/// an `Ffi.kernel "Name"` alias names a kernel that is not registered
+pub const SKY_N0028: Code = Code("SKY-N0028");
 
 // ---------------------------------------------------------------------------
 // Type (SKY-T####)
@@ -309,6 +311,7 @@ pub fn title(c: Code) -> &'static str {
         SKY_N0025 => "reserved namespace",
         SKY_N0026 => "type name reserved for a built-in",
         SKY_N0027 => "duplicate import qualifier",
+        SKY_N0028 => "unknown kernel alias",
         SKY_T0001 => "type mismatch",
         SKY_T0002 => "infinite type",
         SKY_T0003 => "type inference exceeded its step budget",
@@ -416,6 +419,7 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         SKY_N0025 => Some(include_str!("../explain/SKY-N0025.md")),
         SKY_N0026 => Some(include_str!("../explain/SKY-N0026.md")),
         SKY_N0027 => Some(include_str!("../explain/SKY-N0027.md")),
+        SKY_N0028 => Some(include_str!("../explain/SKY-N0028.md")),
         SKY_T0001 => Some(include_str!("../explain/SKY-T0001.md")),
         SKY_T0002 => Some(include_str!("../explain/SKY-T0002.md")),
         SKY_T0003 => Some(include_str!("../explain/SKY-T0003.md")),
@@ -481,7 +485,8 @@ pub const ALL_CODES: &[Code] = &[
     SKY_P0015, SKY_P0016, SKY_P0017, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040,
     SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_N0001, SKY_N0002, SKY_N0003,
     SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013, SKY_N0020, SKY_N0021,
-    SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_N0027, SKY_T0001, SKY_T0002,
+    SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_N0027, SKY_N0028, SKY_T0001,
+    SKY_T0002,
     SKY_T0003,
     SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_T0015, SKY_T0016,
     SKY_T0017,
@@ -499,8 +504,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn taxonomy_has_ninety_codes() {
-        assert_eq!(ALL_CODES.len(), 90); // #90: +SKY-L0127; #99: +SKY-L0128; #32: +SKY-T0016; builtin-record-update: +SKY-T0017
+    fn taxonomy_has_ninety_one_codes() {
+        assert_eq!(ALL_CODES.len(), 91); // #90: +SKY-L0127; #99: +SKY-L0128; #32: +SKY-T0016; builtin-record-update: +SKY-T0017; #196: +SKY-N0028
     }
 
     #[test]
@@ -518,7 +523,7 @@ mod tests {
             assert!(s.starts_with("SKY-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 90); // #90: +SKY-L0127; #99: +SKY-L0128; #32: +SKY-T0016; builtin-record-update: +SKY-T0017
+        assert_eq!(seen.len(), 91); // #90: +SKY-L0127; #99: +SKY-L0128; #32: +SKY-T0016; builtin-record-update: +SKY-T0017; #196: +SKY-N0028
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.

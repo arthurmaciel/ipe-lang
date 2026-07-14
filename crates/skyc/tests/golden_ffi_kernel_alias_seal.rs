@@ -1,0 +1,172 @@
+//! #196 regression — the Stage-4 `Ffi.kernel "Module_function"` alias mechanism
+//! and its FAIL-CLOSED gate (THE SEAL).
+//!
+//! A standard-library / user binding of the shape `f = Ffi.kernel "K_n"` routes
+//! `f`'s call sites directly to the built-in kernel named by the string (split
+//! at the first `_` into a `(module, function)` pair). Two invariants:
+//!
+//! * **Positive** — an alias whose string names a REGISTERED kernel resolves and
+//!   builds clean (`skyc` exit 0 AND the emitted Rust `cargo build`s). This is
+//!   the mechanism working end-to-end.
+//! * **Fail-closed (SKY-N0028)** — an alias whose string names NO registered
+//!   kernel is rejected at compile time. Accepting it would emit a call to a
+//!   non-existent kernel that type-checks in `skyc` but fails the downstream
+//!   `cargo build` — the exact exit-0-then-cargo-fail hole THE SEAL forbids
+//!   (`PRINCIPLES.md`, "make invalid states unrepresentable").
+//!
+//! ```text
+//! cargo test -p skyc --test golden_ffi_kernel_alias_seal
+//! ```
+
+use std::fs;
+use std::path::PathBuf;
+
+/// A runtime `false` the optimiser cannot fold — a deliberate unconditional
+/// failure marker, mirroring the sibling error goldens.
+const fn false_marker() -> bool {
+    std::hint::black_box(false)
+}
+
+fn write_project(dir: &std::path::Path, main: &str) -> bool {
+    let src = dir.join("src");
+    let _ = fs::remove_dir_all(dir);
+    if fs::create_dir_all(&src).is_err() {
+        return false;
+    }
+    fs::write(src.join("Main.sky"), main).is_ok()
+}
+
+/// FAIL-CLOSED: `Ffi.kernel "NoSuchKernel_xyz"` names no registered kernel, so
+/// `skyc` must reject it with `NameError::UnknownKernelAlias` (SKY-N0028) —
+/// never accept-then-cargo-fail.
+#[test]
+fn unknown_kernel_alias_is_rejected_at_compile_time() {
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return; // runtime unavailable in this environment — skip silently
+    };
+
+    let tmp = std::env::temp_dir().join("skyc_196_ffi_kernel_alias_unknown");
+    let wrote = write_project(
+        &tmp,
+        "module Main exposing (main)\n\
+         import Sky.Core.Prelude exposing (..)\n\
+         import Std.Log exposing (println)\n\n\
+         bogus : String -> String\n\
+         bogus =\n\
+         \x20   Ffi.kernel \"NoSuchKernel_xyz\"\n\n\
+         main = println (bogus \"x\")\n",
+    );
+    assert!(wrote, "must write the fixture project to a temp dir");
+
+    let entry = tmp.join("src").join("Main.sky");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m196_unknown_kernel_alias_out");
+    let _ = fs::remove_dir_all(&out);
+
+    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let Err(err) = built else {
+        assert!(
+            false_marker(),
+            "expected SKY-N0028 rejection for an alias naming an unregistered \
+             kernel, but skyc build SUCCEEDED — an exit-0-then-cargo-fail hole"
+        );
+        return;
+    };
+    let skyc::CliError::Pipeline { diag, .. } = &err else {
+        assert!(false_marker(), "expected a Pipeline diagnostic, got: {err}");
+        return;
+    };
+    let sky_diagnostics::Diagnostic::Name {
+        msg:
+            sky_diagnostics::NameError::UnknownKernelAlias {
+                alias,
+                module,
+                function,
+            },
+        ..
+    } = diag
+    else {
+        assert!(
+            false_marker(),
+            "expected NameError::UnknownKernelAlias (SKY-N0028), got: {err}"
+        );
+        return;
+    };
+    assert_eq!(&**alias, "NoSuchKernel_xyz");
+    assert_eq!(&**module, "NoSuchKernel");
+    assert_eq!(&**function, "xyz");
+}
+
+/// A malformed alias string with no `_` separator is equally rejected — it names
+/// no `(module, function)` pair, so it fails closed the same way.
+#[test]
+fn malformed_kernel_alias_string_is_rejected() {
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+
+    let tmp = std::env::temp_dir().join("skyc_196_ffi_kernel_alias_malformed");
+    let wrote = write_project(
+        &tmp,
+        "module Main exposing (main)\n\
+         import Sky.Core.Prelude exposing (..)\n\
+         import Std.Log exposing (println)\n\n\
+         bogus : String -> String\n\
+         bogus =\n\
+         \x20   Ffi.kernel \"NoUnderscoreHere\"\n\n\
+         main = println (bogus \"x\")\n",
+    );
+    assert!(wrote, "must write the fixture project to a temp dir");
+
+    let entry = tmp.join("src").join("Main.sky");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m196_malformed_kernel_alias_out");
+    let _ = fs::remove_dir_all(&out);
+
+    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    assert!(
+        matches!(
+            built,
+            Err(skyc::CliError::Pipeline {
+                diag: sky_diagnostics::Diagnostic::Name {
+                    msg: sky_diagnostics::NameError::UnknownKernelAlias { .. },
+                    ..
+                },
+                ..
+            })
+        ),
+        "a `_`-less alias string must fail closed with SKY-N0028: {built:?}"
+    );
+}
+
+/// Positive control (THE SEAL, satisfied): an alias whose string names a
+/// REGISTERED, lowerable+emittable kernel (`String_toUpper`) resolves AND the
+/// emitted Rust `cargo build`s — skyc exit 0 AND cargo exit 0.
+#[test]
+fn registered_kernel_alias_resolves_and_builds() {
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+
+    let tmp = std::env::temp_dir().join("skyc_196_ffi_kernel_alias_registered");
+    let wrote = write_project(
+        &tmp,
+        "module Main exposing (main)\n\
+         import Sky.Core.Prelude exposing (..)\n\
+         import Std.Log exposing (println)\n\n\
+         shout : String -> String\n\
+         shout =\n\
+         \x20   Ffi.kernel \"String_toUpper\"\n\n\
+         main = println (shout \"hi\")\n",
+    );
+    assert!(wrote, "must write the fixture project to a temp dir");
+
+    let entry = tmp.join("src").join("Main.sky");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m196_registered_kernel_alias_out");
+    let _ = fs::remove_dir_all(&out);
+
+    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "an alias to the registered `String_toUpper` kernel must resolve: {:?}",
+        built.err()
+    );
+}
