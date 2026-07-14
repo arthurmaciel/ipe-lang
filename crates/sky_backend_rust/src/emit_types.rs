@@ -153,8 +153,24 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Json => "JsonVal".to_owned(),
         // `Decoder<T>` is the JSON decoder type, aliased in the emitted project's
         // preamble as `pub type Decoder<T> = sky_runtime::json::Decoder<SkyError, T>`.
+        //
+        // #195: when the DECODED VALUE is itself a function (`Decoder (a -> b)` —
+        // e.g. the accumulator of a `succeed Ctor |> required …` pipeline, or a
+        // `succeed (partiallyApplied x)` payload), the runtime represents that
+        // payload as an owned/linear curry chain, `Box<dyn FnOnce(a) -> b + Send>`
+        // (what `curryN` builds and `decode_succeed`'s `A` is inferred to). A bare
+        // `render_type` would render the `IrType::Fun` payload as the SHARED
+        // callback form `Box<dyn Fn(a) -> b + Send + Sync>` — the wrong trait
+        // (`Fn` vs `FnOnce`) AND an over-constrained `+ Sync` the curry chain does
+        // not satisfy → skyc-0-then-cargo-fail (E0308/E0277). A decoder payload
+        // never flows into an `Arc<dyn Fn + Send + Sync>` slot, so it is always the
+        // Send-only owned shape. Render it as the `FnOnceChain` the runtime uses.
         IrType::Decoder(inner) => {
-            format!("Decoder<{}>", render_type(ctx, inner, generics)?)
+            let inner_s = match inner.as_ref() {
+                IrType::Fun(params, ret) => render_fn_once_chain(ctx, params, ret, generics)?,
+                other => render_type(ctx, other, generics)?,
+            };
+            format!("Decoder<{inner_s}>")
         }
         // `Db` is the opaque database connection pool type, re-exported from the
         // runtime as `pub use sky_runtime::Db;` in the emitted crate preamble.
@@ -304,36 +320,54 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // what the `next_decoder` parameter of `decode_pipeline_required` /
         // `decode_pipeline_optional` / `decode_pipeline_required_at` /
         // `db_decode_required` / `db_decode_optional` actually requires.
-        IrType::FnOnceChain(params, ret) => {
-            let Some((last, init)) = params.split_last() else {
-                // Invariant violation (see the variant's doc comment): the
-                // sole producer, `eta_expand_partial`, never constructs a
-                // zero-parameter chain. Fail closed rather than silently
-                // rendering `ret` bare (which would not be a function type).
-                return Err(Diagnostic::CompilerBug {
-                    where_: "sky_backend_rust::emit_types::render_type",
-                    detail: "IrType::FnOnceChain with an empty parameter list".to_owned(),
-                });
-            };
-            let mut acc = render_type(ctx, ret, generics)?;
-            acc = format!(
-                "Box<dyn FnOnce({}) -> {acc} + Send + 'static>",
-                render_type(ctx, last, generics)?
-            );
-            for param in init.iter().rev() {
-                acc = format!(
-                    "Box<dyn FnOnce({}) -> {acc} + Send + 'static>",
-                    render_type(ctx, param, generics)?
-                );
-            }
-            acc
-        }
+        IrType::FnOnceChain(params, ret) => render_fn_once_chain(ctx, params, ret, generics)?,
         // A generic type variable renders as the function's corresponding Rust
         // generic (`T1`, `T2`, …), resolved by position in the quantification
         // scope (M2a). No trait bound is emitted — M2a covers only parametric
         // pass-through; constrained variables are rejected upstream.
         IrType::Generic(sym) => generics.rust_name(*sym)?,
     })
+}
+
+/// Render a curried chain of ONE-SHOT closures — one `Box<dyn FnOnce(..) -> _ +
+/// Send + 'static>` level per parameter, nested from the INSIDE out. This is the
+/// exact shape the `curryN` runtime helpers construct (`curry2` → `Box<dyn
+/// FnOnce(A1) -> Box<dyn FnOnce(A2) -> R + Send> + Send>`) and that the
+/// `next_decoder` / factory parameters of the decode/db-decode combinators
+/// require. It is Send-ONLY (never `+ Sync`): a `FnOnce` curry chain is an
+/// owned/linear value that flows into the runtime's `Box<dyn Fn(..) + Send>`
+/// decoder slots, never into a shared `Arc<dyn Fn + Send + Sync>` callback slot —
+/// so forcing `+ Sync` on it is over-constrained and unsatisfiable (#195).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] on an empty parameter list — a function
+/// type with no parameters is not a `FnOnce` chain (see the [`IrType::FnOnceChain`]
+/// variant's doc comment: its sole producer never constructs a zero-param chain).
+fn render_fn_once_chain(
+    ctx: &EmitCtx,
+    params: &[IrType],
+    ret: &IrType,
+    generics: GenericScope,
+) -> DResult<String> {
+    let Some((last, init)) = params.split_last() else {
+        return Err(Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::emit_types::render_fn_once_chain",
+            detail: "function-value curry chain with an empty parameter list".to_owned(),
+        });
+    };
+    let mut acc = render_type(ctx, ret, generics)?;
+    acc = format!(
+        "Box<dyn FnOnce({}) -> {acc} + Send + 'static>",
+        render_type(ctx, last, generics)?
+    );
+    for param in init.iter().rev() {
+        acc = format!(
+            "Box<dyn FnOnce({}) -> {acc} + Send + 'static>",
+            render_type(ctx, param, generics)?
+        );
+    }
+    Ok(acc)
 }
 
 /// Emit an enum and its derived `SkyStringify` impl, including the trailing
