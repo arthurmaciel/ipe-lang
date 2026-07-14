@@ -2563,6 +2563,178 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
     }
 }
 
+// ── #177: SkyRow bound — structural IR detection ──────────────────────────────
+//
+// The runtime's DB field accessors are generic — `db_get_*<R: SkyRow>(field:
+// String, row: &R)`. When a decoder typed `any -> Record` (the pub/sub /
+// broadcast convention in `examples/27-multi-session-chat`) reads named fields
+// out of its payload via `Db.getString`/`getInt`/`getBool`/`getField`, the `any`
+// param lowers to a wildcard generic. Without a `SkyRow` bound on THAT generic
+// the emitted `db_get_string(_, &payload)` cannot prove `payload: SkyRow` — the
+// program is well-typed to `skyc` but the emitted Rust fails `cargo build` with
+// E0277 (a SEAL violation).
+//
+// The bound is decided HERE, at lowering time, by a STRUCTURAL walk of the
+// already-lowered IR body (NOT a text scan of the rendered Rust — a text scan
+// false-positives on a string literal containing "db_get_" and on a benign user
+// symbol like `dbGetLabel` that lowers to `main_db_get_label`). It fires iff the
+// body contains an actual `Db.get*` KERNEL application whose ROW argument
+// (`args[1]`, since the accessor is `db_get_*(field, &row)`) is a `Var`/`CloneVar`
+// referencing `param`. This forbids all three false classes: a string literal is
+// not a kernel `Call`; a `db_get_`-named USER symbol is a `Call` to a
+// `Callee::Local`/`FuncValue`, not a `Callee::Kernel(DbGet*)`; and a `Db.get*`
+// on a CONCRETE (non-wildcard) row does not reference the wildcard `param`.
+//
+// `DbGetById` (arity 3, `db_get_by_id`) is deliberately EXCLUDED — it takes a
+// `Db` handle, not a row, so it never obliges a `SkyRow` bound.
+
+/// Is `k` one of the four row-field accessors `db_get_*(field, &row)` whose row
+/// argument obliges its type to be `SkyRow`?
+const fn is_db_row_accessor(k: KernelFn) -> bool {
+    matches!(
+        k,
+        KernelFn::DbGetString | KernelFn::DbGetInt | KernelFn::DbGetBool | KernelFn::DbGetField
+    )
+}
+
+/// Does `expr` contain a `Db.get*` row-accessor kernel application whose ROW
+/// argument (`args[1]`) is a direct `Var`/`CloneVar` reference to `param`?
+///
+/// Shadow discipline mirrors [`count_var_uses`]: a scope that rebinds `param`
+/// (`Let`/`Destructure` binder, a `Match`/`TailLoop` arm binding it, a `Lambda`
+/// param) hides the outer `param`, so accessor calls inside that scope are on a
+/// different binding and are NOT attributed to the wildcard param.
+fn body_calls_db_get_on_param(param: Symbol, expr: &Expr) -> bool {
+    // A direct `Var`/`CloneVar` read of `param` in row-argument position.
+    let is_param_row = |row: &Expr| matches!(row, Expr::Var(s) | Expr::CloneVar(s) if *s == param);
+    match expr {
+        Expr::Call { callee, args, .. } => {
+            if let Callee::Kernel(k) = callee
+                && is_db_row_accessor(*k)
+                && args.get(1).is_some_and(is_param_row)
+            {
+                return true;
+            }
+            args.iter().any(|a| body_calls_db_get_on_param(param, a))
+        }
+        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+            if params.iter().any(|(s, _)| *s == param) {
+                false
+            } else {
+                body_calls_db_get_on_param(param, body)
+            }
+        }
+        Expr::Let { name, value, body } => {
+            body_calls_db_get_on_param(param, value)
+                || (*name != param && body_calls_db_get_on_param(param, body))
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            body_calls_db_get_on_param(param, value)
+                || (!pat_binds_symbol(binder, param) && body_calls_db_get_on_param(param, body))
+        }
+        Expr::If { cond, then_, else_ } => {
+            body_calls_db_get_on_param(param, cond)
+                || body_calls_db_get_on_param(param, then_)
+                || body_calls_db_get_on_param(param, else_)
+        }
+        Expr::Match(m) => {
+            body_calls_db_get_on_param(param, m.scrutinee())
+                || m.arms().iter().any(|arm| {
+                    !pat_binds_symbol(&arm.pat, param)
+                        && body_calls_db_get_on_param(param, &arm.body)
+                })
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            body_calls_db_get_on_param(param, lhs) || body_calls_db_get_on_param(param, rhs)
+        }
+        Expr::Apply { func, args } => {
+            body_calls_db_get_on_param(param, func)
+                || args.iter().any(|a| body_calls_db_get_on_param(param, a))
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            items.iter().any(|e| body_calls_db_get_on_param(param, e))
+        }
+        Expr::Cons { head, tail } => {
+            body_calls_db_get_on_param(param, head) || body_calls_db_get_on_param(param, tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            body_calls_db_get_on_param(param, list)
+        }
+        Expr::Record(fields) | Expr::Update { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| body_calls_db_get_on_param(param, e)),
+        Expr::Ctor { args, .. } => args.iter().any(|a| body_calls_db_get_on_param(param, a)),
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            body_calls_db_get_on_param(param, effect) || body_calls_db_get_on_param(param, rest)
+        }
+        Expr::TailLoop { params, body } => {
+            if params.iter().any(|(s, _)| *s == param) {
+                false
+            } else {
+                body_calls_db_get_on_param(param, body)
+            }
+        }
+        Expr::TailRecur { args } => args.iter().any(|a| body_calls_db_get_on_param(param, a)),
+        Expr::Access { record, .. } => body_calls_db_get_on_param(param, record),
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. } => false,
+    }
+}
+
+/// For each `(tv, bounds)` in `type_params`, add [`BoundSet::with_sky_row`] iff
+/// `tv` is a wildcard-`any` GENERIC whose VALUE PARAM binder's body reads DB
+/// fields off it via a `Db.get*` row accessor (#177).
+///
+/// A subtlety: the wildcard `any` param has TWO distinct symbols. `tv` is the
+/// TYPE-VARIABLE symbol (a fresh `anyp_`-pooled binder minted by
+/// `split_typed_sig`, or the raw `any` symbol) that names the Rust generic
+/// `T{n}`. The VALUE binder the body actually reads (`payload` in
+/// `decodeRow payload = { … Db.getString "author" payload … }`) is a SEPARATE
+/// symbol, found in `params` as the `(binder, IrType::Generic(tv))` pair. The
+/// body references the BINDER, not `tv` — so the walk must resolve `tv`'s value
+/// binder first, then look for `Db.get*` on THAT symbol.
+///
+/// Named tvars (`a`/`msg`) never flow into a row accessor, so this only ever
+/// touches the wildcard param; the record STRUCT is never a `type_param` here,
+/// so it stays unbounded and reusable in non-row contexts.
+fn apply_db_row_bounds(
+    interner: &Interner,
+    type_params: &mut [(Symbol, BoundSet)],
+    params: &[(Symbol, IrType)],
+    body: &Expr,
+) {
+    for (tv, bounds) in type_params.iter_mut() {
+        // A param-position `any` is a fresh binder from the lowerer's
+        // `any_param_binders` pool (interned with the `anyp_` prefix; see
+        // `fresh_any_param_symbol` / AUD-01 seal), or the raw `any` symbol.
+        let is_wildcard_any = interner
+            .resolve(*tv)
+            .is_some_and(|nm| nm == "any" || nm.starts_with("anyp_"));
+        if !is_wildcard_any {
+            continue;
+        }
+        // Resolve the VALUE binder whose type is exactly `Generic(tv)`.
+        let fires = params.iter().any(|(binder, ty)| {
+            matches!(ty, IrType::Generic(g) if *g == *tv)
+                && body_calls_db_get_on_param(*binder, body)
+        });
+        if fires {
+            *bounds = bounds.with_sky_row();
+        }
+    }
+}
+
 // ── Fn-value reuse gate, T4 (#90) ─────────────────────────────────────────────
 //
 // A binding whose type embeds a function (`IrType::Fun`, or a `Maybe`/
@@ -5511,7 +5683,7 @@ impl<'a> Lowerer<'a> {
                 // Rust generic, worse than the bug this fix closes. Each is
                 // trivially unbounded (`bounds_for` returns `UNBOUNDED` on a
                 // missing `var_bounds` entry, which every fresh symbol has).
-                let type_params = free_vars
+                let mut type_params: Vec<(Symbol, BoundSet)> = free_vars
                     .iter()
                     .copied()
                     .filter(|v| used_generics.contains(v))
@@ -5547,6 +5719,9 @@ impl<'a> Lowerer<'a> {
                 {
                     lowered_body = rewrite_tail_calls(id, arity, params.clone(), lowered_body);
                 }
+                // #177: a wildcard `any` param that reads DB fields off itself via
+                // a `Db.get*` row accessor gains `SkyRow` (see `apply_db_row_bounds`).
+                apply_db_row_bounds(self.interner, &mut type_params, &params, &lowered_body);
                 Ok(Func {
                     id,
                     name,
@@ -5693,8 +5868,11 @@ impl<'a> Lowerer<'a> {
                     {
                         lowered_body = rewrite_tail_calls(id, arity, params.clone(), lowered_body);
                     }
-                    let type_params =
+                    let mut type_params =
                         compute_type_params(quantified_syms, var_bounds, &params, &ret);
+                    // #177: SkyRow bound on a wildcard `any` param that reads DB
+                    // fields off itself (see `apply_db_row_bounds`).
+                    apply_db_row_bounds(self.interner, &mut type_params, &params, &lowered_body);
                     return Ok(Func {
                         id,
                         name,
