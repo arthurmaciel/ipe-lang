@@ -6146,22 +6146,24 @@ fn emit_match(
     let close_indent = indent_of(indent);
     let mut arms = Vec::with_capacity(m.arms().len());
     for arm in m.arms() {
-        let (pat, prelude) = emit_arm_head(ctx, &arm.pat, &mode)?;
+        let (pat, prelude, synth_guard) = emit_arm_head(ctx, &arm.pat, &mode)?;
         let body = emit_expr_at(ctx, &arm.body, indent + 1, child, generics)?;
         let arm_body = if prelude.is_empty() {
             body
         } else {
             format!("{{ {prelude}{body} }}")
         };
-        // A `Some` guard (#158 C2) renders as a native Rust `if <guard>` on the
-        // arm — `false` falls through to the next arm, matching Sky's refutable
-        // nested-list semantics. `None` keeps the pre-existing `{pat} => …`
-        // shape byte-identical.
-        match &arm.guard {
-            Some(g) => {
-                let guard = emit_expr_at(ctx, g, indent + 1, child, generics)?;
-                arms.push(format!("{arm_indent}{pat} if {guard} => {arm_body},"));
-            }
+        // A guard (#158 C2 arm guard and/or the #182 synthesized `as_str()`
+        // string-column guard) renders as a native Rust `if <guard>` on the arm —
+        // `false` falls through to the next arm, matching the `case`'s refutable
+        // semantics. When both are present they are ANDed. No guard keeps the
+        // pre-existing `{pat} => …` shape byte-identical.
+        let ir_guard = match &arm.guard {
+            Some(g) => Some(emit_expr_at(ctx, g, indent + 1, child, generics)?),
+            None => None,
+        };
+        match combine_guards(synth_guard, ir_guard) {
+            Some(guard) => arms.push(format!("{arm_indent}{pat} if {guard} => {arm_body},")),
             None => arms.push(format!("{arm_indent}{pat} => {arm_body},")),
         }
     }
@@ -6306,23 +6308,56 @@ fn emit_match_scrutinee(
 /// variable / alias / slice — goes through `render_pat` (total over the whole
 /// set), with a `String`/slice binder rebind prelude in string/list mode. Shared
 /// by the value-context and tail-context match emitters.
-fn emit_arm_head(ctx: &EmitCtx, pat: &Pat, mode: &ScrutMode) -> DResult<(String, String)> {
-    match mode {
-        ScrutMode::Whole {
-            str_mode,
-            list_mode,
-        } => emit_whole_arm_head(ctx, pat, *str_mode, *list_mode),
-        ScrutMode::Tuple(cols) => emit_tuple_arm_head(ctx, pat, cols),
+/// AND together the two guard sources on a match arm: the #182 synthesized
+/// string-column `as_str()` guard and the arm's own IR guard (#158 C2). Either,
+/// both, or neither may be present; both present are joined `synth && ir` (the
+/// synthesized `as_str()` checks come from the pattern, so they read first).
+/// `None` when neither is present, keeping the arm's `=> …` shape byte-identical.
+fn combine_guards(synth: Option<String>, ir: Option<String>) -> Option<String> {
+    match (synth, ir) {
+        (Some(s), Some(i)) => Some(format!("{s} && {i}")),
+        (Some(s), None) => Some(s),
+        (None, Some(i)) => Some(i),
+        (None, None) => None,
     }
 }
 
-/// Render a WHOLE-scrutinee arm head (the string / list / plain shapes).
+/// Render one arm head to its Rust pattern, any leading prelude, and any
+/// synthesized match guard (#182 — the `__sgN.as_str() == "lit"` check for a
+/// by-value string-literal column, joined with `&&` when several columns carry
+/// one). `None` when no guard is synthesized (every pre-#182 shape), so the
+/// caller's `if <guard>` clause stays absent and emission is byte-identical.
+fn emit_arm_head(
+    ctx: &EmitCtx,
+    pat: &Pat,
+    mode: &ScrutMode,
+) -> DResult<(String, String, Option<String>)> {
+    let (rendered, prelude, guards) = match mode {
+        ScrutMode::Whole {
+            str_mode,
+            list_mode,
+        } => emit_whole_arm_head(ctx, pat, *str_mode, *list_mode)?,
+        ScrutMode::Tuple(cols) => emit_tuple_arm_head(ctx, pat, cols)?,
+    };
+    let guard = if guards.is_empty() {
+        None
+    } else {
+        Some(guards.join(" && "))
+    };
+    Ok((rendered, prelude, guard))
+}
+
+/// Render a WHOLE-scrutinee arm head (the string / list / plain shapes) to its
+/// Rust pattern, any leading binder-rebind/unbox prelude, and any synthesized
+/// match GUARDS (#182). The guards are the `__sgN.as_str() == "lit"` checks for a
+/// by-value string-literal column — the caller ANDs them onto the arm; they are
+/// empty for every other shape (so existing emission is byte-identical).
 fn emit_whole_arm_head(
     ctx: &EmitCtx,
     pat: &Pat,
     str_mode: bool,
     list_mode: bool,
-) -> DResult<(String, String)> {
+) -> DResult<(String, String, Vec<String>)> {
     if let Pat::Ctor {
         home,
         ty,
@@ -6334,20 +6369,26 @@ fn emit_whole_arm_head(
     } else if str_mode || list_mode {
         // STR/LIST mode: the scrutinee IS a reference (`.as_str()` /
         // `.as_slice()`), so `render_pat`'s `name @ inner` is a borrow and
-        // sound for any inner shape (#99 §1.1) — unchanged.
+        // sound for any inner shape (#99 §1.1) — unchanged. A top-level `Pat::Str`
+        // matches the `&str`-wrapped scrutinee directly (a literal pattern), so no
+        // guard is synthesized here.
         let prelude = if str_mode {
             str_binder_rebinds(ctx, pat)?
         } else {
             list_binder_rebinds(ctx, pat)?
         };
-        Ok((render_pat(ctx, pat)?, prelude))
+        Ok((render_pat(ctx, pat)?, prelude, Vec::new()))
     } else {
         // WHOLE mode, by value: a top-level dispatch-free alias head
-        // (`(a, b) as w ->`) takes the #99 alias-safe clone-rebuild path.
+        // (`(a, b) as w ->`) takes the #99 alias-safe clone-rebuild path; a
+        // by-value string-literal column (`( "transform", v )` on a variable
+        // tuple scrutinee, #182) accumulates its `as_str()` guard here.
         let mut alias_counter: usize = 0;
         let mut prelude = String::new();
-        let rendered = render_arm_pat_alias_safe(ctx, pat, &mut alias_counter, &mut prelude)?;
-        Ok((rendered, prelude))
+        let mut guards = Vec::new();
+        let rendered =
+            render_arm_pat_alias_safe(ctx, pat, &mut alias_counter, &mut prelude, &mut guards)?;
+        Ok((rendered, prelude, guards))
     }
 }
 
@@ -6360,23 +6401,29 @@ fn emit_whole_arm_head(
 /// a tuple or wildcard head here (`tuple_case_supported`), so a whole-value
 /// variable / alias binder — which would see the wrong per-column-coerced type —
 /// is an internal invariant violation, surfaced as a `CompilerBug`.
-fn emit_tuple_arm_head(ctx: &EmitCtx, pat: &Pat, cols: &[ColMode]) -> DResult<(String, String)> {
+fn emit_tuple_arm_head(
+    ctx: &EmitCtx,
+    pat: &Pat,
+    cols: &[ColMode],
+) -> DResult<(String, String, Vec<String>)> {
     match pat {
         Pat::Tuple(elems) => {
             let mut rendered = Vec::with_capacity(elems.len());
             let mut prelude = String::new();
+            let mut guards = Vec::new();
             for (c, sub) in elems.iter().enumerate() {
                 let col = cols.get(c).copied().unwrap_or(ColMode {
                     str_mode: false,
                     list_mode: false,
                 });
-                let (rp, pre) = emit_whole_arm_head(ctx, sub, col.str_mode, col.list_mode)?;
+                let (rp, pre, gs) = emit_whole_arm_head(ctx, sub, col.str_mode, col.list_mode)?;
                 rendered.push(rp);
                 prelude.push_str(&pre);
+                guards.extend(gs);
             }
-            Ok((format!("({})", rendered.join(", ")), prelude))
+            Ok((format!("({})", rendered.join(", ")), prelude, guards))
         }
-        Pat::Wildcard => Ok(("_".to_owned(), String::new())),
+        Pat::Wildcard => Ok(("_".to_owned(), String::new(), Vec::new())),
         _ => Err(Diagnostic::CompilerBug {
             where_: "sky_backend_rust::emit_tuple_arm_head",
             detail: "tuple-scrutinee match arm head is neither a tuple nor a wildcard".to_owned(),
@@ -6393,19 +6440,22 @@ fn emit_ctor_arm_pat(
     ty: Symbol,
     variant: Symbol,
     args: &[Pat],
-) -> DResult<(String, String)> {
+) -> DResult<(String, String, Vec<String>)> {
     // A built-in `Maybe` / `Result` pattern matches the runtime enum; its
     // payload is never a boxed self-edge field, so no unbox prelude is needed.
     if let Some(runtime) = ctx.builtin_runtime_enum(home, ty) {
         let path = format!("{runtime}::{}", ctx.emit_ident(variant)?);
         if args.is_empty() {
-            return Ok((path, String::new()));
+            return Ok((path, String::new(), Vec::new()));
         }
         // #99: the concrete repro (`Just ((a, b) as w)`) lives HERE — a
         // builtin `Maybe`/`Result` payload matched by value. Route through
-        // the alias-safe renderer; alias-free payloads are byte-identical.
+        // the alias-safe renderer; alias-free payloads are byte-identical. A
+        // by-value string-literal payload (`Just "x"` on a `Maybe String`
+        // scrutinee, #182) accumulates its `as_str()` guard in `guards`.
         let mut alias_counter: usize = 0;
         let mut alias_prelude = String::new();
+        let mut guards = Vec::new();
         let mut sub_pats = Vec::with_capacity(args.len());
         for sub in args {
             sub_pats.push(render_arm_pat_alias_safe(
@@ -6413,13 +6463,18 @@ fn emit_ctor_arm_pat(
                 sub,
                 &mut alias_counter,
                 &mut alias_prelude,
+                &mut guards,
             )?);
         }
-        return Ok((format!("{path}({})", sub_pats.join(", ")), alias_prelude));
+        return Ok((
+            format!("{path}({})", sub_pats.join(", ")),
+            alias_prelude,
+            guards,
+        ));
     }
     let path = format!("{}::{}", ctx.enum_name(home, ty)?, ctx.emit_ident(variant)?);
     if args.is_empty() {
-        return Ok((path, String::new()));
+        return Ok((path, String::new(), Vec::new()));
     }
     let fields = ctx.variant_fields(home, ty, variant)?;
     if fields.len() != args.len() {
@@ -6437,6 +6492,7 @@ fn emit_ctor_arm_pat(
     }
     let mut sub_pats = Vec::with_capacity(args.len());
     let mut unbox_lines = String::new();
+    let mut guards = Vec::new();
     // #99: a dispatch-free `as`-alias in a by-value ctor payload renders via
     // the alias-safe clone-rebuild path; its re-derivation `let`s share the
     // arm's existing prelude slot. Alias-free sub-patterns take the
@@ -6466,6 +6522,7 @@ fn emit_ctor_arm_pat(
             sub,
             &mut alias_counter,
             &mut unbox_lines,
+            &mut guards,
         )?);
         // A variable bound to a boxed self-edge field is unboxed so the body
         // sees the payload's own type, not `Box<…>`.
@@ -6479,7 +6536,11 @@ fn emit_ctor_arm_pat(
             })?;
         }
     }
-    Ok((format!("{path}({})", sub_pats.join(", ")), unbox_lines))
+    Ok((
+        format!("{path}({})", sub_pats.join(", ")),
+        unbox_lines,
+        guards,
+    ))
 }
 
 /// Build the `let name = name.to_string();` prelude that rebinds every top-level
@@ -6808,6 +6869,36 @@ fn pat_contains_alias_in_arm(pat: &Pat) -> bool {
     }
 }
 
+/// Does this arm pattern carry a string-literal (`Pat::Str`) leaf anywhere in a
+/// BY-VALUE-matched position (a tuple element, a ctor / record payload, or an
+/// alias inner)? On the whole-scrutinee by-value path a `Pat::Str` is a `&str`
+/// pattern against an owned `String` field (E0308); the emitter instead binds
+/// the field and checks equality in a match guard (#182,
+/// `render_arm_pat_alias_safe`'s `guards` accumulator — mirrors the reference's
+/// `renderPatGuarded`). This detects when that guard path is needed so the
+/// alias-free / str-free fast path stays byte-identical for every other arm.
+///
+/// A `Pat::Slice` prefix/rest is deliberately NOT recursed: a slice column
+/// reaches the reference-style LIST mode (matched by reference), never the
+/// by-value renderer, and the lowerer keeps a list / cons tuple column
+/// fail-closed on the variable-scrutinee path (SKY-L0115), so no `Pat::Str`
+/// under a slice can reach here.
+fn pat_contains_str_in_arm(pat: &Pat) -> bool {
+    match pat {
+        Pat::Str(_) => true,
+        Pat::Alias(inner, _) => pat_contains_str_in_arm(inner),
+        Pat::Tuple(elems) => elems.iter().any(pat_contains_str_in_arm),
+        Pat::Ctor { args, .. } => args.iter().any(pat_contains_str_in_arm),
+        Pat::Record(fields) => fields.iter().any(|(_, p)| pat_contains_str_in_arm(p)),
+        Pat::Var(_)
+        | Pat::Wildcard
+        | Pat::Int(_)
+        | Pat::Bool(_)
+        | Pat::Char(_)
+        | Pat::Slice { .. } => false,
+    }
+}
+
 /// Render a BY-VALUE (whole-scrutinee, non-str, non-list) match-arm
 /// sub-pattern, routing any [`Pat::Alias`] through the SAME "bind the whole,
 /// destructure the inner shape from a CLONE" strategy #96's
@@ -6829,11 +6920,28 @@ fn render_arm_pat_alias_safe(
     pat: &Pat,
     counter: &mut usize,
     prelude: &mut String,
+    guards: &mut Vec<String>,
 ) -> DResult<String> {
-    if !pat_contains_alias_in_arm(pat) {
+    // Fast path: no alias AND no by-value string-literal leaf → the plain,
+    // byte-identical renderer. A `Pat::Str` in a by-value position would render
+    // as a `&str` literal pattern against an owned `String` field (E0308), so
+    // its presence forces the guard walk below even when there is no alias (#182).
+    if !pat_contains_alias_in_arm(pat) && !pat_contains_str_in_arm(pat) {
         return render_pat(ctx, pat);
     }
     match pat {
+        // A by-value string-literal column (#182): Rust can't match an owned
+        // `String` field against a `&str` literal pattern, so bind the field to a
+        // fresh `__sgN` and emit an `if __sgN.as_str() == "lit"` match guard. The
+        // caller ANDs the accumulated guards onto the arm — a false guard falls
+        // through to the next arm, exactly matching the `case`'s literal-column
+        // semantics. Mirrors the reference's `renderPatGuarded`.
+        Pat::Str(s) => {
+            let binder = format!("__sg{}", *counter);
+            *counter += 1;
+            guards.push(format!("{binder}.as_str() == {s:?}"));
+            Ok(binder)
+        }
         Pat::Alias(inner, _name) => {
             // SKY-L0128 (`gate_by_value_dispatch_needing_aliases`) guarantees
             // `inner` is dispatch-free by the time lowering succeeds; fail
@@ -6863,7 +6971,7 @@ fn render_arm_pat_alias_safe(
         Pat::Tuple(elems) => {
             let mut subs = Vec::with_capacity(elems.len());
             for e in elems {
-                subs.push(render_arm_pat_alias_safe(ctx, e, counter, prelude)?);
+                subs.push(render_arm_pat_alias_safe(ctx, e, counter, prelude, guards)?);
             }
             Ok(format!("({})", subs.join(", ")))
         }
@@ -6886,7 +6994,7 @@ fn render_arm_pat_alias_safe(
             } else {
                 let mut subs = Vec::with_capacity(args.len());
                 for a in args {
-                    subs.push(render_arm_pat_alias_safe(ctx, a, counter, prelude)?);
+                    subs.push(render_arm_pat_alias_safe(ctx, a, counter, prelude, guards)?);
                 }
                 Ok(format!("{path}({})", subs.join(", ")))
             }
@@ -6908,7 +7016,7 @@ fn render_arm_pat_alias_safe(
                 {
                     parts.push(field_ident);
                 } else {
-                    let rendered = render_arm_pat_alias_safe(ctx, sub, counter, prelude)?;
+                    let rendered = render_arm_pat_alias_safe(ctx, sub, counter, prelude, guards)?;
                     parts.push(format!("{field_ident}: {rendered}"));
                 }
             }
@@ -6928,7 +7036,9 @@ fn render_arm_pat_alias_safe(
                      arms must route through render_pat directly"
                 .to_owned(),
         }),
-        Pat::Var(_) | Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => {
+        // `Pat::Str` is intercepted above (binder + guard, #182); the remaining
+        // leaves render directly.
+        Pat::Var(_) | Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) => {
             render_pat(ctx, pat)
         }
     }
@@ -7237,7 +7347,7 @@ fn emit_expr_tail(
             let close_indent = indent_of(indent);
             let mut arms = Vec::with_capacity(m.arms().len());
             for arm in m.arms() {
-                let (patstr, prelude) = emit_arm_head(ctx, &arm.pat, &mode)?;
+                let (patstr, prelude, synth_guard) = emit_arm_head(ctx, &arm.pat, &mode)?;
                 // The arm body is a STATEMENT sequence ending in return/continue;
                 // any binder-rebind prelude precedes it inside the arm's block.
                 let body =
@@ -7247,15 +7357,16 @@ fn emit_expr_tail(
                 } else {
                     format!("{}{prelude}\n{body}", indent_of(indent + 2))
                 };
-                // Same `if <guard>` fall-through as the value-context emitter
-                // (#158 C2); `None` keeps the pre-existing shape byte-identical.
-                let guard_clause = match &arm.guard {
-                    Some(g) => {
-                        let guard = emit_expr_at(ctx, g, indent + 1, child, generics)?;
-                        format!(" if {guard}")
-                    }
-                    None => String::new(),
+                // Same `if <guard>` fall-through as the value-context emitter: the
+                // #158 C2 arm guard and the #182 synthesized `as_str()` string-
+                // column guard are ANDed; `None` keeps the pre-existing shape
+                // byte-identical.
+                let ir_guard = match &arm.guard {
+                    Some(g) => Some(emit_expr_at(ctx, g, indent + 1, child, generics)?),
+                    None => None,
                 };
+                let guard_clause = combine_guards(synth_guard, ir_guard)
+                    .map_or_else(String::new, |guard| format!(" if {guard}"));
                 arms.push(format!(
                     "{arm_indent}{patstr}{guard_clause} => {{\n{inner}\n{arm_indent}}}"
                 ));
