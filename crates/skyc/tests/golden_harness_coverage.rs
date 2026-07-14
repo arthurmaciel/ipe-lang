@@ -36,6 +36,9 @@ const NEVER_BYTE_DIFFED: &[&str] = &[
     "golden_aud08_function_name_collision.rs",
     "golden_aud12_append_number.rs",
     "golden_aud14_duplicate_qualifier.rs",
+    // #179 / #185 — Attribute<msg> type-identity SEAL: asserts on
+    // `outcome.stdout` (the rendered <svg>), never byte-diffs a golden main.rs.
+    "golden_attribute_home_disambiguation_179.rs",
     "golden_class1_boundary_scheme_field_result.rs",
     "golden_core_stdlib.rs",
     "golden_cross_module_type_res.rs",

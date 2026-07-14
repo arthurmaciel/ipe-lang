@@ -1,0 +1,95 @@
+module Main exposing (main)
+
+-- Regression for #179 — Attribute<msg> type-identity disambiguation.
+--
+-- `import Std.Html.Attributes as Attr exposing (Attribute)` brings the bare
+-- `Attribute` TYPE into unqualified scope. A polymorphic-msg function annotated
+-- `List (Attribute msg)` whose body produces `Attr.attribute …` (an
+-- `sky_runtime::html::Attribute`) MUST lower its return type to
+-- `sky_runtime::html::Attribute<msg>`, NOT `sky_runtime::ui::element::Attribute`.
+--
+-- Before the fix the bare `Attribute` resolved to the empty-home sentinel, so
+-- the lowerer's `is_html` check failed and picked `ui::element::Attribute`,
+-- while the body produced `html::Attribute` → E0308 at cargo build (skyc still
+-- exited 0: a SEAL violation). Feeding the list into an SVG node (`Html.node`,
+-- which takes `List (html::Attribute)`) locks in the html home so a solver
+-- mismatch (`expected Html.Attribute, found Std.Html.Attributes.Attribute`)
+-- would also surface if the recorded home diverged from the constrainer's.
+--
+-- `Std.Ui.Chart.bar` additionally exercises the Chart module's own
+-- `svgRootAttrs : Cfg -> List (Attr.Attribute msg)` path (#185) — the QUALIFIED
+-- `Attr.Attribute` counterpart of the bare-exposed `pairToAttr` — which builds
+-- the same `<svg>` attribute list. Both must agree on `html::Attribute`.
+--
+-- The polymorphic `pairToAttr` / `svgRootAttrs` are the #179 shape; `svgNode`
+-- consumes them at a CONCRETE `Msg` so no generic-`msg` closure boxing reaches
+-- `main` (that would trip the SEPARATE #184 polymorphic-msg `'static`-bound gap,
+-- not the Attribute type-identity this golden targets).
+--
+-- oracle_divergence = true: skyc's own correct output, not a Go oracle diff —
+-- this asserts the Attribute newtype identity through a runnable render.
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.List as List
+import Sky.Core.String as String
+import Std.Html as Html exposing (Html)
+import Std.Html.Attributes as Attr exposing (Attribute)
+import Std.Ui as Ui exposing (Element)
+import Std.Ui.Chart as Chart
+
+
+type Msg
+    = NoOp
+
+
+-- The #179 shape: polymorphic `msg`, bare exposed `Attribute`, html-producing
+-- body. This is the exact signature of `Std.Live.Head.pairToAttr`.
+pairToAttr : (String, String) -> Attribute msg
+pairToAttr pair =
+    Attr.attribute (fst pair) (snd pair)
+
+
+-- An SVG-root attribute list, Chart-style — mirrors `Std.Ui.Chart.svgRootAttrs`.
+svgRootAttrs : List (Attribute msg)
+svgRootAttrs =
+    [ Attr.attribute "viewBox" "0 0 100 40"
+    , Attr.attribute "xmlns" "http://www.w3.org/2000/svg"
+    , Attr.attribute "role" "img"
+    ]
+
+
+-- Feed BOTH attribute sources into one `<svg>` node. `Html.node` takes
+-- `List (html::Attribute msg)`, so the list must be `html::Attribute` — the
+-- exact slot that mis-typed before the fix.  Concrete `Msg` here instantiates
+-- the polymorphic `pairToAttr` / `svgRootAttrs` above at `Msg`, so no generic
+-- `T1` closure boxing survives to `main` (that would trip the SEPARATE #184
+-- polymorphic-msg `'static`-bound gap, which is not what this golden targets).
+svgNode : Html Msg
+svgNode =
+    Html.node "svg"
+        (svgRootAttrs ++ List.map pairToAttr [("width", "100"), ("height", "40")])
+        [ Html.node "rect"
+            [ Attr.attribute "x" "0", Attr.attribute "y" "0" ]
+            []
+        ]
+
+
+-- A real Chart element locks in the Std.Ui.Chart svgRootAttrs path (#185).
+chartElement : Element Msg
+chartElement =
+    Chart.bar
+        (Chart.defaultCfg |> Chart.withWidth 100 |> Chart.withHeight 40)
+        [ Chart.series [(0.0, 10.0), (1.0, 20.0), (2.0, 15.0)] ]
+
+
+main : ()
+main =
+    let
+        rendered = Html.toString svgNode
+        -- Force the Chart element into a rendered Html string too, so the
+        -- Chart svgRootAttrs path is monomorphised + type-checked, not DCE'd.
+        -- `Ui.layout` converts the `Element Msg` to `Html Msg`.
+        chartHtml = Html.toString (Ui.layout [] chartElement)
+        _ = println (rendered ++ "\n" ++ String.fromInt (String.length chartHtml))
+    in
+        ()
