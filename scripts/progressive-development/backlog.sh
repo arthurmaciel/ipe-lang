@@ -31,6 +31,12 @@
 #                          backlog.mmd). Renderer: $MMDC -> mmdc -> npx
 #                          @mermaid-js/mermaid-cli; falls back to printing the
 #                          Mermaid source if none is runnable.
+#   backlog.sh ready    # MACHINE-readable actionable work source (one line per
+#                       # pending, non-deferred item whose blockers are all done):
+#                       # `#<id> <full task>`, untruncated. Consumed by autopilot's
+#                       # pending(); the same actionable filter as `view ready`.
+#   backlog.sh claims   # MACHINE-readable claimed leases: `<id>\t<claimed_at>` per
+#                       # claimed row. Consumed by autopilot's reclaim_stale_claims().
 #   backlog.sh add --priority P --phase PH --task T --notes N [--spec S] [--blocked-by "193,194"]
 #   backlog.sh claim <id> [<id>...]
 #   backlog.sh unclaim <id> [<id>...]
@@ -246,15 +252,38 @@ _view_board() {   # aligned table of pending tasks, priority-ordered, with readi
       | { printf 'ID\tPRIO\tSTATE\tTASK\n'; cat; } | column -t -s $'\t'
 }
 
-_view_ready() {   # pending tasks with no OPEN blockers — actionable right now
-    jq -rs '
+# The single actionable-work definition, shared by the human `view ready` and
+# the machine `ready` verbs so they can never diverge: a PENDING, non-deferred
+# item every one of whose blocked_by ids is `done` (or none). Emits the matching
+# rows as compact JSON, one per line.
+_actionable_rows() {
+    jq -cs '
         (map(select(has("id")))) as $rows
         | ($rows | map({key:.id, value:.status}) | from_entries) as $st
-        | $rows[] | select(.status == "pending") | select(.deferred != true)
+        | $rows[]
+        | select(.status == "pending") | select(.deferred != true)
         | select( ((.blocked_by // []) | map(select($st[.] != "done")) | length) == 0 )
-        | .id as $rid
-        | "#\(.id)  [\(.priority)]  \(.task | sub("^#" + $rid + " "; "") | .[0:64])"
     ' "$JSONL"
+}
+
+_view_ready() {   # pending tasks with no OPEN blockers — actionable right now (human, truncated)
+    _actionable_rows | jq -r '.id as $rid
+        | "#\(.id)  [\(.priority)]  \(.task | sub("^#" + $rid + " "; "") | .[0:64])"'
+}
+
+# Machine-readable work source for autopilot's pending(): one actionable item per
+# line as `#<id> <full task>` (embedded newlines/tabs collapsed, NOT truncated).
+# The `#<id> ` prefix + full task is the exact string autopilot uses as its
+# $QUEUE attempt-ledger key — keep it byte-stable.
+cmd_ready() {
+    _actionable_rows | jq -r '"#\(.id) " + ((.task // "") | gsub("[\n\t]";" "))'
+}
+
+# Machine-readable claimed-lease list for autopilot's reclaim_stale_claims():
+# `<id>\t<claimed_at>` per claimed row (TTL/date math stays in autopilot).
+cmd_claims() {
+    jq -r 'select(has("id") and .status == "claimed" and (.claimed_at // "") != "")
+           | "\(.id)\t\(.claimed_at)"' "$JSONL"
 }
 
 _graph_mermaid() {   # emit the Mermaid `graph TD` source on stdout
@@ -331,11 +360,13 @@ case "$cmd" in
     list)    cmd_list "$@" ;;
     show)    cmd_show "$@" ;;
     view)    cmd_view "$@" ;;
+    ready)   cmd_ready "$@" ;;
+    claims)  cmd_claims "$@" ;;
     add)     cmd_add "$@" ;;
     claim)   cmd_claim "$@" ;;
     unclaim) cmd_unclaim "$@" ;;
     defer)   cmd_defer "$@" ;;
     undefer) cmd_undefer "$@" ;;
     close)   cmd_close "$@" ;;
-    *) die "unknown command '$cmd' — list|show|view|add|claim|unclaim|defer|undefer|close" ;;
+    *) die "unknown command '$cmd' — list|show|view|ready|claims|add|claim|unclaim|defer|undefer|close" ;;
 esac
