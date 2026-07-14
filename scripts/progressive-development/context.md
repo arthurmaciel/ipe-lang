@@ -37,6 +37,30 @@ Read PRINCIPLES.md fully and also follow the practical rules below.
 `mem-guard.sh` MUST be running. Every build/test wrapped in `timeout`. No
 background processes (`&`/`nohup`). Abort if free disk < 15 GB.
 
+## 4b. Command & output hygiene (enforced — these waste whole builds when broken)
+- **Tee high-cost output to a file, then re-read. NEVER tail-pipe one-shot.**
+  `cargo build`/`nextest`/`clippy`/`skyc build` etc.:
+  `cmd > /tmp/<step>.log 2>&1` then `rg <pat> /tmp/<step>.log` / read it as many
+  times as needed. `cmd 2>&1 | tail` or `| rg` DISCARDS the output — to see a
+  different slice you must RE-RUN the multi-minute build. Re-read the file.
+- **No Monitor tool. No self-poll (`until`/`while pgrep …; do sleep`) on your own
+  build.** A monitor/poll detaches, outlives you, and becomes an unkillable
+  zombie that relaunches killed builds. Run the build in the FOREGROUND under
+  `timeout` and report when it returns. (Extends §4's `&`/`nohup` ban.)
+- **Never `pgrep` your OWN command name to detect completion** — `pgrep -f`
+  matches the waiter itself (self-match) → false "still running" forever. Trust
+  the foreground command's exit code.
+- **Isolated `CARGO_TARGET_DIR` when your change touches compiled code.** Set your
+  own per-lane target; do NOT build on the shared `MASTER_GATE_TARGET` mid-work —
+  it holds only the last build and races concurrent lanes (phantom errors).
+  Leaf-only/doc edits may share.
+- **Never `cargo fmt`** (whole-crate OR `--`-scoped) — it reformats the ENTIRE
+  workspace. Use `rustfmt <exact file>` on ONLY the files you touched.
+- **Never `git checkout --` / `git restore` / `git stash` to clear state** — you
+  can silently destroy another lane's or the prior in-progress work. The ONLY
+  sanctioned reset is §6's `git reset --hard` on YOUR OWN red gate. Unexpected
+  dirty state → STOP and escalate; discard nothing.
+
 ## 5. Boundary
 Only the Rust-port surface: `crates/`, `runtime/`, sky-stdlib compiled-source,
 `examples/` fixtures, `docs/`. `../sky` is READ-ONLY reference — never edit the
