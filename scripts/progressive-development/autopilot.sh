@@ -28,6 +28,23 @@
 # at the guardian gate. Never trust the gate alone for guardian changes. The human
 # keeps a LIGHT meta-audit of the guardian tier via the digest.
 #
+# VERIFICATION MODEL (2026-07-14, distilled from the manual burndown):
+#   * The trust boundary is a SCRIPT'S captured exit code, never an agent's
+#     narration. An agent can report "999/999 passed" while a buried `if false &&`
+#     disabled the whole fix — that survived precisely because a *report* was
+#     trusted. So agents supply CODE + adversarial PROBES (the creative part an
+#     LLM is for); the SCRIPT runs the build/test/SEAL and branches on `$?` (the
+#     part that must not be delegated). The gate below (`&&`-chained nextest +
+#     --features full + doctest + clippy + fuzz, revert-on-fail) is that oracle.
+#   * The EXAMPLES SWEEP (remeasure.sh, measure phase) IS the SEAL oracle:
+#     skyc-exit-0 MUST imply the emitted crate cargo-builds. A "fix" that closes
+#     an example only in an agent's report but not for real is re-surfaced RED by
+#     the next remeasure and re-queued — the loop self-corrects, deterministically.
+#   * Adversarial review = build the COMMITTED branch (cache-hits on unchanged
+#     code are fine — recompiling identical deterministic source yields the same
+#     binary, zero signal), then RUN the SEAL + tests + the reviewer's OWN probes.
+#     Integrity comes from running-from-committed + probing, NOT from recompiling.
+#
 # Config (env): PROGDEV_MAX_CYCLES (100 backstop) · PROGDEV_MAX_GUARDIAN (2/cycle) ·
 #   PROGDEV_LANES (2) · PROGDEV_AUTHOR_MODEL (sonnet) · PROGDEV_GUARDIAN_MODEL /
 #   PROGDEV_RECONCILE_MODEL (opus) · touch autopilot.stop to halt after the cycle.
@@ -58,6 +75,30 @@ DISK_FLOOR="${PROGDEV_DISK_FLOOR_GB:-20}"    # reclaim when free drops below thi
 DISK_CRIT="${PROGDEV_DISK_CRIT_GB:-10}"      # graceful-stop when still below this after reclaim
 # The loop's ENTIRE cargo-target footprint — everything else under ~/.cache is
 # reclaimable. Bounds disk to these two + the shared dev target.
+#
+# TARGET-DIR RULE (2026-07-14, empirically proven — /tmp/skyc-share-exp):
+#   Two build PHASES with opposite sharing rules, and conflating them is the
+#   dominant wasted compute in the loop:
+#   1. COMPILER-crate build (sky_lower/sky_backend/skyc — SOURCE DIFFERS per lane):
+#      MUST use an ISOLATED CARGO_TARGET_DIR (GUARDIAN_TARGET / GATE_TARGET). Two
+#      lanes building different source of the SAME crate to one target = the
+#      Task-13 stale-link clobber (the lock serializes the builds but the last
+#      writer's artifact wins → the other lane reads the wrong backend).
+#   2. EMITTED-E2E-PROJECT build (vendored `sky_runtime` + tokio/sqlx/axum + a
+#      UNIQUELY-named emitted app crate): SHOULD use the SHARED sky-rust-target so
+#      the ~8GB runtime compiles ONCE and is reused across every example, every
+#      lane, author AND reviewer. PROVEN race-free: cargo's build-dir file lock
+#      serialises concurrent access (both logs showed `Blocking waiting for file
+#      lock`, both exit 0, tokio NOT recompiled), because the only shared crate
+#      (sky_runtime) is byte-identical source across non-runtime lanes and the app
+#      crates have unique names. EXCEPTION: a change that edits runtime/ vendors a
+#      DIFFERENT runtime → its emitted build must isolate too (case-1 clobber).
+#   MECHANISM: the E2E harness (tools/oracle) inherits the ambient CARGO_TARGET_DIR,
+#   so today's `CARGO_TARGET_DIR=$GUARDIAN_TARGET` on the impl step ALSO redirects
+#   the emitted build into the isolated target → a fresh runtime compile per lane
+#   (the self-inflicted slow path). The real fix is in the oracle (pin the emitted
+#   build to the shared target unless runtime/ changed) — filed as its own task;
+#   until it lands, sccache (rustc-wrapper, global) reclaims most of the dep cost.
 KEEP_TARGETS="$(basename "$GATE_TARGET") $(basename "$GUARDIAN_TARGET") sky-rust-target"
 LEDGER="docs/architecture/progdev-cost-ledger.tsv"   # persistent per-cycle agent-cost ledger (survives /tmp overwrite across runs)
 SHIMDIR="/tmp/autopilot-shims"                        # rg-enforcement: grep/egrep/fgrep shims prepended to the agent PATH
@@ -442,7 +483,7 @@ KIND is exactly one of: 'mechanical' | 'guardian-typesystem' | 'guardian-runtime
 
         # ── v4 stage 3: Opus REVIEW — BEFORE the expensive gate (failures are review-dominated) ──
         phase review opus
-        review="$(agent "$GUARDIAN_MODEL" "You are an ADVERSARIAL reviewer of a $class change on branch $gbr (diff: git diff $BASE..$gbr). REFUTE it — $(reviewer_angle "$class"). Read the diff + the added tests. If you find ANY unsoundness / behaviour change vs the ../sky reference / disguised hack, print 'REVIEW: REJECT <why>'. Only if you cannot break it after genuine effort, print 'REVIEW: ACCEPT'. Default to REJECT when uncertain." | tee "$rlog")"
+        review="$(agent "$GUARDIAN_MODEL" "You are an ADVERSARIAL reviewer of a $class change on branch $gbr (diff: git diff $BASE..$gbr). REFUTE it — $(reviewer_angle "$class"). Read the diff + the added tests, THEN VERIFY WITH YOUR OWN HANDS: build skyc from THIS branch and cargo-build your OWN probe programs — confirm skyc-exit-0 ⇒ cargo-exit-0 (THE SEAL) yourself. The impl's self-report is NOT evidence (a fix can report green while a buried guard disabled it, or while it emits skyc-0-then-cargo-fail on a shape the impl never tested). Cache-hits on unchanged code are fine — recompiling identical source is zero-signal; integrity comes from RUNNING the committed source + your probes. If you find ANY unsoundness / behaviour change vs the ../sky reference / disguised hack / skyc-0-then-cargo-fail, print 'REVIEW: REJECT <why + the exact repro>'. Only if you cannot break it after genuine effort, print 'REVIEW: ACCEPT'. Default to REJECT when uncertain." | tee "$rlog")"
         if ! printf '%s' "$review" | rg -q 'REVIEW: ACCEPT'; then
             log "guardian [$class] · review → REJECT"
             guardian_failed "$class" "$gdesc" "$gbr" "review REJECT: $(reason_of "$review")"
