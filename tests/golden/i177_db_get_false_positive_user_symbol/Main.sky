@@ -1,0 +1,26 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+dbGetLabel : String -> String
+dbGetLabel s =
+    "label:" ++ s
+
+
+-- #177 false-positive probe D: wildcard-`any` param, calls a USER fn whose
+-- emitted symbol is `main_db_get_label` (contains db_get_) but is NOT a
+-- Db.get* kernel. No Std.Db import.
+render : any -> String
+render x =
+    let
+        _ =
+            x
+    in
+    dbGetLabel "payload"
+
+
+main : Task Error ()
+main =
+    println (render 99)

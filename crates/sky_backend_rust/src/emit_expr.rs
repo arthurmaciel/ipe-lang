@@ -7774,6 +7774,15 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
         // separate `where`-clause plumbing needed in [`emit_func`].
         traits.push("Into<sky_runtime::db::SqlParam>".to_owned());
     }
+    if bounds.has_sky_row() {
+        // Db field-accessor row obligation (#177): a wildcard `any` generic that
+        // flows into a `Db.get*` accessor gains `SkyRow` so the runtime's generic
+        // `db_get_*<R: SkyRow>(field, &row)` call type-checks and monomorphises
+        // per call site. Fully qualified — the trait is not re-exported at the
+        // emitted crate's `pub use sky_runtime::*` root. Added ONLY to the `any`
+        // var and ONLY when the body calls `db_get_*` (see [`emit_func`]).
+        traits.push("sky_runtime::db::SkyRow".to_owned());
+    }
     format!(": {}", traits.join(" + "))
 }
 
@@ -7981,54 +7990,7 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     let scope_syms: Vec<Symbol> = func.type_params.iter().map(|(sym, _)| *sym).collect();
     let generics = GenericScope::new(&scope_syms);
 
-    // The generic clause `<T1, T2: <bounds>, ..>` — one entry per quantified
-    // variable in declaration order, the position fixing its `T{i+1}` name.
-    // `Clone` is always included: Sky has value semantics so every type must be
-    // cloneable (field reads emit `.clone()` to prevent partial-move errors).
-    // For `Copy` types (`i64`, `bool`, …) the bound is trivially satisfied.
-    // Empty for a monomorphic function.
-    //
-    // `Send + 'static` is only injected when the function returns a `SkyTask<A>`:
-    // futures require their captured values to be `Send + 'static`, but plain
-    // record/ADT-returning functions have no such requirement.  Adding the bounds
-    // unconditionally over-constrains callers of pure record-constructors (e.g.
-    // `wrap : a -> { value : a }` must accept any `Clone` type, not only ones
-    // satisfying `Send + 'static`).
     let ret_is_task = matches!(ret_ty, IrType::Task(_));
-    let generic_clause = if func.type_params.is_empty() {
-        String::new()
-    } else {
-        let entries = func
-            .type_params
-            .iter()
-            .enumerate()
-            .map(|(i, (_, bounds))| {
-                let n = i.saturating_add(1);
-                // Always inject `Clone` — field reads emit `.clone()` to prevent
-                // partial-move errors.  The solver's BoundSet may already carry it,
-                // but `with_clone()` is idempotent so this is safe.
-                let clause = render_bounds(bounds.with_clone(), n);
-                // `render_bounds` returns ": Clone[+ ...]" or "".
-                // Append `Send + 'static` only when the return type is a task.
-                if ret_is_task {
-                    if clause.is_empty() {
-                        format!("T{n}: Clone + Send + 'static")
-                    } else {
-                        format!("T{n}{clause} + Send + 'static")
-                    }
-                } else {
-                    // Pure function (returns a record, ADT, scalar …): Clone suffices.
-                    if clause.is_empty() {
-                        format!("T{n}: Clone")
-                    } else {
-                        format!("T{n}{clause}")
-                    }
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("<{entries}>")
-    };
 
     let mut params = Vec::with_capacity(func.params.len());
     for (param, ty) in &func.params {
@@ -8085,8 +8047,71 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
             _ => emit_expr(ctx, body_expr, 1, generics)?,
         }
     };
+
+    // #177: the SkyRow bound (for a wildcard `any` param flowing into a
+    // `Db.get*` accessor) is decided STRUCTURALLY at lowering time and carried
+    // in the param's `BoundSet` — the generic clause just renders the BoundSet.
+    let generic_clause = render_fn_generics(func, ret_is_task);
+
     Ok(format!(
         "pub fn {name}{generic_clause}({}) -> {ret} {{\n    {body}\n}}\n",
         params.join(", ")
     ))
+}
+
+/// Render a function's generic clause `<T1, T2: <bounds>, ..>` — one entry per
+/// quantified variable in declaration order, the position fixing its `T{i+1}`
+/// name. Empty string for a monomorphic function.
+///
+/// `Clone` is always included: Sky has value semantics so every type must be
+/// cloneable (field reads emit `.clone()` to prevent partial-move errors). For
+/// `Copy` types (`i64`, `bool`, …) the bound is trivially satisfied.
+///
+/// `Send + 'static` is injected only when `ret_is_task`: futures require their
+/// captured values to be `Send + 'static`, but plain record/ADT-returning
+/// functions have no such requirement. Adding the bounds unconditionally would
+/// over-constrain callers of pure record-constructors (e.g. `wrap : a -> {
+/// value : a }` must accept any `Clone` type, not only `Send + 'static` ones).
+///
+/// The #177 `SkyRow` bound (for a wildcard `any` param that flows into a
+/// `Db.get*` accessor) is already recorded in the relevant param's [`BoundSet`]
+/// by the lowerer's structural IR walk (`sky_lower`'s `apply_db_row_bounds` /
+/// `body_calls_db_get_on_param`), so this function simply renders whatever
+/// bounds each param carries.
+fn render_fn_generics(func: &Func, ret_is_task: bool) -> String {
+    if func.type_params.is_empty() {
+        return String::new();
+    }
+
+    let entries = func
+        .type_params
+        .iter()
+        .enumerate()
+        .map(|(i, (_sym, bounds))| {
+            let n = i.saturating_add(1);
+            let bounds = *bounds;
+            // Always inject `Clone` — field reads emit `.clone()` to prevent
+            // partial-move errors. The solver's BoundSet may already carry it,
+            // but `with_clone()` is idempotent so this is safe.
+            let clause = render_bounds(bounds.with_clone(), n);
+            // `render_bounds` returns ": Clone[+ ...]" or "".
+            // Append `Send + 'static` only when the return type is a task.
+            if ret_is_task {
+                if clause.is_empty() {
+                    format!("T{n}: Clone + Send + 'static")
+                } else {
+                    format!("T{n}{clause} + Send + 'static")
+                }
+            } else {
+                // Pure function (returns a record, ADT, scalar …): Clone suffices.
+                if clause.is_empty() {
+                    format!("T{n}: Clone")
+                } else {
+                    format!("T{n}{clause}")
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("<{entries}>")
 }
