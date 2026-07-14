@@ -734,6 +734,33 @@ pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerR
 }
 
 // ---------------------------------------------------------------------------
+// Milestone D — per-Rust-file salsa domain
+// (spec: `docs/architecture/phase5-emit-rust-file-design-2026-07-12.md` §4.1)
+// ---------------------------------------------------------------------------
+
+/// One Rust source file the backend emits for a Sky module's OWN
+/// declarations (§4.1). A genuine `#[salsa::interned]` key: interning the
+/// same `home` twice returns the same salsa id, so a per-file emit query
+/// keyed on it memoizes independently of every OTHER file.
+///
+/// **Distinct from [`sky_backend_rust`]'s own `RustFileId`.** That backend
+/// type (Task 1) is a plain, non-interned `enum { Spine, SkyModule(ModPath) }`
+/// used internally for partitioning; it never reaches salsa. This one is the
+/// salsa domain: it carries ONLY a `home` (`Spine` is NOT a `RustFileId` —
+/// it is always present and never added/removed by a module add/delete, so it
+/// is produced by the separate [`emit_spine_file`] query, §4.2).
+///
+/// [`sky_ir::ModPath`] already derives `Clone + Eq + Ord + Hash`
+/// (`crates/sky_ir/src/ir.rs`) — usable as a `#[salsa::interned]` field with
+/// no new trait work.
+#[salsa::interned(debug)]
+pub struct RustFileId {
+    /// The Sky module's defining path (`sky_ir::Func::home` /
+    /// `EnumDef::home`'s value) — never empty on the real driver path.
+    pub home: sky_ir::ModPath,
+}
+
+// ---------------------------------------------------------------------------
 // Tracked queries (Task 17 / Phase 5 continuation: `BuildConfig` + emit_project)
 // ---------------------------------------------------------------------------
 
@@ -816,6 +843,172 @@ pub fn emit_project(
     sky_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
         .emit(&program)
+        .map(Arc::new)
+}
+
+// ---------------------------------------------------------------------------
+// Milestone D — the per-Rust-file tracked query graph
+// (spec: `docs/architecture/phase5-emit-rust-file-design-2026-07-12.md` §4.2)
+// ---------------------------------------------------------------------------
+
+/// The memoized text of ONE emitted Rust file.
+///
+/// `Spine`'s content, or a single Sky-module's own file. Same
+/// `Result<Arc<..>, Diagnostic>` shape as [`EmitResult`], carrying the
+/// rendered `String` rather than a whole project.
+pub type EmitTextResult = Result<Arc<String>, Diagnostic>;
+
+/// The set of [`RustFileId`]s the program emits an OWN Sky-module file for —
+/// the `home`-set quantifier (§4.2). Mirrors `program_metadata`'s
+/// `program_modules()` role in the original design doc: it makes "which files
+/// exist" a first-class, salsa-tracked value, so an add/delete of a Sky module
+/// (which changes the `home` set) is a VISIBLE dependency edge, not an implicit
+/// side effect of [`lower_program`] re-running.
+///
+/// Depends only on [`lower_program`] (the IR) — the `home` set is a pure
+/// function of the lowered program's items, independent of the emit config.
+/// Wraps the thin backend helper [`sky_backend_rust::rust_file_homes`]
+/// (`partition_items`' `SkyModule` bucket keys, `Spine` excluded).
+///
+/// **Return shape — honest deviation from §4.2's `Arc<BTreeSet<RustFileId>>`.**
+/// A `#[salsa::interned]` key derives `Eq`/`Hash` but NOT `Ord`, so it cannot
+/// populate a `BTreeSet`; and its `'db` lifetime cannot be memoized inside an
+/// `Arc<_>` container from a `#[salsa::tracked]` fn taking a `&dyn Db` trait
+/// object (salsa's `Update` machinery demands `'static` there). So this query
+/// returns the home set as an OWNED, `'static`, DETERMINISTICALLY-ORDERED
+/// `Vec<ModPath>` — built straight from the backend's `BTreeSet<ModPath>`
+/// (`rust_file_homes`), so its order and uniqueness are the `BTreeSet`'s.
+/// The salsa `RustFileId` domain remains load-bearing where it matters — as
+/// the per-file KEY of [`emit_rust_file`]; callers intern each `home` to a
+/// `RustFileId` at the demand site ([`emit_manifest`] does exactly this). This
+/// preserves §4.2's whole point for THIS query — making "which files exist" a
+/// first-class, salsa-tracked value whose change (a module add/delete) is a
+/// visible dependency edge — without paying a container-of-interned-keys
+/// lifetime tax that buys nothing here.
+#[salsa::tracked]
+pub fn program_rust_file_ids(
+    db: &dyn Db,
+    root: SourceRoot,
+    entry: SourceFile,
+) -> Result<Arc<Vec<sky_ir::ModPath>>, Diagnostic> {
+    let program = lower_program(db, root, entry)?;
+    let homes = {
+        let interner = db.interner().lock();
+        sky_backend_rust::rust_file_homes(&program, &interner)
+    };
+    Ok(Arc::new(homes.into_iter().collect()))
+}
+
+/// The `Spine` tier's text (§4.2): preamble, kernel-wrapper prelude, record
+/// structs, DB-projection impls, TEA/Auth aliases, epilogue, `fn main()`, and
+/// the `Spine`-bucket `SqlValue`/`SqlField` enums — everything that is
+/// program-wide rather than Sky-module-owned. The `mod`/`pub(crate) use`
+/// barrel lines are NOT baked in here (they are a pure function of
+/// [`program_rust_file_ids`]); [`emit_manifest`] appends them during assembly,
+/// keeping this query's memoized value byte-stable under a barrel-only change.
+///
+/// Depends on [`lower_program`] and [`BuildConfig::db_driver`] — re-executes
+/// exactly when either would have re-run the backend's spine render, now as a
+/// memoized salsa node.
+#[salsa::tracked]
+pub fn emit_spine_file(
+    db: &dyn Db,
+    root: SourceRoot,
+    entry: SourceFile,
+    config: BuildConfig,
+) -> EmitTextResult {
+    let program = lower_program(db, root, entry)?;
+    let driver = config.db_driver(db);
+    let interner = db.interner().lock();
+    sky_backend_rust::RustBackend::new(&interner)
+        .with_db_driver(driver)
+        .emit_spine(&program)
+        .map(Arc::new)
+}
+
+/// One `SkyModule` file's text (§4.2): that `home`'s `EnumDef`s + `Func`s only,
+/// each `pub(crate)` behind a `use crate::*;` glob header.
+///
+/// Depends on [`lower_program`], [`BuildConfig::db_driver`], AND the `file` key
+/// — the `file` key is what makes this SEPARATELY memoized per module. §4.3's
+/// honest divergence: because it depends on the COARSE whole-program
+/// [`lower_program`] (Phase 4's per-module lowering continuation is still
+/// unshipped), a body edit ANYWHERE forces this query to RE-EXECUTE for every
+/// file. The incrementality win is the RED-GREEN one: for an UNRELATED module's
+/// `file`, the re-execution reads a byte-identical slice of the freshly-lowered
+/// program and produces a byte-identical `String`, so salsa backdates its memo
+/// and [`emit_manifest`]'s dependency on it early-cuts — the on-disk write
+/// skips, preserving `cargo`'s per-compilation-unit incrementality.
+#[salsa::tracked]
+pub fn emit_rust_file<'db>(
+    db: &'db dyn Db,
+    root: SourceRoot,
+    entry: SourceFile,
+    config: BuildConfig,
+    file: RustFileId<'db>,
+) -> EmitTextResult {
+    let program = lower_program(db, root, entry)?;
+    let driver = config.db_driver(db);
+    let home = file.home(db);
+    let interner = db.interner().lock();
+    sky_backend_rust::RustBackend::new(&interner)
+        .with_db_driver(driver)
+        .emit_module_file(&program, &home)
+        .map(Arc::new)
+}
+
+/// The complete intended [`sky_backend::EmittedProject`] — the top-level driver
+/// demand, replacing [`emit_project`] as `compile_prepared`'s call site (§4.4).
+///
+/// Assembles from the per-file query graph so the incrementality win is real:
+/// it demands [`emit_spine_file`] + every [`emit_rust_file`] for the homes in
+/// [`program_rust_file_ids`], so a body edit to an UNRELATED module early-cuts
+/// that module's `emit_rust_file` (byte-identical value → salsa backdate →
+/// [`assemble_split_manifest`](sky_backend_rust::RustBackend::assemble_split_manifest)
+/// sees no change → the on-disk write skips, §4.3).
+///
+/// **Spine-collapse routing (§3.3/§4.4).** With 0 or 1 distinct `SkyModule`
+/// home the project is a single `src/main.rs` — this query delegates straight
+/// to [`emit_project`], which is BYTE-IDENTICAL to the pre-split single-file
+/// output (there is no cross-module early-cut to gain in a single-module
+/// program anyway — its own edit forces the whole coarse floor to re-run). The
+/// per-file assembly path fires only for genuine 2+-home programs. Either way
+/// the return SHAPE is [`EmitResult`], so `compile_prepared` /
+/// `write_emitted_project` need zero changes (§4.4). [`emit_project`] is kept,
+/// not deleted — the whole-program non-split oracle (`sky_backend_rust`'s
+/// golden tests) still calls it.
+#[salsa::tracked]
+pub fn emit_manifest(
+    db: &dyn Db,
+    root: SourceRoot,
+    entry: SourceFile,
+    config: BuildConfig,
+) -> EmitResult {
+    let homes = program_rust_file_ids(db, root, entry)?;
+
+    // Spine-collapse: 0 or 1 distinct SkyModule home → the byte-identical
+    // single-`main.rs` path. `emit_project` IS the collapse rendering.
+    if homes.len() < 2 {
+        return emit_project(db, root, entry, config);
+    }
+
+    // Real split: demand the per-file query outputs (creating the salsa
+    // dependency edges that make the §4.3 early-cut observable), then hand the
+    // verbatim texts to the backend's file-count-agnostic assembler.
+    let program = lower_program(db, root, entry)?;
+    let spine = emit_spine_file(db, root, entry, config)?;
+    let mut module_texts: BTreeMap<sky_ir::ModPath, String> = BTreeMap::new();
+    for home in homes.iter() {
+        let file = RustFileId::new(db, home.clone());
+        let text = emit_rust_file(db, root, entry, config, file)?;
+        module_texts.insert(home.clone(), (*text).clone());
+    }
+
+    let driver = config.db_driver(db);
+    let interner = db.interner().lock();
+    sky_backend_rust::RustBackend::new(&interner)
+        .with_db_driver(driver)
+        .assemble_split_manifest(&program, &spine, &module_texts)
         .map(Arc::new)
 }
 
