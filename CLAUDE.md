@@ -214,6 +214,13 @@ Sky.Live → `Cmd.perform task ResultMsg`, dispatch updates
 Source: `sky-stdlib/{Sky/Core,Std,Sky/Http}/*.sky`. `sky doc Module`
 surfaces every entry.
 
+Each stdlib binding is either pure Sky (a recursive/case-based impl) or an
+`Ffi.kernel "Name"` alias — a Sky-source decl with an HM signature whose body is
+`Ffi.kernel "Mod_func"`; the compiler routes such call sites directly to the
+existing typed runtime kernel (no runtime overhead, `sky doc` still lists it).
+You only touch `Ffi.kernel` when authoring/registering stdlib modules, not in
+normal app code.
+
 ### Pure (no I/O, no Task wrap)
 
 | Module | Path | Key functions |
