@@ -607,3 +607,49 @@ No new driver site is added (v1's `hoist_pipeline_clones` dropped, D4). The fix 
 `count_var_uses` arm folds so every driver's seed is correct; (ii) snapshot/restore per arm inside
 `rewrite_multiuse_clones` so the spent counter is not robbed across mutually-exclusive arms;
 (iii) route the two UI-event inline wraps through the existing emitter peel (D5).
+
+---
+
+## v3 CORRECTIONS (2026-07-14) — supersede §2.2.2/§2.2.3/§3 where they conflict
+
+The independent re-review (`REREVIEW REVISE`, arm+tail-hole=**real**) found the v2
+per-arm SNAPSHOT seed drops the post-match-liveness term, reintroducing the exact
+E0382 class #193 must close. Confirmed: for `TaskSeq{effect: Match{A:1,B:1}, rest: …sym…}`
+(tail uses `T=1`), the current SUM code is sound (shared `remaining` stays `>1` through
+the arms so each clones), but v2's per-arm seed = `count_var_uses(sym,&arm_body)` = the
+arm's own count (structurally cannot include `T`) → arm's single use bare-moves → the tail
+use is use-after-move → **E0382**. These four fixes are authoritative for implementation:
+
+**C1 — corrected per-arm seed (§2.2.2/§2.2.3).**
+```
+arm_remaining = count_var_uses(sym, &arm_body) + (if sym is live after the match { 1 } else { 0 })
+```
+The phantom `+1` biases the arm's real last use to `.clone()` when the value escapes the
+match, keeping the tail's move sound. `sym is live after the match` ⟺ the enclosing driver's
+whole-body residual has tail uses ⟺ `after_scrut - max(A,B) > 0`. The shared-counter restore
+is UNCHANGED and uses the REAL peak (no phantom): `*remaining = after_scrut - max(A,B)` via
+`match_arm_peak_uses` = MAX over real arm use-counts (0 for pattern-shadowing arms).
+
+**C2 — proof (§2.2.3) must add the missing case.** Re-derive with the phantom term and ADD
+`once-A / once-B / T=1` (arm+tail): each arm's use → `arm_remaining = 1+1 = 2` → **clone**;
+tail → restored `remaining = after_scrut - max(1,1)` → bare move. ✅ clone-in-arm + tail-move.
+Correct the v2 line "arm A uses sym once → bare move is correct ✅" — it is correct ONLY when
+`T=0`; condition it on post-match liveness.
+
+**C3 — precedent caveat (§2.2.2 ~lines 231-233).** Strike/qualify "identical to the match-arm
+pvar site at :13292 … already-proven per-arm pattern." That site's `sym` is an
+**arm-pattern-bound variable, dead after the match** (post-match liveness ≡ 0), so its
+seedless-of-`T` form does NOT justify generalizing to an escaping OUTER symbol. The phantom
+term is exactly the difference.
+
+**C4 — goldens (§3, D6/D7) must exercise `T≥1`.** `i193_asymmetric_arms_cloneok` and the
+`i193_idempotent` body derived from it MUST include a post-match tail use of the reused
+binding at the same IR level (`let x = case … x … in … x …`, or `TaskSeq{Match{…x…}, …x…}`,
+`T≥1`), with `.clone()`-snapshot assertions: the taken arm's use is `.clone()` (not bare) and
+the tail is a bare move. The v2 tail-free shape passes even with the buggy seed — it cannot
+guard the fix.
+
+Verified sound, NO change (do not re-open): D1 (reference SUM-vs-MAX split), D3
+(`count_fn_value_uses` stays SUM, isolated from the fn-value gate), D4 (`lower_let_pvar:13051`
+covers the pipeline shapes; drop the redundant pass), D5 (`emit_arc_callback_field` peel routing
+for `ui_on_input_`/`ui_on_change_` is sound).
