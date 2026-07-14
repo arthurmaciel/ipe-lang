@@ -2324,6 +2324,32 @@ fn lookup_field<'f>(
     })
 }
 
+/// Arc-wrap an already-emitted callback expression so it fills a runtime
+/// `Arc<dyn Fn(_) -> _ + Send + Sync>` slot.
+///
+/// The `Std.Ui.Input.*` runtime functions (`input_text_`, `input_slider_`,
+/// `input_checkbox_`, `input_radio_`, …) take their callback fields (`onChange`,
+/// checkbox `icon`) as `Arc<dyn Fn(_) -> _ + Send + Sync + 'static>` — the same
+/// shared-callback shape every Sky.Ui / Sky.Live event slot uses. But an
+/// `onChange` field expression lowers as an ordinary value: a bare
+/// `Msg`-constructor eta-expands to a plain lambda, and both [`emit_lambda`] and
+/// [`emit_func_value`] pin `Box::new(..)` for every non-Server/WS `Fun` shape
+/// (see [`wants_arc_ctor`]). Passing that `Box<dyn Fn(_) -> _ + Send>` into the
+/// `Arc<.. + Send + Sync>` parameter is an E0308 (the seal break #178 surfaces).
+///
+/// Rather than special-casing every callback-carrying shape at the box site,
+/// this mirrors the existing `ui_on_input_` / `ui_on_change_` arms (this same
+/// file): eta-wrap the emitted callback in a fresh `Arc`-owned closure
+/// `::std::sync::Arc::new(move |_x| (f)(_x))`. Rust infers `_x`, so ONE wrap
+/// serves every arity-1 callback regardless of arg type (`String` or `bool`) or
+/// return type (`Msg` or `Element<Msg>`). The wrap is sound: an emitted Sky
+/// callback is always `'static` (it captures no borrow-lifetime context), so the
+/// `move` capture yields a `Send + Sync` `Arc`. This is the reference's uniform
+/// Arc-callback policy applied at the call-argument boundary.
+fn arc_callback_wrap(f_s: &str) -> String {
+    format!("::std::sync::Arc::new(move |_x| ({f_s})(_x))")
+}
+
 /// Handle `Std.Ui` / `Std.Html` kernel calls.
 ///
 /// Phase 0 scope:
@@ -4294,7 +4320,8 @@ fn emit_ui_call(
                 "sky_backend_rust::emit_ui_call::InputText::label",
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let on_change_s = emit_expr_at(ctx, on_change_e, indent, child, generics)?;
+            let on_change_s =
+                arc_callback_wrap(&emit_expr_at(ctx, on_change_e, indent, child, generics)?);
             let text_s = emit_expr_at(ctx, text_e, indent, child, generics)?;
             let placeholder_s = emit_expr_at(ctx, placeholder_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
@@ -4356,7 +4383,8 @@ fn emit_ui_call(
                 "sky_backend_rust::emit_ui_call::InputMultiline::spellcheck",
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let on_change_s = emit_expr_at(ctx, on_change_e, indent, child, generics)?;
+            let on_change_s =
+                arc_callback_wrap(&emit_expr_at(ctx, on_change_e, indent, child, generics)?);
             let text_s = emit_expr_at(ctx, text_e, indent, child, generics)?;
             let placeholder_s = emit_expr_at(ctx, placeholder_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
@@ -4404,8 +4432,9 @@ fn emit_ui_call(
                 "sky_backend_rust::emit_ui_call::InputCheckbox::label",
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let on_change_s = emit_expr_at(ctx, on_change_e, indent, child, generics)?;
-            let icon_s = emit_expr_at(ctx, icon_e, indent, child, generics)?;
+            let on_change_s =
+                arc_callback_wrap(&emit_expr_at(ctx, on_change_e, indent, child, generics)?);
+            let icon_s = arc_callback_wrap(&emit_expr_at(ctx, icon_e, indent, child, generics)?);
             let checked_s = emit_expr_at(ctx, checked_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
             Ok(Some(format!(
@@ -4464,7 +4493,8 @@ fn emit_ui_call(
                 "sky_backend_rust::emit_ui_call::InputSlider::label",
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let on_change_s = emit_expr_at(ctx, on_change_e, indent, child, generics)?;
+            let on_change_s =
+                arc_callback_wrap(&emit_expr_at(ctx, on_change_e, indent, child, generics)?);
             let value_s = emit_expr_at(ctx, value_e, indent, child, generics)?;
             let min_s = emit_expr_at(ctx, min_e, indent, child, generics)?;
             let max_s = emit_expr_at(ctx, max_e, indent, child, generics)?;
@@ -4529,7 +4559,8 @@ fn emit_ui_call(
                 "sky_backend_rust::emit_ui_call::InputRadio::label",
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let on_change_s = emit_expr_at(ctx, on_change_e, indent, child, generics)?;
+            let on_change_s =
+                arc_callback_wrap(&emit_expr_at(ctx, on_change_e, indent, child, generics)?);
             let options_s = emit_expr_at(ctx, options_e, indent, child, generics)?;
             let selected_s = emit_expr_at(ctx, selected_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
@@ -4577,7 +4608,8 @@ fn emit_ui_call(
                 "sky_backend_rust::emit_ui_call::InputRadioRow::label",
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let on_change_s = emit_expr_at(ctx, on_change_e, indent, child, generics)?;
+            let on_change_s =
+                arc_callback_wrap(&emit_expr_at(ctx, on_change_e, indent, child, generics)?);
             let options_s = emit_expr_at(ctx, options_e, indent, child, generics)?;
             let selected_s = emit_expr_at(ctx, selected_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
