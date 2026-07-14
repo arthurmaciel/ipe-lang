@@ -37,7 +37,21 @@ else
     C0=; TAGC=; TOOLC=; RESC=; DIMC=; HDRC=; BANC=; WARNC=
 fi
 
-active_tool() { pgrep -f 'progressive-development/(autopilot|orchestrate|run)\.sh' >/dev/null 2>&1; }
+LOCK=".autopilot.lock"   # autopilot writes its live PID here + removes it on EXIT — authoritative run marker
+active_tool() {
+    # Primary signal: is the autopilot that owns the lock still alive? This is
+    # immune to the cmdline-prefix fragility of matching the script by path — a
+    # `bash autopilot.sh` launch (from inside the dir) has no 'progressive-
+    # development/' in argv, so the old pgrep saw NOTHING and the monitor quit
+    # in 3s while autopilot was mid-8-minute design agent. The lock PID cannot lie.
+    local pid
+    if pid="$(cat "$LOCK" 2>/dev/null)" && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    # Fallback for orchestrate.sh / run.sh (they hold no autopilot lock) or a
+    # path-launched autopilot whose lock we somehow can't read.
+    pgrep -f 'progressive-development/(autopilot|orchestrate|run)\.sh' >/dev/null 2>&1
+}
 now_hm()    { date +%H:%M; }
 mtime()     { stat -c %Y "$1" 2>/dev/null || echo 0; }
 term_rows() { tput lines 2>/dev/null || echo 40; }
@@ -282,7 +296,7 @@ cur=""; idle=0; plain_last=0
 while :; do
     if active_tool; then idle=0; else
         idle=$((idle+1))
-        [ "$idle" -ge 3 ] && { teardown; printf '  %s-- run ended - monitor done --%s\n' "$DIMC" "$C0"; exit 0; }
+        [ "$idle" -ge 4 ] && { teardown; printf '  %s-- run ended - monitor done --%s\n' "$DIMC" "$C0"; exit 0; }
     fi
     n="$(newest_log)"
     if [ -n "$n" ] && [ "$n" != "$cur" ]; then stop_tail; cur="$n"; follow "$cur"; fi
