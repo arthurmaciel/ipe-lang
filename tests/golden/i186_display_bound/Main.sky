@@ -1,0 +1,30 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Std.Log exposing (println)
+
+
+-- BACKLOG #186 regression — `toString` on a wildcard `any` param.
+--
+-- Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build`
+-- with E0277 (`the trait bound T1: std::fmt::Display is not satisfied`) at the
+-- `basics_to_string(x)` call inside a function whose only generic is the
+-- wildcard `any` PARAM. The runtime's `basics_to_string<T: std::fmt::Display>`
+-- needs `Display`; the emitted enclosing function carried an unbounded
+-- `<T1: Clone>` param, so its body's `basics_to_string(x)` could not prove
+-- `x: Display`.
+--
+-- Fix (general kernel->bound map, `apply_kernel_type_param_bounds`): the
+-- `BasicsToString` kernel applied to a Var/CloneVar of a generic param obliges
+-- `std::fmt::Display` (BoundSet::DISPLAY) on that generic — the SAME structural
+-- machinery as #177's SkyRow, generalised. `T: Display` is satisfiable by every
+-- scalar (Int/Float/Bool/String), the overwhelming common case.
+render : any -> String
+render x =
+    "value=" ++ toString x
+
+
+main : Task Error ()
+main =
+    println (render 42)
