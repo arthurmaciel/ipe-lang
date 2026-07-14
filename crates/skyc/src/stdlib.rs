@@ -308,45 +308,63 @@ const STD_MONEY: &str = include_str!("../stdlib/Std/Money.sky");
 
 /// `Sky.Core.Pure` — uniform `() -> Task Error a` companion surface.
 ///
-/// Pure Sky wrappers; no Ffi.kernel calls directly.  Not in
-/// `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+/// The point-free helpers `uuidV4`/`uuidV7` route through internal
+/// `Ffi.kernel "Uuid_v4"`/`"Uuid_v7"` aliases (resolved by the #196 kernel-alias
+/// mechanism, `sky_canon::resolve::detect_kernel_alias`).  ARITY-BLOCKED: the
+/// `uuidV4Kernel`/`uuidV7Kernel` helpers annotate an arity-0 `Task Error String`
+/// value over the arity-1 `Uuid_v4`/`Uuid_v7` kernels (`() -> Task Error String`),
+/// so they are rejected with SKY-T0001 at type-check until an
+/// arity-0-alias-of-nullary-effect-kernel lowering exists.  See
+/// `docs/divergences-from-sky.md` §B-FfiKernelAliasSealed.
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const SKY_CORE_PURE: &str = include_str!("../stdlib/Sky/Core/Pure.sky");
 
 /// `Sky.Core.WebSocket` — outbound WebSocket client (compiled source).
 ///
-/// Defines 3 ADTs (`WebSocket`, `WebSocketMessage`, `CloseCode`) and
-/// mixes `Ffi.kernel` calls with pure Sky logic.  Uses `Sub_subscribeWebSocket`
-/// (through the `Sub` qualifier) for the subscription tier.
-/// NOTE: `Sub_subscribeWebSocket` has rust=missing — runtime gap documented in
-/// `docs/architecture/stdlib-sig-divergences-2026-07-14.md`.
+/// Defines 3 ADTs (`WebSocket`, `WebSocketMessage`, `CloseCode`) and routes its
+/// I/O through `Ffi.kernel "WebSocket_*"` / `"Sub_subscribeWebSocket"` aliases.
+/// KERNEL-BLOCKED (#196): none of the `WebSocket_*` kernels nor
+/// `Sub_subscribeWebSocket` have a `StdlibKernel` variant, so importing a member
+/// fails closed with SKY-N0028 (`docs/divergences-from-sky.md`
+/// §B-FfiKernelAliasSealed).  Unblocked once the kernels are registered.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const SKY_CORE_WEBSOCKET: &str = include_str!("../stdlib/Sky/Core/WebSocket.sky");
 
 /// `Std.Cache` — in-memory LRU + TTL cache (compiled source).
 ///
-/// Defines `type Cache k v = Cache Int` ADT.  Not in
-/// `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+/// Defines `type Cache k v = Cache Int` ADT.  KERNEL-BLOCKED (#196): no
+/// `Cache_*` kernel variants exist, so a member use fails closed with SKY-N0028.
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_CACHE: &str = include_str!("../stdlib/Std/Cache.sky");
 
 /// `Std.Compression` — gzip + zstd compression (compiled source).
 ///
+/// KERNEL-BLOCKED (#196): no `Compression_*` kernel variants exist — member use
+/// fails closed with SKY-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_COMPRESSION: &str = include_str!("../stdlib/Std/Compression.sky");
 
 /// `Std.Config` — typed TOML/YAML/JSON decoders (compiled source).
 ///
-/// Defines `type alias Decoder`.  Not in `STDLIB_MODULE_QUALIFIERS`.
+/// Defines `type Decoder a`.  DOUBLE-BLOCKED (#196): (a) `Decoder` collides with
+/// the reserved parametric builtin type (SKY-N0026 at its declaration — the Rust
+/// lowerer's `ir_type_from_ty` reserves `Decoder`), and (b) no `Config_*` kernel
+/// variants exist (SKY-N0028).  Both must be resolved before it compiles.
+/// Not in `STDLIB_MODULE_QUALIFIERS`.
 const STD_CONFIG: &str = include_str!("../stdlib/Std/Config.sky");
 
 /// `Std.Csv` — CSV encode + decode (compiled source).
 ///
-/// Defines `type alias Csv` + pure Sky builders.
+/// Defines `type alias Csv` + pure Sky builders.  KERNEL-BLOCKED (#196): no
+/// `Csv_*` kernel variants exist — member use fails closed with SKY-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_CSV: &str = include_str!("../stdlib/Std/Csv.sky");
 
 /// `Std.Email` — provider-abstract email send (compiled source).
 ///
-/// Defines `type EmailProvider` + `type alias EmailMessage` ADTs.
+/// Defines `type EmailProvider` + `type alias EmailMessage` ADTs.  KERNEL-BLOCKED
+/// (#196): no `Email_*` kernel variant exists — member use fails closed with
+/// SKY-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_EMAIL: &str = include_str!("../stdlib/Std/Email.sky");
 
@@ -358,17 +376,29 @@ const STD_LIVE_CONSOLE: &str = include_str!("../stdlib/Std/Live/Console.sky");
 
 /// `Std.PubSub` — Task-shaped publish, callable from any context (compiled source).
 ///
+/// Routes through `Ffi.kernel "PubSub_publish"` / `"PubSub_publishNoEcho"`.
+/// LOWERING-BLOCKED (#196): the `PubSubPublish`/`PubSubPublishNoEcho` kernels are
+/// in the registry (the runtime `pubsub_publish` exists) but have NO lower/emit
+/// arm, so a member use fails closed with SKY-L0108 at lowering (never a
+/// cargo-fail).  Unblocked once the TEA lower + emit arms are added.  See
+/// `docs/divergences-from-sky.md` §B-FfiKernelAliasSealed.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_PUBSUB: &str = include_str!("../stdlib/Std/PubSub.sky");
 
 /// `Std.Trace` — opt-in distributed-tracing spans (compiled source).
 ///
+/// KERNEL-BLOCKED (#196): no `Trace_*` kernel variants exist — member use fails
+/// closed with SKY-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_TRACE: &str = include_str!("../stdlib/Std/Trace.sky");
 
 /// `Std.Ui.Events` — pure Sky re-exports of `Std.Ui` event helpers (compiled source).
 ///
-/// Pure Sky; no Ffi.kernel calls.
+/// Pure Sky; no Ffi.kernel calls.  RESOLVES (#196, skyc-0 AND cargo-0): the
+/// `onSubmit`/`onInput` re-exports were re-typed to the Rust kernels'
+/// function-arg schemes (`(a -> msg) -> Attribute msg` /
+/// `(String -> msg) -> Attribute msg`) — see `docs/divergences-from-sky.md`
+/// §B-UiEventsFnArg.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_UI_EVENTS: &str = include_str!("../stdlib/Std/Ui/Events.sky");
 

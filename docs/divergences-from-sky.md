@@ -1372,6 +1372,85 @@ API-shape review):
 
 ---
 
+### B-FfiKernelAliasSealed — `Ffi.kernel "Name"` alias resolves in the compiled path, fail-closed on an unregistered kernel (backlog #196)
+
+- **Reference:** the Haskell backend compiles a compiled-source stdlib module's
+  point-free binding `f = Ffi.kernel "Module_function"` and rewrites `f`'s call
+  sites to the kernel at LOWERING (`../sky/src/Sky/Build/Compile.hs`
+  `collectKernelAliases` → `_lc_kernelAlias`), typing the alias against the
+  binding's own Sky annotation. An `Ffi.kernel` string that names no kernel is
+  not structurally rejected at that boundary — Go's dynamically-typed runtime
+  routes it to the `ffi_kernel_polyfill` (`Kernel.hs:780`), which can panic at
+  run time.
+- **ipê design:** the split-at-first-`_` `(Module, function)` pair is resolved
+  against the closed kernel registry (`Env::stdlib_index`) at **canonicalisation**
+  (`crates/sky_canon/src/resolve.rs`, `detect_kernel_alias`). A binding whose
+  body is exactly `Ffi.kernel "Module_function"` and whose pair IS registered is
+  registered as a `VarHome::Kernel` (so every in-module `f` and cross-module
+  `Alias.f` reference lowers straight to the kernel dispatch); its def body emits
+  no top-level function. Cross-module resolution flows through a new
+  `ModuleExports.kernel_aliases` map.
+- **Fail-closed (SEAL):** a pair the registry does NOT cover — or a malformed
+  string with no usable `_` split — is rejected at compile time with
+  `NameError::UnknownKernelAlias` (**SKY-N0028**), never emitted as a call to a
+  non-existent kernel that would type-check in `skyc` yet fail the downstream
+  `cargo build`. This is the "make invalid states unrepresentable" rule applied
+  to the kernel-alias path: `skyc` acceptance is a structural proof the kernel
+  exists. Regression: `crates/skyc/tests/golden_ffi_kernel_alias_seal.rs`
+  (unknown → SKY-N0028; malformed → SKY-N0028; registered `String_toUpper` →
+  skyc-0 AND cargo-0).
+- **Layered fail-closed for arity/lowering gaps:** because ipê types the alias's
+  *body* via the kernel's HM scheme (not a flexible var — a flexible var would be
+  the exact exit-0-then-cargo-fail hole the SEAL forbids), an alias whose declared
+  annotation arity differs from the kernel's scheme is rejected with **SKY-T0001**
+  at type-check, and a kernel with no lowering arm is rejected with **SKY-L0108**
+  at lowering. Both are clean `skyc`-time rejections — no cargo-fail. Consequence:
+  some upstream compiled-source modules stay kernel-blocked on ipê until their
+  Rust kernels (and, where the annotation diverges from the kernel scheme, the
+  matching lowering) exist:
+  - **Registry-blocked (no `StdlibKernel` variant, SKY-N0028):** `Std.Trace`,
+    `Std.Cache`, `Std.Csv`, `Std.Email`, `Std.Compression`, `Std.Config`,
+    `Sky.Core.WebSocket` (incl. its `Sub_subscribeWebSocket`).
+  - **Lowering-blocked (kernel in the registry but no lower/emit arm, SKY-L0108
+    / emit `CompilerBug`):** `Std.PubSub` (`PubSub_publish` /
+    `PubSub_publishNoEcho` — the runtime `pubsub_publish` exists, the compiler
+    lower/emit arm does not).
+  - **Arity-blocked (SKY-T0001):** `Sky.Core.Pure`'s internal `uuidV4Kernel` /
+    `uuidV7Kernel` helpers annotate an arity-0 `Task Error String` value over the
+    arity-1 `Uuid_v4`/`Uuid_v7` kernels (`() -> Task Error String`). Go's
+    `func() any` runtime boundary absorbs the arity difference; Rust's
+    monomorphized `Box<dyn Fn(()) -> …>` cannot, so the shape is rejected until an
+    arity-0-alias-of-nullary-effect-kernel lowering is built.
+  These are documented completeness gaps (PRINCIPLES §5), not silent workarounds.
+- **Sanctioned:** yes, tagged `sanctioned` — ipê is deliberately more sound: the
+  closed registry turns a Go-runtime-panic-class (unknown kernel routed to a
+  polyfill) into a compile-time rejection. Reference: `crates/sky_canon/src/
+  resolve.rs` (`detect_kernel_alias`, `KernelAlias`, in-module + dep injection),
+  `crates/sky_canon/src/lib.rs` (`ModuleExports.kernel_aliases`,
+  `ExportedKernelAlias`), `crates/sky_diagnostics/src/{code,diagnostic,render}.rs`
+  + `explain/SKY-N0028.md`.
+
+### B-UiEventsFnArg — `Std.Ui.Events.onSubmit`/`onInput` take a handler function, not a bare Msg
+
+- **Reference:** upstream `Std.Ui.Events` (`../sky/sky-stdlib/Std/Ui/Events.sky`)
+  re-exports `onSubmit : a -> Attribute b` and `onInput : msg -> Attribute msg`
+  — the arg is a bare value, matching upstream `Std.Ui`'s permissive event
+  kernels.
+- **ipê design:** the Rust `Ui.onSubmit` kernel is `(a -> msg) -> Attribute msg`
+  and `Ui.onInput` is `(String -> msg) -> Attribute msg` (function-arg handlers
+  — `crates/sky_types/src/constrain.rs`, `K::UiOnSubmit`/`K::UiOnInput`). The
+  `Std.Ui.Events` re-exports mirror those kernel schemes
+  (`onSubmit : (a -> msg) -> Ui.Attribute msg`,
+  `onInput : (String -> msg) -> Ui.Attribute msg`); the upstream bare-value
+  signatures would not type-check against the ipê kernel. `onClick` is unchanged
+  (`msg -> Attribute msg` on both). Resolves the module fully (skyc-0 AND
+  cargo-0). Reference: `crates/skyc/stdlib/Std/Ui/Events.sky`.
+- **Sanctioned:** yes, tagged `divergence` — an API-shape difference emergent
+  from ipê's function-arg event-kernel schemes; the re-export must match the
+  kernel it forwards to.
+
+---
+
 <a id="planned-future-divergences"></a>
 ## 6. Planned future divergences (filed, not yet implemented)
 
