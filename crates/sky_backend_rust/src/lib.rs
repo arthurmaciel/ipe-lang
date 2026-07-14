@@ -116,6 +116,56 @@ impl<'a> RustBackend<'a> {
         let ctx = EmitCtx::build(self.interner, program, self.db_driver)?;
         project::emit_module_file(&ctx, program, &rust_file::RustFileId::SkyModule(home.clone()))
     }
+
+    /// Assemble the full split [`EmittedProject`] from already-rendered per-file
+    /// texts — `spine_text` (from [`Self::emit_spine`]) plus `module_texts`
+    /// (`home` → [`Self::emit_module_file`] output). The
+    /// file-count-AGNOSTIC manifest/runtime block is shared verbatim with
+    /// [`Backend::emit`]'s single-file path, so the result is byte-identical to
+    /// [`Backend::emit`]'s output for the same multi-module program (design doc
+    /// §4.4/Task 16 — the `sky_db::emit_manifest` assembly seam). NOT on the
+    /// single-file path; the caller ([`sky_db::emit_manifest`]) invokes it ONLY
+    /// when 2+ distinct homes are present.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any [`Diagnostic`] from [`EmitCtx::build`] or
+    /// [`project::assemble_split_manifest`] (`mod_ident` gates, `RelPath`
+    /// validation, a missing per-home text, the manifest/runtime construction).
+    pub fn assemble_split_manifest(
+        &self,
+        program: &Program,
+        spine_text: &str,
+        module_texts: &BTreeMap<ModPath, String>,
+    ) -> DResult<EmittedProject> {
+        let ctx = EmitCtx::build(self.interner, program, self.db_driver)?;
+        project::assemble_split_manifest(&ctx, program, spine_text, module_texts)
+    }
+}
+
+/// The DISTINCT Sky-module `home`s the backend would emit an OWN Rust file for.
+///
+/// Every [`rust_file::RustFileId::SkyModule`] bucket [`rust_file::
+/// partition_items`] produces, `Spine` excluded (`Spine` is not a per-module
+/// home — it is the always-present entry file). This is the `home`-set
+/// quantifier Milestone D's `sky_db::program_rust_file_ids` wraps in a
+/// tracked query (spec §4.2): a Sky-module add/delete changes this set, making
+/// "which files exist" a first-class, salsa-observable value.
+///
+/// Order-agnostic by construction (`BTreeSet`) — callers that need the
+/// warm/cold-stable EMISSION order use [`rust_file::partition_items`]'s
+/// `type_order`/`func_order` directly ([`project::emit_program`] does); this
+/// set answers only the membership question.
+#[must_use]
+pub fn rust_file_homes(program: &Program, interner: &Interner) -> BTreeSet<ModPath> {
+    rust_file::partition_items(program, interner)
+        .buckets
+        .into_keys()
+        .filter_map(|id| match id {
+            rust_file::RustFileId::SkyModule(home) => Some(home),
+            rust_file::RustFileId::Spine => None,
+        })
+        .collect()
 }
 
 impl Backend for RustBackend<'_> {
