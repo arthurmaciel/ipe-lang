@@ -47,7 +47,6 @@ fn assert_byte_identical(name: &str) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
     let entry = dir.join("Main.sky");
-    let golden = dir.join("main.rs");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_emit"));
     let _ = std::fs::remove_dir_all(&out);
 
@@ -61,11 +60,10 @@ fn assert_byte_identical(name: &str) {
     // Directory-diff the emitted project against the golden dir (byte-compares
     // the emitted `src/main.rs` against the golden `main.rs`). Replaces the
     // former hand-rolled `read_to_string` + `assert_eq!` pair with the shared
-    // harness helper.
-    support::assert_emitted_project_matches_golden_dir(
-        &out,
-        golden.parent().expect("golden has a parent dir"),
-    );
+    // harness helper. `dir` IS the golden dir (`golden` was `dir.join("main.rs")`,
+    // so `golden.parent()` was provably `dir`) — pass it directly, no fallible
+    // `.parent().expect(...)` re-derivation.
+    support::assert_emitted_project_matches_golden_dir(&out, &dir);
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert its
