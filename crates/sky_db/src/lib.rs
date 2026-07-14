@@ -957,6 +957,61 @@ pub fn emit_rust_file<'db>(
         .map(Arc::new)
 }
 
+/// The complete intended [`sky_backend::EmittedProject`] — the top-level driver
+/// demand, replacing [`emit_project`] as `compile_prepared`'s call site (§4.4).
+///
+/// Assembles from the per-file query graph so the incrementality win is real:
+/// it demands [`emit_spine_file`] + every [`emit_rust_file`] for the homes in
+/// [`program_rust_file_ids`], so a body edit to an UNRELATED module early-cuts
+/// that module's `emit_rust_file` (byte-identical value → salsa backdate →
+/// [`assemble_split_manifest`](sky_backend_rust::RustBackend::assemble_split_manifest)
+/// sees no change → the on-disk write skips, §4.3).
+///
+/// **Spine-collapse routing (§3.3/§4.4).** With 0 or 1 distinct `SkyModule`
+/// home the project is a single `src/main.rs` — this query delegates straight
+/// to [`emit_project`], which is BYTE-IDENTICAL to the pre-split single-file
+/// output (there is no cross-module early-cut to gain in a single-module
+/// program anyway — its own edit forces the whole coarse floor to re-run). The
+/// per-file assembly path fires only for genuine 2+-home programs. Either way
+/// the return SHAPE is [`EmitResult`], so `compile_prepared` /
+/// `write_emitted_project` need zero changes (§4.4). [`emit_project`] is kept,
+/// not deleted — the whole-program non-split oracle (`sky_backend_rust`'s
+/// golden tests) still calls it.
+#[salsa::tracked]
+pub fn emit_manifest(
+    db: &dyn Db,
+    root: SourceRoot,
+    entry: SourceFile,
+    config: BuildConfig,
+) -> EmitResult {
+    let homes = program_rust_file_ids(db, root, entry)?;
+
+    // Spine-collapse: 0 or 1 distinct SkyModule home → the byte-identical
+    // single-`main.rs` path. `emit_project` IS the collapse rendering.
+    if homes.len() < 2 {
+        return emit_project(db, root, entry, config);
+    }
+
+    // Real split: demand the per-file query outputs (creating the salsa
+    // dependency edges that make the §4.3 early-cut observable), then hand the
+    // verbatim texts to the backend's file-count-agnostic assembler.
+    let program = lower_program(db, root, entry)?;
+    let spine = emit_spine_file(db, root, entry, config)?;
+    let mut module_texts: BTreeMap<sky_ir::ModPath, String> = BTreeMap::new();
+    for home in homes.iter() {
+        let file = RustFileId::new(db, home.clone());
+        let text = emit_rust_file(db, root, entry, config, file)?;
+        module_texts.insert(home.clone(), (*text).clone());
+    }
+
+    let driver = config.db_driver(db);
+    let interner = db.interner().lock();
+    sky_backend_rust::RustBackend::new(&interner)
+        .with_db_driver(driver)
+        .assemble_split_manifest(&program, &spine, &module_texts)
+        .map(Arc::new)
+}
+
 /// The identifier words of one module's source text — the per-file slice of
 /// the fresh-name collision universe (`Interner::set_fresh_avoid`).
 ///
