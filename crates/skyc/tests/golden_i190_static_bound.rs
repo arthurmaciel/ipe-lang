@@ -75,10 +75,13 @@ fn i190_skyc_accepts_and_bounds_fn_static() {
         "the generic that flows into the boxed `+ 'static` mapper callback must \
          carry the leading `'static` lifetime bound (#190); got main.rs:\n{emitted}"
     );
-    // The boxed mapper slot the bound serves.
+    // The boxed mapper slot the bound serves. (#184 broadened every boxed
+    // first-class fn value to `+ Send + Sync + 'static` so a user callback can
+    // forward into the runtime's `Arc<dyn Fn + Send + Sync>` UI slots; the
+    // `'static` half is what #190 propagates onto T1.)
     assert!(
-        emitted.contains("Box<dyn Fn((String, String)) -> sky_runtime::html::Attribute<T1> + Send + 'static>"),
-        "the mapper callback must box into a `+ 'static` trait object (#190); got \
+        emitted.contains("Box<dyn Fn((String, String)) -> sky_runtime::html::Attribute<T1> + Send + Sync + 'static>"),
+        "the mapper callback must box into a `+ Send + Sync + 'static` trait object (#190/#184); got \
          main.rs:\n{emitted}"
     );
 }
