@@ -18,6 +18,7 @@ use crate::code::{
     SKY_N0001,
     SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
     SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_N0027,
+    SKY_N0028,
     SKY_P0001,
     SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015,
     SKY_P0016, SKY_P0017, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041,
@@ -414,6 +415,17 @@ pub enum NameError {
     /// clash between two distinct dep modules is. `first` is the earlier
     /// import's span. [SKY-N0027]
     DuplicateQualifier { qualifier: Box<str>, first: Span },
+    /// A standard-library binding `f = Ffi.kernel "Name"` (a Stage-4 kernel
+    /// alias) names a kernel that is not registered in the kernel table. The
+    /// `alias` is the raw string; `module` / `function` are its first-`_` split.
+    /// FAIL-CLOSED (THE SEAL): accepting this would emit a call to a kernel that
+    /// does not exist, type-checking in `skyc` but failing the downstream Rust
+    /// build — so the alias is rejected at compile time. [SKY-N0028]
+    UnknownKernelAlias {
+        alias: Box<str>,
+        module: Box<str>,
+        function: Box<str>,
+    },
 }
 
 /// Class label for the #90 T3 higher-order-kernel callback-result obligation.
@@ -1009,6 +1021,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::ReservedNamespace { .. } => SKY_N0025,
         NameError::ReservedBuiltinType { .. } => SKY_N0026,
         NameError::DuplicateQualifier { .. } => SKY_N0027,
+        NameError::UnknownKernelAlias { .. } => SKY_N0028,
     }
 }
 
@@ -1147,7 +1160,8 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::ModulePathMismatch { .. }
         | NameError::AmbiguousImport { .. }
         | NameError::ReservedNamespace { .. }
-        | NameError::ReservedBuiltinType { .. } => Vec::new(),
+        | NameError::ReservedBuiltinType { .. }
+        | NameError::UnknownKernelAlias { .. } => Vec::new(),
     }
 }
 
