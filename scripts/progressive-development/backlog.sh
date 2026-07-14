@@ -26,8 +26,11 @@
 #   backlog.sh view [board|ready|graph]   # dependency-aware view of pending work:
 #       board  (default) — priority-ordered table + READY/blk state per task
 #       ready            — pending tasks whose blockers are all done (actionable)
-#       graph            — Mermaid `graph TD` (blocker --> dependent) on stdout;
-#                          pipe to a renderer, or paste in a ```mermaid fence.
+#       graph            — render the dependency graph (blocker --> dependent)
+#                          to backlog.svg + backlog.png (source kept at
+#                          backlog.mmd). Renderer: $MMDC -> mmdc -> npx
+#                          @mermaid-js/mermaid-cli; falls back to printing the
+#                          Mermaid source if none is runnable.
 #   backlog.sh add --priority P --phase PH --task T --notes N [--spec S] [--blocked-by "193,194"]
 #   backlog.sh claim <id> [<id>...]
 #   backlog.sh unclaim <id> [<id>...]
@@ -217,7 +220,7 @@ _view_ready() {   # pending tasks with no OPEN blockers — actionable right now
     ' "$JSONL"
 }
 
-_view_graph() {   # Mermaid dependency graph on stdout (blocker --> dependent)
+_graph_mermaid() {   # emit the Mermaid `graph TD` source on stdout
     jq -rs '
         (map(select(has("id")))) as $rows
         | ($rows | map({key:.id, value:.}) | from_entries) as $byid
@@ -237,6 +240,46 @@ _view_graph() {   # Mermaid dependency graph on stdout (blocker --> dependent)
           "  classDef ready fill:#fff3cd,stroke:#ffc107,color:#856404",
           "  classDef blocked fill:#f8d7da,stroke:#dc3545,color:#721c24"
     ' "$JSONL"
+}
+
+# `view graph` renders the dependency graph to backlog.svg + backlog.png (and
+# keeps the Mermaid source at backlog.mmd). The renderer is resolved as:
+#   $MMDC (if set) -> `mmdc` on PATH -> `npx -y @mermaid-js/mermaid-cli`.
+# If no renderer runs, the .mmd is still written and the source is echoed with
+# a one-line render hint — never a silent failure.
+_view_graph() {
+    local mmd="$HERE/backlog.mmd" svg="$HERE/backlog.svg" png="$HERE/backlog.png"
+    _graph_mermaid > "$mmd"
+    local runner=""
+    if [ -n "${MMDC:-}" ]; then runner="$MMDC"
+    elif command -v mmdc >/dev/null 2>&1; then runner="mmdc"
+    elif command -v npx >/dev/null 2>&1; then runner="npx -y @mermaid-js/mermaid-cli"; fi
+
+    # mermaid renders through a headless Chromium (puppeteer). Locate a browser
+    # (puppeteer-core bundles none) and run it sandbox-less — required in
+    # containers/CI where the default sandbox has no privileges.
+    local browser="${PUPPETEER_EXECUTABLE_PATH:-}"
+    if [ -z "$browser" ]; then
+        local b
+        for b in chromium chromium-browser google-chrome google-chrome-stable; do
+            command -v "$b" >/dev/null 2>&1 && { browser="$(command -v "$b")"; break; }
+        done
+        [ -z "$browser" ] && [ -x /usr/bin/chromium ] && browser=/usr/bin/chromium
+    fi
+    local ppcfg; ppcfg="$(mktemp)"
+    printf '{"args":["--no-sandbox","--disable-setuid-sandbox","--disable-gpu"]}' > "$ppcfg"
+
+    if [ -n "$runner" ] \
+        && PUPPETEER_EXECUTABLE_PATH="$browser" $runner -p "$ppcfg" -i "$mmd" -o "$svg" >/dev/null 2>&1 \
+        && PUPPETEER_EXECUTABLE_PATH="$browser" $runner -p "$ppcfg" -i "$mmd" -o "$png" >/dev/null 2>&1; then
+        rm -f "$ppcfg"
+        echo "rendered: $svg + $png  (source: $mmd)" >&2
+    else
+        rm -f "$ppcfg"
+        echo "backlog.sh: Mermaid render failed (need mmdc + a Chromium; set MMDC=/path/to/mmdc and/or PUPPETEER_EXECUTABLE_PATH=/path/to/chromium)." >&2
+        echo "backlog.sh: wrote $mmd — render manually: mmdc -i $mmd -o backlog.svg" >&2
+        cat "$mmd"
+    fi
 }
 
 cmd="${1:-}"; shift || true
