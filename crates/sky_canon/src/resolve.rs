@@ -386,8 +386,12 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
     // (empty here) with the module's own aliases.
     let mut type_home_map: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
     let extra_aliases: BTreeMap<Symbol, AliasDef> = BTreeMap::new();
-    // Single-module has no deps, so no qualifiers to map.
-    let qualifier_paths: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
+    // Single-module has no deps, so no user qualifiers to map — but a Html-family
+    // STDLIB import qualifier (`import Std.Html.Attributes as Attr`) still needs
+    // its `["Html"]` type home folded so a qualified `Attr.Attribute` lowers to
+    // `html::Attribute` (#179 / #185).
+    let mut qualifier_paths: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
+    fold_html_stdlib_qualifier_homes(&m.imports, &mut qualifier_paths, interner)?;
     // The bare single-module entry is always ordinary USER source: the trust tag
     // can only be raised via `canonicalise_module_with_origin`.
     canonicalise_with_env(
@@ -643,6 +647,13 @@ pub fn canonicalise_module_in_project(
         qualifier_paths.insert(qualifier, dep_path.clone());
         qualifier_first_span.insert(qualifier, import.name.span);
     }
+
+    // Fold Html-family STDLIB import qualifiers into `qualifier_paths` (→
+    // `["Html"]`) so a qualified `Attr.Attribute` (`import Std.Html.Attributes as
+    // Attr`) resolves to the `html::Attribute` home (#179 / #185). Runs AFTER the
+    // user-dep loop so a user qualifier that also names a Html dep keeps its real
+    // dep path (`entry(..).or_insert` inside the helper is a no-op on a hit).
+    fold_html_stdlib_qualifier_homes(&m.imports, &mut qualifier_paths, interner)?;
 
     // Snapshot injected aliases (params + body only) so we can include them in
     // `scope_aliases` after `injected_aliases` is moved into `canonicalise_with_env`.
@@ -914,6 +925,177 @@ fn inject_stdlib_exposed_values(
             seen_values.insert(name, item.span);
             env.vars.insert(name, home);
         }
+    }
+    Ok(())
+}
+
+/// Builtin type names whose lowering (`sky_lower::ir_type_from_{ty,canon}`)
+/// disambiguates by the `home` path — `Attribute` exists in BOTH `Std.Ui`
+/// (→ `sky_runtime::ui::element::Attribute`) and `Std.Html.Attributes`
+/// (→ `sky_runtime::html::Attribute`), and the lowerer's `is_html = home
+/// contains "Html"` check drives the choice. `Event` is listed for the same
+/// home-driven precedent (currently single-ctor `html::Event`, so harmless).
+/// Every OTHER builtin type is home-insensitive at lowering (its named arm fires
+/// on the name string regardless of `home`).
+const HOME_SENSITIVE_BUILTIN_TYPES: &[&str] = &["Attribute", "Event"];
+
+/// Record the canonical `["Html"]` `home` for a home-sensitive builtin TYPE
+/// (`Attribute` / `Event`) brought UNQUALIFIED into scope via an explicit
+/// `import <Html-family> exposing (Attribute, …)` list (#179) — the TYPE
+/// counterpart of [`inject_stdlib_exposed_values`] (which handles only lowercase
+/// VALUE members).
+///
+/// ## Why
+///
+/// `Attribute` exists in BOTH `Std.Ui` (→ `ui::element::Attribute`) and
+/// `Std.Html.Attributes` (→ `html::Attribute`); the lowerer disambiguates by
+/// `is_html = home contains "Html"`. A bare `Attribute` exposed from a stdlib
+/// Html module previously reached the empty-home sentinel (stdlib imports are
+/// skipped by the dep-injection loop), so `is_html` always failed and the
+/// `Std.Live.Head.pairToAttr : (String,String) -> Attribute msg` shape
+/// mis-lowered to `ui::element::Attribute` while its `Attr.attribute` body
+/// produced `html::Attribute` — an exit-0-then-cargo-fail E0308 SEAL violation.
+/// The bare path resolves via `resolve_unqualified_type_home`, which consults
+/// `type_home_map` first, so recording `["Html"]` here fixes it.
+///
+/// ## Why `["Html"]` and not the full dep path
+///
+/// The HM constrainer builds the Std.Html attribute type as `Ty::Con { module:
+/// ["Html"], name: Attribute }` (`constrain.rs` `html_attr`). Recording the full
+/// `["Std","Html","Attributes"]` would mint a NOMINALLY-DISTINCT `Attribute` that
+/// fails to unify with `Html.node`'s parameter (`expected Html.Attribute, found
+/// Std.Html.Attributes.Attribute`). `["Html"]` matches the constrainer AND
+/// satisfies the lowerer's `is_html` check.
+///
+/// ## Scope and soundness
+///
+/// * Only names in [`HOME_SENSITIVE_BUILTIN_TYPES`] are touched — a no-op for
+///   every home-insensitive builtin.
+/// * The QUALIFIED `Attr.Attribute` / `Ui.Attribute` case is handled separately
+///   by [`fold_html_stdlib_qualifier_homes`] (keyed on the QUALIFIER, so the two
+///   stay distinct); this pass must touch ONLY names exposed UNQUALIFIED, or it
+///   would also hijack a qualified `Ui.Attribute` in the same module (whose
+///   fallback also reads `type_home_map`) — the exact regression in
+///   `26-ui-showcase/RegressionGates.testId : Ui.Attribute msg`.
+/// * **Conflict guard.** If the SAME module ALSO brings the Ui `Attribute` type
+///   into UNQUALIFIED scope (`import Std.Ui … exposing (Attribute)` or `exposing
+///   (..)`), a bare `Attribute` is genuinely ambiguous, so we record NOTHING and
+///   leave the sentinel rather than silently pinning one home.
+/// * Runs BEFORE any value body is canonicalised.
+/// * A later LOCAL `type Attribute` is already rejected by
+///   `reject_reserved_builtin_type` (SKY-N0026); re-inserting the same `["Html"]`
+///   is idempotent (`entry(..).or_insert`).
+fn inject_stdlib_exposed_type_homes(
+    m: &src::Module,
+    type_home_map: &mut BTreeMap<Symbol, Vec<Symbol>>,
+    interner: &mut Interner,
+) -> DResult<()> {
+    let html_sym = interner.intern("Html")?;
+
+    // Does this module bring the Ui `Attribute` TYPE into UNQUALIFIED scope?
+    let ui_exposes_attribute = m.imports.iter().any(|import| {
+        let dep = &import.name.value;
+        // Exactly `Std.Ui` (owner of the Ui `Attribute`), not a `Std.Ui.*`
+        // sub-module (which does not re-export it).
+        let is_std_ui = dep.len() == 2
+            && dep
+                .first()
+                .copied()
+                .is_some_and(|s| interner.resolve(s) == Some("Std"))
+            && dep
+                .get(1)
+                .copied()
+                .is_some_and(|s| interner.resolve(s) == Some("Ui"));
+        if !is_std_ui {
+            return false;
+        }
+        match &import.exposing.value {
+            src::Exposing::All => true,
+            src::Exposing::List(items) => items.iter().any(|item| {
+                matches!(&item.value, src::Exposed::Type(n, _)
+                    if interner.resolve(*n) == Some("Attribute"))
+            }),
+        }
+    });
+    if ui_exposes_attribute {
+        return Ok(());
+    }
+
+    for import in &m.imports {
+        let src::Exposing::List(items) = &import.exposing.value else {
+            continue;
+        };
+        let is_html_family = import
+            .name
+            .value
+            .iter()
+            .any(|s| interner.resolve(*s) == Some("Html"));
+        if !is_html_family {
+            continue;
+        }
+        for item in items {
+            let src::Exposed::Type(type_name, _privacy) = &item.value else {
+                continue;
+            };
+            let Some(resolved) = interner.resolve(*type_name) else {
+                continue;
+            };
+            if !HOME_SENSITIVE_BUILTIN_TYPES.contains(&resolved) {
+                continue;
+            }
+            type_home_map
+                .entry(*type_name)
+                .or_insert_with(|| vec![html_sym]);
+        }
+    }
+    Ok(())
+}
+
+/// Fold each Html-family STDLIB import qualifier into `qualifier_paths`, mapping
+/// it to the canonical `["Html"]` type home (#179 / #185).
+///
+/// Stdlib kernel imports are skipped by the ordinary `qualifier_paths`
+/// construction (they carry no `deps` entry), so a QUALIFIED `Attr.Attribute`
+/// (from `import Std.Html.Attributes as Attr`) used to fall through to the
+/// by-name `type_home_map.get("Attribute")` — a single entry that cannot tell
+/// `Attr.Attribute` (Html) from `Ui.Attribute` (Ui), so both mis-lowered to the
+/// same newtype. Registering the qualifier here — `Attr` (and the canonical
+/// `Html`) → `["Html"]` — makes the `TType` arm resolve `Attr.Attribute` to the
+/// `html::Attribute` home directly, while `Ui.Attribute` (Ui-family qualifier,
+/// deliberately NOT folded) keeps falling through to the empty Ui sentinel.
+///
+/// The `["Html"]` value is the SAME single-segment home the HM constrainer uses
+/// for the Std.Html attribute type (`constrain.rs` `html_attr`), so the emitted
+/// type unifies with `Html.node`'s parameter rather than minting a distinct
+/// `Std.Html.Attributes.Attribute`.
+///
+/// A qualifier the user has ALSO bound to a real dep module keeps its dep path
+/// (`entry(..).or_insert` — the dep-path insertion runs first and wins).
+///
+/// # Errors
+/// [`Diagnostic::CompilerBug`] if interning `Html` exhausts the interner.
+fn fold_html_stdlib_qualifier_homes(
+    imports: &[src::Import],
+    qualifier_paths: &mut BTreeMap<Symbol, Vec<Symbol>>,
+    interner: &mut Interner,
+) -> DResult<()> {
+    let html_sym = interner.intern("Html")?;
+    for import in imports {
+        let dep_path = &import.name.value;
+        let is_html_family = dep_path
+            .iter()
+            .any(|s| interner.resolve(*s) == Some("Html"));
+        if !is_html_family {
+            continue;
+        }
+        // Effective qualifier: explicit `as Alias`, else the Elm last-segment
+        // default (`import Std.Html.Attributes` → `Attributes`).
+        let qualifier = import
+            .alias
+            .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
+        qualifier_paths
+            .entry(qualifier)
+            .or_insert_with(|| vec![html_sym]);
     }
     Ok(())
 }
@@ -1213,6 +1395,14 @@ fn canonicalise_with_env(
     // rule). Fail-closed: a lowercase name that is not a real value member of the
     // module surfaces `NameNotExposed`, never a dangling binding.
     inject_stdlib_exposed_values(m, env, &mut seen_values, interner)?;
+    // #179: record the `["Html"]` origin home for a home-sensitive builtin TYPE
+    // brought UNQUALIFIED via `import <Html-family> exposing (Attribute)`, so the
+    // bare `Attribute msg` annotation lowers to the SAME newtype (`html::Attribute`
+    // vs `ui::element::Attribute`) its body produces. Runs before any value body
+    // is canonicalised so `resolve_unqualified_type_home` (which consults
+    // `type_home_map` first) sees the recorded home rather than the empty-home
+    // sentinel that always mis-selects `UiAttribute`.
+    inject_stdlib_exposed_type_homes(m, type_home_map, interner)?;
     // #98: flood every member of an `import Sky.*/Std.* exposing (..)` stdlib
     // module into the LOW-PRIORITY wildcard tier. Deliberately does NOT touch
     // `seen_values` — a local / explicit-exposed / synth-ctor / prelude name of
@@ -2968,7 +3158,11 @@ fn canonicalise_type(
                 return Ok(expanded);
             }
             // Qualified reference (e.g. `Counter.Msg`): use `qualifier_paths`
-            // for the dep module's full home path.  Unqualified: delegate to
+            // for the dep module's full home path. It ALSO carries (folded in by
+            // `fold_html_stdlib_qualifier_homes`) the canonical `["Html"]` home
+            // for a Html-family STDLIB qualifier, so `Attr.Attribute` →
+            // `html::Attribute` while `Ui.Attribute` (not folded) falls through to
+            // the empty Ui sentinel (#179 / #185). Unqualified: delegate to
             // `resolve_unqualified_type_home` which fails closed with SKY-N0002
             // for unknown names (builtins get the empty-home sentinel).
             let home = if qualifier_str.is_empty() {
