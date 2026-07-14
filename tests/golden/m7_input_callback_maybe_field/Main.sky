@@ -1,0 +1,84 @@
+module Main exposing (main)
+
+import Std.Html as Html
+import Std.Ui as Ui
+import Std.Ui.Input as Input
+
+
+-- #178 regression lock (SEAL: skyc-0 ⇒ cargo-0).
+--
+-- Every `Std.Ui.Input.*` runtime function takes its callback fields
+-- (`onChange`, checkbox `icon`) as `Arc<dyn Fn(_) -> _ + Send + Sync>`. When the
+-- `onChange` field is a BARE Msg-constructor (`FilterChanged : String -> Msg`),
+-- it eta-expands to a plain lambda that the emitter used to box with `Box::new`
+-- (the non-Server/WS `Fun` default) — a `Box<dyn Fn(_) -> _ + Send>` that does
+-- NOT fill the `Arc<.. + Send + Sync>` slot. skyc accepted the program (exit 0)
+-- but the emitted Rust failed `cargo build` with E0308 — a seal break.
+--
+-- This fixture exercises the exact shape from `examples/37-composite-live-shop`:
+-- an `Input.text` whose cfg carries a `Just (Input.placeholder ...)` (`Maybe`
+-- field) AND a bare-constructor `onChange`, plus `Input.slider`,
+-- `Input.checkbox` (which ALSO has an `icon` Arc-callback field), and
+-- `Input.radioRow`. Non-E2E goldens (`i148`/`i155`) missed this because they
+-- only check skyc lowering, never `cargo build`. This one cargo-builds and runs.
+--
+-- oracle_divergence context: the Go oracle (`sky dev`) does not expose
+-- `Html.htmlRender`, so this test does not assert Go parity — it asserts the
+-- emitted Rust builds (cargo exit 0) and the binary runs (exit 0).
+
+
+type Msg
+    = FilterChanged String
+    | MaxPriceChanged String
+    | SortChanged String
+    | NotifyToggled Bool
+
+
+checkmark : Bool -> Ui.Element Msg
+checkmark on =
+    if on then
+        Ui.text "x"
+
+    else
+        Ui.text " "
+
+
+controlBar : String -> Int -> String -> Bool -> String
+controlBar filter maxPrice sort notify =
+    Html.htmlRender
+        (Ui.layout []
+            (Ui.column []
+                [ Input.text []
+                    { onChange = FilterChanged
+                    , text = filter
+                    , placeholder = Just (Input.placeholder [] (Ui.text "Search…"))
+                    , label = Input.labelAbove [] (Ui.text "Filter")
+                    }
+                , Input.slider []
+                    { onChange = MaxPriceChanged
+                    , value = String.fromInt maxPrice
+                    , min = "0"
+                    , max = "150"
+                    , step = "5"
+                    , label = Input.labelHidden "Max price"
+                    }
+                , Input.radioRow []
+                    { onChange = SortChanged
+                    , options =
+                        [ Input.option "name" (Ui.text "Name")
+                        , Input.option "price" (Ui.text "Price")
+                        ]
+                    , selected = sort
+                    , label = Input.labelAbove [] (Ui.text "Sort")
+                    }
+                , Input.checkbox []
+                    { onChange = NotifyToggled
+                    , icon = checkmark
+                    , checked = notify
+                    , label = Input.labelLeft [] (Ui.text "Notify")
+                    }
+                ]))
+
+
+main =
+    println (controlBar "" 5000 "name" False)
