@@ -10,8 +10,8 @@ use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::Interner;
 use sky_ir::{
-    Arm, BinOp, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module, Pat,
-    Program, TypeDef, Variant,
+    Arm, BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
+    Module, Pat, Program, TypeDef, Variant,
 };
 
 const GOLDEN_MAIN: &str = include_str!("../../../tests/golden/m0/main.rs");
@@ -114,8 +114,11 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
                         },
                         Expr::Int(0),
                     ],
+                    pin: CallPin::None,
                 }],
+                pin: CallPin::None,
             }],
+            pin: CallPin::None,
         },
     };
 

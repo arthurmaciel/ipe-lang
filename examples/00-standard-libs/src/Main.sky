@@ -436,7 +436,7 @@ jwtClaimSet =
 
 jwtHsToken : Result Error String
 jwtHsToken =
-    Jwt.encode (Jwt.hs256 "topsecret") jwtClaimSet
+    Jwt.encode (Jwt.hs256 "topsecret-topsecret-topsecret-32") jwtClaimSet
 
 
 jwtDecodeOk : String -> Int -> String -> Bool
@@ -462,21 +462,21 @@ jwtSuite =
         , Test.test "HS256 verify round-trips" (\_ ->
             case jwtHsToken of
                 Ok tok ->
-                    Test.isTrue (jwtDecodeOk "topsecret" 1000 tok)
+                    Test.isTrue (jwtDecodeOk "topsecret-topsecret-topsecret-32" 1000 tok)
 
                 Err _ ->
                     Test.isTrue False)
         , Test.test "rejects a forged signature (wrong key)" (\_ ->
             case jwtHsToken of
                 Ok tok ->
-                    Test.isFalse (jwtDecodeOk "wrong-key" 1000 tok)
+                    Test.isFalse (jwtDecodeOk "wrong-key-wrong-key-wrong-key-33!" 1000 tok)
 
                 Err _ ->
                     Test.isTrue False)
         , Test.test "rejects an expired token" (\_ ->
             case jwtHsToken of
                 Ok tok ->
-                    Test.isFalse (jwtDecodeOk "topsecret" 99999999999 tok)
+                    Test.isFalse (jwtDecodeOk "topsecret-topsecret-topsecret-32" 99999999999 tok)
 
                 Err _ ->
                     Test.isTrue False)

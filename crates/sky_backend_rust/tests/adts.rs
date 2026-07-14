@@ -42,8 +42,8 @@ use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{
-    Arm, BinOp, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module, Pat,
-    Program, TypeDef, Variant,
+    Arm, BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
+    Module, Pat, Program, TypeDef, Variant,
 };
 
 fn emit(interner: &Interner, prog: &Program) -> DResult<String> {
@@ -150,8 +150,11 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
                         variant: just,
                         args: vec![Expr::Int(5)],
                     }],
+                    pin: CallPin::None,
                 }],
+                pin: CallPin::None,
             }],
+            pin: CallPin::None,
         },
     };
 
@@ -231,6 +234,7 @@ fn tree_sum_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
     let call_sum = |arg: Symbol| Expr::Call {
         callee: Callee::Func(FuncId::from_raw(0)),
         args: vec![Expr::Var(arg)],
+        pin: CallPin::None,
     };
     let arms = vec![
         Arm {
@@ -309,8 +313,11 @@ fn tree_main_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
                 args: vec![Expr::Call {
                     callee: Callee::Func(FuncId::from_raw(0)),
                     args: vec![the_tree],
+                    pin: CallPin::None,
                 }],
+                pin: CallPin::None,
             }],
+            pin: CallPin::None,
         },
     })
 }
