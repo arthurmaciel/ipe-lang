@@ -62,6 +62,11 @@ const FILE: &str = include_str!("../stdlib/Sky/Core/File.sky");
 /// `Sky.Core.Http` — outbound HTTP client kernels + pure builders (M5b).
 const HTTP: &str = include_str!("../stdlib/Sky/Core/Http.sky");
 
+/// `Sky.Core.Path` — pure filesystem-path helpers (M5b).
+const PATH: &str = include_str!("../stdlib/Sky/Core/Path.sky");
+/// `Sky.Core.Regex` — RE2 regex helpers (M5b).
+const REGEX: &str = include_str!("../stdlib/Sky/Core/Regex.sky");
+
 /// Every embedded `Sky.Core` module, keyed by its dotted import name.
 ///
 /// `Sky.Core.Prelude` is intentionally absent here: it is not a source file but
@@ -135,6 +140,14 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Sky.Core.Http",
         source: HTTP,
+    },
+    StdModule {
+        name: "Sky.Core.Path",
+        source: PATH,
+    },
+    StdModule {
+        name: "Sky.Core.Regex",
+        source: REGEX,
     },
 ];
 
@@ -293,6 +306,72 @@ const STD_UI_ANIMATION: &str = include_str!("../stdlib/Std/Ui/Animation.sky");
 /// Unblocks `00-standard-libs` (N0004: Std.Money).
 const STD_MONEY: &str = include_str!("../stdlib/Std/Money.sky");
 
+/// `Sky.Core.Pure` — uniform `() -> Task Error a` companion surface.
+///
+/// Pure Sky wrappers; no Ffi.kernel calls directly.  Not in
+/// `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+const SKY_CORE_PURE: &str = include_str!("../stdlib/Sky/Core/Pure.sky");
+
+/// `Sky.Core.WebSocket` — outbound WebSocket client (compiled source).
+///
+/// Defines 3 ADTs (`WebSocket`, `WebSocketMessage`, `CloseCode`) and
+/// mixes `Ffi.kernel` calls with pure Sky logic.  Uses `Sub_subscribeWebSocket`
+/// (through the `Sub` qualifier) for the subscription tier.
+/// NOTE: `Sub_subscribeWebSocket` has rust=missing — runtime gap documented in
+/// `docs/architecture/stdlib-sig-divergences-2026-07-14.md`.
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+const SKY_CORE_WEBSOCKET: &str = include_str!("../stdlib/Sky/Core/WebSocket.sky");
+
+/// `Std.Cache` — in-memory LRU + TTL cache (compiled source).
+///
+/// Defines `type Cache k v = Cache Int` ADT.  Not in
+/// `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+const STD_CACHE: &str = include_str!("../stdlib/Std/Cache.sky");
+
+/// `Std.Compression` — gzip + zstd compression (compiled source).
+///
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+const STD_COMPRESSION: &str = include_str!("../stdlib/Std/Compression.sky");
+
+/// `Std.Config` — typed TOML/YAML/JSON decoders (compiled source).
+///
+/// Defines `type alias Decoder`.  Not in `STDLIB_MODULE_QUALIFIERS`.
+const STD_CONFIG: &str = include_str!("../stdlib/Std/Config.sky");
+
+/// `Std.Csv` — CSV encode + decode (compiled source).
+///
+/// Defines `type alias Csv` + pure Sky builders.
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+const STD_CSV: &str = include_str!("../stdlib/Std/Csv.sky");
+
+/// `Std.Email` — provider-abstract email send (compiled source).
+///
+/// Defines `type EmailProvider` + `type alias EmailMessage` ADTs.
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+const STD_EMAIL: &str = include_str!("../stdlib/Std/Email.sky");
+
+/// `Std.Live.Console` — typed console identity + builder helpers (compiled source).
+///
+/// Pure Sky; no Ffi.kernel calls.
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+const STD_LIVE_CONSOLE: &str = include_str!("../stdlib/Std/Live/Console.sky");
+
+/// `Std.PubSub` — Task-shaped publish, callable from any context (compiled source).
+///
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+const STD_PUBSUB: &str = include_str!("../stdlib/Std/PubSub.sky");
+
+/// `Std.Trace` — opt-in distributed-tracing spans (compiled source).
+///
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+const STD_TRACE: &str = include_str!("../stdlib/Std/Trace.sky");
+
+/// `Std.Ui.Events` — pure Sky re-exports of `Std.Ui` event helpers (compiled source).
+///
+/// Pure Sky; no Ffi.kernel calls.
+/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+const STD_UI_EVENTS: &str = include_str!("../stdlib/Std/Ui/Events.sky");
+
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
 /// Disjoint from [`MODULES`] (parse fixtures) and from `sky_canon`'s
@@ -345,6 +424,50 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Std.Money",
         source: STD_MONEY,
+    },
+    CompiledStdModule {
+        dotted: "Sky.Core.Pure",
+        source: SKY_CORE_PURE,
+    },
+    CompiledStdModule {
+        dotted: "Sky.Core.WebSocket",
+        source: SKY_CORE_WEBSOCKET,
+    },
+    CompiledStdModule {
+        dotted: "Std.Cache",
+        source: STD_CACHE,
+    },
+    CompiledStdModule {
+        dotted: "Std.Compression",
+        source: STD_COMPRESSION,
+    },
+    CompiledStdModule {
+        dotted: "Std.Config",
+        source: STD_CONFIG,
+    },
+    CompiledStdModule {
+        dotted: "Std.Csv",
+        source: STD_CSV,
+    },
+    CompiledStdModule {
+        dotted: "Std.Email",
+        source: STD_EMAIL,
+    },
+    CompiledStdModule {
+        dotted: "Std.Live.Console",
+        source: STD_LIVE_CONSOLE,
+    },
+    CompiledStdModule {
+        dotted: "Std.PubSub",
+        source: STD_PUBSUB,
+    },
+    CompiledStdModule {
+        dotted: "Std.Trace",
+        source: STD_TRACE,
+    },
+    CompiledStdModule {
+        dotted: "Std.Ui.Events",
+        source: STD_UI_EVENTS,
     },
 ];
 
