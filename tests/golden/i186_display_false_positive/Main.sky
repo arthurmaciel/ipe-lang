@@ -1,0 +1,29 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Sky.Core.Dict as Dict
+import Std.Db as Db
+import Std.Log exposing (println)
+
+
+-- BACKLOG #186 FALSE-POSITIVE guard: a wildcard `any` param used ONLY as a Db
+-- row (which correctly gains the #177 `SkyRow` bound) must NOT ALSO gain a
+-- spurious `Display` bound just because a SIBLING concrete `String` param is
+-- `toString`'d in the same body. The Display obligation is decided per-param by
+-- the exact `toString` argument position; a `String`-typed sibling never routes
+-- Display onto the wildcard `row` generic. A gratuitous `T: std::fmt::Display`
+-- on a Dict-shaped row (which is not Display) would be an outright E0277 SEAL
+-- violation the moment a caller instantiates it.
+grab : any -> String -> String
+grab row prefix =
+    toString prefix ++ ":" ++ Db.getString "k" row
+
+
+main : Task Error ()
+main =
+    let
+        payload =
+            Dict.fromList [ ( "k", "v" ) ]
+    in
+    println (grab payload "p")
