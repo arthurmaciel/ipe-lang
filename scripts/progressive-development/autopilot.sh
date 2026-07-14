@@ -39,8 +39,8 @@
 #     binary, zero signal), then RUN the SEAL + tests + the reviewer's OWN probes.
 #     Integrity comes from running-from-committed + probing, NOT from recompiling.
 #
-# Config (env): PROGDEV_MAX_CYCLES (100 backstop) · PROGDEV_MAX_GUARDIAN (2/cycle) ·
-#   PROGDEV_LANES (2) · PROGDEV_AUTHOR_MODEL (opus 4.8) · PROGDEV_GUARDIAN_MODEL /
+# Config (env): PROGDEV_MAX_CYCLES (100 backstop) · PROGDEV_LANES (2 items/cycle,
+#   sequential) · PROGDEV_AUTHOR_MODEL (opus 4.8) · PROGDEV_GUARDIAN_MODEL /
 #   PROGDEV_RECONCILE_MODEL (opus) · touch autopilot.stop to halt after the cycle.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
@@ -48,7 +48,12 @@ REPO="$(pwd)"
 HERE="scripts/progressive-development"
 
 MAX_CYCLES="${PROGDEV_MAX_CYCLES:-100}"   # runaway backstop only; real stop = 2-dry-pass convergence
-MAX_GUARDIAN="${PROGDEV_MAX_GUARDIAN:-2}"
+# PROGDEV_LANES = items dispatched per cycle. autopilot is single-writer by design
+# (the gate does git switch/merge/nextest on the ONE shared checkout, and
+# context.md §6b relies on "exactly one writer"), so lanes run SEQUENTIALLY — this
+# is a per-cycle throughput cap, not concurrent authoring (that is orchestrate.sh).
+LANES="${PROGDEV_LANES:-2}"
+MAX_GUARDIAN="${PROGDEV_MAX_GUARDIAN:-$LANES}"   # back-compat override; defaults to PROGDEV_LANES
 FUZZ_ITERS="${PROGDEV_FUZZ_ITERS:-30}"       # no-panic fuzzer iters (measure sweep + guardian gate)
 FUZZ="scripts/fuzz-well-typed.sh"
 STREAM="${PROGDEV_STREAM:-1}"                 # DEFAULT ON (watch.sh renders it); PROGDEV_STREAM=0 to disable. Safe: logic is grep/queue-based
@@ -138,8 +143,8 @@ Flags:
 
 Env vars (defaults):
   PROGDEV_MAX_CYCLES      (100)    runaway backstop only (real stop = converge: 2 passes, no new findings)
-  PROGDEV_MAX_GUARDIAN    (2)      guardian items dispatched per run
-  PROGDEV_LANES           (2)      parallel mechanical lanes (this box: 2)
+  PROGDEV_LANES           (2)      items dispatched per cycle (SEQUENTIAL — single-writer design, not concurrent)
+  PROGDEV_MAX_GUARDIAN    (=LANES) back-compat override for the per-cycle count
   PROGDEV_FUZZ_ITERS      (30)     no-panic fuzzer iters (measure sweep + guardian gate)
   PROGDEV_STREAM          (1)      agents emit stream-json for the live view; 0 = plain-text logs
   PROGDEV_WATCH           (1)      auto-launch watch.sh alongside (one terminal); 0 = don't (== --no-watch)
