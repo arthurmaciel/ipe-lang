@@ -1,0 +1,63 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+{-| #193 regression — record-UPDATE base is a borrow (`(rec).clone()`) that
+    reads `rec` but never moves it.  When an `if`/`case` arm uses a non-`Copy`
+    binding in a CONSUMING position (a by-value function argument) AND then in a
+    record-update BASE position that is textually LATER, the clone-hoist must
+    clone the consuming use so the update's borrow of the still-live value is
+    sound.
+
+    Pre-fix (the bug this exercises): `count_var_uses` did NOT count the update
+    base, so the seed under-counted.  The MAX-seed change (#193) then made the
+    consuming argument the "last counted" use → bare move → the later update
+    base `(rec).clone()` read a moved value → E0382.  This is exactly the
+    `16-skychess` `selectIfWhite` shape reduced to one file.
+-}
+type alias Model =
+    { tag : String
+    , score : Int
+    }
+
+
+{-| `describe` takes the record BY VALUE (consuming position) — mirrors
+    `legalMovesForSquare … model`.
+-}
+describe : Model -> String
+describe m =
+    m.tag ++ "#" ++ String.fromInt m.score
+
+
+{-| The reduced `selectIfWhite`: in the True arm `model` is used in an
+    ACCESS (`model.tag` — borrow), a CONSUMING arg (`describe model`), and an
+    UPDATE base (`{ model | ... }` — borrow, textually last).  The False arm
+    moves `model` out once (mutually exclusive, sound).
+-}
+bump : Bool -> Model -> ( Model, String )
+bump active model =
+    if active then
+        let
+            note =
+                model.tag ++ "/" ++ describe model
+        in
+        ( { model | score = model.score + 1 }, note )
+
+    else
+        ( model, "idle" )
+
+
+main =
+    let
+        start =
+            { tag = "sky", score = 41 }
+
+        ( updated, note ) =
+            bump True start
+
+        ( same, idle ) =
+            bump False { tag = "zzz", score = 7 }
+    in
+    println (updated.tag ++ " " ++ String.fromInt updated.score ++ " " ++ note ++ " | " ++ same.tag ++ " " ++ idle)

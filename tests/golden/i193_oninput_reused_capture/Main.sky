@@ -1,0 +1,61 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Std.Html as Html
+import Std.Ui as Ui exposing (Element)
+import Std.Ui.Input as Input
+import Std.Log exposing (println)
+
+
+-- #193 D5: Ui.onInput with a reused non-Copy capture.
+--
+-- `item` (non-Copy record) is used in a `Ui.onInput` callback AND reused by a
+-- sibling button `onPress` in the same view.  Pre-fix (before the D5 emitter
+-- reroute): `skyc` exits 0, but the emitted Rust fails `cargo build` with E0382
+-- ("use of moved value: `item`") because the synthesized
+-- `Arc::new(move |_x| …)` for `ui_on_input_` move-captures the free outer
+-- `item`, and the sibling `onPress` hits use-after-move.
+--
+-- Fix (D5): route `UiOnInput`/`UiOnChange` through `emit_arc_callback_field` so
+-- the lowerer-hoisted `let item = item.clone();` is peeled OUTSIDE the
+-- synthesized `Arc`'s `move` closure — exactly as the `onChange` FIELD path was
+-- fixed by #191.
+type alias Item =
+    { id : Int
+    , name : String
+    }
+
+
+type Msg
+    = UpdateName Int String
+    | RemoveItem Int
+
+
+-- `item` is captured in onInput (Arc callback) AND reused in the onClick sibling.
+itemRow : Item -> Element Msg
+itemRow item =
+    Ui.row
+        [ Ui.spacing 12 ]
+        [ Input.text
+            [ Ui.onInput (\val -> UpdateName item.id val) ]
+            { onChange = \val -> UpdateName item.id val
+            , text = item.name
+            , placeholder = Nothing
+            , label = Input.labelLeft [] (Ui.text item.name)
+            }
+        , Ui.button
+            []
+            { onPress = Just (RemoveItem item.id)
+            , label = Ui.text ("Remove " ++ item.name)
+            }
+        ]
+
+
+main : Task Error ()
+main =
+    let
+        row =
+            itemRow { id = 3, name = "apple" }
+    in
+    println (Html.render (Ui.layout [] row))
