@@ -1,0 +1,55 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Sky.Core.Dict as Dict
+import Std.Db as Db
+import Std.Log exposing (println)
+
+
+-- BACKLOG #177 regression — `examples/27-multi-session-chat`'s cargo build.
+--
+-- Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build`
+-- with E0277 (`the trait bound T1: SkyRow is not satisfied`) at every
+-- `db_get_string(field, &payload)` call site inside a function whose only
+-- generic is the wildcard `any` PARAM. The runtime's field accessors are
+-- generic `db_get_*<R: SkyRow>(field, &row)`; the emitted enclosing function
+-- carried an unbounded `<T1: Clone>` param, so its body's `db_get_string(_,
+-- &payload)` could not prove `payload: SkyRow`.
+--
+-- The trigger idiom (mirrors example 27's `decodeChatMessage`): a decoder
+-- typed `any -> Record` that reads named fields out of its payload via
+-- `Db.getString` (a Dict-shaped accessor). The `any` param lowers to a
+-- wildcard generic; the fix appends `+ SkyRow` to exactly that generic (and
+-- ONLY when the body actually calls a `db_get_*`), leaving the record STRUCT
+-- itself unbounded so it stays reusable in non-row contexts.
+
+
+type alias Row =
+    { author : String
+    , text : String
+    }
+
+
+-- The payload is typed `any` (the pub/sub / broadcast convention). We carry
+-- it as a `Dict String String` so `Db.getString` reads fields straight back.
+decodeRow : any -> Row
+decodeRow payload =
+    { author = Db.getString "author" payload
+    , text = Db.getString "text" payload
+    }
+
+
+main : Task Error ()
+main =
+    let
+        payload =
+            Dict.fromList
+                [ ( "author", "ada" )
+                , ( "text", "hello" )
+                ]
+
+        row =
+            decodeRow payload
+    in
+    println (row.author ++ "," ++ row.text)
