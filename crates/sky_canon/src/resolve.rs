@@ -394,6 +394,8 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
     fold_html_stdlib_qualifier_homes(&m.imports, &mut qualifier_paths, interner)?;
     // The bare single-module entry is always ordinary USER source: the trust tag
     // can only be raised via `canonicalise_module_with_origin`.
+    // The single-module entry does not build a `ModuleExports`, so the kernel-
+    // alias map is discarded — registration + def-skip already happened in `env`.
     canonicalise_with_env(
         m,
         &mut env,
@@ -403,6 +405,7 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
         ModuleOrigin::User,
         interner,
     )
+    .map(|(canon_mod, _kernel_aliases)| canon_mod)
 }
 
 /// Canonicalise a module in a multi-module project context.
@@ -664,7 +667,7 @@ pub fn canonicalise_module_in_project(
         })
         .collect();
 
-    let canon_mod =
+    let (canon_mod, kernel_aliases) =
         canonicalise_with_env(
             m,
             &mut env,
@@ -717,7 +720,7 @@ pub fn canonicalise_module_in_project(
     // Build the export surface from the module's own `exposing (…)` clause.
     // Then record the full type scope so importers can use it when expanding
     // this module's alias bodies (see `AliasDef::dep_scope_types`).
-    let mut exports = build_module_exports(&home, m, &env, &synth_ctor_names);
+    let mut exports = build_module_exports(&home, m, &env, &synth_ctor_names, &kernel_aliases);
     exports.scope_types = type_home_map;
 
     // Build the full alias scope: own local aliases + all injected dep aliases.
@@ -1212,7 +1215,7 @@ fn canonicalise_with_env(
     extra_aliases: BTreeMap<Symbol, AliasDef>,
     origin: ModuleOrigin,
     interner: &mut Interner,
-) -> DResult<canon::Module> {
+) -> DResult<(canon::Module, BTreeMap<Symbol, KernelAlias>)> {
     let home = env.home.clone();
 
     // #102: a LOCAL type/alias declaration whose name already has a
@@ -1409,6 +1412,13 @@ fn canonicalise_with_env(
     // the same spelling silently shadows a wildcard member (see the fn doc);
     // cross-wildcard clashes surface only at an ambiguous use site.
     inject_stdlib_wildcard_values(m, env, interner)?;
+    // Stage-4 kernel aliases discovered in this module: `f = Ffi.kernel "K_n"`.
+    // Each is registered as a `VarHome::Kernel` (so every reference — in-module
+    // `f` or cross-module `Alias.f` — routes straight to the kernel) and its
+    // body is NOT canonicalised into a top-level def (the alias emits no runtime
+    // function; it IS the kernel). The map is returned so the project entry can
+    // record it on `ModuleExports.kernel_aliases`.
+    let mut kernel_aliases: BTreeMap<Symbol, KernelAlias> = BTreeMap::new();
     for v in &m.values {
         let name = v.value.name.value;
         let name_span = v.value.name.span;
@@ -1422,12 +1432,26 @@ fn canonicalise_with_env(
             });
         }
         seen_values.insert(name, name_span);
-        env.vars.insert(name, VarHome::TopLevel(home.clone()));
+        // FAIL-CLOSED (THE SEAL): `detect_kernel_alias` errors when the binding
+        // is a kernel alias naming an unregistered kernel — never a silent
+        // TopLevel fall-through that would emit a dangling call.
+        if let Some(alias) = detect_kernel_alias(&v.value, env, interner)? {
+            env.vars
+                .insert(name, VarHome::Kernel(Some(alias.id), alias.module, alias.function));
+            kernel_aliases.insert(name, alias);
+        } else {
+            env.vars.insert(name, VarHome::TopLevel(home.clone()));
+        }
     }
 
-    // Canonicalise each value declaration.
+    // Canonicalise each value declaration. A kernel alias has no runtime body —
+    // it lowers as its kernel at every call site — so it is skipped here, exactly
+    // as a kernel-qualifier member is never a compiled def.
     let mut defs = Vec::with_capacity(m.values.len() + synth_ctor_defs.len());
     for v in &m.values {
+        if kernel_aliases.contains_key(&v.value.name.value) {
+            continue;
+        }
         defs.push(canonicalise_value(
             &v.value,
             env,
@@ -1440,11 +1464,14 @@ fn canonicalise_with_env(
     // The synthesized constructor defs are already fully canonical.
     defs.extend(synth_ctor_defs);
 
-    Ok(canon::Module {
-        name: home,
-        unions,
-        defs,
-    })
+    Ok((
+        canon::Module {
+            name: home,
+            unions,
+            defs,
+        },
+        kernel_aliases,
+    ))
 }
 
 /// Synthesize the value-level auto-constructor for every LOCAL `type alias`
@@ -1786,6 +1813,7 @@ fn inject_dep_exports(
                     import.name.span,
                     env,
                     unqual_origins,
+                    dep.kernel_aliases.get(&name),
                     interner,
                 )?;
             }
@@ -1839,6 +1867,7 @@ fn inject_dep_exports(
                             item.span,
                             env,
                             unqual_origins,
+                            dep.kernel_aliases.get(name),
                             interner,
                         )?;
                     }
@@ -1896,12 +1925,17 @@ fn inject_dep_exports(
                             // into the value namespace too so `exposing (Account)`
                             // makes `Account` usable as a constructor.
                             if dep.values.contains(type_name) {
+                                // A record-alias auto-constructor is never a kernel
+                                // alias (kernel aliases are lowercase values, not
+                                // type names), so this lookup is always `None`;
+                                // passed for uniformity with the value paths.
                                 check_and_inject_value(
                                     *type_name,
                                     dep_path,
                                     item.span,
                                     env,
                                     unqual_origins,
+                                    dep.kernel_aliases.get(type_name),
                                     interner,
                                 )?;
                             }
@@ -1920,7 +1954,14 @@ fn inject_dep_exports(
         .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
     let qual_map = std::rc::Rc::make_mut(&mut env.qual_vars).entry(qualifier).or_default();
     for &v in &dep.values {
-        qual_map.insert(v, VarHome::TopLevel(dep_path.clone()));
+        // A dep value that is a Stage-4 kernel alias resolves as its kernel, so a
+        // qualified `Alias.f` routes straight to the kernel dispatch — never a
+        // `TopLevel(dep_path)` reference to a def the alias module never emits.
+        if let Some(alias) = dep.kernel_aliases.get(&v) {
+            qual_map.insert(v, VarHome::Kernel(Some(alias.id), alias.module, alias.function));
+        } else {
+            qual_map.insert(v, VarHome::TopLevel(dep_path.clone()));
+        }
     }
     // Register qualified constructors so `Alias.CtorName` resolves correctly.
     // Needed for compiled-source ADTs (e.g. `Money.USD` from `import Std.Money
@@ -1950,6 +1991,7 @@ fn check_and_inject_value(
     span: Span,
     env: &mut Env,
     unqual_origins: &mut BTreeMap<Symbol, Vec<Symbol>>,
+    kernel_alias: Option<&crate::ExportedKernelAlias>,
     interner: &Interner,
 ) -> DResult<()> {
     if let Some(prior_path) = unqual_origins.get(&name) {
@@ -1969,7 +2011,14 @@ fn check_and_inject_value(
         return Ok(());
     }
     unqual_origins.insert(name, dep_path.to_vec());
-    env.vars.insert(name, VarHome::TopLevel(dep_path.to_vec()));
+    // A kernel alias resolves unqualified to its kernel, same as it would
+    // qualified — otherwise `import Std.PubSub exposing (publish)` would bind
+    // `publish` to a non-existent `TopLevel` def.
+    let home = match kernel_alias {
+        Some(a) => VarHome::Kernel(Some(a.id), a.module, a.function),
+        None => VarHome::TopLevel(dep_path.to_vec()),
+    };
+    env.vars.insert(name, home);
     Ok(())
 }
 
@@ -2032,6 +2081,7 @@ fn build_module_exports(
     m: &src::Module,
     env: &Env,
     synth_ctor_names: &BTreeSet<Symbol>,
+    kernel_aliases: &BTreeMap<Symbol, KernelAlias>,
 ) -> crate::ModuleExports {
     let mut exports = crate::ModuleExports {
         path: home.to_owned(),
@@ -2115,6 +2165,24 @@ fn build_module_exports(
                     }
                 }
             }
+        }
+    }
+
+    // Record every EXPORTED kernel alias so importers register `Alias.f` as the
+    // kernel rather than a `TopLevel` reference. A kernel alias is an ordinary
+    // value as far as `exposing` is concerned, so it is already in
+    // `exports.values`; we only add the ones actually exported (an un-exposed
+    // alias is module-private and needs no cross-module entry).
+    for (&name, alias) in kernel_aliases {
+        if exports.values.contains(&name) {
+            exports.kernel_aliases.insert(
+                name,
+                crate::ExportedKernelAlias {
+                    id: alias.id,
+                    module: alias.module,
+                    function: alias.function,
+                },
+            );
         }
     }
 
@@ -3197,6 +3265,111 @@ fn name_str(interner: &Interner, sym: Symbol) -> DResult<Box<str>> {
             where_: "intern.resolve",
             detail: "canonicaliser: name symbol not backed by the interner".to_owned(),
         })
+}
+
+/// A resolved Stage-4 kernel alias — the target of a standard-library binding
+/// of the shape `f = Ffi.kernel "Module_function"`.
+///
+/// The binding routes every reference of `f` straight to the built-in kernel
+/// `id`, so it lowers identically to a qualified `Module.function` call. The
+/// `module` / `function` symbols are the first-`_` split of the kernel string,
+/// retained so the alias registers a [`VarHome::Kernel`] carrying the same
+/// canonical `(module, function)` pair a direct qualified reference produces.
+#[derive(Clone, Copy)]
+pub(crate) struct KernelAlias {
+    pub id: StdlibKernel,
+    pub module: Symbol,
+    pub function: Symbol,
+}
+
+/// Recognise a Stage-4 kernel-alias binding and resolve it against the kernel
+/// registry — the compiled-source counterpart of the reference compiler's
+/// `collectKernelAliases` (`Sky.Build.Compile`).
+///
+/// A binding qualifies when it takes NO parameters and its body is exactly
+/// `Ffi.kernel "Module_function"`. The string is split at the FIRST `_` into a
+/// `(module, function)` pair (the `KernelMod_funcName` convention) and looked up
+/// in `env.stdlib_index`.
+///
+/// Returns:
+/// * `Ok(None)` — the binding is an ordinary value/function, not a kernel alias.
+/// * `Ok(Some(alias))` — a kernel alias whose target is a registered kernel.
+/// * `Err(SKY-N0028)` — the binding IS a kernel alias but its string names no
+///   registered kernel. This is the FAIL-CLOSED gate demanded by THE SEAL:
+///   accepting it would let `skyc` emit a call to a non-existent kernel that
+///   type-checks here yet fails the downstream `cargo build`. A kernel the
+///   resolver would recognise but the registry does not cover is a
+///   representable-but-illegal state, rejected at compile time.
+///
+/// # Errors
+/// [`NameError::UnknownKernelAlias`] (SKY-N0028) when the split `(module,
+/// function)` pair is absent from the kernel registry.
+pub(crate) fn detect_kernel_alias(
+    value: &src::Value,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<Option<KernelAlias>> {
+    // A kernel alias binds a bare value — a binding with parameters is an
+    // ordinary function, never the point-free Layer-3 alias shape.
+    if !value.patterns.is_empty() {
+        return Ok(None);
+    }
+    // Body must be `Ffi.kernel "<raw>"`, i.e. a call of the qualified
+    // `Ffi.kernel` to a single string literal.
+    let src::Expr_::Call(callee, args) = &value.body.value else {
+        return Ok(None);
+    };
+    let src::Expr_::VarQual(qualifier, member) = &callee.value else {
+        return Ok(None);
+    };
+    // Compare against the reserved `Ffi.kernel` spelling. These interns are
+    // idempotent (the strings almost always already exist), and only run for the
+    // narrow `VarQual`-applied-to-one-arg shape, so the cost is negligible.
+    let ffi_sym = interner.intern("Ffi")?;
+    let kernel_sym = interner.intern("kernel")?;
+    if *qualifier != ffi_sym || *member != kernel_sym {
+        return Ok(None);
+    }
+    let [arg] = args.as_slice() else {
+        return Ok(None);
+    };
+    let src::Expr_::Str(raw) = &arg.value else {
+        return Ok(None);
+    };
+
+    // Split at the FIRST `_` — `"PubSub_publish"` → `("PubSub", "publish")`,
+    // matching the runtime's `KernelMod_funcName` convention. A string with no
+    // `_`, or an empty module/function half, is a malformed alias and fails
+    // closed the same way an unknown kernel does.
+    let split = raw.split_once('_').filter(|(m, f)| !m.is_empty() && !f.is_empty());
+    // A `SKY-N0028` for the alias — its `module` / `function` are the split
+    // halves (empty when the string is malformed, so the message still renders).
+    let unknown_alias = |module: Box<str>, function: Box<str>| Diagnostic::Name {
+        span: value.body.span,
+        msg: NameError::UnknownKernelAlias {
+            alias: Box::<str>::from(raw.as_str()),
+            module,
+            function,
+        },
+    };
+    let Some((module_str, function_str)) = split else {
+        return Err(unknown_alias(Box::<str>::from(""), Box::<str>::from("")));
+    };
+    let module = interner.intern(module_str)?;
+    let function = interner.intern(function_str)?;
+    // FAIL-CLOSED: only a kernel the registry actually covers resolves. An
+    // unregistered pair is rejected here, never emitted as a dangling call.
+    match env.stdlib_index.get(&(module, function)).copied() {
+        Some(id) => Ok(Some(KernelAlias {
+            id,
+            module,
+            function,
+        })),
+        None => Err(unknown_alias(
+            Box::<str>::from(module_str),
+            Box::<str>::from(function_str),
+        )),
+    }
 }
 
 /// Build the deterministic `did you mean` suggestion list for an unresolved

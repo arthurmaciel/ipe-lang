@@ -1733,7 +1733,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 90, "taxonomy is 90 codes"); // #90: +SKY-L0127; #99: +SKY-L0128; #32: +SKY-T0016; builtin-record-update: +SKY-T0017
+        assert_eq!(ALL_CODES.len(), 91, "taxonomy is 91 codes"); // #90: +SKY-L0127; #99: +SKY-L0128; #32: +SKY-T0016; builtin-record-update: +SKY-T0017; #196: +SKY-N0028
         assert!(
             index.contains("SKY-T0001  type mismatch"),
             "index pairs code with title"
