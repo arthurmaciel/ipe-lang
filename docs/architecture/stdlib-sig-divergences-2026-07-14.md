@@ -1,0 +1,160 @@
+# Stdlib signature-divergence audit — 2026-07-14
+
+Audit of the 30 embedded `.sky` modules in `crates/skyc/stdlib/` against the
+upstream reference (`../sky/sky-stdlib/`) and the Rust kernel registry
+(`scripts/ipe-index parity --gaps`).
+
+## Summary
+
+| Category | Count |
+|---|---|
+| Confirmed signature divergences (wrong kernel / wrong sig) | 1 |
+| Missing functions in existing files (upstream has, local lacks) | 11 |
+| Local-only extras (local has, upstream lacks) | 1 |
+| Cosmetic / import-style differences (no sig divergence) | 1 |
+| Kernel gaps for ports | 1 |
+| Blocked ports (upstream source missing) | 1 |
+
+---
+
+## 1. Confirmed signature divergences
+
+### 1.1 `Sky.Core.Random.choice`
+
+| Field | Value |
+|---|---|
+| Local sig | `choice : List String -> Task Error String` via kernel `Random_choice` |
+| Upstream sig | `choice : List a -> Task Error (Maybe a)` via kernel `Random_choiceMaybe` |
+| Impact | Wrong type: not polymorphic over element type; returns bare `String` not `Maybe a`. |
+| Fix | Replace kernel name with `Random_choiceMaybe`, update sig and exposing list. |
+| Kernel parity | `Random_choiceMaybe` parity=ok |
+
+---
+
+## 2. Missing functions in existing files
+
+All kernels for the missing functions have parity=ok in Rust unless noted.
+
+### 2.1 `Sky.Core.Time` — 7 missing entries
+
+| Missing function | Kernel | Notes |
+|---|---|---|
+| `format : String -> Int -> String` | `Time_format` | parity=ok |
+| `formatHTTP : Int -> String` | `Time_formatHTTP` | parity=ok |
+| `formatISO8601 : Int -> String` | `Time_formatISO8601` | parity=ok |
+| `formatRFC3339 : Int -> String` | `Time_formatRFC3339` | parity=ok |
+| `addMillis : Int -> Int -> Int` | `Time_addMillis` | parity=ok |
+| `diffMillis : Int -> Int -> Int` | `Time_diffMillis` | parity=ok |
+| `every : Int -> msg -> Sub msg` | `Time_every` | parity=ok |
+
+### 2.2 `Sky.Core.Random` — 8 missing entries
+
+| Missing function | Kernel | Notes |
+|---|---|---|
+| `range : Int -> Int -> Task Error Int` | alias for `int` | pure Sky alias |
+| `shuffle : List a -> Task Error (List a)` | `Random_shuffle` | parity=ok |
+| `weighted : List (Float, a) -> Task Error (Maybe a)` | `Random_weighted` | parity=ok |
+| `type Seed = Seed Int` | n/a | pure Sky ADT |
+| `seed : Int -> Seed` | n/a | pure Sky ctor |
+| `seededInt : Seed -> Int -> Int -> (Int, Seed)` | `Random_seededInt` | parity=ok |
+| `seededFloat : Seed -> (Float, Seed)` | `Random_seededFloat` | parity=ok |
+| `seededChoice : Seed -> List a -> (Maybe a, Seed)` | `Random_seededChoice` | parity=ok |
+
+### 2.3 `Sky.Core.System` — 1 missing entry
+
+| Missing function | Kernel | Notes |
+|---|---|---|
+| `getcwd : () -> Task Error String` | `System_getcwd` | parity=ok; alias for `cwd` |
+
+---
+
+## 3. Local-only extras (local has, upstream lacks)
+
+### 3.1 `Sky.Core.File.delete`
+
+Local exposes `delete : String -> Task Error ()` via `File_delete`. Upstream uses
+only `remove` for deletion and does not expose `delete`. `File_delete` kernel
+exists and has parity=ok. Decision: **remove from local** to match upstream surface.
+
+---
+
+## 4. Cosmetic / import-style differences
+
+### 4.1 `Std.Ui.Grid`
+
+Local: `import Std.Ui as Ui exposing (Attribute)` then calls `Ui.gridTracksRaw`.
+Upstream: `import Std.Ui exposing (Attribute, gridTracksRaw)` then calls `gridTracksRaw`.
+Semantically identical — same `UiGridTracksRaw` kernel. No action required.
+
+---
+
+## 5. Ports — placement decisions and kernel-gap notes
+
+14 modules were requested for porting. `Std.Markdown` does not exist in upstream.
+
+### Registration decisions
+
+| Module | Placement | Reason |
+|---|---|---|
+| `Sky.Core.Path` | `MODULES` + qualifier entry | Pure Ffi.kernel, no ADTs |
+| `Sky.Core.Regex` | `MODULES` + qualifier entry | Pure Ffi.kernel, no ADTs |
+| `Sky.Core.Pure` | `COMPILED_STD_MODULES` | Pure Sky wrappers; imports Task/Time/System/Io |
+| `Sky.Core.WebSocket` | `COMPILED_STD_MODULES` | Has 3 own ADTs plus mixed Ffi.kernel and pure Sky logic |
+| `Std.Cache` | `COMPILED_STD_MODULES` | Has `type Cache k v = Cache Int` ADT; not in qualifier table |
+| `Std.Compression` | `COMPILED_STD_MODULES` | Not in qualifier table |
+| `Std.Config` | `COMPILED_STD_MODULES` | Has `type alias Decoder`; not in qualifier table |
+| `Std.Csv` | `COMPILED_STD_MODULES` | Has `type alias Csv` plus pure Sky builders |
+| `Std.Email` | `COMPILED_STD_MODULES` | Has `type EmailProvider` plus `type alias EmailMessage` |
+| `Std.Live.Console` | `COMPILED_STD_MODULES` | Pure Sky; no Ffi.kernel |
+| `Std.PubSub` | `COMPILED_STD_MODULES` | Not in qualifier table |
+| `Std.Trace` | `COMPILED_STD_MODULES` | Not in qualifier table |
+| `Std.Ui.Events` | `COMPILED_STD_MODULES` | Pure Sky re-exports |
+
+### Kernel gaps for ports
+
+| Module | Gap | Detail |
+|---|---|---|
+| `Sky.Core.WebSocket` | `Sub_subscribeWebSocket` rust=missing | parity=ok in Go; Rust runtime missing. `onOpen`/`onMessage`/`onClose`/`onError` will not function at runtime on the Rust backend. Module ported for parse/canon completeness; gap documented. |
+
+### Blocked
+
+| Module | Reason |
+|---|---|
+| `Std.Markdown` | Source file does not exist in `../sky/sky-stdlib/`. Cannot port. |
+
+---
+
+## 6. Full divergence inventory (all files audited)
+
+| File | Status |
+|---|---|
+| `Sky/Core/Basics.sky` | ok |
+| `Sky/Core/Maybe.sky` | ok |
+| `Sky/Core/Result.sky` | ok |
+| `Sky/Core/List.sky` | ok |
+| `Sky/Core/String.sky` | ok |
+| `Sky/Core/Char.sky` | ok |
+| `Sky/Core/Dict.sky` | ok |
+| `Sky/Core/Set.sky` | ok |
+| `Sky/Core/Bytes.sky` | ok |
+| `Sky/Core/Crypto.sky` | ok |
+| `Sky/Core/Task.sky` | ok |
+| `Sky/Core/Io.sky` | ok |
+| `Sky/Core/Time.sky` | DIVERGES — 7 missing functions (section 2.1) |
+| `Sky/Core/System.sky` | DIVERGES — 1 missing function (section 2.3) |
+| `Sky/Core/Random.sky` | DIVERGES — 1 wrong sig + 8 missing (sections 1.1 and 2.2) |
+| `Sky/Core/File.sky` | EXTRA — `delete` not in upstream (section 3.1) |
+| `Sky/Core/Http.sky` | ok |
+| `Sky/Core/Math.sky` | ok |
+| `Sky/Core/ToString.sky` | ok (COMPILED_STD_MODULES) |
+| `Sky/Test.sky` | ok (COMPILED_STD_MODULES) |
+| `Std/Css.sky` | ok (COMPILED_STD_MODULES) |
+| `Std/Palette.sky` | ok (COMPILED_STD_MODULES) |
+| `Std/Live/Head.sky` | ok (COMPILED_STD_MODULES) |
+| `Std/Money.sky` | ok (COMPILED_STD_MODULES) |
+| `Std/Ui/Responsive.sky` | ok (COMPILED_STD_MODULES) |
+| `Std/Ui/Chart.sky` | ok (COMPILED_STD_MODULES) |
+| `Std/Ui/Grid.sky` | COSMETIC — import style differs (section 4.1) |
+| `Std/Ui/Transition.sky` | ok (COMPILED_STD_MODULES) |
+| `Std/Ui/Transform.sky` | ok (COMPILED_STD_MODULES) |
+| `Std/Ui/Animation.sky` | ok (COMPILED_STD_MODULES) |
