@@ -2598,12 +2598,19 @@ const fn is_db_row_accessor(k: KernelFn) -> bool {
 }
 
 /// Does `expr` contain a `Db.get*` row-accessor kernel application whose ROW
-/// argument (`args[1]`) is a direct `Var`/`CloneVar` reference to `param`?
+/// argument (`args[1]`) is a `Var`/`CloneVar` reference to `param` — either
+/// directly, or through a chain of value-preserving `let` aliases of `param`?
 ///
 /// Shadow discipline mirrors [`count_var_uses`]: a scope that rebinds `param`
 /// (`Let`/`Destructure` binder, a `Match`/`TailLoop` arm binding it, a `Lambda`
 /// param) hides the outer `param`, so accessor calls inside that scope are on a
 /// different binding and are NOT attributed to the wildcard param.
+///
+/// Alias-transparency (the `Let` arm) closes a false-negative: an indirected
+/// row arg — `let r = payload in Db.getString _ r`, where `r` is a pure alias
+/// of the wildcard param — still obliges the `SkyRow` bound, exactly as a direct
+/// `Db.getString _ payload` does. See [`flows_into_sync_kernel_call`] for the
+/// same alias-chain-resolution pattern (#168).
 fn body_calls_db_get_on_param(param: Symbol, expr: &Expr) -> bool {
     // A direct `Var`/`CloneVar` read of `param` in row-argument position.
     let is_param_row = |row: &Expr| matches!(row, Expr::Var(s) | Expr::CloneVar(s) if *s == param);
@@ -2625,8 +2632,25 @@ fn body_calls_db_get_on_param(param: Symbol, expr: &Expr) -> bool {
             }
         }
         Expr::Let { name, value, body } => {
+            // Alias-transparency (mirrors [`flows_into_sync_kernel_call`]'s `Let`
+            // arm): a value-preserving re-binding `let name = param` (or
+            // `let name = <CloneVar param>`) makes `name` an ALIAS of the
+            // wildcard row for the rest of `body`. A `Db.get*` whose row arg is
+            // `name` is then equally a `Db.get*` on `param`, so we ALSO walk
+            // `body` tracking `name`. Only a bare `Var`/`CloneVar` RHS aliases;
+            // `let name = transform param` binds a NEW value (a call result),
+            // not the row, so it must NOT be tracked — that would over-bound.
+            // Each alias hop re-walks `body`, a strict subtree, so the walk is
+            // structurally decreasing and terminates; an arbitrary-length chain
+            // (`let r = payload; let r2 = r in Db.getString _ r2`) resolves by
+            // induction, since the `name`-tracked walk itself sees `let r2 = r`
+            // as an alias of `r` and recurses again.
+            let is_alias_of_param = *name != param
+                && matches!(value.as_ref(), Expr::Var(v) | Expr::CloneVar(v) if *v == param);
             body_calls_db_get_on_param(param, value)
-                || (*name != param && body_calls_db_get_on_param(param, body))
+                || (*name != param
+                    && (body_calls_db_get_on_param(param, body)
+                        || (is_alias_of_param && body_calls_db_get_on_param(*name, body))))
         }
         Expr::Destructure {
             binder,
