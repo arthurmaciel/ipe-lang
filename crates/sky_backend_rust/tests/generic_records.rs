@@ -35,7 +35,9 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::{Interner, Symbol};
-use sky_ir::{BoundSet, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program};
+use sky_ir::{
+    BoundSet, CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program,
+};
 
 /// A single-module program.
 fn program(name: Symbol, funcs: Vec<Func>, records: Vec<IrType>, entry: Option<FuncId>) -> Program {
@@ -132,9 +134,13 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
                     args: vec![Expr::Call {
                         callee: Callee::Func(FuncId::from_raw(0)),
                         args: vec![Expr::Int(42)],
+                        pin: CallPin::None,
                     }],
+                    pin: CallPin::None,
                 }],
+                pin: CallPin::None,
             }],
+            pin: CallPin::None,
         },
     };
 
@@ -292,7 +298,9 @@ fn two_type_parameter_record() -> DResult<()> {
         "two-parameter SkyStringify impl missing or wrong:\n{out}"
     );
     assert!(
-        out.contains("pub fn main_pair<T1: Clone, T2: Clone>(x: T1, y: T2) -> RecFirstSecond<T1, T2> {"),
+        out.contains(
+            "pub fn main_pair<T1: Clone, T2: Clone>(x: T1, y: T2) -> RecFirstSecond<T1, T2> {"
+        ),
         "two-parameter signature not rendered:\n{out}"
     );
     Ok(())

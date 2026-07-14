@@ -6,7 +6,9 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::{Interner, Symbol};
-use sky_ir::{BinOp, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program};
+use sky_ir::{
+    BinOp, CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program,
+};
 
 const COUNT_ID: FuncId = FuncId::from_raw(0);
 const MAIN_ID: FuncId = FuncId::from_raw(1);
@@ -66,6 +68,7 @@ fn emit_count_main_rs(tco: bool) -> DResult<String> {
             else_: Box::new(Expr::Call {
                 callee: Callee::Func(COUNT_ID),
                 args: vec![next_n, next_acc],
+                pin: CallPin::None,
             }),
         }
     };
@@ -95,8 +98,11 @@ fn emit_count_main_rs(tco: bool) -> DResult<String> {
                 args: vec![Expr::Call {
                     callee: Callee::Func(COUNT_ID),
                     args: vec![Expr::Int(5), Expr::Int(0)],
+                    pin: CallPin::None,
                 }],
+                pin: CallPin::None,
             }],
+            pin: CallPin::None,
         },
     };
 
