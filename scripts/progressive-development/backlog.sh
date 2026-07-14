@@ -129,11 +129,14 @@ cmd_claim() {
     now="$(date -Is)"
     _claim_locked() {
         local tmp; tmp="$(mktemp)"
-        jq -c --arg ids "$ids" --arg run_id "$run_id" --arg now "$now" '
-            if has("id") and ((" " + $ids + " ") | contains(" " + .id + " ")) and .status == "pending"
-            then .status = "claimed" | .claimed_by = $run_id | .claimed_at = $now
-            else . end' "$JSONL" > "$tmp"
-        mv "$tmp" "$JSONL"
+        # Bind .id BEFORE the pipe — inside `(str) | contains(...)` the `.` is the
+        # string, so a bare `.id` there indexes a string and errors on every row.
+        if jq -c --arg ids "$ids" --arg run_id "$run_id" --arg now "$now" '
+            (.id? // "") as $rid
+            | if ($rid != "") and ((" " + $ids + " ") | contains(" " + $rid + " ")) and .status == "pending"
+              then .status = "claimed" | .claimed_by = $run_id | .claimed_at = $now
+              else . end' "$JSONL" > "$tmp" && [ -s "$tmp" ]
+        then mv "$tmp" "$JSONL"; else rm -f "$tmp"; echo "backlog claim: jq failed — file left UNCHANGED" >&2; exit 1; fi
     }
     with_lock bash -c "$(declare -f _claim_locked); JSONL='$JSONL' ids='$ids' run_id='$run_id' now='$now' _claim_locked"
 }
@@ -143,13 +146,47 @@ cmd_unclaim() {
     local ids="$*"
     _unclaim_locked() {
         local tmp; tmp="$(mktemp)"
-        jq -c --arg ids "$ids" '
-            if has("id") and ((" " + $ids + " ") | contains(" " + .id + " ")) and .status == "claimed"
-            then .status = "pending" | del(.claimed_by) | del(.claimed_at)
-            else . end' "$JSONL" > "$tmp"
-        mv "$tmp" "$JSONL"
+        if jq -c --arg ids "$ids" '
+            (.id? // "") as $rid
+            | if ($rid != "") and ((" " + $ids + " ") | contains(" " + $rid + " ")) and .status == "claimed"
+              then .status = "pending" | del(.claimed_by) | del(.claimed_at)
+              else . end' "$JSONL" > "$tmp" && [ -s "$tmp" ]
+        then mv "$tmp" "$JSONL"; else rm -f "$tmp"; echo "backlog unclaim: jq failed — file left UNCHANGED" >&2; exit 1; fi
     }
     with_lock bash -c "$(declare -f _unclaim_locked); JSONL='$JSONL' ids='$ids' _unclaim_locked"
+}
+
+# ── defer: mark a pending item as correct-but-not-reachable-today ─────────────
+# A deferred item stays filed (no-deferral principle: nothing is dropped) but is
+# skipped by the autonomous work source (pending()) so Opus time is not spent on
+# a latent bug no current example reaches. Undefer restores it. Orthogonal to
+# `blocked_by` (inter-item deps) and to `status` (a deferred item is still
+# pending work, just parked).
+cmd_defer() {
+    [ $# -ge 1 ] || die "defer: usage: defer <id> [reason]"
+    local id="$1"; shift || true; local reason="$*"
+    _defer_locked() {
+        local tmp; tmp="$(mktemp)"
+        if jq -c --arg id "$id" --arg reason "$reason" '
+            if has("id") and .id == $id
+            then .deferred = true | (if $reason != "" then .defer_reason = $reason else . end)
+            else . end' "$JSONL" > "$tmp" && [ -s "$tmp" ]
+        then mv "$tmp" "$JSONL"; else rm -f "$tmp"; echo "backlog defer: jq failed — file left UNCHANGED" >&2; exit 1; fi
+    }
+    with_lock bash -c "$(declare -f _defer_locked); JSONL='$JSONL' id='$id' reason='$reason' _defer_locked"
+    echo "deferred #$id.${reason:+ ($reason)}" >&2
+}
+cmd_undefer() {
+    [ $# -ge 1 ] || die "undefer: usage: undefer <id>"
+    local id="$1"
+    _undefer_locked() {
+        local tmp; tmp="$(mktemp)"
+        if jq -c --arg id "$id" \
+            'if has("id") and .id == $id then del(.deferred) | del(.defer_reason) else . end' "$JSONL" > "$tmp" && [ -s "$tmp" ]
+        then mv "$tmp" "$JSONL"; else rm -f "$tmp"; echo "backlog undefer: jq failed — file left UNCHANGED" >&2; exit 1; fi
+    }
+    with_lock bash -c "$(declare -f _undefer_locked); JSONL='$JSONL' id='$id' _undefer_locked"
+    echo "un-deferred #$id." >&2
 }
 
 cmd_close() {
@@ -166,9 +203,9 @@ cmd_close() {
 
     _close_locked() {
         local tmp; tmp="$(mktemp)"
-        jq -c --arg id "$id" --arg done_at "$done_at" \
-            'if has("id") and .id == $id then .status = "done" | .done_at = $done_at else . end' "$JSONL" > "$tmp"
-        mv "$tmp" "$JSONL"
+        if jq -c --arg id "$id" --arg done_at "$done_at" \
+            'if has("id") and .id == $id then .status = "done" | .done_at = $done_at else . end' "$JSONL" > "$tmp" && [ -s "$tmp" ]
+        then mv "$tmp" "$JSONL"; else rm -f "$tmp"; echo "backlog close: jq failed — file left UNCHANGED" >&2; exit 1; fi
     }
     with_lock bash -c "$(declare -f _close_locked); JSONL='$JSONL' id='$id' done_at='$done_at' _close_locked"
 
@@ -213,7 +250,7 @@ _view_ready() {   # pending tasks with no OPEN blockers — actionable right now
     jq -rs '
         (map(select(has("id")))) as $rows
         | ($rows | map({key:.id, value:.status}) | from_entries) as $st
-        | $rows[] | select(.status == "pending")
+        | $rows[] | select(.status == "pending") | select(.deferred != true)
         | select( ((.blocked_by // []) | map(select($st[.] != "done")) | length) == 0 )
         | .id as $rid
         | "#\(.id)  [\(.priority)]  \(.task | sub("^#" + $rid + " "; "") | .[0:64])"
@@ -297,6 +334,8 @@ case "$cmd" in
     add)     cmd_add "$@" ;;
     claim)   cmd_claim "$@" ;;
     unclaim) cmd_unclaim "$@" ;;
+    defer)   cmd_defer "$@" ;;
+    undefer) cmd_undefer "$@" ;;
     close)   cmd_close "$@" ;;
-    *) die "unknown command '$cmd' — list|show|view|add|claim|unclaim|close" ;;
+    *) die "unknown command '$cmd' — list|show|view|add|claim|unclaim|defer|undefer|close" ;;
 esac

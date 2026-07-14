@@ -60,6 +60,9 @@ DESIGN_MODEL="${PROGDEV_DESIGN_MODEL:-claude-opus-4-8}"     # Fable NO LONGER AU
 GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
 QUEUE="docs/architecture/progressive-development-queue.tsv"   # ATTEMPT LEDGER only (mark/attempts_of) — NOT the work source
 BACKLOG="$HERE/backlog.jsonl"                                 # THE work source: pending items (SSOT)
+BACKLOG_SH="$HERE/backlog.sh"                                 # claim/unclaim/close/defer (flock-serialized JSONL edits)
+CLAIM_TTL="${PROGDEV_CLAIM_TTL:-14400}"                       # 4h lease: a claim older than this is stale → auto-reclaimed
+CUR_CLAIM=""                                                  # id of the item this run is mid-dispatch on (released by EXIT trap)
 # Every pending backlog item runs the SAME pipeline (design→impl→review→gate) —
 # there is NO mechanical-vs-guardian tier. This heuristic only tailors the
 # design/review FOCUS + preserves the security HARD-RULE scrutiny.
@@ -281,7 +284,7 @@ if [ "$WATCH" != 0 ] && [ -t 1 ] && [ -x "$HERE/watch.sh" ]; then
     "$HERE/watch.sh" & watch_pid=$!
     log "live monitor: watch.sh pid $watch_pid (one terminal; --no-watch / PROGDEV_WATCH=0 to disable)"
 fi
-trap 'rm -f "$LOCK"; [ -n "$watch_pid" ] && { kill "$watch_pid" 2>/dev/null; pkill -P "$watch_pid" 2>/dev/null; }; log "exit"' EXIT
+trap 'rm -f "$LOCK"; [ -n "$CUR_CLAIM" ] && "$BACKLOG_SH" unclaim "$CUR_CLAIM" >/dev/null 2>&1; [ -n "$watch_pid" ] && { kill "$watch_pid" 2>/dev/null; pkill -P "$watch_pid" 2>/dev/null; }; log "exit"' EXIT
 
 BASE="$(git rev-parse --abbrev-ref HEAD)"
 START_SHA="$(git rev-parse HEAD)"
@@ -297,7 +300,7 @@ pending() { # THE work source: every actionable backlog.jsonl item → "<class>\
     # actionable = status pending + blockers resolved + not ESCALATED + < GUARDIAN_ATTEMPTS tries.
     # ONE uniform stream (no mechanical/guardian tier); class only tailors focus.
     command -v jq >/dev/null 2>&1 || return 0
-    jq -r 'select((.id//"")!="" and .status=="pending" and ((.blocked_by//[])|length==0))
+    jq -r 'select((.id//"")!="" and .status=="pending" and (.deferred != true) and ((.blocked_by//[])|length==0))
            | "#\(.id) " + ((.task//"") | gsub("[\n\t]";" "))' "$BACKLOG" 2>/dev/null \
       | while IFS= read -r d; do
           [ -z "$d" ] && continue
@@ -307,6 +310,29 @@ pending() { # THE work source: every actionable backlog.jsonl item → "<class>\
         done
 }
 mark() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$QUEUE"; }   # status kind desc
+
+# ── backlog claim lease (cross-process race guard) ───────────────────────────
+# The backlog is shared by THIS autopilot and any hand-dispatched agent. Claiming
+# flips an item's status pending→claimed so the other dispatcher's pending() skips
+# it. bk() is best-effort (a claim failure must never crash the loop). id_of()
+# pulls the leading "#NNN" that pending() prepends.
+bk() { PROGDEV_RUN_ID="autopilot-$$" "$BACKLOG_SH" "$@" >/dev/null 2>&1 || true; }
+id_of() { local t="${1%% *}"; printf '%s' "${t#\#}"; }   # "#170 #170 foo" → "170"
+# Reclaim leases whose owner died without releasing (SIGKILL skips the EXIT trap).
+# A claimed item is invisible to pending(); without this a crashed claimer would
+# lock it forever. Mirrors the .autopilot.lock self-heal: liveness by TTL.
+reclaim_stale_claims() {
+    command -v jq >/dev/null 2>&1 || return 0
+    local now; now="$(date +%s)"
+    local id at ce
+    while IFS=$'\t' read -r id at; do
+        [ -n "$id" ] && [ -n "$at" ] || continue
+        ce="$(date -d "$at" +%s 2>/dev/null)" || continue
+        if [ "$(( now - ce ))" -ge "$CLAIM_TTL" ]; then
+            bk unclaim "$id" && log "reclaimed stale claim on #$id (lease > ${CLAIM_TTL}s, owner gone)"
+        fi
+    done < <(jq -r 'select((.status//"")=="claimed" and (.claimed_at//"")!="") | "\(.id)\t\(.claimed_at)"' "$BACKLOG" 2>/dev/null)
+}
 attempts_of() { d="$1" awk -F'\t' 'BEGIN{d=ENVIRON["d"]} $3==d && ($1=="ATTEMPTED"||$1=="BLOCKED"){n++} END{print n+0}' "$QUEUE"; }
 slug_of()     { printf '%s' "$1" | tr -cs 'A-Za-z0-9' '-' | sed 's/^-//;s/-*$//' | cut -c1-64; }
 # Save what a guardian attempt tried (diff + why it didn't land) so the NEXT
@@ -334,6 +360,9 @@ guardian_failed() { # <class> <desc> <branch> <reason>
     save_resume "$1" "$2" "$3" "$4"
     local n=$(( $(attempts_of "$2") + 1 ))
     mark ATTEMPTED "$1" "$2"
+    # release the backlog lease so the item is claimable again next pass (the
+    # $QUEUE ledger still suppresses it if this was the ESCALATED attempt).
+    local _gid; _gid="$(id_of "$2")"; bk unclaim "$_gid"; [ "$CUR_CLAIM" = "$_gid" ] && CUR_CLAIM=""
     if [ "$n" -ge "$GUARDIAN_ATTEMPTS" ]; then
         mark ESCALATED "$1" "$2"; log "guardian [$1] exhausted $GUARDIAN_ATTEMPTS attempts — ESCALATED to human (resume at $RESUME_DIR/$(slug_of "$2").md)"
     else
@@ -371,6 +400,7 @@ while :; do
     ensure_disk || { log "disk still critical after reclaim ($(disk_free_gb)G) — graceful stop before any build (no mid-build ENOSPC)"; break; }
     [ "$cycle" -gt "$MAX_CYCLES" ] && { log "runaway backstop ($MAX_CYCLES cycles) — stopping; raise PROGDEV_MAX_CYCLES if legit"; break; }
 
+    reclaim_stale_claims   # return leases whose owner died (before convergence reads pending)
     # convergence: did the PREVIOUS cycle make progress? (HEAD advanced, or work remains)
     cur_head="$(git rev-parse HEAD)"
     act="$(pending | wc -l | tr -d ' ')"
@@ -412,6 +442,7 @@ For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <s
         class="${g%%$'\t'*}"; gdesc="${g#*$'\t'}"
         [ -z "$class" ] && class="guardian-typesystem"
         done_guard=$((done_guard+1))
+        CUR_CLAIM="$(id_of "$gdesc")"; bk claim "$CUR_CLAIM"   # lease it so a parallel hand-dispatched agent skips it
         set_task "$class" "$gdesc" "$(( $(attempts_of "$gdesc") + 1 ))/$GUARDIAN_ATTEMPTS"
         log "guardian [$class] · $gdesc"
         gbr="progressive-development/guardian-c$cycle-$done_guard"
@@ -506,6 +537,7 @@ For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <s
                 && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly clippy --workspace --no-deps --jobs 4 -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
            && ( "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 ); then
             log "guardian [$class] · LANDED (gate-green + fuzz-clean)"; mark LANDED "$class" "$gdesc"
+            bk close "$CUR_CLAIM" --done-at "$(date +%F)"; CUR_CLAIM=""   # fix landed → backlog done (keeps SSOT truthful; no manual sync)
         else
             log "guardian [$class] · gate RED — reverting to $gpre"
             git merge --abort 2>/dev/null; git reset --hard "$gpre" >/dev/null 2>&1
