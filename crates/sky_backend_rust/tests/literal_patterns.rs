@@ -40,8 +40,8 @@ use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{
-    Arm, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Pat, Program,
-    TypeDef, Variant,
+    Arm, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Pat,
+    Program, TypeDef, Variant,
 };
 
 fn emit(interner: &Interner, prog: &Program) -> DResult<String> {
@@ -144,8 +144,11 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
                         variant: a,
                         args: vec![Expr::Int(0)],
                     }],
+                    pin: CallPin::None,
                 }],
+                pin: CallPin::None,
             }],
+            pin: CallPin::None,
         },
     };
 
@@ -299,8 +302,11 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
                         variant: mk_wrap,
                         args: vec![Expr::Int(7)],
                     }],
+                    pin: CallPin::None,
                 }],
+                pin: CallPin::None,
             }],
+            pin: CallPin::None,
         },
     };
 
@@ -319,7 +325,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
                 uses_tui: false,
                 uses_webview: false,
                 uses_css: false,
-            uses_auth: false,
+                uses_auth: false,
             }],
         },
         x,

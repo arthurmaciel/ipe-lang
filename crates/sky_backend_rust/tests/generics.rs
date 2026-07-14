@@ -35,7 +35,8 @@ use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::Interner;
 use sky_ir::{
-    BinOp, BoundSet, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program,
+    BinOp, BoundSet, CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module,
+    Program,
 };
 
 /// Build the canonical generic program:
@@ -80,6 +81,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
     let call_int = Expr::Call {
         callee: Callee::Func(identity_id),
         args: vec![Expr::Int(40)],
+        pin: CallPin::None,
     };
     // identity (1 == 1) — T1 = Bool, the second concrete instantiation.
     let call_bool = Expr::Call {
@@ -89,6 +91,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
             lhs: Box::new(Expr::Int(1)),
             rhs: Box::new(Expr::Int(1)),
         }],
+        pin: CallPin::None,
     };
     // if flag then n + 2 else n
     let chosen = Expr::If {
@@ -106,7 +109,9 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
         args: vec![Expr::Call {
             callee: Callee::Kernel(KernelFn::StringFromInt),
             args: vec![chosen],
+            pin: CallPin::None,
         }],
+        pin: CallPin::None,
     };
     // let n = identity 40 in let flag = identity (1 == 1) in <print>
     let main_body = Expr::Let {
@@ -251,17 +256,21 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
     let max_call = Expr::Call {
         callee: Callee::Func(max_id),
         args: vec![Expr::Int(20), Expr::Int(21)],
+        pin: CallPin::None,
     };
     let double_call = Expr::Call {
         callee: Callee::Func(double_id),
         args: vec![max_call],
+        pin: CallPin::None,
     };
     let main_body = Expr::Call {
         callee: Callee::Kernel(KernelFn::LogPrintln),
         args: vec![Expr::Call {
             callee: Callee::Kernel(KernelFn::StringFromInt),
             args: vec![double_call],
+            pin: CallPin::None,
         }],
+        pin: CallPin::None,
     };
     let main_fn = Func {
         id: main_id,

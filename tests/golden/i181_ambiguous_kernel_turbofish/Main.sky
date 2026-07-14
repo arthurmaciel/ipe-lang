@@ -1,0 +1,129 @@
+module Main exposing (main)
+
+-- #181 regression: polymorphic kernels whose free result type parameter the HM
+-- solver leaves GENUINELY UNCONSTRAINED (a discarded / empty / phantom position)
+-- must emit a default turbofish so the Rust builds (no E0282/E0283) — the SEAL
+-- (skyc-0 ⟹ cargo-0). Each line below is such an ambiguous shape; the printed
+-- output proves the runtime behaviour is still correct, not just that it builds.
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.List as List
+import Sky.Core.Dict as Dict
+import Sky.Core.Set as Set
+import Sky.Core.Task as Task
+import Sky.Core.String as String
+import Sky.Core.Error as Error
+import Std.Decimal as Dec
+import Std.Log exposing (println)
+
+
+-- `List.head []` — element type free; result discarded to a Bool.
+headEmpty : Bool
+headEmpty =
+    case List.head [] of
+        Nothing ->
+            True
+
+        Just _ ->
+            False
+
+
+-- `List.tail []` — element type free (Maybe (List elem)).
+tailEmpty : Bool
+tailEmpty =
+    case List.tail [] of
+        Nothing ->
+            True
+
+        Just _ ->
+            False
+
+
+-- `List.isEmpty []` — element free, comes only from the empty-list argument.
+isEmptyEmpty : Bool
+isEmptyEmpty =
+    List.isEmpty []
+
+
+-- `List.length []` — likewise argument-driven.
+lengthEmpty : Int
+lengthEmpty =
+    List.length []
+
+
+-- `Dict.keys Dict.empty` — key AND value free.
+dictKeysEmpty : Int
+dictKeysEmpty =
+    List.length (Dict.keys Dict.empty)
+
+
+-- `Set.toList Set.empty` — element free.
+setEmptyCount : Int
+setEmptyCount =
+    List.length (Set.toList Set.empty)
+
+
+-- `Result.mapError` on a discarded `Err` — the `Ok` type is free.
+mapErrorDiscard : Bool
+mapErrorDiscard =
+    let
+        wrapped =
+            Result.mapError (\_ -> Error.unexpected "wrapped") (Err (Error.unexpected "inner"))
+    in
+    case wrapped of
+        Err _ ->
+            True
+
+        Ok _ ->
+            False
+
+
+-- `Decimal.fromString "abc"` — error channel free, discarded.
+decJunkIsErr : Bool
+decJunkIsErr =
+    case Dec.fromString "abc" of
+        Err _ ->
+            True
+
+        Ok _ ->
+            False
+
+
+-- `Task.fail` whose phantom success is discarded (run then matched).
+taskFailIsErr : Bool
+taskFailIsErr =
+    case Task.run (Task.fail (Error.unexpected "boom")) of
+        Err _ ->
+            True
+
+        Ok _ ->
+            False
+
+
+main =
+    let
+        flags =
+            [ headEmpty
+            , tailEmpty
+            , isEmptyEmpty
+            , mapErrorDiscard
+            , decJunkIsErr
+            , taskFailIsErr
+            ]
+
+        allTrue =
+            List.all (\b -> b) flags
+
+        verdict =
+            if allTrue then
+                "ok"
+
+            else
+                "FAIL"
+
+        counts =
+            String.fromInt lengthEmpty
+                ++ "," ++ String.fromInt dictKeysEmpty
+                ++ "," ++ String.fromInt setEmptyCount
+    in
+    println (verdict ++ " " ++ counts)
