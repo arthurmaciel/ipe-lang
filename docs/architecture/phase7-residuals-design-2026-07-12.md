@@ -1485,3 +1485,17 @@ replace an unverified claim with a measured fact): if the second SIGTERM
 truly has zero effect, the comment states plainly "a stuck `ipe watch`
 needs SIGKILL — do not rely on a second SIGTERM." Commit — **Problem 3
 fully closed.**
+
+---
+
+## Research pointer (added 2026-07-13, per user)
+
+**Problem 3 (SIGTERM process-group propagation) — mine the reference first.**
+Before implementing, study how the reference Sky backend+runtime (`../sky`)
+handles **killing the console sub-process** — it already solved child-process
+teardown (spawn the `/_sky/console` mini-app, propagate termination, reap it
+without orphaning). Grep `../sky/runtime-rust` + `../sky/src` for the console
+spawn/kill path (`SpawnSkyConsole` / `MountSubApp` analog, process-group /
+`setsid` / SIGTERM-forward logic). Mirror its proven teardown; combine with
+this doc's §3.4 revision (forwarder gated to `run()`-only, never `spawn()`;
+second SIGTERM → SIGKILL).
