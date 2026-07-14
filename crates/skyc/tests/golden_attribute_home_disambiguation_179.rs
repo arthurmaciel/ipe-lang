@@ -1,0 +1,122 @@
+//! E2E regression golden for #179 / #185 — `Attribute<msg>` type-identity
+//! disambiguation between `sky_runtime::html::Attribute` and
+//! `sky_runtime::ui::element::Attribute`.
+//!
+//! ## The bug
+//!
+//! `Attribute` exists in BOTH `Std.Ui` (→ `ui::element::Attribute`) and
+//! `Std.Html.Attributes` (→ `html::Attribute`).  The lowerer disambiguates by
+//! `is_html = home contains "Html"`, but a bare/aliased `Attribute` from a
+//! stdlib module previously reached the empty-home sentinel (stdlib imports are
+//! skipped by both the dep-injection loop and the `qualifier_paths`
+//! construction), so `is_html` always failed and BOTH the bare-exposed form
+//! (`Std.Live.Head.pairToAttr`, #179) and the qualified form
+//! (`Std.Ui.Chart.svgRootAttrs`, #185) mis-lowered `Attribute msg` to
+//! `ui::element::Attribute` while their `Attr.attribute` bodies produced
+//! `html::Attribute` — an exit-0-then-cargo-fail E0308 SEAL violation.
+//!
+//! ## What is tested
+//!
+//! * `skyc build` compiles `tests/golden/attribute_home_disambiguation_179/
+//!   Main.sky` (canon → types → lower → Rust backend).
+//! * The emitted Rust project `cargo build`s (the type-identity fix means the
+//!   `html::Attribute`-producing bodies now agree with their return-type
+//!   annotations) and the binary runs and exits 0.
+//! * The rendered `<svg>` carries the attributes from BOTH a polymorphic-msg
+//!   `pairToAttr` (bare `Attribute` exposed from `Std.Html.Attributes`) and a
+//!   `svgRootAttrs`-style list, proving the `html::Attribute` list flowed into
+//!   the `Html.node` slot without a cast.
+//!
+//! `oracle_divergence = true` — the assertion is skyc's own correct render, not
+//! a Go oracle diff; the point is the Attribute NEWTYPE identity, which the Go
+//! backend does not model.
+//!
+//! Run:
+//!
+//! ```text
+//! SKY_E2E=1 cargo test golden_attribute_home_disambiguation_179
+//! ```
+
+use std::path::{Path, PathBuf};
+
+mod support;
+
+fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+/// Compile / build / run the golden and return its run outcome. Gated on
+/// `SKY_E2E=1`.
+fn build_run_attribute_home_179() -> support::RunOutcome {
+    let root = repo_root();
+    let dir = root
+        .join("tests")
+        .join("golden")
+        .join("attribute_home_disambiguation_179");
+    let entry = dir.join("Main.sky");
+    let out = std::env::temp_dir().join("skyc_attribute_home_179_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve for E2E");
+    let Ok(runtime) = runtime else {
+        return support::RunOutcome {
+            stdout: String::new(),
+            exit_code: None,
+        };
+    };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "skyc build must succeed for attribute_home_disambiguation_179: {:?}",
+        built.err()
+    );
+
+    support::build_and_run_emitted("attribute_home_disambiguation_179", &out)
+}
+
+#[test]
+fn attribute_home_disambiguation_179_builds_and_renders() {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+
+    let outcome = build_run_attribute_home_179();
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "binary must exit 0 (the html::Attribute return types must agree with \
+         their html::Attribute-producing bodies)\n--- stdout ---\n{}",
+        outcome.stdout
+    );
+
+    let rendered = outcome.stdout;
+
+    // The `<svg>` root — proves `svgRootAttrs` (a `List (Attribute msg)`) flowed
+    // into `Html.node`'s `html::Attribute` slot.
+    assert!(
+        rendered.contains("<svg"),
+        "must render an <svg> root\n--- stdout ---\n{rendered}"
+    );
+    // Attributes from the polymorphic-msg `svgRootAttrs` list.
+    assert!(
+        rendered.contains("viewBox=\"0 0 100 40\""),
+        "svgRootAttrs viewBox attribute must render\n--- stdout ---\n{rendered}"
+    );
+    assert!(
+        rendered.contains("role=\"img\""),
+        "svgRootAttrs role attribute must render\n--- stdout ---\n{rendered}"
+    );
+    // Attributes produced by `pairToAttr` (bare exposed `Attribute` from
+    // Std.Html.Attributes, mapped over a list) — the exact #179 shape.
+    assert!(
+        rendered.contains("width=\"100\"") && rendered.contains("height=\"40\""),
+        "pairToAttr-produced width/height attributes must render\n--- stdout ---\n{rendered}"
+    );
+    // The nested <rect> child confirms the whole svg subtree serialised.
+    assert!(
+        rendered.contains("<rect"),
+        "nested <rect> must render\n--- stdout ---\n{rendered}"
+    );
+}
