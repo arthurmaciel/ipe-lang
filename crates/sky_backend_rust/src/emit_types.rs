@@ -263,13 +263,25 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         }
         IrType::Fun(params, ret) => {
             // A first-class function value is a boxed trait object
-            // `Box<dyn Fn(T0, ...) -> R + Send + 'static>`. The `Send + 'static`
-            // bounds are required so closures can be passed to Task combinators
-            // (`task_map`, `task_and_then`, etc.) whose runtime signatures carry
-            // those bounds. All closures emitted by this backend are `move`
-            // closures that capture only `Send + 'static` values, so this is
-            // always sound. A nullary function type renders as
-            // `Box<dyn Fn() -> R + Send + 'static>`. The boxed-closure
+            // `Box<dyn Fn(T0, ...) -> R + Send + Sync + 'static>`. The
+            // `Send + Sync + 'static` bounds are required so closures can be
+            // passed to Task combinators (`task_map`, `task_and_then`, etc.)
+            // AND — crucially — so a callback-typed PARAMETER can be forwarded
+            // into the runtime's UI/Live event-callback slots, whose fields are
+            // `Arc<dyn Fn(_) -> _ + Send + Sync + 'static>` (see
+            // `sky_runtime::ui::element::Event`). Without `Sync` on this boxed
+            // param, an emitted user fn generic over its Msg type
+            // (`fn f<T1: Clone>(onEdit: Box<dyn Fn(String) -> T1 + Send>) …`)
+            // that arc-wraps `onEdit` (via `arc_callback_wrap`) and passes it to
+            // `input_multiline_`/`input_text_`/… fails E0277 (`… cannot be
+            // shared between threads safely`) — the seal break that
+            // `26-ui-showcase`'s `regression_gates_input_multiline_fill`
+            // surfaced. `Send + Sync` is strictly stronger than the previous
+            // `Send`, so every `Send + 'static` consumer (the Task combinators)
+            // still accepts it; all closures emitted by this backend are `move`
+            // closures capturing only `Send + Sync + 'static` values, so this is
+            // sound. A nullary function type renders as
+            // `Box<dyn Fn() -> R + Send + Sync + 'static>`. The boxed-closure
             // optimisation (a concrete, non-boxed generic closure type) is deferred.
             let mut parts = Vec::with_capacity(params.len());
             for param in params {
@@ -277,7 +289,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             }
             let ret = render_type(ctx, ret, generics)?;
             format!(
-                "Box<dyn Fn({}) -> {ret} + Send + 'static>",
+                "Box<dyn Fn({}) -> {ret} + Send + Sync + 'static>",
                 parts.join(", ")
             )
         }
