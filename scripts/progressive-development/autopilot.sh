@@ -259,7 +259,18 @@ fi
 mkdir -p "$(dirname "$LEDGER")"; [ -f "$LEDGER" ] || printf 'stamp\trun\tcycle\tcum_cost\n' > "$LEDGER"
 ensure_disk || die "disk critically low even after reclaim ($(disk_free_gb)G < ${DISK_CRIT}G) — free space and retry"
 [ -f "$STOP" ] && die "kill-switch $STOP present"
-if ! ( set -o noclobber; echo "$$" > "$LOCK" ) 2>/dev/null; then die "another autopilot holds $LOCK"; fi
+if ! ( set -o noclobber; echo "$$" > "$LOCK" ) 2>/dev/null; then
+    # Lock exists. Is its owner still alive? A prior run SIGKILLed (or the host
+    # rebooted) never fires its EXIT trap, leaving a STALE lock that would block
+    # every future run forever. Reclaim iff the recorded PID is dead.
+    lpid="$(cat "$LOCK" 2>/dev/null)"
+    if [ -n "$lpid" ] && kill -0 "$lpid" 2>/dev/null; then
+        die "another autopilot (pid $lpid) holds $LOCK"
+    fi
+    log "stale $LOCK (owner pid ${lpid:-?} is dead) — reclaiming"
+    rm -f "$LOCK"
+    ( set -o noclobber; echo "$$" > "$LOCK" ) 2>/dev/null || die "raced on $LOCK while reclaiming — another autopilot just started; retry"
+fi
 
 # One-terminal DX: auto-launch the live monitor as a child (tty only), killed on
 # exit. The heartbeat below + watch.sh's rendered agent stream interleave in this
