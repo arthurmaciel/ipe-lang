@@ -583,6 +583,46 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   and that the two fixes are structurally defense-in-depth (a gap in one
   does not silently defeat the other).
 
+### B24 — Prescriptive TEA `init` signature (Live → `LiveReq`; Tui/Webview → `()`) (#180)
+- **Reference:** `../sky/src/Sky/Type/Constrain/Expression.hs:2665-2695` leaves
+  `Live.app`'s `init` argument a **free type var** (`req`), and models the
+  request as a heterogeneous `map[string]any` accessed via `Dict.get "path"
+  req`. It does this for a Go-runtime reason (keep the untyped map compatible
+  with any inferred shape; return-only TVar defaulting collapses it to
+  `rt.SkyValue` for examples that never touch `req`).
+- **ipê is prescriptive:** the `init` field is **pinned per app shape** — 
+  `Live.app` requires `init : LiveReq -> (Model, Cmd Msg)`, and
+  `Tui.app`/`Tui.program`/`Webview.app` require `init : () -> (Model, Cmd Msg)`.
+  A mismatch (`init : {} ->` on Live, or `init : LiveReq ->` on Tui) is a clear
+  compile-time SKY-T0001 (`expected LiveReq, found {}` / `expected (), found
+  LiveReq`) at the `init` cfg field, not a raw unification failure and not a
+  deferred `cargo` break. A `Live.app` init that declares polymorphic `init : a
+  -> …` unifies `a` to `LiveReq` automatically (unchanged for the canonical
+  corpus examples 09/10/37).
+- **`LiveReq` is a typed opaque record, not a heterogeneous map.** ipê's runtime
+  carries `sky_runtime::live::LiveReq` as a concrete struct (`path`/`query`/
+  `method : String`; `params`/`headers`/`cookies : Dict String String`).
+  `req.path` is ordinary field access: `LiveReq` stays an opaque nullary `Con`
+  at the type level (so no bare record literal can masquerade as the runtime
+  struct — the same make-invalid-states-unrepresentable posture as the opaque
+  server `Request`), but its fixed field set is READABLE via the deferred
+  `FieldAccess` pass (`LiveReqFields`, mirroring `RequestFields`). A field access
+  lowers to `(req).<field>.clone()` reading the struct directly — no synthesised
+  record. Record UPDATE on a `LiveReq` is rejected (SKY-T0017), exactly like
+  `Request`.
+- **Rationale:** ambient input (env/args/cwd) is reached through `System.*` from
+  anywhere; `init`'s argument carries ONLY genuine per-invocation context with
+  no ambient accessor — `LiveReq` for Live (a session is born from one specific
+  HTTP request; there is no `System.currentRequest`), nothing for Tui/Webview.
+  Elm needs `flags` as an init arg only because a browser sandboxes JS; ipê runs
+  natively with a real `System` API, so `flags`-as-init-arg is redundant. Being
+  prescriptive is both more Elm-`Browser.application`-faithful and
+  make-invalid-states-unrepresentable — the reference's free-tvar rationale
+  (untyped `map[string]any` compat) simply does not transfer to a typed
+  `LiveReq`. **Sanctioned:** yes — stricter direction (rejects only ill-shaped
+  `init`s the reference would silently default), no soundness hole. Full design:
+  `docs/architecture/tea-shape-matrix-and-init-design-2026-07-13.md`.
+
 ---
 
 ## 3. Architectural divergences (compiler + runtime structure)
