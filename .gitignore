@@ -39,3 +39,6 @@ docs/architecture/progdev-cost-ledger.tsv
 skills-lock.json
 
 scripts/progressive-development/.backlog.lock
+scripts/progressive-development/backlog.svg
+scripts/progressive-development/backlog.png
+scripts/progressive-development/backlog.mmd
