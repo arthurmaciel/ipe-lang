@@ -7937,9 +7937,10 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
         }
     };
 
-    // #177: the generic clause consults the RENDERED body so a wildcard `any`
-    // generic that flows into a `Db.get*` accessor can gain the `SkyRow` bound.
-    let generic_clause = render_fn_generics(ctx, func, ret_is_task, &body);
+    // #177: the SkyRow bound (for a wildcard `any` param flowing into a
+    // `Db.get*` accessor) is decided STRUCTURALLY at lowering time and carried
+    // in the param's `BoundSet` — the generic clause just renders the BoundSet.
+    let generic_clause = render_fn_generics(func, ret_is_task);
 
     Ok(format!(
         "pub fn {name}{generic_clause}({}) -> {ret} {{\n    {body}\n}}\n",
@@ -7961,56 +7962,23 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
 /// over-constrain callers of pure record-constructors (e.g. `wrap : a -> {
 /// value : a }` must accept any `Clone` type, not only `Send + 'static` ones).
 ///
-/// `rendered_body` is the already-emitted function body; it is scanned for a
-/// `db_get_` call so the #177 `SkyRow` bound can be added to EXACTLY the
-/// wildcard `any` generic that flows into it (see the per-param comment below).
-fn render_fn_generics(
-    ctx: &EmitCtx,
-    func: &Func,
-    ret_is_task: bool,
-    rendered_body: &str,
-) -> String {
+/// The #177 `SkyRow` bound (for a wildcard `any` param that flows into a
+/// `Db.get*` accessor) is already recorded in the relevant param's [`BoundSet`]
+/// by the lowerer's structural IR walk (`sky_lower`'s `apply_db_row_bounds` /
+/// `body_calls_db_get_on_param`), so this function simply renders whatever
+/// bounds each param carries.
+fn render_fn_generics(func: &Func, ret_is_task: bool) -> String {
     if func.type_params.is_empty() {
         return String::new();
     }
-
-    // #177: a wildcard `any` generic that flows into a `Db.get*` field accessor
-    // needs the `SkyRow` bound so the runtime's generic `db_get_*<R: SkyRow>`
-    // call type-checks and monomorphises per call site (the row's real
-    // `Dict String String` / `LiveReq` shape). Detected by scanning the RENDERED
-    // body for a `db_get_` call — the same body-substring gate the Haskell
-    // reference (`ModuleEmitter.hs` `bodyHasDbGet`) uses. The bound is added ONLY
-    // to the `any` variable (a genuine named tvar `a`/`msg` never flows into a
-    // row accessor) and ONLY when the body actually calls a `db_get_*`, so there
-    // is no blast radius on other generics. `db_get_by_id` is NOT a row accessor
-    // (it takes a `Db` handle, not a row), but its name shares the `db_get_`
-    // prefix; a function calling only `db_get_by_id` has no wildcard `any` param
-    // flowing into it, so the `any`-var scoping keeps the bound from misfiring.
-    let body_has_db_get = rendered_body.contains("db_get_");
 
     let entries = func
         .type_params
         .iter()
         .enumerate()
-        .map(|(i, (sym, bounds))| {
+        .map(|(i, (_sym, bounds))| {
             let n = i.saturating_add(1);
-            // #177: scope the SkyRow bound to the wildcard `any` variable only —
-            // a genuine named tvar (`a`/`msg`) never flows into a `db_get_*`
-            // accessor, so bounding it would over-constrain callers. A
-            // param-position `any` is lowered to a fresh binder from the
-            // lowerer's `any_param_binders` pool (interned with the `anyp_`
-            // prefix; see `sky_lower`'s `fresh_any_param_symbol` / AUD-01 seal),
-            // so the wildcard is detected by that prefix, not the raw `"any"`
-            // spelling (which the fresh symbol no longer carries).
-            let is_wildcard_any = ctx
-                .interner
-                .resolve(*sym)
-                .is_some_and(|nm| nm == "any" || nm.starts_with("anyp_"));
-            let bounds = if body_has_db_get && is_wildcard_any {
-                bounds.with_sky_row()
-            } else {
-                *bounds
-            };
+            let bounds = *bounds;
             // Always inject `Clone` — field reads emit `.clone()` to prevent
             // partial-move errors. The solver's BoundSet may already carry it,
             // but `with_clone()` is idempotent so this is safe.

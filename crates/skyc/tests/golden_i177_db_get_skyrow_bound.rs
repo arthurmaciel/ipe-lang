@@ -11,15 +11,19 @@
 //! carried an unbounded `<T1: Clone>` param, so its body's
 //! `db_get_string(_, &payload)` could not prove `payload: SkyRow`.
 //!
-//! Fix (`crates/sky_ir/src/ir.rs` + `crates/sky_backend_rust/src/emit_expr.rs`):
-//! a new `BoundSet::SKY_ROW` flag, rendered by `render_bounds` as
-//! `sky_runtime::db::SkyRow`; `emit_func` scans the RENDERED body for a
-//! `db_get_` call and, when present, appends the bound to EXACTLY the wildcard
-//! `any` generic param (interned with the `anyp_` prefix by the lowerer's
-//! `any_param_binders` pool) — never a genuine named tvar, never the record
-//! STRUCT. Mirrors the Haskell reference's `ModuleEmitter.hs` `bodyHasDbGet`
-//! gate; the record struct stays unbounded (reusable in non-row contexts),
-//! mirroring `TypeEmitter.hs:166-177`.
+//! Fix (`crates/sky_ir/src/ir.rs` + `crates/sky_lower/src/lower.rs`): a new
+//! `BoundSet::SKY_ROW` flag, rendered by `render_bounds` as
+//! `sky_runtime::db::SkyRow`. The lowerer decides the bound STRUCTURALLY, at
+//! IR level (`apply_db_row_bounds` / `body_calls_db_get_on_param`): it fires
+//! ONLY when the fn body contains an actual `Db.get*` KERNEL application whose
+//! ROW argument is a `Var`/`CloneVar` reference to the wildcard `any` param
+//! (interned with the `anyp_` prefix by the lowerer's `any_param_binders`
+//! pool) — never a genuine named tvar, never the record STRUCT. The emitter
+//! (`render_fn_generics`) just renders whatever `BoundSet` each param carries.
+//! (This replaced an earlier body-TEXT-substring scan that false-positived on a
+//! `"db_get_"` string literal / a `db_get_`-named user symbol — see
+//! `golden_i177_db_get_false_positive`.) The record struct stays unbounded
+//! (reusable in non-row contexts), mirroring `TypeEmitter.hs:166-177`.
 //!
 //! Run:
 //! ```text
