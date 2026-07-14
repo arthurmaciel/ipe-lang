@@ -691,6 +691,23 @@ axis where the reference is more complete; ipê adopts the 3-way split when a
 `derive`/`Clone` callback subsystem lands. *Neutral: reference-ahead on
 completeness.*
 
+**#195 refinement (2026-07-14) — decoder-payload function values are Send-only,
+matching the runtime.** The uniform `IrType::Fun` → `Box<dyn Fn + Send + Sync>`
+rendering is retained for callback PARAMETERS (which may forward into a shared
+`Arc<dyn Fn + Send + Sync>` UI/Live event slot via `arc_callback_wrap`, the
+load-bearing #184 path), BUT a function value that is the PAYLOAD of a decoder
+(`Decoder (a -> b)` — the accumulator of a `succeed Ctor |> required …` pipeline,
+or a `succeed (partiallyApplied x)`) now renders as the Send-ONLY curry chain
+`Box<dyn FnOnce(a) -> b + Send>` the runtime actually constructs (`curryN` +
+`decode_succeed`, `runtime/src/sky_runtime/json.rs`). The blanket `+ Sync` on a
+decoder payload was over-constrained — a `FnOnce` curry chain is `Send` but not
+`Sync`, and a decoder payload is owned/linear and never flows into an `Arc`
+slot — so it caused a skyc-0-then-cargo-fail (E0308 wrong-trait + E0277
+`Sync`-unsatisfiable). This mirrors the reference's ownership split (owned/linear
+→ Send-only) at the decoder-payload position rather than diverging from it.
+Regression: `golden_i195_json_decode_pipeline`; the `+ Sync` forwarding path is
+pinned by `golden_i190_static_bound` / `golden_i191_input_arc_capture`.
+
 ### A9 — Crate-version SSOT as a typed `const` table + drift test
 ipê holds crate name+version in a typed `const CrateSpec` table
 (`crates/sky_backend_rust/src/crate_specs.rs`) read by every manifest-emitting
