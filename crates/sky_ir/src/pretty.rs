@@ -1328,6 +1328,9 @@ fn bound_suffix(bounds: BoundSet) -> String {
     if bounds.has_clone() {
         parts.push("Clone");
     }
+    if bounds.has_display() {
+        parts.push("Display");
+    }
     format!(": {}", parts.join("+"))
 }
 

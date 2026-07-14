@@ -2563,30 +2563,35 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
     }
 }
 
-// ── #177: SkyRow bound — structural IR detection ──────────────────────────────
+// ── Kernel→type-param-bound propagation — structural IR detection ─────────────
+// (#177 SkyRow, #186 Display — one shared walk, a kernel→bound map.)
 //
-// The runtime's DB field accessors are generic — `db_get_*<R: SkyRow>(field:
-// String, row: &R)`. When a decoder typed `any -> Record` (the pub/sub /
-// broadcast convention in `examples/27-multi-session-chat`) reads named fields
-// out of its payload via `Db.getString`/`getInt`/`getBool`/`getField`, the `any`
-// param lowers to a wildcard generic. Without a `SkyRow` bound on THAT generic
-// the emitted `db_get_string(_, &payload)` cannot prove `payload: SkyRow` — the
-// program is well-typed to `skyc` but the emitted Rust fails `cargo build` with
-// E0277 (a SEAL violation).
+// Some runtime kernels are generic over a type parameter with a Rust trait bound
+// — `db_get_*<R: SkyRow>(field: String, row: &R)` (#177),
+// `basics_to_string<T: std::fmt::Display>(v: T)` (#186). When such a kernel is
+// applied to a value whose Sky type is a generic/wildcard type-param, the
+// enclosing emitted function must carry the kernel's Rust bound on THAT generic
+// — otherwise the body's `db_get_string(_, &payload)` / `basics_to_string(x)`
+// call cannot prove the bound and the program, well-typed to `skyc`, fails
+// `cargo build` with E0277 (a SEAL violation).
 //
 // The bound is decided HERE, at lowering time, by a STRUCTURAL walk of the
 // already-lowered IR body (NOT a text scan of the rendered Rust — a text scan
 // false-positives on a string literal containing "db_get_" and on a benign user
 // symbol like `dbGetLabel` that lowers to `main_db_get_label`). It fires iff the
-// body contains an actual `Db.get*` KERNEL application whose ROW argument
-// (`args[1]`, since the accessor is `db_get_*(field, &row)`) is a `Var`/`CloneVar`
-// referencing `param`. This forbids all three false classes: a string literal is
-// not a kernel `Call`; a `db_get_`-named USER symbol is a `Call` to a
-// `Callee::Local`/`FuncValue`, not a `Callee::Kernel(DbGet*)`; and a `Db.get*`
-// on a CONCRETE (non-wildcard) row does not reference the wildcard `param`.
+// body contains an actual bound-obliging KERNEL application whose OBLIGING
+// argument (the exact position the kernel bounds — arg 1 for `Db.get*`, arg 0
+// for `toString`) is a `Var`/`CloneVar` referencing the tracked param. This
+// forbids the false classes: a string literal is not a kernel `Call`; a
+// `db_get_`-named USER symbol is a `Call` to a `Callee::Local`/`FuncValue`, not
+// a `Callee::Kernel(..)`; and a call on a CONCRETE value does not reference the
+// generic param.
 //
-// `DbGetById` (arity 3, `db_get_by_id`) is deliberately EXCLUDED — it takes a
-// `Db` handle, not a row, so it never obliges a `SkyRow` bound.
+// `DbGetById` (arity 3, `db_get_by_id`) is deliberately EXCLUDED from the SkyRow
+// obligation — it takes a `Db` handle, not a row, so it never obliges `SkyRow`.
+//
+// The shared walk is `body_calls_kernel_on_param`; each obligation supplies its
+// own `matcher`. `apply_kernel_type_param_bounds` iterates the map.
 
 /// Is `k` one of the four row-field accessors `db_get_*(field, &row)` whose row
 /// argument obliges its type to be `SkyRow`?
@@ -2597,38 +2602,49 @@ const fn is_db_row_accessor(k: KernelFn) -> bool {
     )
 }
 
-/// Does `expr` contain a `Db.get*` row-accessor kernel application whose ROW
-/// argument (`args[1]`) is a `Var`/`CloneVar` reference to `param` — either
-/// directly, or through a chain of value-preserving `let` aliases of `param`?
+/// Does `expr` contain a KERNEL application — decided by `matcher` — that
+/// obligates `param` (a Var/CloneVar reference to it sitting in the arg position
+/// the kernel bounds), either directly or through a chain of value-preserving
+/// `let` aliases of `param`?
+///
+/// `matcher(tracked, k, args)` answers, for the currently-tracked symbol
+/// `tracked`, whether the call `Callee::Kernel(k)` applied to `args` obligates
+/// it — e.g. #177's `is_db_row_accessor(k) && args[1] is Var(tracked)` (`SkyRow`),
+/// or #186's `k == BasicsToString && args[0] is Var(tracked)` (`Display`). Every
+/// distinct kernel→bound obligation is expressed as one such matcher; the
+/// STRUCTURAL walk (shadow discipline + alias-transparency) is shared, so a new
+/// bound reuses this whole traversal by supplying only its own matcher.
 ///
 /// Shadow discipline mirrors [`count_var_uses`]: a scope that rebinds `param`
 /// (`Let`/`Destructure` binder, a `Match`/`TailLoop` arm binding it, a `Lambda`
 /// param) hides the outer `param`, so accessor calls inside that scope are on a
-/// different binding and are NOT attributed to the wildcard param.
+/// different binding and are NOT attributed to the param.
 ///
 /// Alias-transparency (the `Let` arm) closes a false-negative: an indirected
-/// row arg — `let r = payload in Db.getString _ r`, where `r` is a pure alias
-/// of the wildcard param — still obliges the `SkyRow` bound, exactly as a direct
-/// `Db.getString _ payload` does. See [`flows_into_sync_kernel_call`] for the
-/// same alias-chain-resolution pattern (#168).
-fn body_calls_db_get_on_param(param: Symbol, expr: &Expr) -> bool {
-    // A direct `Var`/`CloneVar` read of `param` in row-argument position.
-    let is_param_row = |row: &Expr| matches!(row, Expr::Var(s) | Expr::CloneVar(s) if *s == param);
+/// arg — `let r = payload in Db.getString _ r`, where `r` is a pure alias of the
+/// param — still obliges the bound, exactly as a direct `Db.getString _ payload`
+/// does. See [`flows_into_sync_kernel_call`] for the same alias-chain-resolution
+/// pattern (#168).
+fn body_calls_kernel_on_param(
+    param: Symbol,
+    expr: &Expr,
+    matcher: &dyn Fn(Symbol, KernelFn, &[Expr]) -> bool,
+) -> bool {
     match expr {
         Expr::Call { callee, args, .. } => {
             if let Callee::Kernel(k) = callee
-                && is_db_row_accessor(*k)
-                && args.get(1).is_some_and(is_param_row)
+                && matcher(param, *k, args)
             {
                 return true;
             }
-            args.iter().any(|a| body_calls_db_get_on_param(param, a))
+            args.iter()
+                .any(|a| body_calls_kernel_on_param(param, a, matcher))
         }
         Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
             if params.iter().any(|(s, _)| *s == param) {
                 false
             } else {
-                body_calls_db_get_on_param(param, body)
+                body_calls_kernel_on_param(param, body, matcher)
             }
         }
         Expr::Let { name, value, body } => {
@@ -2647,63 +2663,73 @@ fn body_calls_db_get_on_param(param: Symbol, expr: &Expr) -> bool {
             // as an alias of `r` and recurses again.
             let is_alias_of_param = *name != param
                 && matches!(value.as_ref(), Expr::Var(v) | Expr::CloneVar(v) if *v == param);
-            body_calls_db_get_on_param(param, value)
+            body_calls_kernel_on_param(param, value, matcher)
                 || (*name != param
-                    && (body_calls_db_get_on_param(param, body)
-                        || (is_alias_of_param && body_calls_db_get_on_param(*name, body))))
+                    && (body_calls_kernel_on_param(param, body, matcher)
+                        || (is_alias_of_param && body_calls_kernel_on_param(*name, body, matcher))))
         }
         Expr::Destructure {
             binder,
             value,
             body,
         } => {
-            body_calls_db_get_on_param(param, value)
-                || (!pat_binds_symbol(binder, param) && body_calls_db_get_on_param(param, body))
+            body_calls_kernel_on_param(param, value, matcher)
+                || (!pat_binds_symbol(binder, param)
+                    && body_calls_kernel_on_param(param, body, matcher))
         }
         Expr::If { cond, then_, else_ } => {
-            body_calls_db_get_on_param(param, cond)
-                || body_calls_db_get_on_param(param, then_)
-                || body_calls_db_get_on_param(param, else_)
+            body_calls_kernel_on_param(param, cond, matcher)
+                || body_calls_kernel_on_param(param, then_, matcher)
+                || body_calls_kernel_on_param(param, else_, matcher)
         }
         Expr::Match(m) => {
-            body_calls_db_get_on_param(param, m.scrutinee())
+            body_calls_kernel_on_param(param, m.scrutinee(), matcher)
                 || m.arms().iter().any(|arm| {
                     !pat_binds_symbol(&arm.pat, param)
-                        && body_calls_db_get_on_param(param, &arm.body)
+                        && body_calls_kernel_on_param(param, &arm.body, matcher)
                 })
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            body_calls_db_get_on_param(param, lhs) || body_calls_db_get_on_param(param, rhs)
+            body_calls_kernel_on_param(param, lhs, matcher)
+                || body_calls_kernel_on_param(param, rhs, matcher)
         }
         Expr::Apply { func, args } => {
-            body_calls_db_get_on_param(param, func)
-                || args.iter().any(|a| body_calls_db_get_on_param(param, a))
+            body_calls_kernel_on_param(param, func, matcher)
+                || args
+                    .iter()
+                    .any(|a| body_calls_kernel_on_param(param, a, matcher))
         }
-        Expr::Tuple(items) | Expr::List { items, .. } => {
-            items.iter().any(|e| body_calls_db_get_on_param(param, e))
-        }
+        Expr::Tuple(items) | Expr::List { items, .. } => items
+            .iter()
+            .any(|e| body_calls_kernel_on_param(param, e, matcher)),
         Expr::Cons { head, tail } => {
-            body_calls_db_get_on_param(param, head) || body_calls_db_get_on_param(param, tail)
+            body_calls_kernel_on_param(param, head, matcher)
+                || body_calls_kernel_on_param(param, tail, matcher)
         }
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            body_calls_db_get_on_param(param, list)
+            body_calls_kernel_on_param(param, list, matcher)
         }
         Expr::Record(fields) | Expr::Update { fields, .. } => fields
             .iter()
-            .any(|(_, e)| body_calls_db_get_on_param(param, e)),
-        Expr::Ctor { args, .. } => args.iter().any(|a| body_calls_db_get_on_param(param, a)),
+            .any(|(_, e)| body_calls_kernel_on_param(param, e, matcher)),
+        Expr::Ctor { args, .. } => args
+            .iter()
+            .any(|a| body_calls_kernel_on_param(param, a, matcher)),
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
-            body_calls_db_get_on_param(param, effect) || body_calls_db_get_on_param(param, rest)
+            body_calls_kernel_on_param(param, effect, matcher)
+                || body_calls_kernel_on_param(param, rest, matcher)
         }
         Expr::TailLoop { params, body } => {
             if params.iter().any(|(s, _)| *s == param) {
                 false
             } else {
-                body_calls_db_get_on_param(param, body)
+                body_calls_kernel_on_param(param, body, matcher)
             }
         }
-        Expr::TailRecur { args } => args.iter().any(|a| body_calls_db_get_on_param(param, a)),
-        Expr::Access { record, .. } => body_calls_db_get_on_param(param, record),
+        Expr::TailRecur { args } => args
+            .iter()
+            .any(|a| body_calls_kernel_on_param(param, a, matcher)),
+        Expr::Access { record, .. } => body_calls_kernel_on_param(param, record, matcher),
         Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
@@ -2716,45 +2742,97 @@ fn body_calls_db_get_on_param(param: Symbol, expr: &Expr) -> bool {
     }
 }
 
-/// For each `(tv, bounds)` in `type_params`, add [`BoundSet::with_sky_row`] iff
-/// `tv` is a wildcard-`any` GENERIC whose VALUE PARAM binder's body reads DB
-/// fields off it via a `Db.get*` row accessor (#177).
+/// Is `args[idx]` a direct `Var`/`CloneVar` reference to `tracked`? The shared
+/// "the param sits in the bound-obliging arg position" test for every
+/// direct-arg-position kernel→bound matcher (Shape A: #177 `SkyRow` at arg 1,
+/// #186 `Display` at arg 0).
+fn arg_is_tracked_var(args: &[Expr], idx: usize, tracked: Symbol) -> bool {
+    matches!(args.get(idx), Some(Expr::Var(s) | Expr::CloneVar(s)) if *s == tracked)
+}
+
+/// Is `*tv` a wildcard-`any` generic (a fresh `anyp_`-pooled binder minted by
+/// `split_typed_sig`, or the raw `any` symbol) rather than a genuine named tvar
+/// (`a`/`msg`)? #177's `SkyRow` bound is restricted to wildcards; #186's
+/// `Display` bound applies to BOTH.
+fn is_wildcard_any_tv(interner: &Interner, tv: Symbol) -> bool {
+    interner
+        .resolve(tv)
+        .is_some_and(|nm| nm == "any" || nm.starts_with("anyp_"))
+}
+
+/// GENERAL kernel→type-param-bound propagation (#177 `SkyRow` + #186 `Display`,
+/// generalising the original single-purpose `Db.get*`→`SkyRow` walk).
 ///
-/// A subtlety: the wildcard `any` param has TWO distinct symbols. `tv` is the
-/// TYPE-VARIABLE symbol (a fresh `anyp_`-pooled binder minted by
-/// `split_typed_sig`, or the raw `any` symbol) that names the Rust generic
-/// `T{n}`. The VALUE binder the body actually reads (`payload` in
-/// `decodeRow payload = { … Db.getString "author" payload … }`) is a SEPARATE
-/// symbol, found in `params` as the `(binder, IrType::Generic(tv))` pair. The
-/// body references the BINDER, not `tv` — so the walk must resolve `tv`'s value
-/// binder first, then look for `Db.get*` on THAT symbol.
+/// A kernel whose Rust signature bounds a type parameter — `db_get_*<R: SkyRow>`,
+/// `basics_to_string<T: std::fmt::Display>` — obliges that Rust bound on the Sky
+/// generic its argument resolves to. When such a kernel is applied,
+/// alias-transparently, to a value whose type is `Generic(tv)`, we add the
+/// required bound to `tv`'s emitted generic so the body type-checks and
+/// monomorphises per call site. Without it the generic carries only `<T{n}:
+/// Clone>` and the body's kernel call cannot prove the bound (E0277) — the
+/// program is well-typed to `skyc` but the emitted Rust fails `cargo build` (a
+/// SEAL violation).
 ///
-/// Named tvars (`a`/`msg`) never flow into a row accessor, so this only ever
-/// touches the wildcard param; the record STRUCT is never a `type_param` here,
-/// so it stays unbounded and reusable in non-row contexts.
-fn apply_db_row_bounds(
+/// Each obligation supplies a `matcher(tracked, k, args)` — does this kernel
+/// call obligate `tracked` (the exact arg position that the kernel bounds holds
+/// a `Var`/`CloneVar` of it)? — and a wildcard-only flag: is the bound
+/// restricted to wildcard `any` params (as #177's `SkyRow` is), or does it apply
+/// to named tvars too (#186's `Display`)? The matched `BoundSet` builder records
+/// the Rust bound.
+///
+/// A subtlety carried over from #177: a param has TWO distinct symbols. `tv` is
+/// the TYPE-VARIABLE symbol that names the Rust generic `T{n}`; the VALUE binder
+/// the body references (`payload`, `x`) is a SEPARATE symbol, found in `params`
+/// as the `(binder, IrType::Generic(tv))` pair. So the walk resolves `tv`'s
+/// value binder first, then asks whether the body applies the obliging kernel to
+/// THAT binder.
+///
+/// The bound lands ONLY when the body actually applies the kernel to the param —
+/// never on a record STRUCT (never a `type_param` here) and never on a generic
+/// that does not flow into the kernel, so a truly-parametric pass-through stays
+/// unbounded and reusable. This precision is what forbids over-bounding.
+fn apply_kernel_type_param_bounds(
     interner: &Interner,
     type_params: &mut [(Symbol, BoundSet)],
     params: &[(Symbol, IrType)],
     body: &Expr,
 ) {
+    // #177 — SkyRow: a `Db.get*(field, &row)` accessor whose ROW arg (index 1)
+    // is the tracked param. Wildcard-`any`-only: a genuine named tvar never
+    // legitimately flows into a row accessor, and restricting to wildcards keeps
+    // the record struct + reusable generics clean (see #177's false-positive
+    // golden). `DbGetById` (arity 3) takes a `Db` handle, not a row, so it is
+    // excluded by `is_db_row_accessor`.
+    let sky_row_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
+        is_db_row_accessor(k) && arg_is_tracked_var(args, 1, tracked)
+    };
+    // #186 — Display: a `Basics.toString(x)` application whose sole arg (index 0)
+    // is the tracked param. Applies to wildcard `any` AND named tvars — `toString`
+    // is legitimate on a polymorphic value, and `T: Display` is satisfiable by
+    // every scalar caller; a composite argument fails at COMPILE time either way
+    // (see `BoundSet::DISPLAY`).
+    let display_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
+        matches!(k, KernelFn::BasicsToString) && arg_is_tracked_var(args, 0, tracked)
+    };
+
     for (tv, bounds) in type_params.iter_mut() {
-        // A param-position `any` is a fresh binder from the lowerer's
-        // `any_param_binders` pool (interned with the `anyp_` prefix; see
-        // `fresh_any_param_symbol` / AUD-01 seal), or the raw `any` symbol.
-        let is_wildcard_any = interner
-            .resolve(*tv)
-            .is_some_and(|nm| nm == "any" || nm.starts_with("anyp_"));
-        if !is_wildcard_any {
-            continue;
-        }
-        // Resolve the VALUE binder whose type is exactly `Generic(tv)`.
-        let fires = params.iter().any(|(binder, ty)| {
-            matches!(ty, IrType::Generic(g) if *g == *tv)
-                && body_calls_db_get_on_param(*binder, body)
-        });
-        if fires {
+        let is_wildcard = is_wildcard_any_tv(interner, *tv);
+        // Resolve the VALUE binder(s) whose type is exactly `Generic(tv)`, then
+        // ask each obligation's matcher whether the body applies its kernel to
+        // that binder.
+        let fires_on = |matcher: &dyn Fn(Symbol, KernelFn, &[Expr]) -> bool| {
+            params.iter().any(|(binder, ty)| {
+                matches!(ty, IrType::Generic(g) if *g == *tv)
+                    && body_calls_kernel_on_param(*binder, body, matcher)
+            })
+        };
+        // SkyRow — wildcard-only (#177).
+        if is_wildcard && fires_on(&sky_row_matcher) {
             *bounds = bounds.with_sky_row();
+        }
+        // Display — wildcard OR named (#186).
+        if fires_on(&display_matcher) {
+            *bounds = bounds.with_display();
         }
     }
 }
@@ -5743,9 +5821,17 @@ impl<'a> Lowerer<'a> {
                 {
                     lowered_body = rewrite_tail_calls(id, arity, params.clone(), lowered_body);
                 }
-                // #177: a wildcard `any` param that reads DB fields off itself via
-                // a `Db.get*` row accessor gains `SkyRow` (see `apply_db_row_bounds`).
-                apply_db_row_bounds(self.interner, &mut type_params, &params, &lowered_body);
+                // General kernel→type-param-bound propagation: a param that flows
+                // into a bound-obliging kernel gains that kernel's Rust bound —
+                // #177 (`Db.get*`→`SkyRow`, wildcard-only) + #186
+                // (`toString`→`Display`, any tvar). See
+                // `apply_kernel_type_param_bounds`.
+                apply_kernel_type_param_bounds(
+                    self.interner,
+                    &mut type_params,
+                    &params,
+                    &lowered_body,
+                );
                 Ok(Func {
                     id,
                     name,
@@ -5894,9 +5980,14 @@ impl<'a> Lowerer<'a> {
                     }
                     let mut type_params =
                         compute_type_params(quantified_syms, var_bounds, &params, &ret);
-                    // #177: SkyRow bound on a wildcard `any` param that reads DB
-                    // fields off itself (see `apply_db_row_bounds`).
-                    apply_db_row_bounds(self.interner, &mut type_params, &params, &lowered_body);
+                    // General kernel→type-param-bound propagation (#177 SkyRow +
+                    // #186 Display) — see `apply_kernel_type_param_bounds`.
+                    apply_kernel_type_param_bounds(
+                        self.interner,
+                        &mut type_params,
+                        &params,
+                        &lowered_body,
+                    );
                     return Ok(Func {
                         id,
                         name,
