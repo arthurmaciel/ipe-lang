@@ -21,8 +21,9 @@ use sky_canon::ast as canon;
 use sky_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{
-    Arm, BinOp, BoundSet, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
-    Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant, is_dispatch_free, is_irrefutable,
+    Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match,
+    ModPath, Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant, is_dispatch_free,
+    is_irrefutable,
 };
 use sky_types::{SolvedTypes, Ty, TyBounds};
 
@@ -317,6 +318,165 @@ fn ty_contains_fun(ty: &Ty) -> bool {
         Ty::Tuple(elems) => elems.iter().any(ty_contains_fun),
         Ty::Con { args, .. } => args.iter().any(ty_contains_fun),
         Ty::Record(fields, _) => fields.values().any(ty_contains_fun),
+    }
+}
+
+/// #181 context suppression (let-bound shape). Recursively clear a
+/// [`CallPin::DefaultI64`] from any `task_fail(…)` call that is the VALUE of a
+/// `let` / `Destructure` binding: the binding slot's type (emitted as an
+/// explicit `let eta_N: SkyTask<T> = …` annotation) already fixes the phantom
+/// success, so an `::<i64>` turbofish there would be an E0308 conflict (the
+/// pipe/eta shape `Task.fail e |> Task.andThen f`). A bare / lambda-tail
+/// `task_fail` — never a binding value — keeps its needed default pin.
+///
+/// Total over every [`Expr`] arm (no wildcard) so a future variant that can
+/// host a `task_fail` value is a compile error here, not a silent miss.
+#[allow(clippy::too_many_lines)] // one arm per Expr variant; exhaustive by design
+fn clear_let_bound_task_fail_pins(expr: Expr) -> Expr {
+    // Clear the pin on a `task_fail` sitting directly in a binding value; every
+    // other value shape is returned unchanged (then still recursed into).
+    fn declaw_binding_value(value: Expr) -> Expr {
+        match value {
+            Expr::Call {
+                callee: Callee::Kernel(KernelFn::TaskFail),
+                args,
+                pin: CallPin::DefaultI64,
+            } => Expr::Call {
+                callee: Callee::Kernel(KernelFn::TaskFail),
+                args: args
+                    .into_iter()
+                    .map(clear_let_bound_task_fail_pins)
+                    .collect(),
+                pin: CallPin::None,
+            },
+            other => clear_let_bound_task_fail_pins(other),
+        }
+    }
+    let recur = clear_let_bound_task_fail_pins;
+    match expr {
+        Expr::Let { name, value, body } => Expr::Let {
+            name,
+            value: Box::new(declaw_binding_value(*value)),
+            body: Box::new(recur(*body)),
+        },
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => Expr::Destructure {
+            binder,
+            value: Box::new(declaw_binding_value(*value)),
+            body: Box::new(recur(*body)),
+        },
+        Expr::If { cond, then_, else_ } => Expr::If {
+            cond: Box::new(recur(*cond)),
+            then_: Box::new(recur(*then_)),
+            else_: Box::new(recur(*else_)),
+        },
+        Expr::Match(m) => {
+            Expr::Match(m.map_bodies(recur, |_, body, guard| (recur(body), guard.map(recur))))
+        }
+        Expr::Call { callee, args, pin } => Expr::Call {
+            callee,
+            args: args.into_iter().map(recur).collect(),
+            pin,
+        },
+        Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args,
+        } => Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args: args.into_iter().map(recur).collect(),
+        },
+        Expr::TailRecur { args } => Expr::TailRecur {
+            args: args.into_iter().map(recur).collect(),
+        },
+        // An `Expr::Apply` applies a first-class function value whose parameter
+        // types are concrete, so every argument slot is typed — a `task_fail`
+        // in argument position is pinned by that slot (the backend materialises
+        // it as a typed `let eta_N: SkyTask<T> = <arg>` binding), exactly like a
+        // `let` value. This is the pipe/eta shape `Task.fail e |> Task.andThen f`
+        // that never reaches `lower_call_uniform`'s equal-arity path. Declaw the
+        // `task_fail` pin here so the slot's type wins (E0308 otherwise).
+        Expr::Apply { func, args } => Expr::Apply {
+            func: Box::new(recur(*func)),
+            args: args.into_iter().map(declaw_binding_value).collect(),
+        },
+        Expr::Lambda { params, ret, body } => Expr::Lambda {
+            params,
+            ret,
+            body: Box::new(recur(*body)),
+        },
+        Expr::SharedLambda { params, ret, body } => Expr::SharedLambda {
+            params,
+            ret,
+            body: Box::new(recur(*body)),
+        },
+        Expr::TailLoop { params, body } => Expr::TailLoop {
+            params,
+            body: Box::new(recur(*body)),
+        },
+        Expr::BinOp { op, lhs, rhs } => Expr::BinOp {
+            op,
+            lhs: Box::new(recur(*lhs)),
+            rhs: Box::new(recur(*rhs)),
+        },
+        Expr::Cons { head, tail } => Expr::Cons {
+            head: Box::new(recur(*head)),
+            tail: Box::new(recur(*tail)),
+        },
+        Expr::Tuple(items) => Expr::Tuple(items.into_iter().map(recur).collect()),
+        Expr::List { elem, items } => Expr::List {
+            elem,
+            items: items.into_iter().map(recur).collect(),
+        },
+        Expr::Record(fields) => {
+            Expr::Record(fields.into_iter().map(|(k, v)| (k, recur(v))).collect())
+        }
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Expr::Access {
+            record: Box::new(recur(*record)),
+            field,
+            field_ty,
+        },
+        Expr::Update { record, fields } => Expr::Update {
+            record: Box::new(recur(*record)),
+            fields: fields.into_iter().map(|(k, v)| (k, recur(v))).collect(),
+        },
+        Expr::TaskSeq { effect, rest } => Expr::TaskSeq {
+            effect: Box::new(recur(*effect)),
+            rest: Box::new(recur(*rest)),
+        },
+        Expr::TaskSeqSync { effect, rest } => Expr::TaskSeqSync {
+            effect: Box::new(recur(*effect)),
+            rest: Box::new(recur(*rest)),
+        },
+        Expr::ListIndexClone { list, index } => Expr::ListIndexClone {
+            list: Box::new(recur(*list)),
+            index,
+        },
+        Expr::ListLenCheck { list, len, exact } => Expr::ListLenCheck {
+            list: Box::new(recur(*list)),
+            len,
+            exact,
+        },
+        // Leaves that cannot host a `task_fail` value — returned unchanged.
+        leaf @ (Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. }) => leaf,
     }
 }
 
@@ -1208,7 +1368,7 @@ fn rewrite_captured_clones(
         // Non-lambda args keep the full `noncl_set` so forwarding a NonClone
         // value in arg position (e.g. `applyTwice f x` where `f` is non-callee)
         // is still rejected.
-        Expr::Call { callee, args } => Ok(Expr::Call {
+        Expr::Call { callee, args, pin } => Ok(Expr::Call {
             callee,
             args: args
                 .into_iter()
@@ -1221,6 +1381,7 @@ fn rewrite_captured_clones(
                     }
                 })
                 .collect::<DResult<Vec<_>>>()?,
+            pin,
         }),
         Expr::Tuple(items) => Ok(Expr::Tuple(
             items
@@ -1748,7 +1909,7 @@ fn expr_mentions_sym(sym: Symbol, expr: &Expr) -> bool {
 /// sufficient.
 fn flows_into_sync_kernel_call(sym: Symbol, expr: &Expr) -> bool {
     match expr {
-        Expr::Call { callee, args } => {
+        Expr::Call { callee, args, .. } => {
             let hit_here = matches!(callee, Callee::Kernel(k) if k.requires_sync_capture())
                 && args.iter().any(|a| expr_mentions_sym(sym, a));
             hit_here || args.iter().any(|a| flows_into_sync_kernel_call(sym, a))
@@ -1981,9 +2142,10 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
             then_: Box::new(force_shared_capture_clones(sym, *then_)),
             else_: Box::new(force_shared_capture_clones(sym, *else_)),
         },
-        Expr::Call { callee, args } => Expr::Call {
+        Expr::Call { callee, args, pin } => Expr::Call {
             callee,
             args: force_shared_capture_clones_all(sym, args),
+            pin,
         },
         Expr::Apply { func, args } => Expr::Apply {
             func: Box::new(force_shared_capture_clones(sym, *func)),
@@ -2703,12 +2865,13 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
                 },
             ))
         }
-        Expr::Call { callee, args } => Expr::Call {
+        Expr::Call { callee, args, pin } => Expr::Call {
             callee,
             args: args
                 .into_iter()
                 .map(|a| rewrite_multiuse_clones(sym, remaining, a))
                 .collect(),
+            pin,
         },
         Expr::Apply { func, args } => {
             let new_func = Box::new(rewrite_multiuse_clones(sym, remaining, *func));
@@ -2920,6 +3083,7 @@ fn count_self_calls(
         Expr::Call {
             callee: Callee::Func(id),
             args,
+            ..
         } if *id == self_id => {
             if in_tail && args.len() == arity {
                 *tail += 1;
@@ -3063,6 +3227,7 @@ fn rewrite_in_tail(self_id: FuncId, arity: usize, expr: Expr) -> Expr {
         Expr::Call {
             callee: Callee::Func(id),
             args,
+            ..
         } if id == self_id && args.len() == arity => Expr::TailRecur { args },
         Expr::If { cond, then_, else_ } => Expr::If {
             cond,
@@ -3209,7 +3374,7 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
         return;
     }
     match expr {
-        Expr::Call { callee, args } => {
+        Expr::Call { callee, args, .. } => {
             if let Callee::Kernel(k) = callee {
                 usage.record(*k);
             }
@@ -3436,12 +3601,13 @@ fn rewrite_var_free_occurrences(
                 (new_body, new_guard)
             },
         )),
-        Expr::Call { callee, args } => Expr::Call {
+        Expr::Call { callee, args, pin } => Expr::Call {
             callee,
             args: args
                 .into_iter()
                 .map(|a| rewrite_var_free_occurrences(target, a, on_hit))
                 .collect(),
+            pin,
         },
         Expr::Tuple(items) => Expr::Tuple(
             items
@@ -4664,7 +4830,17 @@ impl<'a> Lowerer<'a> {
             // id — passing it spares `lower_def` a throwaway `Vec<Symbol>`
             // key allocation per def (efficiency-audit §3 low).
             let id = FuncId::from_raw(u32::try_from(idx).unwrap_or(u32::MAX));
-            let func = self.lower_def(def, id)?;
+            let mut func = self.lower_def(def, id)?;
+            // #181 context suppression, applied UNIFORMLY to every lowered body
+            // regardless of which `lower_def` branch produced it (typed / untyped
+            // fn / nullary binding). Clears a `task_fail` turbofish pin whose
+            // phantom success type a `let` or `Apply` slot already supplies (the
+            // pipe/eta `Task.fail e |> Task.andThen f` shape) — leaving it would
+            // emit `task_fail::<i64>` into a differently-typed slot (E0308). A
+            // bare / lambda-tail `task_fail` (never a binding/arg value) keeps
+            // its needed default pin. Centralised here so no `lower_def` branch
+            // can silently miss it.
+            func.body = clear_let_bound_task_fail_pins(func.body);
             if self.interner.resolve(func.name) == Some("main") {
                 entry = Some(func.id);
             }
@@ -7706,6 +7882,7 @@ impl<'a> Lowerer<'a> {
                         Ok(Expr::Call {
                             callee: Callee::Kernel(KernelFn::ListAppend),
                             args: vec![lowered_lhs, lowered_rhs],
+                            pin: CallPin::None,
                         })
                     } else {
                         Ok(Expr::BinOp {
@@ -7838,9 +8015,17 @@ impl<'a> Lowerer<'a> {
                         // Return value discarded — only the error path matters.
                         let _ = self.ir_type_from_ty(ty, e.span)?;
                     }
+                    // #181: an arity-0 polymorphic kernel referenced bare
+                    // (`Dict.empty` / `Set.empty`) whose free key/value/element
+                    // the solver left unconstrained needs a turbofish default —
+                    // otherwise `dict_empty()` / `set_empty()` hits E0282/E0283.
+                    // Arity-0 kernels bypass `lower_call`, so the pin is computed
+                    // here at the reference site instead of the call site.
+                    let pin = self.kernel_turbofish_pin(&callee, &[], e.span);
                     return Ok(Expr::Call {
                         callee,
                         args: Vec::new(),
+                        pin,
                     });
                 }
                 let ty = self.region_ty(e.span).ok_or_else(|| {
@@ -7907,6 +8092,7 @@ impl<'a> Lowerer<'a> {
                     Ok(Expr::Call {
                         callee,
                         args: Vec::new(),
+                        pin: CallPin::None,
                     })
                 }
             }
@@ -8261,6 +8447,7 @@ impl<'a> Lowerer<'a> {
                         return Ok(Intercepted::Done(Expr::Call {
                             callee: peek,
                             args: vec![lowered_cfg],
+                            pin: CallPin::None,
                         }));
                     }
                 }
@@ -8293,6 +8480,7 @@ impl<'a> Lowerer<'a> {
                         return Ok(Intercepted::Done(Expr::Call {
                             callee: peek,
                             args: vec![lowered_cfg],
+                            pin: CallPin::None,
                         }));
                     }
                 }
@@ -8342,6 +8530,7 @@ impl<'a> Lowerer<'a> {
                         return Ok(Intercepted::Done(Expr::Call {
                             callee: peek,
                             args: vec![lowered_attrs, lowered_cfg],
+                            pin: CallPin::None,
                         }));
                     }
                 }
@@ -8358,6 +8547,7 @@ impl<'a> Lowerer<'a> {
                         return Ok(Intercepted::Done(Expr::Call {
                             callee: peek,
                             args: vec![lowered_cfg],
+                            pin: CallPin::None,
                         }));
                     }
                 }
@@ -8382,6 +8572,7 @@ impl<'a> Lowerer<'a> {
                         return Ok(Intercepted::Done(Expr::Call {
                             callee: peek,
                             args: vec![lowered_pattern, lowered_builder],
+                            pin: CallPin::None,
                         }));
                     }
                 }
@@ -8401,6 +8592,217 @@ impl<'a> Lowerer<'a> {
     /// resolved for a `VarKernel`/`VarTopLevel` callee (or `None` for every
     /// other callee shape) — reused here instead of re-running the large
     /// `lower_callee` dispatch per call (efficiency-audit §3 medium).
+    /// Is this solved `Ty` a GENUINELY-FREE type variable at this call site —
+    /// i.e. a `Ty::Var` the solver never constrained AND that is not an
+    /// enclosing generic function's own quantified parameter (which the
+    /// signature already pins, so an added turbofish would conflict)?
+    ///
+    /// A free var bound by the enclosing signature returns `false`: rustc binds
+    /// it through the function's own generic, so no pin is needed OR wanted.
+    fn ty_is_unbound_free(&self, ty: &Ty) -> bool {
+        matches!(ty, Ty::Var(raw) if self.poly_tvar_symbol(*raw).is_none())
+    }
+
+    /// The turbofish pin (#181) for a polymorphic kernel whose free result type
+    /// parameter the HM solver left unconstrained at THIS call site. Returns
+    /// [`CallPin::None`] for every non-affected kernel and for every affected
+    /// kernel whose relevant parameter came out concrete (rustc infers it) or
+    /// is bound by an enclosing generic signature.
+    ///
+    /// The affected kernels and the position each inspects on the SOLVED result
+    /// type at `call_span`:
+    ///
+    /// * `List.head` / `List.tail` — `Maybe elem` / `Maybe (List elem)`; the
+    ///   element `elem` (`list_head<T>` / `list_tail<T>`). Default `::<i64>`.
+    /// * `Set.empty` — `Set elem`; the element (`set_empty<A>`). `::<i64>`.
+    /// * `Dict.empty` — `Dict k v`; either key OR value free
+    ///   (`dict_empty<K, V>`). Default `::<String, i64>`.
+    /// * `Task.fail` — `Task a`; the phantom success `a` (the main-crate wrapper
+    ///   `task_fail<A>` already pins the error to `SkyError`). `::<i64>`.
+    /// * `Result.mapError` — `Result f a`; the `Ok` type `a` when the input was
+    ///   an `Err` (`sky_result_map_error<E, F, A>`). `::<_, _, i64>`.
+    /// * `Decimal.fromString` / `Decimal.div` / `Decimal.mod` — `Result e
+    ///   Decimal`; the discarded error `e`
+    ///   (`decimal_from_string`/`decimal_div`/`decimal_mod<E: From<String>>`).
+    ///   `::<SkyError>`.
+    ///
+    /// A second, ARGUMENT-driven family pins a list-consuming kernel whose sole
+    /// free `T` comes only from a `Vec<T>` argument and never appears in the
+    /// result, so rustc cannot infer it when that argument is an empty list of a
+    /// still-free element type (`List.isEmpty []` → `list_is_empty(Vec::new())`):
+    ///
+    /// * `List.isEmpty` / `List.length` — pin `::<i64>` ONLY when the single
+    ///   list argument's solved element type is a genuinely-free variable (an
+    ///   empty literal in an unconstrained position). A concrete-element list
+    ///   (`[1, 2, 3]`, or any non-empty literal) is left unpinned so the real
+    ///   element type flows through — pinning it would be a wrong `i64` cast.
+    #[allow(clippy::too_many_lines)] // one match arm per covered kernel; splitting hurts locality
+    fn kernel_turbofish_pin(
+        &self,
+        resolved: &Callee,
+        args: &[canon::Expr],
+        call_span: Span,
+    ) -> CallPin {
+        let Callee::Kernel(k) = resolved else {
+            return CallPin::None;
+        };
+        // Argument-driven list kernels: pin from the list arg's element type,
+        // not the result type (the result — `Bool` / `Int` — carries no `T`).
+        //
+        // Restricted to a LITERAL empty list argument (`List.isEmpty []`). A
+        // DERIVED list whose element the solver leaves free at THIS site but
+        // another kernel's own pin later fixes — e.g. `List.length (Dict.keys
+        // Dict.empty)`, where `dict_empty`'s pin makes the keys `String` — must
+        // NOT be pinned to `i64` here, or the two defaults disagree and rustc
+        // reports a `HashMap<i64, _>` vs `HashMap<String, i64>` mismatch. A
+        // literal `[]` has no such downstream anchor, so its `i64` default is
+        // the only one and is always consistent.
+        if matches!(k, KernelFn::ListIsEmpty | KernelFn::ListLength) {
+            let arg_is_empty_list_literal = matches!(
+                args.first().map(|a| &a.value),
+                Some(canon::Expr_::List(elems)) if elems.is_empty()
+            );
+            if !arg_is_empty_list_literal {
+                return CallPin::None;
+            }
+            return match args.first().and_then(|a| self.region_ty(a.span)) {
+                Some(Ty::Con {
+                    name,
+                    args: list_args,
+                    ..
+                }) if self.interner.resolve(*name) == Some("List")
+                    && list_args
+                        .first()
+                        .is_some_and(|e| self.ty_is_unbound_free(e)) =>
+                {
+                    CallPin::DefaultI64
+                }
+                _ => CallPin::None,
+            };
+        }
+        // The result-driven kernels this fix covers; anything else keeps
+        // `CallPin::None`.
+        if !matches!(
+            k,
+            KernelFn::ListHead
+                | KernelFn::ListTail
+                | KernelFn::SetEmpty
+                | KernelFn::DictEmpty
+                | KernelFn::TaskFail
+                | KernelFn::ResultMapError
+                | KernelFn::DecFromString
+                | KernelFn::DecDiv
+                | KernelFn::DecMod
+        ) {
+            return CallPin::None;
+        }
+        // No solved region type → conservatively no pin (never a wrong pin).
+        let Some(ty) = self.region_ty(call_span) else {
+            return CallPin::None;
+        };
+        // Peel the result type's relevant position and test it for a genuinely-
+        // unbound free variable. Matching on the outer constructor keeps this
+        // total — an unexpected shape (well-typed input never produces one)
+        // falls through to `CallPin::None`, the safe default.
+        match k {
+            // `Maybe elem` — pin when `elem` is free.
+            KernelFn::ListHead => match ty {
+                Ty::Con { name, args, .. }
+                    if self.interner.resolve(*name) == Some("Maybe")
+                        && args.first().is_some_and(|e| self.ty_is_unbound_free(e)) =>
+                {
+                    CallPin::DefaultI64
+                }
+                _ => CallPin::None,
+            },
+            // `Maybe (List elem)` — pin when the inner list's `elem` is free.
+            KernelFn::ListTail => match ty {
+                Ty::Con { name, args, .. } if self.interner.resolve(*name) == Some("Maybe") => {
+                    match args.first() {
+                        Some(Ty::Con {
+                            name: inner,
+                            args: inner_args,
+                            ..
+                        }) if self.interner.resolve(*inner) == Some("List")
+                            && inner_args
+                                .first()
+                                .is_some_and(|e| self.ty_is_unbound_free(e)) =>
+                        {
+                            CallPin::DefaultI64
+                        }
+                        _ => CallPin::None,
+                    }
+                }
+                _ => CallPin::None,
+            },
+            // `Set elem` — pin when `elem` is free.
+            KernelFn::SetEmpty => match ty {
+                Ty::Con { name, args, .. }
+                    if self.interner.resolve(*name) == Some("Set")
+                        && args.first().is_some_and(|e| self.ty_is_unbound_free(e)) =>
+                {
+                    CallPin::DefaultI64
+                }
+                _ => CallPin::None,
+            },
+            // `Dict k v` — pin when EITHER key or value is free (rustc could not
+            // resolve one of them from context).
+            KernelFn::DictEmpty => match ty {
+                Ty::Con { name, args, .. }
+                    if self.interner.resolve(*name) == Some("Dict")
+                        && args.iter().any(|a| self.ty_is_unbound_free(a)) =>
+                {
+                    CallPin::DefaultDict
+                }
+                _ => CallPin::None,
+            },
+            // `Task a` — pin when the success `a` is free (the wrapper's error is
+            // already `SkyError`).
+            KernelFn::TaskFail => match ty {
+                Ty::Con { name, args, .. }
+                    if self.interner.resolve(*name) == Some("Task")
+                        && args.first().is_some_and(|a| self.ty_is_unbound_free(a)) =>
+                {
+                    CallPin::DefaultI64
+                }
+                _ => CallPin::None,
+            },
+            // `Result f a` — pin the discarded `Ok` type `a` (2nd arg) when free.
+            KernelFn::ResultMapError => match ty {
+                Ty::Con { name, args, .. }
+                    if self.interner.resolve(*name) == Some("Result")
+                        && args.get(1).is_some_and(|a| self.ty_is_unbound_free(a)) =>
+                {
+                    CallPin::DefaultResultMapErr
+                }
+                _ => CallPin::None,
+            },
+            // `Result e Decimal` — pin the error channel `e` (1st arg). Sky's
+            // `Decimal.fromString : String -> Result Error Decimal` fixes `e` to
+            // the canonical `Error`, whose only Rust inhabitant is `SkyError`, so
+            // the pin is unconditional whenever the result is a `Result`. Unlike
+            // the free-collection kernels, the ambiguity here is NOT a free var:
+            // the solver DOES resolve `e` to `Error`, but the runtime bound
+            // `decimal_from_string<E: From<String>>` cannot be back-inferred once
+            // the `Err` arm is discarded (`sky_test_err` / `result_with_default`),
+            // so rustc reports E0283 even though Sky knows the type. Pinning
+            // `::<SkyError>` restores it without changing behaviour.
+            // `decimal_div` / `decimal_mod` share the same
+            // `<E: From<String>>` shape and the same erased-error ambiguity as
+            // `decimal_from_string` (e.g. `sky_test_err (Dec.div a zero)`).
+            KernelFn::DecFromString | KernelFn::DecDiv | KernelFn::DecMod => match ty {
+                Ty::Con { name, .. } if self.interner.resolve(*name) == Some("Result") => {
+                    CallPin::ErrSkyError
+                }
+                _ => CallPin::None,
+            },
+            // Unreachable in practice: the outer guard admits only the arms
+            // above; a new kernel added to that guard without an arm here keeps
+            // the safe `CallPin::None` default rather than a wrong pin.
+            _ => CallPin::None,
+        }
+    }
+
     fn lower_call_uniform(
         &self,
         callee: &canon::Expr,
@@ -8444,6 +8846,7 @@ impl<'a> Lowerer<'a> {
                         return Ok(Expr::Call {
                             callee: Callee::Kernel(KernelFn::ResultOkDefault),
                             args: lowered_args,
+                            pin: CallPin::None,
                         });
                     }
                     Ok(Expr::Ctor {
@@ -8475,10 +8878,21 @@ impl<'a> Lowerer<'a> {
                 };
                 let arity = self.callee_arity(&resolved)?;
                 match args.len().cmp(&arity) {
-                    std::cmp::Ordering::Equal => Ok(Expr::Call {
-                        callee: resolved,
-                        args: lowered_args,
-                    }),
+                    std::cmp::Ordering::Equal => {
+                        // #181: pin a polymorphic kernel's genuinely-free result
+                        // type parameter so the emitted Rust does not hit
+                        // `E0282`/`E0283` "type annotations needed" (an exit-0-
+                        // then-cargo-fail SEAL violation). The pin fires ONLY for
+                        // the small set of ambiguous kernels AND only when the
+                        // free parameter is not an enclosing generic (which would
+                        // already pin it — see `kernel_turbofish_pin`).
+                        let pin = self.kernel_turbofish_pin(&resolved, args, call_span);
+                        Ok(Expr::Call {
+                            callee: resolved,
+                            args: lowered_args,
+                            pin,
+                        })
+                    }
                     std::cmp::Ordering::Less => {
                         self.eta_expand_partial(callee, resolved, lowered_args, arity, call_span)
                     }
@@ -8737,6 +9151,9 @@ impl<'a> Lowerer<'a> {
         let body = Expr::Call {
             callee: resolved,
             args: call_args,
+            // Eta-expanded partial application: the residual arrow's param/ret
+            // types (from the lambda) pin every generic, so no turbofish (#181).
+            pin: CallPin::None,
         };
         let lambda = Expr::Lambda {
             params,
@@ -8964,6 +9381,9 @@ impl<'a> Lowerer<'a> {
         let inner_call = Expr::Call {
             callee,
             args: direct_args,
+            // Eta adapter: the adapter closure's declared param/ret types pin
+            // the callee's generics, so no turbofish (#181).
+            pin: CallPin::None,
         };
         // Apply: pass the remaining eta params to the returned closure.
         // `def_arity == 0` ⇒ `apply_args == eta_syms[0..]` (all params).
@@ -9027,6 +9447,10 @@ impl<'a> Lowerer<'a> {
             func: Box::new(Expr::Call {
                 callee: resolved,
                 args: head,
+                // Over-application: the base call returns a function that is
+                // further applied; the affected #181 kernels never take this
+                // shape, so no turbofish.
+                pin: CallPin::None,
             }),
             args: rest,
         })
@@ -12828,6 +13252,7 @@ impl<'a> Lowerer<'a> {
                                 Expr::Int(i64::try_from(prefix_len).unwrap_or(i64::MAX)),
                                 Expr::Var(fresh),
                             ],
+                            pin: CallPin::None,
                         },
                     ));
                 }

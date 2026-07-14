@@ -1463,7 +1463,7 @@ fn write_expr(out: &mut String, expr: &Expr, interner: &Interner, level: usize) 
             write_expr(out, else_, interner, level + 2);
         }
         Expr::Match(m) => write_match(out, m, interner, level),
-        Expr::Call { callee, args } => {
+        Expr::Call { callee, args, .. } => {
             line(out, level, &format!("Call {}", callee_name(callee)));
             for arg in args {
                 write_expr(out, arg, interner, level + 1);
@@ -1699,7 +1699,7 @@ fn write_match(out: &mut String, m: &Match, interner: &Interner, level: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::FuncId;
+    use crate::ir::{CallPin, FuncId};
     use sky_diagnostics::DResult;
 
     /// Build the canonical M0 program: a `Main` module with a `Msg` enum and a
@@ -1728,7 +1728,9 @@ mod tests {
                 args: vec![Expr::Call {
                     callee: Callee::Kernel(KernelFn::StringFromInt),
                     args: vec![Expr::Int(1)],
+                    pin: CallPin::None,
                 }],
+                pin: CallPin::None,
             },
         };
 

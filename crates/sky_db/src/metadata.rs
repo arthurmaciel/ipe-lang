@@ -219,7 +219,7 @@ fn walk_expr(
                 walk_arm(arm, direct_calls, types);
             }
         }
-        Expr::Call { callee, args } => {
+        Expr::Call { callee, args, .. } => {
             walk_callee(callee, direct_calls);
             for arg in args {
                 walk_expr(arg, direct_calls, types);

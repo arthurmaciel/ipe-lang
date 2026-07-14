@@ -253,7 +253,10 @@ fn compiler_revision_hash() -> Option<String> {
 /// `toolchain_fingerprint()`. `None` when `rustc` is not on `PATH` or exits
 /// non-zero.
 fn toolchain_fingerprint_hash() -> Option<String> {
-    let output = std::process::Command::new("rustc").arg("-vV").output().ok()?;
+    let output = std::process::Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -668,8 +671,8 @@ mod tests {
 
     fn sample_ir_program(i: &mut Interner) -> sky_diagnostics::DResult<Program> {
         use sky_ir::{
-            Arm, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath, Module,
-            Pat, TypeDef, Variant,
+            Arm, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
+            Module, Pat, TypeDef, Variant,
         };
 
         let msg_ty = i.intern("Msg")?;
@@ -692,6 +695,7 @@ mod tests {
                     Expr::Call {
                         callee: Callee::Kernel(KernelFn::LogPrintln),
                         args: vec![],
+                        pin: CallPin::None,
                     },
                 ),
                 Arm::new(
@@ -704,6 +708,7 @@ mod tests {
                     Expr::Call {
                         callee: Callee::Kernel(KernelFn::LogPrintln),
                         args: vec![],
+                        pin: CallPin::None,
                     },
                 ),
             ],

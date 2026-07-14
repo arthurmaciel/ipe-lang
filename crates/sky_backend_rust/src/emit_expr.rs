@@ -351,12 +351,13 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
                 (new_body, new_guard)
             },
         )),
-        Expr::Call { callee, args } => Expr::Call {
+        Expr::Call { callee, args, pin } => Expr::Call {
             callee,
             args: args
                 .into_iter()
                 .map(|a| clone_free_target(a, target))
                 .collect(),
+            pin,
         },
         Expr::Tuple(items) => Expr::Tuple(
             items
@@ -716,12 +717,13 @@ fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
                 (new_body, new_guard)
             },
         )),
-        Expr::Call { callee, args } => Expr::Call {
+        Expr::Call { callee, args, pin } => Expr::Call {
             callee,
             args: args
                 .into_iter()
                 .map(|a| substitute_var(a, target, replacement))
                 .collect(),
+            pin,
         },
         Expr::Tuple(items) => Expr::Tuple(
             items
@@ -5738,7 +5740,7 @@ pub fn emit_expr_at(
             let else_ = emit_expr_at(ctx, else_, indent, child, generics)?;
             Ok(format!("(if {cond} {{ {then_} }} else {{ {else_} }})"))
         }
-        Expr::Call { callee, args } => {
+        Expr::Call { callee, args, pin } => {
             // Kernel-dispatch special cases apply ONLY to `Callee::Kernel` —
             // every probe below starts with a `let Callee::Kernel(..) = callee
             // else { return Ok(None) }` gate, so a plain user-function call
@@ -5811,6 +5813,14 @@ pub fn emit_expr_at(
                 }
             }
             let name = callee_name(ctx, callee)?;
+            // #181: a polymorphic-kernel turbofish the lowerer set because the
+            // solver left this call's result type parameter genuinely
+            // unconstrained (a discarded / empty / phantom position). Empty for
+            // every other call — `CallPin::None::turbofish()` is `""` — so an
+            // unpinned call stays byte-identical to the pre-#181 emission. The
+            // suffix goes between the kernel name and its `(` argument list:
+            // `dict_empty::<String, i64>(…)`.
+            let turbofish = pin.turbofish();
             let mut parts = Vec::with_capacity(args.len());
             for arg in args {
                 parts.push(emit_expr_at(ctx, arg, indent, child, generics)?);
@@ -5823,7 +5833,7 @@ pub fn emit_expr_at(
             if matches!(callee, Callee::Kernel(k) if kernel_swaps_first_two(*k)) {
                 parts.reverse();
             }
-            Ok(format!("{name}({})", parts.join(", ")))
+            Ok(format!("{name}{turbofish}({})", parts.join(", ")))
         }
         Expr::Tuple(elems) => {
             // A tuple constructor renders inline as `(e1, e2, ...)`. The IR
@@ -7676,6 +7686,7 @@ fn elide_task_run_tail(expr: &Expr) -> Option<Expr> {
         Expr::Call {
             callee: Callee::Kernel(KernelFn::TaskRun | KernelFn::TaskPerform),
             args,
+            ..
         } => {
             let [inner] = args.as_slice() else {
                 return None;

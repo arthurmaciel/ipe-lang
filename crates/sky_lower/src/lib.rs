@@ -338,7 +338,7 @@ mod tests {
             matches!(&main.body, Expr::Call { .. }),
             "main body is a call"
         );
-        let Expr::Call { callee, args } = &main.body else {
+        let Expr::Call { callee, args, .. } = &main.body else {
             return;
         };
         assert_eq!(*callee, Callee::Kernel(KernelFn::LogPrintln));
@@ -347,6 +347,7 @@ mod tests {
         let Some(Expr::Call {
             callee: c1,
             args: a1,
+            ..
         }) = args.first()
         else {
             return;
@@ -357,6 +358,7 @@ mod tests {
         let Some(Expr::Call {
             callee: c2,
             args: a2,
+            ..
         }) = a1.first()
         else {
             return;
