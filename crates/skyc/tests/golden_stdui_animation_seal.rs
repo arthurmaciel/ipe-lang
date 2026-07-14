@@ -78,17 +78,12 @@ fn build_animation_project(slot: &str) -> (PathBuf, Result<(), skyc::CliError>) 
 /// `Std.Ui.Animation` resolves (no SKY-N0004), type-checks, and the emit lowers
 /// `Animation.attribute` to the four-arg `ui_animate_raw_` native helper.
 ///
-/// IGNORED pending backlog #174: `Std.Ui.Animation` `import`s `Std.Ui.Transform`
-/// (for the `Prop` type + `propsToCss`), and `Std.Ui.Transform`'s refutable
-/// tuple `case`s (`( "transform", v ) -> …`) hit the still-unimplemented
-/// `SKY-L0115 TuplePatternMatch` lowering — an INDEPENDENT pre-existing blocker
-/// (`Std.Ui.Transform` fails to lower on its own, with or without this module).
-/// This module's OWN resolution + kernel wiring is correct (canon + type-check of
-/// `Animation` + `Main` pass; the only diagnostic is a `Lower` error located
-/// inside `<embedded-stdlib>/Std.Ui.Transform`). Flip `#[ignore]` off once #174
-/// lands so this seal begins guarding the full seam end to end.
+/// Un-ignored by #182: `Std.Ui.Transform`'s refutable tuple `case`s
+/// (`( "transform", v ) -> …` — a VARIABLE tuple scrutinee with a string-literal
+/// column) now lower to a native `match pair { (__sg0, v) if __sg0.as_str() ==
+/// "transform" => … }` (a by-value binder + `as_str()` guard), so the whole
+/// `import Std.Ui.Animation` → `Std.Ui.Transform` seam builds end to end.
 #[test]
-#[ignore = "blocked on #174 (SKY-L0115 tuple-pattern-match in the imported Std.Ui.Transform)"]
 #[allow(clippy::expect_used)]
 fn animation_module_resolves_and_emits_kernel() {
     let (emit, res) = build_animation_project("emit");
@@ -120,9 +115,8 @@ fn animation_module_resolves_and_emits_kernel() {
 /// The GREEN GATE: under `SKY_E2E=1` the emitted Cargo project builds and runs,
 /// rendering the CSS `animation:` shorthand — the seal, end to end.
 ///
-/// IGNORED pending backlog #174 (see `animation_module_resolves_and_emits_kernel`).
+/// Un-ignored by #182 (see `animation_module_resolves_and_emits_kernel`).
 #[test]
-#[ignore = "blocked on #174 (SKY-L0115 tuple-pattern-match in the imported Std.Ui.Transform)"]
 fn animation_e2e_builds_and_renders_shorthand() {
     if std::env::var("SKY_E2E").is_err() {
         return;
