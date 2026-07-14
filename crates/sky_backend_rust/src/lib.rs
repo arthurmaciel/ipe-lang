@@ -116,6 +116,31 @@ impl<'a> RustBackend<'a> {
         let ctx = EmitCtx::build(self.interner, program, self.db_driver)?;
         project::emit_module_file(&ctx, program, &rust_file::RustFileId::SkyModule(home.clone()))
     }
+
+    /// Assemble the full split [`EmittedProject`] from already-rendered per-file
+    /// texts — `spine_text` (from [`Self::emit_spine`]) plus `module_texts`
+    /// (`home` → [`Self::emit_module_file`] output). The
+    /// file-count-AGNOSTIC manifest/runtime block is shared verbatim with
+    /// [`Backend::emit`]'s single-file path, so the result is byte-identical to
+    /// [`Backend::emit`]'s output for the same multi-module program (design doc
+    /// §4.4/Task 16 — the `sky_db::emit_manifest` assembly seam). NOT on the
+    /// single-file path; the caller ([`sky_db::emit_manifest`]) invokes it ONLY
+    /// when 2+ distinct homes are present.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any [`Diagnostic`] from [`EmitCtx::build`] or
+    /// [`project::assemble_split_manifest`] (`mod_ident` gates, `RelPath`
+    /// validation, a missing per-home text, the manifest/runtime construction).
+    pub fn assemble_split_manifest(
+        &self,
+        program: &Program,
+        spine_text: &str,
+        module_texts: &BTreeMap<ModPath, String>,
+    ) -> DResult<EmittedProject> {
+        let ctx = EmitCtx::build(self.interner, program, self.db_driver)?;
+        project::assemble_split_manifest(&ctx, program, spine_text, module_texts)
+    }
 }
 
 /// The DISTINCT Sky-module `home`s the backend would emit an OWN Rust file for.

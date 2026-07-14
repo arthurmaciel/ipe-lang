@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use sky_backend::{EmittedProject, RelPath};
 use sky_diagnostics::{DResult, Diagnostic};
-use sky_ir::Program;
+use sky_ir::{ModPath, Program};
 
 use crate::EmitCtx;
 use crate::crate_specs;
@@ -570,6 +570,30 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         rust_sources.push((RelPath::new("src/main.rs")?, out));
     }
 
+    assemble_project_files(ctx, rust_sources)
+}
+
+/// Assemble the final [`EmittedProject`] from the already-rendered Rust source
+/// files (`src/main.rs` plus, in the real split, each `src/sky_mods/<ident>.rs`)
+/// — appending the manifest (`Cargo.toml`) and the trimmed runtime module
+/// files (`sky_runtime/mod.rs` + `config.rs`).
+///
+/// **Factored out of [`emit_program`] (design doc §4.4/Task 16).** This block
+/// is file-count-agnostic — it depends ONLY on `ctx`'s used-kernel flags, never
+/// on how many Rust source files `rust_sources` carries — so the salsa
+/// `emit_manifest` query (`sky_db`) reuses it verbatim after assembling
+/// `rust_sources` from the per-file [`emit_spine`]/[`emit_module_file`] query
+/// outputs, guaranteeing byte-identity with the single-file `emit_program`
+/// path. Kept a shared helper rather than duplicated, exactly as §4.4 requires.
+///
+/// # Errors
+///
+/// Propagates any [`Diagnostic`] from the `Cargo.toml`/runtime-module
+/// construction (e.g. a drifted server/db/tui/webview manifest anchor).
+fn assemble_project_files(
+    ctx: &EmitCtx,
+    rust_sources: Vec<(RelPath, String)>,
+) -> DResult<EmittedProject> {
     // ── Manifest + runtime module files ──────────────────────────────────────
     // The driver (skyc) first copies the full runtime source tree into
     // `<out>/src/sky_runtime/`, then writes the emitted files over the top.
@@ -834,6 +858,112 @@ pub fn emit_module_file(ctx: &EmitCtx, program: &Program, home: &RustFileId) -> 
     }
 
     Ok(out)
+}
+
+/// Assemble the full split [`EmittedProject`] from ALREADY-RENDERED per-file
+/// texts (design doc §4.4/Task 16 — the `emit_manifest` assembly seam).
+///
+/// `spine_text` is [`emit_spine`]'s output; `module_texts` maps each Sky-module
+/// `home` to its [`emit_module_file`] output. This function performs ONLY the
+/// file-count-dependent assembly the single-file [`emit_program`] path also
+/// does in its `>= 2` branch — computing the deterministic first-encounter
+/// module order, the fail-closed `mod_ident` uniqueness gate, the record-struct
+/// disjointness gate, the `main.rs` barrel lines, and the `src/sky_mods/*.rs`
+/// file list — then delegates the file-count-AGNOSTIC manifest/runtime block to
+/// the shared [`assemble_project_files`]. It never re-renders any user item;
+/// the texts are taken verbatim, so the salsa `emit_manifest` query's output is
+/// byte-identical to `emit_program`'s split output for the same program.
+///
+/// PRECONDITION (`>= 2` distinct `SkyModule` homes): this is the real-split
+/// path. The single-home / zero-home collapse case never reaches here —
+/// `emit_manifest` routes it straight to `emit_program` for the byte-identical
+/// single-`main.rs` output (§4.4).
+///
+/// # Errors
+///
+/// Propagates [`Diagnostic`]s from `mod_ident` resolution, the fail-closed
+/// duplicate-`mod`/record-struct-collision gates, [`RelPath`] validation, and
+/// the shared manifest/runtime assembly.
+pub fn assemble_split_manifest(
+    ctx: &EmitCtx,
+    program: &Program,
+    spine_text: &str,
+    module_texts: &BTreeMap<ModPath, String>,
+) -> DResult<EmittedProject> {
+    let partition = partition_items(program, ctx.interner);
+
+    // The distinct `SkyModule` homes in first-encounter (linker/topological)
+    // order — the SAME union `emit_program`'s split branch computes, driving
+    // both the barrel lines and the per-module file list.
+    let mut module_homes: Vec<RustFileId> = Vec::new();
+    let mut seen: BTreeSet<RustFileId> = BTreeSet::new();
+    for id in partition
+        .type_order
+        .iter()
+        .chain(partition.func_order.iter())
+    {
+        if seen.insert(id.clone()) {
+            module_homes.push(id.clone());
+        }
+    }
+
+    // Task 3: fail closed if a synthesised record struct's name collides with a
+    // `mod_ident` (every SkyModule home contributes its ident in the split).
+    let mod_idents: BTreeSet<String> = module_homes
+        .iter()
+        .filter_map(|id| match id {
+            RustFileId::SkyModule(home) => Some(rust_file::resolve_mod_ident(home, ctx.interner)),
+            RustFileId::Spine => None,
+        })
+        .collect::<DResult<BTreeSet<String>>>()?;
+    ctx.assert_record_structs_disjoint_from_type_namespace(&mod_idents)?;
+
+    let mut rust_sources: Vec<(RelPath, String)> = Vec::new();
+
+    // `main.rs` = the given spine text + the flat glob barrel, one pair per
+    // distinct SkyModule home in first-encounter order (byte-identical to
+    // `emit_program`'s split branch).
+    let mut main_rs = spine_text.to_owned();
+    main_rs.push('\n');
+    for id in &module_homes {
+        let RustFileId::SkyModule(home) = id else {
+            continue;
+        };
+        let ident = rust_file::resolve_mod_ident(home, ctx.interner)?;
+        main_rs.push_str("#[path = \"sky_mods/");
+        main_rs.push_str(&ident);
+        main_rs.push_str(".rs\"]\nmod ");
+        main_rs.push_str(&ident);
+        main_rs.push_str(";\npub(crate) use ");
+        main_rs.push_str(&ident);
+        main_rs.push_str("::*;\n");
+    }
+    rust_sources.push((RelPath::new("src/main.rs")?, main_rs));
+
+    // One `src/sky_mods/<ident>.rs` per module, its text taken verbatim from
+    // the demanded per-file query output.
+    for id in &module_homes {
+        let RustFileId::SkyModule(home) = id else {
+            continue;
+        };
+        let ident = rust_file::resolve_mod_ident(home, ctx.interner)?;
+        let text = module_texts
+            .get(home)
+            .ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::project::assemble_split_manifest",
+                detail: format!(
+                    "no rendered text supplied for SkyModule home ident {ident:?} — \
+                 emit_manifest must demand emit_rust_file for every home in \
+                 program_rust_file_ids"
+                ),
+            })?;
+        rust_sources.push((
+            RelPath::new(format!("src/sky_mods/{ident}.rs"))?,
+            text.clone(),
+        ));
+    }
+
+    assemble_project_files(ctx, rust_sources)
 }
 
 /// Narrow a rendered top-level item's leading `pub ` visibility to

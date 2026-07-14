@@ -17,9 +17,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use sky_backend_rust::DbDriver;
-use sky_db::{
-    BuildConfig, Db as _, ModuleOrigin, RustFileId, SkyDatabase, SourceFile, SourceRoot,
-};
+use sky_db::{BuildConfig, Db as _, ModuleOrigin, RustFileId, SkyDatabase, SourceFile, SourceRoot};
 use sky_ir::ModPath;
 
 /// A shared, poison-safe log of executed-query debug keys — the same
@@ -96,7 +94,11 @@ fn mod_path(db: &SkyDatabase, segs: &[&str]) -> ModPath {
     let mut interner = db.interner().lock();
     ModPath(
         segs.iter()
-            .map(|s| interner.intern(s).expect("intern must succeed for a test segment"))
+            .map(|s| {
+                interner
+                    .intern(s)
+                    .expect("intern must succeed for a test segment")
+            })
             .collect(),
     )
 }
@@ -140,10 +142,8 @@ fn rust_file_id_interns_distinct_homes_distinctly() {
 // incrementality is built on.
 const LIB: &str = "module Lib exposing (helper)\n\nhelper : Int\nhelper = 41\n";
 const LIB_BODY_EDIT: &str = "module Lib exposing (helper)\n\nhelper : Int\nhelper = 40\n";
-const MAIN_IMPORTS_LIB: &str =
-    "module Main exposing (answer)\n\nimport Lib exposing (helper)\n\nanswer : Int\nanswer = helper + 1\n";
-const MAIN_EDIT: &str =
-    "module Main exposing (answer)\n\nimport Lib exposing (helper)\n\nanswer : Int\nanswer = helper + 2\n";
+const MAIN_IMPORTS_LIB: &str = "module Main exposing (answer)\n\nimport Lib exposing (helper)\n\nanswer : Int\nanswer = helper + 1\n";
+const MAIN_EDIT: &str = "module Main exposing (answer)\n\nimport Lib exposing (helper)\n\nanswer : Int\nanswer = helper + 2\n";
 const EXTRA: &str = "module Extra exposing (bonus)\n\nbonus : Int\nbonus = 7\n";
 const MAIN_IMPORTS_BOTH: &str = "module Main exposing (answer)\n\n\
     import Lib exposing (helper)\n\
@@ -201,7 +201,11 @@ fn emit_spine_file_memoized_coarse_floor() {
 
     // Byte-equal re-save: boundary no-op, nothing executes.
     log.clear();
-    assert!(!sky_db::set_text_if_changed(&mut db, main, MAIN_IMPORTS_LIB));
+    assert!(!sky_db::set_text_if_changed(
+        &mut db,
+        main,
+        MAIN_IMPORTS_LIB
+    ));
     assert!(sky_db::emit_spine_file(&db, root, main, config).is_ok());
     assert_eq!(log.executions_of("emit_spine_file("), 0);
 
@@ -285,8 +289,15 @@ fn program_rust_file_ids_tracks_module_add_delete() {
     // Add a third module `Extra` with a distinct home; wire `Main` to import
     // it so it is reachable (unreachable modules are DCE'd out of the program).
     let extra = file(&db, &["Extra"], EXTRA);
-    assert!(sky_db::set_text_if_changed(&mut db, main, MAIN_IMPORTS_BOTH));
-    let root3 = root_of(&db, &[(&["Lib"], lib), (&["Main"], main), (&["Extra"], extra)]);
+    assert!(sky_db::set_text_if_changed(
+        &mut db,
+        main,
+        MAIN_IMPORTS_BOTH
+    ));
+    let root3 = root_of(
+        &db,
+        &[(&["Lib"], lib), (&["Main"], main), (&["Extra"], extra)],
+    );
 
     let ids3 = sky_db::program_rust_file_ids(&db, root3, main).expect("three-module program");
     assert_eq!(
@@ -298,5 +309,78 @@ fn program_rust_file_ids_tracks_module_add_delete() {
         ids3.len(),
         ids2.len() + 1,
         "the set grew by exactly one on the module add"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task 16 — emit_manifest (the Spine-collapse invariant at the SALSA layer)
+// ---------------------------------------------------------------------------
+
+/// For a SINGLE-module program, `emit_manifest` must be BYTE-IDENTICAL to
+/// `emit_project` — the Spine-collapse invariant (§3.3), now proven at the
+/// salsa layer, not just the backend layer. This is the property that lets
+/// `compile_prepared` switch its call site from `emit_project` to
+/// `emit_manifest` (§4.4) with zero emitted-byte change.
+#[test]
+#[allow(clippy::expect_used)]
+fn emit_manifest_matches_emit_project_for_single_module() {
+    let (db, _log) = logged_db();
+    // A single user module (no imports) — exactly one distinct home, so the
+    // Spine-collapse branch fires and the whole project is one `src/main.rs`.
+    let main = file(
+        &db,
+        &["Main"],
+        "module Main exposing (answer)\n\nanswer : Int\nanswer = 42\n",
+    );
+    let root = root_of(&db, &[(&["Main"], main)]);
+    let config = BuildConfig::new(&db, DbDriver::Sqlite);
+
+    let via_project =
+        sky_db::emit_project(&db, root, main, config).expect("emit_project must succeed");
+    let via_manifest =
+        sky_db::emit_manifest(&db, root, main, config).expect("emit_manifest must succeed");
+
+    assert_eq!(
+        via_manifest.cargo_toml, via_project.cargo_toml,
+        "Cargo.toml must be byte-identical"
+    );
+    assert_eq!(
+        via_manifest.files, via_project.files,
+        "every emitted file must be byte-identical between emit_manifest and emit_project"
+    );
+}
+
+/// The split-assembly path's own SEAL: for a genuine TWO-module program,
+/// `emit_manifest` (which assembles from the demanded `emit_spine_file` +
+/// per-`emit_rust_file` outputs) must be BYTE-IDENTICAL to `emit_project`
+/// (which renders the split inline). This guards the new
+/// `assemble_split_manifest` seam against drift — a barrel-line, module-order,
+/// or file-path mismatch would surface here rather than as an
+/// exit-0-then-cargo-fail downstream.
+#[test]
+#[allow(clippy::expect_used)]
+fn emit_manifest_matches_emit_project_for_two_modules() {
+    let (db, _log) = logged_db();
+    let (root, _lib, main) = two_module_root(&db);
+    let config = BuildConfig::new(&db, DbDriver::Sqlite);
+
+    // Precondition: this program genuinely splits (2 distinct homes), so
+    // `emit_manifest` takes the assemble_split_manifest path, not the collapse.
+    let homes = sky_db::program_rust_file_ids(&db, root, main).expect("homes");
+    assert_eq!(homes.len(), 2, "fixture must be a genuine 2-home split");
+
+    let via_project =
+        sky_db::emit_project(&db, root, main, config).expect("emit_project must succeed");
+    let via_manifest =
+        sky_db::emit_manifest(&db, root, main, config).expect("emit_manifest must succeed");
+
+    assert_eq!(
+        via_manifest.cargo_toml, via_project.cargo_toml,
+        "Cargo.toml must be byte-identical across the split assembly"
+    );
+    assert_eq!(
+        via_manifest.files, via_project.files,
+        "every emitted file (main.rs barrel + each sky_mods/*.rs) must be byte-identical \
+         between emit_manifest's assemble-from-pieces path and emit_project's inline split"
     );
 }
