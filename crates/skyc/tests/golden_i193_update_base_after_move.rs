@@ -1,0 +1,158 @@
+//! #193 regression — record-UPDATE base borrow ordered AFTER a consuming use.
+//!
+//! **The bug (exposed by the #193 MAX-seed change):** `count_var_uses` did NOT
+//! count the record-update BASE occurrence of `sym` (`{ rec | … }` lowers to
+//! `(rec).clone()` — a borrow, so it was deemed "not a move, don't count").
+//! Under the pre-#193 SUM seed the over-count accidentally kept an earlier
+//! consuming use cloned; the MAX seed removed that slack, so the last *counted*
+//! use (a by-value function argument) was made a bare MOVE while the later
+//! update base still borrowed the (now moved) value → E0382.
+//!
+//! This is the `16-skychess` `selectIfWhite` shape reduced to one file:
+//! a True `if` arm using `model` in an access, a consuming argument, and an
+//! update base (textually last), with the False arm moving `model` out once.
+//!
+//! **The fix:** `count_var_uses` now counts the update base (like `Expr::Access`)
+//! and `rewrite_multiuse_clones` recurses into it, keeping last-counted aligned
+//! with last-textual so the consuming argument is cloned and the update base
+//! borrows a live value.
+//!
+//! Run:
+//! ```text
+//! cargo test -p skyc --test golden_i193_update_base_after_move
+//! SKY_E2E=1 cargo test -p skyc --test golden_i193_update_base_after_move
+//! ```
+
+use std::path::{Path, PathBuf};
+
+mod support;
+
+fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+fn entry_path(root: &Path) -> PathBuf {
+    root.join("tests")
+        .join("golden")
+        .join("i193_update_base_after_move")
+        .join("Main.sky")
+}
+
+/// skyc-0 + emit assertion: the consuming `describe model` argument in the True
+/// arm must be cloned (`model.clone()`) because the update base `{ model | … }`
+/// (a `(model).clone()` borrow) is textually later and needs `model` alive.
+#[test]
+fn i193_update_base_skyc_accepts_and_clones_consuming_use() {
+    let root = repo_root();
+    let entry = entry_path(&root);
+    let out =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_update_base_after_move_skyc_out");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        eprintln!("SKIP i193_update_base_after_move: runtime not available");
+        return;
+    };
+
+    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "skyc build must succeed for i193_update_base_after_move: {:?}",
+        built.err()
+    );
+
+    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
+        .expect("emitted main.rs must exist");
+
+    // The reduced `bump` must exist and the update base must borrow via clone.
+    assert!(
+        emitted.contains("fn main_bump"),
+        "emitted main.rs must contain the bump function; got:\n{emitted}"
+    );
+    // The record update always emits a `.clone()` borrow of its base into
+    // `__sky_rec` — its presence confirms the update shape is exercised.
+    assert!(
+        emitted.contains("__sky_rec") && emitted.contains(").clone();"),
+        "update base must borrow via `let mut __sky_rec = (…).clone();`; \
+         got:\n{emitted}"
+    );
+    // At least two `model.clone()` occurrences: the access `(model.clone()).tag`
+    // AND the consuming `describe(model.clone())` argument.  Pre-fix the
+    // consuming argument was a bare `model` move (ordered before the update
+    // base borrow) → this count would drop below 2 and cargo E0382'd.
+    let clone_hits = emitted.matches("model.clone()").count();
+    assert!(
+        clone_hits >= 2,
+        "expected >= 2 `model.clone()` occurrences (access + consuming arg); \
+         found {clone_hits}. A regression makes the consuming `describe model` \
+         argument a bare move → E0382. Emitted:\n{emitted}"
+    );
+}
+
+/// idempotence: two independent builds produce byte-identical `main.rs`.
+#[test]
+fn i193_update_base_idempotent() {
+    let root = repo_root();
+    let entry = entry_path(&root);
+    let out1 = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_update_base_idempotent_pass1");
+    let out2 = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_update_base_idempotent_pass2");
+    let _ = std::fs::remove_dir_all(&out1);
+    let _ = std::fs::remove_dir_all(&out2);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        eprintln!("SKIP i193_update_base_idempotent: runtime not available");
+        return;
+    };
+
+    let b1 = skyc::build_with_sibling_discovery(&entry, &out1, &runtime);
+    assert!(b1.is_ok(), "pass 1 must succeed: {:?}", b1.err());
+    let b2 = skyc::build_with_sibling_discovery(&entry, &out2, &runtime);
+    assert!(b2.is_ok(), "pass 2 must succeed: {:?}", b2.err());
+
+    let main1 = std::fs::read_to_string(out1.join("src").join("main.rs"))
+        .expect("pass-1 main.rs must exist");
+    let main2 = std::fs::read_to_string(out2.join("src").join("main.rs"))
+        .expect("pass-2 main.rs must exist");
+
+    assert_eq!(
+        main1, main2,
+        "two independent builds must produce byte-identical main.rs (idempotence)"
+    );
+}
+
+/// cargo-0 ∧ run-correct: the emitted project compiles with rustc (no E0382)
+/// and prints the expected line.  Gated on `SKY_E2E=1`.
+#[test]
+fn i193_update_base_cargo_builds_and_runs() {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+
+    let root = repo_root();
+    let entry = entry_path(&root);
+    let out = std::env::temp_dir().join("skyc_i193_update_base_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve for E2E");
+    let Ok(runtime) = runtime else { return };
+
+    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
+
+    let outcome = support::build_and_run_emitted("i193_update_base_after_move", &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "i193_update_base_after_move must exit 0 (no E0382); stdout: {:?}",
+        outcome.stdout
+    );
+    // bump True {tag=sky, score=41} → ({tag=sky, score=42}, "sky/sky#41")
+    // bump False {tag=zzz, score=7} → ({tag=zzz, score=7}, "idle")
+    assert!(
+        outcome.stdout.contains("sky 42 sky/sky#41 | zzz idle"),
+        "unexpected stdout: {:?}",
+        outcome.stdout
+    );
+}

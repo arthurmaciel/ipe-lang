@@ -1,0 +1,137 @@
+//! #193 D5 regression — `Ui.onInput`/`Ui.onChange` inline-wrap emitter sites.
+//!
+//! A non-Copy record captured into a `Ui.onInput` callback AND reused by a
+//! sibling `onPress` button in the same view.
+//!
+//! **Pre-fix:** `skyc` exits 0, but the emitted Rust fails `cargo build` with
+//! E0382 ("use of moved value").  The lowerer's multi-use-clone rewrite wraps
+//! the `onInput` Lambda in `let item = item.clone(); Lambda { … }`, but the
+//! inline-wrap emitter (`KernelFn::UiOnInput`) then places the whole block
+//! inside `Arc::new(move |_x| …)`.  The outer `move` still move-captures the
+//! free outer `item`, so the sibling `onPress` hits use-after-move.
+//!
+//! This is the same bug shape as #191 (`onChange` FIELD path), which was fixed
+//! by `emit_arc_callback_field`.  That fix covered only the `on_change` FIELD
+//! path (via `input_checkbox_`/`Input.*` call arguments), NOT the two inline
+//! `Arc::new(move …)` wraps synthesized by the `UiOnInput`/`UiOnChange` kernel
+//! arms in `emit_expr.rs`.
+//!
+//! **Fix (D5):** route `KernelFn::UiOnInput` and `KernelFn::UiOnChange` through
+//! `emit_arc_callback_field`, which peels leading pure-alias `let`s OUTSIDE the
+//! synthesized `Arc`'s `move` closure.  Output is byte-identical when no
+//! capture-clone `let`s are present.
+//!
+//! Run:
+//! ```text
+//! # fast (no cargo):
+//! cargo test -p skyc --test golden_i193_oninput_reused_capture
+//!
+//! # full E2E:
+//! SKY_E2E=1 cargo test -p skyc --test golden_i193_oninput_reused_capture
+//! ```
+
+use std::path::{Path, PathBuf};
+
+mod support;
+
+fn repo_root() -> PathBuf {
+    let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
+fn entry_path(root: &Path) -> PathBuf {
+    root.join("tests")
+        .join("golden")
+        .join("i193_oninput_reused_capture")
+        .join("Main.sky")
+}
+
+/// skyc-0: the compiler must accept the program AND emit the capture-clone `let`
+/// OUTSIDE the `ui_on_input_` Arc closure — checked unconditionally (no cargo).
+///
+/// This is the exact assertion that the E0382 SEAL break cannot recur for the
+/// `Ui.onInput` inline-wrap path: the pre-clone must sit before `Arc::new`,
+/// never inside its `move |_x|` body.
+#[test]
+fn i193_oninput_skyc_accepts_and_hoists_capture_clone() {
+    let root = repo_root();
+    let entry = entry_path(&root);
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("i193_oninput_reused_capture_skyc_out");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        eprintln!("SKIP i193_oninput_reused_capture: runtime not available");
+        return;
+    };
+
+    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "skyc build must succeed for i193_oninput_reused_capture: {:?}",
+        built.err()
+    );
+
+    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
+        .expect("emitted main.rs must exist");
+
+    // The capture-clone `let` must be HOISTED outside the `ui_on_input_` Arc
+    // closure — `let item = item.clone(); ::std::sync::Arc::new(…)`.
+    // This is the #193/#191 parity: same hoist that #191 established for the
+    // onChange FIELD path, now applied to the UiOnInput inline-wrap path.
+    assert!(
+        emitted.contains("let item = item.clone(); ::std::sync::Arc::new"),
+        "capture-clone must be hoisted OUTSIDE the Arc `move` closure (#193 D5); \
+         got main.rs:\n{emitted}"
+    );
+
+    // Guard against the pre-fix shape: the clone must NOT sit inside the Arc's
+    // `move |_x|` body, which would re-move the free outer `item`.
+    assert!(
+        !emitted.contains("Arc::new(move |_x| (({ let item = item.clone();"),
+        "capture-clone must NOT sit inside the Arc `move` closure (the pre-fix \
+         E0382 shape); got main.rs:\n{emitted}"
+    );
+}
+
+/// cargo-0 ∧ run-correct: emitted project compiles (no E0382) and renders the
+/// row.  Gated on `SKY_E2E=1` — the only check that catches the original SEAL
+/// violation (E0382 from `cargo build`, invisible to `skyc`).
+#[test]
+fn i193_oninput_cargo_builds_and_runs() {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+
+    let root = repo_root();
+    let entry = entry_path(&root);
+    let out = std::env::temp_dir().join("skyc_i193_oninput_reused_capture_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = skyc::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve for E2E");
+    let Ok(runtime) = runtime else { return };
+
+    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "skyc build must succeed: {:?}",
+        built.err()
+    );
+
+    let outcome = support::build_and_run_emitted("i193_oninput_reused_capture", &out);
+    assert_eq!(
+        outcome.exit_code,
+        Some(0),
+        "i193_oninput_reused_capture must exit 0 (no E0382); stdout: {:?}",
+        outcome.stdout
+    );
+    // The reused `item` renders both the input label AND the Remove button label
+    // — proof the binding survived every consuming site.
+    let stdout = &outcome.stdout;
+    assert!(
+        stdout.contains("apple") && stdout.contains("Remove"),
+        "must render the row (item name `apple` + `Remove` button) through the \
+         reused `item` binding; got: {stdout:?}"
+    );
+}

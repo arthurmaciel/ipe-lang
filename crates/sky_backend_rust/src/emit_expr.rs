@@ -4389,8 +4389,7 @@ fn emit_ui_call(
                 "sky_backend_rust::emit_ui_call::InputText::label",
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let on_change_s =
-                emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
+            let on_change_s = emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
             let text_s = emit_expr_at(ctx, text_e, indent, child, generics)?;
             let placeholder_s = emit_expr_at(ctx, placeholder_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
@@ -4452,8 +4451,7 @@ fn emit_ui_call(
                 "sky_backend_rust::emit_ui_call::InputMultiline::spellcheck",
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let on_change_s =
-                emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
+            let on_change_s = emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
             let text_s = emit_expr_at(ctx, text_e, indent, child, generics)?;
             let placeholder_s = emit_expr_at(ctx, placeholder_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
@@ -4501,8 +4499,7 @@ fn emit_ui_call(
                 "sky_backend_rust::emit_ui_call::InputCheckbox::label",
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let on_change_s =
-                emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
+            let on_change_s = emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
             let icon_s = emit_arc_callback_field(ctx, icon_e, indent, child, generics)?;
             let checked_s = emit_expr_at(ctx, checked_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
@@ -4562,8 +4559,7 @@ fn emit_ui_call(
                 "sky_backend_rust::emit_ui_call::InputSlider::label",
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let on_change_s =
-                emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
+            let on_change_s = emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
             let value_s = emit_expr_at(ctx, value_e, indent, child, generics)?;
             let min_s = emit_expr_at(ctx, min_e, indent, child, generics)?;
             let max_s = emit_expr_at(ctx, max_e, indent, child, generics)?;
@@ -4628,8 +4624,7 @@ fn emit_ui_call(
                 "sky_backend_rust::emit_ui_call::InputRadio::label",
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let on_change_s =
-                emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
+            let on_change_s = emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
             let options_s = emit_expr_at(ctx, options_e, indent, child, generics)?;
             let selected_s = emit_expr_at(ctx, selected_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
@@ -4677,8 +4672,7 @@ fn emit_ui_call(
                 "sky_backend_rust::emit_ui_call::InputRadioRow::label",
             )?;
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
-            let on_change_s =
-                emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
+            let on_change_s = emit_arc_callback_field(ctx, on_change_e, indent, child, generics)?;
             let options_s = emit_expr_at(ctx, options_e, indent, child, generics)?;
             let selected_s = emit_expr_at(ctx, selected_e, indent, child, generics)?;
             let label_s = emit_expr_at(ctx, label_e, indent, child, generics)?;
@@ -5037,6 +5031,15 @@ fn emit_ui_call(
         }
 
         // `Ui.onInput : (String -> msg) -> Attribute msg`  (T6: Arc-wrap the fn)
+        //
+        // #193 D5: route through `emit_arc_callback_field` so any lowerer-hoisted
+        // capture-clone `let`s (pre-clone `Let { value: CloneVar }` wrapping the
+        // Lambda) are peeled OUTSIDE the synthesized `Arc::new(move |_x| …)`.
+        // Without this, the outer `move` still move-captures the free outer binding
+        // and a sibling use hits E0382 — the exact #191 bug shape applied to the
+        // inline-wrap sites (the #191 fix covered only the on_change FIELD path).
+        // When there are no leading pure-alias `let`s, `emit_arc_callback_field`
+        // produces output byte-identical to the previous `arc_callback_wrap` call.
         KernelFn::UiOnInput => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -5044,15 +5047,15 @@ fn emit_ui_call(
                     detail: format!("Ui.onInput requires 1 argument, got {}", args.len()),
                 });
             };
-            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
-            // Arc-wrap: the runtime needs Arc<dyn Fn(String)->M+Send+Sync>.
-            // `f` is a 'static emitted Sky fn; `move` captures it by value.
+            // Peel any leading capture-clone `let`s outside the Arc closure (#193/#191).
+            let peeled = emit_arc_callback_field(ctx, f_e, indent, child, generics)?;
             Ok(Some(format!(
-                "sky_runtime::ui::helpers::ui_on_input_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
+                "sky_runtime::ui::helpers::ui_on_input_({peeled})"
             )))
         }
 
         // `Ui.onChange : (String -> msg) -> Attribute msg`  (T6: Arc-wrap)
+        // #193 D5: same peel-hoist as UiOnInput above.
         KernelFn::UiOnChange => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -5060,9 +5063,9 @@ fn emit_ui_call(
                     detail: format!("Ui.onChange requires 1 argument, got {}", args.len()),
                 });
             };
-            let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let peeled = emit_arc_callback_field(ctx, f_e, indent, child, generics)?;
             Ok(Some(format!(
-                "sky_runtime::ui::helpers::ui_on_change_(::std::sync::Arc::new(move |_x| ({f_s})(_x)))"
+                "sky_runtime::ui::helpers::ui_on_change_({peeled})"
             )))
         }
 

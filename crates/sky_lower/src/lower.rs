@@ -2498,12 +2498,22 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
             };
             in_value + in_body
         }
+        // Arms are mutually exclusive (only one runs at runtime), so the
+        // whole-body peak is `count(cond) + max(then, else)`.  SUM would
+        // over-count: the driver seeds `remaining` too high → the
+        // syntactically-last use inside the taken branch is spuriously cloned
+        // (efficiency regression for CloneOk; E0599 for non-Clone types).
+        // MAX is safe here because `count_var_uses` feeds a SEED, not a
+        // consumed counter — the actual consumption is done via the per-arm
+        // snapshot/restore in `rewrite_multiuse_clones`.
         Expr::If { cond, then_, else_ } => {
-            count_var_uses(sym, cond) + count_var_uses(sym, then_) + count_var_uses(sym, else_)
+            count_var_uses(sym, cond) + count_var_uses(sym, then_).max(count_var_uses(sym, else_))
         }
         Expr::Match(m) => {
             let in_scrut = count_var_uses(sym, m.scrutinee());
-            let in_arms: usize = m
+            // MAX over arms: only one arm executes at runtime, so the peak
+            // consumption on any single path is the maximum over arm bodies.
+            let arm_max: usize = m
                 .arms()
                 .iter()
                 .map(|arm| {
@@ -2513,8 +2523,9 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
                         count_var_uses(sym, &arm.body)
                     }
                 })
-                .sum();
-            in_scrut + in_arms
+                .max()
+                .unwrap_or(0);
+            in_scrut + arm_max
         }
         Expr::BinOp { lhs, rhs, .. } => count_var_uses(sym, lhs) + count_var_uses(sym, rhs),
         Expr::Call { args, .. } => args.iter().map(|a| count_var_uses(sym, a)).sum(),
@@ -2529,12 +2540,20 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
         }
         Expr::Record(fields) => fields.iter().map(|(_, e)| count_var_uses(sym, e)).sum(),
         // `Update.record` — `emit_update` wraps it as `(record).clone()`, which
-        // BORROWS the record (`.clone()` takes `&self`).  `sym` is NOT moved here.
-        // Only the new FIELD VALUES (fields.values) are consuming positions.
-        Expr::Update { fields, .. } => fields
-            .iter()
-            .map(|(_, e)| count_var_uses(sym, e))
-            .sum::<usize>(),
+        // BORROWS the record (`.clone()` takes `&self`).  `sym` is NOT moved by
+        // the base position, but the base IS a textual OCCURRENCE of `sym` that
+        // reads it.  We MUST count it (exactly like `Expr::Access` below) so the
+        // "last use → bare move" optimisation never fires on an EARLIER consuming
+        // use while a later borrow of `sym` (this base) still needs it alive.
+        // Counting the base keeps last-counted == last-textual, preserving
+        // soundness (E0382 otherwise — a bare move ordered before this borrow).
+        Expr::Update { record, fields } => {
+            count_var_uses(sym, record)
+                + fields
+                    .iter()
+                    .map(|(_, e)| count_var_uses(sym, e))
+                    .sum::<usize>()
+        }
         Expr::Ctor { args, .. } => args.iter().map(|a| count_var_uses(sym, a)).sum(),
         Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
             count_var_uses(sym, effect) + count_var_uses(sym, rest)
@@ -3146,6 +3165,25 @@ fn reject_fn_value_reuse(sym: Symbol, ir_ty: &IrType, body: &Expr, span: Span) -
     Ok(())
 }
 
+/// The MAX use-count across all non-shadowing arms of a (post-scrutinee-rewrite)
+/// `Match` node, for restoring the shared `remaining` counter after the per-arm
+/// snapshot pass in `rewrite_multiuse_clones`.
+///
+/// Returns 0 when there are no arms or every arm pattern shadows `sym`.
+fn match_arm_peak_uses(sym: Symbol, m: &sky_ir::Match) -> usize {
+    m.arms()
+        .iter()
+        .map(|arm| {
+            if pat_binds_symbol(&arm.pat, sym) {
+                0
+            } else {
+                count_var_uses(sym, &arm.body)
+            }
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 /// Rewrite `Var(sym)` / `Lambda`-captures of `sym` in DFS left-to-right order
 /// so that all but the syntactically last occurrence are `.clone()`d.
 ///
@@ -3239,11 +3277,30 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
             lhs: Box::new(rewrite_multiuse_clones(sym, remaining, *lhs)),
             rhs: Box::new(rewrite_multiuse_clones(sym, remaining, *rhs)),
         },
-        Expr::If { cond, then_, else_ } => Expr::If {
-            cond: Box::new(rewrite_multiuse_clones(sym, remaining, *cond)),
-            then_: Box::new(rewrite_multiuse_clones(sym, remaining, *then_)),
-            else_: Box::new(rewrite_multiuse_clones(sym, remaining, *else_)),
-        },
+        // #193 — `If` branches are mutually exclusive.  Each branch gets its own
+        // per-arm counter seeded from its own use-count plus a phantom +1 when
+        // the value escapes the `If` (v3 C1: post-if liveness = after_cond - max > 0).
+        // The shared counter is restored by subtracting the MAX branch use-count.
+        Expr::If { cond, then_, else_ } => {
+            let new_cond = Box::new(rewrite_multiuse_clones(sym, remaining, *cond));
+            let after_cond = *remaining;
+            let then_count = count_var_uses(sym, &then_);
+            let else_count = count_var_uses(sym, &else_);
+            let peak = then_count.max(else_count);
+            // phantom +1 when sym is live after the If (post-branch tail uses)
+            let tail_live = after_cond.saturating_sub(peak) > 0;
+            let phantom = usize::from(tail_live);
+            let mut then_rem = then_count + phantom;
+            let mut else_rem = else_count + phantom;
+            let new_then = Box::new(rewrite_multiuse_clones(sym, &mut then_rem, *then_));
+            let new_else = Box::new(rewrite_multiuse_clones(sym, &mut else_rem, *else_));
+            *remaining = after_cond.saturating_sub(peak);
+            Expr::If {
+                cond: new_cond,
+                then_: new_then,
+                else_: new_else,
+            }
+        }
         // `value` is in the outer scope; `body` is shadowed if `name == sym`.
         Expr::Let { name, value, body } => {
             let new_value = Box::new(rewrite_multiuse_clones(sym, remaining, *value));
@@ -3275,22 +3332,45 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
                 body: new_body,
             }
         }
+        // #193 — Match arms are mutually exclusive.  Rewrite the scrutinee with
+        // the shared counter (it runs unconditionally), then give each arm body
+        // its OWN counter — per-arm snapshot/restore (v3 C1).
+        //
+        // Per-arm seed = arm's own use-count + phantom +1 when `sym` is live
+        // after the match (post-match tail uses exist).  The phantom +1 biases
+        // the arm's real last use to `.clone()` so the tail's move stays sound.
+        // Shared counter is restored to `after_scrut - peak` (REAL peak, no
+        // phantom), so downstream tail uses see the correct residual.
         Expr::Match(m) => {
-            // `remaining` is one `&mut` counter threaded through scrutinee and
-            // bodies — rewrite the scrutinee first (DFS order, as before), then
-            // map the bodies with an identity scrutinee_map (E0524 otherwise).
+            // Step 1: rewrite scrutinee (unconditional — threads shared counter).
             let m = m.map_scrutinee(|scrutinee| rewrite_multiuse_clones(sym, remaining, scrutinee));
-            Expr::Match(m.map_bodies(
+            let after_scrut = *remaining;
+
+            // Step 2: compute per-arm seeds before we move `m`.
+            // peak = MAX real use-count over non-shadowing arms.
+            let peak = match_arm_peak_uses(sym, &m);
+            // phantom +1 when sym survives past the match
+            let tail_live = after_scrut.saturating_sub(peak) > 0;
+            let phantom = usize::from(tail_live);
+
+            // Step 3: rewrite each arm body with its own independent counter.
+            let m = m.map_bodies(
                 |scrutinee| scrutinee,
                 |pat, body, guard| {
-                    let new_body = if pat_binds_symbol(pat, sym) {
-                        body
+                    if pat_binds_symbol(pat, sym) {
+                        (body, guard)
                     } else {
-                        rewrite_multiuse_clones(sym, remaining, body)
-                    };
-                    (new_body, guard)
+                        let arm_count = count_var_uses(sym, &body);
+                        let mut arm_remaining = arm_count + phantom;
+                        let new_body = rewrite_multiuse_clones(sym, &mut arm_remaining, body);
+                        (new_body, guard)
+                    }
                 },
-            ))
+            );
+
+            // Step 4: restore shared counter using the REAL peak (no phantom).
+            *remaining = after_scrut.saturating_sub(peak);
+            Expr::Match(m)
         }
         Expr::Call { callee, args, pin } => Expr::Call {
             callee,
@@ -3359,15 +3439,27 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
             field_ty,
         },
         // `Update.record` is always wrapped in `(record).clone()` by `emit_update`
-        // (a borrow via `Clone::clone(&self)`).  Only the field VALUES are consuming
-        // positions; leave `record` bare.
-        Expr::Update { record, fields } => Expr::Update {
-            record,
-            fields: fields
-                .into_iter()
-                .map(|(k, v)| (k, rewrite_multiuse_clones(sym, remaining, v)))
-                .collect(),
-        },
+        // (a borrow via `Clone::clone(&self)`), so the base never MOVES `sym`.
+        // We still recurse into `record` (like `Expr::Access`) so the shared
+        // `remaining` counter advances through this occurrence — `count_var_uses`
+        // now counts it.  Whether the base lands as `Var` (last, stays bare — the
+        // borrow keeps `sym` alive) or `CloneVar` (non-last) is immaterial to the
+        // base's own soundness; recursing simply keeps last-counted aligned with
+        // last-textual so an EARLIER consuming use is not spuriously made bare.
+        //
+        // NOTE ordering: `record` is the FIRST-emitted subexpression of an Update
+        // (`(base).clone()` precedes the field assignments), so it must be
+        // rewritten BEFORE the field values to match DFS/emit order.
+        Expr::Update { record, fields } => {
+            let record = Box::new(rewrite_multiuse_clones(sym, remaining, *record));
+            Expr::Update {
+                record,
+                fields: fields
+                    .into_iter()
+                    .map(|(k, v)| (k, rewrite_multiuse_clones(sym, remaining, v)))
+                    .collect(),
+            }
+        }
         Expr::Ctor {
             home,
             ty,

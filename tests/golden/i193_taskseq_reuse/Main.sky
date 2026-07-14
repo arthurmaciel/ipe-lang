@@ -1,0 +1,41 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Std.Log exposing (println)
+
+
+-- #193 taskseq/pipeline reuse: a CloneOk binding captured into a task_and_then
+-- continuation AND used again after it (the 07-todo-cli shape).
+--
+-- `conn` here is a String (CloneOk) representing a connection label; it is used
+-- inside a Task.andThen lambda AND again in the trailing expression.
+-- `lower_let_pvar` at :13054 reaches the TaskSeq recursion so this shape is
+-- already covered on HEAD — this golden is a LOCK, not a fix.
+--
+-- Pre-fix: may have been E0382 if `lower_let_pvar` did not reach pipeline closures.
+-- Post-fix + lock: skyc-0 → cargo-0 → run prints the expected two lines.
+runQuery : String -> Task Error String
+runQuery conn =
+    Task.andThen
+        (\rows ->
+            Task.succeed (conn ++ ": " ++ rows)
+        )
+        (Task.succeed "row1,row2")
+
+
+main : Task Error ()
+main =
+    let
+        conn = "db://localhost"
+    in
+    Task.andThen
+        (\result ->
+            println result
+        )
+        (Task.andThen
+            (\_ ->
+                runQuery conn
+            )
+            (println ("connecting to " ++ conn))
+        )
