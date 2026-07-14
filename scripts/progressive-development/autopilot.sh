@@ -419,7 +419,15 @@ For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <s
         glog="/tmp/autopilot-guardian-c$cycle-$done_guard.log"
         dlog="/tmp/autopilot-guardian-design-c$cycle-$done_guard.log"   # tee'd so watch.sh follows the design stream live
         rlog="/tmp/autopilot-guardian-review-c$cycle-$done_guard.log"   # tee'd so watch.sh follows the review stream live
-        rm -rf "$gwt"; git worktree add --quiet -b "$gbr" "$gwt" "$BASE" || { mark BLOCKED "$class" "$gdesc"; continue; }
+        # Collision-proof: a SIGKILLed prior run leaves the worktree registration
+        # AND the branch behind, so a plain `-b` add fails 'branch already exists'
+        # and the item is wrongly marked BLOCKED. Force-clear both first — the
+        # branch is ephemeral scratch (any real prior attempt's diff is preserved
+        # by save_resume), so deleting it loses nothing.
+        git worktree remove --force "$gwt" 2>/dev/null || true
+        rm -rf "$gwt"
+        git branch -D "$gbr" 2>/dev/null || true
+        git worktree add --quiet -b "$gbr" "$gwt" "$BASE" || { mark BLOCKED "$class" "$gdesc"; continue; }
 
         # ── v4 stage 1: DESIGN — Opus on the FIRST attempt; REUSED from the saved
         # plan on a RETRY. A REVIEW: REJECT usually means the impl was wrong, not the
