@@ -257,6 +257,17 @@ impl BoundSet {
     /// concrete element type, not just the one instantiation the function
     /// happened to be lowered against.
     const SQL_PARAM: u16 = 1 << 10;
+    /// The `SkyRow` bound (#177): a wildcard `any` generic that flows into a
+    /// `Db.get*` field accessor (`Db.getString`/`getInt`/`getBool`/`getField`)
+    /// gains `sky_runtime::db::SkyRow` so the generic body type-checks and
+    /// monomorphises per call site against the row's real shape (a query result
+    /// `Dict String String`, a pub/sub `Dict` payload, or the typed `LiveReq` an
+    /// `init` handler receives). The runtime's `db_get_*` helpers are generic
+    /// over `R: SkyRow`; without this bound the emitted body's `db_get_string(_,
+    /// &payload)` call cannot prove `payload: SkyRow` (E0277). Added ONLY to the
+    /// wildcard `any` variable and ONLY when the body actually calls a `db_get_*`
+    /// — no blast radius on genuine named type variables (`a`, `msg`).
+    const SKY_ROW: u16 = 1 << 11;
 
     /// The empty bound set: an unconstrained, structurally-parametric variable.
     pub const UNBOUNDED: Self = Self(0);
@@ -348,6 +359,13 @@ impl BoundSet {
         Self(self.0 | Self::SQL_PARAM)
     }
 
+    /// This set with the `SkyRow` (Db field-accessor row) bound — see
+    /// [`Self::SKY_ROW`].
+    #[must_use]
+    pub const fn with_sky_row(self) -> Self {
+        Self(self.0 | Self::SKY_ROW)
+    }
+
     /// Whether the `Add` bound is set.
     #[must_use]
     pub const fn has_add(self) -> bool {
@@ -401,6 +419,13 @@ impl BoundSet {
     #[must_use]
     pub const fn has_sql_param(self) -> bool {
         self.0 & Self::SQL_PARAM != 0
+    }
+
+    /// Whether the `SkyRow` (Db field-accessor row) bound is set — see
+    /// [`Self::SKY_ROW`].
+    #[must_use]
+    pub const fn has_sky_row(self) -> bool {
+        self.0 & Self::SKY_ROW != 0
     }
 }
 
