@@ -40,7 +40,7 @@
 #     Integrity comes from running-from-committed + probing, NOT from recompiling.
 #
 # Config (env): PROGDEV_MAX_CYCLES (100 backstop) · PROGDEV_MAX_GUARDIAN (2/cycle) ·
-#   PROGDEV_LANES (2) · PROGDEV_AUTHOR_MODEL (sonnet) · PROGDEV_GUARDIAN_MODEL /
+#   PROGDEV_LANES (2) · PROGDEV_AUTHOR_MODEL (opus 4.8) · PROGDEV_GUARDIAN_MODEL /
 #   PROGDEV_RECONCILE_MODEL (opus) · touch autopilot.stop to halt after the cycle.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
@@ -55,8 +55,8 @@ STREAM="${PROGDEV_STREAM:-1}"                 # DEFAULT ON (watch.sh renders it)
 WATCH="${PROGDEV_WATCH:-1}"                   # 1 = auto-launch watch.sh alongside (one terminal); 0 / --no-watch disables
 CONTEXT="$REPO/$HERE/context.md"             # operating contract: 6 principles + 2 rules + the seal
 GUARDIAN_MODEL="${PROGDEV_GUARDIAN_MODEL:-claude-opus-4-8}"
-AUTHOR_MODEL="${PROGDEV_AUTHOR_MODEL:-claude-sonnet-4-6}"   # Sonnet implements the design
-DESIGN_MODEL="${PROGDEV_DESIGN_MODEL:-claude-fable-5}"      # v5: Fable designs — out-reasoned Opus on 27 (found the Dict-carrier TypeId soundness fix Opus missed); Sonnet implements
+AUTHOR_MODEL="${PROGDEV_AUTHOR_MODEL:-claude-opus-4-8}"     # all stages default to Opus 4.8 (2026-07-14); override via env
+DESIGN_MODEL="${PROGDEV_DESIGN_MODEL:-claude-opus-4-8}"     # Fable NO LONGER AUTHORIZED — Opus 4.8 (override via PROGDEV_DESIGN_MODEL)
 GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
 QUEUE="docs/architecture/progressive-development-queue.tsv"   # ATTEMPT LEDGER only (mark/attempts_of) — NOT the work source
 BACKLOG="$HERE/backlog.jsonl"                                 # THE work source: pending items (SSOT)
@@ -140,7 +140,7 @@ Env vars (defaults):
   PROGDEV_FUZZ_ITERS      (30)     no-panic fuzzer iters (measure sweep + guardian gate)
   PROGDEV_STREAM          (1)      agents emit stream-json for the live view; 0 = plain-text logs
   PROGDEV_WATCH           (1)      auto-launch watch.sh alongside (one terminal); 0 = don't (== --no-watch)
-  PROGDEV_AUTHOR_MODEL    (claude-sonnet-4-6)   mechanical-lane model
+  PROGDEV_AUTHOR_MODEL    (claude-opus-4-8)     implementer (impl-stage) model
   PROGDEV_GUARDIAN_MODEL  (claude-opus-4-8)     guardian / triage / audit / review model
   PROGDEV_RECONCILE_MODEL (claude-opus-4-8)     merge-conflict reconcile model (via orchestrate.sh)
   MASTER_GATE_TARGET      (~/.cache/master-gate-target)   isolated gate target dir
@@ -172,7 +172,7 @@ ensure_mem_guard() {
     die "mem-guard.sh failed to start within 5s (see /tmp/mem-guard.out)"
 }
 
-# Opus/Sonnet dispatch. EVERY autopilot agent (triage/audit/guardian/review) is
+# Agent dispatch. EVERY autopilot agent (design/impl/guardian/audit/review) is
 # handed the operating contract via --append-system-prompt-file, so all of them
 # obey the 6 principles + 2 rules + the seal (skyc exit-0 ⟹ cargo exit-0) — the
 # contract is not optional for any tier.
@@ -435,7 +435,7 @@ For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <s
             log "guardian [$class] · design REUSED (attempt $datt — impl refines the prior plan against the rejection)"
             design_text="$(cat "$dplan")"; cp -f "$dplan" "$dfile"; : > "$dlog"
         else
-            phase design fable
+            phase design opus
             design="$(agent "$DESIGN_MODEL" "You are a compiler guardian DESIGNER specialising in $class. Do NOT write code. Produce a concise root-cause + fix PLAN: (a) the root cause, (b) the exact crates/files/functions to change, (c) the approach — matching the ../sky READ-ONLY reference, root-cause only, NEVER a hack/fixture-edit/gate-weakening, (d) the regression test to add. FOCUS: $(guardian_focus "$class"). Item: $gdesc .$(resume_hint "$gdesc") If there is NO sound fix (needs a human decision, genuinely multi-session, or would require a hack), print exactly 'DESIGN: ESCALATE <why>' and nothing else. Otherwise print 'DESIGN: <the plan>'." | tee "$dlog")"
             if printf '%s' "$design" | rg -q 'DESIGN: ESCALATE'; then
                 log "guardian [$class] · design → ESCALATE"
@@ -448,10 +448,10 @@ For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <s
             printf '%s\n' "$design_text" > "$dfile"
         fi
 
-        # ── v4 stage 2: Sonnet IMPL — follows the plan FILE ($dfile), never argv
+        # ── v4 stage 2: IMPL (Opus) — follows the plan FILE ($dfile), never argv
         # (PROGDEV_STREAM=1 $design is many-KB stream-json → ARG_MAX E2BIG). On a
         # retry resume_hint points impl at the prior diff + why it was rejected.
-        phase impl sonnet
+        phase impl opus
         ( cd "$gwt"; CARGO_TARGET_DIR="$GUARDIAN_TARGET" \
           agent "$AUTHOR_MODEL" "You are the IMPLEMENTER. READ the DESIGN plan at $dfile FIRST, then follow it EXACTLY — do NOT redesign or deviate from it. Obey the operating contract (6 principles + 2 rules + the seal). Item: $gdesc .$(resume_hint "$gdesc") Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY. Implement the fix + the regression test the design names. SELF-CHECK (do NOT run the full workspace test suite — the integration gate runs that once): (1) 'cargo clippy --workspace --all-targets -- -D warnings' is clean; (2) 'cargo build -p skyc', then rebuild the failing example and confirm its ORIGINAL diagnostic is GONE. Iterate until BOTH pass (cap ~3 tries). Then 'git add -A && git commit'. Final line: 'IMPL: DONE' or 'IMPL: STUCK <why>'." ) >"$glog" 2>&1
         ahead="$(git rev-list --count "$BASE..$gbr" 2>/dev/null || echo 0)"
