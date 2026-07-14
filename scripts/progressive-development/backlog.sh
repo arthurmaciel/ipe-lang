@@ -23,7 +23,12 @@
 # 2026-07-12: an empty-but-no-error result on `--phase "CI, oracle & publish"`
 # is exactly the silent-wrong-answer failure mode this project's principles
 # forbid — caught while building the first status report off this tool).
-#   backlog.sh add --priority P --phase PH --task T --notes N [--spec S]
+#   backlog.sh view [board|ready|graph]   # dependency-aware view of pending work:
+#       board  (default) — priority-ordered table + READY/blk state per task
+#       ready            — pending tasks whose blockers are all done (actionable)
+#       graph            — Mermaid `graph TD` (blocker --> dependent) on stdout;
+#                          pipe to a renderer, or paste in a ```mermaid fence.
+#   backlog.sh add --priority P --phase PH --task T --notes N [--spec S] [--blocked-by "193,194"]
 #   backlog.sh claim <id> [<id>...]
 #   backlog.sh unclaim <id> [<id>...]
 #   backlog.sh close <id> --done-at YYYY-MM-DD
@@ -84,13 +89,14 @@ cmd_show() {
 }
 
 cmd_add() {
-    local priority="" phase="" task="" notes="" spec=""
+    local priority="" phase="" task="" notes="" spec="" blocked_by=""
     while [ $# -gt 0 ]; do case "$1" in
-        --priority) priority="$2"; shift 2 ;;
-        --phase)    phase="$2"; shift 2 ;;
-        --task)     task="$2"; shift 2 ;;
-        --notes)    notes="$2"; shift 2 ;;
-        --spec)     spec="$2"; shift 2 ;;
+        --priority)   priority="$2"; shift 2 ;;
+        --phase)      phase="$2"; shift 2 ;;
+        --task)       task="$2"; shift 2 ;;
+        --notes)      notes="$2"; shift 2 ;;
+        --spec)       spec="$2"; shift 2 ;;
+        --blocked-by) blocked_by="$2"; shift 2 ;;   # comma-separated ids, e.g. "193,194"
         *) die "add: unknown arg $1" ;;
     esac; done
     [ -n "$priority" ] && [ -n "$phase" ] && [ -n "$task" ] || die "add: --priority --phase --task are required"
@@ -104,11 +110,14 @@ cmd_add() {
         local id="$next"
         jq -cn --arg id "$id" --arg priority "$priority" --arg phase "$phase" \
                --arg task "#$id $task" --arg notes "$notes" --arg spec "$spec" \
-               '{id:$id, priority:$priority, phase:$phase, task:$task, notes:$notes, spec:$spec, status:"pending"}' \
+               --arg blocked_by "$blocked_by" \
+               '{id:$id, priority:$priority, phase:$phase, task:$task, notes:$notes, spec:$spec,
+                 blocked_by: ($blocked_by | if . == "" then [] else split(",") end),
+                 status:"pending"}' \
             >> "$JSONL"
         echo "added #$id ($phase / $priority)" >&2
     }
-    with_lock bash -c "$(declare -f _add_locked die); JSONL='$JSONL' priority='$priority' phase='$phase' task='$task' notes='$notes' spec='$spec' _add_locked"
+    with_lock bash -c "$(declare -f _add_locked die); JSONL='$JSONL' priority='$priority' phase='$phase' task='$task' notes='$notes' spec='$spec' blocked_by='$blocked_by' _add_locked"
 }
 
 cmd_claim() {
@@ -166,13 +175,78 @@ cmd_close() {
     echo "REMINDER (not automated yet): stamp ROADMAP.md's '$phase' section, row starting '$task…', Done at = $done_at (priority $priority)." >&2
 }
 
+# ── view: dependency-aware visualisation of PENDING work ─────────────────────
+# Reads the structured `blocked_by` field (array of ids). A pending task is
+# READY when every id in its blocked_by is `done` (or the list is empty);
+# otherwise it is blocked by the still-open ids. All three sub-modes slurp the
+# rows once (`jq -s`) and build an id->status map so blockers resolve in-process.
+cmd_view() {
+    local mode="${1:-board}"
+    case "$mode" in
+        board|pending) _view_board ;;
+        ready)         _view_ready ;;
+        graph)         _view_graph ;;
+        *) die "view: unknown mode '$mode' — board|ready|graph" ;;
+    esac
+}
+
+_view_board() {   # aligned table of pending tasks, priority-ordered, with readiness
+    jq -rs '
+        (map(select(has("id")))) as $rows
+        | ($rows | map({key:.id, value:.status}) | from_entries) as $st
+        | {"Critical":0,"High":1,"Medium":2,"Low":3} as $rank
+        | $rows[] | select(.status == "pending")
+        | ((.blocked_by // []) | map(select($st[.] != "done"))) as $open
+        | .id as $rid
+        | [ ($rank[.priority] // 9), .id, .priority,
+            (if ($open|length) == 0 then "READY" else "blk:" + ($open|join(",")) end),
+            (.task | sub("^#" + $rid + " "; "") | .[0:52]) ] | @tsv
+    ' "$JSONL" \
+      | sort -n | cut -f2- \
+      | { printf 'ID\tPRIO\tSTATE\tTASK\n'; cat; } | column -t -s $'\t'
+}
+
+_view_ready() {   # pending tasks with no OPEN blockers — actionable right now
+    jq -rs '
+        (map(select(has("id")))) as $rows
+        | ($rows | map({key:.id, value:.status}) | from_entries) as $st
+        | $rows[] | select(.status == "pending")
+        | select( ((.blocked_by // []) | map(select($st[.] != "done")) | length) == 0 )
+        | .id as $rid
+        | "#\(.id)  [\(.priority)]  \(.task | sub("^#" + $rid + " "; "") | .[0:64])"
+    ' "$JSONL"
+}
+
+_view_graph() {   # Mermaid dependency graph on stdout (blocker --> dependent)
+    jq -rs '
+        (map(select(has("id")))) as $rows
+        | ($rows | map({key:.id, value:.}) | from_entries) as $byid
+        | ($rows | map({key:.id, value:.status}) | from_entries) as $st
+        | ( [ $rows[] | (.blocked_by // []) as $bb | $bb[] as $b | {from:$b, to:.id} ]
+            | map(select($byid[.from] != null)) ) as $edges
+        | ( ( $rows | map(select(.status == "pending") | .id) )
+            + ( $edges | map(.from, .to) ) | unique
+            | map(select($byid[.] != null)) ) as $nodes
+        | "graph TD",
+          ( $nodes[] as $n | $byid[$n] as $r
+            | (((($r.blocked_by // []) | map(select($st[.] != "done")) | length) > 0)) as $blk
+            | ( if $r.status == "done" then "done" elif $blk then "blocked" else "ready" end ) as $cls
+            | "  \($n)[\"#\($n) · \($r.priority)\"]:::\($cls)" ),
+          ( $edges[] | "  \(.from) --> \(.to)" ),
+          "  classDef done fill:#d4f4dd,stroke:#28a745,color:#155724",
+          "  classDef ready fill:#fff3cd,stroke:#ffc107,color:#856404",
+          "  classDef blocked fill:#f8d7da,stroke:#dc3545,color:#721c24"
+    ' "$JSONL"
+}
+
 cmd="${1:-}"; shift || true
 case "$cmd" in
     list)    cmd_list "$@" ;;
     show)    cmd_show "$@" ;;
+    view)    cmd_view "$@" ;;
     add)     cmd_add "$@" ;;
     claim)   cmd_claim "$@" ;;
     unclaim) cmd_unclaim "$@" ;;
     close)   cmd_close "$@" ;;
-    *) die "unknown command '$cmd' — list|show|add|claim|unclaim|close" ;;
+    *) die "unknown command '$cmd' — list|show|view|add|claim|unclaim|close" ;;
 esac
