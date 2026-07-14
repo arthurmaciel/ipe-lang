@@ -1,0 +1,20 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+-- #177 false-positive probe C: wildcard-`any` param, body has the STRING
+-- LITERAL "db_get_string ..." but NO Db.get* kernel call and no Std.Db import.
+labelFor : any -> String
+labelFor x =
+    let
+        _ =
+            x
+    in
+    "db_get_string called on the payload"
+
+
+main : Task Error ()
+main =
+    println (labelFor 7)
