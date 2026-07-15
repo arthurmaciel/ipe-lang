@@ -290,6 +290,68 @@ fn is_http_request_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &I
     )
 }
 
+/// #210: the canonical `Std.Cache.CacheCfg` field-name set, alphabetically
+/// sorted: `maxBytes`, `maxEntries`, `ttlMs` — all `Int`. Folded to the nominal
+/// `IrType::CacheCfg` (`sky_runtime::cache::CacheCfg`) so a `Cache.defaultCfg`
+/// record literal constructs the runtime struct the `cache_new_raw` kernel
+/// takes (same mechanism as the `HttpRequest` fold above).
+const CACHE_CFG_FIELDS: &[&str] = &["maxBytes", "maxEntries", "ttlMs"];
+
+/// #210: the canonical `Std.Cache.stats` return field-name set, alphabetically
+/// sorted: `evictions`, `hits`, `misses` — all `Int`. Folded to the nominal
+/// `IrType::CacheStats` (`sky_runtime::cache::CacheStats`).
+const CACHE_STATS_FIELDS: &[&str] = &["evictions", "hits", "misses"];
+
+/// Is `ty` the built-in `Int` — an empty-module, arg-less `Con` named `Int`?
+/// Shared by the two all-`Int` Cache-record shape tests. `SKY-N0026` forbids a
+/// user type shadowing `Int`, so the module check can never fire in practice
+/// but is asserted defensively (mirrors [`ty_matches_http_field`]).
+fn ty_is_int(ty: &Ty, interner: &Interner) -> bool {
+    matches!(ty, Ty::Con { module, name, args }
+        if module.is_empty() && args.is_empty() && interner.resolve(*name) == Some("Int"))
+}
+
+/// The [`canon::Type`] twin of [`ty_is_int`].
+fn canon_ty_is_int(ty: &canon::Type, interner: &Interner) -> bool {
+    matches!(ty, canon::Type::Con { home, name, args }
+        if home.is_empty() && args.is_empty() && interner.resolve(*name) == Some("Int"))
+}
+
+/// Does `fields` (as `(resolved name, &Ty)` pairs) match an all-`Int` record
+/// whose sorted field NAMES equal `expected`? Sorts `fields` in place. Used for
+/// both Cache record shapes — the field TYPES are checked (all `Int`) alongside
+/// the NAMES so an unrelated 3-field record with different types does not fold.
+fn is_all_int_record_shape(
+    fields: &mut [(&str, &Ty)],
+    expected: &[&str],
+    interner: &Interner,
+) -> bool {
+    if fields.len() != expected.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    fields
+        .iter()
+        .zip(expected.iter())
+        .all(|((name, ty), expected_name)| *name == *expected_name && ty_is_int(ty, interner))
+}
+
+/// The [`canon::Type`] twin of [`is_all_int_record_shape`].
+fn is_all_int_canon_record_shape(
+    fields: &mut [(&str, &canon::Type)],
+    expected: &[&str],
+    interner: &Interner,
+) -> bool {
+    if fields.len() != expected.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    fields
+        .iter()
+        .zip(expected.iter())
+        .all(|((name, ty), expected_name)| *name == *expected_name && canon_ty_is_int(ty, interner))
+}
+
 /// Does this solved [`Ty`] contain a free type variable anywhere? Used to keep
 /// the lowerer's record-shape collection to fully-concrete shapes — a
 /// variable-bearing (generic) record reaches the backend through a signature,
@@ -724,7 +786,10 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // `SqlFragment` is an opaque query-building value — no embedded function.
         // `Secret` is an opaque sealed string wrapper — no embedded function.
         | IrType::SqlFragment
-        | IrType::Secret => false,
+        | IrType::Secret
+        // #210: Cache config / stats are plain data records — no function.
+        | IrType::CacheCfg
+        | IrType::CacheStats => false,
         // `LiveRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Sky `Fn`).
         IrType::LiveRoute(page) => ir_contains_fun(page),
@@ -814,7 +879,10 @@ fn clone_class(t: &IrType) -> CloneClass {
         | IrType::ServerRoute
         | IrType::ServerCookie
         | IrType::HttpRequest
-        | IrType::WebSocketServerCfg => CloneClass::CloneOk,
+        | IrType::WebSocketServerCfg
+        // #210: Cache config / stats runtime structs are `Clone` (no `Copy`).
+        | IrType::CacheCfg
+        | IrType::CacheStats => CloneClass::CloneOk,
         // Non-Clone: function-typed, task, decoder, Cmd, Sub.
         // Also Generic(_) until T5 (which injects `T: Clone`).
         IrType::Fun(_, _)
@@ -3480,7 +3548,10 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::PanicInfo
         | IrType::TypeInfo
         | IrType::SqlFragment
-        | IrType::Secret => false,
+        | IrType::Secret
+        // #210: Cache config / stats are non-parametric — mention no type var.
+        | IrType::CacheCfg
+        | IrType::CacheStats => false,
     }
 }
 
@@ -5999,7 +6070,21 @@ impl<'a> Lowerer<'a> {
     pub fn run(self) -> DResult<Program> {
         let mut types_ir: Vec<TypeDef> = Vec::with_capacity(self.m.unions.len());
         for u in &self.m.unions {
-            types_ir.push(TypeDef::Enum(self.lower_enum(u)?));
+            // #210: `Std.Cache`'s opaque `type Cache k v = Cache Int` is backed
+            // by the NON-generic runtime enum `SkyCacheHandle { Cache(i64) }` —
+            // the handle carries no type args (`k`/`v` live only on the kernel
+            // calls). Skip its `EnumDef` entirely so the backend never emits a
+            // generic `enum StdCacheCache<T1, T2> { Cache(i64) }` with unused
+            // params (E0392); the `builtin_runtime_enum` / `enum_name` overrides
+            // route the type + `Cache` ctor + pattern to `SkyCacheHandle`
+            // instead (mirrors the reference's `runtimeOpaqueTypes` mapping). We
+            // still call `lower_enum` for its side effect of validating the ctor
+            // payload (a `Task`-arity / polymorphism error must still surface).
+            let def = self.lower_enum(u)?;
+            if self.is_cache_handle_union(u) {
+                continue;
+            }
+            types_ir.push(TypeDef::Enum(def));
         }
 
         let mut funcs = Vec::with_capacity(self.m.defs.len());
@@ -6285,6 +6370,26 @@ impl<'a> Lowerer<'a> {
                 .find_map(|(_, ty)| self.task_arity_in_canon(ty)),
             canon::Type::Var(_) | canon::Type::Unit => None,
         }
+    }
+
+    /// #210: is `u` the `Std.Cache.Cache` opaque handle union — home
+    /// `["Std", "Cache"]`, name `Cache`? Its `EnumDef` is suppressed (the type
+    /// is backed by the runtime `SkyCacheHandle`); the backend routes the type +
+    /// ctor + pattern there via `builtin_runtime_enum`/`enum_name` overrides.
+    fn is_cache_handle_union(&self, u: &canon::Union) -> bool {
+        self.is_cache_handle_con(&u.home, u.name)
+    }
+
+    /// #210: is `(module, name)` the `Std.Cache.Cache` opaque handle type —
+    /// module `["Std", "Cache"]`, name `Cache`? Its `k`/`v` args are dropped at
+    /// lowering (backed by the non-generic runtime `SkyCacheHandle`).
+    fn is_cache_handle_con(&self, module: &[Symbol], name: Symbol) -> bool {
+        self.interner.resolve(name) == Some("Cache")
+            && matches!(
+                module,
+                [a, b] if self.interner.resolve(*a) == Some("Std")
+                    && self.interner.resolve(*b) == Some("Cache")
+            )
     }
 
     fn lower_enum(&self, u: &canon::Union) -> DResult<EnumDef> {
@@ -7586,10 +7691,18 @@ impl<'a> Lowerer<'a> {
                     .enum_variants
                     .contains_key(&(ModPath(home.clone()), *name)) =>
                 {
-                    let mut ir_args = Vec::with_capacity(args.len());
-                    for a in args {
-                        ir_args.push(self.ir_type_from_canon(a, generics)?);
-                    }
+                    // #210: drop the phantom `k`/`v` of `Std.Cache.Cache k v`
+                    // (backed by the non-generic `SkyCacheHandle`) — twin of the
+                    // solved-Ty arm; see its comment for the E0283 rationale.
+                    let ir_args = if self.is_cache_handle_con(home, *name) {
+                        Vec::new()
+                    } else {
+                        let mut v = Vec::with_capacity(args.len());
+                        for a in args {
+                            v.push(self.ir_type_from_canon(a, generics)?);
+                        }
+                        v
+                    };
                     Ok(IrType::Enum {
                         home: ModPath(home.clone()),
                         name: *name,
@@ -7726,6 +7839,16 @@ impl<'a> Lowerer<'a> {
                     .collect();
                 if is_http_request_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::HttpRequest);
+                }
+                // #210: fold the two nominal Std.Cache record shapes (annotation
+                // path — e.g. `newRaw : CacheCfg -> …` / `statsRaw : … -> Task
+                // Error { hits, misses, evictions }`) — twin of the solved-Ty fold.
+                if is_all_int_canon_record_shape(&mut named_fields, CACHE_CFG_FIELDS, self.interner) {
+                    return Ok(IrType::CacheCfg);
+                }
+                if is_all_int_canon_record_shape(&mut named_fields, CACHE_STATS_FIELDS, self.interner)
+                {
+                    return Ok(IrType::CacheStats);
                 }
                 let mut ir_fields = BTreeMap::new();
                 for (name, fty) in fields {
@@ -8403,10 +8526,22 @@ impl<'a> Lowerer<'a> {
                     // `module` is the type's HOME (the solver threads it on
                     // `Ty::Con`), which is the same identity the union was keyed
                     // under (#100).
-                    let mut ir_args = Vec::with_capacity(args.len());
-                    for a in args {
-                        ir_args.push(self.ir_type_from_ty(a, span)?);
-                    }
+                    //
+                    // #210: `Std.Cache.Cache k v` is backed by the NON-generic
+                    // runtime `SkyCacheHandle`, so drop its `k`/`v` args here —
+                    // otherwise they surface as unused generic params on the
+                    // `Std.Cache` wrapper fns (`new : CacheCfg -> Task Error
+                    // (Cache k v)` whose result no longer mentions them), an
+                    // uninferrable `T` at the call site (E0283).
+                    let ir_args = if self.is_cache_handle_con(module, *name) {
+                        Vec::new()
+                    } else {
+                        let mut v = Vec::with_capacity(args.len());
+                        for a in args {
+                            v.push(self.ir_type_from_ty(a, span)?);
+                        }
+                        v
+                    };
                     Ok(IrType::Enum {
                         home: ModPath(module.clone()),
                         name: *name,
@@ -8524,6 +8659,16 @@ impl<'a> Lowerer<'a> {
                     .collect();
                 if is_http_request_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::HttpRequest);
+                }
+                // #210: fold the two nominal Std.Cache record shapes to their
+                // runtime structs (CacheCfg / CacheStats) — same rationale as
+                // HttpRequest: the kernel takes/returns the runtime struct, so a
+                // synthesised `Rec…` struct would mismatch it (E0308).
+                if is_all_int_record_shape(&mut named_fields, CACHE_CFG_FIELDS, self.interner) {
+                    return Ok(IrType::CacheCfg);
+                }
+                if is_all_int_record_shape(&mut named_fields, CACHE_STATS_FIELDS, self.interner) {
+                    return Ok(IrType::CacheStats);
                 }
                 let mut lowered = BTreeMap::new();
                 for (name, field_ty) in fields {
@@ -12159,6 +12304,17 @@ impl<'a> Lowerer<'a> {
             Callee::Kernel(
                 KernelFn::CsvParseWithDelimiter | KernelFn::CsvEncodeWithDelimiter,
             ) => Ok(2),
+            // ── #210: Std.Cache ──────────────────────────────────────────────
+            // newRaw/clear/size/stats take one arg (a `CacheCfg` or the `Int`
+            // handle); get/remove take (handle, key); put takes (handle, key, val).
+            Callee::Kernel(
+                KernelFn::CacheNewRaw
+                | KernelFn::CacheClear
+                | KernelFn::CacheSize
+                | KernelFn::CacheStats,
+            ) => Ok(1),
+            Callee::Kernel(KernelFn::CacheGet | KernelFn::CacheRemove) => Ok(2),
+            Callee::Kernel(KernelFn::CachePut) => Ok(3),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -14883,7 +15039,10 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::Decimal
         | IrType::LiveReq
         | IrType::SqlFragment
-        | IrType::Secret => {}
+        | IrType::Secret
+        // #210: Cache config / stats are non-parametric — no generic syms.
+        | IrType::CacheCfg
+        | IrType::CacheStats => {}
     }
 }
 
@@ -15045,8 +15204,52 @@ mod tests {
     // — a loud failure, not silent exit-0.  Both are M6-reserved TEA primitives
     // awaiting a dedicated lowering + emission path before they are safe to move
     // to the covered set.
-    const REGISTRY_ONLY_ALLOWLIST: &[KernelFn] =
-        &[KernelFn::PubSubPublish, KernelFn::PubSubPublishNoEcho];
+    // The #194/#197/#202/#210 stdlib families (Regex / Path / Trace /
+    // Compression / Csv / Cache) are resolved EXCLUSIVELY through the #196
+    // `Ffi.kernel "Mod_fn"` alias fast-path (`id = Some`, set by
+    // `sky_canon::resolve::detect_kernel_alias`): their qualifiers are compiled-
+    // source module names, never legacy `QUALIFIERS`, so no user program ever
+    // produces a `VarKernel { id = None, module = "Regex", … }` node. They have
+    // NO legacy `lower_callee` arm by design, so — like the PubSub TEA primitives
+    // — they must be allowlisted out of the legacy-arm equivalence test.
+    const REGISTRY_ONLY_ALLOWLIST: &[KernelFn] = &[
+        KernelFn::PubSubPublish,
+        KernelFn::PubSubPublishNoEcho,
+        // #194: Sky.Core.Regex
+        KernelFn::RegexMatch,
+        KernelFn::RegexFind,
+        KernelFn::RegexFindAll,
+        KernelFn::RegexReplace,
+        KernelFn::RegexSplit,
+        // #202: Sky.Core.Path
+        KernelFn::PathBase,
+        KernelFn::PathDir,
+        KernelFn::PathExt,
+        KernelFn::PathIsAbsolute,
+        // #197: Std.Trace
+        KernelFn::TraceSpan,
+        KernelFn::TraceEvent,
+        KernelFn::TraceAttr,
+        // #197: Std.Compression
+        KernelFn::CompressionGzip,
+        KernelFn::CompressionGunzip,
+        KernelFn::CompressionZstdCompress,
+        KernelFn::CompressionZstdDecompress,
+        // #197: Std.Csv
+        KernelFn::CsvParse,
+        KernelFn::CsvParseWithDelimiter,
+        KernelFn::CsvEncode,
+        KernelFn::CsvEncodeWithDelimiter,
+        KernelFn::CsvParseStreamFromFile,
+        // #210: Std.Cache
+        KernelFn::CacheNewRaw,
+        KernelFn::CacheGet,
+        KernelFn::CachePut,
+        KernelFn::CacheRemove,
+        KernelFn::CacheClear,
+        KernelFn::CacheSize,
+        KernelFn::CacheStats,
+    ];
 
     /// Verifies that for every non-excluded variant in `KernelFn::ALL`, the
     /// legacy string-match arm in `lower_callee` returns `Callee::Kernel(sk)`
