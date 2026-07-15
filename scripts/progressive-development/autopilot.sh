@@ -61,7 +61,14 @@ CONTEXT="$REPO/$HERE/context.md"             # operating contract: 6 principles 
 REVIEW_MODEL="${PROGDEV_REVIEW_MODEL:-claude-opus-4-8}"
 AUTHOR_MODEL="${PROGDEV_AUTHOR_MODEL:-claude-opus-4-8}"     # all stages default to Opus 4.8 (2026-07-14); override via env
 DESIGN_MODEL="${PROGDEV_DESIGN_MODEL:-claude-opus-4-8}"     # Fable NO LONGER AUTHORIZED — Opus 4.8 (override via PROGDEV_DESIGN_MODEL)
-GATE_TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
+# SANCTIONED CARGO-TARGET ROOT (2026-07-15): every cargo target the loop writes —
+# gate, per-lane, shared-oracle — lives under $IPE_CACHE and NOWHERE else, so an
+# emergency prune has ONE known root. Targets outside it (/tmp, $HOME root) filled
+# the disk to 100% and crashed the loop; reclaim_disk sweeps strays as a safety net,
+# but the write-boundary (DEVELOPMENT.md) forbids creating them at all.
+IPE_CACHE="${PROGDEV_CACHE_ROOT:-$HOME/.cache/ipe}"
+mkdir -p "$IPE_CACHE"
+GATE_TARGET="${MASTER_GATE_TARGET:-$IPE_CACHE/gate-target}"
 QUEUE="docs/architecture/progressive-development-queue.tsv"   # ATTEMPT LEDGER only (mark/attempts_of) — NOT the work source
 BACKLOG="$HERE/backlog.jsonl"                                 # THE work source: pending items (SSOT)
 BACKLOG_SH="$HERE/backlog.sh"                                 # claim/unclaim/close/defer (flock-serialized JSONL edits)
@@ -80,7 +87,7 @@ MAX_ATTEMPTS="${PROGDEV_MAX_ATTEMPTS:-2}"  # v4: 2 resuming attempts, then phase
 DIGEST="docs/architecture/progressive-development-digest.md"
 STOP="autopilot.stop"
 LOCK=".autopilot.lock"
-LANE_TARGET_BASE="$HOME/.cache/sky-rust-lane"
+LANE_TARGET_BASE="$IPE_CACHE/lane"
 DISK_FLOOR="${PROGDEV_DISK_FLOOR_GB:-20}"    # reclaim when free drops below this
 DISK_CRIT="${PROGDEV_DISK_CRIT_GB:-10}"      # graceful-stop when still below this after reclaim
 LANE_TARGET_MAX_GB="${PROGDEV_LANE_TARGET_MAX_GB:-60}"   # per-lane target hard size cap (regardless of total disk; 0 = off)
@@ -97,7 +104,7 @@ GATE_TARGET_MAX_GB="${PROGDEV_GATE_TARGET_MAX_GB:-30}"   # gate-target hard size
 #      Task-13 stale-link clobber (the lock serializes the builds but the last
 #      writer's artifact wins → the other lane reads the wrong backend).
 #   2. EMITTED-E2E-PROJECT build (vendored `sky_runtime` + tokio/sqlx/axum + a
-#      UNIQUELY-named emitted app crate): SHOULD use the SHARED sky-rust-target so
+#      UNIQUELY-named emitted app crate): SHOULD use the SHARED $IPE_CACHE/oracle-target so
 #      the ~8GB runtime compiles ONCE and is reused across every example, every
 #      lane, author AND reviewer. PROVEN race-free: cargo's build-dir file lock
 #      serialises concurrent access (both logs showed `Blocking waiting for file
@@ -111,7 +118,7 @@ GATE_TARGET_MAX_GB="${PROGDEV_GATE_TARGET_MAX_GB:-30}"   # gate-target hard size
 #   (the self-inflicted slow path). The real fix is in the oracle (pin the emitted
 #   build to the shared target unless runtime/ changed) — filed as its own task;
 #   until it lands, sccache (rustc-wrapper, global) reclaims most of the dep cost.
-KEEP_TARGETS="$(basename "$GATE_TARGET") sky-rust-target"   # lane targets (sky-rust-lane-*) kept via prefix in reclaim_disk
+KEEP_TARGETS="$(basename "$GATE_TARGET") oracle-target"   # under $IPE_CACHE: keep gate + shared-oracle; lane-* kept via prefix in reclaim_disk
 LEDGER="docs/architecture/progdev-cost-ledger.tsv"   # persistent per-cycle agent-cost ledger (survives /tmp overwrite across runs)
 SHIMDIR="/tmp/autopilot-shims"                        # rg-enforcement: grep/egrep/fgrep shims prepended to the agent PATH
 
@@ -167,7 +174,7 @@ Env vars (defaults):
   PROGDEV_REVIEW_MODEL  (claude-opus-4-8)     review / audit model
   PROGDEV_LANES_DISK_MIN  (30)     free-GB floor below which a cycle drops to 1 lane
   PROGDEV_LANE_TARGET_MAX_GB (60)  per-lane cargo target size cap; over → purged (0 = off)
-  MASTER_GATE_TARGET      (~/.cache/master-gate-target)   isolated gate target dir
+  MASTER_GATE_TARGET      ($IPE_CACHE/gate-target)         isolated gate target dir
 
 Control:  touch autopilot.stop  → halt cleanly after the current cycle
 Monitor:  watch.sh runs automatically (unless --no-watch); or run it in another terminal.
@@ -221,43 +228,50 @@ show_agent() { if [ "$STREAM" != 0 ]; then "$HERE/render-stream.sh" "$1"; else s
 # ── disk safety (ENOSPC mid-build corrupts git state — prevent, don't crash) ──
 disk_free_gb() { df -BG --output=avail / | tail -1 | tr -dc '0-9'; }
 reclaim_disk() {
-    log "disk reclaim (free $(disk_free_gb)G) — keeping only [$KEEP_TARGETS]"
-    for d in "$HOME"/.cache/*target*; do
+    log "disk reclaim (free $(disk_free_gb)G) — keeping only [$KEEP_TARGETS] under $IPE_CACHE"
+    # ALL loop cargo targets live under $IPE_CACHE (the single sanctioned root). Keep
+    # the gate + shared-oracle targets and the warm per-lane targets; reap the rest.
+    for d in "$IPE_CACHE"/*; do
         [ -d "$d" ] || continue
         local keep=0 k bn; bn="$(basename "$d")"
         for k in $KEEP_TARGETS; do [ "$bn" = "$k" ] && keep=1; done
-        # per-lane cargo targets (sky-rust-lane-0, -1, …) stay WARM across cycles;
+        # per-lane cargo targets (lane-1, lane-2, …) stay WARM across cycles;
         # NORMAL reclaim keeps them — they are purged only at DISK_CRIT (ensure_disk).
-        case "$bn" in sky-rust-lane*) keep=1 ;; esac
+        case "$bn" in lane-*) keep=1 ;; esac
         [ "$keep" -eq 1 ] && continue
-        # 2026-07-13: this call site is now UNCONDITIONAL (fired proactively
-        # after every landed item, not just when
-        # disk_free_gb dips below DISK_FLOOR) — see the two call sites'
-        # comments. That makes the pre-existing no-liveness-check gap a real
-        # hazard it wasn't before: a concurrent autopilot authoring lane can have
-        # its OWN CARGO_TARGET_DIR (not in $KEEP_TARGETS) actively open at
-        # the exact moment a DIFFERENT lane's completion triggers this
-        # reclaim. Skip anything a live process still references — mirrors
-        # disk-guard.sh's path_is_live() gate; a live writer always wins
-        # over a disk-space goal.
+        # No-liveness-check would be a hazard: this reclaim is UNCONDITIONAL (fired
+        # after every landed item), so a concurrent lane's OWN target could be open
+        # when a DIFFERENT lane's completion triggers it. Skip anything a live
+        # process references — a live writer always wins over a disk-space goal.
         if pgrep -f -- "$d" >/dev/null 2>&1; then
             log "  skip $(basename "$d") (live process still references it)"
             continue
         fi
         log "  rm $(basename "$d") ($(du -sh "$d" 2>/dev/null | cut -f1))"; rm -rf "$d"
     done
+    # SAFETY NET — reap cargo targets OUTSIDE the sanctioned root: legacy
+    # ~/.cache/*target* + any /tmp/*target* a manual agent dropped (CACHEDIR.TAG-
+    # marked, pgrep-guarded). DEVELOPMENT.md's write-boundary forbids creating these,
+    # but sweeping them means a stray one can never fill the disk again (2026-07-15).
+    local stray
+    for stray in "$HOME"/.cache/*target* $(find /tmp -maxdepth 2 -name CACHEDIR.TAG 2>/dev/null | sed 's|/CACHEDIR.TAG$||'); do
+        [ -d "$stray" ] || continue
+        case "$stray" in "$IPE_CACHE"/*) continue ;; esac   # sanctioned root handled above
+        pgrep -f -- "$stray" >/dev/null 2>&1 && continue
+        log "  rm STRAY $stray ($(du -sh "$stray" 2>/dev/null | cut -f1))"; rm -rf "$stray"
+    done
     git worktree prune 2>/dev/null
     rm -rf /tmp/sky-fuzz.* /tmp/sky-fuzz-neg.* /tmp/orch-*.log 2>/dev/null
     log "  free now $(disk_free_gb)G"
 }
-# Hard size cap per lane target — deletes a sky-rust-lane-<i> that has bloated
+# Hard size cap per lane target — deletes a lane-<i> that has bloated
 # past LANE_TARGET_MAX_GB regardless of total free disk (incremental cruft grows
 # unbounded across cycles otherwise). Runs at cycle top, when no lane holds a
 # target; the pgrep check is belt-and-suspenders. It rebuilds warm next cycle.
 prune_oversize_lane_targets() {
     [ "${LANE_TARGET_MAX_GB:-0}" -gt 0 ] 2>/dev/null || return 0
     local d sz
-    for d in "$HOME"/.cache/sky-rust-lane-*; do
+    for d in "$IPE_CACHE"/lane-*; do
         [ -d "$d" ] || continue
         pgrep -f -- "$d" >/dev/null 2>&1 && continue    # never delete a live build's target
         sz="$(du -sBG "$d" 2>/dev/null | cut -f1 | tr -dc '0-9')"
@@ -296,7 +310,7 @@ ensure_disk() {
     # This is the "each lane its own target, deleted ONLY on disk ENOSPC" rule.
     if [ "$(disk_free_gb)" -lt "$DISK_CRIT" ]; then
         log "still critical ($(disk_free_gb)G < ${DISK_CRIT}G) — purging warm per-lane targets"
-        for d in "$HOME"/.cache/sky-rust-lane-*; do
+        for d in "$IPE_CACHE"/lane-*; do
             [ -d "$d" ] || continue
             pgrep -f -- "$d" >/dev/null 2>&1 && { log "  keep $(basename "$d") (live)"; continue; }
             log "  rm $(basename "$d")"; rm -rf "$d"
@@ -642,7 +656,7 @@ lane_gate() {
 full_gate() {
     local GRF SKY_SHARE
     GRF="-C link-arg=-fuse-ld=mold -Zthreads=8"
-    if git -C "$GATE_WT" diff --name-only "$LAST_FULL_GREEN..HEAD" 2>/dev/null | rg -q '^runtime/'; then SKY_SHARE=""; else SKY_SHARE="$HOME/.cache/sky-rust-target"; fi
+    if git -C "$GATE_WT" diff --name-only "$LAST_FULL_GREEN..HEAD" 2>/dev/null | rg -q '^runtime/'; then SKY_SHARE=""; else SKY_SHARE="$IPE_CACHE/oracle-target"; fi
     ( cd "$GATE_WT"; touch runtime/tests/*.rs crates/skyc/tests/*.rs 2>/dev/null; \
       RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" SKY_ORACLE_SHARED_TARGET="$SKY_SHARE" timeout 3000 cargo +nightly nextest run --workspace >/tmp/autopilot-gate.log 2>&1 \
       && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" SKY_ORACLE_SHARED_TARGET="$SKY_SHARE" timeout 1800 cargo +nightly nextest run -p sky-runtime-rust --features full >>/tmp/autopilot-gate.log 2>&1 \
