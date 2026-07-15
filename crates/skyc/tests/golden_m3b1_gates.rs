@@ -1,29 +1,39 @@
-//! Milestone-3b-1 fail-closed gates: each tuple-pattern shape the lowerer does
-//! not model yet must surface a clean, span-carrying SKY-L0115 — never a panic,
-//! an internal compiler bug, or silent (refutable) cargo-failing Rust.
+//! Milestone-3b-1 tuple-pattern shapes: originally FAIL-CLOSED gates (each shape
+//! the lowerer could not yet model had to surface a clean, span-carrying
+//! SKY-L0115 — never a panic, an internal compiler bug, or silent refutable
+//! cargo-failing Rust). Both shapes are now MODELLED end-to-end by the
+//! tuple-pattern lowering plus the `sky_types::exhaust` exhaustiveness/redundancy
+//! engine, so the placeholder gate is retired and these tests now pin the
+//! verified-correct behaviour instead:
 //!
-//! * a `case` on a tuple with MORE THAN ONE arm (needs product/literal-pattern
-//!   exhaustiveness) → SKY-L0115,
-//! * a single tuple `case` arm with a REFUTABLE element (a constructor) →
-//!   SKY-L0115.
+//! * a `case` on a tuple with MORE THAN ONE arm whose first arm is irrefutable
+//!   (`(a, b) -> …` then `(c, d) -> …`): the redundancy checker recognises the
+//!   trailing arm is unreachable and the lowerer emits the single useful arm —
+//!   `match pair { (a, b) => (a + b) }` — building + running to the right value.
+//! * a single-cover tuple `case` with a REFUTABLE element (`(Som x, b)` /
+//!   `(Non, b)`): lowered to a real exhaustive Rust match over the constructor —
+//!   `match pair { (MainOpt::Som(x), b) => …, (MainOpt::Non, b) => … }`.
 //!
-//! Each is driven through the full `skyc` pipeline and asserted to produce its
-//! exact code, locking the gap so it can never regress into a worse failure mode.
+//! Each is driven through the full `skyc` pipeline; the build MUST SUCCEED (no
+//! SKY-L0115, no other diagnostic) and — behind `SKY_E2E=1` — the emitted crate
+//! MUST build with cargo and print the reference value `3`. The anti-goal the
+//! original gate guarded against (silent, cargo-FAILING refutable Rust) is
+//! covered by the E2E build+run: were an arm dropped unsoundly or a refutable
+//! match left non-exhaustive, cargo would reject it.
 
 use std::path::{Path, PathBuf};
-
-use skyc::CliError;
+use std::process::Command;
 
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Build the named golden fixture and assert it surfaces exactly `expected` as a
-/// pipeline diagnostic. A build that succeeds, or fails with any other error,
-/// makes `got` differ from `Some(expected)` and fails with a descriptive message
-/// — never a panic. A skip occurs only when the runtime cannot be resolved.
-fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+/// Build the named golden fixture through the full pipeline and assert the build
+/// SUCCEEDS (the tuple-pattern shape is now modelled, so no diagnostic fires).
+/// Returns the emitted output directory for the optional E2E build+run. A skip
+/// occurs only when the runtime cannot be resolved.
+fn build_ok(fixture: &str, out_suffix: &str) -> Option<PathBuf> {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -33,35 +43,52 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code)
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
-        return;
-    };
+    let runtime = skyc::resolve_runtime().ok()?;
     let built = skyc::build(&entry, &out, &runtime);
-    let got = match &built {
-        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
-        _ => None,
-    };
+    assert!(
+        built.is_ok(),
+        "fixture {fixture}: tuple-pattern shape must now build cleanly, got {built:?}"
+    );
+    Some(out)
+}
+
+/// Behind `SKY_E2E=1`, build the emitted crate with cargo and assert stdout is
+/// exactly `3\n`. This is the load-bearing soundness check: a dropped or
+/// non-exhaustive match arm would make cargo reject the crate (or change the
+/// printed value), so a green here proves the lowering is correct, not merely
+/// diagnostic-free.
+fn assert_e2e_prints_three(out: &Path) {
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    let output = Command::new("cargo")
+        .arg("run")
+        .arg("--quiet")
+        .current_dir(out)
+        .output()
+        .expect("cargo run");
+    assert!(
+        output.status.success(),
+        "emitted crate must build+run; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(
-        got,
-        Some(expected),
-        "fixture {fixture}: expected {expected:?}, got build result {built:?}"
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "3",
+        "emitted crate must print 3"
     );
 }
 
 #[test]
-fn multi_arm_tuple_case_is_sky_l0115() {
-    assert_gate(
-        "m3b1_gate_multiarm",
-        "m3b1_gate_multiarm_emit",
-        sky_diagnostics::SKY_L0115,
-    );
+fn multi_arm_tuple_case_lowers_and_runs() {
+    if let Some(out) = build_ok("m3b1_gate_multiarm", "m3b1_gate_multiarm_emit") {
+        assert_e2e_prints_three(&out);
+    }
 }
 
 #[test]
-fn refutable_tuple_element_is_sky_l0115() {
-    assert_gate(
-        "m3b1_gate_refutable",
-        "m3b1_gate_refutable_emit",
-        sky_diagnostics::SKY_L0115,
-    );
+fn refutable_tuple_element_lowers_and_runs() {
+    if let Some(out) = build_ok("m3b1_gate_refutable", "m3b1_gate_refutable_emit") {
+        assert_e2e_prints_three(&out);
+    }
 }

@@ -4,8 +4,11 @@
 //! These exercise the [`Pat`] additions the backend learned to render as flat
 //! Rust match arms:
 //!
-//! * the LITERAL leaves [`Pat::Int`] / [`Pat::Bool`] / [`Pat::Char`] /
-//!   [`Pat::Str`] — rendered as the Rust literals `0` / `true` / `'a'` / `"hi"`,
+//! * the LITERAL leaves [`Pat::Int`] / [`Pat::Bool`] / [`Pat::Char`] —
+//!   rendered as the in-pattern Rust literals `0` / `true` / `'a'`, and
+//!   [`Pat::Str`] — since #182 rendered NOT in-pattern (Rust cannot match an
+//!   owned `String` against a `"..."` literal) but as a fresh binder plus an
+//!   `if __sgN.as_str() == "lit"` match guard,
 //! * the ALIAS / `as` binder [`Pat::Alias`] — rendered as the Rust binding-with-
 //!   subpattern form `name @ <inner>`.
 //!
@@ -224,9 +227,16 @@ fn str_literal_subpattern_renders_and_escapes() -> DResult<()> {
     let mut i = Interner::new();
     let prog = tag_program(&mut i, Pat::Str("hi\"\n".to_owned()))?;
     let src = emit(&i, &prog)?;
+    // Since #182, a `Pat::Str` leaf does NOT render as an in-pattern string
+    // literal (`MainTag::A("hi") =>`) — Rust cannot pattern-match an owned
+    // `String` payload against a `"..."` literal. It renders as a fresh binder
+    // plus an `if __sgN.as_str() == "lit"` match guard, which IS valid Rust and
+    // preserves the same discrimination. The escaped literal must still appear
+    // verbatim on the guard's right-hand side.
     assert!(
-        src.contains(r#"MainTag::A("hi\"\n") =>"#),
-        "string literal sub-pattern must render an escaped Rust string literal; got:\n{src}"
+        src.contains(r#".as_str() == "hi\"\n""#),
+        "string literal sub-pattern must render as an escaped `as_str() == \"lit\"` \
+         match guard (#182); got:\n{src}"
     );
     Ok(())
 }
