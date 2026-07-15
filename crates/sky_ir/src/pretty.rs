@@ -209,6 +209,9 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::TypeInfo => "TypeInfo".to_owned(),
         IrType::SqlFragment => "SqlFragment".to_owned(),
         IrType::Secret => "Secret".to_owned(),
+        // #210: Std.Cache config / stats records.
+        IrType::CacheCfg => "CacheCfg".to_owned(),
+        IrType::CacheStats => "CacheStats".to_owned(),
     }
 }
 
@@ -696,6 +699,15 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::CsvEncode => "Csv.encode",
         KernelFn::CsvEncodeWithDelimiter => "Csv.encodeWithDelimiter",
         KernelFn::CsvParseStreamFromFile => "Csv.parseStreamFromFile",
+        // #210: Std.Cache (the `*Raw` kernel aliases; the surface names carry
+        // no `Raw` suffix but the pretty form names the underlying kernel).
+        KernelFn::CacheNewRaw => "Cache.newRaw",
+        KernelFn::CacheGet => "Cache.getRaw",
+        KernelFn::CachePut => "Cache.putRaw",
+        KernelFn::CacheRemove => "Cache.removeRaw",
+        KernelFn::CacheClear => "Cache.clearRaw",
+        KernelFn::CacheSize => "Cache.sizeRaw",
+        KernelFn::CacheStats => "Cache.statsRaw",
         // M5c: TEA Cmd / Sub / Time.every (wired)
         KernelFn::CmdNone => "Cmd.none",
         KernelFn::CmdBatch => "Cmd.batch",
