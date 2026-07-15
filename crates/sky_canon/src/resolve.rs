@@ -2014,10 +2014,10 @@ fn check_and_inject_value(
     // A kernel alias resolves unqualified to its kernel, same as it would
     // qualified — otherwise `import Std.PubSub exposing (publish)` would bind
     // `publish` to a non-existent `TopLevel` def.
-    let home = match kernel_alias {
-        Some(a) => VarHome::Kernel(Some(a.id), a.module, a.function),
-        None => VarHome::TopLevel(dep_path.to_vec()),
-    };
+    let home = kernel_alias.map_or_else(
+        || VarHome::TopLevel(dep_path.to_vec()),
+        |a| VarHome::Kernel(Some(a.id), a.module, a.function),
+    );
     env.vars.insert(name, home);
     Ok(())
 }
@@ -3276,7 +3276,7 @@ fn name_str(interner: &Interner, sym: Symbol) -> DResult<Box<str>> {
 /// retained so the alias registers a [`VarHome::Kernel`] carrying the same
 /// canonical `(module, function)` pair a direct qualified reference produces.
 #[derive(Clone, Copy)]
-pub(crate) struct KernelAlias {
+pub struct KernelAlias {
     pub id: StdlibKernel,
     pub module: Symbol,
     pub function: Symbol,
@@ -3304,7 +3304,7 @@ pub(crate) struct KernelAlias {
 /// # Errors
 /// [`NameError::UnknownKernelAlias`] (SKY-N0028) when the split `(module,
 /// function)` pair is absent from the kernel registry.
-pub(crate) fn detect_kernel_alias(
+pub fn detect_kernel_alias(
     value: &src::Value,
     env: &Env,
     interner: &mut Interner,
@@ -3359,17 +3359,24 @@ pub(crate) fn detect_kernel_alias(
     let function = interner.intern(function_str)?;
     // FAIL-CLOSED: only a kernel the registry actually covers resolves. An
     // unregistered pair is rejected here, never emitted as a dangling call.
-    match env.stdlib_index.get(&(module, function)).copied() {
-        Some(id) => Ok(Some(KernelAlias {
-            id,
-            module,
-            function,
-        })),
-        None => Err(unknown_alias(
-            Box::<str>::from(module_str),
-            Box::<str>::from(function_str),
-        )),
-    }
+    env.stdlib_index
+        .get(&(module, function))
+        .copied()
+        .map_or_else(
+            || {
+                Err(unknown_alias(
+                    Box::<str>::from(module_str),
+                    Box::<str>::from(function_str),
+                ))
+            },
+            |id| {
+                Ok(Some(KernelAlias {
+                    id,
+                    module,
+                    function,
+                }))
+            },
+        )
 }
 
 /// Build the deterministic `did you mean` suggestion list for an unresolved

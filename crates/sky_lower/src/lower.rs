@@ -851,6 +851,33 @@ fn clone_class(t: &IrType) -> CloneClass {
     }
 }
 
+/// T5 multi-use-clone eligibility for a by-value fn/def PARAMETER (#189).
+///
+/// A `CloneOk` param clones per the general multi-use rule. A bare
+/// [`IrType::Generic`] param is ALSO eligible even though [`clone_class`] floors
+/// it to `NonClone`: `render_fn_generics` (`sky_backend_rust` `emit_expr.rs`,
+/// `bounds.with_clone()`) stamps `T: Clone` on EVERY emitted generic fn
+/// type-param UNCONDITIONALLY, so an inserted `x.clone()` on a reused generic
+/// param always type-checks. That `T: Clone` bound is the soundness gate — a
+/// non-`Clone` instantiation (e.g. `Box<dyn Fn>`) fails the bound at the CALLER
+/// before the inserted `.clone()` is ever reached, so inserting the clone is
+/// sound (over-cloning is the only downside, never unsoundness). SINGLE SOURCE
+/// OF TRUTH: this predicate and `render_fn_generics`' unconditional
+/// `with_clone()` must agree — if one changes, the other must change with it,
+/// else a reused generic either moves twice (E0382) or clones a non-`Clone`
+/// value (E0599).
+///
+/// Scope: only a BARE `Generic` leaf. Composites carrying a generic
+/// (`List (Generic)`, `Tuple(.., Generic)`, …) still floor to `NonClone` via the
+/// generic leaf and are intentionally out of scope here — the wider blast radius
+/// of flipping `clone_class(Generic)` itself is a separate decision (see #189
+/// design). A bare `Generic` param already makes [`reject_fn_value_reuse`] a
+/// no-op (`ir_contains_fun(Generic) == false`), so admitting it here loses no
+/// diagnostic — it only closes the silent double-move.
+fn param_is_multiuse_clonable(ir_ty: &IrType) -> bool {
+    matches!(clone_class(ir_ty), CloneClass::CloneOk) || matches!(ir_ty, IrType::Generic(_))
+}
+
 fn clone_class_composite<'a>(parts: impl Iterator<Item = &'a IrType>) -> CloneClass {
     let mut any_clone_ok = false;
     for p in parts {
@@ -2107,6 +2134,8 @@ fn sym_referenced_directly(sym: Symbol, expr: &Expr) -> bool {
 /// further nesting, no sibling) never reaches here at all — the let-binding
 /// stays a plain `Expr::Lambda` (`Box<dyn Fn>`), byte-identical to the
 /// pre-fix lowering.
+// A recursive tree-walk over a large enum — necessarily long and linear.
+#[allow(clippy::too_many_lines)]
 fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
     match expr {
         Expr::Var(_)
@@ -2242,7 +2271,7 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
 /// (kept `Fn`). `sym_referenced_directly` stops at nested `Lambda` boundaries, so
 /// a `sym` used ONLY inside a further-nested real lambda inside `rest` is that
 /// lambda's own concern (it already got its own wrap during recursion) and does
-/// not trigger a redundant TaskSeq wrap here.
+/// not trigger a redundant `TaskSeq` wrap here.
 fn wrap_task_seq_rest_capture(sym: Symbol, node: Expr) -> Expr {
     let (Expr::TaskSeq { rest, .. } | Expr::TaskSeqSync { rest, .. }) = &node else {
         return node;
@@ -6111,8 +6140,11 @@ impl<'a> Lowerer<'a> {
                 // N > 1 times in the body, all but the syntactically last occurrence
                 // must clone — otherwise Rust emits E0382 (use of moved value).
                 // Run BEFORE TCO so the loop-rewrite sees already-correct clone nodes.
+                // #189: a reused bare `IrType::Generic(_)` param is treated as
+                // clonable here too (see `param_is_multiuse_clonable`) — the
+                // emitted `T: Clone` bound makes the inserted `.clone()` sound.
                 for (sym, ir_ty) in &params {
-                    if matches!(clone_class(ir_ty), CloneClass::CloneOk) {
+                    if param_is_multiuse_clonable(ir_ty) {
                         let n = count_var_uses(*sym, &lowered_body);
                         if n > 1 {
                             let mut remaining = n;
@@ -6273,8 +6305,10 @@ impl<'a> Lowerer<'a> {
                     }
                     // T5 (#104 / #112): same param multi-use-clone pass as the
                     // Typed path above (see comment there for rationale).
+                    // #189: reused bare `IrType::Generic(_)` param also clonable
+                    // (see `param_is_multiuse_clonable`).
                     for (sym, ir_ty) in &params {
-                        if matches!(clone_class(ir_ty), CloneClass::CloneOk) {
+                        if param_is_multiuse_clonable(ir_ty) {
                             let n = count_var_uses(*sym, &lowered_body);
                             if n > 1 {
                                 let mut remaining = n;
