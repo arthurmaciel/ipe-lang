@@ -14,9 +14,10 @@ is possible by construction.
 ## Files
 | File | Role |
 |---|---|
-| `scripts/progressive-development/run.sh` | the loop = OUTER safety harness (disk/mem/budget/iteration-cap/kill-switch/single-writer) |
-| `scripts/progressive-development/prompt.md` | the per-iteration playbook the fresh agent executes (pick → fix → gate → land-or-discard → log) |
-| `BACKLOG.md` | the work list; only **sweep-front** / **[progdev-safe]** items are eligible |
+| `scripts/progressive-development/autopilot.sh` | THE loop (the only one) — per cycle it authors up to `PROGDEV_LANES` (2) items CONCURRENTLY (design→impl→review, each in its own worktree + cargo target) then INTEGRATES them SERIALLY (git-mutating gate, one lane at a time); + disk/mem/kill-switch/convergence safety harness |
+| `scripts/progressive-development/context.md` | the operating contract every dispatched lane agent reads (`--append-system-prompt-file`) |
+| `scripts/progressive-development/backlog.jsonl` | the work source (SSOT); queried via the `backlog.sh` interface (`ready`/`claim`/`close`/…) |
+| `scripts/progressive-development/watch.sh` | live monitor — per-lane status header (task + elapsed), narrator line, `1`/`2` key-switching between lanes |
 | `docs/architecture/progressive-development-log.md` | append-only per-iteration outcomes + attempt counts (created on first run) |
 | `docs/architecture/progressive-development-escalations.md` | items the loop refused (excluded class) + fix sketches (created on first run) |
 
@@ -24,7 +25,7 @@ is possible by construction.
 1. **Gate-on-green commit (the pawl).** An iteration commits only if `cargo test --workspace` + `cargo clippy -D warnings` pass on the isolated gate target (and, for a sweep blocker, the example's original diagnostic is gone). Red → `git reset --hard`, log the reason. The tree is always green between iterations.
 2. **Stop-and-escalate on the hard class.** Security tier (Secret/SqlFragment/CSRF/fuzzer), feature gaps needing type-system+backend+runtime co-design (e.g. erased-`any` payloads), oracle *divergences*, `unsafe`/FFI, or anything relaxing a soundness gate → the iteration refuses, writes an escalation, and moves on. This is the ex27 lesson encoded: a fresh agent under "pressure-cooker" pressure will otherwise produce a plausible **unsound** hack. The loop only touches mechanical, reference-backed wiring.
 3. **Per-item attempt cap (anti-thrash).** 3 failed attempts on one item → mark BLOCKED, escalate, move on. Prevents infinite grinding on an intractable item.
-4. **Single writer.** A lockfile + a dedicated `progressive-development/run-*` branch; no concurrent swarm during a run (concurrent commits/builds race — proven by the shared-target stale-rlib thrash we hit). Commits land on the branch; a human fast-forwards to master after reviewing the run.
+4. **Concurrent authoring, serial integration.** A lockfile guards against a second autopilot. Within one run, up to `PROGDEV_LANES` lanes AUTHOR in parallel (each in its own worktree + its own cargo target — never the shared one), but the git-mutating GATE runs SERIALLY, one lane at a time, on the shared checkout (single-writer where it matters). A lane that loses a merge race with an earlier-landed lane is requeued (no penalty). Landed lanes commit straight to the base branch through the green gate.
 5. **Resource preconditions every iteration.** mem-guard alive, free disk ≥ 15 GB, timeout-bounded builds, no background processes. The CLAUDE.md non-negotiables become loop invariants.
 6. **Kill-switch + caps.** `touch progressive-development.stop` for a clean exit; `PROGDEV_MAX_ITERS` and per-iteration `timeout` bound the blast radius; `--once` validates a single iteration before unleashing the loop.
 7. **Isolated gate target.** Always `~/.cache/master-gate-target`, never the shared lane target — the stale-rlib thrash cannot fool the gate.
@@ -33,11 +34,11 @@ is possible by construction.
 ## Operating it
 ```bash
 # 0. mem-guard must be running; tree clean; on master (or your base).
-scripts/progressive-development/run.sh --once          # validate ONE iteration, inspect the branch
-scripts/progressive-development/run.sh                 # run the loop (default 20 iters)
-touch progressive-development.stop                 # stop after the current iteration
-# review the run, then fast-forward:
-git switch master && git merge --ff-only progressive-development/run-<ts>
+./autopilot-run.sh                    # supervised first run (1 cycle, live watch.sh attached)
+./autopilot-run.sh --full             # full run using autopilot's native caps
+PROGDEV_LANES=2 scripts/progressive-development/autopilot.sh   # or invoke directly
+./autopilot-stop.sh                   # graceful stop after the current phase (touch autopilot.stop)
+# lanes commit straight to the base branch through the green gate — no fast-forward step.
 ```
 
 ## Monitoring a run
@@ -65,9 +66,9 @@ header (branch + landed commits + escalations) then follows the newest iter-log
 live, pretty-printing stream-json steps via `jq` (falls back to raw tail). Run it
 in a second terminal:
 ```bash
-# terminal 1 — run with the live step feed on
-PROGDEV_STREAM=1 scripts/progressive-development/run.sh
-# terminal 2 — watch it think + see what lands
+# terminal 1 — start the loop (auto-attaches watch.sh on a tty)
+scripts/progressive-development/autopilot.sh
+# terminal 2 (optional) — a foreground watch supports 1/2 lane-switching + a auto
 scripts/progressive-development/watch.sh
 ```
 
@@ -104,11 +105,12 @@ fixed part** if `F` is large and N is high: a 25k-token `F` over 50 iterations i
    so a prompt instruction to "ignore CLAUDE.md" is futile (the tokens are already
    billed) AND counter-productive (naming the file can trigger a wasteful re-`Read`).
    The only real fix is to change *what loads*, and the Claude CLI has flags for
-   exactly this. `run.sh` invokes each iteration as:
+   exactly this. autopilot's `agent()` invokes each lane stage (design/impl/review)
+   as:
    ```
    claude --safe-mode --permission-mode auto \
           --append-system-prompt-file scripts/progressive-development/context.md \
-          -p "$(cat scripts/progressive-development/prompt.md)"
+          -p "<the stage prompt>"
    ```
    (`--permission-mode auto` — not `acceptEdits`: the latter auto-approves only
    file edits, so the iteration would stall on the first `cargo`/`git` bash call

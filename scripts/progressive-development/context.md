@@ -90,17 +90,16 @@ original diagnostic is gone (note the new blocker). Green → commit. Red →
 `git reset --hard` + log the reason. The tree only advances.
 
 ## 6b. Isolated-worktree lanes — NEVER `git stash`
-If this iteration is running as an orchestrated PARALLEL lane (its own git
-worktree, not the single shared checkout), do NOT run `git stash` under any
-circumstance — `refs/stash` is SHARED across every worktree of one repo (a
-documented git limitation, not per-worktree state), so concurrent lanes
-stashing at the same time can collide and silently swap or lose each other's
-in-progress diffs. A freshly-created lane worktree should never be dirty at
-start; if you find one dirty, that is a worktree-isolation violation — abort
-and escalate, do not stash it away. (Single-checkout sequential iterations —
-i.e. `autopilot.sh`, not `orchestrate.sh` — are the only context where
-stash-if-dirty from a prior iteration is safe, since there is exactly one
-writer at a time.)
+You are one of autopilot's CONCURRENT lanes, running in your OWN git worktree.
+Do NOT run `git stash` under any circumstance — `refs/stash` is SHARED across
+every worktree of one repo (a documented git limitation, not per-worktree
+state), so two lanes stashing at the same moment can collide and silently swap
+or lose each other's in-progress diffs. A freshly-created lane worktree is never
+dirty at start; if you find one dirty, that is a worktree-isolation violation —
+abort and escalate, do not stash it away. (autopilot authors lanes in parallel
+worktrees but INTEGRATES them serially — the git-mutating gate runs one lane at
+a time on the shared checkout — so the stash-ban is about the parallel AUTHORING
+phase you are in.)
 
 ## 7. Output style — caveman-ultra (mandatory)
 Your prose is watched live. Be EXTREMELY terse. Drop articles, filler, hedging,

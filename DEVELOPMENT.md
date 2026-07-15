@@ -15,6 +15,33 @@
 
 ## Non-negotiables
 
+### 0. Understand before you change — `ipe-index` + reference-first (MANDATORY)
+
+Before writing or changing ANY compiler/runtime code, you MUST understand both the
+code you are about to touch AND how the reference already handles the task. A fix
+that doesn't match the reference's proven logic is a guess — **port, don't invent**.
+
+- **`ipe-index` FIRST for our own code** (`crates/` `runtime/` `tools/`) — it is a
+  pre-built structural index, not a fresh search. Use it before `rg`:
+  - `ipe-index locate <Module.function>` — where a symbol lives + its kernel-parity
+    route (Sky → Haskell → Go → Rust impl paths).
+  - `ipe-index def <sym>` / `refs <sym>` / `kind <fn|struct|enum|trait|type|impl>`.
+  - `ipe-index parity --gaps` — Go-vs-Rust kernel parity gaps.
+  Reserve `rg` for free-text/substring hunts `ipe-index` cannot answer.
+- **Learn how the reference handles THIS task before designing the fix.** `../sky`
+  is the READ-ONLY source of truth for the whole pipeline. For the construct you
+  are fixing, read how each layer deals with it:
+  - the **Sky compiler** (Haskell, `../sky/src/Sky/`) — parse/canon/type/lower;
+  - the **Go backend** (`../sky/runtime-go/`) — the byte-diff parity oracle target;
+  - the **Rust backend** (`../sky/src/Sky/Generate/Rust/`) — emission + lowering;
+  - the **Rust runtime** (the runtime crate) — the vendored behaviour it emits into.
+  (`skydex` on PATH indexes this reference: `skydex locate <sym>` gives the cross-
+  lang route.)
+- Only once you can state (a) where OUR code handles it and (b) how the reference
+  handles it across compiler + Rust backend + Rust runtime should you design the
+  change. This is the discovery step that turns a "guess-and-check" lane into a
+  faithful port.
+
 ### 1. Memory safety — `scripts/mem-guard.sh` MUST run during dev
 
 A runaway `sky`/`cabal`/`ghc`/`haskell-language-server` process previously
