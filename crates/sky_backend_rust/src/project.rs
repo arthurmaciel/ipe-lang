@@ -209,7 +209,7 @@ const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub 
 /// not via `pub use live::*;` (to avoid surfacing the internal `store` / `req`
 /// internals in the top-level namespace).
 const RUNTIME_MOD_RS_LIVE_APPEND: &str = "#[cfg(feature = \"live\")]\npub mod live;\n\
-     #[cfg(feature = \"live\")]\npub use live::{live_app, live_app_routed, live_render_static, sub_subscribe_topic, cmd_publish, cmd_publish_no_echo, LiveReq};\n";
+     #[cfg(feature = \"live\")]\npub use live::{live_app, live_app_routed, live_render_static, sub_subscribe_topic, cmd_publish, cmd_publish_no_echo, pubsub_publish, pubsub_publish_no_echo, LiveReq};\n";
 
 /// The `SkyCmd<M>` and `SkySub<M>` project-level type aliases emitted when the
 /// program uses TEA kernels. Placed immediately after `runtime_bindings()` (the
@@ -695,11 +695,18 @@ fn assemble_project_files(
         // (tui/focus.rs), so a String-view Tui program (`uses_tui` without
         // `uses_ui`) still needs the css/ui/html appends — same invariant as
         // the `http_header` leaf above.
-        if ctx.uses_ui || ctx.uses_css || ctx.uses_tui {
+        // (#215 extension): `live/mod.rs` unconditionally does
+        // `pub use crate::sky_runtime::html::*` and `html.rs` imports
+        // `css_safety`, so a `uses_live`-only program (e.g. PubSub-only, no
+        // Std.Ui kernels) still needs `css_safety` and `html` declared.
+        if ctx.uses_ui || ctx.uses_css || ctx.uses_tui || ctx.uses_live || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_CSS_APPEND);
         }
-        // M7: Std.Ui / Std.Html render kernels (+ Tui transitive dep).
-        if ctx.uses_ui || ctx.uses_tui {
+        // M7: Std.Ui / Std.Html render kernels (+ Tui + Live transitive dep).
+        // `live/mod.rs` unconditionally re-exports `crate::sky_runtime::html::*`;
+        // `live/style_inject.rs` imports `super::html` — so `html` must be
+        // declared whenever live is enabled, even without explicit Std.Ui use.
+        if ctx.uses_ui || ctx.uses_tui || ctx.uses_live || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_UI_APPEND);
         }
         // Phase-1b: Std.Live / Sky.Live app-entry kernels.
@@ -1832,10 +1839,10 @@ mod tests {
         );
     }
 
-    /// `RUNTIME_MOD_RS_LIVE_APPEND` must re-export `cmd_publish` and
-    /// `cmd_publish_no_echo` so that emitted call sites (`cmd_publish(topic,
-    /// payload)`) resolve.  Without this the emitted project fails with E0425
-    /// (`cannot find function cmd_publish`) — a seal violation.
+    /// `RUNTIME_MOD_RS_LIVE_APPEND` must re-export `cmd_publish`,
+    /// `cmd_publish_no_echo`, `pubsub_publish`, and `pubsub_publish_no_echo` so
+    /// that emitted call sites resolve.  Without this the emitted project fails
+    /// with E0425 — a seal violation.
     #[test]
     fn live_mod_rs_exports_cmd_publish_fns() {
         assert!(
@@ -1846,6 +1853,16 @@ mod tests {
         assert!(
             RUNTIME_MOD_RS_LIVE_APPEND.contains("cmd_publish_no_echo"),
             "RUNTIME_MOD_RS_LIVE_APPEND must re-export cmd_publish_no_echo (E0425 fix): \
+             {RUNTIME_MOD_RS_LIVE_APPEND}"
+        );
+        assert!(
+            RUNTIME_MOD_RS_LIVE_APPEND.contains("pubsub_publish"),
+            "RUNTIME_MOD_RS_LIVE_APPEND must re-export pubsub_publish (E0425 fix, #215): \
+             {RUNTIME_MOD_RS_LIVE_APPEND}"
+        );
+        assert!(
+            RUNTIME_MOD_RS_LIVE_APPEND.contains("pubsub_publish_no_echo"),
+            "RUNTIME_MOD_RS_LIVE_APPEND must re-export pubsub_publish_no_echo (E0425 fix, #215): \
              {RUNTIME_MOD_RS_LIVE_APPEND}"
         );
     }

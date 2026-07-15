@@ -4191,6 +4191,15 @@ impl<'a> Builder<'a> {
             // var(0) = payload type (the `any`), var(1) = message type.
             K::SubSubscribeTopic => fun(string(), fun(fun(var(0), var(1)), sub(var(1)))),
 
+            // ── PubSub.publish / publishNoEcho (backlog #215) ──
+            // `PubSub.publish    : String -> a -> Task Error Int`
+            // `PubSub.publishNoEcho : String -> a -> Task Error Int`
+            // var(0) = payload (polymorphic, monomorphized by rustc — like the
+            // runtime T).  Result is `Task Error Int` (subscriber count), NOT
+            // `Cmd msg` — no `msg` type var, distinct from `Cmd.publish`.
+            K::PubSubPublish => fun(string(), fun(var(0), task(int()))),
+            K::PubSubPublishNoEcho => fun(string(), fun(var(0), task(int()))),
+
             // ── Server ──
             K::ServerGet
             | K::ServerPost
@@ -5593,27 +5602,19 @@ impl<'a> Builder<'a> {
             // compile in `sky_types` until it is either schemed above or added to
             // one of the two exclusion buckets below).
             //
-            //  * `PubSub.publish` / `publishNoEcho` — KNOWN_UNBACKED: no runtime
-            //    fn AND qualifier absent from canon `qual_vars` (unreachable). A
-            //    scheme would forge an exit-0 path to an unbacked kernel.
             //  * `Live.appRouted` — REACHABLE_BUT_UNLOWERED: has a runtime fn +
             //    qualifier, but its lowering is `Feature::RoutedLiveApp`
             //    unsupported and its type is a closed record, not a curried `Ty`.
             //    A caller fails closed at type-check until routed lowering lands.
             //
-            // Both buckets are gate-checked (`known_unbacked_never_schemed`,
+            // Gate-checked (`known_unbacked_never_schemed`,
             // `stdlib_scheme_total_over_reachable`, the REACHABLE_BUT_UNLOWERED
             // disjointness guard). Do NOT add a bare `_` back — it reopens F1.
             //
-            //  * `PubSub.publish` / `publishNoEcho` — KNOWN_UNBACKED in ALL but
-            //    unreachable (qualifier "PubSub" absent from canon `qual_vars`).
-            //    Named here to keep this match wildcard-free. Get a scheme when
-            //    "PubSub" qualifier lands in M6.
-            //  * `Sub.subscribeTopic` / `Cmd.publish` / `Cmd.publishNoEcho` are
-            //    wired (M5d / M5e) and have their types above; not in this arm.
-            K::PubSubPublish
-            | K::PubSubPublishNoEcho
-            | K::LiveAppRouted => return None,
+            //  * `Sub.subscribeTopic` / `Cmd.publish` / `Cmd.publishNoEcho` /
+            //    `PubSub.publish` / `PubSub.publishNoEcho` are wired and have
+            //    their schemes above; not in this arm.
+            K::LiveAppRouted => return None,
 
             // ── #111: Std.Auth (9 kernels) ──────────────────────────────────────
             // hashPassword : String -> Result Error String
@@ -6956,6 +6957,11 @@ mod registry_phase_c_tests {
     /// ONLY `PubSub` (`publish`/`publishNoEcho`) — a KNOWN-UNBACKED exclusion
     /// (`KNOWN_UNBACKED`), no runtime backing and qualifier absent from canon
     /// `qual_vars`; Phase E turns it into a hard unreachable-kernel error.
+    /// As of backlog #215, `PubSub.publish` / `PubSub.publishNoEcho` are now
+    /// schemed (`String -> a -> Task Error Int`) and have been moved here from
+    /// `KNOWN_UNBACKED` (which is now empty). The runtime `pubsub_publish` /
+    /// `pubsub_publish_no_echo` exist; the emit arm emits
+    /// `pubsub_publish::<_, SkyError>(topic, payload)`.
     const FIRST_SCHEMED: &[StdlibKernel] = {
         use StdlibKernel as K;
         &[
@@ -7655,6 +7661,11 @@ mod registry_phase_c_tests {
             K::CacheClear,
             K::CacheSize,
             K::CacheStats,
+            // ── Std.PubSub (#215; 2) ─────────────────────────────────────
+            // Moved from KNOWN_UNBACKED: runtime exists, emit arm wired
+            // (`pubsub_publish::<_, SkyError>`), scheme `String -> a -> Task Error Int`.
+            K::PubSubPublish,
+            K::PubSubPublishNoEcho,
         ]
     };
 
@@ -7673,17 +7684,20 @@ mod registry_phase_c_tests {
     };
 
     /// KNOWN-UNBACKED kernels: present in `StdlibKernel::ALL` (so they carry a
-    /// registry index) but deliberately NEVER schemed. `PubSub.publish` /
-    /// `PubSub.publishNoEcho` have no Rust runtime fn AND their `"PubSub"`
-    /// qualifier is absent from canon `qual_vars`, so no user program can name
-    /// them — they are unreachable. Scheming them would forge a well-typed
-    /// exit-0 path to an unbacked kernel, so they stay on the `Ty::Var(u32::MAX)`
-    /// fallback. Named explicitly here so Phase E's totality flip accounts for
-    /// them deliberately rather than tripping on an unexplained `None`.
+    /// registry index) but deliberately NEVER schemed. Currently **empty** —
+    /// as of backlog #215, `PubSub.publish`/`PubSub.publishNoEcho` (the only
+    /// previous occupants) were promoted to `FIRST_SCHEMED` once their runtime
+    /// functions and emit arm were confirmed present. The bucket exists
+    /// structurally so the `known_unbacked_never_schemed` gate still compiles
+    /// (it iterates the slice, which is now a vacuous pass) and future
+    /// deliberately-unschemed kernels have a named home. Do NOT scheme a kernel
+    /// into `FIRST_SCHEMED` before its runtime function and emit arm exist —
+    /// that forges an exit-0 path to an unbacked kernel (SEAL violation).
     /// Enforced by `known_unbacked_never_schemed`.
     const KNOWN_UNBACKED: &[StdlibKernel] = {
+        #[allow(unused_imports)]
         use StdlibKernel as K;
-        &[K::PubSubPublish, K::PubSubPublishNoEcho]
+        &[]
     };
 
     /// KNOWN-UNBACKED kernels are in `ALL`, are disjoint from the migrated

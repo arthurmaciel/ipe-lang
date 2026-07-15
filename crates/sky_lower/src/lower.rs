@@ -15193,25 +15193,26 @@ mod tests {
     //
     // EMITTABILITY VERDICT (sky_backend_rust/src/emit_expr.rs, `emit_tea_call`):
     //
-    //   KernelFn::PubSubPublish       → Err(Diagnostic::CompilerBug)  [NOT emittable]
-    //   KernelFn::PubSubPublishNoEcho → Err(Diagnostic::CompilerBug)  [NOT emittable]
+    //   KernelFn::PubSubPublish       → Ok(Some("pubsub_publish::<_, SkyError>(…)"))  [emittable, #215]
+    //   KernelFn::PubSubPublishNoEcho → Ok(Some("pubsub_publish_no_echo::<_, SkyError>(…)"))  [emittable, #215]
     //
-    // LOUD FINDING: PubSubPublish and PubSubPublishNoEcho are in ALL (and hence
-    // in stdlib_index) but the qualifier "PubSub" is absent from QUALIFIERS in
-    // env.rs, so no VarKernel node with module="PubSub" can be produced from
-    // user programs.  The Phase B fast path (id = Some) CANNOT fire for them
-    // in practice.  If it somehow did fire, the backend returns Err(CompilerBug)
-    // — a loud failure, not silent exit-0.  Both are M6-reserved TEA primitives
-    // awaiting a dedicated lowering + emission path before they are safe to move
-    // to the covered set.
-    // The #194/#197/#202/#210 stdlib families (Regex / Path / Trace /
-    // Compression / Csv / Cache) are resolved EXCLUSIVELY through the #196
-    // `Ffi.kernel "Mod_fn"` alias fast-path (`id = Some`, set by
+    // PubSubPublish and PubSubPublishNoEcho are in ALL (and hence in
+    // stdlib_index) but the qualifier "PubSub" is absent from QUALIFIERS in
+    // env.rs, so no VarKernel node with module="PubSub" can be produced via
+    // the legacy string path.  They are reachable ONLY through the
+    // `Ffi.kernel "PubSub_publish"` alias fast-path (`id = Some`, set by
+    // `sky_canon::resolve::detect_kernel_alias`).  As of backlog #215, both
+    // have a real type scheme (`String -> a -> Task Error Int`) and a
+    // dedicated emit arm — they emit `pubsub_publish::<_, SkyError>(topic,
+    // payload)`.  They remain here (no legacy arm) so the
+    // decl-equiv-legacy test skips them.
+    // The #194/#197/#202/#210/#215 stdlib families (Regex / Path / Trace /
+    // Compression / Csv / Cache / PubSub) are resolved EXCLUSIVELY through the
+    // #196 `Ffi.kernel "Mod_fn"` alias fast-path (`id = Some`, set by
     // `sky_canon::resolve::detect_kernel_alias`): their qualifiers are compiled-
     // source module names, never legacy `QUALIFIERS`, so no user program ever
     // produces a `VarKernel { id = None, module = "Regex", … }` node. They have
-    // NO legacy `lower_callee` arm by design, so — like the PubSub TEA primitives
-    // — they must be allowlisted out of the legacy-arm equivalence test.
+    // NO legacy `lower_callee` arm by design and must be allowlisted here.
     const REGISTRY_ONLY_ALLOWLIST: &[KernelFn] = &[
         KernelFn::PubSubPublish,
         KernelFn::PubSubPublishNoEcho,

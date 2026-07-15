@@ -388,11 +388,12 @@ const STD_LIVE_CONSOLE: &str = include_str!("../stdlib/Std/Live/Console.sky");
 /// `Std.PubSub` — Task-shaped publish, callable from any context (compiled source).
 ///
 /// Routes through `Ffi.kernel "PubSub_publish"` / `"PubSub_publishNoEcho"`.
-/// LOWERING-BLOCKED (#196): the `PubSubPublish`/`PubSubPublishNoEcho` kernels are
-/// in the registry (the runtime `pubsub_publish` exists) but have NO lower/emit
-/// arm, so a member use fails closed with SKY-L0108 at lowering (never a
-/// cargo-fail).  Unblocked once the TEA lower + emit arms are added.  See
-/// `docs/divergences-from-sky.md` §B-FfiKernelAliasSealed.
+/// RESOLVES (backlog #215): `PubSubPublish`/`PubSubPublishNoEcho` now have a
+/// type scheme (`String -> a -> Task Error Int`) and a dedicated emit arm
+/// (`pubsub_publish::<_, SkyError>(topic, payload)`).  A member use exits skyc-0
+/// AND cargo-0.  The payload `a` is a genuine monomorphized type var (concrete-
+/// over-generic), never erased.  See `docs/divergences-from-sky.md`
+/// §B-FfiKernelAliasSealed for the closed completeness gap.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_PUBSUB: &str = include_str!("../stdlib/Std/PubSub.sky");
 
