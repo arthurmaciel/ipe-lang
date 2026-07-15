@@ -89,7 +89,8 @@ type TxnConn = std::sync::Arc<tokio::sync::Mutex<sqlx::Transaction<'static, DbDa
 // (even ones connected to the same URL via two separate `.connect()` calls
 // that didn't go through `connect_cached`) get distinct allocations. This
 // gives genuine pool identity with zero blast radius on the public `Db` type.
-type PoolIdentity = std::sync::Arc<<<DbDatabase as sqlx::Database>::Connection as sqlx::Connection>::Options>;
+type PoolIdentity =
+    std::sync::Arc<<<DbDatabase as sqlx::Database>::Connection as sqlx::Connection>::Options>;
 
 fn pool_identity(pool: &Db) -> PoolIdentity {
     pool.connect_options()
@@ -972,7 +973,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
         // In `migrate` op mode an infra error prints context to stderr + exits 1;
         // otherwise it is returned as a Task Err. Mirrors Go's `fail`.
         macro_rules! db_op_fail {
-            ($ctx:expr, $err:expr) => {{
+            ($ctx:expr_2021, $err:expr_2021) => {{
                 if op == "migrate" {
                     eprintln!("db: {} failed", $ctx);
                     let _ = std::io::Write::flush(&mut std::io::stderr());
@@ -1195,7 +1196,7 @@ impl SqlIdent {
 #[cfg(feature = "db")]
 fn extract_returning_id(r: &DbRow) -> Result<i64, String> {
     r.try_get::<i64, _>("id")
-        .or_else(|_| r.try_get::<i32, _>("id").map(|v| i64::from(v)))
+        .or_else(|_| r.try_get::<i32, _>("id").map(i64::from))
         .map_err(|_| {
             "inserted row's id column is not an integer (non-integer or composite \
              primary key) — cannot report an Int id; use Db.insertFieldsReturning \
@@ -1256,9 +1257,7 @@ pub fn db_insert_row<E: Send + From<String> + 'static>(
             match fetch_one_routed(&conn, q).await {
                 Ok(r) => match extract_returning_id(&r) {
                     Ok(id) => ok_res(id),
-                    Err(msg) => {
-                        SkyResult::Err(format!("db.insertRow: {msg}").into())
-                    }
+                    Err(msg) => SkyResult::Err(format!("db.insertRow: {msg}").into()),
                 },
                 Err(e) => SkyResult::Err(sky_err(&e)),
             }
@@ -1673,10 +1672,9 @@ pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
         let pool_for_body = conn.clone();
         let owner = pool_identity(&conn);
         let outcome = TXN_CONN
-            .scope(
-                Some((owner, tx_conn.clone())),
-                async move { body(pool_for_body).await },
-            )
+            .scope(Some((owner, tx_conn.clone())), async move {
+                body(pool_for_body).await
+            })
             .await;
 
         // Reclaim sole ownership to finish via the TYPED commit/rollback (which
@@ -2113,9 +2111,7 @@ pub fn db_delete_where<E: Send + From<String> + 'static>(
         let qtable = match SqlIdent::parse(&table) {
             Some(t) => t,
             None => {
-                return SkyResult::Err(
-                    format!("db.deleteWhere: invalid table {:?}", table).into(),
-                );
+                return SkyResult::Err(format!("db.deleteWhere: invalid table {:?}", table).into());
             }
         };
         let sql = db_format_sql(format!(
@@ -2223,9 +2219,7 @@ pub fn db_insert_fields<E: Send + From<String> + 'static>(
             match fetch_one_routed(&conn, q).await {
                 Ok(r) => match extract_returning_id(&r) {
                     Ok(id) => ok_res(id),
-                    Err(msg) => {
-                        SkyResult::Err(format!("db.insertFields: {msg}").into())
-                    }
+                    Err(msg) => SkyResult::Err(format!("db.insertFields: {msg}").into()),
                 },
                 Err(e) => SkyResult::Err(sky_err(&e)),
             }
@@ -3200,7 +3194,10 @@ mod tests {
                     })
                 })
                 .await;
-                assert!(matches!(inner, SkyResult::Err(_)), "inner reports its own error");
+                assert!(
+                    matches!(inner, SkyResult::Err(_)),
+                    "inner reports its own error"
+                );
 
                 SkyResult::Ok(0i64)
             })
@@ -3495,7 +3492,10 @@ mod tests {
         let db = fresh_db().await;
         insert_todo(&db, "alpha").await;
         insert_todo(&db, "beta").await;
-        let frag = sql_eq(sql_column("title".to_string()), sql_param("alpha".to_string()));
+        let frag = sql_eq(
+            sql_column("title".to_string()),
+            sql_param("alpha".to_string()),
+        );
         let found: SkyResult<String, Vec<HashMap<String, String>>> =
             db_find_where(db, "todos".into(), frag).await;
         match found {
@@ -3516,7 +3516,10 @@ mod tests {
         insert_todo(&db, "beta").await;
         insert_todo(&db, "beta").await;
         let frag = sql_and(
-            sql_eq(sql_column("title".to_string()), sql_param("beta".to_string())),
+            sql_eq(
+                sql_column("title".to_string()),
+                sql_param("beta".to_string()),
+            ),
             sql_gt(sql_column("id".to_string()), sql_param(1_i64)),
         );
         let found: SkyResult<String, Vec<HashMap<String, String>>> =
@@ -3534,12 +3537,19 @@ mod tests {
         let db = fresh_db().await;
         insert_todo(&db, "alpha").await;
         insert_todo(&db, "beta").await;
-        let frag = sql_eq(sql_column("title".to_string()), sql_param("alpha".to_string()));
+        let frag = sql_eq(
+            sql_column("title".to_string()),
+            sql_param("alpha".to_string()),
+        );
         let deleted: SkyResult<String, i64> =
             db_delete_where(db.clone(), "todos".into(), frag).await;
         assert_eq!(deleted, SkyResult::Ok(1));
-        let remaining: SkyResult<String, Vec<HashMap<String, String>>> =
-            db_find_where(db, "todos".into(), sql_is_not_null(sql_column("title".to_string()))).await;
+        let remaining: SkyResult<String, Vec<HashMap<String, String>>> = db_find_where(
+            db,
+            "todos".into(),
+            sql_is_not_null(sql_column("title".to_string())),
+        )
+        .await;
         match remaining {
             SkyResult::Ok(v) => assert_eq!(v.len(), 1),
             SkyResult::Err(e) => panic!("expected Ok, got Err({e})"),
@@ -3591,7 +3601,10 @@ mod tests {
     async fn test_column_accepts_dotted_reference() {
         let db = fresh_db().await;
         insert_todo(&db, "alpha").await;
-        let frag = sql_eq(sql_column("todos.title".to_string()), sql_param("alpha".to_string()));
+        let frag = sql_eq(
+            sql_column("todos.title".to_string()),
+            sql_param("alpha".to_string()),
+        );
         let found: SkyResult<String, Vec<HashMap<String, String>>> =
             db_find_where(db, "todos".into(), frag).await;
         match found {
@@ -3633,7 +3646,10 @@ mod tests {
             !shown.contains("super-secret-value"),
             "Debug leaked a bind value: {shown}"
         );
-        assert!(shown.contains("binds: 1"), "Debug should show bind count: {shown}");
+        assert!(
+            shown.contains("binds: 1"),
+            "Debug should show bind count: {shown}"
+        );
     }
 
     /// `SqlFragment` derives `PartialEq` structurally (sql + binds + invalid).

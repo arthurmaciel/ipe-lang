@@ -1217,35 +1217,33 @@ fn render_input<M: Clone>(
     // rows, scrolling the window to keep the cursor row visible (correct Std.Ui: a
     // fixed-height textarea scrolls internally; it neither grows with content nor
     // shrinks below its height).
-    if is_multiline {
-        if let Some(rows) = height_cells(attrs, ctx.canvas) {
-            let inner_rows = rows.saturating_sub(frame_ring).max(1);
-            let total = block.lines.len();
-            if total > inner_rows {
-                let cur_line = cursor_marker.map(|(l, _)| l).unwrap_or(0);
-                let start = cur_line
-                    .saturating_sub(inner_rows - 1)
-                    .min(total - inner_rows);
-                let end = (start + inner_rows).min(block.lines.len());
-                block.lines = block
-                    .lines
-                    .get(start..end)
-                    .map(<[Vec<Run>]>::to_vec)
-                    .unwrap_or_default();
-            } else {
-                // Pad with blank track rows so the box keeps its fixed height.
-                let track_w = block.width();
-                let tfg = input_track_fg(style.bg);
-                while block.lines.len() < inner_rows {
-                    block.lines.push(vec![Run {
-                        text: "░".repeat(track_w),
-                        style: Style {
-                            fg: Some(tfg),
-                            bg: style.bg,
-                            ..Style::default()
-                        },
-                    }]);
-                }
+    if is_multiline && let Some(rows) = height_cells(attrs, ctx.canvas) {
+        let inner_rows = rows.saturating_sub(frame_ring).max(1);
+        let total = block.lines.len();
+        if total > inner_rows {
+            let cur_line = cursor_marker.map(|(l, _)| l).unwrap_or(0);
+            let start = cur_line
+                .saturating_sub(inner_rows - 1)
+                .min(total - inner_rows);
+            let end = (start + inner_rows).min(block.lines.len());
+            block.lines = block
+                .lines
+                .get(start..end)
+                .map(<[Vec<Run>]>::to_vec)
+                .unwrap_or_default();
+        } else {
+            // Pad with blank track rows so the box keeps its fixed height.
+            let track_w = block.width();
+            let tfg = input_track_fg(style.bg);
+            while block.lines.len() < inner_rows {
+                block.lines.push(vec![Run {
+                    text: "░".repeat(track_w),
+                    style: Style {
+                        fg: Some(tfg),
+                        bg: style.bg,
+                        ..Style::default()
+                    },
+                }]);
             }
         }
     }
@@ -1494,20 +1492,19 @@ fn render_node<M: Clone>(
                 }
                 // In a fixed-height COLUMN, height-fill children split the leftover
                 // vertical space (audit #2/#4). Needs the column's resolved height.
-                if w.dir == Dir::Column {
-                    if let Some(th) = w
+                if w.dir == Dir::Column
+                    && let Some(th) = w
                         .height
                         .as_ref()
                         .and_then(|l| resolve_fixed_h(l, ctx.canvas))
-                    {
-                        distribute_col_fill(
-                            &mut children,
-                            &h_specs,
-                            th,
-                            ctx.canvas.cells_y(w.spacing_px),
-                            w.style.bg,
-                        );
-                    }
+                {
+                    distribute_col_fill(
+                        &mut children,
+                        &h_specs,
+                        th,
+                        ctx.canvas.cells_y(w.spacing_px),
+                        w.style.bg,
+                    );
                 }
                 // Cross-axis alignment: offset each child within the stack's cross
                 // size per its Ui.alignX/alignY (was dropped → everything flush

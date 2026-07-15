@@ -834,10 +834,10 @@ async fn aggregate_service_stat(pool: &SqlitePool, svc: &str) -> Value {
             if let Some(c) = req_counts.get_mut(idx) {
                 *c += 1;
             }
-            if let Some(v) = lat {
-                if let Some(b) = lat_buckets.get_mut(idx) {
-                    b.push(v);
-                }
+            if let Some(v) = lat
+                && let Some(b) = lat_buckets.get_mut(idx)
+            {
+                b.push(v);
             }
         }
     }
@@ -853,10 +853,10 @@ async fn aggregate_service_stat(pool: &SqlitePool, svc: &str) -> Value {
             continue;
         }
         latencies.push(ms);
-        if let Some(idx) = bucket_index(s_ms, since_ms, bucket_ms) {
-            if let Some(b) = lat_buckets.get_mut(idx) {
-                b.push(ms);
-            }
+        if let Some(idx) = bucket_index(s_ms, since_ms, bucket_ms)
+            && let Some(b) = lat_buckets.get_mut(idx)
+        {
+            b.push(ms);
         }
     }
 
@@ -1478,7 +1478,11 @@ mod tests {
         .await;
         match res {
             SkyResult::Ok(rows) => {
-                assert_eq!(rows.len(), 1, "expected exactly the customer-42 row: {rows:?}");
+                assert_eq!(
+                    rows.len(),
+                    1,
+                    "expected exactly the customer-42 row: {rows:?}"
+                );
                 assert_eq!(rows[0]["subapp"], "customer-42-billing");
             }
             SkyResult::Err(_) => panic!("expected Ok"),
