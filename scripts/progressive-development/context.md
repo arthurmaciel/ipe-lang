@@ -29,9 +29,10 @@ Read PRINCIPLES.md fully and also follow the practical rules below.
 5. **Typed effects & secrets** — effects are `Task Error a`; no `Result String`/`Task String` in public surfaces; secrets are typed, never `fmt`-stringified.
 6. **Exhaustive wiring** — new AST/IR/kernel work updates EVERY match arm the compiler enforces; no `_ ->` catch-all cover-ups. Lean on the type checker to prove you got them all.
 
-## 3. The two rules
+## 3. The three rules
 1. **Test-first** — every new feature/bug becomes a regression test before the fix lands; the failing test is the discovery artefact.
 2. **No deferral** — "pre-existing" / "known edge case" is never a shipping excuse. Root-cause it, or escalate it; never paper over it.
+3. **Structural fix, not symptom** — repair the generative cause (the missing invariant, the drifting table, the special-case that should be a general rule) so the WHOLE class cannot recur; an ad-hoc patch that silences the visible symptom resurfaces one shape over (the next match arm, the next kernel, another call site). Ask "what structural property, if it held, would make this class impossible?" and establish it.
 
 ## 4. Resource non-negotiables (loop preconditions)
 `mem-guard.sh` MUST be running. Every build/test wrapped in `timeout`. No
