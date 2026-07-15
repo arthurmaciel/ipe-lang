@@ -2020,6 +2020,570 @@ fn flows_into_sync_kernel_call(sym: Symbol, expr: &Expr) -> bool {
     }
 }
 
+// ── BACKLOG #172: mixed Arc/Box handler unification at one Rust type slot ──
+//
+// Once [`Lowerer::lower_let_pvar`] promotes a function-typed `let name = \… ->
+// …` whose read [`flows_into_sync_kernel_call`] (e.g. `Ui.onSubmit`), every read
+// of `name` renders `Arc<dyn Fn(..) + Send + Sync>` (`Expr::SharedLambda`). But
+// when that read sits in ONE branch of an `if`/`match` whose SIBLING branch
+// renders a function value at the DEFAULT `Box<dyn Fn(..) + Send + Sync>`
+// carrier — an inline lambda (`Box::new(|…| …)`), a top-level function
+// reference (`Expr::FuncValue` → `Box::new(f)`), a `Var` read of another
+// box-typed binding, or any other function-value shape — the two branches must
+// unify at ONE Rust type slot. `Arc<..>` and `Box<..>` are distinct types even
+// with identical trait bounds, so the group fails to type-check → cargo `E0308`
+// AFTER `skyc` exit 0 (SEAL break). Example:
+//
+//   Ui.onSubmit (if flag then handler else signIn)   -- signIn : Expr::FuncValue
+//
+// The backend `emit_expr` `If`/`Match` arms emit each branch verbatim and keep
+// NO record of which read is Arc-promoted (that fact exists only at this
+// promotion decision), so the root-cause fix lives here: when `name` becomes a
+// `SharedLambda`, coerce EVERY sibling function-value leaf in the shared
+// unification group to the SAME `Arc` carrier. An inline `Expr::Lambda` leaf is
+// coerced DIRECTLY to `Expr::SharedLambda` (byte-friendliest, no wrapper). Every
+// OTHER function-value leaf `f` is ETA-EXPANDED into
+// `SharedLambda { params, ret, body: Apply(f, [Var(fresh0), …]) }` (rendering
+// `Arc::new(move |x0, …| (f)(x0, …))`), taking the group's arrow type
+// (`params`/`ret`) from the promoted `SharedLambda` sibling and FRESH param
+// symbols from [`Lowerer::eta_params`] to avoid capture. This unifies ALL
+// function-value shapes in one principled stroke — no per-`Expr`-variant
+// whack-a-mole.
+//
+// Soundness: these handlers are pure functions (`X -> Msg`), so eta-expansion is
+// semantics-preserving; the coercion fires ONLY in the rare mixed group (a
+// promoted-`name` value-leaf present), so byte-identity of ALL other output is
+// preserved (a pure-inline group with no promoted read is never reached).
+
+/// Does the VALUE-POSITION LEAF of `branch` read the just-promoted symbol `name`
+/// as a live `Var`/`CloneVar` — resolved transparently through `Let`/
+/// `Destructure` bodies (respecting shadowing) and nested `If`/`Match` tail
+/// positions? A branch may resolve to MULTIPLE leaves (nested `If`/`Match`
+/// tails); "any leaf reads `name`" wins. GATES the sibling coercion: when this
+/// holds for one branch of a unification group, the promoted `name`'s `Arc`
+/// carrier IS the group's unified type, so every sibling function-value leaf
+/// must be coerced to the same `Arc`. Enumerated exhaustively (no `_`
+/// catch-all), so a future `Expr` variant is a compile error here, not a
+/// silently-missed case — SEAL §6, mirroring [`flows_into_sync_kernel_call`].
+fn branch_value_leaf_reads_sym(name: Symbol, branch: &Expr) -> bool {
+    match branch {
+        Expr::Var(s) | Expr::CloneVar(s) => *s == name,
+        Expr::Let {
+            name: let_name,
+            body,
+            ..
+        } => *let_name != name && branch_value_leaf_reads_sym(name, body),
+        Expr::Destructure { binder, body, .. } => {
+            !pat_binds_symbol(binder, name) && branch_value_leaf_reads_sym(name, body)
+        }
+        Expr::If { then_, else_, .. } => {
+            branch_value_leaf_reads_sym(name, then_) || branch_value_leaf_reads_sym(name, else_)
+        }
+        Expr::Match(m) => m.arms().iter().any(|arm| {
+            !pat_binds_symbol(&arm.pat, name) && branch_value_leaf_reads_sym(name, &arm.body)
+        }),
+        // Every other shape is an opaque value leaf that is not a live read of
+        // `name` (a nested `Lambda`/`SharedLambda` is a value, not a read of the
+        // promoted binding).
+        Expr::Lambda { .. }
+        | Expr::SharedLambda { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. }
+        | Expr::TailLoop { .. }
+        | Expr::BinOp { .. }
+        | Expr::Call { .. }
+        | Expr::Apply { .. }
+        | Expr::Tuple(_)
+        | Expr::List { .. }
+        | Expr::Cons { .. }
+        | Expr::ListIndexClone { .. }
+        | Expr::ListLenCheck { .. }
+        | Expr::Record(_)
+        | Expr::Access { .. }
+        | Expr::Update { .. }
+        | Expr::Ctor { .. }
+        | Expr::TaskSeq { .. }
+        | Expr::TaskSeqSync { .. }
+        | Expr::TailRecur { .. } => false,
+    }
+}
+
+/// Eta-expand a non-lambda function-value `leaf` into an `Expr::SharedLambda`
+/// carrying the group's arrow type (`params`/`ret`, taken from the promoted
+/// `SharedLambda` sibling) so it renders through the `Arc` carrier and unifies
+/// with the promoted branch. The wrapper body is `Apply(leaf, [Var(f0), …])`
+/// over FRESH parameter symbols drawn positionally from `eta_pool`, so the
+/// coercion introduces no capture and the emitted `Arc::new(move |f0, …| (leaf)
+/// (f0, …))` re-callably forwards to the underlying function.
+///
+/// A `Var`/`CloneVar` `leaf` is forwarded as `CloneVar` — the eta wrapper
+/// `Arc::new(move |x, …| ((leaf).clone())(x, …))` is itself constructed inside
+/// the backend's OUTER `move |_x|` re-wrap closure (`ui_on_submit_(move |_x|
+/// (…)(_x))`), which is an `Fn` called once per event. Evaluating this branch
+/// CONSTRUCTS a fresh eta closure that move-captures the leaf's binding; a bare
+/// move of a variable the outer `Fn` closure captured is `E0507` (`cannot move
+/// out of a captured variable in an Fn closure`), so the binding must be CLONED
+/// (`Arc::clone`) into the eta instead. At a sync-capture kernel unification
+/// group every function-typed sibling binding read in the argument is itself
+/// promoted to `Arc` by [`flows_into_sync_kernel_call`] (it, too, flows into the
+/// kernel), so the clone is always `Arc::clone` — cheap and always sound. Every
+/// OTHER `leaf` shape (a `FuncValue`, an `Access`, an `Apply`, a `Call`)
+/// rebuilds its value expression inside the `move` closure body, so it is
+/// constructed anew on each call rather than captured — no move-out hazard.
+///
+/// The pool is sized to the module's widest callable arity; a gap wider than the
+/// pool is an invariant violation (the group's arrow arity can never exceed a
+/// binding's declared arity), surfaced as a [`bug`], never an index panic.
+fn eta_expand_leaf_to_shared(
+    leaf: Expr,
+    params: &[(Symbol, IrType)],
+    ret: &IrType,
+    eta_pool: &[Symbol],
+) -> DResult<Expr> {
+    // A `Var`/`CloneVar` callee is cloned so the outer `Fn` re-wrap closure's
+    // captured binding is not moved out when this eta closure is constructed
+    // (E0507); every other shape is a fresh construction, forwarded as-is.
+    let callee = match leaf {
+        Expr::Var(s) | Expr::CloneVar(s) => Expr::CloneVar(s),
+        other => other,
+    };
+    let mut fresh_params: Vec<(Symbol, IrType)> = Vec::with_capacity(params.len());
+    let mut call_args: Vec<Expr> = Vec::with_capacity(params.len());
+    for (offset, (_, pty)) in params.iter().enumerate() {
+        // Each eta-lambda is its own closure scope, so pool slot `offset` names
+        // the i-th synthesised parameter without cross-site shadowing — the same
+        // positional-reuse discipline `eta_expand_partial` relies on.
+        let sym = *eta_pool.get(offset).ok_or_else(|| {
+            bug(
+                "sky_lower::eta_expand_leaf_to_shared",
+                "eta-parameter pool smaller than the unification group's arrow arity",
+            )
+        })?;
+        fresh_params.push((sym, pty.clone()));
+        call_args.push(Expr::Var(sym));
+    }
+    Ok(Expr::SharedLambda {
+        params: fresh_params,
+        ret: ret.clone(),
+        body: Box::new(Expr::Apply {
+            func: Box::new(callee),
+            args: call_args,
+        }),
+    })
+}
+
+/// Coerce every VALUE-POSITION LEAF of `branch` to the promoted `name`'s `Arc`
+/// carrier, resolved transparently through `Let`/`Destructure` bodies and nested
+/// `If`/`Match` tail positions:
+///   * an inline `Expr::Lambda` leaf → `Expr::SharedLambda` (identical
+///     `params`/`ret`/`body`; only the Rust carrier changes from `Box` to `Arc`,
+///     matching the promoted sibling — the byte-friendliest coercion, no eta
+///     wrapper);
+///   * a live `Var(name)`/`CloneVar(name)` read of the promoted binding →
+///     `CloneVar(name)` (`Arc::clone`). The backend re-wraps a sync-capture
+///     kernel arg in a synthetic `move |_x| (…)(_x)` `Fn` closure
+///     (`emit_expr`'s `UiOnSubmit` et al.); reading the promoted `name` as a
+///     bare `Var` in a BRANCH VALUE position MOVES the captured `Arc` out of
+///     that `Fn` closure → `E0507`. `force_shared_capture_clones` only clones
+///     reads at IR lambda-nesting depth ≥ 1, and this `if`/`match` sits at depth
+///     0 in the IR (the wrapper is a backend-emit artefact invisible to the
+///     lowerer), so the clone must be forced here. `Arc::clone` is a cheap
+///     pointer bump and always sound (`Arc: Clone`);
+///   * every OTHER function-value leaf (`FuncValue`, a `Var`/`CloneVar` of a
+///     DIFFERENT box-typed binding, an `Access`/`Apply`/`Call` producing a
+///     function value) → eta-expanded to `SharedLambda` via
+///     [`eta_expand_leaf_to_shared`], so a top-level-function-reference sibling
+///     (the reviewer's exact `FuncValue` repro) unifies too.
+///
+/// Invoked on each branch of a unification group ONLY once
+/// [`branch_value_leaf_reads_sym`] has confirmed a promoted-`name` leaf is
+/// present in the group, so a pure-inline group is never reached and stays
+/// byte-identical. Since the group shares one type slot with the promoted
+/// `IrType::Fun` handler, EVERY value leaf is that same arrow type, so coercing
+/// each to the `Arc` carrier is type-correct. Enumerated exhaustively (no `_`
+/// catch-all) — SEAL §6.
+fn unify_group_value_leaves(
+    name: Symbol,
+    branch: Expr,
+    params: &[(Symbol, IrType)],
+    ret: &IrType,
+    eta_pool: &[Symbol],
+) -> DResult<Expr> {
+    match branch {
+        Expr::Lambda {
+            params: lp,
+            ret: lr,
+            body,
+        } => Ok(Expr::SharedLambda {
+            params: lp,
+            ret: lr,
+            body,
+        }),
+        Expr::Var(s) | Expr::CloneVar(s) if s == name => Ok(Expr::CloneVar(name)),
+        Expr::Let {
+            name: let_name,
+            value,
+            body,
+        } => Ok(Expr::Let {
+            // A `let` that SHADOWS `name` hides the promoted `Arc` from its body;
+            // stop coercing `name`-reads there, but still coerce other
+            // function-value leaves for the group's carrier.
+            name: let_name,
+            value,
+            body: Box::new(unify_group_value_leaves(name, *body, params, ret, eta_pool)?),
+        }),
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            let body = if pat_binds_symbol(&binder, name) {
+                body
+            } else {
+                Box::new(unify_group_value_leaves(name, *body, params, ret, eta_pool)?)
+            };
+            Ok(Expr::Destructure {
+                binder,
+                value,
+                body,
+            })
+        }
+        Expr::If { cond, then_, else_ } => Ok(Expr::If {
+            cond,
+            then_: Box::new(unify_group_value_leaves(name, *then_, params, ret, eta_pool)?),
+            else_: Box::new(unify_group_value_leaves(name, *else_, params, ret, eta_pool)?),
+        }),
+        Expr::Match(m) => {
+            let m = m.try_map_bodies(
+                Ok,
+                |pat, body, guard| {
+                    let body = if pat_binds_symbol(pat, name) {
+                        body
+                    } else {
+                        unify_group_value_leaves(name, body, params, ret, eta_pool)?
+                    };
+                    Ok((body, guard))
+                },
+            )?;
+            Ok(Expr::Match(m))
+        }
+        // Every other value leaf shares the group's `IrType::Fun` type (a
+        // promoted-`name` read is present in the group), so it is a function
+        // value: eta-expand it to the `Arc` carrier. `SharedLambda` is already
+        // `Arc` — but re-wrapping it is still type-correct, and a nested
+        // promoted lambda in a mixed group is vanishingly rare, so uniform
+        // treatment is preferred to a special case.
+        leaf @ (Expr::SharedLambda { .. }
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. }
+        | Expr::Apply { .. }
+        | Expr::Call { .. }
+        | Expr::Access { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::BinOp { .. }
+        | Expr::TailLoop { .. }
+        | Expr::Tuple(_)
+        | Expr::List { .. }
+        | Expr::Cons { .. }
+        | Expr::ListIndexClone { .. }
+        | Expr::ListLenCheck { .. }
+        | Expr::Record(_)
+        | Expr::Update { .. }
+        | Expr::Ctor { .. }
+        | Expr::TaskSeq { .. }
+        | Expr::TaskSeqSync { .. }
+        | Expr::TailRecur { .. }) => eta_expand_leaf_to_shared(leaf, params, ret, eta_pool),
+    }
+}
+
+/// #172 companion pass to the `Expr::SharedLambda` promotion in
+/// [`Lowerer::lower_let_pvar`]: walk `expr` exhaustively and, at every
+/// `If`/`Match` **unification group** whose one branch's value-position leaf
+/// reads the just-promoted `name` (`Arc<dyn Fn + Send + Sync>`), coerce every
+/// SIBLING branch's function-value leaf to the same `Arc` carrier (inline
+/// lambdas directly to `SharedLambda`, every other function-value shape via
+/// eta-expansion) so the group's branches share one Rust type — closing the
+/// mixed-Arc/Box `E0308` SEAL break. Only fires when a promoted-`name`
+/// value-leaf is actually present in a group; a pure-inline group is left
+/// byte-identical.
+///
+/// Recursion mirrors [`force_shared_capture_clones`] — one arm per `Expr`
+/// variant, no `_` catch-all (SEAL §6), stopping at any binder that SHADOWS
+/// `name` (an inner rebinding hides the outer promoted `Arc`, so its subtree can
+/// never unify against it). Recursing into every child first means a group
+/// nested arbitrarily deep — inside a call arg, a record field, another closure
+/// body — is still reached. `params`/`ret` are the promoted lambda's arrow type;
+/// `eta_pool` supplies fresh eta-parameter symbols.
+// A recursive tree-walk over a large enum — necessarily long and linear.
+#[allow(clippy::too_many_lines)]
+fn promote_unification_sibling_lambdas(
+    name: Symbol,
+    expr: Expr,
+    params: &[(Symbol, IrType)],
+    ret: &IrType,
+    eta_pool: &[Symbol],
+) -> DResult<Expr> {
+    let recur = |e: Expr| promote_unification_sibling_lambdas(name, e, params, ret, eta_pool);
+    match expr {
+        Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => Ok(expr),
+        Expr::Lambda {
+            params: lp,
+            ret: lr,
+            body,
+        } => {
+            // A param shadowing `name` hides the promoted binding from the whole
+            // body — nothing inside can unify against it, so leave it untouched.
+            if lp.iter().any(|(s, _)| *s == name) {
+                Ok(Expr::Lambda {
+                    params: lp,
+                    ret: lr,
+                    body,
+                })
+            } else {
+                Ok(Expr::Lambda {
+                    params: lp,
+                    ret: lr,
+                    body: Box::new(recur(*body)?),
+                })
+            }
+        }
+        Expr::SharedLambda {
+            params: lp,
+            ret: lr,
+            body,
+        } => {
+            if lp.iter().any(|(s, _)| *s == name) {
+                Ok(Expr::SharedLambda {
+                    params: lp,
+                    ret: lr,
+                    body,
+                })
+            } else {
+                Ok(Expr::SharedLambda {
+                    params: lp,
+                    ret: lr,
+                    body: Box::new(recur(*body)?),
+                })
+            }
+        }
+        Expr::Let {
+            name: bound,
+            value,
+            body,
+        } => {
+            let value = Box::new(recur(*value)?);
+            let body = if bound == name {
+                body
+            } else {
+                Box::new(recur(*body)?)
+            };
+            Ok(Expr::Let {
+                name: bound,
+                value,
+                body,
+            })
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            let value = Box::new(recur(*value)?);
+            let body = if pat_binds_symbol(&binder, name) {
+                body
+            } else {
+                Box::new(recur(*body)?)
+            };
+            Ok(Expr::Destructure {
+                binder,
+                value,
+                body,
+            })
+        }
+        Expr::Match(m) => {
+            // Recurse into scrutinee + every arm body first (an arm that shadows
+            // `name` keeps its body untouched — the outer promotion is invisible
+            // there).
+            let m = m.try_map_bodies(
+                // Direct call (not `recur`) so the `recur` closure stays live for
+                // `arm_map` — `try_map_bodies` consumes its `scrutinee_map`.
+                |scrutinee| {
+                    promote_unification_sibling_lambdas(name, scrutinee, params, ret, eta_pool)
+                },
+                |pat, body, guard| {
+                    let body = if pat_binds_symbol(pat, name) {
+                        body
+                    } else {
+                        recur(body)?
+                    };
+                    Ok((body, guard))
+                },
+            )?;
+            // Unification group: if any non-shadowing arm's value-leaf reads the
+            // promoted `name`, coerce every arm's function-value leaf.
+            let group_promotes = m.arms().iter().any(|arm| {
+                !pat_binds_symbol(&arm.pat, name) && branch_value_leaf_reads_sym(name, &arm.body)
+            });
+            if group_promotes {
+                let m = m.try_map_bodies(
+                    Ok,
+                    |_pat, body, guard| {
+                        Ok((
+                            unify_group_value_leaves(name, body, params, ret, eta_pool)?,
+                            guard,
+                        ))
+                    },
+                )?;
+                Ok(Expr::Match(m))
+            } else {
+                Ok(Expr::Match(m))
+            }
+        }
+        Expr::If { cond, then_, else_ } => {
+            let cond = Box::new(recur(*cond)?);
+            let then_ = Box::new(recur(*then_)?);
+            let else_ = Box::new(recur(*else_)?);
+            let group_promotes = branch_value_leaf_reads_sym(name, &then_)
+                || branch_value_leaf_reads_sym(name, &else_);
+            if group_promotes {
+                Ok(Expr::If {
+                    cond,
+                    then_: Box::new(unify_group_value_leaves(name, *then_, params, ret, eta_pool)?),
+                    else_: Box::new(unify_group_value_leaves(name, *else_, params, ret, eta_pool)?),
+                })
+            } else {
+                Ok(Expr::If { cond, then_, else_ })
+            }
+        }
+        Expr::TailLoop {
+            params: lp,
+            body,
+        } => {
+            let body = if lp.iter().any(|(s, _)| *s == name) {
+                body
+            } else {
+                Box::new(recur(*body)?)
+            };
+            Ok(Expr::TailLoop { params: lp, body })
+        }
+        Expr::BinOp { op, lhs, rhs } => Ok(Expr::BinOp {
+            op,
+            lhs: Box::new(recur(*lhs)?),
+            rhs: Box::new(recur(*rhs)?),
+        }),
+        Expr::Call { callee, args, pin } => Ok(Expr::Call {
+            callee,
+            args: args
+                .into_iter()
+                .map(recur)
+                .collect::<DResult<Vec<_>>>()?,
+            pin,
+        }),
+        Expr::Apply { func, args } => Ok(Expr::Apply {
+            func: Box::new(recur(*func)?),
+            args: args
+                .into_iter()
+                .map(recur)
+                .collect::<DResult<Vec<_>>>()?,
+        }),
+        Expr::Tuple(items) => Ok(Expr::Tuple(
+            items
+                .into_iter()
+                .map(recur)
+                .collect::<DResult<Vec<_>>>()?,
+        )),
+        Expr::List { elem, items } => Ok(Expr::List {
+            elem,
+            items: items
+                .into_iter()
+                .map(recur)
+                .collect::<DResult<Vec<_>>>()?,
+        }),
+        Expr::Cons { head, tail } => Ok(Expr::Cons {
+            head: Box::new(recur(*head)?),
+            tail: Box::new(recur(*tail)?),
+        }),
+        Expr::ListIndexClone { list, index } => Ok(Expr::ListIndexClone {
+            list: Box::new(recur(*list)?),
+            index,
+        }),
+        Expr::ListLenCheck { list, len, exact } => Ok(Expr::ListLenCheck {
+            list: Box::new(recur(*list)?),
+            len,
+            exact,
+        }),
+        Expr::Record(fields) => Ok(Expr::Record(
+            fields
+                .into_iter()
+                .map(|(f, e)| Ok((f, recur(e)?)))
+                .collect::<DResult<Vec<_>>>()?,
+        )),
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Ok(Expr::Access {
+            record: Box::new(recur(*record)?),
+            field,
+            field_ty,
+        }),
+        Expr::Update { record, fields } => Ok(Expr::Update {
+            record: Box::new(recur(*record)?),
+            fields: fields
+                .into_iter()
+                .map(|(f, e)| Ok((f, recur(e)?)))
+                .collect::<DResult<Vec<_>>>()?,
+        }),
+        Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args,
+        } => Ok(Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args: args
+                .into_iter()
+                .map(recur)
+                .collect::<DResult<Vec<_>>>()?,
+        }),
+        Expr::TaskSeq { effect, rest } => Ok(Expr::TaskSeq {
+            effect: Box::new(recur(*effect)?),
+            rest: Box::new(recur(*rest)?),
+        }),
+        Expr::TaskSeqSync { effect, rest } => Ok(Expr::TaskSeqSync {
+            effect: Box::new(recur(*effect)?),
+            rest: Box::new(recur(*rest)?),
+        }),
+        Expr::TailRecur { args } => Ok(Expr::TailRecur {
+            args: args
+                .into_iter()
+                .map(recur)
+                .collect::<DResult<Vec<_>>>()?,
+        }),
+    }
+}
+
 /// Does `sym` appear as a live `Var`/`CloneVar` leaf DIRECTLY in `expr`
 /// (i.e. NOT hidden behind a further-nested `Lambda`/`SharedLambda`
 /// boundary)? Unlike [`lambda_body_refs_sym`] (which treats nested lambdas
@@ -13357,6 +13921,25 @@ impl<'a> Lowerer<'a> {
             {
                 acc = force_shared_capture_clones(name, acc);
                 if let Expr::Lambda { params, ret, body } = value {
+                    // #172: `name`'s reads now render `Arc<dyn Fn + Send + Sync>`.
+                    // A read sitting in one branch of an `if`/`match` whose
+                    // sibling branch renders a function value at the default
+                    // `Box` carrier (an inline lambda, a `FuncValue` top-level
+                    // reference, a `Var` of another box-typed binding, …) would
+                    // emit two incompatible carriers at one unification slot →
+                    // cargo E0308 after skyc exit 0 (SEAL break). Coerce every
+                    // such sibling function-value leaf to the same `Arc` carrier
+                    // (inline lambdas directly; every other shape by
+                    // eta-expansion), using this promoted lambda's arrow type as
+                    // the group's unified type. Runs BEFORE `value` is moved so
+                    // `params`/`ret` are still available.
+                    acc = promote_unification_sibling_lambdas(
+                        name,
+                        acc,
+                        &params,
+                        &ret,
+                        &self.eta_params,
+                    )?;
                     value = Expr::SharedLambda { params, ret, body };
                 }
             }
