@@ -48,7 +48,7 @@ fn emits_byte_identical_main_rs() {
     // harness helper.
     support::assert_emitted_project_matches_golden_dir(
         &out,
-        golden.parent().expect("golden has a parent dir"),
+        support::golden_dir_of(&golden),
     );
 }
 
