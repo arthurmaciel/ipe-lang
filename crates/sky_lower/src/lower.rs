@@ -12085,6 +12085,15 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CompressionZstdCompress
                 | KernelFn::CompressionZstdDecompress,
             ) => Ok(1),
+            // ── #197: Std.Csv ────────────────────────────────────────────────
+            // parse/encode/parseStreamFromFile → 1; parseWithDelimiter/
+            // encodeWithDelimiter → 2.
+            Callee::Kernel(
+                KernelFn::CsvParse | KernelFn::CsvEncode | KernelFn::CsvParseStreamFromFile,
+            ) => Ok(1),
+            Callee::Kernel(
+                KernelFn::CsvParseWithDelimiter | KernelFn::CsvEncodeWithDelimiter,
+            ) => Ok(2),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
