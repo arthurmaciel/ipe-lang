@@ -13,6 +13,16 @@
 > `scripts/progressive-development/context.md` (it distills the seal + principles
 > + the command/output hygiene rules for dispatched agents).
 
+## Documentation hygiene — state the contract, not its history
+
+Every doc here (and every code comment) states what the rule or design **is now**,
+never how it got there. **No archaeology:** no dates, no `(2026-07-15)`, no "was X,
+now Y", no incident post-mortems, no changelog notes in prose. Git history and
+`git blame` already record *when* and *why* a line changed — duplicating that in
+the text only rots and bloats it. When a rule needs a rationale, give the
+*structural* reason it holds ("a cargo target outside the prune root is invisible
+to reclaim and fills the disk"), not the story of the day it was learned.
+
 ## Non-negotiables
 
 ### 0. Understand before you change — `ipe-index` + reference-first (MANDATORY)
@@ -142,7 +152,7 @@ authoritative check over the whole accumulated batch:
 Full-green → close the batch + fast-forward master to that sha. Full-red → reset
 integration to the last certified sha + re-queue the batch.
 
-**`--all-targets` policy (2026-07-15).** The two gates MUST agree on lint scope,
+**`--all-targets` policy.** The two gates MUST agree on lint scope,
 and the cheap gate must never be *stricter* than the full gate (else it rejects
 lanes the authority would accept). Target end-state: **both** gates run clippy
 `--all-targets` (so test-binary lint debt — `clippy::panic`/`expect_used`/
@@ -152,6 +162,19 @@ ran `--workspace` only, `--all-targets` goes into the FULL gate ONLY once the
 test-file clippy-debt sweep is clean (else the full gate reds); until then the
 cheap gate stays `--all-targets`-free to match. Do not add `--all-targets` to one
 gate without the other.
+
+### 3c. Lint enforcement — comply by construction, never lower the lint
+
+The gate runs `clippy -D warnings`; a firing lint is fixed in the **code**, never
+silenced by lowering the lint level. Workspace denies (root `Cargo.toml`
+`[workspace.lints.clippy]`): `unwrap_used`, `expect_used`, `panic`,
+`indexing_slicing`, `unreachable`, `todo`, `unimplemented`, `pedantic`, `nursery`.
+`pedantic` includes `doc_markdown` — **code identifiers in doc (`///`/`//!`) and
+`//` comments MUST be backticked** (`` `CloneOk` ``, `` `Vec<T>` ``, `` `--all-targets` ``).
+These apply to `tests/*.rs` too (the `--all-targets` end-state, §3b). The only
+sanctioned escape is a **per-site** `#[allow(lint)] // one-line why` (e.g. the
+runtime HMAC-infallible sites, a shared-test-helper `dead_code`) — never a crate-
+or gate-wide relaxation.
 
 ### 4. No-deferral principle — every known bug enters the pipeline
 
@@ -224,7 +247,7 @@ operational state outside the compiler repo.
 ### 6. Disk hygiene — unused build caches MUST be pruned
 
 **Write-boundary — the ONLY two locations anything (agent or human) may write
-(MANDATORY, 2026-07-15).** Cargo targets and scratch build state go under
+(MANDATORY).** Cargo targets and scratch build state go under
 `~/.cache/ipe/` and NOWHERE else; source/doc/test edits go under the repo working
 tree and nowhere else. Concretely:
 
@@ -234,11 +257,9 @@ tree and nowhere else. Concretely:
   agent or a manual verify build uses `~/.cache/ipe/<purpose>-target`.
 - **Why:** the disk-prune logic scans exactly two roots — `~/.cache/ipe/` (the
   sanctioned targets) and, as a safety net, strays. A target written *outside*
-  `~/.cache/ipe/` is invisible to the normal prune, so it grows unbounded and
-  fills the disk. This actually happened (2026-07-15): a 41 GB gate target plus
-  ~50 GB of `/tmp/*-target` and `$HOME`-root targets from past agents filled a
-  217 GB disk to 100 %, crashing the loop mid-run. In an emergency you now prune
-  ONE place: `rm -rf ~/.cache/ipe/*` (rebuilds warm).
+  `~/.cache/ipe/` is invisible to the normal prune, so it grows unbounded and can
+  fill the disk to 100 %, which crashes the loop mid-run. In an emergency you
+  prune ONE place: `rm -rf ~/.cache/ipe/*` (rebuilds warm).
 - **Enforced in `autopilot.sh`**: `IPE_CACHE=~/.cache/ipe`; `reclaim_disk` keeps
   the gate + oracle + warm `lane-*` targets there and reaps the rest, AND sweeps
   stray cargo targets found under `~/.cache/*target*` or `/tmp` (pgrep-guarded) so
