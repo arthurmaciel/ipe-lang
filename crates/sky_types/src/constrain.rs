@@ -489,6 +489,11 @@ struct Builtins {
     /// `rust_decimal::Decimal`).  Zero type arguments.  Lowered to
     /// `IrType::Decimal` by `ir_type_from_ty` / `ir_type_from_canon`.
     decimal: Symbol,
+    // ── #197 Std.Csv record field symbols ─────────────────────────────────────
+    /// `"header"` — `Std.Csv.Csv.header : List String`.
+    csv_f_header: Symbol,
+    /// `"rows"` — `Std.Csv.Csv.rows : List (List String)`.
+    csv_f_rows: Symbol,
 }
 
 impl Builtins {
@@ -631,6 +636,8 @@ impl Builtins {
             input_f_selected: interner.intern("selected")?,
             // Sky.Core.Http.Stream: StreamId opaque handle type (#148).
             stream_id: interner.intern("StreamId")?,
+            csv_f_header: interner.intern("header")?,
+            csv_f_rows: interner.intern("rows")?,
             // ── Order ADT (#123) ─────────────────────────────────────────────
             order: interner.intern("Order")?,
             lt: interner.intern("LT")?,
@@ -3517,6 +3524,15 @@ impl<'a> Builder<'a> {
             name: self.builtins.ws_server_cfg,
             args: Vec::new(),
         };
+        // ── #197 stdlib record / opaque-Con helpers ─────────────────────────
+        // `Csv` — closed record `{ header : List String, rows : List (List
+        // String) }` (runtime `sky_runtime::csv::CsvDoc`).
+        let csv_rec = || {
+            let mut m = BTreeMap::new();
+            m.insert(self.builtins.csv_f_header, list(string()));
+            m.insert(self.builtins.csv_f_rows, list(list(string())));
+            Ty::Record(m, RowTail::Closed)
+        };
         let attr = |m: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.attribute,
@@ -5662,6 +5678,55 @@ impl<'a> Builder<'a> {
             // closeClient : WebSocketServer -> Task Error ()
             K::WsCloseClient => fun(wsh(), task_unit()),
 
+            // ── #194: Sky.Core.Regex (5 kernels) ────────────────────────────────
+            // Concrete, monomorphic schemes (no type vars): RE2 helpers over
+            // `String`. `match` returns `Bool`; `find` a `Maybe String`;
+            // `findAll`/`split` a `List String`; `replace` is arity-3
+            // `String -> String -> String -> String`. Runtime is total/pure
+            // (`sky_runtime::regex_kernel::*`, re-exported ungated).
+            K::RegexMatch => fun(string(), fun(string(), bool_ty())),
+            K::RegexFind => fun(string(), fun(string(), maybe(string()))),
+            K::RegexFindAll => fun(string(), fun(string(), list(string()))),
+            K::RegexReplace => fun(string(), fun(string(), fun(string(), string()))),
+            K::RegexSplit => fun(string(), fun(string(), list(string()))),
+
+            // ── #202: Sky.Core.Path (4 kernels) ─────────────────────────────────
+            // Pure path helpers over `String`. `base`/`dir`/`ext` return
+            // `String`; `isAbsolute` returns `Bool`. Runtime total/pure
+            // (`sky_runtime::path::*`, re-exported ungated).
+            K::PathBase => fun(string(), string()),
+            K::PathDir => fun(string(), string()),
+            K::PathExt => fun(string(), string()),
+            K::PathIsAbsolute => fun(string(), bool_ty()),
+
+            // ── #197: Std.Trace (3 kernels) ─────────────────────────────────────
+            // `span : String -> Task a -> Task a` — the wrapped Task's value flows
+            // through untouched; the error channel is the implicit `Error`.
+            // `event : String -> Task ()`; `attr : String -> String -> Task ()`.
+            K::TraceSpan => fun(string(), fun(task(var(0)), task(var(0)))),
+            K::TraceEvent => fun(string(), task_unit()),
+            K::TraceAttr => fun(string(), fun(string(), task_unit())),
+
+            // ── #197: Std.Compression (4 kernels) ───────────────────────────────
+            // `Bytes -> Task Bytes` — the Rust runtime `compression_*` takes and
+            // returns `Vec<u8>` (`Bytes` lowers to `Vec<u8>`), a documented
+            // divergence from the Go backend's `String`-as-bytes shape.
+            K::CompressionGzip => fun(bytes(), task(bytes())),
+            K::CompressionGunzip => fun(bytes(), task(bytes())),
+            K::CompressionZstdCompress => fun(bytes(), task(bytes())),
+            K::CompressionZstdDecompress => fun(bytes(), task(bytes())),
+
+            // ── #197: Std.Csv (5 kernels) ───────────────────────────────────────
+            // `Csv` is the closed record `{ header : List String,
+            // rows : List (List String) }` (runtime `sky_runtime::csv::CsvDoc`).
+            K::CsvParse => fun(string(), result(error_ty(), csv_rec())),
+            K::CsvParseWithDelimiter => {
+                fun(string(), fun(string(), result(error_ty(), csv_rec())))
+            }
+            K::CsvEncode => fun(csv_rec(), string()),
+            K::CsvEncodeWithDelimiter => fun(string(), fun(csv_rec(), string())),
+            K::CsvParseStreamFromFile => fun(string(), task(list(list(string())))),
+
             // ── Ui.link ──────────────────────────────────────────────────────────
             // link : List (Attribute msg) -> { url : String, label : Element msg }
             //      -> Element msg
@@ -7492,6 +7557,32 @@ mod registry_phase_c_tests {
             K::SecretFromString,
             K::SecretReveal,
             K::SecretRedacted,
+            // ── Sky.Core.Regex (#194; 5) ─────────────────────────────────────
+            K::RegexMatch,
+            K::RegexFind,
+            K::RegexFindAll,
+            K::RegexReplace,
+            K::RegexSplit,
+            // ── Sky.Core.Path (#202; 4) ──────────────────────────────────────
+            K::PathBase,
+            K::PathDir,
+            K::PathExt,
+            K::PathIsAbsolute,
+            // ── Std.Trace (#197; 3) ──────────────────────────────────────────
+            K::TraceSpan,
+            K::TraceEvent,
+            K::TraceAttr,
+            // ── Std.Compression (#197; 4) ────────────────────────────────────
+            K::CompressionGzip,
+            K::CompressionGunzip,
+            K::CompressionZstdCompress,
+            K::CompressionZstdDecompress,
+            // ── Std.Csv (#197; 5) ────────────────────────────────────────────
+            K::CsvParse,
+            K::CsvParseWithDelimiter,
+            K::CsvEncode,
+            K::CsvEncodeWithDelimiter,
+            K::CsvParseStreamFromFile,
         ]
     };
 

@@ -76,17 +76,14 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Sky", "Core", "Random"], "Random"),
     (&["Sky", "Core", "File"], "File"),
     (&["Sky", "Core", "Http"], "Http"),
-    // NOTE — `Sky.Core.Path` and `Sky.Core.Regex` are DELIBERATELY absent here.
-    // Commit 45504c6 ("port 13 missing .sky modules") added them to this table
-    // without registering any members in `install_prelude_qualifiers`'s QUALIFIERS
-    // array (no `StdlibKernel` enum variant, no `constrain`/`lower` arms either),
-    // so the anti-drift invariant (`stdlib_module_paths_target_a_known_qualifier`)
-    // — every claimed qualifier is wired — was violated. The runtime kernels DO
-    // exist (`runtime/src/sky_runtime/{path.rs,regex_kernel.rs}`), so wiring them
-    // is a proper follow-up kernel-registration item; the claim is removed here
-    // rather than left dangling. The shadow `.sky` parse fixtures in
-    // `skyc::stdlib::MODULES` are harmless and stay as the raw material for that
-    // future wiring. Nothing currently imports either module.
+    // NOTE — `Sky.Core.Path` (#202) and `Sky.Core.Regex` (#194) are DELIBERATELY
+    // absent here. They are COMPILED-SOURCE Layer-3 modules (registered in
+    // `skyc::stdlib::COMPILED_STD_MODULES`): their members are point-free
+    // `Ffi.kernel "Path_*"` / `"Regex_*"` aliases that `detect_kernel_alias`
+    // routes to the registered pure `Path*` / `Regex*` `StdlibKernel` variants
+    // (runtime: `sky_runtime::{path,regex_kernel}::*`). A module is EITHER a
+    // kernel qualifier here OR compiled-source — never both
+    // (`compiled_vs_kernel_qualifier_disjoint`), so these stay out of this table.
     // ── Sky.Http.* server surface ───────────────────────────────────────────
     (&["Sky", "Http", "Server"], "Server"),
     (&["Sky", "Http", "Middleware"], "Middleware"),
