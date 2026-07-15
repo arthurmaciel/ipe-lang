@@ -332,6 +332,29 @@ for _g in grep egrep fgrep; do
     printf '#!/usr/bin/env bash\necho "grep is disabled for autopilot agents — use rg (ripgrep): rg -n PATTERN / rg -l / rg -c." >&2\nexit 2\n' > "$SHIMDIR/$_g"
     chmod +x "$SHIMDIR/$_g"
 done
+# cargo shim: headless claude -p ignores PreToolUse hooks, so enforce the
+# `cargo fmt`-write ban here too — block it, pass everything else to the real
+# cargo. Escape hatch: SKY_ALLOW_FMT=1 (the one sanctioned workspace pass, #214).
+cat > "$SHIMDIR/cargo" <<'CARGOSHIM'
+#!/usr/bin/env bash
+case " $* " in
+  *" fmt "*|*" fmt")
+    case " $* " in
+      *" --check"*) ;;
+      *) [ -n "$SKY_ALLOW_FMT" ] || { echo "cargo fmt is disabled for autopilot agents — it reformats the WHOLE workspace. Use rustfmt <exact file>, or cargo fmt --check, or SKY_ALLOW_FMT=1 for the one sanctioned pass." >&2; exit 2; } ;;
+    esac ;;
+esac
+exec "$HOME/.cargo/bin/cargo" "$@"
+CARGOSHIM
+chmod +x "$SHIMDIR/cargo"
+# pgrep shim: pgrep -f self-matches (its own cmdline / the invoking shell) →
+# false positives every caller must reason around; steer to the bracket trick.
+cat > "$SHIMDIR/pgrep" <<'PGREPSHIM'
+#!/usr/bin/env bash
+echo "pgrep is disabled for autopilot agents — it self-matches (its own cmdline / the invoking shell), producing false positives. Use the bracket trick: ps -eo pid,args | grep '[c]argo' (first char in [] so the grep process cannot match itself), or ps -eo args | grep -c '[c]argo' for a live count. Never poll in a loop — trust a foreground timeout command's exit code." >&2
+exit 2
+PGREPSHIM
+chmod +x "$SHIMDIR/pgrep"
 # skydex wrapper on the agent PATH: code-relation index over the ../sky READ-ONLY
 # reference (Sky↔Haskell↔Go↔Rust routes; parity/rdeps/deps/covers/locate). Runs
 # from ../sky where .skydex/index.db lives; read-only ref → never stale.
