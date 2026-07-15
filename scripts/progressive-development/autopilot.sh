@@ -84,6 +84,7 @@ LOCK=".autopilot.lock"
 GUARDIAN_TARGET="$HOME/.cache/guardian-target"
 DISK_FLOOR="${PROGDEV_DISK_FLOOR_GB:-20}"    # reclaim when free drops below this
 DISK_CRIT="${PROGDEV_DISK_CRIT_GB:-10}"      # graceful-stop when still below this after reclaim
+LANE_TARGET_MAX_GB="${PROGDEV_LANE_TARGET_MAX_GB:-60}"   # per-lane target hard size cap (regardless of total disk; 0 = off)
 # The loop's ENTIRE cargo-target footprint — everything else under ~/.cache is
 # reclaimable. Bounds disk to these two + the shared dev target.
 #
@@ -166,6 +167,7 @@ Env vars (defaults):
   PROGDEV_AUTHOR_MODEL    (claude-opus-4-8)     implementer (impl-stage) model
   PROGDEV_GUARDIAN_MODEL  (claude-opus-4-8)     guardian / triage / audit / review model
   PROGDEV_LANES_DISK_MIN  (30)     free-GB floor below which a cycle drops to 1 lane
+  PROGDEV_LANE_TARGET_MAX_GB (60)  per-lane cargo target size cap; over → purged (0 = off)
   MASTER_GATE_TARGET      (~/.cache/master-gate-target)   isolated gate target dir
 
 Control:  touch autopilot.stop  → halt cleanly after the current cycle
@@ -248,6 +250,24 @@ reclaim_disk() {
     git worktree prune 2>/dev/null
     rm -rf /tmp/sky-fuzz.* /tmp/sky-fuzz-neg.* /tmp/orch-*.log 2>/dev/null
     log "  free now $(disk_free_gb)G"
+}
+# Hard size cap per lane target — deletes a guardian-target-<i> that has bloated
+# past LANE_TARGET_MAX_GB regardless of total free disk (incremental cruft grows
+# unbounded across cycles otherwise). Runs at cycle top, when no lane holds a
+# target; the pgrep check is belt-and-suspenders. It rebuilds warm next cycle.
+prune_oversize_lane_targets() {
+    [ "${LANE_TARGET_MAX_GB:-0}" -gt 0 ] 2>/dev/null || return 0
+    local d sz
+    for d in "$HOME"/.cache/guardian-target-*; do
+        [ -d "$d" ] || continue
+        pgrep -f -- "$d" >/dev/null 2>&1 && continue    # never delete a live build's target
+        sz="$(du -sBG "$d" 2>/dev/null | cut -f1 | tr -dc '0-9')"
+        [ -n "$sz" ] || continue
+        if [ "$sz" -ge "$LANE_TARGET_MAX_GB" ]; then
+            log "lane target $(basename "$d") = ${sz}G ≥ ${LANE_TARGET_MAX_GB}G cap — purging (rebuilds warm next cycle)"
+            rm -rf "$d"
+        fi
+    done
 }
 # reclaim if below floor; return 1 (caller stops) if still critical afterwards.
 ensure_disk() {
@@ -529,6 +549,7 @@ while :; do
     [ "$cycle" -gt "$MAX_CYCLES" ] && { log "runaway backstop ($MAX_CYCLES cycles) — stopping; raise PROGDEV_MAX_CYCLES if legit"; break; }
 
     reclaim_stale_claims   # return leases whose owner died (before convergence reads pending)
+    prune_oversize_lane_targets   # hard per-lane-target size cap (independent of total disk)
     # convergence: did the PREVIOUS cycle make progress? (HEAD advanced, or work remains)
     cur_head="$(git rev-parse HEAD)"
     act="$(pending | wc -l | tr -d ' ')"
