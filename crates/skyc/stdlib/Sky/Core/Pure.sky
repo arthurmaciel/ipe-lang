@@ -52,31 +52,22 @@ import Std.Db as Db exposing (Db)
 -- | `Pure.uuidV4 ()` — uniform-shape companion for `Uuid.v4`.
 -- See `Sky.Core.Uuid.v4` for semantics.
 --
--- Implementation note: `Uuid_v4` runtime is already a Task-shaped
--- closure (`func() any { return Ok/Err }`), so we declare it
--- directly as `() -> Task Error String` at this boundary — bypassing
--- the legacy `Uuid.v4 : String` Sky surface which the existing
--- arity-0 kernel pathway forces through a String narrow.  Both
--- forms point at the same runtime kernel.
+-- Implementation note: the `Uuid_v4` kernel is registered directly at
+-- `() -> Task Error String` (entropy is an effect — see the kernel
+-- scheme in `sky_types::constrain`, `K::UuidV4 => fun(Unit, task(string))`),
+-- so `Pure.uuidV4` is a point-free alias to it, exactly like every other
+-- `Ffi.kernel` stdlib binding.  A `uuidV4 _ = uuidV4Kernel` indirection
+-- annotated the kernel as a bare `Task Error String`, which mismatches its
+-- real `() -> Task Error String` scheme (SKY-T0001).
 uuidV4 : () -> Task Error String
-uuidV4 _ =
-    uuidV4Kernel
-
-
-uuidV4Kernel : Task Error String
-uuidV4Kernel =
+uuidV4 =
     Ffi.kernel "Uuid_v4"
 
 
 -- | `Pure.uuidV7 ()` — uniform-shape companion for `Uuid.v7`.
 -- See `Sky.Core.Uuid.v7` for semantics.
 uuidV7 : () -> Task Error String
-uuidV7 _ =
-    uuidV7Kernel
-
-
-uuidV7Kernel : Task Error String
-uuidV7Kernel =
+uuidV7 =
     Ffi.kernel "Uuid_v7"
 
 

@@ -12122,6 +12122,43 @@ impl<'a> Lowerer<'a> {
             Callee::Kernel(
                 KernelFn::SecretFromString | KernelFn::SecretReveal | KernelFn::SecretRedacted,
             ) => Ok(1),
+            // ── #194: Sky.Core.Regex ─────────────────────────────────────────
+            // `match`/`find`/`findAll`/`split : String -> String -> _` (arity 2);
+            // `replace : String -> String -> String -> String` (arity 3).
+            Callee::Kernel(
+                KernelFn::RegexMatch
+                | KernelFn::RegexFind
+                | KernelFn::RegexFindAll
+                | KernelFn::RegexSplit,
+            ) => Ok(2),
+            Callee::Kernel(KernelFn::RegexReplace) => Ok(3),
+            // ── #202: Sky.Core.Path — all four are `String -> _` (arity 1). ───
+            Callee::Kernel(
+                KernelFn::PathBase
+                | KernelFn::PathDir
+                | KernelFn::PathExt
+                | KernelFn::PathIsAbsolute,
+            ) => Ok(1),
+            // ── #197: Std.Trace — `span : String -> Task -> Task` (arity 2);
+            // `event : String -> Task ()` (1); `attr : String -> String -> Task ()` (2).
+            Callee::Kernel(KernelFn::TraceSpan | KernelFn::TraceAttr) => Ok(2),
+            Callee::Kernel(KernelFn::TraceEvent) => Ok(1),
+            // ── #197: Std.Compression — all four `String -> Task String` (arity 1).
+            Callee::Kernel(
+                KernelFn::CompressionGzip
+                | KernelFn::CompressionGunzip
+                | KernelFn::CompressionZstdCompress
+                | KernelFn::CompressionZstdDecompress,
+            ) => Ok(1),
+            // ── #197: Std.Csv ────────────────────────────────────────────────
+            // parse/encode/parseStreamFromFile → 1; parseWithDelimiter/
+            // encodeWithDelimiter → 2.
+            Callee::Kernel(
+                KernelFn::CsvParse | KernelFn::CsvEncode | KernelFn::CsvParseStreamFromFile,
+            ) => Ok(1),
+            Callee::Kernel(
+                KernelFn::CsvParseWithDelimiter | KernelFn::CsvEncodeWithDelimiter,
+            ) => Ok(2),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
